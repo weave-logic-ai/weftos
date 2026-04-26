@@ -71,6 +71,10 @@ clawft-substrate = { workspace = true }
 clawft-app = { workspace = true }
 # M1.5-B + M1.5-D/E: surface-description IR + composer (ADR-016).
 clawft-surface = { workspace = true }
+# Terminal panel decodes base64 chunks pushed via substrate from the
+# daemon-side PTY service (see `terminal::Terminal`). Cross-target
+# (native + wasm) — works in both the egui binary and the webview.
+base64 = "0.22"
 
 # ── Native-only dependencies ─────────────────────────────────────────
 

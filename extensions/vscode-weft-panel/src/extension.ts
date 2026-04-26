@@ -73,6 +73,17 @@ const ALLOWED_METHODS = new Set<string>([
     // llama.cpp endpoint. Wired in the daemon at boot via DAEMON_LLM;
     // the chat window panel calls this for each user turn.
     "llm.prompt",
+    // Terminal service: PTY-backed shell sessions hosted in the
+    // daemon, surfaced as an Explorer panel. Output is published
+    // to substrate (via the existing `substrate.read` proxy);
+    // these four verbs cover spawn / write / resize / close. The
+    // daemon's own per-session ownership check is the real gate —
+    // this allowlist just keeps the webview from reaching arbitrary
+    // RPC surface.
+    "terminal.spawn",
+    "terminal.write",
+    "terminal.resize",
+    "terminal.close",
 ]);
 
 interface WasmRpcRequest {

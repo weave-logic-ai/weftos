@@ -1,0 +1,44 @@
+[package]
+name = "clawft-service-terminal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "WeftOS terminal service — daemon-side PTY allocation and shell hosting. Surfaces interactive shells over JSON-RPC for the egui Explorer terminal panel and any other surface that wants the same sessions (Cursor webview, future remote SSH)."
+
+[dependencies]
+# Async runtime — tokio 'full' matches the daemon, which is the intended host.
+# We need spawn_blocking for portable-pty's sync read/write file handles, plus
+# mpsc channels to fan output bytes from the reader thread to the substrate
+# publish task.
+tokio = { workspace = true }
+
+# Serde for the wire-shape published to substrate.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Cross-platform PTY allocation. Picks the right backend per-OS:
+# unix-pty on Linux/macOS (works on WSL2 — it just uses /dev/ptmx), and
+# winpty/conpty on Windows. We deliberately don't pin a specific backend
+# feature here — `portable-pty` auto-selects.
+portable-pty = "0.8"
+
+# Concurrent map keyed by session id. Same crate the daemon control plane
+# uses, so no new transitive deps.
+dashmap = { workspace = true }
+
+# Short uuids for SessionId. v4 random is plenty — sessions are
+# process-local and never serialized to disk.
+uuid = { workspace = true }
+
+# Structured logs.
+tracing = { workspace = true }
+
+# Error handling.
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+tracing-subscriber = { workspace = true }

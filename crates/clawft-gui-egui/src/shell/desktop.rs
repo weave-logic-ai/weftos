@@ -304,7 +304,7 @@ pub fn show(
             // Closing the Explorer window drops its active subscription
             // so no background re-read polls run against a hidden panel.
             if is_explorer {
-                desk.explorer.close();
+                desk.explorer.close(live);
             }
             desk.open_chip = None;
         }

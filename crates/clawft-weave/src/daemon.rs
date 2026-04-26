@@ -42,6 +42,18 @@ fn daemon_llm() -> Option<Arc<clawft_service_llm::LlmClient>> {
     DAEMON_LLM.get().cloned()
 }
 
+/// Daemon-wide handle to the PTY-backed terminal manager. Set at boot;
+/// the four `terminal.*` handlers read this. We don't register a
+/// control flag for terminal — sessions are user-initiated (no
+/// background traffic to gate) and the GUI's "close session" button is
+/// the natural off-switch. If we ever grow auto-spawned sessions, the
+/// control flag lives here next to `DAEMON_LLM`.
+static DAEMON_TERMINAL: OnceLock<Arc<clawft_service_terminal::TerminalManager>> = OnceLock::new();
+
+fn daemon_terminal() -> Option<Arc<clawft_service_terminal::TerminalManager>> {
+    DAEMON_TERMINAL.get().cloned()
+}
+
 use clawft_kernel::{Kernel, KernelState};
 use clawft_platform::NativePlatform;
 use clawft_types::config::{Config, KernelConfig};
@@ -320,6 +332,46 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
                      return 'service unavailable'"
                 );
             }
+        }
+    }
+
+    // Spawn the terminal manager. Empty registry — sessions appear on
+    // demand via `terminal.spawn`. Construction is infallible (a
+    // `DashMap::new()` under the hood); we still match on the result so
+    // future fallible variants land cleanly.
+    {
+        let mgr = Arc::new(clawft_service_terminal::TerminalManager::new());
+        let _ = DAEMON_TERMINAL.set(mgr);
+        info!("terminal service wired (PTY-backed sessions hosted in daemon)");
+    }
+
+    // Publish the top-level UI sentinel for the terminal panel. Lives
+    // at `substrate/<daemon-node>/ui/terminal` — the egui Explorer's
+    // terminal viewer shape-matches on `{ "kind": "terminal" }`. By
+    // convention, every top-level surface (chat-window agent picks a
+    // sibling path) publishes its sentinel under
+    // `substrate/<daemon-node>/ui/<name>` so the Explorer tree
+    // surfaces them as siblings without further coordination.
+    {
+        let k = kernel.read().await;
+        let substrate = k.substrate_service();
+        let path = format!(
+            "substrate/{}/ui/terminal",
+            daemon_identity.node_id
+        );
+        let value = serde_json::json!({
+            "kind": "terminal",
+            "label": "Terminal",
+            "updated_at_ms": crate::control::now_ms(),
+        });
+        if let Err(e) = substrate.publish_gated(
+            Some(&daemon_identity.node_id),
+            &path,
+            value,
+        ) {
+            warn!(error = %e, path = %path, "terminal: ui sentinel publish failed");
+        } else {
+            debug!(path = %path, "terminal: ui sentinel published");
         }
     }
 
@@ -1846,6 +1898,205 @@ async fn handle_llm_prompt(
     }
 }
 
+// ── Terminal (PTY) RPC handlers ─────────────────────────────────────
+//
+// All four handlers share two preconditions:
+// 1. `DAEMON_TERMINAL` is set (boot wiring did its job).
+// 2. The supplied `session_id` resolves to a live session. Spawn is the
+//    exception — it allocates the id rather than receiving one.
+//
+// Output flows the other way: a tokio task started by `terminal.spawn`
+// drains the session's `mpsc::UnboundedReceiver<TerminalEvent>` and
+// publishes each chunk to
+// `substrate/<daemon-node>/derived/terminal/<session_id>` via
+// `publish_gated`. Surfaces poll that path through the existing
+// `substrate.read` cascade — no separate streaming RPC.
+
+/// Handle `terminal.spawn`: allocate a PTY, spawn a shell, start the
+/// substrate publish pump, and return the session id + resolved shell
+/// metadata.
+async fn handle_terminal_spawn(
+    params: serde_json::Value,
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    let p: crate::protocol::TerminalSpawnParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("invalid params: {e}")),
+    };
+    let mgr = match daemon_terminal() {
+        Some(m) => m,
+        None => return Response::error("terminal service not initialized".to_string()),
+    };
+    let id = match mgr.spawn(p.rows, p.cols, p.shell.clone(), p.cwd.clone()) {
+        Ok(id) => id,
+        Err(e) => return Response::error(format!("terminal.spawn: {e}")),
+    };
+    let session = match mgr.session(&id) {
+        Some(s) => s,
+        None => {
+            return Response::error(
+                "terminal.spawn: session disappeared between spawn and lookup".to_string(),
+            );
+        }
+    };
+
+    // Drain the session's output channel onto substrate. The reader
+    // pump runs on its own OS thread inside the service crate; this
+    // tokio task just forwards events.
+    //
+    // Authority: the daemon's own node-id, so `publish_gated` accepts
+    // the write under its node-private prefix.
+    let daemon_node_id = match daemon_control() {
+        Some(s) => s.daemon_node_id.clone(),
+        None => return Response::error("daemon control state not initialized".to_string()),
+    };
+    let output_path = format!(
+        "substrate/{}/derived/terminal/{}",
+        daemon_node_id, id
+    );
+    let resolved_shell = session.shell().to_string();
+    let resolved_cwd = session.cwd().to_string();
+
+    if let Some(mut events) = session.take_events() {
+        let substrate = {
+            let k = kernel.read().await;
+            k.substrate_service().clone()
+        };
+        let publish_path = output_path.clone();
+        let publish_node = daemon_node_id.clone();
+        let session_id_for_log = id.clone();
+        tokio::spawn(async move {
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD;
+            while let Some(ev) = events.recv().await {
+                let chunk = match ev {
+                    clawft_service_terminal::TerminalEvent::Output(bytes) => {
+                        crate::protocol::TerminalChunk {
+                            data: b64.encode(&bytes),
+                            ts_ms: crate::control::now_ms(),
+                            exit: false,
+                        }
+                    }
+                    clawft_service_terminal::TerminalEvent::Exit => {
+                        crate::protocol::TerminalChunk {
+                            data: String::new(),
+                            ts_ms: crate::control::now_ms(),
+                            exit: true,
+                        }
+                    }
+                };
+                let value = match serde_json::to_value(&chunk) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!(error = %e, "terminal: chunk serialize failed");
+                        continue;
+                    }
+                };
+                if let Err(e) = substrate.publish_gated(
+                    Some(&publish_node),
+                    &publish_path,
+                    value,
+                ) {
+                    warn!(error = %e, path = %publish_path, "terminal: publish_gated failed");
+                }
+                if chunk.exit {
+                    debug!(session_id = %session_id_for_log, "terminal: drain task exiting on Exit chunk");
+                    break;
+                }
+            }
+            debug!(session_id = %session_id_for_log, "terminal: drain task ended");
+        });
+    } else {
+        warn!(session_id = %id, "terminal: take_events returned None — output won't be published");
+    }
+
+    let result = crate::protocol::TerminalSpawnResult {
+        session_id: id.to_string(),
+        rows: if p.rows == 0 { clawft_service_terminal::DEFAULT_ROWS } else { p.rows },
+        cols: if p.cols == 0 { clawft_service_terminal::DEFAULT_COLS } else { p.cols },
+        shell: resolved_shell,
+        cwd: resolved_cwd,
+        output_path,
+    };
+    Response::success(serde_json::to_value(result).unwrap())
+}
+
+/// Handle `terminal.write`: forward base64-decoded bytes into the PTY.
+async fn handle_terminal_write(
+    params: serde_json::Value,
+    _kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    let p: crate::protocol::TerminalWriteParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("invalid params: {e}")),
+    };
+    let mgr = match daemon_terminal() {
+        Some(m) => m,
+        None => return Response::error("terminal service not initialized".to_string()),
+    };
+    use base64::Engine;
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(p.data.as_bytes()) {
+        Ok(b) => b,
+        Err(e) => return Response::error(format!("terminal.write: bad base64: {e}")),
+    };
+    match mgr.write(
+        &clawft_service_terminal::SessionId::from(p.session_id.as_str()),
+        &bytes,
+    ) {
+        Ok(()) => Response::success(
+            serde_json::to_value(crate::protocol::TerminalAck { ok: true }).unwrap(),
+        ),
+        Err(e) => Response::error(format!("terminal.write: {e}")),
+    }
+}
+
+/// Handle `terminal.resize`: reflow the PTY for an in-shell app.
+async fn handle_terminal_resize(
+    params: serde_json::Value,
+    _kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    let p: crate::protocol::TerminalResizeParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("invalid params: {e}")),
+    };
+    let mgr = match daemon_terminal() {
+        Some(m) => m,
+        None => return Response::error("terminal service not initialized".to_string()),
+    };
+    match mgr.resize(
+        &clawft_service_terminal::SessionId::from(p.session_id.as_str()),
+        p.rows,
+        p.cols,
+    ) {
+        Ok(()) => Response::success(
+            serde_json::to_value(crate::protocol::TerminalAck { ok: true }).unwrap(),
+        ),
+        Err(e) => Response::error(format!("terminal.resize: {e}")),
+    }
+}
+
+/// Handle `terminal.close`: kill the child shell, drop the PTY, forget
+/// the session. Idempotent — closing an unknown session is `ok`.
+async fn handle_terminal_close(
+    params: serde_json::Value,
+    _kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    let p: crate::protocol::TerminalCloseParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("invalid params: {e}")),
+    };
+    let mgr = match daemon_terminal() {
+        Some(m) => m,
+        None => return Response::error("terminal service not initialized".to_string()),
+    };
+    match mgr.close(&clawft_service_terminal::SessionId::from(p.session_id.as_str())) {
+        Ok(()) => Response::success(
+            serde_json::to_value(crate::protocol::TerminalAck { ok: true }).unwrap(),
+        ),
+        Err(e) => Response::error(format!("terminal.close: {e}")),
+    }
+}
+
 /// Handle `control.set_enabled`: flip a daemon-side enable flag and
 /// republish the substrate control intent under the daemon's own
 /// prefix.
@@ -2676,6 +2927,10 @@ async fn dispatch(
         "control.set_enabled" => handle_control_set_enabled(params, kernel).await,
         "control.list" => handle_control_list(params, kernel).await,
         "llm.prompt" => handle_llm_prompt(params, kernel).await,
+        "terminal.spawn" => handle_terminal_spawn(params, kernel).await,
+        "terminal.write" => handle_terminal_write(params, kernel).await,
+        "terminal.resize" => handle_terminal_resize(params, kernel).await,
+        "terminal.close" => handle_terminal_close(params, kernel).await,
         "agent.spawn" => {
             let spawn_params: AgentSpawnParams = match serde_json::from_value(params) {
                 Ok(p) => p,

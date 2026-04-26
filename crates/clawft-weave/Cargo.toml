@@ -59,6 +59,10 @@ thiserror = { workspace = true }
 dashmap = { workspace = true }
 clawft-service-whisper = { workspace = true }
 clawft-service-llm = { workspace = true }
+clawft-service-terminal = { workspace = true }
+# Base64 encoding for terminal RPC payloads (PTY bytes don't survive
+# raw JSON; chunks ride as { data: <base64>, ... }).
+base64 = "0.22"
 exo-resource-tree = { workspace = true, optional = true }
 weftos-rvf-wire = { workspace = true, optional = true }
 rvf-types = { workspace = true, optional = true }
