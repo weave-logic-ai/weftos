@@ -67,12 +67,14 @@ pub fn paint(ui: &mut egui::Ui, ex: &mut Explorer) -> Option<String> {
                 Some(kids) => {
                     for child in kids {
                         let label = last_segment(&child.path);
+                        let is_leaf = child.has_value && child.child_count == 0;
                         render_node(
                             ui,
                             ex,
                             &child.path,
                             label,
                             0,
+                            is_leaf,
                             &mut newly_selected,
                             &mut to_request,
                         );
@@ -102,15 +104,27 @@ pub fn paint(ui: &mut egui::Ui, ex: &mut Explorer) -> Option<String> {
 
 /// Render a single tree row and, if `expanded`, its children.
 ///
-/// * `prefix`   — the prefix we asked the backend to list (`""` for root).
-/// * `display`  — the label to show for this row.
-/// * `depth`    — indentation depth.
+/// * `prefix` — the prefix we asked the backend to list (`""` for root).
+/// * `display` — the label to show for this row.
+/// * `depth` — indentation depth.
+/// * `is_leaf` — true when `substrate.list` reported this child with
+///   `has_value: true && child_count == 0`. Leaves render without an
+///   expand caret because expanding them would fire a
+///   `substrate.list { prefix: <leaf-path> }` whose kernel-side
+///   contract returns the leaf itself as a child (see
+///   `substrate_service::list` and the test
+///   `list_leaf_prefix_returns_itself`). Recursing into
+///   `tree_children["<leaf>"] == [{path:"<leaf>",...}]` would render
+///   the same row inside itself indefinitely and overflow the stack
+///   on WASM.
+#[allow(clippy::too_many_arguments)]
 fn render_node(
     ui: &mut egui::Ui,
     ex: &mut Explorer,
     prefix: &str,
     display: &str,
     depth: usize,
+    is_leaf: bool,
     newly_selected: &mut Option<String>,
     to_request: &mut Vec<String>,
 ) {
@@ -124,19 +138,28 @@ fn render_node(
     ui.horizontal(|ui| {
         ui.add_space(indent);
 
-        // Expand/collapse arrow. Clicking fires a list request if we
-        // haven't cached children for this prefix yet.
-        let arrow = if is_expanded { "▾" } else { "▸" };
-        let arrow_resp = ui
-            .add(egui::Button::new(egui::RichText::new(arrow).monospace()).frame(false));
-        if arrow_resp.clicked() {
-            if is_expanded {
-                ex.expanded.remove(prefix);
-            } else {
-                ex.expanded.insert(prefix.to_string());
-                // Always re-request on expand — children may have
-                // changed since last time.
-                to_request.push(prefix.to_string());
+        if is_leaf {
+            // Pad to the same column width the caret button would
+            // occupy so leaf rows stay aligned with their siblings.
+            // The caret button is rendered with `frame(false)` so its
+            // width is just the glyph; ~14 px matches "▸" in the
+            // current theme.
+            ui.add_space(14.0);
+        } else {
+            // Expand/collapse arrow. Clicking fires a list request if
+            // we haven't cached children for this prefix yet.
+            let arrow = if is_expanded { "▾" } else { "▸" };
+            let arrow_resp = ui
+                .add(egui::Button::new(egui::RichText::new(arrow).monospace()).frame(false));
+            if arrow_resp.clicked() {
+                if is_expanded {
+                    ex.expanded.remove(prefix);
+                } else {
+                    ex.expanded.insert(prefix.to_string());
+                    // Always re-request on expand — children may have
+                    // changed since last time.
+                    to_request.push(prefix.to_string());
+                }
             }
         }
 
@@ -191,13 +214,25 @@ fn render_node(
         }
         Some(kids) => {
             for child in kids {
+                // Defense in depth against the kernel's "list of a leaf
+                // returns the leaf itself as a child" contract: skip any
+                // child whose path equals our own prefix. Without this
+                // guard the row would re-render itself inside itself.
+                // The is_leaf branch in the parent's caret rendering
+                // suppresses the expand affordance that triggers this
+                // case in the first place; this is the second line.
+                if child.path == prefix {
+                    continue;
+                }
                 let child_label = last_segment(&child.path);
+                let is_leaf = child.has_value && child.child_count == 0;
                 render_node(
                     ui,
                     ex,
                     &child.path,
                     child_label,
                     depth + 1,
+                    is_leaf,
                     newly_selected,
                     to_request,
                 );
@@ -294,5 +329,27 @@ mod tests {
         assert_eq!(last_segment("substrate/sensor/mic"), "mic");
         assert_eq!(last_segment("root"), "root");
         assert_eq!(last_segment(""), "");
+    }
+
+    #[test]
+    fn parse_list_response_preserves_leaf_self_reference() {
+        // The kernel's `substrate.list` returns the prefix itself as the
+        // sole child when the prefix is a leaf with a value (see
+        // `substrate_service::list` and the test `list_leaf_prefix_returns_itself`
+        // in clawft-kernel). The parser MUST preserve that shape — the
+        // recursion guard lives in `render_node`, not here. If we filtered
+        // self-references at parse time, callers that use `list` to ask
+        // "is this a leaf?" would silently lose their answer.
+        let v = json!({
+            "children": [
+                { "path": "substrate/n-bfc4cd/sensor/mic/pcm_chunk",
+                  "has_value": true, "child_count": 0 }
+            ]
+        });
+        let kids = parse_list_response(&v);
+        assert_eq!(kids.len(), 1);
+        assert_eq!(kids[0].path, "substrate/n-bfc4cd/sensor/mic/pcm_chunk");
+        assert!(kids[0].has_value);
+        assert_eq!(kids[0].child_count, 0);
     }
 }

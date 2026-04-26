@@ -61,6 +61,14 @@ const ALLOWED_METHODS = new Set<string>([
     // webview-hosted Explorer panel calls this on each tree-node
     // expand to fetch immediate children from the daemon.
     "substrate.list",
+    // Phase 3 control plane (commit a8bdc631): the Explorer's
+    // control-intent toggle viewer fires `control.set_enabled` to
+    // flip a sensor or service on/off; `control.list` is the read
+    // counterpart for the upcoming control-overview panel. The
+    // daemon's gate enforces authority — this allowlist just opens
+    // the proxy.
+    "control.set_enabled",
+    "control.list",
 ]);
 
 interface WasmRpcRequest {

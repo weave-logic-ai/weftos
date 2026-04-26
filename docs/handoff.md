@@ -1,8 +1,64 @@
 # Session handoff — 2026-04-25
 
 Pick-up doc for the next session. Reflects `phase3-node-identity` at
-commit `04df62ca`, 15 commits ahead of `master`, pushed to
-`origin/phase3-node-identity`.
+commit `04df62ca` plus two **uncommitted** post-handoff fixes (extension
+RPC allowlist, leaf-carrot recursion guard). Branch is 15 commits ahead
+of `master` and pushed to `origin/phase3-node-identity`.
+
+## Post-handoff fixes (uncommitted) — 2026-04-25 evening
+
+The hand-back from the prior session had two visible bugs the user hit
+on first re-test:
+
+1. **Toggle button click did nothing** — `control.set_enabled` was
+   shipped on the daemon and wired into the explorer's
+   `control_toggle.rs`, but never added to the VSCode extension's
+   `ALLOWED_METHODS` proxy allowlist
+   (`extensions/vscode-weft-panel/src/extension.ts:39`). The viewer
+   uses fire-and-forget (`reply: Some(reply_channel().0)` —
+   immediately dropped), so the proxy's `"method not allowed"`
+   rejection was eaten silently. **Fix:** added `control.set_enabled`
+   + `control.list` to the allowlist; `out/extension.js` recompiled.
+   Rule of thumb captured in
+   `~/.claude/projects/-home-aepod-dev-clawft/memory/feedback_extension_rpc_allowlist.md`:
+   any new RPC the WASM panel will fire must also be allowlisted, or
+   it dies silently.
+
+2. **Carrot on a leaf node crashed the GUI** — kernel
+   `SubstrateService::list(prefix)` deliberately returns
+   `[{ path: prefix, has_value: true, child_count: 0 }]` when
+   `prefix` is itself a leaf carrying a value, so a caller can ask
+   "is this a leaf?" without a separate read. Locked by the kernel
+   test `list_leaf_prefix_returns_itself`. The Explorer's
+   `render_node` recursed on every child of an expanded prefix —
+   so clicking the `▸` on any leaf made `tree_children["<leaf>"]`
+   contain itself, and the row rendered itself inside itself
+   indefinitely → WASM stack overflow → "the app breaks." **Fix in
+   `crates/clawft-gui-egui/src/explorer/tree.rs`:**
+   - Suppress the expand caret on leaves
+     (`is_leaf = has_value && child_count == 0`). Leaves render
+     padded to the same column width with no `▸` glyph.
+   - Defensive `if child.path == prefix { continue }` in the
+     recursive child loop. Belt-and-suspenders.
+   - New parser test
+     `parse_list_response_preserves_leaf_self_reference` documents
+     that we do NOT filter the kernel's leaf-as-self reply at parse
+     time — the recursion guard is in `render_node`. If a future
+     refactor moves the filter, the kernel-side leaf-probe semantic
+     will break for any external caller.
+   Memory at `project_substrate_list_leaf_self.md` captures the
+   contract.
+
+Both fixes are tested clean: `scripts/build.sh check`, `clippy`, and
+`test` (with `WEFTOS_RUNTIME_DIR=/tmp/nonexistent-weftos-$$` to dodge
+the documented `clawft-rpc` no-daemon flake) all green. WASM bundle
+rebuilt at 18:03 (`webview/wasm/clawft_gui_egui_bg.wasm`,
+5,788,867 b).
+
+User has not yet visually confirmed the toggle flips after webview
+reload — that's the first thing to check on resume. If confirmed,
+both fixes plus 2026-04-25 daytime work bundle into one commit on
+`phase3-node-identity`.
 
 ---
 
