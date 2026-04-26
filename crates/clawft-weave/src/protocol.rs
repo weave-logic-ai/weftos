@@ -577,6 +577,136 @@ pub struct LlmPromptResult {
     pub model: Option<String>,
 }
 
+// ── Terminal RPCs ─────────────────────────────────────────
+//
+// PTY-backed shell sessions hosted in the daemon. The egui Explorer
+// terminal panel (and the future Cursor webview terminal, and any
+// remote-SSH surface that ships) consume these. The architectural
+// reason terminals live in the daemon — not in the surface — is so a
+// single shell session is observable from any number of surfaces and
+// survives a surface restart within the daemon's lifetime.
+//
+// Wire shape:
+//
+// - `terminal.spawn  { rows, cols, shell?, cwd? }
+//      → { session_id, rows, cols, shell, cwd }`
+// - `terminal.write  { session_id, data }   // data is base64`
+//      → `{ ok: true }`
+// - `terminal.resize { session_id, rows, cols }`
+//      → `{ ok: true }`
+// - `terminal.close  { session_id }`
+//      → `{ ok: true }`
+//
+// Output is published to substrate at
+// `substrate/<daemon-node>/derived/terminal/<session_id>` as
+// `{ data: <base64>, ts_ms: <u64>, exit?: bool }` chunks. Surfaces
+// subscribe via the existing substrate.read poll cascade — no
+// special-case streaming RPC.
+
+/// Parameters for `terminal.spawn`.
+///
+/// All fields optional; `rows` and `cols` default to a 24×80 cell PTY
+/// when 0. `shell` falls back to `$SHELL` → `/bin/bash` → `/bin/sh`.
+/// `cwd` falls back to the daemon's cwd when missing or non-existent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TerminalSpawnParams {
+    /// Initial PTY rows (cells). 0 / missing → service default.
+    #[serde(default)]
+    pub rows: u16,
+    /// Initial PTY cols (cells). 0 / missing → service default.
+    #[serde(default)]
+    pub cols: u16,
+    /// Shell binary path. Empty / missing → auto-detect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+    /// Initial cwd. Empty / missing or non-existent → daemon cwd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+}
+
+/// Result of `terminal.spawn`. Echoes the resolved parameters back
+/// so the surface can render an accurate "shell · path" header
+/// without needing a separate query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalSpawnResult {
+    /// Opaque session id. Surfaces stash this and pass it back in
+    /// every subsequent `terminal.*` call. Format is `t-<12-hex>`.
+    pub session_id: String,
+    /// Effective rows the PTY was opened with.
+    pub rows: u16,
+    /// Effective cols the PTY was opened with.
+    pub cols: u16,
+    /// Resolved shell path that was spawned.
+    pub shell: String,
+    /// Resolved cwd the shell was started in.
+    pub cwd: String,
+    /// Substrate path the surface should subscribe to for output
+    /// chunks. Convenience — equal to
+    /// `substrate/<daemon-node>/derived/terminal/<session_id>`. Saves
+    /// the surface from having to know the daemon's node-id ahead of
+    /// time.
+    pub output_path: String,
+}
+
+/// Parameters for `terminal.write`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalWriteParams {
+    /// Target session.
+    pub session_id: String,
+    /// Bytes to write to the PTY, base64-encoded. Base64 because the
+    /// JSON-RPC line carrier doesn't support raw bytes; the bytes
+    /// commonly include `\r`, `\n`, and 0x1B escape sequences.
+    pub data: String,
+}
+
+/// Result of `terminal.write` (and the other side-effect terminal
+/// RPCs). Tiny success ack — error cases come back as the standard
+/// RPC `{ "error": "..." }` envelope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalAck {
+    /// Always `true` on success.
+    pub ok: bool,
+}
+
+/// Parameters for `terminal.resize`. Cells, not pixels — applications
+/// inside the shell read `TIOCGWINSZ` in cells.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalResizeParams {
+    /// Target session.
+    pub session_id: String,
+    /// New row count.
+    pub rows: u16,
+    /// New column count.
+    pub cols: u16,
+}
+
+/// Parameters for `terminal.close`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalCloseParams {
+    /// Target session. Closing an unknown / already-closed session
+    /// is a no-op success — surfaces unmount and re-mount without
+    /// having to remember whether spawn ever succeeded.
+    pub session_id: String,
+}
+
+/// Substrate value shape the daemon publishes for each terminal
+/// output chunk. Documented as a typed struct so a future surface
+/// (or a `vte`-based viewer) has one source of truth for the wire.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalChunk {
+    /// Bytes the child wrote, base64-encoded. Empty when `exit` is
+    /// `true`.
+    pub data: String,
+    /// Wall-clock ms when the chunk was emitted (or 0 on clock
+    /// failure — strictly informational).
+    pub ts_ms: u64,
+    /// `true` on the final chunk after the child exited (or the
+    /// surface called `terminal.close`). After this no more chunks
+    /// arrive for the session.
+    #[serde(default)]
+    pub exit: bool,
+}
+
 /// Parameters for `substrate.canonical_publish_payload`.
 ///
 /// Diagnostic RPC — runs the daemon's value-canonicalization +

@@ -28,6 +28,7 @@ use crate::live::{self, Command, Live, ReplyRx};
 
 pub mod chat;
 pub mod control_toggle;
+pub mod terminal;
 pub mod tree;
 pub mod viewers;
 pub mod workshop;
@@ -140,6 +141,12 @@ pub struct Explorer {
     /// sentinel selection should start with an empty history rather
     /// than inherit the previous panel's turns.
     chat_view: chat::ChatView,
+    /// Live terminal panel state. Reset (and the daemon-side session
+    /// closed) when selection moves off the terminal sentinel — see
+    /// [`Explorer::on_select`] and [`Explorer::close`]. Held inside
+    /// the Explorer so a single PTY survives across frames; multi-tab
+    /// would replace this with a `HashMap<SessionId, Terminal>`.
+    terminal_view: terminal::Terminal,
 }
 
 impl Default for Explorer {
@@ -169,6 +176,7 @@ impl Default for Explorer {
                 .unwrap_or_else(web_time::Instant::now),
             workshop_view: workshop::WorkshopView::default(),
             chat_view: chat::ChatView::default(),
+            terminal_view: terminal::Terminal::default(),
         }
     }
 }
@@ -208,7 +216,7 @@ impl Explorer {
 
     /// Called by the layout code after a new path is selected. Drops
     /// the previous subscription and starts tracking the new one.
-    fn on_select(&mut self, path: String, _live: &Arc<Live>) {
+    fn on_select(&mut self, path: String, live: &Arc<Live>) {
         // Dropping the existing `SubscriptionHandle` closes its pending
         // ReplyRx — no leaked in-flight reads on the old path.
         self.subscription_handle = Some(SubscriptionHandle::new(path.clone()));
@@ -223,12 +231,20 @@ impl Explorer {
         // scope, the daemon's response is ignored). In-memory only —
         // there is no on-disk conversation to restore.
         self.chat_view = chat::ChatView::default();
+        // Tear down the terminal session if we were on the terminal
+        // sentinel and are navigating away. If we're navigating to a
+        // (different) terminal sentinel the next paint re-spawns; if
+        // we're navigating to anything else the daemon-side child
+        // shell dies promptly rather than waiting for the daemon to
+        // shut down.
+        self.terminal_view.close(live);
+        self.terminal_view = terminal::Terminal::default();
     }
 
     /// Clear the subscription handle. Called by the mount site when
     /// the Explorer panel is closed so no poll is left running against
     /// a hidden panel.
-    pub fn close(&mut self) {
+    pub fn close(&mut self, live: &Arc<Live>) {
         self.subscription_handle = None;
         self.selected_value = None;
         // Drop all Workshop per-panel subscriptions so hidden panels
@@ -237,6 +253,11 @@ impl Explorer {
         // Drop chat state on close — same reason as Workshop: hidden
         // panels shouldn't keep an in-flight RPC against the daemon.
         self.chat_view = chat::ChatView::default();
+        // Same teardown as `on_select`: kill the daemon-side shell
+        // when the Explorer is hidden so a forgotten terminal panel
+        // doesn't leak a session.
+        self.terminal_view.close(live);
+        self.terminal_view = terminal::Terminal::default();
         // Keep expanded + tree_children so reopening is instant.
     }
 
@@ -404,6 +425,17 @@ impl Explorer {
                 // exactly as Phase 1 shipped it.
                 if let Some(inferred) = crate::ontology::infer(&v) {
                     paint_object_type_badge(ui, inferred);
+                }
+                // Terminal sentinel dispatch: when the selected
+                // value is the terminal surface sentinel
+                // (`{ "kind": "terminal" }` published by the daemon at
+                // `substrate/<daemon-node>/ui/terminal`), render the
+                // PTY-backed terminal panel. Shape-match precedes
+                // Workshop and the generic viewer cascade — see
+                // [`terminal::matches`].
+                if terminal::matches(&v) > 0 {
+                    self.terminal_view.paint(ui, live);
+                    return;
                 }
                 // Workshop dispatch: if the value shape-matches a
                 // Workshop, render the composition primitive instead

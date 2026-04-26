@@ -61,9 +61,13 @@ web-time = "1"
 # from other crates in the tree doesn't reliably pick up PNG for the wasm
 # target, so the boot logo silently fails to decode. Pin `png` explicitly.
 image = { version = "0.25", default-features = false, features = ["png"] }
-# Decoding pcm_chunk's base64-encoded i16le payload for the inline
-# waveform mini-plot in the Explorer's PcmChunkViewer. Pinned to
-# match the version `clawft-service-whisper` already brings in.
+# Two consumers in this crate:
+#  - PcmChunkViewer's inline waveform mini-plot (decodes the
+#    pcm_chunk payload's i16le data field for the Explorer).
+#  - terminal::Terminal panel (decodes PTY output chunks pushed
+#    from the daemon-side terminal service via substrate).
+# Cross-target (native + wasm). Pinned to match the version
+# `clawft-service-whisper` already brings in.
 base64 = "0.22"
 
 # M1.5-C + M1.5-D/E: substrate state tree + ADR-017 OntologyAdapter
@@ -75,7 +79,6 @@ clawft-substrate = { workspace = true }
 clawft-app = { workspace = true }
 # M1.5-B + M1.5-D/E: surface-description IR + composer (ADR-016).
 clawft-surface = { workspace = true }
-
 # ── Native-only dependencies ─────────────────────────────────────────
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
