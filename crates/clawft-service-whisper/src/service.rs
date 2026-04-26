@@ -1040,7 +1040,7 @@ mod tests {
             ..Default::default()
         };
         let input_path = cfg.input_path.clone();
-        let output_path = cfg.output_path.clone();
+        let output_path = cfg.output_path_derived.clone();
         let actor = cfg.node_id.clone();
         let (_oid, mut out_rx) = substrate.subscribe(Some(&actor), &output_path).unwrap();
         let svc = WhisperService::spawn(substrate.clone(), client, cfg).unwrap();
