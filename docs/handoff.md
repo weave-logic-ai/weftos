@@ -1,439 +1,510 @@
-# Session handoff — 2026-04-25
+# Session handoff — 2026-04-26
 
 Pick-up doc for the next session. Reflects `phase3-node-identity` at
-commit `04df62ca` plus two **uncommitted** post-handoff fixes (extension
-RPC allowlist, leaf-carrot recursion guard). Branch is 15 commits ahead
-of `master` and pushed to `origin/phase3-node-identity`.
+commit `6ebc8ad5`. Branch is **23 commits ahead** of `master`. All
+green: `scripts/build.sh check` + `clippy` clean; targeted tests pass
+across every touched crate (15 + 7 + 15 + 34 + 215 + 41 = 327 unit
+tests + integration). The full-workspace `cargo test --workspace`
+deadlocks against any live daemon's runtime dir — this is a
+documented flake, NOT a regression. Run targeted tests instead:
 
-## Post-handoff fixes (uncommitted) — 2026-04-25 evening
+```bash
+cargo test -p clawft-service-llm \
+          -p clawft-service-terminal \
+          -p clawft-service-classify \
+          -p clawft-service-whisper \
+          -p clawft-gui-egui \
+          -p clawft-weave --lib
+```
 
-The hand-back from the prior session had two visible bugs the user hit
-on first re-test:
+This session was a single big push: the LLM connect, then a
+five-agent parallel wave that landed chat / terminal / VAD-classifier
+/ mesh-canonical write gate / GUI cleanups simultaneously.
+**Merge-to-master is now within reach.** The user's gating rule was
+"kernel + mesh + chain + explorer all work well, plus terminal and
+clawft chat window" — every item on that list is in the tree. The
+remaining holdouts are the live-verify and a doc/UX polish pass; see
+"Open loops" at the bottom.
 
-1. **Toggle button click did nothing** — `control.set_enabled` was
-   shipped on the daemon and wired into the explorer's
-   `control_toggle.rs`, but never added to the VSCode extension's
-   `ALLOWED_METHODS` proxy allowlist
-   (`extensions/vscode-weft-panel/src/extension.ts:39`). The viewer
-   uses fire-and-forget (`reply: Some(reply_channel().0)` —
-   immediately dropped), so the proxy's `"method not allowed"`
-   rejection was eaten silently. **Fix:** added `control.set_enabled`
-   + `control.list` to the allowlist; `out/extension.js` recompiled.
-   Rule of thumb captured in
-   `~/.claude/projects/-home-aepod-dev-clawft/memory/feedback_extension_rpc_allowlist.md`:
-   any new RPC the WASM panel will fire must also be allowlisted, or
-   it dies silently.
+---
 
-2. **Carrot on a leaf node crashed the GUI** — kernel
-   `SubstrateService::list(prefix)` deliberately returns
-   `[{ path: prefix, has_value: true, child_count: 0 }]` when
-   `prefix` is itself a leaf carrying a value, so a caller can ask
-   "is this a leaf?" without a separate read. Locked by the kernel
-   test `list_leaf_prefix_returns_itself`. The Explorer's
-   `render_node` recursed on every child of an expanded prefix —
-   so clicking the `▸` on any leaf made `tree_children["<leaf>"]`
-   contain itself, and the row rendered itself inside itself
-   indefinitely → WASM stack overflow → "the app breaks." **Fix in
-   `crates/clawft-gui-egui/src/explorer/tree.rs`:**
-   - Suppress the expand caret on leaves
-     (`is_leaf = has_value && child_count == 0`). Leaves render
-     padded to the same column width with no `▸` glyph.
-   - Defensive `if child.path == prefix { continue }` in the
-     recursive child loop. Belt-and-suspenders.
-   - New parser test
-     `parse_list_response_preserves_leaf_self_reference` documents
-     that we do NOT filter the kernel's leaf-as-self reply at parse
-     time — the recursion guard is in `render_node`. If a future
-     refactor moves the filter, the kernel-side leaf-probe semantic
-     will break for any external caller.
-   Memory at `project_substrate_list_leaf_self.md` captures the
-   contract.
+## What's new this session
 
-Both fixes are tested clean: `scripts/build.sh check`, `clippy`, and
-`test` (with `WEFTOS_RUNTIME_DIR=/tmp/nonexistent-weftos-$$` to dodge
-the documented `clawft-rpc` no-daemon flake) all green. WASM bundle
-rebuilt at 18:03 (`webview/wasm/clawft_gui_egui_bg.wasm`,
-5,788,867 b).
+### LLM connect (commit `a05e22ac`)
 
-User has not yet visually confirmed the toggle flips after webview
-reload — that's the first thing to check on resume. If confirmed,
-both fixes plus 2026-04-25 daytime work bundle into one commit on
-`phase3-node-identity`.
+The daemon now talks to a locally-hosted llama-server and exposes a
+single synchronous chat-completions RPC.
+
+- New crate **`clawft-service-llm`** — mirrors `clawft-service-whisper`
+  exactly (in-flight semaphore=1, health probe + retry-or-not error
+  taxonomy, wiremock unit tests). Posts to OpenAI-compat
+  `/v1/chat/completions`. 15/15 unit tests green.
+- **Why a new crate, not `clawft-llm`** — the existing crate is the
+  general provider abstraction (OpenAI/Anthropic/native + routing +
+  failover + SSE), targets browser+native, brings in `clawft-types`
+  + `eml-core` + `uuid` + a futures stack. For the daemon's
+  "POST one prompt to a single localhost endpoint" use case that
+  surface is overkill and the dependency edge would couple the
+  daemon-only HTTP wrapper to a browser-targeted abstraction. Crate
+  doc at the top of `lib.rs` explains.
+- **Daemon wiring** — `DAEMON_LLM` (`OnceLock<Arc<LlmClient>>`),
+  background tokio task probes `/health` at boot,
+  `control.set_enabled {target:"llm"}` source-cuts the call, initial
+  control intent published under `substrate/<daemon-node>/control/services/llm`.
+- **Protocol** — `LlmPromptParams { prompt | messages | system |
+  temperature | max_tokens }` + `LlmPromptResult { completion |
+  finish_reason | prompt_tokens | completion_tokens | model }`.
+  Streaming is **deliberately deferred** — when the chat window grows
+  a per-token UI, it lands as `llm.prompt_stream` mirroring
+  `substrate.subscribe`'s connection-takeover pattern, NOT as a
+  breaking change.
+- **Verified live** at `127.0.0.1:8111` against
+  `Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf`. `llm.prompt {prompt:"Reply with
+  exactly: hello clawft"}` returns the expected completion;
+  `control.set_enabled {target:"llm", enabled:false}` cuts subsequent
+  calls before any HTTP hit.
+
+Memory: `~/.claude/projects/-home-aepod-dev-clawft/memory/project_llm_service_shipped.md`
+
+### Chat window panel (commit `e23807fb` → merged in `b96d413a`)
+
+Egui chat surface that talks to `llm.prompt`.
+
+- New module `crates/clawft-gui-egui/src/explorer/chat.rs`. Holds
+  `ChatView { history, draft, in_flight }` across paints.
+- Daemon publishes `substrate/<daemon-node>/ui/chat` with
+  `{ "kind": "chat", "model": "<llama-server model>" }` next to the
+  initial control intents. Panel matches `kind == "chat"` at
+  priority 40 (wins over Workshop=30 and control_toggle=25).
+- Existing `Live::Command::Raw { reply }` + `try_recv_reply` already
+  return `Result<Value, String>` — the chat panel reuses the
+  Workshop drain pattern; no new RPC plumbing needed.
+- `ChatMessage` is local to the GUI crate (not re-exported from
+  weave) so gui-egui doesn't pull a tokio-server edge.
+- `Explorer::on_select` and `Explorer::close` reset the chat view
+  so a hidden panel can't keep an in-flight `llm.prompt` against
+  llama-server's single-batch slot.
+- Scope cuts (deferred): no streaming, no markdown, no system-prompt
+  UI, no model picker, no on-disk persistence.
+
+### Terminal pane (commit `a509cd14` → merged in `ced776bd`)
+
+Daemon-side PTY service, surfaced as an explorer panel.
+
+- New crate **`clawft-service-terminal`** wrapping `portable-pty 0.8`.
+  Public `TerminalManager` over `DashMap<SessionId, Arc<TerminalSession>>`.
+  Auto-detects shell (`requested → $SHELL → /bin/bash → /bin/sh`),
+  sets `TERM=xterm-256color`, **runs the blocking reader on a
+  dedicated OS thread** (a tokio worker would stall on
+  `std::io::Read`).
+- Four RPCs: `terminal.spawn { rows, cols, shell?, cwd? }` →
+  `{ session_id, rows, cols, shell }`, `terminal.write { id, data
+  /*base64*/ }`, `terminal.resize`, `terminal.close`.
+- Output: each PTY chunk is base64-encoded and published to
+  `substrate/<daemon-node>/derived/terminal/<session_id>` as
+  `{ data, ts_ms, exit }`. The egui panel polls the path every
+  250 ms (dedupes by tick), base64-decodes UTF-8-lossy into a
+  sticky-bottom `ScrollArea`.
+- Sentinel: `substrate/<daemon-node>/ui/terminal` with `{ "kind":
+  "terminal" }`. **Convention** locked in by both this and the chat
+  panel: `substrate/<daemon-node>/ui/<name>` with at minimum
+  `{ "kind": "<name>" }` is how new top-level UI surfaces declare
+  themselves.
+- `Explorer::on_select` / `close` now take `&Arc<Live>` so they can
+  fire `terminal.close` on navigate-away.
+- Sharp edges flagged for follow-up:
+  - **ANSI escapes render as literal `\u{1b}[...`** — `vte` parser is
+    the next iteration.
+  - **Output dedup is by `tick`**, not append-only-log. Two chunks
+    with identical bytes between two polls collapse into one. Fix is
+    a per-session output sub-stream path or tick-bumping append.
+  - **`take_events()` is single-consumer** — a chat agent and a panel
+    can't both watch the same session yet. Daemon-side drain is the
+    only consumer today; fan-out is the next change.
+  - **`Drop` on `Terminal` can't fire `terminal.close`** (no `Live`
+    handle). Explorer's explicit `close()` and `on_select()` cover
+    happy paths; if neither runs (process kill), the daemon-side
+    session lives until daemon shutdown. Acceptable since no
+    background traffic.
+  - **No SIGWINCH handshake** — we just call `MasterPty::resize`
+    (ioctl). In-shell apps see it on next read.
+
+### Audio-classifier Stage (commit `dbf521f8` → merged in `be8366d3`)
+
+The Stage between PcmSource and WhisperInference per
+`.planning/sensors/PIPELINE-PRIMITIVE-JOURNAL.md` §R2.
+
+- New crate **`clawft-service-classify`** with `ClassifierBackend`
+  trait — the seam for the future llama.cpp-hosted classifier.
+- Initial backend `EnergyClassifier` is RMS-dBFS threshold (default
+  `-45 dB`, override via `VAD_RMS_THRESHOLD_DB`); emits
+  `Classification { class: String, confidence, rms_db, sample_rate,
+  samples, ts_ms, source_node, source_seq }`. **`class` is a String
+  on purpose** — a future classifier emits `"music"` / `"noise"` /
+  `"speech"` / etc. without breaking subscribers (per the
+  `project_vad_classifier_via_llamacpp.md` memory).
+- `ClassifierService::spawn` mirrors `WhisperService::spawn`
+  (subscribe → decode b64→i16le → backend → `publish_gated`) with
+  the same `service_enabled` / `source_enabled` `Arc<AtomicBool>`
+  flags.
+- **Whisper is now gated on classifier output via substrate, not via
+  a Rust edge.** New `WhisperServiceConfig` fields `classifier_input:
+  Option<String>` + `gate_window_ms: u64` (default `1500`, ≈ two
+  pcm_chunk periods at the firmware's 2 Hz cadence — long enough to
+  bridge inter-syllabic pauses, short enough that sustained quiet
+  closes the gate). The chunk-receive arm checks an internal
+  `is_speech` flag updated by a background subscriber task.
+- 15 classify-crate tests + 4 new whisper tests
+  (skip-on-silence / process-on-speech / stickiness / wire-pin).
+
+Memory: `~/.claude/projects/-home-aepod-dev-clawft/memory/project_vad_classifier_via_llamacpp.md`
+
+Surprise the agent flagged: the existing whisper service runs
+everything in one fat `tokio::select!` rather than the R2
+Source/Stage/Sink split, so adding the gate was a tactical patch
+rather than a slot in a clean Stage layer. The journal's "small
+refactor" estimate is real and waiting.
+
+### Mesh-canonical write gate, R3.6 (commit `8be9e70d`)
+
+Daemon-class nodes can now write `substrate/_derived/...` under an
+explicit grant.
+
+- `DerivedWriteGrant { grantee_node_id, topic, issued_at_ms, scope }`
+  with `GrantScope::{ExactTopic, TopicPrefix}`. Stored in a sibling
+  `DashMap<(grantee, topic), grant>` on `NodeRegistry`.
+- New method **`SubstrateService::publish_gated_with_grants(node,
+  path, value, &NodeRegistry)`** adds the tier split. Mesh-canonical
+  paths (`substrate/_derived/...`) consult the grant table; everything
+  else falls through to the existing per-node-prefix rule. Legacy
+  `publish_gated` keeps strict semantics so unmigrated callers still
+  reject `_derived/` writes — opt-in by switching to the new method.
+- Daemon issues itself `transcript` / `classify` / `terminal` grants
+  right after node-identity bootstrap.
+- **Whisper dual-publish migration** — publishes to BOTH
+  `substrate/_derived/transcript/<src>/mic` (canonical, R3.2) AND the
+  legacy `substrate/<daemon>/derived/transcript/<src>/mic`. Legacy
+  publish wrapped in `// REMOVE AFTER PHASE 4` and tracing target
+  `"deprecated"`. Subscribers in this repo all discover via
+  `substrate.list/read` walks rather than hardcoded subscriptions, so
+  the migration risk is limited to operator-driven `substrate.subscribe`
+  invocations against the old path — none of which live in this tree.
+- 9 new node_registry tests + 7 new substrate_service tests + 3 new
+  integration tests in `crates/clawft-weave/tests/derived_grant_gate.rs`.
+
+Open follow-ups (R3.6 explicitly out of scope):
+- No multi-node grant federation — single daemon issues to itself.
+- No grant revocation API — grants permanent for daemon lifetime.
+- No transparent migration of `substrate.subscribe` paths.
+
+### Disable-device toggle bug fixes (commit `8bc6fb23`)
+
+Two post-handoff bugs from the prior session that prevented the
+sensor toggle from working:
+
+1. **Extension RPC allowlist gap** — `control.set_enabled` /
+   `control.list` shipped on the daemon and wired into the toggle
+   viewer, but never added to `extensions/vscode-weft-panel/src/extension.ts`'s
+   `ALLOWED_METHODS`. Toggle viewer fires fire-and-forget, so the
+   proxy reject was eaten silently. Fix: 2 lines added to allowlist.
+2. **Leaf-node carrot recursion → WASM stack overflow** — kernel's
+   `substrate.list` deliberately returns `[{path:prefix,
+   has_value:true, child_count:0}]` when prefix is itself a value-
+   carrying leaf (so callers can leaf-probe without a separate
+   read). The Explorer's `render_node` recursed on every child of an
+   expanded prefix; clicking the ▸ on a leaf put the leaf into
+   `ex.expanded` and the next list-response populated
+   `tree_children["<leaf>"]` with a single entry whose path was the
+   leaf itself — infinite recursion → WASM stack overflow. Fix:
+   suppress caret on leaves (`is_leaf = has_value && child_count ==
+   0`) + defensive `if child.path == prefix { continue }` belt-
+   and-suspenders. New parser test asserts we do NOT filter the
+   kernel's leaf-as-self response at parse time — the recursion guard
+   lives in `render_node`, not in the parser, because filtering at
+   the parser would silently break any external caller that uses
+   `substrate.list` as a leaf probe.
+
+Memories:
+- `~/.claude/projects/-home-aepod-dev-clawft/memory/feedback_extension_rpc_allowlist.md`
+- `~/.claude/projects/-home-aepod-dev-clawft/memory/project_substrate_list_leaf_self.md`
+
+### GUI cleanups bundle (commits `5a067eef`, `5a194c8b`, `551d25a2` → merged in `29702177`)
+
+- **Mic tray-chip gauge migration.** New `crates/clawft-gui-egui/src/live/mic_discovery.rs`
+  walks a `substrate.list` response and returns the first child path
+  ending in `/sensor/mic/rms`. Native driver runs discovery once per
+  (re)connect. `None` → chip dimmed "no mic." 7 unit tests including
+  a defensive check that the legacy flat path does NOT match.
+- **Decoded waveform mini-plot in `PcmChunkViewer`.** 40 px painter
+  line, full row width, normalized [-1, 1]. Decode-time decimation
+  caps at 60 points; `MIN_DECODE_INTERVAL_MS = 250` rate-limits
+  decode to ≤4 Hz. Cache keyed by `(path, start_ts_ms)` in egui
+  memory so repaints between decodes are free. 7 new viewer tests.
+- **Workshop-watcher example migration.** `crates/clawft-gui-egui/examples/workshop-watcher.rs`
+  was broken since the Phase 3 gate flip (publishes were unsigned).
+  Inline `LocalNode` (adapted from `clawft-weave/tests/substrate_rpc.rs::TestNode`)
+  generates ephemeral keypair, registers, signs every publish over
+  `node_publish_payload`. Default publish path now
+  `substrate/<this-example's-node-id>/ui/workshop/<name>`. One-shot
+  `substrate.canonical_publish_payload` self-check at boot.
+  **Live verification deferred** — example builds clean, runtime
+  test against a daemon is the next step.
 
 ---
 
 ## Right this second — what's running
 
-**End-to-end live system, all of it on one daemon + one ESP32:**
+**Daemon:** old binary (PID 78737, started 2026-04-25 21:37 from
+commit `a05e22ac`). Still listening on
+`unix:.weftos/runtime/kernel.sock` and `tcp:0.0.0.0:9471`. Whisper
+service still publishing transcripts; ESP32 `n-bfc4cd` still
+connected. Node-id `n-046780`.
 
-- **Daemon** (`weaver kernel start --foreground`) — node-id `n-046780`,
-  keyfile at `.weftos/runtime/node.key` (0600). Generated at first
-  run; same id across restarts. Listening on
-  `unix:.weftos/runtime/kernel.sock` and `tcp:0.0.0.0:9471`.
-- **ESP32** (`weftos-mic-node` firmware, INMP441 MEMS mic) — node-id
-  `n-bfc4cd`. Calls `node.register` after WiFi up, signs every
-  `substrate.publish` over the canonical
-  `node_publish_payload(path, value_json, ts, node_id)`. Wire
-  shape: alphabetical-keyed JSON `value` (locked in dialog file
-  resolution).
-- **Whisper service** (`clawft-service-whisper`, in-process tokio
-  task) — subscribes to
-  `substrate/n-bfc4cd/sensor/mic/pcm_chunk`, windows into 2-s
-  buffers, POSTs to `whisper.cpp` HTTP at `127.0.0.1:8123` (model
-  `ggml-large-v3-turbo-q5_0.bin`). Publishes transcripts to
-  `substrate/n-046780/derived/transcript/n-bfc4cd/mic` via
-  `publish_gated`.
-- **whisper.cpp server** — separate process at
-  `~/llama.cpp/whisper-src/build/bin/whisper-server` started via
-  `~/llama.cpp/whisper-server.sh start`.
+**The merged tree carries new daemon RPCs (`llm.prompt`,
+`terminal.*`) and a new daemon-side service (classify) that the
+running binary doesn't know about.** Restart the daemon to pick them
+up — see the "On return" block below.
 
-**Just verified live this session:**
+**Whisper-server:** `/home/aepod/llama.cpp/whisper-src/build/bin/whisper-server`
+at `127.0.0.1:8123` (Qwen3 STT). Health endpoint `GET /health`.
+Start/stop via `~/llama.cpp/whisper-server.sh`.
 
-- RMS values flowing at ~1 Hz on `substrate/n-bfc4cd/sensor/mic/rms`
-  (current sample: `rms_db=-57.5 peak_db=-45.5` at tick 3049 — quiet
-  room).
-- Transcripts flowing at ~0.5 Hz on the daemon's transcript path
-  (current sample: `text="Okay.\n" window=870000-872000ms` at
-  tick 3058).
-- Sensor enable/disable cuts pcm_chunk traffic at the ESP32 within
-  ~2.5 s (firmware polls control intent every 2 s). Toggled
-  off/on, observed substrate tick flat for the off window then
-  resume.
+**llama-server (LLM):** `127.0.0.1:8111` running
+`Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf`. The new daemon will probe this on
+boot and log `llm service: healthy url=http://127.0.0.1:8111` if it
+answers.
 
-**Cross-Claude dialog file** at
+**ESP32 (`weftos-mic-node`):** node-id `n-bfc4cd`, WiFi-DHCP
+`192.168.1.178`. Polls control paths every 2 s. Will reconnect
+automatically when the daemon comes back up.
+
+**Cross-Claude dialog file:**
 `/mnt/c/Users/aepod/OneDrive/Desktop/mentra/docs/clawft-dialog.md`
-(=`~/dev/mentra/docs/clawft-dialog.md` from WSL via OneDrive
-mount). Append-only, role-tagged. Both kernel and firmware Claudes
-read from + post to it. Watch it when iterating wire formats.
+(=`~/dev/mentra/docs/clawft-dialog.md` from WSL). Append-only,
+role-tagged. Read it before changing any wire format.
 
 ### What the user should do on return
 
-1. The daemon and whisper-server should still be up. If not:
+1. **Confirm fresh artifacts.**
+   ```bash
+   ls -la ~/.cargo/bin/weaver ~/dev/clawft/target/release/weaver
+   ls -la ~/dev/clawft/extensions/vscode-weft-panel/webview/wasm/clawft_gui_egui_bg.wasm
+   ```
+   The 2026-04-26 session ends with both built fresh against `6ebc8ad5`.
+2. **The daemon was restarted at end-of-session.** If it isn't up:
    ```bash
    bash ~/llama.cpp/whisper-server.sh start
-   RUST_LOG=info nohup ~/.cargo/bin/weaver kernel start --foreground \
+   cd ~/dev/clawft && RUST_LOG=info nohup ~/.cargo/bin/weaver kernel start --foreground \
        > ~/dev/clawft/.weftos/runtime/kernel.log 2>&1 &
    ```
-2. **`Ctrl+Shift+P` → "Developer: Reload Webviews"** in Cursor.
-   The WASM bundle was rebuilt at the end of this session (15:37);
-   the Cursor webview probably has the old one cached.
-3. Open the WeftOS panel. Tree should show:
+3. **`Ctrl+Shift+P` → "Developer: Reload Webviews"** in Cursor —
+   the WASM bundle was rebuilt at 23:05.
+4. Open the WeftOS panel. Tree should show:
    ```
    ▾ n-046780 (daemon)
        control/
          services/whisper       — toggle
-         sensors/n-bfc4cd/mic/  — toggles for pcm_chunk + rms
-       derived/transcript/n-bfc4cd/mic   — live transcript
+         services/llm           — toggle           ← new
+         services/classify      — toggle           ← new
+         sensors/n-bfc4cd/mic/  — toggles
+       derived/transcript/n-bfc4cd/mic    — live transcript (legacy path, dual-published)
+       derived/classify/n-bfc4cd/mic      — live classification ← new
+       derived/terminal/<sid>             — appears once a session is spawned
+       ui/chat                ← new sentinel; click to open chat panel
+       ui/terminal            ← new sentinel; click to open terminal panel
+   ▾ _derived/                                    ← new mesh-canonical tier
+       transcript/n-bfc4cd/mic  — live transcript (canonical path, R3.2)
    ▾ n-bfc4cd (esp32-mic-node)
-       sensor/mic/rms           — INMP441 RMS bars
-       sensor/mic/pcm_chunk     — clean metadata view (no lockup)
+       sensor/mic/rms / pcm_chunk
    ```
-4. Click `pcm_chunk`. Should render PcmChunkViewer (sample rate,
-   channels, ~8000 samples / 500 ms, encoded byte count) — NOT
-   the JSON fallback's 21-KB string. If it locks up, the WASM
-   reload didn't take.
-5. Click any `control/services/whisper` or `control/sensors/...`
-   path. Should render the toggle viewer with Enable/Disable
-   button. Click to toggle; effect lands within ~2.5 s.
-
----
-
-## What shipped this session (2026-04-24 evening → 2026-04-25)
-
-### Phase 3 — node identity + write gate (commits 1–8)
-
-All on `phase3-node-identity` branch. Prior session ended with a flat
-substrate path scheme (`substrate/sensor/mic` etc.) and unsigned
-publishes accepted. This phase landed the node-identity invariant.
-
-- `cfb69319` **NodeRegistry + publish_gated** — kernel infra. Node-id
-  is `n-<6-hex>` BLAKE3 prefix of an Ed25519 pubkey; gate enforces
-  `path.starts_with("substrate/<node-id>/")` for every write.
-  `node_publish_payload(path, value_json, ts, node_id)` is the
-  canonical signing layout.
-- `21d4e89a` Node-id format finalised (`n-<6-hex>`) per
-  `.planning/sensors/JOURNALED-NODE-ESP32.md` §2.2.
-- `7fdf696f` **Daemon identity bootstrap** — generates and persists
-  ed25519 keypair on first run, registers self at boot.
-- `72c115e2` **`node.register` RPC** — proof-of-possession registration
-  mirroring `agent.register` but for nodes. Returns deterministic
-  `node_id`.
-- `9c99ee10` **`substrate.publish` gate flip** — every publish must
-  carry `node_id` + `node_signature` + `node_ts`. Hard reject on
-  unsigned, cross-node, top-level-flat, unknown-node. Existing
-  integration tests grew a `TestNode` helper that registers and
-  signs.
-- `2216a4d3` **Explorer cleanup** — drops the synthetic
-  "substrate/" header row; tree now starts cleanly with node-ids
-  as the top level.
-- `359b97f4` **Whisper service wired into the daemon** — also
-  schema-aligned the in-crate `PcmChunk` deserializer to the
-  ESP32's actual emission shape (`{ data, encoding, format,
-  sample_rate, channels, samples, start_ts_ms }` — richer than
-  the original spec). Old `pcm_b64` / `seq` / `chunk_ms` accepted
-  as serde aliases for backward-compat with `publish_wav.rs`.
-
-### Cross-Claude byte-layout debug (dialog-driven)
-
-Firmware Claude shipped flashed firmware with signing logic; every
-`substrate.publish` returned `signature verify failed`. They
-hypothesised the daemon re-serializes through `serde_json::Value`
-and BTreeMap-alphabetises keys. **Confirmed correct** (workspace
-doesn't enable `serde_json/preserve_order`). Posted the worked
-example with hex bytes; firmware shipped Option A (alphabetical
-emit) and signatures verified.
-
-`8c631f14` shipped `substrate.canonical_publish_payload` echo RPC
-so the next byte-layout drift is a one-shot diff instead of
-three-Claude triangulation. Firmware's `node.identity` request
-landed as `c656cd38`.
-
-### Phase 2 of the control plane (commit a8bdc631)
-
-User asked: "we have to be able to enable/disable any sensor from
-explore." Strict requirement: cut traffic at the source, not
-soft-disable on the consumer.
-
-**Substrate-backed control plane:**
-
-- Path scheme:
-  `substrate/<authority-node>/control/{services,sensors}/<target>`.
-  Authority writes under its own prefix; subjects subscribe to
-  intents from authorities they trust. No gate exception needed.
-- `ControlIntent` value: `{ enabled, kind, target, label,
-  updated_at_ms }`.
-- RPCs: `control.set_enabled { kind, target, enabled, label? }`
-  and `control.list`.
-- `ControlFlags` registry on the daemon — Arc<AtomicBool> per
-  target, shared between RPC handlers and consumer-side enforcement.
-- Whisper service grew `service_enabled` + `source_enabled` flags
-  in `WhisperServiceConfig`. Both checked in the chunk-receive
-  loop. Wiremock `.expect(0)` tests verify zero `/inference`
-  calls when either flag is false.
-- Initial intents published at boot for: whisper service,
-  pcm_chunk sensor, rms sensor.
-
-**Explorer toggle viewer** (`control_toggle.rs`) — shape-matches
-control intent, renders Enable/Disable button, fires
-`control.set_enabled` on click. Lives outside the
-`SubstrateViewer` trait because it needs Live for RPCs (same
-pattern as Workshop).
-
-**Firmware contract** posted to dialog: subscribe to
-`substrate/<daemon-node>/control/sensors/<own-node>/<sensor-tail>`
-after register, stop emit task entirely on `enabled: false`.
-
-**Firmware shipped poll-based subscribe** (2-s cadence — they
-explained why subscribe-on-same-socket would need request-response
-demux they didn't want to build for human-scale latency). Verified
-live: pcm_chunk tick stops advancing within the 2.5-s budget after
-toggle-off, resumes cleanly on toggle-on.
-
-`c656cd38` **`node.identity` RPC** — returns the running daemon's
-own `{ node_id, label, registered_at }`. Firmware uses this on
-first connect to drop the `#define DAEMON_NODE_ID` it had
-hardcoded.
-
-### Whisper transcripts proven live
-
-`Yes.` and `Yeah, it seems to get it.` came through during a 30-s
-subscribe stream. "Thank you." hallucinations on near-silence are a
-known whisper-large-v3-turbo artifact (training data has lots of
-YouTube outros). Useful Sensors' Moonshine specifically advertises
-not doing this — good candidate when we add a VAD pre-filter Stage.
-
-### Build-id banner (commit 8c631f14)
-
-User suggested putting a build-id at the top of every binary's
-output. Added `crates/clawft-weave/build.rs` that captures git
-short hash + UTC timestamp. Daemon now prints
-`weaver 0.6.19 · git <hash> · built <iso>` as the first stdout
-line and the same goes through tracing INFO. `weaver --version`
-upgraded to match.
-
-### Explorer pcm_chunk lockup fix (commit 04df62ca)
-
-Last-minute bug: clicking `pcm_chunk` in the tree locked up the
-GUI. Root cause: `JsonFallbackViewer::paint_string` cached its
-expand state by `(path, length)`. Once expanded once, every
-subsequent same-length value (every 500-ms chunk is exactly
-21,336 b64 chars) re-laid out a 21-KB monospace galley each
-frame, choking the render thread.
-
-Fix:
-- Hard cap `STR_INLINE_HARD_MAX = 4096` in `json_fallback.rs`. Above
-  that, never inline-render in full — clipped preview + size badge
-  + copy-to-clipboard button.
-- New dedicated `PcmChunkViewer` at priority 20 — matches the
-  firmware's emission envelope and renders metadata only. Decoded
-  waveform plot deferred (would need throttled b64 decode).
-
-WASM rebuilt at end of session — 5,788,743 bytes, mtime 15:37.
-
-### Sensor planning docs landed (commit d1ccec83)
-
-Background-agent pass produced `.planning/sensors/`:
-- `JOURNALED-SENSOR-MIC.md` — INMP441 as first journaled sensor.
-- `JOURNALED-NODE-ESP32.md` — ESP32-S3 as first journaled node.
-- `HEALTHCHECK-CONTRACT.md` — generic node + sensor health shape.
-- `EXPLORER-MANAGEMENT-SURFACE.md` — proposal for the toggle UI we
-  partially shipped this session.
-
-### Pipeline-primitive journal R2 + R3 revisions (commit df51d832)
-
-`.planning/sensors/PIPELINE-PRIMITIVE-JOURNAL.md` now carries:
-- **R2** — Source/Stage/Sink split. Pure stages; identity at the
-  Sink; placement axis collapses.
-- **R3** — Two-tier path rule (node-private vs mesh-canonical),
-  Q1 federation resolved as election (not redundancy), Sink grows
-  `pipeline_id` / `process_id` / `target_tier`, governance via
-  `DerivedWriteGrant`, audit envelope `(node_id, process_id,
-  pipeline_id, ts, signature)`, attest-vs-authenticate (chose
-  attest for now), 4 new open questions.
+5. **Try the chat window:** click `ui/chat`. Type a message, hit
+   Enter. Should round-trip through `llm.prompt`. Qwen3 burns most
+   tokens on its `<think>` block, so set max_tokens generously
+   (default 512 in the daemon config; not exposed in UI yet).
+6. **Try the terminal:** click `ui/terminal`. Should auto-spawn a
+   shell (sees `$SHELL` first, falls back to bash). Type `echo hi`,
+   press Enter, see output. ANSI sequences render literal — that's
+   the documented vte-parser follow-up.
+7. **Click `pcm_chunk`:** should render PcmChunkViewer with the new
+   waveform mini-plot underneath the metadata.
 
 ---
 
 ## Runtime state
 
-### Daemon
+### Daemon binary
 
 - Binary: `/home/aepod/.cargo/bin/weaver` — installed from
-  `phase3-node-identity` tip. Last `cargo install` at the end of
-  this session.
-- Process: PID `91033` at end of session. Confirm with
-  `pgrep -af 'weaver kernel'`.
+  `phase3-node-identity` tip `6ebc8ad5`. Last `cargo install` at
+  end-of-session.
+- Process: PID was `78737` early in session, restarted at
+  end-of-session against the new binary.
 - Unix socket: `.weftos/runtime/kernel.sock`
-- TCP relay: `127.0.0.1:9471` (also bound `0.0.0.0:9471` for ESP32
-  LAN access via WSL2 mirrored networking on `192.168.1.73`).
+- TCP relay: `127.0.0.1:9471` (also `0.0.0.0:9471` for ESP32 LAN
+  via WSL2 mirrored networking on `192.168.1.73`).
 - Log: `.weftos/runtime/kernel.log`. Daemon node-id is `n-046780`.
-- Substrate tick: ~3000+ at end of session.
-
-### Whisper-server
-
-- Binary: `/home/aepod/llama.cpp/whisper-src/build/bin/whisper-server`
-- Process: PID `14038` at end of session.
-- Port: `127.0.0.1:8123`. Health endpoint `GET /health` → `{"status":"ok"}`.
-- Model: `ggml-large-v3-turbo-q5_0.bin` (16-kHz mono i16le input).
-- Start/stop/status: `~/llama.cpp/whisper-server.sh {start|stop|status}`.
-
-### ESP32 (`weftos-mic-node`)
-
-- Owned by Windows-side firmware Claude (`weftos-mic-node/` repo).
-- Node-id `n-bfc4cd`. WiFi-DHCP `192.168.1.178`. Connects to
-  `192.168.1.73:9471`.
-- Polls control paths every 2 s; respects `enabled: bool`.
-- Hardcoded `#define DAEMON_NODE_ID "n-046780"` — firmware Claude
-  said next iteration switches to `node.identity` RPC.
-
-### Cursor extension
-
-- Source: `extensions/vscode-weft-panel/`. Latest `out/extension.js`
-  picks up `node.register` allowlist (already shipped in prior
-  session).
-- WASM bundle: `extensions/vscode-weft-panel/webview/wasm/clawft_gui_egui_bg.wasm`
-  — rebuilt at 15:37 today. Gitignored; regenerate with
-  `extensions/vscode-weft-panel/scripts/build-wasm.sh`.
-- After every WASM rebuild: `Ctrl+Shift+P` → "Developer: Reload
-  Webviews".
 
 ### Branches
 
-- `phase3-node-identity` — tip `04df62ca`. Pushed to origin. 15
-  commits ahead of `master`. Open PR URL surfaced by the remote:
-  `https://github.com/weave-logic-ai/weftos/pull/new/phase3-node-identity`.
-- `master` — unchanged from prior session.
-- Remote `origin` is technically still at `clawft.git`; GitHub
-  redirected this repo to `weftos.git`. `git remote set-url origin
-  git@github.com:weave-logic-ai/weftos.git` cleans up the "this
-  repository moved" warning. Not urgent.
+- `phase3-node-identity` — tip `6ebc8ad5`. Pushed to origin (need
+  `git push` if you want it on the remote — local-only at end of
+  session). 23 commits ahead of `master`.
+- All five worktrees (`agent-aa797dec06afad46f`,
+  `agent-a282fd684e8be096d`, `agent-a449c31cd9ac44da4`,
+  `agent-a776be7c32eaa4fcd`, plus the unused
+  `agent-af74d2cb05c70b68b`) cleaned up. Stale branches deleted.
+
+### llama-server
+
+- Binary: `/home/aepod/llama.cpp/build/bin/llama-server`
+- Port: `127.0.0.1:8111`
+- Model: `Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf`
+- Health: `GET http://127.0.0.1:8111/health` → `{"status":"ok"}`
+- The daemon's `clawft-service-llm` boot probe will log this status
+  line.
 
 ---
 
-## Key architectural decisions this session
+## Architectural decisions this session (read in order for context)
 
-Read in order for context:
-
-- **`.planning/sensors/PIPELINE-PRIMITIVE-JOURNAL.md` §R3** — node
-  vs actor split, two-tier path rule (node-private vs
-  mesh-canonical), election-not-redundancy, governance shape, audit
-  envelope, attest-vs-authenticate. Most load-bearing for what's
-  next.
-- **`.planning/sensors/JOURNALED-NODE-ESP32.md`** — node-id format
-  spec, key custody (plain NVS for MVP, eFuse later), ESP32 as
-  first journaled node.
-- **`crates/clawft-kernel/src/node_registry.rs`** — canonical
-  signing payloads (`node_register_payload`,
-  `node_publish_payload`), `path_belongs_to`, `node_id_from_pubkey`.
-- **`crates/clawft-weave/src/control.rs`** — control-plane shape +
-  flag registry. Read with the dialog file's
-  "[kernel] 2026-04-25 — Sensor enable/disable control plane" entry.
-- **`/mnt/c/Users/aepod/OneDrive/Desktop/mentra/docs/clawft-dialog.md`**
-  — running cross-Claude transcript. Read before changing any wire
-  format.
+- **`crates/clawft-service-llm/src/lib.rs`** — top-of-file rationale
+  for why this is a separate crate from `clawft-llm`.
+- **`crates/clawft-service-classify/src/`** — `ClassifierBackend`
+  trait shape. Future llama.cpp-hosted classifier swaps in by
+  implementing this trait against a HTTP endpoint; subscribers don't
+  change.
+- **`crates/clawft-kernel/src/node_registry.rs`** — `DerivedWriteGrant`
+  + `GrantScope` types, `issue_derived_grant`,
+  `has_derived_grant`. Sibling table to `NodeRegistration` per
+  R3.6's "separate permission" mandate.
+- **`crates/clawft-kernel/src/substrate_service.rs`** —
+  `publish_gated_with_grants` is the new opt-in surface. Old
+  `publish_gated` kept strict for unmigrated callers.
+- **`crates/clawft-service-terminal/src/session.rs`** — PTY reader
+  on dedicated OS thread, sentinel convention
+  `substrate/<daemon-node>/ui/<name>`.
+- **`crates/clawft-gui-egui/src/explorer/{chat,terminal}.rs`** — the
+  two new non-trait viewer modules. Both register at the same
+  dispatch arm in `mod.rs:paint_detail` next to `control_toggle`
+  and `workshop`.
+- **`.planning/sensors/PIPELINE-PRIMITIVE-JOURNAL.md` §R3.6** — the
+  governance design doc for what we just shipped. Read alongside
+  R3.0 (two-tier path rule) + R3.3 (Sink gate splits by tier).
 
 ---
 
 ## Open loops carried forward
 
-1. **VAD pre-filter as a Stage** between PcmSource and
-   WhisperInference. Per the user's "we would classify the audio
-   first and if it is speech deal with it." Eliminates the "Thank
-   you." hallucinations on near-silence and saves whisper cycles.
-   Useful Sensors' Moonshine is the obvious model; some open VAD
-   options (Silero VAD ONNX) also fit.
-2. **`clawft-service-llm`** for Qwen3.6-35B at `127.0.0.1:8111`
-   (already running via `~/llama.cpp/llama-server`). Same shape as
-   the whisper crate: HTTP client, daemon-side tokio task, gated
-   publishes. Two design questions still open in the prior
-   discussion:
-   - Substrate path semantics for prompt/completion (subscribe to
-     a prompt queue path, publish to a completion path? or RPC?).
-   - Streaming: emit per-token via successive replaces, or just
-     final result?
-3. **GUI tray-chip mic gauge** still hardcoded to legacy
-   `substrate/sensor/mic`. Either (a) walk `substrate.list
-   "substrate"` to find any `*/sensor/mic`, (b) call `node.identity`
-   to learn the daemon-id and the explorer ESP32 discovery
-   protocol, or (c) just retire the chip and point to the Explorer
-   panel.
-4. **`workshop-watcher` example** annotated as broken-until-migrated.
-   Need to make it call `node.register` once + sign every publish.
-   Lower priority — it's a dev tool.
-5. **Mesh-canonical write gate** (R3.6 in journal). Today
-   `substrate/_derived/...` paths can't be written through the gate
-   because no node owns the prefix. Capability + eligibility
-   branch is sketched in R3.3 but not implemented. Will become
-   load-bearing when (a) federated kernel-class nodes appear, or
-   (b) we want transcripts at a stable mesh-canonical path
-   instead of `substrate/<daemon-node>/derived/...`.
-6. **Decoded waveform** in `PcmChunkViewer`. Currently metadata-only.
-   Throttled b64 decode + tiny line plot would be useful confidence
-   signal. Per-frame decode of 16 KB is the perf concern — needs a
-   sample-rate cap.
-7. **Other long-string-blob sensors** if any ship that aren't
-   pcm_chunk-shaped. The hard cap in `json_fallback.rs` covers
-   them generically but a dedicated viewer is always better.
-8. **Ed25519 sub-key delegation for processes** — current scheme is
-   "attest" (process_id is a label, signed by node key). Authenticate
-   (per-process keys with delegation) becomes load-bearing when
-   WASM apps share a daemon. R3.8 in journal has the plan.
-9. **`substrate.canonical_publish_payload` boot self-check on
-   firmware** — firmware Claude said they'll wire a one-shot
-   hex-compare against their own buffer at boot. Not blocking;
-   nice-to-have for next protocol drift.
-10. **PR / merge to master.** Branch is stable, all commits green.
-    Open the PR via the URL above when ready, or run `/ultrareview
-    phase3-node-identity` first if you want a multi-agent review
-    pass.
+Higher-priority follow-ups first.
+
+1. **Live verify the new surfaces.** First boot of the new daemon
+   binary. Confirm:
+   - `llm service: healthy` line appears in kernel.log
+   - `ui/chat` panel round-trips a prompt
+   - `ui/terminal` spawns a shell and round-trips `echo hi`
+   - `_derived/transcript/...` shows live transcripts
+   - `derived/classify/...` shows speech/silence transitions
+   - Old `<daemon>/derived/transcript/...` still receives the
+     dual-publish (will go away after Phase 4)
+2. **PR / merge to master.** User's gating list (kernel, mesh,
+   chain, explorer, terminal, chat) is now complete in-tree.
+   Open the PR via
+   `https://github.com/weave-logic-ai/weftos/pull/new/phase3-node-identity`
+   — or run `/ultrareview phase3-node-identity` first for a
+   multi-agent review pass.
+3. **Drop the legacy whisper publish.** When the dual-publish
+   window ends, delete the `output_path_legacy` field + the
+   `// REMOVE AFTER PHASE 4` block in
+   `crates/clawft-service-whisper/src/service.rs`, and update the
+   Explorer's transcript discovery to look under `_derived/...`
+   only. No external subscribers in this tree depend on the legacy
+   path; only operator-driven `substrate.subscribe` calls.
+4. **`vte` parser for the terminal panel.** Today ANSI escape
+   sequences render as literal `\u{1b}[...`. Adding the `vte` crate
+   to the egui terminal would render colors + cursor moves. Keep
+   the panel itself thin; the parser is the only thing that needs
+   to grow.
+5. **Streaming `llm.prompt_stream`.** When the chat window grows a
+   per-token UI, the streaming sibling lands as a connection-takeover
+   RPC mirroring `substrate.subscribe`'s pattern. The
+   `llm.prompt` shape is already designed not to break. Markdown
+   rendering in the chat panel is the obvious cosmetic follow-up.
+6. **Real audio classifier.** `EnergyClassifier` is the floor.
+   Silero VAD ONNX is the obvious next step (one more
+   `ClassifierBackend` impl); a llama.cpp-hosted multi-class
+   classifier comes after that and unlocks `"music"` / `"noise"` /
+   `"speech"` distinctions per the saved memory. Trait shape
+   already accommodates both.
+7. **Whisper service Source/Stage/Sink refactor.** The classifier
+   gate landed as a tactical patch in the existing
+   `tokio::select!`; the journal's R2 split is still waiting.
+   Worth doing before adding any more pipeline stages.
+8. **Terminal output dedup as append-log** rather than tick. Two
+   identical chunks between polls collapse today. Per-session
+   sub-stream substrate path or tick-bumping append.
+9. **Multi-surface terminal attach.** `take_events()` is
+   single-consumer today; a fan-out broadcast channel is the
+   change. Becomes load-bearing when a chat agent + a panel both
+   want to watch the same session.
+10. **Multi-node grant federation** (R3.6 deferred). Today only the
+    daemon-class node issues grants to itself. When federated
+    kernel-class nodes appear, grant issuance becomes a
+    cross-signature flow. R3.8's authenticate path is also waiting.
+11. **Mic gauge live-update.** Discovery is single-shot per connect;
+    new mic-bearing nodes joining mid-session won't appear until the
+    daemon connection cycles. Cheap fix: rerun discovery on every
+    slow tick that returns no transcript.
+12. **Pre-existing clippy warnings** in
+    `crates/clawft-gui-egui/src/explorer/viewers/{pcm_chunk,
+    time_series}.rs` and `control_toggle.rs` test modules
+    (`assertions_on_constants`, `approx_constant`). Easy sweep,
+    out-of-scope for this session.
+13. **Workshop-watcher live verify.** Builds clean against the new
+    gate; runtime test against a running daemon is the only thing
+    left. Promote past "developer tool" once that's done.
+14. **Sub-key delegation for processes** (R3.8). Current scheme is
+    "attest" (process_id is a label, signed by node key).
+    Authenticate (per-process keys with delegation) becomes
+    load-bearing when WASM apps share a daemon.
+15. **`substrate.canonical_publish_payload` boot self-check on
+    firmware.** Firmware Claude said they'll wire this; not
+    blocking. Nice-to-have for next protocol drift.
 
 ---
 
 ## Useful one-liners
 
-Live transcript stream:
+Live transcript stream (canonical path):
 
 ```bash
-{ echo '{"id":"sub","method":"substrate.subscribe","params":{"path":"substrate/n-046780/derived/transcript/n-bfc4cd/mic"}}'; sleep 999; } \
+{ echo '{"id":"sub","method":"substrate.subscribe","params":{"path":"substrate/_derived/transcript/n-bfc4cd/mic"}}'; sleep 999; } \
+  | nc 127.0.0.1 9471
+```
+
+Live classifier stream:
+
+```bash
+{ echo '{"id":"sub","method":"substrate.subscribe","params":{"path":"substrate/n-046780/derived/classify/n-bfc4cd/mic"}}'; sleep 999; } \
+  | nc 127.0.0.1 9471
+```
+
+LLM prompt:
+
+```bash
+echo '{"id":"t","method":"llm.prompt","params":{"prompt":"hello clawft","max_tokens":400}}' \
+  | nc -q 60 127.0.0.1 9471
+```
+
+Spawn a terminal session (CLI test of the daemon-side service):
+
+```bash
+echo '{"id":"t","method":"terminal.spawn","params":{"rows":24,"cols":80}}' | nc -q 5 127.0.0.1 9471
+```
+
+Toggle a service off:
+
+```bash
+echo '{"id":"t","method":"control.set_enabled","params":{"kind":"service","target":"llm","enabled":false}}' \
   | nc 127.0.0.1 9471
 ```
 
@@ -441,13 +512,6 @@ Daemon node-identity:
 
 ```bash
 echo '{"id":"t","method":"node.identity","params":{}}' | nc 127.0.0.1 9471
-```
-
-Toggle a sensor off:
-
-```bash
-echo '{"id":"t","method":"control.set_enabled","params":{"kind":"sensor","target":"n-bfc4cd/mic/pcm_chunk","enabled":false,"label":"Mic PCM chunks"}}' \
-  | nc 127.0.0.1 9471
 ```
 
 Verify a publish payload (canonical bytes the verifier sees):
@@ -464,6 +528,18 @@ echo '{"id":"t","method":"substrate.list","params":{"prefix":"substrate","depth"
   | nc 127.0.0.1 9471 | python3 -m json.tool
 ```
 
+Targeted test sweep (this is the green-build benchmark — full
+workspace test deadlocks against any live daemon's runtime dir):
+
+```bash
+cargo test -p clawft-service-llm \
+          -p clawft-service-terminal \
+          -p clawft-service-classify \
+          -p clawft-service-whisper \
+          -p clawft-gui-egui \
+          -p clawft-weave --lib
+```
+
 Full phase gate before pushing more:
 
 ```bash
@@ -475,4 +551,14 @@ Rebuild the WASM bundle for the Cursor extension:
 ```bash
 bash extensions/vscode-weft-panel/scripts/build-wasm.sh
 # then in Cursor: Ctrl+Shift+P → Developer: Reload Webviews
+```
+
+Install the fresh daemon binary (requires daemon to be stopped first
+— text-busy otherwise):
+
+```bash
+pkill -TERM -f 'weaver kernel start' && sleep 2
+cp ~/dev/clawft/target/release/weaver ~/.cargo/bin/weaver
+RUST_LOG=info nohup ~/.cargo/bin/weaver kernel start --foreground \
+    > ~/dev/clawft/.weftos/runtime/kernel.log 2>&1 &
 ```
