@@ -511,8 +511,8 @@ fn window_frame() -> egui::Frame {
             1.0,
             egui::Color32::from_rgba_unmultiplied(255, 255, 255, 25),
         ))
-        .rounding(10.0)
-        .inner_margin(egui::Margin::same(8.0))
+        .corner_radius(10.0)
+        .inner_margin(egui::Margin::same(8))
 }
 
 fn render_blocks_window(
@@ -521,9 +521,9 @@ fn render_blocks_window(
     live: &std::sync::Arc<crate::live::Live>,
     snap: &Snapshot,
 ) {
-    egui::SidePanel::left("blocks_nav")
+    egui::Panel::left("blocks_nav")
         .resizable(false)
-        .default_width(170.0)
+        .default_size(170.0)
         .show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 if ui

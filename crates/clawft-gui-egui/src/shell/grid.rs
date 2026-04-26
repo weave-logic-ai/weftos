@@ -130,6 +130,7 @@ pub fn paint(ui: &mut egui::Ui, rect: egui::Rect, time: f32) {
         0.0,
         egui::Color32::TRANSPARENT,
         egui::Stroke::new(60.0, vignette),
+        egui::StrokeKind::Inside,
     );
 }
 

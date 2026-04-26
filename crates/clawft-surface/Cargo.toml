@@ -19,7 +19,7 @@ thiserror = { workspace = true }
 # egui is only needed because the eval module lives here and a handful
 # of `ui` helpers (like colored_label) used to sit in compose.rs.
 # Kept for now; can drop once eval.rs is fully UI-free.
-egui = "0.29"
+egui = "0.34"
 # Canonical Mode / Input / Permission enums (ADR-015) + OntologySnapshot
 # (ADR-017) are re-exported from these crates so the surface IR speaks
 # the same types as the manifest + substrate layers.

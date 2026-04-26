@@ -211,7 +211,7 @@ where
     // Scrim: paint a translucent layer over the full ctx rect below
     // our own window, so background controls are visually dimmed.
     let ctx = ui.ctx().clone();
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
     let scrim_layer = egui::LayerId::new(egui::Order::Background, id.with("scrim"));
     let scrim_painter = egui::Painter::new(ctx.clone(), scrim_layer, screen);
     scrim_painter.rect_filled(
@@ -305,7 +305,7 @@ where
         .order(egui::Order::Tooltip)
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-16.0, 16.0));
     let response = area.show(&ctx, |ui| {
-        egui::Frame::popup(&ctx.style()).show(ui, body);
+        egui::Frame::popup(&ctx.global_style()).show(ui, body);
     });
     response.response
 }

@@ -172,10 +172,10 @@ impl<'a, T: AsRef<str>> CanonWidget for StreamView<'a, T> {
         let wrap = self.wrap_lines;
         let lines = self.lines;
 
-        let frame = egui::Frame::none()
+        let frame = egui::Frame::new()
             .fill(egui::Color32::from_rgb(8, 10, 14))
-            .rounding(4.0)
-            .inner_margin(egui::Margin::symmetric(10.0, 8.0));
+            .corner_radius(4.0)
+            .inner_margin(egui::Margin::symmetric(10, 8));
 
         let inner = frame.show(ui, |ui| {
             ui.set_min_height(min_height);

@@ -222,7 +222,7 @@ fn render_grid(
     let grid = Grid::new(&node.path, columns, |ui: &mut egui::Ui| {
         for (i, child) in children.iter().enumerate() {
             egui::Frame::group(ui.style())
-                .inner_margin(egui::Margin::same(8.0))
+                .inner_margin(egui::Margin::same(8))
                 .show(ui, |ui| {
                     render_node(child, snap, ui, frame);
                 });

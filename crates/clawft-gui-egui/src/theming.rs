@@ -13,7 +13,7 @@ use eframe::egui;
 pub fn apply(ctx: &egui::Context) {
     let tokens = Tokens::default();
     ctx.set_visuals(tokens.visuals());
-    ctx.set_style(tokens.style());
+    ctx.set_global_style(tokens.style());
 }
 
 /// Neutral design tokens. No brand color at the base; `accent` is the
@@ -84,12 +84,15 @@ impl Tokens {
         v.code_bg_color = egui::Color32::from_rgb(12, 12, 16);
 
         v.window_stroke = egui::Stroke::new(1.0, self.stroke_soft);
-        v.window_rounding = egui::Rounding::same(self.rounding * 2.0);
-        v.menu_rounding = egui::Rounding::same(self.rounding);
+        // egui 0.34 renamed `*_rounding` → `*_corner_radius` and switched
+        // CornerRadius from f32 to u8.
+        v.window_corner_radius =
+            egui::CornerRadius::same((self.rounding * 2.0).round() as u8);
+        v.menu_corner_radius = egui::CornerRadius::same(self.rounding.round() as u8);
         v.popup_shadow = egui::Shadow {
-            offset: egui::vec2(0.0, 4.0),
-            blur: 16.0,
-            spread: 0.0,
+            offset: [0, 4],
+            blur: 16,
+            spread: 0,
             color: egui::Color32::from_rgba_unmultiplied(0, 0, 0, 160),
         };
         v.window_shadow = v.popup_shadow;
@@ -108,31 +111,31 @@ impl Tokens {
         wv.noninteractive.weak_bg_fill = self.bg_panel;
         wv.noninteractive.bg_stroke = egui::Stroke::new(1.0, self.stroke_hair);
         wv.noninteractive.fg_stroke = egui::Stroke::new(1.0, self.text_secondary);
-        wv.noninteractive.rounding = egui::Rounding::same(self.rounding);
+        wv.noninteractive.corner_radius = egui::CornerRadius::same(self.rounding.round() as u8);
 
         wv.inactive.bg_fill = self.bg_surface;
         wv.inactive.weak_bg_fill = self.bg_panel;
         wv.inactive.bg_stroke = egui::Stroke::new(1.0, self.stroke_hair);
         wv.inactive.fg_stroke = egui::Stroke::new(1.0, self.text_primary);
-        wv.inactive.rounding = egui::Rounding::same(self.rounding);
+        wv.inactive.corner_radius = egui::CornerRadius::same(self.rounding.round() as u8);
 
         wv.hovered.bg_fill = self.bg_hover;
         wv.hovered.weak_bg_fill = self.bg_hover;
         wv.hovered.bg_stroke = egui::Stroke::new(1.0, self.stroke_soft);
         wv.hovered.fg_stroke = egui::Stroke::new(1.0, self.text_primary);
-        wv.hovered.rounding = egui::Rounding::same(self.rounding);
+        wv.hovered.corner_radius = egui::CornerRadius::same(self.rounding.round() as u8);
 
         wv.active.bg_fill = self.bg_active;
         wv.active.weak_bg_fill = self.bg_active;
         wv.active.bg_stroke = egui::Stroke::new(1.0, self.accent);
         wv.active.fg_stroke = egui::Stroke::new(1.0, self.accent);
-        wv.active.rounding = egui::Rounding::same(self.rounding);
+        wv.active.corner_radius = egui::CornerRadius::same(self.rounding.round() as u8);
 
         wv.open.bg_fill = self.bg_surface;
         wv.open.weak_bg_fill = self.bg_surface;
         wv.open.bg_stroke = egui::Stroke::new(1.0, self.stroke_soft);
         wv.open.fg_stroke = egui::Stroke::new(1.0, self.text_primary);
-        wv.open.rounding = egui::Rounding::same(self.rounding);
+        wv.open.corner_radius = egui::CornerRadius::same(self.rounding.round() as u8);
 
         v
     }
@@ -141,7 +144,7 @@ impl Tokens {
         let mut s = egui::Style::default();
         s.spacing.item_spacing = self.spacing;
         s.spacing.button_padding = self.button_padding;
-        s.spacing.menu_margin = egui::Margin::symmetric(6.0, 4.0);
+        s.spacing.menu_margin = egui::Margin::symmetric(6, 4);
         s.spacing.indent = 14.0;
         s.spacing.interact_size.y = 22.0;
         s.spacing.icon_width = 14.0;

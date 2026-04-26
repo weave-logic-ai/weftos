@@ -24,10 +24,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut DemoState) {
     ui.separator();
 
     let (_, body) = TABS.get(state.tab_idx).copied().unwrap_or(("", ""));
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(egui::Color32::from_gray(22))
-        .rounding(4.0)
-        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+        .corner_radius(4.0)
+        .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui, |ui| {
             ui.label(body);
         });

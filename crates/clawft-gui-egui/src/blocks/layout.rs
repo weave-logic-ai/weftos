@@ -36,10 +36,10 @@ pub fn show(ui: &mut egui::Ui) {
 }
 
 fn cell(ui: &mut egui::Ui, label: &str) {
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(egui::Color32::from_gray(30))
-        .rounding(3.0)
-        .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+        .corner_radius(3.0)
+        .inner_margin(egui::Margin::symmetric(10, 6))
         .show(ui, |ui| {
             ui.set_min_size(egui::vec2(70.0, 32.0));
             ui.label(egui::RichText::new(label).monospace().small());

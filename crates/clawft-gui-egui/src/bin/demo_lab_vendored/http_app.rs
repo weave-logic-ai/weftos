@@ -60,6 +60,9 @@ impl Default for HttpApp {
 }
 
 impl eframe::App for HttpApp {
+    fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
+
+    #[allow(deprecated)]
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         egui::TopBottomPanel::bottom("http_bottom").show(ctx, |ui| {
             let layout = egui::Layout::top_down(egui::Align::Center).with_main_justify(true);
@@ -222,10 +225,10 @@ fn syntax_highlighting(
 ) -> Option<ColoredText> {
     let extension_and_rest: Vec<&str> = response.url.rsplitn(2, '.').collect();
     let extension = extension_and_rest.first()?;
-    let theme = egui_extras::syntax_highlighting::CodeTheme::from_style(&ctx.style());
+    let theme = egui_extras::syntax_highlighting::CodeTheme::from_style(&ctx.global_style());
     Some(ColoredText(egui_extras::syntax_highlighting::highlight(
         ctx,
-        &ctx.style(),
+        &ctx.global_style(),
         &theme,
         text,
         extension,
@@ -238,7 +241,7 @@ impl ColoredText {
     pub fn ui(&self, ui: &mut egui::Ui) {
         let mut job = self.0.clone();
         job.wrap.max_width = ui.available_width();
-        let galley = ui.fonts(|f| f.layout_job(job));
+        let galley = ui.ctx().fonts_mut(|f| f.layout_job(job));
         ui.add(egui::Label::new(galley).selectable(true));
     }
 }

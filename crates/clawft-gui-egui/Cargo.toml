@@ -42,13 +42,13 @@ crate-type = ["cdylib", "rlib"]
 # ── Cross-target dependencies ────────────────────────────────────────
 
 [dependencies]
-egui = "0.29"
-egui_extras = { version = "0.29", features = ["all_loaders"] }
-egui_plot = "0.29"
-egui_demo_lib = "0.29"
-# NB: egui_dock 0.14 is the egui-0.29-compatible line (0.13 tracks 0.28).
+egui = "0.34"
+egui_extras = { version = "0.34", features = ["all_loaders"] }
+egui_plot = "0.35"
+egui_demo_lib = "0.34"
+# NB: egui_dock 0.19 tracks egui 0.34. (0.14 tracked egui 0.29.)
 # ADR-001 row 10 — `ui://dock` is implemented via this crate.
-egui_dock = "0.14"
+egui_dock = "0.19"
 log = "0.4"
 serde_json = { workspace = true }
 parking_lot = { workspace = true }
@@ -82,7 +82,14 @@ clawft-surface = { workspace = true }
 # ── Native-only dependencies ─────────────────────────────────────────
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+eframe = { version = "0.34", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+# alacritty_terminal provides the VT/ANSI parser + Term grid model.
+# We feed PTY bytes (received from the daemon-side
+# clawft-service-terminal via substrate) through `vte::ansi::Processor`
+# into a `Term<NopListener>`, then walk the grid in egui to paint
+# colored cells and glyphs. Native-only: alacritty pulls in
+# platform-specific tty + polling crates that don't compile for wasm.
+alacritty_terminal = "0.25"
 tokio = { workspace = true }
 clawft-rpc = { workspace = true }
 ehttp = { version = "0.5", features = ["native-async"] }
@@ -91,7 +98,7 @@ poll-promise = "0.3"
 # ── Wasm-only dependencies (compiled for `wasm32-unknown-unknown`) ──
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow"] }
+eframe = { version = "0.34", default-features = false, features = ["default_fonts", "glow"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"

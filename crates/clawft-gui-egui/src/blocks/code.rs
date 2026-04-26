@@ -19,10 +19,10 @@ pub fn show(ui: &mut egui::Ui, snap: &Snapshot) {
         }
     });
 
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(egui::Color32::from_gray(18))
-        .rounding(4.0)
-        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+        .corner_radius(4.0)
+        .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .max_height(420.0)

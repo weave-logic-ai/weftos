@@ -454,7 +454,7 @@ impl WorkshopView {
         let id = egui::Id::new(("weft-workshop-panel", idx, &panel.substrate_path));
 
         egui::Frame::group(ui.style())
-            .inner_margin(egui::Margin::same(6.0))
+            .inner_margin(egui::Margin::same(6))
             .show(ui, |ui| {
                 // Header row: title + muted path hint.
                 ui.horizontal(|ui| {

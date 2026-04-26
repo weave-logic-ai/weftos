@@ -197,10 +197,10 @@ impl Explorer {
         let total_w = ui.available_width();
         let tree_w = (total_w * 0.4).clamp(220.0, 480.0);
 
-        egui::SidePanel::left("weft_explorer_tree")
+        egui::Panel::left("weft_explorer_tree")
             .resizable(true)
-            .default_width(tree_w)
-            .width_range(180.0..=640.0)
+            .default_size(tree_w)
+            .size_range(180.0..=640.0)
             .show_inside(ui, |ui| {
                 ui.heading("Substrate");
                 ui.separator();

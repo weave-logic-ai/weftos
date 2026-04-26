@@ -393,6 +393,7 @@ fn draw_node(painter: &egui::Painter, pos: egui::Pos2, node: &GraphNode) {
         rect,
         4.0,
         egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 200, 215)),
+        egui::StrokeKind::Inside,
     );
     painter.text(
         pos,

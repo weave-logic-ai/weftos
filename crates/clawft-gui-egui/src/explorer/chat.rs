@@ -274,7 +274,7 @@ pub fn paint(ui: &mut egui::Ui, path: &str, value: &Value, view: &mut ChatView, 
     let history_h = (ui.available_height() - input_h).max(120.0);
 
     egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(6.0))
+        .inner_margin(egui::Margin::same(6))
         .show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
@@ -372,10 +372,10 @@ fn paint_bubble(ui: &mut egui::Ui, msg: &ChatMessage) {
             ui.with_layout(
                 egui::Layout::top_down(egui::Align::RIGHT),
                 |ui| {
-                    egui::Frame::none()
+                    egui::Frame::new()
                         .fill(egui::Color32::from_rgb(50, 60, 80))
-                        .inner_margin(egui::Margin::symmetric(8.0, 4.0))
-                        .rounding(6.0)
+                        .inner_margin(egui::Margin::symmetric(8, 4))
+                        .corner_radius(6.0)
                         .show(ui, |ui| {
                             ui.label(
                                 egui::RichText::new(&msg.content)
@@ -390,10 +390,10 @@ fn paint_bubble(ui: &mut egui::Ui, msg: &ChatMessage) {
             ui.with_layout(
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
-                    egui::Frame::none()
+                    egui::Frame::new()
                         .fill(egui::Color32::from_rgb(40, 50, 50))
-                        .inner_margin(egui::Margin::symmetric(8.0, 4.0))
-                        .rounding(6.0)
+                        .inner_margin(egui::Margin::symmetric(8, 4))
+                        .corner_radius(6.0)
                         .show(ui, |ui| {
                             ui.label(
                                 egui::RichText::new(&msg.content)
@@ -408,10 +408,10 @@ fn paint_bubble(ui: &mut egui::Ui, msg: &ChatMessage) {
             ui.with_layout(
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
-                    egui::Frame::none()
+                    egui::Frame::new()
                         .fill(egui::Color32::from_rgb(70, 30, 30))
-                        .inner_margin(egui::Margin::symmetric(8.0, 4.0))
-                        .rounding(6.0)
+                        .inner_margin(egui::Margin::symmetric(8, 4))
+                        .corner_radius(6.0)
                         .show(ui, |ui| {
                             ui.label(
                                 egui::RichText::new(format!("error: {}", msg.content))

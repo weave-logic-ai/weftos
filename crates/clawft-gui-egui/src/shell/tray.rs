@@ -159,10 +159,10 @@ fn chip(
     } else {
         egui::Color32::from_rgba_unmultiplied(28, 28, 38, 180)
     };
-    let frame_resp = egui::Frame::none()
+    let frame_resp = egui::Frame::new()
         .fill(fill)
-        .rounding(8.0)
-        .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+        .corner_radius(8.0)
+        .inner_margin(egui::Margin::symmetric(8, 4))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 let (rect, _) =

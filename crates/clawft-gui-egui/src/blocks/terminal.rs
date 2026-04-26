@@ -20,10 +20,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut DemoState, live: &Arc<Live>) {
     // Drain any pending RPC replies the command sender parked in state.
     drain_replies(state);
 
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(egui::Color32::from_rgb(8, 10, 14))
-        .rounding(4.0)
-        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+        .corner_radius(4.0)
+        .inner_margin(egui::Margin::symmetric(10, 8))
         .show(ui, |ui| {
             ui.set_min_height(320.0);
             egui::ScrollArea::vertical()
