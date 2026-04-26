@@ -1,564 +1,306 @@
-# Session handoff — 2026-04-26
+# Session handoff — 2026-04-26 (evening)
 
-Pick-up doc for the next session. Reflects `phase3-node-identity` at
-commit `6ebc8ad5`. Branch is **23 commits ahead** of `master`. All
-green: `scripts/build.sh check` + `clippy` clean; targeted tests pass
-across every touched crate (15 + 7 + 15 + 34 + 215 + 41 = 327 unit
-tests + integration). The full-workspace `cargo test --workspace`
-deadlocks against any live daemon's runtime dir — this is a
-documented flake, NOT a regression. Run targeted tests instead:
+Pick-up doc for the next session. Reflects `development-0.7.0` at
+commit `c9f43fc8` (fast-forwarded over `phase3-node-identity`). Four
+new commits land on top of the morning's "LLM connect + parallel-wave"
+batch. All green: `scripts/build.sh check` + `scripts/build.sh
+clippy` clean across the workspace; targeted tests pass for every
+touched crate (1391 passing across `clawft-service-llm`,
+`clawft-core`, and `clawft-gui-egui`).
+
+The full-workspace `cargo test --workspace` still deadlocks on
+`clawft-kernel hnsw_eml::tests::benchmark_*` (preexisting, NOT a
+regression — those tests run >30 min). Run targeted tests instead:
 
 ```bash
 cargo test -p clawft-service-llm \
-          -p clawft-service-terminal \
-          -p clawft-service-classify \
-          -p clawft-service-whisper \
+          -p clawft-core \
           -p clawft-gui-egui \
-          -p clawft-weave --lib
+          -p clawft-surface --lib
 ```
 
-This session was a single big push: the LLM connect, then a
-five-agent parallel wave that landed chat / terminal / VAD-classifier
-/ mesh-canonical write gate / GUI cleanups simultaneously.
-**Merge-to-master is now within reach.** The user's gating rule was
-"kernel + mesh + chain + explorer all work well, plus terminal and
-clawft chat window" — every item on that list is in the tree. The
-remaining holdouts are the live-verify and a doc/UX polish pass; see
-"Open loops" at the bottom.
+This evening was two pieces:
+
+1. **egui 0.34 bump + custom alacritty-based terminal renderer** —
+   replacing the UTF-8-lossy `String` accumulator that was rendering
+   ANSI escape codes as literal `\u{1b}[...` text.
+2. **Wire every orphaned agent capability in `clawft-core` through
+   `clawft-service-llm`** — Phases A-H of the integration plan.
+   Eight orphans were brought into the live agent loop with
+   `clawft-service-llm` as the canonical LLM call site.
 
 ---
 
 ## What's new this session
 
-### LLM connect (commit `a05e22ac`)
+### Commit 1 — `feat(gui-egui): bump egui to 0.34 + alacritty-backed terminal renderer` (`7bf6bf16`)
 
-The daemon now talks to a locally-hosted llama-server and exposes a
-single synchronous chat-completions RPC.
+The workspace was anchored at egui 0.29 by `egui_dock 0.14` (the
+egui-0.29-compatible line). That blocked any modern terminal-emulator
+crate. Bumped:
 
-- New crate **`clawft-service-llm`** — mirrors `clawft-service-whisper`
-  exactly (in-flight semaphore=1, health probe + retry-or-not error
-  taxonomy, wiremock unit tests). Posts to OpenAI-compat
-  `/v1/chat/completions`. 15/15 unit tests green.
-- **Why a new crate, not `clawft-llm`** — the existing crate is the
-  general provider abstraction (OpenAI/Anthropic/native + routing +
-  failover + SSE), targets browser+native, brings in `clawft-types`
-  + `eml-core` + `uuid` + a futures stack. For the daemon's
-  "POST one prompt to a single localhost endpoint" use case that
-  surface is overkill and the dependency edge would couple the
-  daemon-only HTTP wrapper to a browser-targeted abstraction. Crate
-  doc at the top of `lib.rs` explains.
-- **Daemon wiring** — `DAEMON_LLM` (`OnceLock<Arc<LlmClient>>`),
-  background tokio task probes `/health` at boot,
-  `control.set_enabled {target:"llm"}` source-cuts the call, initial
-  control intent published under `substrate/<daemon-node>/control/services/llm`.
-- **Protocol** — `LlmPromptParams { prompt | messages | system |
-  temperature | max_tokens }` + `LlmPromptResult { completion |
-  finish_reason | prompt_tokens | completion_tokens | model }`.
-  Streaming is **deliberately deferred** — when the chat window grows
-  a per-token UI, it lands as `llm.prompt_stream` mirroring
-  `substrate.subscribe`'s connection-takeover pattern, NOT as a
-  breaking change.
-- **Verified live** at `127.0.0.1:8111` against
-  `Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf`. `llm.prompt {prompt:"Reply with
-  exactly: hello clawft"}` returns the expected completion;
-  `control.set_enabled {target:"llm", enabled:false}` cuts subsequent
-  calls before any HTTP hit.
+| crate | from | to |
+|---|---|---|
+| egui / eframe / egui_extras / egui_demo_lib | 0.29 | 0.34 |
+| egui_plot | 0.29 | 0.35 |
+| egui_dock | 0.14 | 0.19 |
 
-Memory: `~/.claude/projects/-home-aepod-dev-clawft/memory/project_llm_service_shipped.md`
+Mechanical migrations across ~50 files in `clawft-gui-egui` +
+`clawft-surface`:
 
-### Chat window panel (commit `e23807fb` → merged in `b96d413a`)
+- `Margin::symmetric(f32, f32)` → `Margin::symmetric(i8, i8)`
+- `Rounding` → `CornerRadius` (u8-based)
+- `Visuals::*_rounding` → `Visuals::*_corner_radius`
+- `WidgetVisuals::rounding` → `WidgetVisuals::corner_radius`
+- `Painter::rect` / `rect_stroke` — added `StrokeKind` argument
+- `Line::new(points)` → `Line::new(name, points)`
+- `eframe::App` — added required `ui` (kept `update`)
+- `fonts(|f| f.glyph_width(..))` → `ctx().fonts_mut(|f| ..)`
+- `SidePanel::*` → `Panel::*`
+- `Frame::none()` → `Frame::new()`
+- `.rounding(N)` → `.corner_radius(N)`
+- `Context::style/set_style` → `global_style/set_global_style`
+- `default_width / width_range` → `default_size / size_range`
 
-Egui chat surface that talks to `llm.prompt`.
+**Terminal renderer.** `egui_term` was evaluated and rejected because
+(a) it pins to egui 0.31, and (b) it owns its own PTY internally —
+would have bypassed the daemon-side `clawft-service-terminal`
+service entirely. Instead, `crates/clawft-gui-egui/src/explorer/terminal.rs`
+now drives `alacritty_terminal` directly:
 
-- New module `crates/clawft-gui-egui/src/explorer/chat.rs`. Holds
-  `ChatView { history, draft, in_flight }` across paints.
-- Daemon publishes `substrate/<daemon-node>/ui/chat` with
-  `{ "kind": "chat", "model": "<llama-server model>" }` next to the
-  initial control intents. Panel matches `kind == "chat"` at
-  priority 40 (wins over Workshop=30 and control_toggle=25).
-- Existing `Live::Command::Raw { reply }` + `try_recv_reply` already
-  return `Result<Value, String>` — the chat panel reuses the
-  Workshop drain pattern; no new RPC plumbing needed.
-- `ChatMessage` is local to the GUI crate (not re-exported from
-  weave) so gui-egui doesn't pull a tokio-server edge.
-- `Explorer::on_select` and `Explorer::close` reset the chat view
-  so a hidden panel can't keep an in-flight `llm.prompt` against
-  llama-server's single-batch slot.
-- Scope cuts (deferred): no streaming, no markdown, no system-prompt
-  UI, no model picker, no on-disk persistence.
+- PTY bytes from the daemon-side service flow through
+  `vte::ansi::Processor` into a `Term<NopListener>`.
+- The grid is painted as colored cells + glyphs
+  (`NamedColor`/`Spec`/`Indexed` mapped to a Solarized-dark-ish
+  palette, 256-color cube + grayscale ramp resolved inline).
+- Keyboard input: text passes through; arrows / Enter / Backspace /
+  Tab / Esc / Home / End / PageUp / PageDn / Delete / Insert /
+  F1-F12 emit the right CSI sequences; Ctrl+letter masks to control
+  bytes (Ctrl+C → `0x03` etc).
+- Resize syncs the local model AND fires `terminal.resize` so
+  in-shell apps reflow.
+- Cursor: filled rect when focused (with blink), hollow when not.
+- Browser builds get a placeholder stub since alacritty pulls
+  platform-specific tty + polling crates that don't compile to wasm.
 
-### Terminal pane (commit `a509cd14` → merged in `ced776bd`)
+The daemon-side architecture is preserved end-to-end. The daemon
+spawns PTYs in `clawft-service-terminal` and publishes chunks at
+`substrate/<daemon-node>/derived/terminal/<session_id>`; this surface
+remains the thin renderer.
 
-Daemon-side PTY service, surfaced as an explorer panel.
+### Commit 2 — `fix(vscode-weft-panel): per-method RPC timeout for llm.prompt` (`1bbd6f0d`)
 
-- New crate **`clawft-service-terminal`** wrapping `portable-pty 0.8`.
-  Public `TerminalManager` over `DashMap<SessionId, Arc<TerminalSession>>`.
-  Auto-detects shell (`requested → $SHELL → /bin/bash → /bin/sh`),
-  sets `TERM=xterm-256color`, **runs the blocking reader on a
-  dedicated OS thread** (a tokio worker would stall on
-  `std::io::Read`).
-- Four RPCs: `terminal.spawn { rows, cols, shell?, cwd? }` →
-  `{ session_id, rows, cols, shell }`, `terminal.write { id, data
-  /*base64*/ }`, `terminal.resize`, `terminal.close`.
-- Output: each PTY chunk is base64-encoded and published to
-  `substrate/<daemon-node>/derived/terminal/<session_id>` as
-  `{ data, ts_ms, exit }`. The egui panel polls the path every
-  250 ms (dedupes by tick), base64-decodes UTF-8-lossy into a
-  sticky-bottom `ScrollArea`.
-- Sentinel: `substrate/<daemon-node>/ui/terminal` with `{ "kind":
-  "terminal" }`. **Convention** locked in by both this and the chat
-  panel: `substrate/<daemon-node>/ui/<name>` with at minimum
-  `{ "kind": "<name>" }` is how new top-level UI surfaces declare
-  themselves.
-- `Explorer::on_select` / `close` now take `&Arc<Live>` so they can
-  fire `terminal.close` on navigate-away.
-- Sharp edges flagged for follow-up:
-  - **ANSI escapes render as literal `\u{1b}[...`** — `vte` parser is
-    the next iteration.
-  - **Output dedup is by `tick`**, not append-only-log. Two chunks
-    with identical bytes between two polls collapse into one. Fix is
-    a per-session output sub-stream path or tick-bumping append.
-  - **`take_events()` is single-consumer** — a chat agent and a panel
-    can't both watch the same session yet. Daemon-side drain is the
-    only consumer today; fan-out is the next change.
-  - **`Drop` on `Terminal` can't fire `terminal.close`** (no `Live`
-    handle). Explorer's explicit `close()` and `on_select()` cover
-    happy paths; if neither runs (process kill), the daemon-side
-    session lives until daemon shutdown. Acceptable since no
-    background traffic.
-  - **No SIGWINCH handshake** — we just call `MasterPty::resize`
-    (ioctl). In-shell apps see it on next read.
+The default 3000 ms in `rpc.ts` is right for daemon-local control
+verbs that round-trip in milliseconds, but `llm.prompt` proxies to a
+llama.cpp server doing CPU/GPU inference; even a short completion
+takes 5-30 s and a longer one runs minutes. The panel now hands
+`llm.prompt` a 300 s timeout while everything else keeps fast-fail
+semantics — a stopped daemon still surfaces immediately on the
+chips.
 
-### Audio-classifier Stage (commit `dbf521f8` → merged in `be8366d3`)
+### Commit 3 — `feat(service-llm): tool-call wire format + complete_with_tools` (`a7e848cd`)
 
-The Stage between PcmSource and WhisperInference per
-`.planning/sensors/PIPELINE-PRIMITIVE-JOURNAL.md` §R2.
+Extended the narrow `LlmClient` so it can drive a tool-using agent
+loop against llama-server's OpenAI-compat endpoint:
 
-- New crate **`clawft-service-classify`** with `ClassifierBackend`
-  trait — the seam for the future llama.cpp-hosted classifier.
-- Initial backend `EnergyClassifier` is RMS-dBFS threshold (default
-  `-45 dB`, override via `VAD_RMS_THRESHOLD_DB`); emits
-  `Classification { class: String, confidence, rms_db, sample_rate,
-  samples, ts_ms, source_node, source_seq }`. **`class` is a String
-  on purpose** — a future classifier emits `"music"` / `"noise"` /
-  `"speech"` / etc. without breaking subscribers (per the
-  `project_vad_classifier_via_llamacpp.md` memory).
-- `ClassifierService::spawn` mirrors `WhisperService::spawn`
-  (subscribe → decode b64→i16le → backend → `publish_gated`) with
-  the same `service_enabled` / `source_enabled` `Arc<AtomicBool>`
-  flags.
-- **Whisper is now gated on classifier output via substrate, not via
-  a Rust edge.** New `WhisperServiceConfig` fields `classifier_input:
-  Option<String>` + `gate_window_ms: u64` (default `1500`, ≈ two
-  pcm_chunk periods at the firmware's 2 Hz cadence — long enough to
-  bridge inter-syllabic pauses, short enough that sustained quiet
-  closes the gate). The chunk-receive arm checks an internal
-  `is_speech` flag updated by a background subscriber task.
-- 15 classify-crate tests + 4 new whisper tests
-  (skip-on-silence / process-on-speech / stickiness / wire-pin).
+- `ChatMessage` carries optional `tool_calls` (assistant) and
+  `tool_call_id` (`role:"tool"` replies). New
+  `ChatMessage::tool(id, content)` constructor closes the round-trip.
+- `ChatRequest` grows optional `tools` and `tool_choice` (both
+  serde-skipped when None — wire shape stays byte-compatible with the
+  no-tools case the chat panel and daemon RPC already use).
+- New types: `Tool`, `ToolFunction`, `ToolCall`, `ToolCallFunction`.
+- `ToolChoice { Auto | None | Required | Function(name) }` with a
+  custom `Serialize` that emits `"auto"` / `"none"` / `"required"`
+  or `{type:"function",function:{name}}` per the OpenAI schema.
+- `LlmClient::complete_with_tools(messages, tools, tool_choice, …)`.
+  Existing `complete(...)` delegates to the new method (passing no
+  tools), so all current callers keep working unchanged.
 
-Memory: `~/.claude/projects/-home-aepod-dev-clawft/memory/project_vad_classifier_via_llamacpp.md`
+22 client tests (6 new) — all pass.
 
-Surprise the agent flagged: the existing whisper service runs
-everything in one fat `tokio::select!` rather than the R2
-Source/Stage/Sink split, so adding the gate was a tactical patch
-rather than a slot in a clean Stage layer. The journal's "small
-refactor" estimate is real and waiting.
+### Commit 4 — `feat(core): wire agent orphans through clawft-service-llm` (`c9f43fc8`)
 
-### Mesh-canonical write gate, R3.6 (commit `8be9e70d`)
+This is the big one. Brings every orphaned-but-built agent
+capability in `clawft-core` into the live agent loop, with
+`clawft-service-llm` as the canonical LLM call site.
 
-Daemon-class nodes can now write `substrate/_derived/...` under an
-explicit grant.
+**Phase A** (separate commit above) — tool-call wire format on
+`LlmClient`.
 
-- `DerivedWriteGrant { grantee_node_id, topic, issued_at_ms, scope }`
-  with `GrantScope::{ExactTopic, TopicPrefix}`. Stored in a sibling
-  `DashMap<(grantee, topic), grant>` on `NodeRegistry`.
-- New method **`SubstrateService::publish_gated_with_grants(node,
-  path, value, &NodeRegistry)`** adds the tier split. Mesh-canonical
-  paths (`substrate/_derived/...`) consult the grant table; everything
-  else falls through to the existing per-node-prefix rule. Legacy
-  `publish_gated` keeps strict semantics so unmigrated callers still
-  reject `_derived/` writes — opt-in by switching to the new method.
-- Daemon issues itself `transcript` / `classify` / `terminal` grants
-  right after node-identity bootstrap.
-- **Whisper dual-publish migration** — publishes to BOTH
-  `substrate/_derived/transcript/<src>/mic` (canonical, R3.2) AND the
-  legacy `substrate/<daemon>/derived/transcript/<src>/mic`. Legacy
-  publish wrapped in `// REMOVE AFTER PHASE 4` and tracing target
-  `"deprecated"`. Subscribers in this repo all discover via
-  `substrate.list/read` walks rather than hardcoded subscriptions, so
-  the migration risk is limited to operator-driven `substrate.subscribe`
-  invocations against the old path — none of which live in this tree.
-- 9 new node_registry tests + 7 new substrate_service tests + 3 new
-  integration tests in `crates/clawft-weave/tests/derived_grant_gate.rs`.
+**Phase B — `pipeline/service_llm_adapter.rs` (NEW).** A
+`ServiceLlmAdapter` bridges `Arc<LlmClient>` into the pipeline's
+`LlmProvider` trait. Inbound `&[serde_json::Value]` → typed
+`ChatMessage` conversion tolerates partial inputs (missing role →
+`"user"`, missing content → `""`, malformed `tool_calls` → `None`).
+Outbound `ChatResponse` → OpenAI-shape `Value` so the existing
+`OpenAiCompatTransport` response parser consumes it unchanged.
+Streaming defers to the trait default (`LlmClient` has no SSE yet).
+10 unit tests + a wiremock end-to-end round-trip.
 
-Open follow-ups (R3.6 explicitly out of scope):
-- No multi-node grant federation — single daemon issues to itself.
-- No grant revocation API — grants permanent for daemon lifetime.
-- No transparent migration of `substrate.subscribe` paths.
+**Phase C — Bootstrap default pipeline.** `build_default_pipeline`
+now wires `ServiceLlmAdapter` over `LlmClient::new(LlmConfig::from_env())`
+instead of the previously-stubbed transport. Default model server is
+the same llama-server the daemon's `llm.prompt` RPC and the chat
+panel already use — three call paths, one model. On `LlmClient`
+construction failure (bad env URL) the transport falls back to the
+stub so the rest of the pipeline still wires. Browser builds keep
+the stub (service-llm pulls reqwest; native-only).
 
-### Disable-device toggle bug fixes (commit `8bc6fb23`)
+**Phase D — Learner feedback loop.** `LearningBackend` grows
+`evolve_prompt(prompt) -> String` with a no-op default.
+`PipelineRegistry::complete` and `::complete_stream` call
+`apply_prompt_evolution` between context assembly and the transport
+stage, mutating the first `system` message in place.
+`TrajectoryLearner` overrides `evolve_prompt` to: (a) check
+`evolution_ready`, (b) snapshot poor + best trajectories as
+`TrajectoryHint`s (capped at 16), (c) `auto_select_strategy` +
+`mutate_prompt`, (d) clear the flag so we don't re-mutate every
+turn. `NoopLearner` inherits the default no-op.
 
-Two post-handoff bugs from the prior session that prevented the
-sensor toggle from working:
+**Phase E — Sandbox enforcement at tool dispatch.** `AgentLoop` got
+an optional `Arc<SandboxEnforcer>` via `with_sandbox()`. In
+`run_tool_loop`'s per-tool dispatch, if an enforcer is attached we
+call `check_tool(name)` before `tools.execute`. A denial surfaces
+as `{"error": "sandbox denied: …"}` so the LLM can recover instead
+of failing the turn, and the audit log captures it.
 
-1. **Extension RPC allowlist gap** — `control.set_enabled` /
-   `control.list` shipped on the daemon and wired into the toggle
-   viewer, but never added to `extensions/vscode-weft-panel/src/extension.ts`'s
-   `ALLOWED_METHODS`. Toggle viewer fires fire-and-forget, so the
-   proxy reject was eaten silently. Fix: 2 lines added to allowlist.
-2. **Leaf-node carrot recursion → WASM stack overflow** — kernel's
-   `substrate.list` deliberately returns `[{path:prefix,
-   has_value:true, child_count:0}]` when prefix is itself a value-
-   carrying leaf (so callers can leaf-probe without a separate
-   read). The Explorer's `render_node` recursed on every child of an
-   expanded prefix; clicking the ▸ on a leaf put the leaf into
-   `ex.expanded` and the next list-response populated
-   `tree_children["<leaf>"]` with a single entry whose path was the
-   leaf itself — infinite recursion → WASM stack overflow. Fix:
-   suppress caret on leaves (`is_leaf = has_value && child_count ==
-   0`) + defensive `if child.path == prefix { continue }` belt-
-   and-suspenders. New parser test asserts we do NOT filter the
-   kernel's leaf-as-self response at parse time — the recursion guard
-   lives in `render_node`, not in the parser, because filtering at
-   the parser would silently break any external caller that uses
-   `substrate.list` as a leaf probe.
+**Phase F — Skill watcher hot-reload.** `AppContext` got
+`start_skill_watcher()` (native-only) which builds an empty
+`SkillRegistry` over the `SkillsLoader`'s directory, wraps in
+`Arc<RwLock>`, and starts the existing `notify`-based watcher.
+Caller keeps the returned handle alive for the loop's lifetime.
+Opt-in (bootstrap doesn't auto-start to avoid inotify-quota
+issues).
 
-Memories:
-- `~/.claude/projects/-home-aepod-dev-clawft/memory/feedback_extension_rpc_allowlist.md`
-- `~/.claude/projects/-home-aepod-dev-clawft/memory/project_substrate_list_leaf_self.md`
+**Phase G — Skill autogen.** `AgentLoop` got an optional
+`Arc<Mutex<PatternDetector>>` via `with_autogen()`. Post-dispatch we
+feed every executed tool name to `record_tool_call`, then
+`detect_candidates`; new patterns get materialized as pending
+`SKILL.md` files in `~/.clawft/skills/pending/<name>/` via
+`install_pending_skill`. Pending → live promotion stays manual per
+the autogen module's design.
 
-### GUI cleanups bundle (commits `5a067eef`, `5a194c8b`, `551d25a2` → merged in `29702177`)
-
-- **Mic tray-chip gauge migration.** New `crates/clawft-gui-egui/src/live/mic_discovery.rs`
-  walks a `substrate.list` response and returns the first child path
-  ending in `/sensor/mic/rms`. Native driver runs discovery once per
-  (re)connect. `None` → chip dimmed "no mic." 7 unit tests including
-  a defensive check that the legacy flat path does NOT match.
-- **Decoded waveform mini-plot in `PcmChunkViewer`.** 40 px painter
-  line, full row width, normalized [-1, 1]. Decode-time decimation
-  caps at 60 points; `MIN_DECODE_INTERVAL_MS = 250` rate-limits
-  decode to ≤4 Hz. Cache keyed by `(path, start_ts_ms)` in egui
-  memory so repaints between decodes are free. 7 new viewer tests.
-- **Workshop-watcher example migration.** `crates/clawft-gui-egui/examples/workshop-watcher.rs`
-  was broken since the Phase 3 gate flip (publishes were unsigned).
-  Inline `LocalNode` (adapted from `clawft-weave/tests/substrate_rpc.rs::TestNode`)
-  generates ephemeral keypair, registers, signs every publish over
-  `node_publish_payload`. Default publish path now
-  `substrate/<this-example's-node-id>/ui/workshop/<name>`. One-shot
-  `substrate.canonical_publish_payload` self-check at boot.
-  **Live verification deferred** — example builds clean, runtime
-  test against a daemon is the next step.
+**Phase H — Multi-agent surfaces.** `AppContext` got optional fields
+`agent_router: Arc<AgentRouter>` and `agent_bus: Arc<AgentBus>` plus
+set/get pairs. The single-agent CLI flow ignores them; the daemon's
+spawn manager (and any future multi-agent dispatcher) can register
+them when needed. The orphaned core modules (`agent_routing.rs`,
+`agent_bus.rs`) are reachable now without deletion or further
+refactor.
 
 ---
 
-## Right this second — what's running
+## Three call paths, one llama-server
 
-**Daemon:** old binary (PID 78737, started 2026-04-25 21:37 from
-commit `a05e22ac`). Still listening on
-`unix:.weftos/runtime/kernel.sock` and `tcp:0.0.0.0:9471`. Whisper
-service still publishing transcripts; ESP32 `n-bfc4cd` still
-connected. Node-id `n-046780`.
+After this session the local llama-server is the unified LLM
+endpoint for **all** of:
 
-**The merged tree carries new daemon RPCs (`llm.prompt`,
-`terminal.*`) and a new daemon-side service (classify) that the
-running binary doesn't know about.** Restart the daemon to pick them
-up — see the "On return" block below.
+```
+              ┌─ chat panel (vscode-weft-panel)  ──┐
+              ├─ daemon RPC `llm.prompt`           ┤
+              └─ CLI agent (weft agent / loop_core)┘
+                                                   ▼
+                  clawft-service-llm::LlmClient
+                                                   │
+                              POST /v1/chat/completions
+                                                   ▼
+                              llama-server (Qwen3 by default)
+```
 
-**Whisper-server:** `/home/aepod/llama.cpp/whisper-src/build/bin/whisper-server`
-at `127.0.0.1:8123` (Qwen3 STT). Health endpoint `GET /health`.
-Start/stop via `~/llama.cpp/whisper-server.sh`.
-
-**llama-server (LLM):** `127.0.0.1:8111` running
-`Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf`. The new daemon will probe this on
-boot and log `llm service: healthy url=http://127.0.0.1:8111` if it
-answers.
-
-**ESP32 (`weftos-mic-node`):** node-id `n-bfc4cd`, WiFi-DHCP
-`192.168.1.178`. Polls control paths every 2 s. Will reconnect
-automatically when the daemon comes back up.
-
-**Cross-Claude dialog file:**
-`/mnt/c/Users/aepod/OneDrive/Desktop/mentra/docs/clawft-dialog.md`
-(=`~/dev/mentra/docs/clawft-dialog.md` from WSL). Append-only,
-role-tagged. Read it before changing any wire format.
-
-### What the user should do on return
-
-1. **Confirm fresh artifacts.**
-   ```bash
-   ls -la ~/.cargo/bin/weaver ~/dev/clawft/target/release/weaver
-   ls -la ~/dev/clawft/extensions/vscode-weft-panel/webview/wasm/clawft_gui_egui_bg.wasm
-   ```
-   The 2026-04-26 session ends with both built fresh against `6ebc8ad5`.
-2. **The daemon was restarted at end-of-session.** If it isn't up:
-   ```bash
-   bash ~/llama.cpp/whisper-server.sh start
-   cd ~/dev/clawft && RUST_LOG=info nohup ~/.cargo/bin/weaver kernel start --foreground \
-       > ~/dev/clawft/.weftos/runtime/kernel.log 2>&1 &
-   ```
-3. **`Ctrl+Shift+P` → "Developer: Reload Webviews"** in Cursor —
-   the WASM bundle was rebuilt at 23:05.
-4. Open the WeftOS panel. Tree should show:
-   ```
-   ▾ n-046780 (daemon)
-       control/
-         services/whisper       — toggle
-         services/llm           — toggle           ← new
-         services/classify      — toggle           ← new
-         sensors/n-bfc4cd/mic/  — toggles
-       derived/transcript/n-bfc4cd/mic    — live transcript (legacy path, dual-published)
-       derived/classify/n-bfc4cd/mic      — live classification ← new
-       derived/terminal/<sid>             — appears once a session is spawned
-       ui/chat                ← new sentinel; click to open chat panel
-       ui/terminal            ← new sentinel; click to open terminal panel
-   ▾ _derived/                                    ← new mesh-canonical tier
-       transcript/n-bfc4cd/mic  — live transcript (canonical path, R3.2)
-   ▾ n-bfc4cd (esp32-mic-node)
-       sensor/mic/rms / pcm_chunk
-   ```
-5. **Try the chat window:** click `ui/chat`. Type a message, hit
-   Enter. Should round-trip through `llm.prompt`. Qwen3 burns most
-   tokens on its `<think>` block, so set max_tokens generously
-   (default 512 in the daemon config; not exposed in UI yet).
-6. **Try the terminal:** click `ui/terminal`. Should auto-spawn a
-   shell (sees `$SHELL` first, falls back to bash). Type `echo hi`,
-   press Enter, see output. ANSI sequences render literal — that's
-   the documented vte-parser follow-up.
-7. **Click `pcm_chunk`:** should render PcmChunkViewer with the new
-   waveform mini-plot underneath the metadata.
+The CLI agent's pipeline (Classifier → Router → Assembler →
+**ServiceLlmAdapter** → Scorer → **Learner**) is now end-to-end
+working. The Learner's feedback loop mutates the system prompt when
+poor outcomes accumulate; mutations carry forward into the next
+turn's request.
 
 ---
 
-## Runtime state
+## What's still orphaned-ish
 
-### Daemon binary
+After Phase H every module is reachable, but a few remain "wired
+but not auto-driven" — i.e. the production bootstrap has the hook,
+just isn't filling it in:
 
-- Binary: `/home/aepod/.cargo/bin/weaver` — installed from
-  `phase3-node-identity` tip `6ebc8ad5`. Last `cargo install` at
-  end-of-session.
-- Process: PID was `78737` early in session, restarted at
-  end-of-session against the new binary.
-- Unix socket: `.weftos/runtime/kernel.sock`
-- TCP relay: `127.0.0.1:9471` (also `0.0.0.0:9471` for ESP32 LAN
-  via WSL2 mirrored networking on `192.168.1.73`).
-- Log: `.weftos/runtime/kernel.log`. Daemon node-id is `n-046780`.
-
-### Branches
-
-- `phase3-node-identity` — tip `6ebc8ad5`. Pushed to origin (need
-  `git push` if you want it on the remote — local-only at end of
-  session). 23 commits ahead of `master`.
-- All five worktrees (`agent-aa797dec06afad46f`,
-  `agent-a282fd684e8be096d`, `agent-a449c31cd9ac44da4`,
-  `agent-a776be7c32eaa4fcd`, plus the unused
-  `agent-af74d2cb05c70b68b`) cleaned up. Stale branches deleted.
-
-### llama-server
-
-- Binary: `/home/aepod/llama.cpp/build/bin/llama-server`
-- Port: `127.0.0.1:8111`
-- Model: `Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf`
-- Health: `GET http://127.0.0.1:8111/health` → `{"status":"ok"}`
-- The daemon's `clawft-service-llm` boot probe will log this status
-  line.
+- `start_skill_watcher()` is opt-in. Nothing in `weft agent` yet
+  calls it, so SKILL.md edits still need a process restart in the
+  CLI. Easy follow-up: have `commands/agent.rs` start it after
+  bootstrap and hold the handle for the loop's lifetime.
+- `with_sandbox()` and `with_autogen()` builders exist on
+  `AgentLoop` but bootstrap doesn't construct an enforcer or
+  detector. Reasonable defaults need config keys; punt to next
+  session.
+- `set_agent_router` / `set_agent_bus` on `AppContext` are
+  unused — daemon's `agent.spawn` still goes through the kernel
+  `A2ARouter` (the canonical Phase-3 path). The core
+  `AgentRouter` / `AgentBus` pair is now available for the CLI
+  agent should we want multi-agent fan-out there too.
+- `pipeline/llm_adapter.rs` (the older `clawft-llm` provider
+  bridge) coexists with the new `service_llm_adapter.rs`. Not dead,
+  not orphaned — it's the path we'd switch to if we ever need
+  cross-provider routing (OpenAI / Anthropic / Groq) instead of
+  local-llama.
 
 ---
 
-## Architectural decisions this session (read in order for context)
+## Build & test
 
-- **`crates/clawft-service-llm/src/lib.rs`** — top-of-file rationale
-  for why this is a separate crate from `clawft-llm`.
-- **`crates/clawft-service-classify/src/`** — `ClassifierBackend`
-  trait shape. Future llama.cpp-hosted classifier swaps in by
-  implementing this trait against a HTTP endpoint; subscribers don't
-  change.
-- **`crates/clawft-kernel/src/node_registry.rs`** — `DerivedWriteGrant`
-  + `GrantScope` types, `issue_derived_grant`,
-  `has_derived_grant`. Sibling table to `NodeRegistration` per
-  R3.6's "separate permission" mandate.
-- **`crates/clawft-kernel/src/substrate_service.rs`** —
-  `publish_gated_with_grants` is the new opt-in surface. Old
-  `publish_gated` kept strict for unmigrated callers.
-- **`crates/clawft-service-terminal/src/session.rs`** — PTY reader
-  on dedicated OS thread, sentinel convention
-  `substrate/<daemon-node>/ui/<name>`.
-- **`crates/clawft-gui-egui/src/explorer/{chat,terminal}.rs`** — the
-  two new non-trait viewer modules. Both register at the same
-  dispatch arm in `mod.rs:paint_detail` next to `control_toggle`
-  and `workshop`.
-- **`.planning/sensors/PIPELINE-PRIMITIVE-JOURNAL.md` §R3.6** — the
-  governance design doc for what we just shipped. Read alongside
-  R3.0 (two-tier path rule) + R3.3 (Sink gate splits by tier).
+```bash
+# Verify
+scripts/build.sh check       # workspace cargo check
+scripts/build.sh clippy      # warnings-as-errors
+cargo test -p clawft-service-llm -p clawft-core \
+           -p clawft-gui-egui --lib
+
+# Counts last-verified at commit c9f43fc8:
+#   service-llm:   22 / 22 pass
+#   core:        1137 / 1137 pass
+#   gui-egui:     232 / 232 pass
+#   surface:       18 / 18 pass
+```
+
+The `cargo test --workspace` deadlock on `clawft-kernel
+hnsw_eml::tests::benchmark_*` is the same flake from the morning
+session and not in scope here.
 
 ---
 
-## Open loops carried forward
+## Open loops (still)
 
-Higher-priority follow-ups first.
+These carried over from the morning handoff and are still on the
+list:
 
-1. **Live verify the new surfaces.** First boot of the new daemon
-   binary. Confirm:
-   - `llm service: healthy` line appears in kernel.log
-   - `ui/chat` panel round-trips a prompt
-   - `ui/terminal` spawns a shell and round-trips `echo hi`
-   - `_derived/transcript/...` shows live transcripts
-   - `derived/classify/...` shows speech/silence transitions
-   - Old `<daemon>/derived/transcript/...` still receives the
-     dual-publish (will go away after Phase 4)
-2. **PR / merge to master.** User's gating list (kernel, mesh,
-   chain, explorer, terminal, chat) is now complete in-tree.
-   Open the PR via
-   `https://github.com/weave-logic-ai/weftos/pull/new/phase3-node-identity`
-   — or run `/ultrareview phase3-node-identity` first for a
-   multi-agent review pass.
-3. **Drop the legacy whisper publish.** When the dual-publish
-   window ends, delete the `output_path_legacy` field + the
-   `// REMOVE AFTER PHASE 4` block in
-   `crates/clawft-service-whisper/src/service.rs`, and update the
-   Explorer's transcript discovery to look under `_derived/...`
-   only. No external subscribers in this tree depend on the legacy
-   path; only operator-driven `substrate.subscribe` calls.
-4. **`vte` parser for the terminal panel.** Today ANSI escape
-   sequences render as literal `\u{1b}[...`. Adding the `vte` crate
-   to the egui terminal would render colors + cursor moves. Keep
-   the panel itself thin; the parser is the only thing that needs
-   to grow.
-5. **Streaming `llm.prompt_stream`.** When the chat window grows a
-   per-token UI, the streaming sibling lands as a connection-takeover
-   RPC mirroring `substrate.subscribe`'s pattern. The
-   `llm.prompt` shape is already designed not to break. Markdown
-   rendering in the chat panel is the obvious cosmetic follow-up.
-6. **Real audio classifier.** `EnergyClassifier` is the floor.
-   Silero VAD ONNX is the obvious next step (one more
-   `ClassifierBackend` impl); a llama.cpp-hosted multi-class
-   classifier comes after that and unlocks `"music"` / `"noise"` /
-   `"speech"` distinctions per the saved memory. Trait shape
-   already accommodates both.
-7. **Whisper service Source/Stage/Sink refactor.** The classifier
-   gate landed as a tactical patch in the existing
-   `tokio::select!`; the journal's R2 split is still waiting.
-   Worth doing before adding any more pipeline stages.
-8. **Terminal output dedup as append-log** rather than tick. Two
-   identical chunks between polls collapse today. Per-session
-   sub-stream substrate path or tick-bumping append.
-9. **Multi-surface terminal attach.** `take_events()` is
-   single-consumer today; a fan-out broadcast channel is the
-   change. Becomes load-bearing when a chat agent + a panel both
-   want to watch the same session.
-10. **Multi-node grant federation** (R3.6 deferred). Today only the
-    daemon-class node issues grants to itself. When federated
-    kernel-class nodes appear, grant issuance becomes a
-    cross-signature flow. R3.8's authenticate path is also waiting.
-11. **Mic gauge live-update.** Discovery is single-shot per connect;
-    new mic-bearing nodes joining mid-session won't appear until the
-    daemon connection cycles. Cheap fix: rerun discovery on every
-    slow tick that returns no transcript.
-12. **Pre-existing clippy warnings** in
-    `crates/clawft-gui-egui/src/explorer/viewers/{pcm_chunk,
-    time_series}.rs` and `control_toggle.rs` test modules
-    (`assertions_on_constants`, `approx_constant`). Easy sweep,
-    out-of-scope for this session.
-13. **Workshop-watcher live verify.** Builds clean against the new
-    gate; runtime test against a running daemon is the only thing
-    left. Promote past "developer tool" once that's done.
-14. **Sub-key delegation for processes** (R3.8). Current scheme is
-    "attest" (process_id is a label, signed by node key).
-    Authenticate (per-process keys with delegation) becomes
-    load-bearing when WASM apps share a daemon.
-15. **`substrate.canonical_publish_payload` boot self-check on
-    firmware.** Firmware Claude said they'll wire this; not
-    blocking. Nice-to-have for next protocol drift.
+- **Live verify with a running llama-server.** Now that the agent
+  loop genuinely talks to llama-server end-to-end (Phase C wired the
+  transport), running `weft agent -m "say hi"` against a live
+  server is the next acceptance check. Expected behaviour: full
+  pipeline runs, `ServiceLlmAdapter` POSTs to
+  `/v1/chat/completions`, output appears.
+- **VSCode panel — Apr 25 user brief items still pending:**
+  inline-streaming (would need `llm.prompt_stream` lands on the
+  daemon side first), provider switcher in the chip strip,
+  multi-message thread vs single-shot (currently single-shot).
+- **Mesh canonical write gate** — landed in the morning batch; soak
+  test still wanted.
+- **Doc/UX polish pass** before the master merge: README + ADR-001
+  appendix entries for the canon primitives still aging from the
+  pre-Phase-3 era.
 
 ---
 
-## Useful one-liners
+## Daemon
 
-Live transcript stream (canonical path):
+Restarted at the end of this session — the running `weaver kernel
+start --foreground` had been up since Apr 25 and was still on the
+old binary. The new build picks up:
 
-```bash
-{ echo '{"id":"sub","method":"substrate.subscribe","params":{"path":"substrate/_derived/transcript/n-bfc4cd/mic"}}'; sleep 999; } \
-  | nc 127.0.0.1 9471
-```
+- alacritty-based terminal renderer — old explorer terminal text
+  display will look completely different (real colors, real cursor)
+  on next reconnect.
+- service-llm tool-call extensions — RPC schema unchanged for the
+  chat panel; only relevant when the agent loop drives tools.
+- core orphan wiring — affects only `weft agent` callers; daemon
+  RPCs are otherwise untouched.
 
-Live classifier stream:
-
-```bash
-{ echo '{"id":"sub","method":"substrate.subscribe","params":{"path":"substrate/n-046780/derived/classify/n-bfc4cd/mic"}}'; sleep 999; } \
-  | nc 127.0.0.1 9471
-```
-
-LLM prompt:
-
-```bash
-echo '{"id":"t","method":"llm.prompt","params":{"prompt":"hello clawft","max_tokens":400}}' \
-  | nc -q 60 127.0.0.1 9471
-```
-
-Spawn a terminal session (CLI test of the daemon-side service):
-
-```bash
-echo '{"id":"t","method":"terminal.spawn","params":{"rows":24,"cols":80}}' | nc -q 5 127.0.0.1 9471
-```
-
-Toggle a service off:
-
-```bash
-echo '{"id":"t","method":"control.set_enabled","params":{"kind":"service","target":"llm","enabled":false}}' \
-  | nc 127.0.0.1 9471
-```
-
-Daemon node-identity:
-
-```bash
-echo '{"id":"t","method":"node.identity","params":{}}' | nc 127.0.0.1 9471
-```
-
-Verify a publish payload (canonical bytes the verifier sees):
-
-```bash
-echo '{"id":"t","method":"substrate.canonical_publish_payload","params":{"path":"substrate/n-bfc4cd/sensor/mic/rms","value":{"rms_db":-26.4,"peak_db":-12.1,"sample_rate":16000,"available":true,"samples_in_window":16000,"characterization":"Rate"},"node_id":"n-bfc4cd","node_ts":12345}}' \
-  | nc 127.0.0.1 9471
-```
-
-Walk the substrate tree from the daemon root:
-
-```bash
-echo '{"id":"t","method":"substrate.list","params":{"prefix":"substrate","depth":4}}' \
-  | nc 127.0.0.1 9471 | python3 -m json.tool
-```
-
-Targeted test sweep (this is the green-build benchmark — full
-workspace test deadlocks against any live daemon's runtime dir):
-
-```bash
-cargo test -p clawft-service-llm \
-          -p clawft-service-terminal \
-          -p clawft-service-classify \
-          -p clawft-service-whisper \
-          -p clawft-gui-egui \
-          -p clawft-weave --lib
-```
-
-Full phase gate before pushing more:
-
-```bash
-scripts/build.sh gate
-```
-
-Rebuild the WASM bundle for the Cursor extension:
-
-```bash
-bash extensions/vscode-weft-panel/scripts/build-wasm.sh
-# then in Cursor: Ctrl+Shift+P → Developer: Reload Webviews
-```
-
-Install the fresh daemon binary (requires daemon to be stopped first
-— text-busy otherwise):
-
-```bash
-pkill -TERM -f 'weaver kernel start' && sleep 2
-cp ~/dev/clawft/target/release/weaver ~/.cargo/bin/weaver
-RUST_LOG=info nohup ~/.cargo/bin/weaver kernel start --foreground \
-    > ~/dev/clawft/.weftos/runtime/kernel.log 2>&1 &
-```
+Branch state: `development-0.7.0` and `phase3-node-identity` both
+point at `c9f43fc8`. Nothing pushed yet.
