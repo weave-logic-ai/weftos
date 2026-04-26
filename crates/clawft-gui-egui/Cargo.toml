@@ -114,6 +114,27 @@ toml = { workspace = true }
 clap = { workspace = true }
 clawft-rpc = { workspace = true }
 anyhow = { workspace = true }
+# workshop-watcher migrated to the Phase 3 node-identity gate: it
+# generates an ephemeral ed25519 keypair, calls `node.register`,
+# and signs every `substrate.publish` over `node_publish_payload`.
+# `clawft-kernel` exposes the canonical payload helpers and the
+# node-id derivation used by the example.
+ed25519-dalek = { workspace = true }
+# `OsRng` for the example's ephemeral keypair generation. The
+# workspace pins rand 0.8, which is what `ed25519-dalek` 2.x's
+# `SigningKey::generate(&mut OsRng)` expects via the `rand_core`
+# feature.
+rand = { workspace = true }
+# Need `node_registry::{node_register_payload, node_publish_payload,
+# node_id_from_pubkey}` for the example. The workspace clawft-kernel
+# entry sets `default-features = false`; we restore the kernel's
+# default feature set here because individual features
+# (e.g. `native` alone) don't compile in isolation. This is a
+# dev-dep so the cost only hits `cargo run --example`, not the
+# release build of the gui-egui library.
+clawft-kernel = { workspace = true, features = [
+    "native", "exochain", "cluster", "tilezero", "ecc", "mesh",
+] }
 
 # ── Features ─────────────────────────────────────────────────────────
 
