@@ -9,6 +9,8 @@ pub mod learner;
 #[cfg(feature = "native")]
 pub mod llm_adapter;
 pub mod mutation;
+#[cfg(feature = "native")]
+pub mod service_llm_adapter;
 pub mod permissions;
 pub mod rate_limiter;
 pub mod router;

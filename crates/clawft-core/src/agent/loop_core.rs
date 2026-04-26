@@ -26,7 +26,7 @@
 //! Outbound Message (dispatched to MessageBus)
 //! ```
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use clawft_plugin::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -143,6 +143,27 @@ pub struct AgentLoop<P: Platform> {
     /// before the local LLM is invoked. If a rule matches, the
     /// `delegate_task` tool is called directly, bypassing the LLM.
     auto_delegation: Option<Arc<dyn AutoDelegation>>,
+    /// Optional sandbox enforcer.
+    ///
+    /// When set, every tool dispatch in [`Self::run_tool_loop`] is
+    /// gated through [`SandboxEnforcer::check_tool`] before the
+    /// underlying [`ToolRegistry`] runs. A denial materializes as a
+    /// `{"error": ...}` tool result (same shape as a normal failure)
+    /// so the LLM can recover, and the audit log captures the
+    /// decision. When `None` (default for backwards compat) tools
+    /// execute exactly as before — no enforcement layer.
+    sandbox: Option<Arc<crate::agent::sandbox::SandboxEnforcer>>,
+    /// Optional autonomous skill-creation pattern detector.
+    ///
+    /// When set, every tool dispatched in [`Self::run_tool_loop`] is
+    /// fed to
+    /// [`PatternDetector::record_tool_call`](crate::agent::skill_autogen::PatternDetector::record_tool_call).
+    /// After dispatch we call `detect_candidates`; new patterns get
+    /// materialized as pending SKILL.md files via
+    /// [`install_pending_skill`](crate::agent::skill_autogen::install_pending_skill)
+    /// in `~/.clawft/skills/pending/`. The pending → live promotion
+    /// stays manual (user approval), per the autogen module's design.
+    autogen: Option<Arc<Mutex<crate::agent::skill_autogen::PatternDetector>>>,
 }
 
 impl<P: Platform> AgentLoop<P> {
@@ -179,6 +200,8 @@ impl<P: Platform> AgentLoop<P> {
             permission_resolver,
             cancel: None,
             auto_delegation: None,
+            sandbox: None,
+            autogen: None,
         }
     }
 
@@ -195,6 +218,30 @@ impl<P: Platform> AgentLoop<P> {
     /// `delegate_task` tool before the local LLM processes them.
     pub fn with_auto_delegation(mut self, delegation: Arc<dyn AutoDelegation>) -> Self {
         self.auto_delegation = Some(delegation);
+        self
+    }
+
+    /// Attach a [`SandboxEnforcer`](crate::agent::sandbox::SandboxEnforcer)
+    /// that gates every tool call against the agent's allowlist before
+    /// dispatch. Without this attached the agent loop runs un-sandboxed
+    /// (legacy behaviour).
+    pub fn with_sandbox(
+        mut self,
+        sandbox: Arc<crate::agent::sandbox::SandboxEnforcer>,
+    ) -> Self {
+        self.sandbox = Some(sandbox);
+        self
+    }
+
+    /// Attach a
+    /// [`PatternDetector`](crate::agent::skill_autogen::PatternDetector)
+    /// so the agent loop records every tool call and writes pending
+    /// SKILL.md candidates when patterns recur.
+    pub fn with_autogen(
+        mut self,
+        detector: Arc<Mutex<crate::agent::skill_autogen::PatternDetector>>,
+    ) -> Self {
+        self.autogen = Some(detector);
         self
     }
 
@@ -655,11 +702,29 @@ impl<P: Platform> AgentLoop<P> {
                 .as_ref()
                 .map(|ctx| &ctx.permissions);
 
+            let sandbox = self.sandbox.clone();
             let futures: Vec<_> = tool_calls
                 .iter()
                 .map(|(id, name, input)| {
                     let tools = &self.tools;
+                    let sandbox = sandbox.clone();
                     async move {
+                        // Sandbox gate: if an enforcer is attached,
+                        // refuse calls outside the agent's allowlist
+                        // before the registry sees them. The denial
+                        // surfaces as a tool-result error so the LLM
+                        // can recover (e.g. pick a different tool)
+                        // instead of failing the whole turn.
+                        if let Some(enforcer) = sandbox.as_ref()
+                            && let Err(reason) = enforcer.check_tool(name)
+                        {
+                            warn!(tool = %name, reason = %reason, "sandbox: tool dispatch denied");
+                            let body = serde_json::json!({
+                                "error": format!("sandbox denied: {reason}")
+                            })
+                            .to_string();
+                            return (id.clone(), name.clone(), body);
+                        }
                         let result = tools.execute(name, input.clone(), permissions).await;
                         let result_json = match result {
                             Ok(val) => {
@@ -678,6 +743,62 @@ impl<P: Platform> AgentLoop<P> {
                 .collect();
 
             let results = futures_util::future::join_all(futures).await;
+
+            // Skill autogen pattern detection: feed each dispatched
+            // tool name to the detector, then surface any newly
+            // recurring patterns as pending SKILL.md candidates in
+            // `~/.clawft/skills/pending/`. Promotion to live skills
+            // stays a manual approval step per the autogen module's
+            // design — we never auto-arm a generated skill.
+            if let Some(detector) = self.autogen.as_ref() {
+                use crate::agent::skill_autogen::{
+                    generate_skill_md, install_pending_skill,
+                };
+                let candidates = {
+                    let mut det = match detector.lock() {
+                        Ok(g) => g,
+                        Err(p) => {
+                            warn!("autogen detector mutex poisoned, recovering");
+                            p.into_inner()
+                        }
+                    };
+                    for (_, name, _) in &results {
+                        det.record_tool_call(name);
+                    }
+                    det.detect_candidates()
+                };
+                if !candidates.is_empty() {
+                    let install_dir = {
+                        // Reload the config-derived install dir each
+                        // time so user overrides take effect without
+                        // restarting the loop.
+                        let det = match detector.lock() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        crate::agent::skill_autogen::AutogenConfig {
+                            enabled: det.is_enabled(),
+                            ..Default::default()
+                        }
+                        .install_dir()
+                    };
+                    for pattern in candidates {
+                        let candidate = generate_skill_md(&pattern);
+                        match install_pending_skill(&candidate, &install_dir) {
+                            Ok(path) => {
+                                info!(
+                                    skill_dir = %path.display(),
+                                    name = %candidate.name,
+                                    "autogen: installed pending skill candidate"
+                                );
+                            }
+                            Err(e) => {
+                                warn!(error = %e, "autogen: install_pending_skill failed");
+                            }
+                        }
+                    }
+                }
+            }
 
             // Post-write verification: check that claimed writes exist on disk.
             let verification_results = verification::verify_write_results(

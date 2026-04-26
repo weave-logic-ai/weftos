@@ -319,6 +319,21 @@ pub trait LearningBackend: Send + Sync {
 
     /// Process a learning signal (e.g. user feedback).
     fn adapt(&self, signal: &LearningSignal);
+
+    /// Apply learned-from-trajectories mutations to a system prompt.
+    ///
+    /// Default implementation is a no-op: returns the prompt unchanged.
+    /// Trajectory-collecting implementations
+    /// (e.g. [`crate::pipeline::learner::TrajectoryLearner`]) override
+    /// this to apply
+    /// [`crate::pipeline::mutation::mutate_prompt`] when an evolution
+    /// is due.
+    ///
+    /// Called from [`PipelineRegistry::complete`] before the transport
+    /// stage so the model sees an up-to-date system prompt.
+    fn evolve_prompt(&self, prompt: &str) -> String {
+        prompt.to_string()
+    }
 }
 
 // ── Cost & rate-limiting traits ──────────────────────────────────────────
@@ -391,6 +406,49 @@ pub struct Pipeline {
     pub learner: Arc<dyn LearningBackend>,
 }
 
+/// Pipeline-internal helper for stage 3.5: ask the learner to mutate
+/// the assembled system message before transport.
+///
+/// Walks the assembled messages, finds the system prompt (first
+/// `role == "system"`), passes its content through
+/// [`LearningBackend::evolve_prompt`], and returns a new vector with
+/// the (possibly) mutated content. Non-system messages are passed
+/// through unchanged.
+///
+/// If no system message exists the input is returned unchanged — the
+/// learner only ever transforms the system layer.
+fn apply_prompt_evolution(
+    messages: Vec<LlmMessage>,
+    learner: &dyn LearningBackend,
+) -> Vec<LlmMessage> {
+    let mut mutated = false;
+    let out: Vec<LlmMessage> = messages
+        .into_iter()
+        .map(|m| {
+            if !mutated && m.role == "system" {
+                let new_content = learner.evolve_prompt(&m.content);
+                if new_content != m.content {
+                    tracing::debug!(
+                        before_chars = m.content.len(),
+                        after_chars = new_content.len(),
+                        "pipeline: learner mutated system prompt"
+                    );
+                }
+                mutated = true; // only the first system message is mutated
+                LlmMessage {
+                    role: m.role,
+                    content: new_content,
+                    tool_call_id: m.tool_call_id,
+                    tool_calls: m.tool_calls,
+                }
+            } else {
+                m
+            }
+        })
+        .collect();
+    out
+}
+
 /// Registry that maps task types to specialized pipelines.
 ///
 /// When a request arrives, the registry classifies it, looks up the
@@ -434,11 +492,18 @@ impl PipelineRegistry {
         // Stage 3: assemble context
         let context = pipeline.assembler.assemble(request, &profile).await;
 
+        // Stage 3.5: feedback loop — let the learner mutate the
+        // assembled system prompt. NoopLearner returns it unchanged;
+        // TrajectoryLearner only mutates when an evolution is due
+        // (configured trigger count of poor trajectories accumulated).
+        let messages =
+            apply_prompt_evolution(context.messages, pipeline.learner.as_ref());
+
         // Stage 4: transport (with latency measurement)
         let transport_request = TransportRequest {
             provider: routing.provider.clone(),
             model: routing.model.clone(),
-            messages: context.messages,
+            messages,
             tools: request.tools.clone(),
             max_tokens: request.max_tokens,
             temperature: request.temperature,
@@ -487,10 +552,14 @@ impl PipelineRegistry {
         let routing = pipeline.router.route(request, &profile).await;
         let context = pipeline.assembler.assemble(request, &profile).await;
 
+        // Stage 3.5: same feedback loop as the non-streaming path.
+        let messages =
+            apply_prompt_evolution(context.messages, pipeline.learner.as_ref());
+
         let transport_request = TransportRequest {
             provider: routing.provider.clone(),
             model: routing.model.clone(),
-            messages: context.messages,
+            messages,
             tools: request.tools.clone(),
             max_tokens: request.max_tokens,
             temperature: request.temperature,

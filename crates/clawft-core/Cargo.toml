@@ -22,6 +22,7 @@ native = [
     "dep:dirs",
     "dep:tokio",
     "dep:tokio-util",
+    "dep:clawft-service-llm",
     "clawft-platform/native",
     "clawft-llm/native",
     "clawft-plugin/native",
@@ -61,6 +62,13 @@ tokio = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
 dirs = { workspace = true, optional = true }
 notify = { workspace = true, optional = true }
+# clawft-service-llm provides the narrow LlmClient that talks to a
+# local llama-server over OpenAI-compat HTTP. The pipeline's
+# ServiceLlmAdapter (`pipeline/service_llm_adapter.rs`) bridges
+# LlmClient into the pipeline's LlmProvider trait so the agent loop
+# routes through the same service the daemon's `llm.prompt` RPC uses.
+# Native-only because LlmClient pulls reqwest.
+clawft-service-llm = { workspace = true, optional = true }
 
 # Browser only
 wasm-bindgen-futures = { version = "0.4", optional = true }
@@ -85,6 +93,10 @@ clawft-types = { workspace = true }
 temp-env = "0.3"
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = { workspace = true }
+# ServiceLlmAdapter integration tests spin up a wiremock server to
+# stand in for llama-server's `/v1/chat/completions` endpoint and
+# verify the JSON conversion round-trip.
+wiremock = "0.6"
 
 [[bench]]
 name = "pipeline_bench"
