@@ -253,6 +253,19 @@ function installWasmHotReload(
     };
 }
 
+// Per-method RPC timeout. The default (`rpc.ts`'s 3000ms) is right for
+// the daemon-local control verbs that round-trip in milliseconds, but
+// `llm.prompt` proxies to a llama.cpp server doing CPU/GPU inference;
+// even a short completion against a 35B-A3B model takes 5–30 s, and
+// a longer one can run minutes. Anything that calls a model server
+// gets the long bucket; everything else keeps fast-fail semantics so
+// a stopped daemon surfaces immediately on the chips.
+const LLM_TIMEOUT_MS = 300_000;
+function timeoutForMethod(method: string): number | undefined {
+    if (method === "llm.prompt") return LLM_TIMEOUT_MS;
+    return undefined; // fall through to rpcCall's default
+}
+
 async function handleRpc(
     panel: vscode.WebviewPanel,
     socketPath: string,
@@ -269,11 +282,15 @@ async function handleRpc(
     }
 
     try {
-        const resp = await rpcCall(socketPath, {
-            method: req.method,
-            params: req.params ?? null,
-            id: randomUUID(),
-        });
+        const resp = await rpcCall(
+            socketPath,
+            {
+                method: req.method,
+                params: req.params ?? null,
+                id: randomUUID(),
+            },
+            timeoutForMethod(req.method),
+        );
         void panel.webview.postMessage({
             type: "rpc-response",
             id: req.id,
