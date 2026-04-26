@@ -1209,6 +1209,7 @@ version = "0.6.19"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "clap",
  "clawft-app",
  "clawft-rpc",

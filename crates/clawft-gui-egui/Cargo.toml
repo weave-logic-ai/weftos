@@ -61,6 +61,10 @@ web-time = "1"
 # from other crates in the tree doesn't reliably pick up PNG for the wasm
 # target, so the boot logo silently fails to decode. Pin `png` explicitly.
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Decoding pcm_chunk's base64-encoded i16le payload for the inline
+# waveform mini-plot in the Explorer's PcmChunkViewer. Pinned to
+# match the version `clawft-service-whisper` already brings in.
+base64 = "0.22"
 
 # M1.5-C + M1.5-D/E: substrate state tree + ADR-017 OntologyAdapter
 # trait + surface-description composer. Compiles on wasm (adapter trait
