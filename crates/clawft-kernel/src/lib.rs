@@ -242,7 +242,8 @@ pub use agent_registry::{
 #[cfg(feature = "native")]
 pub use node_registry::{
     node_id_from_pubkey, node_publish_payload, path_belongs_to, required_path_prefix,
-    NodeRegistry, RegisteredNode,
+    DerivedGrantError, DerivedWriteGrant, GrantScope, NodeRegistry, RegisteredNode,
+    MESH_CANONICAL_PREFIX,
 };
 #[cfg(feature = "native")]
 pub use substrate_service::{

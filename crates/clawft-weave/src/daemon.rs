@@ -176,6 +176,51 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
             "node",
             format!("daemon node registered: {}", daemon_identity.node_id),
         );
+
+        // Issue mesh-canonical write grants for every topic this
+        // daemon will produce. Per `.planning/sensors/PIPELINE-PRIMITIVE-JOURNAL.md`
+        // §R3.6 each `_derived/<topic>` subtree requires a separate
+        // grant — this is the seam where they're stamped. MVP: the
+        // daemon grants itself in-process; no signature, no
+        // revocation. Future federated grants will require an issuer
+        // signature checked at the RPC boundary.
+        //
+        // Topics included now (some are produced by services landing
+        // in parallel work):
+        // - `transcript`  — whisper STT output (this branch)
+        // - `classify`    — speech/silence/keyword classifier (parallel)
+        // - `terminal`    — terminal-output capture pipeline (parallel)
+        //
+        // Stamping all three here means the parallel branches don't
+        // each need to touch this grant-issue path.
+        for topic in ["transcript", "classify", "terminal"] {
+            match k.node_registry().issue_derived_grant(
+                daemon_identity.node_id.clone(),
+                topic,
+                clawft_kernel::GrantScope::TopicPrefix,
+            ) {
+                Ok(_) => {
+                    info!(
+                        node_id = %daemon_identity.node_id,
+                        topic = %topic,
+                        "derived-write grant issued"
+                    );
+                    k.event_log().info(
+                        "node",
+                        format!(
+                            "derived-write grant: node={} topic={}",
+                            daemon_identity.node_id, topic
+                        ),
+                    );
+                }
+                Err(e) => {
+                    // Topic strings above are constants so this can't
+                    // realistically fire — log + continue rather than
+                    // abort daemon boot.
+                    warn!(error = %e, topic = %topic, "derived-write grant issue failed");
+                }
+            }
+        }
     }
 
     // Stash daemon-wide control state. Set once; the `control.*`
@@ -217,19 +262,38 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         let input_path = format!(
             "substrate/{source_node_id}/sensor/mic/pcm_chunk"
         );
-        let output_path = format!(
+        // Mesh-canonical transcript path (R3.2). Source node is part
+        // of the path so subscribers see one stable subtree across
+        // leader handoff. The daemon issued itself a `transcript`
+        // grant above; the gate consults the registry handed to the
+        // service via config.
+        let output_path_derived = format!(
+            "substrate/_derived/transcript/{source_node_id}/mic",
+        );
+        // REMOVE AFTER PHASE 4: dual-publish for migration.
+        // Old node-private path stays alive for one release so
+        // existing in-tree subscribers (the Explorer's substrate
+        // walk) keep working while consumers migrate to the
+        // canonical path.
+        let output_path_legacy = format!(
             "substrate/{daemon}/derived/transcript/{source}/mic",
             daemon = daemon_identity.node_id,
             source = source_node_id,
         );
+        let node_registry = {
+            let k = kernel.read().await;
+            k.node_registry().clone()
+        };
         let cfg = clawft_service_whisper::WhisperServiceConfig {
             window_ms: 2_000,
             retry_backoff: std::time::Duration::from_millis(500),
             node_id: daemon_identity.node_id.clone(),
             input_path: input_path.clone(),
-            output_path: output_path.clone(),
+            output_path_derived: output_path_derived.clone(),
+            output_path_legacy: Some(output_path_legacy.clone()),
             service_enabled: Arc::clone(&whisper_service_flag),
             source_enabled: Arc::clone(&whisper_source_flag),
+            node_registry,
         };
         let client_cfg = clawft_service_whisper::WhisperConfig {
             base_url: whisper_url.clone(),
@@ -253,9 +317,10 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
             Ok(svc) => {
                 info!(
                     input = %input_path,
-                    output = %output_path,
+                    output = %output_path_derived,
+                    legacy_output = %output_path_legacy,
                     whisper_url = %whisper_url,
-                    "whisper service spawned"
+                    "whisper service spawned (dual-publish: canonical + legacy)"
                 );
                 Some(svc)
             }

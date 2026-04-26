@@ -163,6 +163,15 @@ pub enum GateDenied {
         /// Attempted path.
         path: String,
     },
+    /// The path is mesh-canonical (`substrate/_derived/...`) but the
+    /// publishing node holds no [`crate::DerivedWriteGrant`] covering
+    /// it. See `.planning/sensors/PIPELINE-PRIMITIVE-JOURNAL.md` §R3.6.
+    MissingDerivedGrant {
+        /// Attempted path.
+        path: String,
+        /// Node that tried to write it.
+        node_id: String,
+    },
 }
 
 impl std::fmt::Display for GateDenied {
@@ -175,6 +184,11 @@ impl std::fmt::Display for GateDenied {
             GateDenied::MissingNodeId { path } => write!(
                 f,
                 "publish to {path} rejected: no node_id declared (every write must be node-attributed)"
+            ),
+            GateDenied::MissingDerivedGrant { path, node_id } => write!(
+                f,
+                "node {node_id} may not publish to mesh-canonical path {path} \
+                 (no DerivedWriteGrant for the topic; see R3.6)"
             ),
         }
     }
@@ -433,17 +447,24 @@ impl SubstrateService {
 
     /// Publish a Replace delta under the node-identity write gate.
     ///
-    /// Every substrate write belongs to exactly one **node**, and may
-    /// only land under that node's namespace — `substrate/<node-id>/…`.
-    /// This is the enforcement seam: callers provide the `node_id` they
-    /// have already authenticated (signature verified at the RPC
-    /// boundary, or trusted at in-process call sites where the daemon
-    /// stamps its own id); `publish_gated` refuses to write anywhere
-    /// else.
+    /// Every node-private substrate write belongs to exactly one
+    /// **node**, and may only land under that node's namespace —
+    /// `substrate/<node-id>/…`. This is the enforcement seam: callers
+    /// provide the `node_id` they have already authenticated
+    /// (signature verified at the RPC boundary, or trusted at
+    /// in-process call sites where the daemon stamps its own id);
+    /// `publish_gated` refuses to write anywhere else.
     ///
-    /// Returns the new tick on success, or [`GateDenied`] when the path
-    /// is outside the node's prefix or no node id was supplied. See
-    /// [`crate::node_registry::path_belongs_to`] for the exact rule.
+    /// Mesh-canonical writes (`substrate/_derived/...`) are
+    /// **rejected** by this method — the legacy gate has no
+    /// [`crate::NodeRegistry`] handle and cannot consult the
+    /// `DerivedWriteGrant` table. Use
+    /// [`Self::publish_gated_with_grants`] for that tier.
+    ///
+    /// Returns the new tick on success, or [`GateDenied`] when the
+    /// path is outside the node's prefix or no node id was supplied.
+    /// See [`crate::node_registry::path_belongs_to`] for the exact
+    /// rule.
     ///
     /// Fans out to all external-stream subscribers registered via
     /// [`Self::subscribe`].
@@ -462,10 +483,71 @@ impl SubstrateService {
                 node_id: node_id.to_string(),
             });
         }
-        // Note the node id as the caller in the fan-out line so
-        // subscribers can audit who wrote it. We deliberately keep the
-        // existing `caller` wire-field name — semantics evolve (from
-        // "actor" to "node") without breaking the log shape.
+        Ok(self.publish_after_gate(node_id, path, value))
+    }
+
+    /// Tier-aware publish gate.
+    ///
+    /// Splits writes by path tier per
+    /// `.planning/sensors/PIPELINE-PRIMITIVE-JOURNAL.md` §R3.3:
+    ///
+    /// - **Node-private** (`substrate/<node-id>/...`) — strict prefix
+    ///   match, identical to [`Self::publish_gated`].
+    /// - **Mesh-canonical** (`substrate/_derived/...`) — checks the
+    ///   registry's [`crate::DerivedWriteGrant`] table.
+    ///   `node_registry.has_derived_grant(node_id, path)` must return
+    ///   `true`. Without a grant the write is rejected with
+    ///   [`GateDenied::MissingDerivedGrant`].
+    ///
+    /// The dual-tier check is the load-bearing bit of R3 — it lets a
+    /// daemon-class node publish whisper transcripts at
+    /// `substrate/_derived/transcript/<source>/mic` while still
+    /// honouring the per-node prefix rule for everything else.
+    pub fn publish_gated_with_grants(
+        &self,
+        node_id: Option<&str>,
+        path: &str,
+        value: Value,
+        node_registry: &crate::NodeRegistry,
+    ) -> Result<u64, GateDenied> {
+        let node_id = node_id.ok_or_else(|| GateDenied::MissingNodeId {
+            path: path.to_string(),
+        })?;
+        // Tier detection. Mesh-canonical paths get the grant check;
+        // anything else falls through to the legacy per-node-prefix
+        // rule. Note that `_derived/` is the *only* reserved word
+        // under `substrate/` — node-ids carry a leading `n-` exactly
+        // so they cannot collide with this segment (see
+        // `node_registry::node_id_from_pubkey`).
+        if path.starts_with(crate::node_registry::MESH_CANONICAL_PREFIX) {
+            if !node_registry.has_derived_grant(node_id, path) {
+                return Err(GateDenied::MissingDerivedGrant {
+                    path: path.to_string(),
+                    node_id: node_id.to_string(),
+                });
+            }
+            return Ok(self.publish_after_gate(node_id, path, value));
+        }
+        if !crate::node_registry::path_belongs_to(path, node_id) {
+            return Err(GateDenied::WrongPrefix {
+                path: path.to_string(),
+                node_id: node_id.to_string(),
+            });
+        }
+        Ok(self.publish_after_gate(node_id, path, value))
+    }
+
+    /// Shared post-gate write path. Allocates a new tick, writes the
+    /// value, and fans out to all subscribers. Both
+    /// [`Self::publish_gated`] and
+    /// [`Self::publish_gated_with_grants`] flow through here so the
+    /// fan-out behaviour stays identical across tiers.
+    ///
+    /// `node_id` is recorded as the caller on the fan-out line so
+    /// subscribers can audit who wrote it. We deliberately keep the
+    /// existing `caller` wire-field name — semantics evolve (from
+    /// "actor" to "node") without breaking the log shape.
+    fn publish_after_gate(&self, node_id: &str, path: &str, value: Value) -> u64 {
         let new_tick = self.inner.global_tick.fetch_add(1, Ordering::Relaxed) + 1;
         let line = build_update_line(path, Some(&value), new_tick, "publish", Some(node_id));
         let mut entry = self
@@ -476,7 +558,7 @@ impl SubstrateService {
         entry.value = Some(value);
         entry.tick = new_tick;
         fanout(&mut entry.sinks, &line);
-        Ok(new_tick)
+        new_tick
     }
 
     /// Publish a Replace delta at a path. Returns the new tick.
@@ -1033,5 +1115,167 @@ mod tests {
             .unwrap();
         let got = rt.block_on(async move { rx.recv().await });
         assert!(got.is_some(), "subscriber did not receive fanout");
+    }
+
+    // ── publish_gated_with_grants (R3.3 tier-aware gate) ───────────
+
+    #[test]
+    fn gate_accepts_derived_write_with_grant() {
+        let svc = SubstrateService::new();
+        let registry = crate::NodeRegistry::new();
+        registry
+            .issue_derived_grant(
+                "n-daemon",
+                "transcript",
+                crate::GrantScope::TopicPrefix,
+            )
+            .unwrap();
+        let tick = svc
+            .publish_gated_with_grants(
+                Some("n-daemon"),
+                "substrate/_derived/transcript/n-foo/mic",
+                serde_json::json!({"text": "hi"}),
+                &registry,
+            )
+            .expect("grant in place — write must succeed");
+        assert_eq!(tick, 1);
+        // Read back through the egress gate to prove the value
+        // landed.
+        let snap = svc
+            .read(None, "substrate/_derived/transcript/n-foo/mic")
+            .unwrap();
+        assert_eq!(snap.value, Some(serde_json::json!({"text": "hi"})));
+    }
+
+    #[test]
+    fn gate_rejects_derived_write_without_grant() {
+        let svc = SubstrateService::new();
+        let registry = crate::NodeRegistry::new();
+        // No grant issued.
+        let err = svc
+            .publish_gated_with_grants(
+                Some("n-daemon"),
+                "substrate/_derived/transcript/n-foo/mic",
+                serde_json::json!({"text": "nope"}),
+                &registry,
+            )
+            .expect_err("missing grant must reject");
+        match err {
+            GateDenied::MissingDerivedGrant { path, node_id } => {
+                assert_eq!(path, "substrate/_derived/transcript/n-foo/mic");
+                assert_eq!(node_id, "n-daemon");
+            }
+            other => panic!("expected MissingDerivedGrant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gate_rejects_derived_for_unrelated_topic() {
+        let svc = SubstrateService::new();
+        let registry = crate::NodeRegistry::new();
+        // Grant only for `transcript`; daemon attempts a `classify`
+        // write. R3.6: grants are bounded — one pipeline's grant
+        // does NOT bleed into another's namespace.
+        registry
+            .issue_derived_grant(
+                "n-daemon",
+                "transcript",
+                crate::GrantScope::TopicPrefix,
+            )
+            .unwrap();
+        let err = svc
+            .publish_gated_with_grants(
+                Some("n-daemon"),
+                "substrate/_derived/classify/n-foo/mic",
+                serde_json::json!({"label": "speech"}),
+                &registry,
+            )
+            .expect_err("grant scoped to other topic must not apply");
+        assert!(matches!(err, GateDenied::MissingDerivedGrant { .. }));
+    }
+
+    #[test]
+    fn gate_accepts_node_prefix_write_unchanged() {
+        // Regression: tier detection must not break the node-private
+        // happy path. With no grant in the registry, a write under
+        // the node's own prefix still succeeds via the fall-through
+        // branch.
+        let svc = SubstrateService::new();
+        let registry = crate::NodeRegistry::new();
+        let tick = svc
+            .publish_gated_with_grants(
+                Some("n-daemon"),
+                "substrate/n-daemon/sensor/mic",
+                serde_json::json!(42),
+                &registry,
+            )
+            .expect("node-private path still accepted");
+        assert_eq!(tick, 1);
+    }
+
+    #[test]
+    fn gate_rejects_cross_node_write_unchanged() {
+        // Regression: the per-node prefix rule still rejects writes
+        // into another node's subtree in the new gate.
+        let svc = SubstrateService::new();
+        let registry = crate::NodeRegistry::new();
+        let err = svc
+            .publish_gated_with_grants(
+                Some("n-a"),
+                "substrate/n-b/sensor/mic",
+                serde_json::json!(0),
+                &registry,
+            )
+            .expect_err("cross-node write must be rejected");
+        match err {
+            GateDenied::WrongPrefix { path, node_id } => {
+                assert_eq!(path, "substrate/n-b/sensor/mic");
+                assert_eq!(node_id, "n-a");
+            }
+            other => panic!("expected WrongPrefix, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gate_rejects_top_level_flat_write_unchanged() {
+        // Regression: a path with no node-id segment (the old "flat"
+        // shape) still gets rejected as WrongPrefix even with a grant
+        // in the registry — it's neither node-private nor
+        // mesh-canonical.
+        let svc = SubstrateService::new();
+        let registry = crate::NodeRegistry::new();
+        registry
+            .issue_derived_grant(
+                "n-daemon",
+                "transcript",
+                crate::GrantScope::TopicPrefix,
+            )
+            .unwrap();
+        let err = svc
+            .publish_gated_with_grants(
+                Some("n-daemon"),
+                "substrate/sensor/mic",
+                serde_json::json!(0),
+                &registry,
+            )
+            .expect_err("flat path must be rejected");
+        assert!(matches!(err, GateDenied::WrongPrefix { .. }));
+    }
+
+    #[test]
+    fn legacy_publish_gated_still_rejects_derived_paths() {
+        // The legacy `publish_gated` (no registry) must reject
+        // `_derived/` writes outright — it has no way to consult
+        // the grant table. This guards against accidental
+        // regressions in callers that haven't migrated.
+        let svc = SubstrateService::new();
+        let err = svc
+            .publish_gated(
+                Some("n-daemon"),
+                "substrate/_derived/transcript/n-foo/mic",
+                serde_json::json!({"text": "x"}),
+            )
+            .expect_err("legacy gate must reject derived writes");
+        assert!(matches!(err, GateDenied::WrongPrefix { .. }));
     }
 }

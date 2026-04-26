@@ -13,8 +13,8 @@
 //! [`WhisperService`], then publishes the WAV's PCM to
 //! [`clawft_service_whisper::SUBSTRATE_PCM_INPUT_PATH`] in chunks. It
 //! prints every transcript the service emits on
-//! [`clawft_service_whisper::SUBSTRATE_TRANSCRIPT_OUTPUT_PATH`] until
-//! the WAV is exhausted + a short grace window elapses.
+//! the configured `output_path_derived` until the WAV is exhausted +
+//! a short grace window elapses.
 //!
 //! This is deliberately a stand-alone example rather than wired into
 //! the daemon. Wiring to the live daemon is a single additional step
@@ -30,7 +30,7 @@ use base64::Engine as _;
 use clawft_kernel::SubstrateService;
 use clawft_service_whisper::{
     wav::parse_wav, WhisperClient, WhisperConfig, WhisperService, WhisperServiceConfig,
-    SUBSTRATE_PCM_INPUT_PATH, SUBSTRATE_TRANSCRIPT_OUTPUT_PATH,
+    SUBSTRATE_PCM_INPUT_PATH,
 };
 use serde_json::{json, Value};
 
@@ -65,16 +65,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let substrate = SubstrateService::new();
     let client = WhisperClient::new(WhisperConfig::from_env())?;
     let whisper_url = client.config().base_url.clone();
-    let service = WhisperService::spawn(
-        substrate.clone(),
-        client,
-        WhisperServiceConfig::default(),
-    )?;
+    // The default config issues a `transcript` grant for `n-test00`
+    // against its own embedded `NodeRegistry`, so the example's
+    // canonical publish lands without further wiring.
+    let cfg = WhisperServiceConfig::default();
+    let transcript_path = cfg.output_path_derived.clone();
+    let service = WhisperService::spawn(substrate.clone(), client, cfg)?;
     println!("publish_wav: whisper service spawned against {whisper_url}");
 
     // Tap the transcript output to print what the service publishes.
     let (_id, mut transcript_rx) = substrate
-        .subscribe(Some("publish_wav"), SUBSTRATE_TRANSCRIPT_OUTPUT_PATH)
+        .subscribe(Some("publish_wav"), &transcript_path)
         .map_err(|e| e.to_string())?;
 
     // Background printer.

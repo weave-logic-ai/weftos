@@ -11,7 +11,7 @@
 //! # Shape of the service
 //!
 //! ```text
-//!   substrate/sensor/mic/pcm_chunk          substrate/derived/transcript/mic
+//!   substrate/sensor/mic/pcm_chunk          substrate/_derived/transcript/<src>/mic
 //!           (i16 PCM, b64 in JSON)                    (text + timing)
 //!                   │                                      ▲
 //!                   ▼                                      │
@@ -62,14 +62,21 @@ pub use windower::{PcmChunk, PcmWindow, Windower};
 /// ```
 pub const SUBSTRATE_PCM_INPUT_PATH: &str = "substrate/sensor/mic/pcm_chunk";
 
-/// Substrate path the service publishes transcripts to.
+/// Mesh-canonical transcript path *prefix* for the whisper pipeline.
+///
+/// Per `.planning/sensors/PIPELINE-PRIMITIVE-JOURNAL.md` §R3.2 the
+/// fully-resolved publish path is
+/// `substrate/_derived/transcript/<source-node-id>/mic` — the source
+/// node id is part of the path so subscribers see one stable subtree
+/// even if leader handoff swaps which kernel-class node is currently
+/// running the pipeline.
 ///
 /// Payload shape (JSON):
 /// ```json
 /// { "text": "...", "start_ms": 0, "end_ms": 2000, "confidence": null,
-///   "lang": "en", "tick": 0, "seq": 0 }
+///   "lang": "en", "seq": 0 }
 /// ```
-pub const SUBSTRATE_TRANSCRIPT_OUTPUT_PATH: &str = "substrate/derived/transcript/mic";
+pub const SUBSTRATE_TRANSCRIPT_OUTPUT_PREFIX: &str = "substrate/_derived/transcript";
 
 /// Environment variable read by [`WhisperConfig::from_env`].
 pub const WHISPER_SERVICE_URL_ENV: &str = "WHISPER_SERVICE_URL";

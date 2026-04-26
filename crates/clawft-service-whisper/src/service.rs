@@ -3,8 +3,9 @@
 //! Binds a [`WhisperClient`](crate::WhisperClient) to an in-process
 //! [`SubstrateService`]: subscribes to
 //! [`crate::SUBSTRATE_PCM_INPUT_PATH`], windows incoming PCM, posts to
-//! `/inference`, and publishes transcripts to
-//! [`crate::SUBSTRATE_TRANSCRIPT_OUTPUT_PATH`].
+//! `/inference`, and publishes transcripts to the mesh-canonical
+//! `substrate/_derived/transcript/<source>/mic` (configured via
+//! [`WhisperServiceConfig::output_path_derived`]).
 //!
 //! # Backpressure
 //!
@@ -30,7 +31,7 @@ use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
-use clawft_kernel::SubstrateService;
+use clawft_kernel::{NodeRegistry, SubstrateService};
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn};
@@ -50,15 +51,34 @@ pub struct WhisperServiceConfig {
     /// Node id this service publishes under. Required — every
     /// substrate write is node-attributed under the node-identity
     /// gate. Typically set to the daemon's own node-id (the daemon
-    /// is "the node running whisper" in the ontology); the output
-    /// path must sit under `substrate/<node_id>/...` until the
-    /// mesh-canonical gate lands.
+    /// is "the node running whisper" in the ontology). The
+    /// mesh-canonical write gate (R3.6) requires this node to hold
+    /// a `DerivedWriteGrant` on the `transcript` topic — issued by
+    /// the daemon at boot.
     pub node_id: String,
     /// Substrate path to read PCM from.
     pub input_path: String,
-    /// Substrate path to write transcripts to. Must start with
-    /// `substrate/<node_id>/` for the publish gate to accept it.
-    pub output_path: String,
+    /// Mesh-canonical transcript path. Per R3.2 this is the
+    /// load-bearing publish target — subscribers (Explorer,
+    /// downstream pipelines) consume from here, and the path is
+    /// stable across leader handoff. Must sit under
+    /// `substrate/_derived/transcript/...` and the publishing node
+    /// must hold a grant for the `transcript` topic.
+    pub output_path_derived: String,
+    /// Legacy node-private transcript path. Kept alive for one
+    /// migration window so existing in-tree subscribers (today:
+    /// the Explorer's substrate-walk discovery) continue to find
+    /// transcripts at the old path while consumers migrate to
+    /// `output_path_derived`. Each publish to `output_path_derived`
+    /// also writes here; failures are logged but do not block the
+    /// canonical publish.
+    ///
+    /// `None` disables the legacy publish. `Some(path)` must sit
+    /// under `substrate/<node_id>/...` for the legacy gate to
+    /// accept it.
+    ///
+    // REMOVE AFTER PHASE 4: dual-publish for migration
+    pub output_path_legacy: Option<String>,
     /// Service-level enable flag. When `false`, the inference loop
     /// drops incoming chunks before windowing — no work is done.
     /// Defaults to a fresh `Arc<AtomicBool>(true)` if you don't
@@ -72,22 +92,47 @@ pub struct WhisperServiceConfig {
     /// control-path subscribe yet, but the user wants this off."
     /// Defaults to enabled if you don't supply one.
     pub source_enabled: Arc<AtomicBool>,
+    /// Node registry for the mesh-canonical write gate. Cheap to
+    /// clone — the underlying tables are `Arc`-backed. The daemon
+    /// hands its own registry handle here so the service sees the
+    /// `DerivedWriteGrant` issued for the `transcript` topic at
+    /// boot.
+    pub node_registry: NodeRegistry,
 }
 
 impl Default for WhisperServiceConfig {
     fn default() -> Self {
         // Defaults are test-friendly. Daemon-side wiring overrides
-        // `node_id` (with the daemon's own id) and the paths (with
-        // the actual ESP32 node-id for input + the daemon's prefix
-        // for output).
+        // `node_id` (with the daemon's own id), the input path (with
+        // the actual ESP32 node-id), and the output paths.
+        //
+        // Tests that exercise the full pipeline must:
+        // 1. Build a `NodeRegistry` and pre-issue a `transcript`
+        //    grant for `node_id` (`Default` does this for the
+        //    test default `n-test00`).
+        // 2. Overwrite `output_path_derived` if the test asserts on
+        //    a specific source-node attribution.
+        let node_registry = NodeRegistry::new();
+        node_registry
+            .issue_derived_grant(
+                "n-test00",
+                "transcript",
+                clawft_kernel::GrantScope::TopicPrefix,
+            )
+            .expect("test default grant");
         Self {
             window_ms: 2_000,
             retry_backoff: Duration::from_millis(500),
             node_id: "n-test00".to_string(),
             input_path: SUBSTRATE_PCM_INPUT_PATH.to_string(),
-            output_path: "substrate/n-test00/derived/transcript/mic".to_string(),
+            output_path_derived:
+                "substrate/_derived/transcript/n-test00/mic".to_string(),
+            output_path_legacy: Some(
+                "substrate/n-test00/derived/transcript/mic".to_string(),
+            ),
             service_enabled: Arc::new(AtomicBool::new(true)),
             source_enabled: Arc::new(AtomicBool::new(true)),
+            node_registry,
         }
     }
 }
@@ -108,7 +153,9 @@ impl WhisperService {
     /// 2. Parses each line, pulls `value.pcm_b64` + metadata, feeds a
     ///    [`Windower`].
     /// 3. When a window emits, wraps PCM in WAV, POSTs to whisper.
-    /// 4. On success, publishes transcript to `output_path`.
+    /// 4. On success, publishes transcript to `output_path_derived`
+    ///    (mesh-canonical) and, while dual-publish is on, also to
+    ///    `output_path_legacy`.
     ///
     /// # Lifecycle
     ///
@@ -317,30 +364,61 @@ async fn handle_inference_result(
                 "lang": "en",
                 "seq": window.last_seq,
             });
-            // Run through the node-identity gate. Output path must
-            // sit under `substrate/<node_id>/...` (config-checked by
-            // the gate); WhisperServiceConfig builders are
-            // responsible for that. Mesh-canonical placement
-            // (`substrate/_derived/transcript/...`) requires the
-            // capability path that ships with the next gate slice.
-            match substrate.publish_gated(
+            // Mesh-canonical publish: the load-bearing target. R3.2
+            // says the canonical transcript path is
+            // `substrate/_derived/transcript/<source-node>/mic` so it
+            // outlives leader handoff. The daemon issued this node a
+            // `transcript` grant at boot; the gate consults the
+            // registry held in config to verify.
+            match substrate.publish_gated_with_grants(
                 Some(&config.node_id),
-                &config.output_path,
-                payload,
+                &config.output_path_derived,
+                payload.clone(),
+                &config.node_registry,
             ) {
                 Ok(tick) => info!(
                     tick,
                     start_ms = window.start_ms,
                     end_ms = window.end_ms,
                     seq = window.last_seq,
-                    "whisper service: transcript published"
+                    output_path = %config.output_path_derived,
+                    "whisper service: transcript published (mesh-canonical)"
                 ),
                 Err(e) => error!(
                     err = %e,
-                    output_path = %config.output_path,
+                    output_path = %config.output_path_derived,
                     node_id = %config.node_id,
-                    "whisper service: gate denied transcript publish"
+                    "whisper service: gate denied transcript publish (mesh-canonical)"
                 ),
+            }
+
+            // REMOVE AFTER PHASE 4: dual-publish for migration
+            //
+            // Legacy publish: keep emitting at the old node-private
+            // path so existing in-tree subscribers (Explorer's
+            // `substrate/<daemon>/derived/transcript/...` walk) keep
+            // working through the migration window. Logged with a
+            // "deprecated" tag so anyone tailing the daemon log
+            // notices the dual-publish happening.
+            if let Some(ref legacy_path) = config.output_path_legacy {
+                match substrate.publish_gated(
+                    Some(&config.node_id),
+                    legacy_path,
+                    payload,
+                ) {
+                    Ok(_) => warn!(
+                        target: "deprecated",
+                        output_path = %legacy_path,
+                        canonical_path = %config.output_path_derived,
+                        "whisper service: dual-published transcript at legacy node-private path \
+                         (REMOVE AFTER PHASE 4)"
+                    ),
+                    Err(e) => warn!(
+                        err = %e,
+                        output_path = %legacy_path,
+                        "whisper service: legacy transcript publish failed (canonical succeeded)"
+                    ),
+                }
             }
         }
         Err(e) => {
@@ -500,13 +578,17 @@ mod tests {
             ..Default::default()
         };
         let input_path = cfg.input_path.clone();
-        let output_path = cfg.output_path.clone();
+        let output_path = cfg.output_path_derived.clone();
+        let legacy_path = cfg.output_path_legacy.clone().unwrap();
         let actor = cfg.node_id.clone();
 
-        // Pre-subscribe to the OUTPUT to catch the transcript. Must be
-        // done before pumping input so we don't race the first
-        // transcript publish.
+        // Pre-subscribe to BOTH outputs to catch the transcript.
+        // Mesh-canonical is the load-bearing path (R3.2); the legacy
+        // dual-publish is REMOVE-AFTER-PHASE-4 and is exercised via
+        // a parallel subscription to keep the migration honest.
         let (_out_id, mut out_rx) = substrate.subscribe(Some(&actor), &output_path).unwrap();
+        let (_legacy_id, mut legacy_rx) =
+            substrate.subscribe(Some(&actor), &legacy_path).unwrap();
 
         let svc = WhisperService::spawn(substrate.clone(), client, cfg).unwrap();
 
@@ -516,7 +598,8 @@ mod tests {
         publish_pcm_chunk(&substrate, &actor, &input_path, &half, 250, 1);
         publish_pcm_chunk(&substrate, &actor, &input_path, &half, 250, 2);
 
-        // Wait up to 3s for a transcript to show up on the output path.
+        // Wait up to 3s for a transcript to show up on the canonical
+        // output path.
         let got = tokio::time::timeout(Duration::from_secs(3), out_rx.recv()).await;
         let line = got.expect("transcript not published within 3s").expect("substrate closed");
         let update: Value = serde_json::from_slice(&line[..line.len() - 1]).unwrap();
@@ -529,6 +612,18 @@ mod tests {
         assert_eq!(body["seq"], 2);
         assert_eq!(body["lang"], "en");
         assert!(body["confidence"].is_null());
+
+        // Legacy dual-publish must also have fired with the same
+        // payload. REMOVE AFTER PHASE 4: when dual-publish is dropped,
+        // delete this assertion + the legacy_rx subscription above.
+        let legacy_got = tokio::time::timeout(Duration::from_secs(1), legacy_rx.recv()).await;
+        let legacy_line = legacy_got
+            .expect("legacy transcript not published within 1s")
+            .expect("substrate closed");
+        let legacy_update: Value =
+            serde_json::from_slice(&legacy_line[..legacy_line.len() - 1]).unwrap();
+        assert_eq!(legacy_update["path"], legacy_path);
+        assert_eq!(legacy_update["value"]["text"], "unit test speaks");
 
         svc.shutdown().await;
     }

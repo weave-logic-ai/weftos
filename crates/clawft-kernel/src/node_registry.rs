@@ -38,9 +38,57 @@
 //! the on-disk provisioning is the source of truth.
 
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
+
+/// Scope of a [`DerivedWriteGrant`]. Decides whether the registered
+/// `topic` matches one literal subtree or all subtrees beneath it.
+///
+/// See `.planning/sensors/PIPELINE-PRIMITIVE-JOURNAL.md` §R3.6.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantScope {
+    /// Grant covers exactly the path `substrate/_derived/<topic>` (no
+    /// children). Useful for single-leaf canonical facts like
+    /// `_derived/chain/head`.
+    ExactTopic,
+    /// Grant covers any path matching `substrate/_derived/<topic>/...`.
+    /// Used by pipelines that publish a per-source subtree (whisper:
+    /// `_derived/transcript/<source-node>/mic`).
+    TopicPrefix,
+}
+
+/// Capability allowing a node to publish under
+/// `substrate/_derived/<topic>` (or its subtree, depending on
+/// [`GrantScope`]).
+///
+/// Mesh-canonical paths (`substrate/_derived/...`) are explicitly
+/// outside the per-node prefix rule; without a grant the
+/// substrate write gate refuses every publish to that subtree, even
+/// from a daemon-class node. See
+/// `.planning/sensors/PIPELINE-PRIMITIVE-JOURNAL.md` §R3.6 for the
+/// design rationale.
+///
+/// **MVP scope:** grants are issued in-process by the daemon to
+/// itself; there is no signature on the grant itself, no revocation
+/// API, and no cross-node federation. Those land later (R3.6 calls
+/// them out as deferred).
+#[derive(Debug, Clone)]
+pub struct DerivedWriteGrant {
+    /// Node id permitted to write under the topic.
+    pub grantee_node_id: String,
+    /// Topic segment immediately under `_derived/`. For whisper this
+    /// is `"transcript"`. Stored without the `_derived/` prefix so
+    /// the registry holds the conceptual capability, not its path
+    /// rendering.
+    pub topic: String,
+    /// Wall-clock issuance time in milliseconds since UNIX epoch.
+    pub issued_at_ms: u64,
+    /// Whether the topic is matched as exact-only or as a path
+    /// prefix.
+    pub scope: GrantScope,
+}
 
 /// A registered node: node-id, public key, optional friendly label,
 /// and when it was added to the registry.
@@ -64,10 +112,46 @@ pub struct RegisteredNode {
 /// In-memory node-id → public-key map.
 ///
 /// Cheap to clone — the inner map is wrapped in `Arc`/`DashMap`.
+///
+/// Also holds the [`DerivedWriteGrant`] table — the mesh-canonical
+/// write-permissions seam. Both tables share the registry's clone
+/// semantics so a service handed a `NodeRegistry` clone sees grant
+/// updates the daemon issues mid-boot.
 #[derive(Debug, Default, Clone)]
 pub struct NodeRegistry {
     inner: Arc<DashMap<String, RegisteredNode>>,
+    /// `(grantee_node_id, topic)` → grant. Per-pair so the same node
+    /// holding two grants (e.g. `transcript` + `classify`) gets two
+    /// distinct rows; that matches the R3.6 mandate that grants are
+    /// path-bounded, not blanket.
+    grants: Arc<DashMap<(String, String), DerivedWriteGrant>>,
 }
+
+/// Failure modes for [`NodeRegistry::issue_derived_grant`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DerivedGrantError {
+    /// The topic is empty or contains a `/` — topics name a single
+    /// segment immediately below `_derived/`. Multi-segment grants
+    /// must use [`GrantScope::TopicPrefix`] over the *first* segment
+    /// and rely on path matching for finer granularity.
+    InvalidTopic {
+        /// The offending topic string.
+        topic: String,
+    },
+}
+
+impl std::fmt::Display for DerivedGrantError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DerivedGrantError::InvalidTopic { topic } => write!(
+                f,
+                "invalid derived-write topic {topic:?}: must be one non-empty path segment"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DerivedGrantError {}
 
 impl NodeRegistry {
     /// Create a new empty registry.
@@ -114,7 +198,100 @@ impl NodeRegistry {
     pub fn list(&self) -> Vec<RegisteredNode> {
         self.inner.iter().map(|e| e.value().clone()).collect()
     }
+
+    /// Issue a [`DerivedWriteGrant`] permitting `grantee_node_id` to
+    /// publish under the mesh-canonical topic.
+    ///
+    /// **MVP authority model.** Per R3.6 the daemon issues to itself
+    /// in-process; there's no signature check at this seam. Future
+    /// federated grants will add an "issuer signature" arm that
+    /// `clawft-weave`'s RPC boundary will check before this call.
+    /// Today, callers are trusted because they had to be inside the
+    /// daemon process to reach the registry.
+    ///
+    /// Idempotent: re-issuing a `(grantee, topic)` pair overwrites
+    /// `issued_at_ms` and `scope`. Returns the freshly-stored grant.
+    pub fn issue_derived_grant(
+        &self,
+        grantee_node_id: impl Into<String>,
+        topic: impl Into<String>,
+        scope: GrantScope,
+    ) -> Result<DerivedWriteGrant, DerivedGrantError> {
+        let grantee_node_id = grantee_node_id.into();
+        let topic = topic.into();
+        if topic.is_empty() || topic.contains('/') {
+            return Err(DerivedGrantError::InvalidTopic { topic });
+        }
+        let issued_at_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let grant = DerivedWriteGrant {
+            grantee_node_id: grantee_node_id.clone(),
+            topic: topic.clone(),
+            issued_at_ms,
+            scope,
+        };
+        self.grants.insert((grantee_node_id, topic), grant.clone());
+        Ok(grant)
+    }
+
+    /// Whether `grantee_node_id` holds a grant covering `path`.
+    ///
+    /// `path` must look like `substrate/_derived/<topic>/...` (or
+    /// `substrate/_derived/<topic>` for [`GrantScope::ExactTopic`]).
+    /// Anything else returns `false`. The check is the second half
+    /// of the mesh-canonical write gate — the first half is the
+    /// `substrate/_derived/` tier detection that lives on
+    /// [`crate::SubstrateService::publish_gated_with_grants`].
+    pub fn has_derived_grant(&self, grantee_node_id: &str, path: &str) -> bool {
+        // Strip the mesh-canonical tier prefix; if the path doesn't
+        // belong to the tier, no grant matches.
+        let Some(tail) = path.strip_prefix(MESH_CANONICAL_PREFIX) else {
+            return false;
+        };
+        if tail.is_empty() {
+            return false;
+        }
+        // First segment of the tail is the topic; the rest (if any)
+        // is the grantee-controlled subtree.
+        let (topic, rest) = match tail.split_once('/') {
+            Some((t, r)) => (t, Some(r)),
+            None => (tail, None),
+        };
+        if topic.is_empty() {
+            return false;
+        }
+        let Some(entry) = self
+            .grants
+            .get(&(grantee_node_id.to_string(), topic.to_string()))
+        else {
+            return false;
+        };
+        match entry.scope {
+            // Exact: the path must be the bare topic, no subtree.
+            GrantScope::ExactTopic => rest.is_none(),
+            // Prefix: the path must be the topic followed by at least
+            // one non-empty subtree segment. A bare topic write
+            // `substrate/_derived/transcript` is rejected — that path
+            // belongs to the topic root, not to any pipeline-owned
+            // attribution subtree, and would collide if two
+            // pipelines ever shared a topic.
+            GrantScope::TopicPrefix => rest.is_some_and(|r| !r.is_empty()),
+        }
+    }
+
+    /// Snapshot of all currently-issued grants. Test helper / future
+    /// admin-RPC seam; not intended for hot-path use.
+    pub fn list_derived_grants(&self) -> Vec<DerivedWriteGrant> {
+        self.grants.iter().map(|e| e.value().clone()).collect()
+    }
 }
+
+/// Required path prefix for a mesh-canonical write. Trailing slash
+/// included so a `strip_prefix` cleanly leaves the remaining `<topic>`
+/// segment without a leading separator. See R3.0.
+pub const MESH_CANONICAL_PREFIX: &str = "substrate/_derived/";
 
 /// Derive a node-id from an Ed25519 public key.
 ///
@@ -322,5 +499,131 @@ mod tests {
         assert!(!path_belongs_to("substrate/sensor/mic", "n1"));
         assert!(!path_belongs_to("", "n1"));
         assert!(!path_belongs_to("something-else", "n1"));
+    }
+
+    // ── DerivedWriteGrant ──────────────────────────────────────────
+
+    #[test]
+    fn issue_grant_round_trips() {
+        let reg = NodeRegistry::new();
+        let g = reg
+            .issue_derived_grant("n-daemon", "transcript", GrantScope::TopicPrefix)
+            .expect("valid grant accepted");
+        assert_eq!(g.grantee_node_id, "n-daemon");
+        assert_eq!(g.topic, "transcript");
+        assert_eq!(g.scope, GrantScope::TopicPrefix);
+        // Issuance time is recorded; we can't pin the exact value but
+        // it must be non-zero on any sane host clock.
+        assert!(g.issued_at_ms > 0);
+        assert_eq!(reg.list_derived_grants().len(), 1);
+    }
+
+    #[test]
+    fn issue_grant_rejects_invalid_topic() {
+        let reg = NodeRegistry::new();
+        assert!(matches!(
+            reg.issue_derived_grant("n-d", "", GrantScope::ExactTopic),
+            Err(DerivedGrantError::InvalidTopic { .. })
+        ));
+        assert!(matches!(
+            reg.issue_derived_grant("n-d", "transcript/mic", GrantScope::TopicPrefix),
+            Err(DerivedGrantError::InvalidTopic { .. })
+        ));
+    }
+
+    #[test]
+    fn has_grant_topic_prefix_matches_subtree() {
+        let reg = NodeRegistry::new();
+        reg.issue_derived_grant("n-daemon", "transcript", GrantScope::TopicPrefix)
+            .unwrap();
+        assert!(reg.has_derived_grant(
+            "n-daemon",
+            "substrate/_derived/transcript/n-foo/mic"
+        ));
+        assert!(reg.has_derived_grant(
+            "n-daemon",
+            "substrate/_derived/transcript/n-bar/cam"
+        ));
+        // Bare-topic write under a TopicPrefix grant is rejected;
+        // pipelines own attribution subtrees, not the topic root.
+        assert!(!reg.has_derived_grant("n-daemon", "substrate/_derived/transcript"));
+    }
+
+    #[test]
+    fn has_grant_exact_topic_rejects_subtree() {
+        let reg = NodeRegistry::new();
+        reg.issue_derived_grant("n-leader", "chain", GrantScope::ExactTopic)
+            .unwrap();
+        // ExactTopic covers exactly `substrate/_derived/chain`, not
+        // its subtree. (Real chain head is a single-leaf canonical
+        // value — see R3.1.)
+        assert!(reg.has_derived_grant("n-leader", "substrate/_derived/chain"));
+        assert!(!reg.has_derived_grant("n-leader", "substrate/_derived/chain/head"));
+    }
+
+    #[test]
+    fn has_grant_returns_false_when_grant_absent() {
+        let reg = NodeRegistry::new();
+        // No grants issued.
+        assert!(!reg.has_derived_grant(
+            "n-daemon",
+            "substrate/_derived/transcript/n-foo/mic"
+        ));
+    }
+
+    #[test]
+    fn has_grant_rejects_other_grantee() {
+        let reg = NodeRegistry::new();
+        reg.issue_derived_grant("n-daemon", "transcript", GrantScope::TopicPrefix)
+            .unwrap();
+        assert!(!reg.has_derived_grant(
+            "n-other",
+            "substrate/_derived/transcript/n-foo/mic"
+        ));
+    }
+
+    #[test]
+    fn has_grant_rejects_unrelated_topic() {
+        let reg = NodeRegistry::new();
+        reg.issue_derived_grant("n-daemon", "transcript", GrantScope::TopicPrefix)
+            .unwrap();
+        // Same grantee, different topic.
+        assert!(!reg.has_derived_grant(
+            "n-daemon",
+            "substrate/_derived/classify/n-foo/mic"
+        ));
+    }
+
+    #[test]
+    fn has_grant_rejects_non_mesh_canonical_path() {
+        let reg = NodeRegistry::new();
+        reg.issue_derived_grant("n-daemon", "transcript", GrantScope::TopicPrefix)
+            .unwrap();
+        // Even with a grant, paths that don't sit under
+        // `substrate/_derived/` belong to the node-private tier and
+        // must not be matched by this check.
+        assert!(!reg.has_derived_grant("n-daemon", "substrate/n-daemon/foo"));
+        assert!(!reg.has_derived_grant("n-daemon", "substrate/_derived/"));
+        assert!(!reg.has_derived_grant("n-daemon", ""));
+    }
+
+    #[test]
+    fn issue_grant_is_idempotent_per_pair() {
+        let reg = NodeRegistry::new();
+        let _ = reg
+            .issue_derived_grant("n-daemon", "transcript", GrantScope::TopicPrefix)
+            .unwrap();
+        // Second issue of same (grantee, topic) overwrites in place,
+        // doesn't grow the table.
+        let _ = reg
+            .issue_derived_grant("n-daemon", "transcript", GrantScope::ExactTopic)
+            .unwrap();
+        assert_eq!(reg.list_derived_grants().len(), 1);
+        // After the overwrite the path with subtree no longer matches
+        // (scope flipped to ExactTopic).
+        assert!(!reg.has_derived_grant(
+            "n-daemon",
+            "substrate/_derived/transcript/n-foo/mic"
+        ));
     }
 }
