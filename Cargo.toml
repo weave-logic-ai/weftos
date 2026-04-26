@@ -37,6 +37,7 @@ members = [
     "crates/clawft-treecalc",
     "crates/clawft-casestudy-gen-qsr",
     "crates/clawft-service-whisper",
+    "crates/clawft-service-llm",
 ]
 exclude = [
     "gui/src-tauri",
@@ -196,6 +197,7 @@ clawft-substrate = { version = "0.6.6", path = "crates/clawft-substrate" }
 clawft-app = { version = "0.6.6", path = "crates/clawft-app" }
 clawft-surface = { version = "0.6.6", path = "crates/clawft-surface" }
 clawft-service-whisper = { version = "0.6.6", path = "crates/clawft-service-whisper" }
+clawft-service-llm = { version = "0.6.6", path = "crates/clawft-service-llm" }
 
 # EML (exp-ln) function approximation
 eml-core = { version = "0.1.0", path = "crates/eml-core" }

@@ -32,6 +32,16 @@ fn daemon_control() -> Option<Arc<DaemonControlState>> {
     DAEMON_CONTROL.get().cloned()
 }
 
+/// Daemon-wide handle to the LLM HTTP client. Set at boot if the
+/// service spawns successfully; `None` otherwise. The `llm.prompt`
+/// handler reads this and returns a clean error when unset rather
+/// than panicking.
+static DAEMON_LLM: OnceLock<Arc<clawft_service_llm::LlmClient>> = OnceLock::new();
+
+fn daemon_llm() -> Option<Arc<clawft_service_llm::LlmClient>> {
+    DAEMON_LLM.get().cloned()
+}
+
 use clawft_kernel::{Kernel, KernelState};
 use clawft_platform::NativePlatform;
 use clawft_types::config::{Config, KernelConfig};
@@ -256,6 +266,63 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         }
     };
 
+    // Spawn the LLM service handle. Unlike whisper this is a
+    // request/response client — there's no background tokio task to
+    // hold open, so we just construct the client (and one-shot
+    // health probe in the background so a cold cache logs cleanly
+    // without blocking boot).
+    //
+    // Pre-register the control flag so `control.set_enabled
+    // {kind:"service", target:"llm"}` works the first time the
+    // user toggles it from the GUI.
+    let _llm_service_flag =
+        control_flags.register(ControlKind::Service, "llm", true);
+    {
+        let llm_url = std::env::var(clawft_service_llm::LLM_SERVICE_URL_ENV)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                clawft_service_llm::DEFAULT_LLM_SERVICE_URL.to_string()
+            });
+        let cfg = clawft_service_llm::LlmConfig {
+            base_url: llm_url.clone(),
+            ..clawft_service_llm::LlmConfig::default()
+        };
+        match clawft_service_llm::LlmClient::new(cfg) {
+            Ok(client) => {
+                let arc = Arc::new(client);
+                // Background health probe — surfaces "llama-server is
+                // down" in the log without making the daemon refuse to
+                // boot when the local model service hasn't been
+                // started yet.
+                let probe = Arc::clone(&arc);
+                tokio::spawn(async move {
+                    if probe.wait_for_healthy().await {
+                        info!(
+                            url = %probe.config().base_url,
+                            "llm service: healthy"
+                        );
+                    } else {
+                        warn!(
+                            url = %probe.config().base_url,
+                            "llm service: health probe failed at boot \
+                             (RPC will return a clean error per call)"
+                        );
+                    }
+                });
+                let _ = DAEMON_LLM.set(arc);
+                info!(url = %llm_url, "llm service handle wired");
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "llm client init failed — llm.prompt RPC will \
+                     return 'service unavailable'"
+                );
+            }
+        }
+    }
+
     // Publish initial control intents now that the daemon node is
     // registered and services are wired. The intents live under the
     // daemon's own prefix so `publish_gated` accepts them.
@@ -264,6 +331,7 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         let substrate = k.substrate_service();
         let initial = [
             (ControlKind::Service, "whisper".to_string(), "Whisper STT"),
+            (ControlKind::Service, "llm".to_string(), "Local LLM"),
             (ControlKind::Sensor, pcm_chunk_target.clone(), "Mic PCM chunks"),
             (ControlKind::Sensor, rms_target.clone(), "Mic RMS summary"),
         ];
@@ -1688,6 +1756,96 @@ async fn handle_node_identity(
     )
 }
 
+/// Handle `llm.prompt`: synchronous chat completion against the local
+/// LLM service.
+///
+/// This is the V1 shape — one RPC, full completion in the response.
+/// Streaming is a deferred follow-up that lands as `llm.prompt_stream`
+/// using the same connection-takeover pattern as
+/// `substrate.subscribe`, not as a breaking change to this method.
+///
+/// Behaviour:
+/// 1. If the `llm` control flag is `false`, fast-fail with a clear
+///    error so the GUI's disable toggle has the same source-cuts
+///    semantic as for sensors.
+/// 2. If the daemon's LLM client wasn't wired at boot (init error or
+///    feature absent), return a clean "service unavailable" instead
+///    of panicking.
+/// 3. Build a [`ChatMessage`] vector from the params (`messages`
+///    wins over `prompt`; optional `system` is prepended only when
+///    `messages` doesn't already carry one).
+/// 4. Forward to [`LlmClient::complete`]; map errors back to RPC
+///    errors with the same string formatting `LlmError::Display`
+///    uses, so the wire surface stays diagnosable.
+async fn handle_llm_prompt(
+    params: serde_json::Value,
+    _kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    let p: crate::protocol::LlmPromptParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("invalid params: {e}")),
+    };
+
+    // Honor the `llm` control flag. Source-cuts: if disabled, we
+    // never even reach the HTTP client.
+    if let Some(state) = daemon_control()
+        && let Some(flag) = state.flags.get(ControlKind::Service, "llm")
+        && !flag.load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Response::error("llm service is disabled (toggle on via control.set_enabled)");
+    }
+
+    let client = match daemon_llm() {
+        Some(c) => c,
+        None => {
+            return Response::error(
+                "llm service not initialized (check daemon boot log for 'llm client init failed')",
+            );
+        }
+    };
+
+    let mut messages: Vec<clawft_service_llm::ChatMessage> = match (p.messages, p.prompt.clone()) {
+        (Some(msgs), _) => msgs
+            .into_iter()
+            .map(|m| clawft_service_llm::ChatMessage {
+                role: m.role,
+                content: m.content,
+            })
+            .collect(),
+        (None, Some(prompt)) => vec![clawft_service_llm::ChatMessage::user(prompt)],
+        (None, None) => {
+            return Response::error("invalid params: must supply `prompt` or `messages`");
+        }
+    };
+    if messages.is_empty() {
+        return Response::error("invalid params: messages was empty");
+    }
+    // Prepend a system prompt only when the caller didn't already
+    // provide one. Avoids stomping a deliberately-set conversation
+    // shape.
+    if let Some(sys) = p.system
+        && !sys.is_empty()
+        && !messages.first().map(|m| m.role == "system").unwrap_or(false)
+    {
+        messages.insert(0, clawft_service_llm::ChatMessage::system(sys));
+    }
+
+    match client.complete(messages, p.temperature, p.max_tokens).await {
+        Ok(resp) => {
+            let first = &resp.choices[0]; // complete() rejects empty choices upstream
+            let result = crate::protocol::LlmPromptResult {
+                completion: first.message.content.clone(),
+                finish_reason: first.finish_reason.clone(),
+                prompt_tokens: resp.usage.prompt_tokens,
+                completion_tokens: resp.usage.completion_tokens,
+                model: resp.model.clone(),
+            };
+            Response::success(serde_json::to_value(result).unwrap())
+        }
+        Err(e) => Response::error(format!("llm.prompt: {e}")),
+    }
+}
+
 /// Handle `control.set_enabled`: flip a daemon-side enable flag and
 /// republish the substrate control intent under the daemon's own
 /// prefix.
@@ -2517,6 +2675,7 @@ async fn dispatch(
         "substrate.notify" => handle_substrate_notify(params, kernel).await,
         "control.set_enabled" => handle_control_set_enabled(params, kernel).await,
         "control.list" => handle_control_list(params, kernel).await,
+        "llm.prompt" => handle_llm_prompt(params, kernel).await,
         "agent.spawn" => {
             let spawn_params: AgentSpawnParams = match serde_json::from_value(params) {
                 Ok(p) => p,

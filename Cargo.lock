@@ -1510,6 +1510,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "clawft-service-llm"
+version = "0.6.19"
+dependencies = [
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "wiremock",
+]
+
+[[package]]
 name = "clawft-service-whisper"
 version = "0.6.19"
 dependencies = [
@@ -1664,6 +1678,7 @@ dependencies = [
  "clawft-kernel",
  "clawft-platform",
  "clawft-rpc",
+ "clawft-service-llm",
  "clawft-service-whisper",
  "clawft-types",
  "comfy-table",

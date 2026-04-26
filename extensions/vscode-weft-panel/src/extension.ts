@@ -69,6 +69,10 @@ const ALLOWED_METHODS = new Set<string>([
     // the proxy.
     "control.set_enabled",
     "control.list",
+    // LLM service: synchronous chat completion against the local
+    // llama.cpp endpoint. Wired in the daemon at boot via DAEMON_LLM;
+    // the chat window panel calls this for each user turn.
+    "llm.prompt",
 ]);
 
 interface WasmRpcRequest {

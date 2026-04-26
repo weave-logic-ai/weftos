@@ -513,6 +513,70 @@ pub struct ControlListResult {
     pub entries: Vec<ControlListEntry>,
 }
 
+/// One message in an `llm.prompt` conversation.
+///
+/// `role` is one of `"system"`, `"user"`, `"assistant"`. The daemon
+/// passes this through to the underlying chat-completions endpoint
+/// without validation; the server rejects unknown roles.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmPromptMessage {
+    /// Role: `system` / `user` / `assistant`.
+    pub role: String,
+    /// Message content.
+    pub content: String,
+}
+
+/// Parameters for `llm.prompt`.
+///
+/// The daemon-side LLM service is intentionally minimal in this
+/// iteration: a single round-trip request that returns the full
+/// completion. Streaming is deferred — when the chat window grows a
+/// per-token UI it lands as `llm.prompt_stream` mirroring
+/// `substrate.subscribe`'s connection-takeover pattern, not as a
+/// breaking change to this RPC.
+///
+/// At least one of `prompt` (a bare user-turn convenience) or
+/// `messages` (full conversation) must be provided. When both are
+/// present, `messages` wins and `prompt` is ignored.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmPromptParams {
+    /// Convenience: a bare user prompt. Treated as a single
+    /// `[{role:"user", content: prompt}]` conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// Full conversation. Overrides `prompt` when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messages: Option<Vec<LlmPromptMessage>>,
+    /// Optional system prompt prepended to the conversation. Ignored
+    /// when `messages` already starts with a `system` role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    /// Sampling temperature. `None` uses the daemon's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    /// Hard cap on generated tokens. `None` uses the daemon's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+}
+
+/// Result of `llm.prompt`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmPromptResult {
+    /// Assistant completion text.
+    pub completion: String,
+    /// Why generation stopped (`"stop"`, `"length"`, etc.). May be
+    /// absent on servers that omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+    /// Tokens consumed by the prompt (0 if the server omits usage).
+    pub prompt_tokens: u32,
+    /// Tokens generated (0 if the server omits usage).
+    pub completion_tokens: u32,
+    /// Echoed model name (best-effort; may be absent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
 /// Parameters for `substrate.canonical_publish_payload`.
 ///
 /// Diagnostic RPC — runs the daemon's value-canonicalization +
