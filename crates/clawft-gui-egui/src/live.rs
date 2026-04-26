@@ -17,6 +17,8 @@ use parking_lot::RwLock;
 use serde_json::Value;
 
 #[cfg(not(target_arch = "wasm32"))]
+mod mic_discovery;
+#[cfg(not(target_arch = "wasm32"))]
 mod native_live;
 
 #[cfg(target_arch = "wasm32")]
