@@ -78,14 +78,32 @@ impl LlmConfig {
 
 /// One message in a chat completion conversation.
 ///
-/// `role` is one of `"system"`, `"user"`, `"assistant"`. We don't
-/// gate on the value here — the server validates and rejects.
+/// `role` is one of `"system"`, `"user"`, `"assistant"`, `"tool"`. We
+/// don't gate on the value here — the server validates and rejects.
+///
+/// Tool-call additions:
+/// - When the assistant emits tool calls, `content` may be empty and
+///   `tool_calls` carries the structured calls.
+/// - When relaying a tool result back to the model, `role` is `"tool"`,
+///   `content` is the tool's stringified result, and `tool_call_id`
+///   matches the originating call's id.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
-    /// Role: `system` / `user` / `assistant`.
+    /// Role: `system` / `user` / `assistant` / `tool`.
     pub role: String,
-    /// Message content.
+    /// Message content. Empty string for tool-call-only assistant
+    /// turns; OpenAI-compat servers accept `""` here.
+    #[serde(default)]
     pub content: String,
+    /// Tool calls produced by the assistant. Present on assistant
+    /// messages whose `finish_reason` is `"tool_calls"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    /// On `role: "tool"` messages, the id of the tool call this is a
+    /// response to. Required by the OpenAI-compat schema for tool
+    /// results to be accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 impl ChatMessage {
@@ -94,6 +112,8 @@ impl ChatMessage {
         Self {
             role: "system".into(),
             content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
     /// Convenience constructor for a user turn.
@@ -101,6 +121,8 @@ impl ChatMessage {
         Self {
             role: "user".into(),
             content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
     /// Convenience constructor for an assistant turn.
@@ -108,6 +130,126 @@ impl ChatMessage {
         Self {
             role: "assistant".into(),
             content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+    /// Convenience constructor for a `role: "tool"` reply that closes
+    /// out a tool call from a previous assistant turn.
+    pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: "tool".into(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
+        }
+    }
+}
+
+/// A tool definition the model is allowed to call. OpenAI-compatible
+/// `{"type":"function","function":{...}}` shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tool {
+    /// Always `"function"` for the OpenAI-compat schema we target.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The function specification.
+    pub function: ToolFunction,
+}
+
+impl Tool {
+    /// Build a `function`-typed tool from a name, description, and
+    /// JSON-schema parameter spec.
+    pub fn function(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        parameters: serde_json::Value,
+    ) -> Self {
+        Self {
+            kind: "function".into(),
+            function: ToolFunction {
+                name: name.into(),
+                description: description.into(),
+                parameters,
+            },
+        }
+    }
+}
+
+/// The function spec attached to a [`Tool`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolFunction {
+    /// Tool name. Must be a valid identifier on the server side.
+    pub name: String,
+    /// Free-text description; the model uses this to decide when to
+    /// call.
+    #[serde(default)]
+    pub description: String,
+    /// JSON-schema describing the call's arguments. The model emits
+    /// values matching this schema in the `arguments` string of the
+    /// returned [`ToolCall`].
+    pub parameters: serde_json::Value,
+}
+
+/// One tool call emitted by the assistant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    /// Server-assigned identifier; echo back in the matching
+    /// [`ChatMessage::tool`] reply.
+    pub id: String,
+    /// Always `"function"` for the OpenAI-compat schema.
+    #[serde(default = "default_tool_call_kind", rename = "type")]
+    pub kind: String,
+    /// The function being called.
+    pub function: ToolCallFunction,
+}
+
+fn default_tool_call_kind() -> String {
+    "function".to_string()
+}
+
+/// The function name + JSON-stringified arguments emitted in a
+/// [`ToolCall`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallFunction {
+    /// Tool name the assistant chose.
+    pub name: String,
+    /// JSON-encoded arguments. The model returns this as a string per
+    /// the OpenAI schema; callers must `serde_json::from_str` to parse.
+    pub arguments: String,
+}
+
+/// Tool-choice strategy. `Auto` (default) lets the model decide;
+/// `None` disables tool calls; `Required` forces one tool call;
+/// `Function(name)` pins to a specific tool.
+#[derive(Debug, Clone)]
+pub enum ToolChoice {
+    /// Server default — equivalent to omitting `tool_choice`.
+    Auto,
+    /// Disallow tool calls (model must respond with content only).
+    None,
+    /// Require any tool call.
+    Required,
+    /// Force a specific tool by name.
+    Function(String),
+}
+
+impl serde::Serialize for ToolChoice {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        match self {
+            ToolChoice::Auto => ser.serialize_str("auto"),
+            ToolChoice::None => ser.serialize_str("none"),
+            ToolChoice::Required => ser.serialize_str("required"),
+            ToolChoice::Function(name) => {
+                use serde::ser::SerializeMap;
+                let mut m = ser.serialize_map(Some(2))?;
+                m.serialize_entry("type", "function")?;
+                m.serialize_entry(
+                    "function",
+                    &serde_json::json!({ "name": name }),
+                )?;
+                m.end()
+            }
         }
     }
 }
@@ -129,6 +271,14 @@ pub struct ChatRequest {
     /// streaming would land as a separate method that flips this to
     /// `true` and parses SSE.
     pub stream: bool,
+    /// Tools the model is allowed to call. Omitted when empty so we
+    /// stay byte-compatible with the no-tools wire shape that existed
+    /// before tool support landed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Tool>>,
+    /// Strategy for choosing among the supplied tools.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
 }
 
 /// One choice in a chat completion response.
@@ -308,10 +458,32 @@ impl LlmClient {
     /// rather than racing the server's single-batch slot.
     ///
     /// The caller controls `temperature` and `max_tokens` per call;
-    /// passing `None` uses the config defaults.
+    /// passing `None` uses the config defaults. No tools are sent —
+    /// for tool-call-capable completions use
+    /// [`Self::complete_with_tools`].
     pub async fn complete(
         &self,
         messages: Vec<ChatMessage>,
+        temperature: Option<f32>,
+        max_tokens: Option<u32>,
+    ) -> Result<ChatResponse, LlmError> {
+        self.complete_with_tools(messages, Vec::new(), None, temperature, max_tokens)
+            .await
+    }
+
+    /// Tool-call-capable variant of [`Self::complete`]. Pass an empty
+    /// `tools` vec to behave identically to `complete`.
+    ///
+    /// `tool_choice` controls whether the model is forced to call a
+    /// tool ([`ToolChoice::Required`] / [`ToolChoice::Function`]),
+    /// allowed to choose ([`ToolChoice::Auto`] — the server default,
+    /// equivalent to passing `None`), or forbidden from calling
+    /// ([`ToolChoice::None`]).
+    pub async fn complete_with_tools(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Vec<Tool>,
+        tool_choice: Option<ToolChoice>,
         temperature: Option<f32>,
         max_tokens: Option<u32>,
     ) -> Result<ChatResponse, LlmError> {
@@ -320,16 +492,19 @@ impl LlmClient {
             .acquire()
             .await
             .map_err(|_| LlmError::Transport("llm in-flight semaphore closed".into()))?;
-        self.complete_unchecked(messages, temperature, max_tokens)
+        self.complete_unchecked(messages, tools, tool_choice, temperature, max_tokens)
             .await
     }
 
     /// Send the request without acquiring the permit. Public for test
     /// harnesses that exercise the wire format without serialization;
-    /// production code paths MUST use [`Self::complete`].
+    /// production code paths MUST use [`Self::complete`] or
+    /// [`Self::complete_with_tools`].
     pub async fn complete_unchecked(
         &self,
         messages: Vec<ChatMessage>,
+        tools: Vec<Tool>,
+        tool_choice: Option<ToolChoice>,
         temperature: Option<f32>,
         max_tokens: Option<u32>,
     ) -> Result<ChatResponse, LlmError> {
@@ -341,6 +516,8 @@ impl LlmClient {
             temperature: Some(temperature.unwrap_or(self.config.default_temperature)),
             max_tokens: Some(max_tokens.unwrap_or(self.config.default_max_tokens)),
             stream: false,
+            tools: if tools.is_empty() { None } else { Some(tools) },
+            tool_choice,
         };
 
         let resp = self
@@ -628,5 +805,161 @@ mod tests {
         assert_eq!(ChatMessage::system("s").role, "system");
         assert_eq!(ChatMessage::user("u").role, "user");
         assert_eq!(ChatMessage::assistant("a").role, "assistant");
+    }
+
+    #[test]
+    fn chat_message_tool_constructor() {
+        let m = ChatMessage::tool("call_42", "result text");
+        assert_eq!(m.role, "tool");
+        assert_eq!(m.content, "result text");
+        assert_eq!(m.tool_call_id.as_deref(), Some("call_42"));
+        assert!(m.tool_calls.is_none());
+    }
+
+    #[test]
+    fn chat_request_serializes_tools_when_present() {
+        let req = ChatRequest {
+            model: "qwen".into(),
+            messages: vec![ChatMessage::user("hi")],
+            temperature: None,
+            max_tokens: None,
+            stream: false,
+            tools: Some(vec![Tool::function(
+                "list_files",
+                "List files in a directory",
+                serde_json::json!({"type":"object","properties":{}}),
+            )]),
+            tool_choice: Some(ToolChoice::Auto),
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert!(v.get("tools").is_some(), "tools should serialize");
+        assert_eq!(v["tools"][0]["type"], "function");
+        assert_eq!(v["tools"][0]["function"]["name"], "list_files");
+        assert_eq!(v["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn chat_request_omits_tools_when_none() {
+        let req = ChatRequest {
+            model: "qwen".into(),
+            messages: vec![ChatMessage::user("hi")],
+            temperature: None,
+            max_tokens: None,
+            stream: false,
+            tools: None,
+            tool_choice: None,
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert!(
+            v.get("tools").is_none(),
+            "wire shape must stay byte-compat with the no-tools case"
+        );
+        assert!(v.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn tool_choice_function_serializes_as_object() {
+        let v = serde_json::to_value(ToolChoice::Function("read_file".into())).unwrap();
+        assert_eq!(v["type"], "function");
+        assert_eq!(v["function"]["name"], "read_file");
+    }
+
+    #[test]
+    fn tool_choice_string_variants_serialize() {
+        assert_eq!(serde_json::to_value(ToolChoice::Auto).unwrap(), "auto");
+        assert_eq!(serde_json::to_value(ToolChoice::None).unwrap(), "none");
+        assert_eq!(
+            serde_json::to_value(ToolChoice::Required).unwrap(),
+            "required"
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_with_tools_returns_tool_calls() {
+        // Server returns a tool-call response: assistant message with
+        // empty content and a `tool_calls` array, finish_reason
+        // "tool_calls".
+        let server = MockServer::start().await;
+        let body = r#"{
+            "id": "chatcmpl-tool-1",
+            "model": "Qwen3.6-35B",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {
+                            "name": "list_files",
+                            "arguments": "{\"path\":\"/tmp\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }"#;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+        let client = LlmClient::new(test_config(server.uri())).unwrap();
+        let r = client
+            .complete_with_tools(
+                vec![ChatMessage::user("list /tmp")],
+                vec![Tool::function(
+                    "list_files",
+                    "List files in a directory",
+                    serde_json::json!({"type":"object"}),
+                )],
+                Some(ToolChoice::Auto),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let calls = r.choices[0]
+            .message
+            .tool_calls
+            .as_ref()
+            .expect("tool_calls present");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_abc");
+        assert_eq!(calls[0].kind, "function");
+        assert_eq!(calls[0].function.name, "list_files");
+        assert!(calls[0].function.arguments.contains("/tmp"));
+        assert_eq!(r.choices[0].finish_reason.as_deref(), Some("tool_calls"));
+    }
+
+    #[tokio::test]
+    async fn tool_role_message_round_trips_with_id() {
+        let server = MockServer::start().await;
+        let body = r#"{
+            "choices": [{
+                "message": {"role":"assistant","content":"done"},
+                "finish_reason":"stop"
+            }]
+        }"#;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+        let client = LlmClient::new(test_config(server.uri())).unwrap();
+        // Round-trip a tool-result message through the request.
+        let r = client
+            .complete(
+                vec![
+                    ChatMessage::user("list /tmp"),
+                    ChatMessage::tool("call_abc", "[\"a\",\"b\"]"),
+                ],
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.choices[0].message.content, "done");
     }
 }

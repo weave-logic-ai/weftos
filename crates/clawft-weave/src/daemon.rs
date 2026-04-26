@@ -2036,6 +2036,12 @@ async fn handle_llm_prompt(
             .map(|m| clawft_service_llm::ChatMessage {
                 role: m.role,
                 content: m.content,
+                // The daemon's `llm.prompt` RPC predates tool-call
+                // support and accepts only role+content from clients;
+                // tool fields stay None until a future RPC schema bump
+                // exposes them.
+                tool_calls: None,
+                tool_call_id: None,
             })
             .collect(),
         (None, Some(prompt)) => vec![clawft_service_llm::ChatMessage::user(prompt)],

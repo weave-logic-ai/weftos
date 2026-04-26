@@ -46,6 +46,7 @@ pub mod client;
 
 pub use client::{
     ChatChoice, ChatMessage, ChatRequest, ChatResponse, ChatUsage, LlmClient, LlmConfig, LlmError,
+    Tool, ToolCall, ToolCallFunction, ToolChoice, ToolFunction,
 };
 
 /// Environment variable read by [`LlmConfig::from_env`].
