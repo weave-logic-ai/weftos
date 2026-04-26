@@ -59,6 +59,7 @@ thiserror = { workspace = true }
 dashmap = { workspace = true }
 clawft-service-whisper = { workspace = true }
 clawft-service-llm = { workspace = true }
+clawft-service-classify = { workspace = true }
 exo-resource-tree = { workspace = true, optional = true }
 weftos-rvf-wire = { workspace = true, optional = true }
 rvf-types = { workspace = true, optional = true }

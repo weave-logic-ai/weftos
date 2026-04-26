@@ -24,13 +24,13 @@
 //! window. 4xx is a programmer bug (malformed WAV etc.) so we log +
 //! drop immediately without retry.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
-use clawft_kernel::SubstrateService;
+use clawft_kernel::{SubscriberId, SubstrateService};
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn};
@@ -72,6 +72,29 @@ pub struct WhisperServiceConfig {
     /// control-path subscribe yet, but the user wants this off."
     /// Defaults to enabled if you don't supply one.
     pub source_enabled: Arc<AtomicBool>,
+    /// Optional substrate path of an upstream audio-classifier
+    /// publisher (e.g. `clawft-service-classify`). When set, the
+    /// service spawns a background task that subscribes to that
+    /// path and updates an internal `is_speech` flag from each
+    /// classification. The chunk-receive arm then drops chunks
+    /// while the flag is `false` (silence) so whisper inference
+    /// only runs on speech windows.
+    ///
+    /// When `None` (the default), the service runs every chunk
+    /// through inference unconditionally — preserving the
+    /// pre-classifier behaviour for tests and for daemons that
+    /// haven't wired the classifier in.
+    pub classifier_input: Option<String>,
+    /// Stickiness window for a "speech" classification, in ms.
+    /// Once the classifier reports speech, the gate stays open for
+    /// at least this long after the last speech tick — so we don't
+    /// clip the leading silence of a speech window when the
+    /// classifier briefly drops back to silence between syllables.
+    /// Default 1500 ms is roughly two pcm_chunk periods at the
+    /// firmware's 2 Hz cadence; long enough to bridge a normal
+    /// inter-syllabic pause, short enough that a sustained quiet
+    /// period correctly closes the gate.
+    pub gate_window_ms: u64,
 }
 
 impl Default for WhisperServiceConfig {
@@ -88,6 +111,8 @@ impl Default for WhisperServiceConfig {
             output_path: "substrate/n-test00/derived/transcript/mic".to_string(),
             service_enabled: Arc::new(AtomicBool::new(true)),
             source_enabled: Arc::new(AtomicBool::new(true)),
+            classifier_input: None,
+            gate_window_ms: 1_500,
         }
     }
 }
@@ -137,16 +162,72 @@ impl WhisperService {
             path = %config.input_path,
             window_ms = config.window_ms,
             whisper_url = %client.config().base_url,
+            classifier_input = ?config.classifier_input,
+            gate_window_ms = config.gate_window_ms,
             "whisper service: subscribed to PCM input"
         );
+
+        // Optional classifier-gate state. Two atomics:
+        //   - is_speech: latest "speech" verdict from the classifier
+        //   - last_speech_ms: monotonic ms of the last speech verdict
+        // The pipeline reads both to apply the sticky-window rule.
+        // When `classifier_input` is None, both stay at their default
+        // values (false / 0) and the pipeline ignores them entirely.
+        let is_speech = Arc::new(AtomicBool::new(false));
+        let last_speech_ms = Arc::new(AtomicU64::new(0));
+        let classifier_unsub: Option<(String, SubscriberId)> =
+            if let Some(path) = config.classifier_input.clone() {
+                match substrate.subscribe(Some(&config.node_id), &path) {
+                    Ok((cid, crx)) => {
+                        info!(
+                            sub_id = cid.0,
+                            path = %path,
+                            "whisper service: subscribed to classifier output"
+                        );
+                        let is_speech_clone = Arc::clone(&is_speech);
+                        let last_speech_ms_clone = Arc::clone(&last_speech_ms);
+                        tokio::spawn(classifier_subscriber_loop(
+                            crx,
+                            is_speech_clone,
+                            last_speech_ms_clone,
+                        ));
+                        Some((path, cid))
+                    }
+                    Err(e) => {
+                        warn!(
+                            err = %e,
+                            path = %path,
+                            "whisper service: classifier subscribe failed; \
+                             gating disabled (every chunk will be transcribed)"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let substrate_for_task = substrate.clone();
         let input_path_cleanup = config.input_path.clone();
+        let is_speech_for_task = Arc::clone(&is_speech);
+        let last_speech_for_task = Arc::clone(&last_speech_ms);
         let task = tokio::spawn(async move {
-            run_pipeline(rx, substrate_for_task.clone(), client, config, shutdown_rx).await;
+            run_pipeline(
+                rx,
+                substrate_for_task.clone(),
+                client,
+                config,
+                shutdown_rx,
+                is_speech_for_task,
+                last_speech_for_task,
+            )
+            .await;
             // Clean up the subscription on exit (idempotent).
             substrate_for_task.unsubscribe(&input_path_cleanup, id);
+            if let Some((cpath, cid)) = classifier_unsub {
+                substrate_for_task.unsubscribe(&cpath, cid);
+            }
         });
         Ok(Self {
             shutdown: shutdown_tx,
@@ -167,6 +248,8 @@ async fn run_pipeline(
     client: WhisperClient,
     config: WhisperServiceConfig,
     mut shutdown_rx: watch::Receiver<bool>,
+    is_speech: Arc<AtomicBool>,
+    last_speech_ms: Arc<AtomicU64>,
 ) {
     // Health probe is fire-and-forget: if whisper isn't up the service
     // still stays subscribed and will start processing once POSTs
@@ -214,6 +297,25 @@ async fn run_pipeline(
                 }
                 if !config.source_enabled.load(Ordering::SeqCst) {
                     debug!("whisper service: chunk dropped (source sensor disabled)");
+                    continue;
+                }
+                // Classifier gate. Only evaluated when an upstream
+                // classifier was configured; otherwise every chunk
+                // proceeds (preserves the pre-classifier behaviour).
+                //
+                // Sticky-window rule: a chunk is allowed through if
+                // EITHER the latest classification is still "speech"
+                // OR a "speech" verdict landed within the last
+                // `gate_window_ms` ms — bridging the inter-syllabic
+                // pauses where the classifier flips back to silence.
+                if config.classifier_input.is_some()
+                    && !is_speech_allowed(
+                        &is_speech,
+                        &last_speech_ms,
+                        config.gate_window_ms,
+                    )
+                {
+                    debug!("whisper service: chunk dropped (classifier says silence)");
                     continue;
                 }
                 if let Some(chunk) = decode_update_line(&bytes) {
@@ -273,6 +375,67 @@ async fn run_pipeline(
         && let Ok((window, result)) = h.await {
             handle_inference_result(&substrate, &config, window, result).await;
         }
+}
+
+/// Monotonic milliseconds since process start. Used by the
+/// classifier-gate stickiness window so we don't depend on system
+/// wall-clock for a "did speech land in the last N ms" check.
+fn monotonic_ms() -> u64 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    let epoch = *EPOCH.get_or_init(Instant::now);
+    epoch.elapsed().as_millis() as u64
+}
+
+/// Read the gate state and decide whether to let a chunk through.
+///
+/// Allows iff (a) the latest classification is currently "speech" OR
+/// (b) the most recent "speech" verdict landed within the last
+/// `gate_window_ms` ms. Both conditions checked atomically; no lock.
+fn is_speech_allowed(
+    is_speech: &AtomicBool,
+    last_speech_ms: &AtomicU64,
+    gate_window_ms: u64,
+) -> bool {
+    if is_speech.load(Ordering::SeqCst) {
+        return true;
+    }
+    let last = last_speech_ms.load(Ordering::SeqCst);
+    if last == 0 {
+        return false;
+    }
+    let now = monotonic_ms();
+    now.saturating_sub(last) <= gate_window_ms
+}
+
+/// Background task: subscribe to the classifier output path and
+/// update the gate flags as classifications arrive.
+///
+/// The classifier publishes a stable JSON shape (see
+/// `clawft-service-classify::Classification`); we only read `class`
+/// here. Any other class string than `"speech"` (e.g. `"silence"`,
+/// future `"music"` / `"noise"`) closes the gate — a future
+/// "should we transcribe music?" knob can read additional fields
+/// at the call site without reshaping this loop.
+async fn classifier_subscriber_loop(
+    mut rx: mpsc::Receiver<Vec<u8>>,
+    is_speech: Arc<AtomicBool>,
+    last_speech_ms: Arc<AtomicU64>,
+) {
+    while let Some(line) = rx.recv().await {
+        let Some(value) = decode_update_line(&line) else { continue };
+        let speech = value
+            .get("class")
+            .and_then(|v| v.as_str())
+            .map(|s| s == "speech")
+            .unwrap_or(false);
+        is_speech.store(speech, Ordering::SeqCst);
+        if speech {
+            last_speech_ms.store(monotonic_ms(), Ordering::SeqCst);
+        }
+    }
+    debug!("whisper service: classifier subscriber loop exiting (sender dropped)");
 }
 
 /// Single inference call with one in-line retry for retriable errors.
@@ -678,5 +841,177 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), svc.shutdown())
             .await
             .expect("shutdown hung — the pipeline did not drain");
+    }
+
+    /// Helper for the classifier-gate tests: publish a fake
+    /// `Classification`-shaped value at the given path. Mirrors what
+    /// `clawft-service-classify`'s service publishes, but without
+    /// taking a build-time edge into the classify crate (which would
+    /// flip the dependency direction we want — whisper does not
+    /// depend on classify).
+    fn publish_classification(
+        substrate: &SubstrateService,
+        actor: &str,
+        path: &str,
+        class: &str,
+    ) {
+        let payload = json!({
+            "class": class,
+            "confidence": 1.0,
+            "rms_db": -10.0,
+            "sample_rate": 16_000,
+            "samples": 8_000,
+            "ts_ms": 0,
+            "source_node": "n-bfc4cd",
+            "source_seq": 0,
+        });
+        substrate.publish(Some(actor), path, payload);
+    }
+
+    #[tokio::test]
+    async fn whisper_skips_chunk_when_classifier_says_silence() {
+        // Wire up a classifier-input path; publish a `silence`
+        // classification first so the gate is closed; then pump pcm
+        // and assert /inference is never hit.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"status":"ok"}"#))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/inference"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(r#"{"text": " heard"}"#),
+            )
+            .expect(0) // gate must keep us at zero
+            .mount(&server)
+            .await;
+
+        let substrate = SubstrateService::new();
+        let client = make_client(server.uri());
+        let classifier_path = "substrate/n-test00/derived/classify/n-bfc4cd/mic".to_string();
+        let cfg = WhisperServiceConfig {
+            window_ms: 500,
+            classifier_input: Some(classifier_path.clone()),
+            gate_window_ms: 1_500,
+            ..Default::default()
+        };
+        let input_path = cfg.input_path.clone();
+        let actor = cfg.node_id.clone();
+        let svc = WhisperService::spawn(substrate.clone(), client, cfg).unwrap();
+
+        // Publish silence so the gate is unambiguously closed.
+        publish_classification(&substrate, &actor, &classifier_path, "silence");
+        // Yield so the classifier-subscriber loop ingests it before
+        // we start pumping audio.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Pump audio that WOULD trigger inference if the gate were
+        // open (two 250 ms chunks → one 500 ms window).
+        let half = vec![0u8; 8_000];
+        publish_pcm_chunk(&substrate, &actor, &input_path, &half, 250, 1);
+        publish_pcm_chunk(&substrate, &actor, &input_path, &half, 250, 2);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        svc.shutdown().await;
+        // Implicit assertion: wiremock .expect(0) panics on drop if
+        // any /inference call landed.
+    }
+
+    #[tokio::test]
+    async fn whisper_processes_chunk_when_classifier_says_speech() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"status":"ok"}"#))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/inference"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(r#"{"text": " gated speech"}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let substrate = SubstrateService::new();
+        let client = make_client(server.uri());
+        let classifier_path = "substrate/n-test00/derived/classify/n-bfc4cd/mic".to_string();
+        let cfg = WhisperServiceConfig {
+            window_ms: 500,
+            classifier_input: Some(classifier_path.clone()),
+            gate_window_ms: 1_500,
+            ..Default::default()
+        };
+        let input_path = cfg.input_path.clone();
+        let output_path = cfg.output_path.clone();
+        let actor = cfg.node_id.clone();
+        let (_oid, mut out_rx) = substrate.subscribe(Some(&actor), &output_path).unwrap();
+        let svc = WhisperService::spawn(substrate.clone(), client, cfg).unwrap();
+
+        // Open the gate.
+        publish_classification(&substrate, &actor, &classifier_path, "speech");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let half = vec![0u8; 8_000];
+        publish_pcm_chunk(&substrate, &actor, &input_path, &half, 250, 1);
+        publish_pcm_chunk(&substrate, &actor, &input_path, &half, 250, 2);
+
+        let line = tokio::time::timeout(Duration::from_secs(3), out_rx.recv())
+            .await
+            .expect("transcript not published within 3s")
+            .expect("substrate sender closed");
+        let update: Value = serde_json::from_slice(&line[..line.len() - 1]).unwrap();
+        assert_eq!(update["kind"], "publish");
+        assert_eq!(update["value"]["text"], "gated speech");
+
+        svc.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn is_speech_stickiness_works_within_window() {
+        // Pure-unit test of the gate function — no substrate / no HTTP.
+        // Verifies: speech=true → allow; speech=false but recent →
+        // allow; speech=false and stale → deny.
+        //
+        // We use a deliberately tiny `gate_window_ms` (50) and
+        // sleep > that interval to make the staleness branch
+        // observable without depending on absolute clock values.
+        // (The function reads `monotonic_ms()` internally, so we
+        // can't fully fake the clock; we test the *behaviour* with
+        // real elapsed time.)
+        let is_speech = AtomicBool::new(false);
+        let last = AtomicU64::new(0);
+        let window = 50u64;
+
+        // No prior speech → denied.
+        assert!(!is_speech_allowed(&is_speech, &last, window));
+
+        // Speech currently true → allowed regardless of timestamp.
+        is_speech.store(true, Ordering::SeqCst);
+        assert!(is_speech_allowed(&is_speech, &last, window));
+
+        // Speech now false but a recent verdict just landed → allowed.
+        // Prime the monotonic clock first so subsequent reads return
+        // a non-zero value (the function treats `last == 0` as a
+        // sentinel for "never set").
+        let _ = monotonic_ms();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        is_speech.store(false, Ordering::SeqCst);
+        let just_now = monotonic_ms();
+        assert!(just_now > 0, "monotonic_ms should have advanced past 0");
+        last.store(just_now, Ordering::SeqCst);
+        assert!(
+            is_speech_allowed(&is_speech, &last, window),
+            "fresh verdict should keep gate open within window (just_now={just_now})"
+        );
+
+        // Sleep past the window. The verdict is now stale → denied.
+        tokio::time::sleep(Duration::from_millis(window + 50)).await;
+        assert!(
+            !is_speech_allowed(&is_speech, &last, window),
+            "stale verdict should not keep gate open after window+slack ms",
+        );
     }
 }

@@ -211,6 +211,20 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     // the intent that the firmware will eventually subscribe to.
     let _rms_sensor_flag = control_flags.register(ControlKind::Sensor, &rms_target, true);
 
+    // The classifier publishes one `Classification` per pcm_chunk
+    // under the daemon's prefix. We compute its path here so the
+    // whisper service can subscribe to it for its gate. Mesh-canonical
+    // `_derived/...` is the eventual home (R3.0 / R3.2); for now we
+    // single-tier under the daemon prefix and the mesh-gate agent
+    // will move all derived paths together at integration time.
+    let classify_output_path = format!(
+        "substrate/{daemon}/derived/classify/{source}/mic",
+        daemon = daemon_identity.node_id,
+        source = source_node_id,
+    );
+    let classify_service_flag =
+        control_flags.register(ControlKind::Service, "classify", true);
+
     let _whisper_handle: Option<clawft_service_whisper::WhisperService> = {
         let whisper_url = std::env::var(clawft_service_whisper::WHISPER_SERVICE_URL_ENV)
             .unwrap_or_else(|_| "http://127.0.0.1:8123".to_string());
@@ -230,6 +244,14 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
             output_path: output_path.clone(),
             service_enabled: Arc::clone(&whisper_service_flag),
             source_enabled: Arc::clone(&whisper_source_flag),
+            // Gate whisper on the classifier's output. The classifier
+            // is spawned just below; we point the subscription at the
+            // path the classifier will publish to. If the classifier
+            // fails to spawn (or hasn't published yet), the gate
+            // stays closed and no chunks are transcribed — that's
+            // the safe default for a "speech detected" filter.
+            classifier_input: Some(classify_output_path.clone()),
+            gate_window_ms: 1_500,
         };
         let client_cfg = clawft_service_whisper::WhisperConfig {
             base_url: whisper_url.clone(),
@@ -261,6 +283,62 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
             }
             Err(e) => {
                 warn!(error = %e, "whisper service failed to spawn (continuing without STT)");
+                None
+            }
+        }
+    };
+
+    // Spawn the audio-classifier Stage. Subscribes to the same
+    // ESP32-side mic pcm_chunk path the whisper service consumes,
+    // runs each window through an `EnergyClassifier` (RMS-threshold
+    // VAD), and republishes a `Classification` value under the
+    // daemon's prefix at `classify_output_path`. The whisper service
+    // (configured above) subscribes to that path and uses it as a
+    // speech-vs-silence gate so inference only runs on speech.
+    //
+    // The `ClassifierBackend` trait is the seam for the future
+    // llama.cpp-hosted multi-class classifier (music / noise /
+    // speech / silence / ...) — swapping the backend doesn't change
+    // the wire shape, so neither the whisper gate nor any GUI
+    // subscriber needs a code change.
+    let _classify_handle: Option<clawft_service_classify::ClassifierService> = {
+        let input_path = format!(
+            "substrate/{source_node_id}/sensor/mic/pcm_chunk"
+        );
+        let cfg = clawft_service_classify::ClassifierServiceConfig {
+            node_id: daemon_identity.node_id.clone(),
+            source_node: source_node_id.clone(),
+            input_path: input_path.clone(),
+            output_path: classify_output_path.clone(),
+            service_enabled: Arc::clone(&classify_service_flag),
+            // Reuse the whisper-side source flag — the user's mental
+            // model is "the mic source"; toggling that off should
+            // disable both the classifier and the transcription path
+            // since they consume the same source.
+            source_enabled: Arc::clone(&whisper_source_flag),
+        };
+        let backend: Arc<dyn clawft_service_classify::ClassifierBackend> =
+            Arc::new(clawft_service_classify::EnergyClassifier::from_env());
+        let substrate = {
+            let k = kernel.read().await;
+            k.substrate_service().clone()
+        };
+        match clawft_service_classify::ClassifierService::spawn(substrate, backend, cfg) {
+            Ok(svc) => {
+                info!(
+                    input = %input_path,
+                    output = %classify_output_path,
+                    "classifier service spawned (energy VAD)"
+                );
+                Some(svc)
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "classifier service failed to spawn (whisper gate will \
+                     stay closed and transcription will not run until the \
+                     classifier publishes)"
+                );
                 None
             }
         }
@@ -332,6 +410,7 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         let initial = [
             (ControlKind::Service, "whisper".to_string(), "Whisper STT"),
             (ControlKind::Service, "llm".to_string(), "Local LLM"),
+            (ControlKind::Service, "classify".to_string(), "Audio classifier"),
             (ControlKind::Sensor, pcm_chunk_target.clone(), "Mic PCM chunks"),
             (ControlKind::Sensor, rms_target.clone(), "Mic RMS summary"),
         ];

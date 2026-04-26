@@ -1510,6 +1510,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "clawft-service-classify"
+version = "0.6.19"
+dependencies = [
+ "base64 0.22.1",
+ "clawft-kernel",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "clawft-service-llm"
 version = "0.6.19"
 dependencies = [
@@ -1678,6 +1692,7 @@ dependencies = [
  "clawft-kernel",
  "clawft-platform",
  "clawft-rpc",
+ "clawft-service-classify",
  "clawft-service-llm",
  "clawft-service-whisper",
  "clawft-types",
