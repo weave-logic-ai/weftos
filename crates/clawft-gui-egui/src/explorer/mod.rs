@@ -26,6 +26,7 @@ use serde_json::Value;
 
 use crate::live::{self, Command, Live, ReplyRx};
 
+pub mod chat;
 pub mod control_toggle;
 pub mod tree;
 pub mod viewers;
@@ -132,6 +133,13 @@ pub struct Explorer {
     /// selection clears it via [`Explorer::on_select`] so the new
     /// Workshop (if any) starts from a clean slate.
     workshop_view: workshop::WorkshopView,
+    /// Live chat-window state. Holds conversation history + draft
+    /// input + in-flight reply channel across frames so a paint
+    /// doesn't lose a pending `llm.prompt` reply. Cleared on selection
+    /// change for the same reason as `workshop_view` — a fresh chat
+    /// sentinel selection should start with an empty history rather
+    /// than inherit the previous panel's turns.
+    chat_view: chat::ChatView,
 }
 
 impl Default for Explorer {
@@ -160,6 +168,7 @@ impl Default for Explorer {
                 .checked_sub(SLOW_TICK * 2)
                 .unwrap_or_else(web_time::Instant::now),
             workshop_view: workshop::WorkshopView::default(),
+            chat_view: chat::ChatView::default(),
         }
     }
 }
@@ -209,6 +218,11 @@ impl Explorer {
         // is also a Workshop, its subscriptions rebuild on the next
         // paint; if not, the old per-panel polls stop immediately.
         self.workshop_view = workshop::WorkshopView::default();
+        // Reset chat state too. A pending `llm.prompt` reply against
+        // the previous selection is dropped (the ReplyRx falls out of
+        // scope, the daemon's response is ignored). In-memory only —
+        // there is no on-disk conversation to restore.
+        self.chat_view = chat::ChatView::default();
     }
 
     /// Clear the subscription handle. Called by the mount site when
@@ -220,6 +234,9 @@ impl Explorer {
         // Drop all Workshop per-panel subscriptions so hidden panels
         // stop polling.
         self.workshop_view = workshop::WorkshopView::default();
+        // Drop chat state on close — same reason as Workshop: hidden
+        // panels shouldn't keep an in-flight RPC against the daemon.
+        self.chat_view = chat::ChatView::default();
         // Keep expanded + tree_children so reopening is instant.
     }
 
@@ -396,6 +413,16 @@ impl Explorer {
                 // instantiates, which Viewers render it…"
                 if workshop::matches(&v) > 0 {
                     self.workshop_view.paint(ui, &v, live);
+                    return;
+                }
+                // Chat sentinel: dispatched ahead of control_toggle so
+                // a `{kind:"chat"}` value lands in the chat panel even
+                // if some future control intent shape brushes against
+                // it. Needs the Live RPC handle to fire `llm.prompt`
+                // and the persistent `chat_view` state for history +
+                // in-flight reply tracking.
+                if chat::matches(&v) > 0 {
+                    chat::paint(ui, &path, &v, &mut self.chat_view, live);
                     return;
                 }
                 // Control-intent toggle: shape-match precedes the
