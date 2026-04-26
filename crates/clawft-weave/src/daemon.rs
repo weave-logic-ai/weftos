@@ -426,6 +426,36 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
                 debug!(path = %path, "control: initial intent published");
             }
         }
+
+        // Publish the chat-window sentinel so the GUI Explorer's chat
+        // panel has a stable substrate mount point. Shape:
+        // `{ "kind": "chat", "model": "<llama-server model name>" }`.
+        // The model field is informational — the daemon's `llm.prompt`
+        // handler picks the actual model server-side; this just makes
+        // the choice visible in the Explorer's tree label and chat
+        // header.
+        let chat_path = format!(
+            "substrate/{}/ui/chat",
+            daemon_identity.node_id,
+        );
+        let model_name = daemon_llm()
+            .map(|c| c.config().model.clone())
+            .unwrap_or_else(|| {
+                clawft_service_llm::DEFAULT_LLM_MODEL.to_string()
+            });
+        let chat_sentinel = serde_json::json!({
+            "kind": "chat",
+            "model": model_name,
+        });
+        if let Err(e) = substrate.publish_gated(
+            Some(&daemon_identity.node_id),
+            &chat_path,
+            chat_sentinel,
+        ) {
+            warn!(error = %e, path = %chat_path, "ui: chat sentinel publish failed");
+        } else {
+            debug!(path = %chat_path, "ui: chat sentinel published");
+        }
     }
 
     // Print boot banner. Lead with the build-id so every run makes
