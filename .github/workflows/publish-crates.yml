@@ -64,12 +64,13 @@ jobs:
           #
           # Single command replaces the entire tiered publish pipeline.
 
+          # --no-git-commit is mutually exclusive with --no-git-push /
+          # --no-git-tag in cargo-workspaces 0.3+; the single flag already
+          # suppresses commit, tag, and push (it's an all-or-nothing gate).
           cargo workspaces publish \
             --from-git \
             --allow-dirty \
             --no-git-commit \
-            --no-git-push \
-            --no-git-tag \
             --yes \
             --token "$CARGO_REGISTRY_TOKEN" \
             skip

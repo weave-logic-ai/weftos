@@ -1733,6 +1733,7 @@ dependencies = [
  "clawft-service-llm",
  "clawft-service-terminal",
  "clawft-service-whisper",
+ "clawft-tools",
  "clawft-types",
  "comfy-table",
  "dashmap",
