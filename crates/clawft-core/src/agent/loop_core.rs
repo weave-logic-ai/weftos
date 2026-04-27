@@ -46,6 +46,9 @@ use crate::tools::registry::ToolRegistry;
 
 use super::context::ContextBuilder;
 use super::context_router::{ContextRequest, ContextRouter, NullRouter};
+use super::effects::effect_for_tool;
+use super::gate::{EffectGate, GateDecision, NoopGate};
+use super::sink::{ConversationSink, InMemorySink, Turn};
 use super::verification;
 
 // ---------------------------------------------------------------------------
@@ -175,6 +178,20 @@ pub struct AgentLoop<P: Platform> {
     /// (`crates/clawft-core/src/pipeline/tiered_router.rs:585`).
     /// See `docs/research/rvf-context-router.md` for the contract.
     context_router: Arc<dyn ContextRouter>,
+    /// Effect gate (agent-core-v1 Phase B2). Consulted before each
+    /// tool dispatch with an [`EffectVector`](crate::agent::effects::EffectVector)
+    /// from [`effect_for_tool`](crate::agent::effects::effect_for_tool).
+    /// Defaults to [`NoopGate`](crate::agent::gate::NoopGate) (always
+    /// permits). Phase D2 swaps in the kernel-backed
+    /// `GovernanceGate::check` from `clawft-kernel`.
+    gate: Arc<dyn EffectGate>,
+    /// Conversation sink (agent-core-v1 Phase B2). Receives one
+    /// [`Turn`](crate::agent::sink::Turn) per role event (user,
+    /// assistant, tool). Defaults to
+    /// [`InMemorySink`](crate::agent::sink::InMemorySink) (test-only,
+    /// HashMap-backed). Phase C3 swaps in the substrate-backed sink
+    /// from `clawft-service-agent`.
+    sink: Arc<dyn ConversationSink>,
 }
 
 impl<P: Platform> AgentLoop<P> {
@@ -214,6 +231,8 @@ impl<P: Platform> AgentLoop<P> {
             sandbox: None,
             autogen: None,
             context_router: Arc::new(NullRouter),
+            gate: Arc::new(NoopGate),
+            sink: Arc::new(InMemorySink::new()),
         }
     }
 
@@ -263,6 +282,24 @@ impl<P: Platform> AgentLoop<P> {
     /// behaviour identical to pre-B1).
     pub fn with_context_router(mut self, router: Arc<dyn ContextRouter>) -> Self {
         self.context_router = router;
+        self
+    }
+
+    /// Attach an [`EffectGate`] so the loop checks every tool dispatch
+    /// against policy before execution. Without this attached the
+    /// loop uses [`NoopGate`] (always permits) — behaviour identical
+    /// to pre-B2.
+    pub fn with_gate(mut self, gate: Arc<dyn EffectGate>) -> Self {
+        self.gate = gate;
+        self
+    }
+
+    /// Attach a [`ConversationSink`] so the loop persists one
+    /// [`Turn`] per role event. Without this attached the loop uses
+    /// [`InMemorySink`] (HashMap-backed, test-only) — behaviour
+    /// identical to pre-B2 (turns are recorded but never observed).
+    pub fn with_sink(mut self, sink: Arc<dyn ConversationSink>) -> Self {
+        self.sink = sink;
         self
     }
 
@@ -363,6 +400,16 @@ impl<P: Platform> AgentLoop<P> {
         msg: InboundMessage,
     ) -> clawft_types::Result<OutboundMessage> {
         let session_key = msg.session_key();
+        // Conversation identity for the ConversationSink. We use
+        // `chat_id` directly today (matches the spike's substrate
+        // path layout `derived/chat/<conv_id>/`); when Phase C lands
+        // an explicit `conv_id` field on InboundMessage the wiring
+        // moves there with no other call-site changes.
+        let conv_id = msg.chat_id.clone();
+        // Acquire the per-conv lock. InMemorySink is a no-op; the
+        // substrate-backed sink (Phase C3) blocks concurrent turns
+        // in the same conversation against the AgentService DashMap.
+        self.sink.lock_conversation(&conv_id).await;
 
         // 0. Pre-LLM auto-delegation check.
         //    If an AutoDelegation router is configured and the message matches
@@ -412,6 +459,28 @@ impl<P: Platform> AgentLoop<P> {
 
         // 3. Add user message to session (after building context)
         session.add_message("user", &msg.content, None);
+
+        // 3b. Persist the user turn to the conversation sink. Errors
+        //     here are logged and swallowed — sink failures must not
+        //     abort the LLM turn (Phase C3 will harden this against
+        //     substrate write errors).
+        if let Err(e) = self
+            .sink
+            .append_turn(
+                &conv_id,
+                Turn {
+                    turn_id: Self::next_turn_id(),
+                    role: "user".into(),
+                    content: msg.content.clone(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    ts_ms: Self::now_ms(),
+                },
+            )
+            .await
+        {
+            warn!(error = %e, "sink: failed to append user turn");
+        }
 
         // 4. Context messages are already pipeline::traits::LlmMessage (B2 unification).
         let mut messages: Vec<LlmMessage> = context_messages;
@@ -555,7 +624,14 @@ impl<P: Platform> AgentLoop<P> {
         };
 
         // 10. Execute pipeline + tool loop
-        let tool_result = self.run_tool_loop(request).await?;
+        //     `agent_id` for the EffectGate is synthesized from the
+        //     channel + sender identity until Phase D1 lands the
+        //     IdentityProvider that gives every agent a stable
+        //     binding-thread-hashed name.
+        let agent_id = format!("{}:{}", msg.channel, msg.sender_id);
+        let tool_result = self
+            .run_tool_loop(request, &conv_id, &agent_id)
+            .await?;
 
         // 11. Update hallucination score if any write verifications occurred.
         if tool_result.hallucinations > 0 || tool_result.verified_successes > 0 {
@@ -580,6 +656,28 @@ impl<P: Platform> AgentLoop<P> {
 
         // 12. Add assistant message to session
         session.add_message("assistant", &tool_result.text, None);
+
+        // 12b. Persist the final assistant turn to the conversation
+        //      sink. Tool-result intermediates already went through
+        //      append_turn from inside run_tool_loop; this is the
+        //      last record per `chat-agent-v1.md` §11.5.
+        if let Err(e) = self
+            .sink
+            .append_turn(
+                &conv_id,
+                Turn {
+                    turn_id: Self::next_turn_id(),
+                    role: "assistant".into(),
+                    content: tool_result.text.clone(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    ts_ms: Self::now_ms(),
+                },
+            )
+            .await
+        {
+            warn!(error = %e, "sink: failed to append assistant turn");
+        }
 
         // 13. Save session
         self.sessions.save_session(&session).await?;
@@ -690,6 +788,34 @@ impl<P: Platform> AgentLoop<P> {
             .resolve_auth_context(&msg.sender_id, &msg.channel, allow_from_match)
     }
 
+    /// Wall-clock millisecond timestamp.
+    ///
+    /// Used as the `ts_ms` for [`Turn`] records published to the
+    /// [`ConversationSink`]. Falls back to `0` if the system clock
+    /// is before the UNIX epoch (which only happens on misconfigured
+    /// machines; not worth surfacing as an error).
+    fn now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    /// Generate a turn identifier. Phase C3 will swap this for a
+    /// monotonic ULID inside the substrate-backed sink; until then
+    /// we use a `chrono`-based string + nanosecond counter to keep
+    /// turns ordered without pulling a ULID dep into clawft-core.
+    fn next_turn_id() -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        format!(
+            "turn-{ts}-{seq:08x}",
+            ts = Self::now_ms(),
+            seq = seq
+        )
+    }
+
     /// Resolve the workspace path from config, expanding `~` to home dir.
     fn workspace_path(&self) -> std::path::PathBuf {
         let raw = &self.config.defaults.workspace;
@@ -715,6 +841,8 @@ impl<P: Platform> AgentLoop<P> {
     async fn run_tool_loop(
         &self,
         mut request: ChatRequest,
+        conv_id: &str,
+        agent_id: &str,
     ) -> clawft_types::Result<ToolLoopResult> {
         let max_iterations = self.config.defaults.max_tool_iterations.max(1) as usize;
         let mut total_hallucinations: usize = 0;
@@ -799,10 +927,31 @@ impl<P: Platform> AgentLoop<P> {
 
             request.messages.push(LlmMessage {
                 role: "assistant".into(),
-                content: assistant_text,
+                content: assistant_text.clone(),
                 tool_call_id: None,
-                tool_calls: Some(assistant_tool_calls),
+                tool_calls: Some(assistant_tool_calls.clone()),
             });
+
+            // Phase B2: persist the assistant turn that invoked
+            // tools. The final assistant text response (no tools)
+            // is written by handle_turn after the loop returns.
+            if let Err(e) = self
+                .sink
+                .append_turn(
+                    conv_id,
+                    Turn {
+                        turn_id: Self::next_turn_id(),
+                        role: "assistant".into(),
+                        content: assistant_text,
+                        tool_calls: Some(assistant_tool_calls),
+                        tool_call_id: None,
+                        ts_ms: Self::now_ms(),
+                    },
+                )
+                .await
+            {
+                warn!(error = %e, "sink: failed to append assistant tool-call turn");
+            }
 
             // Execute all tool calls in parallel and append results in order.
             let permissions = request
@@ -810,13 +959,60 @@ impl<P: Platform> AgentLoop<P> {
                 .as_ref()
                 .map(|ctx| &ctx.permissions);
 
+            // EffectGate (agent-core-v1 Phase B2). Per-tool policy
+            // check before dispatch. Pre-walk the tool calls so we
+            // can build a parallel error result for any Deny/Defer
+            // without ever issuing the underlying tools.execute.
+            // Permit lets the dispatch proceed. Phase D2 swaps in
+            // the kernel-backed gate; the loop wiring stays the same.
+            let mut gate_results: Vec<Option<String>> = Vec::with_capacity(tool_calls.len());
+            for (_, name, input) in &tool_calls {
+                let ev = effect_for_tool(name, input);
+                let action = format!("tool.{name}");
+                let decision = self.gate.check(agent_id, &action, &ev).await;
+                let blocked = match decision {
+                    GateDecision::Permit { .. } => None,
+                    GateDecision::Deny { reason } => {
+                        warn!(tool = %name, reason = %reason, "gate: tool dispatch denied");
+                        Some(
+                            serde_json::json!({
+                                "error": format!("gate denied: {reason}")
+                            })
+                            .to_string(),
+                        )
+                    }
+                    GateDecision::Defer { reason } => {
+                        warn!(tool = %name, reason = %reason, "gate: tool dispatch deferred");
+                        // v1: defer surfaces as a tool result the
+                        // model can re-plan against. Real interactive
+                        // defer (panel UI prompt) is a v1.1 follow-up.
+                        Some(
+                            serde_json::json!({
+                                "error": format!("gate deferred: {reason}")
+                            })
+                            .to_string(),
+                        )
+                    }
+                };
+                gate_results.push(blocked);
+            }
+
             let sandbox = self.sandbox.clone();
             let futures: Vec<_> = tool_calls
                 .iter()
-                .map(|(id, name, input)| {
+                .zip(gate_results.into_iter())
+                .map(|((id, name, input), gate_blocked)| {
                     let tools = &self.tools;
                     let sandbox = sandbox.clone();
                     async move {
+                        // EffectGate denied/deferred: short-circuit
+                        // with the gate's reason as the tool result
+                        // so the LLM can re-plan. Sandbox below is
+                        // the legacy allowlist gate — both fire.
+                        if let Some(body) = gate_blocked {
+                            return (id.clone(), name.clone(), body);
+                        }
+
                         // Sandbox gate: if an enforcer is attached,
                         // refuse calls outside the agent's allowlist
                         // before the registry sees them. The denial
@@ -949,10 +1145,32 @@ impl<P: Platform> AgentLoop<P> {
 
                 request.messages.push(LlmMessage {
                     role: "tool".into(),
-                    content,
+                    content: content.clone(),
                     tool_call_id: Some(id.clone()),
                     tool_calls: None,
                 });
+
+                // Phase B2: persist the tool-result turn so the
+                // ConversationSink sees one record per role event.
+                // Sink errors are logged and swallowed — never fail
+                // the LLM turn because of a substrate write hiccup.
+                if let Err(e) = self
+                    .sink
+                    .append_turn(
+                        conv_id,
+                        Turn {
+                            turn_id: Self::next_turn_id(),
+                            role: "tool".into(),
+                            content,
+                            tool_calls: None,
+                            tool_call_id: Some(id.clone()),
+                            ts_ms: Self::now_ms(),
+                        },
+                    )
+                    .await
+                {
+                    warn!(error = %e, "sink: failed to append tool turn");
+                }
             }
         }
 
@@ -1373,7 +1591,9 @@ mod tests {
             complexity_boost: 0.0,
         };
 
-        let result = agent.run_tool_loop(request).await;
+        let result = agent
+            .run_tool_loop(request, "test-conv", "test:agent")
+            .await;
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -1597,7 +1817,10 @@ mod tests {
             complexity_boost: 0.0,
         };
 
-        let tool_result = agent.run_tool_loop(request).await.unwrap();
+        let tool_result = agent
+            .run_tool_loop(request, "test-conv", "test:agent")
+            .await
+            .unwrap();
         let result = &tool_result.text;
 
         // The tool result should have been truncated to MAX_TOOL_RESULT_BYTES (65536).
