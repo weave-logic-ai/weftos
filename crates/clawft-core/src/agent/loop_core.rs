@@ -302,8 +302,15 @@ impl<P: Platform> AgentLoop<P> {
                         chat_id = %msg.chat_id,
                         "processing inbound message"
                     );
-                    if let Err(e) = self.process_message(msg).await {
-                        error!("failed to process message: {}", e);
+                    match self.handle_turn(msg).await {
+                        Ok(outbound) => {
+                            if let Err(e) = self.bus.dispatch_outbound(outbound) {
+                                error!("failed to dispatch outbound message: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            error!("failed to process message: {}", e);
+                        }
                     }
                 }
                 None => {
@@ -316,11 +323,24 @@ impl<P: Platform> AgentLoop<P> {
         Ok(())
     }
 
-    /// Process a single inbound message through the full pipeline.
+    /// Process a single inbound message through the full pipeline and
+    /// return the resulting [`OutboundMessage`] reply.
+    ///
+    /// This is the per-turn entry point used by both the long-lived
+    /// bus consumer ([`Self::run`]) and request/response RPC handlers
+    /// (e.g. `agent.chat`). Unlike [`Self::run`], `handle_turn` does
+    /// **not** touch the [`MessageBus`] for outbound dispatch — the
+    /// caller is responsible for routing the returned reply (publish
+    /// to the bus, return as an RPC response, etc.).
     ///
     /// Handles session lookup, context building, pipeline invocation,
-    /// the tool execution loop, session persistence, and outbound dispatch.
-    async fn process_message(&self, msg: InboundMessage) -> clawft_types::Result<()> {
+    /// the tool execution loop, and session persistence. Auto-delegation
+    /// short-circuits the local LLM pipeline and returns the delegate's
+    /// response as the reply.
+    pub async fn handle_turn(
+        &self,
+        msg: InboundMessage,
+    ) -> clawft_types::Result<OutboundMessage> {
         let session_key = msg.session_key();
 
         // 0. Pre-LLM auto-delegation check.
@@ -475,7 +495,7 @@ impl<P: Platform> AgentLoop<P> {
         // 13. Save session
         self.sessions.save_session(&session).await?;
 
-        // 14. Dispatch outbound
+        // 14. Build outbound reply (caller handles dispatch)
         let outbound = OutboundMessage {
             channel: msg.channel.clone(),
             chat_id: msg.chat_id.clone(),
@@ -484,24 +504,24 @@ impl<P: Platform> AgentLoop<P> {
             media: vec![],
             metadata: Default::default(),
         };
-        self.bus.dispatch_outbound(outbound)?;
 
         debug!(session_key = %session_key, "message processed successfully");
 
-        Ok(())
+        Ok(outbound)
     }
 
-    /// Execute auto-delegation: invoke `delegate_task` directly and dispatch
-    /// the result as an outbound message.
+    /// Execute auto-delegation: invoke `delegate_task` directly and
+    /// return the resulting [`OutboundMessage`].
     ///
     /// This short-circuits the normal LLM pipeline when the auto-delegation
     /// router decides a message should be handled by a delegate (e.g. Claude
-    /// sub-agent) rather than the local LLM.
+    /// sub-agent) rather than the local LLM. The caller is responsible for
+    /// routing the returned reply (see [`Self::handle_turn`]).
     async fn run_auto_delegation(
         &self,
         msg: &InboundMessage,
         delegate_args: serde_json::Value,
-    ) -> clawft_types::Result<()> {
+    ) -> clawft_types::Result<OutboundMessage> {
         let session_key = msg.session_key();
 
         // Save user message to session for history.
@@ -529,9 +549,9 @@ impl<P: Platform> AgentLoop<P> {
             }
             Err(e) => {
                 warn!(error = %e, "auto-delegation failed, falling through to local LLM");
-                // On delegation failure, fall through to normal processing.
-                // Re-process via the full pipeline by calling process_message_inner.
-                // For simplicity, return an error message to the user.
+                // On delegation failure, surface a user-visible error.
+                // (A future enhancement could re-enter the local LLM
+                // pipeline here; today we keep the simpler contract.)
                 format!("Delegation failed: {e}. The task could not be routed to the delegate.")
             }
         };
@@ -540,7 +560,7 @@ impl<P: Platform> AgentLoop<P> {
         session.add_message("assistant", &response_text, None);
         self.sessions.save_session(&session).await?;
 
-        // Dispatch outbound.
+        // Build outbound reply (caller handles dispatch).
         let outbound = OutboundMessage {
             channel: msg.channel.clone(),
             chat_id: msg.chat_id.clone(),
@@ -549,10 +569,9 @@ impl<P: Platform> AgentLoop<P> {
             media: vec![],
             metadata: Default::default(),
         };
-        self.bus.dispatch_outbound(outbound)?;
 
         debug!(session_key = %session_key, "auto-delegated message processed");
-        Ok(())
+        Ok(outbound)
     }
 
     /// Resolve [`AuthContext`] from the inbound message's sender identity.
@@ -1211,10 +1230,9 @@ mod tests {
 
         // Process it
         let msg = agent.bus.consume_inbound().await.unwrap();
-        agent.process_message(msg).await.unwrap();
+        let outbound = agent.handle_turn(msg).await.unwrap();
 
         // Check outbound
-        let outbound = agent.bus.consume_outbound().await.unwrap();
         assert_eq!(outbound.channel, "test");
         assert_eq!(outbound.chat_id, "chat1");
         assert_eq!(outbound.content, "Hello from LLM!");
@@ -1239,9 +1257,8 @@ mod tests {
         agent.bus.publish_inbound(inbound).unwrap();
 
         let msg = agent.bus.consume_inbound().await.unwrap();
-        agent.process_message(msg).await.unwrap();
+        let outbound = agent.handle_turn(msg).await.unwrap();
 
-        let outbound = agent.bus.consume_outbound().await.unwrap();
         assert_eq!(outbound.content, "tool result processed");
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -1333,7 +1350,7 @@ mod tests {
         agent.bus.publish_inbound(inbound).unwrap();
 
         let msg = agent.bus.consume_inbound().await.unwrap();
-        agent.process_message(msg).await.unwrap();
+        let _outbound = agent.handle_turn(msg).await.unwrap();
 
         // Verify session was saved with both messages
         let session = agent
@@ -1681,10 +1698,9 @@ mod tests {
         };
         agent.bus.publish_inbound(inbound).unwrap();
         let msg = agent.bus.consume_inbound().await.unwrap();
-        agent.process_message(msg).await.unwrap();
+        let outbound = agent.handle_turn(msg).await.unwrap();
 
         // Verify outbound message is the final text response
-        let outbound = agent.bus.consume_outbound().await.unwrap();
         assert_eq!(outbound.content, "I received the tool output successfully");
         assert_eq!(outbound.channel, "cli");
         assert_eq!(outbound.chat_id, "e2e-chat");
@@ -1761,9 +1777,8 @@ mod tests {
         };
         agent.bus.publish_inbound(inbound).unwrap();
         let msg = agent.bus.consume_inbound().await.unwrap();
-        agent.process_message(msg).await.unwrap();
+        let outbound = agent.handle_turn(msg).await.unwrap();
 
-        let outbound = agent.bus.consume_outbound().await.unwrap();
         assert_eq!(outbound.content, "processed both tools");
 
         // Verify the second call to the transport has both tool results
@@ -1836,9 +1851,8 @@ mod tests {
         };
         agent.bus.publish_inbound(inbound).unwrap();
         let msg = agent.bus.consume_inbound().await.unwrap();
-        agent.process_message(msg).await.unwrap();
+        let outbound = agent.handle_turn(msg).await.unwrap();
 
-        let outbound = agent.bus.consume_outbound().await.unwrap();
         assert_eq!(outbound.content, "Direct answer from LLM");
         assert_eq!(outbound.channel, "direct");
 
@@ -1946,9 +1960,8 @@ mod tests {
         };
         agent.bus.publish_inbound(inbound).unwrap();
         let msg = agent.bus.consume_inbound().await.unwrap();
-        agent.process_message(msg).await.unwrap();
+        let outbound = agent.handle_turn(msg).await.unwrap();
 
-        let outbound = agent.bus.consume_outbound().await.unwrap();
         assert_eq!(
             outbound.content,
             "I see the tool failed, let me help differently"
@@ -2097,11 +2110,10 @@ mod tests {
         agent.bus.publish_inbound(inbound).unwrap();
 
         let msg = agent.bus.consume_inbound().await.unwrap();
-        agent.process_message(msg).await.unwrap();
+        let outbound = agent.handle_turn(msg).await.unwrap();
 
         // Verify response came through (proves pipeline executed successfully
         // with auth_context attached).
-        let outbound = agent.bus.consume_outbound().await.unwrap();
         assert_eq!(outbound.content, "auth-verified");
         assert_eq!(outbound.channel, "cli");
 
@@ -2162,9 +2174,8 @@ mod tests {
         agent.bus.publish_inbound(inbound).unwrap();
 
         let msg = agent.bus.consume_inbound().await.unwrap();
-        agent.process_message(msg).await.unwrap();
+        let outbound = agent.handle_turn(msg).await.unwrap();
 
-        let outbound = agent.bus.consume_outbound().await.unwrap();
         assert_eq!(outbound.content, "zero-trust-ok");
         assert_eq!(outbound.channel, "telegram");
 
@@ -2283,9 +2294,8 @@ mod tests {
         };
         agent.bus.publish_inbound(inbound).unwrap();
         let msg = agent.bus.consume_inbound().await.unwrap();
-        agent.process_message(msg).await.unwrap();
+        let outbound = agent.handle_turn(msg).await.unwrap();
 
-        let outbound = agent.bus.consume_outbound().await.unwrap();
         assert!(
             outbound.content.contains("Delegated:"),
             "response should be from delegate_task, got: {}",
@@ -2317,9 +2327,8 @@ mod tests {
         };
         agent.bus.publish_inbound(inbound).unwrap();
         let msg = agent.bus.consume_inbound().await.unwrap();
-        agent.process_message(msg).await.unwrap();
+        let outbound = agent.handle_turn(msg).await.unwrap();
 
-        let outbound = agent.bus.consume_outbound().await.unwrap();
         assert_eq!(
             outbound.content, "LLM response",
             "non-matching message should go through normal LLM pipeline"
@@ -2346,9 +2355,8 @@ mod tests {
         };
         agent.bus.publish_inbound(inbound).unwrap();
         let msg = agent.bus.consume_inbound().await.unwrap();
-        agent.process_message(msg).await.unwrap();
+        let outbound = agent.handle_turn(msg).await.unwrap();
 
-        let outbound = agent.bus.consume_outbound().await.unwrap();
         assert_eq!(outbound.content, "normal LLM");
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
