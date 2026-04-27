@@ -1,6 +1,161 @@
+# Session handoff — 2026-04-27 (early morning)
+
+Follow-on debug session on top of the previous handoff (preserved
+below). The chat-agent vertical-slice spike was tried for real, hung
+on the first query, and root-caused. A small observability + config
+patch is staged (uncommitted) on `development-0.7.0`. The user has
+rebuilt the kernel and is about to restart Cursor to pick up the new
+daemon binary.
+
+## The bug — `agent.chat` hung on first real query
+
+Symptom: panel showed `error: agent.chat: llm http transport: error
+sending request for url (http://127.0.0.1:8111/v1/chat/completions)`
+after a long spinner. Daemon log showed only the
+identity-fallback WARN at handler entry, then silence; llama-server
+slots were idle when checked mid-hang.
+
+Root cause (math, not deadlock):
+
+- `LlmClient.request_timeout` defaulted to **120 s**
+  (`crates/clawft-service-llm/src/client.rs:55`).
+- `LlmConfig.default_max_tokens` = **512**.
+- Qwen3.6-35B IQ2_XXS sustained generation ≈ 4 tok/s under the
+  spike's prompt shape (cold first turn; reasoning_content on the
+  wire eating budget).
+- 512 tokens × 250 ms ≈ **128 s of generation alone**, already
+  past the 120 s reqwest timeout. Add prompt processing of the
+  ~13 KB SOUL+IDENTITY system prompt + tool catalog + history and
+  every iteration was guaranteed to hit the wall.
+- Panel-side `LLM_TIMEOUT_MS` is 300 s — so the daemon was failing
+  *before* the panel would have. Panel surfaced the transport
+  error verbatim.
+
+Contributing (not the cause, but they made the fail mode invisible):
+
+- Zero progress logging in the tool loop
+  (`crates/clawft-weave/src/daemon.rs:2197-2258`). No `info!`
+  around `complete_with_tools`, no per-iteration trace.
+- No heartbeat to `derived/chat/<conv>/status` — explicitly
+  deferred per plan §14 commit (6).
+- The handoff's "first turn likely 5-30 s" estimate was wildly
+  optimistic for Qwen 35B at IQ2_XXS with reasoning_content on.
+
+## Patch staged on `development-0.7.0` (uncommitted)
+
+Five files, ~80 LoC. All gates clean.
+
+**`crates/clawft-service-llm/src/client.rs`**:
+- `LlmConfig.request_timeout` default 120 s → **300 s** (matches
+  panel `LLM_TIMEOUT_MS`).
+- New `ChatUsagePromptDetails { cached_tokens: u32 }`, attached as
+  `usage.prompt_tokens_details` on `ChatUsage`. Lets us see slot
+  prefix-cache hit counts.
+- New `ChatTimings { predicted_per_second, prompt_per_second }`,
+  attached as `timings: Option<ChatTimings>` on `ChatResponse`.
+  Lets us see real sustained throughput per call.
+- Both fields are `#[serde(default)]` / `Option`, so non-llama-server
+  backends keep deserializing fine.
+
+**`crates/clawft-service-llm/src/lib.rs`**:
+- Re-export `ChatTimings`, `ChatUsagePromptDetails`.
+
+**`crates/clawft-core/src/pipeline/service_llm_adapter.rs`**:
+- Two test-mock construction sites updated for the new
+  `ChatResponse.timings: None` field and `ChatUsage.. .Default::default()`
+  spread. Tests still pass.
+
+**`crates/clawft-weave/src/daemon.rs`**:
+- New `AGENT_CHAT_PER_TURN_MAX_TOKENS: u32 = 256` const, passed in
+  place of `p.max_tokens` to every `complete_with_tools` call. Caps
+  per-iter generation at ~64 s @ 4 tok/s (cold) or ~10 s @ 25 tok/s
+  (sustained) — both safely under the 300 s timeout. Model can keep
+  calling tools across iterations if it needs more output.
+- `info!` at handler entry (msg_count, identity_source,
+  per_turn_max_tokens).
+- Per-iter `info!` after every `complete_with_tools` returns Ok:
+  `iter, elapsed_ms, prompt_tokens, cached_tokens,
+   completion_tokens, predicted_per_sec, tool_calls`. One line per
+  iteration in `kernel.log` — debugging future hangs is now trivial.
+- `warn!` on transport errors (with iter + elapsed) and on
+  `max_iterations` cap (with elapsed).
+
+## Validation gates
+
+- `scripts/build.sh check` — clean (41 s).
+- `scripts/build.sh native-debug` — clean (1 m 25 s); `weft` 253 MB,
+  `weaver` 296 MB.
+- `cargo test -p clawft-service-llm --lib` — **22 / 22** pass.
+- `cargo test -p clawft-core --lib` — **1141 / 1141** pass.
+
+## Daemon
+
+User rebuilt the kernel and is restarting Cursor at handoff time.
+Next session should:
+
+1. Confirm `weaver --version` shows the post-patch build.
+2. Open the Cursor panel, ask "what is this project about?".
+3. `tail -f .weftos/runtime/kernel.log | grep "agent.chat"` and
+   expect one `info!` line per loop iteration.
+
+## Open questions the new logs will answer in one chat cycle
+
+1. **Does Qwen3.6 hybrid arch honor slot prefix cache?** Iter 2+
+   should report `cached_tokens ≈ prompt_tokens` of iter 1
+   (strictly-extending prefix). If `cached_tokens` stays at 0
+   across iters, the hybrid arch isn't reusing the slot cache and
+   we should reorganize the prompt (smaller system prompt, tools
+   moved to messages, or skip tool catalog reuse).
+2. **What's the real sustained throughput** under the spike's
+   actual prompt shape? `predicted_per_sec` per iter tells us
+   whether the 25 tok/s claim with `--spec-type ngram-simple`
+   holds, or whether we're durably at 4 tok/s and need to revisit
+   speculation tuning / reasoning_format / quant.
+
+If `cached_tokens` stays at 0, candidate follow-ups:
+
+- Add `--reasoning-format none` to the llama-server start script —
+  stops reasoning_content from burning the per-turn token budget,
+  ~2-3× speedup on tool-call turns.
+- Move tools out of the `tools:` field into a static system-prompt
+  block (some hybrid models prefix-cache plaintext better than the
+  structured tools block).
+
+## Architecture note (carried from this session's Q&A)
+
+WeftOS does **not** require running as wasm in Cursor. The egui GUI
+is dual-target:
+
+- `crates/clawft-gui-egui/src/main.rs` — eframe native window
+  (`fn main() -> eframe::Result<()>`).
+- `[[bin]] name = "weft-gui-egui"` at
+  `crates/clawft-gui-egui/Cargo.toml:18-21`,
+  `required-features = ["native"]`.
+- `weft-demo-lab` and the `workshop-watcher` example use the same
+  surface natively.
+
+Build it standalone:
+
+```bash
+cargo build -p clawft-gui-egui --features native --bin weft-gui-egui
+./target/debug/weft-gui-egui
+```
+
+Note: `scripts/build.sh native` only builds `weft` + `weaver` today.
+If we want `weft-gui-egui` as a first-class artifact, it's a one-line
+addition to the script (deferred — user is staying with the Cursor
+panel for the chat demo).
+
+User is keeping the **Cursor panel path** for now because that's
+where `LLM_TIMEOUT_MS`, hot-reload watcher, allowlist, and demo
+muscle memory already live. Native eframe path remains a fallback
+if webview indirection becomes the bottleneck again.
+
+---
+
 # Session handoff — 2026-04-26 (late evening)
 
-Pick-up doc for the next session. Reflects `development-0.7.0` at
+Pick-up doc for the previous session. Reflects `development-0.7.0` at
 commit `e6f8c816`, two new commits on top of the evening's egui-0.34
 + agent-orphans batch:
 
