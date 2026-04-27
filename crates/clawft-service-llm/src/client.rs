@@ -32,9 +32,9 @@ pub struct LlmConfig {
     /// echoed in the response and shows up in logs.
     pub model: String,
     /// Request timeout for a single completion. Generation can take
-    /// many seconds for large outputs; default 120s covers up to a
-    /// few hundred tokens on a moderately quantized 35B at low
-    /// throughput.
+    /// many seconds for large outputs; default 300s covers a single
+    /// long generation on a moderately quantized 35B at low throughput
+    /// and matches the panel-side `LLM_TIMEOUT_MS` per-method bucket.
     pub request_timeout: Duration,
     /// How long [`LlmClient::wait_for_healthy`] will poll before
     /// giving up.
@@ -45,6 +45,19 @@ pub struct LlmConfig {
     /// Set deliberately conservative so a forgotten cap doesn't pin
     /// the server for minutes on a single request.
     pub default_max_tokens: u32,
+    /// Optional bearer token. When `Some`, sent as
+    /// `Authorization: Bearer <token>`. Required for OpenRouter (and any
+    /// other hosted OpenAI-compat API); left `None` for local
+    /// `llama-server` so the wire shape stays byte-identical to the
+    /// pre-OpenRouter path.
+    pub api_key: Option<String>,
+    /// Optional `HTTP-Referer` header. OpenRouter uses this for app
+    /// attribution in its dashboard; safe to leave `None` for local
+    /// servers.
+    pub referer: Option<String>,
+    /// Optional `X-Title` header. OpenRouter shows this alongside the
+    /// referer for attribution.
+    pub app_title: Option<String>,
 }
 
 impl Default for LlmConfig {
@@ -52,10 +65,13 @@ impl Default for LlmConfig {
         Self {
             base_url: DEFAULT_LLM_SERVICE_URL.to_string(),
             model: DEFAULT_LLM_MODEL.to_string(),
-            request_timeout: Duration::from_secs(120),
+            request_timeout: Duration::from_secs(300),
             health_deadline: Duration::from_secs(10),
             default_temperature: 0.2,
             default_max_tokens: 512,
+            api_key: None,
+            referer: None,
+            app_title: None,
         }
     }
 }
@@ -307,6 +323,32 @@ pub struct ChatUsage {
     /// Sum.
     #[serde(default)]
     pub total_tokens: u32,
+    /// Per-prompt detail block; carries `cached_tokens` from
+    /// llama-server's slot prefix cache. Server-optional, defaults
+    /// to all-zeros when omitted.
+    #[serde(default)]
+    pub prompt_tokens_details: ChatUsagePromptDetails,
+}
+
+/// Optional `usage.prompt_tokens_details` block. Surfaces slot prefix
+/// cache hit counts so callers can verify cache reuse.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ChatUsagePromptDetails {
+    /// Tokens served from the slot prefix cache.
+    #[serde(default)]
+    pub cached_tokens: u32,
+}
+
+/// llama-server's `timings` block — server-specific, carries token-rate
+/// metrics. Absent on stricter OpenAI-compat backends.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ChatTimings {
+    /// Sustained generation rate during this call (tokens/sec).
+    #[serde(default)]
+    pub predicted_per_second: f32,
+    /// Sustained prompt-processing rate (tokens/sec).
+    #[serde(default)]
+    pub prompt_per_second: f32,
 }
 
 /// Wire shape for `POST /v1/chat/completions` response body.
@@ -321,6 +363,9 @@ pub struct ChatResponse {
     /// Echoed model name (best-effort; some servers omit).
     #[serde(default)]
     pub model: Option<String>,
+    /// llama-server-specific timings block; server-optional.
+    #[serde(default)]
+    pub timings: Option<ChatTimings>,
 }
 
 /// Errors emitted by the LLM HTTP client.
@@ -496,6 +541,23 @@ impl LlmClient {
             .await
     }
 
+    /// Build the chat-completions URL from `base_url`.
+    ///
+    /// Tolerates either convention for `base_url`:
+    /// - bare API root (`http://127.0.0.1:8111`, `https://openrouter.ai/api`)
+    ///   — appends `/v1/chat/completions`.
+    /// - v1 root (`https://openrouter.ai/api/v1`) — appends just
+    ///   `/chat/completions` so callers who paste OpenRouter's
+    ///   "OpenAI base URL" string still get the right endpoint.
+    fn chat_completions_url(&self) -> String {
+        let base = self.config.base_url.trim_end_matches('/');
+        if let Some(stripped) = base.strip_suffix("/v1") {
+            format!("{stripped}/v1/chat/completions")
+        } else {
+            format!("{base}/v1/chat/completions")
+        }
+    }
+
     /// Send the request without acquiring the permit. Public for test
     /// harnesses that exercise the wire format without serialization;
     /// production code paths MUST use [`Self::complete`] or
@@ -508,7 +570,7 @@ impl LlmClient {
         temperature: Option<f32>,
         max_tokens: Option<u32>,
     ) -> Result<ChatResponse, LlmError> {
-        let url = format!("{}/v1/chat/completions", self.config.base_url);
+        let url = self.chat_completions_url();
 
         let body = ChatRequest {
             model: self.config.model.clone(),
@@ -520,10 +582,17 @@ impl LlmClient {
             tool_choice,
         };
 
-        let resp = self
-            .http
-            .post(&url)
-            .json(&body)
+        let mut req = self.http.post(&url).json(&body);
+        if let Some(key) = self.config.api_key.as_deref() {
+            req = req.bearer_auth(key);
+        }
+        if let Some(referer) = self.config.referer.as_deref() {
+            req = req.header("HTTP-Referer", referer);
+        }
+        if let Some(title) = self.config.app_title.as_deref() {
+            req = req.header("X-Title", title);
+        }
+        let resp = req
             .send()
             .await
             .map_err(|e| LlmError::Transport(e.to_string()))?;
@@ -931,6 +1000,76 @@ mod tests {
         assert_eq!(calls[0].function.name, "list_files");
         assert!(calls[0].function.arguments.contains("/tmp"));
         assert_eq!(r.choices[0].finish_reason.as_deref(), Some("tool_calls"));
+    }
+
+    #[tokio::test]
+    async fn complete_attaches_bearer_and_attribution_headers() {
+        // OpenRouter path: when api_key/referer/app_title are set,
+        // they ride on the request as `Authorization: Bearer …`,
+        // `HTTP-Referer: …`, `X-Title: …`. Local-llama path
+        // (everything `None`) sends none of these — covered by all
+        // the existing tests that expect byte-compat wire shape.
+        use wiremock::matchers::{header, method, path};
+        let server = MockServer::start().await;
+        let body = r#"{"choices":[{"message":{"role":"assistant","content":"ok"}}]}"#;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(header("authorization", "Bearer sk-or-test"))
+            .and(header("http-referer", "https://example.test/app"))
+            .and(header("x-title", "WeftOS test"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+        let cfg = LlmConfig {
+            base_url: server.uri(),
+            api_key: Some("sk-or-test".into()),
+            referer: Some("https://example.test/app".into()),
+            app_title: Some("WeftOS test".into()),
+            request_timeout: Duration::from_secs(5),
+            health_deadline: Duration::from_secs(2),
+            ..LlmConfig::default()
+        };
+        let client = LlmClient::new(cfg).unwrap();
+        let r = client
+            .complete(vec![ChatMessage::user("hi")], None, None)
+            .await
+            .expect("matched mock means headers were present");
+        assert_eq!(r.choices[0].message.content, "ok");
+    }
+
+    #[test]
+    fn chat_completions_url_handles_both_base_url_conventions() {
+        // Bare API root → appends /v1/chat/completions.
+        let bare = LlmClient::new(LlmConfig {
+            base_url: "http://127.0.0.1:8111".into(),
+            ..test_config("unused".into())
+        })
+        .unwrap();
+        assert_eq!(
+            bare.chat_completions_url(),
+            "http://127.0.0.1:8111/v1/chat/completions",
+        );
+        // Trailing slash → trimmed.
+        let slash = LlmClient::new(LlmConfig {
+            base_url: "http://127.0.0.1:8111/".into(),
+            ..test_config("unused".into())
+        })
+        .unwrap();
+        assert_eq!(
+            slash.chat_completions_url(),
+            "http://127.0.0.1:8111/v1/chat/completions",
+        );
+        // OpenRouter "OpenAI base URL" with /v1 already in it →
+        // strip and re-append so we don't double up.
+        let v1 = LlmClient::new(LlmConfig {
+            base_url: "https://openrouter.ai/api/v1".into(),
+            ..test_config("unused".into())
+        })
+        .unwrap();
+        assert_eq!(
+            v1.chat_completions_url(),
+            "https://openrouter.ai/api/v1/chat/completions",
+        );
     }
 
     #[tokio::test]

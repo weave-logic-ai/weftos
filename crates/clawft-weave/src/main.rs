@@ -101,6 +101,13 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Best-effort load of `.env` from the current working directory,
+    // before any subcommand reads env vars. Lets `OPENROUTER_API_KEY`,
+    // `LLM_SERVICE_URL`, `LLM_MODEL`, etc. live in a project-local
+    // `.env` (which is gitignored) without forcing shell exports.
+    // Silently ignored if no file exists.
+    let _ = dotenvy::dotenv();
+
     let cli = Cli::parse();
 
     let default_filter = if cli.verbose { "debug" } else { "warn" };

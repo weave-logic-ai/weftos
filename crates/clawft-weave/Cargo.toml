@@ -64,6 +64,11 @@ clawft-service-classify = { workspace = true }
 # Base64 encoding for terminal RPC payloads (PTY bytes don't survive
 # raw JSON; chunks ride as { data: <base64>, ... }).
 base64 = "0.22"
+# `.env` loader. The daemon reads OPENROUTER_API_KEY (and friends) from
+# the environment; loading `.env` from cwd at startup makes the
+# OpenRouter takeover work without forcing the user to export keys
+# in their shell rc.
+dotenvy = "0.15"
 exo-resource-tree = { workspace = true, optional = true }
 weftos-rvf-wire = { workspace = true, optional = true }
 rvf-types = { workspace = true, optional = true }

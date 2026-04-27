@@ -434,40 +434,72 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     let _llm_service_flag =
         control_flags.register(ControlKind::Service, "llm", true);
     {
+        // OpenRouter takeover: when OPENROUTER_API_KEY is set we
+        // default the base URL + model to OpenRouter and attach
+        // bearer auth. Local-llama-server users see no behaviour
+        // change (api_key stays None, defaults match the prior code).
+        let api_key = std::env::var(clawft_service_llm::OPENROUTER_API_KEY_ENV)
+            .ok()
+            .filter(|s| !s.is_empty());
+        let (default_url, default_model) = if api_key.is_some() {
+            (
+                clawft_service_llm::DEFAULT_OPENROUTER_BASE_URL.to_string(),
+                clawft_service_llm::DEFAULT_OPENROUTER_MODEL.to_string(),
+            )
+        } else {
+            (
+                clawft_service_llm::DEFAULT_LLM_SERVICE_URL.to_string(),
+                clawft_service_llm::DEFAULT_LLM_MODEL.to_string(),
+            )
+        };
         let llm_url = std::env::var(clawft_service_llm::LLM_SERVICE_URL_ENV)
             .ok()
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-                clawft_service_llm::DEFAULT_LLM_SERVICE_URL.to_string()
-            });
+            .unwrap_or(default_url);
+        let llm_model = std::env::var(clawft_service_llm::LLM_MODEL_ENV)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(default_model);
+        let using_openrouter = api_key.is_some();
         let cfg = clawft_service_llm::LlmConfig {
             base_url: llm_url.clone(),
+            model: llm_model.clone(),
+            api_key,
+            referer: using_openrouter.then(|| "https://github.com/clawft/clawft".to_string()),
+            app_title: using_openrouter.then(|| "WeftOS weaver".to_string()),
             ..clawft_service_llm::LlmConfig::default()
         };
         match clawft_service_llm::LlmClient::new(cfg) {
             Ok(client) => {
                 let arc = Arc::new(client);
-                // Background health probe — surfaces "llama-server is
-                // down" in the log without making the daemon refuse to
-                // boot when the local model service hasn't been
-                // started yet.
-                let probe = Arc::clone(&arc);
-                tokio::spawn(async move {
-                    if probe.wait_for_healthy().await {
-                        info!(
-                            url = %probe.config().base_url,
-                            "llm service: healthy"
-                        );
-                    } else {
-                        warn!(
-                            url = %probe.config().base_url,
-                            "llm service: health probe failed at boot \
-                             (RPC will return a clean error per call)"
-                        );
-                    }
-                });
+                // Background health probe — only meaningful for
+                // local llama-server; OpenRouter has no `/health`
+                // endpoint and would always fail the probe, so we
+                // skip it when an api_key is configured.
+                if !using_openrouter {
+                    let probe = Arc::clone(&arc);
+                    tokio::spawn(async move {
+                        if probe.wait_for_healthy().await {
+                            info!(
+                                url = %probe.config().base_url,
+                                "llm service: healthy"
+                            );
+                        } else {
+                            warn!(
+                                url = %probe.config().base_url,
+                                "llm service: health probe failed at boot \
+                                 (RPC will return a clean error per call)"
+                            );
+                        }
+                    });
+                }
                 let _ = DAEMON_LLM.set(arc);
-                info!(url = %llm_url, "llm service handle wired");
+                info!(
+                    url = %llm_url,
+                    model = %llm_model,
+                    openrouter = using_openrouter,
+                    "llm service handle wired",
+                );
             }
             Err(e) => {
                 warn!(
@@ -2103,6 +2135,12 @@ const AGENT_CHAT_MAX_ITERATIONS: u32 = 10;
 const AGENT_CHAT_RESULT_PREVIEW_BYTES: usize = 1024;
 const AGENT_CHAT_FILE_READ_LIMIT_BYTES: usize = 256 * 1024;
 const AGENT_CHAT_DIR_ENTRY_LIMIT: usize = 200;
+/// Per-iteration `max_tokens` ceiling for the spike. Sized so one
+/// generation step at ~4 tok/s sustained (Qwen 35B IQ2_XXS cold) stays
+/// under ~64s, well below the panel's 300s `LLM_TIMEOUT_MS`. Overrides
+/// any panel-supplied `p.max_tokens` for the spike — the model can keep
+/// calling tools across iterations if it needs more headroom.
+const AGENT_CHAT_PER_TURN_MAX_TOKENS: u32 = 256;
 
 /// Handle `agent.chat`: identity-aware tool-using chat against the
 /// local LLM. See module-level commentary above.
@@ -2194,26 +2232,69 @@ async fn handle_agent_chat(
     let finish_reason: String;
     let mut assistant_text: String = String::new();
 
+    let agent_chat_started = std::time::Instant::now();
+    info!(
+        msg_count = messages.len(),
+        identity_source = identity.source,
+        per_turn_max_tokens = AGENT_CHAT_PER_TURN_MAX_TOKENS,
+        "agent.chat: tool loop starting",
+    );
+
     loop {
         iterations += 1;
         if iterations > AGENT_CHAT_MAX_ITERATIONS {
             finish_reason = "max_iterations".into();
+            warn!(
+                iterations,
+                elapsed_ms = agent_chat_started.elapsed().as_millis() as u64,
+                "agent.chat: hit max_iterations cap",
+            );
             break;
         }
 
+        let iter_started = std::time::Instant::now();
         let resp = match client
             .complete_with_tools(
                 messages.clone(),
                 tools.clone(),
                 None,
                 p.temperature,
-                p.max_tokens,
+                Some(AGENT_CHAT_PER_TURN_MAX_TOKENS),
             )
             .await
         {
             Ok(r) => r,
-            Err(e) => return Response::error(format!("agent.chat: {e}")),
+            Err(e) => {
+                warn!(
+                    iterations,
+                    elapsed_ms = iter_started.elapsed().as_millis() as u64,
+                    error = %e,
+                    "agent.chat: complete_with_tools failed",
+                );
+                return Response::error(format!("agent.chat: {e}"));
+            }
         };
+        let iter_elapsed_ms = iter_started.elapsed().as_millis() as u64;
+        let predicted_per_sec = resp
+            .timings
+            .as_ref()
+            .map(|t| t.predicted_per_second)
+            .unwrap_or(0.0);
+        info!(
+            iter = iterations,
+            elapsed_ms = iter_elapsed_ms,
+            prompt_tokens = resp.usage.prompt_tokens,
+            cached_tokens = resp.usage.prompt_tokens_details.cached_tokens,
+            completion_tokens = resp.usage.completion_tokens,
+            predicted_per_sec,
+            tool_calls = resp
+                .choices
+                .first()
+                .and_then(|c| c.message.tool_calls.as_ref())
+                .map(|tc| tc.len())
+                .unwrap_or(0),
+            "agent.chat: iter complete",
+        );
 
         if model_name.is_none() {
             model_name.clone_from(&resp.model);

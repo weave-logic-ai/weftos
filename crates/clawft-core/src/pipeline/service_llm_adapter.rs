@@ -325,8 +325,10 @@ mod tests {
                 prompt_tokens: 7,
                 completion_tokens: 3,
                 total_tokens: 10,
+                ..ChatUsage::default()
             },
             model: Some("test-model".into()),
+            timings: None,
         }
     }
 
@@ -372,6 +374,7 @@ mod tests {
             }],
             usage: ChatUsage::default(),
             model: Some("m".into()),
+            timings: None,
         };
         let v = response_to_value(&resp, "m");
         let tcs = v["choices"][0]["message"]["tool_calls"]

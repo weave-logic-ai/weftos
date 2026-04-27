@@ -45,19 +45,39 @@
 pub mod client;
 
 pub use client::{
-    ChatChoice, ChatMessage, ChatRequest, ChatResponse, ChatUsage, LlmClient, LlmConfig, LlmError,
-    Tool, ToolCall, ToolCallFunction, ToolChoice, ToolFunction,
+    ChatChoice, ChatMessage, ChatRequest, ChatResponse, ChatTimings, ChatUsage,
+    ChatUsagePromptDetails, LlmClient, LlmConfig, LlmError, Tool, ToolCall, ToolCallFunction,
+    ToolChoice, ToolFunction,
 };
 
 /// Environment variable read by [`LlmConfig::from_env`].
 pub const LLM_SERVICE_URL_ENV: &str = "LLM_SERVICE_URL";
 
+/// Environment variable that overrides the default model name, e.g.
+/// for picking a specific OpenRouter slug. Honoured by the daemon's
+/// LLM-client construction in `clawft-weave`.
+pub const LLM_MODEL_ENV: &str = "LLM_MODEL";
+
+/// Environment variable carrying an OpenRouter API key. When set,
+/// the daemon defaults the LLM service URL to OpenRouter and attaches
+/// `Authorization: Bearer <key>` to chat-completion requests.
+pub const OPENROUTER_API_KEY_ENV: &str = "OPENROUTER_API_KEY";
+
 /// Default LLM service URL if the env var is unset. Matches the
 /// `llama-server` instance the user already runs locally for Qwen3.
 pub const DEFAULT_LLM_SERVICE_URL: &str = "http://127.0.0.1:8111";
+
+/// Default OpenRouter API base. The client appends `/v1/chat/completions`
+/// (and tolerates a trailing `/v1`), so this points at the API root,
+/// not the v1 root.
+pub const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api";
 
 /// Default model name. `llama-server` accepts any string and routes to
 /// its single loaded model, so the default is purely cosmetic — it
 /// shows up in the request body for traceability and is echoed back in
 /// the response.
 pub const DEFAULT_LLM_MODEL: &str = "local";
+
+/// Default OpenRouter model — Nvidia's free Nemotron 120b. Used when
+/// `OPENROUTER_API_KEY` is set and `LLM_MODEL` is unset.
+pub const DEFAULT_OPENROUTER_MODEL: &str = "nvidia/nemotron-3-super-120b-a12b:free";
