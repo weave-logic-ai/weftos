@@ -61,6 +61,7 @@ clawft-service-whisper = { workspace = true }
 clawft-service-llm = { workspace = true }
 clawft-service-terminal = { workspace = true }
 clawft-service-classify = { workspace = true }
+clawft-tools = { workspace = true, features = ["native"] }
 # Base64 encoding for terminal RPC payloads (PTY bytes don't survive
 # raw JSON; chunks ride as { data: <base64>, ... }).
 base64 = "0.22"
