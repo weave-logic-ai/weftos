@@ -601,7 +601,8 @@ pub struct AgentChatMessage {
 
 /// Parameters for `agent.chat`. The panel sends the full conversation
 /// each turn; the daemon-side concierge is stateless across requests
-/// (substrate-backed conversation state lands in commit 4).
+/// today (substrate-backed conversation state lands in
+/// `agent-core-v1.md` Phase C3).
 ///
 /// Note: there is no `permission` field. Permission is resolved
 /// server-side from the authenticated channel mapping in
@@ -616,6 +617,31 @@ pub struct AgentChatParams {
     /// Hard cap on generated tokens per LLM call inside the loop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// Conversation identifier. Used by `agent-core-v1.md` Phase C
+    /// for the per-conv `DashMap<ConvId, Mutex<()>>`, the substrate
+    /// JSONL path (`derived/chat/<conv_id>/turns/<ulid>`), and the
+    /// heartbeat (`derived/chat/<conv_id>/status`). Defaults to an
+    /// ephemeral ULID when callers omit it so legacy panels keep
+    /// working unchanged through Phase A.
+    #[serde(default = "default_conv_id")]
+    pub conv_id: String,
+}
+
+/// Default conversation id when the caller omits `conv_id`. Generates
+/// an ephemeral ULID-shaped string (timestamp-prefixed monotonic) so
+/// successive default-id calls don't collide. Phase C will require
+/// callers to supply a stable id; until then this keeps the legacy
+/// panel wire format working.
+fn default_conv_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("ephemeral-{ts:013}-{n:06}")
 }
 
 /// Summary of one tool call the agent executed during a chat turn.
@@ -1210,5 +1236,35 @@ mod tests {
     fn socket_path_not_empty() {
         let path = socket_path();
         assert!(path.to_string_lossy().contains("kernel.sock"));
+    }
+
+    #[test]
+    fn agent_chat_params_omitted_conv_id_gets_default() {
+        // Legacy panel wire format (no `conv_id` field) must still
+        // deserialize cleanly; the default fills in an ephemeral id.
+        let json = r#"{"messages":[{"role":"user","content":"hi"}]}"#;
+        let params: AgentChatParams = serde_json::from_str(json).unwrap();
+        assert!(
+            params.conv_id.starts_with("ephemeral-"),
+            "default conv_id must be ephemeral-shaped, got {:?}",
+            params.conv_id
+        );
+        assert_eq!(params.messages.len(), 1);
+    }
+
+    #[test]
+    fn agent_chat_params_explicit_conv_id_round_trips() {
+        let json = r#"{"messages":[],"conv_id":"01HQ123ABCXYZ"}"#;
+        let params: AgentChatParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.conv_id, "01HQ123ABCXYZ");
+    }
+
+    #[test]
+    fn agent_chat_params_default_conv_ids_are_distinct() {
+        // Successive default-id calls within the same millisecond must
+        // not collide — the atomic counter component differentiates.
+        let a = default_conv_id();
+        let b = default_conv_id();
+        assert_ne!(a, b);
     }
 }

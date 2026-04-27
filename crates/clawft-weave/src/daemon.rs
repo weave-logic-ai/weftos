@@ -203,10 +203,14 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         // - `transcript`  — whisper STT output (this branch)
         // - `classify`    — speech/silence/keyword classifier (parallel)
         // - `terminal`    — terminal-output capture pipeline (parallel)
+        // - `chat`        — agent.chat per-turn JSONL + heartbeat
+        //                   (`derived/chat/<conv>/turns/<ulid>`,
+        //                    `derived/chat/<conv>/status`); plan
+        //                   `agent-core-v1.md` Phase A2.
         //
-        // Stamping all three here means the parallel branches don't
+        // Stamping all four here means the parallel branches don't
         // each need to touch this grant-issue path.
-        for topic in ["transcript", "classify", "terminal"] {
+        for topic in ["transcript", "classify", "terminal", "chat"] {
             match k.node_registry().issue_derived_grant(
                 daemon_identity.node_id.clone(),
                 topic,
