@@ -2,11 +2,15 @@
 
 pub mod agents;
 pub mod context;
+pub mod context_router;
+pub mod effects;
+pub mod gate;
 pub mod helpers;
 pub mod identity;
 pub mod loop_core;
 pub mod memory;
 pub mod sandbox;
+pub mod sink;
 #[cfg(feature = "native")]
 pub mod skill_watcher;
 pub mod skill_autogen;
