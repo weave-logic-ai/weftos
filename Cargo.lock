@@ -1531,6 +1531,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "clawft-service-agent"
+version = "0.6.19"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "clawft-core",
+ "clawft-platform",
+ "clawft-service-llm",
+ "clawft-types",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "clawft-service-classify"
 version = "0.6.19"
 dependencies = [
