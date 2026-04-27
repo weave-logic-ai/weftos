@@ -45,6 +45,7 @@ use crate::session::SessionManager;
 use crate::tools::registry::ToolRegistry;
 
 use super::context::ContextBuilder;
+use super::context_router::{ContextRequest, ContextRouter, NullRouter};
 use super::verification;
 
 // ---------------------------------------------------------------------------
@@ -164,6 +165,16 @@ pub struct AgentLoop<P: Platform> {
     /// in `~/.clawft/skills/pending/`. The pending → live promotion
     /// stays manual (user approval), per the autogen module's design.
     autogen: Option<Arc<Mutex<crate::agent::skill_autogen::PatternDetector>>>,
+    /// Pre-LLM context router (agent-core-v1 Phase B1).
+    ///
+    /// Defaults to
+    /// [`NullRouter`](crate::agent::context_router::NullRouter) so
+    /// existing behaviour is preserved. Phase E1 swaps in
+    /// `LlmClassifierRouter`. The router NEVER picks a model — that's
+    /// `TieredRouter`'s job downstream
+    /// (`crates/clawft-core/src/pipeline/tiered_router.rs:585`).
+    /// See `docs/research/rvf-context-router.md` for the contract.
+    context_router: Arc<dyn ContextRouter>,
 }
 
 impl<P: Platform> AgentLoop<P> {
@@ -202,6 +213,7 @@ impl<P: Platform> AgentLoop<P> {
             auto_delegation: None,
             sandbox: None,
             autogen: None,
+            context_router: Arc::new(NullRouter),
         }
     }
 
@@ -242,6 +254,15 @@ impl<P: Platform> AgentLoop<P> {
         detector: Arc<Mutex<crate::agent::skill_autogen::PatternDetector>>,
     ) -> Self {
         self.autogen = Some(detector);
+        self
+    }
+
+    /// Attach a [`ContextRouter`] so the loop consults it before each
+    /// LLM request. Without this attached the loop uses
+    /// [`NullRouter`] (no skills, no tool restriction, zero hint —
+    /// behaviour identical to pre-B1).
+    pub fn with_context_router(mut self, router: Arc<dyn ContextRouter>) -> Self {
+        self.context_router = router;
         self
     }
 
@@ -357,6 +378,31 @@ impl<P: Platform> AgentLoop<P> {
             return self.run_auto_delegation(&msg, delegate_args).await;
         }
 
+        // 0b. Pre-LLM context router (agent-core-v1 Phase B1).
+        //     The router selects skills, can restrict the tool subset,
+        //     and writes a clamped complexity_hint into the request.
+        //     Default is NullRouter (no-op); Phase E1 replaces it with
+        //     LlmClassifierRouter. By contract, the router NEVER picks
+        //     a model — TieredRouter still owns that decision.
+        let ctx_request = ContextRequest {
+            content: msg.content.clone(),
+            channel: msg.channel.clone(),
+            chat_id: msg.chat_id.clone(),
+            metadata: msg.metadata.clone(),
+        };
+        let ctx_decision = self.context_router.route(&ctx_request).await;
+        if !ctx_decision.skills.is_empty()
+            || ctx_decision.tool_subset.is_some()
+            || ctx_decision.complexity_hint != 0.0
+        {
+            debug!(
+                skills = ?ctx_decision.skills,
+                tool_subset = ?ctx_decision.tool_subset,
+                complexity_hint = ctx_decision.complexity_hint,
+                "context router emitted decision"
+            );
+        }
+
         // 1. Get or create session
         let mut session = self.sessions.get_or_create(&session_key).await?;
 
@@ -369,6 +415,25 @@ impl<P: Platform> AgentLoop<P> {
 
         // 4. Context messages are already pipeline::traits::LlmMessage (B2 unification).
         let mut messages: Vec<LlmMessage> = context_messages;
+
+        // 4a. Append router-selected skill names as a system note.
+        //     The full skill instruction body is loaded by the
+        //     skills loader; here we surface the names so the LLM
+        //     knows which capabilities the router thinks apply.
+        //     Phase E1's LlmClassifierRouter will resolve names to
+        //     instructions before we reach the model; for now this
+        //     is a hook the NullRouter never exercises.
+        if !ctx_decision.skills.is_empty() {
+            messages.push(LlmMessage {
+                role: "system".into(),
+                content: format!(
+                    "# Router-selected skills\n\n{}",
+                    ctx_decision.skills.join(", ")
+                ),
+                tool_call_id: None,
+                tool_calls: None,
+            });
+        }
 
         // 4b. Inject skill instructions from metadata (v2 skill activation).
         //     When the interactive REPL activates a skill, its instructions
@@ -418,24 +483,37 @@ impl<P: Platform> AgentLoop<P> {
 
         // 7. Resolve tool schemas -- filter by allowed_tools if present
         //    in the inbound message metadata (skill-based injection).
-        let tool_schemas = match msg
-            .metadata
-            .get("allowed_tools")
-            .and_then(|v| v.as_array())
-        {
-            Some(tools_arr) => {
-                let allowed: Vec<String> = tools_arr
-                    .iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect();
-                if allowed.is_empty() {
-                    self.tools.schemas()
-                } else {
-                    debug!(allowed_tools = ?allowed, "filtering tools for skill");
-                    self.tools.schemas_for_tools(&allowed)
-                }
+        //    The context router's tool_subset (when Some) overrides
+        //    metadata-driven filtering since the router has the
+        //    higher-level view (skill choice, complexity, etc.).
+        let tool_schemas = if let Some(subset) = ctx_decision.tool_subset.as_ref() {
+            if subset.is_empty() {
+                debug!("context router: empty tool_subset → tools disabled");
+                Vec::new()
+            } else {
+                debug!(tool_subset = ?subset, "context router: applying tool subset");
+                self.tools.schemas_for_tools(subset)
             }
-            None => self.tools.schemas(),
+        } else {
+            match msg
+                .metadata
+                .get("allowed_tools")
+                .and_then(|v| v.as_array())
+            {
+                Some(tools_arr) => {
+                    let allowed: Vec<String> = tools_arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
+                    if allowed.is_empty() {
+                        self.tools.schemas()
+                    } else {
+                        debug!(allowed_tools = ?allowed, "filtering tools for skill");
+                        self.tools.schemas_for_tools(&allowed)
+                    }
+                }
+                None => self.tools.schemas(),
+            }
         };
 
         // 8. Read hallucination score from session metadata and compute boost.
@@ -444,15 +522,26 @@ impl<P: Platform> AgentLoop<P> {
             .get(verification::HALLUCINATION_SCORE_KEY)
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0) as f32;
-        let complexity_boost = verification::score_to_boost(hallucination_score);
+        let hallucination_boost = verification::score_to_boost(hallucination_score);
 
-        if complexity_boost > 0.0 {
+        if hallucination_boost > 0.0 {
             debug!(
                 hallucination_score,
-                complexity_boost,
+                hallucination_boost,
                 "applying hallucination complexity boost"
             );
         }
+
+        // 8b. Resolve final complexity_boost: when the router supplied
+        //     a nonzero hint it takes precedence; otherwise we keep
+        //     the hallucination-derived boost. This matches the B1
+        //     contract — the router never ESCALATES a tier, it just
+        //     replaces the boost field for the classifier to consume.
+        let complexity_boost = if ctx_decision.complexity_hint != 0.0 {
+            ctx_decision.complexity_hint
+        } else {
+            hallucination_boost
+        };
 
         // 9. Create pipeline request with auth context + hallucination boost
         let request = ChatRequest {

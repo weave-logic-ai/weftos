@@ -2,6 +2,7 @@
 
 pub mod agents;
 pub mod context;
+pub mod context_router;
 pub mod helpers;
 pub mod identity;
 pub mod loop_core;
