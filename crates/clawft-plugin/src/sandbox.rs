@@ -232,17 +232,21 @@ impl SandboxPolicy {
     }
 
     /// Check whether a file path is readable.
+    ///
+    /// Uses canonicalize + canonical-prefix comparison to defeat
+    /// `..` traversal and unresolved symlinks. The target must exist
+    /// for a read check; if it doesn't, the path is rejected.
     pub fn is_path_readable(&self, path: &std::path::Path) -> bool {
-        self.filesystem.readable_paths.iter().any(|allowed| {
-            path.starts_with(allowed)
-        })
+        is_path_within_allowlist(path, &self.filesystem.readable_paths, false)
     }
 
     /// Check whether a file path is writable.
+    ///
+    /// Uses canonicalize + canonical-prefix comparison. For not-yet-
+    /// existing targets we canonicalize the parent directory and
+    /// re-append the leaf so legitimate new-file creation is permitted.
     pub fn is_path_writable(&self, path: &std::path::Path) -> bool {
-        self.filesystem.writable_paths.iter().any(|allowed| {
-            path.starts_with(allowed)
-        })
+        is_path_within_allowlist(path, &self.filesystem.writable_paths, true)
     }
 
     /// Check whether a command is allowed by the process policy.
@@ -291,6 +295,60 @@ impl SandboxPolicy {
             other => other.clone(),
         }
     }
+}
+
+/// Canonicalize `path` and check whether the result is contained in
+/// any of the canonical roots derived from `allowlist`.
+///
+/// `allow_missing_target` controls behavior when `path` does not yet
+/// exist on disk:
+/// - `false` (read checks): reject. Symlink targets must already
+///   resolve to a real file inside the allowlist.
+/// - `true` (write checks): canonicalize the parent directory and
+///   re-append the leaf, so creating a new file inside an allowed
+///   root is permitted.
+///
+/// Mirrors the spike's `resolve_workspace_path` idiom in
+/// `clawft-weave::daemon`. By routing both sides through
+/// `Path::canonicalize`, traversal segments (`..`), unresolved
+/// symlinks, and Windows extended-length prefixes (`\\?\`) all
+/// normalize identically, so the `starts_with` check is sound on
+/// every supported platform.
+fn is_path_within_allowlist(
+    path: &std::path::Path,
+    allowlist: &[std::path::PathBuf],
+    allow_missing_target: bool,
+) -> bool {
+    if allowlist.is_empty() {
+        return false;
+    }
+
+    let target_canon = match path.canonicalize() {
+        Ok(c) => c,
+        Err(_) if allow_missing_target => {
+            // Target may not exist yet (e.g. file we're about to
+            // create). Canonicalize the parent directory and re-append
+            // the leaf so we can still verify containment.
+            let parent = match path.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p,
+                _ => return false,
+            };
+            let parent_canon = match parent.canonicalize() {
+                Ok(c) => c,
+                Err(_) => return false,
+            };
+            match path.file_name() {
+                Some(name) => parent_canon.join(name),
+                None => return false,
+            }
+        }
+        Err(_) => return false,
+    };
+
+    allowlist.iter().any(|allowed| match allowed.canonicalize() {
+        Ok(allowed_canon) => target_canon.starts_with(&allowed_canon),
+        Err(_) => false,
+    })
 }
 
 /// Check whether a domain matches a pattern (exact or wildcard).
@@ -477,30 +535,148 @@ mod tests {
 
     #[test]
     fn path_readable_check() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let file = workspace.path().join("file.rs");
+        std::fs::write(&file, b"fn main() {}").expect("write file");
+
         let policy = SandboxPolicy {
             agent_id: "test".into(),
             filesystem: FilesystemPolicy {
-                readable_paths: vec![PathBuf::from("/home/user/workspace")],
+                readable_paths: vec![workspace.path().to_path_buf()],
                 ..Default::default()
             },
             ..Default::default()
         };
-        assert!(policy.is_path_readable(Path::new("/home/user/workspace/file.rs")));
-        assert!(!policy.is_path_readable(Path::new("/etc/passwd")));
+        assert!(policy.is_path_readable(&file));
+        // A path outside the allowlist must reject. /etc exists on
+        // Unix; on platforms where it doesn't, canonicalize fails and
+        // the helper still rejects.
+        assert!(!policy.is_path_readable(Path::new("/etc")));
     }
 
     #[test]
     fn path_writable_check() {
+        let sandbox = tempfile::tempdir().expect("tempdir");
+        let target = sandbox.path().join("output.txt");
+        // Write target does not yet exist — must still permit because
+        // the parent canonicalizes inside the allowlist.
         let policy = SandboxPolicy {
             agent_id: "test".into(),
             filesystem: FilesystemPolicy {
-                writable_paths: vec![PathBuf::from("/tmp/sandbox")],
+                writable_paths: vec![sandbox.path().to_path_buf()],
                 ..Default::default()
             },
             ..Default::default()
         };
-        assert!(policy.is_path_writable(Path::new("/tmp/sandbox/output.txt")));
-        assert!(!policy.is_path_writable(Path::new("/etc/config")));
+        assert!(policy.is_path_writable(&target));
+        assert!(!policy.is_path_writable(Path::new("/etc")));
+    }
+
+    #[test]
+    fn path_readable_rejects_dotdot_traversal() {
+        // /workspace/../etc/passwd-style escape. Set up two real
+        // siblings under a shared root so canonicalize has something
+        // to chew on; then ask the policy whether
+        // <workspace>/../<sibling>/secret is readable. The lexical
+        // starts_with implementation said yes; the canonical one must
+        // say no.
+        let root = tempfile::tempdir().expect("tempdir");
+        let workspace = root.path().join("workspace");
+        let secrets = root.path().join("etc");
+        std::fs::create_dir(&workspace).expect("mkdir workspace");
+        std::fs::create_dir(&secrets).expect("mkdir etc");
+        let secret_file = secrets.join("passwd");
+        std::fs::write(&secret_file, b"root:x:0:0").expect("write secret");
+
+        let policy = SandboxPolicy {
+            agent_id: "test".into(),
+            filesystem: FilesystemPolicy {
+                readable_paths: vec![workspace.clone()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let traversal = workspace.join("..").join("etc").join("passwd");
+        assert!(
+            !policy.is_path_readable(&traversal),
+            "lexical starts_with would have accepted this; canonicalize must reject"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_readable_rejects_symlink_escape() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let workspace = root.path().join("workspace");
+        let outside = root.path().join("outside");
+        std::fs::create_dir(&workspace).expect("mkdir workspace");
+        std::fs::create_dir(&outside).expect("mkdir outside");
+        let secret = outside.join("secret.txt");
+        std::fs::write(&secret, b"secret").expect("write secret");
+
+        // workspace/escape -> ../outside/secret.txt
+        let link = workspace.join("escape");
+        std::os::unix::fs::symlink(&secret, &link).expect("create symlink");
+
+        let policy = SandboxPolicy {
+            agent_id: "test".into(),
+            filesystem: FilesystemPolicy {
+                readable_paths: vec![workspace.clone()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        // The lexical check would have accepted `link` since it's
+        // literally inside `workspace`; canonicalize must follow the
+        // symlink and reject because the target is outside.
+        assert!(!policy.is_path_readable(&link));
+    }
+
+    #[test]
+    fn path_writable_permits_not_yet_existing_target() {
+        let sandbox = tempfile::tempdir().expect("tempdir");
+        let new_file = sandbox.path().join("does-not-exist-yet.txt");
+        assert!(
+            !new_file.exists(),
+            "precondition: target must not exist for this test"
+        );
+
+        let policy = SandboxPolicy {
+            agent_id: "test".into(),
+            filesystem: FilesystemPolicy {
+                writable_paths: vec![sandbox.path().to_path_buf()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(policy.is_path_writable(&new_file));
+
+        // But if the parent itself doesn't exist, reject.
+        let nested = sandbox.path().join("missing-dir").join("file.txt");
+        assert!(!policy.is_path_writable(&nested));
+    }
+
+    #[test]
+    fn path_readable_allowlist_with_trailing_slash() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let file = workspace.path().join("file.rs");
+        std::fs::write(&file, b"hi").expect("write file");
+
+        // PathBuf reconstructed with a trailing separator. Both sides
+        // go through canonicalize, so the comparison must still match.
+        let mut allowed_with_slash = workspace.path().as_os_str().to_owned();
+        allowed_with_slash.push(std::path::MAIN_SEPARATOR.to_string());
+        let policy = SandboxPolicy {
+            agent_id: "test".into(),
+            filesystem: FilesystemPolicy {
+                readable_paths: vec![PathBuf::from(allowed_with_slash)],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(policy.is_path_readable(&file));
     }
 
     #[test]

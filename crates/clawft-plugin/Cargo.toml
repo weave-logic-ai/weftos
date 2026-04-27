@@ -37,3 +37,4 @@ reqwest = { workspace = true, default-features = false, features = ["json", "mul
 
 [dev-dependencies]
 tokio = { workspace = true }
+tempfile = { workspace = true }
