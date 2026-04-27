@@ -91,6 +91,7 @@ serde_yaml = { workspace = true }
 clawft-platform = { workspace = true }
 clawft-types = { workspace = true }
 temp-env = "0.3"
+tempfile = { workspace = true }
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = { workspace = true }
 # ServiceLlmAdapter integration tests spin up a wiremock server to

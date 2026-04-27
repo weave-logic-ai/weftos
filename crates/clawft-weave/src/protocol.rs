@@ -577,6 +577,89 @@ pub struct LlmPromptResult {
     pub model: Option<String>,
 }
 
+// ── Agent chat (Concierge) — vertical-slice spike ──────────
+//
+// `agent.chat` wraps `llm.prompt` with an identity-aware system prompt
+// and a small built-in tool surface (read_file, list_directory) that
+// lets the assistant inspect the workspace before answering.
+//
+// The wire shape is intentionally close to `llm.prompt` for the spike;
+// post-spike commits add `conversation_id`, `tool_calls` summaries with
+// per-call duration, identity-drift signals, and substrate rehydrate.
+//
+// Plan: `docs/plans/chat-agent-v1.md` §5.
+
+/// One message in an `agent.chat` conversation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentChatMessage {
+    /// `system` / `user` / `assistant`. The daemon prepends its own
+    /// system prompt; `system` from the panel is appended after it.
+    pub role: String,
+    /// Message content.
+    pub content: String,
+}
+
+/// Parameters for `agent.chat`. The panel sends the full conversation
+/// each turn; the daemon-side concierge is stateless across requests
+/// (substrate-backed conversation state lands in commit 4).
+///
+/// Note: there is no `permission` field. Permission is resolved
+/// server-side from the authenticated channel mapping in
+/// `.clawft/config.json` per governance review (plan §15.5).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentChatParams {
+    /// Full conversation history. Last entry should be `user`.
+    pub messages: Vec<AgentChatMessage>,
+    /// Sampling temperature; daemon default when None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    /// Hard cap on generated tokens per LLM call inside the loop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+}
+
+/// Summary of one tool call the agent executed during a chat turn.
+/// Renders as a collapsible bubble in the panel between user and
+/// assistant turns (plan §11.4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentChatToolCall {
+    /// Tool name (e.g. `"read_file"`, `"list_directory"`).
+    pub name: String,
+    /// JSON-stringified arguments, truncated for UI preview.
+    pub arguments_preview: String,
+    /// Tool result, truncated for UI preview.
+    pub result_preview: String,
+    /// True when the tool ran without error.
+    pub success: bool,
+}
+
+/// Result of `agent.chat`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentChatResult {
+    /// Final assistant text after the tool loop terminates.
+    pub assistant_text: String,
+    /// Tool calls executed during the loop, in order.
+    pub tool_calls: Vec<AgentChatToolCall>,
+    /// Why the loop terminated: `"stop"`, `"length"`,
+    /// `"max_iterations"`, etc.
+    pub finish_reason: String,
+    /// Number of LLM round-trips inside the loop.
+    pub iterations: u32,
+    /// Cumulative prompt tokens across iterations.
+    pub prompt_tokens: u32,
+    /// Cumulative completion tokens across iterations.
+    pub completion_tokens: u32,
+    /// Echoed model name (best-effort).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Identity descriptor surfaced to the panel — diagnostic for the
+    /// drift-warning path (plan §7.8). Spike emits the loaded source
+    /// (e.g. `"docs-fallback"`) so the user knows when `weaver init`
+    /// hasn't been run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_source: Option<String>,
+}
+
 // ── Terminal RPCs ─────────────────────────────────────────
 //
 // PTY-backed shell sessions hosted in the daemon. The egui Explorer

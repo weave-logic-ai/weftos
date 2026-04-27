@@ -73,6 +73,12 @@ const ALLOWED_METHODS = new Set<string>([
     // llama.cpp endpoint. Wired in the daemon at boot via DAEMON_LLM;
     // the chat window panel calls this for each user turn.
     "llm.prompt",
+    // WeftOS Concierge: identity-aware tool-using chat. Wraps `llm.prompt`
+    // with a built-in tool surface (read_file, list_directory) that lets
+    // the assistant inspect the workspace before answering. Replaces
+    // `llm.prompt` as the chat panel's wire for user turns; same llama.cpp
+    // server underneath. Plan: docs/plans/chat-agent-v1.md §5.
+    "agent.chat",
     // Terminal service: PTY-backed shell sessions hosted in the
     // daemon, surfaced as an Explorer panel. Output is published
     // to substrate (via the existing `substrate.read` proxy);
@@ -262,7 +268,7 @@ function installWasmHotReload(
 // a stopped daemon surfaces immediately on the chips.
 const LLM_TIMEOUT_MS = 300_000;
 function timeoutForMethod(method: string): number | undefined {
-    if (method === "llm.prompt") return LLM_TIMEOUT_MS;
+    if (method === "llm.prompt" || method === "agent.chat") return LLM_TIMEOUT_MS;
     return undefined; // fall through to rpcCall's default
 }
 

@@ -3,6 +3,7 @@
 pub mod agents;
 pub mod context;
 pub mod helpers;
+pub mod identity;
 pub mod loop_core;
 pub mod memory;
 pub mod sandbox;

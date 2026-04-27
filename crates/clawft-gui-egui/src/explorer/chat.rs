@@ -143,14 +143,14 @@ impl ChatView {
         self.pending.is_some()
     }
 
-    /// Build the JSON params for `llm.prompt` from the current history.
+    /// Build the JSON params for `agent.chat` from the current history.
     ///
-    /// Matches `LlmPromptParams { messages, system, temperature,
-    /// max_tokens }` — the convenience `prompt` field is intentionally
-    /// not used so the daemon always receives the full conversation.
+    /// Matches `AgentChatParams { messages, temperature, max_tokens }`.
+    /// The `system` field on `LlmPromptParams` is intentionally absent —
+    /// the daemon-side concierge owns the system prompt (identity +
+    /// workspace + tool intro) and we don't let the panel inject one.
     ///
-    /// Filters UI-only `error` pseudo-roles out of the wire payload
-    /// (the daemon would 400 on the unknown role).
+    /// Filters UI-only `error` pseudo-roles out of the wire payload.
     pub fn build_request_params(&self, next_user: &str) -> Value {
         let mut messages: Vec<Value> = self
             .history
@@ -169,11 +169,6 @@ impl ChatView {
         }));
         let mut obj = serde_json::Map::new();
         obj.insert("messages".into(), Value::Array(messages));
-        if let Some(sys) = &self.system
-            && !sys.is_empty()
-        {
-            obj.insert("system".into(), Value::String(sys.clone()));
-        }
         obj.insert(
             "temperature".into(),
             serde_json::json!(DEFAULT_TEMPERATURE),
@@ -185,17 +180,24 @@ impl ChatView {
         Value::Object(obj)
     }
 
-    /// State-machine entry: a successful `llm.prompt` response landed.
+    /// State-machine entry: a successful `agent.chat` response landed.
     /// Appends the assistant text to history and clears the in-flight
     /// flag. Pure function over [`Value`] so tests can drive it without
     /// any RPC plumbing.
+    ///
+    /// Tool-call rendering as collapsible bubbles lands in commit 9
+    /// (plan §11.4); the spike just shows the final assistant text.
+    /// Both old `{ completion: "..." }` and new
+    /// `{ assistant_text: "..." }` shapes are accepted to make rolling
+    /// the wasm bundle and the daemon independently safe.
     pub fn on_response_ok(&mut self, response: &Value) {
-        let completion = response
-            .get("completion")
+        let text = response
+            .get("assistant_text")
+            .or_else(|| response.get("completion"))
             .and_then(Value::as_str)
             .unwrap_or("(empty completion)");
         self.history
-            .push(ChatMessage::assistant(completion.to_string()));
+            .push(ChatMessage::assistant(text.to_string()));
         self.pending = None;
     }
 
@@ -240,7 +242,7 @@ impl ChatView {
         let (tx, rx) = live::reply_channel();
         self.pending = Some(rx);
         live.submit(Command::Raw {
-            method: "llm.prompt".into(),
+            method: "agent.chat".into(),
             params,
             reply: Some(tx),
         });
@@ -525,14 +527,38 @@ mod tests {
     }
 
     #[test]
-    fn serializes_messages_with_system_when_set() {
+    fn serializes_messages_omits_system_field_for_agent_chat() {
+        // The daemon-side concierge owns the system prompt now; the
+        // panel's `system` field is intentionally not sent on the wire
+        // even when set, to prevent panel-side identity injection.
         let mut view = ChatView {
             system: Some("you are concise".into()),
             ..Default::default()
         };
         view.history.push(ChatMessage::user("hi"));
         let params = view.build_request_params("again");
-        assert_eq!(params["system"], "you are concise");
+        assert!(params.get("system").is_none());
+    }
+
+    #[test]
+    fn ok_response_accepts_assistant_text_field() {
+        // `agent.chat` returns `assistant_text`; the panel must accept it
+        // alongside the legacy `completion` field for cross-rev safety.
+        let mut view = ChatView::default();
+        view.history.push(ChatMessage::user("hi"));
+        let response = json!({
+            "assistant_text": "hello from the concierge",
+            "tool_calls": [],
+            "finish_reason": "stop",
+            "iterations": 1,
+            "prompt_tokens": 12,
+            "completion_tokens": 5,
+            "model": "local",
+            "identity_source": "clawft",
+        });
+        view.on_response_ok(&response);
+        assert_eq!(view.history.len(), 2);
+        assert_eq!(view.history[1].content, "hello from the concierge");
     }
 
     #[test]

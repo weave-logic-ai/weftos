@@ -59,7 +59,8 @@ use clawft_platform::NativePlatform;
 use clawft_types::config::{Config, KernelConfig};
 
 use crate::protocol::{
-    self, AgentInspectResult, AgentSendParams, AgentSpawnParams, AgentSpawnResult, AgentStopParams,
+    self, AgentChatParams, AgentChatResult, AgentChatToolCall, AgentInspectResult,
+    AgentSendParams, AgentSpawnParams, AgentSpawnResult, AgentStopParams,
     AgentRestartParams, ClusterJoinParams, ClusterLeaveParams, ClusterNodeInfo,
     ClusterStatusResult, CronAddParams, CronJobInfo, CronRemoveParams, IpcPublishParams,
     IpcSubscribeParams, IpcTopicInfo, KernelStatusResult, LogEntry, LogsParams, ProcessInfo,
@@ -2078,6 +2079,450 @@ async fn handle_llm_prompt(
     }
 }
 
+// ── Agent chat (Concierge) — vertical-slice spike (commit 0) ────────
+//
+// `agent.chat` builds an identity-aware system prompt, exposes a small
+// built-in tool surface (read_file, list_directory) bounded to the
+// daemon CWD, and runs a tool-call loop against the local LLM until the
+// model returns text.
+//
+// What this is NOT (yet — landing in commits 1-9):
+// - No gate.check / EffectVector evaluation per tool call.
+// - No SOUL.journal append, no soul-promote.
+// - No ContextRouter; the system prompt is fixed.
+// - No substrate-backed conversation history; the panel sends the full
+//   history each turn (mirrors `llm.prompt`).
+// - No per-conversation cost circuit-breaker.
+// - Tool surface is hardcoded to two file-read tools, not the
+//   `clawft-tools` registry.
+// - No heartbeat to `derived/chat/<conv>/status`.
+//
+// Plan: `docs/plans/chat-agent-v1.md` §14 commit (0).
+
+const AGENT_CHAT_MAX_ITERATIONS: u32 = 10;
+const AGENT_CHAT_RESULT_PREVIEW_BYTES: usize = 1024;
+const AGENT_CHAT_FILE_READ_LIMIT_BYTES: usize = 256 * 1024;
+const AGENT_CHAT_DIR_ENTRY_LIMIT: usize = 200;
+
+/// Handle `agent.chat`: identity-aware tool-using chat against the
+/// local LLM. See module-level commentary above.
+async fn handle_agent_chat(
+    params: serde_json::Value,
+    _kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    let p: AgentChatParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("invalid params: {e}")),
+    };
+
+    if p.messages.is_empty() {
+        return Response::error("invalid params: messages was empty");
+    }
+
+    // Honor the `llm` control flag — same semantics as `llm.prompt`.
+    if let Some(state) = daemon_control()
+        && let Some(flag) = state.flags.get(ControlKind::Service, "llm")
+        && !flag.load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Response::error("llm service is disabled (toggle on via control.set_enabled)");
+    }
+
+    let client = match daemon_llm() {
+        Some(c) => c,
+        None => {
+            return Response::error(
+                "llm service not initialized (check daemon boot log for 'llm client init failed')",
+            );
+        }
+    };
+
+    // Workspace = daemon CWD for the spike. Plan §15.4 lifts this into
+    // `agent.workspace_root` config in commit 6+.
+    let workspace = match std::env::current_dir() {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("agent: cwd unavailable: {e}")),
+    };
+
+    // Identity load. Spike falls back to docs/skills/clawft/ when
+    // .clawft/ hasn't been seeded by `weaver init` yet.
+    let loader = clawft_core::agent::identity::IdentityLoader::new(&workspace);
+    let identity = match loader.current() {
+        Some(id) => id,
+        None => {
+            return Response::error(
+                "agent: identity load failed: neither .clawft/ nor docs/skills/clawft/ \
+                 has both SOUL.md and IDENTITY.md",
+            );
+        }
+    };
+
+    // System prompt: identity + workspace + tool intro. Minimal — the
+    // full SystemPromptBuilder lands in commit 3.
+    let system_prompt = build_concierge_system_prompt(&identity, &workspace);
+
+    // Translate panel messages to the service-llm wire shape, prepending
+    // our system prompt. If the panel already passed a `system` turn,
+    // we keep ours first (the panel's role is informational; ours is
+    // the operating identity).
+    let mut messages: Vec<clawft_service_llm::ChatMessage> = Vec::with_capacity(p.messages.len() + 1);
+    messages.push(clawft_service_llm::ChatMessage::system(system_prompt));
+    for m in &p.messages {
+        // Skip any UI-only error pseudo-roles the panel might leak.
+        if m.role == "error" {
+            continue;
+        }
+        messages.push(clawft_service_llm::ChatMessage {
+            role: m.role.clone(),
+            content: m.content.clone(),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+    }
+
+    // Tool catalog for the spike: read_file + list_directory, bounded
+    // to `workspace`. Both are stringly-defined here (rather than going
+    // through `clawft-tools::register_all`) so the spike has zero
+    // cross-crate wiring.
+    let tools = build_concierge_tools();
+
+    // Tool loop.
+    let mut iterations: u32 = 0;
+    let mut prompt_tokens: u32 = 0;
+    let mut completion_tokens: u32 = 0;
+    let mut model_name: Option<String> = None;
+    let mut tool_call_summaries: Vec<AgentChatToolCall> = Vec::new();
+    let finish_reason: String;
+    let mut assistant_text: String = String::new();
+
+    loop {
+        iterations += 1;
+        if iterations > AGENT_CHAT_MAX_ITERATIONS {
+            finish_reason = "max_iterations".into();
+            break;
+        }
+
+        let resp = match client
+            .complete_with_tools(
+                messages.clone(),
+                tools.clone(),
+                None,
+                p.temperature,
+                p.max_tokens,
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Response::error(format!("agent.chat: {e}")),
+        };
+
+        if model_name.is_none() {
+            model_name.clone_from(&resp.model);
+        }
+        prompt_tokens = prompt_tokens.saturating_add(resp.usage.prompt_tokens);
+        completion_tokens = completion_tokens.saturating_add(resp.usage.completion_tokens);
+
+        let choice = match resp.choices.into_iter().next() {
+            Some(c) => c,
+            None => return Response::error("agent.chat: empty choices in response"),
+        };
+        let assistant_msg = choice.message;
+        let calls = assistant_msg.tool_calls.clone().unwrap_or_default();
+
+        if calls.is_empty() {
+            // Terminal turn: assistant produced text, no further tools.
+            assistant_text = assistant_msg.content.clone();
+            finish_reason = choice.finish_reason.unwrap_or_else(|| "stop".into());
+            messages.push(assistant_msg);
+            break;
+        }
+
+        // Append the assistant tool-use turn so the next round-trip has
+        // the correct (assistant tool_use → tool result → ...) shape.
+        messages.push(assistant_msg);
+
+        // Execute each requested tool and append the corresponding tool
+        // turn to `messages`.
+        for call in calls {
+            let summary = execute_concierge_tool(&workspace, &call);
+            messages.push(clawft_service_llm::ChatMessage::tool(
+                call.id.clone(),
+                summary.full_result.clone(),
+            ));
+            tool_call_summaries.push(AgentChatToolCall {
+                name: summary.name,
+                arguments_preview: summary.arguments_preview,
+                result_preview: summary.result_preview,
+                success: summary.success,
+            });
+        }
+    }
+
+    let result = AgentChatResult {
+        assistant_text,
+        tool_calls: tool_call_summaries,
+        finish_reason,
+        iterations,
+        prompt_tokens,
+        completion_tokens,
+        model: model_name,
+        identity_source: Some(identity.source.into()),
+    };
+    Response::success(serde_json::to_value(result).unwrap())
+}
+
+/// Build the spike system prompt: identity (SOUL+IDENTITY), workspace,
+/// and a brief tool intro. Plan §9 spec lands in commit 3.
+fn build_concierge_system_prompt(
+    identity: &clawft_core::agent::identity::Identity,
+    workspace: &std::path::Path,
+) -> String {
+    let mut s = String::with_capacity(
+        identity.soul.len() + identity.identity.len() + 1024,
+    );
+    s.push_str("# WeftOS Concierge — Operating Identity\n\n");
+    s.push_str("## SOUL.md\n\n");
+    s.push_str(&identity.soul);
+    s.push_str("\n\n## IDENTITY.md\n\n");
+    s.push_str(&identity.identity);
+    s.push_str("\n\n## Workspace\n\n");
+    s.push_str(&format!("- Workspace root: `{}`\n", workspace.display()));
+    s.push_str(
+        "- Use `read_file` to inspect specific files (e.g. README, CLAUDE.md, agent profiles).\n",
+    );
+    s.push_str(
+        "- Use `list_directory` to enumerate workspace contents before reading.\n",
+    );
+    s.push_str(
+        "- All paths are workspace-relative or absolute under the workspace root; \
+         attempts to escape the root are denied.\n\n",
+    );
+    s.push_str("## Working style\n\n");
+    s.push_str(
+        "When the user asks about the project or its components, prefer reading the \
+         actual files (README, CLAUDE.md, agents/, docs/) over speculation. Cite the \
+         specific files you consulted in your answer.\n",
+    );
+    s
+}
+
+/// Build the OpenAI-compatible tool catalog for the spike. Two tools,
+/// both read-only and workspace-bounded.
+fn build_concierge_tools() -> Vec<clawft_service_llm::Tool> {
+    vec![
+        clawft_service_llm::Tool::function(
+            "read_file",
+            "Read a UTF-8 text file from the workspace. Returns the file contents truncated \
+             at 256 KiB. Path is workspace-relative; absolute paths must remain under the \
+             workspace root.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative or absolute path to the file."
+                    }
+                },
+                "required": ["path"]
+            }),
+        ),
+        clawft_service_llm::Tool::function(
+            "list_directory",
+            "List entries (files and subdirectories) in a workspace directory. Returns up \
+             to 200 entries with type and name; truncates with a notice if exceeded.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative or absolute directory path. \
+                                       Use \".\" for the workspace root."
+                    }
+                },
+                "required": ["path"]
+            }),
+        ),
+    ]
+}
+
+struct ConciergeToolOutput {
+    name: String,
+    arguments_preview: String,
+    result_preview: String,
+    full_result: String,
+    success: bool,
+}
+
+/// Dispatch one tool call against the spike's built-in tools.
+/// Workspace-bounded; never panics; failures surface as
+/// `success: false` with a human-readable error string.
+fn execute_concierge_tool(
+    workspace: &std::path::Path,
+    call: &clawft_service_llm::ToolCall,
+) -> ConciergeToolOutput {
+    let name = call.function.name.clone();
+    let arguments_preview = truncate_for_preview(&call.function.arguments, 256);
+
+    let args: serde_json::Value = match serde_json::from_str(&call.function.arguments) {
+        Ok(v) => v,
+        Err(e) => {
+            let err = format!("invalid arguments JSON: {e}");
+            return ConciergeToolOutput {
+                full_result: err.clone(),
+                result_preview: truncate_for_preview(&err, AGENT_CHAT_RESULT_PREVIEW_BYTES),
+                arguments_preview,
+                name,
+                success: false,
+            };
+        }
+    };
+
+    let outcome: Result<String, String> = match name.as_str() {
+        "read_file" => concierge_read_file(workspace, &args),
+        "list_directory" => concierge_list_directory(workspace, &args),
+        other => Err(format!("unknown tool: {other}")),
+    };
+
+    let (success, full_result) = match outcome {
+        Ok(s) => (true, s),
+        Err(e) => (false, format!("error: {e}")),
+    };
+    ConciergeToolOutput {
+        result_preview: truncate_for_preview(&full_result, AGENT_CHAT_RESULT_PREVIEW_BYTES),
+        full_result,
+        arguments_preview,
+        name,
+        success,
+    }
+}
+
+fn concierge_read_file(
+    workspace: &std::path::Path,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let path_str = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing required argument: path".to_string())?;
+    let resolved = resolve_workspace_path(workspace, path_str)?;
+    if !resolved.is_file() {
+        return Err(format!(
+            "path is not a regular file: {}",
+            resolved.display()
+        ));
+    }
+    let bytes = std::fs::read(&resolved)
+        .map_err(|e| format!("read failed: {e}"))?;
+    let truncated = bytes.len() > AGENT_CHAT_FILE_READ_LIMIT_BYTES;
+    let view = if truncated {
+        &bytes[..AGENT_CHAT_FILE_READ_LIMIT_BYTES]
+    } else {
+        &bytes[..]
+    };
+    let mut text = String::from_utf8_lossy(view).into_owned();
+    if truncated {
+        text.push_str(&format!(
+            "\n\n[truncated: file is {} bytes, returning first {} bytes]",
+            bytes.len(),
+            AGENT_CHAT_FILE_READ_LIMIT_BYTES
+        ));
+    }
+    Ok(text)
+}
+
+fn concierge_list_directory(
+    workspace: &std::path::Path,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let path_str = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing required argument: path".to_string())?;
+    let resolved = resolve_workspace_path(workspace, path_str)?;
+    if !resolved.is_dir() {
+        return Err(format!(
+            "path is not a directory: {}",
+            resolved.display()
+        ));
+    }
+    let entries = std::fs::read_dir(&resolved)
+        .map_err(|e| format!("read_dir failed: {e}"))?;
+    let mut listed: Vec<(String, &'static str)> = Vec::new();
+    let mut total: usize = 0;
+    for entry in entries.flatten() {
+        total += 1;
+        if listed.len() >= AGENT_CHAT_DIR_ENTRY_LIMIT {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let kind = match entry.file_type() {
+            Ok(ft) if ft.is_dir() => "dir",
+            Ok(ft) if ft.is_file() => "file",
+            Ok(ft) if ft.is_symlink() => "symlink",
+            _ => "other",
+        };
+        listed.push((name, kind));
+    }
+    listed.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut out = String::with_capacity(listed.len() * 32);
+    for (name, kind) in &listed {
+        out.push_str(&format!("{kind}\t{name}\n"));
+    }
+    if total > listed.len() {
+        out.push_str(&format!(
+            "[truncated: {} entries total, showing first {}]\n",
+            total,
+            listed.len()
+        ));
+    }
+    Ok(out)
+}
+
+/// Resolve a tool-supplied path against the workspace root, rejecting
+/// any traversal that would escape the root. Accepts both relative and
+/// absolute paths; the absolute case still must canonicalize to inside
+/// the workspace.
+fn resolve_workspace_path(
+    workspace: &std::path::Path,
+    raw: &str,
+) -> Result<std::path::PathBuf, String> {
+    let candidate = std::path::Path::new(raw);
+    let joined = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        workspace.join(candidate)
+    };
+    // Canonicalize the workspace and the candidate's existing parent so
+    // we can compare prefixes even when the file itself doesn't exist.
+    let ws_canon = workspace
+        .canonicalize()
+        .map_err(|e| format!("workspace canonicalize failed: {e}"))?;
+    // For canonicalize to work the path must exist; for read tools it
+    // does. If a future write tool needs not-yet-created paths this gets
+    // refined.
+    let target_canon = joined
+        .canonicalize()
+        .map_err(|e| format!("path canonicalize failed: {e}"))?;
+    if !target_canon.starts_with(&ws_canon) {
+        return Err(format!(
+            "path escapes workspace root: {}",
+            target_canon.display()
+        ));
+    }
+    Ok(target_canon)
+}
+
+fn truncate_for_preview(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    // Find a UTF-8 char boundary at or before max_bytes.
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
+}
+
 // ── Terminal (PTY) RPC handlers ─────────────────────────────────────
 //
 // All four handlers share two preconditions:
@@ -3107,6 +3552,7 @@ async fn dispatch(
         "control.set_enabled" => handle_control_set_enabled(params, kernel).await,
         "control.list" => handle_control_list(params, kernel).await,
         "llm.prompt" => handle_llm_prompt(params, kernel).await,
+        "agent.chat" => handle_agent_chat(params, kernel).await,
         "terminal.spawn" => handle_terminal_spawn(params, kernel).await,
         "terminal.write" => handle_terminal_write(params, kernel).await,
         "terminal.resize" => handle_terminal_resize(params, kernel).await,
