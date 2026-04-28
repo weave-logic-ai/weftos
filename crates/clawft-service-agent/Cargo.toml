@@ -82,3 +82,12 @@ async-trait = { workspace = true }
 # The stub returns `OutboundMessage` directly, so the test depends
 # on the same shared types as the production code.
 clawft-types = { workspace = true, features = ["native"] }
+
+# F3 (`tests/witness_chain.rs`) drives a real `AgentLoop` end-to-end
+# against a real kernel `GovernanceGate` + `ChainManager`, with the
+# loop wired hermetically per `loop_core::tests::make_agent_loop`
+# (~30 lines reproduced inline). The test references `NativePlatform`
+# by name (already a transitive dep through `clawft-core`'s native
+# feature, but pinned explicitly so a future feature-flag flip
+# doesn't silently break the test build).
+clawft-platform = { workspace = true, features = ["native"] }

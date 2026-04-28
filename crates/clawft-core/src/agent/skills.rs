@@ -222,9 +222,15 @@ impl<P: Platform> SkillsLoader<P> {
         }
     }
 
-    /// Create a skills loader with an explicit directory (for testing).
-    #[cfg(test)]
-    pub(crate) fn with_dir(skills_dir: PathBuf, platform: Arc<P>) -> Self {
+    /// Create a skills loader with an explicit skills directory.
+    ///
+    /// Skips the home-directory resolution that [`Self::new`] performs;
+    /// useful for hermetic tests (point at a temp dir) and for
+    /// embedded callers that want a custom skills root. Public so
+    /// workspace-level integration tests outside `clawft-core` can
+    /// compose an isolated `AgentLoop` without scanning the user's
+    /// real `~/.clawft/skills`.
+    pub fn with_dir(skills_dir: PathBuf, platform: Arc<P>) -> Self {
         Self {
             skills_dir,
             extra_dirs: Vec::new(),
