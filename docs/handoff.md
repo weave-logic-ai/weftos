@@ -63,6 +63,16 @@ all return exit 0.
 - **Agent-side journal write**: F2 lands the operator side of `weaver soul promote`; the agent's self-observation write path (during chat turns) is deferred. With an empty journal the command exits cleanly.
 - **C3 monotonic-ULID test flake**: `append_turns_are_monotonic` occasionally fails when two appends land in the same ms. Pre-existing from C3; not a new issue.
 - **v3 `MicroLoraRouter`**: explicitly deferred until `ruvllm-wasm` lifts the documented 11-pattern HNSW cap (`docs/research/rvf-context-router.md:118-128`). E3's `HybridRouter` left a `TODO(agent-core-v1 phase E3+)` marker.
+- **Worktree + branch cleanup**: 12 `agent-core/*` worktrees remain locked under `.claude/worktrees/` (one per parallel commit dispatched this session — A3, A4, B1+B2, C1, C2, C3, D1, D2, E1, F1, F2, F3). Once you've smoke-tested a real `weaver` boot and confirmed `agent.chat` runs end-to-end through the new path, run:
+  ```bash
+  for wt in /home/aepod/dev/clawft/.claude/worktrees/agent-*; do
+      git worktree remove "$wt"
+  done
+  for b in $(git branch --list 'agent-core/*'); do
+      git branch -d "$b"   # safe: -d only deletes merged branches
+  done
+  ```
+  Don't push to origin or run the cleanup until live boot smoke is green; the worktrees are the rollback escape hatch.
 
 ## Architectural shape post-F2
 
@@ -97,7 +107,7 @@ LLM
 
 - Working tree: clean.
 - `git status -sb`: `## development-0.7.0...origin/development-0.7.0 [ahead 78]`.
-- Three locked agent-core/* worktrees retained from this session's parallel work (D1, D2, F2). Safe to `git worktree remove` once you've verified the merges.
+- 12 locked `agent-core/*` worktrees retained from this session's parallel work (one per commit dispatched in isolation). Cleanup steps in the "Known follow-ups" list above; do that after live-boot smoke testing, not before.
 - Nothing pushed yet.
 
 ---
