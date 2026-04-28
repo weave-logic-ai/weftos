@@ -92,6 +92,18 @@ impl LlmConfig {
     }
 }
 
+/// Maps an absent or `null` JSON `content` to an empty string. Some
+/// OpenAI-compatible providers (notably OpenRouter routing to certain
+/// upstreams like Nvidia Nemotron) emit `"content": null` alongside
+/// `tool_calls` instead of `"content": ""`. Plain `#[serde(default)]`
+/// only covers the missing-field case, not the explicit-null case.
+fn null_or_missing_to_empty<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
+}
+
 /// One message in a chat completion conversation.
 ///
 /// `role` is one of `"system"`, `"user"`, `"assistant"`, `"tool"`. We
@@ -108,8 +120,10 @@ pub struct ChatMessage {
     /// Role: `system` / `user` / `assistant` / `tool`.
     pub role: String,
     /// Message content. Empty string for tool-call-only assistant
-    /// turns; OpenAI-compat servers accept `""` here.
-    #[serde(default)]
+    /// turns. Some providers emit JSON `null` here instead of `""`
+    /// when the assistant turn is purely a tool call; both are
+    /// coerced to an empty string on the way in.
+    #[serde(default, deserialize_with = "null_or_missing_to_empty")]
     pub content: String,
     /// Tool calls produced by the assistant. Present on assistant
     /// messages whose `finish_reason` is `"tool_calls"`.
@@ -999,6 +1013,64 @@ mod tests {
         assert_eq!(calls[0].kind, "function");
         assert_eq!(calls[0].function.name, "list_files");
         assert!(calls[0].function.arguments.contains("/tmp"));
+        assert_eq!(r.choices[0].finish_reason.as_deref(), Some("tool_calls"));
+    }
+
+    #[tokio::test]
+    async fn complete_with_tools_accepts_null_content() {
+        // OpenRouter via some upstreams (e.g. Nvidia Nemotron) returns
+        // `"content": null` on tool-call turns instead of `"content": ""`.
+        // The wire shape is OpenAI-compatible; the deserializer must
+        // coerce null -> "" so the agent loop can keep going.
+        let server = MockServer::start().await;
+        let body = r#"{
+            "id": "gen-1-null-content",
+            "model": "nvidia/nemotron-3-super-120b-a12b-20230311:free",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "chatcmpl-tool-null-1",
+                        "type": "function",
+                        "function": {
+                            "name": "memory_read",
+                            "arguments": "{\"query\":\"\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }"#;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+        let client = LlmClient::new(test_config(server.uri())).unwrap();
+        let r = client
+            .complete_with_tools(
+                vec![ChatMessage::user("how complete is the project?")],
+                vec![Tool::function(
+                    "memory_read",
+                    "Read project memory",
+                    serde_json::json!({"type":"object"}),
+                )],
+                Some(ToolChoice::Auto),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.choices[0].message.content, "");
+        let calls = r.choices[0]
+            .message
+            .tool_calls
+            .as_ref()
+            .expect("tool_calls present");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "memory_read");
         assert_eq!(r.choices[0].finish_reason.as_deref(), Some("tool_calls"));
     }
 
