@@ -121,6 +121,41 @@ pub async fn load_config_raw(
             }
         }
 
+    // Layer 3: workspace JSON overlay from cwd `.clawft/config.json`.
+    // Most-specific wins — when a kernel runs inside a workspace, the
+    // workspace's config dictates policy (channel permissions, routing
+    // tiers, identity binding, etc.) while the home-dir config remains
+    // the fallback for fields the workspace does not redeclare.
+    //
+    // This restores per-workspace policy that was lost when the loader
+    // stopped reading cwd JSON; matches the convention used by `git`,
+    // `npm`, etc. (most-specific config wins).
+    let workspace_path = PathBuf::from(".clawft").join("config.json");
+    if fs.exists(&workspace_path).await {
+        tracing::debug!(
+            path = %workspace_path.display(),
+            "loading workspace config overlay"
+        );
+        match fs.read_to_string(&workspace_path).await {
+            Ok(contents) => match serde_json::from_str::<Value>(&contents) {
+                Ok(json_value) => {
+                    let normalized = normalize_keys(json_value);
+                    deep_merge(&mut merged, &normalized);
+                }
+                Err(e) => tracing::warn!(
+                    path = %workspace_path.display(),
+                    error = %e,
+                    "failed to parse workspace config; ignoring overlay"
+                ),
+            },
+            Err(e) => tracing::warn!(
+                path = %workspace_path.display(),
+                error = %e,
+                "failed to read workspace config; ignoring overlay"
+            ),
+        }
+    }
+
     if merged.as_object().is_none_or(|m| m.is_empty()) {
         tracing::info!("no config found (checked weave.toml + JSON), using defaults");
     }
@@ -410,5 +445,150 @@ mod tests {
             Some(PathBuf::from("/tmp/clawft_test_nonexistent_home")),
         );
         assert_eq!(result, None);
+    }
+
+    // ── Workspace overlay tests (Layer 3 of load_config_raw) ─────────
+    //
+    // The minimal MockFs below only implements the methods load_config_raw
+    // calls (`exists`, `read_to_string`, `home_dir`). Every other method
+    // panics with `unimplemented!()` so an accidental call in a future
+    // refactor surfaces immediately instead of silently no-oping.
+
+    use async_trait::async_trait;
+    use std::collections::HashMap;
+    use std::path::Path;
+    use std::sync::Mutex;
+
+    struct MockFs {
+        home: Option<PathBuf>,
+        files: Mutex<HashMap<PathBuf, String>>,
+    }
+
+    impl MockFs {
+        fn new(home: Option<PathBuf>) -> Self {
+            Self {
+                home,
+                files: Mutex::new(HashMap::new()),
+            }
+        }
+
+        fn with_file(self, path: impl Into<PathBuf>, contents: &str) -> Self {
+            self.files
+                .lock()
+                .unwrap()
+                .insert(path.into(), contents.to_string());
+            self
+        }
+    }
+
+    #[async_trait]
+    impl super::super::fs::FileSystem for MockFs {
+        async fn read_to_string(&self, path: &Path) -> std::io::Result<String> {
+            self.files
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "not found"))
+        }
+        async fn write_string(&self, _: &Path, _: &str) -> std::io::Result<()> {
+            unimplemented!()
+        }
+        async fn append_string(&self, _: &Path, _: &str) -> std::io::Result<()> {
+            unimplemented!()
+        }
+        async fn exists(&self, path: &Path) -> bool {
+            self.files.lock().unwrap().contains_key(path)
+        }
+        async fn list_dir(&self, _: &Path) -> std::io::Result<Vec<PathBuf>> {
+            unimplemented!()
+        }
+        async fn create_dir_all(&self, _: &Path) -> std::io::Result<()> {
+            unimplemented!()
+        }
+        async fn remove_file(&self, _: &Path) -> std::io::Result<()> {
+            unimplemented!()
+        }
+        fn home_dir(&self) -> Option<PathBuf> {
+            self.home.clone()
+        }
+    }
+
+    fn workspace_config_path() -> PathBuf {
+        PathBuf::from(".clawft").join("config.json")
+    }
+
+    // The home-layer (Layer 2) goes through `discover_config_path`,
+    // which uses a sync `Path::exists()` against the *real* filesystem
+    // — it cannot be exercised with a mock `FileSystem`. These tests
+    // therefore focus on the new workspace overlay (Layer 3), which
+    // does flow through `fs.exists()` / `fs.read_to_string()` and is
+    // mockable. End-to-end behaviour (workspace overrides home with
+    // both layers populated) is covered by the live smoke test.
+
+    #[tokio::test]
+    async fn workspace_overlay_applied_when_present() {
+        // Workspace declares an agent.chat channel at level 2; with
+        // no other layer present, the overlay must surface it.
+        let workspace = r#"{
+            "routing": {
+                "permissions": {
+                    "channels": { "agent.chat": { "level": 2 } }
+                }
+            }
+        }"#;
+        // Home dir set to a path that won't exist on the real fs so
+        // discover_config_path returns None (Layer 2 inert).
+        let fs = MockFs::new(Some(PathBuf::from("/tmp/clawft_test_no_home_xyz")))
+            .with_file(workspace_config_path(), workspace);
+        let env = MockEnv::new();
+        let merged = load_config_raw(&fs, &env).await.unwrap();
+        let lvl = merged
+            .pointer("/routing/permissions/channels/agent.chat/level")
+            .and_then(Value::as_u64)
+            .expect("level present after overlay");
+        assert_eq!(lvl, 2);
+    }
+
+    #[tokio::test]
+    async fn workspace_overlay_skipped_when_absent() {
+        // No workspace config + no home config (real fs path missing)
+        // = empty merged result, behaviour matches pre-fix.
+        let fs = MockFs::new(Some(PathBuf::from("/tmp/clawft_test_no_home_xyz")));
+        let env = MockEnv::new();
+        let merged = load_config_raw(&fs, &env).await.unwrap();
+        assert!(
+            merged.as_object().map(|m| m.is_empty()).unwrap_or(true),
+            "no layers present should yield empty merged config"
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_overlay_invalid_json_is_ignored() {
+        // Malformed workspace JSON must not abort load_config_raw —
+        // the overlay is best-effort. Other layers continue to apply.
+        let fs = MockFs::new(Some(PathBuf::from("/tmp/clawft_test_no_home_xyz")))
+            .with_file(workspace_config_path(), "{ this is not json");
+        let env = MockEnv::new();
+        let merged = load_config_raw(&fs, &env).await.unwrap();
+        assert!(merged.is_object(), "loader returns ok despite parse failure");
+    }
+
+    #[tokio::test]
+    async fn workspace_overlay_keys_are_normalized_to_snake_case() {
+        // Workspace JSON uses camelCase (matches the existing config
+        // file convention); load_config_raw normalizes via
+        // `normalize_keys` before merging.
+        let workspace = r#"{ "agentDefaults": { "maxTokens": 8192 } }"#;
+        let fs = MockFs::new(Some(PathBuf::from("/tmp/clawft_test_no_home_xyz")))
+            .with_file(workspace_config_path(), workspace);
+        let env = MockEnv::new();
+        let merged = load_config_raw(&fs, &env).await.unwrap();
+        assert_eq!(
+            merged
+                .pointer("/agent_defaults/max_tokens")
+                .and_then(Value::as_u64),
+            Some(8192)
+        );
     }
 }
