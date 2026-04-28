@@ -692,14 +692,19 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
             Arc::new(clawft_service_agent::KernelEffectGate::new(backend))
         };
 
-        // agent-core-v1 Phase E1: pick the ContextRouter implementation
+        // agent-core-v1 Phase E1/E2: pick the ContextRouter implementation
         // from `config.routing.context_router`. v0 `"null"` (the
         // default) hands `None` to `build_daemon_agent_loop`, which
         // keeps `AgentLoop`'s built-in `NullRouter` live so behaviour
         // is bit-for-bit unchanged. v1 `"llm-classifier"` builds an
         // `LlmClassifierRouter` over the same `LlmClient` the daemon
         // already uses (so OpenRouter / local llama-server both keep
-        // working without a second connection).
+        // working without a second connection). v2 `"embedding"`
+        // (Phase E2) builds an `EmbeddingRouter` over a
+        // `ruvector-diskann@2.1` index of the discovered skill
+        // descriptors. The embedder is `ApiEmbedder` (production —
+        // OpenAI-compat `/embeddings`) when `OPENAI_API_KEY` is set,
+        // else `HashEmbedder` as the deterministic offline floor.
         //
         // Per `docs/research/rvf-context-router.md`, the router NEVER
         // picks a model and NEVER escalates a tier — `TieredRouter`
@@ -718,6 +723,106 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
                         llm_for_agent.clone(),
                     ),
                 ))
+            }
+            "embedding" => {
+                // E2: discover skills from the workspace + user dirs.
+                // Same paths the CLI uses (`weft agent`); see
+                // `clawft-cli/src/commands/agent.rs::discover_skill_dirs`.
+                let user_skill_dir = dirs::home_dir()
+                    .map(|h| h.join(".clawft").join("skills"));
+                let ws_skill_dir = {
+                    let mut dir = workspace.as_path();
+                    let mut found: Option<std::path::PathBuf> = None;
+                    loop {
+                        let candidate = dir.join(".clawft").join("skills");
+                        if candidate.is_dir() {
+                            found = Some(candidate);
+                            break;
+                        }
+                        match dir.parent() {
+                            Some(parent) => dir = parent,
+                            None => break,
+                        }
+                    }
+                    found
+                };
+
+                let skills_result =
+                    clawft_core::agent::skills_v2::SkillRegistry::discover(
+                        ws_skill_dir.as_deref(),
+                        user_skill_dir.as_deref(),
+                        Vec::new(),
+                    )
+                    .await;
+
+                match skills_result {
+                    Ok(skills) if skills.is_empty() => {
+                        warn!(
+                            "agent-core: ContextRouter v2 (EmbeddingRouter) requested but \
+                             skill registry is empty; falling back to NullRouter"
+                        );
+                        None
+                    }
+                    Ok(skills) => {
+                        // Pick ApiEmbedder when an API key is configured,
+                        // else the hash-only floor. ApiEmbedder itself
+                        // collapses to its SHA-256 fallback per-call when
+                        // the API errors, so production stays robust.
+                        let embedder: Arc<
+                            dyn clawft_core::embeddings::Embedder,
+                        > = if std::env::var("OPENAI_API_KEY")
+                            .map(|s| !s.is_empty())
+                            .unwrap_or(false)
+                        {
+                            info!(
+                                "agent-core: EmbeddingRouter using ApiEmbedder \
+                                 (OpenAI-compat /embeddings)"
+                            );
+                            Arc::new(
+                                clawft_core::embeddings::api_embedder::ApiEmbedder::with_defaults(),
+                            )
+                        } else {
+                            info!(
+                                "agent-core: EmbeddingRouter using ApiEmbedder \
+                                 hash-only fallback (no OPENAI_API_KEY set)"
+                            );
+                            Arc::new(
+                                clawft_core::embeddings::api_embedder::ApiEmbedder::hash_only(384),
+                            )
+                        };
+
+                        match clawft_core::agent::context_router::EmbeddingRouter::new(
+                            embedder, &skills,
+                        )
+                        .await
+                        {
+                            Ok(r) => {
+                                info!(
+                                    router = "embedding",
+                                    skills = skills.len(),
+                                    "agent-core: ContextRouter v2 (EmbeddingRouter) live"
+                                );
+                                Some(Arc::new(r) as Arc<
+                                    dyn clawft_core::agent::context_router::ContextRouter,
+                                >)
+                            }
+                            Err(e) => {
+                                warn!(
+                                    error = %e,
+                                    "agent-core: EmbeddingRouter build failed; falling back to NullRouter"
+                                );
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            "agent-core: skill discovery failed; EmbeddingRouter unavailable, falling back to NullRouter"
+                        );
+                        None
+                    }
+                }
             }
             "null" => {
                 info!(

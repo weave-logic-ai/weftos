@@ -1163,6 +1163,7 @@ dependencies = [
  "percent-encoding",
  "rand 0.8.5",
  "reqwest 0.12.28",
+ "ruvector-diskann",
  "rvf-runtime",
  "rvf-types",
  "serde",

@@ -90,8 +90,14 @@ pub struct RoutingConfig {
     /// - `"llm-classifier"` — v1 [`LlmClassifierRouter`]: round-trips
     ///   the user's message against the daemon's `LlmClient` and reads
     ///   back `{archetype, complexity}`. v1 → v2 promotion gate (7-day
-    ///   fallback rate < 25%) is a future commit; E1 just lands the
-    ///   impl + this flag.
+    ///   fallback rate < 25%) is policy, not code.
+    /// - `"embedding"` — v2 `EmbeddingRouter` (Phase E2): builds an
+    ///   in-memory `ruvector-diskann@2.1` index over hand-authored
+    ///   skill descriptors at boot, retrieves top-K nearest skills per
+    ///   turn via the crate-local `Embedder` trait (production:
+    ///   `ApiEmbedder` against an OpenAI-compat `/embeddings`;
+    ///   fallback: `HashEmbedder` SHA-256 floor). Promotion to v2.5
+    ///   `HybridRouter` ships in E3.
     ///
     /// [`NullRouter`]: ../../clawft_core/agent/context_router/struct.NullRouter.html
     /// [`LlmClassifierRouter`]: ../../clawft_core/agent/context_router/llm_classifier/struct.LlmClassifierRouter.html
