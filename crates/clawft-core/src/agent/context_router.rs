@@ -179,6 +179,23 @@ pub use llm_classifier::{
     DEFAULT_CLASSIFIER_MAX_TOKENS,
 };
 
+// ── v2: EmbeddingRouter ──────────────────────────────────────────────────
+
+// Phase E2: the embedding-similarity router lives in the `embedding`
+// submodule and is re-exported here under the `vector-memory` feature
+// gate (it depends on the crate-local [`Embedder`](crate::embeddings)
+// trait, which itself is `vector-memory`-only). The split keeps this
+// file under the 500-line CLAUDE.md cap and lets the offline build
+// (no `vector-memory`) skip the heavyweight Embedder + index plumbing.
+#[cfg(feature = "vector-memory")]
+pub mod embedding;
+
+#[cfg(feature = "vector-memory")]
+pub use embedding::{
+    EmbeddingRouter, EmbeddingRouterError, DEFAULT_CONFIDENCE_THRESHOLD, DEFAULT_TOP_K,
+    FALLBACK_TRACING_TARGET,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

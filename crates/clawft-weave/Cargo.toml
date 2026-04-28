@@ -41,7 +41,7 @@ rvf-rpc = ["dep:weftos-rvf-wire", "dep:rvf-types"]
 agent-core-chat = []
 
 [dependencies]
-clawft-core = { workspace = true, features = ["native"] }
+clawft-core = { workspace = true, features = ["native", "rvf", "embedding-router"] }
 eml-core = { workspace = true }
 clawft-graphify = { workspace = true, default-features = false }
 clawft-kernel = { workspace = true, features = ["native"] }

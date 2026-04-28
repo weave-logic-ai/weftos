@@ -16,7 +16,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["full", "native"]
-full = ["rvf", "signing", "vector-memory"]
+full = ["rvf", "signing", "vector-memory", "embedding-router"]
 native = [
     "dep:notify",
     "dep:dirs",
@@ -38,6 +38,12 @@ browser = [
 vector-memory = ["dep:rand", "dep:instant-distance"]
 rvf = ["vector-memory", "dep:rvf-runtime", "dep:rvf-types", "dep:reqwest"]
 signing = ["dep:ed25519-dalek", "dep:rand"]
+# agent-core-v1 Phase E2: enables EmbeddingRouter's production index
+# backed by ruvector-diskann@2.1 (Vamana + PQ + mmap). When the feature
+# is off, the router falls back to an in-memory brute-force cosine
+# index (still O(n) over ~35 skills — measured under a microsecond).
+# Implies vector-memory because the Embedder trait lives there.
+embedding-router = ["vector-memory", "dep:ruvector-diskann"]
 
 [dependencies]
 # Always available
@@ -80,6 +86,9 @@ rand = { workspace = true, optional = true }
 instant-distance = { workspace = true, optional = true }
 rvf-runtime = { workspace = true, optional = true }
 rvf-types = { workspace = true, optional = true }
+# E2 EmbeddingRouter: workspace-pinned at 2.1 (Cargo.toml:176). Vamana
+# graph + PQ + mmap; same crate the kernel uses in vector_diskann.rs.
+ruvector-diskann = { workspace = true, optional = true }
 # sha2 is always-on so identity hashing (Phase D1 of agent-core-v1)
 # works without enabling rvf / signing. Existing rvf / signing
 # features still depend on it transitively (was previously optional).
