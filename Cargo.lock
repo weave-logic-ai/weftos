@@ -1748,6 +1748,7 @@ dependencies = [
  "clawft-kernel",
  "clawft-platform",
  "clawft-rpc",
+ "clawft-service-agent",
  "clawft-service-classify",
  "clawft-service-llm",
  "clawft-service-terminal",

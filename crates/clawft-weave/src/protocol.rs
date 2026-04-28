@@ -627,6 +627,73 @@ pub struct AgentChatParams {
     pub conv_id: String,
 }
 
+/// agent-core-v1 Phase C2: convert the wire-shape `AgentChatParams`
+/// into the canonical `clawft_service_agent::AgentChatParams`. The
+/// two structs are intentional 1:1 mirrors (see
+/// `clawft_service_agent::protocol` module docs); D3 will delete this
+/// duplicate set and replace with a `pub use`. Until then the From
+/// impls keep the daemon's `agent.chat` dispatch one line.
+impl From<AgentChatParams> for clawft_service_agent::AgentChatParams {
+    fn from(p: AgentChatParams) -> Self {
+        clawft_service_agent::AgentChatParams {
+            messages: p
+                .messages
+                .into_iter()
+                .map(clawft_service_agent::AgentChatMessage::from)
+                .collect(),
+            temperature: p.temperature,
+            max_tokens: p.max_tokens,
+            conv_id: p.conv_id,
+        }
+    }
+}
+
+impl From<AgentChatMessage> for clawft_service_agent::AgentChatMessage {
+    fn from(m: AgentChatMessage) -> Self {
+        clawft_service_agent::AgentChatMessage {
+            role: m.role,
+            content: m.content,
+        }
+    }
+}
+
+impl From<AgentChatToolCall> for clawft_service_agent::AgentChatToolCall {
+    fn from(t: AgentChatToolCall) -> Self {
+        clawft_service_agent::AgentChatToolCall {
+            name: t.name,
+            arguments_preview: t.arguments_preview,
+            result_preview: t.result_preview,
+            success: t.success,
+        }
+    }
+}
+
+impl From<clawft_service_agent::AgentChatToolCall> for AgentChatToolCall {
+    fn from(t: clawft_service_agent::AgentChatToolCall) -> Self {
+        AgentChatToolCall {
+            name: t.name,
+            arguments_preview: t.arguments_preview,
+            result_preview: t.result_preview,
+            success: t.success,
+        }
+    }
+}
+
+impl From<clawft_service_agent::AgentChatResult> for AgentChatResult {
+    fn from(r: clawft_service_agent::AgentChatResult) -> Self {
+        AgentChatResult {
+            assistant_text: r.assistant_text,
+            tool_calls: r.tool_calls.into_iter().map(AgentChatToolCall::from).collect(),
+            finish_reason: r.finish_reason,
+            iterations: r.iterations,
+            prompt_tokens: r.prompt_tokens,
+            completion_tokens: r.completion_tokens,
+            model: r.model,
+            identity_source: r.identity_source,
+        }
+    }
+}
+
 /// Default conversation id when the caller omits `conv_id`. Generates
 /// an ephemeral ULID-shaped string (timestamp-prefixed monotonic) so
 /// successive default-id calls don't collide. Phase C will require
@@ -1266,5 +1333,66 @@ mod tests {
         let a = default_conv_id();
         let b = default_conv_id();
         assert_ne!(a, b);
+    }
+
+    // ── agent-core-v1 Phase C2: From-impl coverage ──────────────────
+
+    #[test]
+    fn agent_chat_params_into_service_agent_round_trips() {
+        // The wire-shape AgentChatParams (clawft-weave) must convert
+        // 1:1 into the canonical clawft_service_agent::AgentChatParams.
+        // D3 deletes the duplicate; until then the From impl is the
+        // hinge.
+        let weave_params = AgentChatParams {
+            messages: vec![
+                AgentChatMessage {
+                    role: "system".into(),
+                    content: "you are a test".into(),
+                },
+                AgentChatMessage {
+                    role: "user".into(),
+                    content: "hi".into(),
+                },
+            ],
+            temperature: Some(0.7),
+            max_tokens: Some(256),
+            conv_id: "01HQABC".into(),
+        };
+
+        let svc_params: clawft_service_agent::AgentChatParams = weave_params.into();
+        assert_eq!(svc_params.messages.len(), 2);
+        assert_eq!(svc_params.messages[0].role, "system");
+        assert_eq!(svc_params.messages[1].content, "hi");
+        assert_eq!(svc_params.temperature, Some(0.7));
+        assert_eq!(svc_params.max_tokens, Some(256));
+        assert_eq!(svc_params.conv_id, "01HQABC");
+    }
+
+    #[test]
+    fn agent_chat_result_from_service_agent_preserves_fields() {
+        let svc_result = clawft_service_agent::AgentChatResult {
+            assistant_text: "ok".into(),
+            tool_calls: vec![clawft_service_agent::AgentChatToolCall {
+                name: "read_file".into(),
+                arguments_preview: "{\"path\":\"x\"}".into(),
+                result_preview: "stuff".into(),
+                success: true,
+            }],
+            finish_reason: "stop".into(),
+            iterations: 2,
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            model: Some("Qwen3".into()),
+            identity_source: Some("clawft".into()),
+        };
+        let wire: AgentChatResult = svc_result.into();
+        assert_eq!(wire.assistant_text, "ok");
+        assert_eq!(wire.tool_calls.len(), 1);
+        assert_eq!(wire.tool_calls[0].name, "read_file");
+        assert_eq!(wire.tool_calls[0].success, true);
+        assert_eq!(wire.iterations, 2);
+        assert_eq!(wire.prompt_tokens, 100);
+        assert_eq!(wire.model.as_deref(), Some("Qwen3"));
+        assert_eq!(wire.identity_source.as_deref(), Some("clawft"));
     }
 }

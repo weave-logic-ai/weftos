@@ -483,6 +483,126 @@ fn build_default_transport() -> Arc<OpenAiCompatTransport> {
     Arc::new(OpenAiCompatTransport::new())
 }
 
+/// Construct an [`AgentLoop`] suitable for daemon-side hosting via
+/// `clawft-service-agent::AgentService`.
+///
+/// This is a thin factory used by `clawft-weave::daemon` (Phase C2 of
+/// `docs/plans/agent-core-v1.md`). It accepts the handles the daemon
+/// already has on hand — an `LlmClient`, a populated `ToolRegistry`,
+/// an `IdentityLoader`, and a workspace path — and wires the rest
+/// (message bus, session manager, context builder, pipeline) with
+/// daemon-flavored defaults:
+///
+/// - `Config::default()` agents config (the daemon's chat path doesn't
+///   need the workspace `Config` — `agent.chat`'s temperature/max_tokens
+///   come from the wire params).
+/// - A pipeline registry whose transport is wired to the supplied
+///   [`LlmClient`] via [`ServiceLlmAdapter`](crate::pipeline::service_llm_adapter::ServiceLlmAdapter)
+///   so the agent loop, the daemon's `llm.prompt` RPC, and the chat
+///   panel all share one model server.
+/// - `NullRouter` / `NoopGate` / `InMemorySink` defaults (Phase B1/B2).
+///   Phase C3 swaps in `SubstrateConversationSink`; Phase D2 swaps in
+///   the kernel-backed `EffectGate`. The defaults preserve "behaves
+///   exactly like the spike for the C2 cutover" semantics.
+///
+/// The `_identity_loader` argument is accepted but unused at C2 — the
+/// system prompt still flows through `ContextBuilder`. Phase D1 adds an
+/// identity-aware system prompt and starts using the loader.
+///
+/// Native-only: `NativePlatform` and `LlmClient` are both native-gated.
+#[cfg(feature = "native")]
+pub async fn build_daemon_agent_loop(
+    llm: Arc<clawft_service_llm::LlmClient>,
+    tools: Arc<ToolRegistry>,
+    _identity_loader: Arc<crate::agent::identity::IdentityLoader>,
+    workspace: &std::path::Path,
+) -> Arc<crate::agent::loop_core::AgentLoop<clawft_platform::NativePlatform>> {
+    use clawft_platform::NativePlatform;
+
+    use crate::pipeline::service_llm_adapter::ServiceLlmAdapter;
+    use crate::pipeline::transport::{LlmProvider, OpenAiCompatTransport};
+
+    // Daemon-side config: pull a Config::default() and stamp the
+    // workspace path. The agent.chat wire params override
+    // temperature/max_tokens per turn, so the defaults here only
+    // matter for fields the wire doesn't carry (e.g. permission
+    // resolver baselines).
+    let mut config = Config::default();
+    config.agents.defaults.workspace = workspace.display().to_string();
+
+    let platform = Arc::new(NativePlatform::new());
+
+    // Build the supporting infrastructure inline (analogous to
+    // `AppContext::new` minus the parts the daemon doesn't need
+    // — skill watcher, agent router, agent bus). We allow this to
+    // be `expect(...)` because the daemon already validated the
+    // workspace earlier at boot; a failure here is a hard boot
+    // failure rather than a recoverable error.
+    let bus = Arc::new(MessageBus::new());
+
+    // SessionManager::new and MemoryStore::new can fail when the
+    // platform's home_dir resolution fails. The daemon already
+    // resolved the runtime dir earlier; we propagate via expect.
+    let sessions = SessionManager::new(platform.clone())
+        .await
+        .expect("daemon: SessionManager init failed");
+    let memory = Arc::new(
+        crate::agent::memory::MemoryStore::new(platform.clone())
+            .expect("daemon: MemoryStore init failed"),
+    );
+    let skills_loader = crate::agent::skills::SkillsLoader::new(platform.clone())
+        .expect("daemon: SkillsLoader init failed");
+    let skills = Arc::new(skills_loader);
+    let context = ContextBuilder::new(
+        config.agents.clone(),
+        memory,
+        skills,
+        platform.clone(),
+    );
+
+    // Pipeline transport: bridge the daemon's already-constructed
+    // LlmClient through the ServiceLlmAdapter so the agent loop
+    // shares the daemon's single LLM connection.
+    let adapter: Arc<dyn LlmProvider> = Arc::new(ServiceLlmAdapter::new(llm));
+    let transport = Arc::new(OpenAiCompatTransport::with_provider(adapter));
+    let classifier = Arc::new(KeywordClassifier::new());
+    let router: Arc<dyn ModelRouter> = build_router_from_config(&config);
+    let assembler = Arc::new(TokenBudgetAssembler::new(
+        config.agents.defaults.max_tokens.max(1) as usize,
+    ));
+    let scorer = crate::pipeline::build_scorer(&config.pipeline);
+    let learner = crate::pipeline::build_learner(&config.pipeline);
+    let pipeline = PipelineRegistry::new(Pipeline {
+        classifier,
+        router,
+        assembler,
+        transport,
+        scorer,
+        learner,
+    });
+
+    let resolver = crate::pipeline::permissions::PermissionResolver::new(
+        &config.routing,
+        None,
+    );
+    let agent = crate::agent::loop_core::AgentLoop::new(
+        config.agents,
+        platform,
+        bus,
+        pipeline,
+        tools,
+        context,
+        Arc::new(sessions),
+        resolver,
+    );
+    // C2 uses the trait defaults inherited from `AgentLoop::new`:
+    // `NullRouter` / `NoopGate` / `InMemorySink`. C3 attaches a
+    // substrate-backed sink; D2 attaches a kernel-backed gate. Both
+    // arrive via `.with_sink(...)` / `.with_gate(...)` at the
+    // construction site, not here.
+    Arc::new(agent)
+}
+
 /// Build the appropriate router based on `config.routing.mode`.
 fn build_router_from_config(config: &Config) -> Arc<dyn ModelRouter> {
     if config.routing.mode == "tiered" {

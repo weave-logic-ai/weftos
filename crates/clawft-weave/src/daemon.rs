@@ -54,6 +54,29 @@ fn daemon_terminal() -> Option<Arc<clawft_service_terminal::TerminalManager>> {
     DAEMON_TERMINAL.get().cloned()
 }
 
+/// agent-core-v1 Phase C2: daemon-wide handle to the agent service
+/// (`clawft-service-agent::AgentService`). Set at boot when the LLM
+/// client succeeded — `None` if `DAEMON_LLM` couldn't be wired.
+///
+/// Routed through by `agent.chat` only when the `agent-core-chat`
+/// Cargo feature is enabled. With the feature off (default in C2)
+/// the spike at `handle_agent_chat` keeps running and this handle is
+/// initialized but unused. Phase D3 flips the default on and deletes
+/// the spike body.
+///
+/// Generic param matches the blanket
+/// `impl<P: Platform> AgentLoopHandle for AgentLoop<P>` so production
+/// uses `AgentLoop<NativePlatform>` directly.
+type DaemonAgentService = clawft_service_agent::AgentService<
+    clawft_core::agent::loop_core::AgentLoop<NativePlatform>,
+>;
+
+static DAEMON_AGENT: OnceLock<Arc<DaemonAgentService>> = OnceLock::new();
+
+fn daemon_agent() -> Option<Arc<DaemonAgentService>> {
+    DAEMON_AGENT.get().cloned()
+}
+
 use clawft_kernel::{Kernel, KernelState};
 use clawft_platform::NativePlatform;
 use clawft_types::config::{Config, KernelConfig};
@@ -515,6 +538,68 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         }
     }
 
+    // agent-core-v1 Phase C2: wire `clawft-service-agent::AgentService`
+    // into the daemon as a long-lived handle. Mirrors the
+    // whisper/llm/terminal pattern.
+    //
+    // The agent service is fronted by the `agent-core-chat` Cargo
+    // feature flag at the dispatch site; with the flag off (default in
+    // C2) `agent.chat` keeps running the spike at
+    // `handle_agent_chat`. The handle is still wired here so a feature
+    // flip is a one-line change at the dispatch arm and so the cancel
+    // RPC can find it. Phase D3 flips the default on and deletes the
+    // spike body.
+    //
+    // Pre-register the control flag so
+    // `control.set_enabled {kind:"service", target:"agent"}` works the
+    // first time the user toggles it.
+    let _agent_service_flag =
+        control_flags.register(ControlKind::Service, "agent", true);
+    if let Some(llm_for_agent) = DAEMON_LLM.get().cloned() {
+        // Workspace = daemon CWD. Mirrors the spike's
+        // `handle_agent_chat` path (around the original :2186); D1 will
+        // lift this into `agent.workspace_root` config.
+        let workspace = match std::env::current_dir() {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(error = %e, "agent service: cwd unavailable, skipping wiring");
+                return Err(anyhow::anyhow!("agent service: cwd unavailable: {e}"));
+            }
+        };
+
+        let identity_loader = Arc::new(
+            clawft_core::agent::identity::IdentityLoader::new(&workspace),
+        );
+
+        let mut tool_registry = clawft_core::tools::registry::ToolRegistry::new();
+        clawft_tools::register_all(
+            &mut tool_registry,
+            Arc::new(NativePlatform::new()),
+            workspace.clone(),
+            clawft_tools::security_policy::CommandPolicy::safe_defaults(),
+            clawft_tools::url_safety::UrlPolicy::default(),
+            clawft_tools::web_search::WebSearchConfig::default(),
+        );
+        let tool_registry = Arc::new(tool_registry);
+
+        let agent_loop = clawft_core::bootstrap::build_daemon_agent_loop(
+            llm_for_agent,
+            tool_registry,
+            identity_loader,
+            &workspace,
+        )
+        .await;
+
+        let service = Arc::new(clawft_service_agent::AgentService::new(agent_loop));
+        let _ = DAEMON_AGENT.set(service);
+        info!("agent service handle wired (off by default; agent-core-chat feature flips dispatch)");
+    } else {
+        warn!(
+            "agent service: DAEMON_LLM not set, skipping wiring \
+             (agent.chat falls back to spike unchanged)"
+        );
+    }
+
     // Spawn the terminal manager. Empty registry — sessions appear on
     // demand via `terminal.spawn`. Construction is infallible (a
     // `DashMap::new()` under the hood); we still match on the result so
@@ -565,6 +650,7 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
             (ControlKind::Service, "whisper".to_string(), "Whisper STT"),
             (ControlKind::Service, "llm".to_string(), "Local LLM"),
             (ControlKind::Service, "classify".to_string(), "Audio classifier"),
+            (ControlKind::Service, "agent".to_string(), "Agent service"),
             (ControlKind::Sensor, pcm_chunk_target.clone(), "Mic PCM chunks"),
             (ControlKind::Sensor, rms_target.clone(), "Mic RMS summary"),
         ];
@@ -1066,6 +1152,17 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         for anchor in stream_anchors {
             anchor.shutdown();
         }
+    }
+
+    // agent-core-v1 Phase C2: drain the agent service before the
+    // supervisor shutdown sweeps process-table entries. Cancels every
+    // in-flight `agent.chat` dispatch and waits up to 5s for the
+    // counter to hit zero. With the spike still on (default), no
+    // dispatch ever lands here — the spike runs synchronously inside
+    // `handle_agent_chat` and isn't tracked by `AgentService`.
+    if let Some(agent) = DAEMON_AGENT.get() {
+        let drained = agent.shutdown(std::time::Duration::from_secs(5)).await;
+        info!(drained, "agent service shutdown");
     }
 
     // Gracefully shut down running agents before kernel shutdown
@@ -3552,7 +3649,51 @@ async fn dispatch(
         "control.set_enabled" => handle_control_set_enabled(params, kernel).await,
         "control.list" => handle_control_list(params, kernel).await,
         "llm.prompt" => handle_llm_prompt(params, kernel).await,
-        "agent.chat" => handle_agent_chat(params, kernel).await,
+        "agent.chat" => {
+            // agent-core-v1 Phase C2: feature-gated route through
+            // `clawft-service-agent::AgentService`. With
+            // `agent-core-chat` off (default in C2) the spike at
+            // `handle_agent_chat` runs unchanged; D3 flips the
+            // default and deletes the spike body.
+            #[cfg(feature = "agent-core-chat")]
+            {
+                if let Some(agent) = daemon_agent() {
+                    let p: AgentChatParams = match serde_json::from_value(params.clone()) {
+                        Ok(p) => p,
+                        Err(e) => return Response::error(format!("invalid params: {e}")),
+                    };
+                    return match agent.dispatch(p.into()).await {
+                        Ok(result) => {
+                            let wire: AgentChatResult = result.into();
+                            match serde_json::to_value(wire) {
+                                Ok(v) => Response::success(v),
+                                Err(e) => Response::error(format!("agent.chat: {e}")),
+                            }
+                        }
+                        Err(e) => Response::error(format!("agent.chat: {e}")),
+                    };
+                }
+                // Fall through to spike if DAEMON_AGENT didn't wire
+                // (e.g. LLM client failed at boot).
+            }
+            handle_agent_chat(params, kernel).await
+        }
+        "agent.chat.cancel" => {
+            // agent-core-v1 Phase C2: trip the per-conv cancel token
+            // in `AgentService`. Available unconditionally — when the
+            // service isn't wired (or the spike is on) calling cancel
+            // is a clean error rather than a build break.
+            let conv_id = match params.get("conv_id").and_then(|v| v.as_str()) {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => return Response::error("agent.chat.cancel requires conv_id"),
+            };
+            if let Some(agent) = daemon_agent() {
+                agent.cancel(&conv_id);
+                Response::success(serde_json::json!({"cancelled": conv_id}))
+            } else {
+                Response::error("agent service not wired")
+            }
+        }
         "terminal.spawn" => handle_terminal_spawn(params, kernel).await,
         "terminal.write" => handle_terminal_write(params, kernel).await,
         "terminal.resize" => handle_terminal_resize(params, kernel).await,
