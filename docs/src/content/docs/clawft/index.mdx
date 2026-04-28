@@ -15,7 +15,7 @@ The workspace contains 23 crates organized in a strict dependency hierarchy that
 
 clawft is not a library for calling LLM APIs. It is a complete agent runtime -- the Rust-native equivalent to frameworks like Hermes (NousResearch) or OpenClaw. The `AgentLoop` at its center implements a consume-process-respond cycle with tool use:
 
-1. **Inbound** -- A message arrives from any of 11 channels (Telegram, Slack, Discord, etc.) via the `MessageBus`.
+1. **Inbound** -- A message arrives from one of the production channels (Telegram, Slack, Discord, or the in-process `web` channel) via the `MessageBus`. Seven additional channel adapters ship as planning stubs; see [Channels](/clawft/channels) for the per-adapter status.
 2. **Session** -- The loop retrieves or creates a conversation session.
 3. **Context** -- `ContextBuilder` assembles the system prompt, active skill instructions, memory (MEMORY.md), and conversation history into an LLM-ready message list.
 4. **Pipeline** -- The message passes through a 6-stage pluggable pipeline: Classifier, Router, Assembler, Transport, Scorer, Learner.

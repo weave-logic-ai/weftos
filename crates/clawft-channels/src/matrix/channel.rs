@@ -1,5 +1,21 @@
 //! Matrix channel adapter implementation.
 //!
+//! # WARNING: Planning stub -- does NOT transmit messages.
+//!
+//! This adapter is a compile-time placeholder. It is **not**
+//! production-ready:
+//!
+//! - `start()` never long-polls `/sync`, never auto-joins rooms, and
+//!   never parses `m.room.message` events. It waits for cancellation.
+//! - `send()` does not `PUT` to
+//!   `/_matrix/client/v3/rooms/{room}/send/m.room.message/{txn}`. It
+//!   fabricates a synthetic `${ts}` event id and returns it. Outbound
+//!   messages are silently dropped.
+//!
+//! The real client-server runtime is tracked as Task 5 in
+//! `.planning/reviews/0.7.0-release-gate/05-channels.md`. Do **not**
+//! enable the `matrix` feature in production until that task ships.
+//!
 //! Implements [`ChannelAdapter`] for Matrix messaging via the
 //! client-server API. Supports threaded rooms and text payloads.
 
@@ -7,7 +23,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use clawft_plugin::error::PluginError;
 use clawft_plugin::message::MessagePayload;
@@ -61,6 +77,13 @@ impl ChannelAdapter for MatrixChannelAdapter {
         _host: Arc<dyn ChannelAdapterHost>,
         cancel: CancellationToken,
     ) -> Result<(), PluginError> {
+        warn!(
+            "matrix channel adapter is a planning stub: `/sync` long-poll \
+             and `PUT /rooms/.../send/m.room.message/{{txn}}` are not \
+             implemented; outbound messages will be silently dropped. \
+             See .planning/reviews/0.7.0-release-gate/05-channels.md \
+             task 5."
+        );
         info!("Matrix channel adapter starting");
 
         if self.config.homeserver_url.is_empty() {

@@ -1,5 +1,23 @@
 //! Signal channel adapter implementation.
 //!
+//! # WARNING: Planning stub -- does NOT transmit messages.
+//!
+//! This adapter is a compile-time placeholder. It is **not**
+//! production-ready:
+//!
+//! - `start()` never spawns `signal-cli daemon`. PID tracking,
+//!   JSON-RPC reader, and auto-restart are unimplemented. It waits
+//!   for cancellation.
+//! - `send()` does not invoke `tokio::process::Command`. Argument
+//!   sanitization runs (so the security envelope is exercised) but no
+//!   process is spawned and no message is transmitted; the call returns
+//!   a synthetic `signal-{ts}` id. Outbound messages are silently
+//!   dropped.
+//!
+//! The real subprocess runtime is tracked as Task 3 in
+//! `.planning/reviews/0.7.0-release-gate/05-channels.md`. Do **not**
+//! enable the `signal` feature in production until that task ships.
+//!
 //! Implements [`ChannelAdapter`] for Signal messaging via `signal-cli`.
 //! Uses `tokio::process::Command` for subprocess management with
 //! argument sanitization to prevent command injection.
@@ -8,7 +26,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use clawft_plugin::error::PluginError;
 use clawft_plugin::message::MessagePayload;
@@ -83,6 +101,12 @@ impl ChannelAdapter for SignalChannelAdapter {
         _host: Arc<dyn ChannelAdapterHost>,
         cancel: CancellationToken,
     ) -> Result<(), PluginError> {
+        warn!(
+            "signal channel adapter is a planning stub: `signal-cli \
+             daemon` subprocess is not spawned; outbound messages will \
+             be silently dropped. See \
+             .planning/reviews/0.7.0-release-gate/05-channels.md task 3."
+        );
         info!("Signal channel adapter starting");
 
         self.validate_config()?;

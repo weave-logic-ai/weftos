@@ -1,5 +1,22 @@
 //! Microsoft Teams channel adapter implementation.
 //!
+//! # WARNING: Planning stub -- does NOT transmit messages.
+//!
+//! This adapter is a compile-time placeholder. It is **not**
+//! production-ready:
+//!
+//! - `start()` never registers a Bot Framework webhook and never
+//!   acquires an Azure AD client-credentials token. It logs a `debug!`
+//!   line and waits for cancellation.
+//! - `send()` does not POST to
+//!   `/teams/{team-id}/channels/{channel-id}/messages`. It fabricates a
+//!   synthetic `teams-{ts}` id and returns it. Outbound messages are
+//!   silently dropped.
+//!
+//! The real Bot Framework runtime is tracked as Task 7 in
+//! `.planning/reviews/0.7.0-release-gate/05-channels.md`. Do **not**
+//! enable the `teams` feature in production until that task ships.
+//!
 //! Implements [`ChannelAdapter`] for Microsoft Teams via the
 //! Bot Framework and Graph API. Uses Azure AD client credentials
 //! for authentication.
@@ -8,7 +25,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use clawft_plugin::error::PluginError;
 use clawft_plugin::message::MessagePayload;
@@ -67,6 +84,12 @@ impl ChannelAdapter for TeamsChannelAdapter {
         _host: Arc<dyn ChannelAdapterHost>,
         cancel: CancellationToken,
     ) -> Result<(), PluginError> {
+        warn!(
+            "teams channel adapter is a planning stub: Azure AD token \
+             acquisition and Graph API POST are not implemented; \
+             outbound messages will be silently dropped. See \
+             .planning/reviews/0.7.0-release-gate/05-channels.md task 7."
+        );
         info!("Teams channel adapter starting");
 
         if self.config.tenant_id.is_empty() {

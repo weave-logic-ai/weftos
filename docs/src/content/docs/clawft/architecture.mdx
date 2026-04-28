@@ -86,7 +86,7 @@ Built-in tool implementations. Provides 11 tools: `read_file`, `write_file`, `ed
 
 ### clawft-channels
 
-Plugin-based chat channel system with three core traits (`Channel`, `ChannelHost`, `ChannelFactory`) and `PluginHost` for lifecycle management. Ships 11 channel adapters.
+Plugin-based chat channel system with three core traits (`Channel`, `ChannelHost`, `ChannelFactory`) and `PluginHost` for lifecycle management. Four production adapters (Telegram, Slack, Discord, in-process `web`) ship with real network I/O; seven additional adapters (`email`, `whatsapp`, `signal`, `matrix`, `irc`, `google_chat`, `teams`) are planning stubs that compile and pass tests but do not yet transmit. See [Channels](/clawft/channels) for the per-adapter status table.
 
 ### clawft-services
 

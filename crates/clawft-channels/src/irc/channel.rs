@@ -1,5 +1,24 @@
 //! IRC channel adapter implementation.
 //!
+//! # WARNING: Planning stub -- does NOT transmit messages.
+//!
+//! This adapter is a compile-time placeholder. It is **not**
+//! production-ready (existing source already mentions "skeleton" in
+//! `IrcChannelAdapter`'s doc comment; this header makes the operator
+//! impact explicit):
+//!
+//! - `start()` never opens a TCP/TLS socket, never sends NICK/USER/CAP,
+//!   never JOINs the configured channels, and never reads PRIVMSG. See
+//!   the `TODO` at line ~82.
+//! - `send()` does not issue PRIVMSG. It fabricates a synthetic
+//!   `irc-{target}-{ts}` id and returns it. See the `TODO` at line ~128.
+//!   Outbound messages are silently dropped.
+//!
+//! The real RFC-2812 runtime (pending `irc` crate selection) is tracked
+//! as Task 1 in `.planning/reviews/0.7.0-release-gate/05-channels.md`.
+//! Do **not** enable the `irc` feature in production until that task
+//! ships.
+//!
 //! Implements [`ChannelAdapter`] for IRC messaging.
 //! This is a properly-typed skeleton -- the actual IRC protocol client
 //! integration will be added when the `irc` crate is brought in as a
@@ -9,7 +28,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use clawft_plugin::error::PluginError;
 use clawft_plugin::message::MessagePayload;
@@ -75,6 +94,12 @@ impl ChannelAdapter for IrcChannelAdapter {
         _host: Arc<dyn ChannelAdapterHost>,
         cancel: CancellationToken,
     ) -> Result<(), PluginError> {
+        warn!(
+            "irc channel adapter is a planning stub: TCP/TLS dial, \
+             NICK/USER/CAP, JOIN, and PRIVMSG are not implemented; \
+             outbound messages will be silently dropped. See \
+             .planning/reviews/0.7.0-release-gate/05-channels.md task 1."
+        );
         info!("IRC channel adapter starting");
 
         self.validate()?;

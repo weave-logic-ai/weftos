@@ -1,5 +1,22 @@
 //! WhatsApp channel adapter implementation.
 //!
+//! # WARNING: Planning stub -- does NOT transmit messages.
+//!
+//! This adapter is a compile-time placeholder. It is **not**
+//! production-ready:
+//!
+//! - `start()` never starts a webhook listener and never verifies
+//!   `X-Hub-Signature-256` headers. It waits for cancellation.
+//! - `send()` does not POST to
+//!   `/v18.0/{phone_number_id}/messages`. It fabricates a synthetic
+//!   `wamid.{ts}` id and returns it. Outbound messages are silently
+//!   dropped.
+//!
+//! The real Cloud API runtime (webhook receiver, signature verify,
+//! outbound POST, 429 backoff) is tracked as Task 2 in
+//! `.planning/reviews/0.7.0-release-gate/05-channels.md`. Do **not**
+//! enable the `whatsapp` feature in production until that task ships.
+//!
 //! Implements [`ChannelAdapter`] for WhatsApp Cloud API communication.
 //! Uses webhook for inbound messages and REST API for outbound.
 
@@ -7,7 +24,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use clawft_plugin::error::PluginError;
 use clawft_plugin::message::MessagePayload;
@@ -58,6 +75,12 @@ impl ChannelAdapter for WhatsAppChannelAdapter {
         _host: Arc<dyn ChannelAdapterHost>,
         cancel: CancellationToken,
     ) -> Result<(), PluginError> {
+        warn!(
+            "whatsapp channel adapter is a planning stub: webhook \
+             listener and Cloud API POST are not implemented; outbound \
+             messages will be silently dropped. See \
+             .planning/reviews/0.7.0-release-gate/05-channels.md task 2."
+        );
         info!("WhatsApp channel adapter starting");
 
         if self.config.phone_number_id.is_empty() {

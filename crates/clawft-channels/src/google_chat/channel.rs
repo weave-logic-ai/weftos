@@ -1,5 +1,21 @@
 //! Google Chat channel adapter implementation (skeleton).
 //!
+//! # WARNING: Planning stub -- does NOT transmit messages.
+//!
+//! This adapter is a compile-time placeholder. It is **not**
+//! production-ready:
+//!
+//! - `start()` never subscribes to Pub/Sub or the Chat API. It logs a
+//!   `debug!` line and waits for cancellation.
+//! - `send()` does not POST to `chat.spaces.messages.create`. It
+//!   fabricates a synthetic `spaces/{target}/messages/gchat-{ts}` id
+//!   and returns it. Outbound messages are silently dropped.
+//!
+//! The real Workspace API runtime (service-account credentials, OAuth2
+//! via Workstream F6, Pub/Sub subscription) is tracked as Task 6 in
+//! `.planning/reviews/0.7.0-release-gate/05-channels.md`. Do **not**
+//! enable the `google-chat` feature in production until that task ships.
+//!
 //! Implements [`ChannelAdapter`] for Google Chat via the Chat API.
 //! Full OAuth2 integration is deferred to Workstream F6; this
 //! skeleton provides the adapter structure and configuration.
@@ -8,7 +24,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use clawft_plugin::error::PluginError;
 use clawft_plugin::message::MessagePayload;
@@ -67,6 +83,13 @@ impl ChannelAdapter for GoogleChatChannelAdapter {
         _host: Arc<dyn ChannelAdapterHost>,
         cancel: CancellationToken,
     ) -> Result<(), PluginError> {
+        warn!(
+            "google_chat channel adapter is a planning stub: Pub/Sub \
+             event subscription and `chat.spaces.messages.create` POST \
+             are not implemented; outbound messages will be silently \
+             dropped. See \
+             .planning/reviews/0.7.0-release-gate/05-channels.md task 6."
+        );
         info!("Google Chat channel adapter starting");
 
         if self.config.project_id.is_empty() {

@@ -12,21 +12,34 @@ Channels are bidirectional bridges between external chat platforms and the
 agent pipeline. Each channel receives inbound messages from users and delivers
 outbound messages produced by agents.
 
-clawft ships with eleven channel plugins:
+clawft has channel adapter scaffolding for eleven platforms, but only
+**four ship with real network I/O today**: Telegram, Slack, Discord,
+and the in-process `web` channel served by the Axum gateway. The other
+seven (`email`, `whatsapp`, `signal`, `matrix`, `irc`, `google_chat`,
+`teams`) are **planning stubs**: trait implementations, config
+validation, factories, and tests landed, but the transports are
+unimplemented -- `start()` waits for cancellation and `send()` returns
+a synthetic message ID without contacting the platform. Do **not**
+enable the corresponding feature in production until the runtime ships.
 
-| Channel        | Transport                         | Threading | Media | Feature Gate      |
-|----------------|-----------------------------------|-----------|-------|-------------------|
-| Telegram       | HTTP long polling (Bot API)       | No        | Yes   | `telegram`        |
-| Slack          | WebSocket (Socket Mode)           | Yes       | Yes   | `slack`           |
-| Discord        | WebSocket (Gateway v10)           | Yes       | Yes   | `discord`         |
-| Email          | IMAP + SMTP                       | Yes       | Yes   | `email`           |
-| WhatsApp       | WhatsApp Business API (webhook)   | No        | Yes   | `whatsapp`        |
-| Signal         | Signal CLI / signald bridge       | No        | Yes   | `signal`          |
-| Matrix         | Matrix client-server API          | Yes       | No    | `matrix`          |
-| IRC            | TCP / TLS (RFC 2812)              | No        | No    | `irc`             |
-| Google Chat    | Google Chat API (webhook / SA)    | Yes       | No    | `google-chat`     |
-| Microsoft Teams| Bot Framework / Graph API         | Yes       | Yes   | `teams`           |
-| Discord Resume | WebSocket (Gateway v10, resume)   | Yes       | Yes   | `discord-resume`  |
+| Channel        | Transport                         | Threading | Media | Feature Gate      | Status  |
+|----------------|-----------------------------------|-----------|-------|-------------------|---------|
+| Telegram       | HTTP long polling (Bot API)       | No        | Yes   | `telegram`        | Ships   |
+| Slack          | WebSocket (Socket Mode)           | Yes       | Yes   | `slack`           | Ships   |
+| Discord        | WebSocket (Gateway v10)           | Yes       | Yes   | `discord`         | Ships   |
+| Email          | IMAP + SMTP                       | Yes       | Yes   | `email`           | Roadmap (stub only) |
+| WhatsApp       | WhatsApp Business API (webhook)   | No        | Yes   | `whatsapp`        | Roadmap (stub only) |
+| Signal         | Signal CLI / signald bridge       | No        | Yes   | `signal`          | Roadmap (stub only) |
+| Matrix         | Matrix client-server API          | Yes       | No    | `matrix`          | Roadmap (stub only) |
+| IRC            | TCP / TLS (RFC 2812)              | No        | No    | `irc`             | Roadmap (stub only) |
+| Google Chat    | Google Chat API (webhook / SA)    | Yes       | No    | `google-chat`     | Roadmap (stub only) |
+| Microsoft Teams| Bot Framework / Graph API         | Yes       | Yes   | `teams`           | Roadmap (stub only) |
+| Discord Resume | WebSocket (Gateway v10, resume)   | Yes       | Yes   | `discord-resume`  | Folded into Discord (E1; same crate) |
+
+The roadmap for the seven stubs lives in
+`.planning/reviews/0.7.0-release-gate/05-channels.md` (Tasks 1-7) and
+the Element 06 tracker at
+`.planning/sparc/phase4/06-channel-enhancements/04-element-06-tracker.md`.
 
 All channels share the same trait-based interface and lifecycle, so they can
 be enabled, disabled, and swapped without changes to the rest of the system.
@@ -536,12 +549,18 @@ group channels (see Section 4.7).
 
 ---
 
-## 7. Additional Channels
+## 7. Additional Channels (roadmap stubs)
 
-Eight new channel adapters were added in the improvements sprint: Email,
-WhatsApp, Signal, Matrix, IRC, Google Chat, Microsoft Teams, and Discord
-Resume. Full setup instructions for each are in
-[channels-additional.md](channels-additional.md).
+Seven additional channel adapters landed as compile-time stubs in the
+improvements sprint: Email, WhatsApp, Signal, Matrix, IRC, Google Chat,
+and Microsoft Teams. Discord Resume (E1) is folded into the production
+Discord adapter. **None of the seven adapters above currently transmit
+messages**: `start()` waits for cancellation and `send()` returns a
+synthetic ID without contacting the platform. The configuration
+schemas in [channels-additional.md](channels-additional.md) are correct
+and stable, but enabling any of those features in production today
+will silently drop every outbound message. Track the runtime work in
+`.planning/reviews/0.7.0-release-gate/05-channels.md` (Tasks 1-7).
 
 ---
 
