@@ -245,7 +245,18 @@ impl SandboxPolicy {
     /// Uses canonicalize + canonical-prefix comparison. For not-yet-
     /// existing targets we canonicalize the parent directory and
     /// re-append the leaf so legitimate new-file creation is permitted.
+    ///
+    /// Identity hard-deny (agent-core-v1 Phase D1): writes to
+    /// `.clawft/SOUL.md`, `.clawft/IDENTITY.md`, and
+    /// `.clawft/SOUL.journal.md` are denied unconditionally — even
+    /// when the workspace allowlist would otherwise cover them.
+    /// `SOUL.journal.md` is the agent's self-observation log; agent
+    /// writes to it must go through a substrate-mediated topic
+    /// (Phase F1/F2), not direct filesystem writes.
     pub fn is_path_writable(&self, path: &std::path::Path) -> bool {
+        if is_protected_identity_path(path) {
+            return false;
+        }
         is_path_within_allowlist(path, &self.filesystem.writable_paths, true)
     }
 
@@ -349,6 +360,47 @@ fn is_path_within_allowlist(
         Ok(allowed_canon) => target_canon.starts_with(&allowed_canon),
         Err(_) => false,
     })
+}
+
+/// File names inside `.clawft/` that are NEVER writable by the agent,
+/// regardless of the workspace allowlist (agent-core-v1 Phase D1).
+///
+/// - `SOUL.md` and `IDENTITY.md`: identity files. Hand-edited by
+///   the operator; agent writes would corrupt the binding-thread
+///   integrity check.
+/// - `SOUL.journal.md`: the append-only self-observation log. Agent
+///   writes are legitimate but must flow through a substrate-mediated
+///   topic with a `DerivedWriteGrant` (Phase F1/F2) so the
+///   `chain.rs` witness records the append. Direct filesystem writes
+///   bypass that audit, so we deny them here too.
+const PROTECTED_IDENTITY_FILENAMES: &[&str] =
+    &["SOUL.md", "IDENTITY.md", "SOUL.journal.md"];
+
+/// Return `true` when `path`'s tail is `<...>/.clawft/<protected>`.
+///
+/// Operates on the lexical path so it works for both existing and
+/// not-yet-existing targets (write checks call this before
+/// canonicalize). The match is anchored on the **last two**
+/// components: `.clawft/SOUL.md` matches; a stray `SOUL.md` outside
+/// a `.clawft/` directory does not.
+fn is_protected_identity_path(path: &std::path::Path) -> bool {
+    let mut comps = path.components().rev();
+    let leaf = match comps.next() {
+        Some(std::path::Component::Normal(name)) => name,
+        _ => return false,
+    };
+    let parent = match comps.next() {
+        Some(std::path::Component::Normal(name)) => name,
+        _ => return false,
+    };
+    if parent != std::ffi::OsStr::new(".clawft") {
+        return false;
+    }
+    let leaf_str = match leaf.to_str() {
+        Some(s) => s,
+        None => return false,
+    };
+    PROTECTED_IDENTITY_FILENAMES.contains(&leaf_str)
 }
 
 /// Check whether a domain matches a pattern (exact or wildcard).
@@ -794,5 +846,93 @@ mod tests {
         assert_eq!(restored.sandbox_type, SandboxType::Combined);
         assert!(restored.network.allow_network);
         assert!(restored.audit_logging);
+    }
+
+    // ── Identity hard-deny (agent-core-v1 Phase D1) ─────────────────
+
+    fn identity_writable_policy(workspace: &std::path::Path) -> SandboxPolicy {
+        SandboxPolicy {
+            agent_id: "identity-test".into(),
+            filesystem: FilesystemPolicy {
+                writable_paths: vec![workspace.to_path_buf()],
+                allow_create: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn writes_to_clawft_soul_md_are_denied_even_when_allowlisted() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let clawft = workspace.path().join(".clawft");
+        std::fs::create_dir_all(&clawft).unwrap();
+        std::fs::write(clawft.join("SOUL.md"), "ignored").unwrap();
+
+        let policy = identity_writable_policy(workspace.path());
+        // Sanity: a sibling file in the same workspace IS writable.
+        assert!(policy.is_path_writable(&workspace.path().join("note.txt")));
+        // Identity files are denied.
+        assert!(!policy.is_path_writable(&clawft.join("SOUL.md")));
+    }
+
+    #[test]
+    fn writes_to_clawft_identity_md_are_denied_even_when_allowlisted() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let clawft = workspace.path().join(".clawft");
+        std::fs::create_dir_all(&clawft).unwrap();
+        std::fs::write(clawft.join("IDENTITY.md"), "ignored").unwrap();
+
+        let policy = identity_writable_policy(workspace.path());
+        assert!(!policy.is_path_writable(&clawft.join("IDENTITY.md")));
+    }
+
+    #[test]
+    fn writes_to_clawft_soul_journal_md_are_denied_even_when_allowlisted() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let clawft = workspace.path().join(".clawft");
+        std::fs::create_dir_all(&clawft).unwrap();
+        // SOUL.journal.md doesn't exist yet — the deny must hit even
+        // for the not-yet-existing-target path.
+        let policy = identity_writable_policy(workspace.path());
+        assert!(!policy.is_path_writable(&clawft.join("SOUL.journal.md")));
+    }
+
+    #[test]
+    fn deny_is_filename_anchored_under_dot_clawft() {
+        // Same filenames OUTSIDE a `.clawft/` dir do not match the
+        // hard-deny rule. (The allowlist still gets the final say.)
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let policy = identity_writable_policy(workspace.path());
+        // A workspace-root SOUL.md must still be writable — this
+        // protects against false positives when an agent project
+        // happens to author a top-level `SOUL.md` doc.
+        let stray = workspace.path().join("SOUL.md");
+        assert!(policy.is_path_writable(&stray));
+    }
+
+    #[test]
+    fn protected_identity_path_predicate_matches_expected_set() {
+        assert!(is_protected_identity_path(std::path::Path::new(
+            "/workspace/.clawft/SOUL.md"
+        )));
+        assert!(is_protected_identity_path(std::path::Path::new(
+            "/workspace/.clawft/IDENTITY.md"
+        )));
+        assert!(is_protected_identity_path(std::path::Path::new(
+            "/workspace/.clawft/SOUL.journal.md"
+        )));
+        // Negative: similarly-named files outside `.clawft/` don't match.
+        assert!(!is_protected_identity_path(std::path::Path::new(
+            "/workspace/SOUL.md"
+        )));
+        assert!(!is_protected_identity_path(std::path::Path::new(
+            "/workspace/.clawft/agents.md"
+        )));
+        // Negative: a directory called `.clawft/SOUL.md/` does NOT
+        // match because we anchor on the leaf-as-file.
+        assert!(is_protected_identity_path(std::path::Path::new(
+            ".clawft/SOUL.md"
+        )));
     }
 }

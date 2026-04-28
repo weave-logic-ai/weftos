@@ -49,6 +49,7 @@ use super::context_router::{ContextRequest, ContextRouter, NullRouter};
 use super::effects::effect_for_tool;
 use super::gate::{EffectGate, GateDecision, NoopGate};
 use super::sink::{ConversationSink, InMemorySink, Turn};
+use super::system_prompt::SystemPromptBuilder;
 use super::verification;
 
 // ---------------------------------------------------------------------------
@@ -192,6 +193,24 @@ pub struct AgentLoop<P: Platform> {
     /// HashMap-backed). Phase C3 swaps in the substrate-backed sink
     /// from `clawft-service-agent`.
     sink: Arc<dyn ConversationSink>,
+    /// Optional daemon-supplied agent_id for [`EffectGate::check`]
+    /// calls (agent-core-v1 Phase D2). When set, every tool dispatch
+    /// passes this id to the gate instead of the synthesized
+    /// `"{channel}:{sender_id}"` from the inbound message. The daemon
+    /// stamps a single concierge agent_id at boot from
+    /// `clawft-kernel::AgentRegistry::register`; v1 chat is
+    /// single-tenant so every `agent.chat` request shares it. Per-user
+    /// agent_ids land in a future phase. CLI / test callers leave this
+    /// as `None` to preserve the synthesis fallback.
+    daemon_agent_id: Option<String>,
+    /// Identity-aware system-prompt builder (agent-core-v1 Phase D1).
+    ///
+    /// When set, [`Self::handle_turn`] builds an identity-aware system
+    /// message via the builder and **prepends** it to the message list
+    /// passed to the LLM transport, ahead of any
+    /// `ContextBuilder`-emitted content. When `None` (default for CLI
+    /// / legacy callers), behaviour is unchanged.
+    system_prompt_builder: Option<Arc<SystemPromptBuilder>>,
 }
 
 impl<P: Platform> AgentLoop<P> {
@@ -233,6 +252,8 @@ impl<P: Platform> AgentLoop<P> {
             context_router: Arc::new(NullRouter),
             gate: Arc::new(NoopGate),
             sink: Arc::new(InMemorySink::new()),
+            daemon_agent_id: None,
+            system_prompt_builder: None,
         }
     }
 
@@ -300,6 +321,39 @@ impl<P: Platform> AgentLoop<P> {
     /// identical to pre-B2 (turns are recorded but never observed).
     pub fn with_sink(mut self, sink: Arc<dyn ConversationSink>) -> Self {
         self.sink = sink;
+        self
+    }
+
+    /// Attach a daemon-supplied agent id (agent-core-v1 Phase D2).
+    ///
+    /// When set, every [`EffectGate::check`] call inside the tool
+    /// loop passes this id as `agent_id` instead of synthesizing one
+    /// from the inbound message metadata. This is how the daemon's
+    /// concierge agent — registered once at boot via
+    /// `clawft-kernel::AgentRegistry` and stashed in
+    /// `DAEMON_CONCIERGE_AGENT_ID` — becomes the principal of every
+    /// chat-driven tool call.
+    ///
+    /// Without this attached (CLI path, tests) the loop falls back to
+    /// the pre-D2 synthesized `"{channel}:{sender_id}"` shape. v1 is
+    /// single-tenant; per-user agent ids ship in a later phase.
+    pub fn with_daemon_agent_id(mut self, agent_id: String) -> Self {
+        self.daemon_agent_id = Some(agent_id);
+        self
+    }
+
+    /// Attach a [`SystemPromptBuilder`] so [`Self::handle_turn`]
+    /// emits an identity-aware system message ahead of the
+    /// `ContextBuilder` content (agent-core-v1 Phase D1).
+    ///
+    /// When unset (default for CLI / legacy callers), the loop's
+    /// system-prompt assembly falls through to whatever the
+    /// [`ContextBuilder`] produces, exactly as before.
+    pub fn with_system_prompt_builder(
+        mut self,
+        builder: Arc<SystemPromptBuilder>,
+    ) -> Self {
+        self.system_prompt_builder = Some(builder);
         self
     }
 
@@ -485,6 +539,40 @@ impl<P: Platform> AgentLoop<P> {
         // 4. Context messages are already pipeline::traits::LlmMessage (B2 unification).
         let mut messages: Vec<LlmMessage> = context_messages;
 
+        // 4·prelude. Identity-aware system prompt (agent-core-v1 Phase D1).
+        //     When a SystemPromptBuilder is attached, build the
+        //     identity-bearing system message and PREPEND it as the
+        //     leading entry in the message list, ahead of any
+        //     ContextBuilder-emitted content. The builder pulls from
+        //     `Arc<dyn IdentityProvider>` so this is filesystem-free
+        //     in tests. A provider failure is logged and swallowed —
+        //     we keep the turn alive on a degraded prompt rather than
+        //     failing the user-visible chat path. Phase D3's cutover
+        //     replaces the spike's `build_concierge_system_prompt`
+        //     with this exact path.
+        if let Some(ref builder) = self.system_prompt_builder {
+            match builder.build().await {
+                Ok(prompt) => {
+                    messages.insert(
+                        0,
+                        LlmMessage {
+                            role: "system".into(),
+                            content: prompt,
+                            tool_call_id: None,
+                            tool_calls: None,
+                        },
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        "system prompt builder: identity load failed; \
+                         continuing with ContextBuilder-only system prompt"
+                    );
+                }
+            }
+        }
+
         // 4a. Append router-selected skill names as a system note.
         //     The full skill instruction body is loaded by the
         //     skills loader; here we surface the names so the LLM
@@ -623,12 +711,18 @@ impl<P: Platform> AgentLoop<P> {
             complexity_boost,
         };
 
-        // 10. Execute pipeline + tool loop
-        //     `agent_id` for the EffectGate is synthesized from the
-        //     channel + sender identity until Phase D1 lands the
-        //     IdentityProvider that gives every agent a stable
-        //     binding-thread-hashed name.
-        let agent_id = format!("{}:{}", msg.channel, msg.sender_id);
+        // 10. Execute pipeline + tool loop.
+        //     Phase D2: prefer the daemon-supplied agent id (a single
+        //     concierge principal registered with the kernel's
+        //     AgentRegistry at boot) over the per-message
+        //     `"{channel}:{sender_id}"` synthesis. The synthesis was
+        //     a B2-era stopgap; D2 turns it into a fallback for the
+        //     CLI / test paths that never go through the daemon.
+        //     Per-user agent ids land in a future phase.
+        let agent_id = match self.daemon_agent_id.as_deref() {
+            Some(id) => id.to_owned(),
+            None => format!("{}:{}", msg.channel, msg.sender_id),
+        };
         let tool_result = self
             .run_tool_loop(request, &conv_id, &agent_id)
             .await?;
@@ -2670,6 +2764,126 @@ mod tests {
         let outbound = agent.handle_turn(msg).await.unwrap();
 
         assert_eq!(outbound.content, "normal LLM");
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    // ── agent-core-v1 Phase D1: identity-aware system prompt ────────
+
+    /// In-memory [`IdentityProvider`] for the system-prompt test.
+    struct StubIdentityProvider {
+        soul: String,
+        identity: String,
+    }
+
+    #[async_trait]
+    impl crate::agent::identity::IdentityProvider for StubIdentityProvider {
+        async fn current(
+            &self,
+        ) -> Result<
+            crate::agent::identity::Identity,
+            crate::agent::identity::IdentityError,
+        > {
+            Ok(crate::agent::identity::Identity {
+                soul: self.soul.clone(),
+                identity: self.identity.clone(),
+                hash: crate::agent::identity::sha256_identity_hash(
+                    &self.soul,
+                    &self.identity,
+                ),
+                source: "stub",
+            })
+        }
+    }
+
+    /// D1: when a `SystemPromptBuilder` is attached, `handle_turn`
+    /// must prepend the identity-aware system message to the message
+    /// list passed to the transport. Verified by recording the
+    /// transport's incoming messages and asserting the leading entry
+    /// carries the SOUL/IDENTITY content + binding-thread status.
+    #[tokio::test]
+    async fn handle_turn_prepends_identity_system_prompt() {
+        use crate::agent::identity::{IdentityProvider, BINDING_THREAD_EXCERPT};
+        use crate::agent::system_prompt::SystemPromptBuilder;
+
+        let transport = Arc::new(E2eRecordingTransport::new());
+        let (mut agent, dir) =
+            make_agent_loop(transport.clone() as Arc<dyn LlmTransport>, "d1_prompt")
+                .await;
+
+        let soul = format!(
+            "# SOUL.md\n\nThe binding thread: {BINDING_THREAD_EXCERPT}.\n"
+        );
+        let identity = "# IDENTITY.md\n\nclawft Concierge.".to_string();
+        let provider: Arc<dyn IdentityProvider> = Arc::new(StubIdentityProvider {
+            soul: soul.clone(),
+            identity: identity.clone(),
+        });
+        let workspace = std::path::PathBuf::from("/tmp/d1-test-workspace");
+        let builder = Arc::new(SystemPromptBuilder::new(provider, workspace.clone()));
+        agent = agent.with_system_prompt_builder(builder);
+
+        // Use the echo tool so the loop runs the multi-call path; the
+        // first transport invocation captures the system prompt.
+        let inbound = InboundMessage {
+            channel: "test".into(),
+            sender_id: "user1".into(),
+            chat_id: "chat-d1".into(),
+            content: "ping".into(),
+            timestamp: chrono::Utc::now(),
+            media: vec![],
+            metadata: HashMap::new(),
+        };
+        agent.bus.publish_inbound(inbound).unwrap();
+        let msg = agent.bus.consume_inbound().await.unwrap();
+        let _ = agent.handle_turn(msg).await.unwrap();
+
+        let snapshots = transport.snapshots();
+        assert!(!snapshots.is_empty(), "transport must record ≥1 call");
+        let first_call = &snapshots[0];
+        assert_eq!(
+            first_call[0].role, "system",
+            "leading message must be the identity system prompt"
+        );
+        let prompt = &first_call[0].content;
+        assert!(prompt.contains("[identity]"));
+        assert!(prompt.contains(BINDING_THREAD_EXCERPT));
+        assert!(prompt.contains(&identity));
+        assert!(prompt.contains("[binding-thread-status]\nok"));
+        assert!(prompt.contains(&workspace.display().to_string()));
+        assert!(prompt.contains("[hash]"));
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    /// D1: when no builder is attached the loop must NOT inject any
+    /// new system message — preserving CLI / legacy callers' shape.
+    #[tokio::test]
+    async fn handle_turn_without_builder_skips_identity_prompt() {
+        let transport = Arc::new(E2eRecordingTransport::new());
+        let (agent, dir) =
+            make_agent_loop(transport.clone() as Arc<dyn LlmTransport>, "d1_nobuild")
+                .await;
+
+        let inbound = InboundMessage {
+            channel: "test".into(),
+            sender_id: "user1".into(),
+            chat_id: "chat-d1-no".into(),
+            content: "ping".into(),
+            timestamp: chrono::Utc::now(),
+            media: vec![],
+            metadata: HashMap::new(),
+        };
+        agent.bus.publish_inbound(inbound).unwrap();
+        let msg = agent.bus.consume_inbound().await.unwrap();
+        let _ = agent.handle_turn(msg).await.unwrap();
+
+        let snapshots = transport.snapshots();
+        assert!(!snapshots.is_empty());
+        let leading = &snapshots[0][0];
+        // No identity prompt means the leading message must NOT
+        // contain the D1 marker.
+        assert!(!leading.content.contains("[binding-thread-status]"));
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
