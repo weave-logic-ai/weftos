@@ -352,17 +352,24 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         //
         // Topics included now (some are produced by services landing
         // in parallel work):
-        // - `transcript`  — whisper STT output (this branch)
-        // - `classify`    — speech/silence/keyword classifier (parallel)
-        // - `terminal`    — terminal-output capture pipeline (parallel)
-        // - `chat`        — agent.chat per-turn JSONL + heartbeat
-        //                   (`derived/chat/<conv>/turns/<ulid>`,
-        //                    `derived/chat/<conv>/status`); plan
-        //                   `agent-core-v1.md` Phase A2.
+        // - `transcript`    — whisper STT output (this branch)
+        // - `classify`      — speech/silence/keyword classifier (parallel)
+        // - `terminal`      — terminal-output capture pipeline (parallel)
+        // - `chat`          — agent.chat per-turn JSONL + heartbeat
+        //                     (`derived/chat/<conv>/turns/<ulid>`,
+        //                      `derived/chat/<conv>/status`); plan
+        //                     `agent-core-v1.md` Phase A2.
+        // - `soul_journal`  — per-agent identity-drift observations
+        //                     destined for `.clawft/SOUL.journal.md`.
+        //                     The agent writes through the substrate,
+        //                     not direct to disk; F2's `weaver soul
+        //                     promote` reads back, diffs, and applies
+        //                     to SOUL.md on confirmation. Plan
+        //                     `agent-core-v1.md` Phase F1/F2.
         //
-        // Stamping all four here means the parallel branches don't
+        // Stamping all five here means the parallel branches don't
         // each need to touch this grant-issue path.
-        for topic in ["transcript", "classify", "terminal", "chat"] {
+        for topic in ["transcript", "classify", "terminal", "chat", "soul_journal"] {
             match k.node_registry().issue_derived_grant(
                 daemon_identity.node_id.clone(),
                 topic,

@@ -3,18 +3,19 @@
 //! Resolves the WeftOS Concierge's persona content (`SOUL.md`,
 //! `IDENTITY.md`) for use as the system-prompt foundation.
 //!
-//! ## Resolution chain
+//! ## Resolution
 //!
-//! 1. Per-instance: `<workspace>/.clawft/SOUL.md`, `<workspace>/.clawft/IDENTITY.md`
-//! 2. Fallback templates: `<workspace>/docs/skills/clawft/SOUL.md`,
-//!    `<workspace>/docs/skills/clawft/IDENTITY.md`
+//! Per-instance only: `<workspace>/.clawft/SOUL.md` and
+//! `<workspace>/.clawft/IDENTITY.md`. The directory is materialized
+//! by `weaver init` (Phase F1), so every initialized workspace boots
+//! with both files in place. If they're missing the loader returns
+//! [`IdentityError::NotFound`] and the daemon's chat path surfaces
+//! `agent: identity load failed: ...`.
 //!
-//! The fallback exists so the spike runs before `weaver init` has been
-//! extended to materialize `.clawft/`. Phase F1 deletes the fallback
-//! once `weaver init` seeds local `.clawft/` files; the resolution
-//! chain is preserved as-is until then per the agent-core-v1 plan.
+//! Phase F1 deleted the previous `docs/skills/clawft/` fallback the
+//! spike used while `weaver init` did not yet seed `.clawft/`.
 //!
-//! ## What this module DOES (Phase D1, agent-core-v1)
+//! ## What this module DOES (Phase D1 + F1, agent-core-v1)
 //!
 //! - SHA-256 (hex) hash of `SOUL.md + "\n" + IDENTITY.md` as the
 //!   identity descriptor surfaced in logs and the system prompt.
@@ -28,13 +29,15 @@
 //!
 //! ## What this is NOT (yet)
 //!
-//! - **No SOUL.journal** — append-only self-observation lands in
-//!   Phase F1/F2 when `weaver init` seeds the journal grant.
+//! - **No SOUL.journal write path** — F1 seeds the empty journal
+//!   file and stamps the `soul_journal` derived-write grant; F2's
+//!   `weaver soul promote` reads it, diffs, and applies on
+//!   confirmation. The journal is not consulted on every-turn loads.
 //! - **No hot-reload watcher** — the cached `FileIdentityProvider`
 //!   re-reads on every call (small files; cheap). A `notify`-driven
 //!   watcher arrives when measurement says it earns its keep.
 //!
-//! Plan reference: `docs/plans/agent-core-v1.md` Phase D1.
+//! Plan reference: `docs/plans/agent-core-v1.md` Phase D1, F1.
 
 use std::path::{Path, PathBuf};
 
@@ -71,24 +74,27 @@ pub struct Identity {
     /// Phase D1 replaced the spike's `len(soul)+len(identity)`
     /// placeholder.
     pub hash: String,
-    /// Source of the loaded files — `"clawft"` for `.clawft/` or
-    /// `"docs-fallback"` for `docs/skills/clawft/`. Used by the daemon
-    /// log to surface when the user hasn't run `weaver init` yet.
+    /// Source of the loaded files. Always `"clawft"` after F1 (the
+    /// `docs/skills/clawft/` fallback was removed). The field is
+    /// retained as a `&'static str` so a future substrate-backed
+    /// provider can introduce new variants without touching callers.
     pub source: &'static str,
 }
 
 /// Errors emitted by the identity load path.
 ///
-/// Today only signals the "neither path resolved" case; in future a
+/// Today only signals the "files missing" case; in future a
 /// substrate-backed loader will need to distinguish IO from
 /// deserialization errors. Variants stay shaped for forward
 /// compatibility.
 #[derive(Debug, Error)]
 pub enum IdentityError {
-    /// Neither `<workspace>/.clawft/{SOUL.md,IDENTITY.md}` nor the
-    /// `docs/skills/clawft/` fallback resolved. Callers treat this as
-    /// a hard failure for the chat path.
-    #[error("identity load failed: neither .clawft/ nor docs/skills/clawft/ contains both SOUL.md and IDENTITY.md")]
+    /// `<workspace>/.clawft/SOUL.md` or `IDENTITY.md` (or both) are
+    /// missing. Callers treat this as a hard failure for the chat
+    /// path. Run `weaver init` to materialize the seed files.
+    #[error(
+        "identity load failed: <workspace>/.clawft/{{SOUL.md,IDENTITY.md}} missing — run `weaver init`"
+    )]
     NotFound,
 }
 
@@ -177,28 +183,18 @@ impl IdentityLoader {
         }
     }
 
-    /// Load the current identity, applying the resolution chain.
+    /// Load the current identity from `<workspace>/.clawft/`.
     ///
-    /// Returns `None` only when neither `.clawft/` nor the
-    /// `docs/skills/clawft/` fallback contains both files. Callers
-    /// should treat that as a hard failure for the chat path (the
-    /// daemon's `agent.chat` handler returns
+    /// Returns `None` when either `SOUL.md` or `IDENTITY.md` is
+    /// absent. Callers treat that as a hard failure for the chat path
+    /// (the daemon's `agent.chat` handler returns
     /// `agent: identity load failed: ...`).
+    ///
+    /// F1 removed the `docs/skills/clawft/` fallback the spike used
+    /// while `weaver init` did not yet seed `.clawft/`. Every
+    /// initialized workspace now boots with the seed files in place.
     pub fn current(&self) -> Option<Identity> {
-        if let Some(id) = self.try_load_from(&self.workspace.join(".clawft"), "clawft") {
-            return Some(id);
-        }
-        if let Some(id) = self.try_load_from(
-            &self.workspace.join("docs").join("skills").join("clawft"),
-            "docs-fallback",
-        ) {
-            warn!(
-                "identity loaded from docs/skills/clawft/ fallback — \
-                 run `weaver init` to materialize .clawft/"
-            );
-            return Some(id);
-        }
-        None
+        self.try_load_from(&self.workspace.join(".clawft"), "clawft")
     }
 
     fn try_load_from(&self, dir: &Path, source: &'static str) -> Option<Identity> {
@@ -293,7 +289,11 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_docs_when_clawft_missing() {
+    fn does_not_load_from_docs_skills_anymore() {
+        // F1 removed the docs/skills/clawft/ fallback. Even when only
+        // the docs path is populated, the loader returns None — the
+        // chat path must emit `identity load failed: ... run `weaver
+        // init`` rather than silently substituting bundled docs.
         let tmp = tempfile::tempdir().unwrap();
         let docs = tmp.path().join("docs").join("skills").join("clawft");
         std::fs::create_dir_all(&docs).unwrap();
@@ -301,34 +301,29 @@ mod tests {
         std::fs::write(docs.join("IDENTITY.md"), "doc identity").unwrap();
 
         let loader = IdentityLoader::new(tmp.path());
-        let id = loader.current().expect("should load via fallback");
-        assert_eq!(id.soul, "doc soul");
-        assert_eq!(id.source, "docs-fallback");
+        assert!(
+            loader.current().is_none(),
+            "post-F1: docs/skills/clawft/ must not satisfy the loader"
+        );
     }
 
     #[test]
-    fn returns_none_when_neither_present() {
+    fn returns_none_when_clawft_dir_missing() {
         let tmp = tempfile::tempdir().unwrap();
         let loader = IdentityLoader::new(tmp.path());
         assert!(loader.current().is_none());
     }
 
     #[test]
-    fn clawft_wins_over_docs_when_both_exist() {
+    fn returns_none_when_only_one_file_present() {
+        // Half-populated .clawft/ should fail loud, not partial-load.
         let tmp = tempfile::tempdir().unwrap();
         let clawft = tmp.path().join(".clawft");
         std::fs::create_dir_all(&clawft).unwrap();
-        std::fs::write(clawft.join("SOUL.md"), "runtime soul").unwrap();
-        std::fs::write(clawft.join("IDENTITY.md"), "runtime identity").unwrap();
-        let docs = tmp.path().join("docs").join("skills").join("clawft");
-        std::fs::create_dir_all(&docs).unwrap();
-        std::fs::write(docs.join("SOUL.md"), "doc soul").unwrap();
-        std::fs::write(docs.join("IDENTITY.md"), "doc identity").unwrap();
+        std::fs::write(clawft.join("SOUL.md"), "soul only").unwrap();
 
         let loader = IdentityLoader::new(tmp.path());
-        let id = loader.current().unwrap();
-        assert_eq!(id.soul, "runtime soul");
-        assert_eq!(id.source, "clawft");
+        assert!(loader.current().is_none());
     }
 
     // ── FileIdentityProvider tests ────────────────────────────────
