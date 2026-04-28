@@ -78,9 +78,16 @@ impl<P: Platform> MemoryStore<P> {
         })
     }
 
-    /// Create a memory store with explicit paths (for testing).
-    #[cfg(test)]
-    pub(crate) fn with_paths(
+    /// Create a memory store with explicit `MEMORY.md` and `HISTORY.md`
+    /// paths.
+    ///
+    /// Skips the home-directory resolution that [`Self::new`] performs;
+    /// useful for hermetic tests (write into a temp dir) and for
+    /// embedded callers that want to pin the memory location instead
+    /// of inheriting the platform's default. Public so workspace-level
+    /// integration tests outside `clawft-core` can compose an isolated
+    /// `AgentLoop` without touching the user's `~/.clawft/workspace`.
+    pub fn with_paths(
         memory_path: PathBuf,
         history_path: PathBuf,
         platform: Arc<P>,
