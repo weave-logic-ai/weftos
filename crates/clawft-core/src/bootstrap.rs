@@ -529,6 +529,16 @@ fn build_default_transport() -> Arc<OpenAiCompatTransport> {
 ///   leading system message (agent-core-v1 Phase D1). When `None`, the
 ///   loop falls back to the legacy `ContextBuilder`-only system prompt
 ///   so existing CLI / test callers see no behaviour change.
+/// - `context_router`: caller-supplied
+///   [`ContextRouter`](crate::agent::context_router::ContextRouter)
+///   (agent-core-v1 Phase E1). When `Some`, the loop consults it
+///   *before* the LLM call to nudge classification and surface an
+///   archetype label. When `None`, the loop falls back to its
+///   `NullRouter` default so v0 behaviour is preserved bit-for-bit.
+///   The daemon construction site picks between
+///   `Arc::new(NullRouter)` and
+///   `Arc::new(LlmClassifierRouter::new(llm))` based on
+///   `Config.routing.context_router`.
 ///
 /// The legacy `_identity_loader` argument is retained but unused — the
 /// builder consumes `IdentityProvider` directly. Phase F1 will retire
@@ -543,6 +553,7 @@ pub async fn build_daemon_agent_loop(
     _identity_loader: Arc<crate::agent::identity::IdentityLoader>,
     workspace: &std::path::Path,
     agent_id: Option<String>,
+    context_router: Option<Arc<dyn crate::agent::context_router::ContextRouter>>,
     gate: Option<Arc<dyn crate::agent::gate::EffectGate>>,
     sink: Option<Arc<dyn crate::agent::sink::ConversationSink>>,
     identity_provider: Option<Arc<dyn crate::agent::identity::IdentityProvider>>,
@@ -656,6 +667,13 @@ pub async fn build_daemon_agent_loop(
     // (the CLI / test path).
     if let Some(id) = agent_id {
         agent = agent.with_daemon_agent_id(id);
+    }
+    // E1 attaches the daemon-supplied ContextRouter (LlmClassifierRouter
+    // when Config.routing.context_router == "llm-classifier", NullRouter
+    // otherwise — the latter is also AgentLoop's built-in default, so
+    // passing `None` keeps the pre-E1 wire byte-identical).
+    if let Some(r) = context_router {
+        agent = agent.with_context_router(r);
     }
     Arc::new(agent)
 }
