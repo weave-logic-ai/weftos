@@ -1,0 +1,71 @@
+{
+  "_comment": "Single source of truth for Plane identifiers. Refreshed by scripts/plane.sh refresh-ids. NEVER commit PLANE_API_KEY here.",
+  "workspace_slug": "weftos",
+  "project_id": "e5d6dd76-c47e-43f0-b228-efbea039c6e7",
+  "project_name": "WeftOS",
+  "api_base": "https://api.plane.so/api",
+  "auth_header": "X-API-Key",
+  "cycles": {
+    "0.7.x": "e3df6167-3b59-46e4-bee8-7f37146b9a9f",
+    "0.8.x": "76a2e899-a3fd-4fdd-ab88-5310d458bb22",
+    "0.9.x": "e5abd13f-9634-485a-a0c5-0d075ff3dc19",
+    "1.0.x": "852ebfd6-ba10-4d82-b63c-676201d7e985"
+  },
+  "states": {
+    "Backlog": {
+      "id": "129bc069-e372-41f7-a563-becf429154f8",
+      "group": "backlog"
+    },
+    "Todo": {
+      "id": "76d8ee2a-0afd-4359-bf45-7ddd64a59d6f",
+      "group": "unstarted"
+    },
+    "In Progress": {
+      "id": "09fead4c-e5d2-43a3-a8b5-25339bec3901",
+      "group": "started"
+    },
+    "Done": {
+      "id": "7d0ebbba-5ad6-4b05-9c93-f2e871eaf6b3",
+      "group": "completed"
+    },
+    "Cancelled": {
+      "id": "0e18be3e-9bbc-46d1-b1fc-875718dce5e3",
+      "group": "cancelled"
+    }
+  },
+  "labels": {
+    "_note": "Populated by scripts/plane.sh ensure-labels. Source-of-truth for the canonical set is labels.json.",
+    "ws01-core": "72626ffa-326f-4bc9-bb5c-b36efc680c80",
+    "ws02-kernel": "574b5bd8-85ec-45f1-8a97-a0b6fda01898",
+    "ws03-pipeline": "f73bf40f-d37c-497f-afc3-5946d0edb1ec",
+    "ws04-plugin-skills": "8bbf8524-1002-462c-941d-40c4da7fa8e2",
+    "ws05-channels": "d22b62f7-8df8-4c12-a782-165e088cc937",
+    "ws06-memory": "00347144-e21c-42e0-9544-53cc08896b34",
+    "ws07-multi-agent": "005a3f07-16f6-477c-8d58-4c5d42d6be9f",
+    "ws08-weftos-gui": "72392719-7a29-4ffa-a661-59a86974c86f",
+    "ws09-clawft-dashboard": "86825484-37bf-4816-a809-3b4616351504",
+    "ws10-voice": "22fa43c1-e4e4-4015-a655-e0fc1d65eced",
+    "ws11-agent-core-v1": "f7039595-377d-492a-b4d6-8ff045c4eb9f",
+    "ws12-knowledge-graph": "2dc9fa53-56c8-45c5-88a6-c5e3dc6b09e3",
+    "ws13-app-substrate": "2d0c5b55-747f-4c49-a2ac-ebaa85a4a4c6",
+    "ws14-deployment": "e4d66230-47ef-473e-88f6-aa1f99e1ea18",
+    "ws15-mcp": "9615ea99-4c42-4b6c-8189-88417b1e5107",
+    "ws16-browser-wasm": "c70ee686-3bce-4453-ad6e-e99d846125f5",
+    "ws17-research": "615fdfc2-ed9b-42e2-9cd2-377010872ba9",
+    "audit-finding": "1a15f7f9-5ee7-46a0-aeb5-1d233cf08153",
+    "audit-0.7.0": "cc7b7481-19d4-4e7b-ab59-d9c20e132e8e",
+    "release-gate-blocker": "4b6bf906-e152-4525-ac4f-1a36ce97267e",
+    "bug": "6486eecf-bf64-46df-8904-05cf47975104",
+    "stub": "f54fce4c-a614-40c3-9d33-20f86d8ab234",
+    "gap": "148a0f22-0682-4ed4-95f6-1e601c47cd4c",
+    "orphan": "c0f4c24a-92b1-46e1-82f8-80950e2f5293",
+    "governance": "f1c97b5c-31ce-4a7b-916d-52734bd46cb1",
+    "tech-debt": "5fe34d64-1c46-4bd1-b006-873b2c5b0de6",
+    "docs": "bba4694c-0490-47df-a13c-7a4cdd71687f",
+    "tests": "d97c332e-3ae4-49ae-a1a2-6b1a1a4838d1",
+    "tooling": "fcc3661d-1a25-4192-a480-13ed848a48eb",
+    "security": "5dffa02b-8d62-4bb2-9845-aad33fca8f8c",
+    "performance": "d0d0e5d4-0149-48ac-a1f7-3e34e3929ccf"
+  },
+  "last_refreshed": "2026-04-28"
+}

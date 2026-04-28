@@ -1,4 +1,7 @@
-.claude
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/plane-workflow/
 .claude-flow/
 .hive-mind
 .swarm/

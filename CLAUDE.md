@@ -11,6 +11,30 @@
 - ALWAYS read a file before editing it
 - NEVER commit secrets, credentials, or .env files
 
+## Plane is the authoritative work tracker
+
+Every meaningful unit of work for WeftOS / clawft goes through a Plane work
+item in the `weftos` workspace. State must reflect reality. Use the
+`plane-workflow` skill (`.claude/skills/plane-workflow/SKILL.md`) for the
+operational manual; the rule itself:
+
+- **New items**: when a TODO is identified (audit, code review, user
+  request, in-flight discovery), create a Plane work item in the
+  appropriate cycle (`0.7.x` for must-ship-before-0.7, `0.8.x`+ for
+  later). Include file path / source citation, acceptance criteria,
+  dependencies, link back to source-of-truth doc.
+- **Items being worked on**: transition to **In Progress** on claim,
+  before starting code.
+- **Items finished**: close with what shipped, the commit SHA, any
+  follow-up items spawned, and tests / build status. No silent closures.
+- **Items deferred**: move to a later cycle with an explicit reason in
+  the comment (blocked by upstream, scope-cut, superseded, etc.).
+
+Mechanism: `scripts/plane.sh` (project-local under `.claude/skills/
+plane-workflow/scripts/`) wraps the Plane HTTP API. The MCP server's
+`list_*` endpoints currently return HTTP 404; the wrapper is the
+load-bearing path.
+
 ## File Organization
 
 - NEVER save to root folder — use the directories below

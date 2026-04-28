@@ -1,0 +1,625 @@
+[
+  {
+    "name": "ws01: foundation — reconcile ADR-044 wasip1 vs .cargo/config wasip2 alias",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tech-debt", "docs"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — \"Deferred items / ADR-044 wasip2 migration\" + Task List row 2.\n\nCode citations:\n- `docs/adr/adr-044-wasm-wasip1-target.md:31-37`\n- `.cargo/config.toml` (`wasm` alias points at `wasm32-wasip2`, `release-wasm` profile)\n- `rust-toolchain.toml` (channel 1.93)\n\n## Problem / gap\nADR-044 says `wasip1` is the *current* primary target with migration to `wasip2` planned for Sprint 12, but `.cargo/config.toml`'s `wasm` alias already targets `wasm32-wasip2`. The two sources of truth disagree. Either Sprint 12 migration is partially done and the ADR is stale, or the alias change was premature and should be reverted. This must be settled before 0.7.0 cuts because anyone building WASM artifacts via the documented `cargo wasm` alias gets a different target than the ADR claims.\n\n## Acceptance criteria\n- [ ] Decide whether wasip2 is the new primary target.\n- [ ] If yes: update ADR-044 (or supersede with a new ADR), confirm all WASM consumers (browser, wasi runner) build green on wasip2, update `docs/guides/` accordingly.\n- [ ] If no: revert `.cargo/config.toml` alias to `wasm32-wasip1`.\n- [ ] `scripts/build.sh wasi` and `scripts/build.sh browser` both green on chosen target.\n- [ ] Single source of truth documented for which WASI target ships.\n\n## Dependencies\nNone blocking; should land before 0.7.0 publish to avoid downstream confusion.\n\n## Notes\nRust 1.93 supports both targets. Cheap to align; cost is review + decision, not implementation.\n"
+  },
+  {
+    "name": "ws01: bootstrap — split workspace from global at loader for PermissionResolver ceiling",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "tech-debt", "security", "governance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — TODO at `crates/clawft-core/src/bootstrap.rs:633` and Task List row 3. Same root cause as ws06 MW-2.\n\n## Problem / gap\nCurrent `bootstrap.rs` deep-merges the workspace overlay into a single `Config` upstream so workspace policy reaches `PermissionResolver` but `enforce_workspace_ceiling` never runs. Workspace permissions are not clamped against system-wide bounds. Acceptable for single-user kernels, blocks multi-tenant. Marked `TODO(v1.1)` in source.\n\n## Acceptance criteria\n- [ ] Loader returns `(global: Config, workspace: Option<Config>)` or equivalent.\n- [ ] `bootstrap` calls `PermissionResolver::new(global, Some(workspace))`.\n- [ ] `enforce_workspace_ceiling` clamps workspace permissions per FIX-04 rules (level<=1, no budget/rate-limit increases, tools subset of global).\n- [ ] Test: workspace `.clawft/config.json` granting elevated perms is silently clamped, with audit-log warning emitted.\n- [ ] Multi-tenant scenario covered by integration test.\n\n## Dependencies\nCross-listed with ws06 MW-2 (memory/workspace audit). Coordinate so the fix lands once.\n\n## Notes\nSingle-tenant deploys are unaffected; promote to 0.7.x only if multi-tenant lands sooner.\n"
+  },
+  {
+    "name": "ws01: rpc — implement Windows daemon transport (named pipes) for DaemonClient",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — TODO/stub at `crates/clawft-rpc/src/client.rs:54-80,62-64` and Task List row 4.\n\n## Problem / gap\nNon-Unix `DaemonClient::connect()` returns `None`. Comment says \"Windows named-pipe transport is planned for v0.2\"; we are at 0.6.19 — slipped 4+ minor versions. Windows users cannot run the daemon at all.\n\n## Acceptance criteria\n- [ ] Implement named-pipe transport on Windows (or document explicit non-support).\n- [ ] `DaemonClient::connect()` returns a working client on Windows.\n- [ ] CI matrix includes Windows build of `clawft-rpc`.\n- [ ] Update `docs/guides/` to reflect Windows status.\n\n## Dependencies\nLikely depends on ws01 version_check Windows port (separate item).\n\n## Notes\nPure 0.7.0 publish does not require Windows support, but the slipped TODO is a poor signal. Could be deferred to 0.9.x if Windows demand stays low.\n"
+  },
+  {
+    "name": "ws01: rpc — replace version_check curl shell-out with reqwest",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "tech-debt", "bug"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — Task List row 5; code at `crates/clawft-rpc/src/version_check.rs:63-83`.\n\n## Problem / gap\n`version_check` shells out to `curl` for the GitHub release-check. This assumes `curl` exists on every host (it doesn't on Windows or minimal containers/Alpine), and shells from a foundation crate. `reqwest` is already a transitive workspace dep.\n\n## Acceptance criteria\n- [ ] Replace `std::process::Command::new(\"curl\")` with a `reqwest` GET request.\n- [ ] 24h cache behavior preserved.\n- [ ] Test covers offline / 404 / parse-failure paths.\n- [ ] Crate compiles + works on Windows + minimal Linux container.\n\n## Dependencies\nNone.\n\n## Notes\nSmall mechanical fix; gates the Windows daemon story.\n"
+  },
+  {
+    "name": "ws01: platform — implement OPFS-backed BrowserFileSystem persistence",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — Task List row 6; header note at `crates/clawft-platform/src/browser/fs.rs:1-9`, companion at `crates/clawft-platform/src/browser/mod.rs:7`. Cross-references ws01 BrowserEnvironment item.\n\n## Problem / gap\n`BrowserFileSystem` is currently in-memory `HashMap`-backed. PWA users lose all state on reload. Comment says \"acceptable for the current stub/MVP phase\".\n\n## Acceptance criteria\n- [ ] `BrowserFileSystem` reads/writes through OPFS (Origin Private File System) bindings.\n- [ ] Falls back gracefully when OPFS unavailable.\n- [ ] State survives page reload in a smoke test.\n- [ ] Existing `clawft-wasm` tests pass.\n- [ ] Documented in `docs/guides/browser.md` or equivalent.\n\n## Dependencies\nUpstream `web-sys` OPFS bindings stability (was unstable at port time).\n\n## Notes\nPair with `BrowserEnvironment` persistence (separate item). Required for any real WeftOS PWA.\n"
+  },
+  {
+    "name": "ws01: platform — land OPFS-or-equivalent BrowserEnvironment persistence",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — Task List row 13; code at `crates/clawft-platform/src/browser/env.rs`.\n\n## Problem / gap\n`BrowserEnvironment` is in-memory only. Same UX consequence as the FS issue: env variables (e.g. API keys) are lost on reload.\n\n## Acceptance criteria\n- [ ] `BrowserEnvironment` persists to OPFS or `IndexedDB`.\n- [ ] Round-trip test confirms env survives reload.\n- [ ] `BrowserPlatform::env()` retains its async signature.\n- [ ] Config sensitive values continue to redact in Debug.\n\n## Dependencies\nPairs with the `BrowserFileSystem` OPFS work; same upstream binding constraints.\n\n## Notes\nLow priority because secrets-in-browser is a security smell anyway; document the trade-off.\n"
+  },
+  {
+    "name": "ws01: kernel-config — wire LogQuantizedStubConfig + SimdDistanceStubConfig runtime",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — Task List row 7; types at `crates/clawft-types/src/config/kernel.rs:780,810` (foundation surface) waiting on ruvector-core PR #352 (kernel runtime).\n\n## Problem / gap\nTwo `*StubConfig` types are serializable stubs in `clawft-types`; their runtime backends sit in `clawft-kernel` and require ruvector-core PR #352. Foundation surface ready; runtime missing.\n\n## Acceptance criteria\n- [ ] ruvector-core PR #352 merged & released (upstream tracking).\n- [ ] `clawft-kernel` consumes the new ruvector-core APIs and removes the stub guard.\n- [ ] Round-trip test: deserialize config -> instantiate runtime -> use.\n- [ ] Drop the `Requires ...` comment from the type docs.\n\n## Dependencies\nBlocked by ruvector-core PR #352 upstream.\n\n## Notes\nNot a 0.7.0 blocker — stubs deserialize fine; runtime path is gated.\n"
+  },
+  {
+    "name": "ws01: security — rationalize lenient validate_mcp_tool_name vs strict variant",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — Task List row 8; code at `crates/clawft-core/src/security/mod.rs:448-483`. Cross-listed with ws03 03-11 (MCP wildcard tool-name validation).\n\n## Problem / gap\n`validate_mcp_tool_name` (lenient) returns `Ok(())` for any input that looks \"local-ish\"; only the strict variant is called at registration. The lenient helper is a code-smell — either it's unused (delete) or it's used somewhere (document why both exist). Risk: future caller picks the wrong helper and creates a security gap.\n\n## Acceptance criteria\n- [ ] Audit all call sites of both variants.\n- [ ] Either delete the lenient helper or rename + add module docs explaining when each is appropriate.\n- [ ] No production caller uses lenient unless intentional and justified in source comment.\n- [ ] Unit test pins the chosen contract.\n\n## Dependencies\nNone.\n\n## Notes\nRelease-gate because it touches the MCP attack surface; pair with ws03 03-11.\n"
+  },
+  {
+    "name": "ws01: rpc — add chain.append RPC for weaver soul promote",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "gap", "governance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — Task List row 9; `docs/handoff.md:60`; `crates/clawft-cli/src/commands/skills_cmd.rs` (publish path); `crates/clawft-weave/src/commands/soul_cmd.rs:246` (TODO marker `TODO(agent-core-v1.1)`). Cross-listed with ws06 MW-3.\n\n## Problem / gap\n`weaver soul promote` falls back to writing a local audit log because the daemon doesn't expose a public `chain.append` RPC. Witness records meant to land in the chain currently sit in `<workspace>/.weftos/audit/soul-promote.log`. Marked `TODO(agent-core-v1.1)`.\n\n## Acceptance criteria\n- [ ] Add `chain.append` request/response types to `clawft-rpc`.\n- [ ] Implement handler in `clawft-weave`/daemon that proxies to `ChainManager`.\n- [ ] `weaver soul promote` switches to RPC, retains the local audit log as redundant durable record.\n- [ ] Auth: only privileged callers can append (governance check).\n- [ ] Integration test: promote → assert chain entry present.\n\n## Dependencies\nCross-listed with ws06 MW-3; align so the work lands once.\n\n## Notes\nNot a 0.7.0 blocker — local audit log is functionally durable; promotes to 0.8.x.\n"
+  },
+  {
+    "name": "ws01: foundation — run ADR-010 v0.3 cancel-correctness audit on mesh select! branches",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "tech-debt", "tests"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — Task List row 10; ADR at `docs/adr/adr-010-keep-tokio.md:14-15`.\n\n## Problem / gap\nADR-010 calls for a v0.3 audit of `select!` branches in mesh networking code (foundation runtime decision). We are at 0.6.19 with no audit completed. Mesh code lives in stream 04 (mesh) but the ADR governs the foundation runtime.\n\n## Acceptance criteria\n- [ ] Catalog every `tokio::select!` site in mesh code.\n- [ ] For each, verify branches are cancel-safe per the ADR's checklist.\n- [ ] Document findings or fixes in an audit memo.\n- [ ] Add lint or doc-comment convention preventing regression.\n\n## Dependencies\nNone, but coordinate with mesh workstream.\n\n## Notes\nLow risk (no observed issue), but the ADR explicitly tracks this as a deliverable.\n"
+  },
+  {
+    "name": "ws01: security — decide whether clawft-security is publish=true",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tech-debt", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — Task List row 11; `crates/clawft-security/Cargo.toml:3`.\n\n## Problem / gap\n`clawft-security` has `publish = false`, meaning downstream consumers cannot use the 50+ audit checks via crates.io. Reasonable for an internal helper, but the 50+ check engine is library-shaped. Decide before the 0.7.0 publish.\n\n## Acceptance criteria\n- [ ] Decision recorded in an ADR or in `Cargo.toml` comment.\n- [ ] If publish=true: README + docs.rs metadata in place; license + version pinning consistent with workspace.\n- [ ] If publish=false: rationale documented; no surprise to external integrators.\n\n## Dependencies\nFolds into the version-drift fix (WEFT-8) timing.\n\n## Notes\nPublishability decisions are sticky after the first crates.io upload, so make the call before 0.7.0.\n"
+  },
+  {
+    "name": "ws01: types — decide deny_unknown_fields lint mode for Config",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "tech-debt", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — Task List row 12; code at `crates/clawft-types/src/config/mod.rs:1-5`.\n\n## Problem / gap\n`Config` accepts both camelCase and snake_case via `#[serde(alias)]` and silently ignores unknown fields. Forward-compat is good; typo-resistance is bad. No off-by-default lint mode for typo detection.\n\n## Acceptance criteria\n- [ ] Add an opt-in `deny_unknown_fields` mode (env var or CLI flag).\n- [ ] When enabled, loading a config with stray keys produces a clear error.\n- [ ] Default behavior unchanged (silent ignore).\n- [ ] Unit test covers both modes.\n\n## Dependencies\nNone.\n\n## Notes\nSmall ergonomic win; no urgency.\n"
+  },
+  {
+    "name": "ws01: platform — document config_loader Layer 2 sync vs Layer 3 async asymmetry",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — Task List row 14; code at `crates/clawft-platform/src/config_loader.rs:30-65`. Cross-listed with ws06 MW-12 (3g-review residue).\n\n## Problem / gap\n`discover_config_path` uses sync `Path::exists()` for Layer 2 (home-dir JSON) but Layer 3 (workspace overlay) is async via `fs.exists().await`. Asymmetry is documented inline but not in any ADR or guide. Layer 2 cannot be mocked, hence `tests/overlay_probe.rs` is `#[ignore]`.\n\n## Acceptance criteria\n- [ ] ADR or `docs/guides/configuration.md` section explains the asymmetry and the rationale.\n- [ ] If feasible, lift Layer 2 to async (would unblock the ignored overlay probe test).\n- [ ] If not, document the testing gap and the workaround.\n\n## Dependencies\nIntersects ws06 MW-4 (overlay probe test).\n\n## Notes\nDocs-only alternative is acceptable for 0.7.0.\n"
+  },
+  {
+    "name": "ws01: cli — remove TODO(E1) and TODO(C5) markers in workstream-I notes",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — Task List row 15; `.planning/development_notes/03-critical-fixes-cleanup/workstream-I-type-safety/notes.md`.\n\n## Problem / gap\n`TODO(E1)` and `TODO(C5)` markers (Discord ResumePayload, interactive slash commands) live in workstream-I notes. Their sub-streams have shipped (or been re-scoped); the markers are stale.\n\n## Acceptance criteria\n- [ ] Verify each TODO's sub-stream status.\n- [ ] Remove stale markers; convert any still-open ones into Plane items in the right cycle.\n- [ ] Notes file accurately reflects current state.\n\n## Dependencies\nNone.\n\n## Notes\nDocs hygiene; trivial.\n"
+  },
+  {
+    "name": "ws01: cli — replace skills_cmd derived-on-first-sign placeholder pubkey with real Ed25519",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "security"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — Task List row 16; code at `crates/clawft-cli/src/commands/skills_cmd.rs:793-803`.\n\n## Problem / gap\n`weft skills keygen` writes the literal string `(derived on first sign)` as the public-key file when the `signing` feature is not compiled in. Real Ed25519 derivation only happens at publish-time. Users running keygen without `signing` get a non-functional placeholder file but no error.\n\n## Acceptance criteria\n- [ ] Either (a) compile signing in by default and always derive a real key, or (b) error clearly when `signing` feature is off (\"keygen requires --features signing\").\n- [ ] Tests cover both build configurations.\n- [ ] `docs/skills/` updated to describe the supported workflow.\n\n## Dependencies\nIntersects ws04 task #11 (skill signing trust root docs).\n\n## Notes\nRelease-gate because anyone publishing a skill without `signing` ends up with a corrupt keypair file.\n"
+  },
+  {
+    "name": "ws01: planning — close out improvements.md Phase-5 sprint-tracker",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — Task List row 17; `.planning/development_notes/02-improvements-overview/sprint-tracker.md`, `.planning/improvements.md`.\n\n## Problem / gap\nThe Phase-5 sprint-tracker still shows MVP / Full-Vision checkboxes from Week 8/12. All foundation-relevant items (A1-A9, B1-B9, I1-I8, J1-J7) are checked but the doc itself was never closed; it gives the illusion of work-in-progress to a future reader.\n\n## Acceptance criteria\n- [ ] Mark sprint-tracker as `closed` with a final-state summary.\n- [ ] Move any still-open items into Plane (this audit captures most).\n- [ ] Same for `.planning/improvements.md`.\n\n## Dependencies\nNone.\n\n## Notes\nDocs hygiene before 0.7.0 publish.\n"
+  },
+  {
+    "name": "ws01: planning — archive stale 00-initial-sprint codebase-map / planning-summary",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs", "orphan"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — \"Orphaned work\" section; `.planning/development_notes/00-initial-sprint/{codebase-map,planning-summary}.md`, `.planning/development_notes/00-initial-sprint/phase3/{exit-criteria-review,phase3-status,round3-summary,round4-summary}.md`.\n\n## Problem / gap\nSnapshot of the original Python → Rust port; pinned to nanobot lineage; stale relative to the WeftOS rebrand. Useful history but no living tracking.\n\n## Acceptance criteria\n- [ ] Mark each as historical with a header banner pointing to current source-of-truth (this audit, the `0.7.0-release-gate/README.md`).\n- [ ] Optionally move under `.planning/archive/` to make the archival explicit.\n\n## Dependencies\nNone.\n\n## Notes\nDocs hygiene only.\n"
+  },
+  {
+    "name": "ws01: types — clean up panic! macros in test-only canvas/provider/agent_bus arms",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws01-core", "audit-finding", "audit-0.7.0", "tech-debt", "tests"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/01-core-platform.md` — \"Open questions\" item 8; `crates/clawft-types/src/canvas.rs:259,287,318`, `provider.rs:775`, `agent_bus.rs:255,270,287`.\n\n## Problem / gap\n`panic!` macros live inside `#[cfg(test)]` match arms. Harmless (cfg-gated) but stylistically loud. Prefer `unreachable!` with rationale or proper `assert!` macros.\n\n## Acceptance criteria\n- [ ] Replace `panic!` calls with `unreachable!(\"…\")` or domain assertion macros.\n- [ ] Same test outcomes.\n- [ ] Lint clean.\n\n## Dependencies\nNone.\n\n## Notes\nPure cleanup; safely deferrable.\n"
+  },
+  {
+    "name": "ws03: routing — apply tier check to fallback model selection",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "bug"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-06; security review §2.3, Q3.\n\nCode: `crates/clawft-core/src/pipeline/tiered_router.rs` (fallback resolution path).\n\n## Problem / gap\nThe security review recommended subjecting the fallback model to the same tier check, but the current code does not appear to gate the fallback by `max_tier`. A misconfigured `routing.fallback_model: anthropic/claude-opus-4-5` would let zero_trust users hit elite tier — bypassing the entire permission system.\n\n## Acceptance criteria\n- [ ] Locate fallback resolution branch.\n- [ ] Apply `PermissionResolver`-driven tier check before returning the fallback.\n- [ ] Tier-mismatch case routes to a deny + reason or to a tier-appropriate alternate, never the disallowed model.\n- [ ] Test: zero_trust user hits failover; assert fallback respects max_tier.\n- [ ] Document the precedence in `routing.md`.\n\n## Dependencies\nSits next to 03-09 (reason-redaction) — same code path.\n\n## Notes\nHigh-priority security fix; release-gate.\n"
+  },
+  {
+    "name": "ws03: routing — HMAC the cost-tracker persistence file",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-07; security review §2.4, Q4.\n\nCode: `crates/clawft-core/src/pipeline/cost_tracker.rs` persistence path.\n\n## Problem / gap\nPersistence file uses Unix mode 0600 but no HMAC / checksum. A local user with file access can reset their spend by editing the JSON — defeating the budget enforcement. Security review recommended HMAC keyed on a server-side secret.\n\n## Acceptance criteria\n- [ ] Generate or load a server-side HMAC key on first launch (stored separately, mode 0600).\n- [ ] Sign the cost-tracker JSON on write; verify on load.\n- [ ] Tampered file produces a clear error (and optionally rebuilds from chain audit log).\n- [ ] Test covers tamper detection.\n- [ ] Key rotation path documented.\n\n## Dependencies\nNone urgent; mild interaction with chain-event audit log.\n\n## Notes\nRelease-gate because cost enforcement is a tier-cap promise to operators.\n"
+  },
+  {
+    "name": "ws03: routing — reject window_seconds=0 in Phase H validation",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "release-gate-blocker", "bug", "security"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-08; security review §2.5, Q5.\n\n## Problem / gap\nRate-limiter `window_seconds = 0` is documented as \"functionally unlimited\" but Phase H validation does not reject it. A misconfigured rate limit silently disables rate limiting.\n\n## Acceptance criteria\n- [ ] Add validation rejecting `window_seconds == 0` (or any non-positive value).\n- [ ] Test confirms error path.\n- [ ] Existing legit configs unaffected.\n- [ ] Documented in `routing.md`.\n\n## Dependencies\nNone.\n\n## Notes\nTrivial; release-gate because silent failure of rate limiting is a security regression vector.\n"
+  },
+  {
+    "name": "ws03: routing — redact RoutingDecision.reason to avoid info disclosure",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-09; security review T-06, Q6.\n\n## Problem / gap\n`RoutingDecision.reason` includes verbatim user metadata (`complexity={:.2}, tier={}, level={}, user={}`). When the reason is surfaced through error messages or audit logs, raw user identifiers and policy details leak to caller scope.\n\n## Acceptance criteria\n- [ ] Truncate or redact `reason` before user-facing surfaces.\n- [ ] Keep full reason internally for debug logs (gated on log level).\n- [ ] Unit test asserts redaction in user-facing branch.\n- [ ] Document the contract (\"reason is operator-debug, not user-safe\").\n\n## Dependencies\nNone.\n\n## Notes\nRelease-gate; pair with 03-06.\n"
+  },
+  {
+    "name": "ws03: routing — audit-log model_override bypasses (escalation already logs)",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "governance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-10; security review §2.3 + \"Orphaned work\" `permissions.rs` 757 lines.\n\nCode: `crates/clawft-core/src/pipeline/permissions.rs`.\n\n## Problem / gap\nEscalation events log at `warn!` per security review recommendation, but `model_override` bypasses do not appear to. This means an admin lifting tier filtering via `model_override: true` leaves no audit trail.\n\n## Acceptance criteria\n- [ ] Emit `chain_event!` and `tracing::warn!` whenever a `model_override` overrides tier filtering.\n- [ ] Test asserts the event fires with user_id + model + reason fields.\n- [ ] Documented in `governance.md`.\n\n## Dependencies\nIntersects 03-19 (admin endpoint exposing routing-decision history).\n\n## Notes\nRelease-gate because admin bypass without audit is a governance gap.\n"
+  },
+  {
+    "name": "ws03: routing — add MCP tool-name namespace validation against wildcard ['*']",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "bug"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-11; security review T-02 attack vector `exec__shell` via wildcard `['*']`. Cross-listed with ws01 lenient `validate_mcp_tool_name`.\n\nCode: `crates/clawft-core/src/pipeline/permissions.rs` (tool-name validation; currently exact-match only).\n\n## Problem / gap\nTool-name validation is exact-match only. A tool registered as `exec__shell` (double-underscore namespace) can be granted via wildcard `[\"*\"]` allowlists, opening a shell-execution path even when the operator thinks they only allowed safe tools.\n\n## Acceptance criteria\n- [ ] Validate the tool-name namespace pattern (no `__shell`, no `..`, etc.).\n- [ ] Wildcard `[\"*\"]` does not cover sensitive namespaces unless an explicit `\"exec_shell\"` (or similar) is in the allow list.\n- [ ] Test: register `exec__shell`, set allowlist to `[\"*\"]`, assert deny.\n- [ ] Document the namespace policy.\n\n## Dependencies\nPair with ws01 lenient validator cleanup.\n\n## Notes\nHigh-priority security; release-gate.\n"
+  },
+  {
+    "name": "ws03: routing — scaffold fuzz targets for 8 attack surfaces",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "tests", "security"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-12; `.planning/sparc/phase4/01-tiered-router/security-review.md` — 8 fuzz-target proposals.\n\nTargets:\n- `routing_config_parsing`\n- `permission_resolution`\n- `cost_tracker_concurrent`\n- `rate_limiter_unique_ids`\n- `auth_context_threading`\n- `tool_permission_glob`\n- `escalation_chain`\n- `budget_persistence`\n\n## Problem / gap\nNo `fuzz/` directory exists in any crate. Security review identified 8 fuzz targets covering parsing, concurrency, glob matching, and persistence; none scaffolded.\n\n## Acceptance criteria\n- [ ] `crates/clawft-core/fuzz/` (or workspace-level) created with `cargo-fuzz` skeleton.\n- [ ] All 8 targets compile and run for at least 60s without findings.\n- [ ] CI nightly job runs fuzz for a bounded time.\n- [ ] README documents how to extend.\n\n## Dependencies\nNone.\n\n## Notes\nDeferrable to 0.8.x; not strictly a 0.7.0 gate but listed as medium-severity by the security reviewer.\n"
+  },
+  {
+    "name": "ws03: routing — resolve CONS-002 (DashMap vs RwLock<HashMap> benchmark)",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "performance", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-13; `.planning/development_notes/01-tiered-router/consensus-log.md:443`.\n\n## Problem / gap\nCostTracker and RateLimiter implemented as `RwLock<HashMap>` (no new dep). Performance trade-off vs DashMap was never benchmarked under contention. Entry remains OPEN pending real production data.\n\n## Acceptance criteria\n- [ ] Build a contention benchmark (criterion) for both data structures.\n- [ ] Decide based on numbers; document in consensus-log.\n- [ ] If switching, ship the change in a single PR.\n- [ ] Otherwise, close CONS-002 with rationale.\n\n## Dependencies\nProduction telemetry from 0.7.x deployments would inform.\n\n## Notes\nResearch-y; defer.\n"
+  },
+  {
+    "name": "ws03: routing — resolve CONS-003 final review (escalation security)",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "governance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-14; consensus-log.md:443.\n\n## Problem / gap\nEscalation security model mitigated by FIX-04 + FIX-06; final review marked \"at Gate C+G\" but no completion stamp logged. Either the review happened and was never marked, or it never happened.\n\n## Acceptance criteria\n- [ ] Re-walk the FIX-04 / FIX-06 mitigations against current code.\n- [ ] Sign off in consensus-log with date + reviewer.\n- [ ] Any new gaps spawn Plane items.\n\n## Dependencies\nNone.\n\n## Notes\nMostly process; release-gate because escalation is the highest-blast-radius routing path.\n"
+  },
+  {
+    "name": "ws03: routing — resolve CONS-006 (config validation boundary)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-15; consensus-log.md:443.\n\n## Problem / gap\nValidation lives in `routing_validation.rs` but the boundary between deserialization-time rejection (serde) and post-load validation was never finalized. Some checks are duplicated; some are only in one place.\n\n## Acceptance criteria\n- [ ] Catalog every validation check.\n- [ ] Decide for each: serde-time (`#[serde(deserialize_with)]`) vs post-load.\n- [ ] Refactor to remove duplicates.\n- [ ] Tests pin both paths.\n\n## Dependencies\nNone.\n\n## Notes\nNon-urgent; ship in 0.8.x with the next routing refactor.\n"
+  },
+  {
+    "name": "ws03: pipeline — wire D1 per-path advisory locks for parallel tool execution",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "release-gate-blocker", "bug", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-16; `.planning/development_notes/05-pipeline-reliability/d-perf/notes.md:14-16`.\n\n## Problem / gap\nD1 parallel-tool implementation explicitly notes \"Per-path advisory locks not implemented yet (future hardening)\". The SPARC plan listed advisory locks as the D1 mitigation for race-condition risk (likelihood=Medium, impact=High, score=6). Current implementation runs tool calls in parallel via `futures::join_all` with no filesystem-level guard against two tools writing the same path concurrently.\n\n## Acceptance criteria\n- [ ] Implement per-path advisory lock (`fcntl(F_SETLK)` on Unix, equivalent on Windows or a process-local lock map).\n- [ ] Lock acquired before any FS-mutating tool; released on completion.\n- [ ] Test: two parallel writes to same path serialize.\n- [ ] No regression in tool-call throughput for non-overlapping paths.\n\n## Dependencies\nNone urgent; intersects ws04 sandbox path canonicalization.\n\n## Notes\nRelease-gate because D1 was a reliability-sprint deliverable left half-done.\n"
+  },
+  {
+    "name": "ws03: pipeline — wire evolution_ready flag → mutation.rs GA loop (ADR-017 flywheel)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "orphan", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-17; `crates/clawft-core/src/pipeline/mutation.rs` (413 lines, complete GA implementation), `crates/clawft-core/src/pipeline/learner.rs` (TrajectoryLearner sets `evolution_ready: true`).\n\n## Problem / gap\n`mutation.rs` is a fully-wired genetic-algorithm implementation (selection, crossover, mutation operators, population state) but **not invoked** from any production code path. `TrajectoryLearner` sets `evolution_ready: true` after threshold; no caller reads the flag and triggers mutation. ADR-017's \"self-improvement flywheel\" exists as code, not as a running feature.\n\n## Acceptance criteria\n- [ ] Define a production trigger surface (background tick? RPC?) that consumes `evolution_ready` and runs `mutation::evolve()`.\n- [ ] Persist the evolved population (probably via substrate or kernel).\n- [ ] End-to-end test: synthetic trajectories trigger evolution; new prompt variant reaches the agent loop.\n- [ ] ADR-017 updated with the chosen wiring.\n\n## Dependencies\nADR-017 amendment; possibly substrate persistence.\n\n## Notes\nDeferrable to 0.8.x; flagship feature but not 0.7.0-blocker.\n"
+  },
+  {
+    "name": "ws03: pipeline — persist RetryModel learned weights across daemon restarts",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-18; Q12; code at `crates/clawft-llm/src/eml_retry.rs`.\n\n## Problem / gap\n`RetryModel` trains from observed retry outcomes but the `Default` impl resets to untrained. Daemon restarts lose all learned retry curves. Persistence path unclear.\n\n## Acceptance criteria\n- [ ] Choose persistence target (substrate topic, JSON file under `~/.clawft/state/`, or kernel hnsw).\n- [ ] On daemon start, restore model weights if present.\n- [ ] On clean shutdown, persist weights.\n- [ ] Test: train, restart, assert continuity.\n\n## Dependencies\nNone.\n\n## Notes\nLow priority because the retry curve regenerates within hours of normal traffic.\n"
+  },
+  {
+    "name": "ws03: pipeline — surface routing-decision history via admin endpoint",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "gap", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-19; security review §2.3 audit recommendation; \"Orphaned work\" `weft status` routing info.\n\n## Problem / gap\nThe panel surfaces current tier / budget remaining via `weft status`, but historical routing decision logs (per the security-review §2.3 audit recommendation) are not exposed. Operators have no way to retroactively review per-tier dispatch counts, fallback rates, or budget exhaustion events.\n\n## Acceptance criteria\n- [ ] Persist routing decisions to substrate or chain.\n- [ ] Admin endpoint (RPC or HTTP) returns last N decisions filtered by user/tier/time.\n- [ ] `weft status --routing` shows aggregate stats.\n- [ ] Privacy: PII / tokens redacted (pair with 03-09).\n\n## Dependencies\nIntersects 03-19 + 03-10.\n\n## Notes\nDeferrable.\n"
+  },
+  {
+    "name": "ws03: research — Iteration 3 EML attention multi-param coordinated perturbation",
+    "priority": "low",
+    "cycle": "1.0.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-20; `.planning/development_notes/eml_model_development_assessment.md:60-70`, Q13.\n\n## Problem / gap\nIteration 3 gate: multi-param coordinated perturbation on SafeTree; target ≥80% MSE reduction at `(seq_len=4, d_model=8)` and `final_mse < 5e-2`. Not attempted yet. Iterations 4-5+ (full EML-Transformer, hybrid scoring) explicitly aspirational. No tracking issue or plan stub.\n\n## Acceptance criteria\n- [ ] Run G3 benchmark with multi-param perturbation; record MSE / wall-clock.\n- [ ] Either pass the gate (≥80% MSE reduction) and ship, or document the failure mode and adjust the gate.\n- [ ] CI integration optional.\n\n## Dependencies\nUpstream eml-core stability.\n\n## Notes\nResearch track; truly long-horizon.\n"
+  },
+  {
+    "name": "ws03: kernel — wire sprint-16 two-tier EML coherence cadence",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-21; `.planning/development_notes/sprint-16/eml-coherence.md:54-60`.\n\n## Problem / gap\nTwo-tier coherence cadence (`coherence_fast()` every tick, `spectral_analysis()` on drift, `model.train()` every 1000 exact) is **not yet wired** despite the 34-param EML model existing in `clawft-kernel/src/eml_coherence.rs`. Same `EmlModel::record/train` pattern was meant to replicate into pipeline scorer but never propagated.\n\n## Acceptance criteria\n- [ ] Implement the cadence schedule in `clawft-kernel`.\n- [ ] Pipeline scorer adopts the same pattern (or explicit ADR explains why not).\n- [ ] Test confirms model trains over a synthetic ticked trajectory.\n\n## Dependencies\nKernel workstream (cross-stream).\n\n## Notes\nKernel-side primarily; included here because pipeline scorer mirrors the design.\n"
+  },
+  {
+    "name": "ws03: pipeline — decide consolidation of clawft-service-llm vs clawft-llm",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-22; Q15.\n\n## Problem / gap\n`clawft-service-llm` and `clawft-llm` overlap. The lib.rs comments argue the split (daemon-narrow vs general provider abstraction), but as the daemon adds streaming / multi-provider features, the split rationale erodes. Two crates maintaining parallel HTTP clients invites drift.\n\n## Acceptance criteria\n- [ ] ADR documenting either (a) keep split with clear contract, or (b) consolidate behind a single trait with feature flags.\n- [ ] If consolidating: migration plan + dep cleanup.\n- [ ] If keeping: each crate's API surface explicitly documented to prevent drift.\n\n## Dependencies\nNone urgent.\n\n## Notes\nArchitecture review; defer.\n"
+  },
+  {
+    "name": "ws03: service-llm — handle non-string content (vision blocks / structured) in LlmClient",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "gap", "bug"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-23; Q16; the recently-landed `8b05d868` covers null-content but not array content.\n\nCode: `crates/clawft-service-llm/src/client.rs`.\n\n## Problem / gap\nThe null-content deserializer (`8b05d868`) covers the Nemotron tool-call case. OpenAI vision API and others emit content as an array of content blocks (`[{type: \"text\", text: \"...\"}, {type: \"image_url\", ...}]`). Current `String` field with `null→\"\"` mapping does not handle that — calls fail with a serde error.\n\n## Acceptance criteria\n- [ ] Switch `content` to a typed enum: `String | Array<ContentBlock> | Null`.\n- [ ] Consumer code adapts (most paths can flatten Array→String for now).\n- [ ] Test fixtures: OpenAI vision response, Anthropic-style blocks, Nemotron null.\n- [ ] Backward-compat: existing string responses still parse.\n\n## Dependencies\nNone.\n\n## Notes\nNot 0.7.0-blocker because vision is not yet a 0.7.0 feature, but extending the current `String` shape is cheap insurance.\n"
+  },
+  {
+    "name": "ws03: routing — wire MicroLoraRouter (v3) once ruvllm-wasm lifts 11-pattern HNSW cap",
+    "priority": "medium",
+    "cycle": "0.9.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-03; `crates/clawft-core/src/agent/context_router/hybrid.rs:44`; `docs/plans/agent-core-v1.md:99`; `docs/research/rvf-context-router.md:118-128`.\n\n## Problem / gap\nv3 `MicroLoraRouter` is deferred until `ruvllm-wasm` lifts the documented 11-pattern HNSW cap. Plumbing in `HybridRouter` is there; the v3 implementation isn't.\n\n## Acceptance criteria\n- [ ] Upstream ruvllm-wasm cap lifted (track via separate Plane item or upstream issue).\n- [ ] Implement `MicroLoraRouter` consuming the lifted-cap surface.\n- [ ] Wire under `routing.context_router = \"micro-lora\"`.\n- [ ] Benchmark + accuracy comparison vs v2.5.\n- [ ] Promotion gate criteria recorded.\n\n## Dependencies\nBlocked by ruvllm-wasm upstream.\n\n## Notes\nLong-horizon; tracked here so the deferral is visible.\n"
+  },
+  {
+    "name": "ws03: routing — wire v2.5 sona-backed rerank step in HybridRouter",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-04; `crates/clawft-core/src/agent/context_router/hybrid.rs:49`; `docs/plans/agent-core-v1.md:99`.\n\n## Problem / gap\nv2.5 sona-backed rerank step is a placeholder only — comment explicitly defers until ruv-ecosystem stability clears (`ruv-ecosystem-analysis-20260414.md`).\n\n## Acceptance criteria\n- [ ] Sona crate API stable enough to depend on.\n- [ ] Implement rerank in `HybridRouter::route` after primary candidate set is built.\n- [ ] Benchmark: rerank-on vs rerank-off accuracy + latency.\n- [ ] Feature-gate behind `hybrid-rerank` so a slow upstream doesn't block builds.\n\n## Dependencies\nUpstream sona / ruv-ecosystem stability.\n\n## Notes\nDeferrable.\n"
+  },
+  {
+    "name": "ws03: routing — add max_grantable_level field to RoutingConfig",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "gap", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-05; `crates/clawft-core/src/routing_validation.rs:489-491`; Q1.\n\n## Problem / gap\n`routing_validation.rs:489-491` notes the field is intentionally a constant for now: `Until max_grantable_level is added to RoutingConfig, this constant provides the default ceiling`. Promotion to a config field would let operators raise the ceiling deliberately for known-good workspaces without patching code.\n\n## Acceptance criteria\n- [ ] Add `max_grantable_level: u8` field to `RoutingConfig` (default = 1, the current constant).\n- [ ] Validator reads from the config when present.\n- [ ] Backward-compat: missing field uses the existing default.\n- [ ] Test: workspace setting elevated value is accepted only when global allows it.\n- [ ] Documented in `routing.md`.\n\n## Dependencies\nIntersects ws01 bootstrap loader split (workspace/global ceiling).\n\n## Notes\nDeferrable; only matters once multi-tenant lands.\n"
+  },
+  {
+    "name": "ws03: rate-limiter — expose rate-limiter metrics via admin endpoint (Element-09)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "gap", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-01; live TODO at `crates/clawft-core/src/pipeline/rate_limiter.rs:59` `TODO(Element-09): Expose via admin metrics endpoint (L2)`.\n\n## Problem / gap\nThe `pending_count()`-equivalent is implemented but not surfaced through any HTTP/RPC admin route.\n\n## Acceptance criteria\n- [ ] Element-09 admin endpoint exposes rate-limiter metrics.\n- [ ] `weft status --rate-limiter` (or admin RPC) returns the data.\n- [ ] Test exercises the endpoint.\n- [ ] TODO marker removed.\n\n## Dependencies\nElement-09 admin surface (separate workstream).\n\n## Notes\nOwned by Element-09; tracked here for cross-reference.\n"
+  },
+  {
+    "name": "ws03: rate-limiter — expose rate-limiter LRU maintenance via admin endpoint (Element-09)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "gap", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Task 03-02; live TODO at `crates/clawft-core/src/pipeline/rate_limiter.rs:284` `TODO(Element-09): Used by admin maintenance endpoint (L2)`.\n\n## Problem / gap\nThe maintenance method (manual LRU flush) is wired but not exposed.\n\n## Acceptance criteria\n- [ ] Element-09 admin endpoint exposes manual LRU flush.\n- [ ] Authn/authz check (admin-only).\n- [ ] Test exercises the endpoint.\n- [ ] TODO marker removed.\n\n## Dependencies\nElement-09 admin surface (separate workstream).\n\n## Notes\nPair with 03-01.\n"
+  },
+  {
+    "name": "ws03: context-router — document Some(vec![]) tool_subset contract for plugin authors",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Q8; code at `crates/clawft-core/src/agent/context_router/hybrid.rs:100`.\n\n## Problem / gap\n`HybridRouter` \"structurally empty decision\" predicate treats `Some(vec![])` for `tool_subset` as non-empty (intentional — `Some([])` means \"no tools at all\" is an explicit signal). The contract is not documented for plugin authors writing custom routers.\n\n## Acceptance criteria\n- [ ] Module-level docs in `context_router/mod.rs` explain the `None` vs `Some(vec![])` distinction.\n- [ ] Plugin author guide section.\n- [ ] Doctest pinning the contract.\n\n## Dependencies\nNone.\n\n## Notes\nDocs-only; release-gate because it's a public-API contract.\n"
+  },
+  {
+    "name": "ws03: context-router — exhaustively test embedding-router cargo-feature-off path",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tests", "bug"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Q9.\n\n## Problem / gap\nWhen `Config.routing.context_router` is set to `\"embedding\"` but the `embedding-router` feature is not compiled in, the daemon's behavior is not exhaustively tested. `index.rs` already handles `EmbeddingRouterError::EmptyRegistry`, but other branches may panic or silently fall back.\n\n## Acceptance criteria\n- [ ] Build matrix covering `--no-default-features` and `--features embedding-router`.\n- [ ] `Config.routing.context_router = \"embedding\"` with feature off produces a clear startup error or graceful fallback.\n- [ ] Test asserts the chosen behavior.\n- [ ] Documented in `routing.md`.\n\n## Dependencies\nNone.\n\n## Notes\nRelease-gate because misconfiguration silent failure is a deployment foot-gun.\n"
+  },
+  {
+    "name": "ws03: routing — verify admin user x restricted channel interaction",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "tests"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Q2; CONS-007 made channel > user priority; security review T-02.\n\n## Problem / gap\nAdmin `model_override: true` may bypass tier filtering even in restricted channels. There is no explicit test for \"admin in restricted channel\" yet. CONS-007 made channel highest priority, but admin override interaction is not covered.\n\n## Acceptance criteria\n- [ ] Add integration test: admin user in `#general` (free-tier-only channel).\n- [ ] Decide: should admin override beat channel restriction, or vice versa?\n- [ ] Test asserts the chosen behavior.\n- [ ] Documented in `routing.md`.\n\n## Dependencies\nNone.\n\n## Notes\nRelease-gate; pair with 03-10 (audit log model_override).\n"
+  },
+  {
+    "name": "ws03: pipeline — decide EML score-fusion in scope for 0.7.0 (FitnessScorer weights)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Q10; `.planning/development_notes/eml-synergy-scan.md`.\n\n## Problem / gap\n`FitnessScorer` weights remain literal constants (0.4/0.2/0.2/0.2) hand-tuned via `FitnessScorerWeights::default()`. The synergy scan flagged `pipeline/scorer.rs` as a candidate for `EmlModel::new(2, 4, 1)` learning per-task fitness. Work was not assigned to a sprint.\n\n## Acceptance criteria\n- [ ] Decision: 0.8.x or later?\n- [ ] If yes: implement EmlModel-backed weight learning.\n- [ ] If no: document why and freeze the literal weights with a comment.\n\n## Dependencies\neml-core stability + sprint-16 cadence pattern (ws03 03-21).\n\n## Notes\nDeferrable.\n"
+  },
+  {
+    "name": "ws03: pipeline — review FitnessScorer.error_indicators allowlist (localization, jailbreak)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Q11.\n\n## Problem / gap\nThe `FitnessScorer.error_indicators` allowlist of refusal phrases (\"I can't\", \"as an AI\", etc.) is hand-curated. Localization, jailbreak resilience, and false-positive rate are unknown.\n\n## Acceptance criteria\n- [ ] Catalog known-good and known-bad cases.\n- [ ] Either expand to multilingual or scope down to English-only with a comment.\n- [ ] Add a fuzz/property test against random strings.\n\n## Dependencies\nNone.\n\n## Notes\nResearch-y; defer.\n"
+  },
+  {
+    "name": "ws03: pipeline — verify experimental-attention CI build/test wiring",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "tooling", "tests"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — Q14.\n\n## Problem / gap\nThe `experimental-attention` feature gate exists in `eml-core` and the benchmark example exists, but no GH actions step references it. CI may not catch regressions.\n\n## Acceptance criteria\n- [ ] Add CI matrix entry that builds `eml-core --features experimental-attention`.\n- [ ] Bench example compiles in CI.\n- [ ] Optionally run the bench at low iteration count and assert non-regression.\n\n## Dependencies\nNone.\n\n## Notes\nDeferrable; orphan check.\n"
+  },
+  {
+    "name": "ws03: pipeline — define explicit pipeline-pass step in scripts/build.sh gate",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "tooling", "tests"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — \"Orphaned work\" `scripts/build.sh gate`.\n\n## Problem / gap\nThe 11-check phase gate doesn't have an explicit pipeline-pass step. Pipeline-specific regression coverage relies on the workspace test suite generally.\n\n## Acceptance criteria\n- [ ] Add `cargo test -p clawft-core --test 'pipeline_*'` (or named integration suite) to the gate.\n- [ ] Faster than full workspace test, runs in <60s.\n- [ ] Documented in `scripts/build.sh --help`.\n\n## Dependencies\nNone.\n\n## Notes\nNice-to-have.\n"
+  },
+  {
+    "name": "ws03: research — track 80+ heuristics from eml-synergy-scan",
+    "priority": "low",
+    "cycle": "1.0.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — \"Deferred items / From eml-synergy-scan.md\".\n\n## Problem / gap\n80+ hardcoded heuristics across graphify, kernel, LLM, assessment, and bench subsystems are listed as EML candidates. Notable pipeline-relevant ones: `assessment/effects.rs` weighted scores, `pipeline/scorer.rs` weights (covered by Q10), LLM provider cost-vs-quality trade-off ($0.01/1K threshold). Scan is exploratory.\n\n## Acceptance criteria\n- [ ] Single tracking issue/page enumerating each candidate.\n- [ ] Each candidate has a status: deferred, scheduled, won't-do.\n- [ ] Annual review cadence.\n\n## Dependencies\nUpstream EML stability.\n\n## Notes\nResearch backlog; long horizon.\n"
+  },
+  {
+    "name": "ws03: research — track HNSW EML opportunities (adaptive ef, learned distance)",
+    "priority": "low",
+    "cycle": "1.0.x",
+    "labels": ["ws03-pipeline", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/03-pipeline-routing.md` — \"Deferred items / From hnsw-eml-deep-analysis.md\".\n\n## Problem / gap\n10 EML opportunities for HNSW (adaptive ef, learned distance, cosine decomposition, search-path prediction, etc.). Items 3-10 are research; items 1-2 (adaptive beam, learned distance) are not yet implemented.\n\n## Acceptance criteria\n- [ ] Decide whether items 1-2 enter 0.9.x scope.\n- [ ] If yes: file separate Plane items.\n- [ ] If no: tracking comment with rationale.\n\n## Dependencies\nUpstream HNSW + eml-core.\n\n## Notes\nResearch.\n"
+  },
+  {
+    "name": "ws04: cli — add weft skills approve / reject CLI for autogen .pending markers",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "release-gate-blocker", "gap", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Task 1; deferred item 2.\n\nCode: lib API `crates/clawft-core/src/agent/skill_autogen.rs:335,347` (`approve_skill` / `reject_skill`). CLI absent — `crates/clawft-cli/src/commands/skills_cmd.rs` has no `pending`/`approve` subcommand.\n\n## Problem / gap\n`skill_autogen` library API exists (`approve_skill`, `reject_skill`, `install_pending_skill` writes `.pending` markers under `~/.clawft/skills/<name>/`) but no CLI surface. Operators have to either `rm .pending` by hand or write Rust to drive the lib API. The C4a \"user prompted for approval\" exit criterion is technically met by the marker file existing, but is not ergonomic.\n\n## Acceptance criteria\n- [ ] `weft skills approve <name>` calls `skill_autogen::approve_skill`.\n- [ ] `weft skills reject <name>` calls `skill_autogen::reject_skill`.\n- [ ] Both error usefully when the skill or `.pending` marker is missing.\n- [ ] Help text + examples in `weft skills --help`.\n- [ ] Unit/integration test for the approve path.\n\n## Dependencies\nPair with `weft skills pending` listing (separate item).\n\n## Notes\nP1; release-gate. Closes the autogen approval UX gap.\n"
+  },
+  {
+    "name": "ws04: cli — add weft skills pending listing with generated SKILL.md preview",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "release-gate-blocker", "gap", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Task 2; deferred item 3.\n\n## Problem / gap\nNothing renders pending skill candidates with their generated `SKILL.md` for human review before approval. The `.pending` marker contents are just the literal string \"awaiting user approval\" (`crates/clawft-core/src/agent/skill_autogen.rs:322`); no diff / summary surface exists.\n\n## Acceptance criteria\n- [ ] `weft skills pending` lists every `.pending`-marked skill.\n- [ ] For each, show: name, autogen reason, generated SKILL.md path, allowed-tools list.\n- [ ] `weft skills pending --show <name>` prints the full SKILL.md content.\n- [ ] Test covers empty / one-pending / many-pending.\n\n## Dependencies\nPair with the `approve`/`reject` CLI item.\n\n## Notes\nP1; release-gate.\n"
+  },
+  {
+    "name": "ws04: architecture — decide fate of 8 orphaned clawft-plugin-* crates",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "release-gate-blocker", "orphan", "tech-debt", "governance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Task 3; deferred item 5; \"Orphaned work\" section. Recent commit `8c08ce0a` raised this in handoff.\n\n## Problem / gap\nEight workspace-member native plugin crates (`clawft-plugin-{browser, calendar, cargo, ci, containers, git, npm, oauth2}`) ship to crates.io at `0.6.6`, each with full Tool-trait impls, but no consumer in the workspace. Only `clawft-plugin-treesitter` is wired (via `clawft-kernel/Cargo.toml:65`'s `treesitter` feature). Every workspace `cargo check` rebuilds 8 unused crates.\n\nDecision options:\n- external consumers exist (downstream WeftOS / external integrators) → keep decoupled\n- planned for a `weft full` extras bundle → wire it up\n- legacy from pre-ADR-036 architecture → move out of workspace / archive\n\n## Acceptance criteria\n- [ ] One of: ADR + feature-gate-bundle (e.g. `weft --features full-plugins`), separate-repo migration, or documented downstream-consumer manifest.\n- [ ] If feature-gated: kernel or CLI wires them under a single feature.\n- [ ] If separate-repo: workspace member entries removed; repo URLs documented in `docs/plugins/`.\n- [ ] Workspace `cargo check` no longer rebuilds the orphans (or only when feature on).\n- [ ] crates.io publish strategy aligned with version-drift fix (WEFT-8).\n\n## Dependencies\nIntersects WEFT-8 (workspace deps version drift).\n\n## Notes\nP0 release-gate decision; the answer affects publish + CI.\n"
+  },
+  {
+    "name": "ws04: architecture — ADR documenting clawft-core vs clawft-kernel ToolRegistry split + migration",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tech-debt", "governance", "docs"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Task 4; deferred item 6.\n\nCode: `crates/clawft-core/src/tools/registry.rs:339` (used by agent loop), `crates/clawft-kernel/src/wasm_runner/registry.rs:18` (ADR-036, hierarchical, sync `BuiltinTool` trait).\n\n## Problem / gap\nTwo `ToolRegistry` implementations with different Tool traits (async `dyn Tool` vs sync `dyn BuiltinTool`), different signature requirements, and overlapping responsibilities (both gate-check, both filter). ADR-036 says \"All future tool registration ... must follow this pattern: register in the overlay, not the base\" but the agent loop today still talks to the `clawft-core` registry, not the kernel one. **No ADR records the merger / migration plan.**\n\n## Acceptance criteria\n- [ ] New ADR (or ADR-036 amendment) explicitly states: which registry owns what, when migration happens, what the end-state looks like.\n- [ ] Decision on whether to merge the two trait shapes or keep them.\n- [ ] If migrating: timeline + breakage matrix.\n- [ ] If keeping both: clear contract that prevents drift.\n\n## Dependencies\nADR-036 amendment.\n\n## Notes\nP0; release-gate because dual-tracked registries is an architecture decision a 0.7.0 publish locks in.\n"
+  },
+  {
+    "name": "ws04: skills — implement shell-execution skill approval prompt at install time",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Task 5; deferred item 1; `.planning/sparc/phase4/04-plugin-skill-system/00-orchestrator.md:198` — outstanding exit criterion.\n\n## Problem / gap\nA skill declaring `allowed-tools: - exec_shell` installs without prompting. `T39` lifecycle tests are not yet in the test suite. Risk: a malicious skill from ClawHub could escalate via shell.\n\n## Acceptance criteria\n- [ ] On `weft skills install`: detect `exec_shell` in declared tools.\n- [ ] If detected: interactive `[y/N]` prompt with the skill name + path.\n- [ ] Non-interactive mode requires `--allow-shell` or env-var explicit opt-in.\n- [ ] Audit-log every shell-skill install.\n- [ ] T39 lifecycle tests added.\n\n## Dependencies\nIntersects ws04 task 7 (allowed-tools intersection validator) and 15 (T39 tests).\n\n## Notes\nP1 release-gate; the only outstanding 00-orchestrator exit criterion.\n"
+  },
+  {
+    "name": "ws04: plugin — reconcile manifest formats (clawft.plugin.json vs .weftos-plugin.toml)",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "release-gate-blocker", "bug", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Task 6; deferred item 7; \"Orphaned work\" PluginManifest JSON schema.\n\nCode: `crates/clawft-plugin/src/manifest.rs:11` (JSON/YAML PluginManifest); `crates/clawft-cli/src/commands/plugins_cmd.rs:289,401` (TOML `.weftos-plugin.toml` scaffold); `:365` (validator only checks TOML).\n\n## Problem / gap\nTwo plugin manifest formats coexist:\n- `clawft.plugin.json` — read by the WASM host's manifest reader.\n- `.weftos-plugin.toml` — what `weft plugins create` scaffolds, what `weft plugins validate` checks.\n\nA scaffolded plugin will pass `weft plugins validate` but **won't load via the WASM host**. This is a hard correctness bug.\n\n## Acceptance criteria\n- [ ] Pick one canonical format (recommend `clawft.plugin.json` since it's already the runtime path).\n- [ ] Update the scaffolder to emit the canonical format.\n- [ ] Update the validator to check the canonical format + the WASM host loader path.\n- [ ] Migration tool or doc for any existing `.weftos-plugin.toml` files.\n- [ ] End-to-end test: scaffold → validate → load via WASM host.\n\n## Dependencies\nIntersects ws04 task 13 (manifest roundtrip test).\n\n## Notes\nP1 release-gate; current state lies to plugin authors.\n"
+  },
+  {
+    "name": "ws04: skills — add per-skill allowed-tools intersection validator at load time",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Task 7; deferred item 4; consensus.md SEC-SKILL-04.\n\n## Problem / gap\nSkill `allowed-tools` is intersected with the agent's `tool_access` only via the registry's `check_tool_permission` at execution time. The skill doesn't declare a precedence relationship to `allowed_tools` on the per-agent sandbox — so a project-trusted skill can request a tool that the agent's `SandboxPolicy.allowed_tools` would have allowed, and the skill metadata adds nothing. There is no \"skill-declared tools must be a subset of agent-allowed tools at parse time\" validator.\n\n## Acceptance criteria\n- [ ] Skill loader validates `allowed_tools ⊆ agent.tool_access` at load time.\n- [ ] Mismatch produces a clear error referencing the skill + the disallowed tool.\n- [ ] Test: skill requesting a denied tool is rejected before any agent turn runs.\n- [ ] Documented in `docs/skills/`.\n\n## Dependencies\nNone urgent.\n\n## Notes\nP1 release-gate; closes SEC-SKILL-04.\n"
+  },
+  {
+    "name": "ws04: autogen — wire improve_skill_instructions / generate_skill_md_with_learning into agent-loop",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "orphan", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Task 8; \"Orphaned work\" `skill_autogen.rs:376,412`.\n\nCode: `crates/clawft-core/src/agent/loop_core.rs:1190` constructs `AutogenConfig` with no learner reference.\n\n## Problem / gap\n`improve_skill_instructions` is fully implemented at `skill_autogen.rs:376` with tests, but the agent-loop wiring constructs an `AutogenConfig` with no learner reference. Function is dead from the loop's perspective. Same for `generate_skill_md_with_learning`. TrajectoryLearner integration is shipped as code, not as a running feature.\n\n## Acceptance criteria\n- [ ] `loop_core.rs` builds `AutogenConfig` with the active TrajectoryLearner.\n- [ ] When autogen is enabled, learning-driven instruction mutation runs.\n- [ ] End-to-end test: synthetic trajectories produce a SKILL.md improvement.\n- [ ] Documented in `docs/skills/autogen.md`.\n\n## Dependencies\nIntersects ws03 evolution_ready wiring (03-17).\n\n## Notes\nP2; deferrable.\n"
+  },
+  {
+    "name": "ws04: cli — add weft skills autogen {enable,disable,status} CLI",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "gap", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Task 9; deferred item 11.\n\n## Problem / gap\n`AutogenConfig::default().enabled == false`. Enabling autogen is only via constructing a config in code; no `weft config` flag, no onboarding hint, no `weft skills autogen status` surface.\n\n## Acceptance criteria\n- [ ] `weft skills autogen enable` flips config to `enabled: true`.\n- [ ] `weft skills autogen disable` reverts.\n- [ ] `weft skills autogen status` shows current state + threshold + max_pending.\n- [ ] Help text + examples.\n- [ ] Settings persist to user-level `~/.clawft/config.json`.\n\n## Dependencies\nNone.\n\n## Notes\nP2; deferrable.\n"
+  },
+  {
+    "name": "ws04: observability — add WASM per-plugin fuel/memory observability",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "gap", "tooling", "performance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Task 10; Q6.\n\n## Problem / gap\nFuel/memory limits are enforced but no observability surface exists. Plugin authors can't tune limits empirically.\n\n## Acceptance criteria\n- [ ] Per-plugin fuel-consumption counter exposed via `chain_event!` or admin RPC.\n- [ ] `weft plugins inspect <name>` shows aggregate fuel + memory + invocation count.\n- [ ] Test pins the metric shape.\n\n## Dependencies\nIntersects Element-09 admin surface.\n\n## Notes\nP2.\n"
+  },
+  {
+    "name": "ws04: docs — document skill signing trust root location and rotation",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs", "security"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Task 11; Q3.\n\n## Problem / gap\n`weft skills keygen` exists, but where is the trusted-key registry stored, who can add keys, and how does a workspace constrain accepted signers? **No trust-root file is documented under `~/.clawft/`.** Operators publishing or installing signed skills can't reason about the trust model.\n\n## Acceptance criteria\n- [ ] `docs/skills/signing.md` documents:\n  - trust-root location (e.g. `~/.clawft/trusted-keys.json`)\n  - format (Ed25519 pubkeys + metadata)\n  - how to add/remove keys\n  - rotation policy\n  - how a workspace overrides global trust\n- [ ] `weft skills keys list/add/remove` CLI (or document explicit manual file edit).\n- [ ] Integration test for signed-install round trip when trust-root is configured.\n\n## Dependencies\nIntersects ws01 task: replace skills_cmd derived-on-first-sign placeholder pubkey.\n\n## Notes\nP1 release-gate; the operator story is missing.\n"
+  },
+  {
+    "name": "ws04: ux — add macOS-sandbox-downgrade warning to startup banner",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "docs"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Task 12; Q7; code at `crates/clawft-plugin/src/sandbox.rs:299`.\n\n## Problem / gap\n`effective_sandbox_type` silently downgrades `OsSandbox`/`Combined` to `Wasm` on macOS, emitting `tracing::warn!`. Downstream operators on macOS may not know they're running in a weaker sandbox — no error, no opt-in confirmation.\n\n## Acceptance criteria\n- [ ] On startup, if any plugin downgrades sandbox on macOS, surface a single visible banner line.\n- [ ] Optional `CLAWFT_REQUIRE_OS_SANDBOX=1` env var causes startup failure when downgrade would happen.\n- [ ] `docs/security/sandbox.md` documents macOS posture.\n\n## Dependencies\nNone.\n\n## Notes\nP2 by severity but trivial to ship; release-gate for transparency.\n"
+  },
+  {
+    "name": "ws04: tests — add clawft.plugin.json schema roundtrip + version-compat test",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tests", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Task 13; deferred item 8.\n\n## Problem / gap\nThe crate ships `PluginManifest::deserialize` derived via serde, but `crates/clawft-plugin/src/manifest.rs` has no roundtrip / schema-version / forward-compat tests at the integration level.\n\n## Acceptance criteria\n- [ ] Roundtrip test: known-good manifest → deserialize → serialize → byte-equal.\n- [ ] Forward-compat test: future-version field is preserved or ignored gracefully.\n- [ ] Negative tests: malformed manifest, missing required fields, wrong schema version.\n- [ ] Tests live in `crates/clawft-plugin/tests/`.\n\n## Dependencies\nPair with task 6 (manifest reconciliation).\n\n## Notes\nP2; release-gate because the manifest is a public-API contract.\n"
+  },
+  {
+    "name": "ws04: skills — verify (or close) SkillContext::Fork status post-3F review M2",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "release-gate-blocker", "gap", "stub"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Task 14; deferred item 13.\n\n## Problem / gap\nFrom 3F-agents review M2: no SubagentManager, fork variant parses but does not spawn. Status of this in 0.7.0 not verified by this audit. Open question whether it silently no-ops, errors, or has been implemented since the review.\n\n## Acceptance criteria\n- [ ] Audit current code path for `SkillContext::Fork`.\n- [ ] If silently no-ops: change to explicit error + close on a later milestone.\n- [ ] If implemented: add tests + remove the open question.\n- [ ] If still deferred: explicit `tracing::warn!` on use + Plane item documenting the timeline.\n\n## Dependencies\nNone.\n\n## Notes\nP2 release-gate; \"fork variant silently does nothing\" is a real footgun if not addressed.\n"
+  },
+  {
+    "name": "ws04: tests — land T39 plugin-lifecycle tests",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tests"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Task 15; 00-orchestrator.md only-remaining-checked-out box on the C2 security exit list.\n\n## Problem / gap\nT39 plugin-lifecycle tests are referenced in 00-orchestrator.md as the closing item on the C2 security exit list, but never landed. The shell-skill approval flow (task 5) was deferred specifically because T39 was the prerequisite test infrastructure.\n\n## Acceptance criteria\n- [ ] T39 test cases scaffolded as integration tests under `crates/clawft-plugin/tests/lifecycle/`.\n- [ ] Cover: install, hot-reload, approve/reject, signed-install, rejected-skill-cleanup, shell-skill confirmation.\n- [ ] Pass on `scripts/build.sh test`.\n- [ ] Closes the last C2 exit-criteria checkbox.\n\n## Dependencies\nPair with task 5 (shell approval) + task 1/2 (CLI surface).\n\n## Notes\nP2 release-gate; named in the SPARC plan.\n"
+  },
+  {
+    "name": "ws04: skills — define pending-skill review timing (interactive prompt vs CLI)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Q4.\n\n## Problem / gap\nShould the `.pending` marker also trigger an interactive prompt at next agent-loop start, or only on demand via CLI? Today neither happens automatically. Without a defined trigger, pending skills accumulate unseen.\n\n## Acceptance criteria\n- [ ] Decision recorded (interactive on start, CLI-only, or both).\n- [ ] Implementation matches decision.\n- [ ] Tested.\n\n## Dependencies\nPair with task 1/2 (CLI).\n\n## Notes\nDeferrable.\n"
+  },
+  {
+    "name": "ws04: autogen — define filesystem allowlist semantics for autogenerated skills",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "security", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — Q5; `crates/clawft-core/src/agent/skill_autogen.rs:691-700`.\n\n## Problem / gap\nGenerated skills emit `user-invocable: false` and \"minimal permissions\" but the generated SKILL.md does not explicitly populate filesystem allowlists. It relies on the loading agent's existing sandbox to constrain. Insufficient when the host agent has broader perms than the autogen design target.\n\n## Acceptance criteria\n- [ ] `generate_skill_md` emits an explicit minimal allowlist.\n- [ ] When loaded, the autogen-skill's allowlist intersects with (does not exceed) the host agent's.\n- [ ] Test: synthetic broader-perm host loads autogen skill; assert effective allowlist is the minimum.\n- [ ] Documented in `docs/skills/autogen.md`.\n\n## Dependencies\nIntersects task 7 (allowed-tools intersection).\n\n## Notes\nDeferrable but security-relevant.\n"
+  },
+  {
+    "name": "ws04: skills — add weft skills refresh CLI for headless/CI scenarios",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "gap", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — deferred item 12; consensus.md 3F-agents review m4.\n\n## Problem / gap\nHot-reload covers FS changes via notify, but in-process discovery state has no manual invalidation surface. Headless / CI scenarios where the watcher is disabled have no fallback.\n\n## Acceptance criteria\n- [ ] `weft skills refresh` triggers a manual reload of the registry.\n- [ ] No-op on watcher-enabled hosts.\n- [ ] Test exercises the path with watcher disabled.\n\n## Dependencies\nNone.\n\n## Notes\nDeferrable.\n"
+  },
+  {
+    "name": "ws04: voice — drop or stub VoiceHandler trait placeholder for 0.7.0",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "docs"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — deferred item 10; \"Orphaned work\" C1 trait `VoiceHandler`; `crates/clawft-plugin/src/lib.rs:17`.\n\n## Problem / gap\n`VoiceHandler` trait is a placeholder, no impl, no plan to remove or implement in 0.7.0. Comment documents it as forward-compat for Workstream G but external integrators reading the trait surface get a misleading public API.\n\n## Acceptance criteria\n- [ ] Either: (a) explicitly mark the trait `#[doc(hidden)]` + `unstable-voice` feature-gate, or (b) document it as `pub` for forward-compat with a banner doc comment.\n- [ ] Decision recorded.\n- [ ] No public API surface drift in 0.7.0.\n\n## Dependencies\nVoice workstream (cross-stream).\n\n## Notes\nDocs/feature-gate hygiene; release-gate to lock the public API.\n"
+  },
+  {
+    "name": "ws04: scaffold — add Rust struct/parser for .weftos-plugin.toml or remove it",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws04-plugin-skills", "audit-finding", "audit-0.7.0", "release-gate-blocker", "orphan", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/04-plugin-skills.md` — \"Orphaned work\" `weftos-plugin.toml`; `crates/clawft-cli/src/commands/plugins_cmd.rs:289-303`.\n\n## Problem / gap\n`.weftos-plugin.toml` format exists only in scaffolder template strings, no Rust struct, no parser, no reader. Pure scaffold artifact; resolves to ws04 task 6 (manifest reconciliation).\n\n## Acceptance criteria\n- [ ] Subsumed by task 6: pick canonical format, delete unused scaffold variant.\n- [ ] Validator path consolidated.\n\n## Dependencies\nFolds into task 6.\n\n## Notes\nKeeping as a separate item for traceability; will close together with task 6.\n"
+  },
+  {
+    "name": "ws06: memory — route MemoryStore + SkillsLoader through WorkspaceContext",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "release-gate-blocker", "bug", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-1; WS-O3 / WS-Q11 / WS-Q12.\n\nCode:\n- `crates/clawft-core/src/agent/memory.rs:52-79` (`MemoryStore::new` resolves `~/.clawft/workspace/memory/` legacy)\n- `crates/clawft-core/src/agent/skills.rs:186-211` (`SkillsLoader::new` resolves `~/.clawft/workspace/skills/`)\n\n## Problem / gap\n`MemoryStore::new` and `SkillsLoader::new` were written before workspace-aware bootstrap and never migrated. In a workspace-loaded daemon there are now two memory roots — the workspace-scoped one created by `WorkspaceManager::create` and the home-scoped one used by `MemoryStore::new`. Result: writes to MEMORY.md from a workspace-loaded daemon land in the home dir, not the workspace's `.clawft/memory/`. Users discover this when they `git status` the workspace and see no changes.\n\n## Acceptance criteria\n- [ ] `MemoryStore` and `SkillsLoader` constructions go through the loaded `WorkspaceContext`.\n- [ ] When a workspace is active, `<workspace>/.clawft/{memory,skills}` is the resolved path.\n- [ ] Fallback to home dir only when no workspace.\n- [ ] Regression test: load workspace, write MEMORY.md, assert workspace file changed (not home dir).\n- [ ] Same regression for SkillsLoader.\n- [ ] Migration guide for existing single-user installs.\n\n## Dependencies\nIntersects ws01 bootstrap loader split (multi-tenant) but standalone fixable.\n\n## Notes\nP1 release-gate; the workspace-loaded daemon's memory writes silently land in the wrong place.\n"
+  },
+  {
+    "name": "ws06: bootstrap — split workspace from global at loader for PermissionResolver ceiling (MW-2)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "tech-debt", "security", "governance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-2; WS-T1; `crates/clawft-core/src/bootstrap.rs:633` `TODO(v1.1)`. Cross-listed with ws01.\n\n## Problem / gap\nLoader currently deep-merges workspace overlay into a single Config. `enforce_workspace_ceiling` is bypassed. Multi-tenant deployments cannot apply the security ceiling. `Fine for single-user kernels; needed for multi-tenant.`\n\n## Acceptance criteria\n- [ ] Loader returns `(global, Option<workspace>)`.\n- [ ] `bootstrap` calls `PermissionResolver::new(global, Some(workspace))`.\n- [ ] `enforce_workspace_ceiling` clamps workspace permissions per FIX-04.\n- [ ] Multi-tenant integration test.\n\n## Dependencies\nCross-listed with ws01 (same root cause, single fix).\n\n## Notes\nDe-duplicates with the ws01 item. Keep one Plane parent + a link comment on the other.\n"
+  },
+  {
+    "name": "ws06: governance — implement chain.append RPC for weaver soul promote (MW-3)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "gap", "governance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-3; WS-T2; `crates/clawft-weave/src/commands/soul_cmd.rs:246` `TODO(agent-core-v1.1)`. Cross-listed with ws01.\n\n## Problem / gap\n`weaver soul promote` writes a witness payload to `<workspace>/.weftos/audit/soul-promote.log` (JSONL) plus a tracing event because the daemon doesn't expose a public `chain.append` RPC. Local audit log is the durable record until then.\n\n## Acceptance criteria\n- [ ] `chain.append` RPC implemented in daemon (auth + governance check).\n- [ ] `weaver soul promote` switches to RPC; keeps local log as redundant durable record.\n- [ ] Integration test: promote → assert chain entry present.\n\n## Dependencies\nCross-listed with ws01.\n\n## Notes\nDe-duplicates with the ws01 item.\n"
+  },
+  {
+    "name": "ws06: tests — convert overlay_probe.rs from #[ignore] to hermetic temp-workspace test (MW-4)",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tests"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-4; WS-O11; `tests/overlay_probe.rs` is `#[ignore]`.\n\n## Problem / gap\nThe Layer-3 overlay (`0452539a`) has no end-to-end CI coverage. The only non-ignored coverage is via mocked `FileSystem` and the `home_dir() == None` path. The recent `ec7bb2bd` (\"thread loaded RoutingConfig to daemon agent loop\") suggests a regression already happened once where the overlay was loaded but not propagated.\n\n## Acceptance criteria\n- [ ] `overlay_probe.rs` rewritten to use a `tempdir`-rooted workspace.\n- [ ] Drops a `.clawft/config.json` with a sentinel value, runs the loader, asserts the sentinel reaches the parsed `Config`.\n- [ ] No `#[ignore]`.\n- [ ] Runs in CI as part of `scripts/build.sh test`.\n\n## Dependencies\nIntersects ws01 sync/async asymmetry doc item (Layer 2 sync `Path::exists`).\n\n## Notes\nP1 release-gate; this is the regression-prevention mechanism for the most recent live bug fix.\n"
+  },
+  {
+    "name": "ws06: identity — add agent.workspace_root config key (MW-5)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "gap", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-5; WS-D6; `crates/clawft-core/src/agent/identity.rs:175-179`.\n\n## Problem / gap\n`The workspace is the daemon CWD by default (plan §15.4 — soon agent.workspace_root config key)`. Today daemon CWD is implicit. Adding the config key would let the daemon serve multiple workspaces without restart.\n\n## Acceptance criteria\n- [ ] `agent.workspace_root: Option<PathBuf>` added to `AgentsConfig` (or similar).\n- [ ] `IdentityLoader::new` reads from the key when present, falls back to CWD.\n- [ ] Test: configure two workspaces with different identities; daemon switches based on RPC arg.\n- [ ] Documented in `docs/guides/agents.md`.\n\n## Dependencies\nNone.\n\n## Notes\nDeferrable; multi-workspace daemon is a 0.8.x story.\n"
+  },
+  {
+    "name": "ws06: memory — rebuild memory.rvf.json when MEMORY.md changes (MW-6)",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "release-gate-blocker", "bug", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-6; WS-O6.\n\n## Problem / gap\n`MemoryStore::search` is purely substring + case-insensitive. `memory_bootstrap` builds a vector index in parallel, but the index is built once at bootstrap. `memory_bootstrap` is idempotent and skips if the index file exists, which means **edits to MEMORY.md are not reflected in vector search until the index is manually deleted.**\n\n## Acceptance criteria\n- [ ] Either:\n  - (a) Check mtime in `bootstrap_memory_index` and re-index when `MEMORY.md` is newer than the index.\n  - (b) Add a `weft memory reindex` command (and document the manual workflow).\n- [ ] Reindex test: write to MEMORY.md, search via vector backend, find new content.\n- [ ] Documented in `docs/memory.md`.\n\n## Dependencies\nNone.\n\n## Notes\nP1 release-gate because vector-search staleness is silent and confusing.\n"
+  },
+  {
+    "name": "ws06: substrate — emit chain_event! for session.append on every appended turn (MW-7)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "gap", "governance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-7; WS-O5.\n\n## Problem / gap\n`chain_event!` for `session.create` fires only when neither cache nor disk has the session. There is no `session.update` event for appended turns, only on the file-not-existing branch of `append_turn`. A long-running session looks like one create event followed by a destroy. The hot loop activity is invisible to the chain.\n\n## Acceptance criteria\n- [ ] Emit `session.append` on every appended turn.\n- [ ] Sample-rate cap if volume is too high (configurable).\n- [ ] Test: 100 turns produce 100 events (or sampled count).\n- [ ] Documented in `governance.md`.\n\n## Dependencies\nNone.\n\n## Notes\nDeferrable.\n"
+  },
+  {
+    "name": "ws06: workspace — align WorkspaceManager::delete with FR-W06 (MW-8)",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "release-gate-blocker", "bug", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-8; WS-O10.\n\n## Problem / gap\n`WorkspaceManager::delete` removes the registry entry but explicitly does *not* delete files on disk (\"that is the caller's responsibility\"). FR-W06 says `--keep-data` is the *opt-in* — i.e. default should remove `.clawft/` + `CLAWFT.md`. Today's behavior is the opposite of the spec.\n\n## Acceptance criteria\n- [ ] Default `WorkspaceManager::delete` removes `.clawft/` + `CLAWFT.md`.\n- [ ] `--keep-data` opts out.\n- [ ] CLI surface (`weft workspace delete`) matches.\n- [ ] Test exercises both branches.\n- [ ] Migration note for users who relied on the old (no-op) behavior.\n\n## Dependencies\nNone.\n\n## Notes\nP1 release-gate; spec/code drift on a destructive operation.\n"
+  },
+  {
+    "name": "ws06: sessions — ship weft session gc (or self-cleanup migration path) (MW-9)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "gap", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-9; WS-O8.\n\n## Problem / gap\n`SessionManager` migration path (`old_filename` with `_` instead of `:`) reads the old file and writes the new one, but never removes the old file (\"keep old for safety\"). After several sessions this leaves orphaned files in `sessions/`.\n\n## Acceptance criteria\n- [ ] Either: (a) `weft session gc` command removing migrated underscore-encoded files, or (b) auto-cleanup once the percent-encoded copy is verified intact.\n- [ ] Dry-run mode showing what would be removed.\n- [ ] Test: simulate legacy + new files, run gc, assert clean state.\n\n## Dependencies\nNone.\n\n## Notes\nDeferrable.\n"
+  },
+  {
+    "name": "ws06: workspace — update last_accessed in WorkspaceManager::load (MW-10)",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "release-gate-blocker", "bug"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-10; WS-O4.\n\n## Problem / gap\n`WorkspaceEntry.last_accessed` is populated on `create`, but `load` doesn't touch it. The 3G plan implied `load` would update it. Real impact: `weft workspace list --by-recency` shows creation order, not last-use order.\n\n## Acceptance criteria\n- [ ] `WorkspaceManager::load` updates `last_accessed` to now.\n- [ ] Atomic write.\n- [ ] `weft workspace list --by-recency` shows correct order.\n- [ ] Test confirms ordering after load sequence.\n\n## Dependencies\nNone.\n\n## Notes\nTrivial; release-gate because a CLI flag silently lies today.\n"
+  },
+  {
+    "name": "ws06: planning — backfill empty 08-memory-workspace decisions/blockers notes (MW-11)",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-11; WS-O1.\n\n## Problem / gap\n`.planning/development_notes/08-memory-workspace/{h1-workspace,h2-vector-memory,h3-timestamps}/{decisions,blockers,difficult-tasks,notes}.md` are all empty templates. No decisions or blockers were ever logged. Decisions for H1 (0700 perms, symlink-only sharing, namespace validation) only live in source comments and the SPARC plan.\n\n## Acceptance criteria\n- [ ] Each empty file gets at least a one-paragraph backfill from source comments + SPARC plan.\n- [ ] Or: replace with an `ARCHIVED.md` pointer to the actual living docs.\n- [ ] No empty templates remain.\n\n## Dependencies\nNone.\n\n## Notes\nDocs hygiene; release-gate because the empty trail is a foot-gun for future audits.\n"
+  },
+  {
+    "name": "ws06: planning — re-walk 3g-review.md and mark each ISSUE fixed/open/won't-do (MW-12)",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-12; WS-Q1..WS-Q9; `.planning/reviews/3g-review.md`.\n\nCovers WS-Q1 (--no-hooks plumbing), WS-Q2 (array merge semantics), WS-Q3 (CLAWFT.md walk .git/ boundary), WS-Q4 (import regex), WS-Q5 (WorkspaceContext.name), WS-Q6 (`weft workspace init` alias), WS-Q7 (.gitignore template), WS-Q8 (env-var overlay layer 4), WS-Q9 (mcp/ subdirectory).\n\n## Problem / gap\nThe 3G review is a frozen 2026-02-17 snapshot with no closure markers. Each ISSUE is in indeterminate state — either fixed (with no marker), still open, or rejected.\n\n## Acceptance criteria\n- [ ] Each ISSUE in 3g-review.md gets a status footer: `STATUS: fixed in <commit>` / `STATUS: open (Plane WEFT-N)` / `STATUS: won't-do, rationale: …`.\n- [ ] Open issues have Plane items in the right cycle.\n- [ ] Reviewer-flagged risks (information-leak via CLAWFT.md walk; permissive @ regex) get tests.\n\n## Dependencies\nProduces several follow-up Plane items; this is the parent.\n\n## Notes\nP1 release-gate; this audit is the single biggest residue from 3G.\n"
+  },
+  {
+    "name": "ws06: identity — decide whether FileIdentityProvider needs notify watcher (MW-13)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "performance", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-13; WS-D2; `crates/clawft-core/src/agent/identity.rs:36-39`.\n\n## Problem / gap\n\"No hot-reload watcher — the cached FileIdentityProvider re-reads on every call (small files; cheap). A notify-driven watcher arrives when measurement says it earns its keep.\" The deferred-doc is open with no measurement.\n\n## Acceptance criteria\n- [ ] Profile identity load on the per-turn hot path.\n- [ ] If overhead >1%: ship the notify watcher.\n- [ ] If not: delete the deferred-doc and close the question.\n\n## Dependencies\nNone.\n\n## Notes\nDeferrable; pure decision item.\n"
+  },
+  {
+    "name": "ws06: identity — decide binding-thread-mismatch policy refuse vs annotate (MW-14)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "security", "governance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-14; WS-D3; `crates/clawft-core/src/agent/identity.rs:55-58`.\n\n## Problem / gap\n\"Hard refusal is a v1.1 follow-up.\" Binding-thread mismatch currently downgrades to an annotation + warn log, never refuses. Reviewer-flagged as a security posture decision.\n\n## Acceptance criteria\n- [ ] Decision: refuse / annotate / config-toggle.\n- [ ] Implementation matches.\n- [ ] Documented in `docs/security/identity.md`.\n- [ ] Test pins the chosen behavior.\n\n## Dependencies\nNone.\n\n## Notes\nDeferrable; security posture call.\n"
+  },
+  {
+    "name": "ws06: embeddings — pick fate of rvf_stub.rs vs rvf_io.rs (MW-15)",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "release-gate-blocker", "orphan", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-15; WS-O2.\n\n## Problem / gap\n`crates/clawft-core/src/embeddings/rvf_stub.rs` and `rvf_io.rs` both ship. The plan says rvf_stub gets *replaced* by rvf_io; if both are alive, callers need to know which to use.\n\n## Acceptance criteria\n- [ ] Either remove `rvf_stub.rs` (and update callers), or keep with a module-doc: \"brute-force fallback for the no-rvf-feature build\".\n- [ ] Build matrix covers both feature configurations.\n- [ ] No orphan code.\n\n## Dependencies\nNone.\n\n## Notes\nRelease-gate because dual implementations rot fast.\n"
+  },
+  {
+    "name": "ws06: workspace — document or drop per-agent tool_state/ subdirectory (MW-16)",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "release-gate-blocker", "orphan"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-16; WS-O7.\n\n## Problem / gap\nPer-agent workspace `tool_state/` subdirectory is created but no consumer in `clawft-core` writes there. Plugins are presumably the consumers (Contract 3.1).\n\n## Acceptance criteria\n- [ ] Confirm whether any plugin (in or out of tree) writes to `tool_state/`.\n- [ ] If yes: document in `docs/plugins/` and verify sandbox grants the path.\n- [ ] If no: drop the subdirectory from `AGENT_WORKSPACE_SUBDIRS` (with migration note).\n\n## Dependencies\nIntersects ws04 plugin sandbox audit.\n\n## Notes\nRelease-gate because empty subdirectories that look meaningful are confusing.\n"
+  },
+  {
+    "name": "ws06: identity — route IdentityLoader::current through Platform::fs() (MW-17)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — MW-17; WS-O9.\n\n## Problem / gap\n`IdentityLoader::current` uses `std::fs::read_to_string` directly instead of going through `Platform::fs()`. The only sync, platform-bypassing read in the agent identity path. Cannot be exercised in WASM the same way the rest of the agent loop is.\n\n## Acceptance criteria\n- [ ] `IdentityLoader::current` refactored to async, uses `Platform::fs().read_string()`.\n- [ ] Or: explicit ADR-style comment that documents the deviation.\n- [ ] If async: callers updated.\n- [ ] WASM test exercises the path.\n\n## Dependencies\nMay touch many call sites; assess blast radius first.\n\n## Notes\nDeferrable.\n"
+  },
+  {
+    "name": "ws06: identity — define journal substrate read-on-every-turn path (WS-D1)",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — WS-D1; `crates/clawft-core/src/agent/identity.rs:32-38`.\n\n## Problem / gap\n\"No SOUL.journal write path — F1 seeds the empty journal file and stamps the soul_journal derived-write grant; F2's weaver soul promote reads it, diffs, and applies on confirmation. The journal is not consulted on every-turn loads.\" Any consumer that needs a per-turn read will need to design that path (likely via the same substrate, not a file watcher).\n\n## Acceptance criteria\n- [ ] Identify whether any feature needs per-turn journal reads.\n- [ ] If yes: design the substrate-backed read path.\n- [ ] If no: document the deferral.\n\n## Dependencies\nNone.\n\n## Notes\nResearch-y; long horizon.\n"
+  },
+  {
+    "name": "ws06: identity — substrate-backed Identity::source variant set (WS-D4 / WS-D5)",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws06-memory", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md` — WS-D4 + WS-D5; `crates/clawft-core/src/agent/identity.rs:79-89`.\n\n## Problem / gap\n`Identity::source` is `&'static str` placeholder; trait is forward-compatible. Error variants need to be added when substrate path lands (today only signals \"files missing\").\n\n## Acceptance criteria\n- [ ] When substrate-backed identity path lands: introduce the new variant.\n- [ ] Error variants distinguish IO from deserialization.\n- [ ] Callers updated.\n\n## Dependencies\nSubstrate-backed identity (post-F2 roadmap).\n\n## Notes\nLong horizon.\n"
+  }
+]

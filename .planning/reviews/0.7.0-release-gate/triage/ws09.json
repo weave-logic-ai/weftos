@@ -1,0 +1,212 @@
+[
+  {
+    "name": "ws09: build-script — fix cmd_ui to point at clawft-ui not ui",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tooling", "bug"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #1 + Open Questions #1 + Orphaned/Stale Work.\n\n## Problem / gap\n\n`scripts/build.sh::cmd_ui()` (lines 195-213, 264-266) checks `[ -d \"$ROOT/ui\" ] && [ -f \"$ROOT/ui/package.json\" ]` and runs `cd \"$ROOT/ui\" && npm run build`. Per CHANGELOG 0.6.19 (2026-04-22) the directory was renamed `ui/` -> `clawft-ui/`. The old path no longer has a `package.json` (only stale 2026-02-27 `dist/` and `node_modules/`), so the cmd silently `skip`s — the UI never builds via `scripts/build.sh ui` or `scripts/build.sh all`. This is a release-gate blocker for the dashboard ship.\n\n## Acceptance criteria\n\n- [ ] `scripts/build.sh::cmd_ui` references `$ROOT/clawft-ui` (not `$ROOT/ui`) for the directory + `package.json` check and the `cd` target.\n- [ ] Dry-run print lines (audit cites lines 202 and 407) updated to the new path.\n- [ ] `scripts/build.sh ui` builds the dashboard end-to-end against `clawft-ui/` and produces `clawft-ui/dist/`.\n- [ ] `scripts/build.sh all` includes the UI build in its phase chain.\n- [ ] `scripts/build.sh gate` continues to pass with the new path.\n\n## Dependencies\n\n- None. Pure tooling fix.\n\n## Notes\n\nPair with the `weft ui --ui-dir` default fix (separate item) so the build output and the runtime serve path agree."
+  },
+  {
+    "name": "ws09: weft-ui — update --ui-dir default to clawft-ui/dist",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tooling", "bug"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #2 + Orphaned/Stale Work.\n\n## Problem / gap\n\n`crates/clawft-cli/src/commands/ui_cmd.rs:122` and `crates/clawft-cli/src/help_text.rs:119-122` still default `--ui-dir` to `./ui/dist`. After the rename `ui/` -> `clawft-ui/` (CHANGELOG 0.6.19) `weft ui` will either serve the stale 2026-02-27 build artefact at `ui/dist/` or fail when that directory is removed. The matching unit test at `ui_cmd.rs:127` asserts `Some(\"./ui/dist\")` and would also need updating.\n\n## Acceptance criteria\n\n- [ ] `crates/clawft-cli/src/commands/ui_cmd.rs:122` default changed to `./clawft-ui/dist`.\n- [ ] `crates/clawft-cli/src/help_text.rs:119-122` help text references `./clawft-ui/dist`.\n- [ ] Unit test at `ui_cmd.rs:127` updated to expect `Some(\"./clawft-ui/dist\")`.\n- [ ] `weft ui --no-open` with no `--ui-dir` flag serves a freshly built `clawft-ui/dist/` bundle.\n- [ ] `scripts/build.sh test` passes after the change.\n\n## Dependencies\n\n- Builds best on top of the `scripts/build.sh::cmd_ui` rename fix so the served bundle is also the freshly built one.\n\n## Notes\n\nLand both rename fixes in the same PR if possible to avoid an interim where build script and CLI default disagree."
+  },
+  {
+    "name": "ws09: hygiene — remove stale ui/ legacy artefact",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tech-debt", "tooling"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #3 + Open Questions #2 + Orphaned/Stale Work.\n\n## Problem / gap\n\n`ui/` (top-level repo dir) still exists with a 2026-02-27 `dist/` (459 KB JS) and a `node_modules/` but no `package.json`. It is the pre-rename leftover. With the build script and `weft ui` defaults pointing here it can serve a months-old bundle. Even after the path defaults are fixed, having the stale tree on disk is misleading and bloats checkouts.\n\n## Acceptance criteria\n\n- [ ] Decide: delete entirely vs keep as a forwarding alias / symlink to `clawft-ui/`.\n- [ ] `ui/dist/` and `ui/node_modules/` removed from the working tree.\n- [ ] `.gitignore` updated if the alias approach is chosen so the legacy path cannot accumulate stale artefacts again.\n- [ ] Repo grep for `\\bui/dist\\b` returns no live references (only historical CHANGELOG / planning notes).\n- [ ] CI / release scripts do not fail on the missing path.\n\n## Dependencies\n\n- Lands cleanly only after the `scripts/build.sh` and `weft ui` path fixes (otherwise removal breaks them).\n\n## Notes\n\nIf retained as a symlink, be careful on Windows checkouts — a plain delete is the lowest-risk option."
+  },
+  {
+    "name": "ws09: package-json — rename name field from ui to clawft-ui",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "tech-debt", "tooling"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #4 + Open Questions #3 + Orphaned/Stale Work.\n\n## Problem / gap\n\n`clawft-ui/package.json` still has `\"name\": \"ui\"` and `\"version\": \"0.0.0\"` — leftover from the original scaffold and the pre-rename state. Cosmetic but inconsistent with workspace conventions and confusing in error messages and lockfile output.\n\n## Acceptance criteria\n\n- [ ] `clawft-ui/package.json` `name` set to `clawft-ui`.\n- [ ] `version` aligned with workspace versioning convention (matches the Rust crate / workspace cycle, e.g. `0.7.0`).\n- [ ] `package-lock.json` / `pnpm-lock.yaml` regenerated to match.\n- [ ] `npm run build` still succeeds.\n\n## Dependencies\n\n- None.\n\n## Notes\n\nBundle this with the README and index.html title hygiene fixes since they all touch top-level `clawft-ui/` files."
+  },
+  {
+    "name": "ws09: index-html — set real product title for dashboard",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "docs", "tech-debt"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #5 + Orphaned/Stale Work.\n\n## Problem / gap\n\n`clawft-ui/index.html` still has `<title>ui</title>` from the Vite scaffold. Browser tab and bookmark UX shows the placeholder.\n\n## Acceptance criteria\n\n- [ ] `<title>` updated to a product-appropriate string (e.g. `Clawft Agent Dashboard`).\n- [ ] Optionally surface dynamic title per route via TanStack Router head metadata.\n- [ ] Build still succeeds; smoke-load shows the new title.\n\n## Dependencies\n\n- None.\n\n## Notes\n\nTrivial; bundle with the package.json rename and README rewrite."
+  },
+  {
+    "name": "ws09: readme — replace Vite template with project README",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "docs"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #6 + Orphaned/Stale Work.\n\n## Problem / gap\n\n`clawft-ui/README.md` is still the literal Vite template (\"React + TypeScript + Vite\", links to `@vitejs/plugin-react`, talks about React Compiler not being enabled). No project-specific content for contributors who land in `clawft-ui/` first.\n\n## Acceptance criteria\n\n- [ ] README rewritten covering: local dev with MSW mocks, Axum-mode dev (against `weft gateway`), browser-mode dev (WASM), build (`scripts/build.sh ui`), deployment (referencing `docs/ui/deployment.md`).\n- [ ] Links to `docs/ui/{developer-guide,api-reference,browser-mode,deployment}.md`.\n- [ ] Mentions the BackendAdapter mode-selection contract (`?mode=`, `VITE_BACKEND_MODE`, runtime probe).\n- [ ] No leftover Vite template boilerplate.\n\n## Dependencies\n\n- None.\n\n## Notes\n\nKeep it short — link out to `docs/ui/` for depth."
+  },
+  {
+    "name": "ws09: api — add CSP middleware to gateway handlers",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "stub"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #7 + TODO at `crates/clawft-services/src/api/handlers.rs:130`.\n\n## Problem / gap\n\n`handlers.rs:130` carries `// TODO: Add Content-Security-Policy (CSP) middleware via tower layer.` Plan-of-record (S3.5) specifies `script-src 'self'`, no inline scripts, restricted resource origins, WebSocket origin allowlist, and `'wasm-unsafe-eval'` only in browser-only mode. Without CSP the dashboard is exposed to XSS escalation paths once it ships behind shared hosting or the agent gateway.\n\n## Acceptance criteria\n\n- [ ] Tower CSP layer mounted on the api router with the policy from the plan-of-record.\n- [ ] Browser-only mode toggles `'wasm-unsafe-eval'`; default mode does not include it.\n- [ ] WebSocket `connect-src` origin allowlist matches the served origin.\n- [ ] Integration test asserts `Content-Security-Policy` header on at least one HTML and one JSON response.\n- [ ] TODO comment at `handlers.rs:130` removed.\n\n## Dependencies\n\n- None blocking. Coordinate with rate-limiting middleware item to land them as a single S3.5 hardening PR.\n\n## Notes\n\nIf any inline `<script>` or `style` is required, document it in the PR and prefer `nonce`-based allowance over `'unsafe-inline'`."
+  },
+  {
+    "name": "ws09: api — add rate-limiting middleware with per-endpoint defaults",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "stub"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #8 + TODO at `crates/clawft-services/src/api/handlers.rs:133`.\n\n## Problem / gap\n\n`handlers.rs:133` carries `// TODO: Add rate limiting middleware via tower::limit::RateLimitLayer or tower-governor.` The TODO comment already documents per-endpoint defaults: `/api/auth/token` 5/min, `/api/delegation/*` 60/min, `/api/monitoring/*` 30/min. Without it, the unauthenticated `POST /api/auth/token` is a brute-force surface and the streaming endpoints can be DOS'd.\n\n## Acceptance criteria\n\n- [ ] Rate limiter (tower-governor or equivalent) mounted on the api router.\n- [ ] Per-endpoint policies match the documented defaults (auth 5/min, delegation 60/min, monitoring 30/min); other endpoints get a sane global default.\n- [ ] 429 response includes `Retry-After` header.\n- [ ] Integration test asserts a burst of `POST /api/auth/token` returns 429 after the configured ceiling.\n- [ ] TODO comment at `handlers.rs:133` removed.\n\n## Dependencies\n\n- Pairs naturally with CSP middleware in a single S3.5 hardening PR.\n\n## Notes\n\nPrefer in-memory limiter for the local-gateway use case; document upgrade path to a shared store if/when multi-instance comes."
+  },
+  {
+    "name": "ws09: api — add WebSocket heartbeat and dead-connection cleanup",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "release-gate-blocker", "bug", "performance"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #9 (S3.5.4 sparc 03 phase doc).\n\n## Problem / gap\n\nThe `/ws` endpoint in `crates/clawft-services/src/api/ws.rs` accepts subscribe/unsubscribe/ping but does not enforce a server-side heartbeat or evict dead connections. Long-running dashboards leak slots and the broadcaster fans out to phantom subscribers. S3.5.4 in the sparc plan is unimplemented.\n\n## Acceptance criteria\n\n- [ ] Server sends periodic ping (e.g. 30s) and closes connections that miss N pongs.\n- [ ] Client (`clawft-ui/src/lib/ws-client.ts`) responds to server pings and surfaces missed-pong reconnect.\n- [ ] Broadcaster removes dropped subscribers from its topic map promptly.\n- [ ] Integration / unit test confirms a stalled client is evicted within the configured window.\n\n## Dependencies\n\n- None.\n\n## Notes\n\nReuse `axum::extract::ws` keepalive primitives if available; otherwise a `tokio::time::interval` task per socket is the simplest path."
+  },
+  {
+    "name": "ws09: api-bridge — wire skill install/uninstall to real loader",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #10 + TODOs at `crates/clawft-services/src/api/bridge.rs:282` and `:287`.\n\n## Problem / gap\n\n`bridge.rs:282` (`// TODO: implement skill installation via ClawHub registry`) and `:287` (`// TODO: implement skill uninstallation`) both currently return `Err(\"not implemented\")`. The `/skills` UI route renders an Install/Uninstall button that always fails. Real implementation depends on Skill loader (C3) and ClawHub registry (K4) main-sprint deliverables.\n\n## Acceptance criteria\n\n- [ ] `install_skill(slug)` calls into the real Skill loader and ClawHub registry; success returns the installed skill record.\n- [ ] `uninstall_skill(slug)` removes from the loader and from local cache.\n- [ ] UI install/uninstall round-trip works end-to-end against a running `weft gateway`.\n- [ ] Error responses surface a useful message when a slug is unknown / network fails.\n- [ ] TODO markers at `bridge.rs:282` and `:287` removed.\n\n## Dependencies\n\n- C3 Skill loader / hot-reload\n- K4 ClawHub registry\n\n## Notes\n\nUntil C3/K4 land the UI button should remain feature-gated or grey out with a `not yet available` message."
+  },
+  {
+    "name": "ws09: api-bridge — implement memory delete with append-only rewrite",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #11 + TODO at `crates/clawft-services/src/api/bridge.rs:395`.\n\n## Problem / gap\n\n`bridge.rs:395` carries `// TODO: implement memory entry deletion`. Underlying memory store files are append-only, so a delete requires rewriting the file (or tombstone-marking entries). The `/memory` UI exposes a delete affordance that currently no-ops.\n\n## Acceptance criteria\n\n- [ ] Delete-by-id implemented either via tombstone + compaction or atomic rewrite.\n- [ ] HNSW index updated so a deleted entry no longer surfaces in semantic search.\n- [ ] Concurrency: delete during writes does not corrupt the file.\n- [ ] UI delete round-trip removes the row from `/memory` after refresh.\n- [ ] TODO marker at `bridge.rs:395` removed.\n\n## Dependencies\n\n- H2 Memory store HNSW (already partly wired).\n\n## Notes\n\nPrefer tombstone+compact-on-startup for crash safety; document the recovery semantics in `docs/ui/api-reference.md`."
+  },
+  {
+    "name": "ws09: api-bridge — implement save_config persistence",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #12 + TODO at `crates/clawft-services/src/api/bridge.rs:467`.\n\n## Problem / gap\n\n`bridge.rs:467` carries `// TODO: implement config persistence (deserialize, validate, write to file)`. `save_config` returns `Err(\"config saving not yet implemented\")`. The `/config` UI route shows a Save button (and a diff summary) that always errors.\n\n## Acceptance criteria\n\n- [ ] `save_config` deserializes the incoming JSON into the `RoutingConfig` / agent-config types.\n- [ ] Validation runs (schema + cross-field invariants) before write.\n- [ ] Atomic write (tempfile + rename) to the same file `weft` reads from at startup.\n- [ ] API key fields remain write-only / never echoed back (already the GET-side contract).\n- [ ] UI Save button persists and a daemon restart picks up the new config.\n- [ ] TODO marker at `bridge.rs:467` removed.\n\n## Dependencies\n\n- None blocking; aligns with the recent `cwd-relative workspace config overlay` work.\n\n## Notes\n\nDecide whether save also triggers a hot-reload signal to the running daemon or only takes effect on restart; document the choice."
+  },
+  {
+    "name": "ws09: api — replace mock delegation handlers with FlowDelegator wiring",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #13 + Mock-Data Backends section (`api/delegation.rs::list_active_delegations` line 92, `list_delegation_rules` line 131, `upsert`, `delete`, `history`).\n\n## Problem / gap\n\nAll four delegation handlers in `crates/clawft-services/src/api/delegation.rs` return hardcoded fixtures (three mock delegations, mock rules). The `/delegation` UI's Active / Rules / History tabs render that fake data. Real wiring depends on FlowDelegator events from M1/M2.\n\n## Acceptance criteria\n\n- [ ] `list_active_delegations` subscribes to / queries the live FlowDelegator state.\n- [ ] `list_delegation_rules` reads from config (already persisted by the routing config layer).\n- [ ] `upsert` and `delete` write rule changes through to config persistence.\n- [ ] `history` returns persisted delegation events (audit-trail / event-sourced store).\n- [ ] `/delegation` UI shows live data when the daemon is running.\n- [ ] Comments \"Mock data for now\" / \"Mock rules\" removed.\n\n## Dependencies\n\n- M1/M2 FlowDelegator real events.\n- Depends on `save_config` persistence work for rule writes.\n\n## Notes\n\nUI is already shaped correctly per audit (\"UI ready, backend mocked\")."
+  },
+  {
+    "name": "ws09: api — replace mock monitoring handlers with metrics collector",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #14 + Mock-Data Backends section (`api/monitoring.rs::token_usage` line 99, `cost_breakdown`, `pipeline_runs`).\n\n## Problem / gap\n\n`crates/clawft-services/src/api/monitoring.rs` returns hardcoded provider/session totals and ADR-026 tier costs. The `/monitoring` UI renders those fakes. Real wiring depends on metrics collector + sender_id thread (D5/D6).\n\n## Acceptance criteria\n\n- [ ] `token_usage`, `cost_breakdown`, `pipeline_runs` query the real metrics collector (live or persisted).\n- [ ] Cost attribution by `sender_id` reflects D6 thread once landed.\n- [ ] Per-session latency reflects D5.\n- [ ] `/monitoring` UI shows non-zero values during a real agent run.\n- [ ] \"Mock data\" comment removed.\n\n## Dependencies\n\n- D5 per-session latency.\n- D6 cost attribution by sender_id.\n\n## Notes\n\nIf the metrics store is not yet implemented, ship a minimal in-process aggregator first and document the upgrade path to a persisted store."
+  },
+  {
+    "name": "ws09: tools — wire render_ui to message bus and ws broadcaster",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #15 + step4-s2.1-live-canvas.md design note 2.\n\n## Problem / gap\n\n`crates/clawft-tools/src/render_ui.rs` validates and logs Canvas commands but does not publish them to the message bus. The whole point of the Live Canvas (`/canvas` route + `CanvasCommand` protocol) is that an agent calling `render_ui` causes the dashboard to render; today nothing reaches the WS broadcaster.\n\n## Acceptance criteria\n\n- [ ] `render_ui` publishes the validated command to the message bus on success.\n- [ ] WS broadcaster fans the command out on the `canvas` topic.\n- [ ] `/canvas` route receives and renders the command in real time.\n- [ ] End-to-end test: agent invokes `render_ui` -> dashboard tab subscribed to `canvas` shows the new element.\n- [ ] Existing validation and logging behaviour preserved.\n\n## Dependencies\n\n- WebSocket heartbeat work makes the demo experience cleaner but is not strictly blocking.\n\n## Notes\n\nThis is the single highest-impact gap for the Canvas feature — without it the route is decorative."
+  },
+  {
+    "name": "ws09: wasm-adapter — implement getToolSchema introspection",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #16 + TODO at `clawft-ui/src/lib/adapters/wasm-adapter.ts:205`.\n\n## Problem / gap\n\n`wasm-adapter.ts:205` carries `// Schema introspection deferred to future WASM entry point` and `getToolSchema()` returns `null` in WASM mode. Browser-mode users on `/tools` see no JSON-Schema viewer for any tool.\n\n## Acceptance criteria\n\n- [ ] `clawft-wasm` exposes a `tool_schema(slug)` entry point returning JSON-Schema for the registered tool.\n- [ ] `WasmAdapter.getToolSchema()` calls it and returns the schema.\n- [ ] `/tools` route shows JSON-Schema in WASM mode equivalently to Axum mode.\n- [ ] Comment at `wasm-adapter.ts:205` removed.\n\n## Dependencies\n\n- W-BROWSER WASM bindgen surface (audit lists this as cross-workstream open dep).\n\n## Notes\n\nKeep schema generation symmetric with the Axum-side handler so both modes return the same shape."
+  },
+  {
+    "name": "ws09: ui — implement real Cmd+K command palette",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #17 + Open Questions #7 (S1.3.12).\n\n## Problem / gap\n\nPer step3-s1.3-core-views.md the Cmd+K shortcut is a placeholder that only opens / closes a stub. SPARC plan called for a real fuzzy-finder palette over routes, commands, agents, sessions, etc.\n\n## Acceptance criteria\n\n- [ ] Cmd+K opens a fuzzy-search palette indexing routes, agents, sessions, tools, skills, channels.\n- [ ] Keyboard-only navigation (arrow keys, enter, escape).\n- [ ] Recent / pinned items surfaced first.\n- [ ] Accessible (focus trap, ARIA roles, visible focus ring).\n- [ ] Works in both Axum and WASM adapter modes.\n\n## Dependencies\n\n- None.\n\n## Notes\n\nLand alongside the WCAG audit so a11y patterns are consistent."
+  },
+  {
+    "name": "ws09: auth — add use-auth hook with single-use URL token",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "security", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #18 + Open Questions #6 (S1.2.8).\n\n## Problem / gap\n\nNo `use-auth.ts` hook exists. Token handling is inlined in `lib/api-client.ts` against `localStorage[\"clawft-token\"]`. The SPARC plan called for one-time URL-token consumption (single-use, consumed on first read) — currently the token from `weft ui`'s `?token=...` URL is read freely on every load.\n\n## Acceptance criteria\n\n- [ ] `clawft-ui/src/lib/use-auth.ts` (or `hooks/use-auth.ts`) added with token lifecycle helpers.\n- [ ] URL `?token=...` is consumed once: read on first load, persisted to localStorage, then stripped from `window.location` via `history.replaceState`.\n- [ ] `api-client.ts` reads the token via the hook (or shared store), not directly from localStorage.\n- [ ] Logout clears localStorage and refuses to silently re-auth from a now-stale URL.\n- [ ] Documented in `docs/ui/api-reference.md`.\n\n## Dependencies\n\n- Pairs naturally with Tailscale auth provider work for the multi-user story.\n\n## Notes\n\nKeep the 24h TTL behaviour of `POST /api/auth/token` aligned with the hook's refresh policy."
+  },
+  {
+    "name": "ws09: browser-config — validate cors_proxy URL is HTTPS in production",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "security", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #19 + Open Questions #9.\n\n## Problem / gap\n\n`clawft-ui/src/components/wasm/browser-config.tsx` accepts a `cors_proxy` URL for routing OpenAI / custom provider traffic in browser-only mode. S3.6 security req specifies HTTPS in production, HTTP only for localhost. The check is not visibly enforced in the component.\n\n## Acceptance criteria\n\n- [ ] Save action rejects `http://` URLs unless host resolves to localhost / 127.0.0.1 / `::1`.\n- [ ] User-visible error explains why HTTP was rejected.\n- [ ] Validation runs on initial provider-config load too (not just on user input) so legacy stored values are flagged.\n- [ ] Unit test covers the validator with HTTPS, HTTP-localhost, and HTTP-public cases.\n\n## Dependencies\n\n- None.\n\n## Notes\n\nKeep the validator pure so it can be reused in future Tauri shell config screens."
+  },
+  {
+    "name": "ws09: pwa — add manifest, service worker, push notifications",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #20 + Deferred Phases S3.3.\n\n## Problem / gap\n\nNo `manifest.webmanifest`, no `service-worker.*`, no offline shell, no WASM binary cache, no SW + WS push-notification bridge. S3.3 is entirely unstarted. Long-horizon polish, not 0.7 critical.\n\n## Acceptance criteria\n\n- [ ] `manifest.webmanifest` with name, icons, theme color, start_url, display=standalone.\n- [ ] Service worker pre-caches the app shell and the WASM binary.\n- [ ] Offline reload renders the shell with a clear offline banner.\n- [ ] Push notifications wired to a WS event bridge (subscribe via VAPID, dispatch via SW).\n- [ ] Lighthouse PWA score > 90 in CI.\n\n## Dependencies\n\n- None blocking.\n\n## Notes\n\nDeferred per phase plan; bundle with mobile responsive work."
+  },
+  {
+    "name": "ws09: responsive — mobile sidebar drawer and chat input",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #21 + Deferred Phases S3.3.\n\n## Problem / gap\n\n`MainLayout.tsx` has no responsive drawer for screens < 768 px. Mobile WebChat lacks a bottom-anchored input and swipe nav between sessions. S3.3 is entirely unstarted.\n\n## Acceptance criteria\n\n- [ ] Sidebar collapses to a drawer below 768 px with hamburger toggle.\n- [ ] `/chat` mobile layout: bottom-anchored input, message list scroll-up, swipe-left/right to switch sessions.\n- [ ] Tap targets meet WCAG 44x44 minimum.\n- [ ] Existing desktop layout unaffected (visual snapshot baseline holds at >= 1024 px).\n\n## Dependencies\n\n- WCAG audit (separate item).\n\n## Notes\n\nKeep Tailwind v4 breakpoint conventions consistent across the app."
+  },
+  {
+    "name": "ws09: tauri — scaffold clawft-ui/src-tauri desktop shell",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #22 + Deferred Phases S3.4 + ADR-038 cross-reference.\n\n## Problem / gap\n\nNo `clawft-ui/src-tauri/` directory. The agent dashboard's Tauri shell is unstarted and distinct from `gui/src-tauri/` (which is the WeftOS Explorer). Plan calls for: Tauri 2.0 wrapping `clawft-ui/dist/`, system tray with agent-status colour, Cmd+Shift+W global hotkey, auto-start `weft gateway`, macOS Spotlight integration, native notification bridge.\n\n## Acceptance criteria\n\n- [ ] `clawft-ui/src-tauri/` initialized for Tauri 2.0 wrapping `clawft-ui/dist/`.\n- [ ] System tray icon with agent-status colour states.\n- [ ] Global hotkey Cmd+Shift+W (Linux/Win equivalents).\n- [ ] Tauri side-car launches `weft gateway` on app start, terminates on quit.\n- [ ] macOS Spotlight registration documented; native notification bridge functional on Linux/Win/macOS.\n- [ ] Build artefact ships as part of `scripts/build.sh all`.\n\n## Dependencies\n\n- None blocking; reuse `gui/src-tauri/` learnings without sharing the package.\n\n## Notes\n\nDeferred behind 0.9.x UX redesign cycle per audit."
+  },
+  {
+    "name": "ws09: tests — add Playwright E2E suite under clawft-ui/tests",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "tests", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #23 + Deferred Phases S3.5.\n\n## Problem / gap\n\nNo `clawft-ui/tests/` directory. `package.json` has no `playwright` / `vitest` / `cypress` dep. The dashboard ships without an automated browser-level smoke suite.\n\n## Acceptance criteria\n\n- [ ] Playwright installed in `clawft-ui/package.json` with deterministic version pin.\n- [ ] `clawft-ui/tests/` covers: dashboard loads, WebChat streaming round-trip, Canvas command flow, browser-mode bootstrap.\n- [ ] CI job runs Playwright headless against MSW mocks (and optionally a real `weft gateway`).\n- [ ] Failures emit screenshots + traces.\n- [ ] `scripts/build.sh` exposes the e2e suite (e.g. `scripts/build.sh ui-e2e`).\n\n## Dependencies\n\n- None.\n\n## Notes\n\nMSW already covers all 9 endpoint groups; the Playwright run can use MSW for fast deterministic CI."
+  },
+  {
+    "name": "ws09: ui — axe-core a11y audit and bundle-size budget",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "tests", "performance", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #24 + Deferred Phases S3.5.\n\n## Problem / gap\n\nNo axe-core / WCAG AA audit run; no `vite-bundle-analyzer` in CI. Current bundle is 452 KB JS / 128 KB gzip; S1.2 exit criteria targeted < 200 KB gzip — currently over budget.\n\n## Acceptance criteria\n\n- [ ] axe-core integrated into the Playwright suite or run as a standalone script across all 14 routes.\n- [ ] WCAG AA violations triaged: critical fixed, others tracked.\n- [ ] `vite-bundle-analyzer` produces a report in CI.\n- [ ] Bundle size budget set; build fails if gzip JS exceeds budget.\n- [ ] Identified large modules code-split (`/canvas` advanced renderers, charting, code editor) via dynamic import.\n\n## Dependencies\n\n- Playwright suite item (axe runs nicest inside Playwright).\n\n## Notes\n\nThe largest wins are likely in `/canvas` advanced renderers and the code-editor view."
+  },
+  {
+    "name": "ws09: auth — Tailscale provider and per-user session isolation",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "security", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #25 + Deferred Phases S3.5.\n\n## Problem / gap\n\nThe gateway only supports the local Bearer-token flow today. SPARC plan calls for a Tailscale auth provider validating `X-Tailscale-User-*` headers plus source-IP / cert verification, and per-user session isolation so memory / sessions / config scopes do not leak across users.\n\n## Acceptance criteria\n\n- [ ] Auth provider abstraction with `Bearer` (existing) and `Tailscale` implementations.\n- [ ] Tailscale provider validates `X-Tailscale-User-Login`, source-IP within tailnet, and (optionally) cert chain.\n- [ ] Per-user scoping for `/api/sessions`, `/api/memory`, `/api/config` so user A cannot see user B's data.\n- [ ] Provider selection driven by config; default remains Bearer for local-dev.\n- [ ] Integration tests cover an unauthorized request and a cross-user scope leak attempt.\n\n## Dependencies\n\n- `use-auth` hook work for the client-side scope token plumbing.\n\n## Notes\n\nDocument the threat model in a new ADR (see ADR-for-BackendAdapter task) or its own ADR."
+  },
+  {
+    "name": "ws09: deploy — multi-stage Dockerfile for dashboard",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "tooling", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #26 + Deferred Phases S3.5 (S1.2.12 deployment artefact).\n\n## Problem / gap\n\n`clawft-ui/Dockerfile` is missing. Plan-of-record specifies a multi-stage Vite build -> `nginx:alpine` runtime, never written.\n\n## Acceptance criteria\n\n- [ ] `clawft-ui/Dockerfile` with two stages: `node:lts-alpine` builder running `npm ci && npm run build`; `nginx:alpine` runtime serving `dist/`.\n- [ ] Nginx config sets caching headers, MIME for `.wasm`, and SPA fallback to `index.html`.\n- [ ] Image builds in CI; image size documented.\n- [ ] `scripts/build.sh` adds a `ui-docker` subcommand to drive it.\n- [ ] `docs/ui/deployment.md` updated with the docker workflow.\n\n## Dependencies\n\n- Build script rename fix (so `clawft-ui/dist/` exists).\n\n## Notes\n\nKeep the runtime image minimal — no Node in the final image."
+  },
+  {
+    "name": "ws09: env — add .env and .env.mock with documented VITE vars",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "docs", "tooling"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #27 + Deferred Phases S3.5 (S1.2.13).\n\n## Problem / gap\n\n`clawft-ui/.env` and `.env.mock` are missing. New contributors have to read source to discover `VITE_API_URL`, `VITE_WS_URL`, `VITE_MOCK_API`, `VITE_BACKEND_MODE`.\n\n## Acceptance criteria\n\n- [ ] `clawft-ui/.env.example` (committed) and `clawft-ui/.env.mock` (committed) document all `VITE_*` vars consumed by the app with descriptions and sane defaults.\n- [ ] `.gitignore` excludes `.env` (real local file) but includes `.env.example` and `.env.mock`.\n- [ ] README points at `.env.example`.\n- [ ] No secrets ever shipped in any committed env file.\n\n## Dependencies\n\n- None.\n\n## Notes\n\nKeep the var surface stable; downstream Tauri / Docker work will read the same env layer."
+  },
+  {
+    "name": "ws09: docs — author ADR for BackendAdapter contract",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "docs", "governance"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #28 + ADR Coverage section.\n\n## Problem / gap\n\nThe agent dashboard's auth model, BackendAdapter (axum/wasm/mock) indirection, MSW-first development pattern, and dual-mode runtime probe have no ADR. The audit explicitly calls this a documentation gap. Existing ADRs (003/005/006/007/013/015/016/038) target the WeftOS GUI / Explorer (workstream 08), not this dashboard.\n\n## Acceptance criteria\n\n- [ ] New ADR under `docs/adr/` covering: `BackendAdapter` interface, mode selection (`?mode=` URL param, `VITE_BACKEND_MODE`, runtime health probe), MSW-first dev pattern, browser-only-mode encrypted IndexedDB key storage, and the auth model (Bearer + future Tailscale).\n- [ ] Cross-references CHANGELOG 0.6.19 rename and the four step docs.\n- [ ] Linked from `docs/ui/developer-guide.md`.\n- [ ] ADR index updated.\n\n## Dependencies\n\n- None.\n\n## Notes\n\nKeep it short and decision-shaped, not a redo of the developer guide."
+  },
+  {
+    "name": "ws09: planning — refresh sparc trackers to reflect shipped status",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "docs", "governance"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #29 + Orphaned/Stale Work.\n\n## Problem / gap\n\n`.planning/sparc/ui/05-ui-tracker.md` lists every row as `Status: Not Started`. `.planning/sparc/ui/01-phase-S1-foundation-core-views.md` lines 3053-3087 list every S1.x task as `Status: TODO`. Pre-implementation tasks P1-P6 (API design, WS protocol design, auth design, performance budget) are all `Not Started`. In reality the step docs and orchestrator log are the de-facto trackers and most of S1-S3.2 plus S3.6/S3.7 shipped.\n\n## Acceptance criteria\n\n- [ ] `05-ui-tracker.md` rows updated to reflect observed status (Done / Partial / Deferred / Not Started) per the audit's status table.\n- [ ] `01-phase-S1-foundation-core-views.md` rows reconciled with what landed.\n- [ ] Pre-implementation P1-P6 either marked Done with a pointer to where the design landed (step docs) or explicitly marked deferred.\n- [ ] No row remains `TODO` / `Not Started` for shipped work.\n\n## Dependencies\n\n- None.\n\n## Notes\n\nPure documentation hygiene; should not require code changes."
+  },
+  {
+    "name": "ws09: planning — note rename in step-7 phase-gate and re-run gate",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws09-clawft-dashboard", "audit-finding", "audit-0.7.0", "docs", "tests"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md` task #30 + Open Questions #4.\n\n## Problem / gap\n\n`.planning/development_notes/step7-phase-gate.md` records the 11/11 PASS as run from `cd ui && npm run build` (1,920 modules). That command no longer exists post-rename. The doc is stale on the path; the gate has not been re-verified from `clawft-ui/`.\n\n## Acceptance criteria\n\n- [ ] `step7-phase-gate.md` annotated to note the 0.6.19 rename and the canonical path is now `clawft-ui/`.\n- [ ] Re-run `scripts/build.sh gate` (after the build-script fix) and append the new metrics: modules transformed, bundle sizes, gzip sizes, time, workspace test count.\n- [ ] If results regressed materially, file follow-up issues and link them.\n- [ ] If results match the prior 11/11, doc records confirmation date.\n\n## Dependencies\n\n- `scripts/build.sh::cmd_ui` rename fix (so the gate can run end-to-end).\n\n## Notes\n\nPair with the `.env.example` and README hygiene items so the gate run also exercises new dev-onboarding artefacts."
+  }
+]

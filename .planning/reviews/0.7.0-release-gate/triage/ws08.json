@@ -1,0 +1,352 @@
+[
+  {
+    "name": "ws08: vscode panel — supersede ADRs 005/007/038/013 (legacy Tauri+React)",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs", "governance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/08-weftos-gui.md` task T08-84; \"Orphaned work / parallel paths\" §; `docs/adr/adr-005-xterm-js`, `adr-007-zustand-tauri-events`, `adr-013-json-block-descriptor`, `adr-038-tauri-desktop-shell`.\n\n## Problem / gap\nTop-level ADRs 005 / 007 / 013 / 038 describe a Tauri + React + xterm.js + Zustand stack that the egui canon shell explicitly replaces. None are marked superseded. Old guidance is still indexed in `docs/adr/`, misleading contributors and AI agents about the load-bearing UI path. The egui terminal pane is backed by `alacritty_terminal`, the shell is rendered directly in egui, and `clawft-gui-egui` is the canonical GUI. ADR-016 (multi-target theming) is also called out as parallel/competing.\n\n## Acceptance criteria\n- [ ] Add `Status: Superseded by <ADR>` headers to ADR-005, ADR-007, ADR-013, ADR-038 (and ADR-016 if confirmed parallel) with cross-link to ADR-001 primitive canon and ADR-016 surface description.\n- [ ] Update `docs/adr/README.md` (or index) to reflect superseded status.\n- [ ] Add a short paragraph in each superseded ADR explaining the egui shell rationale.\n- [ ] Confirm no live source still references the superseded path.\n\n## Dependencies\n- Blocks: clean 0.7.0 release-gate doc story.\n- Blocked-by: none.\n\n## Notes\nAudit explicitly flags this as a release-gate-blocker docs item (stale ADRs are governance / `docs` cleanup, not functional)."
+  },
+  {
+    "name": "ws08: explorer — bound activity HashMap (LRU/TTL) to stop session leak",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "release-gate-blocker", "bug", "performance"],
+    "description_md": "## Source\nAudit \"Identified bugs / risk surfaces\" §; task T08-91. `crates/clawft-gui-egui/src/explorer/`.\n\n## Problem / gap\nActivity-dot `HashMap` in `Explorer` grows unbounded — paths added on every value change with no eviction. Long-running sessions leak one entry per visited path with mutation history. Real users running the panel against a live daemon will hit this.\n\n## Acceptance criteria\n- [ ] Cap `Explorer::activity` with an LRU or TTL (target: configurable bound, default ~512 entries or 30 min TTL).\n- [ ] Add a unit test that simulates >N path mutations and asserts the map size stays bounded.\n- [ ] Verify tree-render still shows a recent-activity dot for the most-recent paths.\n\n## Dependencies\n- Blocks: long-running smoke / stress tests of Explorer.\n- Blocked-by: none.\n\n## Notes\nClassic memory-leak class; small fix but user-visible after ~hours of session use."
+  },
+  {
+    "name": "ws08: composer — wire ui://field in surface IR dispatch",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "gap"],
+    "description_md": "## Source\nTask T08-10; `src/surface_host/compose.rs:144` `render_todo` fallthrough; ADR-016 surface description.\n\n## Problem / gap\nField primitive exists in `canon/field.rs` but the surface IR composer falls through to `render_todo` for `ui://field`, rendering a yellow `\"TODO: ui://field not wired in M1.5\"` label. WeftOS Admin app (and any future surface declaring a field) cannot show form input.\n\n## Acceptance criteria\n- [ ] Add `ui://field` arm in `compose.rs` match dispatching to `Field::show` with proper kind/value extraction from `SurfaceTree`.\n- [ ] Cover with a fixture in `tests/surface_headless_render.rs` or `tests/admin_app_e2e.rs`.\n- [ ] Verify affordance round-trip (text edit → CanonResponse → kernel verb) end-to-end.\n\n## Dependencies\n- Blocks: T08-12 (Field::Date), T08-13 (Field::Code) — both go through this dispatch.\n- Blocked-by: none.\n\n## Notes\nThis is the first of 11 canon IRIs that fall through; field is highest priority because admin/concierge surfaces want input."
+  },
+  {
+    "name": "ws08: composer — wire remaining 10 canon IRIs (toggle/select/slider/sheet/modal/dock/tabs/tree/plot/media/canvas/foreign)",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "gap"],
+    "description_md": "## Source\nTask T08-11; `src/surface_host/compose.rs:144,683` `render_todo` fallthrough.\n\n## Problem / gap\nAfter `ui://field` lands, the following primitives still render the yellow TODO label when declared via surface IR: `ui://toggle`, `ui://select`, `ui://slider`, `ui://sheet`, `ui://modal`, `ui://dock`, `ui://tabs`, `ui://tree`, `ui://plot`, `ui://media`, `ui://canvas`, `ui://foreign`. Each primitive type has an in-crate widget but isn't dispatched. This blocks the \"21-item canon\" claim being honest from the surface-description path.\n\n## Acceptance criteria\n- [ ] Add a match arm + render call for each of the 12 IRIs above.\n- [ ] Each arm covered by a smoke-render test (similar pattern to existing arms).\n- [ ] `render_todo` fallthrough remains only for genuinely-unknown IRIs.\n- [ ] Update `compose.rs:11` doc comment that currently labels this M1.6+ work.\n\n## Dependencies\n- Blocks: any surface fixture wanting these primitives.\n- Blocked-by: T08-10 (field, as the pattern reference).\n\n## Notes\nM1.5 explicitly shipped only 10 arms (Stack/Strip/Grid/Chip/Pressable/Gauge/Table/StreamView/Heatmap/Waveform). Closing the gap is required before any honest \"canon complete\" claim."
+  },
+  {
+    "name": "ws08: wasm — fix wasm-opt disabled (4.2 MB unoptimized cold-load hit)",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "release-gate-blocker", "performance", "tooling"],
+    "description_md": "## Source\nTask T08-85; audit \"Identified bugs / risk surfaces\" §; `crates/clawft-gui-egui/Cargo.toml:9-12`.\n\n## Problem / gap\n`wasm-pack` profile sets `wasm-opt = false` because the cached `wasm-opt` rejects modern bulk-memory output. GUI takes a \"modest size hit\". WASM bundle is reported at ~4.2 MB unoptimized; this slows VSCode/Cursor panel cold-load. Brittle and visible to users every time they open the panel.\n\n## Acceptance criteria\n- [ ] Pin a `wasm-opt` (binaryen) version that supports bulk-memory.\n- [ ] Re-enable `wasm-opt` in `Cargo.toml` profile.\n- [ ] Re-run `scripts/build-wasm.sh`; confirm bundle shrinks.\n- [ ] Document the required binaryen version in `extensions/vscode-weft-panel/README.md` and/or `scripts/build.sh`.\n\n## Dependencies\n- Blocks: VSCode panel cold-load perf goal.\n- Blocked-by: none.\n\n## Notes\nOnce fixed, capture the new bundle size and update audit reference (~4.2 MB)."
+  },
+  {
+    "name": "ws08: wasm — factor Instant::checked_sub time-origin guard helper",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tech-debt", "bug"],
+    "description_md": "## Source\nTask T08-90; audit \"Orphaned work / parallel paths\" §; commit `eb4cd9d8`.\n\n## Problem / gap\nWSL/WASM `Instant`-subtraction guard (`checked_sub`) duplicated at `Explorer::default` and `SubscriptionHandle::new`. Drift risk: if one is updated and the other isn't, the time-origin panic resurfaces only on WSL. Already burned us once.\n\n## Acceptance criteria\n- [ ] Extract `wasm_safe_now()` (or similar) helper into a shared module (e.g. `src/util/time.rs` or under `live/`).\n- [ ] Replace both call sites.\n- [ ] Add a comment referencing commit `eb4cd9d8` and the WSL/WASM origin behaviour.\n\n## Dependencies\n- Blocks: future code adding more `Instant::now() - origin` patterns.\n- Blocked-by: none.\n\n## Notes\nSmall but cheap-to-do hygiene that prevents a recurring class of bug."
+  },
+  {
+    "name": "ws08: chat panel — surface live smoke verify against running llama-server",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tests", "tooling"],
+    "description_md": "## Source\nTask T08-01; audit \"Handoff open loops\" §; `docs/handoff.md` 2026-04-26/27; commit `e6f8c816`.\n\n## Problem / gap\nLive chat round-trip smoke against running llama-server is still pending. Chat-agent timeout was patched (300s + `AGENT_CHAT_PER_TURN_MAX_TOKENS = 256`) but user has not exercised it end-to-end. \"Concierge reads CLAUDE.md\" is the canonical smoke. Without this, we don't know if the patched stack actually works.\n\n## Acceptance criteria\n- [ ] Run weft-gui-egui native (or VSCode panel) against a running llama-server daemon.\n- [ ] Ask \"what is this project about?\" via chat panel; expect concierge to read `CLAUDE.md` and respond.\n- [ ] Capture a brief log of round-trip latency + token count.\n- [ ] Document smoke procedure in `extensions/vscode-weft-panel/SMOKE.md`.\n\n## Dependencies\n- Blocks: chat-agent v1.1 streaming work (T08-60) — must confirm v1.0 baseline first.\n- Blocked-by: daemon + llama-server up.\n\n## Notes\nGate item from latest handoff. Result either green-lights 0.7.0 chat or surfaces a real bug."
+  },
+  {
+    "name": "ws08: composer — RefCell re-entrancy class still possible (deadlock-bug class)",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "release-gate-blocker", "bug"],
+    "description_md": "## Source\nAudit \"Identified bugs / risk surfaces\" §; `src/surface_host/compose.rs:96-105`; example `examples/canon_slider_windows_deadlock_repro.rs`; commit `b5ed97f4`.\n\n## Problem / gap\nThe composer's per-frame `RefCell<Vec<...>>` accumulators walk the tree using interior mutability. Any future re-entrancy from a primitive's `show()` would panic. The Windows-only RwLock reentrancy in canon slider was already patched, but the architectural class isn't eliminated. New canon IRI dispatch (T08-11) likely increases re-entrancy surface.\n\n## Acceptance criteria\n- [ ] Audit current accumulators and identify potential re-entry call paths (especially after T08-11 lands more dispatch arms).\n- [ ] Either: refactor to pass mutable borrow explicitly (no `RefCell`), or add a debug-mode re-entry guard with a clear error message.\n- [ ] Add a regression test using the existing repro example pattern.\n\n## Dependencies\n- Blocked-by: T08-11 (more dispatch arms exercise this class first).\n- Blocks: confidence in primitive expansion.\n\n## Notes\nPre-existing risk surface; promotes to release-gate because the dispatch expansion in T08-11 makes re-entry more likely."
+  },
+  {
+    "name": "ws08: vscode allowlist drift — document or automate substrate-method add",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tooling", "docs"],
+    "description_md": "## Source\nAudit \"Identified bugs / risk surfaces\" §; user-memory `feedback_rebuild_webview_wasm.md` and `feedback_extension_rpc_allowlist.md`; `extensions/vscode-weft-panel/src/extension.ts`.\n\n## Problem / gap\nEvery new substrate consumer needs an allowlist edit + WASM rebuild + extension recompile + Cursor webview reload. Captured as a recurring failure mode in user memory. No automation, and no checklist in the repo.\n\n## Acceptance criteria\n- [ ] Add a contributor doc (`extensions/vscode-weft-panel/README.md` section or new `docs/guides/` page) listing the four-step rebuild dance.\n- [ ] Optionally: a `scripts/build.sh` subcommand `rebuild-vscode-panel` that runs build-wasm + extension recompile.\n- [ ] Cross-link the user-memory feedback files (or summarise into the doc).\n\n## Dependencies\n- Blocks: repeat-developer onboarding pain.\n- Blocked-by: none.\n\n## Notes\nDocs/tooling fix; release-gate because it directly causes user-visible \"my edit didn't take\" confusion."
+  },
+  {
+    "name": "ws08: wasm — image PNG feature pin documentation",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tech-debt", "docs"],
+    "description_md": "## Source\nTask T08-93; audit \"Identified bugs / risk surfaces\" §; `crates/clawft-gui-egui/Cargo.toml:48-51`.\n\n## Problem / gap\n`image` crate pinned to `default-features = false` + `[\"png\"]` because feature unification doesn't reliably pick PNG on the wasm target — boot logo silently fails to decode otherwise. Brittle: any future workspace dep that flips `default-features = true` reintroduces the bug, with no warning.\n\n## Acceptance criteria\n- [ ] Add a `// IMPORTANT:` block comment in `Cargo.toml` near the `image` entry explaining the pin rationale + symptom (boot logo silent decode failure).\n- [ ] Add a smoke test that loads the boot logo on the WASM build and asserts non-empty pixels (or at minimum decode success).\n- [ ] If feasible, link to a tracking issue for upstream `image` feature unification on wasm.\n\n## Dependencies\n- Blocks: future workspace-deps consolidation work (related to WEFT-8 already covers version drift; this is feature-flag drift).\n- Blocked-by: none.\n\n## Notes\nWEFT-8 covers version drift; this is the feature-set drift complement, distinct enough to track separately."
+  },
+  {
+    "name": "ws08: chat panel — markdown rendering in chat bubbles",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-62; `src/explorer/chat.rs:23-32`; chat-agent-v1.md §14.\n\n## Problem / gap\nChat bubbles render plain text only. Concierge responses with code blocks, lists, headers come through as raw markdown source — degraded UX.\n\n## Acceptance criteria\n- [ ] Pick a markdown crate compatible with both native and wasm32 (e.g. `egui_commonmark` or pulldown-cmark + custom renderer).\n- [ ] Render assistant turns as parsed markdown; preserve code-block monospace and copy affordance.\n- [ ] Cover with a snapshot test on a representative response.\n\n## Dependencies\n- Blocked-by: T08-01 baseline smoke green.\n- Blocks: nicer concierge UX.\n\n## Notes\nChat-agent v1.1 backlog item."
+  },
+  {
+    "name": "ws08: chat panel — inline streaming via agent.chat_stream",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-60; `src/explorer/chat.rs:23-32`; Apr 25 user brief; chat-agent-v1.md §14.\n\n## Problem / gap\nChat panel is sync-only. Long answers feel frozen until full response. Daemon needs `agent.chat_stream` v1.1+ verb; panel needs incremental rendering.\n\n## Acceptance criteria\n- [ ] Add `agent.chat_stream` verb to extension allowlist (with appropriate timeout policy).\n- [ ] Wire daemon-side streaming into chat panel; render tokens as they arrive.\n- [ ] Surface heartbeat label or progress affordance during in-flight stream.\n- [ ] Native + WASM transports both supported.\n\n## Dependencies\n- Blocked-by: daemon-side `agent.chat_stream` RPC (workstream tracking — chat-agent v1.1).\n- Blocks: T08-65 (heartbeat label).\n\n## Notes\nMarked as 0.8.x — substantive UX feature, daemon-side dependency."
+  },
+  {
+    "name": "ws08: chat panel — multi-conversation sidebar UI",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-61; chat-agent-v1.md §14; Apr 25 user brief.\n\n## Problem / gap\nPanel currently shows one conversation. No way to switch between concurrent threads or revisit history. Multi-tab terminal also foreshadowed only.\n\n## Acceptance criteria\n- [ ] Sidebar listing conversations (id + last-active timestamp + first message snippet).\n- [ ] New-conversation affordance.\n- [ ] Selection switches active stream + history.\n- [ ] In-memory persistence acceptable for first cut; on-disk persistence is a follow-up.\n\n## Dependencies\n- Blocked-by: T08-60 (streaming + per-conversation state).\n\n## Notes\nPart of chat-agent v1.1 backlog."
+  },
+  {
+    "name": "ws08: chat panel — system-prompt UI affordance",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "stub"],
+    "description_md": "## Source\nTask T08-63; `src/explorer/chat.rs:29` (struct has unwired `system` field).\n\n## Problem / gap\nChat struct already declares a `system` field but has no UI to set it. Users cannot customise the concierge persona / instructions per session.\n\n## Acceptance criteria\n- [ ] Add a system-prompt edit affordance (e.g. expandable textarea above the message field).\n- [ ] Persist per-conversation in memory; pass through on each `agent.chat` call.\n- [ ] Sensible default (empty or workspace-derived).\n\n## Dependencies\n- Blocked-by: T08-61 if scoped to per-conversation, else standalone.\n\n## Notes\nStub already in struct — small to land."
+  },
+  {
+    "name": "ws08: chat panel — model / provider switcher in chip strip",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-64; Apr 25 user brief; chat-agent-v1.md §14.\n\n## Problem / gap\nNo runtime way to choose model/provider from the panel. Users must edit configs out-of-band.\n\n## Acceptance criteria\n- [ ] Chip-strip selector (or dropdown) listing available providers/models from daemon.\n- [ ] Selection plumbs through `agent.chat` call.\n- [ ] Persists across panel reload.\n\n## Dependencies\n- Blocked-by: daemon-side enumeration of available providers/models.\n\n## Notes\nUser brief item from Apr 25."
+  },
+  {
+    "name": "ws08: chat panel — heartbeat label replaces spinner occlusion",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "bug"],
+    "description_md": "## Source\nTask T08-65.\n\n## Problem / gap\nSpinner currently occludes `derived/chat/<conv>/status`. Users can't see live status text during long waits.\n\n## Acceptance criteria\n- [ ] Replace spinner with a heartbeat label that surfaces `derived/chat/<conv>/status` live.\n- [ ] Keep a subtle activity indicator (dot or animated text).\n\n## Dependencies\n- Blocked-by: T08-60 (streaming).\n\n## Notes\nUX polish, after streaming lands."
+  },
+  {
+    "name": "ws08: chat panel — real interactive defer (resume on { deferred: true })",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-66; chat-agent-v1.md §14.\n\n## Problem / gap\nWhen agent returns `{ deferred: true, reason }` the panel should prompt the user and resume on response. Today it doesn't differentiate this control case.\n\n## Acceptance criteria\n- [ ] Detect `deferred: true` in response.\n- [ ] Render the `reason` and an inline input/affordance.\n- [ ] Resume conversation with user-supplied input.\n\n## Dependencies\n- Blocked-by: agent-side defer protocol stable.\n\n## Notes\nChat-agent v1.1 backlog."
+  },
+  {
+    "name": "ws08: chat panel — identity-drift / binding-thread mismatch warning",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap", "security"],
+    "description_md": "## Source\nTask T08-67; chat-agent-v1.md §14.\n\n## Problem / gap\nNo surface for identity drift or binding-thread mismatches. Silent failures are a security/governance risk.\n\n## Acceptance criteria\n- [ ] Detect identity-drift / binding-thread mismatch markers in agent metadata.\n- [ ] Render a non-dismissable banner (or chip) when mismatch detected.\n- [ ] Link to docs explaining remediation.\n\n## Dependencies\n- Blocked-by: agent-side metadata surfacing this signal.\n\n## Notes\nSecurity-adjacent UI; bundle with chat-agent v1.1."
+  },
+  {
+    "name": "ws08: terminal panel — mouse selection + clipboard",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-70; `src/explorer/terminal.rs:27-37`.\n\n## Problem / gap\nTerminal pane has no selection or copy-to-clipboard. Basic terminal usability gap.\n\n## Acceptance criteria\n- [ ] Mouse-drag selection over the alacritty-backed grid.\n- [ ] Copy on selection or Ctrl+C / Cmd+C.\n- [ ] Paste from clipboard into PTY.\n\n## Dependencies\n- Blocks: terminal-as-real-tool usage.\n- Blocked-by: none.\n\n## Notes\nNative-only acceptable initially (WASM stub remains)."
+  },
+  {
+    "name": "ws08: terminal panel — bold/italic glyph variants",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-71; `src/explorer/terminal.rs:27-37`.\n\n## Problem / gap\nItalic ignored; bold treated inconsistently. ANSI styling fidelity is incomplete.\n\n## Acceptance criteria\n- [ ] Render bold variants from font fallback or weighted glyph.\n- [ ] Render italic variants where font supports it.\n- [ ] Visual smoke test against a known ANSI fixture.\n\n## Dependencies\n- Blocked-by: none.\n\n## Notes\nLow priority cosmetic."
+  },
+  {
+    "name": "ws08: terminal panel — scrollback view + wheel handler",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-72; `src/explorer/terminal.rs:27-37`.\n\n## Problem / gap\nTerminal shows viewport only; scroll-wheel doesn't reveal scrollback. Lost output is invisible.\n\n## Acceptance criteria\n- [ ] Mouse-wheel scrolls into alacritty grid history.\n- [ ] Scrollback bound configurable; default reasonable (~10k lines).\n- [ ] Resize re-reflows correctly.\n\n## Dependencies\n- Blocked-by: none.\n\n## Notes\nBasic terminal expectation."
+  },
+  {
+    "name": "ws08: terminal panel — multi-tab terminal (HashMap<SessionId, Terminal>)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-73; Apr 25 user brief.\n\n## Problem / gap\nOnly one terminal session at a time. Structure foreshadowed (`HashMap<SessionId, Terminal>`) but unwired.\n\n## Acceptance criteria\n- [ ] Tabbed terminal UI; each tab is its own PTY.\n- [ ] New / close-tab affordances.\n- [ ] Selection switches active session.\n\n## Dependencies\n- Blocked-by: T08-70/T08-72 baseline.\n\n## Notes\nUX feature."
+  },
+  {
+    "name": "ws08: terminal panel — real WASM terminal renderer",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-74; `src/explorer/terminal.rs`; alacritty native-only today.\n\n## Problem / gap\nWASM terminal is a stub. VSCode/Cursor panel users get nothing. Real WASM renderer needs design re-think (alacritty doesn't compile to wasm32).\n\n## Acceptance criteria\n- [ ] Design memo: pick a wasm-compatible VTE / renderer path (custom or vendored).\n- [ ] Implement minimum viable WASM terminal (read-only output first acceptable).\n- [ ] Smoke test in VSCode panel.\n\n## Dependencies\n- Blocked-by: design decision; possibly RPC-side `terminal.spawn/write/resize/close` revisit.\n\n## Notes\nLong-horizon — explicit 0.9.x design re-think per the cycle rules."
+  },
+  {
+    "name": "ws08: canon — implement Field::Date (DatePickerButton + chrono::NaiveDate)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "stub"],
+    "description_md": "## Source\nTask T08-12; `src/canon/field.rs:6,61`.\n\n## Problem / gap\nCanon row 3 (`Field`) ships only Text/Number/Choice. Date is an explicit TODO. ADR-001 row 3 lists it.\n\n## Acceptance criteria\n- [ ] Add `FieldValue::Date(NaiveDate)` enum variant.\n- [ ] Wire `egui_extras::DatePickerButton` in `field.rs`.\n- [ ] Smoke test in `canon/mod.rs`.\n- [ ] Composer dispatch (depends on T08-10) covers Date.\n\n## Dependencies\n- Blocked-by: T08-10 (composer field arm).\n\n## Notes\nCanon completeness work."
+  },
+  {
+    "name": "ws08: canon — implement Field::Code (TextEdit::multiline + syntax highlighting)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "stub"],
+    "description_md": "## Source\nTask T08-13; `src/canon/field.rs:6,62`.\n\n## Problem / gap\nField::Code is an explicit TODO. ADR-003 (codemirror) does not apply here — egui needs `egui::TextEdit::multiline` plus `egui_extras::syntax_highlighting`.\n\n## Acceptance criteria\n- [ ] Add `FieldValue::Code { lang, src }` variant.\n- [ ] Wire `TextEdit::multiline` with syntax highlighter.\n- [ ] Smoke test for at least one language (e.g. Rust).\n- [ ] Composer dispatch (depends on T08-10) covers Code.\n\n## Dependencies\n- Blocked-by: T08-10 (composer field arm).\n\n## Notes\nCanon completeness."
+  },
+  {
+    "name": "ws08: canon — Select TableBuilder large-set form (ADR-001 row 5)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-14; `src/canon/select.rs:6`.\n\n## Problem / gap\nLarge-N Select variant (TableBuilder-based) is explicitly deferred. Doc says the table form is \"a future extension kept inside `ui://table`\" but ADR-001 row 5 implies Select itself should support it.\n\n## Acceptance criteria\n- [ ] Decide canonical home: Select large-N or compose with `ui://table`.\n- [ ] If Select: wire `egui_extras::TableBuilder` for >N items.\n- [ ] Update ADR-001 alignment note in `select.rs:6`.\n\n## Dependencies\n- Blocked-by: design decision.\n\n## Notes\nDesign call before code."
+  },
+  {
+    "name": "ws08: explorer — HealthViewer for substrate/<node>/health (READS-ONLY tier)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-20; `.planning/sensors/EXPLORER-MANAGEMENT-SURFACE.md` affordances #1, #2.\n\n## Problem / gap\nNo viewer for `HealthReport` paths. Affordances #1 and #2 (READS-ONLY tier) blocked. Needs new `HealthReport` Object Type.\n\n## Acceptance criteria\n- [ ] Add `HealthReport` Object Type under `ontology/`.\n- [ ] Add `HealthViewer` under `explorer/viewers/`.\n- [ ] Register viewer in registry (priority appropriate).\n- [ ] Smoke test against fixture.\n\n## Dependencies\n- Blocks: T08-23 sparkline embed for HealthReport scalars.\n\n## Notes\nPart of \"migration pass\" post Node/Actor split."
+  },
+  {
+    "name": "ws08: explorer — SensorViewer with raw-vs-summary child-pane switcher",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-21; EXPLORER-MANAGEMENT-SURFACE affordance #3.\n\n## Problem / gap\nNo viewer for Sensor classification with raw/summary toggle.\n\n## Acceptance criteria\n- [ ] Add `Sensor` Object Type classifier.\n- [ ] Add `SensorViewer` with raw and summary panes plus a switcher chip.\n- [ ] Register viewer; smoke test.\n\n## Dependencies\n- Blocked-by: T08-20 (Object Type pattern).\n- Blocks: T08-23.\n\n## Notes\nPart of management-surface READS-ONLY tier."
+  },
+  {
+    "name": "ws08: explorer — tree filter UI (chip row for type/status filters)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-22; EXPLORER-MANAGEMENT-SURFACE affordance #9.\n\n## Problem / gap\nNo way to filter the substrate tree by Object Type or status. Sentinel chip strip already exists; reuse the pattern.\n\n## Acceptance criteria\n- [ ] Top-of-tree chip row with type + status filters.\n- [ ] Filters persist within session.\n- [ ] Tree re-renders on filter change.\n\n## Dependencies\n- Blocked-by: none.\n\n## Notes\nSmall UI add per audit note."
+  },
+  {
+    "name": "ws08: explorer — sparkline embed for HealthReport scalars",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-23; EXPLORER-MANAGEMENT-SURFACE affordance #10.\n\n## Problem / gap\n`HealthReport.rssi`, `free_heap`, observed-rate scalars have no inline sparkline under Node/Sensor viewers. `TimeSeriesViewer` already exists — just wiring.\n\n## Acceptance criteria\n- [ ] Embed `TimeSeriesViewer` (or sparkline mode) inline in HealthViewer / SensorViewer for known scalar fields.\n- [ ] Configurable via Object-Type metadata.\n\n## Dependencies\n- Blocked-by: T08-20 / T08-21.\n\n## Notes\nReuses shipped infra."
+  },
+  {
+    "name": "ws08: explorer — Sensor↔Node breadcrumb navigation intent",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-24; EXPLORER-MANAGEMENT-SURFACE affordance #11.\n\n## Problem / gap\nNo viewer-emitted \"select path\" intent that the Explorer's `on_select` consumes. Users can't jump from a Sensor to its parent Node.\n\n## Acceptance criteria\n- [ ] Add `CanonResponse::SelectPath(SubstratePath)` (or similar intent) emit.\n- [ ] Explorer consumes the intent in its top-level select handler.\n- [ ] Wire breadcrumb buttons in HealthViewer / SensorViewer.\n\n## Dependencies\n- Blocked-by: T08-20 / T08-21.\n\n## Notes\nNavigational UX."
+  },
+  {
+    "name": "ws08: explorer — copy-path / copy-pubkey / export-snapshot via clipboard",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-25; EXPLORER-MANAGEMENT-SURFACE affordance #12.\n\n## Problem / gap\negui clipboard API not wired. No way to copy a substrate path, node pubkey, or export the current detail-pane snapshot.\n\n## Acceptance criteria\n- [ ] Add a kebab/menu chip in detail pane with Copy Path / Copy Pubkey / Export Snapshot.\n- [ ] Use `ctx.output_mut(|o| o.copied_text = ...)`.\n- [ ] Toast or transient label confirming copy.\n\n## Dependencies\n- Blocked-by: none.\n\n## Notes\nSmall UX win."
+  },
+  {
+    "name": "ws08: explorer — Workshop parameterization schema sign-off + impl",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "governance", "gap"],
+    "description_md": "## Source\nTask T08-30; EXPLORER-MANAGEMENT-SURFACE affordance #8 + open question §6.2.\n\n## Problem / gap\nWorkshop parameterization schema (`{ \"substrate_path_template\": \"...\", \"params\": { ... } }`) not signed off. Open question. Without sign-off, parameterized Workshop panels are blocked.\n\n## Acceptance criteria\n- [ ] Decision memo (in `.planning/explorer/`) defining the canonical schema.\n- [ ] Sign-off in handoff or symposium.\n- [ ] Implement schema parsing + substitution in `workshop.rs`.\n- [ ] TOML watcher example updated.\n\n## Dependencies\n- Blocked-by: design sign-off.\n\n## Notes\nBoth governance (schema sign-off) and implementation."
+  },
+  {
+    "name": "ws08: explorer — Lineage Object Type + viewer (metadata convention sign-off)",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap", "governance"],
+    "description_md": "## Source\nTask T08-31; EXPLORER-MANAGEMENT-SURFACE affordance #14 + open question §6.3.\n\n## Problem / gap\nLineage metadata placement is open: inline field vs sibling `<derived-path>/meta/lineage` path. Without sign-off, no Lineage Object Type, no lineage viewer.\n\n## Acceptance criteria\n- [ ] Decision memo on metadata placement.\n- [ ] Add Lineage Object Type to registry.\n- [ ] Add lineage graph viewer.\n- [ ] Smoke test against a derived path with lineage attached.\n\n## Dependencies\n- Blocked-by: governance sign-off.\n\n## Notes\nLong-horizon design item."
+  },
+  {
+    "name": "ws08: explorer — ObjectType::applicable_actions populated for Mesh/Sensor/Node",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "stub"],
+    "description_md": "## Source\nTask T08-32; PHASE-2-PLAN.md Track 2; Phase 2 ontology open questions.\n\n## Problem / gap\n`ObjectType::applicable_actions` and `events_emitted` are declared as slots but all empty for MVP. Per-type schema not designed. Action Types declared as slots, all empty.\n\n## Acceptance criteria\n- [ ] Design per-type `applicable_actions` schema (entry shape decided).\n- [ ] Populate for Mesh / Sensor / Node.\n- [ ] Surface chosen actions in the Explorer detail pane (read-only — full pipeline is T08-33+).\n- [ ] Update Object Type tests.\n\n## Dependencies\n- Blocked-by: schema design.\n- Blocks: full Actions pipeline.\n\n## Notes\nPhase 3 enabler."
+  },
+  {
+    "name": "ws08: composer — honest_affordances real GEPA / governance intersection",
+    "priority": "medium",
+    "cycle": "0.9.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "stub", "governance"],
+    "description_md": "## Source\nTask T08-33; `src/surface_host/compose.rs:803-805,805`; ADR-006 rule 2.\n\n## Problem / gap\n`honest_affordances` is identity passthrough — \"ADR-006 rule 2 TODO\". GEPA-gated governance intersection deferred to M2 active-radar loop. The hook exists; the policy doesn't.\n\n## Acceptance criteria\n- [ ] Define governance/GEPA policy contract.\n- [ ] Implement intersection: only return affordances permitted by current governance state.\n- [ ] Smoke test with allow + deny fixtures.\n- [ ] Update ADR-006 alignment note.\n\n## Dependencies\n- Blocked-by: M2 active-radar loop design.\n\n## Notes\nLong-horizon — ties to broader governance architecture."
+  },
+  {
+    "name": "ws08: workshop — implement Grid layout (degrades to Rows today)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\nTask T08-40; PHASE-2-PLAN.md Track 5.\n\n## Problem / gap\nWorkshop's Grid layout falls through to Rows with a debug hint. Hot-reload composition declared as Rows-only.\n\n## Acceptance criteria\n- [ ] Implement Grid layout in `explorer/workshop.rs`.\n- [ ] TOML schema parsing for grid config.\n- [ ] Smoke + integration test (`tests/workshop_integration.rs`).\n\n## Dependencies\n- Blocked-by: none.\n\n## Notes\nPhase 2 stretch."
+  },
+  {
+    "name": "ws08: workshop — implement Tabs layout (degrades to Rows today)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\nTask T08-41; PHASE-2-PLAN.md Track 5.\n\n## Problem / gap\nWorkshop Tabs layout falls through to Rows with a debug hint.\n\n## Acceptance criteria\n- [ ] Implement Tabs layout in `workshop.rs`.\n- [ ] TOML schema parsing for tabs config.\n- [ ] Smoke + integration test.\n\n## Dependencies\n- Blocked-by: none.\n\n## Notes\nPair with T08-40."
+  },
+  {
+    "name": "ws08: workshop — wire viewer_hint overrides (today: \"auto\" only)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "stub"],
+    "description_md": "## Source\nTask T08-42.\n\n## Problem / gap\nWorkshop schema accepts only `\"auto\"` viewer_hint. No override mechanism.\n\n## Acceptance criteria\n- [ ] Allow named viewer_hint values matching registered viewers.\n- [ ] Fall back to auto if hint is unknown.\n- [ ] Test fixture with overridden hint.\n\n## Dependencies\n- Blocked-by: none.\n\n## Notes\nSmall."
+  },
+  {
+    "name": "ws08: graph viewer — editable Phase 3+ patch UI (egui_node_graph migration)",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-50; PHASE-2-PLAN.md Track 3.\n\n## Problem / gap\nGraphViewer (`ui://graph`) is read-only MVP (rolled-our-own painter). Editable graph is explicit stretch goal NOT in 0.7.0; deferred to \"Phase 3+ patch UI\". `egui_node_graph` adapter is the migration seam.\n\n## Acceptance criteria\n- [ ] Migrate to (or vendor) `egui_node_graph` along the JSON `Value` → node/edge adapter seam.\n- [ ] Editing operations (add/remove/connect) round-trip through substrate writes.\n- [ ] Backward compat with existing read-only fixtures.\n\n## Dependencies\n- Blocked-by: design for graph-edit substrate verbs.\n\n## Notes\nLong-horizon."
+  },
+  {
+    "name": "ws08: vscode panel — capture sidecar (mic/camera) for vscode#303293",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-80; `extensions/vscode-weft-panel/SMOKE.md` and `README.md`; upstream `microsoft/vscode#303293`.\n\n## Problem / gap\nWebviews can't expose `allow=\"microphone\"`. No voice input in panel. Capture sidecar deferred to M2.\n\n## Acceptance criteria\n- [ ] Design memo: sidecar process architecture (host-side capture + IPC to panel).\n- [ ] Implement minimum viable mic capture path.\n- [ ] Smoke test against whisper service.\n\n## Dependencies\n- Blocked-by: upstream issue tracking + M2 design.\n\n## Notes\nM2 scope per audit."
+  },
+  {
+    "name": "ws08: vscode panel — typed active-radar return schema (variant-id echo)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-81; `extensions/vscode-weft-panel/SMOKE.md`.\n\n## Problem / gap\nWebview posts only plain RPC-request / RPC-response messages — no typed active-radar return schema or `variant-id` echo. Future active-radar work needs typed envelope.\n\n## Acceptance criteria\n- [ ] Define typed envelope schema (variant-id, return-type, etc.).\n- [ ] Implement on both extension-host and webview sides.\n- [ ] Backward compat for existing plain RPC.\n\n## Dependencies\n- Blocked-by: active-radar surface design.\n\n## Notes\nForeshadowed feature."
+  },
+  {
+    "name": "ws08: vscode panel — ThreadDock primitive for per-agent parallel output",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-82; `extensions/vscode-weft-panel/SMOKE.md`.\n\n## Problem / gap\nNo `ThreadDock` primitive — multiple parallel agent outputs collapse together. Multi-agent swarm UX gap.\n\n## Acceptance criteria\n- [ ] Add `ThreadDock` canon primitive (or extension on Dock).\n- [ ] Compose with chat panel for parallel agent threads.\n- [ ] Smoke test with ≥2 parallel streams.\n\n## Dependencies\n- Blocked-by: T08-60 streaming.\n\n## Notes\nPart of compositional-ui symposium track."
+  },
+  {
+    "name": "ws08: vscode panel — WSP-0.1 verb support (raw RPC only today)",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\nTask T08-83; `.planning/symposiums/compositional-ui/protocol-spec.md`; M3 scope per audit.\n\n## Problem / gap\nPanel does not yet speak WSP-0.1 verbs; raw `kernel.*` / `agent.chat` RPC only. WSP verbs queued for M3.\n\n## Acceptance criteria\n- [ ] Implement WSP-0.1 verb adapter on extension host + panel.\n- [ ] Migrate at least one existing surface to WSP path.\n- [ ] Backward compat retained for raw RPC.\n\n## Dependencies\n- Blocked-by: WSP-0.1 protocol freeze.\n\n## Notes\nM3 scope, 0.9.x cycle."
+  },
+  {
+    "name": "ws08: hygiene — document or retire legacy blocks/ vs canon/ duality",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "tech-debt", "orphan", "docs"],
+    "description_md": "## Source\nTask T08-92; audit \"Orphaned work / parallel paths\" §; `crates/clawft-gui-egui/src/blocks/`; `shell/desktop.rs:88-118`.\n\n## Problem / gap\n12 legacy demo blocks run in parallel to the 21-primitive canon. The 0.6.19 changelog mentioned \"Retrofit pass: 7-8 existing blocks wrapped in the trait\". Blocks are still driven by `weft-demo-lab` and the `Desktop` panel `BlockKind` variant. Retirement plan not documented.\n\n## Acceptance criteria\n- [ ] Decide: retire `blocks/` entirely vs keep as demo-only path.\n- [ ] If retire: replace `weft-demo-lab` blocks with canon primitives; remove `BlockKind` variant.\n- [ ] If keep: add a doc explaining the duality (`crates/clawft-gui-egui/src/blocks/README.md` or module doc).\n- [ ] Update CHANGELOG.\n\n## Dependencies\n- Blocked-by: design call.\n\n## Notes\nOrphan; non-trivial scope."
+  },
+  {
+    "name": "ws08: hygiene — decide vendored vs upstream egui_demo_lib path",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "orphan", "tech-debt"],
+    "description_md": "## Source\nTask T08-94; audit \"Orphaned work / parallel paths\" §; `bin/demo_lab_vendored/`.\n\n## Problem / gap\n`fractal_clock.rs`, `http_app.rs`, `custom3d_glow.rs` vendored from `egui_demo_lib`; `serde` feature gate kept solely to satisfy upstream `#[cfg_attr]` lines. Drift from upstream egui demo. Will rot.\n\n## Acceptance criteria\n- [ ] Decide: depend on upstream `egui_demo_lib` (with feature flags) vs continue vendoring vs drop the demos entirely.\n- [ ] Implement chosen path.\n- [ ] Remove unneeded `serde` feature gate if vendored path drops.\n\n## Dependencies\n- Blocked-by: decision.\n\n## Notes\nSmall but recurring drift surface."
+  },
+  {
+    "name": "ws08: handoff — cleanup 12 agent-core/* locked worktrees",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tooling"],
+    "description_md": "## Source\nTask T08-03; `docs/handoff.md` follow-up; commit `8c08ce0a`.\n\n## Problem / gap\n12 `agent-core/*` locked worktrees retained as rollback hatch under `.claude/worktrees/agent-*`. GUI panel commit (#9, ~300 LoC) and 11 sibling agent-core branches need cleanup once smoke green.\n\n## Acceptance criteria\n- [ ] Confirm smoke green (T08-01).\n- [ ] Remove 12 worktrees per `git worktree remove`.\n- [ ] Delete merged agent-core branches.\n- [ ] Update handoff doc.\n\n## Dependencies\n- Blocked-by: T08-01 smoke green.\n\n## Notes\nNot strictly GUI-only but tangled per audit. Tracked here because origin is the GUI panel commit."
+  },
+  {
+    "name": "ws08: vscode panel — confirm npm run package + .vsix flow current",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tests", "tooling"],
+    "description_md": "## Source\nTask T08-04; `extensions/vscode-weft-panel/README.md`.\n\n## Problem / gap\n`.vsix` install/uninstall path documented but unexercised this cycle. Risk that the doc is stale or the script broke under recent edits.\n\n## Acceptance criteria\n- [ ] Run `npm run package`; produce a `.vsix`.\n- [ ] Install + uninstall in Cursor / VSCode.\n- [ ] Update README if any step changed.\n- [ ] Smoke that the panel loads after install.\n\n## Dependencies\n- Blocked-by: none.\n\n## Notes\nDoc-currency check; cheap."
+  },
+  {
+    "name": "ws08: tooling — document weft-gui-egui native binary path in scripts/build.sh",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs", "tooling"],
+    "description_md": "## Source\nTask T08-02; `docs/handoff.md` note: \"one-line addition\".\n\n## Problem / gap\n`scripts/build.sh native` does not surface the `weft-gui-egui` native binary path. Contributors who aren't current-session-Cursor users won't find it.\n\n## Acceptance criteria\n- [ ] Add a one-line print or section in `scripts/build.sh native` mentioning the `weft-gui-egui` binary location.\n- [ ] Update `--help` if appropriate.\n- [ ] Cross-link in handoff or contributor doc.\n\n## Dependencies\n- Blocked-by: none.\n\n## Notes\nHandoff explicitly defers until a non-Cursor user reports need; landing in 0.7.x is still cheap."
+  },
+  {
+    "name": "ws08: changelog — fix [0.5.x] legacy Lego Block Engine reference",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws08-weftos-gui", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs", "orphan"],
+    "description_md": "## Source\nAudit \"Orphaned work / parallel paths\" §; `CHANGELOG.md` `[0.5.x] – legacy \"Lego Block Engine\"`.\n\n## Problem / gap\nChangelog references Zustand block engine and a React `gui/` source tree that is no longer present in `crates/clawft-gui-egui` (workstream 09's `ui/`). Misleading historical entry.\n\n## Acceptance criteria\n- [ ] Add a clarifying note next to the `[0.5.x]` entry stating the Zustand/React block engine was superseded by the egui canon shell.\n- [ ] Cross-link to ADR-001 / superseded ADRs.\n- [ ] Verify no live link in the entry points to a deleted path.\n\n## Dependencies\n- Blocked-by: none (independent of T08-84 ADR supersedence work but related).\n\n## Notes\nDoc cleanup; release-gate level since the changelog is user-facing."
+  }
+]

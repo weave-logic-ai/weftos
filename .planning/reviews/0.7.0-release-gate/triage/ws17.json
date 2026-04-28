@@ -1,0 +1,338 @@
+[
+  {
+    "name": "ws17: Democritus — verify idle-graph gate keeps net_change suppression on real daemon (post-merge)",
+    "priority": "urgent",
+    "cycle": "0.7.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tests", "bug"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T1, D12)\n- `crates/clawft-kernel/src/cognitive_tick.rs::run_democritus_loop`\n- `.weftos/runtime/kernel.log` (lines 10538-11220, 2026-04-28 10:47 → 15:36 UTC)\n\n## Problem / gap\n\nIn this audit session, the Democritus stuck-loop bug — where `kernel.log` showed continuous `Stuck { net_change: 0.0 }` warnings on geometric backoff — was fixed by an idle-graph gate added to `cognitive_tick.rs` (uncommitted at audit time, but tested 23/23 locally). The fix needs post-merge verification on a real daemon to confirm the idle-graph gate actually suppresses the `net_change == 0.0` warning chain in production conditions, and that the loop still emits non-trivial signals when the causal graph becomes active.\n\n## Acceptance criteria\n- [ ] Idle-graph gate change merged to `development-0.7.0` (or release branch) and built via `scripts/build.sh native`\n- [ ] Run a real daemon for at least 30 minutes; verify `kernel.log` shows no `DEMOCRITUS: still stuck after N checks: Stuck { net_change: 0.0 }` chain when graph is idle\n- [ ] Drive activity into the causal graph (e.g. via a brief agent loop session) and confirm Democritus emits non-`Stuck` states\n- [ ] Add or extend an integration test in `crates/clawft-kernel/tests/` that exercises the idle-graph gate explicitly\n- [ ] Update `.planning/development_notes/sprint-16/democritus-loop.md` with verification notes\n\n## Dependencies\n- Idle-graph gate fix in `cognitive_tick.rs` (this session, uncommitted)\n- ECC + EML coherence shipped in K3c / sprint-16\n\n## Notes\nDo NOT re-file the original stuck-loop bug — it was fixed in this session. This task only verifies the fix on a real (non-test-harness) daemon. P1 carry-over from D12 is now closed by code; this is its post-merge gate.\n"
+  },
+  {
+    "name": "ws17: ECC — wire boot_ecc() runtime function into Kernel<P> boot sequence",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T2, D1)\n- `.planning/development_notes/k3c-ecc-integration.md`\n- `crates/clawft-kernel/src/{causal,crossref,impulse,hnsw_service,calibration,cognitive_tick}.rs`\n\n## Problem / gap\n\n`boot_ecc()` was scoped in K3c but never wired into `Kernel<P>` boot. Resource-tree namespaces under `/kernel/services/ecc/` and the tool catalog are populated, but service instances (HnswService, CausalGraph, CognitiveTick) and calibration are not actually executed at boot.\n\n## Acceptance criteria\n- [ ] Decide fold-vs-fork (see Q1 / T41) and document in an ADR or note\n- [ ] Implement `boot_ecc()` that constructs HnswService, CausalGraph, CognitiveTick and wires them into `Kernel<P>`\n- [ ] Calibration runs at boot and stays under the 100ms budget\n- [ ] All 562 ECC tests still pass; new boot path covered by at least one integration test\n- [ ] Update `weftos/ecc.mdx` if user-visible behavior shifts\n\n## Dependencies\n- ECC feature flag, BootPhase::Ecc already landed\n\n## Notes\nFold-vs-fork decision (T41 / Q1) is a prerequisite. Out of scope for 0.7.0 release gate.\n"
+  },
+  {
+    "name": "ws17: ECC — verify ecc feature exclusion on wasm32-unknown-unknown",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "tests", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T3, D2)\n\n## Problem / gap\n\nThe `ecc` feature pulls native deps (blake3, vector-memory) that won't link on `wasm32-unknown-unknown`. Exclusion is asserted in cfg gates but not verified by CI or local build.\n\n## Acceptance criteria\n- [ ] `scripts/build.sh browser` succeeds with default features\n- [ ] Add an explicit assertion (CI step or doc) that `--features ecc` is rejected for `wasm32-unknown-unknown`\n- [ ] Update `crates/clawft-wasm/Cargo.toml` if any dep coupling needs to be broken\n\n## Dependencies\n- WASM build infrastructure (Stream 13)\n\n## Notes\nSmall but real risk for browser builds; stream-13 cross-cut.\n"
+  },
+  {
+    "name": "ws17: ECC — add governance gates to auth_service rotate_credential, request_token, revoke_token",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "security", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T4, D14, D15, D16)\n- `.planning/development_notes/governance-certification.md`\n\n## Problem / gap\n\n`auth_service:rotate_credential` and `auth_service:request_token` are chain-logged but **not** governance-gated. Any agent with IPC access could rotate any credential without a policy check; token issuance is gated only by the credential's `allowed_agents` list. `auth_service:revoke_token` is partial (logged, not gated).\n\n## Acceptance criteria\n- [ ] Add `GovernanceGate::evaluate()` calls in front of all three auth_service methods\n- [ ] Wire `EffectVector` with explicit risk dimensions (not context-only)\n- [ ] Add policy expressions covering rotate/request/revoke and document in `governance-certification.md`\n- [ ] Add tests covering both allowed and denied paths\n- [ ] Re-run governance certification audit and update the 19-gate count\n\n## Dependencies\n- Existing `GovernanceEngine` and `GateBackend` infrastructure\n- Cross-cuts with Stream 8 (security)\n\n## Notes\nClosely tied to T43 (rotate-but-not-revoke policy expression).\n"
+  },
+  {
+    "name": "ws17: governance — make EffectVector explicit on auth/config/a2a/cron gates",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "security", "tech-debt"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T5, D17)\n\n## Problem / gap\n\n`EffectVector` on the auth, config, a2a, and cron gates is currently 'context-only' / heuristic — risk weighting is implicit. Decisions are still being made by the engine, but the inputs aren't auditable.\n\n## Acceptance criteria\n- [ ] Define an explicit `EffectVector` schema for each of the four gates (dimensions + weights)\n- [ ] Refactor gate construction sites to populate the vector explicitly\n- [ ] Add tests pinning the dimensions per gate type\n- [ ] Update `governance-certification.md`\n\n## Dependencies\n- T4 (governance gates on auth_service) overlaps\n\n## Notes\nCarry-over to 0.8.x hardening pass. Cross-cuts Stream 8.\n"
+  },
+  {
+    "name": "ws17: weave — implement weaver ecc CLI subcommands",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "tooling", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T6, D4)\n\n## Problem / gap\n\nNo CLI surface yet for ECC operations. Operators have to talk to the resource tree directly. `weaver ecc {status, calibrate, predict, tick, ...}` is sketched in K3c notes but not implemented.\n\n## Acceptance criteria\n- [ ] Add `weaver ecc` subcommand group to `clawft-weave`\n- [ ] Cover at least: status, calibrate, predict, coherence-fast, coherence-exact\n- [ ] Each subcommand wraps the matching kernel RPC / resource-tree endpoint\n- [ ] CLI help + `docs/guides/` page entry\n- [ ] Tests against a running daemon\n\n## Dependencies\n- T2 (`boot_ecc()` wired in) helps but isn't strictly required — RPCs already exist\n- Stream 4 (weave) cross-cut\n\n## Notes\nLow effort, high operator-UX value once ECC is being exercised.\n"
+  },
+  {
+    "name": "ws17: ECC — define new RVF segment types for ECC structures and persistence",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T7, D5)\n\n## Problem / gap\n\nECC structures (CausalEdge, ImpulseRecord, CalibrationProfile, etc.) are conceptual at the RVF segment level — no formal segment-type definitions, so persistence is ad-hoc.\n\n## Acceptance criteria\n- [ ] Define RVF segment types for the core ECC structures\n- [ ] Add encode/decode round-trip tests\n- [ ] Document in the RVF / chain reference docs\n- [ ] Migration plan if any ad-hoc on-disk format must be replaced\n\n## Dependencies\n- rvf-types crate, chain.rs\n\n## Notes\nFollow-up to the K3c chain RVF breakage repair. Non-blocking for 0.7.0.\n"
+  },
+  {
+    "name": "ws17: ECC — resolve 5 pre-existing clippy warnings in agent_loop, chain, gate",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T8, D6)\n\n## Problem / gap\n\n5 pre-existing clippy warnings remain at:\n- `agent_loop.rs:30,138,219`\n- `chain.rs:1239`\n- `gate.rs:427`\n\nNot introduced by ECC, but unaddressed and surfaced during the K3c work.\n\n## Acceptance criteria\n- [ ] All 5 warnings either fixed or explicitly `#[allow(...)]` with a justification comment\n- [ ] `scripts/build.sh clippy` clean\n\n## Dependencies\n- None\n\n## Notes\nP3 cleanup; group with similar lint-debt items.\n"
+  },
+  {
+    "name": "ws17: EML — incremental component-count maintenance for O(1) coherence feature extraction",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "performance", "tech-debt"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T9, D7)\n- `crates/clawft-kernel/src/eml_coherence.rs` (`from_causal_graph`)\n\n## Problem / gap\n\n`from_causal_graph` is currently O(n+m) because `connected_components()` is recomputed each call. For true O(1) feature extraction the component count needs incremental maintenance on edge add/remove.\n\n## Acceptance criteria\n- [ ] Add union-find or equivalent incremental connected-components structure to `CausalGraph`\n- [ ] `from_causal_graph` runs in amortised O(1) for the component-count feature\n- [ ] Benchmarks confirm the speed-up (`scripts/build.sh` integrate if needed)\n- [ ] Existing EML coherence tests still pass\n\n## Dependencies\n- `causal.rs`\n\n## Notes\nKey for keeping the Democritus fast tick under budget at scale.\n"
+  },
+  {
+    "name": "ws17: EML — Iteration 1 end-to-end coordinate-descent loop for Q/K/V models",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T10, D8, D10)\n- `crates/eml-core/src/attention.rs`\n\n## Problem / gap\n\nIn `ToyEmlAttention` (Iteration 0), Q/K/V models remain at default initialization — only the output projections get the EML treatment. Iteration 1 needs an end-to-end coordinate-descent loop training all five EML models jointly. This subsumes D10 (coord-descent on multiple interdependent EML models is an open problem).\n\n## Acceptance criteria\n- [ ] Design + ADR for joint coordinate-descent across QKV+output EML models\n- [ ] Implementation behind `experimental-attention` feature\n- [ ] Convergence demonstrated on at least one toy task\n- [ ] Numerical-stability notes captured\n\n## Dependencies\n- Existing `EmlModel` training, `ToyEmlAttention`\n\n## Notes\nResearch-grade item; speculative.\n"
+  },
+  {
+    "name": "ws17: EML — drive top 5 eml-synergy-scan rows from scan to implementation",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T11, D9)\n- `.planning/development_notes/eml-synergy-scan.md`\n\n## Problem / gap\n\nScan catalogued dozens of hardcoded heuristics (graphify analyze surprise scorer L209-269, cluster `MAX_COMMUNITY_FRACTION`, ForceAtlas2 6-parameter physics tuner, HNSW ef-adaptive beam, peripheral-hub detection L254-255, bridge-node `.take(3)` cut, HTML viz physics constants L246-251 + 253). Most rows are still hardcoded.\n\n## Acceptance criteria\n- [ ] Pick top 5 by impact/feasibility and document the choice in `eml-synergy-scan.md`\n- [ ] Replace each with an `EmlModel` (or principled alternative) and add tests\n- [ ] Cross-stream items into Stream 12 (graphify) where applicable\n\n## Dependencies\n- `eml-core` training APIs\n- Stream 12 (graphify)\n\n## Notes\nGood candidate for a focused 0.8.x mini-sprint.\n"
+  },
+  {
+    "name": "ws17: KG — RoMem phase-rotation temporal KG on CausalGraph",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T12, D41)\n- `.planning/development_notes/knowledge-graph-paper-survey-phase2.md` (RoMem, arXiv:2604.11544)\n\n## Problem / gap\n\nRoMem proposes phase-rotation temporal KG to replace hard age-pruning with geometric shadowing on CausalEdge. Sketched and prioritised, no code.\n\n## Acceptance criteria\n- [ ] ADR sketching phase-rotation embedding for `CausalEdge`\n- [ ] Reference implementation behind a feature flag\n- [ ] Comparison vs current hard-deletion pruning on a real workload\n\n## Dependencies\n- `causal.rs`, `eml_coherence.rs`\n- Cross-cuts Stream 12\n\n## Notes\nP1 in audit; cycle 0.9.x because it's research-grade and not gating any shipped feature.\n"
+  },
+  {
+    "name": "ws17: KG — GraphRAG community summaries in pipeline analyze",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T13, D38)\n- `.planning/development_notes/knowledge-graph-paper-survey.md` (GraphRAG, arXiv:2404.16130)\n\n## Problem / gap\n\nP0 in Phase 1 survey: build community summaries during pipeline analyze, then aggregate hierarchically at query time. Not in code.\n\n## Acceptance criteria\n- [ ] Community-detection step added to `graphify analyze`\n- [ ] Per-community summary persisted (LLM-summarised once, cached)\n- [ ] `run_query()` aggregates summaries hierarchically\n- [ ] Tests on at least one corpus showing better recall vs current baseline\n- [ ] Docs page in `docs/guides/`\n\n## Dependencies\n- Stream 12 (graphify analyze)\n\n## Notes\nP1 in audit; primary owner is research+graphify.\n"
+  },
+  {
+    "name": "ws17: KG — CausalRAG causal_trace() over typed edges",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T14, D39)\n- `.planning/development_notes/knowledge-graph-paper-survey.md` (CausalRAG, arXiv:2503.19878)\n\n## Problem / gap\n\nP0 in Phase 1 survey: BFS/DFS along Causes / Enables / EvidenceFor edges to assemble causal-chain context for retrieval. Not in code.\n\n## Acceptance criteria\n- [ ] Add `causal_trace(node, depth)` traversal helper to graph layer\n- [ ] Wire into the retrieval path used by `suggest_questions()` / RAG\n- [ ] Tests pinning ordering and depth bounds\n- [ ] Docs page entry\n\n## Dependencies\n- Typed-edge schema in `causal.rs`\n- Stream 12\n\n## Notes\nLow-medium effort; high reasoning-quality payoff.\n"
+  },
+  {
+    "name": "ws17: KG — SASE clustering replacing label-propagation in cluster.rs",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap", "performance"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T15, D40)\n- `.planning/development_notes/knowledge-graph-paper-survey.md` (SASE, arXiv:2408.05765)\n\n## Problem / gap\n\nSASE (k-order graph convolution + Random Fourier Features) is parameter-free, linear-time, and would replace the current label-propagation in `cluster.rs`. Sketched, not implemented.\n\n## Acceptance criteria\n- [ ] Implement SASE behind a feature flag in `cluster.rs`\n- [ ] Benchmark vs label-propagation on representative graphs\n- [ ] Migrate default once parity is shown\n- [ ] Update Stream 12 docs\n\n## Dependencies\n- `cluster.rs`\n- Stream 12\n\n## Notes\nLargely a graphify item; ws17 sponsors the research.\n"
+  },
+  {
+    "name": "ws17: KG — LightRAG dual-level keyword retrieval",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T16, D42)\n- `.planning/development_notes/arxiv-2410-05779-analysis.md`\n\n## Problem / gap\n\nLightRAG (Guo et al. 2410.05779) — dual-level keyword retrieval, ~610× fewer tokens than GraphRAG; would slot into `suggest_questions()`. Not in code.\n\n## Acceptance criteria\n- [ ] Reference implementation behind a feature flag\n- [ ] Token-cost comparison vs GraphRAG path on a representative workload\n- [ ] Decision recorded in an ADR or note\n\n## Dependencies\n- T13 (GraphRAG) — useful baseline\n- Stream 12\n\n## Notes\nP2 in audit; cycle 0.9.x.\n"
+  },
+  {
+    "name": "ws17: KG — process remaining Phase 2 papers into priority list",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "docs"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T17, D43)\n- `.planning/development_notes/knowledge-graph-paper-survey-phase2.md`\n\n## Problem / gap\n\n~5 remaining 2604.* Phase 2 papers are filed but not yet priority-tagged or fed into the implementation queue.\n\n## Acceptance criteria\n- [ ] Each paper gets a P1/P2/P3 tag and a one-paragraph implementation sketch in the survey doc\n- [ ] Cross-link into Stream 12 / 17 task list as appropriate\n\n## Dependencies\n- None (analysis-only)\n\n## Notes\nPure tracking work; pairs well with the next Phase batch.\n"
+  },
+  {
+    "name": "ws17: LeWM — codify ADR-058 decoupling-invariant runtime checks",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "governance", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T18, D35, Q4)\n- `.planning/symposiums/lewm-worldmodel/diagram.md`\n- ADR-058\n\n## Problem / gap\n\nADR-058 states the decoupling invariant — ECC remains authoritative per node, the latent world model is an additive consumer. The five formal rules are documented in prose but there are no compile-time or runtime checks that would catch a violation (e.g. world model short-circuiting a causal edge).\n\n## Acceptance criteria\n- [ ] Enumerate the five rules as testable predicates in an ADR addendum\n- [ ] Add runtime assertions / debug checks inside the world-model facade\n- [ ] Add a property test that demonstrates a forbidden short-circuit is rejected\n- [ ] Update `lewm-worldmodel-rs` page if user-facing\n\n## Dependencies\n- LeWM crates (if implemented). Can land as text-only ADR + check stubs first\n\n## Notes\nADR-only is acceptable for 0.8.x; runtime checks land alongside the implementation crates in 0.9.x.\n"
+  },
+  {
+    "name": "ws17: LeWM — create weftos-worldmodel-core crate (no_std traits)",
+    "priority": "high",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T19, D19)\n- `.planning/lewm-worldmodel-rs-page/{DESIGN-A,DESIGN-B,PLAN}.md`\n- `.planning/symposiums/lewm-worldmodel/diagram.md`\n- ADR-048 → ADR-058\n\n## Problem / gap\n\nThe LeWM diagram and ADR batch describe a `weftos-worldmodel-core` `no_std` traits crate. Crate does not exist on master at 2026-04-28.\n\n## Acceptance criteria\n- [ ] Crate scaffolded under `crates/weftos-worldmodel-core/`\n- [ ] Core traits defined: encoder, predictor, planner, lattice API surface\n- [ ] `no_std` build verified\n- [ ] Stub tests pass\n- [ ] Workspace `Cargo.toml` updated\n\n## Dependencies\n- ADR-048 → ADR-058 finalised\n\n## Notes\nFirst crate of the LeWM 7-crate batch; foundation for impls + facade.\n"
+  },
+  {
+    "name": "ws17: LeWM — create weftos-worldmodel-impls crate (candle ViT-tiny + AdaLN)",
+    "priority": "high",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T20, D20)\n- `.planning/symposiums/lewm-worldmodel/diagram.md`\n\n## Problem / gap\n\nCandle-backed ViT-tiny encoder + AdaLN-modulated predictor implementations are described in the diagram and ADRs but have no crate on master.\n\n## Acceptance criteria\n- [ ] Crate scaffolded under `crates/weftos-worldmodel-impls/`\n- [ ] Candle-backed ViT-tiny encoder and AdaLN predictor stubs that satisfy the core traits\n- [ ] End-to-end SIGReg implementation (Epps-Pulley on M random 1D projections), no EMA, no stop-gradient\n- [ ] Smoke test on synthetic input\n\n## Dependencies\n- T19 (`weftos-worldmodel-core`)\n- candle dep coupling decision\n\n## Notes\nLargest implementation crate; ADR-050 SIGReg manifold is the spine.\n"
+  },
+  {
+    "name": "ws17: LeWM — create weftos-worldmodel facade crate",
+    "priority": "high",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T21, D21)\n\n## Problem / gap\n\nFacade crate that re-exports core + impls, providing the user-facing surface, does not exist.\n\n## Acceptance criteria\n- [ ] Crate scaffolded under `crates/weftos-worldmodel/`\n- [ ] Re-exports + integration tests vs core + impls\n- [ ] Doc page updated in `docs/src/content/docs/weftos/`\n\n## Dependencies\n- T19, T20\n\n## Notes\nSmall crate but unblocks downstream consumers.\n"
+  },
+  {
+    "name": "ws17: LeWM — create weftos-sensor-pipeline + -wire crates",
+    "priority": "high",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T22, D22, D23)\n- ADR-053\n\n## Problem / gap\n\nSensor pipeline + on-the-wire crates (CBOR + Ed25519, observational-only packets, ExoChain-indexed every frame) do not exist on master.\n\n## Acceptance criteria\n- [ ] Crate scaffolds for `crates/weftos-sensor-pipeline/` and `crates/weftos-sensor-pipeline-wire/`\n- [ ] CBOR + Ed25519 framing implemented in `-wire`\n- [ ] Round-trip tests for the three observation topics (encoded, consensus, control)\n- [ ] Workspace `Cargo.toml` updated\n\n## Dependencies\n- T19 (core traits)\n- T25 (mesh topics) downstream\n\n## Notes\nADR-053 fixes the wire schema; both crates can land together.\n"
+  },
+  {
+    "name": "ws17: LeWM — create clawft-worldmodel-service binary (3 deployment topologies)",
+    "priority": "high",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T23, D24)\n- ADR-054\n\n## Problem / gap\n\nThe `clawft-worldmodel-service` binary is described (single, hot-standby, peer-to-peer topologies) but does not exist.\n\n## Acceptance criteria\n- [ ] Binary scaffolded under `crates/clawft-worldmodel-service/`\n- [ ] Three deployment topologies selectable via config\n- [ ] At least the single-node mode boots end-to-end\n- [ ] Smoke test against a fake sensor pipeline\n\n## Dependencies\n- T19, T20, T21, T22\n\n## Notes\nIntegrates everything else; primary user-facing artifact.\n"
+  },
+  {
+    "name": "ws17: LeWM — create clawft-delegation crate",
+    "priority": "high",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T24, D25)\n\n## Problem / gap\n\nIn-tree `clawft-delegation` crate (delegation of cognitive work to remote/peer world-model services) does not exist.\n\n## Acceptance criteria\n- [ ] Crate scaffolded under `crates/clawft-delegation/`\n- [ ] Delegation client + server traits, with at least one transport (TCP or mesh)\n- [ ] Round-trip tests\n- [ ] Workspace updated\n\n## Dependencies\n- T22 (sensor-pipeline-wire), T23 (service binary)\n\n## Notes\nUnblocks peer-to-peer topology in T23.\n"
+  },
+  {
+    "name": "ws17: LeWM — add mesh.sensor.v1.{encoded,consensus,control} topics on mesh wire",
+    "priority": "high",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T25, D26)\n- ADR-053\n\n## Problem / gap\n\nNo `mesh.sensor.v1.*` topic definitions on the mesh wire today. CBOR + Ed25519 framing, observational-only, ExoChain-indexed every frame is described but not present.\n\n## Acceptance criteria\n- [ ] Three topic definitions added to mesh-wire schema\n- [ ] Publisher and subscriber paths wired to ExoChain indexer\n- [ ] Wire-level integration test producing one frame on each topic\n- [ ] Cross-stream link to mesh\n\n## Dependencies\n- T22 (sensor-pipeline-wire crates)\n- mesh stream\n\n## Notes\nAfter the crates land. Mesh team owns implementation; ws17 owns acceptance.\n"
+  },
+  {
+    "name": "ws17: LeWM — implement LatticeApi (7 methods) via ServiceApi",
+    "priority": "high",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T26, D27)\n- ADR-052\n\n## Problem / gap\n\n`LatticeApi` is registered in spec only. Required methods: observe, observe_node, predict, plan, recall, subscribe_surprise, subscribe_drift.\n\n## Acceptance criteria\n- [ ] All 7 methods implemented on a `ServiceApi` impl\n- [ ] Wired into `clawft-worldmodel-service`\n- [ ] Tests for each method (happy path + one error path)\n- [ ] Doc page entry\n\n## Dependencies\n- T19, T20, T21, T23\n\n## Notes\nPrimary external surface for the world model.\n"
+  },
+  {
+    "name": "ws17: LeWM — wire SIGReg sigreg_health Welford monitor + auto-rollback at 0.85/30s",
+    "priority": "high",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T27, D28, D29)\n- ADR-050\n\n## Problem / gap\n\nADR-050 mandates Welford-based `sigreg_health` measurable in production, version-tagged, ExoChain-attested, with auto-rollback when `sigreg_health < 0.85` for 30 s. None of this exists in code.\n\n## Acceptance criteria\n- [ ] Welford running stats wired into the encoder/predictor pipeline\n- [ ] `sigreg_health` exposed as a metric and logged to ExoChain\n- [ ] Auto-rollback path triggered by 30s window of unhealthy readings\n- [ ] Tests forcing low health and confirming rollback\n\n## Dependencies\n- T20 (`weftos-worldmodel-impls`)\n- ExoChain attestation hookup (T32)\n\n## Notes\nDirectly governs production safety of the world model.\n"
+  },
+  {
+    "name": "ws17: LeWM — implement pred_φ predictor + LatentPlanner (CEM default)",
+    "priority": "high",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T28, D30, D31)\n\n## Problem / gap\n\nNo `pred_φ` (z_t, a_t → ẑ_{t+1}) predictor. No `LatentPlanner` (CEM default / MPPI-warm / gradient shooting) running on the 10 Hz background thread.\n\n## Acceptance criteria\n- [ ] `pred_φ` predictor implemented behind the core trait\n- [ ] `LatentPlanner` with CEM default; MPPI / gradient as configurable variants\n- [ ] 10 Hz background-thread integration in `clawft-worldmodel-service`\n- [ ] Tests covering one toy planning task\n\n## Dependencies\n- T19, T20, T23, T26\n\n## Notes\nCore real-time loop component.\n"
+  },
+  {
+    "name": "ws17: LeWM — implement four-condition AND rollback gate",
+    "priority": "high",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T29, D32)\n- ADR-055\n\n## Problem / gap\n\nADR-055 specifies a four-condition AND gate: cluster SIGReg health, held-out probing accuracy, VoE surprise differentiation, temporal-straightening score. None implemented.\n\n## Acceptance criteria\n- [ ] All four metrics computed in production paths\n- [ ] AND-combined gate that blocks promotion when any condition fails\n- [ ] Tests covering each condition's veto independently\n- [ ] Doc page entry\n\n## Dependencies\n- T20 (impls), T27 (SIGReg health)\n\n## Notes\nPair with T30 (training surfaces).\n"
+  },
+  {
+    "name": "ws17: LeWM — implement two training surfaces (offline edge + online streaming-merge)",
+    "priority": "medium",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T30, D33)\n- ADR-055\n\n## Problem / gap\n\nADR-055 defines two surfaces: (1) offline per-sensor-class edge intelligence (RVF-delivered, hot-swappable); (2) online streaming-merge world-model training with per-class importance-weighted replay. Neither in code.\n\n## Acceptance criteria\n- [ ] Offline edge-intelligence pipeline: RVF segment delivery + hot-swap at tick alignment\n- [ ] Online streaming-merge trainer with importance-weighted replay buffer\n- [ ] Hooked into the four-condition AND rollback gate\n- [ ] Tests for one cycle of each surface\n\n## Dependencies\n- T29 (rollback gate)\n- RVF segment infra\n\n## Notes\nP2 in audit; cycle 0.9.x. Heavy item.\n"
+  },
+  {
+    "name": "ws17: LeWM — per-sensor-class trainable RVF-hosted small models with hot-swap",
+    "priority": "medium",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T31, D37)\n- ADR-057\n\n## Problem / gap\n\nADR-057 defines three trainable RVF-hosted small models per sensor class (transmit-gate, aggregate, encode), hot-swap at tick alignment, with auto-rollback. Not implemented.\n\n## Acceptance criteria\n- [ ] RVF segment types for the three model variants\n- [ ] Hot-swap mechanism aligned to tick boundaries\n- [ ] Auto-rollback hooked into the AND gate\n- [ ] Tests covering swap + rollback cycle\n\n## Dependencies\n- T29, T30\n\n## Notes\nPairs with the training surfaces work.\n"
+  },
+  {
+    "name": "ws17: LeWM — ExoChain attestation of (a_t, z_t, z_{t+1}, surprise) tuples",
+    "priority": "high",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "governance", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T32, D34)\n\n## Problem / gap\n\nObservational tuples `(a_t, z_t, z_{t+1}, surprise)` should be ExoChain-attested every frame. Not wired.\n\n## Acceptance criteria\n- [ ] Per-frame attestation path in the world-model service\n- [ ] Attestation includes version-tagged SIGReg manifold reference\n- [ ] Tests confirming chain entries are produced and decode round-trips\n\n## Dependencies\n- T20, T23, T27\n\n## Notes\nGovernance-relevant; gates downstream auditability.\n"
+  },
+  {
+    "name": "ws17: LeWM — land /lewm-worldmodel-rs marketing page after visual confirmation",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "docs"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T33, D36)\n- `docs/src/app/lewm-worldmodel-rs/`\n- `.planning/lewm-worldmodel-rs-page/{DESIGN-A,DESIGN-B,PLAN}.md`\n\n## Problem / gap\n\nMarketing/explainer page is scaffolded (18 client/RSC components, motion v12, blueprint palette, prefers-reduced-motion branch) but PR posture is 'DO NOT MERGE — awaiting visual confirmation'.\n\n## Acceptance criteria\n- [ ] Visual confirmation pass complete (designer/owner sign-off recorded)\n- [ ] Perf budget verified: ≤25 KB gz motion JS, ≤80 KB gz total route, ≤40 KB SVG, LCP < 2.0 s, CLS = 0, scroll INP < 120 ms\n- [ ] Page merged to development branch and deployed\n- [ ] PLAN.md acceptance checklist closed\n\n## Dependencies\n- Designer review\n- Stream docs\n\n## Notes\nPure docs/marketing — independent of crate work.\n"
+  },
+  {
+    "name": "ws17: sonobuoy — scaffold clawft-sonobuoy-ranging crate (G1 follow-up)",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T34, D48)\n- `.planning/sonobuoy/RANGING.md`, ADR-078\n\n## Problem / gap\n\nG1 (sensor-position uncertainty) closed in `RANGING.md` (983 lines, ADR-078). Crate scaffold for `clawft-sonobuoy-ranging` is the next step, scheduled for v2.\n\n## Acceptance criteria\n- [ ] Crate scaffolded under `crates/clawft-sonobuoy-ranging/`\n- [ ] Initial ranging primitives implemented per ADR-078\n- [ ] Tests on synthetic data\n- [ ] Doc page entry\n\n## Dependencies\n- ADR-078\n\n## Notes\nP3 in audit; very speculative.\n"
+  },
+  {
+    "name": "ws17: sonobuoy — drive G2-G5 to closure or accept as deferred",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "docs"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T35, D44, D45, D46, D47)\n- `.planning/sonobuoy/GAPS.md`\n\n## Problem / gap\n\n- G2 — Helmholtz-PINN 3D collapse (open)\n- G3 — FNO thermocline collapse (open)\n- G4 — SAS unknown velocity (open; partially covered by G1)\n- G5 — sub-kbps FL (open)\n\nEach gap needs either a closure plan or an explicit defer.\n\n## Acceptance criteria\n- [ ] Each gap (G2-G5) gets either a closure note or an explicit deferral entry in `GAPS.md`\n- [ ] Cross-link to any ADRs spawned\n\n## Dependencies\n- None (analysis)\n\n## Notes\nDocs-only triage task.\n"
+  },
+  {
+    "name": "ws17: quantum — implement Pasqal backend skeleton",
+    "priority": "low",
+    "cycle": "1.0.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T36, D49)\n- `.planning/development_notes/pasqal-integration.md`\n\n## Problem / gap\n\nFull hardware spec audit, cloud API + SDK details, blockade-radius math, neutral-atom encoding, EMU-TN/MPS/SV emulator targets are documented; no implementation.\n\n## Acceptance criteria\n- [ ] Backend skeleton crate / module created\n- [ ] At least one emulator target reachable\n- [ ] Smoke test\n\n## Dependencies\n- Quantum backend trait surface\n\n## Notes\nSpeculative; cycle 1.0.x.\n"
+  },
+  {
+    "name": "ws17: quantum — scaffold cuDensityMat SimulatorBackend behind quantum-nvidia feature flag",
+    "priority": "low",
+    "cycle": "1.0.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T37, D50)\n- `.planning/development_notes/nvidia-quantum-integration.md`\n\n## Problem / gap\n\ncuDensityMat-backed `SimulatorBackend` queued for v0.7.x post-GUI behind `quantum-nvidia` feature flag. Python-sidecar first, FFI later. Not started.\n\n## Acceptance criteria\n- [ ] `quantum-nvidia` feature flag wired in workspace\n- [ ] Python-sidecar prototype demonstrating analog Rydberg simulation\n- [ ] Decision recorded on FFI vs sidecar long term\n\n## Dependencies\n- CUDA-Q + cuQuantum availability\n\n## Notes\nSpeculative; cycle 1.0.x. Post-GUI cut originally targeted v0.7.x but that's slipped per audit.\n"
+  },
+  {
+    "name": "ws17: gaming-robotics — kick off first symposium experiment",
+    "priority": "low",
+    "cycle": "1.0.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T38, D51)\n- `.planning/symposiums/gaming-robotics/{FINAL_REPORT.md, robotics/research-report.md, experiments/}`\n\n## Problem / gap\n\n8 experiments planned ($1,102 hardware budget, 7-week timeline). None executed. PERCEIVE-THINK-ACT (PTA) framework + 'DEMOCRITUS = servo control loop' thesis sit unproven.\n\n## Acceptance criteria\n- [ ] Pick one of the 8 experiments\n- [ ] Procure / allocate hardware\n- [ ] Run + write up findings in the symposium folder\n\n## Dependencies\n- Hardware budget allocation\n\n## Notes\nFar future; cycle 1.0.x.\n"
+  },
+  {
+    "name": "ws17: docs — cross-link orphan symposium output (compositional-ui, RLM 2512.24601) or close",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "orphan", "docs"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T39, 'Orphaned research')\n\n## Problem / gap\n\n- `compositional-ui` symposium output not visibly cross-referenced into Stream 9/10 audits.\n- `RLM - arxiv-2512.24601` symposium has no follow-up tracked.\n\n## Acceptance criteria\n- [ ] Each symposium output either cross-linked into a responsible stream or marked closed in its index\n- [ ] If closed, a one-line rationale recorded\n\n## Dependencies\n- Stream 9/10 owners for compositional-ui\n\n## Notes\nDocs hygiene.\n"
+  },
+  {
+    "name": "ws17: docs — decide on single research → feature pipeline index vs ADR-only",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "docs", "governance"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T40, Q7)\n\n## Problem / gap\n\nThe audit found no single index of research → feature transitions. Each ADR currently serves as its own marker, which is workable but makes audit-time discovery painful.\n\n## Acceptance criteria\n- [ ] Decision recorded: single index file vs ADR-only\n- [ ] If single index: scaffold and seed with the existing landed-as-feature entries (ECC, EML, Democritus, Exochain governance)\n- [ ] Update CLAUDE.md / handoff if owner-facing convention changes\n\n## Dependencies\n- Docs owner\n\n## Notes\nGovernance-of-research item.\n"
+  },
+  {
+    "name": "ws17: ECC — decide boot_ecc() fold-vs-fork into Kernel<P>",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "governance"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T41, Q1)\n\n## Problem / gap\n\nOpen architectural question: should `boot_ecc()` be folded into the standard `boot()` flow, or remain a feature-flag-gated fork? The choice affects `Kernel<P>` struct shape.\n\n## Acceptance criteria\n- [ ] Decision recorded in an ADR or kernel-architecture note\n- [ ] Implementation strategy for T2 aligned with the decision\n\n## Dependencies\n- ECC feature-flag policy\n\n## Notes\nPrerequisite to T2.\n"
+  },
+  {
+    "name": "ws17: LeWM — decide 192-dim SIGReg latent dimensionality (ADR-050)",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "governance"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T42, Q2)\n- ADR-050\n\n## Problem / gap\n\nThe diagram fixes 192 dims for the SIGReg manifold. This binds the wire format. We need a documented decision before the wire ships, not after.\n\n## Acceptance criteria\n- [ ] ADR-050 amended (or addended) with the rationale for 192 dims, including the encoder-model assumptions\n- [ ] Wire format pinned in `weftos-sensor-pipeline-wire` once T22 lands\n- [ ] Migration / version-bump policy noted\n\n## Dependencies\n- T22 (sensor-pipeline-wire)\n\n## Notes\nMust precede `mesh.sensor.v1.*` topic ship (T25).\n"
+  },
+  {
+    "name": "ws17: governance — decide rotate-but-not-revoke policy expression for auth_service",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "security", "governance"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T43, Q5)\n\n## Problem / gap\n\nWith auth_service gates landing (T4), we need a policy expression for cases like 'agent X may rotate but not revoke'. Today's policy DSL is unclear on this dimension.\n\n## Acceptance criteria\n- [ ] Decide whether the existing DSL handles this, or extend it\n- [ ] Document the canonical policy expression\n- [ ] Wire test cases into the auth_service test suite\n\n## Dependencies\n- T4 (auth_service gates)\n- Stream 8\n\n## Notes\nPolicy/governance design item.\n"
+  },
+  {
+    "name": "ws17: sonobuoy — decide whether 5th branch (active-imaging / SAS) lands as feature or stays doc-only",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "governance"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (T44, Q6)\n\n## Problem / gap\n\nSynthesis grew from 4 to 5 architecture branches by adding active-imaging / synthetic aperture sonar. Decision deferred: feature vs doc-only.\n\n## Acceptance criteria\n- [ ] Decision recorded in `SYNTHESIS.md`\n- [ ] If feature: ADR + crate scaffold queued\n- [ ] If doc-only: explicit closure note\n\n## Dependencies\n- None\n\n## Notes\nPure direction-setting.\n"
+  },
+  {
+    "name": "ws17: Democritus — add rate limiting on exposure surface",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "security", "gap"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (D13)\n- `.planning/development_notes/sprint-16/security-audit.md:108`\n\n## Problem / gap\n\nSecurity audit flagged a TODO acknowledging rate limiting is needed for the Democritus exposure surface; not implemented.\n\n## Acceptance criteria\n- [ ] Rate-limit policy decided and applied at the right boundary (RPC / facade)\n- [ ] Tests covering throttle + reject behaviour\n- [ ] Update `security-audit.md` line 108\n\n## Dependencies\n- Democritus loop already shipped\n\n## Notes\nLow risk pre-multitenant; raises in priority once Democritus is exposed externally.\n"
+  },
+  {
+    "name": "ws17: governance — close out 8-agent / 48-task exochain-fix-plan medium-severity rows",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "governance", "tech-debt"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (D18)\n- `.planning/development_notes/exochain-fix-plan.md`\n- `.planning/development_notes/exochain-certification-{critical,medium}.md`\n\n## Problem / gap\n\nThe 8-agent / 48-task `exochain-fix-plan.md` is partially consumed. Remaining medium-severity rows in the cap matrix carry over.\n\n## Acceptance criteria\n- [ ] Walk the remaining medium-severity rows; close each with PR or explicit deferral\n- [ ] Update `governance-certification.md` totals\n\n## Dependencies\n- T4, T5 cover some adjacent items\n\n## Notes\nGood paired sweep with T5.\n"
+  },
+  {
+    "name": "ws17: EML — numerical-stability scaffolding for nested exp/ln at scale",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "gap", "performance"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` (D11)\n\n## Problem / gap\n\nThe CIFAR-10 MLP run blew up on deep EML trees. Full LLM-scale would require heroic numerical-stability engineering. Today there is no framework-level stability layer in `eml-core`.\n\n## Acceptance criteria\n- [ ] Catalogue the numerical issues (over/underflow loci) in `eml-core`\n- [ ] Prototype a stability layer (log-sum-exp tricks, range clamping, AdaScale-style normalization)\n- [ ] Demonstrate convergence on the prior CIFAR-10 reproduction\n- [ ] Document the layer in the EML guide\n\n## Dependencies\n- `eml-core`\n\n## Notes\nResearch-grade; cycle 0.9.x.\n"
+  },
+  {
+    "name": "ws17: orphans — triage OpenFang gap targets (channel breadth, Hands, Tauri, security stack, OFP, marketplace, SDKs, TUI, migration)",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws17-research", "audit-finding", "audit-0.7.0", "orphan", "docs"],
+    "description_md": "## Source\n- `.planning/reviews/0.7.0-release-gate/17-research-streams.md` ('Orphaned research')\n- `.planning/development_notes/openfang-comparison.md`\n\n## Problem / gap\n\nOpenFang comparison surfaced ~10 distinct gap targets that no workstream owns: channel breadth (40 vs 13), autonomous Hands agents, Tauri 2.0 desktop, 16-layer security stack, OpenAI-compatible API, P2P OFP wire protocol, agent marketplace, JS+Python SDKs, ratatui TUI, migration tools.\n\n## Acceptance criteria\n- [ ] For each of the ~10 gap targets, assign a workstream owner or explicitly mark 'no-op'\n- [ ] Update `openfang-comparison.md` with the triage outcome\n- [ ] Cross-link any items that become real tasks into their owning streams\n\n## Dependencies\n- Workstream owners\n\n## Notes\nThese are competitive-analysis items, not research. Filed under ws17 because the comparison report lives there.\n"
+  }
+]

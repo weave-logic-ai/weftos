@@ -1,0 +1,394 @@
+[
+  {
+    "name": "ws02: kernel auth — add gate.check to revoke_token (DiD)",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "release-gate-blocker", "governance", "security"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #1\n- code: `crates/clawft-kernel/src/auth_service.rs:441` (`revoke_token`)\n- prior: cert-critical PARTIAL #6\n\n## Problem / gap\n\n`revoke_token` is the third leg of the auth lifecycle (rotate, request, revoke). The other two legs received `gate.check` guards in commit `a0c54a47`, but `revoke_token` did not, leaving a defense-in-depth gap. Without a governance gate, a compromised principal that bypasses the request/rotate paths can still revoke tokens unchecked.\n\n## Acceptance criteria\n\n- [ ] `gate.check` call inserted at the entry of `revoke_token`, mirroring the `rotate_credential` pattern at `auth_service.rs:337`.\n- [ ] Unit test asserts the Deny path returns a governance error.\n- [ ] `scripts/build.sh check` + `scripts/build.sh clippy` clean.\n- [ ] Audit row #1 removed from `02-kernel-governance.md` task list with WEFT-N reference.\n\n## Dependencies\n\n- blocks: closing the 0.7.0 governance audit\n- blocked-by: none\n\n## Notes\n\n- Pattern reference: `auth_service.rs:337` (rotate_credential after `a0c54a47`).\n- Severity in the audit is HIGH; treated as 0.7.x release-gate-blocker because the audit explicitly classifies it as Defense-in-Depth.\n"
+  },
+  {
+    "name": "ws02: services-api — re-enable auth middleware on /api/* and /ws",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "gap"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #10\n- code: `crates/clawft-services/src/api/mod.rs:309-315` (auth middleware commented out: `// Enable once the UI has a login flow`)\n- prior: sprint-16 security-audit M-1\n\n## Problem / gap\n\nAPI auth middleware is fully implemented but commented out in the tower stack pending a UI login flow. All `/api/*` and `/ws` endpoints are unauthenticated in shipped binaries. This is a HIGH-severity finding from the sprint-16 security audit and a clear release-gate blocker for a public 0.7.0 cut.\n\n## Acceptance criteria\n\n- [ ] Auth middleware enabled by default in `clawft-services/src/api/mod.rs`.\n- [ ] UI login flow lands or a token-bootstrap path is documented.\n- [ ] Unauthenticated `/api/*` request returns 401.\n- [ ] Integration test for an authenticated round-trip.\n\n## Dependencies\n\n- blocks: 0.7.0 publish (any public-facing daemon)\n- blocked-by: UI login flow (or documented bootstrap workaround)\n\n## Notes\n\n- The middleware code already exists; this is a config flip + UI dependency, not new work.\n"
+  },
+  {
+    "name": "ws02: services-api — replace CorsLayer::permissive() with deny-by-default",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "gap"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #11\n- code: `crates/clawft-services/src/api/mod.rs:295` (`CorsLayer::permissive()` default when `cors_origins` is empty)\n- prior: sprint-16 security-audit M-2\n\n## Problem / gap\n\nWhen `cors_origins` is unset, the API ships with `CorsLayer::permissive()`, allowing any origin to call the daemon. This composes badly with the disabled auth middleware (row #10) — even with auth on, a permissive CORS default invites CSRF on cookie/session-bearing flows.\n\n## Acceptance criteria\n\n- [ ] Default CORS layer is deny-by-default (empty allow-list, no `permissive()`).\n- [ ] Operators must explicitly set `cors_origins` to enable cross-origin access.\n- [ ] Test asserts a non-listed origin gets the right CORS headers (no `Access-Control-Allow-Origin`).\n- [ ] Migration note in `docs/handoff.md` for any operator relying on the old default.\n\n## Dependencies\n\n- blocks: 0.7.0 publish\n- blocked-by: none\n\n## Notes\n\n- XS effort per audit; concrete drop-in change.\n"
+  },
+  {
+    "name": "ws02: services-api — add tower::limit::RateLimitLayer to /api/* and token endpoints",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "gap"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #12\n- code: `crates/clawft-services/src/api/handlers.rs:133` (TODO `tower::limit::RateLimitLayer`)\n- prior: sprint-16 security-audit M-3\n\n## Problem / gap\n\nNo rate limiting on `/api/*` — token-issuance endpoints in particular are vulnerable to brute force / abuse. The TODO points at `tower::limit::RateLimitLayer` but the layer was never added.\n\n## Acceptance criteria\n\n- [ ] `tower::limit::RateLimitLayer` (or equivalent) attached to the API tower stack.\n- [ ] Stricter limits on token endpoints than on read endpoints.\n- [ ] Test confirms 429 after burst threshold.\n- [ ] Limits configurable via kernel config.\n\n## Dependencies\n\n- blocks: 0.7.0 publish\n- blocked-by: none\n\n## Notes\n\n- Pairs naturally with auth middleware (row #10) and CORS (row #11) work.\n"
+  },
+  {
+    "name": "ws02: services-api — add TokenStore::revoke_token + expired-token cleanup",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "gap"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #13\n- code: `crates/clawft-services/src/api/auth.rs` (no `revoke_token` method on `TokenStore`)\n- prior: sprint-16 security-audit M-4\n\n## Problem / gap\n\n`TokenStore` cannot revoke an issued token. There is also no background sweep of expired tokens, so the store grows monotonically. Combined, a leaked token cannot be killed and the store eventually exhausts memory under heavy churn.\n\n## Acceptance criteria\n\n- [ ] `TokenStore::revoke_token(id)` lands; revoked tokens fail validation.\n- [ ] Periodic cleanup task removes expired tokens.\n- [ ] Tests for revoke + cleanup.\n- [ ] CLI / RPC exposes revocation to operators.\n\n## Dependencies\n\n- blocks: 0.7.0 publish (security gap)\n- blocked-by: none\n\n## Notes\n\n- Severity MEDIUM in audit but treated as 0.7.x release-gate because the security audit explicitly classifies it user-facing.\n"
+  },
+  {
+    "name": "ws02: chain — add optional idempotency_key to ChainEvent (replay protection)",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "gap"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #14\n- prior: sprint-16 security-audit M-5\n\n## Problem / gap\n\n`ChainEvent` has no replay protection — an attacker (or buggy integrator) can resubmit the same event and have it appended again. The audit recommends an optional `idempotency_key` field plus a duplicate check before append.\n\n## Acceptance criteria\n\n- [ ] `ChainEvent` gains optional `idempotency_key` field.\n- [ ] `ChainManager::append` checks for duplicate keys and short-circuits with success (or distinct error).\n- [ ] Wire format and on-disk RVF bump documented; backward-compatible read path.\n- [ ] Tests for new + repeat append.\n\n## Dependencies\n\n- blocks: 0.7.0 security posture\n- blocked-by: none\n\n## Notes\n\n- Effort M; touches chain serialization. Coordinate with anchoring work.\n"
+  },
+  {
+    "name": "ws02: tooling — add cargo audit to scripts/build.sh gate and CI",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tooling", "security"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #15\n- prior: sprint-16 security-audit\n\n## Problem / gap\n\n`cargo audit` is not installed or invoked in CI. Wasmtime v29→v33 closed 10 transitive Dependabot alerts, but there is no automated gate to catch the next round.\n\n## Acceptance criteria\n\n- [ ] `cargo audit` installed in CI image.\n- [ ] `scripts/build.sh gate` invokes `cargo audit` (with allow-list for known-accepted advisories).\n- [ ] CI fails on new advisories.\n- [ ] Documented in `docs/handoff.md` / build-script docs.\n\n## Dependencies\n\n- blocks: 0.7.0 release confidence\n- blocked-by: none\n\n## Notes\n\n- XS effort; pure tooling. Should land before publish.\n"
+  },
+  {
+    "name": "ws02: mesh — implement K6.4 chain replay (LocalChain::tail_from + append_signed)",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "orphan"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #16\n- code: `crates/clawft-kernel/src/mesh_runtime.rs:509-535` (chain-sync stub)\n- prior: k6-readiness-audit\n\n## Problem / gap\n\nK6.4 chain replay is half-built: `build_chain_sync_request` and `handle_chain_sync_response` exist, but no replay into `ChainManager`. Cross-node chain sync is therefore non-functional.\n\n## Acceptance criteria\n\n- [ ] `LocalChain::tail_from(seq)` returns events newer than seq.\n- [ ] Remote events apply via `ChainManager::append_signed()`.\n- [ ] Conflict / merge policy decided (links to row #20 Q1).\n- [ ] Two-node integration test shows convergence.\n\n## Dependencies\n\n- blocked-by: row #20 (chain merge strategy decision), row #23 (test harness)\n\n## Notes\n\n- L effort; foundational to any K6 mesh story.\n"
+  },
+  {
+    "name": "ws02: mesh — implement K6.4 tree Merkle diff + signed mutations",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "security"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #17\n- prior: k6-readiness-audit Tree RED\n\n## Problem / gap\n\nResource tree has no Merkle proof generation, no diff API, and `MutationEvent.signature` is always `None`. Cross-node tree sync cannot be authenticated or transmitted incrementally.\n\n## Acceptance criteria\n\n- [ ] Merkle diff API on `ResourceTree` exposes minimal-witness deltas.\n- [ ] `MutationEvent` carries Ed25519 signatures end-to-end.\n- [ ] Two-node tree-diff integration test.\n- [ ] Performance: diff is O(changed) not O(tree).\n\n## Dependencies\n\n- blocked-by: row #56 (incremental Merkle hash)\n- pairs-with: row #55 (MutationEvent signing)\n\n## Notes\n\n- L effort; security-critical for any multi-node deployment.\n"
+  },
+  {
+    "name": "ws02: mesh — implement S10 key-rotation chain event + verifier",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "security"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #18\n- prior: k6-decision-coverage S10\n\n## Problem / gap\n\nS10 key rotation has no owner in the K6 plan. Without it, a compromised node key requires cluster-wide manual intervention. The security panel defines a 5-step dual-signed-chain-event protocol but nothing implements it.\n\n## Acceptance criteria\n\n- [ ] Dual-signed chain event for key rotation per security-panel spec.\n- [ ] Verifier rejects events not signed by both old and new keys during the rotation window.\n- [ ] CLI: `weaver kernel rotate-key`.\n- [ ] Tests for happy path + replay rejection.\n\n## Dependencies\n\n- blocks: any production multi-node deployment\n- blocked-by: none\n\n## Notes\n\n- M effort; security-critical for K6 operations.\n"
+  },
+  {
+    "name": "ws02: mesh — implement IpcScope::Restricted browser default + browser_policy rules",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "security"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #19\n- prior: k6-decision-coverage S7\n\n## Problem / gap\n\nS7 (browser node restrictions) has only partial coverage. No exit criterion tests `IpcScope::Restricted` as the browser default, and no governance `browser_policy` rules exist. Browser nodes can therefore reach IPC scopes they should not.\n\n## Acceptance criteria\n\n- [ ] Browser builds default to `IpcScope::Restricted`.\n- [ ] `browser_policy` rule type lands in governance.\n- [ ] Test: browser node cannot subscribe to non-public topics.\n- [ ] Documented in `docs/guides/browser.md`.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- S effort; pairs with FS/env persistence work in ws01.\n"
+  },
+  {
+    "name": "ws02: mesh — decide chain merge strategy (leader vs DAG) and split-brain handling",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "governance"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #20\n- prior: k6-developer-readiness Q1, Q5\n\n## Problem / gap\n\nQ1 (chain merge: leader vs DAG) and Q5 (split-brain handling) are open design questions blocking K6.4 implementation. Without a decision, chain replay (row #16) cannot land cleanly.\n\n## Acceptance criteria\n\n- [ ] ADR added documenting the chosen merge strategy.\n- [ ] Split-brain detection + recovery semantics defined.\n- [ ] Decision referenced by row #16 implementation.\n\n## Dependencies\n\n- blocks: row #16 (chain replay)\n\n## Notes\n\n- M effort; design + ADR work, no code per se.\n"
+  },
+  {
+    "name": "ws02: mesh — decide and freeze KernelMessage wire format (JSON vs RVF)",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "governance"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #21\n- prior: k6-developer-readiness Q2\n\n## Problem / gap\n\nQ2 wire format is open. Pseudocode uses `serialize_rvf()` but `KernelMessage` is currently JSON on the wire. Need a freeze before K6 ships.\n\n## Acceptance criteria\n\n- [ ] ADR documents chosen wire format.\n- [ ] `KernelMessage` serialization aligned with ADR.\n- [ ] Cross-language compatibility considerations recorded.\n- [ ] Test pins the format.\n\n## Dependencies\n\n- pairs-with: rows #16, #17 (sync paths consume this)\n\n## Notes\n\n- S effort; mostly decision + small implementation alignment.\n"
+  },
+  {
+    "name": "ws02: mesh — decide full libp2p-kad vs lighter DHT",
+    "priority": "medium",
+    "cycle": "0.9.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "governance"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #22\n- prior: k6-developer-readiness Q4\n\n## Problem / gap\n\nQ4 is unresolved: stick with full libp2p-kad or build a lighter DHT? This is research / experimentation territory and depends on field telemetry once K6 ships at all.\n\n## Acceptance criteria\n\n- [ ] ADR documenting decision and rationale.\n- [ ] If lighter DHT: design doc + spike code.\n- [ ] Decision aligned with ADR-027 (selective libp2p).\n\n## Dependencies\n\n- blocked-by: K6 mesh ships somewhere first to gather data\n\n## Notes\n\n- Speculative / research item; safe to defer to 0.9.x.\n"
+  },
+  {
+    "name": "ws02: mesh — add InMemoryTransport / MockPeer / MockClock / FaultyTransport",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "tests"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #23\n- prior: k6-test-strategy-review P0\n\n## Problem / gap\n\nNo multi-node integration test harness exists. K6 mesh code is ~3,500 lines with 133 unit tests but zero two-node integration tests. The recommended fixtures (`InMemoryTransport`, `MockPeer`, `MockClock`, `FaultyTransport`) belong in `crates/clawft-kernel/src/mesh_test_support.rs`.\n\n## Acceptance criteria\n\n- [ ] `mesh_test_support.rs` lands with the four fixtures.\n- [ ] At least one two-node integration test exercises each fixture.\n- [ ] Fixtures documented for downstream test authors.\n\n## Dependencies\n\n- blocks: rows #16, #17, #18 (sync work needs this harness)\n\n## Notes\n\n- M effort; foundational for any K6 testability story.\n"
+  },
+  {
+    "name": "ws02: mesh — define Clock trait and inject into time-dependent components",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "tests"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #24\n- prior: k6-test-strategy-review P0\n\n## Problem / gap\n\nMesh time-dependent components (heartbeat, SWIM, retries) hardwire `std::time::Instant` / `tokio::time`, blocking deterministic tests. Need a `Clock` trait so `MockClock` (row #23) can drive them.\n\n## Acceptance criteria\n\n- [ ] `Clock` trait in `clawft-kernel`.\n- [ ] All time-dependent mesh components consume `Clock` via DI.\n- [ ] Production binds to a `RealClock`.\n- [ ] Test using `MockClock` deterministically advances heartbeat ticks.\n\n## Dependencies\n\n- pairs-with: row #23 (MockClock fixture)\n\n## Notes\n\n- M effort; large refactor surface but mechanical.\n"
+  },
+  {
+    "name": "ws02: ci — add cargo check --target wasm32-unknown-unknown (no mesh) to CI",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "tooling", "tests"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #25\n- prior: k6-test-strategy-review P0\n\n## Problem / gap\n\nNo CI gate ensures `clawft-kernel` (mesh feature off) builds for `wasm32-unknown-unknown`. Browser builds risk silent breakage when non-browser code creeps into the default feature set.\n\n## Acceptance criteria\n\n- [ ] CI runs `cargo check --target wasm32-unknown-unknown --no-default-features` (or feature-equivalent).\n- [ ] Failure blocks merge.\n- [ ] Documented in `scripts/build.sh`.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- XS effort; pure CI plumbing.\n"
+  },
+  {
+    "name": "ws02: mesh — define missing K6 protocol struct types and msg_type enum",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "governance"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #26\n- prior: k6-developer-readiness\n\n## Problem / gap\n\nMultiple protocol-message struct types are referenced but undefined: `MeshStream`, `TransportListener`, `EncryptedPeer`, `WeftHandshake`, `JoinRequest/Response`, `TreeSyncRequest/Response`, `ServiceEndpoint`, `ProcessAdvertisement`, `ServiceAdvertisement`, `Frame`, plus the full `msg_type` enumeration. Implementation cannot proceed without them.\n\n## Acceptance criteria\n\n- [ ] Each type lands as a concrete struct/enum with serde derives.\n- [ ] `msg_type` enum exhaustively covers wire variants.\n- [ ] Roundtrip serialization tests for each.\n- [ ] ADR / mesh-protocol doc updated to reference the shipped types.\n\n## Dependencies\n\n- blocks: rows #16, #17, downstream sync paths\n- blocked-by: row #21 (wire format decision)\n\n## Notes\n\n- M effort; mostly type plumbing once row #21 is decided.\n"
+  },
+  {
+    "name": "ws02: mesh — resolve mesh_adapter.rs vs mesh_ipc.rs and mesh/handshake.rs layout",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "tech-debt", "docs"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #27\n- prior: k6-developer-readiness\n\n## Problem / gap\n\nDocumentation references `mesh_adapter.rs` in the K6.3 phase breakdown but it is not in the \"Files to Create\" table; meanwhile `mesh/handshake.rs` is a sub-directory while every other mesh file uses flat `mesh_*.rs`. Either the layout standard is wrong or the file isn't where the docs say.\n\n## Acceptance criteria\n\n- [ ] Layout standard documented (flat vs nested).\n- [ ] Files moved or doc updated to match.\n- [ ] No dangling cross-references.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- XS; cleanup work.\n"
+  },
+  {
+    "name": "ws02: mesh — wire AssessmentTransport into daemon + add weft assess mesh-status",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "orphan"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #28\n- prior: mesh-k6-transport Next Steps\n\n## Problem / gap\n\n`AssessmentTransport` is fully tested but never wired into the daemon mesh event loop. Assessment diff propagation (push only changed findings) does not happen at runtime. No CLI exposes mesh-assess state.\n\n## Acceptance criteria\n\n- [ ] `AssessmentTransport` registered in the daemon mesh event loop.\n- [ ] `weft assess mesh-status` CLI subcommand reports peer state.\n- [ ] Assessment diff propagation pushes only changed findings.\n- [ ] Integration test covers two-node propagation.\n\n## Dependencies\n\n- blocked-by: row #23 (test harness)\n\n## Notes\n\n- M effort; orphan code that needs an owner.\n"
+  },
+  {
+    "name": "ws02: mesh — add QUIC transport (quinn + snow) alongside TCP/WS",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #29\n- prior: mesh-boot-integration Future Work; ADR-026\n\n## Problem / gap\n\nADR-026 makes QUIC the primary transport, but only TCP (and WS) are implemented. Without QUIC, mesh suffers head-of-line blocking and worse NAT traversal.\n\n## Acceptance criteria\n\n- [ ] QUIC transport via `quinn` + `snow` Noise.\n- [ ] Selectable via `[kernel.mesh]` config.\n- [ ] Two-node integration test over QUIC.\n- [ ] Documented in `docs/guides/`.\n\n## Dependencies\n\n- blocked-by: row #23 (test harness)\n\n## Notes\n\n- L effort; ADR-026 commitment.\n"
+  },
+  {
+    "name": "ws02: mesh — make Mesh a SystemService with start/stop/health_check",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "tech-debt"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #30\n- prior: mesh-boot-integration Future Work\n\n## Problem / gap\n\nMesh boots in phase 5d but is not a `SystemService` — it has no proper start/stop/health_check lifecycle. Operators cannot inspect or restart it via the standard service surface.\n\n## Acceptance criteria\n\n- [ ] `MeshService` implements `SystemService`.\n- [ ] Start/stop/health_check exposed via `weaver kernel services`.\n- [ ] Tests for lifecycle transitions.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- S effort; routine service-ification.\n"
+  },
+  {
+    "name": "ws02: mesh — wire ClusterService to mesh peer discovery",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #31\n- prior: mesh-boot-integration Future Work\n\n## Problem / gap\n\n`ClusterService` is pull-based today. Mesh peer discovery exists separately. Linking the two would let cluster membership reflect live mesh state without manual sync.\n\n## Acceptance criteria\n\n- [ ] ClusterService subscribes to mesh peer-event stream.\n- [ ] Membership updates atomically.\n- [ ] Tests for join / leave / partition recovery.\n\n## Dependencies\n\n- blocked-by: row #23 (test harness)\n\n## Notes\n\n- M effort; integration glue.\n"
+  },
+  {
+    "name": "ws02: mesh — implement mesh time-sync (authority election, offset smoothing, mesh_time)",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "orphan"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #32\n- prior: `.planning/development_notes/mesh-time-sync.md` (design only)\n\n## Problem / gap\n\nMesh time sync is design-only: no `authority_time` / `authority_id` fields, no election (GPS > NTP > local), no offset smoothing, no `MeshRuntime::mesh_time()` API, no WiFi TSF integration. Required by ECC causal-edge timestamps, ExoChain `chain_seq` monotonicity across nodes, topology browser temporal dim, robotics sensor fusion.\n\n## Acceptance criteria\n\n- [ ] `authority_time` / `authority_id` heartbeat fields.\n- [ ] Authority election (GPS > NTP > local monotonic).\n- [ ] EMA offset smoothing + outlier rejection.\n- [ ] `MeshRuntime::mesh_time()` API.\n- [ ] WiFi TSF integration for ESP32 (or flagged out).\n\n## Dependencies\n\n- blocks: cross-node ECC, ExoChain monotonicity\n- blocked-by: row #23 (test harness with MockClock)\n\n## Notes\n\n- L effort; orphaned design doc with no current owner.\n"
+  },
+  {
+    "name": "ws02: services-api — wire axum handlers to http_facade types + SSE loop",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "orphan"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #33\n- prior: http-facade Next Steps\n\n## Problem / gap\n\n`http_facade.rs` defines 13 routes + SSE + witness, but no axum handler in `clawft-services/src/api/` calls into it. The facade is orphaned. SSE streaming loop also missing.\n\n## Acceptance criteria\n\n- [ ] axum handlers in `clawft-services/src/api/` call into `http_facade` types.\n- [ ] SSE handler loops on `poll_events()`.\n- [ ] Smoke test for each route + an SSE client smoke test.\n\n## Dependencies\n\n- blocked-by: rows #10, #11, #12 (auth/CORS/rate-limit) for production exposure\n\n## Notes\n\n- M effort; routine wiring once safety stack is in place.\n"
+  },
+  {
+    "name": "ws02: services-api — add HTTP facade integration tests once profile/pairing types land",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "tests"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #34\n- prior: http-facade Next Steps\n\n## Problem / gap\n\nHTTP facade integration tests are blocked on `ProfilesConfig` / `PairingConfig` types landing in `clawft-types`. Once those land, the integration coverage should follow.\n\n## Acceptance criteria\n\n- [ ] `ProfilesConfig` / `PairingConfig` available.\n- [ ] Integration tests cover the 13 routes + SSE.\n- [ ] CI runs the suite.\n\n## Dependencies\n\n- blocked-by: types landing\n\n## Notes\n\n- S effort once the prerequisites land.\n"
+  },
+  {
+    "name": "ws02: vector — wire VectorBackend into DemocritusLoop",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "tech-debt"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #35\n- prior: vector-hybrid Next steps\n\n## Problem / gap\n\nDEMOCRITUS still consumes a raw `HnswService`. The new `VectorBackend` trait + Hybrid backend exists but is unused on the cognitive path. Switching unlocks DiskANN / Hybrid swap-in.\n\n## Acceptance criteria\n\n- [ ] `DemocritusLoop` consumes `Arc<dyn VectorBackend>`.\n- [ ] Default binding is the existing HNSW backend (no behavior change).\n- [ ] Tests confirm backend swap is wiring-only.\n\n## Dependencies\n\n- blocks: row #37 (DiskANN) when upstream lands\n\n## Notes\n\n- S effort.\n"
+  },
+  {
+    "name": "ws02: vector — add ecc.vector-config RPC endpoint",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #36\n- prior: vector-hybrid Next steps\n\n## Problem / gap\n\nNo RPC exposes the active vector backend, so operators have no introspection. A small `ecc.vector-config` RPC closes that gap.\n\n## Acceptance criteria\n\n- [ ] `ecc.vector-config` RPC returns active backend + parameters.\n- [ ] `weaver kernel ecc vector-config` CLI consumes it.\n- [ ] Test for RPC contract.\n\n## Dependencies\n\n- blocked-by: row #35 (VectorBackend wired)\n\n## Notes\n\n- XS effort.\n"
+  },
+  {
+    "name": "ws02: vector — ship real DiskANN backend behind diskann feature once ruvector-diskann publishes",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "tech-debt"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #37\n- code: `crates/clawft-kernel/src/vector_diskann.rs` (brute-force HashMap stub); `boot.rs:1415` log says \"DiskANN (stub)\"\n- prior: vector-hybrid Next steps\n\n## Problem / gap\n\nDiskANN backend is a brute-force `HashMap<u64, StoredEntry>` with linear cosine search awaiting `ruvector-diskann` publication. Speculative / blocked-on-upstream.\n\n## Acceptance criteria\n\n- [ ] `ruvector-diskann` published.\n- [ ] Real DiskANN backend behind `diskann` feature flag.\n- [ ] Boot log no longer says \"DiskANN (stub)\".\n- [ ] Performance benchmark vs HNSW recorded.\n\n## Dependencies\n\n- blocked-by: ruvector-diskann publication\n\n## Notes\n\n- M effort once upstream ships; pure waiting otherwise.\n"
+  },
+  {
+    "name": "ws02: vector — persist HNSW tombstones across save/load",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "tech-debt"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #38\n- prior: vector-hardening (Tombstones note)\n\n## Problem / gap\n\nHNSW tombstones are in-memory only. After a save/load cycle, soft-deleted vectors come back. Persistence requires extending the save/load format.\n\n## Acceptance criteria\n\n- [ ] Save/load format persists tombstone state.\n- [ ] Backward-compatible read for existing snapshots.\n- [ ] Test: delete -> save -> load -> deleted entries stay gone.\n- [ ] Compaction story documented.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- M effort; deferred to vector sync work in WS4 / Gap #11 per planning notes.\n"
+  },
+  {
+    "name": "ws02: vector — flip LogQuantized + SimdDistance is_available once ruvector-core PR #352 lands",
+    "priority": "medium",
+    "cycle": "0.9.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #39\n- code: `crates/clawft-kernel/src/vector_quantization.rs:83` (KG-011), `:150` (KG-012)\n- prior: ruvector-core PR #352 (upstream)\n\n## Problem / gap\n\n`LogQuantizedConfig::is_available()` and `SimdDistanceConfig::is_available()` are hardwired `false` pending ruvector-core PR #352. Once that lands, flip the constants and the +14% QPS branch-free distance path opens.\n\n## Acceptance criteria\n\n- [ ] ruvector-core PR #352 merged + released.\n- [ ] Flags flipped, code paths exercised.\n- [ ] Benchmark shows the +14% QPS lift.\n- [ ] TODO(KG-011/KG-012) comments removed.\n\n## Dependencies\n\n- blocked-by: ruvector-core PR #352\n\n## Notes\n\n- XS once upstream ships.\n"
+  },
+  {
+    "name": "ws02: kernel — ship real Wasmtime backend for spectral_embedding (or move to deferred)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "stub", "tech-debt"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #40\n- code: `crates/clawft-kernel/src/quantum_register.rs:9` (TODO)\n\n## Problem / gap\n\n`spectral_embedding` is a TODO. Either ship a real Wasmtime backend or move it to the deferred-feature appendix and remove from the production surface.\n\n## Acceptance criteria\n\n- [ ] Decision recorded: ship vs defer.\n- [ ] If ship: real backend with tests.\n- [ ] If defer: feature-flagged out and documented.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- M effort if shipping; XS if deferring.\n"
+  },
+  {
+    "name": "ws02: exo-resource-tree — replace permission.rs always-Allow stub with K1 ACL engine",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "governance", "security"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #41\n- code: `crates/exo-resource-tree/src/permission.rs:23-31` (explicit K0 stub: always returns `Allow`)\n- prior: exo-resource-tree K1\n\n## Problem / gap\n\n`permission.rs` is a deliberate K0 stub that always returns `Allow`. Resource-tree access is therefore unauthenticated at the permission layer. K1 deliverable: ACL-based permission checks with delegation shortcut, `EffectiveAclCache`, integration with `CapabilityChecker`.\n\n## Acceptance criteria\n\n- [ ] ACL engine implemented; default-deny fall-through.\n- [ ] `EffectiveAclCache` lands.\n- [ ] `CapabilityChecker` integrated.\n- [ ] Negative tests confirm denial paths.\n- [ ] `weaver kernel acl` CLI surface for inspection.\n\n## Dependencies\n\n- blocks: 0.7.0 governance audit\n- blocked-by: none (the stub is already the holdup)\n\n## Notes\n\n- L effort; treated as 0.7.x release-gate-blocker because the audit explicitly cites it as a kernel governance gap.\n"
+  },
+  {
+    "name": "ws02: exo-resource-tree — implement DelegationCert lifecycle (grant/revoke + Ed25519 + expiry)",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "stub", "governance", "security"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #42\n- code: `crates/exo-resource-tree/src/delegation.rs:14` (type only, no grant/revoke/sig/expiry/chain-validate)\n- prior: exo-resource-tree K1\n\n## Problem / gap\n\n`DelegationCert` is a type stub with no lifecycle. K1 deliverables: grant/revoke with Ed25519 signatures, certificate chain validation, time-bounded expiry.\n\n## Acceptance criteria\n\n- [ ] Grant/revoke APIs with Ed25519 signing.\n- [ ] Chain validation against trust anchor.\n- [ ] Expiry honored.\n- [ ] Integration test with multi-cert chain.\n\n## Dependencies\n\n- pairs-with: row #41 (ACL engine consumes delegations)\n\n## Notes\n\n- M effort; foundational for delegation-aware governance.\n"
+  },
+  {
+    "name": "ws02: services-api — implement bridge.rs TODOs (skill, memory, config)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "stub"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #43\n- code: `crates/clawft-services/src/api/bridge.rs:282, 287, 395, 467` (unimplemented bridge endpoints)\n\n## Problem / gap\n\nFour bridge endpoints are unimplemented: skill install/uninstall, memory delete, config persistence. UI features that depend on them silently fail.\n\n## Acceptance criteria\n\n- [ ] Each endpoint implemented with proper error mapping.\n- [ ] Tests cover happy + error paths.\n- [ ] Documented in API reference.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- M effort; routine.\n"
+  },
+  {
+    "name": "ws02: services-api — add CSP middleware to API tower stack",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "security"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #44\n- code: `crates/clawft-services/src/api/handlers.rs:130` (TODO CSP middleware)\n\n## Problem / gap\n\nNo Content-Security-Policy headers on API responses. UI is therefore exposed to XSS / inline-script abuse.\n\n## Acceptance criteria\n\n- [ ] CSP middleware attached to the tower stack.\n- [ ] Sensible default policy that doesn't break the UI.\n- [ ] Configurable via kernel config.\n- [ ] Test asserts header presence.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- XS effort.\n"
+  },
+  {
+    "name": "ws02: tests — resolve test-suite hang in clawft-kernel --lib aggregate run",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tests", "bug"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #45\n- prior: CHANGELOG 0.6.19 Known Issues\n\n## Problem / gap\n\nWhen the full `clawft-kernel --lib` test suite is run, one test hangs. Targeted runs pass. This blocks reliable CI and any pre-commit gate that runs the full suite.\n\n## Acceptance criteria\n\n- [ ] Hang reproduced in a controlled harness.\n- [ ] Root cause identified (likely an unbounded `select!`, missing timeout, or resource leak).\n- [ ] Fix landed; full `--lib` run passes deterministically.\n- [ ] CI gate reinstated.\n\n## Dependencies\n\n- blocks: 0.7.0 publish (CI confidence)\n- blocked-by: none\n\n## Notes\n\n- M effort; treated as release-gate-blocker because reliable CI is a 0.7.0 prerequisite.\n"
+  },
+  {
+    "name": "ws02: workspace — clean ~150 clippy errors (pre-existing debt)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #46\n- prior: CHANGELOG 0.6.19 Known Issues\n\n## Problem / gap\n\n`scripts/build.sh check` is green but `scripts/build.sh clippy` is red on ~150 pre-existing errors across `clawft-types/src/goal.rs`, `clawft-rpc`, `eml-core`, and older kernel/weave code. Blocks any clippy-as-gate aspiration.\n\n## Acceptance criteria\n\n- [ ] Errors triaged: trivial, mechanical, structural.\n- [ ] Mechanical batch fixed.\n- [ ] Remaining structural issues filed as smaller follow-ups.\n- [ ] `scripts/build.sh clippy` green.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- M effort; sequence after 0.7.0 to avoid distracting churn.\n"
+  },
+  {
+    "name": "ws02: kernel — persist AppManager state to disk",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #47\n- prior: k0-k5-final-gap-analysis §6\n\n## Problem / gap\n\nApps installed during a daemon session are lost on restart. AppManager has no on-disk manifest store.\n\n## Acceptance criteria\n\n- [ ] Manifest store persists installed apps.\n- [ ] Boot rehydrates AppManager from disk.\n- [ ] Atomic write (tmp + rename) to avoid corruption.\n- [ ] Test: install -> restart -> app still present.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- S effort; mirrors cluster_peers persistence pattern.\n"
+  },
+  {
+    "name": "ws02: chain — implement chain-anchored anchoring beyond MockAnchor",
+    "priority": "medium",
+    "cycle": "0.9.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #48\n- code: `crates/clawft-kernel/src/chain.rs:2180-2212` (`ChainAnchor` trait + `MockAnchor`)\n- prior: ADR-041 (chainanchor-trait)\n\n## Problem / gap\n\nThe `ChainAnchor` trait has only a `MockAnchor` impl. No external-ledger anchoring is wired up. Speculative until a target ledger is chosen.\n\n## Acceptance criteria\n\n- [ ] Concrete anchor against an external ledger (e.g. Bitcoin OP_RETURN, Ethereum log, custom hash chain).\n- [ ] Configurable via kernel config.\n- [ ] Anchoring frequency policy.\n- [ ] Tests with mock ledger.\n\n## Dependencies\n\n- blocked-by: ledger-target decision\n\n## Notes\n\n- M effort; speculative, deferred to 0.9.x.\n"
+  },
+  {
+    "name": "ws02: docs — update docs/weftos/k-phases.md (K2.1/K3/K4/K5 mis-marked)",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #49\n- prior: k0-k5-final §1, §3\n\n## Problem / gap\n\n`docs/weftos/k-phases.md` shows K2.1 as PENDING and K3/K4/K5 as STUBBED when all are complete. Misleading public docs at 0.7.0 cut.\n\n## Acceptance criteria\n\n- [ ] K-phase status table reflects shipped state.\n- [ ] Cross-checked against `k0-k5-final-gap-analysis.md`.\n- [ ] Build green for the docs site.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- XS effort; ship before 0.7.0 to avoid embarrassment in public docs.\n"
+  },
+  {
+    "name": "ws02: docs — write docs/guides/kernel.md (deferred from K5)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "docs", "gap"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #50\n- prior: k0-k5-final\n\n## Problem / gap\n\nK5 deliverable `docs/guides/kernel.md` does not exist. Operators have no curated entry point for kernel concepts beyond the architecture doc.\n\n## Acceptance criteria\n\n- [ ] `docs/guides/kernel.md` lands covering boot phases, services, K-phases, governance, ExoChain at an operator level.\n- [ ] Linked from the docs index.\n- [ ] Reviewed for accuracy against current code.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- M effort; can ship after 0.7.0 since architecture doc covers the worst gap.\n"
+  },
+  {
+    "name": "ws02: docs — renumber duplicate ADRs (two ADR-020s, two ADR-028s)",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs", "tech-debt"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #51 + Open questions\n- files: ADR-020 (chainloggable + kernel-phase-responsibilities); ADR-028 (post-quantum-dual-signing in `docs/adr/` + weftos-kernel in `docs/architecture/`)\n\n## Problem / gap\n\nTwo ADRs share number 020 and two share number 028. Tooling and humans both confuse them. Trivial cleanup that should ship before the public 0.7.0 doc release.\n\n## Acceptance criteria\n\n- [ ] Each ADR carries a unique number.\n- [ ] `docs/architecture/` vs `docs/adr/` paths consolidated to one canonical location.\n- [ ] Cross-references updated.\n- [ ] ADR index regenerated.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- XS effort; release-gate because doc release is part of 0.7.0 and these duplicates would ship publicly otherwise.\n"
+  },
+  {
+    "name": "ws02: docs — accept ADR-023 (assessment-as-kernel-service)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "docs"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #52\n- file: `adr-023-assessment-as-kernel-service` (status: Proposed)\n\n## Problem / gap\n\nADR-023 is still 'Proposed' even though the mesh-assess code that depends on it has shipped. Either accept the ADR or mark dependent code provisional.\n\n## Acceptance criteria\n\n- [ ] ADR status flipped to Accepted (or dependent code annotated provisional).\n- [ ] Decision rationale appended if any.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- XS effort; pure paperwork.\n"
+  },
+  {
+    "name": "ws02: kernel — add NodeId composite for cross-node uniqueness + remote inbox bridge",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #53\n- prior: k6-readiness-audit\n\n## Problem / gap\n\n`Pid: u64` has no node component, so PIDs collide across nodes. `Inbox` mpsc is in-process only; remote delivery has no bridge. Identity / addressing model is incomplete for any multi-node story.\n\n## Acceptance criteria\n\n- [ ] `(NodeId, Pid)` composite identity used at IPC boundaries.\n- [ ] Remote inbox bridge proxies messages across mesh.\n- [ ] Tests for cross-node send / receive.\n\n## Dependencies\n\n- blocked-by: row #23 (test harness)\n\n## Notes\n\n- L effort; foundational for K6.\n"
+  },
+  {
+    "name": "ws02: kernel — enforce max-message-size on KernelIpc::send (16 MiB)",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "gap"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #54\n- prior: k6-readiness-audit Security RED\n\n## Problem / gap\n\nMax-message-size is enforced in `mesh_framing` (16 MiB) but not on raw `KernelIpc::send` deserialization. A malicious local sender can OOM the daemon by submitting an oversized message via the IPC fast path.\n\n## Acceptance criteria\n\n- [ ] `KernelIpc::send` rejects messages > 16 MiB pre-deserialization.\n- [ ] Configurable cap (default 16 MiB).\n- [ ] Test with oversized payload.\n\n## Dependencies\n\n- blocks: 0.7.0 publish (security gap)\n- blocked-by: none\n\n## Notes\n\n- S effort; high-leverage security fix.\n"
+  },
+  {
+    "name": "ws02: mesh — add MutationEvent Ed25519 signing for cross-node tree mutations",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "security"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #55\n- prior: k6-readiness-audit Tree RED\n\n## Problem / gap\n\n`MutationEvent.signature` is always `None`. Cross-node tree mutations cannot be authenticated. Pairs with row #17 (tree Merkle diff).\n\n## Acceptance criteria\n\n- [ ] `MutationEvent` produced with Ed25519 signature.\n- [ ] Receiving node verifies signature.\n- [ ] Tests for valid + tampered + replay cases.\n\n## Dependencies\n\n- pairs-with: row #17 (tree Merkle diff)\n\n## Notes\n\n- M effort.\n"
+  },
+  {
+    "name": "ws02: mesh — incremental Merkle hash updates (replace full recompute_all)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "performance"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #56\n- prior: k6-readiness-audit Tree YELLOW\n\n## Problem / gap\n\n`ResourceTree::recompute_all()` is a full-tree rehash on every mutation; no incremental dirty-flag propagation. O(tree) work per mutation makes large trees painful.\n\n## Acceptance criteria\n\n- [ ] Dirty-flag propagation up the tree.\n- [ ] Recompute scoped to affected subtree.\n- [ ] Benchmark: large tree mutation is O(depth) not O(size).\n- [ ] Tests verify hash equivalence with the old path.\n\n## Dependencies\n\n- pairs-with: row #17 (Merkle diff API)\n\n## Notes\n\n- M effort; pure perf.\n"
+  },
+  {
+    "name": "ws02: mesh — replace static GovernanceRule Vec with cluster-wide distribution",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "governance"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #57\n- prior: k6-readiness-audit Governance RED\n\n## Problem / gap\n\n`Vec<GovernanceRule>` is static and per-node. Cross-node governance requires rule distribution + escalation, otherwise nodes drift on policy.\n\n## Acceptance criteria\n\n- [ ] Cluster-wide rule distribution mechanism.\n- [ ] Cross-node escalation when local policy denies.\n- [ ] Versioned rules with conflict resolution.\n- [ ] Tests for split, merge, and escalation.\n\n## Dependencies\n\n- blocked-by: row #16 (chain replay), row #20 (merge strategy)\n\n## Notes\n\n- L effort; deeply coupled to K6 chain story.\n"
+  },
+  {
+    "name": "ws02: mesh — cross-node capability-claim verification (signed advertisement)",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "security"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #58\n- prior: k6-readiness-audit Security RED\n\n## Problem / gap\n\n`PeerNode.capabilities` strings are unvalidated. Any peer can advertise any capability. Cross-node capability advertisement must be signed and verifiable.\n\n## Acceptance criteria\n\n- [ ] Capability advertisements carry Ed25519 signatures.\n- [ ] Receiving nodes verify.\n- [ ] Capability strings validated against an allow-list.\n- [ ] Tests for valid + tampered.\n\n## Dependencies\n\n- pairs-with: row #55 (signing infra)\n\n## Notes\n\n- M effort.\n"
+  },
+  {
+    "name": "ws02: mesh — rate-limit add_peer() and governance-evaluation requests",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap", "security"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #59\n- prior: k6-readiness-audit Security RED\n\n## Problem / gap\n\nNo DoS protection on `add_peer()` or governance evaluation. A malicious or buggy peer can flood either path.\n\n## Acceptance criteria\n\n- [ ] Rate limit on `add_peer()` per source.\n- [ ] Rate limit on governance-evaluation per principal.\n- [ ] Configurable thresholds.\n- [ ] Tests for limit enforcement.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- S effort.\n"
+  },
+  {
+    "name": "ws02: docs — document DEMOCRITUS 'still stuck' log-line semantics",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #60 + Open questions\n- code: `crates/clawft-kernel/src/cognitive_tick.rs:472`\n\n## Problem / gap\n\nThe DEMOCRITUS \"still stuck after N checks\" warning is expected behavior on empty causal graphs and idle conversations, not a bug. v0.6.19 backoff keeps it quiet but operators will still see it. Without docs, every new operator will file a false-positive bug.\n\n## Acceptance criteria\n\n- [ ] Operator-facing docs explain the log line, when it's normal, when it's worth investigating.\n- [ ] Linked from troubleshooting guide.\n- [ ] Cross-referenced from kernel guide (row #50).\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- XS effort; release-gate because operator confusion at the 0.7.0 cut would be expensive.\n"
+  },
+  {
+    "name": "ws02: kernel — verify weftos-leaf-types push path goes through governance / chain",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "orphan", "governance"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #61\n- prior: v0.6.17 leaf push CLI\n\n## Problem / gap\n\nUnclear whether `weftos-leaf-types` (v0.6.17 leaf push CLI) routes pushes through governance and ExoChain. No workstream claims it.\n\n## Acceptance criteria\n\n- [ ] Audit the leaf-push code path end-to-end.\n- [ ] Either confirm governance + chain coverage or document the bypass.\n- [ ] Add gates if missing.\n- [ ] Test asserts the push event lands in the chain.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- S effort; orphan triage.\n"
+  },
+  {
+    "name": "ws02: mesh — audit mesh_log/mesh_dedup/mesh_listener/mesh_bootstrap for callers",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "orphan", "gap"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #62\n\n## Problem / gap\n\n`mesh_log`, `mesh_dedup`, `mesh_listener`, `mesh_bootstrap` are implemented but have no daemon RPC / CLI / observability surface. Either they have a hidden caller, or they're orphans.\n\n## Acceptance criteria\n\n- [ ] End-to-end caller traced for each module.\n- [ ] If wired: documented and tested.\n- [ ] If orphaned: scheduled for wiring or marked deprecated.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- S effort; triage work.\n"
+  },
+  {
+    "name": "ws02: tests — confirm cognitum-gate-tilezero Permit/Defer/Deny path is exercised",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "tests", "governance"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #63\n\n## Problem / gap\n\n`cognitum-gate-tilezero` (TileZeroGate) Permit/Defer/Deny three-way cryptographic-receipt path has no documented tests. May or may not be exercised in production.\n\n## Acceptance criteria\n\n- [ ] Audit existing test coverage.\n- [ ] Add tests for any missing branch.\n- [ ] Document the receipt format.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- S effort.\n"
+  },
+  {
+    "name": "ws02: chain — add EVENT_KIND_* constants for minor non-kernel chain gaps",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws02-kernel", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n- audit: `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md` Task List row #64\n- prior: exochain-certification-nonkernel Minor Gaps\n\n## Problem / gap\n\nFour minor non-kernel sites do not emit chain events: `ToolRegistry::register_with_metadata`, `sandbox::check_tool|network|file_read|file_write` (only audit-log), and `clawft-graphify::ingest::save_query_result`.\n\n## Acceptance criteria\n\n- [ ] `EVENT_KIND_*` constants defined for each.\n- [ ] Each call site emits the correct event.\n- [ ] Tests confirm events reach the chain.\n\n## Dependencies\n\n- blocked-by: none\n\n## Notes\n\n- S effort; finishes the non-kernel chain story.\n"
+  }
+]
