@@ -599,12 +599,23 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
             ))
         };
 
+        // agent-core-v1 Phase D1: wire a FileIdentityProvider so each
+        // turn's leading system message is built from
+        // `.clawft/SOUL.md` + `.clawft/IDENTITY.md` (with the
+        // docs/skills/clawft fallback). The provider caches the most
+        // recent successful load so cross-turn IO is cheap.
+        let identity_provider: Arc<dyn clawft_core::agent::identity::IdentityProvider> =
+            Arc::new(clawft_core::agent::identity::FileIdentityProvider::new(
+                &workspace,
+            ));
+
         let agent_loop = clawft_core::bootstrap::build_daemon_agent_loop(
             llm_for_agent,
             tool_registry,
             identity_loader,
             &workspace,
             Some(agent_sink),
+            Some(identity_provider),
         )
         .await;
 

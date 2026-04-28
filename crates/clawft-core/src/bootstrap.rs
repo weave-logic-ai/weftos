@@ -508,19 +508,29 @@ fn build_default_transport() -> Arc<OpenAiCompatTransport> {
 ///   C3 daemon construction site passes `Some(SubstrateConversationSink)`
 ///   so per-turn JSONL lands in substrate; CLI/test bootstrap callers
 ///   pass `None`. See `agent-core-v1.md` Phase C3.
+/// - `identity_provider`: caller-supplied
+///   [`IdentityProvider`](crate::agent::identity::IdentityProvider).
+///   When `Some`, this factory wraps it in a
+///   [`SystemPromptBuilder`](crate::agent::system_prompt::SystemPromptBuilder)
+///   and attaches it to the loop so each turn emits an identity-aware
+///   leading system message (agent-core-v1 Phase D1). When `None`, the
+///   loop falls back to the legacy `ContextBuilder`-only system prompt
+///   so existing CLI / test callers see no behaviour change.
 ///
-/// The `_identity_loader` argument is accepted but unused at C2 — the
-/// system prompt still flows through `ContextBuilder`. Phase D1 adds an
-/// identity-aware system prompt and starts using the loader.
+/// The legacy `_identity_loader` argument is retained but unused — the
+/// builder consumes `IdentityProvider` directly. Phase F1 will retire
+/// the loader entirely once `weaver init` seeds local `.clawft/`.
 ///
 /// Native-only: `NativePlatform` and `LlmClient` are both native-gated.
 #[cfg(feature = "native")]
+#[allow(clippy::too_many_arguments)]
 pub async fn build_daemon_agent_loop(
     llm: Arc<clawft_service_llm::LlmClient>,
     tools: Arc<ToolRegistry>,
     _identity_loader: Arc<crate::agent::identity::IdentityLoader>,
     workspace: &std::path::Path,
     sink: Option<Arc<dyn crate::agent::sink::ConversationSink>>,
+    identity_provider: Option<Arc<dyn crate::agent::identity::IdentityProvider>>,
 ) -> Arc<crate::agent::loop_core::AgentLoop<clawft_platform::NativePlatform>> {
     use clawft_platform::NativePlatform;
 
@@ -606,6 +616,17 @@ pub async fn build_daemon_agent_loop(
     // via `.with_gate(...)` at the construction site, not here.
     if let Some(s) = sink {
         agent = agent.with_sink(s);
+    }
+    // D1 attaches the identity-aware system-prompt builder. The
+    // builder is wrapped in an Arc so every turn re-uses the same
+    // provider (and its cache, in the FileIdentityProvider case)
+    // without per-turn re-construction cost.
+    if let Some(provider) = identity_provider {
+        let builder = Arc::new(crate::agent::system_prompt::SystemPromptBuilder::new(
+            provider,
+            workspace.to_path_buf(),
+        ));
+        agent = agent.with_system_prompt_builder(builder);
     }
     Arc::new(agent)
 }
