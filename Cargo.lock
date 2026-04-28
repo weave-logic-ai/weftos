@@ -1742,6 +1742,7 @@ name = "clawft-weave"
 version = "0.6.19"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "blake3",
  "chrono",
@@ -1771,6 +1772,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

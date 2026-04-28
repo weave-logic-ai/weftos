@@ -55,6 +55,9 @@ enum Commands {
     /// Resource tree management (tree, inspect, stats).
     Resource(commands::resource_cmd::ResourceArgs),
 
+    /// Identity-journal operator commands (promote, status).
+    Soul(commands::soul_cmd::SoulArgs),
+
     /// Cron job management (add, list, remove).
     Cron(commands::cron_cmd::CronArgs),
 
@@ -129,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Chain(args) => commands::chain_cmd::run(args).await?,
         Commands::Custody(args) => commands::custody_cmd::run(args).await?,
         Commands::Resource(args) => commands::resource_cmd::run(args).await?,
+        Commands::Soul(args) => commands::soul_cmd::run(args).await?,
         Commands::Cron(args) => commands::cron_cmd::run(args).await?,
         Commands::Ipc(args) => commands::ipc_cmd::run(args).await?,
         #[cfg(unix)]
