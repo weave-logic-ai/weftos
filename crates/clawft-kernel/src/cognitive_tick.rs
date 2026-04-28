@@ -344,6 +344,18 @@ pub async fn run_democritus_loop_with_chain(
     let mut in_stuck_phase = false;
     let mut stuck_checks_since_log: u64 = 0;
     let mut next_log_at: u64 = 1;
+    // Edge-trigger for the idle-graph notice. While the causal graph
+    // has fewer than 2 nodes the spectral path is structurally
+    // incapable of producing a non-zero `lambda_2` (see
+    // `CausalGraph::spectral_analysis_rff` early-return), so any
+    // cycle-detector verdict on that flat history is meaningless.
+    // We log the transition once on entry and once on exit instead
+    // of letting the cycle-detector emit `Stuck { net_change: 0.0 }`
+    // forever (release-gate audit
+    // `.planning/reviews/0.7.0-release-gate/02-kernel-governance.md`
+    // line 510, `17-research-streams.md` line 183).
+    let idle_node_threshold: u64 = 2;
+    let mut in_idle_phase = false;
 
     tick.set_running(true);
     tracing::info!(
@@ -428,13 +440,44 @@ pub async fn run_democritus_loop_with_chain(
             ticks_since_exact = 0;
             exact_tick_count += 1;
 
-            // Track bounded coherence history for cycle detection
-            // (Finding #3). Drop the oldest sample if we've hit the
-            // window cap so the buffer can't grow without bound.
-            if coherence_history.len() == cycle_window {
-                coherence_history.pop_front();
+            // Idle-graph gate. If the causal graph is too small to
+            // produce a meaningful spectral signal, skip cycle
+            // detection: pushing 0.0 samples into history is what
+            // forces the detector into `Stuck { net_change: 0.0 }`
+            // for the lifetime of an empty daemon. We also clear
+            // any accumulated history so that when the graph wakes
+            // up the detector starts from real measurements rather
+            // than a buffer full of zero sentinels.
+            let graph_is_idle = causal.node_count() < idle_node_threshold;
+            if graph_is_idle {
+                if !in_idle_phase {
+                    tracing::info!(
+                        node_count = causal.node_count(),
+                        "DEMOCRITUS: causal graph idle (n<2), suspending cycle detection"
+                    );
+                    in_idle_phase = true;
+                    coherence_history.clear();
+                    in_stuck_phase = false;
+                    stuck_checks_since_log = 0;
+                    next_log_at = 1;
+                }
+            } else {
+                if in_idle_phase {
+                    tracing::info!(
+                        node_count = causal.node_count(),
+                        "DEMOCRITUS: causal graph active, resuming cycle detection"
+                    );
+                    in_idle_phase = false;
+                }
+
+                // Track bounded coherence history for cycle detection
+                // (Finding #3). Drop the oldest sample if we've hit the
+                // window cap so the buffer can't grow without bound.
+                if coherence_history.len() == cycle_window {
+                    coherence_history.pop_front();
+                }
+                coherence_history.push_back(exact_lambda_2);
             }
-            coherence_history.push_back(exact_lambda_2);
 
             // Run the cycle detector once per `cycle_window` exact
             // measurements, and rate-limit the warning on steady-state
@@ -443,7 +486,8 @@ pub async fn run_democritus_loop_with_chain(
             // the stuck phase are always logged (edge-triggered); the
             // in-phase warnings drop off geometrically so the log
             // doesn't drown.
-            if coherence_history.len() >= cycle_window
+            if !graph_is_idle
+                && coherence_history.len() >= cycle_window
                 && exact_tick_count.is_multiple_of(cycle_window as u64)
             {
                 let history_slice: Vec<f64> =
