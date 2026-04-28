@@ -500,10 +500,14 @@ fn build_default_transport() -> Arc<OpenAiCompatTransport> {
 ///   [`LlmClient`] via [`ServiceLlmAdapter`](crate::pipeline::service_llm_adapter::ServiceLlmAdapter)
 ///   so the agent loop, the daemon's `llm.prompt` RPC, and the chat
 ///   panel all share one model server.
-/// - `NullRouter` / `NoopGate` / `InMemorySink` defaults (Phase B1/B2).
-///   Phase C3 swaps in `SubstrateConversationSink`; Phase D2 swaps in
-///   the kernel-backed `EffectGate`. The defaults preserve "behaves
+/// - `NullRouter` / `NoopGate` defaults (Phase B1/B2). Phase D2 swaps
+///   in the kernel-backed `EffectGate`. The default preserves "behaves
 ///   exactly like the spike for the C2 cutover" semantics.
+/// - `sink`: caller-supplied [`ConversationSink`](crate::agent::sink::ConversationSink).
+///   `None` falls back to the in-memory sink (the C1/C2 default). The
+///   C3 daemon construction site passes `Some(SubstrateConversationSink)`
+///   so per-turn JSONL lands in substrate; CLI/test bootstrap callers
+///   pass `None`. See `agent-core-v1.md` Phase C3.
 ///
 /// The `_identity_loader` argument is accepted but unused at C2 — the
 /// system prompt still flows through `ContextBuilder`. Phase D1 adds an
@@ -516,6 +520,7 @@ pub async fn build_daemon_agent_loop(
     tools: Arc<ToolRegistry>,
     _identity_loader: Arc<crate::agent::identity::IdentityLoader>,
     workspace: &std::path::Path,
+    sink: Option<Arc<dyn crate::agent::sink::ConversationSink>>,
 ) -> Arc<crate::agent::loop_core::AgentLoop<clawft_platform::NativePlatform>> {
     use clawft_platform::NativePlatform;
 
@@ -585,7 +590,7 @@ pub async fn build_daemon_agent_loop(
         &config.routing,
         None,
     );
-    let agent = crate::agent::loop_core::AgentLoop::new(
+    let mut agent = crate::agent::loop_core::AgentLoop::new(
         config.agents,
         platform,
         bus,
@@ -595,11 +600,13 @@ pub async fn build_daemon_agent_loop(
         Arc::new(sessions),
         resolver,
     );
-    // C2 uses the trait defaults inherited from `AgentLoop::new`:
-    // `NullRouter` / `NoopGate` / `InMemorySink`. C3 attaches a
-    // substrate-backed sink; D2 attaches a kernel-backed gate. Both
-    // arrive via `.with_sink(...)` / `.with_gate(...)` at the
-    // construction site, not here.
+    // C3 attaches the caller's sink (substrate-backed at the daemon
+    // construction site; falls back to the in-memory default for CLI
+    // / non-substrate callers). D2 still wires a kernel-backed gate
+    // via `.with_gate(...)` at the construction site, not here.
+    if let Some(s) = sink {
+        agent = agent.with_sink(s);
+    }
     Arc::new(agent)
 }
 

@@ -165,6 +165,10 @@ blake3 = "1.5"
 # Concurrent hash map
 dashmap = "6"
 
+# ULID (sortable, ms-prefixed unique ids; used for substrate per-turn
+# JSONL keys in clawft-service-agent's substrate sink).
+ulid = "1"
+
 # Distributed coordination (crates.io — upstream ruvnet)
 ruvector-cluster = "2.0"
 ruvector-raft = "2.0"

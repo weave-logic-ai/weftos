@@ -23,6 +23,24 @@ clawft-platform = { workspace = true, features = ["native"] }
 # having to round-trip through both.
 clawft-service-llm = { workspace = true }
 
+# Kernel — substrate-backed ConversationSink lives in this crate per
+# agent-core-v1.md C3. Service crates have generally avoided a kernel
+# dep; this is the deliberate exception so the daemon can hand off a
+# `SubstrateService` + `NodeRegistry` handle to the sink without weave
+# having to know the sink's internals.
+#
+# We only directly use SubstrateService + NodeRegistry, but kernel's
+# internal cross-references (e.g. `control::scorer` →
+# `eml_kernel::GovernanceScorerModel` under `ecc`) break a standalone
+# build of this crate without the same kernel features the daemon
+# enables. Mirror clawft-weave's set so feature unification across the
+# workspace is identical.
+clawft-kernel = { workspace = true, features = ["native", "ecc", "exochain", "cluster", "mesh"] }
+
+# ULID generation for monotonic per-turn substrate keys
+# (`derived/chat/<conv>/turns/<ulid>`).
+ulid = { workspace = true }
+
 # Wire-format types live here; serde drives the JSON shape.
 serde = { workspace = true }
 serde_json = { workspace = true }
