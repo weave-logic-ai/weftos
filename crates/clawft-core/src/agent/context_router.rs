@@ -196,6 +196,18 @@ pub use embedding::{
     FALLBACK_TRACING_TARGET,
 };
 
+// ── v2.5: HybridRouter (plumbing only) ───────────────────────────────────
+
+// Phase E3: chain a primary + fallback ContextRouter. Plumbing only —
+// the sona-backed rerank step is deferred until ruv-ecosystem
+// stability clears (see hybrid.rs module docs and
+// `docs/research/rvf-context-router.md`). v3 (`MicroLoraRouter`) is
+// also deferred until ruvllm-wasm lifts its 11-pattern HNSW cap; see
+// the TODO marker on `HybridRouter`.
+pub mod hybrid;
+
+pub use hybrid::HybridRouter;
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -96,8 +96,16 @@ pub struct RoutingConfig {
     ///   skill descriptors at boot, retrieves top-K nearest skills per
     ///   turn via the crate-local `Embedder` trait (production:
     ///   `ApiEmbedder` against an OpenAI-compat `/embeddings`;
-    ///   fallback: `HashEmbedder` SHA-256 floor). Promotion to v2.5
-    ///   `HybridRouter` ships in E3.
+    ///   fallback: `HashEmbedder` SHA-256 floor).
+    /// - `"hybrid"` — v2.5 `HybridRouter` (Phase E3, plumbing only):
+    ///   chains v2 `EmbeddingRouter` (primary) with v1
+    ///   `LlmClassifierRouter` (fallback). The primary's decision is
+    ///   returned unless it is structurally empty, in which case the
+    ///   fallback runs. The sona-backed rerank step that v2.5
+    ///   ultimately gets is deferred until ruv-ecosystem stability
+    ///   clears; v3 (`MicroLoraRouter`) is deferred until ruvllm-wasm
+    ///   lifts its 11-pattern HNSW cap
+    ///   (`docs/research/rvf-context-router.md:118-128`).
     ///
     /// [`NullRouter`]: ../../clawft_core/agent/context_router/struct.NullRouter.html
     /// [`LlmClassifierRouter`]: ../../clawft_core/agent/context_router/llm_classifier/struct.LlmClassifierRouter.html
