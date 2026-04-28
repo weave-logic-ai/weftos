@@ -29,6 +29,12 @@ ecc = ["clawft-kernel/ecc", "dep:blake3"]
 exochain = ["clawft-kernel/exochain", "dep:exo-resource-tree"]
 mesh = ["clawft-kernel/mesh"]
 rvf-rpc = ["dep:weftos-rvf-wire", "dep:rvf-types"]
+# agent-core-v1 Phase C2: route `agent.chat` through
+# `clawft-service-agent::AgentService::dispatch` instead of the inlined
+# spike at `daemon::handle_agent_chat`. Off by default in C2 — D3 flips
+# this on and deletes the spike body. See `docs/plans/agent-core-v1.md`
+# Phase C2/D3 for the cutover semantics.
+agent-core-chat = []
 
 [dependencies]
 clawft-core = { workspace = true, features = ["native"] }
@@ -61,6 +67,7 @@ clawft-service-whisper = { workspace = true }
 clawft-service-llm = { workspace = true }
 clawft-service-terminal = { workspace = true }
 clawft-service-classify = { workspace = true }
+clawft-service-agent = { workspace = true }
 clawft-tools = { workspace = true, features = ["native"] }
 # Base64 encoding for terminal RPC payloads (PTY bytes don't survive
 # raw JSON; chunks ride as { data: <base64>, ... }).
