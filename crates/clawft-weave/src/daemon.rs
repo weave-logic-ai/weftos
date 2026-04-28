@@ -54,15 +54,18 @@ fn daemon_terminal() -> Option<Arc<clawft_service_terminal::TerminalManager>> {
     DAEMON_TERMINAL.get().cloned()
 }
 
-/// agent-core-v1 Phase C2: daemon-wide handle to the agent service
-/// (`clawft-service-agent::AgentService`). Set at boot when the LLM
-/// client succeeded — `None` if `DAEMON_LLM` couldn't be wired.
+/// agent-core-v1 Phase D3 (the cutover): daemon-wide handle to the
+/// agent service (`clawft-service-agent::AgentService`). Set at boot
+/// when the LLM client succeeded — `None` if `DAEMON_LLM` couldn't be
+/// wired.
 ///
-/// Routed through by `agent.chat` only when the `agent-core-chat`
-/// Cargo feature is enabled. With the feature off (default in C2)
-/// the spike at `handle_agent_chat` keeps running and this handle is
-/// initialized but unused. Phase D3 flips the default on and deletes
-/// the spike body.
+/// Every `agent.chat` request unconditionally dispatches through this
+/// handle. The C2 spike fallback was removed in D3 along with the
+/// inline `handle_agent_chat` body; if the service didn't wire the
+/// dispatch arm surfaces a typed "agent service not wired" error
+/// instead of falling back. The `agent-core-chat` Cargo feature
+/// survives so a single-commit revert can restore the spike if D3
+/// regresses a release-blocking flow.
 ///
 /// Generic param matches the blanket
 /// `impl<P: Platform> AgentLoopHandle for AgentLoop<P>` so production
@@ -101,7 +104,7 @@ use clawft_platform::NativePlatform;
 use clawft_types::config::{Config, KernelConfig};
 
 use crate::protocol::{
-    self, AgentChatParams, AgentChatResult, AgentChatToolCall, AgentInspectResult,
+    self, AgentChatParams, AgentChatResult, AgentInspectResult,
     AgentSendParams, AgentSpawnParams, AgentSpawnResult, AgentStopParams,
     AgentRestartParams, ClusterJoinParams, ClusterLeaveParams, ClusterNodeInfo,
     ClusterStatusResult, CronAddParams, CronJobInfo, CronRemoveParams, IpcPublishParams,
@@ -557,17 +560,15 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         }
     }
 
-    // agent-core-v1 Phase C2: wire `clawft-service-agent::AgentService`
-    // into the daemon as a long-lived handle. Mirrors the
-    // whisper/llm/terminal pattern.
+    // agent-core-v1 Phase C2 / D3: wire
+    // `clawft-service-agent::AgentService` into the daemon as a
+    // long-lived handle. Mirrors the whisper/llm/terminal pattern.
     //
-    // The agent service is fronted by the `agent-core-chat` Cargo
-    // feature flag at the dispatch site; with the flag off (default in
-    // C2) `agent.chat` keeps running the spike at
-    // `handle_agent_chat`. The handle is still wired here so a feature
-    // flip is a one-line change at the dispatch arm and so the cancel
-    // RPC can find it. Phase D3 flips the default on and deletes the
-    // spike body.
+    // After D3 the dispatch arm at `agent.chat` calls into this
+    // service unconditionally — the C2 spike fallback (`handle_agent_chat`)
+    // is gone. If the LLM client failed to init, `DAEMON_AGENT`
+    // stays `None` and the dispatch arm surfaces a typed error
+    // ("agent service not wired") instead of falling back.
     //
     // Pre-register the control flag so
     // `control.set_enabled {kind:"service", target:"agent"}` works the
@@ -575,9 +576,9 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     let _agent_service_flag =
         control_flags.register(ControlKind::Service, "agent", true);
     if let Some(llm_for_agent) = DAEMON_LLM.get().cloned() {
-        // Workspace = daemon CWD. Mirrors the spike's
-        // `handle_agent_chat` path (around the original :2186); D1 will
-        // lift this into `agent.workspace_root` config.
+        // Workspace = daemon CWD. The C2 spike used the same
+        // resolution; a future config change will lift this into
+        // `agent.workspace_root`.
         let workspace = match std::env::current_dir() {
             Ok(p) => p,
             Err(e) => {
@@ -698,11 +699,11 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
 
         let service = Arc::new(clawft_service_agent::AgentService::new(agent_loop));
         let _ = DAEMON_AGENT.set(service);
-        info!("agent service handle wired (off by default; agent-core-chat feature flips dispatch)");
+        info!("agent service wired (agent.chat dispatches through clawft-service-agent)");
     } else {
         warn!(
             "agent service: DAEMON_LLM not set, skipping wiring \
-             (agent.chat falls back to spike unchanged)"
+             (agent.chat will return 'agent service not wired' until the LLM client comes up)"
         );
     }
 
@@ -1260,12 +1261,12 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         }
     }
 
-    // agent-core-v1 Phase C2: drain the agent service before the
+    // agent-core-v1 Phase C2 / D3: drain the agent service before the
     // supervisor shutdown sweeps process-table entries. Cancels every
     // in-flight `agent.chat` dispatch and waits up to 5s for the
-    // counter to hit zero. With the spike still on (default), no
-    // dispatch ever lands here — the spike runs synchronously inside
-    // `handle_agent_chat` and isn't tracked by `AgentService`.
+    // counter to hit zero. After D3 every dispatch flows through this
+    // service, so the drain is the single chokepoint for graceful
+    // chat shutdown.
     if let Some(agent) = DAEMON_AGENT.get() {
         let drained = agent.shutdown(std::time::Duration::from_secs(5)).await;
         info!(drained, "agent service shutdown");
@@ -2318,414 +2319,6 @@ async fn handle_llm_prompt(
     }
 }
 
-// ── Agent chat (Concierge) — vertical-slice spike ──────────────────
-//
-// `agent.chat` builds an identity-aware system prompt, exposes a small
-// read-only tool surface (read_file, list_directory) bounded to the
-// daemon CWD, and runs a tool-call loop against the local LLM until the
-// model returns text.
-//
-// Tool dispatch flows through `clawft-tools::register_all` →
-// `ToolRegistry::execute` (commit A4 of agent-core-v1); the LLM only
-// sees the two read-only tools advertised here. Permission gating is
-// not wired yet — `execute` is called with `permissions = None`. D2
-// adds `gate.check` with an `EffectVector` between dispatch and
-// execute; D3 deletes the inline loop entirely in favour of
-// `clawft-service-agent::AgentService::dispatch`.
-//
-// What this is NOT (yet — landing in commits B-D of agent-core-v1):
-// - No gate.check / EffectVector evaluation per tool call.
-// - No SOUL.journal append, no soul-promote.
-// - No ContextRouter; the system prompt is fixed.
-// - No substrate-backed conversation history; the panel sends the full
-//   history each turn (mirrors `llm.prompt`).
-// - No per-conversation cost circuit-breaker.
-// - No heartbeat to `derived/chat/<conv>/status`.
-//
-// Plan: `docs/plans/agent-core-v1.md`.
-
-const AGENT_CHAT_MAX_ITERATIONS: u32 = 10;
-const AGENT_CHAT_RESULT_PREVIEW_BYTES: usize = 1024;
-/// Per-iteration `max_tokens` ceiling for the spike. Sized so one
-/// generation step at ~4 tok/s sustained (Qwen 35B IQ2_XXS cold) stays
-/// under ~64s, well below the panel's 300s `LLM_TIMEOUT_MS`. Overrides
-/// any panel-supplied `p.max_tokens` for the spike — the model can keep
-/// calling tools across iterations if it needs more headroom.
-const AGENT_CHAT_PER_TURN_MAX_TOKENS: u32 = 256;
-
-/// Handle `agent.chat`: identity-aware tool-using chat against the
-/// local LLM. See module-level commentary above.
-async fn handle_agent_chat(
-    params: serde_json::Value,
-    _kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
-) -> Response {
-    let p: AgentChatParams = match serde_json::from_value(params) {
-        Ok(p) => p,
-        Err(e) => return Response::error(format!("invalid params: {e}")),
-    };
-
-    if p.messages.is_empty() {
-        return Response::error("invalid params: messages was empty");
-    }
-
-    // Honor the `llm` control flag — same semantics as `llm.prompt`.
-    if let Some(state) = daemon_control()
-        && let Some(flag) = state.flags.get(ControlKind::Service, "llm")
-        && !flag.load(std::sync::atomic::Ordering::SeqCst)
-    {
-        return Response::error("llm service is disabled (toggle on via control.set_enabled)");
-    }
-
-    let client = match daemon_llm() {
-        Some(c) => c,
-        None => {
-            return Response::error(
-                "llm service not initialized (check daemon boot log for 'llm client init failed')",
-            );
-        }
-    };
-
-    // Workspace = daemon CWD for the spike. Plan §15.4 lifts this into
-    // `agent.workspace_root` config in commit 6+.
-    let workspace = match std::env::current_dir() {
-        Ok(p) => p,
-        Err(e) => return Response::error(format!("agent: cwd unavailable: {e}")),
-    };
-
-    // Identity load. Spike falls back to docs/skills/clawft/ when
-    // .clawft/ hasn't been seeded by `weaver init` yet.
-    let loader = clawft_core::agent::identity::IdentityLoader::new(&workspace);
-    let identity = match loader.current() {
-        Some(id) => id,
-        None => {
-            return Response::error(
-                "agent: identity load failed: neither .clawft/ nor docs/skills/clawft/ \
-                 has both SOUL.md and IDENTITY.md",
-            );
-        }
-    };
-
-    // System prompt: identity + workspace + tool intro. Minimal — the
-    // full SystemPromptBuilder lands in commit 3.
-    let system_prompt = build_concierge_system_prompt(&identity, &workspace);
-
-    // Translate panel messages to the service-llm wire shape, prepending
-    // our system prompt. If the panel already passed a `system` turn,
-    // we keep ours first (the panel's role is informational; ours is
-    // the operating identity).
-    let mut messages: Vec<clawft_service_llm::ChatMessage> = Vec::with_capacity(p.messages.len() + 1);
-    messages.push(clawft_service_llm::ChatMessage::system(system_prompt));
-    for m in &p.messages {
-        // Skip any UI-only error pseudo-roles the panel might leak.
-        if m.role == "error" {
-            continue;
-        }
-        messages.push(clawft_service_llm::ChatMessage {
-            role: m.role.clone(),
-            content: m.content.clone(),
-            tool_calls: None,
-            tool_call_id: None,
-        });
-    }
-
-    // Tool catalog: read_file + list_directory sourced from
-    // `clawft-tools::register_all` so the canonical `ReadFileTool` /
-    // `ListDirectoryTool` (with their JSON result shapes and
-    // canonicalize-prefix sandbox checks) are the only path. Permission
-    // gating is deferred to D2 (`gate.check`); we pass `None` to
-    // `ToolRegistry::execute` for now to preserve spike behaviour.
-    let mut tool_registry = clawft_core::tools::registry::ToolRegistry::new();
-    clawft_tools::register_all(
-        &mut tool_registry,
-        Arc::new(NativePlatform::new()),
-        workspace.clone(),
-        clawft_tools::security_policy::CommandPolicy::safe_defaults(),
-        clawft_tools::url_safety::UrlPolicy::default(),
-        clawft_tools::web_search::WebSearchConfig::default(),
-    );
-    // Filter to the two read-only tools the spike exposes (others are
-    // registered for parity with the CLI but not advertised to the LLM
-    // until D2 lands per-tool gating).
-    let allowed_tool_names: [&str; 2] = ["read_file", "list_directory"];
-    let tools: Vec<clawft_service_llm::Tool> = allowed_tool_names
-        .iter()
-        .filter_map(|name| tool_registry.get(name))
-        .map(|tool| into_service_llm_tool(tool.as_ref()))
-        .collect();
-
-    // Tool loop.
-    let mut iterations: u32 = 0;
-    let mut prompt_tokens: u32 = 0;
-    let mut completion_tokens: u32 = 0;
-    let mut model_name: Option<String> = None;
-    let mut tool_call_summaries: Vec<AgentChatToolCall> = Vec::new();
-    let finish_reason: String;
-    let mut assistant_text: String = String::new();
-
-    let agent_chat_started = std::time::Instant::now();
-    info!(
-        msg_count = messages.len(),
-        identity_source = identity.source,
-        per_turn_max_tokens = AGENT_CHAT_PER_TURN_MAX_TOKENS,
-        "agent.chat: tool loop starting",
-    );
-
-    loop {
-        iterations += 1;
-        if iterations > AGENT_CHAT_MAX_ITERATIONS {
-            finish_reason = "max_iterations".into();
-            warn!(
-                iterations,
-                elapsed_ms = agent_chat_started.elapsed().as_millis() as u64,
-                "agent.chat: hit max_iterations cap",
-            );
-            break;
-        }
-
-        let iter_started = std::time::Instant::now();
-        let resp = match client
-            .complete_with_tools(
-                messages.clone(),
-                tools.clone(),
-                None,
-                p.temperature,
-                Some(AGENT_CHAT_PER_TURN_MAX_TOKENS),
-            )
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(
-                    iterations,
-                    elapsed_ms = iter_started.elapsed().as_millis() as u64,
-                    error = %e,
-                    "agent.chat: complete_with_tools failed",
-                );
-                return Response::error(format!("agent.chat: {e}"));
-            }
-        };
-        let iter_elapsed_ms = iter_started.elapsed().as_millis() as u64;
-        let predicted_per_sec = resp
-            .timings
-            .as_ref()
-            .map(|t| t.predicted_per_second)
-            .unwrap_or(0.0);
-        info!(
-            iter = iterations,
-            elapsed_ms = iter_elapsed_ms,
-            prompt_tokens = resp.usage.prompt_tokens,
-            cached_tokens = resp.usage.prompt_tokens_details.cached_tokens,
-            completion_tokens = resp.usage.completion_tokens,
-            predicted_per_sec,
-            tool_calls = resp
-                .choices
-                .first()
-                .and_then(|c| c.message.tool_calls.as_ref())
-                .map(|tc| tc.len())
-                .unwrap_or(0),
-            "agent.chat: iter complete",
-        );
-
-        if model_name.is_none() {
-            model_name.clone_from(&resp.model);
-        }
-        prompt_tokens = prompt_tokens.saturating_add(resp.usage.prompt_tokens);
-        completion_tokens = completion_tokens.saturating_add(resp.usage.completion_tokens);
-
-        let choice = match resp.choices.into_iter().next() {
-            Some(c) => c,
-            None => return Response::error("agent.chat: empty choices in response"),
-        };
-        let assistant_msg = choice.message;
-        let calls = assistant_msg.tool_calls.clone().unwrap_or_default();
-
-        if calls.is_empty() {
-            // Terminal turn: assistant produced text, no further tools.
-            assistant_text = assistant_msg.content.clone();
-            finish_reason = choice.finish_reason.unwrap_or_else(|| "stop".into());
-            messages.push(assistant_msg);
-            break;
-        }
-
-        // Append the assistant tool-use turn so the next round-trip has
-        // the correct (assistant tool_use → tool result → ...) shape.
-        messages.push(assistant_msg);
-
-        // Execute each requested tool through `ToolRegistry` and append
-        // the corresponding tool turn to `messages`. Permissions are
-        // `None` here (spike parity); D2 inserts `gate.check` between
-        // dispatch and execute.
-        for call in calls {
-            let name = call.function.name.clone();
-            let arguments_preview =
-                truncate_for_preview(&call.function.arguments, 256);
-
-            let args: serde_json::Value =
-                match serde_json::from_str(&call.function.arguments) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        let err = format!("invalid arguments JSON: {e}");
-                        messages.push(clawft_service_llm::ChatMessage::tool(
-                            call.id.clone(),
-                            err.clone(),
-                        ));
-                        tool_call_summaries.push(AgentChatToolCall {
-                            name,
-                            arguments_preview,
-                            result_preview: truncate_for_preview(
-                                &err,
-                                AGENT_CHAT_RESULT_PREVIEW_BYTES,
-                            ),
-                            success: false,
-                        });
-                        continue;
-                    }
-                };
-
-            let (full_result, success) = match tool_registry
-                .execute(&name, args, None)
-                .await
-            {
-                Ok(value) => (
-                    serde_json::to_string(&value)
-                        .unwrap_or_else(|e| format!("(unserializable result: {e})")),
-                    true,
-                ),
-                Err(e) => (format!("error: {e}"), false),
-            };
-
-            messages.push(clawft_service_llm::ChatMessage::tool(
-                call.id.clone(),
-                full_result.clone(),
-            ));
-            tool_call_summaries.push(AgentChatToolCall {
-                name,
-                arguments_preview,
-                result_preview: truncate_for_preview(
-                    &full_result,
-                    AGENT_CHAT_RESULT_PREVIEW_BYTES,
-                ),
-                success,
-            });
-        }
-    }
-
-    let result = AgentChatResult {
-        assistant_text,
-        tool_calls: tool_call_summaries,
-        finish_reason,
-        iterations,
-        prompt_tokens,
-        completion_tokens,
-        model: model_name,
-        identity_source: Some(identity.source.into()),
-    };
-    Response::success(serde_json::to_value(result).unwrap())
-}
-
-/// Build the spike system prompt: identity (SOUL+IDENTITY), workspace,
-/// and a brief tool intro. Plan §9 spec lands in commit 3.
-fn build_concierge_system_prompt(
-    identity: &clawft_core::agent::identity::Identity,
-    workspace: &std::path::Path,
-) -> String {
-    let mut s = String::with_capacity(
-        identity.soul.len() + identity.identity.len() + 1024,
-    );
-    s.push_str("# WeftOS Concierge — Operating Identity\n\n");
-    s.push_str("## SOUL.md\n\n");
-    s.push_str(&identity.soul);
-    s.push_str("\n\n## IDENTITY.md\n\n");
-    s.push_str(&identity.identity);
-    s.push_str("\n\n## Workspace\n\n");
-    s.push_str(&format!("- Workspace root: `{}`\n", workspace.display()));
-    s.push_str(
-        "- Use `read_file` to inspect specific files (e.g. README, CLAUDE.md, agent profiles).\n",
-    );
-    s.push_str(
-        "- Use `list_directory` to enumerate workspace contents before reading.\n",
-    );
-    s.push_str(
-        "- All paths are workspace-relative or absolute under the workspace root; \
-         attempts to escape the root are denied.\n\n",
-    );
-    s.push_str("## Working style\n\n");
-    s.push_str(
-        "When the user asks about the project or its components, prefer reading the \
-         actual files (README, CLAUDE.md, agents/, docs/) over speculation. Cite the \
-         specific files you consulted in your answer.\n",
-    );
-    s
-}
-
-/// Translate a `clawft-core` [`Tool`](clawft_core::tools::registry::Tool)
-/// into the OpenAI-shaped [`clawft_service_llm::Tool`] the LLM client
-/// expects. Lives here (rather than in `clawft-tools`) so the tool crate
-/// stays free of any LLM wire-shape dependency.
-fn into_service_llm_tool(
-    tool: &dyn clawft_core::tools::registry::Tool,
-) -> clawft_service_llm::Tool {
-    clawft_service_llm::Tool::function(
-        tool.name().to_string(),
-        tool.description().to_string(),
-        tool.parameters(),
-    )
-}
-
-/// Resolve a tool-supplied path against the workspace root, rejecting
-/// any traversal that would escape the root. Accepts both relative and
-/// absolute paths; the absolute case still must canonicalize to inside
-/// the workspace.
-///
-/// Currently unused at this commit — the spike's tool dispatch now
-/// flows through `clawft-tools::file_tools` which carries its own
-/// canonicalize-prefix sandbox check. Retained because the parallel
-/// commit A3 lifts this idiom into `clawft-plugin::sandbox` (and fixes
-/// the lexical `starts_with` bug there); deleting it now would just
-/// force A3 to recover the same code from git history.
-#[allow(dead_code)]
-fn resolve_workspace_path(
-    workspace: &std::path::Path,
-    raw: &str,
-) -> Result<std::path::PathBuf, String> {
-    let candidate = std::path::Path::new(raw);
-    let joined = if candidate.is_absolute() {
-        candidate.to_path_buf()
-    } else {
-        workspace.join(candidate)
-    };
-    // Canonicalize the workspace and the candidate's existing parent so
-    // we can compare prefixes even when the file itself doesn't exist.
-    let ws_canon = workspace
-        .canonicalize()
-        .map_err(|e| format!("workspace canonicalize failed: {e}"))?;
-    // For canonicalize to work the path must exist; for read tools it
-    // does. If a future write tool needs not-yet-created paths this gets
-    // refined.
-    let target_canon = joined
-        .canonicalize()
-        .map_err(|e| format!("path canonicalize failed: {e}"))?;
-    if !target_canon.starts_with(&ws_canon) {
-        return Err(format!(
-            "path escapes workspace root: {}",
-            target_canon.display()
-        ));
-    }
-    Ok(target_canon)
-}
-
-fn truncate_for_preview(s: &str, max_bytes: usize) -> String {
-    if s.len() <= max_bytes {
-        return s.to_string();
-    }
-    // Find a UTF-8 char boundary at or before max_bytes.
-    let mut end = max_bytes;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
-}
-
 // ── Terminal (PTY) RPC handlers ─────────────────────────────────────
 //
 // All four handlers share two preconditions:
@@ -3756,33 +3349,35 @@ async fn dispatch(
         "control.list" => handle_control_list(params, kernel).await,
         "llm.prompt" => handle_llm_prompt(params, kernel).await,
         "agent.chat" => {
-            // agent-core-v1 Phase C2: feature-gated route through
-            // `clawft-service-agent::AgentService`. With
-            // `agent-core-chat` off (default in C2) the spike at
-            // `handle_agent_chat` runs unchanged; D3 flips the
-            // default and deletes the spike body.
-            #[cfg(feature = "agent-core-chat")]
-            {
-                if let Some(agent) = daemon_agent() {
-                    let p: AgentChatParams = match serde_json::from_value(params.clone()) {
-                        Ok(p) => p,
-                        Err(e) => return Response::error(format!("invalid params: {e}")),
-                    };
-                    return match agent.dispatch(p.into()).await {
-                        Ok(result) => {
-                            let wire: AgentChatResult = result.into();
-                            match serde_json::to_value(wire) {
-                                Ok(v) => Response::success(v),
-                                Err(e) => Response::error(format!("agent.chat: {e}")),
-                            }
-                        }
+            // agent-core-v1 Phase D3 (the cutover): every request goes
+            // through `clawft-service-agent::AgentService::dispatch`.
+            // The C2 spike fallback was removed in this commit along
+            // with `handle_agent_chat`; if the service didn't wire
+            // (LLM init failed at boot) we surface that as a clean
+            // typed error rather than panic. The `agent-core-chat`
+            // feature flag survives so a single-commit revert + flag
+            // flip restores the spike if D3 ever needs to roll back.
+            let Some(agent) = daemon_agent() else {
+                return Response::error(
+                    "agent.chat: agent service not wired \
+                     (LLM client init failed at boot — \
+                     check daemon log for 'llm client init failed')",
+                );
+            };
+            let weave_params: AgentChatParams = match serde_json::from_value(params) {
+                Ok(p) => p,
+                Err(e) => return Response::error(format!("agent.chat: invalid params: {e}")),
+            };
+            match agent.dispatch(weave_params.into()).await {
+                Ok(result) => {
+                    let wire: AgentChatResult = result.into();
+                    match serde_json::to_value(wire) {
+                        Ok(v) => Response::success(v),
                         Err(e) => Response::error(format!("agent.chat: {e}")),
-                    };
+                    }
                 }
-                // Fall through to spike if DAEMON_AGENT didn't wire
-                // (e.g. LLM client failed at boot).
+                Err(e) => Response::error(format!("agent.chat: {e}")),
             }
-            handle_agent_chat(params, kernel).await
         }
         "agent.chat.cancel" => {
             // agent-core-v1 Phase C2: trip the per-conv cancel token

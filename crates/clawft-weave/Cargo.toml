@@ -23,17 +23,21 @@ path = "src/main.rs"
 dist = true
 
 [features]
-default = ["exochain", "cluster", "ecc", "mesh"]
+default = ["agent-core-chat", "cluster", "ecc", "exochain", "mesh"]
 cluster = ["clawft-kernel/cluster"]
 ecc = ["clawft-kernel/ecc", "dep:blake3"]
 exochain = ["clawft-kernel/exochain", "dep:exo-resource-tree"]
 mesh = ["clawft-kernel/mesh"]
 rvf-rpc = ["dep:weftos-rvf-wire", "dep:rvf-types"]
-# agent-core-v1 Phase C2: route `agent.chat` through
-# `clawft-service-agent::AgentService::dispatch` instead of the inlined
-# spike at `daemon::handle_agent_chat`. Off by default in C2 — D3 flips
-# this on and deletes the spike body. See `docs/plans/agent-core-v1.md`
-# Phase C2/D3 for the cutover semantics.
+# agent-core-v1 Phase D3 (the cutover): `agent.chat` always routes
+# through `clawft-service-agent::AgentService::dispatch`. The flag is
+# left in place and on-by-default so a regression can be rolled back
+# with a single revert + flag flip; with the spike body deleted there
+# is no fallback path to disable, but the toggle still controls
+# whether the dispatch flattens to a hard error when the service
+# isn't wired (off ⇒ unreachable!) or surfaces a typed error (on).
+# See `docs/plans/agent-core-v1.md` Phase C2/D3 for the cutover
+# semantics.
 agent-core-chat = []
 
 [dependencies]
