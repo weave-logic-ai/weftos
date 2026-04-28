@@ -51,6 +51,29 @@ impl EffectVector {
             + self.security * self.security)
             .sqrt()
     }
+
+    /// Serialize this effect vector into the JSON shape kernel's
+    /// governance extractor consumes (`{"risk", "fairness", "privacy",
+    /// "novelty", "security"}` — see
+    /// [`clawft_kernel::governance::EffectVector`](../../../../clawft-kernel/src/governance.rs)).
+    ///
+    /// Phase D2 wires an adapter
+    /// (`clawft-service-agent::KernelEffectGate`) that builds the
+    /// kernel-side context with `{ "effect": <this output>, ... }`
+    /// and calls `GovernanceGate::check`. Kernel-side
+    /// `GovernanceGate::extract_effect` reads the same shape back out
+    /// of the context. Field names mirror the kernel definition
+    /// exactly, so a `serde_json::to_value` round-trip is the
+    /// implementation; this method is the documented seam so a
+    /// future divergence (e.g. kernel adds a 6th dimension) lands in
+    /// one place rather than fanning out across callers.
+    pub fn to_kernel_json(&self) -> serde_json::Value {
+        // The local and kernel `EffectVector`s share field names by
+        // contract — see the module doc-comment. `serde_json::to_value`
+        // can't fail for a struct of f64s; if it does the world has
+        // bigger problems than this `.expect`.
+        serde_json::to_value(self).expect("EffectVector serializes to JSON")
+    }
 }
 
 /// Map a tool name + (currently unused) args JSON to its baseline
@@ -142,6 +165,47 @@ mod tests {
         };
         let expected = (0.6f64.powi(2) + 0.7f64.powi(2)).sqrt();
         assert!((ev.magnitude() - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn to_kernel_json_has_all_five_dimensions() {
+        let ev = EffectVector {
+            risk: 0.6,
+            fairness: 0.0,
+            privacy: 0.3,
+            novelty: 0.0,
+            security: 0.7,
+        };
+        let json = ev.to_kernel_json();
+        let obj = json.as_object().expect("kernel JSON is an object");
+        for key in ["risk", "fairness", "privacy", "novelty", "security"] {
+            assert!(
+                obj.contains_key(key),
+                "kernel-side governance::EffectVector requires `{key}` field"
+            );
+        }
+        assert_eq!(obj["risk"].as_f64(), Some(0.6));
+        assert_eq!(obj["security"].as_f64(), Some(0.7));
+        assert_eq!(obj["privacy"].as_f64(), Some(0.3));
+        assert_eq!(obj["fairness"].as_f64(), Some(0.0));
+        assert_eq!(obj["novelty"].as_f64(), Some(0.0));
+    }
+
+    #[test]
+    fn to_kernel_json_round_trips() {
+        // Round-trips back through serde so we know a KernelEffectGate
+        // adapter can ship the JSON across the crate boundary without
+        // dropping any field.
+        let ev = EffectVector {
+            risk: 0.42,
+            fairness: 0.11,
+            privacy: 0.55,
+            novelty: 0.0,
+            security: 0.99,
+        };
+        let json = ev.to_kernel_json();
+        let back: EffectVector = serde_json::from_value(json).unwrap();
+        assert_eq!(back, ev);
     }
 
     #[test]

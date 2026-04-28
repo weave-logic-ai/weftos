@@ -77,6 +77,25 @@ fn daemon_agent() -> Option<Arc<DaemonAgentService>> {
     DAEMON_AGENT.get().cloned()
 }
 
+/// agent-core-v1 Phase D2: daemon-wide handle to the concierge
+/// agent's kernel-issued `agent_id`.
+///
+/// Set at boot when the daemon registers a single concierge
+/// principal in `clawft-kernel::AgentRegistry::register` (right next
+/// to the existing node registration). Every `agent.chat` request in
+/// v1 dispatches through this id — chat is single-tenant by design;
+/// per-user agent ids are a future phase. The `AgentService` reads it
+/// via `daemon_concierge_agent_id()` to thread the id into
+/// `AgentLoop::with_daemon_agent_id` (then every `gate.check` call in
+/// `run_tool_loop` sees the concierge id rather than the
+/// `"{channel}:{sender_id}"` synthesis).
+static DAEMON_CONCIERGE_AGENT_ID: OnceLock<String> = OnceLock::new();
+
+#[allow(dead_code)] // Read by future RPCs (e.g. `agent.whoami`)
+fn daemon_concierge_agent_id() -> Option<String> {
+    DAEMON_CONCIERGE_AGENT_ID.get().cloned()
+}
+
 use clawft_kernel::{Kernel, KernelState};
 use clawft_platform::NativePlatform;
 use clawft_types::config::{Config, KernelConfig};
@@ -599,11 +618,69 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
             ))
         };
 
+        // agent-core-v1 Phase D2: register a single concierge
+        // principal in the kernel's AgentRegistry. v1 chat is
+        // single-tenant by design — every `agent.chat` request is
+        // first-party traffic from the same agent talking to a user
+        // — so one id covers the whole panel. Per-user agent ids
+        // ship in a future phase. The agent reuses the daemon's
+        // own pubkey (PoP is unnecessary for a self-registration
+        // happening before the listener is up).
+        let concierge_agent_id: String = {
+            let k = kernel.read().await;
+            let pubkey: [u8; 32] = daemon_identity.signing_key.verifying_key().to_bytes();
+            let entry = k.agent_registry().register("concierge-bot".into(), pubkey);
+            info!(
+                agent_id = %entry.agent_id,
+                name = %entry.name,
+                "agent-core: concierge principal registered"
+            );
+            k.event_log().info(
+                "agent",
+                format!("concierge principal registered: {}", entry.agent_id),
+            );
+            entry.agent_id
+        };
+        let _ = DAEMON_CONCIERGE_AGENT_ID.set(concierge_agent_id.clone());
+
+        // agent-core-v1 Phase D2: construct a GovernanceGate for the
+        // chat path and wrap it in the `EffectGate` adapter so every
+        // tool dispatch in `AgentLoop::run_tool_loop` produces an
+        // audited Permit/Defer/Deny decision. Risk threshold 0.8
+        // matches the daemon's existing per-spawn gate; chain logging
+        // is wired when the exochain feature is on so witness chain
+        // entries land alongside other governance events.
+        let chat_gate: Arc<dyn clawft_core::agent::gate::EffectGate> = {
+            use clawft_kernel::{
+                GateBackend, GovernanceBranch, GovernanceGate, GovernanceRule, RuleSeverity,
+            };
+            let mut g = GovernanceGate::new(0.8, false).add_rule(GovernanceRule {
+                id: "chat-tool-guard".into(),
+                description: "Block high-risk tool dispatches in agent.chat".into(),
+                branch: GovernanceBranch::Judicial,
+                severity: RuleSeverity::Blocking,
+                active: true,
+                reference_url: None,
+                sop_category: None,
+            });
+            #[cfg(feature = "exochain")]
+            {
+                let k = kernel.read().await;
+                if let Some(cm) = k.chain_manager() {
+                    g = g.with_chain(cm.clone());
+                }
+            }
+            let backend: Arc<dyn GateBackend> = Arc::new(g);
+            Arc::new(clawft_service_agent::KernelEffectGate::new(backend))
+        };
+
         let agent_loop = clawft_core::bootstrap::build_daemon_agent_loop(
             llm_for_agent,
             tool_registry,
             identity_loader,
             &workspace,
+            Some(concierge_agent_id),
+            Some(chat_gate),
             Some(agent_sink),
         )
         .await;
