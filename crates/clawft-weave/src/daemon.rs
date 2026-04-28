@@ -180,6 +180,106 @@ pub fn daemonize(config_override: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Build the v2 [`EmbeddingRouter`](clawft_core::agent::context_router::EmbeddingRouter),
+/// or `None` (with a `tracing::warn!`) when any prerequisite fails.
+///
+/// Phase E2 introduced this construction inline in the `"embedding"`
+/// arm; Phase E3 extracted it here so the new `"hybrid"` arm reuses
+/// the exact same skill-discovery + embedder-selection + index-build
+/// path. The helper:
+///
+/// 1. Discovers skills via the same workspace-walk + user-dir lookup
+///    the CLI's `weft agent` uses.
+/// 2. Selects [`ApiEmbedder::with_defaults`](clawft_core::embeddings::api_embedder::ApiEmbedder)
+///    when `OPENAI_API_KEY` is set, else
+///    [`ApiEmbedder::hash_only`](clawft_core::embeddings::api_embedder::ApiEmbedder)
+///    as the deterministic offline floor.
+/// 3. Builds the index. On any failure (empty registry, discover
+///    error, embedder/index build error) it emits a `warn!` and
+///    returns `None` so callers can fall back to the next router in
+///    their preference chain (NullRouter for `"embedding"`,
+///    LlmClassifierRouter for `"hybrid"`).
+async fn build_embedding_router_or_warn(
+    workspace: &std::path::Path,
+) -> Option<Arc<dyn clawft_core::agent::context_router::ContextRouter>> {
+    // Skill discovery: same paths the CLI uses (`weft agent`); see
+    // `clawft-cli/src/commands/agent.rs::discover_skill_dirs`.
+    let user_skill_dir = dirs::home_dir().map(|h| h.join(".clawft").join("skills"));
+    let ws_skill_dir = {
+        let mut dir = workspace;
+        let mut found: Option<std::path::PathBuf> = None;
+        loop {
+            let candidate = dir.join(".clawft").join("skills");
+            if candidate.is_dir() {
+                found = Some(candidate);
+                break;
+            }
+            match dir.parent() {
+                Some(parent) => dir = parent,
+                None => break,
+            }
+        }
+        found
+    };
+
+    let skills_result = clawft_core::agent::skills_v2::SkillRegistry::discover(
+        ws_skill_dir.as_deref(),
+        user_skill_dir.as_deref(),
+        Vec::new(),
+    )
+    .await;
+
+    let skills = match skills_result {
+        Ok(s) if s.is_empty() => {
+            warn!(
+                "agent-core: EmbeddingRouter requested but skill registry is empty; \
+                 returning None so caller can fall back"
+            );
+            return None;
+        }
+        Ok(s) => s,
+        Err(e) => {
+            warn!(
+                error = %e,
+                "agent-core: skill discovery failed; EmbeddingRouter unavailable"
+            );
+            return None;
+        }
+    };
+
+    // Pick ApiEmbedder when an API key is configured, else the hash
+    // floor. ApiEmbedder itself collapses to its SHA-256 fallback
+    // per-call when the API errors, so production stays robust.
+    let embedder: Arc<dyn clawft_core::embeddings::Embedder> = if std::env::var("OPENAI_API_KEY")
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+    {
+        info!("agent-core: EmbeddingRouter using ApiEmbedder (OpenAI-compat /embeddings)");
+        Arc::new(clawft_core::embeddings::api_embedder::ApiEmbedder::with_defaults())
+    } else {
+        info!(
+            "agent-core: EmbeddingRouter using ApiEmbedder hash-only fallback \
+             (no OPENAI_API_KEY set)"
+        );
+        Arc::new(clawft_core::embeddings::api_embedder::ApiEmbedder::hash_only(384))
+    };
+
+    match clawft_core::agent::context_router::EmbeddingRouter::new(embedder, &skills).await {
+        Ok(r) => {
+            info!(
+                router = "embedding",
+                skills = skills.len(),
+                "agent-core: ContextRouter v2 (EmbeddingRouter) built"
+            );
+            Some(Arc::new(r) as Arc<dyn clawft_core::agent::context_router::ContextRouter>)
+        }
+        Err(e) => {
+            warn!(error = %e, "agent-core: EmbeddingRouter build failed");
+            None
+        }
+    }
+}
+
 /// Run the kernel daemon in the foreground.
 ///
 /// Boots the kernel, binds to a Unix socket, and serves requests
@@ -725,102 +825,67 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
                 ))
             }
             "embedding" => {
-                // E2: discover skills from the workspace + user dirs.
-                // Same paths the CLI uses (`weft agent`); see
-                // `clawft-cli/src/commands/agent.rs::discover_skill_dirs`.
-                let user_skill_dir = dirs::home_dir()
-                    .map(|h| h.join(".clawft").join("skills"));
-                let ws_skill_dir = {
-                    let mut dir = workspace.as_path();
-                    let mut found: Option<std::path::PathBuf> = None;
-                    loop {
-                        let candidate = dir.join(".clawft").join("skills");
-                        if candidate.is_dir() {
-                            found = Some(candidate);
-                            break;
-                        }
-                        match dir.parent() {
-                            Some(parent) => dir = parent,
-                            None => break,
-                        }
+                // E2: build the v2 router via the shared helper. On
+                // any prerequisite failure (empty registry, discover
+                // error, embedder/index build error) the helper logs
+                // a `warn!` and returns None; we propagate that so the
+                // daemon falls back to the built-in NullRouter rather
+                // than crashing the boot path.
+                match build_embedding_router_or_warn(workspace.as_path()).await {
+                    Some(r) => {
+                        info!(
+                            router = "embedding",
+                            "agent-core: ContextRouter v2 (EmbeddingRouter) live"
+                        );
+                        Some(r)
                     }
-                    found
-                };
-
-                let skills_result =
-                    clawft_core::agent::skills_v2::SkillRegistry::discover(
-                        ws_skill_dir.as_deref(),
-                        user_skill_dir.as_deref(),
-                        Vec::new(),
-                    )
-                    .await;
-
-                match skills_result {
-                    Ok(skills) if skills.is_empty() => {
+                    None => {
                         warn!(
-                            "agent-core: ContextRouter v2 (EmbeddingRouter) requested but \
-                             skill registry is empty; falling back to NullRouter"
+                            "agent-core: EmbeddingRouter unavailable; falling back to NullRouter"
                         );
                         None
                     }
-                    Ok(skills) => {
-                        // Pick ApiEmbedder when an API key is configured,
-                        // else the hash-only floor. ApiEmbedder itself
-                        // collapses to its SHA-256 fallback per-call when
-                        // the API errors, so production stays robust.
-                        let embedder: Arc<
-                            dyn clawft_core::embeddings::Embedder,
-                        > = if std::env::var("OPENAI_API_KEY")
-                            .map(|s| !s.is_empty())
-                            .unwrap_or(false)
-                        {
-                            info!(
-                                "agent-core: EmbeddingRouter using ApiEmbedder \
-                                 (OpenAI-compat /embeddings)"
-                            );
-                            Arc::new(
-                                clawft_core::embeddings::api_embedder::ApiEmbedder::with_defaults(),
-                            )
-                        } else {
-                            info!(
-                                "agent-core: EmbeddingRouter using ApiEmbedder \
-                                 hash-only fallback (no OPENAI_API_KEY set)"
-                            );
-                            Arc::new(
-                                clawft_core::embeddings::api_embedder::ApiEmbedder::hash_only(384),
-                            )
-                        };
-
-                        match clawft_core::agent::context_router::EmbeddingRouter::new(
-                            embedder, &skills,
+                }
+            }
+            "hybrid" => {
+                // E3: v2.5 plumbing. EmbeddingRouter (v2) primary,
+                // LlmClassifierRouter (v1) fallback on empty/low-
+                // confidence (the v2 router already collapses to
+                // ContextDecision::default() below its confidence
+                // threshold, so "empty primary" == "low-confidence
+                // primary" without any extra signaling).
+                //
+                // If the v2 primary fails to construct (no
+                // OPENAI_API_KEY *and* the hash floor still errors —
+                // unlikely but possible if skills discovery breaks),
+                // we degrade gracefully to the v1 classifier alone.
+                // If even the classifier can't be constructed (it
+                // can't fail today — `Arc::new(LlmClient.into())`),
+                // we fall through to NullRouter.
+                let v1: Arc<dyn clawft_core::agent::context_router::ContextRouter> =
+                    Arc::new(
+                        clawft_core::agent::context_router::LlmClassifierRouter::new(
+                            llm_for_agent.clone(),
+                        ),
+                    );
+                match build_embedding_router_or_warn(workspace.as_path()).await {
+                    Some(emb) => {
+                        info!(
+                            router = "hybrid",
+                            "agent-core: ContextRouter v2.5 (HybridRouter) live \
+                             — EmbeddingRouter primary, LlmClassifierRouter fallback"
+                        );
+                        Some(Arc::new(
+                            clawft_core::agent::context_router::HybridRouter::new(emb, v1),
                         )
-                        .await
-                        {
-                            Ok(r) => {
-                                info!(
-                                    router = "embedding",
-                                    skills = skills.len(),
-                                    "agent-core: ContextRouter v2 (EmbeddingRouter) live"
-                                );
-                                Some(Arc::new(r) as Arc<
-                                    dyn clawft_core::agent::context_router::ContextRouter,
-                                >)
-                            }
-                            Err(e) => {
-                                warn!(
-                                    error = %e,
-                                    "agent-core: EmbeddingRouter build failed; falling back to NullRouter"
-                                );
-                                None
-                            }
-                        }
+                            as Arc<dyn clawft_core::agent::context_router::ContextRouter>)
                     }
-                    Err(e) => {
+                    None => {
                         warn!(
-                            error = %e,
-                            "agent-core: skill discovery failed; EmbeddingRouter unavailable, falling back to NullRouter"
+                            "hybrid router: embedding primary unavailable; \
+                             using LlmClassifierRouter alone"
                         );
-                        None
+                        Some(v1)
                     }
                 }
             }
