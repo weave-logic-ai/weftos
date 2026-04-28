@@ -23,3 +23,6 @@ docs/src/public/kb/*.rvf.json
 docs/src/public/kb/*.rvf.json.gz
 .planning/sonobuoy/papers/pdfs/
 .planning/clients/weave.toml
+
+# WeftOS
+graphify-out/
