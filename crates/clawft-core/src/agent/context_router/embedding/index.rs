@@ -7,7 +7,9 @@
 //! Both backends speak L2-squared on **unit-normalised** vectors so the
 //! `cosine = 1 - dist / 2` derivation holds across the whole router.
 
-use super::{normalise, EmbeddingRouterError};
+use super::normalise;
+#[cfg(feature = "embedding-router")]
+use super::EmbeddingRouterError;
 
 /// One nearest-neighbour hit returned by an [`Index`].
 ///
