@@ -209,6 +209,13 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         std::fs::create_dir_all(parent)?;
     }
 
+    // agent-core-v1 Phase E1: snapshot the ContextRouter selector
+    // before `config` moves into `Kernel::boot`. The agent-service
+    // wiring further below reads this to pick between v0 NullRouter
+    // and v1 LlmClassifierRouter. See `Config.routing.context_router`
+    // in `clawft-types::routing`.
+    let context_router_choice = config.routing.context_router.clone();
+
     // Boot kernel
     let platform = NativePlatform::new();
     let kernel = Kernel::boot(config, kernel_config, Arc::new(platform)).await?;
@@ -685,12 +692,56 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
             Arc::new(clawft_service_agent::KernelEffectGate::new(backend))
         };
 
+        // agent-core-v1 Phase E1: pick the ContextRouter implementation
+        // from `config.routing.context_router`. v0 `"null"` (the
+        // default) hands `None` to `build_daemon_agent_loop`, which
+        // keeps `AgentLoop`'s built-in `NullRouter` live so behaviour
+        // is bit-for-bit unchanged. v1 `"llm-classifier"` builds an
+        // `LlmClassifierRouter` over the same `LlmClient` the daemon
+        // already uses (so OpenRouter / local llama-server both keep
+        // working without a second connection).
+        //
+        // Per `docs/research/rvf-context-router.md`, the router NEVER
+        // picks a model and NEVER escalates a tier — `TieredRouter`
+        // owns the actual decision; the router only nudges
+        // `complexity_hint` and surfaces an `archetype` label.
+        let context_router: Option<
+            Arc<dyn clawft_core::agent::context_router::ContextRouter>,
+        > = match context_router_choice.as_str() {
+            "llm-classifier" => {
+                info!(
+                    router = "llm-classifier",
+                    "agent-core: ContextRouter v1 (LlmClassifierRouter) live"
+                );
+                Some(Arc::new(
+                    clawft_core::agent::context_router::LlmClassifierRouter::new(
+                        llm_for_agent.clone(),
+                    ),
+                ))
+            }
+            "null" => {
+                info!(
+                    router = "null",
+                    "agent-core: ContextRouter v0 (NullRouter) live"
+                );
+                None
+            }
+            other => {
+                warn!(
+                    requested = %other,
+                    "agent-core: unknown context_router setting; falling back to NullRouter"
+                );
+                None
+            }
+        };
+
         let agent_loop = clawft_core::bootstrap::build_daemon_agent_loop(
             llm_for_agent,
             tool_registry,
             identity_loader,
             &workspace,
             Some(concierge_agent_id),
+            context_router,
             Some(chat_gate),
             Some(agent_sink),
             Some(identity_provider),

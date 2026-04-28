@@ -22,10 +22,10 @@
 //!
 //! ## Phasing
 //!
-//! agent-core-v1 lands [`NullRouter`] (v0). Phase E1 will replace it
-//! with `LlmClassifierRouter` (v1); Phase E2 promotes to
-//! `EmbeddingRouter` (v2) once the 7-day fallback metric is below 25%.
-//! See `docs/plans/agent-core-v1.md` Phase E and
+//! agent-core-v1 lands [`NullRouter`] (v0) and, in Phase E1,
+//! [`LlmClassifierRouter`] (v1). Phase E2 promotes to `EmbeddingRouter`
+//! (v2) once the 7-day fallback metric is below 25%. See
+//! `docs/plans/agent-core-v1.md` Phase E and
 //! `docs/research/rvf-context-router.md` for the full v0 → v3 sequence.
 
 use async_trait::async_trait;
@@ -76,7 +76,8 @@ pub struct ContextRequest {
 /// Routing decision returned by a [`ContextRouter`].
 ///
 /// All fields are optional in effect — empty `skills`, `None`
-/// `tool_subset`, and `0.0` hint mean "no opinion, proceed normally".
+/// `tool_subset`, `0.0` hint, and `None` `archetype` mean
+/// "no opinion, proceed normally".
 #[derive(Debug, Clone)]
 pub struct ContextDecision {
     /// Skills to inject into the system context for this turn.
@@ -94,11 +95,27 @@ pub struct ContextDecision {
     /// **Never** picks a tier; downstream `TieredRouter` still owns
     /// that decision.
     pub complexity_hint: f32,
+
+    /// Optional archetype label produced by a classifier router (Phase
+    /// E1's [`LlmClassifierRouter`] populates this with values like
+    /// `"Reasoning"`, `"CodeGen"`, `"Analysis"`, `"Conversational"`,
+    /// or `"Creative"` — see `docs/research/rvf-context-router.md` §6).
+    ///
+    /// Today this is metadata only: the agent loop logs it for
+    /// diagnostics but doesn't otherwise act on it. v2 / v2.5 routers
+    /// (`EmbeddingRouter`, `HybridRouter`) will layer skill retrieval
+    /// on top of the archetype to bias recall toward the right
+    /// shelf. Surfaced here so the downstream wiring can land in a
+    /// later commit without reshaping the trait.
+    pub archetype: Option<String>,
 }
 
 impl ContextDecision {
     /// Construct a decision, clamping `complexity_hint` to the legal
     /// range. All in-trait construction should funnel through here.
+    ///
+    /// The `archetype` field is left `None`; classifier routers that
+    /// produce an archetype label set it after construction.
     pub fn new(
         skills: Vec<String>,
         tool_subset: Option<Vec<String>>,
@@ -108,6 +125,7 @@ impl ContextDecision {
             skills,
             tool_subset,
             complexity_hint: clamp_complexity(complexity_hint),
+            archetype: None,
         }
     }
 }
@@ -118,6 +136,7 @@ impl Default for ContextDecision {
             skills: Vec::new(),
             tool_subset: None,
             complexity_hint: 0.0,
+            archetype: None,
         }
     }
 }
@@ -135,7 +154,8 @@ pub trait ContextRouter: Send + Sync + 'static {
 ///
 /// This is the default attached to [`AgentLoop`](super::loop_core::AgentLoop)
 /// so existing callers see exactly the same behaviour they had before
-/// the seam landed. Phase E1 swaps this out for `LlmClassifierRouter`.
+/// the seam landed. Phase E1 [`LlmClassifierRouter`] is the v1
+/// successor; the swap is a config flip, not a code change.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NullRouter;
 
@@ -145,6 +165,19 @@ impl ContextRouter for NullRouter {
         ContextDecision::default()
     }
 }
+
+// ── v1: LlmClassifierRouter ──────────────────────────────────────────────
+
+// Phase E1: the LLM-classifier router lives in the `llm_classifier`
+// submodule and is re-exported here so existing imports continue to
+// see `agent::context_router::LlmClassifierRouter` etc. The split
+// keeps this file under the 500-line CLAUDE.md cap.
+pub mod llm_classifier;
+
+pub use llm_classifier::{
+    Classifier, ClassifierOutput, LlmClassifierRouter, CLASSIFIER_SYSTEM_PROMPT,
+    DEFAULT_CLASSIFIER_MAX_TOKENS,
+};
 
 #[cfg(test)]
 mod tests {
@@ -238,5 +271,16 @@ mod tests {
 
         let edge = ContextDecision::new(vec![], None, COMPLEXITY_HINT_LIMIT);
         assert_eq!(edge.complexity_hint, COMPLEXITY_HINT_LIMIT);
+    }
+
+    #[test]
+    fn context_decision_default_archetype_is_none() {
+        // E1 contract: archetype defaults to None so v0 NullRouter
+        // and any pre-E1 caller stays archetype-free.
+        let d = ContextDecision::default();
+        assert!(d.archetype.is_none());
+
+        let n = ContextDecision::new(vec![], None, 0.0);
+        assert!(n.archetype.is_none());
     }
 }
