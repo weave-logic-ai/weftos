@@ -18,6 +18,7 @@ pub mod ipc_cmd;
 pub mod kernel_cmd;
 pub mod leaf_cmd;
 pub mod resource_cmd;
+pub mod soul_cmd;
 pub mod topology_cmd;
 pub mod vault_cmd;
 

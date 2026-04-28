@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Active |
+| **Status** | Complete (all 12 end-state criteria satisfied as of F2) |
 | **Drafted** | 2026-04-27 |
 | **Branch** | `development-0.7.0` |
 | **Supersedes** | `docs/plans/chat-agent-v1.md` §14 (commits 1-9) |
@@ -114,6 +114,10 @@ Goal: identity becomes operable, not just loaded.
 2. **`OPENROUTER_API_KEY` runtime swap.** Today `daemon_llm()` captures the client once at boot. Once `AgentService` holds an `Arc<LlmClient>`, runtime env changes go stale. Fix by wrapping in `Arc<RwLock<LlmClient>>` and refreshing on `control.set_enabled("llm", _)` cycles. Ships in C2.
 3. **`ConversationSink` vs `agent/memory.rs` confusion.** `memory.rs` (461 LoC) is the cross-conversation distilled-facts store; `ConversationSink` is per-turn substrate. They never share a path (per `chat-agent-v1.md:348-355`). Document this clearly in C3's commit message.
 4. **Gate `Defer` UX.** `Defer { reason }` requires a human-in-the-loop hook (`crates/clawft-kernel/src/gate.rs:14-34`). v1 lands as "tool result becomes the defer reason; loop continues" (model can re-plan). Real interactive `Defer` is a v1.1 follow-up needing panel UI.
+
+## Status
+
+**agent-core-v1 is complete as of commit F2 (`feat(weaver): soul promote command`).** All 12 end-state acceptance criteria above are satisfied: the spike was retired in D3, the chat path runs end-to-end through `clawft-service-agent::AgentService::dispatch` → `clawft-core::agent::AgentLoop::handle_turn`, the kernel gate is in-line on every tool call, identity loads from `.clawft/SOUL.md` + `IDENTITY.md` with the BINDING_THREAD_EXCERPT pin, and the soul-journal flow now has both halves wired (F1 stamped the substrate grant; F2 promotes journal entries into SOUL.md with a witness audit entry). Follow-ups are tracked under agent-core-v1.1 (notably: agent-side journal-write path during chat turns, and a public `chain.append` RPC so `weaver soul promote` can push witness records onto the live chain instead of the local audit log).
 
 ## Sequencing & parallelism
 
