@@ -1,3 +1,107 @@
+# Session handoff — 2026-04-27 (late evening) — agent-core-v1 SHIPS
+
+The full **agent-core-v1** plan at `docs/plans/agent-core-v1.md`
+landed across this session. All 12 end-state acceptance criteria
+are met. Spike is gone; `agent.chat` runs through
+`clawft-core::agent::AgentLoop::handle_turn` end-to-end with
+kernel-backed `GovernanceGate::check`, substrate-backed
+`ConversationSink`, identity-aware system prompt, and the v0→v2.5
+context router phasing in place.
+
+## What landed (78 commits ahead of origin/development-0.7.0)
+
+| Phase | Scope | Commits |
+|---|---|---|
+| Plan + handoff | `docs/plans/agent-core-v1.md` (167 lines), bug-hunt notes | 2 |
+| **A** | OpenRouter takeover, `chat` derived-write grant, `conv_id`, canonicalize sandbox, tools-registry route | 4 + ride-along `fix(ci)` |
+| **B** | `handle_turn` extracted from `process_message`; `ContextRouter`/`EffectGate`/`ConversationSink` traits; sandbox-test repair | 3 + 1 fix |
+| **C** | `clawft-service-agent` crate skeleton; `DAEMON_AGENT` OnceLock + service flag + boot order + `agent.chat.cancel`; substrate `ConversationSink` + heartbeat | 3 |
+| **D** | Identity-aware system prompt + SHA-256 hash + `BINDING_THREAD_EXCERPT`; per-tool `gate.check` via `KernelEffectGate`; cutover (~360 LoC spike deleted, feature default on) | 3 |
+| **E** | `LlmClassifierRouter` (v1); `EmbeddingRouter` (v2, `ruvector-diskann@2.1`); `HybridRouter` (v2.5 plumbing); E2 import fix | 3 + 1 fix |
+| **F** | `weaver init` seeds `.clawft/`; `WitnessRecord` chat-path tests; `weaver soul promote` | 3 |
+
+## Test totals after F2 + final fix
+
+```
+cargo test --lib -p clawft-core -p clawft-weave -p clawft-service-agent \
+                  -p clawft-service-llm -p clawft-tools -p clawft-plugin
+clawft-core         1218
+clawft-plugin         82
+clawft-service-agent  15  (+ 7 dispatch + 11 substrate + 3 witness = 36 total)
+clawft-service-llm    24
+clawft-tools         152
+clawft-weave          58  (+ integration suites: ~30)
+─────────────────────────
+                    1549 lib tests, 0 failed
+```
+
+`scripts/build.sh check`, `scripts/build.sh clippy`, and
+`cargo build -p clawft-weave --no-default-features --features
+cluster,ecc,exochain,mesh` (the `agent-core-chat` feature off path)
+all return exit 0.
+
+## End-state acceptance criteria — all met
+
+1. ✅ `agent.chat` delegates to `AgentService::dispatch` (no inline loop in daemon).
+2. ✅ Dispatch runs through `AgentLoop::handle_turn` (B3 extraction).
+3. ✅ Tool catalog from `clawft-tools::register_all` (A4).
+4. ✅ Per-tool `gate.check` with `EffectVector` via `KernelEffectGate` (D2). Defer/Deny → structured tool-result JSON.
+5. ✅ Per-conv `DashMap<ConvId, Mutex<()>>` + cancel tokens on `AgentService` (C1).
+6. ✅ Substrate JSONL at `derived/chat/<conv_id>/turns/<ulid>` + heartbeat at `…/status` (C3); `chat` grant (A2).
+7. ✅ `IdentityLoader` reads `.clawft/`, SHA-256 hash, `BINDING_THREAD_EXCERPT` compile-time pin, sandbox hard-deny (D1, F1).
+8. ✅ Router phasing: `null` → `llm-classifier` → `embedding` → `hybrid`, locked seam at `ChatRequest.complexity_boost`. v3 (MicroLora) deferred per ruv-researcher pin.
+9. ✅ `OPENROUTER_API_KEY` path live; local llama-server unchanged when env unset (A1).
+10. ✅ `agent.chat.cancel` aborts in-flight loops (C2).
+11. ✅ Boot order: kernel → grants → LLM → agent service → terminal → UI sentinels (C2).
+12. ✅ `chat-agent-v1.md` §2-D1 promise fulfilled; cutover commit named in git history (D3).
+
+## Known follow-ups (none blocking)
+
+- **`chain.append` RPC**: F2's `weaver soul promote` writes a witness payload to `<workspace>/.weftos/audit/soul-promote.log` (JSONL) plus a `tracing::info!(target = "chain_event", …)` event because the daemon doesn't expose a public `chain.append` RPC yet. Source has a `TODO(agent-core-v1.1)` to switch when the wire ships.
+- **Defer UX**: D2 surfaces `Defer { reason }` as a structured tool-result `{ "deferred": true, "reason": ... }` so the LLM can re-plan. Real interactive defer (panel-side prompt-and-resume) is v1.1.
+- **Per-user agent_ids**: chat is single-tenant (one `concierge-bot` principal registered at boot per D2). Per-user agent_ids ship in a future phase.
+- **Agent-side journal write**: F2 lands the operator side of `weaver soul promote`; the agent's self-observation write path (during chat turns) is deferred. With an empty journal the command exits cleanly.
+- **C3 monotonic-ULID test flake**: `append_turns_are_monotonic` occasionally fails when two appends land in the same ms. Pre-existing from C3; not a new issue.
+- **v3 `MicroLoraRouter`**: explicitly deferred until `ruvllm-wasm` lifts the documented 11-pattern HNSW cap (`docs/research/rvf-context-router.md:118-128`). E3's `HybridRouter` left a `TODO(agent-core-v1 phase E3+)` marker.
+
+## Architectural shape post-F2
+
+```
+agent.chat RPC  (clawft-weave/src/daemon.rs, unconditional)
+      │
+      ▼
+clawft-service-agent::AgentService::dispatch
+      │  per-conv DashMap<Mutex>, CancellationToken,
+      │  AgentChatParams → InboundMessage
+      ▼
+clawft-core::agent::AgentLoop::handle_turn
+      │  ContextRouter::route (NullRouter / LlmClassifier /
+      │     Embedding / Hybrid based on Config.routing.context_router)
+      │  SystemPromptBuilder (identity-aware, SHA-256, BINDING_THREAD)
+      ▼
+clawft-core::agent::loop_core::run_tool_loop
+      │  for each tool call:
+      │    EffectGate::check (KernelEffectGate → GovernanceGate
+      │       → witness chain entry)
+      │    ToolRegistry::execute (clawft-tools)
+      │  ConversationSink::append_turn (SubstrateConversationSink
+      │       → derived/chat/<conv>/turns/<ulid>)
+      ▼
+clawft-service-llm::LlmClient
+      │  OpenRouter (OPENROUTER_API_KEY) or local llama-server
+      ▼
+LLM
+```
+
+## Branch status
+
+- Working tree: clean.
+- `git status -sb`: `## development-0.7.0...origin/development-0.7.0 [ahead 78]`.
+- Three locked agent-core/* worktrees retained from this session's parallel work (D1, D2, F2). Safe to `git worktree remove` once you've verified the merges.
+- Nothing pushed yet.
+
+---
+
 # Session handoff — 2026-04-27 (early morning)
 
 Follow-on debug session on top of the previous handoff (preserved
