@@ -94,6 +94,7 @@ pub struct AppContext<P: Platform> {
     /// inbox-scoped delivery. The CLI runs a single agent so doesn't
     /// need it, but multi-agent hosts (the daemon's spawn manager)
     /// register each spawned agent and route IPC through the bus.
+    #[cfg(feature = "native")]
     agent_bus: Option<Arc<crate::agent_bus::AgentBus>>,
 }
 
@@ -184,6 +185,7 @@ impl<P: Platform> AppContext<P> {
             skills,
             auto_delegation: None,
             agent_router: None,
+            #[cfg(feature = "native")]
             agent_bus: None,
         })
     }
@@ -358,12 +360,14 @@ impl<P: Platform> AppContext<P> {
     /// Attach a shared [`AgentBus`](crate::agent_bus::AgentBus). The
     /// daemon's agent supervisor registers each spawned agent with
     /// this bus so A2A messaging is inbox-scoped.
+    #[cfg(feature = "native")]
     pub fn set_agent_bus(&mut self, bus: Arc<crate::agent_bus::AgentBus>) {
         self.agent_bus = Some(bus);
     }
 
     /// Borrow the optional agent bus. `None` means A2A messaging is
     /// disabled (single-agent process).
+    #[cfg(feature = "native")]
     pub fn agent_bus(&self) -> Option<&Arc<crate::agent_bus::AgentBus>> {
         self.agent_bus.as_ref()
     }
@@ -481,6 +485,41 @@ fn build_default_transport() -> Arc<OpenAiCompatTransport> {
 #[cfg(not(feature = "native"))]
 fn build_default_transport() -> Arc<OpenAiCompatTransport> {
     Arc::new(OpenAiCompatTransport::new())
+}
+
+/// Build a pipeline whose transport is wired to a [`BrowserLlmClient`]
+/// via [`BrowserLlmAdapter`](crate::pipeline::browser_llm_adapter::BrowserLlmAdapter).
+///
+/// All other stages (classifier, router, assembler, scorer, learner)
+/// match [`build_default_pipeline`] so the browser path runs through
+/// the same 6-stage shape as the native path. Used by the
+/// `clawft-wasm` browser entry to wire `AgentLoop<BrowserPlatform>`
+/// end-to-end through the pipeline (W-BROWSER P0.1).
+#[cfg(feature = "browser")]
+pub fn build_browser_pipeline(
+    config: &Config,
+    client: Arc<clawft_llm::browser_transport::BrowserLlmClient>,
+) -> PipelineRegistry {
+    use crate::pipeline::browser_llm_adapter::BrowserLlmAdapter;
+    use crate::pipeline::transport::LlmProvider;
+
+    let adapter: Arc<dyn LlmProvider> = Arc::new(BrowserLlmAdapter::new(client));
+    let transport = Arc::new(OpenAiCompatTransport::with_provider(adapter));
+    let classifier = Arc::new(KeywordClassifier::new());
+    let router: Arc<dyn ModelRouter> = build_router_from_config(config);
+    let assembler = Arc::new(TokenBudgetAssembler::new(
+        config.agents.defaults.max_tokens.max(1) as usize,
+    ));
+    let scorer = crate::pipeline::build_scorer(&config.pipeline);
+    let learner = crate::pipeline::build_learner(&config.pipeline);
+    PipelineRegistry::new(Pipeline {
+        classifier,
+        router,
+        assembler,
+        transport,
+        scorer,
+        learner,
+    })
 }
 
 /// Construct an [`AgentLoop`] suitable for daemon-side hosting via

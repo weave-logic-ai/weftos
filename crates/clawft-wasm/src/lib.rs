@@ -122,23 +122,38 @@ pub fn capabilities() -> String {
 /// running clawft in a web browser via the BrowserPlatform.
 #[cfg(feature = "browser")]
 mod browser_entry {
-    use std::sync::OnceLock;
+    use std::sync::{Arc, OnceLock};
 
+    use clawft_core::agent::loop_core::AgentLoop;
+    use clawft_core::bootstrap::AppContext;
     use clawft_llm::browser_transport::BrowserLlmClient;
     use clawft_llm::config::LlmProviderConfig;
-    use clawft_llm::types::{ChatMessage, ChatRequest};
+    use clawft_platform::BrowserPlatform;
     use clawft_types::config::Config;
+    use clawft_types::event::InboundMessage;
     use wasm_bindgen::prelude::*;
 
     /// Persistent runtime state initialized by `init()`.
+    ///
+    /// Wires `AgentLoop<BrowserPlatform>` end-to-end through the
+    /// 6-stage pipeline (classifier → router → assembler → transport
+    /// → scorer → learner) plus session management, the context
+    /// builder, the conversation sink, the effect gate, and the tool
+    /// registry. `send_message` builds an [`InboundMessage`] and
+    /// dispatches it through [`AgentLoop::handle_turn`], identical in
+    /// shape to the native daemon's `agent.chat` path.
     struct BrowserRuntime {
-        config: Config,
-        client: BrowserLlmClient,
-        /// The model name to send in requests (prefix stripped).
-        model_name: String,
-        /// Conversation history.
-        messages: std::sync::Mutex<Vec<ChatMessage>>,
+        agent: Arc<AgentLoop<BrowserPlatform>>,
     }
+
+    // SAFETY: wasm32-unknown-unknown is single-threaded; nothing here
+    // ever crosses a thread boundary. The pipeline's `Send + Sync`
+    // expectations on transports are satisfied via the `?Send`
+    // `async_trait` relaxation in `LlmTransport` / `LlmProvider` for
+    // the browser feature; the `OnceLock` in turn just needs the
+    // outer struct to be `Send + Sync`.
+    unsafe impl Send for BrowserRuntime {}
+    unsafe impl Sync for BrowserRuntime {}
 
     static RUNTIME: OnceLock<BrowserRuntime> = OnceLock::new();
 
@@ -236,19 +251,22 @@ mod browser_entry {
 
     /// Initialize the clawft-wasm browser runtime.
     ///
-    /// Parses the provided JSON config and sets up a BrowserLlmClient.
+    /// Parses the provided JSON config, builds an
+    /// [`AppContext<BrowserPlatform>`](AppContext), wires the LLM
+    /// transport to the appropriate provider via [`BrowserLlmClient`],
+    /// and produces a fully assembled [`AgentLoop<BrowserPlatform>`].
     /// Must be called once before `send_message`.
     #[wasm_bindgen]
     pub async fn init(config_json: &str) -> Result<(), JsValue> {
         console_error_panic_hook::set_once();
 
-        let config: Config = serde_json::from_str(config_json)
+        let mut config: Config = serde_json::from_str(config_json)
             .map_err(|e| JsValue::from_str(&format!("config parse error: {e}")))?;
 
-        let _platform = clawft_platform::BrowserPlatform::new();
+        let platform = Arc::new(BrowserPlatform::new());
 
-        let model = &config.agents.defaults.model;
-        let (llm_cfg, stripped_model, user_cfg) = resolve_provider(&config, model)
+        let model = config.agents.defaults.model.clone();
+        let (llm_cfg, stripped_model, user_cfg) = resolve_provider(&config, &model)
             .map_err(|e| JsValue::from_str(&e))?;
 
         let api_key = user_cfg.api_key.expose();
@@ -270,82 +288,95 @@ mod browser_entry {
             .into(),
         );
 
-        let client = BrowserLlmClient::with_api_key(
+        let client = Arc::new(BrowserLlmClient::with_api_key(
             llm_cfg,
             api_key.to_string(),
             user_cfg.browser_direct,
             user_cfg.cors_proxy.clone(),
+        ));
+
+        // The pipeline's transport sees the stripped model name; the
+        // routing decision will pin it back to the same provider via
+        // `StaticRouter::from_config`. Stamp the stripped form into the
+        // agent defaults so the static router doesn't try to re-resolve
+        // a prefix that the browser already consumed.
+        config.agents.defaults.model = stripped_model;
+
+        // Build the AppContext (bus, sessions, memory, skills, context,
+        // empty tools registry, default classifier/router/assembler/
+        // scorer/learner with stub transport) — exactly like the native
+        // path — then swap in a transport wired to BrowserLlmClient.
+        let mut ctx = AppContext::new(config.clone(), platform.clone())
+            .await
+            .map_err(|e| JsValue::from_str(&format!("AppContext init failed: {e}")))?;
+
+        // Register all the browser-compatible tools. Native-exec tools
+        // (shell, spawn) are gated out at compile time via
+        // clawft-tools' feature flags so what lands here is the
+        // file/memory/web-search/web-fetch subset. The browser
+        // workspace is the in-memory `BrowserFileSystem`'s virtual
+        // home (`/clawft`) — file tools sandbox to that root and the
+        // web tools defer to UrlPolicy for SSRF protection.
+        let workspace_dir = std::path::PathBuf::from("/clawft/workspace");
+        clawft_tools::register_all(
+            ctx.tools_mut(),
+            platform.clone(),
+            workspace_dir,
+            clawft_types::security::CommandPolicy::default(),
+            clawft_types::security::UrlPolicy::default(),
+            clawft_tools::web_search::WebSearchConfig::default(),
         );
 
-        let system_prompt = "You are a helpful AI assistant running in the browser via clawft-wasm.";
+        // Replace the stub transport with the BrowserLlmClient-backed
+        // one so the pipeline's transport stage actually reaches the
+        // network. Stages 1, 2, 3, 5, and 6 are unchanged.
+        let pipeline = clawft_core::bootstrap::build_browser_pipeline(&config, client);
+        ctx.set_pipeline(pipeline);
+
+        let agent = Arc::new(ctx.into_agent_loop());
 
         RUNTIME
-            .set(BrowserRuntime {
-                config,
-                client,
-                model_name: stripped_model,
-                messages: std::sync::Mutex::new(vec![ChatMessage::system(system_prompt)]),
-            })
+            .set(BrowserRuntime { agent })
             .map_err(|_| JsValue::from_str("already initialized"))?;
 
-        web_sys::console::log_1(&"clawft-wasm initialized".into());
+        web_sys::console::log_1(
+            &"clawft-wasm initialized — AgentLoop<BrowserPlatform> wired through full pipeline"
+                .into(),
+        );
         Ok(())
     }
 
-    /// Send a message through the clawft LLM pipeline.
+    /// Send a message through the clawft AgentLoop pipeline.
     ///
-    /// Appends the user message to the conversation history, sends it
-    /// to the configured LLM provider via BrowserLlmClient, and returns
-    /// the assistant's response.
+    /// Builds an [`InboundMessage`] (channel = `"web"`, chat_id =
+    /// `"browser"`), dispatches it through
+    /// [`AgentLoop::handle_turn`], and returns the resulting
+    /// outbound text. Conversation history, session state, the
+    /// 6-stage pipeline, the conversation sink, and tool execution
+    /// all run on the wired [`AgentLoop<BrowserPlatform>`].
     #[wasm_bindgen]
     pub async fn send_message(text: &str) -> Result<String, JsValue> {
         let rt = RUNTIME
             .get()
             .ok_or_else(|| JsValue::from_str("not initialized — call init() first"))?;
 
-        // Add user message to history.
-        let messages = {
-            let mut msgs = rt
-                .messages
-                .lock()
-                .map_err(|e| JsValue::from_str(&format!("lock error: {e}")))?;
-            msgs.push(ChatMessage::user(text));
-            msgs.clone()
+        let msg = InboundMessage {
+            channel: "web".into(),
+            sender_id: "browser-user".into(),
+            chat_id: "browser".into(),
+            content: text.to_string(),
+            timestamp: chrono::Utc::now(),
+            media: vec![],
+            metadata: std::collections::HashMap::new(),
         };
 
-        let max_tokens = rt.config.agents.defaults.max_tokens;
-
-        let request = ChatRequest {
-            model: rt.model_name.clone(),
-            messages,
-            max_tokens: Some(max_tokens),
-            temperature: Some(rt.config.agents.defaults.temperature),
-            stream: None,
-            tools: vec![],
-        };
-
-        let response = rt
-            .client
-            .complete(&request)
+        let outbound = rt
+            .agent
+            .handle_turn(msg)
             .await
-            .map_err(|e| JsValue::from_str(&format!("LLM error: {e}")))?;
+            .map_err(|e| JsValue::from_str(&format!("agent error: {e}")))?;
 
-        let reply = response
-            .choices
-            .first()
-            .and_then(|c| c.message.content.clone())
-            .unwrap_or_else(|| "No response from model.".to_string());
-
-        // Add assistant reply to history.
-        {
-            let mut msgs = rt
-                .messages
-                .lock()
-                .map_err(|e| JsValue::from_str(&format!("lock error: {e}")))?;
-            msgs.push(ChatMessage::assistant(&reply));
-        }
-
-        Ok(reply)
+        Ok(outbound.content)
     }
 
     /// Set an environment variable on the BrowserPlatform.

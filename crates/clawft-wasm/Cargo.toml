@@ -26,6 +26,7 @@ browser = [
     "dep:web-sys",
     "dep:js-sys",
     "dep:console_error_panic_hook",
+    "dep:chrono",
     "clawft-core/browser",
     "clawft-llm/browser",
     "clawft-tools/browser",

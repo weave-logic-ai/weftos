@@ -277,7 +277,18 @@ pub trait ContextAssembler: Send + Sync {
 pub type StreamCallback = Box<dyn FnMut(&str) -> bool + Send>;
 
 /// Stage 4: Execute the LLM call via HTTP transport.
-#[async_trait]
+///
+/// The `async_trait` `?Send` relaxation is applied for the `browser`
+/// feature so the WASM-resident transport (which wraps `reqwest`'s
+/// `!Send` Fetch-API client) satisfies the trait. Native impls keep
+/// the strict `Send` bound for tokio multi-threaded runtimes.
+///
+/// Streaming (`complete_stream`) is gated to the native build because
+/// the [`StreamCallback`] type is `+ Send`-bounded; once the browser
+/// transport learns SSE under `wasm-streams`/`ReadableStream` a
+/// browser-equivalent will land alongside it.
+#[cfg_attr(not(feature = "browser"), async_trait)]
+#[cfg_attr(feature = "browser", async_trait(?Send))]
 pub trait LlmTransport: Send + Sync {
     /// Send a request to the LLM provider and return the response.
     async fn complete(&self, request: &TransportRequest) -> clawft_types::Result<LlmResponse>;
@@ -286,6 +297,7 @@ pub trait LlmTransport: Send + Sync {
     ///
     /// The default implementation falls back to `complete()` and invokes
     /// the callback once with the full response text.
+    #[cfg(not(feature = "browser"))]
     async fn complete_stream(
         &self,
         request: &TransportRequest,
@@ -541,6 +553,12 @@ impl PipelineRegistry {
     ///
     /// The `callback` receives each text delta as it arrives and should
     /// return `true` to continue or `false` to abort early.
+    ///
+    /// Browser builds skip this method — [`StreamCallback`] requires
+    /// `Send` and the browser's WASM runtime is single-threaded; a
+    /// browser-specific streaming entry will land alongside an
+    /// SSE-via-`ReadableStream` parser in W-BROWSER P3.
+    #[cfg(not(feature = "browser"))]
     pub async fn complete_stream(
         &self,
         request: &ChatRequest,

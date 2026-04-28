@@ -44,7 +44,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio::sync::RwLock;
+use crate::runtime::RwLock;
 use tracing::{debug, warn};
 
 /// Distinctive paragraph from the canonical `SOUL.md` used as the
