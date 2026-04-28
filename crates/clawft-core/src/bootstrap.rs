@@ -500,9 +500,22 @@ fn build_default_transport() -> Arc<OpenAiCompatTransport> {
 ///   [`LlmClient`] via [`ServiceLlmAdapter`](crate::pipeline::service_llm_adapter::ServiceLlmAdapter)
 ///   so the agent loop, the daemon's `llm.prompt` RPC, and the chat
 ///   panel all share one model server.
-/// - `NullRouter` / `NoopGate` defaults (Phase B1/B2). Phase D2 swaps
-///   in the kernel-backed `EffectGate`. The default preserves "behaves
-///   exactly like the spike for the C2 cutover" semantics.
+/// - `NullRouter` default (Phase B1). Phase E1 swaps in
+///   `LlmClassifierRouter`.
+/// - `gate`: caller-supplied [`EffectGate`](crate::agent::gate::EffectGate).
+///   `None` falls back to [`NoopGate`](crate::agent::gate::NoopGate)
+///   (always-permit, Phase B2 default). Phase D2's daemon construction
+///   site passes `Some(KernelEffectGate)` so every tool dispatch in
+///   `agent.chat` gets audited via
+///   `clawft_kernel::GovernanceGate::check`. See `agent-core-v1.md`
+///   Phase D2.
+/// - `agent_id`: caller-supplied daemon agent id used by every
+///   `gate.check` call. `None` keeps the pre-D2 behaviour of
+///   synthesizing `"{channel}:{sender_id}"` from the inbound message.
+///   Phase D2's daemon construction site registers a single concierge
+///   principal in `clawft-kernel::AgentRegistry` at boot and threads
+///   the resulting id through here. v1 chat is single-tenant; per-user
+///   agent ids land in a future phase.
 /// - `sink`: caller-supplied [`ConversationSink`](crate::agent::sink::ConversationSink).
 ///   `None` falls back to the in-memory sink (the C1/C2 default). The
 ///   C3 daemon construction site passes `Some(SubstrateConversationSink)`
@@ -529,6 +542,8 @@ pub async fn build_daemon_agent_loop(
     tools: Arc<ToolRegistry>,
     _identity_loader: Arc<crate::agent::identity::IdentityLoader>,
     workspace: &std::path::Path,
+    agent_id: Option<String>,
+    gate: Option<Arc<dyn crate::agent::gate::EffectGate>>,
     sink: Option<Arc<dyn crate::agent::sink::ConversationSink>>,
     identity_provider: Option<Arc<dyn crate::agent::identity::IdentityProvider>>,
 ) -> Arc<crate::agent::loop_core::AgentLoop<clawft_platform::NativePlatform>> {
@@ -612,8 +627,7 @@ pub async fn build_daemon_agent_loop(
     );
     // C3 attaches the caller's sink (substrate-backed at the daemon
     // construction site; falls back to the in-memory default for CLI
-    // / non-substrate callers). D2 still wires a kernel-backed gate
-    // via `.with_gate(...)` at the construction site, not here.
+    // / non-substrate callers).
     if let Some(s) = sink {
         agent = agent.with_sink(s);
     }
@@ -627,6 +641,21 @@ pub async fn build_daemon_agent_loop(
             workspace.to_path_buf(),
         ));
         agent = agent.with_system_prompt_builder(builder);
+    }
+    // D2 attaches the kernel-backed gate. When `None`, AgentLoop's
+    // `NoopGate` default keeps behaviour identical to the pre-D2
+    // path so CLI / test callers see no change. The daemon
+    // construction site passes `Some(KernelEffectGate)` so every
+    // tool dispatch hits `GovernanceGate::check`.
+    if let Some(g) = gate {
+        agent = agent.with_gate(g);
+    }
+    // D2 also threads through the daemon-supplied concierge agent
+    // id used by every `gate.check`. Without this, the loop falls
+    // back to the per-message `"{channel}:{sender_id}"` synthesis
+    // (the CLI / test path).
+    if let Some(id) = agent_id {
+        agent = agent.with_daemon_agent_id(id);
     }
     Arc::new(agent)
 }

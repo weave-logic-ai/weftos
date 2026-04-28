@@ -1065,12 +1065,24 @@ impl<P: Platform> AgentLoop<P> {
                 let action = format!("tool.{name}");
                 let decision = self.gate.check(agent_id, &action, &ev).await;
                 let blocked = match decision {
+                    // Phase D2: Permit currently discards the kernel
+                    // token. The plan calls out "optionally pass the
+                    // token to tools.execute" as a follow-up — that
+                    // requires a tool-side proof-of-permission API
+                    // the registry doesn't yet expose. Tracked for
+                    // v1.1.
                     GateDecision::Permit { .. } => None,
                     GateDecision::Deny { reason } => {
                         warn!(tool = %name, reason = %reason, "gate: tool dispatch denied");
+                        // Phase D2: structured tool-result shape so
+                        // the LLM can distinguish a policy decision
+                        // from a runtime failure (which keeps the
+                        // legacy `{"error": ...}` envelope below for
+                        // sandbox + tool execution faults).
                         Some(
                             serde_json::json!({
-                                "error": format!("gate denied: {reason}")
+                                "denied": true,
+                                "reason": reason,
                             })
                             .to_string(),
                         )
@@ -1082,7 +1094,8 @@ impl<P: Platform> AgentLoop<P> {
                         // defer (panel UI prompt) is a v1.1 follow-up.
                         Some(
                             serde_json::json!({
-                                "error": format!("gate deferred: {reason}")
+                                "deferred": true,
+                                "reason": reason,
                             })
                             .to_string(),
                         )
@@ -2768,9 +2781,9 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
-    // ── agent-core-v1 Phase D1: identity-aware system prompt ────────
+    // ── agent-core-v1 Phase D1 + D2 helpers ─────────────────────────
 
-    /// In-memory [`IdentityProvider`] for the system-prompt test.
+    /// In-memory [`IdentityProvider`] for the D1 system-prompt tests.
     struct StubIdentityProvider {
         soul: String,
         identity: String,
@@ -2796,11 +2809,126 @@ mod tests {
         }
     }
 
+    /// D2 stub gate that always returns the configured decision and
+    /// records every `(agent_id, action)` it observed. Used to assert
+    /// (a) Defer/Deny short-circuits the tool dispatch with the
+    /// structured tool-result shape, and (b) `with_daemon_agent_id`
+    /// overrides the synthesized fallback.
+    struct StubGate {
+        decision: super::super::gate::GateDecision,
+        seen: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    impl StubGate {
+        fn defer(reason: &str) -> Self {
+            Self {
+                decision: super::super::gate::GateDecision::Defer {
+                    reason: reason.into(),
+                },
+                seen: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+        fn deny(reason: &str) -> Self {
+            Self {
+                decision: super::super::gate::GateDecision::Deny {
+                    reason: reason.into(),
+                },
+                seen: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+        fn agent_ids(&self) -> Vec<String> {
+            self.seen
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(a, _)| a.clone())
+                .collect()
+        }
+    }
+
+    #[async_trait]
+    impl super::super::gate::EffectGate for StubGate {
+        async fn check(
+            &self,
+            agent_id: &str,
+            action: &str,
+            _effect: &super::super::effects::EffectVector,
+        ) -> super::super::gate::GateDecision {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((agent_id.into(), action.into()));
+            self.decision.clone()
+        }
+    }
+
+    /// D2 transport that drives one `echo` tool-use turn followed by a
+    /// final-text turn. The second turn echoes back the tool-result
+    /// message body (last `LlmMessage::content`) so the test can
+    /// inspect what the loop fed the LLM after the gate decision.
+    struct GateProbeTransport {
+        call_count: std::sync::atomic::AtomicUsize,
+    }
+
+    impl GateProbeTransport {
+        fn new() -> Self {
+            Self {
+                call_count: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmTransport for GateProbeTransport {
+        async fn complete(
+            &self,
+            request: &TransportRequest,
+        ) -> clawft_types::Result<LlmResponse> {
+            let count = self
+                .call_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if count == 0 {
+                Ok(LlmResponse {
+                    id: "gate-probe-tool".into(),
+                    content: vec![ContentBlock::ToolUse {
+                        id: "call-d2".into(),
+                        name: "echo".into(),
+                        input: serde_json::json!({"text": "blocked?"}),
+                    }],
+                    stop_reason: StopReason::ToolUse,
+                    usage: Usage {
+                        input_tokens: 10,
+                        output_tokens: 5,
+                        total_tokens: 0,
+                    },
+                    metadata: HashMap::new(),
+                })
+            } else {
+                let echoed = request
+                    .messages
+                    .last()
+                    .map(|m| m.content.clone())
+                    .unwrap_or_default();
+                Ok(LlmResponse {
+                    id: "gate-probe-final".into(),
+                    content: vec![ContentBlock::Text { text: echoed }],
+                    stop_reason: StopReason::EndTurn,
+                    usage: Usage {
+                        input_tokens: 20,
+                        output_tokens: 8,
+                        total_tokens: 0,
+                    },
+                    metadata: HashMap::new(),
+                })
+            }
+        }
+    }
+
+    // ── D1 tests ────────────────────────────────────────────────────
+
     /// D1: when a `SystemPromptBuilder` is attached, `handle_turn`
     /// must prepend the identity-aware system message to the message
-    /// list passed to the transport. Verified by recording the
-    /// transport's incoming messages and asserting the leading entry
-    /// carries the SOUL/IDENTITY content + binding-thread status.
+    /// list passed to the transport.
     #[tokio::test]
     async fn handle_turn_prepends_identity_system_prompt() {
         use crate::agent::identity::{IdentityProvider, BINDING_THREAD_EXCERPT};
@@ -2823,8 +2951,6 @@ mod tests {
         let builder = Arc::new(SystemPromptBuilder::new(provider, workspace.clone()));
         agent = agent.with_system_prompt_builder(builder);
 
-        // Use the echo tool so the loop runs the multi-call path; the
-        // first transport invocation captures the system prompt.
         let inbound = InboundMessage {
             channel: "test".into(),
             sender_id: "user1".into(),
@@ -2881,9 +3007,130 @@ mod tests {
         let snapshots = transport.snapshots();
         assert!(!snapshots.is_empty());
         let leading = &snapshots[0][0];
-        // No identity prompt means the leading message must NOT
-        // contain the D1 marker.
         assert!(!leading.content.contains("[binding-thread-status]"));
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    // ── D2 tests ────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn gate_defer_emits_structured_tool_result() {
+        let transport = Arc::new(GateProbeTransport::new());
+        let (mut agent, dir) = make_agent_loop(transport, "gate_defer").await;
+        let gate = Arc::new(StubGate::defer("policy review pending"));
+        agent = agent.with_gate(gate.clone());
+
+        let inbound = InboundMessage {
+            channel: "test".into(),
+            sender_id: "u".into(),
+            chat_id: "conv-defer".into(),
+            content: "trigger tool".into(),
+            timestamp: chrono::Utc::now(),
+            media: vec![],
+            metadata: HashMap::new(),
+        };
+        agent.bus.publish_inbound(inbound).unwrap();
+        let msg = agent.bus.consume_inbound().await.unwrap();
+        let outbound = agent.handle_turn(msg).await.unwrap();
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&outbound.content).expect("gate result is JSON");
+        assert_eq!(parsed["deferred"], serde_json::json!(true));
+        assert_eq!(parsed["reason"], serde_json::json!("policy review pending"));
+        assert!(
+            parsed.get("error").is_none(),
+            "Defer must use the structured `deferred` shape, not the legacy error envelope"
+        );
+        assert_eq!(gate.agent_ids().len(), 1);
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn gate_deny_emits_structured_tool_result() {
+        let transport = Arc::new(GateProbeTransport::new());
+        let (mut agent, dir) = make_agent_loop(transport, "gate_deny").await;
+        let gate = Arc::new(StubGate::deny("write blocked by policy"));
+        agent = agent.with_gate(gate);
+
+        let inbound = InboundMessage {
+            channel: "test".into(),
+            sender_id: "u".into(),
+            chat_id: "conv-deny".into(),
+            content: "trigger tool".into(),
+            timestamp: chrono::Utc::now(),
+            media: vec![],
+            metadata: HashMap::new(),
+        };
+        agent.bus.publish_inbound(inbound).unwrap();
+        let msg = agent.bus.consume_inbound().await.unwrap();
+        let outbound = agent.handle_turn(msg).await.unwrap();
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&outbound.content).expect("gate result is JSON");
+        assert_eq!(parsed["denied"], serde_json::json!(true));
+        assert_eq!(parsed["reason"], serde_json::json!("write blocked by policy"));
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn daemon_agent_id_overrides_synthesized_fallback() {
+        let transport = Arc::new(GateProbeTransport::new());
+        let (mut agent, dir) = make_agent_loop(transport, "daemon_id").await;
+        let gate = Arc::new(StubGate::defer("anything"));
+        agent = agent
+            .with_gate(gate.clone())
+            .with_daemon_agent_id("concierge-bot/uuid".into());
+
+        let inbound = InboundMessage {
+            channel: "test".into(),
+            sender_id: "u".into(),
+            chat_id: "conv-daemon-id".into(),
+            content: "trigger".into(),
+            timestamp: chrono::Utc::now(),
+            media: vec![],
+            metadata: HashMap::new(),
+        };
+        agent.bus.publish_inbound(inbound).unwrap();
+        let msg = agent.bus.consume_inbound().await.unwrap();
+        let _outbound = agent.handle_turn(msg).await.unwrap();
+
+        let ids = gate.agent_ids();
+        assert!(!ids.is_empty(), "gate must have been invoked");
+        for id in ids {
+            assert_eq!(id, "concierge-bot/uuid");
+        }
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn synthesized_agent_id_remains_when_daemon_id_unset() {
+        let transport = Arc::new(GateProbeTransport::new());
+        let (mut agent, dir) = make_agent_loop(transport, "synth_id").await;
+        let gate = Arc::new(StubGate::defer("ignored"));
+        agent = agent.with_gate(gate.clone());
+
+        let inbound = InboundMessage {
+            channel: "cli".into(),
+            sender_id: "local-user".into(),
+            chat_id: "conv-synth".into(),
+            content: "hi".into(),
+            timestamp: chrono::Utc::now(),
+            media: vec![],
+            metadata: HashMap::new(),
+        };
+        agent.bus.publish_inbound(inbound).unwrap();
+        let msg = agent.bus.consume_inbound().await.unwrap();
+        let _outbound = agent.handle_turn(msg).await.unwrap();
+
+        let ids = gate.agent_ids();
+        assert!(!ids.is_empty(), "gate must have been invoked");
+        for id in ids {
+            assert_eq!(id, "cli:local-user");
+        }
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
