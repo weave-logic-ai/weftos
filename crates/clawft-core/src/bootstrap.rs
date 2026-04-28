@@ -557,6 +557,7 @@ pub async fn build_daemon_agent_loop(
     gate: Option<Arc<dyn crate::agent::gate::EffectGate>>,
     sink: Option<Arc<dyn crate::agent::sink::ConversationSink>>,
     identity_provider: Option<Arc<dyn crate::agent::identity::IdentityProvider>>,
+    routing: Option<&clawft_types::routing::RoutingConfig>,
 ) -> Arc<crate::agent::loop_core::AgentLoop<clawft_platform::NativePlatform>> {
     use clawft_platform::NativePlatform;
 
@@ -566,10 +567,17 @@ pub async fn build_daemon_agent_loop(
     // Daemon-side config: pull a Config::default() and stamp the
     // workspace path. The agent.chat wire params override
     // temperature/max_tokens per turn, so the defaults here only
-    // matter for fields the wire doesn't carry (e.g. permission
-    // resolver baselines).
+    // matter for fields the wire doesn't carry. The exception is
+    // `routing` — the resolver's `channel_overrides` MUST reflect the
+    // operator's loaded permissions, not Config::default() (which
+    // would force every non-CLI channel to zero_trust). Callers pass
+    // their loaded `RoutingConfig` via the `routing` parameter; if
+    // `None`, we fall back to defaults (test/dev path only).
     let mut config = Config::default();
     config.agents.defaults.workspace = workspace.display().to_string();
+    if let Some(r) = routing {
+        config.routing = r.clone();
+    }
 
     let platform = Arc::new(NativePlatform::new());
 
@@ -622,6 +630,14 @@ pub async fn build_daemon_agent_loop(
         learner,
     });
 
+    // TODO(v1.1): split workspace from global at the loader layer so
+    // we can pass them to `PermissionResolver::new(global, Some(workspace))`
+    // and let `enforce_workspace_ceiling` clamp workspace permissions
+    // against system-wide bounds. Today the workspace overlay is
+    // deep-merged into `config.routing` upstream in
+    // `config_loader::load_config_raw`, so workspace policy reaches
+    // the resolver but the security ceiling pattern is bypassed. Fine
+    // for single-user kernels; needed for multi-tenant.
     let resolver = crate::pipeline::permissions::PermissionResolver::new(
         &config.routing,
         None,

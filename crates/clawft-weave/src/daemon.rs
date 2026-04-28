@@ -316,6 +316,13 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     // in `clawft-types::routing`.
     let context_router_choice = config.routing.context_router.clone();
 
+    // Snapshot the loaded `RoutingConfig` before `config` moves into
+    // `Kernel::boot`. The agent service later threads this into
+    // `build_daemon_agent_loop` so the resolver's `channel_overrides`
+    // reflect the operator's loaded permissions instead of
+    // `Config::default()`'s empty defaults.
+    let agent_routing = config.routing.clone();
+
     // Boot kernel
     let platform = NativePlatform::new();
     let kernel = Kernel::boot(config, kernel_config, Arc::new(platform)).await?;
@@ -922,6 +929,11 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
             Some(chat_gate),
             Some(agent_sink),
             Some(identity_provider),
+            // The loaded RoutingConfig — without this, the resolver's
+            // `channel_overrides` is empty and every chat principal
+            // hits the zero_trust fallback regardless of what the
+            // workspace/home `.clawft/config.json` says.
+            Some(&agent_routing),
         )
         .await;
 
