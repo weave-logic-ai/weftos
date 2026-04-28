@@ -43,6 +43,11 @@
 
 pub mod protocol;
 pub mod service;
+pub mod substrate_sink;
 
 pub use protocol::{AgentChatMessage, AgentChatParams, AgentChatResult, AgentChatToolCall};
 pub use service::{AgentLoopHandle, AgentService, AgentServiceError};
+pub use substrate_sink::{
+    AudioRef, HEARTBEAT_PERIOD, KernelSubstrateClient, SubstrateClient, SubstrateConversationSink,
+    TurnContent, TurnContentPart,
+};

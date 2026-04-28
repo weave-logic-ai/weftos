@@ -582,11 +582,29 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         );
         let tool_registry = Arc::new(tool_registry);
 
+        // agent-core-v1 Phase C3: wire the substrate-backed
+        // `ConversationSink` so per-turn JSONL lands at
+        // `substrate/_derived/chat/<conv>/turns/<ulid>` and the
+        // per-conv heartbeat publishes
+        // `substrate/_derived/chat/<conv>/status`. The `chat`
+        // derived-write grant issued at boot covers both paths.
+        let agent_sink: Arc<dyn clawft_core::agent::sink::ConversationSink> = {
+            let k = kernel.read().await;
+            let substrate = k.substrate_service().clone();
+            let node_registry = k.node_registry().clone();
+            Arc::new(clawft_service_agent::SubstrateConversationSink::new(
+                substrate,
+                node_registry,
+                daemon_identity.node_id.clone(),
+            ))
+        };
+
         let agent_loop = clawft_core::bootstrap::build_daemon_agent_loop(
             llm_for_agent,
             tool_registry,
             identity_loader,
             &workspace,
+            Some(agent_sink),
         )
         .await;
 
