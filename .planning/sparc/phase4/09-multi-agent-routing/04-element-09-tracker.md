@@ -1,7 +1,24 @@
 # Element 09: Multi-Agent Routing & Claude Flow Integration - Sprint Tracker
 **Workstreams**: L (Multi-Agent Routing), M (Claude Flow Integration)
 **Timeline**: Weeks 3-9
-**Status**: Complete (14/14 items done, 100%)
+**Status**: Type-surface shipped; runtime work carried forward to 0.7.0 release wave (M4)
+
+> **Correctness note (2026-04-28, WEFT-202)**: an earlier version of this
+> tracker reported "Complete (14/14, 100%)". The 0.7.0 release-gate audit
+> (`.planning/reviews/0.7.0-release-gate/07-multi-agent-routing.md`) found
+> that several items shipped only at type / scaffolding level. The honest
+> status is:
+>
+> | Item | Reality | Carry-forward |
+> |------|---------|---------------|
+> | M1 — `FlowDelegator` | **Not implemented**: `flow.rs` was never created; `flow_available` removed; `Flow` collapses to `Claude` | WEFT-179 |
+> | M3 — recursion guard | `MAX_DELEGATION_DEPTH = 3` + `CLAWFT_DELEGATION_DEPTH` never threaded | WEFT-180 |
+> | L1 — AgentRouter wiring | Router stored on `AgentContext` but `MessageBus` / `AgentLoop` never call `route()` | WEFT-178 |
+> | M4 — McpServerManager | `remove_server` is a flag-flip; no in-flight `AtomicU32`, no drain wait, no transport drop | WEFT-182 |
+> | M5 — McpBridge | `initialize()` is a state-machine setter; no `claude mcp serve` spawn / handshake / `tools/list`; `call_claude_tool_with_depth` does not exist | WEFT-181 |
+> | L4 — PlanningRouter | `check_guard_rails` / `explain_termination` shipped; `execute_react` / `execute_plan_and_execute` are `todo!()` | WEFT-183 |
+>
+> See `.planning/development_notes/09-multi-agent-routing/phase-{M-foundation,L-routing,M-advanced}/decisions.md` for the recorded rationale on each.
 
 ---
 
