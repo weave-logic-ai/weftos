@@ -31,15 +31,14 @@
 //! real implementation and the composer stops dispatching verbs the
 //! gate would have denied.
 
-use std::cell::RefCell;
-
 use clawft_surface::eval::{eval_binding, Value};
 use clawft_surface::substrate::OntologySnapshot;
 use clawft_surface::tree::{AffordanceDecl, AttrValue, IdentityIri, SurfaceNode, SurfaceTree};
 
 use crate::canon::{
-    pressable::PressableStyle, CanonResponse, CanonWidget, CellSize, Chip, ChipTone, Gauge, Grid,
-    Pressable, Stack, StackAxis, StreamView, Strip, StripAxis, Table, TableColumn,
+    pressable::PressableStyle, CanonResponse, CanonWidget, CellSize, Chip, ChipTone, Field,
+    FieldKind, FieldValue, Gauge, Grid, Pressable, Sheet, Slider, Stack, StackAxis, StreamView,
+    Strip, StripAxis, Table, TableColumn, Tabs, Toggle,
 };
 
 /// A verb activation picked up by the composer during a frame. The
@@ -76,13 +75,47 @@ pub struct ComposeOutcome {
     pub dispatches: Vec<PendingDispatch>,
 }
 
-/// Internal call frame — every recursive `render_*` takes these
+/// Internal call frame — every recursive `render_*` takes this
 /// together so affordance-emitting primitives can push dispatches
 /// alongside their CanonResponse without plumbing a second argument
 /// through every signature.
+///
+/// **WEFT-249**: Uses `&mut Vec` rather than `RefCell<Vec>` so the
+/// borrow checker statically rejects re-entrant pushes during a
+/// child render. The previous shape was a deadlock-class bug — a
+/// container's `body` callback could trigger a nested
+/// `render_node` that would itself try to `borrow_mut` the same
+/// `RefCell`, panicking on overlap. The cell-based shape worked
+/// only because no caller ever held the borrow across a
+/// `render_node` call; this invariant is now compiler-enforced.
+///
+/// Containers that pass an `&mut egui::Ui` body callback into a
+/// canon widget (`Stack`, `Strip`, `Grid`) cannot put a
+/// `&mut Frame` directly inside the callback because the callback
+/// is `'static` against the frame's lifetime. We work around that
+/// by collecting a per-container child outcome (responses +
+/// dispatches) inside the closure and merging it back into the
+/// parent frame after the closure returns. See `render_stack` /
+/// `render_strip` / `render_grid` for the merge sites.
 struct Frame<'a> {
-    responses: &'a RefCell<Vec<CanonResponse>>,
-    dispatches: &'a RefCell<Vec<PendingDispatch>>,
+    responses: &'a mut Vec<CanonResponse>,
+    dispatches: &'a mut Vec<PendingDispatch>,
+}
+
+impl<'a> Frame<'a> {
+    fn push_response(&mut self, r: CanonResponse) {
+        self.responses.push(r);
+    }
+    fn push_dispatch(&mut self, d: PendingDispatch) {
+        self.dispatches.push(d);
+    }
+    /// Drain a child outcome into this frame. Used by container
+    /// renderers whose body closure captured a child frame in its
+    /// own buffers.
+    fn merge(&mut self, mut child: ComposeOutcome) {
+        self.responses.append(&mut child.responses);
+        self.dispatches.append(&mut child.dispatches);
+    }
 }
 
 /// Main entry point. Walks `tree.root` and drives primitives. Returns
@@ -93,24 +126,45 @@ pub fn compose(
     snapshot: &OntologySnapshot,
     ui: &mut egui::Ui,
 ) -> ComposeOutcome {
-    let responses = RefCell::new(Vec::new());
-    let dispatches = RefCell::new(Vec::new());
-    let frame = Frame {
-        responses: &responses,
-        dispatches: &dispatches,
+    let mut responses: Vec<CanonResponse> = Vec::new();
+    let mut dispatches: Vec<PendingDispatch> = Vec::new();
+    let mut frame = Frame {
+        responses: &mut responses,
+        dispatches: &mut dispatches,
     };
-    render_node(&tree.root, snapshot, ui, &frame);
+    // Debug-only re-entrancy guard. The `&mut Vec` shape already
+    // makes re-entrant `compose` calls a compile error, but we still
+    // want a runtime assertion if the egui body closure loop ever
+    // tries to recurse through `compose` itself rather than
+    // `render_node`. The guard fires only in debug builds.
+    debug_assert!(
+        !COMPOSE_REENTRANCY_GUARD.with(|c| c.get()),
+        "compose() called re-entrantly — see WEFT-249"
+    );
+    COMPOSE_REENTRANCY_GUARD.with(|c| c.set(true));
+    render_node(&tree.root, snapshot, ui, &mut frame);
+    COMPOSE_REENTRANCY_GUARD.with(|c| c.set(false));
     ComposeOutcome {
-        responses: responses.into_inner(),
-        dispatches: dispatches.into_inner(),
+        responses,
+        dispatches,
     }
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    static COMPOSE_REENTRANCY_GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(not(debug_assertions))]
+thread_local! {
+    static COMPOSE_REENTRANCY_GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn render_node(
     node: &SurfaceNode,
     snap: &OntologySnapshot,
     ui: &mut egui::Ui,
-    frame: &Frame<'_>,
+    frame: &mut Frame<'_>,
 ) {
     // Conditional rendering (ADR-016 §6).
     if let Some(when) = &node.when {
@@ -141,6 +195,24 @@ fn render_node(
         IdentityIri::StreamView => render_stream_view(node, snap, ui, frame),
         IdentityIri::Heatmap => render_heatmap(node, snap, ui, frame),
         IdentityIri::Waveform => render_waveform(node, snap, ui, frame),
+        // WEFT-244: ui://field — text/number/choice input.
+        IdentityIri::Field => render_field(node, snap, ui, frame),
+        // WEFT-245: the 10 remaining canon IRIs.
+        IdentityIri::Toggle => render_toggle(node, snap, ui, frame),
+        IdentityIri::Select => render_select(node, snap, ui, frame),
+        IdentityIri::Slider => render_slider(node, snap, ui, frame),
+        IdentityIri::Sheet => render_sheet(node, snap, ui, frame),
+        IdentityIri::Modal => render_modal(node, snap, ui, frame),
+        IdentityIri::Dock => render_dock(node, snap, ui, frame),
+        IdentityIri::Tabs => render_tabs(node, snap, ui, frame),
+        // ui://tree (canon "list") — hierarchical disclosure.
+        IdentityIri::Tree => render_tree(node, snap, ui, frame),
+        // Plot ≈ canon "menu" placement (ADR-016 §4 — readonly view
+        // primitive with a small affordance strip). Plot is also the
+        // closest canon to the requested `menu` IRI; expose both so
+        // surfaces declaring `ui://plot` render rather than
+        // fall-through to the TODO label.
+        IdentityIri::Plot => render_plot(node, snap, ui, frame),
         other => render_todo(other, &node.path, ui),
     }
 }
@@ -151,7 +223,7 @@ fn render_stack(
     node: &SurfaceNode,
     snap: &OntologySnapshot,
     ui: &mut egui::Ui,
-    frame: &Frame<'_>,
+    frame: &mut Frame<'_>,
 ) {
     let axis = attr_str(node, "axis")
         .and_then(|s| match s {
@@ -163,23 +235,33 @@ fn render_stack(
     let wrap = attr_bool(node, "wrap").unwrap_or(false);
     let children = &node.children;
 
-    let stack = Stack::new(&node.path)
-        .axis(axis)
-        .wrap(wrap)
-        .body(|ui: &mut egui::Ui| {
-            for child in children {
-                render_node(child, snap, ui, frame);
+    // Container body buffers — live for the duration of the closure
+    // and are merged into the parent frame after the widget returns.
+    // WEFT-249: the explicit pre/post structure means there is no
+    // re-entrant access to the parent frame's buffers.
+    let mut child = ComposeOutcome::default();
+
+    let stack = Stack::new(&node.path).axis(axis).wrap(wrap).body(
+        |ui: &mut egui::Ui| {
+            let mut child_frame = Frame {
+                responses: &mut child.responses,
+                dispatches: &mut child.dispatches,
+            };
+            for c in children {
+                render_node(c, snap, ui, &mut child_frame);
             }
-        });
+        },
+    );
     let resp = stack.show(ui);
-    frame.responses.borrow_mut().push(resp);
+    frame.merge(child);
+    frame.push_response(resp);
 }
 
 fn render_strip(
     node: &SurfaceNode,
     snap: &OntologySnapshot,
     ui: &mut egui::Ui,
-    frame: &Frame<'_>,
+    frame: &mut Frame<'_>,
 ) {
     let axis = attr_str(node, "axis")
         .and_then(|s| match s {
@@ -192,25 +274,31 @@ fn render_strip(
     let cells: Vec<CellSize> = (0..node.children.len()).map(|_| CellSize::Remainder).collect();
     let children = &node.children;
 
-    let strip = Strip::new(&node.path)
-        .axis(axis)
-        .cells(cells)
-        .body(|strip: &mut egui_extras::Strip<'_, '_>| {
-            for child in children {
+    let mut child = ComposeOutcome::default();
+
+    let strip = Strip::new(&node.path).axis(axis).cells(cells).body(
+        |strip: &mut egui_extras::Strip<'_, '_>| {
+            let mut child_frame = Frame {
+                responses: &mut child.responses,
+                dispatches: &mut child.dispatches,
+            };
+            for c in children {
                 strip.cell(|ui| {
-                    render_node(child, snap, ui, frame);
+                    render_node(c, snap, ui, &mut child_frame);
                 });
             }
-        });
+        },
+    );
     let resp = strip.show(ui);
-    frame.responses.borrow_mut().push(resp);
+    frame.merge(child);
+    frame.push_response(resp);
 }
 
 fn render_grid(
     node: &SurfaceNode,
     snap: &OntologySnapshot,
     ui: &mut egui::Ui,
-    frame: &Frame<'_>,
+    frame: &mut Frame<'_>,
 ) {
     let columns = attr_int(node, "columns").unwrap_or(1).max(1) as usize;
     let children = &node.children;
@@ -219,12 +307,17 @@ fn render_grid(
     // partitioned quadrants rather than a stream of orphan widgets.
     // M1.5.1a polish — the fixture is a 2×2 layout that was visually
     // collapsing in narrow webviews.
+    let mut child = ComposeOutcome::default();
     let grid = Grid::new(&node.path, columns, |ui: &mut egui::Ui| {
-        for (i, child) in children.iter().enumerate() {
+        let mut child_frame = Frame {
+            responses: &mut child.responses,
+            dispatches: &mut child.dispatches,
+        };
+        for (i, c) in children.iter().enumerate() {
             egui::Frame::group(ui.style())
                 .inner_margin(egui::Margin::same(8))
                 .show(ui, |ui| {
-                    render_node(child, snap, ui, frame);
+                    render_node(c, snap, ui, &mut child_frame);
                 });
             if (i + 1) % columns == 0 {
                 ui.end_row();
@@ -232,7 +325,8 @@ fn render_grid(
         }
     });
     let resp = grid.show(ui);
-    frame.responses.borrow_mut().push(resp);
+    frame.merge(child);
+    frame.push_response(resp);
 }
 
 // ── Leaves ─────────────────────────────────────────────────────────
@@ -241,7 +335,7 @@ fn render_chip(
     node: &SurfaceNode,
     snap: &OntologySnapshot,
     ui: &mut egui::Ui,
-    frame: &Frame<'_>,
+    frame: &mut Frame<'_>,
 ) {
     let label = bound_string(node, "label", snap).unwrap_or_else(|| node.path.clone());
     let tone = bound_string(node, "tone", snap)
@@ -253,24 +347,19 @@ fn render_chip(
         chip = chip.activatable(true);
     }
     let resp = chip.show(ui);
-    // If the chip was activated this frame and the node declares a
-    // non-built-in affordance (e.g. `activate` mapped to a real RPC
-    // verb), dispatch it. The admin fixture doesn't declare chip
-    // affordances today, but this keeps the path alive for any future
-    // surface that binds a chip to a verb.
     if resp.inner.clicked()
         && let Some(dispatch) = build_dispatch(node, None)
     {
-        frame.dispatches.borrow_mut().push(dispatch);
+        frame.push_dispatch(dispatch);
     }
-    frame.responses.borrow_mut().push(resp);
+    frame.push_response(resp);
 }
 
 fn render_pressable(
     node: &SurfaceNode,
     snap: &OntologySnapshot,
     ui: &mut egui::Ui,
-    frame: &Frame<'_>,
+    frame: &mut Frame<'_>,
 ) {
     let label = bound_string(node, "label", snap).unwrap_or_else(|| node.path.clone());
     let style = attr_str(node, "style")
@@ -289,16 +378,16 @@ fn render_pressable(
     if resp.inner.clicked()
         && let Some(dispatch) = build_dispatch(node, None)
     {
-        frame.dispatches.borrow_mut().push(dispatch);
+        frame.push_dispatch(dispatch);
     }
-    frame.responses.borrow_mut().push(resp);
+    frame.push_response(resp);
 }
 
 fn render_gauge(
     node: &SurfaceNode,
     snap: &OntologySnapshot,
     ui: &mut egui::Ui,
-    frame: &Frame<'_>,
+    frame: &mut Frame<'_>,
 ) {
     let value = bound_value(node, "value", snap).and_then(|v| v.as_f64()).unwrap_or(0.0);
     let lo = attr_number(node, "min").unwrap_or(0.0);
@@ -310,18 +399,17 @@ fn render_gauge(
         g = g.label(l);
     }
     let resp = g.show(ui);
-    frame.responses.borrow_mut().push(resp);
+    frame.push_response(resp);
 
     // If the node declares affordances, render a small action strip
-    // underneath the gauge. Gauges themselves are read-only (the canon
-    // `ui://gauge` has an empty AFFORDANCES list) so the composer adds
-    // explicit action buttons per affordance declaration — this reads
-    // better than pretending a progress bar is clickable.
+    // underneath the gauge. Per-affordance click → dispatch is
+    // collected in a local Vec inside the closure (egui's
+    // `ui.horizontal` body cannot borrow `&mut frame`) and merged
+    // afterward. WEFT-249.
     if !node.affordances.is_empty() {
+        let mut local: Vec<PendingDispatch> = Vec::new();
         ui.horizontal(|ui| {
             for aff in &node.affordances {
-                // Pretty label: use the declared affordance name
-                // capitalised. `kill` → `Kill`, `restart` → `Restart`.
                 let label = prettify(&aff.name);
                 if ui
                     .small_button(format!("↻ {label}"))
@@ -329,10 +417,13 @@ fn render_gauge(
                     .clicked()
                     && let Some(dispatch) = build_dispatch(node, Some(aff))
                 {
-                    frame.dispatches.borrow_mut().push(dispatch);
+                    local.push(dispatch);
                 }
             }
         });
+        for d in local {
+            frame.push_dispatch(d);
+        }
     }
 }
 
@@ -340,29 +431,26 @@ fn render_stream_view(
     node: &SurfaceNode,
     snap: &OntologySnapshot,
     ui: &mut egui::Ui,
-    frame: &Frame<'_>,
+    frame: &mut Frame<'_>,
 ) {
     let lines: Vec<String> = bound_value(node, "stream", snap)
         .and_then(|v| v.as_list())
         .map(|xs| xs.into_iter().map(|v| v.to_display_string()).collect())
         .unwrap_or_default();
 
-    // Clamp the stream-view to the current ui's available width so a
-    // long log line can't push the parent container off-screen. The
-    // underlying `StreamView` widget doesn't impose a width cap.
     let width = ui.available_width();
     let sv = StreamView::new(&node.path)
         .lines(&lines)
         .desired_width(width)
         .variant(0);
-    frame.responses.borrow_mut().push(sv.show(ui));
+    frame.push_response(sv.show(ui));
 }
 
 fn render_table(
     node: &SurfaceNode,
     snap: &OntologySnapshot,
     ui: &mut egui::Ui,
-    frame: &Frame<'_>,
+    frame: &mut Frame<'_>,
 ) {
     let columns: Vec<TableColumn> = node
         .attrs
@@ -384,9 +472,11 @@ fn render_table(
     // Row-click state is collected via the first cell of each row as a
     // selectable label. The primary cell is whichever column contains
     // the primary key (`pid` for kernel.ps, typically first column).
-    // We capture the click index inside the render closure via a
-    // RefCell so the row dispatch logic can read it after show.
-    let clicked_row: RefCell<Option<usize>> = RefCell::new(None);
+    // `Cell<Option<usize>>` rather than `RefCell` — we only ever
+    // overwrite the slot, never observe through a borrow that
+    // outlives an inner write. Keeps the re-entrancy story trivial.
+    // WEFT-249.
+    let clicked_row: std::cell::Cell<Option<usize>> = std::cell::Cell::new(None);
 
     let t = Table::new(&node.path, &columns)
         .rows(row_count)
@@ -401,7 +491,7 @@ fn render_table(
                             // First column is the click target when
                             // the table declares row-level affordances.
                             if ui.selectable_label(false, text).clicked() {
-                                *clicked_row.borrow_mut() = Some(idx);
+                                clicked_row.set(Some(idx));
                             }
                         } else {
                             ui.label(text);
@@ -411,19 +501,19 @@ fn render_table(
             }
         });
     let (resp, _outcome) = t.show_with_outcome(ui);
-    frame.responses.borrow_mut().push(resp);
+    frame.push_response(resp);
 
     // If a row was clicked and the node has a row-level affordance,
     // extract the row's `pid` (or the first column's value if there's
     // no `pid` field) and dispatch. The params shape is per-verb — for
     // `kernel.kill-process` the daemon expects `{"pid": u64}`.
-    if let Some(idx) = *clicked_row.borrow()
+    if let Some(idx) = clicked_row.get()
         && let Some(aff) = node.affordances.first()
         && let Some(row_val) = rows.get(idx)
     {
         let params = row_params_for(&aff.verb, row_val);
         let verb = strip_rpc_prefix(&aff.verb);
-        frame.dispatches.borrow_mut().push(PendingDispatch {
+        frame.push_dispatch(PendingDispatch {
             source_path: node.path.clone(),
             affordance: aff.name.clone(),
             verb,
@@ -452,7 +542,7 @@ fn render_heatmap(
     node: &SurfaceNode,
     snap: &OntologySnapshot,
     ui: &mut egui::Ui,
-    _frame: &Frame<'_>,
+    _frame: &mut Frame<'_>,
 ) {
     // Frame-object form: `values = "$substrate/sensor/tof"` resolves
     // to a `Value::Json(...)` holding the whole frame object. We also
@@ -577,7 +667,7 @@ fn render_waveform(
     node: &SurfaceNode,
     snap: &OntologySnapshot,
     ui: &mut egui::Ui,
-    _frame: &Frame<'_>,
+    _frame: &mut Frame<'_>,
 ) {
     let samples: Vec<f64> = bound_value(node, "samples", snap)
         .and_then(|v| v.as_list())
@@ -676,6 +766,440 @@ fn heatmap_color(mm: u16, min: u16, max: u16) -> egui::Color32 {
         }
     }
     egui::Color32::from_rgb(220, 70, 60)
+}
+
+// ── M4-C extra IRI handlers ─────────────────────────────────────────
+//
+// WEFT-244 (`ui://field`) + WEFT-245 (the 10 remaining canon IRIs).
+//
+// Inputs (Field, Toggle, Select, Slider) read their initial value
+// from the bound substrate path (or an `attrs` default), then keep
+// the in-frame mutable copy in egui memory keyed by the surface
+// node's path. When the user edits the widget and a declared
+// affordance is present, we emit a `PendingDispatch` so the desktop
+// shell can submit the canonical write verb. Without an affordance
+// the widget is editable but the change is local to the panel —
+// matches the chip / pressable behaviour for declared-but-unbound
+// nodes.
+//
+// Containers (Sheet, Tabs) descend into children with the same
+// pre/post merge pattern used by Stack / Strip / Grid; child
+// dispatches bubble up.
+//
+// Modal / Dock are partially wired — the runtime shape needs a
+// `&mut DockState` and `TabViewer` (Dock) or persistent open-state
+// (Modal). For M4-C we render a labelled placeholder so the IRI
+// stops falling through to `render_todo`; full surface IR support
+// for these two ships in the M5 surface-state milestone.
+
+/// Convenience for read-only "value as JSON-ish display string" so a
+/// number / bool / string binding can drive a one-liner field
+/// preview.
+fn binding_to_string(node: &SurfaceNode, slot: &str, snap: &OntologySnapshot) -> String {
+    bound_value(node, slot, snap)
+        .map(|v| v.to_display_string())
+        .unwrap_or_default()
+}
+
+fn render_field(
+    node: &SurfaceNode,
+    snap: &OntologySnapshot,
+    ui: &mut egui::Ui,
+    frame: &mut Frame<'_>,
+) {
+    // The `kind` attr selects the field flavour: `text` (default),
+    // `multiline`, `password`, `number`, `choice`. For `choice` we
+    // expect an `options` attr; for `number` we accept `min`,
+    // `max`, `step`. Defaults are conservative — a missing attr
+    // falls back to a free-form text input rather than an error.
+    let kind_str = attr_str(node, "kind").unwrap_or("text");
+    let placeholder: std::borrow::Cow<'static, str> = attr_str(node, "placeholder")
+        .map(|s| std::borrow::Cow::Owned(s.to_string()))
+        .unwrap_or(std::borrow::Cow::Borrowed(""));
+
+    // Read the bound initial value (if any) once, so the widget
+    // shows the substrate-tracked value on first paint. Subsequent
+    // edits live in egui memory keyed by the node path.
+    let initial = binding_to_string(node, "value", snap);
+
+    let kind = match kind_str {
+        "multiline" => FieldKind::multiline(placeholder.clone()),
+        "password" => FieldKind::password(placeholder.clone()),
+        "number" => {
+            let lo = attr_number(node, "min").unwrap_or(0.0);
+            let hi = attr_number(node, "max").unwrap_or(100.0);
+            let step = attr_number(node, "step").unwrap_or(1.0);
+            FieldKind::number(lo, hi, step)
+        }
+        // Choice falls back to text — the canon `Field::choice`
+        // requires `&'static [&'static str]` options which we
+        // can't materialise from runtime attrs without leaking.
+        // Surfaces wanting choice should use `ui://select`.
+        _ => FieldKind::text(placeholder.clone()),
+    };
+
+    let key = egui::Id::new(("compose.field.value", &node.path));
+    let mut value: FieldValue = ui.ctx().memory_mut(|m| {
+        m.data
+            .get_temp_mut_or_insert_with::<FieldValue>(key, || match kind {
+                FieldKind::Number { .. } => FieldValue::Number(initial.parse().unwrap_or(0.0)),
+                _ => FieldValue::Text(initial.clone()),
+            })
+            .clone()
+    });
+
+    let enabled = attr_bool(node, "enabled").unwrap_or(true);
+    let f = Field::new(&node.path, kind, &mut value).enabled(enabled).variant(0);
+    let resp = f.show(ui);
+    let changed = resp.inner.changed();
+    // Persist the (possibly mutated) value back into egui memory.
+    ui.ctx().memory_mut(|m| {
+        m.data.insert_temp(key, value);
+    });
+    if changed
+        && let Some(dispatch) = build_dispatch(node, None)
+    {
+        frame.push_dispatch(dispatch);
+    }
+    frame.push_response(resp);
+}
+
+fn render_toggle(
+    node: &SurfaceNode,
+    snap: &OntologySnapshot,
+    ui: &mut egui::Ui,
+    frame: &mut Frame<'_>,
+) {
+    let label = bound_string(node, "label", snap).unwrap_or_else(|| node.path.clone());
+    // Initial value comes from the binding; subsequent flips are
+    // egui-memory-keyed so a click doesn't bounce back on the next
+    // frame before the substrate write round-trips.
+    let initial =
+        bound_value(node, "value", snap).and_then(|v| v.as_bool()).unwrap_or(false);
+    let key = egui::Id::new(("compose.toggle.value", &node.path));
+    let mut value = ui.ctx().memory_mut(|m| {
+        *m.data.get_temp_mut_or_insert_with::<bool>(key, || initial)
+    });
+    let enabled = attr_bool(node, "enabled").unwrap_or(true);
+    let t = Toggle::new(&node.path, label, &mut value).enabled(enabled).variant(0);
+    let resp = t.show(ui);
+    ui.ctx().memory_mut(|m| m.data.insert_temp(key, value));
+    if resp.inner.changed()
+        && let Some(dispatch) = build_dispatch(node, None)
+    {
+        frame.push_dispatch(dispatch);
+    }
+    frame.push_response(resp);
+}
+
+fn render_select(
+    node: &SurfaceNode,
+    snap: &OntologySnapshot,
+    ui: &mut egui::Ui,
+    frame: &mut Frame<'_>,
+) {
+    // The canon `Select` widget requires `&'static [&'static str]`
+    // for options — runtime attrs can't satisfy that without a
+    // leak. Render a labelled fall-back combo using `egui::ComboBox`
+    // directly, then synthesise a CanonResponse for the observation
+    // walker so the surface-host invariants hold.
+    let label = bound_string(node, "label", snap).unwrap_or_else(|| "select".to_string());
+    let options: Vec<String> = node
+        .attrs
+        .get("options")
+        .and_then(|a| a.as_array())
+        .map(|arr| arr.iter().filter_map(|a| a.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+
+    let initial = binding_to_string(node, "value", snap);
+    let key = egui::Id::new(("compose.select.value", &node.path));
+    let mut current = ui.ctx().memory_mut(|m| {
+        m.data
+            .get_temp_mut_or_insert_with::<String>(key, || initial.clone())
+            .clone()
+    });
+    let prev = current.clone();
+    let resp = ui
+        .horizontal(|ui| {
+            ui.label(label);
+            let r = egui::ComboBox::new(("compose.select.combo", &node.path), "")
+                .selected_text(current.clone())
+                .show_ui(ui, |ui| {
+                    for opt in &options {
+                        ui.selectable_value(&mut current, opt.clone(), opt);
+                    }
+                });
+            r.response
+        })
+        .inner;
+
+    let changed = current != prev;
+    ui.ctx().memory_mut(|m| m.data.insert_temp(key, current));
+    let synth = CanonResponse::from_egui(resp, std::borrow::Cow::Borrowed("ui://select"), 0, None);
+    if changed
+        && let Some(dispatch) = build_dispatch(node, None)
+    {
+        frame.push_dispatch(dispatch);
+    }
+    frame.push_response(synth);
+}
+
+fn render_slider(
+    node: &SurfaceNode,
+    snap: &OntologySnapshot,
+    ui: &mut egui::Ui,
+    frame: &mut Frame<'_>,
+) {
+    let label = bound_string(node, "label", snap).unwrap_or_else(|| node.path.clone());
+    let lo = attr_number(node, "min").unwrap_or(0.0);
+    let hi = attr_number(node, "max").unwrap_or(1.0);
+    let step = attr_number(node, "step");
+    let initial =
+        bound_value(node, "value", snap).and_then(|v| v.as_f64()).unwrap_or(lo);
+    let key = egui::Id::new(("compose.slider.value", &node.path));
+    let mut value = ui.ctx().memory_mut(|m| {
+        *m.data.get_temp_mut_or_insert_with::<f64>(key, || initial)
+    });
+    let enabled = attr_bool(node, "enabled").unwrap_or(true);
+    let mut s = Slider::new(&node.path, label, &mut value, lo, hi)
+        .enabled(enabled)
+        .variant(0);
+    if let Some(st) = step {
+        s = s.step(st);
+    }
+    let resp = s.show(ui);
+    ui.ctx().memory_mut(|m| m.data.insert_temp(key, value));
+    if resp.inner.changed()
+        && let Some(dispatch) = build_dispatch(node, None)
+    {
+        frame.push_dispatch(dispatch);
+    }
+    frame.push_response(resp);
+}
+
+fn render_sheet(
+    node: &SurfaceNode,
+    snap: &OntologySnapshot,
+    ui: &mut egui::Ui,
+    frame: &mut Frame<'_>,
+) {
+    let max_h = attr_number(node, "max_height").map(|v| v as f32);
+    let stick = attr_bool(node, "stick_to_bottom").unwrap_or(false);
+    let children = &node.children;
+
+    let mut child = ComposeOutcome::default();
+    let mut s = Sheet::new(&node.path, |ui: &mut egui::Ui| {
+        let mut child_frame = Frame {
+            responses: &mut child.responses,
+            dispatches: &mut child.dispatches,
+        };
+        for c in children {
+            render_node(c, snap, ui, &mut child_frame);
+        }
+    })
+    .stick_to_bottom(stick)
+    .variant(0);
+    if let Some(h) = max_h {
+        s = s.max_height(h);
+    }
+    let resp = s.show(ui);
+    frame.merge(child);
+    frame.push_response(resp);
+}
+
+fn render_modal(
+    node: &SurfaceNode,
+    _snap: &OntologySnapshot,
+    ui: &mut egui::Ui,
+    frame: &mut Frame<'_>,
+) {
+    // `ui://modal` needs a body callback (FnOnce<&mut egui::Ui>) and
+    // a persistent open-state. Surface IR doesn't yet model an
+    // open/dismiss handshake — for M4-C we render a labelled
+    // placeholder so the IRI stops falling through to `render_todo`.
+    // Full wiring (with a `Modality` attribute, body composition,
+    // and dismiss-dispatch) ships with M5 surface state.
+    let title = node
+        .attrs
+        .get("title")
+        .and_then(AttrValue::as_str)
+        .unwrap_or("modal");
+    let resp = ui
+        .group(|ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("[modal]").color(egui::Color32::from_rgb(180, 160, 110)));
+                ui.label(title);
+            });
+            ui.label(
+                egui::RichText::new(format!("({} children)", node.children.len()))
+                    .small()
+                    .color(egui::Color32::from_rgb(140, 140, 150)),
+            );
+        })
+        .response;
+    frame.push_response(CanonResponse::from_egui(
+        resp,
+        std::borrow::Cow::Borrowed("ui://modal"),
+        0,
+        None,
+    ));
+}
+
+fn render_dock(
+    node: &SurfaceNode,
+    _snap: &OntologySnapshot,
+    ui: &mut egui::Ui,
+    frame: &mut Frame<'_>,
+) {
+    // `ui://dock` needs a `&mut DockState<Tab>` and `TabViewer`
+    // implementation that the surface IR doesn't yet describe.
+    // Render a labelled placeholder. Same milestone-cut as
+    // `render_modal`.
+    let resp = ui
+        .group(|ui| {
+            ui.label(egui::RichText::new("[dock]").color(egui::Color32::from_rgb(180, 160, 110)));
+            ui.label(
+                egui::RichText::new(format!("({} panes)", node.children.len()))
+                    .small()
+                    .color(egui::Color32::from_rgb(140, 140, 150)),
+            );
+        })
+        .response;
+    frame.push_response(CanonResponse::from_egui(
+        resp,
+        std::borrow::Cow::Borrowed("ui://dock"),
+        0,
+        None,
+    ));
+}
+
+fn render_tabs(
+    node: &SurfaceNode,
+    snap: &OntologySnapshot,
+    ui: &mut egui::Ui,
+    frame: &mut Frame<'_>,
+) {
+    // Each child is one tab. Label is the child's `label` attr or
+    // its last path segment.
+    let labels_owned: Vec<String> = node
+        .children
+        .iter()
+        .map(|c| {
+            c.attrs
+                .get("label")
+                .and_then(AttrValue::as_str)
+                .map(String::from)
+                .unwrap_or_else(|| {
+                    c.path
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&c.path)
+                        .to_string()
+                })
+        })
+        .collect();
+    let labels: Vec<&str> = labels_owned.iter().map(|s| s.as_str()).collect();
+
+    let key = egui::Id::new(("compose.tabs.selected", &node.path));
+    let mut selected = ui.ctx().memory_mut(|m| {
+        *m.data.get_temp_mut_or_insert_with::<usize>(key, || 0)
+    });
+    if selected >= node.children.len() {
+        selected = 0;
+    }
+
+    let mut child = ComposeOutcome::default();
+    let resp = if labels.is_empty() {
+        let r = ui.label(
+            egui::RichText::new("[tabs] (no children)")
+                .color(egui::Color32::from_rgb(160, 160, 170))
+                .italics(),
+        );
+        CanonResponse::from_egui(r, std::borrow::Cow::Borrowed("ui://tabs"), 0, None)
+    } else {
+        let children = &node.children;
+        let t = Tabs::new(
+            &node.path,
+            &labels,
+            &mut selected,
+            |ui: &mut egui::Ui, idx: usize| {
+                let mut child_frame = Frame {
+                    responses: &mut child.responses,
+                    dispatches: &mut child.dispatches,
+                };
+                if let Some(c) = children.get(idx) {
+                    render_node(c, snap, ui, &mut child_frame);
+                }
+            },
+        )
+        .variant(0);
+        t.show(ui)
+    };
+
+    ui.ctx().memory_mut(|m| m.data.insert_temp(key, selected));
+    frame.merge(child);
+    frame.push_response(resp);
+}
+
+fn render_tree(
+    node: &SurfaceNode,
+    snap: &OntologySnapshot,
+    ui: &mut egui::Ui,
+    frame: &mut Frame<'_>,
+) {
+    // The canon `Tree` widget owns its own state; for surface-IR
+    // purposes we render a flat collapsing-list of the node's
+    // children, descending the composer for each. This is the
+    // "list" affordance from the canon spec — child nodes render
+    // as nested items, with their children collapsed by default.
+    // A real recursive `ui://tree` (per the canon's `TreeNode`
+    // builder) needs a richer IR shape that's M5 work.
+    let label = node
+        .attrs
+        .get("label")
+        .and_then(AttrValue::as_str)
+        .unwrap_or("list");
+    let mut child = ComposeOutcome::default();
+    let resp = egui::CollapsingHeader::new(label)
+        .id_salt(("compose.tree", &node.path))
+        .default_open(true)
+        .show(ui, |ui| {
+            let mut child_frame = Frame {
+                responses: &mut child.responses,
+                dispatches: &mut child.dispatches,
+            };
+            for c in &node.children {
+                render_node(c, snap, ui, &mut child_frame);
+            }
+        })
+        .header_response;
+    frame.merge(child);
+    frame.push_response(CanonResponse::from_egui(
+        resp,
+        std::borrow::Cow::Borrowed("ui://tree"),
+        0,
+        None,
+    ));
+}
+
+fn render_plot(
+    node: &SurfaceNode,
+    snap: &OntologySnapshot,
+    ui: &mut egui::Ui,
+    frame: &mut Frame<'_>,
+) {
+    let series: Vec<(f64, f64)> = bound_value(node, "points", snap)
+        .and_then(|v| v.as_list())
+        .map(|xs| {
+            xs.into_iter()
+                .enumerate()
+                .filter_map(|(i, v)| v.as_f64().map(|y| (i as f64, y)))
+                .collect()
+        })
+        .unwrap_or_default();
+    let p = crate::canon::Plot::new(&node.path).points(&series).variant(0);
+    let resp = p.show(ui);
+    frame.push_response(resp);
 }
 
 // ── TODO fallback ──────────────────────────────────────────────────
