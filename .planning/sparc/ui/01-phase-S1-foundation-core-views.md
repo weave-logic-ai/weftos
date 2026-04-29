@@ -1,13 +1,26 @@
 # Phase S1: Foundation + Core Views
 
+> **Status (2026-04-28): Shipped.** All 37 S1 items (S1.1 backend API +
+> S1.2 frontend scaffold + S1.3 core views) shipped between
+> 2026-02-23 and 2026-02-24, verified by step-7 phase gate (11/11
+> PASS, `.planning/development_notes/step7-phase-gate.md`). The
+> per-row `Status: TODO` markers below were never refreshed; see
+> the audit doc
+> (`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md`)
+> for current ground truth, and Plane (label
+> `ws09-clawft-dashboard`, items WEFT-292..321) for the deferred
+> follow-up work. Source location moved from `ui/` to `clawft-ui/`
+> in CHANGELOG 0.6.19 (2026-04-22); the toolchain rename completed
+> in 0.7.0 wave M1-E (WEFT-292/293/294/295/296/297/318).
+
 > **Element:** UI -- Web Dashboard + Live Canvas
 > **Phase:** S1 (S1.1, S1.2, S1.3)
 > **Timeline:** Weeks 1-3
 > **Priority:** P0 (Critical Path)
-> **Crates:** `crates/clawft-services/` (new `api/` module), `crates/clawft-cli/` (`weft ui` command), `ui/` (standalone frontend)
+> **Crates:** `crates/clawft-services/` (new `api/` module), `crates/clawft-cli/` (`weft ui` command), `clawft-ui/` (standalone frontend)
 > **Dependencies IN:** B5 (shared tool registry builder), existing `GatewayConfig` (port 18790), `Session` type, `AgentDefinition`, `ToolRegistry`, `MessageBus`
 > **Blocks:** S2.1 (Live Canvas), S2.2 (Skill Browser), S2.3 (Memory Explorer), S2.4 (Config Editor), S2.5 (Cron+Channels), S3.x (all Sprint 3 phases)
-> **Status:** Planning
+> **Status:** Shipped (see banner above)
 > **Orchestrator Ref:** `ui/00-orchestrator.md` Sections 2 (Phases), 3 (Exit Criteria), 4 (Security)
 
 ---

@@ -1,8 +1,12 @@
-# ADR-020: Kernel Phase (K-Level) Responsibilities
+# ADR-048: Kernel Phase (K-Level) Responsibilities
 
 **Date**: 2026-04-03
 **Status**: Accepted
 **Deciders**: Architecture review, Sprint 14
+**Renumbered**: 2026-04-28 (WEFT-140) — was ADR-020, collided with
+ADR-020 (ChainLoggable). Earlier dependants (ADR-021, ADR-022) and
+the kernel-governance audit reference this document by its old
+number; references have been updated to point at ADR-048.
 
 ## Context
 

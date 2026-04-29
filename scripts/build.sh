@@ -142,6 +142,35 @@ cmd_native_debug() {
     report_binary_size "target/debug/weaver" "Native binary (weave, debug)"
 }
 
+# Build the native egui GUI binary (`weft-gui-egui`). Lives in
+# `crates/clawft-gui-egui/` and gates the native main loop behind the
+# `native` feature so the wasm target excludes eframe's window code
+# (see Cargo.toml `[[bin]]` `required-features = ["native"]`). The
+# wasm bundle (used by the VSCode panel) is built via `cmd_browser`.
+cmd_gui_egui() {
+    local profile="${PROFILE:-release}"
+    header "Building native egui GUI binary weft-gui-egui (profile: $profile)"
+    force_clean_pkg clawft-gui-egui
+    timer_start
+    local feat="native"
+    if [ -n "$FEATURES" ]; then
+        feat="native,$FEATURES"
+    fi
+    local args=(cargo build -p clawft-gui-egui --bin weft-gui-egui --features "$feat")
+    if [ "$profile" = "release" ] || [ "$profile" = "release-wasm" ]; then
+        args+=(--profile "$profile")
+    fi
+    run_cmd "${args[@]}"
+    timer_end
+    if [ "$profile" = "release" ]; then
+        report_binary_size "target/release/weft-gui-egui" "weft-gui-egui (release)"
+    elif [ "$profile" = "release-wasm" ]; then
+        report_binary_size "target/release-wasm/weft-gui-egui" "weft-gui-egui (release-wasm)"
+    else
+        report_binary_size "target/debug/weft-gui-egui" "weft-gui-egui (debug)"
+    fi
+}
+
 cmd_wasi() {
     local profile="${PROFILE:-release-wasm}"
     header "Building WASM for WASI (wasm32-wasip2, profile: $profile)"
@@ -193,22 +222,37 @@ cmd_browser() {
 
 cmd_ui() {
     header "Building React frontend (tsc + vite)"
-    if [ ! -d "$ROOT/ui" ] || [ ! -f "$ROOT/ui/package.json" ]; then
-        skip "ui/ directory not found — skipping"
+    if [ ! -d "$ROOT/clawft-ui" ] || [ ! -f "$ROOT/clawft-ui/package.json" ]; then
+        skip "clawft-ui/ directory not found — skipping"
         return 0
     fi
     timer_start
     if [ "$DRY_RUN" = true ]; then
-        printf "  ${YELLOW}DRY${NC}   cd ui && npm run build\n"
+        printf "  ${YELLOW}DRY${NC}   cd clawft-ui && npm run build\n"
     else
-        (cd "$ROOT/ui" && npm run build)
+        (cd "$ROOT/clawft-ui" && npm run build)
     fi
     timer_end
-    if [ -d "$ROOT/ui/dist" ]; then
+    if [ -d "$ROOT/clawft-ui/dist" ]; then
         local size
-        size=$(du -sh "$ROOT/ui/dist" 2>/dev/null | cut -f1)
+        size=$(du -sh "$ROOT/clawft-ui/dist" 2>/dev/null | cut -f1)
         printf "  ${CYAN}SIZE${NC}  UI bundle: %s\n" "$size"
     fi
+}
+
+cmd_releases_mdx() {
+    header "Regenerating docs releases.mdx from CHANGELOG.md"
+    if [ ! -x "$ROOT/scripts/build-releases-mdx.sh" ]; then
+        fail "scripts/build-releases-mdx.sh not found or not executable"
+        return 1
+    fi
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   scripts/build-releases-mdx.sh\n"
+    else
+        "$ROOT/scripts/build-releases-mdx.sh"
+    fi
+    timer_end
 }
 
 cmd_all() {
@@ -261,9 +305,9 @@ cmd_clippy() {
 cmd_clean() {
     header "Cleaning build artifacts"
     run_cmd cargo clean
-    if [ -d "$ROOT/ui/dist" ]; then
-        info "Removing ui/dist"
-        rm -rf "$ROOT/ui/dist"
+    if [ -d "$ROOT/clawft-ui/dist" ]; then
+        info "Removing clawft-ui/dist"
+        rm -rf "$ROOT/clawft-ui/dist"
     fi
     if [ -d "$ROOT/crates/clawft-wasm/www/pkg" ]; then
         info "Removing crates/clawft-wasm/www/pkg"
@@ -400,13 +444,13 @@ cmd_gate() {
     fi
 
     # 10. UI build
-    if [ -d "$ROOT/ui" ] && [ -f "$ROOT/ui/package.json" ]; then
+    if [ -d "$ROOT/clawft-ui" ] && [ -f "$ROOT/clawft-ui/package.json" ]; then
         printf "\n${BOLD}[%2d/%d]${NC} %s\n" 10 "$total" "UI build (tsc + vite)"
         timer_start
         if [ "$DRY_RUN" = true ]; then
-            printf "  ${YELLOW}DRY${NC}   cd ui && npm run build\n"
+            printf "  ${YELLOW}DRY${NC}   cd clawft-ui && npm run build\n"
             passed=$((passed + 1))
-        elif (cd "$ROOT/ui" && npm run build) >/dev/null 2>&1; then
+        elif (cd "$ROOT/clawft-ui" && npm run build) >/dev/null 2>&1; then
             pass "UI build"
             passed=$((passed + 1))
         else
@@ -416,7 +460,7 @@ cmd_gate() {
         timer_end
     else
         printf "\n${BOLD}[%2d/%d]${NC} %s\n" 10 "$total" "UI build"
-        skip "ui/ directory not found"
+        skip "clawft-ui/ directory not found"
         skipped=$((skipped + 1))
     fi
 
@@ -454,9 +498,12 @@ ${BOLD}Usage:${NC} scripts/build.sh <command> [options]
 ${BOLD}Commands:${NC}
   native          Build native CLI binary (release)
   native-debug    Build native CLI binary (debug, fast)
+  gui-egui        Build native egui GUI binary (weft-gui-egui, requires --features native)
   wasi            Build WASM for WASI (wasm32-wasip2)
   browser         Build WASM for browser (wasm32-unknown-unknown)
   ui              Build React frontend (tsc + vite)
+  releases-mdx    Regenerate docs/src/content/docs/weftos/vision/releases.mdx
+                  from CHANGELOG.md (also runs as --check before commits)
   all             Build everything (native + wasi + browser + ui)
   test            Run cargo test --workspace
   check           Run cargo check --workspace (fast compile check)
@@ -476,6 +523,8 @@ ${BOLD}Options:${NC}
 ${BOLD}Examples:${NC}
   scripts/build.sh native                          # Release CLI binary
   scripts/build.sh native --features voice          # CLI with voice
+  scripts/build.sh gui-egui                         # Native egui GUI (release)
+  scripts/build.sh gui-egui --profile debug         # Native egui GUI (debug)
   scripts/build.sh browser                          # Browser WASM
   scripts/build.sh gate                             # Full phase gate
   scripts/build.sh native --dry-run                 # Preview commands
@@ -542,9 +591,11 @@ main() {
     case "$COMMAND" in
         native)       cmd_native ;;
         native-debug) cmd_native_debug ;;
+        gui-egui)     cmd_gui_egui ;;
         wasi)         cmd_wasi ;;
         browser)      cmd_browser ;;
         ui)           cmd_ui ;;
+        releases-mdx) cmd_releases_mdx ;;
         all)          cmd_all ;;
         test)         cmd_test ;;
         check)        cmd_check ;;

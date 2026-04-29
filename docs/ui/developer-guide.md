@@ -150,8 +150,8 @@ The command requires the `channels` feature flag at build time. If the feature i
 weft ui
 
 # Production: serve built frontend
-cd ui && npm run build
-weft ui --ui-dir ./ui/dist
+cd clawft-ui && npm run build
+weft ui --ui-dir ./clawft-ui/dist
 
 # Custom port
 weft ui --port 9000

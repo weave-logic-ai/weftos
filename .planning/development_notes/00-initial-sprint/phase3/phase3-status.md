@@ -1,5 +1,10 @@
 # Phase 3 -- Status Dashboard
 
+> **HISTORICAL — 2026-02-17 snapshot (WEFT-25, archived 2026-04-28).**
+> Phase-3 status from the initial Python → Rust port sprint. Tracker
+> is no longer live; see
+> `.planning/reviews/0.7.0-release-gate/README.md` for current state.
+
 **Last Updated**: 2026-02-17 (Phase 3C Rust upgrade in progress)
 **Phase Start**: 2026-02-17
 **Rounds Completed**: 4 of 4 (+ Phase 3C stream active)

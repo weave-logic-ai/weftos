@@ -3,6 +3,16 @@
 > Single sprint integrating codebase fixes (from full 9-crate review) with the OpenClaw-parity
 > feature roadmap. Items are grouped into workstreams and ordered by dependency within each.
 
+> **Closed 2026-04-28 (WEFT-24)** — historical reference only. This document is the
+> original sprint plan for Phase 5 (the "Improvements Sprint"). It is retained for
+> context but no longer reflects live tracking. The 0.7.0 release-gate audit at
+> `.planning/reviews/0.7.0-release-gate/` is the source-of-truth for what shipped,
+> what lingered, and what is deferred per workstream. Outstanding TODOs were lifted
+> into Plane work items (`weftos` workspace, cycle `0.7.x` for must-ship-before-0.7,
+> `0.8.x`/`0.9.x`/`1.0.x` for deferred). See
+> `.planning/development_notes/02-improvements-overview/sprint-tracker.md` for the
+> matching closure note on the per-element tracker.
+
 ---
 
 ## Workstream A: Critical Fixes (Week 1-2)

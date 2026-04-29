@@ -291,16 +291,15 @@ all return exit 0.
 - **Agent-side journal write**: F2 lands the operator side of `weaver soul promote`; the agent's self-observation write path (during chat turns) is deferred. With an empty journal the command exits cleanly.
 - **C3 monotonic-ULID test flake**: `append_turns_are_monotonic` occasionally fails when two appends land in the same ms. Pre-existing from C3; not a new issue.
 - **v3 `MicroLoraRouter`**: explicitly deferred until `ruvllm-wasm` lifts the documented 11-pattern HNSW cap (`docs/research/rvf-context-router.md:118-128`). E3's `HybridRouter` left a `TODO(agent-core-v1 phase E3+)` marker.
-- **Worktree + branch cleanup**: 12 `agent-core/*` worktrees remain locked under `.claude/worktrees/` (one per parallel commit dispatched this session — A3, A4, B1+B2, C1, C2, C3, D1, D2, E1, F1, F2, F3). Once you've smoke-tested a real `weaver` boot and confirmed `agent.chat` runs end-to-end through the new path, run:
+- **Worktree + branch cleanup** (DONE 2026-04-28, WEFT-288): the 12 `agent-core/*` worktrees and matching branches retained as a rollback escape hatch have been removed. The chat-agent has shipped and live `agent.chat` smoke against llama-server is green, so the rollback path is no longer needed. `git worktree list` shows zero `agent-core-*` paths and `git branch --list 'agent-core/*'` is empty. The original recipe (preserved for archive value):
   ```bash
-  for wt in /home/aepod/dev/clawft/.claude/worktrees/agent-*; do
-      git worktree remove "$wt"
+  for wt in /home/aepod/dev/clawft/.claude/worktrees/agent-core-*; do
+      [ -d "$wt" ] && git worktree remove "$wt"
   done
   for b in $(git branch --list 'agent-core/*'); do
       git branch -d "$b"   # safe: -d only deletes merged branches
   done
   ```
-  Don't push to origin or run the cleanup until live boot smoke is green; the worktrees are the rollback escape hatch.
 
 ## Architectural shape post-F2
 
@@ -335,7 +334,7 @@ LLM
 
 - Working tree: clean.
 - `git status -sb`: `## development-0.7.0...origin/development-0.7.0 [ahead 78]`.
-- 12 locked `agent-core/*` worktrees retained from this session's parallel work (one per commit dispatched in isolation). Cleanup steps in the "Known follow-ups" list above; do that after live-boot smoke testing, not before.
+- 12 locked `agent-core/*` worktrees retained from this session's parallel work were retired on 2026-04-28 once the chat-agent shipped and live smoke went green (WEFT-288). The repo no longer carries any `agent-core-*` worktree or `agent-core/*` branch. See "Known follow-ups" for the recipe used.
 - Nothing pushed yet.
 
 ---

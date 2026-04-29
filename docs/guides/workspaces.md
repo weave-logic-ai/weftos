@@ -318,11 +318,54 @@ When an agent workspace is created, the following structure is scaffolded:
   sessions/        # Per-agent session store
   memory/          # Per-agent memory namespace
   skills/          # Agent-specific skill overrides
-  tool_state/      # Per-plugin state
+  tool_state/      # Per-plugin state (see "tool_state contract" below)
 ```
 
 All directories are created with `0700` permissions on Unix for security.
 Files are only created if they do not already exist (idempotent operation).
+
+#### tool_state contract
+
+`tool_state/` is the host-managed key-value namespace exposed to
+plugins via the [`KeyValueStore`] trait
+(`crates/clawft-plugin/src/traits.rs`). It implements **Contract 3.1**
+(Tool Plugin -> Memory) from the cross-element integration spec
+(`.planning/sparc/phase4/02-improvements-overview/01-cross-element-integration.md`).
+
+[`KeyValueStore`]: https://docs.rs/clawft-plugin/latest/clawft_plugin/trait.KeyValueStore.html
+
+The contract:
+
+- **Layout**: each plugin gets a sub-namespace at
+  `~/.clawft/agents/<agent_id>/tool_state/<plugin_name>/`. The host is
+  responsible for materializing the per-plugin subdirectory; plugins
+  see only their own slice through the trait.
+- **API surface**: plugins use the `ToolContext::key_value_store()`
+  accessor to get a `&dyn KeyValueStore`, which provides async
+  `get`, `set`, `delete`, and `list_keys` methods. The trait
+  signature is in `crates/clawft-plugin/src/traits.rs:329-347`.
+- **Sandbox grants**: the plugin sandbox grants read+write to
+  `<agent_workspace>/tool_state/<plugin_name>/` only -- no other
+  filesystem path is reachable through the trait. Cross-plugin
+  reads are explicitly out of scope; share state via shared memory
+  namespaces (see "Cross-Agent Memory Sharing" below) instead.
+- **Idempotent setup**: the directory is created at agent-workspace
+  init time even if no plugin writes to it yet. This makes the
+  contract visible to operators and lets sandbox-grant rules
+  resolve a stable path.
+
+Status as of 0.7.0: the directory is created and the trait is
+defined, but the only `KeyValueStore` impls in-tree are
+test-fixture mocks (`MockKvStore` in plugin crates). The first
+production-backed implementation (file-system-backed, scoped to the
+per-agent path) is tracked under the post-0.7.0 plugin work and
+referenced from the audit doc
+(`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md`,
+row WS-O7) and Plane WEFT-94 (this commit closes the
+documentation half; the runtime impl is a separate item). New
+plugin authors should call through `ToolContext::key_value_store()`
+and treat the backing store as eventually-real; do not write to
+`tool_state/` directly.
 
 ### Workspace Creation
 

@@ -53,7 +53,7 @@ enabled. The default port is `18789`.
 cargo run --bin clawft
 
 # Or with a custom port and UI directory
-cargo run --bin clawft -- --api-port 3100 --ui-dir ./ui/dist
+cargo run --bin clawft -- --api-port 3100 --ui-dir ./clawft-ui/dist
 ```
 
 ### Quick Smoke Test
@@ -2123,16 +2123,16 @@ the static file from that directory, with `index.html` appended for directories
 (SPA-style routing).
 
 ```bash
-# Serve the built UI from ./ui/dist
-cargo run --bin clawft -- --ui-dir ./ui/dist
+# Serve the built UI from ./clawft-ui/dist
+cargo run --bin clawft -- --ui-dir ./clawft-ui/dist
 ```
 
 With this configuration:
 - `GET /api/agents` -- handled by the API router
 - `GET /ws` -- handled by the WebSocket router
-- `GET /` -- serves `./ui/dist/index.html`
-- `GET /settings` -- serves `./ui/dist/index.html` (SPA fallback)
-- `GET /assets/style.css` -- serves `./ui/dist/assets/style.css`
+- `GET /` -- serves `./clawft-ui/dist/index.html`
+- `GET /settings` -- serves `./clawft-ui/dist/index.html` (SPA fallback)
+- `GET /assets/style.css` -- serves `./clawft-ui/dist/assets/style.css`
 
 ---
 

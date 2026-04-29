@@ -25,7 +25,7 @@ This guide directs documentation agents to update ALL relevant ClawFT documentat
 - The "inverted persistence" principle (ephemeral cognition, permanent memory)
 - Reference to `docs/weftos/ecc-symposium/01-research-synthesis.md` for full background
 
-### 1.2 `docs/architecture/adr-028-weftos-kernel.md`
+### 1.2 `docs/adr/adr-049-weftos-kernel.md` (was `docs/architecture/adr-028-weftos-kernel.md`; renumbered 2026-04-28 / WEFT-140)
 
 **Action**: Add a subsection under kernel design decisions documenting the ECC integration architecture.
 

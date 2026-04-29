@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Staging area for changes landing on `master` between releases. Move
+entries into a dated `## [X.Y.Z] - YYYY-MM-DD` section at release-cut
+time, then add a matching `[X.Y.Z]: ...compare/...` link to the
+footnote block at the bottom of the file. The release runbook documents
+the cut-over (`docs/deployment/release.md`).
+
 ## [0.6.19] - 2026-04-22
 
 Rollup of the `development-0.7.0` work stream onto the 0.6 release line. Ships the M1.5 app-layer trilogy, the 21-item canon UI primitive system, the built-in system components, a sensor framework, ExoChain stream-anchor auditing, eight EML-swap learnable-model wirings, and two late kernel-plumbing fixes (cluster peer persistence + optional TCP IPC relay). Also merges forward the v0.6.18 graphify fix (originally cut on an orphan commit that never reached `master`).
@@ -886,7 +894,7 @@ data structure as an interactive, drillable topology graph.
 
 #### Sprint 12: Block Engine, Theming, GEPA, Local LLM
 
-- **Lego Block Engine** (`gui/src/engine/`, `gui/src/blocks/`): BlockRegistry, BlockRenderer, and Zustand+Tauri StateStore. 10 composable block components (Text, Code, Status, Table, Tree, Terminal, Button, Column, Row, Grid, Tabs) with recursive rendering and JSON descriptor-driven layout.
+- **Block Engine (legacy, superseded)** (`gui/src/engine/`, `gui/src/blocks/`): BlockRegistry, BlockRenderer, and Zustand+Tauri StateStore. 10 composable block components (Text, Code, Status, Table, Tree, Terminal, Button, Column, Row, Grid, Tabs) with recursive rendering and JSON descriptor-driven layout. *Historical entry: this Zustand+Tauri+React engine was retired in [0.6.19] and replaced by the egui canon shell (`crates/clawft-gui-egui`, ADR-001 row-aligned canon primitives + the VSCode panel that hosts the WASM build). See ADR-005 / ADR-007 / ADR-013 / ADR-038, all marked Superseded by the egui shell.*
 - **Theming System** (`gui/src/themes/`): 4 built-in themes (ocean-dark, midnight, paper-light, high-contrast with WCAG AAA compliance). CSS variable bridge via `--weftos-*` custom properties, ThemeProvider with runtime switching, ANSI palette mapping, and Tailwind integration.
 - **Context Compression** (`crates/clawft-core/src/agent/context.rs`): Sliding-window context management with configurable `max_context_tokens` (default 8192). First-sentence summarization for older messages. Opt-in via `builder.with_compression(config)`.
 - **GEPA Prompt Evolution** (`crates/clawft-core/src/pipeline/`): `TrajectoryLearner` replacing `NoopLearner` with trajectory collection, pattern extraction, and 4 prompt mutation strategies (rephrase, add examples, remove ineffective, emphasize). `FitnessScorer` replacing `NoopScorer` with 4-dimension weighted scoring (relevance, coherence, completeness, conciseness).
@@ -953,6 +961,20 @@ data structure as an interactive, drillable topology graph.
 - Release profile with LTO, strip, single codegen unit, and abort-on-panic
 - 1,029 tests across the workspace
 
+[Unreleased]: https://github.com/weave-logic-ai/weftos/compare/v0.6.19...HEAD
+[0.6.19]: https://github.com/weave-logic-ai/weftos/compare/v0.6.18...v0.6.19
+[0.6.18]: https://github.com/weave-logic-ai/weftos/compare/v0.6.17...v0.6.18
+[0.6.17]: https://github.com/weave-logic-ai/weftos/compare/v0.6.16...v0.6.17
+[0.6.16]: https://github.com/weave-logic-ai/weftos/compare/v0.6.15...v0.6.16
+[0.6.15]: https://github.com/weave-logic-ai/weftos/compare/v0.6.14...v0.6.15
+[0.6.14]: https://github.com/weave-logic-ai/weftos/compare/v0.6.13...v0.6.14
+[0.6.13]: https://github.com/weave-logic-ai/weftos/compare/v0.6.12...v0.6.13
+[0.6.12]: https://github.com/weave-logic-ai/weftos/compare/v0.6.11...v0.6.12
+[0.6.11]: https://github.com/weave-logic-ai/weftos/compare/v0.6.10...v0.6.11
+[0.6.10]: https://github.com/weave-logic-ai/weftos/compare/v0.6.9...v0.6.10
+[0.6.9]: https://github.com/weave-logic-ai/weftos/compare/v0.6.8...v0.6.9
+[0.6.8]: https://github.com/weave-logic-ai/weftos/compare/v0.6.7...v0.6.8
+[0.6.7]: https://github.com/weave-logic-ai/weftos/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/weave-logic-ai/weftos/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/weave-logic-ai/weftos/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/weave-logic-ai/weftos/compare/v0.6.3...v0.6.4

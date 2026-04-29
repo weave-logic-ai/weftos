@@ -1,8 +1,10 @@
 # ADR-013: JSON Block Descriptor Architecture (json-render + A2UI Synthesis)
 
 **Date**: 2026-03-28
-**Status**: Accepted
+**Status**: Superseded by egui shell (2026-04-28)
 **Deciders**: Sprint 11 Symposium Track 4 + Design Notes
+
+> **Superseded note (2026-04-28, WEFT-242)**: The JSON block descriptor system described below was retired in [0.6.19] alongside the Tauri+React stack. WeftOS now uses the egui canon (`crates/clawft-gui-egui/`) for in-process rendering with 21 canon primitives (`ui://stack`, `ui://field`, `ui://heatmap`, `ui://waveform`, etc.) wired through the surface IR composer in `clawft-surface`. The flat-adjacency JSON descriptor + Zod catalog model has been replaced by the surface description IR + composer. See ADR-001 row-aligned canon primitives. This ADR is retained for historical context only.
 
 ## Context
 

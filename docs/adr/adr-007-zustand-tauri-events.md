@@ -1,8 +1,10 @@
 # ADR-007: Zustand + Tauri Events for State Management
 
 **Date**: 2026-03-28
-**Status**: Accepted
+**Status**: Superseded by egui shell (2026-04-28)
 **Deciders**: Sprint 11 Symposium Track 4 (UI/UX Design)
+
+> **Superseded note (2026-04-28, WEFT-242)**: Zustand + Tauri events are no longer the state-sync model. The current canon shell is `clawft-gui-egui` (native + WASM via the VSCode panel), and substrate paths drive UI state through the surface IR composer (`clawft-surface`) plus substrate RPCs (`read`, `subscribe`, `publish`, `notify`). React/Zustand state has been retired together with the Tauri shell described in ADR-038. This ADR is retained for historical context only.
 
 ## Context
 

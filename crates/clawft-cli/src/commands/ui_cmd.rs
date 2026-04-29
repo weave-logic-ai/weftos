@@ -119,12 +119,12 @@ mod tests {
             config: Some("/tmp/config.json".into()),
             port: Some(9000),
             no_open: true,
-            ui_dir: Some("./ui/dist".into()),
+            ui_dir: Some("./clawft-ui/dist".into()),
         };
         assert_eq!(args.config.as_deref(), Some("/tmp/config.json"));
         assert_eq!(args.port, Some(9000));
         assert!(args.no_open);
-        assert_eq!(args.ui_dir.as_deref(), Some("./ui/dist"));
+        assert_eq!(args.ui_dir.as_deref(), Some("./clawft-ui/dist"));
     }
 
     #[test]
