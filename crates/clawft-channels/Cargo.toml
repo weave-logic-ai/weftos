@@ -15,7 +15,7 @@ categories = ["network-programming"]
 default = ["native"]
 native = ["clawft-plugin/native"]
 email = []
-whatsapp = []
+whatsapp = ["dep:axum", "dep:hex"]
 signal = []
 matrix = []
 # Google Chat adapter: real Pub/Sub pull + chat.spaces.messages.create POST.
@@ -52,14 +52,21 @@ uuid = { workspace = true }
 
 # Optional, gated under feature flags. Pulled in only when the relevant
 # adapter is enabled (see [features] above).
+# - base64: google-chat Pub/Sub data field
+# - axum + jsonwebtoken: teams Bot Framework webhook + JWT decode
+# - axum + hex: whatsapp Cloud API webhook + HMAC hex
 base64 = { version = "0.22", optional = true }
-axum = { version = "0.8", default-features = false, features = ["json", "tokio", "http1"], optional = true }
+axum = { version = "0.8", default-features = false, features = ["json", "tokio", "http1", "macros"], optional = true }
 jsonwebtoken = { version = "9", default-features = false, optional = true }
+hex = { version = "0.4", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
-# wiremock backs the channel adapters' HTTP-level tests (Google Chat
-# Pub/Sub pull/ack + spaces.messages.create; Teams token endpoint +
-# conversations/activities POST). Already used elsewhere in the
-# workspace (clawft-llm, clawft-core) at this version.
+# wiremock + mockito back HTTP-level adapter tests across multiple
+# adapters (Google Chat, Teams, WhatsApp). Already used elsewhere in
+# the workspace at these versions.
 wiremock = "0.6"
+mockito = "1"
+# Used by `whatsapp` webhook unit tests to drive the axum router
+# in-process via `ServiceExt::oneshot`.
+tower = { version = "0.5", features = ["util"] }
