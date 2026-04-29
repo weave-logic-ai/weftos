@@ -279,6 +279,14 @@ pub async fn serve(
     static_dir: Option<&str>,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
+    // WEFT-102: kick off the periodic token-store sweep so revoked
+    // and expired tokens do not accumulate over the server's lifetime.
+    // The handle is detached -- the task observes the store via a
+    // Weak ref and self-terminates when ApiState drops its Arc.
+    let _cleanup = auth::spawn_cleanup_task(
+        state.auth.clone(),
+        auth::TOKEN_CLEANUP_INTERVAL_SECS,
+    );
     let router = build_router(state, cors_origins, static_dir);
     // `into_make_service_with_connect_info::<SocketAddr>()` makes
     // `ConnectInfo<SocketAddr>` available to handlers and middleware

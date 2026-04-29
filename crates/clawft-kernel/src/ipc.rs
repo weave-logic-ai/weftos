@@ -16,6 +16,14 @@ use clawft_core::bus::MessageBus;
 use crate::error::KernelError;
 use crate::process::Pid;
 
+/// Maximum serialized size of a single kernel IPC message in bytes (16 MiB).
+///
+/// Frames larger than this are rejected by [`KernelIpc::send`] with
+/// [`KernelError::MessageTooLarge`] before the payload is published on
+/// the bus. This prevents a single misbehaving sender (or a corrupt
+/// inbound frame) from exhausting kernel memory or stalling the bus.
+pub const KERNEL_IPC_MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+
 /// Global atomic counter for generating internal IPC message IDs.
 ///
 /// Using an atomic counter instead of `uuid::Uuid::new_v4()` eliminates
@@ -422,6 +430,12 @@ impl KernelIpc {
     /// Currently serializes the message to JSON and publishes it
     /// as an inbound message on the bus. Future versions (K2) will
     /// implement PID-based routing and topic subscriptions.
+    ///
+    /// Frames whose serialized size exceeds
+    /// [`KERNEL_IPC_MAX_MESSAGE_BYTES`] (16 MiB) are rejected with
+    /// [`KernelError::MessageTooLarge`] before any publish occurs.
+    /// This bounds peak kernel memory under hostile or misbehaving
+    /// senders (WEFT-143).
     pub fn send(&self, msg: &KernelMessage) -> Result<(), KernelError> {
         debug!(
             id = %msg.id,
@@ -431,6 +445,16 @@ impl KernelIpc {
 
         let json = serde_json::to_string(msg)
             .map_err(|e| KernelError::Ipc(format!("failed to serialize message: {e}")))?;
+
+        // Enforce the 16 MiB cap on serialized message size before
+        // touching the bus. The cap is applied to the canonical
+        // JSON payload because that is what we publish downstream.
+        if json.len() > KERNEL_IPC_MAX_MESSAGE_BYTES {
+            return Err(KernelError::MessageTooLarge {
+                size: json.len(),
+                limit: KERNEL_IPC_MAX_MESSAGE_BYTES,
+            });
+        }
 
         // For now, publish as an inbound message. The A2A routing (K2)
         // will replace this with proper PID-based delivery.
@@ -507,6 +531,56 @@ mod tests {
         let bus = Arc::new(MessageBus::new());
         let ipc = KernelIpc::new(bus.clone());
         assert!(Arc::ptr_eq(ipc.bus(), &bus));
+    }
+
+    #[test]
+    fn ipc_rejects_oversize_message() {
+        // WEFT-143: a frame whose serialized size exceeds 16 MiB must
+        // be rejected with `KernelError::MessageTooLarge` and must
+        // not be published on the bus.
+        let bus = Arc::new(MessageBus::new());
+        let ipc = KernelIpc::new(bus.clone());
+
+        // Construct a Binary payload large enough that even after
+        // JSON encoding (which slightly inflates Vec<u8> -> array of
+        // numbers) the serialized envelope clears the 16 MiB cap by
+        // a wide margin.
+        let huge = vec![0u8; KERNEL_IPC_MAX_MESSAGE_BYTES + 1];
+        let msg = KernelMessage::new(
+            0,
+            MessageTarget::Process(1),
+            MessagePayload::Binary(huge),
+        );
+
+        let err = ipc.send(&msg).unwrap_err();
+        match err {
+            KernelError::MessageTooLarge { size, limit } => {
+                assert_eq!(limit, KERNEL_IPC_MAX_MESSAGE_BYTES);
+                assert!(
+                    size > KERNEL_IPC_MAX_MESSAGE_BYTES,
+                    "expected size > limit, got size={size} limit={limit}"
+                );
+            }
+            other => panic!("expected MessageTooLarge, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ipc_accepts_message_at_limit_boundary() {
+        // A small Binary payload must round-trip cleanly to confirm
+        // the cap does not regress the happy path.
+        let bus = Arc::new(MessageBus::new());
+        let ipc = KernelIpc::new(bus.clone());
+
+        let msg = KernelMessage::new(
+            0,
+            MessageTarget::Process(1),
+            MessagePayload::Binary(vec![0u8; 1024]),
+        );
+
+        ipc.send(&msg).unwrap();
+        let received = bus.consume_inbound().await.unwrap();
+        assert_eq!(received.channel, "kernel-ipc");
     }
 
     #[test]
