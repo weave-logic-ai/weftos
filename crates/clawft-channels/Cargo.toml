@@ -23,16 +23,14 @@ whatsapp = ["dep:axum", "dep:hex"]
 # without --no-default-features.
 signal = ["clawft-plugin/native"]
 matrix = []
-# Google Chat adapter: real Pub/Sub pull + chat.spaces.messages.create POST.
-# `reqwest`, `serde`, and `serde_json` are unconditionally pulled in by the
-# crate; `base64` is gated here because it's only used to decode the
-# Pub/Sub `data` field for Google Chat events.
+# Google Chat adapter: Pub/Sub pull + chat.spaces.messages.create POST.
+# base64 decodes the Pub/Sub data field.
 google-chat = ["dep:base64"]
-irc = []
-# Microsoft Teams adapter: Bot Framework client-credentials OAuth2 +
-# Graph activities POST + axum-based inbound webhook receiver. Pulls in
-# `axum` for the webhook listener and `jsonwebtoken` for decoding the
-# Bot Framework JWT presented on inbound activities.
+# IRC adapter: TCP/TLS dial + IRCv3 CAP/SASL + JOIN + PRIVMSG.
+# tokio-rustls/webpki-roots/rustls-pki-types provide TLS; base64 backs
+# SASL PLAIN.
+irc = ["dep:tokio-rustls", "dep:webpki-roots", "dep:rustls-pki-types", "dep:base64"]
+# Microsoft Teams: Bot Framework OAuth2 + Graph + axum webhook + JWT.
 teams = ["dep:axum", "dep:jsonwebtoken"]
 
 [dependencies]
@@ -57,13 +55,17 @@ uuid = { workspace = true }
 
 # Optional, gated under feature flags. Pulled in only when the relevant
 # adapter is enabled (see [features] above).
-# - base64: google-chat Pub/Sub data field
-# - axum + jsonwebtoken: teams Bot Framework webhook + JWT decode
-# - axum + hex: whatsapp Cloud API webhook + HMAC hex
+# - base64: google-chat Pub/Sub data field; irc SASL PLAIN.
+# - axum + jsonwebtoken: teams Bot Framework webhook + JWT decode.
+# - axum + hex: whatsapp Cloud API webhook + HMAC hex.
+# - tokio-rustls / webpki-roots / rustls-pki-types: irc TLS dial.
 base64 = { version = "0.22", optional = true }
 axum = { version = "0.8", default-features = false, features = ["json", "tokio", "http1", "macros"], optional = true }
 jsonwebtoken = { version = "9", default-features = false, optional = true }
 hex = { version = "0.4", optional = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["tls12", "ring"], optional = true }
+webpki-roots = { version = "1.0", optional = true }
+rustls-pki-types = { version = "1", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
