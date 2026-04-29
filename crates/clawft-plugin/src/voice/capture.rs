@@ -3,12 +3,26 @@
 //! Provides `AudioCapture` for streaming PCM audio from the default
 //! input device at 16 kHz, 16-bit, mono.
 
+use serde::{Deserialize, Serialize};
+
+use super::config::{VoiceAudioConfig, VoiceCaptureSpec};
+
 /// Audio capture configuration.
-#[derive(Debug, Clone)]
+///
+/// **Deprecated**: prefer [`VoiceAudioConfig`] / [`VoiceCaptureSpec`].
+/// Kept as a thin alias for back-compat through 0.7.x; will be removed
+/// in 0.8.x once all in-tree callers migrate. Per WEFT-213 the canonical
+/// audio config is [`VoiceAudioConfig`] which expresses capture +
+/// playback as a single document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptureConfig {
+    /// Sample rate in Hz.
     pub sample_rate: u32,
+    /// Number of channels (1 = mono).
     pub channels: u16,
+    /// Audio chunk size in samples.
     pub chunk_size: u32,
+    /// Optional capture device name; `None` = system default.
     pub device_name: Option<String>,
 }
 
@@ -19,6 +33,37 @@ impl Default for CaptureConfig {
             channels: 1,
             chunk_size: 512,
             device_name: None,
+        }
+    }
+}
+
+impl CaptureConfig {
+    /// Promote a legacy `CaptureConfig` to a [`VoiceCaptureSpec`].
+    /// Mirrors `From<CaptureConfig> for VoiceCaptureSpec`; provided as
+    /// an explicit method for call sites that prefer it.
+    pub fn into_spec(self) -> VoiceCaptureSpec {
+        self.into()
+    }
+}
+
+impl From<CaptureConfig> for VoiceCaptureSpec {
+    fn from(value: CaptureConfig) -> Self {
+        VoiceCaptureSpec {
+            sample_rate: value.sample_rate,
+            channels: value.channels,
+            chunk_size: value.chunk_size,
+            device_name: value.device_name,
+        }
+    }
+}
+
+impl From<VoiceCaptureSpec> for CaptureConfig {
+    fn from(value: VoiceCaptureSpec) -> Self {
+        CaptureConfig {
+            sample_rate: value.sample_rate,
+            channels: value.channels,
+            chunk_size: value.chunk_size,
+            device_name: value.device_name,
         }
     }
 }
@@ -35,9 +80,15 @@ pub struct AudioCapture {
 }
 
 impl AudioCapture {
-    /// Create a new audio capture with the given configuration.
+    /// Create a new audio capture from a legacy [`CaptureConfig`].
     pub fn new(config: CaptureConfig) -> Self {
         Self { config, active: false }
+    }
+
+    /// Create a new audio capture from a unified [`VoiceAudioConfig`].
+    /// Returns `None` if the config has no capture spec attached.
+    pub fn from_voice(cfg: &VoiceAudioConfig) -> Option<Self> {
+        cfg.capture.clone().map(|spec| Self::new(spec.into()))
     }
 
     /// Start capturing audio.
