@@ -14,6 +14,7 @@ pub mod control;
 pub mod daemon;
 pub mod node_identity;
 pub mod protocol;
+pub mod voice_router;
 #[cfg(feature = "rvf-rpc")]
 pub mod rvf_codec;
 #[cfg(feature = "rvf-rpc")]

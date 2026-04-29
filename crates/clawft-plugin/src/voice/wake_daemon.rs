@@ -5,7 +5,8 @@
 //! activates Talk Mode.
 //!
 //! Currently a **stub implementation** -- real audio capture and
-//! rustpotter integration deferred until after VP validation.
+//! rustpotter integration are deferred to the 0.8.x in-process voice
+//! backend (see ADR-053).
 
 use tracing::info;
 

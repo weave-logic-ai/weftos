@@ -1,0 +1,12 @@
+{
+  "moz:firefoxOptions": { "args": ["-headless"] },
+  "goog:chromeOptions": {
+    "args": [
+      "--headless=new",
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--disable-software-rasterizer"
+    ]
+  }
+}

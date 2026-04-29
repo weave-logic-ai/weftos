@@ -4,7 +4,7 @@
 //! fires a detection event when the wake word is recognized.
 //!
 //! Currently a **stub implementation** -- real rustpotter integration
-//! is deferred until after VP validation.
+//! is deferred to the 0.8.x in-process voice backend (see ADR-053).
 
 use std::path::PathBuf;
 

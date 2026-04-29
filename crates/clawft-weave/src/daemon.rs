@@ -323,6 +323,11 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     // `Config::default()`'s empty defaults.
     let agent_routing = config.routing.clone();
 
+    // WEFT-555 (M5-W): snapshot the voice-consumer section so it
+    // survives `Kernel::boot` taking ownership of `config`. The voice
+    // consumer wires further below, after the agent service is up.
+    let voice_consumer_cfg = config.voice.consumer.clone();
+
     // Boot kernel
     let platform = NativePlatform::new();
     let kernel = Kernel::boot(config, kernel_config, Arc::new(platform)).await?;
@@ -499,6 +504,12 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
             // the safe default for a "speech detected" filter.
             classifier_input: Some(classify_output_path.clone()),
             gate_window_ms: 1_500,
+            // SC-9 audit row context. Until manifest verify is wired
+            // into daemon boot we log a fixed model identifier; once
+            // `verify_model_dir` runs at startup the report's
+            // `manifest.model_id` will replace this.
+            model_id: "whisper-cpp/unverified".to_string(),
+            source_node_hint: source_node_id.clone(),
         };
         let client_cfg = clawft_service_whisper::WhisperConfig {
             base_url: whisper_url.clone(),
@@ -956,6 +967,82 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         let _ = DAEMON_TERMINAL.set(mgr);
         info!("terminal service wired (PTY-backed sessions hosted in daemon)");
     }
+
+    // WEFT-555 (M5-W): voice transcript consumer. Subscribes to the
+    // mesh-canonical transcript topic emitted by
+    // `clawft-service-whisper` and routes each transcript into either
+    // an `agent.chat` dispatch (default) or the daemon's RPC dispatch
+    // (when the transcript starts with `voice.consumer.command_prefix`).
+    //
+    // Disabled by default; voice routing is opt-in via the config flag
+    // until the 5 P0 voice security controls (WEFT-207..211) ship.
+    let _voice_router_handle: Option<crate::voice_router::VoiceRouter> = {
+        if !voice_consumer_cfg.enabled {
+            info!(
+                "voice consumer: disabled by config (voice.consumer.enabled=false)"
+            );
+            None
+        } else if DAEMON_AGENT.get().is_none() {
+            warn!(
+                "voice consumer: requested but agent service not wired; \
+                 transcripts would have nowhere to land — skipping spawn"
+            );
+            None
+        } else {
+            let substrate = {
+                let k = kernel.read().await;
+                k.substrate_service().clone()
+            };
+            let subscriber_id = daemon_identity.node_id.clone();
+            let router_cfg = crate::voice_router::VoiceRouterConfig {
+                transcript_topic: voice_consumer_cfg.transcript_topic.clone(),
+                chat_target_agent: voice_consumer_cfg.chat_target_agent.clone(),
+                conv_id: voice_consumer_cfg.conv_id.clone(),
+                command_prefix: voice_consumer_cfg.command_prefix.clone(),
+                subscriber_id: Some(subscriber_id.clone()),
+            };
+            let chat_handler: Arc<dyn crate::voice_router::ChatHandler> =
+                Arc::new(DaemonAgentChatHandler);
+            let cmd_kernel = Arc::clone(&kernel);
+            let cmd_shutdown = control_flags.clone();
+            let cmd_handler: Arc<dyn crate::voice_router::CommandHandler> =
+                Arc::new(DaemonCommandHandler {
+                    kernel: cmd_kernel,
+                    // Voice-routed commands cannot trigger daemon
+                    // shutdown — the kernel.shutdown verb requires a
+                    // separate control intent. Hand the handler a
+                    // throwaway watch channel so its signature
+                    // matches the daemon's `dispatch` arity.
+                    shutdown_tx: watch::channel(false).0,
+                    _control: cmd_shutdown,
+                });
+            match crate::voice_router::VoiceRouter::spawn(
+                router_cfg,
+                |caller, path| {
+                    substrate
+                        .subscribe(caller, path)
+                        .map(|(_id, rx)| rx)
+                        .map_err(|e| format!("substrate subscribe: {e}"))
+                },
+                chat_handler,
+                cmd_handler,
+            ) {
+                Ok(svc) => {
+                    info!(
+                        topic = %voice_consumer_cfg.transcript_topic,
+                        chat_target = %voice_consumer_cfg.chat_target_agent,
+                        command_prefix = %voice_consumer_cfg.command_prefix,
+                        "voice consumer spawned"
+                    );
+                    Some(svc)
+                }
+                Err(e) => {
+                    warn!(error = %e, "voice consumer failed to spawn");
+                    None
+                }
+            }
+        }
+    };
 
     // Publish the top-level UI sentinel for the terminal panel. Lives
     // at `substrate/<daemon-node>/ui/terminal` — the egui Explorer's
@@ -4801,6 +4888,102 @@ async fn dispatch(
         }
 
         other => Response::error(format!("unknown method: {other}")),
+    }
+}
+
+// ── Voice consumer wiring (WEFT-555 / M5-W) ──────────────────────────
+//
+// Production handlers that bridge the substrate-side voice transcript
+// stream into the daemon's existing surfaces. The consumer trait
+// surface lives in `crate::voice_router`; these impls are the only
+// place that touches daemon-wide state (`DAEMON_AGENT`, `dispatch`).
+
+/// Routes a voice transcript into the daemon's wired agent service.
+/// Synthesizes a single-turn `agent.chat` request and feeds it through
+/// `clawft_service_agent::AgentService::dispatch`. Source attribution
+/// (`source: voice`, transcript_topic, confidence) lands as a
+/// `system`-role message prepended to the conversation so the loop's
+/// system prompt sees it without changing the wire shape.
+struct DaemonAgentChatHandler;
+
+#[async_trait::async_trait]
+impl crate::voice_router::ChatHandler for DaemonAgentChatHandler {
+    async fn dispatch_chat(
+        &self,
+        turn: crate::voice_router::VoiceChatTurn,
+    ) -> Result<(), String> {
+        let Some(agent) = daemon_agent() else {
+            return Err("agent service not wired (DAEMON_AGENT unset)".into());
+        };
+        let _ = turn.target_agent; // single-tenant concierge today (Phase D2 wiring)
+        let confidence_str = turn
+            .metadata
+            .confidence
+            .map(|c| format!("{c:.3}"))
+            .unwrap_or_else(|| "n/a".into());
+        let system_prefix = format!(
+            "[voice transcript — source={} topic={} confidence={}]",
+            turn.metadata.source, turn.metadata.transcript_topic, confidence_str,
+        );
+        let params = clawft_service_agent::AgentChatParams {
+            messages: vec![
+                clawft_service_agent::AgentChatMessage {
+                    role: "system".into(),
+                    content: system_prefix,
+                },
+                clawft_service_agent::AgentChatMessage {
+                    role: "user".into(),
+                    content: turn.text,
+                },
+            ],
+            temperature: None,
+            max_tokens: None,
+            conv_id: turn.conv_id,
+        };
+        agent
+            .dispatch(params)
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("agent.chat dispatch: {e}"))
+    }
+}
+
+/// Routes a parsed `weft <verb> <args>` transcript into the daemon's
+/// JSON-RPC `dispatch` function. Uses the same dispatch entry point
+/// the Unix-socket handler uses, so every method that works for the
+/// panel works for voice — subject to the placeholder permission gate
+/// in [`crate::voice_router`] (replaced by WEFT-208).
+struct DaemonCommandHandler {
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+    /// Throwaway shutdown channel — the consumer will not initiate a
+    /// daemon shutdown; verbs that try (`kernel.shutdown`) flip this
+    /// local channel rather than the real one.
+    shutdown_tx: watch::Sender<bool>,
+    /// Holds the daemon's control flag handle alive for the lifetime
+    /// of the handler. Read-only today; future per-verb intent
+    /// publication (WEFT-210 audit hook) reads it.
+    _control: ControlFlags,
+}
+
+#[async_trait::async_trait]
+impl crate::voice_router::CommandHandler for DaemonCommandHandler {
+    async fn dispatch_command(
+        &self,
+        method: String,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let resp = dispatch(
+            method,
+            params,
+            Arc::clone(&self.kernel),
+            self.shutdown_tx.clone(),
+        )
+        .await;
+        if resp.ok {
+            Ok(resp.result.unwrap_or(serde_json::Value::Null))
+        } else {
+            Err(resp.error.unwrap_or_else(|| "unknown error".into()))
+        }
     }
 }
 

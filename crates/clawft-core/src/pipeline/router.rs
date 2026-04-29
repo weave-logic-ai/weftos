@@ -157,6 +157,7 @@ mod tests {
                 model: "anthropic/claude-opus-4-5".into(),
                 ..AgentDefaults::default()
             },
+            ..AgentsConfig::default()
         };
         let router = StaticRouter::from_config(&config);
         assert_eq!(router.provider(), "anthropic");
@@ -170,6 +171,7 @@ mod tests {
                 model: "gpt-4o".into(),
                 ..AgentDefaults::default()
             },
+            ..AgentsConfig::default()
         };
         let router = StaticRouter::from_config(&config);
         assert_eq!(router.provider(), "openai");

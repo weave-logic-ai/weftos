@@ -39,7 +39,8 @@ impl Default for TtsAbortHandle {
 
 /// Streaming text-to-speech engine.
 ///
-/// Currently a stub -- real sherpa-rs integration after VP.
+/// Currently a stub -- real sherpa-rs integration is deferred to the
+/// 0.8.x in-process voice backend (see ADR-053).
 pub struct TextToSpeech {
     model_path: std::path::PathBuf,
     voice: String,

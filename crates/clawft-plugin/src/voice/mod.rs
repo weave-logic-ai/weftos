@@ -40,7 +40,7 @@ pub mod fallback;
 pub mod transcript_log;
 
 // Re-export key types
-pub use config::VoicePipelineConfig;
+pub use config::{VoiceAudioConfig, VoiceCaptureSpec, VoicePipelineConfig, VoicePlaybackSpec};
 pub use models::ModelDownloadManager;
 pub use channel::{VoiceChannel, VoiceStatus};
 pub use echo::{EchoCanceller, EchoCancellerConfig};
