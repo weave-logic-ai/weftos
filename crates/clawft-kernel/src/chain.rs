@@ -160,7 +160,31 @@ pub struct ChainEvent {
     /// Optional payload (JSON).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
+    /// Optional idempotency key for replay protection (WEFT-103).
+    ///
+    /// When provided to [`ChainManager::append_idempotent`], the chain
+    /// rejects (returns the prior event without appending a duplicate)
+    /// any new event whose key matches an entry within the last
+    /// [`IDEMPOTENCY_LOOKBACK`] events. This shields the append path
+    /// from replayed writes at retry boundaries (mesh peers, HTTP
+    /// reties, sync-sweep loops).
+    ///
+    /// **Not covered by the event hash.** Idempotency keys are an
+    /// out-of-band deduplication hint, not part of the immutable
+    /// chain commitment. This keeps existing chains hash-stable as
+    /// the field rolls out and allows different writers to retry the
+    /// same logical operation without invalidating the ledger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<[u8; 32]>,
 }
+
+/// Number of recent events scanned for idempotency-key collisions
+/// in [`ChainManager::append_idempotent`].
+///
+/// 1000 events is large enough to cover bursts of retries from any
+/// reasonable client TTL window without making the lookup O(n) over
+/// the whole chain. Configurable in a future pass if needed.
+pub const IDEMPOTENCY_LOOKBACK: usize = 1000;
 
 /// A checkpoint snapshot of the chain state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -759,6 +783,22 @@ impl LocalChain {
         kind: String,
         payload: Option<serde_json::Value>,
     ) -> &ChainEvent {
+        self.append_with_key(source, kind, payload, None)
+    }
+
+    /// Append carrying an optional idempotency key (WEFT-103).
+    ///
+    /// The key is *not* mixed into the SHAKE-256 event hash so that
+    /// chain commitments remain stable for replicas that never see
+    /// the key. Replay protection is enforced one layer up in
+    /// [`ChainManager::append_idempotent`].
+    fn append_with_key(
+        &mut self,
+        source: String,
+        kind: String,
+        payload: Option<serde_json::Value>,
+        idempotency_key: Option<[u8; 32]>,
+    ) -> &ChainEvent {
         let timestamp = Utc::now();
         let payload_hash = compute_payload_hash(&payload);
         let hash = compute_event_hash(
@@ -781,6 +821,7 @@ impl LocalChain {
             source,
             kind,
             payload,
+            idempotency_key,
         };
 
         // Create a witness entry for this event.
@@ -1014,6 +1055,53 @@ impl ChainManager {
     ) -> ChainEvent {
         let mut chain = self.inner.lock().unwrap();
         chain.append(source.into(), kind.into(), payload).clone()
+    }
+
+    /// Append an event with an optional idempotency key (WEFT-103).
+    ///
+    /// When `idempotency_key` is `Some`, the chain is scanned for the
+    /// most recent [`IDEMPOTENCY_LOOKBACK`] events. If an event with
+    /// the same key is found, **no append occurs** and the prior
+    /// event is returned. This protects the chain against:
+    ///
+    /// - Retried mesh writes that crossed the network twice.
+    /// - HTTP-handler retries on connection drops.
+    /// - Sync-sweep loops that re-emit the same logical operation.
+    ///
+    /// When `idempotency_key` is `None`, behaves exactly like
+    /// [`Self::append`].
+    ///
+    /// Concurrency: the lookback scan and the append happen under
+    /// the same inner mutex, so concurrent callers cannot race past
+    /// each other to insert duplicates.
+    pub fn append_idempotent(
+        &self,
+        source: &str,
+        kind: &str,
+        payload: Option<serde_json::Value>,
+        idempotency_key: Option<[u8; 32]>,
+    ) -> ChainEvent {
+        let mut chain = self.inner.lock().unwrap();
+
+        if let Some(ref key) = idempotency_key {
+            let len = chain.events.len();
+            let start = len.saturating_sub(IDEMPOTENCY_LOOKBACK);
+            // Walk newest-first so a hot-cache hit short-circuits early.
+            for existing in chain.events[start..].iter().rev() {
+                if existing.idempotency_key.as_ref() == Some(key) {
+                    debug!(
+                        sequence = existing.sequence,
+                        kind = existing.kind,
+                        "idempotency_key match -- skipping duplicate append"
+                    );
+                    return existing.clone();
+                }
+            }
+        }
+
+        chain
+            .append_with_key(source.into(), kind.into(), payload, idempotency_key)
+            .clone()
     }
 
     /// Create a checkpoint.
@@ -1505,6 +1593,10 @@ impl ChainManager {
                     source: rvf_payload.source,
                     kind: rvf_payload.kind,
                     payload: rvf_payload.payload,
+                    // Idempotency keys are an in-memory dedup hint;
+                    // they are not persisted to RVF segments
+                    // (preserves chain-hash stability across restores).
+                    idempotency_key: None,
                 });
             } else if exo_header.subtype == 0x41 {
                 // Checkpoint — extract witness chain if present.
@@ -2414,6 +2506,62 @@ mod tests {
 
         let e2 = cm.append("test", "event.two", Some(serde_json::json!({"key": "value"})));
         assert_eq!(e2.prev_hash, e1.hash);
+    }
+
+    /// WEFT-103: an idempotency_key match within the lookback window
+    /// must short-circuit the append and return the prior event
+    /// rather than producing a duplicate ledger entry.
+    #[test]
+    fn append_idempotent_dedups_within_window() {
+        let cm = ChainManager::new(0, 1000);
+        let key = [0xABu8; 32];
+
+        let starting_len = cm.len();
+        let first = cm.append_idempotent(
+            "test",
+            "idempotent.event",
+            Some(serde_json::json!({"n": 1})),
+            Some(key),
+        );
+        assert_eq!(cm.len(), starting_len + 1);
+        assert_eq!(first.idempotency_key, Some(key));
+
+        // Replay -- payload differs but key matches: must be a no-op.
+        let replay = cm.append_idempotent(
+            "test",
+            "idempotent.event",
+            Some(serde_json::json!({"n": 2})),
+            Some(key),
+        );
+        assert_eq!(cm.len(), starting_len + 1, "replay must not append");
+        assert_eq!(replay.sequence, first.sequence);
+        assert_eq!(replay.hash, first.hash);
+    }
+
+    /// WEFT-103: distinct keys must each produce a fresh event, and
+    /// an absent key must always append (default-on behaviour).
+    #[test]
+    fn append_idempotent_distinct_keys_append() {
+        let cm = ChainManager::new(0, 1000);
+        let starting_len = cm.len();
+
+        let _ = cm.append_idempotent(
+            "test",
+            "k.a",
+            None,
+            Some([0x01u8; 32]),
+        );
+        let _ = cm.append_idempotent(
+            "test",
+            "k.b",
+            None,
+            Some([0x02u8; 32]),
+        );
+        // No key -- always appends.
+        let _ = cm.append_idempotent("test", "k.none", None, None);
+        let _ = cm.append_idempotent("test", "k.none", None, None);
+
+        assert_eq!(cm.len(), starting_len + 4);
     }
 
     #[test]
