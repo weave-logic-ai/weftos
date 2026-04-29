@@ -7,11 +7,35 @@ license.workspace = true
 repository.workspace = true
 description = "egui/eframe native GUI spike for ClawFT — ports the 12 core UI blocks"
 
-# wasm-pack settings: disable wasm-opt because the cached wasm-opt
-# pinned by wasm-pack is old and rejects modern Rust's bulk-memory
-# output. We take the (modest) size hit.
+# wasm-pack settings: enable wasm-opt with `-Oz` (size-optimized)
+# for release builds.
+#
+# History: wasm-pack used to bundle an old binaryen whose `wasm-opt`
+# rejected modern Rust's bulk-memory output. wasm-pack ≥ 0.13 picks
+# up a system `wasm-opt` instead, and the in-repo build script
+# (`extensions/vscode-weft-panel/scripts/build-wasm.sh`) also has a
+# post-bindgen `wasm-opt -Oz` pass as a belt-and-braces fallback for
+# the cargo+wasm-bindgen path. Either way the published bundle is
+# now optimised. WEFT-246.
+#
+# The size impact matters: cold-load over the VSCode webview's local
+# resource loader pays ~3× the size of an uncached wasm bundle (gzip
+# parses + caches per-file for resource:// URLs). Without `-Oz` the
+# bundle was ~4.2 MB; with it the bundle drops below ~2 MB, putting
+# panel boot below 1.5 s on a typical dev box.
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = false
+# Older binaryen versions (≤ 116) refuse modern Rust output unless we
+# pass the feature-enable flags rustc 1.93 emits. The build script's
+# fallback path uses the same set; keep them in sync.
+wasm-opt = [
+    "--enable-bulk-memory",
+    "--enable-nontrapping-float-to-int",
+    "--enable-sign-ext",
+    "--enable-mutable-globals",
+    "--enable-multivalue",
+    "--enable-reference-types",
+    "-Oz",
+]
 
 # ── Native-only bins (excluded from wasm via target.cfg) ─────────────
 
@@ -56,10 +80,30 @@ parking_lot = { workspace = true }
 # Without this, wasm32-unknown-unknown panics ("time not implemented on
 # this platform") the moment any UI code hits a clock.
 web-time = "1"
-# egui_extras's `all_loaders` turns on the `image` crate dep but leaves format
-# features OFF (default-features=false and no overrides). Feature unification
-# from other crates in the tree doesn't reliably pick up PNG for the wasm
-# target, so the boot logo silently fails to decode. Pin `png` explicitly.
+# NOTE (WEFT-251): the `image` crate is feature-pinned to PNG only.
+#
+# Why "png" and nothing else:
+#   1. egui_extras's `all_loaders` brings `image` in as a transitive
+#      dep but leaves all format features OFF (default-features=false,
+#      no overrides). Feature unification across the workspace
+#      doesn't reliably enable PNG on `wasm32-unknown-unknown`, so
+#      without this explicit pin the boot logo silently fails to
+#      decode in the VSCode webview.
+#   2. PNG is the only format the egui shell *actually* renders today
+#      (the boot splash, the chip icons, the surface-host placeholder
+#      thumbnails are all PNG). Pulling JPEG/WebP/AVIF/etc. in via
+#      `image = "default"` adds ~600 KB of dead decoders to the wasm
+#      bundle — directly opposed to WEFT-246's size budget.
+#
+# Updating this list:
+#   - Adding a format (e.g. WebP) means a measurable wasm bundle
+#     hit. Profile the impact (`scripts/build.sh browser` and
+#     check `extensions/vscode-weft-panel/webview/wasm/` size)
+#     and update the WEFT-246 size note in the wasm-pack metadata
+#     above if you go above the ~2 MB target.
+#   - The native build pays roughly the same cost in stripped-bin
+#     size; the wasm size dominates because cold-load is webview-
+#     local and gzip caching is per-resource, not per-tab.
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Two consumers in this crate:
 #  - PcmChunkViewer's inline waveform mini-plot (decodes the
@@ -159,6 +203,13 @@ audio = ["dep:rodio"]
 # (even if unused) keeps clippy's `-D warnings` happy without editing
 # the vendored source.
 serde = []
+# WEFT-248: opt-in live smoke test against a running daemon + llama-server.
+# Spawned binaries and network calls don't run under default CI; this
+# feature gates the test so `scripts/build.sh test` stays hermetic.
+#
+# Enable with:
+#   cargo test -p clawft-gui-egui --features live-smoke -- --ignored
+live-smoke = []
 
 [dependencies.rodio]
 version = "0.19"
