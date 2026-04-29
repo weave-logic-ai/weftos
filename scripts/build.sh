@@ -142,6 +142,35 @@ cmd_native_debug() {
     report_binary_size "target/debug/weaver" "Native binary (weave, debug)"
 }
 
+# Build the native egui GUI binary (`weft-gui-egui`). Lives in
+# `crates/clawft-gui-egui/` and gates the native main loop behind the
+# `native` feature so the wasm target excludes eframe's window code
+# (see Cargo.toml `[[bin]]` `required-features = ["native"]`). The
+# wasm bundle (used by the VSCode panel) is built via `cmd_browser`.
+cmd_gui_egui() {
+    local profile="${PROFILE:-release}"
+    header "Building native egui GUI binary weft-gui-egui (profile: $profile)"
+    force_clean_pkg clawft-gui-egui
+    timer_start
+    local feat="native"
+    if [ -n "$FEATURES" ]; then
+        feat="native,$FEATURES"
+    fi
+    local args=(cargo build -p clawft-gui-egui --bin weft-gui-egui --features "$feat")
+    if [ "$profile" = "release" ] || [ "$profile" = "release-wasm" ]; then
+        args+=(--profile "$profile")
+    fi
+    run_cmd "${args[@]}"
+    timer_end
+    if [ "$profile" = "release" ]; then
+        report_binary_size "target/release/weft-gui-egui" "weft-gui-egui (release)"
+    elif [ "$profile" = "release-wasm" ]; then
+        report_binary_size "target/release-wasm/weft-gui-egui" "weft-gui-egui (release-wasm)"
+    else
+        report_binary_size "target/debug/weft-gui-egui" "weft-gui-egui (debug)"
+    fi
+}
+
 cmd_wasi() {
     local profile="${PROFILE:-release-wasm}"
     header "Building WASM for WASI (wasm32-wasip2, profile: $profile)"
@@ -454,6 +483,7 @@ ${BOLD}Usage:${NC} scripts/build.sh <command> [options]
 ${BOLD}Commands:${NC}
   native          Build native CLI binary (release)
   native-debug    Build native CLI binary (debug, fast)
+  gui-egui        Build native egui GUI binary (weft-gui-egui, requires --features native)
   wasi            Build WASM for WASI (wasm32-wasip2)
   browser         Build WASM for browser (wasm32-unknown-unknown)
   ui              Build React frontend (tsc + vite)
@@ -476,6 +506,8 @@ ${BOLD}Options:${NC}
 ${BOLD}Examples:${NC}
   scripts/build.sh native                          # Release CLI binary
   scripts/build.sh native --features voice          # CLI with voice
+  scripts/build.sh gui-egui                         # Native egui GUI (release)
+  scripts/build.sh gui-egui --profile debug         # Native egui GUI (debug)
   scripts/build.sh browser                          # Browser WASM
   scripts/build.sh gate                             # Full phase gate
   scripts/build.sh native --dry-run                 # Preview commands
@@ -542,6 +574,7 @@ main() {
     case "$COMMAND" in
         native)       cmd_native ;;
         native-debug) cmd_native_debug ;;
+        gui-egui)     cmd_gui_egui ;;
         wasi)         cmd_wasi ;;
         browser)      cmd_browser ;;
         ui)           cmd_ui ;;
