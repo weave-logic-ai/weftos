@@ -470,7 +470,35 @@ impl AuthService {
     }
 
     /// Revoke an active token.
-    pub fn revoke_token(&self, token_id: &str) -> bool {
+    ///
+    /// Returns `Ok(true)` if a token was revoked, `Ok(false)` if the
+    /// token was not present (idempotent re-revoke), and
+    /// `Err(KernelError::GovernanceDenied)` if the configured
+    /// governance gate denies the `auth.token.revoke` action.
+    ///
+    /// WEFT-98: revocation is a privileged operation -- it is the
+    /// only mechanism for invalidating an issued credential before
+    /// its TTL elapses. Without a governance gate, a compromised
+    /// caller could mass-revoke tokens to deny service. The gate
+    /// runs *before* state mutation so a denied revoke leaves the
+    /// active-token map untouched.
+    pub fn revoke_token(&self, token_id: &str) -> Result<bool, KernelError> {
+        // Governance gate: token revocation is governed by policy
+        // (mirrors the rotate_credential / request_token gates).
+        #[cfg(feature = "exochain")]
+        if let Some(ref gate) = self.governance_gate {
+            use crate::gate::GateDecision;
+            let ctx = serde_json::json!({
+                "token_id": token_id,
+            });
+            let decision = gate.check("auth-service", "auth.token.revoke", &ctx);
+            if let GateDecision::Deny { reason, .. } = decision {
+                return Err(KernelError::GovernanceDenied(format!(
+                    "token revocation denied: {reason}"
+                )));
+            }
+        }
+
         let removed = self.active_tokens.remove(token_id).is_some();
 
         #[cfg(feature = "exochain")]
@@ -485,7 +513,7 @@ impl AuthService {
                 );
             }
 
-        removed
+        Ok(removed)
     }
 
     /// List all active (non-expired) tokens.
@@ -805,8 +833,61 @@ mod tests {
             .unwrap();
         let req = make_request("cred", "agent", 1);
         let token = svc.request_token(&req).unwrap();
-        assert!(svc.revoke_token(&token.token_id));
+        assert!(svc.revoke_token(&token.token_id).unwrap());
         assert!(svc.validate_token(&token.token_id).is_err());
+        // Revoking an unknown / already-revoked token is idempotent.
+        assert!(!svc.revoke_token(&token.token_id).unwrap());
+    }
+
+    /// WEFT-98: revoke_token must consult the governance gate and
+    /// surface a `GovernanceDenied` error when the gate denies the
+    /// `auth.token.revoke` action.
+    ///
+    /// Uses a selective gate that only denies `auth.token.revoke`
+    /// so register/issue still succeed during setup.
+    #[cfg(feature = "exochain")]
+    #[test]
+    fn revoke_token_denied_by_governance() {
+        use crate::gate::{GateBackend, GateDecision};
+        use std::sync::Arc;
+
+        struct RevokeDenyGate;
+        impl GateBackend for RevokeDenyGate {
+            fn check(
+                &self,
+                _source: &str,
+                action: &str,
+                _ctx: &serde_json::Value,
+            ) -> GateDecision {
+                if action == "auth.token.revoke" {
+                    GateDecision::Deny {
+                        reason: "policy: revoke disabled".into(),
+                        receipt: None,
+                    }
+                } else {
+                    GateDecision::Permit { token: None }
+                }
+            }
+        }
+
+        let svc = AuthService::new_default()
+            .with_governance_gate(Arc::new(RevokeDenyGate) as Arc<dyn GateBackend>);
+        svc.register_credential("cred", CredentialType::ApiKey, b"val", vec![])
+            .unwrap();
+        let req = make_request("cred", "agent", 1);
+        let token = svc.request_token(&req).unwrap();
+
+        let err = svc.revoke_token(&token.token_id).unwrap_err();
+        match err {
+            KernelError::GovernanceDenied(msg) => {
+                assert!(msg.contains("token revocation denied"), "got: {msg}");
+            }
+            other => panic!("expected GovernanceDenied, got {other:?}"),
+        }
+
+        // Token must still be valid -- a denied revoke is a no-op
+        // on the active-token map.
+        assert!(svc.validate_token(&token.token_id).is_ok());
     }
 
     #[test]
