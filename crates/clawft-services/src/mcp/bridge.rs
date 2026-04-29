@@ -24,9 +24,17 @@
 //! ```
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
+
+use super::transport::{
+    DefaultTransportFactory, McpTransportFactory, TransportFactoryConfig, TransportSpec,
+};
+use super::{McpSession, ToolDefinition};
+use crate::error::{Result, ServiceError};
 
 /// Bridge status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,16 +115,36 @@ pub struct McpBridge {
     inbound_tools: Vec<String>,
     /// Tools exposed by clawft to Claude Code.
     outbound_tools: Vec<String>,
+    /// Live session against Claude Code (set after `connect_inbound`).
+    inbound_session: Option<Arc<Mutex<McpSession>>>,
+    /// Transport factory used for the inbound connection.
+    factory: Arc<dyn McpTransportFactory>,
 }
 
 impl McpBridge {
-    /// Create a new bridge with the given configuration.
+    /// Create a new bridge with the given configuration and a default
+    /// (lenient) transport factory.
     pub fn new(config: BridgeConfig) -> Self {
+        Self::with_factory(
+            config,
+            Arc::new(DefaultTransportFactory::new(
+                TransportFactoryConfig::lenient(),
+            )),
+        )
+    }
+
+    /// Create a new bridge with a custom transport factory.
+    ///
+    /// Useful for tests (inject a mock factory) or for hardening
+    /// (inject `TransportFactoryConfig::strict()`).
+    pub fn with_factory(config: BridgeConfig, factory: Arc<dyn McpTransportFactory>) -> Self {
         Self {
             config,
             status: BridgeStatus::Unconfigured,
             inbound_tools: Vec::new(),
             outbound_tools: Vec::new(),
+            inbound_session: None,
+            factory,
         }
     }
 
@@ -140,17 +168,12 @@ impl McpBridge {
         self.config.enabled
     }
 
-    /// Initialize the bridge.
+    /// Register the set of tools that clawft exposes outbound to Claude
+    /// Code, and mark the bridge as initializing.
     ///
-    /// This sets up the outbound direction (clawft -> Claude Code) by
-    /// registering outbound tools, and prepares for inbound connection.
-    ///
-    /// # Note
-    ///
-    /// Full MCP client connection depends on Element 07/F9a providing
-    /// the `McpClient::connect()` implementation. Until then, this
-    /// method sets up the configuration and marks the bridge as ready
-    /// for connection.
+    /// This is the synchronous part of bridge bring-up. Use
+    /// [`Self::connect_inbound`] to actually spawn the Claude Code
+    /// process and complete the inbound MCP handshake.
     pub fn initialize(&mut self, outbound_tools: Vec<String>) {
         if !self.config.enabled {
             debug!("bridge not enabled, skipping initialization");
@@ -164,6 +187,91 @@ impl McpBridge {
             namespace = %self.config.namespace,
             "MCP bridge initializing"
         );
+    }
+
+    /// Spawn Claude Code, perform the MCP `initialize` handshake, and
+    /// register the resulting tool list under the bridge namespace.
+    ///
+    /// This is the real implementation of the inbound direction:
+    /// 1. Build a [`TransportSpec::Stdio`] from the bridge config.
+    /// 2. Validate via the transport factory and spawn the process.
+    /// 3. [`McpSession::connect`] performs `initialize` +
+    ///    `notifications/initialized`.
+    /// 4. `tools/list` is fetched and namespaced via
+    ///    [`Self::namespaced_tool_name`].
+    ///
+    /// On success the session is stashed inside the bridge for later
+    /// `tools/call` use; on failure the bridge transitions to
+    /// `BridgeStatus::Error`.
+    pub async fn connect_inbound(&mut self) -> Result<Vec<ToolDefinition>> {
+        if !self.config.enabled {
+            return Err(ServiceError::McpTransport("bridge not enabled".into()));
+        }
+
+        let spec = TransportSpec::Stdio {
+            command: self.config.claude_command.clone(),
+            args: self.config.claude_args.clone(),
+            env: self.config.env.clone(),
+        };
+
+        let transport = match self.factory.create(spec).await {
+            Ok(t) => t,
+            Err(e) => {
+                self.set_error(&format!("transport spawn failed: {e}"));
+                return Err(e);
+            }
+        };
+
+        let session = match McpSession::connect(transport).await {
+            Ok(s) => s,
+            Err(e) => {
+                self.set_error(&format!("handshake failed: {e}"));
+                return Err(e);
+            }
+        };
+
+        info!(
+            server_name = %session.server_info.name,
+            server_version = %session.server_info.version,
+            protocol_version = %session.protocol_version,
+            "Claude Code MCP handshake complete"
+        );
+
+        let tools = match session.list_tools().await {
+            Ok(t) => t,
+            Err(e) => {
+                self.set_error(&format!("tools/list failed: {e}"));
+                return Err(e);
+            }
+        };
+
+        // Build the namespaced tool definition list and the inbound
+        // tool-name registry that drives status transitions.
+        let namespaced: Vec<ToolDefinition> = tools
+            .into_iter()
+            .map(|td| ToolDefinition {
+                name: self.namespaced_tool_name(&td.name),
+                description: td.description,
+                input_schema: td.input_schema,
+            })
+            .collect();
+
+        self.inbound_tools = namespaced.iter().map(|t| t.name.clone()).collect();
+        self.inbound_session = Some(Arc::new(Mutex::new(session)));
+        self.update_status();
+
+        info!(
+            inbound_tool_count = self.inbound_tools.len(),
+            namespace = %self.config.namespace,
+            "Claude Code tools registered under bridge namespace"
+        );
+
+        Ok(namespaced)
+    }
+
+    /// Access the live inbound session (post-`connect_inbound`).
+    pub fn inbound_session(&self) -> Option<&Arc<Mutex<McpSession>>> {
+        self.inbound_session.as_ref()
     }
 
     /// Mark the inbound connection as active with discovered tools.
@@ -192,6 +300,9 @@ impl McpBridge {
     pub fn shutdown(&mut self) {
         self.status = BridgeStatus::ShuttingDown;
         self.inbound_tools.clear();
+        // Drop the live session so the child process's stdin closes
+        // and the reader task exits.
+        self.inbound_session = None;
         info!("MCP bridge shutting down");
     }
 
@@ -374,5 +485,199 @@ mod tests {
         let restored: BridgeStatus =
             serde_json::from_str("\"shutting_down\"").unwrap();
         assert_eq!(restored, BridgeStatus::ShuttingDown);
+    }
+
+    // ── connect_inbound tests (WEFT-182) ────────────────────────────────
+
+    use super::super::transport::{McpTransport, McpTransportFactory, TransportSpec};
+    use super::super::types::JsonRpcResponse;
+    use crate::error::{Result as SvcResult, ServiceError};
+    use async_trait::async_trait;
+
+    /// A mock factory that hands out a pre-programmed in-memory
+    /// transport. Used to exercise `connect_inbound` without spawning
+    /// a real child process.
+    struct MockFactory {
+        responses: std::sync::Mutex<Option<Vec<JsonRpcResponse>>>,
+    }
+
+    impl MockFactory {
+        fn new(responses: Vec<JsonRpcResponse>) -> Self {
+            Self {
+                responses: std::sync::Mutex::new(Some(responses)),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl McpTransportFactory for MockFactory {
+        fn validate(&self, _spec: &TransportSpec) -> SvcResult<()> {
+            Ok(())
+        }
+
+        async fn create(&self, _spec: TransportSpec) -> SvcResult<Box<dyn McpTransport>> {
+            let responses = self
+                .responses
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or_else(|| ServiceError::McpTransport("factory used twice".into()))?;
+            Ok(Box::new(super::super::transport::MockTransport::new(
+                responses,
+            )))
+        }
+    }
+
+    fn ok_response(id: u64, result: serde_json::Value) -> JsonRpcResponse {
+        JsonRpcResponse {
+            jsonrpc: "2.0".into(),
+            id,
+            result: Some(result),
+            error: None,
+        }
+    }
+
+    fn err_response(id: u64, code: i32, message: &str) -> JsonRpcResponse {
+        JsonRpcResponse {
+            jsonrpc: "2.0".into(),
+            id,
+            result: None,
+            error: Some(super::super::types::JsonRpcError {
+                code,
+                message: message.into(),
+                data: None,
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn connect_inbound_disabled_errors() {
+        let mut bridge = McpBridge::disabled();
+        let result = bridge.connect_inbound().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn connect_inbound_handshake_and_tools_list() {
+        // Mocked initialize response.
+        let init = ok_response(
+            1,
+            serde_json::json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {"tools": {"listChanged": true}},
+                "serverInfo": {"name": "claude-code", "version": "0.1.2"}
+            }),
+        );
+        // Mocked tools/list response.
+        let tools = ok_response(
+            2,
+            serde_json::json!({
+                "tools": [
+                    {
+                        "name": "read_file",
+                        "description": "Read a file",
+                        "inputSchema": {"type": "object"}
+                    },
+                    {
+                        "name": "write_file",
+                        "description": "Write a file",
+                        "inputSchema": {"type": "object"}
+                    }
+                ]
+            }),
+        );
+        let factory = Arc::new(MockFactory::new(vec![init, tools]));
+
+        let mut bridge = McpBridge::with_factory(
+            BridgeConfig {
+                enabled: true,
+                namespace: "claude-code".into(),
+                ..Default::default()
+            },
+            factory,
+        );
+
+        let registered = bridge.connect_inbound().await.unwrap();
+        assert_eq!(registered.len(), 2);
+
+        // Tools must be registered under the namespaced prefix.
+        assert_eq!(registered[0].name, "mcp:claude-code:read_file");
+        assert_eq!(registered[1].name, "mcp:claude-code:write_file");
+        assert_eq!(bridge.inbound_tools().len(), 2);
+        assert!(bridge.inbound_session().is_some());
+    }
+
+    #[tokio::test]
+    async fn connect_inbound_handshake_failure_marks_error() {
+        // Initialize fails.
+        let factory = Arc::new(MockFactory::new(vec![err_response(
+            1,
+            -32600,
+            "bad init",
+        )]));
+
+        let mut bridge = McpBridge::with_factory(
+            BridgeConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            factory,
+        );
+
+        let result = bridge.connect_inbound().await;
+        assert!(result.is_err());
+        assert_eq!(bridge.status(), BridgeStatus::Error);
+        assert!(bridge.inbound_session().is_none());
+    }
+
+    #[tokio::test]
+    async fn connect_inbound_tools_list_failure_marks_error() {
+        let init = ok_response(
+            1,
+            serde_json::json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "serverInfo": {"name": "claude-code", "version": "0.1.0"}
+            }),
+        );
+        let tools_err = err_response(2, -32601, "tools/list not supported");
+        let factory = Arc::new(MockFactory::new(vec![init, tools_err]));
+
+        let mut bridge = McpBridge::with_factory(
+            BridgeConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            factory,
+        );
+
+        let result = bridge.connect_inbound().await;
+        assert!(result.is_err());
+        assert_eq!(bridge.status(), BridgeStatus::Error);
+    }
+
+    #[tokio::test]
+    async fn shutdown_drops_session() {
+        let init = ok_response(
+            1,
+            serde_json::json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "serverInfo": {"name": "x", "version": "y"}
+            }),
+        );
+        let tools = ok_response(2, serde_json::json!({"tools": []}));
+        let factory = Arc::new(MockFactory::new(vec![init, tools]));
+        let mut bridge = McpBridge::with_factory(
+            BridgeConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            factory,
+        );
+        let _ = bridge.connect_inbound().await.unwrap();
+        assert!(bridge.inbound_session().is_some());
+        bridge.shutdown();
+        assert!(bridge.inbound_session().is_none());
     }
 }
