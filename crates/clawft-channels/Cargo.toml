@@ -12,10 +12,16 @@ keywords = ["telegram", "slack", "discord", "chat", "bot"]
 categories = ["network-programming"]
 
 [features]
-default = []
+default = ["native"]
+native = ["clawft-plugin/native"]
 email = []
 whatsapp = []
-signal = []
+# `signal` requires the real (tokio-backed) `CancellationToken` exposed
+# by `clawft-plugin`'s `native` feature; without it the trait's cancel
+# parameter resolves to the WASM-only fallback type and the
+# `ChannelAdapter::start` impl fails to type-check in standalone
+# `cargo check -p clawft-channels --features signal`.
+signal = ["clawft-plugin/native"]
 matrix = []
 google-chat = []
 irc = []
