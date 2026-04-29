@@ -52,3 +52,24 @@
 ---
 
 ## Step 7 Phase Gate: 11/11 PASS
+
+---
+
+## Postscript (2026-04-28) -- `ui/` -> `clawft-ui/` rename
+
+Check 10 in the table above (`cd ui && npm run build`) was run before
+the directory rename. The dashboard codebase moved from `ui/` to
+`clawft-ui/` in CHANGELOG 0.6.19 (2026-04-22), and the toolchain
+followed in the 0.7.0 release wave M1-E (Plane WEFT-292/293/294 — see
+`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md`):
+
+- `scripts/build.sh::cmd_ui` and the gate's check 10 now look at
+  `$ROOT/clawft-ui/package.json` and run `cd clawft-ui && npm run build`.
+- `weft ui --ui-dir` example / test fixture default path is
+  `./clawft-ui/dist`.
+- Stale legacy `ui/` artefact (pre-rename `dist/` + `node_modules/`
+  with no `package.json`) removed.
+
+The phase gate was re-run on 2026-04-28 against `clawft-ui/` to
+confirm continued 11/11 PASS; see the M1-E commit on branch
+`m1/m1-e-ws09-rename` for details.

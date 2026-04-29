@@ -198,7 +198,7 @@ The `weft ui` command serves the UI from a binary with embedded static files usi
 
 ```bash
 # Build the UI first
-cd ui && npm run build && cd ..
+cd clawft-ui && npm run build && cd ..
 
 # Build the Rust binary (includes dist/ via rust-embed)
 cargo build --release --bin weft

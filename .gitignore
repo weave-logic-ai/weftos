@@ -8,6 +8,9 @@
 target/
 .env
 .env-keys.json
+# Documented Vite build-time template files (no secrets) — keep tracked.
+!clawft-ui/.env
+!clawft-ui/.env.mock
 crates/clawft-wasm/www/pkg/
 
 # WeftOS runtime state
@@ -15,8 +18,8 @@ weave.toml
 .weftos/
 gui/node_modules/
 gui/dist/
-ui/node_modules/
-ui/dist/
+clawft-ui/node_modules/
+clawft-ui/dist/
 .vercel
 # KB: commit .gz only, decompress client-side or via CI
 docs/src/public/kb/weftos-docs.rvf.json

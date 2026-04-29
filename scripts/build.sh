@@ -222,20 +222,20 @@ cmd_browser() {
 
 cmd_ui() {
     header "Building React frontend (tsc + vite)"
-    if [ ! -d "$ROOT/ui" ] || [ ! -f "$ROOT/ui/package.json" ]; then
-        skip "ui/ directory not found — skipping"
+    if [ ! -d "$ROOT/clawft-ui" ] || [ ! -f "$ROOT/clawft-ui/package.json" ]; then
+        skip "clawft-ui/ directory not found — skipping"
         return 0
     fi
     timer_start
     if [ "$DRY_RUN" = true ]; then
-        printf "  ${YELLOW}DRY${NC}   cd ui && npm run build\n"
+        printf "  ${YELLOW}DRY${NC}   cd clawft-ui && npm run build\n"
     else
-        (cd "$ROOT/ui" && npm run build)
+        (cd "$ROOT/clawft-ui" && npm run build)
     fi
     timer_end
-    if [ -d "$ROOT/ui/dist" ]; then
+    if [ -d "$ROOT/clawft-ui/dist" ]; then
         local size
-        size=$(du -sh "$ROOT/ui/dist" 2>/dev/null | cut -f1)
+        size=$(du -sh "$ROOT/clawft-ui/dist" 2>/dev/null | cut -f1)
         printf "  ${CYAN}SIZE${NC}  UI bundle: %s\n" "$size"
     fi
 }
@@ -305,9 +305,9 @@ cmd_clippy() {
 cmd_clean() {
     header "Cleaning build artifacts"
     run_cmd cargo clean
-    if [ -d "$ROOT/ui/dist" ]; then
-        info "Removing ui/dist"
-        rm -rf "$ROOT/ui/dist"
+    if [ -d "$ROOT/clawft-ui/dist" ]; then
+        info "Removing clawft-ui/dist"
+        rm -rf "$ROOT/clawft-ui/dist"
     fi
     if [ -d "$ROOT/crates/clawft-wasm/www/pkg" ]; then
         info "Removing crates/clawft-wasm/www/pkg"
@@ -444,13 +444,13 @@ cmd_gate() {
     fi
 
     # 10. UI build
-    if [ -d "$ROOT/ui" ] && [ -f "$ROOT/ui/package.json" ]; then
+    if [ -d "$ROOT/clawft-ui" ] && [ -f "$ROOT/clawft-ui/package.json" ]; then
         printf "\n${BOLD}[%2d/%d]${NC} %s\n" 10 "$total" "UI build (tsc + vite)"
         timer_start
         if [ "$DRY_RUN" = true ]; then
-            printf "  ${YELLOW}DRY${NC}   cd ui && npm run build\n"
+            printf "  ${YELLOW}DRY${NC}   cd clawft-ui && npm run build\n"
             passed=$((passed + 1))
-        elif (cd "$ROOT/ui" && npm run build) >/dev/null 2>&1; then
+        elif (cd "$ROOT/clawft-ui" && npm run build) >/dev/null 2>&1; then
             pass "UI build"
             passed=$((passed + 1))
         else
@@ -460,7 +460,7 @@ cmd_gate() {
         timer_end
     else
         printf "\n${BOLD}[%2d/%d]${NC} %s\n" 10 "$total" "UI build"
-        skip "ui/ directory not found"
+        skip "clawft-ui/ directory not found"
         skipped=$((skipped + 1))
     fi
 

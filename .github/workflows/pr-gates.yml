@@ -247,11 +247,11 @@ jobs:
       - name: Check if UI directory exists
         id: check-ui
         run: |
-          if [ -d "ui" ] && [ -f "ui/package.json" ]; then
+          if [ -d "clawft-ui" ] && [ -f "clawft-ui/package.json" ]; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::UI directory not found, skipping UI checks"
+            echo "::notice::clawft-ui directory not found, skipping UI checks"
           fi
 
       - name: Setup Node.js
@@ -268,19 +268,19 @@ jobs:
 
       - name: Install dependencies
         if: steps.check-ui.outputs.exists == 'true'
-        run: cd ui && pnpm install --frozen-lockfile
+        run: cd clawft-ui && pnpm install --frozen-lockfile
 
       - name: Lint
         if: steps.check-ui.outputs.exists == 'true'
-        run: cd ui && pnpm lint
+        run: cd clawft-ui && pnpm lint
 
       - name: Type check
         if: steps.check-ui.outputs.exists == 'true'
-        run: cd ui && pnpm type-check
+        run: cd clawft-ui && pnpm type-check
 
       - name: Test
         if: steps.check-ui.outputs.exists == 'true'
-        run: cd ui && pnpm test --run
+        run: cd clawft-ui && pnpm test --run
 
   # -------------------------------------------------------------------
   # Cargo Check: fast workspace-wide compilation check
