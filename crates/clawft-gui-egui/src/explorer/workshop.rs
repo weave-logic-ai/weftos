@@ -65,6 +65,7 @@ use eframe::egui;
 use serde_json::Value;
 
 use crate::live::{self, Command, Live, ReplyRx};
+use crate::wasm_time::epoch_minus;
 
 /// Reserved Object Type name so Track 2's `ontology::infer` can match
 /// Workshop shapes once a registration is added there. The value lives
@@ -294,15 +295,11 @@ impl PanelSub {
         Self {
             value: None,
             pending: None,
-            // Epoch: fire the first poll immediately. `checked_sub`
-            // because on WASM `Instant::now()` at early page-load can be
-            // less than `PANEL_POLL * 2`, and unchecked subtraction
-            // panics with "overflow when subtracting duration from
-            // instant". Fallback means the first poll fires one
-            // `PANEL_POLL` later — acceptable to avoid the crash.
-            last_poll: web_time::Instant::now()
-                .checked_sub(PANEL_POLL * 2)
-                .unwrap_or_else(web_time::Instant::now),
+            // Epoch: fire the first poll immediately. The
+            // `epoch_minus` helper handles the WASM cold-load
+            // time-origin underflow (see WEFT-247); fallback means
+            // the first poll fires one `PANEL_POLL` later instead.
+            last_poll: epoch_minus(PANEL_POLL * 2),
             last_error: None,
         }
     }
