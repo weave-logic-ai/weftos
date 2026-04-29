@@ -283,6 +283,67 @@ cmd_test() {
     timer_end
 }
 
+# Browser regression suite (WEFT-388 / M5-A).
+#
+# Builds + runs `crates/clawft-wasm/tests/browser_pipeline.rs` under
+# headless Chrome via `wasm-pack test`. Requires:
+#   - wasm-pack             (rustup component or cargo-installed)
+#   - chromedriver matching the installed Chrome
+#   - Chrome / Chromium     (linux: google-chrome; macOS: /Applications/.../Google Chrome)
+# CI installs all three via the `wasm-browser-test` job in
+# `.github/workflows/pr-gates.yml`.
+#
+# Override the browser via `--features` if you want firefox: this
+# script defaults to chrome.
+cmd_test_browser() {
+    header "Running browser WASM regression suite (wasm-pack --headless --chrome)"
+    if ! command -v wasm-pack >/dev/null 2>&1; then
+        fail "wasm-pack not found — install via: cargo install wasm-pack"
+        return 1
+    fi
+    if ! check_target_installed wasm32-unknown-unknown; then return 1; fi
+    timer_start
+    local args=(wasm-pack test --headless --chrome crates/clawft-wasm
+                --no-default-features --features browser
+                --test browser_pipeline)
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   %s\n" "${args[*]}"
+        timer_end
+        return 0
+    fi
+    # Always show full output — tail -5 hides per-test results from the runner.
+    "${args[@]}" 2>&1
+    local rc=$?
+    timer_end
+    return "$rc"
+}
+
+# Browser WASM bundle-size gate (WEFT-389 / M5-A).
+#
+# Runs `scripts/bench/check-bundle-size.sh` against the post-bindgen
+# bundle. Default thresholds (raw 1600 KB / gz 600 KB) live in the
+# script and are documented in `docs/architecture/wasm-bundle-size.md`.
+# Override via `--features` style if you ever need to override here:
+#   scripts/build.sh bundle-size 1500 550
+cmd_bundle_size() {
+    header "Browser WASM bundle-size gate"
+    local pkg="$ROOT/crates/clawft-wasm/www/pkg/clawft_wasm_bg.wasm"
+    if [ ! -f "$pkg" ]; then
+        info "pkg/ not found — running scripts/build.sh browser first"
+        cmd_browser || return 1
+    fi
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   scripts/bench/check-bundle-size.sh\n"
+        timer_end
+        return 0
+    fi
+    bash "$ROOT/scripts/bench/check-bundle-size.sh" "$pkg" "$@"
+    local rc=$?
+    timer_end
+    return "$rc"
+}
+
 cmd_check() {
     header "Running cargo check --workspace"
     timer_start
@@ -578,6 +639,11 @@ ${BOLD}Commands:${NC}
                   from CHANGELOG.md (also runs as --check before commits)
   all             Build everything (native + wasi + browser + ui)
   test            Run cargo test --workspace
+  test-browser    Run browser WASM regression suite under headless Chrome
+                  (WEFT-388 / M5-A). Requires wasm-pack + chromedriver.
+  bundle-size     Gate browser WASM bundle (raw + gzip) against the
+                  documented budget (WEFT-389 / M5-A).
+                  See docs/architecture/wasm-bundle-size.md
   check           Run cargo check --workspace (fast compile check)
   clippy          Run clippy with warnings-as-errors
   audit           Run cargo audit with 0.7.0 ignore-list (deny warnings).
@@ -674,6 +740,8 @@ main() {
         releases-mdx) cmd_releases_mdx ;;
         all)          cmd_all ;;
         test)         cmd_test ;;
+        test-browser) cmd_test_browser ;;
+        bundle-size)  cmd_bundle_size ;;
         check)        cmd_check ;;
         clippy)       cmd_clippy ;;
         audit)        cmd_audit ;;

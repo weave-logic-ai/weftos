@@ -33,6 +33,11 @@ pub mod clawft_md;
 pub mod config_merge;
 pub mod json_repair;
 pub mod pipeline;
+// `planning` uses `tokio::time::{Instant, timeout}` directly. Until those
+// callsites get a runtime abstraction, the module only compiles for native
+// builds. Browser builds skip it (no consumers cross-crate; see audit
+// 2026-04-28 in `.planning/reviews/0.7.0-release-gate/16-browser-wasm.md`).
+#[cfg(feature = "native")]
 pub mod planning;
 pub mod routing_validation;
 pub mod runtime;

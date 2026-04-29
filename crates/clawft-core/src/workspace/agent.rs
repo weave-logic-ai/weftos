@@ -260,17 +260,19 @@ impl WorkspaceManager {
         }
 
         #[cfg(unix)]
-        std::os::unix::fs::symlink(&exporter_ns, &importer_link)?;
+        {
+            std::os::unix::fs::symlink(&exporter_ns, &importer_link)?;
+            Ok(importer_link)
+        }
 
         #[cfg(not(unix))]
         {
             // On non-Unix, fall back to directory junction or just error.
-            return Err(ClawftError::ConfigInvalid {
+            let _ = exporter_ns;
+            Err(ClawftError::ConfigInvalid {
                 reason: "symlink-based sharing requires Unix".into(),
-            });
+            })
         }
-
-        Ok(importer_link)
     }
 }
 

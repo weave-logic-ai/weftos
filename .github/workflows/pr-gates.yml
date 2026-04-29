@@ -204,6 +204,96 @@ jobs:
         run: cargo check --workspace
 
   # -------------------------------------------------------------------
+  # Browser WASM regression suite (WEFT-388 / M5-A).
+  #
+  # Runs `crates/clawft-wasm/tests/browser_pipeline.rs` under headless
+  # Chrome via wasm-pack. Pins chromedriver to the matching Chrome
+  # version that ships on the Ubuntu runner image — `wasm-pack`'s own
+  # downloader has shipped mismatched binaries in the past, so we
+  # install chromedriver explicitly via Chrome-for-Testing.
+  # -------------------------------------------------------------------
+  browser-wasm-tests:
+    name: Browser WASM regression suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-browser-tests-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-browser-tests-
+
+      - name: Install wasm-pack
+        run: |
+          if ! command -v wasm-pack >/dev/null 2>&1; then
+            curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          fi
+          wasm-pack --version
+
+      - name: Install Chrome + matching chromedriver
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+          install-chromedriver: true
+
+      - name: Run browser WASM regression suite
+        run: scripts/build.sh test-browser
+
+  # -------------------------------------------------------------------
+  # Browser WASM bundle size gate (WEFT-389 / M5-A).
+  #
+  # Builds the release-wasm bundle, runs `wasm-bindgen` glue, and
+  # checks the post-bindgen `_bg.wasm` against a documented budget.
+  # Fails on regression. Budget rationale + revision protocol live in
+  # `docs/architecture/wasm-bundle-size.md`.
+  # -------------------------------------------------------------------
+  browser-wasm-bundle-size:
+    name: Browser WASM bundle size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-bundle-size-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-bundle-size-
+
+      - name: Install wasm-bindgen-cli
+        run: |
+          if ! command -v wasm-bindgen >/dev/null 2>&1; then
+            cargo install --locked wasm-bindgen-cli
+          fi
+          wasm-bindgen --version
+
+      - name: Build browser WASM bundle
+        run: scripts/build.sh browser
+
+      - name: Run bundle-size gate
+        run: scripts/build.sh bundle-size
+
+  # -------------------------------------------------------------------
   # Voice: feature compilation check
   # -------------------------------------------------------------------
   voice-feature-check:

@@ -67,7 +67,7 @@ pub use platform::WasmPlatform;
 /// Version information for the WASM build.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Initialize the WASM agent.
+/// Initialize the WASM agent (WASI / non-browser path).
 ///
 /// Called once when the WASM module is instantiated. Sets up the agent
 /// configuration and pipeline from WASI-accessible config files.
@@ -75,13 +75,17 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// # Returns
 ///
 /// Returns 0 on success, non-zero on failure.
+///
+/// Browser builds shadow this with the async `wasm-bindgen` `init` from
+/// [`browser_entry`]; gating prevents a shadow clash on `wasm32-unknown-unknown`.
+#[cfg(not(feature = "browser"))]
 pub fn init() -> i32 {
     // Phase 3A Week 11: Will load config from WASI filesystem
     // and set up the agent pipeline.
     0
 }
 
-/// Process a single message through the agent pipeline.
+/// Process a single message through the agent pipeline (WASI path).
 ///
 /// # Arguments
 ///
@@ -90,6 +94,10 @@ pub fn init() -> i32 {
 /// # Returns
 ///
 /// The agent's response as a string, or an error message.
+///
+/// On browser builds the analogous wired entry-point is
+/// [`browser_entry::send_message`] which drives the full pipeline.
+#[cfg(not(feature = "browser"))]
 pub fn process_message(input: &str) -> String {
     // Phase 3A Week 12: Will run the full 6-stage pipeline.
     format!(
@@ -98,10 +106,12 @@ pub fn process_message(input: &str) -> String {
     )
 }
 
-/// Get the agent's capabilities as a JSON string.
+/// Get the agent's capabilities as a JSON string (WASI path).
 ///
 /// Returns a JSON object describing available tools, providers,
-/// and configuration for this WASM instance.
+/// and configuration for this WASM instance. Browser builds query
+/// capabilities via the wired pipeline directly.
+#[cfg(not(feature = "browser"))]
 pub fn capabilities() -> String {
     serde_json::json!({
         "version": VERSION,
@@ -778,7 +788,7 @@ mod browser_entry {
 #[cfg(feature = "browser")]
 pub use browser_entry::*;
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "browser")))]
 mod tests {
     use super::*;
 
