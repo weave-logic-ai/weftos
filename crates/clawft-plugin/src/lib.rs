@@ -59,16 +59,18 @@ pub mod error;
 pub mod manifest;
 pub mod message;
 pub mod sandbox;
+pub mod skill_grants;
 pub mod traits;
 
 #[cfg(feature = "voice")]
 pub mod voice;
 
 // Re-export core types at crate root for convenience.
-pub use error::PluginError;
+pub use error::{PluginError, SkillLoadError};
 pub use manifest::{
     PermissionDiff, PluginCapability, PluginManifest, PluginPermissions, PluginResourceConfig,
 };
+pub use skill_grants::validate_allowed_tools;
 pub use message::MessagePayload;
 pub use sandbox::{
     SandboxAuditEntry, SandboxPolicy, SandboxType,

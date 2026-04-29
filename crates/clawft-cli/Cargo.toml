@@ -29,7 +29,7 @@ channels = ["dep:clawft-channels"]
 services = ["dep:clawft-services"]
 vector-memory = ["clawft-core/vector-memory"]
 delegate = ["clawft-services/delegate", "clawft-tools/delegate"]
-voice = ["clawft-tools/voice", "dep:clawft-plugin", "clawft-plugin/voice"]
+voice = ["clawft-tools/voice", "clawft-plugin/voice"]
 api = ["clawft-services/api"]
 
 [dependencies]
@@ -41,7 +41,7 @@ clawft-tools = { workspace = true, features = ["native-exec", "native"] }
 clawft-channels = { workspace = true, optional = true }
 clawft-llm = { workspace = true }
 clawft-services = { workspace = true, optional = true }
-clawft-plugin = { workspace = true, optional = true }
+clawft-plugin = { workspace = true }
 clawft-security = { workspace = true }
 which = { workspace = true }
 clap = { workspace = true }
