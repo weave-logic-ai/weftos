@@ -9,6 +9,7 @@ pub mod helpers;
 pub mod identity;
 pub mod loop_core;
 pub mod memory;
+pub mod runtime;
 pub mod sandbox;
 pub mod sink;
 #[cfg(feature = "native")]
