@@ -251,36 +251,116 @@ impl Middleware for SecurityGuard {
 // PermissionFilter
 // ---------------------------------------------------------------------------
 
-/// Middleware that restricts visible tools to an allowlist.
+/// Middleware that restricts visible *and* callable tools to an allowlist.
 ///
-/// When `allowed_tools` is `Some`, only tools whose names appear in the
-/// list are returned from `filter_tools`. When `None`, all tools pass.
+/// `allowed_tools` is a list of glob patterns:
+/// - `*` matches any sequence of characters (including empty).
+/// - `?` matches exactly one character.
+/// - Anything else is matched literally.
+///
+/// When `allowed_tools` is `None`, all tools pass — back-compat behavior
+/// for existing callers. When `Some(patterns)`:
+/// - [`Middleware::filter_tools`] hides tools whose name does not match
+///   any pattern.
+/// - [`Middleware::before_call`] rejects `tools/call` for tools whose
+///   name does not match any pattern, returning
+///   [`ToolError::PermissionDenied`].
 #[derive(Debug, Clone)]
 pub struct PermissionFilter {
-    allowed_tools: Option<HashSet<String>>,
+    /// Exact-name allowlist (back-compat fast path, used for tests).
+    allowed_exact: Option<HashSet<String>>,
+    /// Glob-pattern allowlist (compiled lazily on each call).
+    allowed_patterns: Option<Vec<String>>,
 }
 
 impl PermissionFilter {
-    /// Create a new permission filter.
+    /// Create a new permission filter with exact-name matching.
     ///
     /// Pass `None` to allow all tools, or `Some(list)` to restrict.
     pub fn new(allowed_tools: Option<Vec<String>>) -> Self {
         Self {
-            allowed_tools: allowed_tools.map(|v| v.into_iter().collect()),
+            allowed_exact: allowed_tools.map(|v| v.into_iter().collect()),
+            allowed_patterns: None,
         }
     }
+
+    /// Create a new permission filter with glob-pattern matching.
+    ///
+    /// Patterns may contain `*` (any chars) or `?` (one char). For
+    /// example, `"shell.*"` matches `shell.exec` but not `python.exec`.
+    pub fn from_patterns(patterns: Vec<String>) -> Self {
+        Self {
+            allowed_exact: None,
+            allowed_patterns: Some(patterns),
+        }
+    }
+
+    /// Check if a tool name is permitted by this filter.
+    ///
+    /// `None`-allowlist short-circuits to true (allow all).
+    pub fn is_allowed(&self, name: &str) -> bool {
+        if let Some(exact) = &self.allowed_exact {
+            return exact.contains(name);
+        }
+        if let Some(patterns) = &self.allowed_patterns {
+            return patterns.iter().any(|p| glob_match(p, name));
+        }
+        // Both None -> allow everything.
+        true
+    }
+}
+
+/// Minimal glob matcher supporting `*` and `?`.
+///
+/// Iterative implementation; no backtracking on empty patterns. This is
+/// sufficient for tool-name matching like `mcp:claude-code:*` or
+/// `shell.*`.
+fn glob_match(pattern: &str, name: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let s: Vec<char> = name.chars().collect();
+
+    // Greedy with backtracking on '*'.
+    let (mut pi, mut si, mut star, mut match_si) = (0usize, 0usize, None, 0usize);
+    while si < s.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == s[si]) {
+            pi += 1;
+            si += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            match_si = si;
+            pi += 1;
+        } else if let Some(sp) = star {
+            pi = sp + 1;
+            match_si += 1;
+            si = match_si;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
 }
 
 #[async_trait]
 impl Middleware for PermissionFilter {
     async fn filter_tools(&self, tools: Vec<ToolDefinition>) -> Vec<ToolDefinition> {
-        match &self.allowed_tools {
-            None => tools,
-            Some(allowed) => tools
-                .into_iter()
-                .filter(|t| allowed.contains(&t.name))
-                .collect(),
+        // Allow-all fast path.
+        if self.allowed_exact.is_none() && self.allowed_patterns.is_none() {
+            return tools;
         }
+        tools.into_iter().filter(|t| self.is_allowed(&t.name)).collect()
+    }
+
+    async fn before_call(&self, request: ToolCallRequest) -> Result<ToolCallRequest, ToolError> {
+        if !self.is_allowed(&request.name) {
+            return Err(ToolError::PermissionDenied {
+                tool: request.name.clone(),
+                reason: "tool not in allowed_tools".into(),
+            });
+        }
+        Ok(request)
     }
 }
 
@@ -570,6 +650,89 @@ mod tests {
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"echo"));
         assert!(names.contains(&"web_fetch"));
+    }
+
+    // -- PermissionFilter::before_call (WEFT-189) ----
+
+    #[tokio::test]
+    async fn permission_filter_before_call_allows_listed_tool() {
+        let filter = PermissionFilter::new(Some(vec!["echo".into()]));
+        let req = make_request("echo", serde_json::json!({}));
+        assert!(filter.before_call(req).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn permission_filter_before_call_rejects_unlisted_tool() {
+        let filter = PermissionFilter::new(Some(vec!["echo".into()]));
+        let req = make_request("shell.exec", serde_json::json!({"command": "ls"}));
+        let err = filter.before_call(req).await.unwrap_err();
+        match err {
+            ToolError::PermissionDenied { tool, reason } => {
+                assert_eq!(tool, "shell.exec");
+                assert!(reason.contains("allowed_tools"), "got: {reason}");
+            }
+            other => panic!("expected PermissionDenied, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn permission_filter_before_call_none_allows_all() {
+        let filter = PermissionFilter::new(None);
+        let req = make_request("anything", serde_json::json!({}));
+        assert!(filter.before_call(req).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn permission_filter_glob_matches() {
+        let filter = PermissionFilter::from_patterns(vec!["mcp:claude-code:*".into()]);
+        assert!(filter.is_allowed("mcp:claude-code:read_file"));
+        assert!(filter.is_allowed("mcp:claude-code:"));
+        assert!(!filter.is_allowed("mcp:other:read_file"));
+        assert!(!filter.is_allowed("read_file"));
+    }
+
+    #[tokio::test]
+    async fn permission_filter_glob_question_mark() {
+        let filter = PermissionFilter::from_patterns(vec!["echo?".into()]);
+        assert!(filter.is_allowed("echo1"));
+        assert!(filter.is_allowed("echoz"));
+        assert!(!filter.is_allowed("echo"));
+        assert!(!filter.is_allowed("echo12"));
+    }
+
+    #[tokio::test]
+    async fn permission_filter_glob_star_only_matches_anything() {
+        let filter = PermissionFilter::from_patterns(vec!["*".into()]);
+        assert!(filter.is_allowed(""));
+        assert!(filter.is_allowed("anything"));
+        assert!(filter.is_allowed("with.dots"));
+    }
+
+    #[tokio::test]
+    async fn permission_filter_glob_filter_tools_and_before_call() {
+        let filter = PermissionFilter::from_patterns(vec!["echo*".into(), "web_*".into()]);
+        let tools = filter.filter_tools(sample_tools()).await;
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"echo"));
+        assert!(names.contains(&"web_fetch"));
+
+        // before_call rejects shell.exec.
+        let req = make_request("shell.exec", serde_json::json!({"command": "rm -rf /"}));
+        let err = filter.before_call(req).await.unwrap_err();
+        assert!(matches!(err, ToolError::PermissionDenied { .. }));
+
+        // before_call allows echo.
+        let req = make_request("echo", serde_json::json!({}));
+        assert!(filter.before_call(req).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn permission_filter_denies_shell_exec_when_not_in_allowlist() {
+        // Per the WEFT-189 spec: deny-list for shell.exec via allow-list omission.
+        let filter = PermissionFilter::from_patterns(vec!["echo".into(), "web_fetch".into()]);
+        let req = make_request("shell.exec", serde_json::json!({"command": "rm -rf /"}));
+        let err = filter.before_call(req).await.unwrap_err();
+        assert!(matches!(err, ToolError::PermissionDenied { .. }));
     }
 
     // -- ResultGuard ----
