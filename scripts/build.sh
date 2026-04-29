@@ -366,10 +366,67 @@ cmd_serve() {
     rm -f "$keys_file" 2>/dev/null
 }
 
+# ── cargo-audit ignore list ─────────────────────────────────────────
+# Advisories that are known and tracked as 0.8.x followups. Each
+# `--ignore` carries the WEFT-N tracker so the next reviewer can map
+# the ID back to the followup. See:
+#   .planning/reviews/0.7.0-release-gate/audit-findings/cargo-audit-cold-run-2026-04-28.md
+#
+# When a followup lands, drop the matching IDs from this array.
+#
+# WEFT-551 — wasmtime 33 → 43 (15 advisories)
+# WEFT-552 — rustls-webpki bump (3 advisories)
+# WEFT-553 — unmaintained + unsound (6 advisories)
+CARGO_AUDIT_IGNORES=(
+    # WEFT-551 wasmtime 33.0.2
+    --ignore RUSTSEC-2025-0118
+    --ignore RUSTSEC-2026-0006
+    --ignore RUSTSEC-2026-0020
+    --ignore RUSTSEC-2026-0021
+    --ignore RUSTSEC-2026-0085
+    --ignore RUSTSEC-2026-0086
+    --ignore RUSTSEC-2026-0087
+    --ignore RUSTSEC-2026-0088
+    --ignore RUSTSEC-2026-0089
+    --ignore RUSTSEC-2026-0091
+    --ignore RUSTSEC-2026-0092
+    --ignore RUSTSEC-2026-0093
+    --ignore RUSTSEC-2026-0094
+    --ignore RUSTSEC-2026-0095
+    --ignore RUSTSEC-2026-0096
+    # WEFT-552 rustls-webpki
+    --ignore RUSTSEC-2026-0098
+    --ignore RUSTSEC-2026-0099
+    --ignore RUSTSEC-2026-0104
+    # WEFT-553 unmaintained + unsound
+    --ignore RUSTSEC-2017-0008
+    --ignore RUSTSEC-2024-0384
+    --ignore RUSTSEC-2024-0436
+    --ignore RUSTSEC-2025-0134
+    --ignore RUSTSEC-2025-0141
+    --ignore RUSTSEC-2026-0097
+)
+
+cmd_audit() {
+    header "Running cargo audit (with 0.7.0 ignore-list)"
+    if ! command -v cargo-audit >/dev/null 2>&1; then
+        fail "cargo-audit not installed — run: cargo install --locked cargo-audit"
+        return 1
+    fi
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   cargo audit %s\n" "${CARGO_AUDIT_IGNORES[*]}"
+    else
+        # Fail on any new vulnerability or warning that is NOT in the ignore-list.
+        cargo audit --deny warnings "${CARGO_AUDIT_IGNORES[@]}" 2>&1
+    fi
+    timer_end
+}
+
 # ── Gate: full phase-gate checks ────────────────────────────────────
 cmd_gate() {
-    header "Phase Gate — 11 checks"
-    local total=11 passed=0 failed=0 skipped=0
+    header "Phase Gate — 12 checks"
+    local total=12 passed=0 failed=0 skipped=0
 
     run_gate_check() {
         local num="$1" label="$2"
@@ -468,6 +525,21 @@ cmd_gate() {
     run_gate_check_soft 11 "Voice feature (clawft-plugin)" \
         cargo check --features voice -p clawft-plugin
 
+    # 12. cargo audit (deny warnings, with 0.7.0 ignore-list).
+    # See CARGO_AUDIT_IGNORES + cmd_audit above. Soft check: if
+    # cargo-audit isn't installed locally, skip rather than fail; CI
+    # always installs it (see .github/workflows/pr-gates.yml). When
+    # WEFT-551/552/553 land, drop the matching IDs from
+    # CARGO_AUDIT_IGNORES so this check tightens.
+    if command -v cargo-audit >/dev/null 2>&1; then
+        run_gate_check 12 "cargo audit (deny warnings, 0.7.0 ignores)" \
+            cargo audit --deny warnings "${CARGO_AUDIT_IGNORES[@]}"
+    else
+        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 12 "$total" "cargo audit (deny warnings)"
+        skip "cargo-audit not installed — run: cargo install --locked cargo-audit"
+        skipped=$((skipped + 1))
+    fi
+
     # Summary
     echo ""
     printf "${BOLD}═══════════════════════════════════════${NC}\n"
@@ -508,7 +580,11 @@ ${BOLD}Commands:${NC}
   test            Run cargo test --workspace
   check           Run cargo check --workspace (fast compile check)
   clippy          Run clippy with warnings-as-errors
-  gate            Run full phase gate (11 checks)
+  audit           Run cargo audit with 0.7.0 ignore-list (deny warnings).
+                  Requires: cargo install --locked cargo-audit
+                  Followups: WEFT-551 (wasmtime), WEFT-552 (rustls-webpki),
+                  WEFT-553 (unmaintained + unsound rand).
+  gate            Run full phase gate (12 checks, includes cargo audit)
   serve [port]    Serve browser test harness (default: 8080)
   clean           Clean all build artifacts
 
@@ -600,6 +676,7 @@ main() {
         test)         cmd_test ;;
         check)        cmd_check ;;
         clippy)       cmd_clippy ;;
+        audit)        cmd_audit ;;
         gate)         cmd_gate ;;
         serve)        cmd_serve "$SERVE_PORT" ;;
         clean)        cmd_clean ;;
