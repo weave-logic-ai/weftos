@@ -28,20 +28,25 @@
 
 ---
 
-## VP Pre-Implementation (Week 0)
+## VP Pre-Implementation (Week 0) -- CANCELLED
 
 **SPARC Dir**: `sparc/voice`
 **Purpose**: Validate platform audio, model hosting, feature flags before sprint begins
+**Status**: GATE CLOSED via formal cancellation (2026-04-29). See
+`vp-gate-resolution.md` and ADR-053. The substrate-side STT path
+shipped in `clawft-service-whisper` supersedes the in-process stack
+this gate was meant to validate; VP1..VP5 are not going to be run.
+The five rows are retained for historical context.
 
 | # | Item | Priority | Week | Status | Crate | Type |
 |---|------|----------|------|--------|-------|------|
-| VP1 | Audio pipeline prototype (mic -> VAD -> STT -> print text) | P0 | 0 | Not Started | voice-proto/ | Prototype |
-| VP2 | Model hosting and download strategy (GitHub Releases + HuggingFace, SHA-256 manifest) | P0 | 0 | Not Started | -- | Decision |
-| VP3 | Feature flag design (voice, voice-stt, voice-tts, voice-wake) | P0 | 0 | Not Started | clawft-plugin | Design |
-| VP4 | Platform audio testing (cpal on Linux PipeWire/PulseAudio, macOS CoreAudio, Windows WASAPI, WSL2) | P0 | 0 | Not Started | -- | Testing |
-| VP5 | Echo cancellation feasibility study (loopback subtraction vs WebRTC AEC vs hardware AEC) | P1 | 0 | Not Started | -- | Research |
+| VP1 | Audio pipeline prototype (mic -> VAD -> STT -> print text) | P0 | 0 | Cancelled (ADR-053) | voice-proto/ | Prototype |
+| VP2 | Model hosting and download strategy (GitHub Releases + HuggingFace, SHA-256 manifest) | P0 | 0 | Cancelled (ADR-053) | -- | Decision |
+| VP3 | Feature flag design (voice, voice-stt, voice-tts, voice-wake) | P0 | 0 | Cancelled (ADR-053) | clawft-plugin | Design |
+| VP4 | Platform audio testing (cpal on Linux PipeWire/PulseAudio, macOS CoreAudio, Windows WASAPI, WSL2) | P0 | 0 | Cancelled (ADR-053) | -- | Testing |
+| VP5 | Echo cancellation feasibility study (loopback subtraction vs WebRTC AEC vs hardware AEC) | P1 | 0 | Cancelled (ADR-053) | -- | Research |
 
-**Pre-Implementation Summary**: 5 items
+**Pre-Implementation Summary**: 5 items, all cancelled
 
 ---
 

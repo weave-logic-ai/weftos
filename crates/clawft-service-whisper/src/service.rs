@@ -36,6 +36,7 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn};
 
+use crate::audit::TranscriptAuditEvent;
 use crate::client::{TranscribeError, WhisperClient};
 use crate::wav::write_wav;
 use crate::windower::{PcmChunk, PcmWindow, Windower};
@@ -121,6 +122,17 @@ pub struct WhisperServiceConfig {
     /// inter-syllabic pause, short enough that a sustained quiet
     /// period correctly closes the gate.
     pub gate_window_ms: u64,
+    /// Model identifier reported on each [`TranscriptAuditEvent`]
+    /// (WEFT-210 / SC-9). Sourced from the verified manifest at
+    /// daemon boot when [`crate::manifest::verify_model_dir`] passes;
+    /// otherwise an opaque "unverified" string. Defaults to
+    /// `"unknown"` so audit rows are never blank.
+    pub model_id: String,
+    /// Best-effort sensor node id used as `source_node` in audit
+    /// rows. Substrate paths embed the source node already, but
+    /// callers can override this when wiring multi-tenant sensors.
+    /// Defaults to "unknown" so audit rows are never blank.
+    pub source_node_hint: String,
 }
 
 impl Default for WhisperServiceConfig {
@@ -158,6 +170,8 @@ impl Default for WhisperServiceConfig {
             node_registry,
             classifier_input: None,
             gate_window_ms: 1_500,
+            model_id: "unknown".to_string(),
+            source_node_hint: "unknown".to_string(),
         }
     }
 }
@@ -539,14 +553,30 @@ async fn handle_inference_result(
                 payload.clone(),
                 &config.node_registry,
             ) {
-                Ok(tick) => info!(
-                    tick,
-                    start_ms = window.start_ms,
-                    end_ms = window.end_ms,
-                    seq = window.last_seq,
-                    output_path = %config.output_path_derived,
-                    "whisper service: transcript published (mesh-canonical)"
-                ),
+                Ok(tick) => {
+                    info!(
+                        tick,
+                        start_ms = window.start_ms,
+                        end_ms = window.end_ms,
+                        seq = window.last_seq,
+                        output_path = %config.output_path_derived,
+                        "whisper service: transcript published (mesh-canonical)"
+                    );
+                    // SC-9 audit row: one per successful transcription,
+                    // text-hashed (never raw text), correlated to the
+                    // substrate tick the publish landed on.
+                    let source_node =
+                        derive_source_node_from_path(&config.output_path_derived)
+                            .unwrap_or_else(|| config.source_node_hint.clone());
+                    TranscriptAuditEvent::new(
+                        tick,
+                        source_node,
+                        config.model_id.clone(),
+                        config.node_id.clone(),
+                        &r.text,
+                    )
+                    .emit();
+                }
                 Err(e) => error!(
                     err = %e,
                     output_path = %config.output_path_derived,
@@ -593,6 +623,23 @@ async fn handle_inference_result(
             );
         }
     }
+}
+
+/// Pull the `<source-node-id>` segment from the canonical transcript
+/// publish path, which has the shape
+/// `substrate/_derived/transcript/<source-node-id>/mic`. Returns
+/// `None` for non-canonical paths so the caller can fall back to the
+/// hint configured in [`WhisperServiceConfig::source_node_hint`].
+fn derive_source_node_from_path(path: &str) -> Option<String> {
+    // Parts: ["substrate", "_derived", "transcript", "<src>", "mic"].
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() < 5 {
+        return None;
+    }
+    if parts[0] != "substrate" || parts[1] != "_derived" || parts[2] != "transcript" {
+        return None;
+    }
+    Some(parts[3].to_string())
 }
 
 /// Parse a substrate-subscribe update line.
@@ -680,6 +727,159 @@ mod tests {
             "start_ts_ms": seq,
         });
         substrate.publish(Some(actor_id), path, payload);
+    }
+
+    #[test]
+    fn derive_source_node_canonical_path() {
+        let p = "substrate/_derived/transcript/n-bfc4cd/mic";
+        assert_eq!(derive_source_node_from_path(p).as_deref(), Some("n-bfc4cd"));
+    }
+
+    #[test]
+    fn derive_source_node_non_canonical_returns_none() {
+        assert!(derive_source_node_from_path("substrate/n-x/mic").is_none());
+        assert!(derive_source_node_from_path("").is_none());
+        assert!(derive_source_node_from_path("foo/bar").is_none());
+    }
+
+    /// SC-9 / WEFT-210: a successful transcription emits exactly one
+    /// audit row carrying the required fields, and the row does NOT
+    /// contain the raw transcript text.
+    ///
+    /// Uses a process-global subscriber installed once via
+    /// `OnceLock` so the audit emit (which lands on a different
+    /// tokio worker thread than the test thread) is captured.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn audit_event_emitted_per_transcription() {
+        use std::sync::{Arc, Mutex, OnceLock};
+        use tracing::Subscriber;
+        use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
+        use tracing_subscriber::Registry;
+
+        #[derive(Clone, Default)]
+        struct Capture {
+            rows: Arc<Mutex<Vec<String>>>,
+        }
+        impl<S: Subscriber> tracing_subscriber::Layer<S> for Capture {
+            fn on_event(&self, ev: &tracing::Event<'_>, _ctx: LayerContext<'_, S>) {
+                if ev.metadata().target() != crate::audit::AUDIT_TARGET {
+                    return;
+                }
+                #[derive(Default)]
+                struct V(String);
+                impl tracing::field::Visit for V {
+                    fn record_debug(&mut self, f: &tracing::field::Field, v: &dyn std::fmt::Debug) {
+                        use std::fmt::Write as _;
+                        let _ = write!(self.0, "{}={:?} ", f.name(), v);
+                    }
+                    fn record_str(&mut self, f: &tracing::field::Field, v: &str) {
+                        use std::fmt::Write as _;
+                        let _ = write!(self.0, "{}={} ", f.name(), v);
+                    }
+                    fn record_u64(&mut self, f: &tracing::field::Field, v: u64) {
+                        use std::fmt::Write as _;
+                        let _ = write!(self.0, "{}={} ", f.name(), v);
+                    }
+                }
+                let mut v = V::default();
+                ev.record(&mut v);
+                self.rows.lock().unwrap().push(v.0);
+            }
+        }
+
+        // Install the global subscriber exactly once for the test
+        // process. Subsequent tests in this binary share it; we
+        // snapshot the captured rows by len() before/after this
+        // test's transcription so we count only the row we cause.
+        static CAP: OnceLock<Capture> = OnceLock::new();
+        let cap = CAP.get_or_init(|| {
+            let cap = Capture::default();
+            let subscriber = Registry::default().with(cap.clone());
+            // Best-effort: if some other test already set the global
+            // dispatcher, skip — but in this test binary nothing else
+            // does.
+            let _ = tracing::subscriber::set_global_default(subscriber);
+            cap
+        });
+        let baseline_rows = cap.rows.lock().unwrap().len();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"status":"ok"}"#))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/inference"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"text": " open the pod bay"}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let substrate = SubstrateService::new();
+        let client = make_client(server.uri());
+        let cfg = WhisperServiceConfig {
+            window_ms: 500,
+            model_id: "ggml-test-audit".into(),
+            ..Default::default()
+        };
+        let input_path = cfg.input_path.clone();
+        let output_path = cfg.output_path_derived.clone();
+        let actor = cfg.node_id.clone();
+
+        let (_oid, mut out_rx) = substrate.subscribe(Some(&actor), &output_path).unwrap();
+        let svc = WhisperService::spawn(substrate.clone(), client, cfg).unwrap();
+
+        let half = vec![0u8; 8_000];
+        publish_pcm_chunk(&substrate, &actor, &input_path, &half, 250, 1);
+        publish_pcm_chunk(&substrate, &actor, &input_path, &half, 250, 2);
+
+        let _ = tokio::time::timeout(Duration::from_secs(3), out_rx.recv())
+            .await
+            .expect("transcript not published")
+            .expect("substrate closed");
+
+        // Brief settle so the synchronous audit emit lands before we
+        // shut down the subscriber.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        svc.shutdown().await;
+
+        let rows = cap.rows.lock().unwrap();
+        let new_rows: Vec<String> = rows.iter().skip(baseline_rows).cloned().collect();
+        assert_eq!(
+            new_rows.len(),
+            1,
+            "expected exactly one voice.audit row added by this test, got {}: {:?}",
+            new_rows.len(),
+            new_rows
+        );
+        let row = &new_rows[0];
+        for needle in &[
+            "transcript_id",
+            "source_node",
+            "model_id",
+            "principal_inferred",
+            "transcript_text_hash",
+            "ts_unix_micros",
+        ] {
+            assert!(row.contains(needle), "missing field {needle}: {row}");
+        }
+        // Source node was derived from the canonical output path
+        // `substrate/_derived/transcript/n-test00/mic`.
+        assert!(row.contains("source_node=n-test00"), "row: {row}");
+        assert!(row.contains("model_id=ggml-test-audit"), "row: {row}");
+        // Raw transcript text MUST NOT appear; only the hash.
+        assert!(
+            !row.contains("pod bay"),
+            "raw transcript text leaked into audit row: {row}"
+        );
+        let expected_hash = crate::audit::hash_transcript("open the pod bay");
+        assert!(
+            row.contains(&expected_hash),
+            "expected transcript_text_hash {expected_hash} not present: {row}"
+        );
     }
 
     #[tokio::test]

@@ -42,6 +42,13 @@ clawft-kernel = { workspace = true, features = ["native", "ecc", "exochain", "cl
 # Error handling.
 thiserror = { workspace = true }
 
+# Model integrity (WEFT-209 / SC-7): SHA-256 over on-disk model files
+# + Ed25519 verify of the signed manifest sitting alongside them. The
+# trusted public keys live under ~/.clawft/trust-roots/voice/.
+sha2 = { workspace = true }
+ed25519-dalek = { workspace = true }
+hex = "0.4"
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
 wiremock = "0.6"
