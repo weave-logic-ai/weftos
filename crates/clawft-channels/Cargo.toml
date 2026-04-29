@@ -24,14 +24,18 @@ whatsapp = ["dep:axum", "dep:hex"]
 signal = ["clawft-plugin/native"]
 matrix = []
 # Google Chat adapter: Pub/Sub pull + chat.spaces.messages.create POST.
-# base64 decodes the Pub/Sub data field.
 google-chat = ["dep:base64"]
 # IRC adapter: TCP/TLS dial + IRCv3 CAP/SASL + JOIN + PRIVMSG.
-# tokio-rustls/webpki-roots/rustls-pki-types provide TLS; base64 backs
-# SASL PLAIN.
 irc = ["dep:tokio-rustls", "dep:webpki-roots", "dep:rustls-pki-types", "dep:base64"]
 # Microsoft Teams: Bot Framework OAuth2 + Graph + axum webhook + JWT.
 teams = ["dep:axum", "dep:jsonwebtoken"]
+# Voice channel: trait-injected audio + substrate STT/TTS HTTP. The
+# default `voice` build uses fake audio sources so CI passes without
+# alsa / CoreAudio / WASAPI dev headers; `voice-real-audio` opts cpal
+# in; `real-audio-test` enables the cpal-touching tests too.
+voice = []
+voice-real-audio = ["voice", "dep:cpal"]
+real-audio-test = ["voice-real-audio"]
 
 [dependencies]
 clawft-types = { workspace = true }
@@ -44,7 +48,9 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-reqwest = { workspace = true }
+# `multipart` is voice-only (whisper.cpp /inference takes a WAV part) but
+# additive on the workspace `reqwest` -- harmless for other channels.
+reqwest = { workspace = true, features = ["multipart"] }
 chrono = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
@@ -59,6 +65,7 @@ uuid = { workspace = true }
 # - axum + jsonwebtoken: teams Bot Framework webhook + JWT decode.
 # - axum + hex: whatsapp Cloud API webhook + HMAC hex.
 # - tokio-rustls / webpki-roots / rustls-pki-types: irc TLS dial.
+# - cpal: voice-real-audio cpal capture/playback (opt-in).
 base64 = { version = "0.22", optional = true }
 axum = { version = "0.8", default-features = false, features = ["json", "tokio", "http1", "macros"], optional = true }
 jsonwebtoken = { version = "9", default-features = false, optional = true }
@@ -66,14 +73,17 @@ hex = { version = "0.4", optional = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12", "ring"], optional = true }
 webpki-roots = { version = "1.0", optional = true }
 rustls-pki-types = { version = "1", optional = true }
+cpal = { version = "0.15", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
-# wiremock + mockito back HTTP-level adapter tests across multiple
-# adapters (Google Chat, Teams, WhatsApp). Already used elsewhere in
-# the workspace at these versions.
+# wiremock + mockito back HTTP-level adapter tests across adapters
+# (Google Chat, Teams, WhatsApp, Matrix, Voice substrate).
 wiremock = "0.6"
 mockito = "1"
 # Used by `whatsapp` webhook unit tests to drive the axum router
 # in-process via `ServiceExt::oneshot`.
 tower = { version = "0.5", features = ["util"] }
+# Matrix uses tempfile for since-token persistence test;
+# Voice uses tempfile for fake audio source paths.
+tempfile = { workspace = true }
