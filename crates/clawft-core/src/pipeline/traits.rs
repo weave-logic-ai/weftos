@@ -118,6 +118,15 @@ pub enum TaskType {
 // ── Routing types ───────────────────────────────────────────────────────
 
 /// Model routing decision produced by [`ModelRouter`].
+///
+/// # Reason redaction (WEFT-30)
+///
+/// `reason` is **operator-debug only** — it may contain user identifiers,
+/// channel names, complexity scores, model names, and policy details that
+/// should never cross a trust boundary (errors surfaced to end users, public
+/// audit logs, third-party telemetry, etc.). Always call
+/// [`RoutingDecision::redacted_reason`] before placing the reason in any
+/// caller-visible context.
 #[derive(Debug, Clone, Default)]
 pub struct RoutingDecision {
     /// Provider name (e.g. "openai", "anthropic").
@@ -127,6 +136,11 @@ pub struct RoutingDecision {
     pub model: String,
 
     /// Human-readable reason for the routing choice.
+    ///
+    /// **Internal/operator-debug only.** Contains user identifiers, model
+    /// names, and policy details. Use [`Self::redacted_reason`] for any
+    /// user-facing surface (error messages, public audit logs, telemetry
+    /// shipped off-host, etc.).
     pub reason: String,
 
     /// Tier name that was selected (None for static routing).
@@ -143,6 +157,67 @@ pub struct RoutingDecision {
 
     /// The sender who originated this request, for per-user cost attribution.
     pub sender_id: Option<String>,
+}
+
+impl RoutingDecision {
+    /// Return a high-level category label suitable for crossing a trust
+    /// boundary (user-facing error messages, public audit logs, telemetry).
+    ///
+    /// Strips paths, user identifiers, model names, complexity scores, and
+    /// channel names from the raw `reason`. The mapping uses the structured
+    /// fields on the decision plus keyword classification of the reason
+    /// string. Categories are stable identifiers safe to switch on:
+    ///
+    /// - `static_routing`           — Level-0 static router, no tier system
+    /// - `rate_limited`             — caller hit per-sender rate limit
+    /// - `tier_check_failed`        — fallback model denied by max_tier
+    /// - `cost_cap_hit`             — daily/monthly budget exhausted
+    /// - `fallback_chosen`          — primary tier unavailable, fallback used
+    /// - `no_tiers_available`       — no permitted tier produced a model
+    /// - `model_override_bypass`    — caller's model_override punched through
+    /// - `escalated`                — promoted above caller's max_tier
+    /// - `budget_constrained`       — selected cheaper tier to fit budget
+    /// - `tiered_routing`           — normal tiered selection (default)
+    pub fn redacted_reason(&self) -> &'static str {
+        let r = self.reason.as_str();
+        // Order matters: check the highest-severity / most-specific labels
+        // first so they don't get masked by the generic structured-field
+        // fallbacks below.
+        if r.contains("model_override") {
+            return "model_override_bypass";
+        }
+        if r.contains("rate limited") {
+            if r.contains("not permitted") {
+                return "tier_check_failed";
+            }
+            return "rate_limited";
+        }
+        if r.contains("not permitted") || r.contains("denied") {
+            return "tier_check_failed";
+        }
+        if r.contains("cost") || r.contains("budget") || r.contains("over") {
+            return "cost_cap_hit";
+        }
+        if r.contains("no tiers") {
+            return "no_tiers_available";
+        }
+        if r.contains("fallback") {
+            return "fallback_chosen";
+        }
+        if r.contains("static") {
+            return "static_routing";
+        }
+        // Structured-field fallbacks — these are derived from the decision
+        // metadata, not the free-text reason, so they remain accurate even
+        // for routers that don't bother formatting a reason string.
+        if self.budget_constrained {
+            return "budget_constrained";
+        }
+        if self.escalated {
+            return "escalated";
+        }
+        "tiered_routing"
+    }
 }
 
 /// Outcome of a response, used to update the router.
@@ -674,6 +749,94 @@ mod tests {
         assert!(decision.cost_estimate_usd.is_none());
         assert!(!decision.escalated);
         assert!(!decision.budget_constrained);
+    }
+
+    // ── WEFT-30: redacted_reason (info-disclosure mitigation) ───────
+
+    /// Helper that asserts a reason string maps to the expected category
+    /// AND contains no sensitive sub-strings (user ids, model names, etc).
+    fn assert_redacts(reason: &str, category: &str) {
+        let d = RoutingDecision {
+            reason: reason.into(),
+            ..Default::default()
+        };
+        let red = d.redacted_reason();
+        assert_eq!(red, category, "reason {reason:?} -> {red}, expected {category}");
+        // Category labels must be ASCII snake_case identifiers — no
+        // formatted fields, no whitespace, no special chars.
+        assert!(
+            red.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+            "category {red} must be ascii snake_case"
+        );
+    }
+
+    #[test]
+    fn redacted_reason_strips_user_metadata() {
+        // The verbatim format-string the tiered router emits today.
+        let raw = "tiered routing: complexity=0.85, tier=premium, level=2, user=alice@example.com";
+        let d = RoutingDecision {
+            reason: raw.into(),
+            ..Default::default()
+        };
+        let red = d.redacted_reason();
+        // Redacted form must NOT leak any of those fields.
+        assert!(!red.contains("alice"));
+        assert!(!red.contains("@example.com"));
+        assert!(!red.contains("0.85"));
+        assert!(!red.contains("premium"));
+        assert!(!red.contains("level=2"));
+    }
+
+    #[test]
+    fn redacted_reason_categories() {
+        assert_redacts("static routing (Level 0)", "static_routing");
+        assert_redacts("rate limited: using fallback model", "rate_limited");
+        assert_redacts(
+            "rate limited: fallback model not permitted for user tier",
+            "tier_check_failed",
+        );
+        assert_redacts(
+            "fallback chain: fallback_model denied for user tier",
+            "tier_check_failed",
+        );
+        assert_redacts("daily budget cap reached", "cost_cap_hit");
+        assert_redacts("no tiers or fallback model available", "no_tiers_available");
+        assert_redacts(
+            "fallback to configured fallback_model 'groq/llama-3.1-8b'",
+            "fallback_chosen",
+        );
+        assert_redacts(
+            "tiered routing: complexity=0.50, tier=standard, level=1, user=carol",
+            "tiered_routing",
+        );
+    }
+
+    #[test]
+    fn redacted_reason_uses_structured_fields_when_text_silent() {
+        let escalated = RoutingDecision {
+            reason: String::new(),
+            escalated: true,
+            ..Default::default()
+        };
+        assert_eq!(escalated.redacted_reason(), "escalated");
+
+        let constrained = RoutingDecision {
+            reason: String::new(),
+            budget_constrained: true,
+            ..Default::default()
+        };
+        assert_eq!(constrained.redacted_reason(), "budget_constrained");
+    }
+
+    #[test]
+    fn redacted_reason_default_is_safe() {
+        let d = RoutingDecision::default();
+        // Default decision falls through to the catch-all category.
+        let red = d.redacted_reason();
+        assert!(
+            ["tiered_routing", "static_routing"].contains(&red),
+            "unexpected default category: {red}"
+        );
     }
 
     #[test]

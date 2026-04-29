@@ -437,7 +437,7 @@ modified rather than relying on per-user overrides to override channel rules.
 |-------|--------|---------------------|
 | CONS-001 | RESOLVED | Types in `routing.rs` per FIX-01, Phase A SPARC plan |
 | CONS-002 | OPEN | DashMap vs RwLock -- pending Phase D/E implementation |
-| CONS-003 | NEEDS REVIEW | Escalation security -- mitigated by FIX-04 + FIX-06, review at Gate C+G |
+| CONS-003 | RESOLVED | Escalation security closed by ADR-050 (2026-04-28); FIX-04 + FIX-06 walked + the third no-tiers-available branch added by WEFT-27 |
 | CONS-004 | RESOLVED | AuthContext in `routing.rs` per FIX-01 |
 | CONS-005 | RESOLVED | Flat Option fields + Default impl per FIX-10 |
 | CONS-006 | OPEN | Config validation boundary -- pending Phase H implementation |

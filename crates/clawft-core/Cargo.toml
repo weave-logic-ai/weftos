@@ -93,6 +93,8 @@ ruvector-diskann = { workspace = true, optional = true }
 # works without enabling rvf / signing. Existing rvf / signing
 # features still depend on it transitively (was previously optional).
 sha2 = { workspace = true }
+# WEFT-28: HMAC-SHA256 over the cost-tracker persistence file.
+hmac = { workspace = true }
 reqwest = { workspace = true, optional = true }
 ed25519-dalek = { workspace = true, optional = true }
 
