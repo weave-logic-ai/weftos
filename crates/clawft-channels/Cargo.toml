@@ -24,7 +24,11 @@ matrix = []
 # Pub/Sub `data` field for Google Chat events.
 google-chat = ["dep:base64"]
 irc = []
-teams = []
+# Microsoft Teams adapter: Bot Framework client-credentials OAuth2 +
+# Graph activities POST + axum-based inbound webhook receiver. Pulls in
+# `axum` for the webhook listener and `jsonwebtoken` for decoding the
+# Bot Framework JWT presented on inbound activities.
+teams = ["dep:axum", "dep:jsonwebtoken"]
 
 [dependencies]
 clawft-types = { workspace = true }
@@ -49,10 +53,13 @@ uuid = { workspace = true }
 # Optional, gated under feature flags. Pulled in only when the relevant
 # adapter is enabled (see [features] above).
 base64 = { version = "0.22", optional = true }
+axum = { version = "0.8", default-features = false, features = ["json", "tokio", "http1"], optional = true }
+jsonwebtoken = { version = "9", default-features = false, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
-# wiremock backs the Google Chat adapter's HTTP-level tests (Pub/Sub
-# pull/ack and chat.spaces.messages.create). Already used elsewhere in
-# the workspace (clawft-llm, clawft-core) at this version.
+# wiremock backs the channel adapters' HTTP-level tests (Google Chat
+# Pub/Sub pull/ack + spaces.messages.create; Teams token endpoint +
+# conversations/activities POST). Already used elsewhere in the
+# workspace (clawft-llm, clawft-core) at this version.
 wiremock = "0.6"
