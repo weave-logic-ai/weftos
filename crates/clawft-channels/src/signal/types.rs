@@ -3,6 +3,11 @@
 use serde::{Deserialize, Serialize};
 
 /// Configuration for the Signal channel adapter.
+///
+/// `signal-cli` is invoked in `daemon` mode with a TCP JSON-RPC socket;
+/// `start()` connects a [`tokio::net::TcpStream`] to that socket, reads
+/// newline-delimited JSON-RPC events, and writes outbound `send` calls
+/// over the same connection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignalAdapterConfig {
     /// Phone number registered with Signal (e.g. `"+1234567890"`).
@@ -10,10 +15,28 @@ pub struct SignalAdapterConfig {
     pub phone_number: String,
 
     /// Path to the `signal-cli` binary.
+    ///
+    /// Defaults to the value of the `SIGNAL_CLI_PATH` env var at startup,
+    /// or `"signal-cli"` if the env var is unset (i.e. resolved through
+    /// `PATH`).
     #[serde(default = "default_signal_cli_path", alias = "signalCliPath")]
     pub signal_cli_path: String,
 
+    /// TCP bind address for `signal-cli daemon --tcp <addr>`
+    /// (default `"127.0.0.1:7583"`).
+    #[serde(default = "default_daemon_bind_addr", alias = "daemonBindAddr")]
+    pub daemon_bind_addr: String,
+
+    /// Optional `--config` directory for `signal-cli` state (account
+    /// data, attachments, etc.). When `None`, `signal-cli` uses its
+    /// default location (`~/.local/share/signal-cli`).
+    #[serde(default, alias = "dataDir")]
+    pub data_dir: Option<String>,
+
     /// Subprocess timeout in seconds (default 30).
+    ///
+    /// Used as both the daemon-startup readiness deadline and the
+    /// per-request response deadline.
     #[serde(default = "default_timeout_secs", alias = "timeoutSecs")]
     pub timeout_secs: u64,
 
@@ -23,7 +46,10 @@ pub struct SignalAdapterConfig {
 }
 
 fn default_signal_cli_path() -> String {
-    "signal-cli".into()
+    std::env::var("SIGNAL_CLI_PATH").unwrap_or_else(|_| "signal-cli".into())
+}
+fn default_daemon_bind_addr() -> String {
+    "127.0.0.1:7583".into()
 }
 fn default_timeout_secs() -> u64 {
     30
@@ -34,6 +60,8 @@ impl Default for SignalAdapterConfig {
         Self {
             phone_number: String::new(),
             signal_cli_path: default_signal_cli_path(),
+            daemon_bind_addr: default_daemon_bind_addr(),
+            data_dir: None,
             timeout_secs: default_timeout_secs(),
             allowed_numbers: Vec::new(),
         }
@@ -75,8 +103,14 @@ mod tests {
 
     #[test]
     fn default_values() {
+        // SIGNAL_CLI_PATH may be set in the environment of CI runners;
+        // tolerate either the env-supplied value or the literal default.
         let cfg = SignalAdapterConfig::default();
-        assert_eq!(cfg.signal_cli_path, "signal-cli");
+        let expected_path = std::env::var("SIGNAL_CLI_PATH")
+            .unwrap_or_else(|_| "signal-cli".into());
+        assert_eq!(cfg.signal_cli_path, expected_path);
+        assert_eq!(cfg.daemon_bind_addr, "127.0.0.1:7583");
+        assert!(cfg.data_dir.is_none());
         assert_eq!(cfg.timeout_secs, 30);
     }
 

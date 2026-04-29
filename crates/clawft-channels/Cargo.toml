@@ -16,7 +16,12 @@ default = ["native"]
 native = ["clawft-plugin/native"]
 email = []
 whatsapp = ["dep:axum", "dep:hex"]
-signal = []
+# `signal` requires `clawft-plugin/native` for the tokio-backed
+# CancellationToken. The crate's `native` feature is on by default
+# (see [features].default), so this is a belt-and-suspenders
+# guarantee for `cargo check -p clawft-channels --features signal`
+# without --no-default-features.
+signal = ["clawft-plugin/native"]
 matrix = []
 # Google Chat adapter: real Pub/Sub pull + chat.spaces.messages.create POST.
 # `reqwest`, `serde`, and `serde_json` are unconditionally pulled in by the
