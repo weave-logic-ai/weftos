@@ -47,6 +47,15 @@ pub enum KernelError {
     #[error("ipc error: {0}")]
     Ipc(String),
 
+    /// IPC frame exceeded the configured maximum payload size.
+    #[error("ipc message too large: {size} bytes (limit {limit} bytes)")]
+    MessageTooLarge {
+        /// Observed serialized size in bytes.
+        size: usize,
+        /// Configured limit in bytes (16 MiB by default).
+        limit: usize,
+    },
+
     /// Kernel is in wrong state for requested operation.
     #[error("kernel state error: expected {expected}, got {actual}")]
     WrongState {
