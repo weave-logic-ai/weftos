@@ -14,11 +14,21 @@
 //!   sessions/        # Per-agent session store
 //!   memory/          # Per-agent memory namespace
 //!   skills/          # Per-agent skill overrides
-//!   tool_state/      # Per-plugin state
+//!   tool_state/      # Per-plugin state -- see Contract 3.1 below
 //! ```
 //!
 //! Directories are created with `0700` permissions on Unix for security.
 //! Cross-agent sharing is done via symlinks.
+//!
+//! `tool_state/` implements **Contract 3.1** (Tool Plugin <-> Memory)
+//! from the cross-element integration spec. Plugins access it via
+//! `clawft_plugin::ToolContext::key_value_store()` -- they see a
+//! `&dyn KeyValueStore` slice scoped to
+//! `~/.clawft/agents/<agent_id>/tool_state/<plugin_name>/`. The host
+//! materializes the per-plugin subdirectory; plugins never write to
+//! `tool_state/` directly. Operator-facing documentation:
+//! `docs/guides/workspaces.md` ("tool_state contract"). See WEFT-94
+//! for the docs decision and WEFT MW-16 for the runtime-backed impl.
 
 use std::path::{Path, PathBuf};
 
@@ -27,6 +37,12 @@ use clawft_types::{ClawftError, Result};
 use super::WorkspaceManager;
 
 /// Subdirectories created inside each per-agent workspace.
+///
+/// `tool_state` is created eagerly even though the only in-tree
+/// `KeyValueStore` impls are test-fixture mocks today; this keeps the
+/// directory layout visible to operators and lets the sandbox grant
+/// the path proactively. See the module-level docs and
+/// `docs/guides/workspaces.md` "tool_state contract".
 const AGENT_WORKSPACE_SUBDIRS: &[&str] = &[
     "sessions",
     "memory",

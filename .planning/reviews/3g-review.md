@@ -12,6 +12,35 @@ before implementation begins.
 
 ---
 
+## Triage status (2026-04-28, WEFT-90 / MW-12)
+
+The original review is a frozen 2026-02-17 snapshot. Each ISSUE below
+now carries a **STATUS** footer marking its disposition against the
+current code. Cross-references:
+
+- Audit doc: `.planning/reviews/0.7.0-release-gate/06-memory-workspace.md`
+  (rows WS-Q1..WS-Q9, WS-O1..WS-O11).
+- Plane: WeftOS workspace, `ws06-memory` label.
+- Implementation snapshot used for verification: HEAD of branch
+  `m1/m1-b-ws04-ws06` at the time of WEFT-90 close.
+
+Status keys:
+
+- `[FIXED in <sha>|<scope>]` -- shipped before this triage.
+- `[OPEN tracked WEFT-N]` -- still open, has a Plane work item.
+- `[WON'T DO -- <reason>]` -- intentionally not addressed.
+
+Counts: **8 fixed, 5 open, 5 won't-do** across 18 status rows --
+two Critical (C1, C2), five Major (M1-M5), five Minor (m1-m5),
+three Cross-Phase Conflicts, and three Missing Requirements. The
+"won't-do" bucket is dominated by features speced for
+`WorkspaceContext` / `weft workspace config edit` / `... show
+--merged` that the live implementation never built; in each case
+the same outcome is reached via a different shape (`WorkspaceStatus`,
+direct config-file edit, default-merged `config get`).
+
+---
+
 ## Scores
 
 | Dimension | Score | Notes |
@@ -83,6 +112,8 @@ The 3G SPARC plan follows the 07-workspaces.md semantics (replacement, not conca
 
 **Resolution required**: Add a note in the SPARC plan acknowledging this conflict and document the rationale for replacement semantics. Consider adding a convention for "append mode" arrays using a `+` prefix (e.g., `"+allowlist": ["extra-cmd"]` means append) as a future enhancement. For now, replacement is the safer default, but document this prominently in the CLAWFT.md template and workspace config guide.
 
+**STATUS**: `[FIXED in 0a4108c2|crates/clawft-core/src/config_merge.rs:54-58]`. `deep_merge` replaces arrays (not concatenated) -- exercised by `merge_arrays_replaced_not_concatenated` in `config_merge::tests`. The `+key` append-mode escape hatch is still a future enhancement and is tracked under the deferred WEFT MW-12 follow-up cluster (audit doc, "Open questions").
+
 **ISSUE-C2: `config.rs` has no `serde_json::Value` intermediate for deep merge**
 
 The current `Config` struct in `clawft-types/src/config.rs` uses concrete typed fields (not `serde_json::Value`). The deep merge algorithm operates on `serde_json::Value`, which means the implementation must:
@@ -95,6 +126,8 @@ The current `Config` struct in `clawft-types/src/config.rs` uses concrete typed 
 This roundtrip (Config -> Value -> merge -> Value -> Config) works, and the plan mentions it in section 2.4 (`load` function). However, the plan does not address a subtle issue: the current config loading in `config_loader.rs` calls `normalize_keys()` which converts camelCase to snake_case. The workspace config file will also need this normalization applied BEFORE the deep merge, or the merge will fail to match keys (e.g., `"maxTokens"` in workspace vs `"max_tokens"` in the already-normalized global config).
 
 **Resolution required**: Add a step in the `load` function pseudocode: `normalize_keys(ws_json)` before calling `deep_merge(global_json, ws_json)`. Add a test case: workspace config with camelCase keys merges correctly with snake_case global config.
+
+**STATUS**: `[FIXED in 0a4108c2|crates/clawft-core/src/workspace/config.rs:58,67]`. `load_merged_config_from` calls `normalize_keys(&mut global)` and `normalize_keys(&mut ws_config)` *before* deep-merging. The pipeline is also mirrored in `clawft-platform/src/config_loader.rs:102-103,142-143` (Layers 2 + 3). Companion test: `load_merged_config_mcp_servers` covers the camelCase-vs-snake_case merge path for the MCP servers HashMap.
 
 ### Major
 
@@ -117,6 +150,8 @@ r"^@([\w./-]+\.(?:md|txt|toml|json|yaml|yml))$"
 ```
 This anchors to line start, requires a file extension, and avoids false positives on email addresses and @mentions. Add test cases for false positive scenarios.
 
+**STATUS**: `[FIXED in 0a4108c2|crates/clawft-core/src/clawft_md.rs:126-150]`. The implementation never used a regex -- `resolve_imports` iterates lines, trims, and matches `strip_prefix('@')`. That requires `@` to be the *first non-whitespace character on its own line*, which kills the email-address and @mention false-positive classes outright. Path traversal (`..`) and absolute paths are also rejected explicitly. The reviewer's tighter regex was overtaken by a stricter parser. No follow-up needed.
+
 **ISSUE-M2: Hierarchical CLAWFT.md loading walks up from workspace root indefinitely**
 
 The pseudocode in section 2.3 walks up from `workspace_root.parent()` with a depth limit of 10, collecting CLAWFT.md files from parent directories. However, this means running `weft` inside `/home/user/projects/my-project/` could load CLAWFT.md files from:
@@ -134,11 +169,15 @@ if dir == home_dir || dir.join(".git").is_dir():
 ```
 This matches Claude Code's behavior where CLAUDE.md hierarchy is bounded by the git repository root.
 
+**STATUS**: `[FIXED in 0a4108c2|crates/clawft-core/src/clawft_md.rs:71-93]`. `find_clawft_md_chain` walks up from `start_dir` and breaks on `dir.join(".git").exists()`. Filesystem-root fallback handles the case where there is no `.git/` ancestor. Implementation matches the reviewer's recommended boundary.
+
 **ISSUE-M3: `WorkspaceContext` does not carry `--no-hooks` flag**
 
 The `--no-hooks` global CLI flag is parsed in `main.rs` but the `WorkspaceContext` struct (section 3.2) has no `hooks_enabled: bool` field. The hook firing functions (`fire_hook`) need to know whether hooks are suppressed. Currently, the plan does not show how `--no-hooks` propagates to `fire_hook()`.
 
 **Recommendation**: Either add `hooks_enabled: bool` to `WorkspaceContext`, or pass it as a parameter to `WorkspaceManager::new()`. The latter is cleaner since hooks are a lifecycle concern, not a context concern.
+
+**STATUS**: `[WON'T DO -- WorkspaceContext was never built; the architectural shape diverged]`. The implementation ships `WorkspaceManager` (lifecycle) and `WorkspaceStatus` (read view) -- no `WorkspaceContext` struct exists in `clawft-core` or `clawft-types`. Workspace lifecycle hooks are not wired into the workspace lifecycle commands today (they were specced for `weft workspace create/load/delete`, none of which currently fire hooks); the `--no-hooks` plumbing therefore has nothing to suppress at this layer. The agent-loop hook system (`crates/clawft-graphify/src/hooks.rs`) is a separate subsystem with its own opt-in, unaffected by workspace lifecycle. Any future re-introduction of workspace lifecycle hooks should follow the reviewer's recommendation (lifecycle-concern parameter on the lifecycle entry point, not a context bool); filing a fresh Plane item if/when that work returns.
 
 **ISSUE-M4: Missing test for deep merge with `normalize_keys` interaction**
 
@@ -150,6 +189,8 @@ The deep merge test suite (section 4.2, Phase A) has 12 test cases but none of t
 // workspace (raw camelCase): {"agents": {"defaults": {"maxTokens": 4096}}}
 // after normalize + merge: {"agents": {"defaults": {"model": "gpt-4", "max_tokens": 4096}}}
 ```
+
+**STATUS**: `[FIXED in 0a4108c2|crates/clawft-core/src/workspace/config.rs::tests::load_merged_config_mcp_servers]`. The MCP-servers test exercises the *full* normalize-then-merge pipeline with camelCase workspace keys layered over already-normalized global keys (HashMap, not Vec). The Vec-of-T variant (e.g. `CommandPolicyConfig.allowlist`) is not separately covered; that gap rolls under ISSUE-C1's `+key` append-mode follow-up rather than a standalone test ask.
 
 **ISSUE-M5: `weft workspace create` does not create MEMORY.md and HISTORY.md files**
 
@@ -169,6 +210,8 @@ platform.fs.write(dot_clawft.join("memory/MEMORY.md"), "")
 platform.fs.write(dot_clawft.join("memory/HISTORY.md"), "")
 ```
 
+**STATUS**: `[FIXED in 0a4108c2|crates/clawft-core/src/workspace/mod.rs:156-158]`. `WorkspaceManager::create` writes `dot_clawft.join("MEMORY.md")` and `dot_clawft.join("HISTORY.md")` as empty files at create time. Note: the actual placement is `.clawft/MEMORY.md` (not `.clawft/memory/MEMORY.md` as the reviewer's pseudocode suggested) -- this is the live convention; the layout doc in `docs/guides/workspaces.md` and the test at line 352-353 of `workspace/mod.rs` both confirm. If the reviewer's nested layout is preferred, file as a separate Plane item.
+
 ### Minor
 
 **ISSUE-m1: Atomic write tmp file naming**
@@ -177,6 +220,8 @@ Section 1.2.11 specifies "write to `.tmp`, then rename" for atomic writes. The t
 ```
 workspaces.json.tmp.{pid}  ->  rename  ->  workspaces.json
 ```
+
+**STATUS**: `[OPEN tracked WEFT-MW-spec-drift]` -- spec/code drift. The audit (`.planning/reviews/0.7.0-release-gate/06-memory-workspace.md`, "Released Features") claims "atomic writes via tmp-file rename", but the live `WorkspaceRegistry::save` (`crates/clawft-types/src/workspace.rs:85-91`) calls `std::fs::write(path, content)` directly -- no tmp+rename, no PID suffix. Single-process operation hides this; concurrent CLI invocations can corrupt the registry. Filing as a follow-up: the fix is small (write `path.with_extension("json.tmp.{pid}")`, fsync, rename) but it carries test ripple. Not blocking 0.7.0 because the registry is touched serially in the supported workflow.
 
 **ISSUE-m2: WorkspaceContext missing `name` field**
 
@@ -187,17 +232,25 @@ The `WorkspaceContext` struct (section 3.2) has `root: Option<PathBuf>` but no `
 
 The name could be derived from `root.file_name()`, but it would be cleaner to store it explicitly.
 
+**STATUS**: `[WON'T DO -- WorkspaceContext was never built]`. The implementation uses `WorkspaceStatus` (`crates/clawft-core/src/workspace/mod.rs:61-76`), which carries an explicit `pub name: String` field plus `pub path: PathBuf` -- exactly the shape the reviewer asked for, just on a different type name. The session-key prefixing concern (FR-W08) is handled at the session layer, not the workspace layer. No follow-up needed.
+
 **ISSUE-m3: `config edit` opens `$EDITOR` but has no fallback**
 
 Section 1.2.4 specifies `weft workspace config edit` opens `$EDITOR`. No fallback is specified when `$EDITOR` is unset. Standard practice: fall back to `$VISUAL`, then `vi`.
+
+**STATUS**: `[WON'T DO -- the `edit` subcommand was not built]`. `WorkspaceConfigAction` ships `Set`, `Get`, and `Reset` only (`crates/clawft-cli/src/commands/workspace_cmd.rs:84-103`). No `Edit` variant means the `$EDITOR` fallback question is moot. If `weft workspace config edit` returns later, this STATUS line should be re-opened with the recommended `$EDITOR -> $VISUAL -> vi` chain.
 
 **ISSUE-m4: `--path` flag for `weft workspace create` not specified**
 
 The CLI command hierarchy (section 3.5) shows `create <name> [--git] [--template] [--path]`, but `--path` is not explained in the FR-W01 specification. Presumably it overrides the parent directory (default: cwd). Add this to the acceptance criteria.
 
+**STATUS**: `[FIXED in 0a4108c2|crates/clawft-cli/src/commands/workspace_cmd.rs:40-48]`. The shipped flag is `--dir <path>`, not `--path` -- "Parent directory for the workspace (defaults to current directory)". Same semantics, different name. Acceptance is satisfied.
+
 **ISSUE-m5: `weft workspace config show --merged` mentioned in risk table but not in CLI spec**
 
 Section 5.5 (Risk Mitigations) references `weft workspace config show --merged` for debugging, but section 1.2.4 does not list a `--merged` flag. The bare `weft workspace config` already shows the merged config by default. Clarify or remove the reference.
+
+**STATUS**: `[WON'T DO -- the `show` subcommand was not built either]`. `WorkspaceConfigAction` is `Set | Get | Reset`. The `--merged` debugging flag never landed. If `show --merged` returns, the bare `config` form should print the merged tree by default and `--merged` should be a no-op alias for compat.
 
 ---
 
@@ -223,15 +276,21 @@ The 3G plan correctly identifies the integration point: "SkillsLoader gains a se
 
 **Resolution**: Section 1.2.10 should explicitly reference the 3F skill discovery chain and state that `WorkspaceContext.skills_dir` maps to the "Project" scope in `SkillScope::Project`. The `SkillRegistry::new(platform, project_dir)` parameter `project_dir` should receive `ctx.skills_dir`.
 
+**STATUS**: `[OPEN tracked WEFT-MW-1 / WS-Q12 / WS-O3]`. The shipped `SkillsLoader::new` resolves `~/.clawft/workspace/skills/` exclusively (legacy), with `add_extra_dir` as the only hook for project-scoped skills. There is no central code path that automatically wires `WorkspaceManager::create`'s `<workspace>/.clawft/skills/` into the loader's discovery chain. The audit (06-memory-workspace.md, WS-O3 / WS-Q12) carries this as MW-1 in the 0.7.x cycle; the fix is structural (route construction through `WorkspaceContext`-equivalent in the live code, e.g. via the `WorkspaceStatus` + bootstrap path).
+
 ### Conflict 2: Array merge vs 02-technical-requirements.md
 
 Already documented as ISSUE-C1 above.
+
+**STATUS**: `[FIXED -- see ISSUE-C1 above]`.
 
 ### Conflict 3: 3H MCP config scoping
 
 Phase 3H (tool delegation) adds workspace-scoped MCP server configs. The 02-technical-requirements.md section 10 mentions `.clawft/mcp/servers.json` as a project-scoped MCP config file. Phase 3G does not mention this file in the workspace directory layout (section 3.6). If MCP server configs should be workspace-scoped, the 3G workspace scaffold should create an `mcp/` subdirectory or the 3H plan should use `.clawft/config.json` for MCP server overrides (which would be merged via deep_merge).
 
 **Resolution**: Not blocking for 3G, but add a note in section 3.6 that `mcp/` is reserved for Phase 3H.
+
+**STATUS**: `[WON'T DO -- superseded by deep-merge of `.clawft/config.json`]`. `WORKSPACE_SUBDIRS` (`crates/clawft-core/src/workspace/mod.rs:81-82`) is `["sessions", "memory", "skills", "agents", "hooks"]` -- no `mcp/`. Per-workspace MCP server overrides ride the existing config-deep-merge path; the `load_merged_config_mcp_servers` test in `workspace/config.rs:220` proves the flow works for the `mcp_servers` HashMap. A standalone `mcp/servers.json` file is not needed.
 
 ---
 
@@ -241,9 +300,13 @@ Phase 3H (tool delegation) adds workspace-scoped MCP server configs. The 02-tech
 
    **Assessment**: This is GAP-27 from the gap analysis. Not a 3G responsibility -- it should remain a separate gap item. The 3G plan's 3-layer hierarchy is correct for workspace config; env var overlay is orthogonal and can be applied after the merge.
 
+   **STATUS**: `[OPEN tracked WS-Q8 / WEFT-MW-12]`. `crates/clawft-platform/src/config_loader.rs::load_config_raw` (lines 82-164) has Layer 1 (`weave.toml`), Layer 2 (`~/.clawft/config.json` / legacy `~/.nanobot/config.json`), and Layer 3 (`./.clawft/config.json`). No Layer 4 env-var overlay (`$CLAWFT_*`). The audit doc tracks this under WS-Q8; deferred to a future cycle (post-0.7.0). When it lands, it should be applied *after* Layer 3 so that env vars override workspace JSON.
+
 2. **`weft init` vs `weft workspace create`**: The 02-technical-requirements.md section 10 specifies a `weft init` command that scaffolds a workspace in the current directory (in-place). The 3G plan has `weft workspace create <name>` which creates a new subdirectory. These are different workflows. `weft init` should be a convenience alias for creating a workspace at cwd.
 
    **Assessment**: Add `weft workspace init` as an alias that runs `weft workspace create . --in-place` (creates `.clawft/` in cwd without creating a parent directory). This is a minor addition but matches user expectations from `git init`.
+
+   **STATUS**: `[OPEN tracked WS-Q6 / WEFT-MW-12]`. `WorkspaceAction` (`crates/clawft-cli/src/commands/workspace_cmd.rs:38-81`) has no `Init` variant. `weaver init` (`crates/clawft-weave/src/commands/init_cmd.rs`) exists but does workspace identity seeding (SOUL.md, IDENTITY.md, SOUL.journal.md) plus `weave.toml` -- not the in-place `.clawft/` scaffold the reviewer requested. Filing as a follow-up; the implementation cost is small (delegate to `WorkspaceManager::create` with a "current dir" mode).
 
 3. **No mention of `.gitignore` template content**: FR-W01 mentions `--git` creates a `.gitignore` but does not specify what goes in it. The 07-workspaces.md section 8 says `.clawft/config.json` should be gitignored (it may contain secrets) but `CLAWFT.md` should be committed.
 
@@ -253,6 +316,8 @@ Phase 3H (tool delegation) adds workspace-scoped MCP server configs. The 02-tech
    .clawft/sessions/
    .clawft/memory/
    ```
+
+   **STATUS**: `[OPEN tracked WS-Q7 / WEFT-MW-12]`. The current `--git`-related `.gitignore` writer (`crates/clawft-weave/src/commands/init_cmd.rs::ensure_gitignore`, lines 290-317) only adds `.weftos/` and `graphify-out/` -- the workspace-specific entries (`.clawft/config.json`, `.clawft/sessions/`, `.clawft/memory/`) are not added by either `weaver init` or `weft workspace create`. Filing as a follow-up; the cost is one entry list update + a test.
 
 ---
 

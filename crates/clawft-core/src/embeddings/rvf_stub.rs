@@ -9,6 +9,32 @@
 //! replaced or wrapped while keeping the same interface.
 //!
 //! This module is gated behind the `rvf` feature flag.
+//!
+//! # Why this is the active path (and `rvf_io` is gone)
+//!
+//! Originally the embeddings module shipped two RVF shapes side by side:
+//! this `rvf_stub` (brute-force, JSON-backed, used by
+//! [`crate::memory_bootstrap`]) and a forward-compatible `rvf_io`
+//! module modeling segment files with inline WITNESS chains. The
+//! `rvf_io` shape was the planned target once the upstream
+//! `rvf-runtime` 0.2 binary format stabilized, but it carried no
+//! callers in-tree and risked becoming bit-rot.
+//!
+//! In WEFT-93 (release-gate audit `06-memory-workspace.md` row WS-O2 /
+//! task MW-15) we picked one fate: keep `rvf_stub` as the live path
+//! and delete `rvf_io`. The reasoning:
+//!
+//! 1. `rvf_stub` is exercised by `memory_bootstrap.rs` and its tests.
+//!    `rvf_io` had no callers anywhere in the workspace.
+//! 2. Dual implementations rot fast and confuse new contributors.
+//! 3. The forward-compatible segment shape can return when there is a
+//!    real consumer (e.g. once `rvf-runtime` >= 0.3 ships a stable
+//!    on-disk format).
+//!
+//! The decision is recorded in
+//! `.planning/development_notes/08-memory-workspace/h2-vector-memory/decisions.md`.
+//! If you find yourself adding a second RVF shape: file a Plane item
+//! for the migration plan first, don't ship them side by side.
 
 use std::path::{Path, PathBuf};
 
