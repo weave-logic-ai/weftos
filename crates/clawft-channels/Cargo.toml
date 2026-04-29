@@ -67,7 +67,7 @@ uuid = { workspace = true }
 # - tokio-rustls / webpki-roots / rustls-pki-types: irc TLS dial.
 # - cpal: voice-real-audio cpal capture/playback (opt-in).
 base64 = { version = "0.22", optional = true }
-axum = { version = "0.8", default-features = false, features = ["json", "tokio", "http1", "macros"], optional = true }
+axum = { version = "0.8", default-features = false, features = ["json", "tokio", "http1", "macros", "query"], optional = true }
 jsonwebtoken = { version = "9", default-features = false, optional = true }
 hex = { version = "0.4", optional = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12", "ring"], optional = true }
