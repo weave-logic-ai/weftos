@@ -46,6 +46,98 @@ pub struct VoiceConfig {
     /// Agents not in this map use the default personality.
     #[serde(default, alias = "personalities")]
     pub personalities: HashMap<String, VoicePersonality>,
+
+    /// Voice transcript consumer configuration (WEFT-555 / M5-W).
+    ///
+    /// Controls the daemon-side bridge that subscribes to the substrate
+    /// transcript topic published by `clawft-service-whisper`, then
+    /// routes each transcript into either:
+    ///
+    /// - the configured agent's `agent.chat` conversation, or
+    /// - the daemon's RPC dispatch, when the transcript starts with
+    ///   the configured `command_prefix`.
+    ///
+    /// Disabled by default; voice features must be opted into.
+    #[serde(default)]
+    pub consumer: VoiceConsumerConfig,
+}
+
+/// Voice transcript consumer configuration.
+///
+/// The consumer subscribes to a single substrate path emitted by
+/// `clawft-service-whisper` (typically the mesh-canonical
+/// `substrate/_derived/transcript/<source-node>/mic`) and bridges
+/// transcripts into the daemon's agent / command surfaces.
+///
+/// Defaults match the daemon's ESP32-source whisper wiring at boot
+/// (`WHISPER_INPUT_NODE_ID` env var, falling back to `n-bfc4cd`). The
+/// `enabled` flag defaults to `false` — voice routing is opt-in until
+/// the 5 P0 voice security controls (WEFT-207/208/209/210/211) ship.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceConsumerConfig {
+    /// Master enable toggle. When `false` the daemon does not subscribe
+    /// to the transcript topic at all; whisper still publishes
+    /// transcripts but no consumer reads them.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Substrate path to subscribe to for transcripts. Defaults to the
+    /// mesh-canonical path produced by `clawft-service-whisper` for the
+    /// daemon's configured input source node.
+    #[serde(default = "default_transcript_topic", alias = "transcriptTopic")]
+    pub transcript_topic: String,
+
+    /// Agent identifier whose conversation receives non-command
+    /// transcripts. Defaults to the daemon's single concierge principal
+    /// (`concierge-bot`); per-agent fan-out is a future phase.
+    #[serde(default = "default_chat_target_agent", alias = "chatTargetAgent")]
+    pub chat_target_agent: String,
+
+    /// Conversation id used when synthesizing the agent.chat dispatch.
+    /// Stable across transcripts so the agent loop's per-conv state
+    /// (mutex, sink, heartbeat) accumulates one continuous voice
+    /// session.
+    #[serde(default = "default_voice_conv_id", alias = "convId")]
+    pub conv_id: String,
+
+    /// Prefix indicating a transcript should be parsed as a command and
+    /// routed through the daemon's RPC dispatch instead of the agent
+    /// conversation. The prefix (including any trailing whitespace) is
+    /// stripped before parsing; the remainder is whitespace-split into
+    /// `<method> <args...>`.
+    ///
+    /// Empty string disables command routing — every transcript falls
+    /// through to chat.
+    #[serde(default = "default_command_prefix", alias = "commandPrefix")]
+    pub command_prefix: String,
+}
+
+fn default_transcript_topic() -> String {
+    "substrate/_derived/transcript/n-bfc4cd/mic".into()
+}
+
+fn default_chat_target_agent() -> String {
+    "concierge-bot".into()
+}
+
+fn default_voice_conv_id() -> String {
+    "voice-default".into()
+}
+
+fn default_command_prefix() -> String {
+    "weft ".into()
+}
+
+impl Default for VoiceConsumerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            transcript_topic: default_transcript_topic(),
+            chat_target_agent: default_chat_target_agent(),
+            conv_id: default_voice_conv_id(),
+            command_prefix: default_command_prefix(),
+        }
+    }
 }
 
 /// Audio capture/playback configuration.
