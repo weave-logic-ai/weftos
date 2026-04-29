@@ -45,12 +45,19 @@
 #![deny(rust_2018_idioms)]
 #![warn(missing_docs)]
 
+pub mod audit;
 pub mod client;
+pub mod manifest;
 pub mod service;
 pub mod wav;
 pub mod windower;
 
+pub use audit::{TranscriptAuditEvent, AUDIT_TARGET};
 pub use client::{InferenceResponse, TranscribeError, WhisperClient, WhisperConfig};
+pub use manifest::{
+    verify_model_dir, verify_model_dir_soft, ManifestFile, ModelIntegrityError,
+    ModelIntegrityReport, ModelManifest, MANIFEST_FILENAME, MANIFEST_SIG_FILENAME,
+};
 pub use service::{WhisperService, WhisperServiceConfig};
 pub use windower::{PcmChunk, PcmWindow, Windower};
 

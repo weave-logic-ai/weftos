@@ -499,6 +499,12 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
             // the safe default for a "speech detected" filter.
             classifier_input: Some(classify_output_path.clone()),
             gate_window_ms: 1_500,
+            // SC-9 audit row context. Until manifest verify is wired
+            // into daemon boot we log a fixed model identifier; once
+            // `verify_model_dir` runs at startup the report's
+            // `manifest.model_id` will replace this.
+            model_id: "whisper-cpp/unverified".to_string(),
+            source_node_hint: source_node_id.clone(),
         };
         let client_cfg = clawft_service_whisper::WhisperConfig {
             base_url: whisper_url.clone(),
