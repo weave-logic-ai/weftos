@@ -127,15 +127,37 @@ impl<P: Platform> AppContext<P> {
         let sessions = SessionManager::new(platform.clone()).await?;
         debug!("session manager initialized");
 
-        // 3. Memory store
-        let memory = Arc::new(MemoryStore::new(platform.clone())?);
+        // 3. Memory store — WEFT-79: route through workspace overlay
+        //    when present (.clawft/ in cwd or ancestor) so kernel
+        //    persists into the workspace's `.clawft/memory/` instead
+        //    of the global `~/.clawft/workspace/memory/`. Mirrors the
+        //    cwd-relative config overlay (Layer 3).
+        let memory = match crate::workspace::discover_workspace() {
+            Some(ws_root) if ws_root.join(".clawft").is_dir() => {
+                debug!(
+                    workspace = %ws_root.display(),
+                    "routing memory through workspace overlay"
+                );
+                Arc::new(MemoryStore::for_workspace(&ws_root, platform.clone()))
+            }
+            _ => Arc::new(MemoryStore::new(platform.clone())?),
+        };
         debug!(
             memory_path = %memory.memory_path().display(),
             "memory store initialized"
         );
 
-        // 4. Skills loader
-        let mut skills_loader = SkillsLoader::new(platform.clone())?;
+        // 4. Skills loader — same workspace-overlay routing as memory.
+        let mut skills_loader = match crate::workspace::discover_workspace() {
+            Some(ws_root) if ws_root.join(".clawft").is_dir() => {
+                debug!(
+                    workspace = %ws_root.display(),
+                    "routing skills through workspace overlay"
+                );
+                SkillsLoader::for_workspace(&ws_root, platform.clone())
+            }
+            _ => SkillsLoader::new(platform.clone())?,
+        };
 
         // Also scan extra `skills/` directories if they exist:
         // - workspace/skills/  (from config workspace path)
@@ -628,18 +650,26 @@ pub async fn build_daemon_agent_loop(
     // failure rather than a recoverable error.
     let bus = Arc::new(MessageBus::new());
 
-    // SessionManager::new and MemoryStore::new can fail when the
-    // platform's home_dir resolution fails. The daemon already
-    // resolved the runtime dir earlier; we propagate via expect.
+    // SessionManager::new can still fail when the platform's home_dir
+    // resolution fails. The daemon already resolved the runtime dir
+    // earlier; we propagate via expect.
     let sessions = SessionManager::new(platform.clone())
         .await
         .expect("daemon: SessionManager init failed");
-    let memory = Arc::new(
-        crate::agent::memory::MemoryStore::new(platform.clone())
-            .expect("daemon: MemoryStore init failed"),
+
+    // WEFT-79: route memory + skills through the workspace overlay
+    // the daemon already resolved. The daemon hands us the workspace
+    // root explicitly, so we never fall back to the global path here —
+    // a daemon without a workspace is a misconfiguration, not a soft
+    // fallback case.
+    let memory = Arc::new(crate::agent::memory::MemoryStore::for_workspace(
+        workspace,
+        platform.clone(),
+    ));
+    let skills_loader = crate::agent::skills::SkillsLoader::for_workspace(
+        workspace,
+        platform.clone(),
     );
-    let skills_loader = crate::agent::skills::SkillsLoader::new(platform.clone())
-        .expect("daemon: SkillsLoader init failed");
     let skills = Arc::new(skills_loader);
     let context = ContextBuilder::new(
         config.agents.clone(),
