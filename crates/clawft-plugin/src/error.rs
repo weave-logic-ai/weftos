@@ -38,6 +38,40 @@ pub enum PluginError {
     Serialization(#[from] serde_json::Error),
 }
 
+/// Errors raised by skill loading and validation.
+///
+/// # WEFT-65
+///
+/// Surfaced when a skill's declared `allowed_tools` includes one or more
+/// tools that are not present in the user/skill grant matrix. The skill
+/// loader rejects load with this error rather than silently dropping the
+/// ungranted entries.
+#[non_exhaustive]
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum SkillLoadError {
+    /// One or more declared tools are not in the grant scope for the skill.
+    ///
+    /// The `denied` field contains the offending tool names (sorted, dedup'd).
+    #[error(
+        "skill '{skill}' declares tool(s) not in its grant scope: {denied:?}"
+    )]
+    ToolNotGranted {
+        /// Skill that failed load.
+        skill: String,
+        /// Tools the skill asked for but is not granted.
+        denied: Vec<String>,
+    },
+
+    /// Skill manifest could not be parsed.
+    #[error("skill '{skill}' manifest invalid: {reason}")]
+    ManifestInvalid {
+        /// Skill name (or path, if name was unreadable).
+        skill: String,
+        /// Reason the manifest is rejected.
+        reason: String,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

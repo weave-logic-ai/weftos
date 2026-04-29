@@ -271,6 +271,172 @@ impl PluginManifest {
             "YAML manifest parsing deferred to C3 skill loader".into(),
         ))
     }
+
+    /// Parse a manifest from the legacy `.weftos-plugin.toml` format.
+    ///
+    /// # WEFT-64
+    ///
+    /// The legacy TOML schema is:
+    ///
+    /// ```toml
+    /// [plugin]
+    /// name = "my-plugin"            # → manifest.name
+    /// type = "tool"                 # mapped to manifest.capabilities
+    /// version = "0.1.0"             # → manifest.version
+    /// description = ""
+    /// author = ""
+    /// license = "MIT OR Apache-2.0"
+    ///
+    /// [compatibility]
+    /// weftos_min_version = "0.4.0"  # informational; not in PluginManifest
+    /// ```
+    ///
+    /// The canonical format going forward is `clawft.plugin.json`. This
+    /// reader accepts the legacy TOML, converts it to a `PluginManifest`,
+    /// and emits a `tracing::warn!` deprecation notice. Callers that want
+    /// to surface the warning to end-users should also print to stderr.
+    ///
+    /// Conversion rules:
+    ///
+    /// - `[plugin].name` → `manifest.name` and `manifest.id`
+    ///   (`id` synthesized as `weftos.plugin.<name>` if no id key is present)
+    /// - `[plugin].version` → `manifest.version`
+    /// - `[plugin].type` → mapped to a single capability:
+    ///   - `"tool"` → `Tool`
+    ///   - `"channel"` → `Channel`
+    ///   - `"analyzer"` → `PipelineStage`
+    ///   - `"skill"` → `Skill`
+    ///   - anything else → `Tool` (default)
+    /// - `permissions` and `resources` use crate defaults (legacy TOML did
+    ///   not encode them).
+    pub fn from_legacy_toml(toml_str: &str) -> Result<Self, PluginError> {
+        tracing::warn!(
+            "loading deprecated .weftos-plugin.toml manifest format; \
+             please migrate to clawft.plugin.json"
+        );
+
+        // Parse minimally without bringing in toml as a hard dep: clawft-plugin
+        // already does not list toml in Cargo.toml. We do a hand-rolled
+        // sectioned scan for the keys we need. This avoids dragging the toml
+        // crate into clawft-plugin's dep graph.
+        let parsed = parse_legacy_toml(toml_str)
+            .map_err(|e| PluginError::LoadFailed(format!("legacy TOML parse: {e}")))?;
+
+        let plugin = parsed.get("plugin").ok_or_else(|| {
+            PluginError::LoadFailed(
+                "legacy TOML: missing [plugin] table".into(),
+            )
+        })?;
+
+        let name = plugin.get("name").cloned().ok_or_else(|| {
+            PluginError::LoadFailed(
+                "legacy TOML: missing [plugin].name".into(),
+            )
+        })?;
+
+        let version = plugin
+            .get("version")
+            .cloned()
+            .unwrap_or_else(|| "0.1.0".to_string());
+
+        let plugin_type = plugin
+            .get("type")
+            .map(|s| s.as_str())
+            .unwrap_or("tool");
+        let capability = match plugin_type {
+            "tool" => PluginCapability::Tool,
+            "channel" => PluginCapability::Channel,
+            "analyzer" => PluginCapability::PipelineStage,
+            "skill" => PluginCapability::Skill,
+            "memory" | "memory_backend" => PluginCapability::MemoryBackend,
+            "voice" => PluginCapability::Voice,
+            _ => PluginCapability::Tool,
+        };
+
+        let id = plugin
+            .get("id")
+            .cloned()
+            .unwrap_or_else(|| format!("weftos.plugin.{name}"));
+
+        let manifest = PluginManifest {
+            id,
+            name,
+            version,
+            capabilities: vec![capability],
+            permissions: PluginPermissions::default(),
+            resources: PluginResourceConfig::default(),
+            wasm_module: None,
+            skills: Vec::new(),
+            tools: Vec::new(),
+        };
+
+        manifest.validate()?;
+        Ok(manifest)
+    }
+}
+
+/// Minimal hand-rolled TOML scanner that recognizes simple `[section]` lines
+/// and `key = "string"` entries. Sufficient for the legacy
+/// `.weftos-plugin.toml` schema, which only uses string scalars under
+/// `[plugin]` and `[compatibility]`. Comments (`#`) and blank lines are
+/// skipped. Unquoted values are treated as strings up to end-of-line.
+fn parse_legacy_toml(
+    s: &str,
+) -> std::result::Result<std::collections::HashMap<String, std::collections::HashMap<String, String>>, String>
+{
+    use std::collections::HashMap;
+
+    let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut current_section: Option<String> = None;
+
+    for (lineno, raw) in s.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // Strip trailing comments from value lines.
+        if let Some(stripped) = line.strip_prefix('[') {
+            let close = stripped
+                .find(']')
+                .ok_or_else(|| format!("line {}: unterminated [section]", lineno + 1))?;
+            let name = stripped[..close].trim().to_string();
+            current_section = Some(name);
+            continue;
+        }
+
+        let section = current_section.as_ref().ok_or_else(|| {
+            format!("line {}: key=value outside any [section]", lineno + 1)
+        })?;
+
+        let eq = line
+            .find('=')
+            .ok_or_else(|| format!("line {}: expected key = value", lineno + 1))?;
+        let key = line[..eq].trim().to_string();
+        let mut value = line[eq + 1..].trim().to_string();
+
+        // Handle quoted values: extract substring up to the matching closing
+        // quote, then ignore everything after (e.g. trailing comment).
+        if value.starts_with('"') || value.starts_with('\'') {
+            let quote_char = value.chars().next().unwrap();
+            let body = &value[1..];
+            if let Some(close) = body.find(quote_char) {
+                value = body[..close].to_string();
+            } else {
+                return Err(format!("line {}: unterminated quoted value", lineno + 1));
+            }
+        } else {
+            // Unquoted: strip trailing inline comment.
+            if let Some(hash) = value.find('#') {
+                value = value[..hash].trim().to_string();
+            }
+        }
+
+        out.entry(section.clone())
+            .or_default()
+            .insert(key, value);
+    }
+
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -672,5 +838,141 @@ mod tests {
     fn permission_diff_is_empty_default() {
         let diff = PermissionDiff::default();
         assert!(diff.is_empty());
+    }
+
+    // ── WEFT-64: legacy .weftos-plugin.toml reader ────────────────
+
+    #[test]
+    fn legacy_toml_basic_parse() {
+        let toml = r#"
+[plugin]
+name = "my-plugin"
+type = "tool"
+version = "0.2.0"
+description = "A test"
+author = "alice"
+license = "MIT"
+
+[compatibility]
+weftos_min_version = "0.4.0"
+"#;
+        let manifest = PluginManifest::from_legacy_toml(toml).unwrap();
+        assert_eq!(manifest.name, "my-plugin");
+        assert_eq!(manifest.version, "0.2.0");
+        assert_eq!(manifest.id, "weftos.plugin.my-plugin");
+        assert_eq!(manifest.capabilities, vec![PluginCapability::Tool]);
+    }
+
+    #[test]
+    fn legacy_toml_channel_type_maps_capability() {
+        let toml = r#"
+[plugin]
+name = "slack-bridge"
+type = "channel"
+version = "0.1.0"
+"#;
+        let manifest = PluginManifest::from_legacy_toml(toml).unwrap();
+        assert_eq!(manifest.capabilities, vec![PluginCapability::Channel]);
+    }
+
+    #[test]
+    fn legacy_toml_analyzer_type_maps_pipeline_stage() {
+        let toml = r#"
+[plugin]
+name = "lint-pass"
+type = "analyzer"
+version = "0.1.0"
+"#;
+        let manifest = PluginManifest::from_legacy_toml(toml).unwrap();
+        assert_eq!(
+            manifest.capabilities,
+            vec![PluginCapability::PipelineStage]
+        );
+    }
+
+    #[test]
+    fn legacy_toml_unknown_type_falls_back_to_tool() {
+        let toml = r#"
+[plugin]
+name = "weird"
+type = "no_such_type"
+version = "0.1.0"
+"#;
+        let manifest = PluginManifest::from_legacy_toml(toml).unwrap();
+        assert_eq!(manifest.capabilities, vec![PluginCapability::Tool]);
+    }
+
+    #[test]
+    fn legacy_toml_missing_plugin_table_fails() {
+        let toml = r#"
+[compatibility]
+weftos_min_version = "0.4.0"
+"#;
+        let err = PluginManifest::from_legacy_toml(toml).unwrap_err();
+        assert!(err.to_string().contains("[plugin]"), "got: {err}");
+    }
+
+    #[test]
+    fn legacy_toml_missing_name_fails() {
+        let toml = r#"
+[plugin]
+type = "tool"
+version = "0.1.0"
+"#;
+        let err = PluginManifest::from_legacy_toml(toml).unwrap_err();
+        assert!(err.to_string().contains("name"), "got: {err}");
+    }
+
+    #[test]
+    fn legacy_toml_invalid_version_fails() {
+        let toml = r#"
+[plugin]
+name = "bad-version"
+type = "tool"
+version = "not-semver"
+"#;
+        let err = PluginManifest::from_legacy_toml(toml).unwrap_err();
+        assert!(err.to_string().contains("invalid semver"), "got: {err}");
+    }
+
+    #[test]
+    fn legacy_toml_handles_comments_and_blank_lines() {
+        let toml = r#"
+# top comment
+
+[plugin]
+# inline section comment
+name = "commenter"   # trailing comment
+type = "tool"
+version = "1.0.0"
+"#;
+        let manifest = PluginManifest::from_legacy_toml(toml).unwrap();
+        assert_eq!(manifest.name, "commenter");
+        assert_eq!(manifest.version, "1.0.0");
+    }
+
+    #[test]
+    fn legacy_toml_and_canonical_json_yield_same_struct_shape() {
+        // Same logical plugin, expressed in both formats.
+        let json = serde_json::json!({
+            "id": "weftos.plugin.same-plugin",
+            "name": "same-plugin",
+            "version": "1.0.0",
+            "capabilities": ["tool"]
+        })
+        .to_string();
+        let toml = r#"
+[plugin]
+name = "same-plugin"
+type = "tool"
+version = "1.0.0"
+"#;
+        let from_json = PluginManifest::from_json(&json).unwrap();
+        let from_toml = PluginManifest::from_legacy_toml(toml).unwrap();
+
+        assert_eq!(from_json.id, from_toml.id);
+        assert_eq!(from_json.name, from_toml.name);
+        assert_eq!(from_json.version, from_toml.version);
+        assert_eq!(from_json.capabilities, from_toml.capabilities);
     }
 }
