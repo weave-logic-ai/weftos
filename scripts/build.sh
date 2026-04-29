@@ -211,6 +211,21 @@ cmd_ui() {
     fi
 }
 
+cmd_releases_mdx() {
+    header "Regenerating docs releases.mdx from CHANGELOG.md"
+    if [ ! -x "$ROOT/scripts/build-releases-mdx.sh" ]; then
+        fail "scripts/build-releases-mdx.sh not found or not executable"
+        return 1
+    fi
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   scripts/build-releases-mdx.sh\n"
+    else
+        "$ROOT/scripts/build-releases-mdx.sh"
+    fi
+    timer_end
+}
+
 cmd_all() {
     header "Building everything"
     local failed=0
@@ -457,6 +472,8 @@ ${BOLD}Commands:${NC}
   wasi            Build WASM for WASI (wasm32-wasip2)
   browser         Build WASM for browser (wasm32-unknown-unknown)
   ui              Build React frontend (tsc + vite)
+  releases-mdx    Regenerate docs/src/content/docs/weftos/vision/releases.mdx
+                  from CHANGELOG.md (also runs as --check before commits)
   all             Build everything (native + wasi + browser + ui)
   test            Run cargo test --workspace
   check           Run cargo check --workspace (fast compile check)
@@ -545,6 +562,7 @@ main() {
         wasi)         cmd_wasi ;;
         browser)      cmd_browser ;;
         ui)           cmd_ui ;;
+        releases-mdx) cmd_releases_mdx ;;
         all)          cmd_all ;;
         test)         cmd_test ;;
         check)        cmd_check ;;
