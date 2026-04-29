@@ -13,6 +13,7 @@ pub mod cron_api;
 pub mod delegation;
 pub mod handlers;
 pub mod memory_api;
+pub mod middleware;
 pub mod monitoring;
 pub mod skills;
 pub mod voice_api;
@@ -21,7 +22,6 @@ pub mod ws;
 use std::sync::Arc;
 
 use axum::Router;
-use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 /// Shared state accessible by all API handlers.
@@ -280,51 +280,66 @@ pub async fn serve(
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
     let router = build_router(state, cors_origins, static_dir);
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown)
-        .await
+    // `into_make_service_with_connect_info::<SocketAddr>()` makes
+    // `ConnectInfo<SocketAddr>` available to handlers and middleware
+    // (used by the per-IP rate limiter in `middleware::rate_limit_middleware`).
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
 }
 
 /// Build the API router with all routes.
+///
+/// Layered, in outermost-to-innermost order:
+///   1. CSP headers on every response.
+///   2. CORS (deny-by-default).
+///   3. Trace.
+///   4. Per-IP per-endpoint rate limit.
+///   5. Bearer-token auth gate (route-scoped on `/api/*` and `/ws`).
 ///
 /// When `static_dir` is provided, a [`tower_http::services::ServeDir`]
 /// fallback is added so that the built frontend is served for any path
 /// not matched by the API or WebSocket routes.
 pub fn build_router(state: ApiState, cors_origins: &[String], static_dir: Option<&str>) -> Router {
-    let cors = if cors_origins.is_empty() {
-        CorsLayer::permissive()
-    } else {
-        let origins: Vec<_> = cors_origins
-            .iter()
-            .filter_map(|o| o.parse().ok())
-            .collect();
-        CorsLayer::new()
-            .allow_origin(origins)
-            .allow_methods(Any)
-            .allow_headers(Any)
-    };
+    let cors = middleware::build_cors_layer(cors_origins);
+    let rate_limit_state = Arc::new(middleware::RateLimitState::new());
 
-    let mut router = Router::new()
-        .nest("/api", handlers::api_routes())
-        // NOTE: To enable auth middleware on protected API routes, wrap the
-        // `/api` nest with:
-        //   .nest("/api", handlers::api_routes()
-        //       .layer(axum::middleware::from_fn_with_state(
-        //           state.clone(), auth::auth_middleware)))
-        // This is intentionally disabled for now to keep the dev workflow
-        // simple (no token required). Enable once the UI has a login flow.
-        .route("/ws", axum::routing::get(ws::ws_handler));
+    // Auth-gated `/api/*` nest.
+    let api_router = handlers::api_routes().route_layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        auth::auth_middleware,
+    ));
+
+    // Auth-gated `/ws` route (Bearer header OR `?token=` query param).
+    let ws_router = Router::new()
+        .route("/ws", axum::routing::get(ws::ws_handler))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::ws_auth_middleware,
+        ));
+
+    let mut router = Router::new().nest("/api", api_router).merge(ws_router);
 
     // Serve built UI as SPA fallback when a static directory is provided.
     if let Some(dir) = static_dir {
         use tower_http::services::ServeDir;
-        router = router.fallback_service(
-            ServeDir::new(dir).append_index_html_on_directories(true),
-        );
+        router = router
+            .fallback_service(ServeDir::new(dir).append_index_html_on_directories(true));
     }
 
     router
-        .layer(cors)
+        // Rate limit before auth so 429 doesn't expose token validity.
+        .layer(axum::middleware::from_fn_with_state(
+            rate_limit_state,
+            middleware::rate_limit_middleware,
+        ))
         .layer(TraceLayer::new_for_http())
+        .layer(cors)
+        // CSP outermost so every response (including 401/429/static)
+        // carries the header.
+        .layer(axum::middleware::from_fn(middleware::csp_middleware))
         .with_state(state)
 }
