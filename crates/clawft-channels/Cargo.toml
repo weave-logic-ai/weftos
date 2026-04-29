@@ -12,9 +12,10 @@ keywords = ["telegram", "slack", "discord", "chat", "bot"]
 categories = ["network-programming"]
 
 [features]
-default = []
+default = ["native"]
+native = ["clawft-plugin/native"]
 email = []
-whatsapp = []
+whatsapp = ["dep:axum", "dep:hex"]
 signal = []
 matrix = []
 google-chat = []
@@ -41,5 +42,16 @@ sha2 = { workspace = true }
 dirs = { workspace = true }
 uuid = { workspace = true }
 
+# Optional, gated under the `whatsapp` feature for the webhook receiver
+# (Cloud API meta.com -> our process). Used to host an HTTP listener that
+# verifies `X-Hub-Signature-256` and dispatches inbound messages onto the
+# `MessageBus` via `ChannelAdapterHost`.
+axum = { version = "0.8", features = ["json", "macros"], optional = true }
+hex = { version = "0.4", optional = true }
+
 [dev-dependencies]
 tokio = { workspace = true }
+mockito = "1"
+# Used by `whatsapp` webhook unit tests to drive the axum router
+# in-process via `ServiceExt::oneshot`.
+tower = { version = "0.5", features = ["util"] }

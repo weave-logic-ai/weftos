@@ -1086,13 +1086,16 @@ name = "clawft-channels"
 version = "0.6.19"
 dependencies = [
  "async-trait",
+ "axum",
  "chrono",
  "clawft-platform",
  "clawft-plugin",
  "clawft-types",
  "dirs",
  "futures-util",
+ "hex",
  "hmac",
+ "mockito",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -1101,6 +1104,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.24.0",
  "tokio-util",
+ "tower",
  "tracing",
  "uuid",
 ]
