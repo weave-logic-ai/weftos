@@ -1157,6 +1157,7 @@ dependencies = [
  "fnv",
  "futures-channel",
  "futures-util",
+ "hmac",
  "instant-distance",
  "js-sys",
  "notify",
