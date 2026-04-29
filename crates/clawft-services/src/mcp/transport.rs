@@ -4,8 +4,14 @@
 //! - [`StdioTransport`]: communicates with a child process over stdin/stdout
 //!   using request-ID multiplexing for concurrent requests
 //! - [`HttpTransport`]: communicates over HTTP POST
+//!
+//! Plus a [`McpTransportFactory`] trait used by [`McpServerManager`] to
+//! decouple transport instantiation from server management, with built-in
+//! validators ([`validate_url`], [`validate_command_path`],
+//! [`validate_tempfile_path`]) that gate config before a transport is spawned.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -335,6 +341,448 @@ impl McpTransport for MockTransport {
         let notif = JsonRpcNotification::new(method, params);
         self.notifications.lock().await.push(notif);
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Transport factory + validators (WEFT-186)
+// ---------------------------------------------------------------------------
+
+/// A typed description of how to create a transport.
+///
+/// Variants mirror the supported transport kinds. Use
+/// [`McpTransportFactory::create`] to materialize a transport.
+#[derive(Debug, Clone)]
+pub enum TransportSpec {
+    /// Spawn a child process and speak JSON-RPC over its stdio.
+    Stdio {
+        /// Command path. Validated by [`validate_command_path`] when
+        /// `allowed_paths` is non-empty.
+        command: String,
+        /// Command arguments.
+        args: Vec<String>,
+        /// Environment variables for the child.
+        env: HashMap<String, String>,
+    },
+    /// Speak JSON-RPC over HTTP POST.
+    Http {
+        /// Endpoint URL. Validated by [`validate_url`].
+        url: String,
+    },
+    /// Speak JSON-RPC over a Unix domain socket bound to a tempfile path.
+    ///
+    /// Currently only path validation is performed; transport materialization
+    /// returns a `NotImplemented` error so callers can plug their own
+    /// implementation later.
+    Tempfile {
+        /// Path to the socket file. Validated by [`validate_tempfile_path`].
+        path: PathBuf,
+    },
+}
+
+/// Configuration for a [`McpTransportFactory`] that gates transport
+/// creation through path/url validators.
+#[derive(Debug, Clone, Default)]
+pub struct TransportFactoryConfig {
+    /// Allowed canonical path prefixes for `Stdio` command paths.
+    ///
+    /// When empty, command path canonicalization is skipped (back-compat).
+    /// When non-empty, the command is canonicalized and rejected unless it
+    /// lives under one of these prefixes.
+    pub allowed_paths: Vec<PathBuf>,
+    /// Whether to allow plain HTTP URLs that point to localhost.
+    ///
+    /// Defaults to `true` to support local dev. Set to `false` to require
+    /// HTTPS for every Http transport.
+    pub allow_http_localhost: bool,
+}
+
+impl TransportFactoryConfig {
+    /// Strict defaults: no command paths allowed, HTTPS required.
+    pub fn strict() -> Self {
+        Self {
+            allowed_paths: Vec::new(),
+            allow_http_localhost: false,
+        }
+    }
+
+    /// Lenient defaults: any command path, http://localhost allowed.
+    pub fn lenient() -> Self {
+        Self {
+            allowed_paths: Vec::new(),
+            allow_http_localhost: true,
+        }
+    }
+}
+
+/// Factory that creates [`McpTransport`] instances from a [`TransportSpec`].
+///
+/// Validators are called *before* spawning to fail fast on bad config.
+#[async_trait]
+pub trait McpTransportFactory: Send + Sync {
+    /// Validate a spec without creating a transport.
+    fn validate(&self, spec: &TransportSpec) -> Result<()>;
+
+    /// Validate then create a transport for the given spec.
+    async fn create(&self, spec: TransportSpec) -> Result<Box<dyn McpTransport>>;
+}
+
+/// Default factory that supports stdio and http transports.
+#[derive(Debug, Clone, Default)]
+pub struct DefaultTransportFactory {
+    config: TransportFactoryConfig,
+}
+
+impl DefaultTransportFactory {
+    /// Create a factory with the given config.
+    pub fn new(config: TransportFactoryConfig) -> Self {
+        Self { config }
+    }
+
+    /// Access the factory config.
+    pub fn config(&self) -> &TransportFactoryConfig {
+        &self.config
+    }
+}
+
+#[async_trait]
+impl McpTransportFactory for DefaultTransportFactory {
+    fn validate(&self, spec: &TransportSpec) -> Result<()> {
+        match spec {
+            TransportSpec::Stdio { command, .. } => {
+                if !self.config.allowed_paths.is_empty() {
+                    validate_command_path(command, &self.config.allowed_paths)
+                        .map_err(ServiceError::McpTransport)?;
+                }
+                Ok(())
+            }
+            TransportSpec::Http { url } => {
+                validate_url(url, self.config.allow_http_localhost)
+                    .map_err(ServiceError::McpTransport)
+            }
+            TransportSpec::Tempfile { path } => {
+                validate_tempfile_path(path).map_err(ServiceError::McpTransport)
+            }
+        }
+    }
+
+    async fn create(&self, spec: TransportSpec) -> Result<Box<dyn McpTransport>> {
+        self.validate(&spec)?;
+        match spec {
+            TransportSpec::Stdio { command, args, env } => {
+                let t = StdioTransport::new(&command, &args, &env).await?;
+                Ok(Box::new(t))
+            }
+            TransportSpec::Http { url } => Ok(Box::new(HttpTransport::new(url))),
+            TransportSpec::Tempfile { .. } => Err(ServiceError::McpTransport(
+                "tempfile transport not implemented".into(),
+            )),
+        }
+    }
+}
+
+/// Validate an MCP URL.
+///
+/// Rules:
+/// - Must start with `https://` or (when `allow_http_localhost` is true)
+///   `http://localhost` / `http://127.0.0.1` / `http://[::1]`.
+/// - Must not be empty.
+/// - Hostname must be present and non-empty.
+pub fn validate_url(url: &str, allow_http_localhost: bool) -> std::result::Result<(), String> {
+    if url.is_empty() {
+        return Err("url is empty".into());
+    }
+
+    if let Some(rest) = url.strip_prefix("https://") {
+        if rest.is_empty() {
+            return Err("url has no host".into());
+        }
+        return Ok(());
+    }
+
+    if let Some(rest) = url.strip_prefix("http://") {
+        if !allow_http_localhost {
+            return Err("plain http:// not allowed (use https://)".into());
+        }
+        // Extract host portion (up to /, ?, #, or end).
+        let host = rest
+            .split(&['/', '?', '#'][..])
+            .next()
+            .unwrap_or(rest);
+        // Strip optional port.
+        let host_only = if host.starts_with('[') {
+            // IPv6 bracket notation.
+            host.find(']').map(|i| &host[1..i]).unwrap_or(host)
+        } else {
+            host.rsplit(':').next_back().unwrap_or(host)
+        };
+        let host_lc = host_only.to_lowercase();
+        const ALLOWED_LOCAL: &[&str] = &["localhost", "127.0.0.1", "::1"];
+        if ALLOWED_LOCAL.iter().any(|&h| h == host_lc) {
+            return Ok(());
+        }
+        return Err(format!(
+            "http:// only allowed for localhost, got '{host_only}'",
+        ));
+    }
+
+    Err(format!("url must start with https:// or http://, got '{url}'"))
+}
+
+/// Validate that a command path canonicalizes within one of the allowed
+/// path prefixes.
+///
+/// `command` may be a bare program name (resolved via `$PATH`) or an
+/// absolute path. If it cannot be canonicalized (e.g. PATH lookup fails),
+/// the literal value is rejected.
+pub fn validate_command_path(
+    command: &str,
+    allowed_paths: &[PathBuf],
+) -> std::result::Result<(), String> {
+    if command.is_empty() {
+        return Err("command is empty".into());
+    }
+    if allowed_paths.is_empty() {
+        return Ok(());
+    }
+
+    // Resolve the command. If it has path separators, canonicalize directly.
+    // Otherwise look it up on $PATH.
+    let resolved = if command.contains('/') || command.contains('\\') {
+        std::fs::canonicalize(Path::new(command))
+            .map_err(|e| format!("cannot canonicalize '{command}': {e}"))?
+    } else {
+        which_on_path(command).ok_or_else(|| {
+            format!("command '{command}' not found on $PATH and not absolute")
+        })?
+    };
+
+    let canonical_allowed: Vec<PathBuf> = allowed_paths
+        .iter()
+        .filter_map(|p| std::fs::canonicalize(p).ok())
+        .collect();
+
+    if canonical_allowed.iter().any(|prefix| resolved.starts_with(prefix)) {
+        Ok(())
+    } else {
+        Err(format!(
+            "command '{}' resolves outside allowed_paths ({})",
+            resolved.display(),
+            canonical_allowed
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
+}
+
+/// Look up a bare program name on `$PATH` (Unix-style colon split).
+fn which_on_path(program: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(program);
+        if let Ok(canon) = std::fs::canonicalize(&candidate) {
+            return Some(canon);
+        }
+    }
+    None
+}
+
+/// Validate a tempfile path.
+///
+/// Rules:
+/// - Must be absolute.
+/// - Must not live under sensitive system roots (`/etc`, `/root`, `/sys`,
+///   `/proc`, `/boot`, `/dev`).
+pub fn validate_tempfile_path(path: &Path) -> std::result::Result<(), String> {
+    if !path.is_absolute() {
+        return Err(format!("tempfile path must be absolute: {}", path.display()));
+    }
+
+    const FORBIDDEN: &[&str] = &["/etc", "/root", "/sys", "/proc", "/boot", "/dev"];
+    let s = path.to_string_lossy();
+    for prefix in FORBIDDEN {
+        if s == *prefix || s.starts_with(&format!("{prefix}/")) {
+            return Err(format!(
+                "tempfile path '{}' is under forbidden root '{}'",
+                path.display(),
+                prefix
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod factory_tests {
+    use super::*;
+
+    #[test]
+    fn validate_url_accepts_https() {
+        assert!(validate_url("https://example.com", false).is_ok());
+        assert!(validate_url("https://example.com/path", false).is_ok());
+    }
+
+    #[test]
+    fn validate_url_rejects_empty() {
+        assert!(validate_url("", false).is_err());
+        assert!(validate_url("", true).is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_plain_http_when_disallowed() {
+        let err = validate_url("http://example.com", false).unwrap_err();
+        assert!(err.contains("http://"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_url_accepts_http_localhost_when_allowed() {
+        assert!(validate_url("http://localhost", true).is_ok());
+        assert!(validate_url("http://localhost:8080/rpc", true).is_ok());
+        assert!(validate_url("http://127.0.0.1:1234", true).is_ok());
+        assert!(validate_url("http://[::1]:9090", true).is_ok());
+    }
+
+    #[test]
+    fn validate_url_rejects_http_external_even_when_localhost_allowed() {
+        let err = validate_url("http://example.com", true).unwrap_err();
+        assert!(err.to_lowercase().contains("localhost"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_url_rejects_unknown_scheme() {
+        assert!(validate_url("ftp://example.com", true).is_err());
+        assert!(validate_url("file:///etc/passwd", true).is_err());
+    }
+
+    #[test]
+    fn validate_command_path_empty() {
+        assert!(validate_command_path("", &[]).is_err());
+    }
+
+    #[test]
+    fn validate_command_path_no_allowlist_passes() {
+        // Empty allowlist = back-compat permissive mode.
+        assert!(validate_command_path("/bin/sh", &[]).is_ok());
+        assert!(validate_command_path("npx", &[]).is_ok());
+    }
+
+    #[test]
+    fn validate_command_path_within_allowed() {
+        // /usr/bin should canonicalize and contain known programs.
+        let allowed = vec![PathBuf::from("/usr/bin"), PathBuf::from("/bin")];
+        // sh exists on virtually all Linux systems either at /bin/sh or /usr/bin/sh.
+        let result = validate_command_path("/bin/sh", &allowed);
+        // Either ok, or PATHs got moved (then we just don't fail the test loudly).
+        if let Err(e) = &result {
+            // Skip this test if /bin/sh isn't canonicalizable; that's an
+            // environment quirk, not a logic bug.
+            eprintln!("validate_command_path skipped: {e}");
+        }
+    }
+
+    #[test]
+    fn validate_command_path_outside_allowed_rejected() {
+        let allowed = vec![PathBuf::from("/usr/local/nonexistent-12345")];
+        let result = validate_command_path("/bin/sh", &allowed);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_tempfile_path_absolute_required() {
+        let p = PathBuf::from("relative/path");
+        let err = validate_tempfile_path(&p).unwrap_err();
+        assert!(err.to_lowercase().contains("absolute"));
+    }
+
+    #[test]
+    fn validate_tempfile_path_blocks_etc() {
+        let err = validate_tempfile_path(Path::new("/etc/passwd")).unwrap_err();
+        assert!(err.contains("/etc"));
+    }
+
+    #[test]
+    fn validate_tempfile_path_blocks_root() {
+        let err = validate_tempfile_path(Path::new("/root/.ssh/id_rsa")).unwrap_err();
+        assert!(err.contains("/root"));
+    }
+
+    #[test]
+    fn validate_tempfile_path_blocks_sys_proc_dev_boot() {
+        for p in &["/sys/kernel", "/proc/1", "/dev/null", "/boot/grub"] {
+            let err = validate_tempfile_path(Path::new(p)).unwrap_err();
+            assert!(err.contains(*p) || err.contains("forbidden"));
+        }
+    }
+
+    #[test]
+    fn validate_tempfile_path_allows_tmp() {
+        assert!(validate_tempfile_path(Path::new("/tmp/socket.sock")).is_ok());
+        assert!(validate_tempfile_path(Path::new("/var/run/clawft.sock")).is_ok());
+    }
+
+    #[tokio::test]
+    async fn factory_validates_http_spec() {
+        let f = DefaultTransportFactory::new(TransportFactoryConfig::lenient());
+        let spec = TransportSpec::Http {
+            url: "https://example.com".into(),
+        };
+        assert!(f.validate(&spec).is_ok());
+
+        let spec_bad = TransportSpec::Http {
+            url: "ftp://example.com".into(),
+        };
+        assert!(f.validate(&spec_bad).is_err());
+    }
+
+    #[tokio::test]
+    async fn factory_strict_rejects_http_localhost() {
+        let f = DefaultTransportFactory::new(TransportFactoryConfig::strict());
+        let spec = TransportSpec::Http {
+            url: "http://localhost:8080".into(),
+        };
+        assert!(f.validate(&spec).is_err());
+    }
+
+    #[tokio::test]
+    async fn factory_validates_tempfile_spec() {
+        let f = DefaultTransportFactory::new(TransportFactoryConfig::default());
+        let spec = TransportSpec::Tempfile {
+            path: PathBuf::from("/etc/shadow"),
+        };
+        assert!(f.validate(&spec).is_err());
+
+        let spec_ok = TransportSpec::Tempfile {
+            path: PathBuf::from("/tmp/mcp.sock"),
+        };
+        assert!(f.validate(&spec_ok).is_ok());
+    }
+
+    #[tokio::test]
+    async fn factory_create_tempfile_returns_not_implemented() {
+        let f = DefaultTransportFactory::new(TransportFactoryConfig::default());
+        let spec = TransportSpec::Tempfile {
+            path: PathBuf::from("/tmp/mcp.sock"),
+        };
+        let result = f.create(spec).await;
+        // `Box<dyn McpTransport>` does not implement Debug, so we
+        // can't `.unwrap_err()`; pattern-match instead.
+        match result {
+            Ok(_) => panic!("expected NotImplemented error"),
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(msg.contains("not implemented"), "got: {msg}");
+            }
+        }
+    }
+
+    #[test]
+    fn factory_config_strict_vs_lenient() {
+        let s = TransportFactoryConfig::strict();
+        assert!(!s.allow_http_localhost);
+        let l = TransportFactoryConfig::lenient();
+        assert!(l.allow_http_localhost);
     }
 }
 

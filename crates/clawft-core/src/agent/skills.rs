@@ -239,6 +239,33 @@ impl<P: Platform> SkillsLoader<P> {
         }
     }
 
+    /// Create a skills loader rooted at a workspace overlay.
+    ///
+    /// Resolves the primary skills directory to
+    /// `<workspace_root>/.clawft/skills/` so a kernel running inside
+    /// a workspace picks up that workspace's skill definitions instead
+    /// of the user's global `~/.clawft/workspace/skills/`. Mirrors the
+    /// cwd-relative config overlay (Layer 3 in
+    /// `clawft_platform::config_loader::load_config_raw`).
+    ///
+    /// This constructor does not touch the home directory and never
+    /// fails — the directory may not exist yet (the loader treats a
+    /// missing dir as "no skills"). Pair with [`Self::new`] as a
+    /// fallback when no workspace overlay is present.
+    pub fn for_workspace(workspace_root: &std::path::Path, platform: Arc<P>) -> Self {
+        let skills_dir = workspace_root.join(".clawft").join("skills");
+        debug!(
+            path = %skills_dir.display(),
+            "using workspace-scoped skills path"
+        );
+        Self {
+            skills_dir,
+            extra_dirs: Vec::new(),
+            skills: Arc::new(RwLock::new(HashMap::new())),
+            platform,
+        }
+    }
+
     /// List available skill names by scanning subdirectories.
     ///
     /// A directory is considered a skill if it contains `skill.json`
@@ -684,6 +711,73 @@ mod tests {
         assert!(loader.is_ok());
         let loader = loader.unwrap();
         assert!(loader.skills_dir().is_absolute());
+    }
+
+    #[tokio::test]
+    async fn for_workspace_routes_to_workspace_clawft_skills() {
+        // WEFT-79: when a workspace root is supplied, SkillsLoader's
+        // primary skills_dir must resolve to <workspace>/.clawft/skills/
+        // rather than the global ~/.clawft/workspace/skills/.
+        let dir = temp_dir("for_ws");
+        let platform = Arc::new(NativePlatform::new());
+        let loader = SkillsLoader::for_workspace(&dir, platform);
+
+        let expected_dir = dir.join(".clawft").join("skills");
+        assert_eq!(loader.skills_dir(), &expected_dir);
+
+        // Populate the workspace skills dir and verify discovery
+        // hits it without consulting ~/.clawft.
+        create_skill(
+            &expected_dir,
+            "workspace_skill",
+            "Workspace-only skill",
+            Some("ws prompt"),
+        )
+        .await;
+        let names = loader.list_skills().await.unwrap();
+        assert!(
+            names.iter().any(|n| n == "workspace_skill"),
+            "workspace skill not discovered: {names:?}"
+        );
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn for_workspace_isolates_from_global_path() {
+        // Two loaders rooted at different workspaces must not see each
+        // other's skills.
+        let dir_a = temp_dir("for_ws_iso_a");
+        let dir_b = temp_dir("for_ws_iso_b");
+        let platform = Arc::new(NativePlatform::new());
+
+        let loader_a = SkillsLoader::for_workspace(&dir_a, platform.clone());
+        let loader_b = SkillsLoader::for_workspace(&dir_b, platform);
+
+        create_skill(
+            &dir_a.join(".clawft").join("skills"),
+            "alpha",
+            "Alpha",
+            None,
+        )
+        .await;
+        create_skill(
+            &dir_b.join(".clawft").join("skills"),
+            "beta",
+            "Beta",
+            None,
+        )
+        .await;
+
+        let a_names = loader_a.list_skills().await.unwrap();
+        let b_names = loader_b.list_skills().await.unwrap();
+        assert!(a_names.iter().any(|n| n == "alpha"));
+        assert!(!a_names.iter().any(|n| n == "beta"));
+        assert!(b_names.iter().any(|n| n == "beta"));
+        assert!(!b_names.iter().any(|n| n == "alpha"));
+
+        let _ = tokio::fs::remove_dir_all(&dir_a).await;
+        let _ = tokio::fs::remove_dir_all(&dir_b).await;
     }
 
     // ── SKILL.md format tests ──────────────────────────────────────────

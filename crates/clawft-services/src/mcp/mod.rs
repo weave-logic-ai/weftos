@@ -18,6 +18,10 @@ pub use provider::{
     BuiltinToolProvider, CallToolResult, ContentBlock, SkillToolProvider, ToolError, ToolProvider,
     skill_to_tool_definition, skills_to_tool_definitions,
 };
+pub use transport::{
+    DefaultTransportFactory, McpTransportFactory, TransportFactoryConfig, TransportSpec,
+    validate_command_path, validate_tempfile_path, validate_url,
+};
 
 /// The MCP protocol version negotiated during initialize.
 ///

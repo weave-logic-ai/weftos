@@ -11,15 +11,12 @@ members = [
     "crates/clawft-cli",
     "crates/clawft-wasm",
     "crates/clawft-plugin",
-    "crates/clawft-plugin-git",
-    "crates/clawft-plugin-cargo",
-    "crates/clawft-plugin-oauth2",
+    # Only `clawft-plugin-treesitter` remains a workspace member -- it is
+    # consumed by `clawft-kernel` (assessment::extract_symbols) under the
+    # kernel's `treesitter` feature. The other eight `clawft-plugin-*`
+    # crates were moved to `crates/archive/` per ADR-051; they are
+    # excluded from the workspace below.
     "crates/clawft-plugin-treesitter",
-    "crates/clawft-plugin-browser",
-    "crates/clawft-plugin-calendar",
-    "crates/clawft-plugin-containers",
-    "crates/clawft-plugin-npm",
-    "crates/clawft-plugin-ci",
     "crates/clawft-security",
     "crates/clawft-kernel",
     "crates/clawft-rpc",
@@ -44,6 +41,10 @@ members = [
 ]
 exclude = [
     "gui/src-tauri",
+    # Archived per ADR-051 (clawft-plugin-* fate). These crates are
+    # preserved in-tree for git-history continuity and possible future
+    # revival, but are not part of the active workspace build.
+    "crates/archive",
 ]
 
 [workspace.package]
@@ -188,13 +189,12 @@ clawft-channels = { version = "0.6.6", path = "crates/clawft-channels" }
 clawft-llm = { version = "0.6.6", path = "crates/clawft-llm", default-features = false }
 clawft-services = { version = "0.6.6", path = "crates/clawft-services" }
 clawft-plugin = { version = "0.6.6", path = "crates/clawft-plugin", default-features = false }
-clawft-plugin-git = { version = "0.6.6", path = "crates/clawft-plugin-git" }
-clawft-plugin-cargo = { version = "0.6.6", path = "crates/clawft-plugin-cargo" }
-clawft-plugin-oauth2 = { version = "0.6.6", path = "crates/clawft-plugin-oauth2" }
+# Only the treesitter plugin retains a workspace dependency entry --
+# it is the sole orphan-survivor (ADR-051) and is wired into
+# `clawft-kernel` via the `treesitter` feature. The other eight
+# `clawft-plugin-*` crates live under `crates/archive/` and are not
+# referenced by the active workspace build.
 clawft-plugin-treesitter = { version = "0.6.6", path = "crates/clawft-plugin-treesitter" }
-clawft-plugin-browser = { version = "0.6.6", path = "crates/clawft-plugin-browser" }
-clawft-plugin-calendar = { version = "0.6.6", path = "crates/clawft-plugin-calendar" }
-clawft-plugin-containers = { version = "0.6.6", path = "crates/clawft-plugin-containers" }
 clawft-graphify = { version = "0.6.6", path = "crates/clawft-graphify", default-features = false }
 clawft-security = { version = "0.6.6", path = "crates/clawft-security" }
 clawft-kernel = { version = "0.6.6", path = "crates/clawft-kernel", default-features = false }

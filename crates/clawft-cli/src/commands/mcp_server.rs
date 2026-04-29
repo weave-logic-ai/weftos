@@ -135,9 +135,25 @@ pub async fn run(args: McpServerArgs) -> anyhow::Result<()> {
 
     // ── Build middleware pipeline ────────────────────────────────────
     let security_guard = build_security_guard(&config.tools);
+
+    // WEFT-189: gate tools/list and tools/call by `tools.allowed_tools`.
+    // Empty list = back-compat permissive behavior; populated list =
+    // glob-matched allowlist enforced both at filter_tools() and
+    // before_call().
+    let permission_filter = if config.tools.allowed_tools.is_empty() {
+        info!("tools.allowed_tools is empty; exposing all tools (back-compat)");
+        PermissionFilter::new(None)
+    } else {
+        info!(
+            patterns = ?config.tools.allowed_tools,
+            "tools.allowed_tools is configured; restricting MCP server surface",
+        );
+        PermissionFilter::from_patterns(config.tools.allowed_tools.clone())
+    };
+
     let middlewares: Vec<Box<dyn Middleware>> = vec![
         Box::new(security_guard),
-        Box::new(PermissionFilter::new(None)),
+        Box::new(permission_filter),
         Box::new(ResultGuard::default()),
         Box::new(AuditLog),
     ];

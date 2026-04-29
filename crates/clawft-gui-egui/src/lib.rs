@@ -17,6 +17,7 @@ pub mod ontology;
 pub mod shell;
 pub mod surface_host;
 pub mod theming;
+pub mod wasm_time;
 
 pub use app::ClawftApp;
 

@@ -63,5 +63,46 @@ wasm-bindgen \
     --no-typescript \
     "$wasm_in"
 
+# WEFT-246: post-bindgen wasm-opt -Oz pass.
+#
+# wasm-pack handles this through the package.metadata.wasm-pack
+# profile when its preferred path fires above. In the manual
+# cargo+wasm-bindgen fallback path we have to invoke wasm-opt
+# ourselves, otherwise the webview loads the unoptimised bundle
+# (~4.2 MB on M4-C). Fail soft: if wasm-opt is missing or rejects
+# the input, ship the unoptimised bytes — the panel still works,
+# just larger.
+wasm_bg="$out_dir/clawft_gui_egui_bg.wasm"
+if [ -f "$wasm_bg" ] && command -v wasm-opt >/dev/null; then
+    pre=$(stat -c '%s' "$wasm_bg" 2>/dev/null || stat -f '%z' "$wasm_bg")
+    echo "→ wasm-opt -Oz $wasm_bg (pre: ${pre} bytes)"
+    # Older binaryen versions (≤ 116) refuse modern Rust output
+    # without explicit feature flags. Pass the union of features
+    # rustc 1.93 emits — bulk-memory + nontrapping-fptoint + sign-ext
+    # + mutable-globals + multivalue + reference-types — so the
+    # validator accepts the input. WEFT-246.
+    if wasm-opt \
+        --enable-bulk-memory \
+        --enable-nontrapping-float-to-int \
+        --enable-sign-ext \
+        --enable-mutable-globals \
+        --enable-multivalue \
+        --enable-reference-types \
+        -Oz \
+        -o "$wasm_bg.opt" "$wasm_bg" 2>/dev/null; then
+        mv "$wasm_bg.opt" "$wasm_bg"
+        post=$(stat -c '%s' "$wasm_bg" 2>/dev/null || stat -f '%z' "$wasm_bg")
+        delta=$((pre - post))
+        echo "✓ wasm-opt succeeded (post: ${post} bytes, saved: ${delta} bytes)"
+    else
+        rm -f "$wasm_bg.opt"
+        echo "! wasm-opt rejected the bundle; shipping unoptimised bytes."
+    fi
+elif [ ! -f "$wasm_bg" ]; then
+    echo "! expected $wasm_bg missing — wasm-bindgen output naming changed?"
+else
+    echo "! wasm-opt not found in PATH — install binaryen for size-opt builds."
+fi
+
 echo "✓ Wasm bundle at $out_dir"
 ls -l "$out_dir"
