@@ -1090,6 +1090,7 @@ dependencies = [
  "clawft-platform",
  "clawft-plugin",
  "clawft-types",
+ "cpal",
  "dirs",
  "futures-util",
  "hmac",
@@ -1097,12 +1098,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite 0.24.0",
  "tokio-util",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]

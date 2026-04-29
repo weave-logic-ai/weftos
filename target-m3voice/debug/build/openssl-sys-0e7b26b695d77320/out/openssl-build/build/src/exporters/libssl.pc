@@ -1,0 +1,11 @@
+prefix=/home/aepod/dev/clawft/.claude/worktrees/m3-voice/target-m3voice/debug/build/openssl-sys-0e7b26b695d77320/out/openssl-build/install
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include 
+
+Name: OpenSSL-libssl
+Description: Secure Sockets Layer and cryptography libraries
+Version: 3.5.5
+Requires.private: libcrypto
+Libs: -L${libdir} -lssl
+Cflags: -I${includedir}

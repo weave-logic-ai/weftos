@@ -1,0 +1,1 @@
+cargo:rustc-env=MIME_TYPES_GENERATED_PATH=/home/aepod/dev/clawft/.claude/worktrees/m3-voice/./target-m3voice/debug/build/mime_guess-d7eb3e3a09524a24/out/mime_types_generated.rs

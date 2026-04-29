@@ -1,0 +1,13 @@
+/home/aepod/dev/clawft/.claude/worktrees/m3-voice/./target-m3voice/debug/deps/hnsw_rs-a5b7f0a374055fcb.d: /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/lib.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/api.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/datamap.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/filter.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/flatten.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/hnsw.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/hnswio.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/libext.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/prelude.rs
+
+/home/aepod/dev/clawft/.claude/worktrees/m3-voice/./target-m3voice/debug/deps/libhnsw_rs-a5b7f0a374055fcb.rmeta: /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/lib.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/api.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/datamap.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/filter.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/flatten.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/hnsw.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/hnswio.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/libext.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/prelude.rs
+
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/lib.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/api.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/datamap.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/filter.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/flatten.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/hnsw.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/hnswio.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/libext.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hnsw_rs-0.3.4/src/prelude.rs:

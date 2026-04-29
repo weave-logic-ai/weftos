@@ -1,0 +1,10 @@
+/home/aepod/dev/clawft/.claude/worktrees/m3-voice/./target-m3voice/debug/deps/ruvector_diskann-37beb743f3f84228.d: /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/lib.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/distance.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/graph.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/pq.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/index.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/error.rs
+
+/home/aepod/dev/clawft/.claude/worktrees/m3-voice/./target-m3voice/debug/deps/libruvector_diskann-37beb743f3f84228.rmeta: /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/lib.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/distance.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/graph.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/pq.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/index.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/error.rs
+
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/lib.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/distance.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/graph.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/pq.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/index.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-diskann-2.1.0/src/error.rs:

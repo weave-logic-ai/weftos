@@ -1,0 +1,11 @@
+/home/aepod/dev/clawft/.claude/worktrees/m3-voice/./target-m3voice/debug/deps/ecolor-4d4b0fae02fceeb6.d: /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/lib.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/color32.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/hsva_gamma.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/hsva.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/hex_color_macro.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/rgba.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/hex_color_runtime.rs
+
+/home/aepod/dev/clawft/.claude/worktrees/m3-voice/./target-m3voice/debug/deps/libecolor-4d4b0fae02fceeb6.rmeta: /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/lib.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/color32.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/hsva_gamma.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/hsva.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/hex_color_macro.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/rgba.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/hex_color_runtime.rs
+
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/lib.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/color32.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/hsva_gamma.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/hsva.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/hex_color_macro.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/rgba.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ecolor-0.34.1/src/hex_color_runtime.rs:

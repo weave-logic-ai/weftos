@@ -1,0 +1,12 @@
+/home/aepod/dev/clawft/.claude/worktrees/m3-voice/./target-m3voice/debug/deps/mmap_rs-179e3dd0db23e25b.d: /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/lib.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/areas.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/error.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/mmap.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/os_impl/mod.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/os_impl/unix.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/os_impl/linux.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/../README.md
+
+/home/aepod/dev/clawft/.claude/worktrees/m3-voice/./target-m3voice/debug/deps/libmmap_rs-179e3dd0db23e25b.rmeta: /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/lib.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/areas.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/error.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/mmap.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/os_impl/mod.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/os_impl/unix.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/os_impl/linux.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/../README.md
+
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/lib.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/areas.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/error.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/mmap.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/os_impl/mod.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/os_impl/unix.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/os_impl/linux.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mmap-rs-0.7.0/src/../README.md:

@@ -12,7 +12,8 @@ keywords = ["telegram", "slack", "discord", "chat", "bot"]
 categories = ["network-programming"]
 
 [features]
-default = []
+default = ["native"]
+native = ["clawft-plugin/native"]
 email = []
 whatsapp = []
 signal = []
@@ -20,6 +21,15 @@ matrix = []
 google-chat = []
 irc = []
 teams = []
+# Voice channel: cpal capture/playback + energy-VAD + substrate STT/TTS HTTP.
+# `voice` enables the channel module and the trait-injected (mock) audio
+# path -- no native audio dev headers required, so CI can run
+# `cargo test -p clawft-channels --features voice` cleanly.
+# `voice-real-audio` additionally pulls cpal in for real cpal capture +
+# playback. `real-audio-test` further turns on the cpal-touching tests.
+voice = []
+voice-real-audio = ["voice", "dep:cpal"]
+real-audio-test = ["voice-real-audio"]
 
 [dependencies]
 clawft-types = { workspace = true }
@@ -32,7 +42,9 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-reqwest = { workspace = true }
+# `multipart` is voice-only (whisper.cpp /inference takes a WAV part) but
+# additive on the workspace `reqwest` -- harmless for other channels.
+reqwest = { workspace = true, features = ["multipart"] }
 chrono = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
@@ -41,5 +53,14 @@ sha2 = { workspace = true }
 dirs = { workspace = true }
 uuid = { workspace = true }
 
+# Real audio I/O for the voice channel. Optional + opt-in via
+# `voice-real-audio` so default builds (and CI without alsa / CoreAudio /
+# WASAPI dev headers) compile clean. The trait-injected fakes used by the
+# default test path replace cpal so `--features voice` still tests the
+# capture+VAD+STT+TTS contract end-to-end against a wiremock substrate.
+cpal = { version = "0.15", optional = true }
+
 [dev-dependencies]
 tokio = { workspace = true }
+wiremock = "0.6"
+tempfile = { workspace = true }

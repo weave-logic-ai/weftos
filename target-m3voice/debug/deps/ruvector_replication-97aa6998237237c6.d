@@ -1,0 +1,10 @@
+/home/aepod/dev/clawft/.claude/worktrees/m3-voice/./target-m3voice/debug/deps/ruvector_replication-97aa6998237237c6.d: /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/lib.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/conflict.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/failover.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/replica.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/stream.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/sync.rs
+
+/home/aepod/dev/clawft/.claude/worktrees/m3-voice/./target-m3voice/debug/deps/libruvector_replication-97aa6998237237c6.rmeta: /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/lib.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/conflict.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/failover.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/replica.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/stream.rs /home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/sync.rs
+
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/lib.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/conflict.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/failover.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/replica.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/stream.rs:
+/home/aepod/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruvector-replication-2.0.6/src/sync.rs:
