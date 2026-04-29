@@ -432,3 +432,97 @@ async fn process_envelope_no_event_in_payload() {
     ch.process_envelope(&envelope, &host).await.unwrap();
     assert!(mock_host.messages.lock().await.is_empty());
 }
+
+// ── allow_from_match metadata (WEFT-162) ────────────────────────────────
+
+/// DM with allowlist policy: matched sender → metadata has
+/// `allow_from_match: true`.
+#[tokio::test]
+async fn process_envelope_emits_allow_from_match_for_dm_match() {
+    let mut config = make_config();
+    config.dm.policy = "allowlist".into();
+    config.dm.allow_from = vec!["U100".into(), "U200".into()];
+    let ch = SlackChannel::new(config);
+    let mock_host = Arc::new(MockHost::new());
+    let host: Arc<dyn ChannelHost> = mock_host.clone();
+
+    let event = make_message_event("U100", "D01234", "hello", Some("im"));
+    let envelope = make_envelope(event);
+
+    ch.process_envelope(&envelope, &host).await.unwrap();
+
+    let msgs = mock_host.messages.lock().await;
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(
+        msgs[0].metadata.get("allow_from_match"),
+        Some(&serde_json::Value::Bool(true)),
+        "DM allowlist match must emit allow_from_match=true"
+    );
+}
+
+/// Open DM policy with empty allowlist: sender is allowed but the
+/// metadata flag must NOT be set (no explicit allow_from to match).
+#[tokio::test]
+async fn process_envelope_no_allow_from_match_when_dm_open() {
+    let ch = SlackChannel::new(make_config()); // dm.policy == "open"
+    let mock_host = Arc::new(MockHost::new());
+    let host: Arc<dyn ChannelHost> = mock_host.clone();
+
+    let event = make_message_event("U999", "D01234", "hi", Some("im"));
+    let envelope = make_envelope(event);
+
+    ch.process_envelope(&envelope, &host).await.unwrap();
+
+    let msgs = mock_host.messages.lock().await;
+    assert_eq!(msgs.len(), 1);
+    assert!(
+        !msgs[0].metadata.contains_key("allow_from_match"),
+        "open DM policy must not emit allow_from_match"
+    );
+}
+
+/// Group with allowlist policy: matched sender → metadata has
+/// `allow_from_match: true`.
+#[tokio::test]
+async fn process_envelope_emits_allow_from_match_for_group_match() {
+    let mut config = make_config();
+    config.group_policy = "allowlist".into();
+    config.group_allow_from = vec!["U100".into()];
+    let ch = SlackChannel::new(config);
+    let mock_host = Arc::new(MockHost::new());
+    let host: Arc<dyn ChannelHost> = mock_host.clone();
+
+    let event = make_message_event("U100", "C01234", "hello team", None);
+    let envelope = make_envelope(event);
+
+    ch.process_envelope(&envelope, &host).await.unwrap();
+
+    let msgs = mock_host.messages.lock().await;
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(
+        msgs[0].metadata.get("allow_from_match"),
+        Some(&serde_json::Value::Bool(true)),
+        "group allowlist match must emit allow_from_match=true"
+    );
+}
+
+/// Group with mention policy and empty allowlist: sender is allowed,
+/// but no allow_from_match because there is no explicit allow list.
+#[tokio::test]
+async fn process_envelope_no_allow_from_match_when_group_mention_policy() {
+    let ch = SlackChannel::new(make_config()); // group_policy == "mention"
+    let mock_host = Arc::new(MockHost::new());
+    let host: Arc<dyn ChannelHost> = mock_host.clone();
+
+    let event = make_message_event("U999", "C01234", "hello", None);
+    let envelope = make_envelope(event);
+
+    ch.process_envelope(&envelope, &host).await.unwrap();
+
+    let msgs = mock_host.messages.lock().await;
+    assert_eq!(msgs.len(), 1);
+    assert!(
+        !msgs[0].metadata.contains_key("allow_from_match"),
+        "mention policy with empty allowlist must not emit allow_from_match"
+    );
+}

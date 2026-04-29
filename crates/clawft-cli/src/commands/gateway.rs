@@ -293,8 +293,14 @@ pub async fn run_with_config(
         let publisher: Arc<dyn WebPublisher> = Arc::new(BroadcasterPublisher {
             broadcaster: broadcaster.clone(),
         });
+        // WEFT-163: the web channel's `is_allowed` defers to the
+        // gateway's auth middleware. M2-A wired the auth middleware
+        // unconditionally on the API router, so when the API is up
+        // the auth gate is also up. If a future build flag turns
+        // auth off, this flag must follow it.
+        let auth_enabled = true;
         plugin_host
-            .register_factory(Arc::new(WebChannelFactory::new(publisher)))
+            .register_factory(Arc::new(WebChannelFactory::new(publisher, auth_enabled)))
             .await;
         plugin_host
             .init_channel("web", &serde_json::json!({}))
@@ -584,7 +590,19 @@ fn build_api_state(
     let bus_bridge = BusBridge::new(ctx.bus().clone());
     let skill_bridge = SkillBridge::new(ctx.skills().clone());
     let memory_bridge = MemoryBridge::new(ctx.memory().clone());
-    let config_bridge = ConfigBridge::new(config.clone());
+    // WEFT-168: enable save_config persistence when we can identify a
+    // canonical config path. Default to `~/.clawft/config.json`; when
+    // CLAWFT_CONFIG is set, honour it. If no home dir is available
+    // (rare on locked-down hosts), fall back to the legacy read-only
+    // bridge — save_config will then return an explicit error.
+    let config_save_path = std::env::var("CLAWFT_CONFIG")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".clawft").join("config.json")));
+    let config_bridge = match config_save_path {
+        Some(path) => ConfigBridge::with_save_path(config.clone(), path),
+        None => ConfigBridge::new(config.clone()),
+    };
     let channel_bridge =
         ChannelBridge::from_config(&config.channels, config.gateway.api_enabled);
 

@@ -183,6 +183,31 @@ impl SlackChannel {
             metadata.insert("channel_type".into(), serde_json::Value::String(ct.clone()));
         }
 
+        // WEFT-162: signal that the sender passed an explicit allow_from
+        // check so the permission resolver can promote them from
+        // zero-trust to user level. Mirrors the Discord channel; only
+        // emitted when the relevant allow-list is non-empty AND
+        // contains the sender (i.e. a real positive match, not
+        // "everyone allowed because the list is empty").
+        let is_dm = event.channel_type.as_deref() == Some("im");
+        let allow_match = if is_dm {
+            !self.config.dm.allow_from.is_empty()
+                && self.config.dm.allow_from.iter().any(|id| id == sender_id)
+        } else {
+            !self.config.group_allow_from.is_empty()
+                && self
+                    .config
+                    .group_allow_from
+                    .iter()
+                    .any(|id| id == sender_id)
+        };
+        if allow_match {
+            metadata.insert(
+                "allow_from_match".into(),
+                serde_json::Value::Bool(true),
+            );
+        }
+
         let inbound = InboundMessage {
             channel: "slack".into(),
             sender_id: sender_id.to_owned(),

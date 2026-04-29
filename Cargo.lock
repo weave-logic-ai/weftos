@@ -1086,6 +1086,7 @@ name = "clawft-channels"
 version = "0.6.19"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "clawft-platform",
  "clawft-plugin",
@@ -1103,6 +1104,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]

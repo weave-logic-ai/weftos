@@ -40,15 +40,15 @@ Element 06 has 9 channel items across 3 phases spanning Weeks 4-8.
 ### Week 5-7 (E-Enterprise -- 3 items)
 
 - [~] E2 -- Email channel (IMAP + SMTP + OAuth2 for Gmail) -- TRAIT 2026-02-20; **runtime stub** (poll loop logs `debug!`, `send()` fabricates Message-ID without SMTP)
-- [~] E5a -- Google Chat Workspace API -- TRAIT 2026-02-20; **runtime stub** (no Pub/Sub subscription; `send()` builds a fake `spaces/...` id without POST to `chat.spaces.messages.create`)
+- [x] E5a -- Google Chat Workspace API -- TRAIT 2026-02-20; **runtime ships 2026-04-28** (Pub/Sub `:pull` + `:acknowledge` loop with base64 event decode; `send()` POSTs `chat.googleapis.com/v1/{space}/messages` and parses `name`; `wiremock`-backed pull/ack/send tests)
 - [~] E5b -- Microsoft Teams Bot Framework -- TRAIT 2026-02-20; **runtime stub** (no Azure AD token acquisition; no Graph POST)
 
 ### Week 6-8 (E-Consumer -- 4 items)
 
 - [~] E3 -- WhatsApp Cloud API -- TRAIT 2026-02-20; **runtime stub** (no webhook listener; no POST to `/v18.0/{phone_number_id}/messages`)
-- [~] E4 -- Signal subprocess bridge -- TRAIT 2026-02-20; **runtime stub** (sanitization lands but no `signal-cli` subprocess is spawned)
+- [x] E4 -- Signal subprocess bridge -- TRAIT 2026-02-20; RUNTIME 2026-04-28 (`tokio::process::Command` spawns `signal-cli daemon --tcp <bind>` with `kill_on_drop`; JSON-RPC reader on `tokio::net::TcpStream` correlates responses by id and dispatches `receive` notifications via `host.deliver_inbound`; mock-TCP integration tests cover send + receive + timeout)
 - [~] E5 -- Matrix channel (Matrix SDK) -- TRAIT 2026-02-20; **runtime stub** (no `/sync` long-poll; no `PUT /rooms/{room}/send/m.room.message/{txn}`)
-- [~] E5 -- IRC channel (IRC protocol) -- TRAIT 2026-02-20; **runtime stub** (TODOs at `irc/channel.rs:82` and `:128`; no socket, no PRIVMSG)
+- [x] E5 -- IRC channel (IRC protocol) -- TRAIT 2026-02-20; runtime shipped 2026-04-28 (TCP/TLS dial, CAP/NICK/USER + SASL PLAIN, JOIN, PRIVMSG read/write, mock-server tests) -- `WEFT-160`
 
 ---
 
@@ -66,11 +66,11 @@ config; they MUST NOT be enabled in production.
 | E1 | Discord Gateway Resume (OP 6) | P1 | 4-5 | clawft-channels/src/discord/channel.rs | **Done** | Agent-06 | sprint/phase-5 | Resume via stored session_id/resume_url; RESUMED handler; OP 9 resumable vs non-resumable |
 | E2 | Email channel (IMAP+SMTP+OAuth2) | P0 MVP | 5-7 | clawft-channels/src/email/ | **Planned (stub only -- does not transmit messages)** | Agent-06 | sprint/phase-5 | EmailChannelAdapter + EmailAdapterConfig + EmailAuth (Password/OAuth2) + factory; **runtime IMAP/SMTP integration pending** (`imap` + `lettre` not yet wired) |
 | E3 | WhatsApp Cloud API | P1 | 6-8 | clawft-channels/src/whatsapp/ | **Planned (stub only -- does not transmit messages)** | Agent-06 | sprint/phase-5 | WhatsAppChannelAdapter + SecretString for tokens + Cloud API REST; **webhook listener and POST to Cloud API pending** |
-| E4 | Signal subprocess bridge | P2 | 6-8 | clawft-channels/src/signal/ | **Planned (stub only -- does not transmit messages)** | Agent-06 | sprint/phase-5 | SignalChannelAdapter + sanitize_argument() + subprocess design; **`signal-cli` subprocess never spawned** |
+| E4 | Signal subprocess bridge | P2 | 6-8 | clawft-channels/src/signal/ | **Done** (runtime ships) | Agent-06 / m3-signal | m3/m3-signal | SignalChannelAdapter spawns `signal-cli daemon --tcp <bind>` with `kill_on_drop`; opens `tokio::net::TcpStream`, runs newline-delimited JSON-RPC read-loop matching responses by id and forwarding `receive` notifications via `host.deliver_inbound`; mock-TCP integration tests for send + receive + timeout |
 | E5 | Matrix channel | P2 | 6-8 | clawft-channels/src/matrix/ | **Planned (stub only -- does not transmit messages)** | Agent-06 | sprint/phase-5 | MatrixChannelAdapter + SecretString access_token + auto_join_rooms; **`/sync` long-poll and `PUT /rooms/.../send/...` pending** |
-| E5a | Google Chat Workspace API | P1 | 5-7 | clawft-channels/src/google_chat/ | **Planned (stub only -- does not transmit messages)** | Agent-06 | sprint/phase-5 | GoogleChatChannelAdapter skeleton + config types; **F6 OAuth2 wiring + Pub/Sub subscription + `chat.spaces.messages.create` POST pending** |
+| E5a | Google Chat Workspace API | P1 | 5-7 | clawft-channels/src/google_chat/ | **Done (runtime ships)** | Agent-06 | m3/m3-google-chat | GoogleChatChannelAdapter ships real Pub/Sub `:pull` + `:acknowledge` loop with base64-decoded Chat-event delivery and `chat.spaces.messages.create` POST; `TokenSource` trait abstracts bearer-token acquisition (env var by default); `wiremock` covers pull/ack/send + sender-allow-list; service-account JWT signing remains a 0.8.x follow-up |
 | E5b | Microsoft Teams Bot Framework | P1 | 5-7 | clawft-channels/src/teams/ | **Planned (stub only -- does not transmit messages)** | Agent-06 | sprint/phase-5 | TeamsChannelAdapter + Azure AD fields + SecretString client_secret; **Azure AD token acquisition + Graph API POST pending** |
-| E5-IRC | IRC channel (IRC protocol) | P2 | 6-8 | clawft-channels/src/irc/ | **Planned (stub only -- does not transmit messages)** | Agent-06 | sprint/phase-5 | IrcChannelAdapter + IrcAdapterConfig + auth validation + sender filtering + 39 tests; **TCP/TLS dial + JOIN + PRIVMSG pending (`irc` crate not yet selected)** |
+| E5-IRC | IRC channel (IRC protocol) | P2 | 6-8 | clawft-channels/src/irc/ | **Done** (runtime shipped 2026-04-28, `WEFT-160`) | Agent-M3-irc | m3/m3-irc | IrcChannelAdapter + IrcAdapterConfig + RFC-2812 handshake (CAP LS 302 / SASL PLAIN / NICK / USER / 001 wait), auto-JOIN, PRIVMSG read/write with 400-byte UTF-8-safe chunking, PING auto-pong, allow-listed inbound delivery, QUIT-on-cancel, optional `tokio-rustls` TLS; mock-server tests cover connect, send, receive |
 | E6 | Enhanced heartbeat / check-in | P1 | 4-5 | clawft-services/src/heartbeat/ | **Done** | Agent-06 | sprint/phase-5 | HeartbeatMode enum (Simple/CheckIn) + per-channel prompts + 11 tests |
 
 ---
