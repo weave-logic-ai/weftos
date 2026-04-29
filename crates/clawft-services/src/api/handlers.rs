@@ -127,12 +127,6 @@ async fn health_check() -> Json<serde_json::Value> {
     }))
 }
 
-// TODO: Add Content-Security-Policy (CSP) middleware via tower layer.
-// Example: tower_http::set_header::SetResponseHeaderLayer for CSP headers.
-//
-// TODO: Add rate limiting middleware via tower::limit::RateLimitLayer
-// or a dedicated crate like tower-governor for production use.
-// Configuration should be per-endpoint with sensible defaults:
-//   - /api/auth/token: 5 req/min
-//   - /api/delegation/*: 60 req/min
-//   - /api/monitoring/*: 30 req/min
+// CSP, CORS deny-by-default, per-IP rate limiting, and Bearer-token
+// auth are all implemented in `super::middleware` and `super::auth`,
+// and wired in `super::build_router`. See WEFT-99/100/101/298.

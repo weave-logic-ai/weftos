@@ -45,3 +45,5 @@ clawft-platform = { workspace = true, optional = true }
 tokio = { workspace = true }
 regex = { workspace = true }
 mockito = "1"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
