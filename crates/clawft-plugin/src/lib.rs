@@ -32,7 +32,9 @@
 //!
 //! # Feature Flags
 //!
-//! - `voice` -- Enables the voice pipeline module (implies `voice-vad`).
+//! - `voice` -- Voice umbrella. Pulls in `voice-vad`, `voice-wake`,
+//!   `voice-stt`, and `voice-tts` so `cargo build --features voice`
+//!   compiles the full in-process pipeline scaffold (WEFT-212).
 //! - `voice-vad` -- Voice Activity Detection (Silero VAD stub).
 //! - `voice-stt` -- Speech-to-Text (sherpa-rs stub).
 //! - `voice-tts` -- Text-to-Speech (sherpa-rs stub).
