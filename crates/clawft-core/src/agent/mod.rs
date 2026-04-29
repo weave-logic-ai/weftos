@@ -3,6 +3,7 @@
 pub mod agents;
 pub mod context;
 pub mod context_router;
+pub mod cost_budget;
 pub mod effects;
 pub mod gate;
 pub mod helpers;

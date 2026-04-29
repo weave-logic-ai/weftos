@@ -30,6 +30,7 @@ fn base_config() -> Config {
                 max_tool_iterations: 5,
                 memory_window: 10,
             },
+            ..AgentsConfig::default()
         },
         ..Config::default()
     }

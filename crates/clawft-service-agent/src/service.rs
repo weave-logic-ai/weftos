@@ -36,6 +36,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use clawft_core::agent::cost_budget::{BudgetUsage, ConversationBudget};
 use clawft_core::agent::loop_core::AgentLoop;
 use clawft_platform::Platform;
 use clawft_types::event::{InboundMessage, OutboundMessage};
@@ -63,6 +64,14 @@ pub enum AgentServiceError {
     /// the loop returned.
     #[error("conversation `{0}` was cancelled")]
     Cancelled(String),
+    /// `agent.chat.reset_budget` was invoked but no
+    /// [`ConversationBudget`] is attached to the service. WEFT-322.
+    #[error("no cost budget attached to agent service")]
+    NoBudget,
+    /// `agent.chat.reset_budget` failed at the persistence layer.
+    /// WEFT-322.
+    #[error("budget reset failed: {0}")]
+    BudgetReset(String),
 }
 
 /// Test seam over `clawft_core::agent::AgentLoop`.
@@ -123,6 +132,11 @@ pub struct AgentService<H: AgentLoopHandle> {
     /// Notified each time `in_flight` decrements. Lets
     /// [`Self::shutdown`] avoid a polling loop.
     drain: Arc<Notify>,
+    /// Optional [`ConversationBudget`] handle so `agent.chat.reset_budget`
+    /// can clear `circuit_open` for a tripped conv (WEFT-322 item 3).
+    /// Held here in addition to the agent loop so the daemon RPC layer
+    /// can drive `reset_budget` without touching the loop's internals.
+    cost_budget: Option<Arc<ConversationBudget>>,
 }
 
 impl<H: AgentLoopHandle> AgentService<H> {
@@ -135,7 +149,43 @@ impl<H: AgentLoopHandle> AgentService<H> {
             shutting_down: AtomicBool::new(false),
             in_flight: Arc::new(AtomicUsize::new(0)),
             drain: Arc::new(Notify::new()),
+            cost_budget: None,
         }
+    }
+
+    /// Attach a [`ConversationBudget`] so [`Self::reset_budget`] can
+    /// drive the `agent.chat.reset_budget` RPC (WEFT-322).
+    ///
+    /// The same `Arc<ConversationBudget>` should also be passed to the
+    /// agent loop via `AgentLoop::with_cost_budget` so both layers
+    /// share one accumulator.
+    pub fn with_cost_budget(mut self, budget: Arc<ConversationBudget>) -> Self {
+        self.cost_budget = Some(budget);
+        self
+    }
+
+    /// Reset the per-conversation budget circuit (WEFT-322 item 3).
+    ///
+    /// Drives the daemon RPC `agent.chat.reset_budget`. Clears both
+    /// `circuit_open` and the accumulator so the next `agent.chat`
+    /// call on `conv_id` proceeds. Returns the pre-reset snapshot for
+    /// audit logging.
+    ///
+    /// Errors:
+    /// - [`AgentServiceError::NoBudget`] when no budget is attached.
+    /// - [`AgentServiceError::BudgetReset`] on persistence failure.
+    pub fn reset_budget(&self, conv_id: &str) -> Result<BudgetUsage, AgentServiceError> {
+        let Some(ref budget) = self.cost_budget else {
+            return Err(AgentServiceError::NoBudget);
+        };
+        budget
+            .reset(conv_id)
+            .map_err(AgentServiceError::BudgetReset)
+    }
+
+    /// Borrow the optional [`ConversationBudget`].
+    pub fn cost_budget(&self) -> Option<&Arc<ConversationBudget>> {
+        self.cost_budget.as_ref()
     }
 
     /// Single-turn dispatch — the entry point the `agent.chat`

@@ -199,6 +199,7 @@ mod tests {
                 max_tool_iterations: 10,
                 memory_window: 50,
             },
+            ..AgentsConfig::default()
         }
     }
 
