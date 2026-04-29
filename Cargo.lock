@@ -1086,6 +1086,7 @@ name = "clawft-channels"
 version = "0.6.19"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "clawft-platform",
  "clawft-plugin",
@@ -1094,15 +1095,18 @@ dependencies = [
  "futures-util",
  "hmac",
  "reqwest 0.12.28",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "sha2",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-rustls 0.26.4",
  "tokio-tungstenite 0.24.0",
  "tokio-util",
  "tracing",
  "uuid",
+ "webpki-roots 1.0.6",
 ]
 
 [[package]]

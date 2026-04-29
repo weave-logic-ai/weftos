@@ -12,13 +12,14 @@ keywords = ["telegram", "slack", "discord", "chat", "bot"]
 categories = ["network-programming"]
 
 [features]
-default = []
+default = ["native"]
+native = ["clawft-plugin/native"]
 email = []
 whatsapp = []
 signal = []
 matrix = []
 google-chat = []
-irc = []
+irc = ["dep:tokio-rustls", "dep:webpki-roots", "dep:rustls-pki-types", "dep:base64"]
 teams = []
 
 [dependencies]
@@ -40,6 +41,14 @@ hmac = { workspace = true }
 sha2 = { workspace = true }
 dirs = { workspace = true }
 uuid = { workspace = true }
+
+# IRC (TLS dial). Versions match transitive copies already pinned in
+# Cargo.lock via reqwest / tokio-tungstenite, so enabling the `irc`
+# feature does not introduce additional crate downloads.
+tokio-rustls = { version = "0.26", default-features = false, features = ["tls12", "ring"], optional = true }
+webpki-roots = { version = "1.0", optional = true }
+rustls-pki-types = { version = "1", optional = true }
+base64 = { version = "0.22", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

@@ -48,7 +48,7 @@ Element 06 has 9 channel items across 3 phases spanning Weeks 4-8.
 - [~] E3 -- WhatsApp Cloud API -- TRAIT 2026-02-20; **runtime stub** (no webhook listener; no POST to `/v18.0/{phone_number_id}/messages`)
 - [~] E4 -- Signal subprocess bridge -- TRAIT 2026-02-20; **runtime stub** (sanitization lands but no `signal-cli` subprocess is spawned)
 - [~] E5 -- Matrix channel (Matrix SDK) -- TRAIT 2026-02-20; **runtime stub** (no `/sync` long-poll; no `PUT /rooms/{room}/send/m.room.message/{txn}`)
-- [~] E5 -- IRC channel (IRC protocol) -- TRAIT 2026-02-20; **runtime stub** (TODOs at `irc/channel.rs:82` and `:128`; no socket, no PRIVMSG)
+- [x] E5 -- IRC channel (IRC protocol) -- TRAIT 2026-02-20; runtime shipped 2026-04-28 (TCP/TLS dial, CAP/NICK/USER + SASL PLAIN, JOIN, PRIVMSG read/write, mock-server tests) -- `WEFT-160`
 
 ---
 
@@ -70,7 +70,7 @@ config; they MUST NOT be enabled in production.
 | E5 | Matrix channel | P2 | 6-8 | clawft-channels/src/matrix/ | **Planned (stub only -- does not transmit messages)** | Agent-06 | sprint/phase-5 | MatrixChannelAdapter + SecretString access_token + auto_join_rooms; **`/sync` long-poll and `PUT /rooms/.../send/...` pending** |
 | E5a | Google Chat Workspace API | P1 | 5-7 | clawft-channels/src/google_chat/ | **Planned (stub only -- does not transmit messages)** | Agent-06 | sprint/phase-5 | GoogleChatChannelAdapter skeleton + config types; **F6 OAuth2 wiring + Pub/Sub subscription + `chat.spaces.messages.create` POST pending** |
 | E5b | Microsoft Teams Bot Framework | P1 | 5-7 | clawft-channels/src/teams/ | **Planned (stub only -- does not transmit messages)** | Agent-06 | sprint/phase-5 | TeamsChannelAdapter + Azure AD fields + SecretString client_secret; **Azure AD token acquisition + Graph API POST pending** |
-| E5-IRC | IRC channel (IRC protocol) | P2 | 6-8 | clawft-channels/src/irc/ | **Planned (stub only -- does not transmit messages)** | Agent-06 | sprint/phase-5 | IrcChannelAdapter + IrcAdapterConfig + auth validation + sender filtering + 39 tests; **TCP/TLS dial + JOIN + PRIVMSG pending (`irc` crate not yet selected)** |
+| E5-IRC | IRC channel (IRC protocol) | P2 | 6-8 | clawft-channels/src/irc/ | **Done** (runtime shipped 2026-04-28, `WEFT-160`) | Agent-M3-irc | m3/m3-irc | IrcChannelAdapter + IrcAdapterConfig + RFC-2812 handshake (CAP LS 302 / SASL PLAIN / NICK / USER / 001 wait), auto-JOIN, PRIVMSG read/write with 400-byte UTF-8-safe chunking, PING auto-pong, allow-listed inbound delivery, QUIT-on-cancel, optional `tokio-rustls` TLS; mock-server tests cover connect, send, receive |
 | E6 | Enhanced heartbeat / check-in | P1 | 4-5 | clawft-services/src/heartbeat/ | **Done** | Agent-06 | sprint/phase-5 | HeartbeatMode enum (Simple/CheckIn) + per-channel prompts + 11 tests |
 
 ---
