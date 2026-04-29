@@ -27,14 +27,41 @@ pub trait WebPublisher: Send + Sync {
 /// Inbound messages arrive via the REST API's `/api/sessions/{key}/messages`
 /// endpoint, which publishes directly to the message bus. The web channel's
 /// `start()` method is therefore a no-op that waits for cancellation.
+///
+/// # Authentication gate (WEFT-163)
+///
+/// In 0.6.x the channel's [`is_allowed`](Channel::is_allowed) returned
+/// `true` unconditionally on the assumption that "auth is handled by the
+/// API middleware". That was wrong when the gateway was running without
+/// an auth middleware mounted: every anonymous inbound was accepted.
+///
+/// Now the channel takes an `auth_enabled` flag that mirrors whether
+/// the gateway's auth middleware is wired (D-7 / M2-A). When the
+/// middleware is enabled the channel trusts that the inbound was
+/// validated upstream and returns `true`; when it is disabled the
+/// channel denies all inbound, refusing to fall back to legacy
+/// permissive behavior.
 pub struct WebChannel {
     publisher: Arc<dyn WebPublisher>,
+    /// Whether the gateway's auth middleware is mounted.
+    auth_enabled: bool,
 }
 
 impl WebChannel {
     /// Create a new web channel with the given publisher.
-    pub fn new(publisher: Arc<dyn WebPublisher>) -> Self {
-        Self { publisher }
+    ///
+    /// `auth_enabled` must reflect whether the gateway's auth
+    /// middleware will gate inbound REST/WebSocket requests. When
+    /// `false`, [`is_allowed`](Channel::is_allowed) denies every
+    /// sender (the channel refuses to be permissive when the gateway
+    /// is itself permissive). Callers that still need the legacy
+    /// always-allow behavior must pass `true`, which signals that
+    /// the gateway has authenticated the inbound upstream.
+    pub fn new(publisher: Arc<dyn WebPublisher>, auth_enabled: bool) -> Self {
+        Self {
+            publisher,
+            auth_enabled,
+        }
     }
 }
 
@@ -59,8 +86,13 @@ impl Channel for WebChannel {
     }
 
     fn is_allowed(&self, _sender_id: &str) -> bool {
-        // Auth is handled by the API middleware, not here.
-        true
+        // WEFT-163: defer to the gateway's auth middleware. When the
+        // middleware is mounted (`auth_enabled == true`), the inbound
+        // has already been gated by a Bearer token; we trust the
+        // upstream check and return `true`. When the middleware is
+        // disabled, deny all inbound — the channel will not paper
+        // over a permissive gateway.
+        self.auth_enabled
     }
 
     async fn start(
@@ -114,14 +146,27 @@ impl Channel for WebChannel {
 /// Since the web channel requires a pre-built `WebPublisher` (not something
 /// derivable from JSON config), the factory holds the publisher and passes
 /// it into each built channel.
+///
+/// `auth_enabled` reflects whether the gateway's auth middleware is
+/// mounted; it is propagated into every built channel and ultimately
+/// gates [`Channel::is_allowed`] (WEFT-163).
 pub struct WebChannelFactory {
     publisher: Arc<dyn WebPublisher>,
+    auth_enabled: bool,
 }
 
 impl WebChannelFactory {
     /// Create a new factory with the given publisher.
-    pub fn new(publisher: Arc<dyn WebPublisher>) -> Self {
-        Self { publisher }
+    ///
+    /// `auth_enabled` should be `true` when the gateway's auth
+    /// middleware will gate inbound REST/WebSocket requests, and
+    /// `false` otherwise. When `false`, every built channel will
+    /// reject all inbound until the gateway middleware is enabled.
+    pub fn new(publisher: Arc<dyn WebPublisher>, auth_enabled: bool) -> Self {
+        Self {
+            publisher,
+            auth_enabled,
+        }
     }
 }
 
@@ -131,7 +176,10 @@ impl ChannelFactory for WebChannelFactory {
     }
 
     fn build(&self, _config: &serde_json::Value) -> Result<Arc<dyn Channel>, ChannelError> {
-        Ok(Arc::new(WebChannel::new(self.publisher.clone())))
+        Ok(Arc::new(WebChannel::new(
+            self.publisher.clone(),
+            self.auth_enabled,
+        )))
     }
 }
 
@@ -166,14 +214,14 @@ mod tests {
     #[test]
     fn web_channel_name() {
         let pub_ = Arc::new(MockPublisher::new());
-        let ch = WebChannel::new(pub_);
+        let ch = WebChannel::new(pub_, true);
         assert_eq!(ch.name(), "web");
     }
 
     #[test]
     fn web_channel_metadata() {
         let pub_ = Arc::new(MockPublisher::new());
-        let ch = WebChannel::new(pub_);
+        let ch = WebChannel::new(pub_, true);
         let meta = ch.metadata();
         assert_eq!(meta.name, "web");
         assert_eq!(meta.display_name, "Web Dashboard");
@@ -183,21 +231,36 @@ mod tests {
     #[test]
     fn web_channel_always_running() {
         let pub_ = Arc::new(MockPublisher::new());
-        let ch = WebChannel::new(pub_);
+        let ch = WebChannel::new(pub_, true);
         assert_eq!(ch.status(), ChannelStatus::Running);
     }
 
+    /// WEFT-163: when the gateway's auth middleware is enabled
+    /// (`auth_enabled = true`), `is_allowed` trusts the upstream
+    /// authentication and admits the inbound.
     #[test]
-    fn web_channel_allows_all() {
+    fn web_channel_is_allowed_when_auth_enabled() {
         let pub_ = Arc::new(MockPublisher::new());
-        let ch = WebChannel::new(pub_);
-        assert!(ch.is_allowed("anyone"));
+        let ch = WebChannel::new(pub_, true);
+        assert!(ch.is_allowed("authenticated-user"));
+        assert!(ch.is_allowed(""));
+    }
+
+    /// WEFT-163: when the gateway's auth middleware is NOT enabled,
+    /// `is_allowed` denies every sender — the channel refuses to be
+    /// permissive when the gateway is permissive.
+    #[test]
+    fn web_channel_denies_when_auth_disabled() {
+        let pub_ = Arc::new(MockPublisher::new());
+        let ch = WebChannel::new(pub_, false);
+        assert!(!ch.is_allowed("anyone"));
+        assert!(!ch.is_allowed(""));
     }
 
     #[tokio::test]
     async fn web_channel_send_publishes() {
         let pub_ = Arc::new(MockPublisher::new());
-        let ch = WebChannel::new(pub_.clone());
+        let ch = WebChannel::new(pub_.clone(), true);
 
         let msg = OutboundMessage {
             channel: "web".into(),
@@ -223,10 +286,24 @@ mod tests {
     #[test]
     fn factory_builds_web_channel() {
         let pub_ = Arc::new(MockPublisher::new());
-        let factory = WebChannelFactory::new(pub_);
+        let factory = WebChannelFactory::new(pub_, true);
         assert_eq!(factory.channel_name(), "web");
 
         let ch = factory.build(&serde_json::json!({})).unwrap();
         assert_eq!(ch.name(), "web");
+    }
+
+    /// WEFT-163: the factory propagates `auth_enabled = false` into
+    /// the built channel so every built `WebChannel` denies inbound
+    /// when the gateway is unauthenticated.
+    #[test]
+    fn factory_propagates_auth_disabled() {
+        let pub_ = Arc::new(MockPublisher::new());
+        let factory = WebChannelFactory::new(pub_, false);
+        let ch = factory.build(&serde_json::json!({})).unwrap();
+        assert!(
+            !ch.is_allowed("anyone"),
+            "factory built with auth_enabled=false must produce a denying channel"
+        );
     }
 }

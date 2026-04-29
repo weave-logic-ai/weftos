@@ -278,14 +278,35 @@ impl<P: Platform + 'static> SkillAccess for SkillBridge<P> {
         })
     }
 
+    /// Install a skill from the ClawHub registry.
+    ///
+    /// WEFT-168: ClawHub registry is not yet available in 0.7.x, so
+    /// this method returns an explicit NotImplemented error with a
+    /// docs reference instead of silently accepting the request. The
+    /// previous TODO marker was a footgun: callers (e.g. the
+    /// dashboard) would get `not implemented` with no actionable
+    /// guidance. See `docs/handoff.md` for the deferred-work tracking
+    /// list and the WEFT items that will land it.
     fn install_skill(&self, _id: &str) -> Result<(), String> {
-        // TODO: implement skill installation via ClawHub registry
-        Err("not implemented".into())
+        Err(
+            "skill install is not implemented in 0.7.x — ClawHub skill \
+             registry is deferred (see docs/handoff.md)"
+                .into(),
+        )
     }
 
+    /// Uninstall a skill by name.
+    ///
+    /// WEFT-168: same deferral rationale as `install_skill`. The
+    /// underlying `SkillsLoader` does not yet expose an uninstall
+    /// API, and a filesystem-level delete would bypass the loader's
+    /// in-memory cache. Returns NotImplemented with a docs reference.
     fn uninstall_skill(&self, _name: &str) -> Result<(), String> {
-        // TODO: implement skill uninstallation
-        Err("not implemented".into())
+        Err(
+            "skill uninstall is not implemented in 0.7.x — ClawHub skill \
+             registry is deferred (see docs/handoff.md)"
+                .into(),
+        )
     }
 }
 
@@ -391,10 +412,70 @@ impl<P: Platform + 'static> MemoryAccess for MemoryBridge<P> {
         })
     }
 
-    fn delete(&self, _key: &str) -> bool {
-        // TODO: implement memory entry deletion
-        // Memory files are append-only; deletion requires rewriting.
-        false
+    /// Delete a memory entry by key.
+    ///
+    /// WEFT-168: implemented end-to-end. Keys produced by
+    /// [`Self::list_entries`] follow the form `memory:{i}` where
+    /// `i` is the paragraph index in the long-term memory file.
+    /// Deletion reads the file, drops the targeted paragraph,
+    /// and rewrites the file via `MemoryStore::write_long_term`.
+    /// Returns `true` if the paragraph existed and was removed,
+    /// `false` if the key was malformed or out of range.
+    fn delete(&self, key: &str) -> bool {
+        // Parse "memory:{index}" into a usize index.
+        let idx: usize = match key.strip_prefix("memory:").and_then(|s| s.parse().ok()) {
+            Some(i) => i,
+            None => {
+                warn!(key, "memory delete: invalid key format");
+                return false;
+            }
+        };
+
+        let store = self.store.clone();
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let content = match store.read_long_term().await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!(error = %e, "memory delete: failed to read long-term memory");
+                        return false;
+                    }
+                };
+
+                // Split into paragraphs but keep track of the
+                // non-empty (visible) ones so the index aligns with
+                // what `list_entries` exposes.
+                let paragraphs: Vec<&str> = content.split("\n\n").collect();
+                let mut visible_idx = 0usize;
+                let mut found = false;
+                let mut kept = Vec::with_capacity(paragraphs.len());
+                for p in &paragraphs {
+                    let trimmed = p.trim();
+                    if trimmed.is_empty() {
+                        // Skip empties; they aren't visible to
+                        // list_entries and don't consume an index.
+                        continue;
+                    }
+                    if visible_idx == idx {
+                        found = true;
+                    } else {
+                        kept.push(trimmed.to_string());
+                    }
+                    visible_idx += 1;
+                }
+
+                if !found {
+                    return false;
+                }
+
+                let new_content = kept.join("\n\n");
+                if let Err(e) = store.write_long_term(&new_content).await {
+                    warn!(error = %e, "memory delete: failed to rewrite long-term memory");
+                    return false;
+                }
+                true
+            })
+        })
     }
 }
 
@@ -406,15 +487,42 @@ impl<P: Platform + 'static> MemoryAccess for MemoryBridge<P> {
 ///
 /// For `get_config()`, serializes the Config to JSON. SecretString fields
 /// auto-serialize as empty strings for safety.
-/// For `save_config()`, currently returns an error (read-only for now).
+///
+/// For `save_config()` (WEFT-168), the bridge holds the path to the
+/// canonical config file and persists incoming JSON patches there.
+/// Writes are atomic: the bridge writes to `<path>.tmp` and renames
+/// it over the destination so a crash mid-write cannot leave a
+/// half-rendered config behind.
 pub struct ConfigBridge {
     config: clawft_types::config::Config,
+    /// Optional path for `save_config` to write to. When `None`,
+    /// `save_config` returns an error explaining the configuration
+    /// is read-only (no canonical file path was discovered at boot).
+    save_path: Option<std::path::PathBuf>,
 }
 
 impl ConfigBridge {
     /// Create a new bridge from a cloned Config.
+    ///
+    /// The bridge has no save target; `save_config` will return an
+    /// error. Use [`Self::with_save_path`] to enable persistence.
     pub fn new(config: clawft_types::config::Config) -> Self {
-        Self { config }
+        Self {
+            config,
+            save_path: None,
+        }
+    }
+
+    /// Create a new bridge that persists `save_config` writes to
+    /// `save_path` (typically `~/.clawft/config.json`).
+    pub fn with_save_path(
+        config: clawft_types::config::Config,
+        save_path: std::path::PathBuf,
+    ) -> Self {
+        Self {
+            config,
+            save_path: Some(save_path),
+        }
     }
 }
 
@@ -463,9 +571,61 @@ impl ConfigAccess for ConfigBridge {
         })
     }
 
-    fn save_config(&self, _config: serde_json::Value) -> Result<(), String> {
-        // TODO: implement config persistence (deserialize, validate, write to file)
-        Err("config saving not yet implemented".into())
+    /// Persist the supplied config JSON to the canonical config file.
+    ///
+    /// WEFT-168: the value is first deserialized into the strongly-
+    /// typed `Config` to validate it against the canonical schema;
+    /// invalid payloads are rejected without touching the filesystem.
+    /// On success, the JSON is pretty-printed and written atomically
+    /// (write-tmp-then-rename) so a partial write cannot corrupt the
+    /// live config. When the bridge has no `save_path` (constructed
+    /// via the legacy [`Self::new`]), the call is rejected.
+    fn save_config(&self, config: serde_json::Value) -> Result<(), String> {
+        let path = match &self.save_path {
+            Some(p) => p,
+            None => {
+                return Err(
+                    "config saving is disabled: no canonical config path \
+                     was discovered at boot"
+                        .into(),
+                );
+            }
+        };
+
+        // Validate against the canonical schema.
+        let _validated: clawft_types::config::Config =
+            serde_json::from_value(config.clone())
+                .map_err(|e| format!("config validation failed: {e}"))?;
+
+        // Pretty-print the validated payload.
+        let serialized = serde_json::to_string_pretty(&config)
+            .map_err(|e| format!("failed to serialize config: {e}"))?;
+
+        // Atomic write: write to <path>.tmp, then rename over the
+        // destination. Use std::fs (sync) since `save_config` is
+        // already a sync trait method.
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("failed to create config dir: {e}"))?;
+        }
+
+        let tmp_path = {
+            let mut p = path.clone();
+            let mut name = p
+                .file_name()
+                .map(|n| n.to_os_string())
+                .unwrap_or_else(|| std::ffi::OsString::from("config.json"));
+            name.push(".tmp");
+            p.set_file_name(name);
+            p
+        };
+
+        std::fs::write(&tmp_path, &serialized)
+            .map_err(|e| format!("failed to write tmp config: {e}"))?;
+        std::fs::rename(&tmp_path, path)
+            .map_err(|e| format!("failed to rename tmp config into place: {e}"))?;
+
+        Ok(())
     }
 }
 
@@ -703,4 +863,174 @@ fn resolve_secret(
         return secret.expose().to_string();
     }
     std::env::var(env_var).unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
+// WEFT-168: bridge tests for skill install/uninstall, memory delete,
+// and config persist. Each test exercises the real bridge method
+// (no mocks) against temp directories to keep them hermetic.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod bridge_weft_168_tests {
+    use super::*;
+    use clawft_core::agent::memory::MemoryStore;
+    use clawft_core::agent::skills::SkillsLoader;
+    use clawft_platform::NativePlatform;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_dir(prefix: &str) -> std::path::PathBuf {
+        let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        std::env::temp_dir().join(format!("clawft_bridge_{prefix}_{pid}_{id}"))
+    }
+
+    /// WEFT-168: skill install is deferred (ClawHub registry not yet
+    /// available). The bridge must surface that with an explicit
+    /// NotImplemented message including a docs reference, not the
+    /// previous opaque "not implemented" string.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn skill_bridge_install_returns_explicit_not_implemented() {
+        let dir = temp_dir("skill_install");
+        let platform = Arc::new(NativePlatform::new());
+        let loader = Arc::new(SkillsLoader::with_dir(dir.clone(), platform));
+        let bridge = SkillBridge::new(loader);
+
+        let result = bridge.install_skill("any-skill-id");
+
+        let err = result.expect_err("skill install must return Err");
+        assert!(
+            err.contains("not implemented") && err.contains("docs/handoff.md"),
+            "install_skill error must mention NotImplemented + docs link, got: {err}"
+        );
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    /// WEFT-168: skill uninstall is also deferred. Same contract as
+    /// install: explicit NotImplemented + docs reference.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn skill_bridge_uninstall_returns_explicit_not_implemented() {
+        let dir = temp_dir("skill_uninstall");
+        let platform = Arc::new(NativePlatform::new());
+        let loader = Arc::new(SkillsLoader::with_dir(dir.clone(), platform));
+        let bridge = SkillBridge::new(loader);
+
+        let result = bridge.uninstall_skill("any-skill");
+
+        let err = result.expect_err("skill uninstall must return Err");
+        assert!(
+            err.contains("not implemented") && err.contains("docs/handoff.md"),
+            "uninstall_skill error must mention NotImplemented + docs link, got: {err}"
+        );
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    /// WEFT-168: memory delete is implemented end-to-end. After
+    /// seeding the long-term memory file with three paragraphs, the
+    /// bridge should remove the targeted paragraph (by `memory:{i}`
+    /// key), persist the rewritten file, and report `true`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn memory_bridge_delete_removes_paragraph_end_to_end() {
+        let dir = temp_dir("mem_delete");
+        let memory_path = dir.join("MEMORY.md");
+        let history_path = dir.join("HISTORY.md");
+        let platform = Arc::new(NativePlatform::new());
+
+        let store: Arc<MemoryStore<NativePlatform>> = Arc::new(MemoryStore::with_paths(
+            memory_path.clone(),
+            history_path,
+            platform,
+        ));
+        store.append_long_term("first paragraph").await.unwrap();
+        store.append_long_term("second paragraph").await.unwrap();
+        store.append_long_term("third paragraph").await.unwrap();
+
+        let bridge = MemoryBridge::new(store.clone());
+
+        // Sanity: list_entries returns three entries before delete.
+        let before = bridge.list_entries();
+        assert_eq!(before.len(), 3, "expected 3 paragraphs pre-delete");
+
+        // Delete index 1 (the middle paragraph).
+        let deleted = bridge.delete("memory:1");
+        assert!(deleted, "delete must return true for an existing key");
+
+        // The file should now contain only first + third paragraphs.
+        let after_content = store.read_long_term().await.unwrap();
+        assert!(
+            after_content.contains("first paragraph"),
+            "first paragraph must survive: {after_content:?}"
+        );
+        assert!(
+            after_content.contains("third paragraph"),
+            "third paragraph must survive: {after_content:?}"
+        );
+        assert!(
+            !after_content.contains("second paragraph"),
+            "second paragraph must be removed: {after_content:?}"
+        );
+
+        // A bogus key must report false without touching the file.
+        assert!(!bridge.delete("not-a-memory-key"));
+        assert!(!bridge.delete("memory:99"));
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    /// WEFT-168: config persist is implemented end-to-end. The bridge
+    /// should validate the incoming JSON against the canonical
+    /// `Config` schema and write it atomically to `save_path`.
+    #[test]
+    fn config_bridge_save_persists_to_disk_and_validates() {
+        let dir = temp_dir("config_save");
+        std::fs::create_dir_all(&dir).unwrap();
+        let save_path = dir.join("config.json");
+
+        let initial = clawft_types::config::Config::default();
+        let bridge = ConfigBridge::with_save_path(initial, save_path.clone());
+
+        // A serialized default Config is a valid payload.
+        let payload = serde_json::to_value(clawft_types::config::Config::default()).unwrap();
+        bridge
+            .save_config(payload.clone())
+            .expect("save_config must persist a valid payload");
+
+        // Verify the file was written and round-trips back into a Config.
+        let written = std::fs::read_to_string(&save_path).unwrap();
+        let parsed: clawft_types::config::Config = serde_json::from_str(&written)
+            .expect("written config must round-trip through Config");
+        // Spot-check a default field to prove we wrote real content,
+        // not an empty stub.
+        assert_eq!(
+            parsed.gateway.api_port,
+            clawft_types::config::Config::default().gateway.api_port
+        );
+
+        // Invalid payload must be rejected without rewriting the file.
+        let pre_mtime = std::fs::metadata(&save_path).unwrap().modified().unwrap();
+        let bogus = serde_json::json!({"agents": "this is not an agents object"});
+        let result = bridge.save_config(bogus);
+        assert!(result.is_err(), "invalid payload must be rejected");
+        let post_mtime = std::fs::metadata(&save_path).unwrap().modified().unwrap();
+        assert_eq!(
+            pre_mtime, post_mtime,
+            "rejected payload must not touch the canonical file"
+        );
+
+        // Bridge built without a save_path must reject save_config.
+        let read_only = ConfigBridge::new(clawft_types::config::Config::default());
+        let err = read_only
+            .save_config(serde_json::Value::Object(Default::default()))
+            .expect_err("read-only bridge must reject save_config");
+        assert!(
+            err.contains("disabled") || err.contains("no canonical"),
+            "read-only error must mention the disabled state, got: {err}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

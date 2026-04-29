@@ -140,6 +140,21 @@ impl TelegramChannel {
         }
         metadata.insert("chat_type".into(), msg.chat.chat_type.clone().into());
 
+        // WEFT-162: signal that the sender passed an explicit allow_from
+        // check so the permission resolver can promote them from
+        // zero-trust to user level. Mirrors the Discord channel; only
+        // emitted when `allowed_users` is non-empty AND contains the
+        // sender (i.e. a real positive match, not "everyone allowed
+        // because the list is empty").
+        if !self.allowed_users.is_empty()
+            && self.allowed_users.iter().any(|id| id == &sender_id)
+        {
+            metadata.insert(
+                "allow_from_match".into(),
+                serde_json::Value::Bool(true),
+            );
+        }
+
         let inbound = InboundMessage {
             channel: "telegram".into(),
             sender_id,
