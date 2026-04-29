@@ -12,14 +12,19 @@ keywords = ["telegram", "slack", "discord", "chat", "bot"]
 categories = ["network-programming"]
 
 [features]
-default = []
+default = ["native"]
+native = ["clawft-plugin/native"]
 email = []
 whatsapp = []
 signal = []
 matrix = []
 google-chat = []
 irc = []
-teams = []
+# Microsoft Teams adapter: Bot Framework client-credentials OAuth2 +
+# Graph activities POST + axum-based inbound webhook receiver. Pulls in
+# `axum` for the webhook listener and `jsonwebtoken` for decoding the
+# Bot Framework JWT presented on inbound activities.
+teams = ["dep:axum", "dep:jsonwebtoken"]
 
 [dependencies]
 clawft-types = { workspace = true }
@@ -41,5 +46,16 @@ sha2 = { workspace = true }
 dirs = { workspace = true }
 uuid = { workspace = true }
 
+# Optional, gated under feature flags. Pulled in only when the relevant
+# adapter is enabled (see [features] above). axum + jsonwebtoken back
+# the Microsoft Teams Bot Framework webhook receiver and JWT header
+# decoding respectively.
+axum = { version = "0.8", default-features = false, features = ["json", "tokio", "http1"], optional = true }
+jsonwebtoken = { version = "9", default-features = false, optional = true }
+
 [dev-dependencies]
 tokio = { workspace = true }
+# wiremock backs the Microsoft Teams adapter's HTTP-level tests
+# (token endpoint and conversations/activities POST). Already used
+# elsewhere in the workspace (clawft-llm, clawft-core) at this version.
+wiremock = "0.6"
