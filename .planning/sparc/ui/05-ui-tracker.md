@@ -1,19 +1,33 @@
 # Sprint Tracker: UI Development Sprint
 
+> **Status (2026-04-28): Superseded — implemented with deferred tracks.**
+> Per-row `Not Started` markers in the tables below were never refreshed
+> as work landed. The de-facto trackers are
+> `.planning/development_notes/step{1..7}*.md` (per-step ship reports +
+> phase gates) and the audit doc
+> `.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md`.
+> Plane carries the open follow-up items under label
+> `ws09-clawft-dashboard` (WEFT-292..321). Source location moved from
+> `ui/` to `clawft-ui/` in CHANGELOG 0.6.19 (2026-04-22); the
+> toolchain rename completed in the 0.7.0 release wave M1-E
+> (WEFT-292/293/294/295/296/297/318/320/321). Future updates happen
+> in Plane, not in this file.
+
 **Project**: clawft
 **Sprint**: UI Development -- Web Dashboard + Live Canvas
 **Source**: `.planning/ui_development.md`
 **Orchestrator**: `.planning/sparc/ui/00-orchestrator.md`
-**Stack**: Vite + React + TypeScript + shadcn/ui + Tailwind CSS (frontend), Axum (backend API)
+**Stack**: Vite + React + TypeScript + Tailwind CSS v4 (frontend, custom UI primitives instead of shadcn/ui), Axum (backend API)
 **Created**: 2026-02-23
+**Last shipped**: 2026-02-24 (step-7 phase gate 11/11 PASS)
 
 ---
 
 ## Milestone Status
 
-- [ ] **S1 MVP (Week 3)**: Backend API (auth, agents, sessions, tools, WS), Frontend scaffold (Vite, shadcn, MSW, routing), Core views (dashboard, WebChat streaming, agent management, session explorer, tool registry), theme toggle, command palette
-- [ ] **S2 Complete (Week 6)**: Live Canvas (CanvasCommand protocol, render_ui tool, CanvasRenderer, element types, interactions), skill browser + ClawHub, memory explorer + semantic search, config editor, cron dashboard, channel status
-- [ ] **S3 Complete (Week 9)**: Delegation monitor + pipeline inspector + cost tracker, advanced Canvas (charts, Monaco, forms, history, export), mobile responsive + PWA, Tauri desktop shell, production hardening (CSP, rate limiting, E2E tests, accessibility, Tailscale auth, multi-user)
+- [x] **S1 MVP (Week 3)**: Backend API (auth, agents, sessions, tools, WS), Frontend scaffold (Vite, MSW, routing), Core views (dashboard, WebChat streaming, agent management, session explorer, tool registry), theme toggle. Cmd+K palette is a placeholder. shadcn/ui not adopted; custom primitives shipped instead.
+- [x] **S2 Complete (Week 6)**: Live Canvas (CanvasCommand protocol, render_ui tool, CanvasRenderer, element types, interactions), skill browser + ClawHub, memory explorer + semantic search, config editor, cron dashboard, channel status.
+- [~] **S3 Partial (Week 9)**: S3.1 delegation monitor / S3.2 advanced Canvas / S3.6 browser-WASM integration / S3.7 docs **shipped**. S3.3 (mobile responsive + PWA), S3.4 (Tauri desktop shell), and the security half of S3.5 (CSP, rate limiting, E2E, axe, Tailscale, multi-user) are **deferred** — tracked in Plane.
 
 ### MVP Verification Checklist
 
