@@ -1,5 +1,18 @@
 # clawft -- Consolidated Planning Summary
 
+> **HISTORICAL — 2026-02-17 snapshot (WEFT-25, archived 2026-04-28).**
+> This document captured the original Python → Rust port plan for the
+> nanobot-lineage clawft codebase. The project has since been rebranded
+> to WeftOS (kernel + governance + ECC) and the 0.6.x → 0.7.0 release
+> wave is the operative roadmap. Treat the goals, milestones, and
+> success metrics below as historical.
+>
+> **Current source-of-truth:**
+> - `.planning/reviews/0.7.0-release-gate/README.md` (release-gate audit).
+> - `docs/plans/0.7.0-release-wave.md` (live release plan).
+> - `docs/weftos/VISION.md` and `docs/weftos/architecture.md` for
+>   present-tense product/architecture statements.
+
 **Generated**: 2026-02-17
 **Source documents**: 01-business-requirements.md, 02-technical-requirements.md, 03-development-guide.md, 04-rvf-integration.md, 05-ruvector-crates.md, phase3-status.md, exit-criteria-review.md
 

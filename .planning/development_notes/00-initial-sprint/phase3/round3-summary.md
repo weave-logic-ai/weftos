@@ -1,5 +1,10 @@
 # Phase 3 -- Round 3 Summary
 
+> **HISTORICAL — 2026-02-17 snapshot (WEFT-25, archived 2026-04-28).**
+> Phase-3 round-3 summary from the initial Python → Rust port sprint.
+> Retained for context only; current state lives in
+> `.planning/reviews/0.7.0-release-gate/`.
+
 **Status**: Complete
 **Date**: 2026-02-17
 **Agents**: 8 (parallel swarm)

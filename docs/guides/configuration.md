@@ -5,8 +5,18 @@ and falls back to a sensible default when omitted.
 
 ## Config File Location
 
-The runtime resolves its configuration through a three-step discovery chain,
-stopping at the first match:
+The runtime resolves its configuration as a three-layer merge. Each layer is
+loaded if present and deep-merged on top of the previous layer; later layers
+win on key collisions. This matches the convention used by `git`, `npm`,
+etc. (most-specific wins).
+
+| Layer | Source | Purpose |
+|-------|--------|---------|
+| 1 | `weave.toml` in the current directory | Project-level defaults (versioned). |
+| 2 | JSON config from the discovery chain (see below) | User-level config (per-machine). |
+| 3 | `.clawft/config.json` in the current directory | Workspace overlay — most specific. |
+
+The Layer 2 discovery chain stops at the first file found:
 
 | Priority | Source | Notes |
 |----------|--------|-------|
@@ -14,7 +24,7 @@ stopping at the first match:
 | 2 | `~/.clawft/config.json` | Recommended location. |
 | 3 | `~/.nanobot/config.json` | Legacy fallback for migration. |
 
-If no file is found at any location, all values fall back to their compiled-in
+If no file is found at any layer, all values fall back to their compiled-in
 defaults (equivalent to an empty `{}` document).
 
 You can inspect the fully resolved configuration at any time:
@@ -24,6 +34,43 @@ weft config show              # full config as JSON
 weft config section agents    # single section
 weft config section gateway
 ```
+
+### Layer 2 sync vs Layer 3 async asymmetry
+
+The Layer 2 discovery (`discover_config_path` in
+`crates/clawft-platform/src/config_loader.rs`) checks `~/.clawft/config.json`
+and `~/.nanobot/config.json` using **synchronous** `Path::exists()` against
+the real filesystem, not the injected `FileSystem` trait. The Layer 3
+workspace overlay uses the **async** `fs.exists().await` path on the trait.
+Keep this distinction in mind when reasoning about the loader:
+
+- **Why the asymmetry exists.** Layer 2 paths are absolute home-dir
+  candidates resolved via `dirs::home_dir()`. They are deliberately not
+  routed through the platform `FileSystem` trait because the trait's
+  `home_dir()` is informational, not a sandbox: a sandboxed
+  `BrowserFileSystem` should not pretend a synchronous home-dir lookup
+  succeeded. Layer 3 (`.clawft/config.json` in the cwd) is a relative
+  path and goes through the trait so the same loader works on
+  native + WASM targets.
+- **Testing impact.** Tests cannot mock Layer 2 (no `FileSystem` injection
+  point), so the workspace-overlay smoke test
+  (`crates/clawft-platform/tests/overlay_probe.rs`) is gated
+  `#[ignore]` and run manually when verifying end-to-end behaviour.
+  Unit tests in `config_loader.rs` exercise Layer 3 against `MockFs`
+  and treat Layer 2 as inert by pointing `home_dir()` at a path that
+  does not exist on the real filesystem.
+- **Forward compatibility.** Lifting Layer 2 to async would unblock the
+  ignored test and remove the asymmetry, but requires either (a)
+  threading the platform `FileSystem` through `discover_config_path`
+  and accepting that the trait's `home_dir()` becomes load-bearing, or
+  (b) introducing a separate `home_dir_resolver` capability. Either is
+  a net change worth doing in a follow-up; today's loader keeps the
+  surface small at the cost of one un-mockable layer.
+
+See ADR-021 (CLI ↔ kernel compliance) for the broader principle that
+platform-trait code paths must be the one mockable surface; the Layer 2
+sync exception is documented here rather than in an ADR because it is a
+local pragmatic choice, not a system-wide policy.
 
 ## Config File Format
 
