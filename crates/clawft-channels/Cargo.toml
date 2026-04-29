@@ -12,12 +12,17 @@ keywords = ["telegram", "slack", "discord", "chat", "bot"]
 categories = ["network-programming"]
 
 [features]
-default = []
+default = ["native"]
+native = ["clawft-plugin/native"]
 email = []
 whatsapp = []
 signal = []
 matrix = []
-google-chat = []
+# Google Chat adapter: real Pub/Sub pull + chat.spaces.messages.create POST.
+# `reqwest`, `serde`, and `serde_json` are unconditionally pulled in by the
+# crate; `base64` is gated here because it's only used to decode the
+# Pub/Sub `data` field for Google Chat events.
+google-chat = ["dep:base64"]
 irc = []
 teams = []
 
@@ -41,5 +46,13 @@ sha2 = { workspace = true }
 dirs = { workspace = true }
 uuid = { workspace = true }
 
+# Optional, gated under feature flags. Pulled in only when the relevant
+# adapter is enabled (see [features] above).
+base64 = { version = "0.22", optional = true }
+
 [dev-dependencies]
 tokio = { workspace = true }
+# wiremock backs the Google Chat adapter's HTTP-level tests (Pub/Sub
+# pull/ack and chat.spaces.messages.create). Already used elsewhere in
+# the workspace (clawft-llm, clawft-core) at this version.
+wiremock = "0.6"
