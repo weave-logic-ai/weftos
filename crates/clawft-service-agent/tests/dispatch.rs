@@ -260,3 +260,53 @@ async fn shutdown_refuses_new_dispatches() {
         other => panic!("expected ShuttingDown, got {:?}", other),
     }
 }
+
+// -- WEFT-322: agent.chat.reset_budget integration ---------------------------
+
+#[tokio::test]
+async fn reset_budget_without_budget_attached_returns_no_budget_error() {
+    let release = Arc::new(Notify::new());
+    let stub = Arc::new(StubHandle::new(Arc::clone(&release)));
+    let svc = AgentService::new(Arc::clone(&stub));
+
+    let r = svc.reset_budget("conv-x");
+    assert!(matches!(r, Err(AgentServiceError::NoBudget)));
+}
+
+#[tokio::test]
+async fn reset_budget_clears_circuit_and_returns_prior_snapshot() {
+    use clawft_core::agent::cost_budget::{
+        BudgetStore, ConversationBudget, InMemoryBudgetStore,
+    };
+    use clawft_types::config::CostBudgetConfig;
+
+    let release = Arc::new(Notify::new());
+    let stub = Arc::new(StubHandle::new(Arc::clone(&release)));
+    let store: Arc<dyn BudgetStore> = Arc::new(InMemoryBudgetStore::new());
+    let budget = Arc::new(ConversationBudget::new(
+        CostBudgetConfig {
+            max_tokens_per_conv: 1_000,
+            max_usd_per_conv: 1.0,
+            max_iterations_per_conv: 10,
+        },
+        Arc::clone(&store),
+    ));
+
+    // Pre-trip the budget directly through the budget façade — the
+    // service-level test doesn't need a full agent loop to exercise
+    // the reset RPC contract.
+    budget.record_call("conv-rb", 100, 50, 0.0).unwrap();
+    budget.mark_open("conv-rb", "tokens").unwrap();
+    assert!(budget.usage("conv-rb").circuit_open);
+
+    let svc = AgentService::new(Arc::clone(&stub)).with_cost_budget(Arc::clone(&budget));
+
+    let prev = svc.reset_budget("conv-rb").expect("reset should succeed");
+    assert!(prev.circuit_open, "snapshot must reflect tripped state");
+    assert_eq!(prev.input_tokens, 100);
+
+    // Post-reset: circuit closed, accumulator zero.
+    let post = budget.usage("conv-rb");
+    assert!(!post.circuit_open);
+    assert_eq!(post.input_tokens, 0);
+}
