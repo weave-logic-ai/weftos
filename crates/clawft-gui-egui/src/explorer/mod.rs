@@ -17,7 +17,7 @@
 //! the tree renders just the virtual root and shows a small
 //! backend-unavailable hint. No synthetic in-memory children.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,6 +25,7 @@ use eframe::egui;
 use serde_json::Value;
 
 use crate::live::{self, Command, Live, ReplyRx};
+use crate::wasm_time::epoch_minus;
 
 pub mod chat;
 pub mod control_toggle;
@@ -36,6 +37,24 @@ pub mod workshop;
 /// A path is considered "live" if its value has changed within this
 /// window. Used for the ● activity dot in the tree.
 pub const ACTIVITY_WINDOW: Duration = Duration::from_secs(3);
+
+/// Hard cap on the per-path activity map. Long-running webview
+/// sessions on a busy substrate can otherwise grow this map without
+/// bound — we'd record one entry per ever-published path and never
+/// drop them. WEFT-243.
+///
+/// `Activity` here means a `last_update` `Instant` per path. Eviction
+/// is an LRU-on-insert policy: when the map is at cap, drop the
+/// least-recently-touched entry before inserting the new one.
+pub const ACTIVITY_MAX_ENTRIES: usize = 256;
+
+/// Stale-entry TTL. Any path that hasn't seen a value change in this
+/// long is dropped on the next eviction sweep, even if we're below
+/// `ACTIVITY_MAX_ENTRIES`. Keeps the map small after a burst of
+/// distinct paths goes quiet. The dot is only "active" for
+/// [`ACTIVITY_WINDOW`] anyway, so anything older than this TTL is
+/// purely overhead. WEFT-243.
+pub const ACTIVITY_TTL: Duration = Duration::from_secs(60 * 30);
 
 /// How often to re-list every currently-expanded prefix, so newly
 /// appearing paths show up without the user re-clicking.
@@ -66,17 +85,123 @@ impl SubscriptionHandle {
         Self {
             path,
             pending: None,
-            // Epoch-ish: first poll fires immediately. `checked_sub`
-            // because on WASM `Instant::now()` at early page-load can be
-            // less than `SELECT_POLL * 2`, and unchecked subtraction
-            // panics with "overflow when subtracting duration from
-            // instant". When the saturating fallback hits, the first
-            // poll just fires on the next `SELECT_POLL` tick instead of
-            // immediately — acceptable cost to avoid the WASM crash.
-            last_poll: web_time::Instant::now()
-                .checked_sub(SELECT_POLL * 2)
-                .unwrap_or_else(web_time::Instant::now),
+            // Epoch-ish: first poll fires immediately. The
+            // `epoch_minus` helper handles the WASM cold-load
+            // time-origin underflow (otherwise unchecked `Sub` panics
+            // with "overflow when subtracting duration from instant").
+            // WEFT-247.
+            last_poll: epoch_minus(SELECT_POLL * 2),
         }
+    }
+}
+
+/// Bounded `path → last-activity Instant` map.
+///
+/// Replaces a raw `HashMap<String, Instant>` so a long-lived webview
+/// session can't accumulate entries forever. Eviction policy:
+///
+/// 1. **Insert / touch** — LRU bookkeeping moves the path to the
+///    "most recently touched" end via a parallel queue.
+/// 2. **TTL sweep** — entries older than [`ACTIVITY_TTL`] are dropped
+///    opportunistically on insert. Activity dots are only "live"
+///    within [`ACTIVITY_WINDOW`] (3s) so anything past TTL is pure
+///    overhead.
+/// 3. **Cap sweep** — if the map is still at [`ACTIVITY_MAX_ENTRIES`]
+///    after the TTL sweep, the oldest entry by touch order is
+///    evicted before the new one is inserted.
+///
+/// We don't pull in a full `LruCache` crate for this — the map only
+/// exists for an O(1) `is-active` lookup against a hard cap, and the
+/// "oldest by touch" find is naturally bounded by
+/// `ACTIVITY_MAX_ENTRIES` (256). WEFT-243.
+pub struct ActivityMap {
+    inner: HashMap<String, web_time::Instant>,
+    /// Touch order — front = least recently touched, back = most
+    /// recent. Each path appears at most once; on touch we push the
+    /// fresh copy and the next sweep drops the stale earlier copy.
+    /// VecDeque rather than `LinkedList` because the cap is small
+    /// and contiguous storage wins on cache.
+    order: VecDeque<String>,
+}
+
+impl ActivityMap {
+    /// Create an empty bounded activity map.
+    pub fn new() -> Self {
+        Self {
+            inner: HashMap::with_capacity(ACTIVITY_MAX_ENTRIES.min(64)),
+            order: VecDeque::with_capacity(ACTIVITY_MAX_ENTRIES.min(64)),
+        }
+    }
+
+    /// Record a fresh activity instant for `path`. Evicts a stale or
+    /// LRU entry if the map is at cap.
+    pub fn insert(&mut self, path: String, when: web_time::Instant) {
+        // (1) TTL sweep — drop everything older than TTL.
+        self.evict_stale(when);
+
+        // (2) If we're updating an existing entry, drop its prior
+        //     position from `order` before re-pushing at the back.
+        //     Linear scan is fine: cap is 256 and this is per-update
+        //     not per-frame.
+        if self.inner.contains_key(&path) {
+            if let Some(pos) = self.order.iter().position(|p| p == &path) {
+                self.order.remove(pos);
+            }
+        } else if self.inner.len() >= ACTIVITY_MAX_ENTRIES {
+            // (3) Cap sweep — evict LRU.
+            if let Some(oldest) = self.order.pop_front() {
+                self.inner.remove(&oldest);
+            }
+        }
+        self.inner.insert(path.clone(), when);
+        self.order.push_back(path);
+    }
+
+    /// Look up the last activity instant for a path, if any.
+    pub fn get(&self, path: &str) -> Option<&web_time::Instant> {
+        self.inner.get(path)
+    }
+
+    /// Number of tracked paths. Useful for tests and metrics.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// True iff the map currently tracks no paths.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Drop entries older than [`ACTIVITY_TTL`]. Called on every
+    /// insert and exposed for tests.
+    fn evict_stale(&mut self, now: web_time::Instant) {
+        // Walk from the front (oldest by touch order). Since `order`
+        // is touch-ordered, once we hit a non-stale entry the rest
+        // are also non-stale. But the wall-clock time of an entry
+        // *can* be older than the head of `order` if a series of
+        // inserts went out of monotonic order on wasm — guard
+        // defensively by checking each entry's recorded instant
+        // rather than assuming touch order ≡ time order.
+        while let Some(front) = self.order.front() {
+            match self.inner.get(front) {
+                Some(t) if now.duration_since(*t) > ACTIVITY_TTL => {
+                    let key = self.order.pop_front().unwrap();
+                    self.inner.remove(&key);
+                }
+                Some(_) => break,
+                None => {
+                    // Defensive: order had a key with no entry.
+                    // Drop and continue.
+                    self.order.pop_front();
+                }
+            }
+        }
+    }
+}
+
+impl Default for ActivityMap {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -114,8 +239,11 @@ pub struct Explorer {
     /// nothing is selected. Swapped (NOT mutated) when selection
     /// changes, so the old handle's [`ReplyRx`] drops cleanly.
     pub subscription_handle: Option<SubscriptionHandle>,
-    /// Last-activity instant per path, used to drive the ● activity dot.
-    pub activity: HashMap<String, web_time::Instant>,
+    /// Last-activity instant per path, used to drive the ● activity
+    /// dot. Bounded by [`ACTIVITY_MAX_ENTRIES`] / [`ACTIVITY_TTL`] to
+    /// stop a long-running webview session from leaking one entry per
+    /// ever-published substrate path. WEFT-243.
+    pub activity: ActivityMap,
     /// Most recent value retrieved for the selected path, used by the
     /// right-hand detail pane. Replaced on every successful read.
     pub selected_value: Option<Value>,
@@ -162,18 +290,16 @@ impl Default for Explorer {
             selected: None,
             tree_children: HashMap::new(),
             subscription_handle: None,
-            activity: HashMap::new(),
+            activity: ActivityMap::new(),
             selected_value: None,
             backend_hint: None,
             pending_lists: Vec::new(),
             // `now - slow tick` so the first update() fires the slow
-            // refresh immediately. `checked_sub` avoids the WASM
-            // `overflow when subtracting duration from instant` panic
-            // when the browser time-origin is fresh; fallback means
-            // the first slow tick fires a `SLOW_TICK` later instead.
-            last_slow_tick: web_time::Instant::now()
-                .checked_sub(SLOW_TICK * 2)
-                .unwrap_or_else(web_time::Instant::now),
+            // refresh immediately. `epoch_minus` handles the WASM
+            // cold-load time-origin underflow (see WEFT-247); the
+            // fallback means the first slow tick fires a `SLOW_TICK`
+            // later instead of immediately.
+            last_slow_tick: epoch_minus(SLOW_TICK * 2),
             workshop_view: workshop::WorkshopView::default(),
             chat_view: chat::ChatView::default(),
             terminal_view: terminal::Terminal::default(),
@@ -497,4 +623,88 @@ fn paint_object_type_badge(ui: &mut egui::Ui, inferred: crate::ontology::Inferre
         ui.label(label);
     });
     ui.add_space(2.0);
+}
+
+#[cfg(test)]
+mod activity_map_tests {
+    //! WEFT-243: bounded activity HashMap. Confirms eviction kicks in
+    //! at the cap so a long-lived session doesn't accumulate one
+    //! entry per ever-published substrate path.
+
+    use super::*;
+
+    #[test]
+    fn insert_under_cap_keeps_all_entries() {
+        let mut m = ActivityMap::new();
+        let now = web_time::Instant::now();
+        for i in 0..16 {
+            m.insert(format!("/path/{i}"), now);
+        }
+        assert_eq!(m.len(), 16);
+        assert!(m.get("/path/0").is_some());
+        assert!(m.get("/path/15").is_some());
+    }
+
+    #[test]
+    fn insert_at_cap_evicts_lru() {
+        let mut m = ActivityMap::new();
+        let now = web_time::Instant::now();
+        // Fill to cap.
+        for i in 0..ACTIVITY_MAX_ENTRIES {
+            m.insert(format!("/path/{i}"), now);
+        }
+        assert_eq!(m.len(), ACTIVITY_MAX_ENTRIES);
+
+        // Push one more. The first inserted (LRU) must drop.
+        m.insert("/path/new".into(), now);
+        assert_eq!(m.len(), ACTIVITY_MAX_ENTRIES);
+        assert!(m.get("/path/0").is_none(), "LRU entry should have been evicted");
+        assert!(m.get("/path/new").is_some());
+        // Tail entry must survive.
+        assert!(m.get(&format!("/path/{}", ACTIVITY_MAX_ENTRIES - 1)).is_some());
+    }
+
+    #[test]
+    fn touching_existing_path_refreshes_lru_position() {
+        let mut m = ActivityMap::new();
+        let now = web_time::Instant::now();
+        for i in 0..ACTIVITY_MAX_ENTRIES {
+            m.insert(format!("/path/{i}"), now);
+        }
+        // Touch /path/0 — should move it to the back of the LRU
+        // queue, so the next insert evicts /path/1 instead.
+        m.insert("/path/0".into(), now);
+        m.insert("/path/new".into(), now);
+        assert!(m.get("/path/0").is_some(), "touched entry should survive");
+        assert!(m.get("/path/1").is_none(), "next-oldest should have been evicted");
+    }
+
+    #[test]
+    fn ttl_sweep_drops_stale_entries_on_insert() {
+        let mut m = ActivityMap::new();
+        // Fake a "stale" instant: now - (TTL + slack). On wasm this
+        // could underflow, so use the safe `epoch_minus` helper.
+        let stale = epoch_minus(ACTIVITY_TTL + Duration::from_secs(5));
+        for i in 0..4 {
+            m.insert(format!("/old/{i}"), stale);
+        }
+        // Now drop a fresh entry — TTL sweep should evict the
+        // stale ones.
+        let fresh = web_time::Instant::now();
+        m.insert("/fresh".into(), fresh);
+        assert!(m.get("/fresh").is_some());
+        for i in 0..4 {
+            assert!(
+                m.get(&format!("/old/{i}")).is_none(),
+                "stale entry /old/{i} should have been evicted"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_after_construct() {
+        let m = ActivityMap::new();
+        assert!(m.is_empty());
+        assert_eq!(m.len(), 0);
+    }
 }
