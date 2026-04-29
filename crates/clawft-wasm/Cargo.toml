@@ -79,3 +79,12 @@ wat = "1"
 dlmalloc = { version = "0.2", features = ["global"] }
 talc = { version = "4.4", optional = true }
 lol_alloc = { version = "0.4", optional = true }
+
+# WEFT-388 (M5-A) — browser regression suite.
+# `wasm-bindgen-test` is wasm32-only by construction. Adding it under
+# `[target.'cfg(target_arch = "wasm32")'.dev-dependencies]` lets cargo
+# resolve the test target on native (where the file is a no-op via
+# `#![cfg(target_arch = "wasm32")]`) without dragging the harness into
+# native test runs.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
