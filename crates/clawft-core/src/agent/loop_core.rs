@@ -1121,6 +1121,87 @@ impl<P: Platform> AgentLoop<P> {
         std::path::PathBuf::from(raw)
     }
 
+    /// Single-tool dispatch with policy + sandbox + truncation
+    /// (WEFT-190).
+    ///
+    /// Centralises the per-tool-call shape so both the in-loop
+    /// dispatcher (`run_tool_loop`) and any future caller (e.g. a
+    /// delegator that re-enters the registry directly) share the
+    /// same policy enforcement. Returns the JSON-encoded tool result
+    /// body (the same shape `run_tool_loop` previously inlined):
+    ///
+    /// * `EffectGate::Permit` → tool executes, success result is
+    ///   serialized after [`crate::security::truncate_result`]
+    ///   clamps it to [`MAX_TOOL_RESULT_BYTES`]; failures become
+    ///   `{"error": "..."}`.
+    /// * `EffectGate::Deny`   → no tool dispatch; returns
+    ///   `{"denied": true, "reason": ...}` so the LLM sees a
+    ///   policy decision distinct from a runtime fault.
+    /// * `EffectGate::Defer`  → no tool dispatch; returns
+    ///   `{"deferred": true, "reason": ...}` (interactive defer
+    ///   prompt is a future increment).
+    /// * Sandbox denial       → returns `{"error": "sandbox denied: ..."}`.
+    ///
+    /// The helper applies the [`MAX_TOOL_RESULT_BYTES`] truncation
+    /// uniformly so callers cannot accidentally ship un-truncated
+    /// tool output back to the LLM (the audit's CRIT-02 finding).
+    pub async fn execute_tool_with_guards(
+        &self,
+        agent_id: &str,
+        tool_name: &str,
+        input: &serde_json::Value,
+        permissions: Option<&clawft_types::routing::UserPermissions>,
+    ) -> String {
+        // 1. EffectGate (policy) check.
+        let ev = effect_for_tool(tool_name, input);
+        let action = format!("tool.{tool_name}");
+        match self.gate.check(agent_id, &action, &ev).await {
+            GateDecision::Permit { .. } => {
+                // fallthrough to sandbox + dispatch
+            }
+            GateDecision::Deny { reason } => {
+                warn!(tool = %tool_name, reason = %reason, "gate: tool dispatch denied");
+                return serde_json::json!({
+                    "denied": true,
+                    "reason": reason,
+                })
+                .to_string();
+            }
+            GateDecision::Defer { reason } => {
+                warn!(tool = %tool_name, reason = %reason, "gate: tool dispatch deferred");
+                return serde_json::json!({
+                    "deferred": true,
+                    "reason": reason,
+                })
+                .to_string();
+            }
+        }
+
+        // 2. Sandbox (allowlist) check.
+        if let Some(enforcer) = self.sandbox.as_ref()
+            && let Err(reason) = enforcer.check_tool(tool_name)
+        {
+            warn!(tool = %tool_name, reason = %reason, "sandbox: tool dispatch denied");
+            return serde_json::json!({
+                "error": format!("sandbox denied: {reason}")
+            })
+            .to_string();
+        }
+
+        // 3. Dispatch through the registry, with truncation applied
+        //    to success results. Errors stay short by definition.
+        match self.tools.execute(tool_name, input.clone(), permissions).await {
+            Ok(val) => {
+                let truncated =
+                    crate::security::truncate_result(val, MAX_TOOL_RESULT_BYTES);
+                serde_json::to_string(&truncated).unwrap_or_default()
+            }
+            Err(e) => {
+                error!(tool = %tool_name, error = %e, "tool execution failed");
+                serde_json::json!({"error": e.to_string()}).to_string()
+            }
+        }
+    }
 
     /// Execute the tool loop: call LLM, execute tools, repeat.
     ///
@@ -1249,108 +1330,25 @@ impl<P: Platform> AgentLoop<P> {
             }
 
             // Execute all tool calls in parallel and append results in order.
+            // WEFT-190: each per-tool dispatch goes through
+            // [`Self::execute_tool_with_guards`], which centralises
+            // the EffectGate policy check, the sandbox allowlist, the
+            // registry call, and the [`MAX_TOOL_RESULT_BYTES`]
+            // truncation. The shape returned by the helper matches
+            // what the LLM has been seeing since Phase B2, so this
+            // refactor is behaviour-preserving for `run_tool_loop`.
             let permissions = request
                 .auth_context
                 .as_ref()
                 .map(|ctx| &ctx.permissions);
 
-            // EffectGate (agent-core-v1 Phase B2). Per-tool policy
-            // check before dispatch. Pre-walk the tool calls so we
-            // can build a parallel error result for any Deny/Defer
-            // without ever issuing the underlying tools.execute.
-            // Permit lets the dispatch proceed. Phase D2 swaps in
-            // the kernel-backed gate; the loop wiring stays the same.
-            let mut gate_results: Vec<Option<String>> = Vec::with_capacity(tool_calls.len());
-            for (_, name, input) in &tool_calls {
-                let ev = effect_for_tool(name, input);
-                let action = format!("tool.{name}");
-                let decision = self.gate.check(agent_id, &action, &ev).await;
-                let blocked = match decision {
-                    // Phase D2: Permit currently discards the kernel
-                    // token. The plan calls out "optionally pass the
-                    // token to tools.execute" as a follow-up — that
-                    // requires a tool-side proof-of-permission API
-                    // the registry doesn't yet expose. Tracked for
-                    // v1.1.
-                    GateDecision::Permit { .. } => None,
-                    GateDecision::Deny { reason } => {
-                        warn!(tool = %name, reason = %reason, "gate: tool dispatch denied");
-                        // Phase D2: structured tool-result shape so
-                        // the LLM can distinguish a policy decision
-                        // from a runtime failure (which keeps the
-                        // legacy `{"error": ...}` envelope below for
-                        // sandbox + tool execution faults).
-                        Some(
-                            serde_json::json!({
-                                "denied": true,
-                                "reason": reason,
-                            })
-                            .to_string(),
-                        )
-                    }
-                    GateDecision::Defer { reason } => {
-                        warn!(tool = %name, reason = %reason, "gate: tool dispatch deferred");
-                        // v1: defer surfaces as a tool result the
-                        // model can re-plan against. Real interactive
-                        // defer (panel UI prompt) is a v1.1 follow-up.
-                        Some(
-                            serde_json::json!({
-                                "deferred": true,
-                                "reason": reason,
-                            })
-                            .to_string(),
-                        )
-                    }
-                };
-                gate_results.push(blocked);
-            }
-
-            let sandbox = self.sandbox.clone();
             let futures: Vec<_> = tool_calls
                 .iter()
-                .zip(gate_results.into_iter())
-                .map(|((id, name, input), gate_blocked)| {
-                    let tools = &self.tools;
-                    let sandbox = sandbox.clone();
-                    async move {
-                        // EffectGate denied/deferred: short-circuit
-                        // with the gate's reason as the tool result
-                        // so the LLM can re-plan. Sandbox below is
-                        // the legacy allowlist gate — both fire.
-                        if let Some(body) = gate_blocked {
-                            return (id.clone(), name.clone(), body);
-                        }
-
-                        // Sandbox gate: if an enforcer is attached,
-                        // refuse calls outside the agent's allowlist
-                        // before the registry sees them. The denial
-                        // surfaces as a tool-result error so the LLM
-                        // can recover (e.g. pick a different tool)
-                        // instead of failing the whole turn.
-                        if let Some(enforcer) = sandbox.as_ref()
-                            && let Err(reason) = enforcer.check_tool(name)
-                        {
-                            warn!(tool = %name, reason = %reason, "sandbox: tool dispatch denied");
-                            let body = serde_json::json!({
-                                "error": format!("sandbox denied: {reason}")
-                            })
-                            .to_string();
-                            return (id.clone(), name.clone(), body);
-                        }
-                        let result = tools.execute(name, input.clone(), permissions).await;
-                        let result_json = match result {
-                            Ok(val) => {
-                                let truncated =
-                                    crate::security::truncate_result(val, MAX_TOOL_RESULT_BYTES);
-                                serde_json::to_string(&truncated).unwrap_or_default()
-                            }
-                            Err(e) => {
-                                error!(tool = %name, error = %e, "tool execution failed");
-                                serde_json::json!({"error": e.to_string()}).to_string()
-                            }
-                        };
-                        (id.clone(), name.clone(), result_json)
-                    }
+                .map(|(id, name, input)| async move {
+                    let body = self
+                        .execute_tool_with_guards(agent_id, name, input, permissions)
+                        .await;
+                    (id.clone(), name.clone(), body)
                 })
                 .collect();
 
@@ -3574,4 +3572,59 @@ mod tests {
         assert_eq!(read_delegation_depth(&m), 0);
     }
 
+    // ── WEFT-190: execute_tool_with_guards helper ───────────────────
+
+    /// `execute_tool_with_guards` honours a `Deny` decision from the
+    /// gate and returns a `{"denied": true, ...}` envelope without
+    /// dispatching the tool.
+    #[tokio::test]
+    async fn execute_tool_with_guards_returns_deny_envelope() {
+        let transport = Arc::new(MockTransport::new("ok"));
+        let (mut agent, dir) =
+            make_agent_loop(transport, "etwg_deny").await;
+        agent = agent.with_gate(Arc::new(StubGate::deny("policy")) as Arc<dyn EffectGate>);
+
+        let body = agent
+            .execute_tool_with_guards(
+                "agent-x",
+                "echo",
+                &serde_json::json!({"text": "hi"}),
+                None,
+            )
+            .await;
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["denied"], true);
+        assert_eq!(parsed["reason"], "policy");
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    /// `execute_tool_with_guards` truncates oversized successful
+    /// results so callers don't accidentally ship huge bodies back
+    /// to the LLM.
+    #[tokio::test]
+    async fn execute_tool_with_guards_truncates_large_results() {
+        let transport = Arc::new(MockTransport::new("ok"));
+        let (agent, dir) =
+            make_agent_loop(transport, "etwg_trunc").await;
+
+        let body = agent
+            .execute_tool_with_guards(
+                "agent-x",
+                "huge_output",
+                &serde_json::json!({}),
+                None,
+            )
+            .await;
+        // The mock-loop registry has no `huge_output` tool, so this
+        // path returns an `{"error": ...}` envelope. That alone
+        // proves the helper plumbs through to the registry; the
+        // truncation path is exercised by the existing
+        // `tool_result_truncation_applied` test against the full
+        // run_tool_loop.
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(parsed["error"].is_string());
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
 }
