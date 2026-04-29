@@ -26,7 +26,9 @@ impl Default for CaptureConfig {
 /// Microphone audio capture stream.
 ///
 /// Wraps cpal input stream. Currently a stub -- real cpal integration
-/// will be added after VP (pre-implementation validation) completes.
+/// is deferred to the 0.8.x in-process voice backend (see ADR-053).
+/// 0.7.0 ships with substrate-side capture + transcription, so this
+/// scaffolding is a placeholder for the second `SttBackend` implementor.
 pub struct AudioCapture {
     config: CaptureConfig,
     active: bool,
@@ -40,7 +42,8 @@ impl AudioCapture {
 
     /// Start capturing audio.
     pub fn start(&mut self) -> Result<(), String> {
-        // Stub: real cpal stream creation goes here after VP
+        // Stub: real cpal stream creation deferred to 0.8.x in-process
+        // backend (see ADR-053).
         self.active = true;
         tracing::info!(
             sample_rate = self.config.sample_rate,
