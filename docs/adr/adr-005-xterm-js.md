@@ -1,8 +1,10 @@
 # ADR-005: xterm.js for WeftOS Console
 
 **Date**: 2026-03-28
-**Status**: Accepted
+**Status**: Superseded by egui shell (2026-04-28)
 **Deciders**: Sprint 11 Symposium Track 4 (UI/UX Design)
+
+> **Superseded note (2026-04-28, WEFT-242)**: The xterm.js + Tauri WebView console described below is no longer the canon path. WeftOS now ships an egui-native shell (`crates/clawft-gui-egui/`) backed by `alacritty_terminal` for the terminal pane, hosted natively or via the VSCode panel that loads the WASM build (see `extensions/vscode-weft-panel/`). Any new console work must target the egui shell, not xterm.js + Tauri. ADR-001 row-aligned canon primitives are the current UI canon; ADR-016 describes the surface IR. This ADR is retained for historical context only.
 
 ## Context
 

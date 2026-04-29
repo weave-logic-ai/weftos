@@ -10,15 +10,15 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | [ADR-002](adr-002-cargo-dist.md) | cargo-dist for release artifact generation | Accepted | Release | Track 3 |
 | [ADR-003](adr-003-codemirror.md) | CodeMirror 6 over Monaco for code editor block | Accepted | GUI | Track 4 |
 | [ADR-004](adr-004-no-dockview.md) | No dockview -- CSS Grid + custom Lego engine | Accepted | GUI | Track 4 |
-| [ADR-005](adr-005-xterm-js.md) | xterm.js for WeftOS console | Accepted | GUI | Track 4 |
+| [ADR-005](adr-005-xterm-js.md) | xterm.js for WeftOS console | Superseded by egui shell | GUI | Track 4 |
 | [ADR-006](adr-006-custom-block-renderer.md) | Custom block renderer (json-render pattern) | Accepted | GUI | Track 4 |
-| [ADR-007](adr-007-zustand-tauri-events.md) | Zustand + Tauri events for state management | Accepted | GUI | Track 4 |
+| [ADR-007](adr-007-zustand-tauri-events.md) | Zustand + Tauri events for state management | Superseded by egui shell | GUI | Track 4 |
 | [ADR-008](adr-008-weftos-cloud-side.md) | WeftOS cloud-side for Mentra (not on-device) | Accepted | Integration | Track 6 |
 | [ADR-009](adr-009-sparse-lanczos.md) | Sparse Lanczos for spectral analysis | Accepted | Performance | Track 7 |
 | [ADR-010](adr-010-keep-tokio.md) | Keep Tokio (do not adopt Asupersync) | Accepted | Architecture | Track 9 |
 | [ADR-011](adr-011-no-frankensearch.md) | Do not add FrankenSearch (raw HNSW sufficient) | Accepted | Performance | Track 9 |
 | [ADR-012](adr-012-inline-sha3.md) | Inline sha3 / blake3 fallback for rvf-crypto | Accepted | Release | Tracks 3, 8 |
-| [ADR-013](adr-013-json-block-descriptor.md) | JSON block descriptor architecture | Accepted | GUI | Track 4, Design Notes |
+| [ADR-013](adr-013-json-block-descriptor.md) | JSON block descriptor architecture | Superseded by egui shell | GUI | Track 4, Design Notes |
 | [ADR-014](adr-014-fumadocs.md) | Fumadocs as single documentation source of truth | Accepted | Documentation | Track 5, Unification Plan |
 | [ADR-015](adr-015-three-property-web.md) | Three-property web architecture | Accepted | Documentation | Web Presence Strategy |
 | [ADR-016](adr-016-multi-target-theming.md) | Multi-target theming system | Accepted | GUI | Track 4, Theming Spec |
