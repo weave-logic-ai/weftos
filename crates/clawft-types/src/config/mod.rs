@@ -406,6 +406,19 @@ pub struct ToolsConfig {
     /// URL safety policy (SSRF protection).
     #[serde(default, alias = "urlPolicy")]
     pub url_policy: UrlPolicyConfig,
+
+    /// Tools allowed by `weft mcp-server` over the wire.
+    ///
+    /// Each entry is a glob pattern (`*`, `?`). When the list is empty
+    /// (default), all tools registered in the daemon are exposed —
+    /// preserves prior behavior for upgrades. When non-empty, only
+    /// matching tools are visible to MCP clients and other tools are
+    /// rejected with `PermissionDenied` before execution.
+    ///
+    /// Used by [`PermissionFilter::from_patterns`] in
+    /// `crates/clawft-services/src/mcp/middleware.rs` (WEFT-189).
+    #[serde(default, alias = "allowedTools")]
+    pub allowed_tools: Vec<String>,
 }
 
 /// Web tools configuration.
