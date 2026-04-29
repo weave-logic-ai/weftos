@@ -159,5 +159,5 @@ Full report: `k2-symposium/08-symposium-results-report.md`
 - [Kernel Modules Reference](./kernel-modules.md) -- per-module deep dive
 - [Integration Patterns](./integration-patterns.md) -- RVF, chain, tree, governance
 - [K-Phase Status](./k-phases.md) -- what's implemented vs pending
-- [ADR-028: WeftOS Kernel](../architecture/adr-028-weftos-kernel.md) -- design rationale
+- [ADR-049: WeftOS Kernel](../adr/adr-049-weftos-kernel.md) -- design rationale (formerly `architecture/adr-028-weftos-kernel.md`; renumbered + relocated 2026-04-28 / WEFT-140 to deduplicate the ADR-028 number)
 - [K2 Symposium Results](./k2-symposium/08-symposium-results-report.md) -- design decisions for K3+

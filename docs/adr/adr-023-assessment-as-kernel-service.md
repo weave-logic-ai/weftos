@@ -1,9 +1,23 @@
 # ADR-023: Assessment as a Kernel Service
 
-**Date**: 2026-04-03
-**Status**: Proposed
-**Deciders**: Architecture review, Sprint 14
-**Depends-On**: ADR-020, ADR-021, ADR-022
+**Date**: 2026-04-03 (Proposed) / 2026-04-28 (Accepted)
+**Status**: Accepted (as of 2026-04-28, WEFT-141)
+**Deciders**: Architecture review, Sprint 14; accepted at the 0.7.0
+release-gate now that the dependent mesh-assess code (sprint 16,
+v0.6.13–v0.6.19) has shipped against this decision.
+**Depends-On**: ADR-048 (Kernel Phase Responsibilities — formerly
+ADR-020, renumbered 2026-04-28 / WEFT-140), ADR-021 (CLI Kernel
+Compliance), ADR-022 (ExoChain Mandatory Audit)
+
+## Acceptance rationale (2026-04-28)
+
+The kernel-governance audit
+(`.planning/reviews/0.7.0-release-gate/02-kernel-governance.md`)
+records that mesh assessment transport (mesh-assess, AssessmentSync
+frame 0x0E) ships under this ADR's design and is wired into boot at
+phase 5d. The shipping code is therefore the source-of-truth and the
+ADR is flipped from "Proposed" to "Accepted" without further design
+revision. No outstanding open questions block acceptance.
 
 ## Context
 

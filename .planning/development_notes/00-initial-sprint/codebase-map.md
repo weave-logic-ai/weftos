@@ -1,5 +1,18 @@
 # clawft Codebase Map
 
+> **HISTORICAL — 2026-02-17 snapshot (WEFT-25, archived 2026-04-28).**
+> This document is a point-in-time snapshot of the original Python →
+> Rust port effort, taken when the project was still pinned to the
+> nanobot lineage. Counts, crate names, and architectural assumptions
+> below are out of date relative to the WeftOS rebrand and the 0.7.0
+> release-gate state. Do not treat as living documentation.
+>
+> **Current source-of-truth:**
+> - `.planning/reviews/0.7.0-release-gate/README.md` and the
+>   per-workstream audits under that directory.
+> - `docs/clawft/architecture.mdx` (live architecture).
+> - `docs/weftos/architecture.md` (kernel/governance overview).
+
 **Generated**: 2026-02-17
 **Workspace root**: `/home/aepod/dev/clawft/`
 **Rust edition**: 2024, MSRV 1.93

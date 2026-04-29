@@ -6,6 +6,46 @@
 **Orchestrator**: `.planning/sparc/02-improvements-overview/00-orchestrator.md`
 **Test Baseline**: 2,075+ tests at sprint start
 **Created**: 2026-02-19
+**Closed**: 2026-04-28 (WEFT-24)
+**Status**: CLOSED — historical reference only
+
+---
+
+## Closure Summary (2026-04-28)
+
+This sprint tracker is **closed for live tracking**. It is retained
+verbatim as a historical record of the Phase-5 improvements sprint
+that ran from late February 2026 through the lead-up to the 0.7.0
+release gate.
+
+**Where to look now:**
+- The 0.7.0 release-gate audit
+  (`.planning/reviews/0.7.0-release-gate/`) is the current
+  source-of-truth for outstanding work. The audits enumerate what
+  shipped, what lingered, and what was deferred per workstream.
+- Live tracking happens in **Plane** (`weftos` workspace, project
+  WeftOS). Every audit-finding TODO from this sprint that was not
+  resolved by the time of the audit was lifted into a Plane work
+  item in cycle `0.7.x`, `0.8.x`, `0.9.x`, or `1.0.x`. Search the
+  cycle by audit-finding label to find descendants of any item
+  below.
+- The MVP / Full-Vision checkboxes preserved below reflect the
+  state at the time work paused on this tracker; they are not
+  authoritative — see the per-workstream audits in
+  `.planning/reviews/0.7.0-release-gate/` for shipped state.
+
+The unchecked MVP / Full-Vision boxes (e.g. live hot-reload smoke,
+FlowDelegator end-to-end against a real provider, F9a MCP client
+endpoint smoke) were either superseded by the 0.7.0 release-gate
+audit work or covered by Plane items in later cycles. Do not treat
+the unchecked state as "still in flight" — it is a snapshot.
+
+Workstreams A, B, I, J (rows below) are reflected in the
+ws01-core/ws05-channels/ws06-memory/ws15-mcp audits at
+`.planning/reviews/0.7.0-release-gate/0{1,5,6}*.md` and
+`.../15-mcp-coordination.md`. Subsequent workstreams (C, D, E, F,
+H, K, L, M) are similarly captured by their respective
+release-gate audits.
 
 ---
 

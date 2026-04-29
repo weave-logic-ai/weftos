@@ -3,7 +3,7 @@
 **Date**: 2026-04-03
 **Status**: Accepted
 **Deciders**: Architecture review, Sprint 14
-**Depends-On**: ADR-020 (Kernel Phase Responsibilities)
+**Depends-On**: ADR-048 (Kernel Phase Responsibilities) — formerly numbered ADR-020; renumbered 2026-04-28 (WEFT-140) to deduplicate.
 
 ## Context
 

@@ -1,9 +1,18 @@
-# ADR-028: WeftOS Kernel Architecture
+# ADR-049: WeftOS Kernel Architecture
 
-**Status**: Proposed
-**Date**: 2026-02-28
+**Status**: Accepted (architectural overview; supersedes the earlier
+"Proposed" status now that K0–K5 have shipped)
+**Date**: 2026-02-28 (originally proposed); 2026-04-28 (status flip
+on consolidation)
 **Deciders**: Core team
 **SPARC Workstream**: W-KERNEL (`.planning/sparc/weftos/`)
+**Renumbered / Relocated**: 2026-04-28 (WEFT-140) — this document
+was originally `docs/architecture/adr-028-weftos-kernel.md`, which
+collided in number with ADR-028 (Mandatory Dual Signing) under
+`docs/adr/`. Both ADRs are now under `docs/adr/`; this one is
+ADR-049. The file path was the prior cross-reference target in
+`docs/weftos/architecture.md` and the K0–K3 gap-analysis notes;
+those references have been updated.
 
 ---
 
