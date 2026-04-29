@@ -4,6 +4,13 @@
 **Status**: Accepted
 **Deciders**: K2 Symposium (D11), K5 Symposium Security Panel (D9, S5)
 **Depends-On**: ADR-025 (Ed25519 Node Identity), ADR-029 (weftos-rvf-crypto Fork Strategy)
+**Note (2026-04-28, WEFT-140)**: ADR-028 was previously shared with
+"WeftOS Kernel Architecture", which lived under
+`docs/architecture/`. That document has been moved into this
+directory and renumbered to ADR-049; this dual-signing ADR keeps the
+028 slot since it is the K2-symposium-derived decision dependency
+chain referenced by the rest of the security ADR family
+(ADR-025/029/030).
 
 ## Context
 

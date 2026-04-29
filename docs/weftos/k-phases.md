@@ -1,8 +1,12 @@
 # WeftOS K-Phase Status
 
-Implementation status for each kernel phase. K0 through K2b are complete with
-373+ passing tests. K3+ phases are stubbed with types and traits but not yet
-wired to live backends.
+Implementation status for each kernel phase. As of 0.7.0
+(2026-04-28), K0 through K5 are complete and K6 has shipped Phase 1
+(types, traits, TCP/WS transport, 136 tests). The earlier "K3+
+stubbed" wording was accurate at the K2 milestone; this doc was
+allowed to drift through K3/K4/K5 and was corrected in WEFT-138 against
+the `02-kernel-governance.md` audit and the `k0-k5-final-gap-analysis`
+notes.
 
 ---
 
@@ -58,11 +62,22 @@ wired to live backends.
 
 ### K2.1: Symposium Implementation
 
-**Status**: PENDING
+**Status**: COMPLETE
 
 **Scope**: Implement breaking changes and quick wins from the K2 Symposium
 before K3 begins. See `docs/weftos/k2-symposium/08-symposium-results-report.md`
 for full decision rationale.
+
+Shipped:
+- `SpawnBackend` enum on `SpawnRequest` (D3/C1) with `Native` implemented
+  and `Wasm`/`Container`/`Tee`/`Remote` returning `BackendNotAvailable`.
+- Post-quantum dual-signing scaffolding (D11/C6); see
+  `adr-028-post-quantum-dual-signing.md` for the policy that K2.1
+  enables.
+- `MessageTarget::Service(name)` and `ServiceMethod` routing through
+  `A2ARouter` (D1/D19).
+- `ServiceEntry` as first-class registry concept, decoupled from PID.
+- `AuditLevel` plumbing for chain-event severity.
 
 Decisions addressed in this phase:
 
@@ -96,11 +111,12 @@ Key deliverables:
 
 ---
 
-## Stubbed Phases (Types + Traits Exist, Not Wired to Live Backends)
+## K3+ Phases (Live Backends Wired)
 
 ### K3: WASM Sandbox
 
-**Status**: COMPLETE (types, wasmtime runner, fuel metering, sandbox tests pass)
+**Status**: COMPLETE (Wasmtime-backed runner, fuel metering, gates, chain
+logging, contracts; tests pass with `wasm-sandbox` feature).
 
 **File**: `wasm_runner.rs` (~530 lines)
 
@@ -110,14 +126,15 @@ What exists:
 - `WasmSandboxConfig` with configurable limits
 - `WasmValidation` module validation checks
 - Full test suite for type API
-
-What's needed for K3 completion:
-- Wasmtime runtime integration (behind `wasm-sandbox` feature)
-- Tool registry for WASM modules
-- Fuel accounting connected to resource limits
-- Chain logging for tool execution events
-- Gate check before WASM tool execution
-- Tree registration under `/kernel/tools/`
+- Wasmtime runtime integration (behind `wasm-sandbox` feature),
+  upgraded from wasmtime 29 → 33; WASI no-preopens.
+- Tool registry for WASM modules.
+- Fuel accounting connected to resource limits.
+- Chain logging for tool execution events.
+- Gate check before WASM tool execution (dual-layer A2ARouter gate, C4).
+- Tree registration under `/kernel/tools/`.
+- Chain-anchored service contracts (C3) via `service.contract.register`.
+- Shell→WASM pipeline (C5).
 
 **Symposium additions** (K2 Symposium decisions):
 - **C2**: `ServiceApi` trait -- internal API surface that protocol adapters
@@ -161,7 +178,10 @@ Additional changes:
 
 ### K4: Containers
 
-**Status**: COMPLETE (config validation, lifecycle management, health propagation)
+**Status**: COMPLETE (config validation, lifecycle management, health
+propagation, ChainAnchor scaffolding). Live Docker/Podman integration is
+gated behind a real container daemon and is exercised manually rather
+than in CI.
 
 **File**: `container.rs` (~600 lines)
 
@@ -171,13 +191,18 @@ What exists:
 - `ManagedContainer` state tracking
 - `ContainerState` state machine
 - Port mapping, volume mount, restart policy types
+- `ChainAnchor` trait + `MockAnchor` (`chain.rs:2180-2212`).
 
-What's needed for K4 completion:
-- Docker/Podman API client (bollard crate or shell exec)
-- Container health check integration with HealthSystem
-- Chain logging for container lifecycle events
-- Tree registration under `/kernel/services/{container_name}`
-- Gate check before container operations
+Known limitations / deferred:
+- Live Docker/Podman API client (bollard / shell exec) — interface in
+  place, requires running container daemon for end-to-end smoke.
+- Container health-check integration with `HealthSystem` is wired for
+  the trait surface; live health propagation is exercised via manual
+  smoke runs.
+- Chain logging for container lifecycle events ships under K4; tree
+  registration under `/kernel/services/{container_name}` and gate
+  checks before container operations are wired through the standard
+  K2/ExoChain plumbing.
 
 **Symposium additions** (K2 Symposium decisions):
 - **C7**: `ChainAnchor` trait for blockchain anchoring -- chain-agnostic
@@ -192,7 +217,8 @@ What's needed for K4 completion:
 
 ### K5: App Framework + Clustering
 
-**Status**: COMPLETE (manifest parsing, install/start/stop lifecycle, agent spawning)
+**Status**: COMPLETE (manifest parsing, install/start/stop/remove/list/inspect
+lifecycle, namespaced agents/tools, partial-start rollback, lifecycle hooks).
 
 **File**: `app.rs` (~980 lines)
 
@@ -201,26 +227,32 @@ What's needed for K4 completion:
 > original application framework with multi-node distribution.
 
 What exists:
-- `AppManager` with install/start/stop/uninstall methods
-- `AppManifest` parsing from `weftapp.toml`
-- `InstalledApp` tracking with state machine
-- Agent, service, and tool spec types
+- `AppManager` with install/start/stop/uninstall methods.
+- `AppManifest` parsing from `weftapp.toml` (real file I/O).
+- `InstalledApp` tracking with state machine.
+- Agent, service, and tool spec types.
+- Agent spawning from app manifests via `Supervisor`.
+- Service registration from app manifests.
+- Tool loading (native, WASM, API) from tool specs.
+- Chain logging for app lifecycle events.
+- Tree registration under `/apps/{name}`.
 
-What's needed for K5 completion:
-- TOML manifest parsing wired to real file I/O
-- Agent spawning from app manifests via Supervisor
-- Service registration from app manifests
-- Tool loading (native, WASM, API) from tool specs
-- Chain logging for app lifecycle events
-- Tree registration under `/apps/{name}`
-- **Crypto-signed app bundles**: RVF-signed bundles of config + executables
-  that live on-chain. Apps (weft, openclaw, claudecode, etc.) are verified
-  against their chain-anchored signatures before installation.
-- **Clustering**: Multi-node service discovery and cross-node routing for
-  distributed app deployment. Extends ServiceRegistry and A2ARouter for
-  remote operation.
-- **SONA integration**: Wire self-optimizing agent framework against the
-  training data accumulated during K3/K4.
+Known limitations / deferred:
+- **Crypto-signed app bundles**: RVF-signed bundles of config +
+  executables that live on-chain. Apps (weft, openclaw, claudecode,
+  etc.) are intended to be verified against their chain-anchored
+  signatures before installation; the verification path is in place
+  for the trait, but production-grade bundle signing is post-0.7.
+- **Clustering**: Multi-node service discovery and cross-node routing
+  for distributed app deployment. The `cluster` feature ships with
+  ServiceRegistry / A2ARouter remote-operation hooks; full
+  partition-tolerance and split-brain handling are post-0.7 (tracked
+  in the K6 audit).
+- **SONA integration**: Self-optimizing agent framework against
+  K3/K4 training data — the reuptake spike landed in late K4 (D18); the
+  full K5 wire-through is post-0.7.
+- **`docs/guides/kernel.md`**: operator-facing kernel guide is the K5
+  documentation deliverable; landed in 0.7.0 (see WEFT-139).
 
 ### K6: Deep Networking + Replication
 
