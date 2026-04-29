@@ -5,7 +5,7 @@
 #   ./scripts/deploy/vps-deploy.sh [OPTIONS]
 #
 # Options:
-#   --image IMAGE    Docker image to deploy (default: ghcr.io/clawft/clawft:latest)
+#   --image IMAGE    Docker image to deploy (default: ghcr.io/weave-logic-ai/weftos:latest)
 #   --port PORT      Host port for the gateway (default: 8080)
 #   --name NAME      Container name (default: weft)
 #   --config DIR     Host directory for config (default: ~/.clawft)
@@ -20,7 +20,7 @@
 set -euo pipefail
 
 # Defaults
-IMAGE="ghcr.io/clawft/clawft:latest"
+IMAGE="ghcr.io/weave-logic-ai/weftos:latest"
 PORT="8080"
 CONTAINER_NAME="weft"
 CONFIG_DIR="$HOME/.clawft"

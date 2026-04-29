@@ -1,444 +1,692 @@
 ---
 title: Release Notes
-description: Complete version history for WeftOS from initial development through v0.6.13.
+description: Auto-generated from CHANGELOG.md. Complete WeftOS version history.
 ---
 
 # Release Notes
 
-## v0.6.13 — Adaptive HNSW: Tiered Dimensional Search
+> This page is generated from `CHANGELOG.md` by
+> `scripts/build-releases-mdx.sh`. Edits made directly here will be
+> overwritten on the next docs build. To change a release entry, edit
+> `CHANGELOG.md` and re-run the script.
+
+## v0.6.19
+
+*2026-04-22*
+
+Rollup of the `development-0.7.0` work stream onto the 0.6 release line. Ships the M1.5 app-layer trilogy, the 21-item canon UI primitive system, the built-in system components, a sensor framework, ExoChain stream-anchor auditing, eight EML-swap learnable-model wirings, and two late kernel-plumbing fixes (cluster peer persistence + optional TCP IPC relay). Also merges forward the v0.6.18 graphify fix (originally cut on an orphan commit that never reached `master`).
+
+### Added
+
+#### M1.5 — App Layer Trilogy
+- **`clawft-app` crate** — manifest parser + JSON registry for declarative system apps.
+- **`clawft-substrate` crate** — kernel adapter refactor + substrate RPCs (`read`, `subscribe`, `publish`, `notify`). Relays externally-published paths to the GUI.
+- **`clawft-surface` crate** — description IR + composer + binding evaluator. New UI composer primitives: `ui://heatmap`, `ui://waveform`.
+- Unified `Mode` / `Input` / `OntologySnapshot` / `Permission` across surface / app / substrate.
+- Broke the `surface → gui-egui` dep cycle; wasm-gated substrate.
+- **WeftOS Admin app** — manifest + surface description + Desktop Apps section, rendered end-to-end from the surface IR, covered by integration test.
+
+#### Canon Primitive System (21 components)
+- `CanonWidget` trait + `CanonResponse` + `Pressable` reference implementation.
+- Retrofit pass: 7–8 existing blocks wrapped in the trait.
+- New primitives: Field / Toggle / Select / Slider / Grid / Dock / Sheet / Modal / Media / Canvas / Tabs (11).
+- Canon demo lab — 20 primitive demos in the WeftOS panel.
+
+#### GUI + VSCode Extension
+- `clawft-gui-egui` now compiles to `wasm32-unknown-unknown`.
+- VSCode extension (`weft-panel`) hosts the egui bundle in Cursor.
+- Tray chips open ontology-backed detail panels.
+- ToF tray chip with native 8×8 heatmap panel.
+- WeftOS theming + `weft-demo-lab` bin hosting egui's full demo; demo lab Fractal / HTTP / 3D / Color tabs + theme-toggle A/B.
+- M1 wasm-compat polish: web-time, PNG logo, extension hotload.
+
+#### M1.5.1 — Built-in System Components (α)
+- `NetworkAdapter` — WiFi/ethernet/battery via `/sys/class`.
+- `BluetoothAdapter` — host-local via `/sys/class`.
+- Mesh + chain adapters; dropped the DeFi vapor chip.
+- Admin-app affordances end-to-end + layout polish.
+- wasm-safe `SystemTime` in `clawft-app` registry.
+
+#### Sensor Framework
+- `PhysicalSensorAdapter` trait.
+- `MicrophoneAdapter` preview + extension RPC allowlist extension.
+
+#### ExoChain + IPC
+- **StreamWindowCommit anchor service** — large streams (audio PCM, sensor batches) now auditable against the chain without bloating `rvf` with per-frame signatures. BLAKE3 rolling window commits.
+- **`agent.register` + signed IPC envelopes** for cross-agent message integrity.
+- **`ipc.subscribe_stream`** — external-socket streaming subscribers.
+- **`[kernel.ipc_tcp]`** — optional TCP relay for the daemon's JSON-RPC socket. Transparent byte-copy to the unix socket for Windows/WSL and remote bridges. Auth/policy stays on the unix path.
+
+#### Kernel
+- **Cluster peer persistence** — `ClusterMembership` persists to `.weftos/runtime/cluster_peers.json` via atomic tmp+rename on every add/remove/state-change, and rehydrates on boot. Fixes the regression where `weaver kernel start` reported `cluster: degraded - no healthy cluster nodes` after every restart because the in-memory peer map was wiped.
+- **`clawft-treecalc` crate** — lifts `Form` + triage into its own module.
+
+#### EML-Swap Learnable-Model Wirings (Finding #5 + #7 + #9)
+Eight learnable models replace hard-coded constants:
+- `GovernanceScorerModel` in `EffectVector::score`
+- `RestartStrategyModel` in `RestartTracker`
+- `HealthThresholdModel` in `ProbeConfig`
+- `DeadLetterModel` in `ReliableQueue`
+- `GossipTimingModel` in `ClusterConfig`
+- `ComplexityModel` in `ComplexityAnalyzer`
+- `TickIntervalModel` in `WeaverEngine`
+- `CausalEdgeType` decay treecalc dispatch
+
+### Fixed
+
+- **democritus**: stopped busy-looping the stuck detector; swapped exact-path to RFF.
+- **m1.5-surface**: parser RHS-loss on subtraction + count arity + scope docs.
+- **m1.5-substrate**: log ring trim + watermark overflow safety + tracked subscriptions.
+- **LLM retry**: `RetryModel` wired into `RetryPolicy` via `with_model()`.
+
+### Known Issues
+
+- Pre-existing workspace clippy debt (~150 errors across `clawft-types/src/goal.rs`, `clawft-rpc`, `eml-core`, and some older kernel/weave code). `scripts/build.sh check` is green; `scripts/build.sh clippy` is red on pre-existing code.
+- One test in `clawft-kernel --lib` full suite hangs when run aggregate; targeted runs pass. Tracked separately.
+
+---
+
+## v0.6.18
+
+*2026-04-19*
+
+### Fixed
+
+- **graphify ingest/query schema mismatch** (#26): writer now emits
+  `"edges"` (not NetworkX `"links"`) and populates `source_file` on
+  each edge, matching the reader's schema validator. `weaver graphify
+  query` now succeeds immediately after `weaver graphify ingest`
+  without any workaround. `weaver graphify diff` retains backwards
+  compatibility with old `"links"`-format graph.json files.
+
+---
+
+## v0.6.17
 
 *2026-04-17*
 
-The HNSW vector store now adapts to the data it stores. A corpus probe
-analyzes the dimensional variance spectrum, tree calculus triage classifies
-the structure (Atom/Sequence/Branch), and EML computes tier parameters.
-Structured data gets multi-index tiered search; uniform data stays on
-standard flat HNSW. The system decides automatically.
+### Leaf Push Protocol
 
-### The headline number
+- **weftos-leaf-types crate**: shared no_std wire schema for kernel → leaf
+  push operations. CBOR serialization. Types: LeafPush (Audio/Display/
+  Brightness/Effect), LeafServices, Subscribe, AudioDrop (Chord/Scuttle/
+  Pcm), DisplayText/Image/Clear, LayerSlot, LayerEffectKind. 11 roundtrip
+  tests.
+- **weaver leaf push**: CLI command to push audio/display/control to leaf
+  devices via kernel daemon IPC. Publishes CBOR payload (base64 wrapped)
+  to mesh.leaf.<pubkey>.push topic. Supports text, chord, scuttle, clear,
+  brightness, effect subcommands with --dry-run and named colors.
 
-5000 vectors, 128 dims, k=10, clustered embeddings (20 clusters):
+---
 
-| Metric | Control (flat HNSW) | Tiered (probe-guided) |
-|---|---|---|
-| recall@10 | 0.69 | 0.79 |
-| mean latency | 95 µs | 59 µs |
-| p99 latency | 150 µs | 97 µs |
+## v0.6.16
 
-**1.61x faster mean, 1.54x faster p99, +10% recall.** The tiered search
-is both faster and higher recall because the coarse 20-dim HNSW finds the
-right cluster cheaply while flat HNSW at ef=20 sometimes misses neighbors.
+*2026-04-17*
 
-### What's in the release
+### Added
 
-- **`TieredSearch`** — multi-index dimensional search in `hnsw_store.rs`.
-  Separate HNSW indexes at coarse/medium resolution, linear fine re-rank.
-  `cosine_partial` for subset-dimension cosine similarity.
+- **MessagePayload::Binary(Vec<u8>)**: raw binary payload variant for
+  mesh transport, sensor data, file transfer, and opaque byte streams.
+  Serde roundtrip test included.
 
-- **Corpus probe** — analyzes per-dimension variance, computes spectral
-  steepness and variance knee. Runs once at build time (~1ms).
+---
 
-- **Tree calculus triage** — classifies spectrum as Atom (flat → skip
-  tiering), Sequence (gradual → moderate tiering), or Branch (sharp →
-  aggressive tiering). Follows the dual-substrate pattern from
-  `treecalc.rs`: tree calculus for structural dispatch, EML for
-  continuous parameters.
+## v0.6.15
 
-- **2-head EML ef model** — joint ef + recall prediction. Head 0 learns
-  the ef→latency mapping, head 1 learns ef→recall. Recall is backfilled
-  from periodic brute-force measurements. Score strategy balances both.
+*2026-04-17*
 
-- **HnswService EML integration** — every search call now runs through
-  the EML predict+record path. Adaptive ef, adaptive rebuild timing,
-  and search telemetry feeding back into model training.
+### Mesh Noise Encryption Wired End-to-End
 
-- **ExoChain events** — `hnsw.eml.observe` (per-search), `hnsw.eml.recall`
-  (periodic measurement), `hnsw.eml.trained` (training cycle),
-  `hnsw.eml.triage` (strategy decision). Full audit trail for training
-  provenance.
+- `[kernel.mesh] noise = true` enables Noise XX handshake on all connections
+- Boot accept loop wraps streams in `NoiseChannel::respond()` (responder)
+- Seed peer connections use `NoiseChannel::initiate()` (initiator)
+- `noise_key_path` config for persistent Ed25519 key (ephemeral if absent)
+- Failed handshakes logged and dropped (don't crash listener)
 
-- **4-phase benchmark harness** — mirrors the attention benchmark protocol.
-  Phase 1 (warmup), Phase 2 (learning), Phase 3 (4-arm A/B: control vs
-  overhead vs adaptive vs tiered), Phase 4 (scalability sweep). Structured
-  test data generator with clustered embeddings and exponentially decaying
-  dimensional variance.
+### ExoChain Mesh Audit Trail (PR #24)
 
-- **Stability diagnostic** (EML notebook) — `diagnose_stability()` probes
-  numerical gradient sensitivity of the attention forward pass. Catches
-  stiffness from `exp(x) - ln(y)` tree saturation that MSE curves miss.
+- Every `handle_incoming()` appends a `peer.envelope` event to ExoChain
+- Captures source_node, dest_node, envelope_id, topic, hop_count
+- Viewable via `weaver chain local`
+- Best-effort append — failure doesn't block message delivery
 
-### Tests
+### CI Fix
 
-76 tests across hnsw_eml (36), hnsw_service (23), hnsw_store (17).
+- WASM size gate: explicit `rustup target add wasm32-wasip2` fallback
 
-### Documentation
+---
 
-- [`/weftos/adaptive-hnsw`](/weftos/adaptive-hnsw) — full architecture,
-  API, benchmark, and when-it-doesn't-help guide
-- `.planning/development_notes/adaptive-hnsw-tiered-search.md` — detailed
-  development narrative including what didn't work and why
+## v0.6.14
 
-### Mesh transport boot integration
+*2026-04-17*
 
-The K6 mesh transport layer was fully implemented (3,543 lines, 133 tests)
-but never instantiated during kernel boot. Now wired in:
+### Mesh Time Synchronization
 
-- **Boot phase 5d**: creates `MeshRuntime`, wires to A2A router, spawns
-  transport listener (TCP default, WebSocket available)
-- **`[kernel.mesh]` config**: `enabled`, `transport`, `listen_addr`,
-  `discovery` (Kademlia DHT), `seed_peers`
-- **`mesh` feature**: added to kernel defaults
-- Mesh starts before cluster so cluster can use mesh for peer communication
+- **MeshClockSync**: authority-based time sync piggybacked on heartbeats.
+  Clock hierarchy: GPS > TSF > NTP > Mesh > Local. Authority elected
+  from best source. EMA smoothing with outlier rejection. Precision
+  targets: <1µs (WiFi TSF), ~100µs (same LAN), ~1-5ms (cross-network).
+- **ClockSource enum**: Local, Mesh, Ntp, Tsf, Gps with ordering.
+- **mesh_time_us()** on MeshRuntime: returns authority-aligned microseconds.
+- PingRequest/PingResponse carry `mesh_time_us` and `clock_source` fields.
+- 5 new time sync tests (clock ordering, initial state, NTP authority,
+  source filtering, jitter smoothing).
+
+### Noise Protocol Encryption
+
+- Real Noise XX handshake via `snow` crate (Noise_XX_25519_ChaChaPoly_SHA256).
+- `NoiseChannel::initiate()` and `NoiseChannel::respond()` for mutual auth.
+- `create_encrypted_channel()` helper: crypto when configured, passthrough
+  for dev/test. Mesh traffic is now encrypted by default when Noise is
+  configured.
+
+### weave.toml Config Loading
+
+- Config loader now reads `weave.toml` from project root and merges with
+  JSON config (`~/.clawft/config.json`). Deep merge: JSON overrides TOML.
+  `[kernel.mesh] enabled = true` in weave.toml actually works now.
+
+### Agent Analysis Commands
+
+- `weft analyze` with 9 subcommands (extract, detect, infer, diff, slice,
+  vowl, enrich, links, suggest) — agents can run topology/vault analysis
+  by delegating to weaver.
+
+### Tree-sitter ast-extract Fixed
+
+- 19 compile errors in the `--features lang-rust` path fixed. Tree-sitter
+  can be used as the fast baseline extractor alongside LSP enrichment.
+
+### Other Fixes
+
+- `weaver init` rewritten — works in any directory, generates weave.toml
+- `weaver update` handles "Text file busy" via rename-swap
+- Mesh peer-connected log raised from debug to info
+
+---
+
+## v0.6.13
+
+*2026-04-17*
+
+### Mesh Transport Boot Integration
+
+- Wired K6 mesh transport into kernel boot sequence (phase 5d)
+- `MeshConfig` in `[kernel.mesh]`: enabled, transport (tcp/ws),
+  listen_addr, discovery (Kademlia), seed_peers
+- MeshRuntime created and wired to A2A router during boot
+- TCP listener spawned, seed peer connections in background
+- `mesh` feature added to kernel defaults
+
+### Adaptive HNSW: Tiered Dimensional Search
+
+- Corpus probe + tree calculus triage + EML tier parameters
+- 1.61x faster mean latency, +10% recall on clustered data
+- 2-head EML ef model (ef→latency + ef→recall joint prediction)
+- HnswService EML integration with ExoChain event trail
+- 4-phase benchmark harness, 76 new tests
+
+---
+
+## v0.6.12
+
+*2026-04-17*
 
 ### Universal Topology Browser
 
-Complete framework for navigating any data structure as an interactive,
-drillable topology graph:
+The centerpiece of this release: a complete framework for navigating any
+data structure as an interactive, drillable topology graph.
 
-- **TopologySchema**: composable YAML geometry declarations with IRI identity
-  (Docker-config style layering). 9 geometry types: force, tree, layered,
-  timeline, stream, grid, geo, radial, wardley.
-- **IRI-based entity identity**: resolves the "Service" ambiguity — same
-  word, different IRIs, different concepts in the graph.
-- **Rust layout engine**: Reingold-Tilford tree + Barnes-Hut force +
-  tree calculus triage dispatch + auto-detection heuristic.
-- **Graph slicer**: pre-computed drill-down JSON. Top level: 28 packages.
-  Double-click drills into modules with edges. Cross-package dependency
-  aggregation. Portal counts for external connections.
-- **Schema inference**: `weaver topology infer` generates schemas from
-  existing graphs. `weaver topology diff` detects architectural drift.
-- **VOWL JSON export**: WebVOWL-compatible 8-key format for the navigator.
-- **Navigator widget**: SliceNavigator (drill-down + breadcrumbs) and
-  VowlNavigator (VOWL visual notation). 24 Playwright E2E tests.
-- **Domain presets**: `software.yaml` (14 node types), `investigation.yaml`
-  (13 node types) with full IRIs and Schema.org mappings.
+- **TopologySchema** (`clawft-graphify::topology`): YAML-based geometry
+  declarations for the universal topology browser. Schemas are composable
+  (Docker-config style layering via `extends`), support IRI-based identity
+  for ontology interoperability, and include mode configuration (Diff,
+  Heatmap, Flow, Timeline). Includes `NodeTypeConfig` with geometry
+  (force/tree/layered/timeline/stream/grid/geo/radial/wardley), visual
+  style, containment declarations, and `EdgeTypeConfig` with cardinality
+  constraints. Ships with a 7R Disposition enum (Rehost, Replatform,
+  Refactor, Repurchase, Retire, Retain, Ratify).
 
-### Code Intelligence
+- **Domain schema presets**: `schemas/software.yaml` (14 node types, 8
+  edge types, full IRIs with Schema.org `same_as` mappings) and
+  `schemas/investigation.yaml` (13 node types, 9 edge types, IRIs mapped
+  to FOAF/Schema.org for forensic analysis).
 
-- **Tree calculus + EML AST extractor**: native Rust source extraction using
-  triage dispatch for structural classification and EML for confidence/
-  complexity scoring. No tree-sitter dependency.
-- **`clawft-lsp-extract` crate**: LSP-based semantic extraction from any
-  language server (rust-analyzer, tsserver, pylsp, gopls). Spawns servers
-  via JSON-RPC, queries documentSymbol, builds semantic graph.
+- **IRI-based entity identity** (`Entity.iri` field): The word is a label,
+  the IRI is the concept. "Service" in architecture docs maps to
+  `weftos:arch#Service`, "Service" in support docs maps to
+  `weftos:support#Service` — same word, different IRIs, different things
+  in the graph. Resolves the ontology ambiguity problem.
+
+- **Rust layout engine** (`clawft-graphify::layout`):
+  - Reingold-Tilford tree layout: O(n) top-down with centered parents
+  - Barnes-Hut force-directed layout: repulsion + spring attraction +
+    center gravity + collision resolution (80px minimum spacing)
+  - Tree calculus triage dispatch: classifies nodes as Atom (no children),
+    Sequence (same-type children), Branch (mixed children) to select
+    layout strategy
+  - Auto-detection heuristic: >60% Contains edges = tree, >50% timestamps
+    = timeline, else force-directed
+  - Positioned geometry output (`PositionedGraph`) consumable by any
+    thin renderer (React, Tauri, TUI)
+
+- **Graph slicer** (`clawft-graphify::layout::slicer`): Pre-computes
+  drill-down JSON per hierarchy level. Top level shows packages (28 nodes),
+  double-click drills into modules with edges. Cross-package dependency
+  edges aggregated via ancestor mapping. Portal counts show external
+  connections. Intra-crate import edges extracted from `use crate::`
+  statements. Manifest JSON indexes all slices for lazy loading.
+
+- **Schema inference** (`clawft-graphify::topology_infer`): Generate a
+  TopologySchema from an existing KnowledgeGraph by analyzing entity types,
+  containment hierarchy, geometry, and edge patterns. Auto-generates IRIs.
+  `diff_schemas()` compares declared vs inferred to detect architectural
+  drift (added/removed types, geometry mismatches, new edge patterns).
+
+- **VOWL JSON export** (`clawft-graphify::export::vowl`): Emit
+  WebVOWL-compatible JSON (8-key format: header, namespace, metrics, class,
+  classAttribute, property, propertyAttribute) with IRI mappings from the
+  topology schema. Consumable by WebVOWL and the navigator widget.
+
+- **Navigator widget** (`docs/src/app/vowl-navigator/`):
+  - `SliceNavigator`: drill-down navigation consuming pre-positioned JSON
+    from the Rust layout engine. Breadcrumb trail, double-click to drill,
+    detail panel with type/IRI/connections, expandable node indicators.
+    No d3-force in the browser — instant navigation.
+  - `VowlNavigator`: VOWL visual notation renderer with D3 force layout,
+    search, degree filter, datatype toggle, VOWL legend.
+  - Mode toggle between drill-down (sliced) and VOWL flat views.
+  - File upload for custom VOWL JSON.
+
+- **Playwright E2E tests** (24/24 pass): Validates symposium criteria —
+  not a hairball (28 nodes at top level), drill-down with breadcrumbs,
+  detail panel for architecture understanding, schema-driven visual
+  encoding (shape/color per type), data integrity of slice files,
+  usability (zoom, pan, help text, mode toggle).
+
+### CLI Commands
+
+- `weaver topology layout <graph.json>` — compute positioned geometry
+  with schema-driven or auto-detected layout
+- `weaver topology validate <schema.yaml>` — validate schemas with warnings
+- `weaver topology detect <graph.json>` — auto-detect geometry, show
+  edge/entity distribution and tree calculus triage classification
+- `weaver topology infer <graph.json>` — infer a schema from graph data
+- `weaver topology diff <schema.yaml> <graph.json>` — declared vs inferred
+  schema drift detection
+- `weaver topology vowl <graph.json>` — export VOWL JSON for the navigator
+- `weaver topology slice <graph.json>` — generate drill-down slices
+- `weaver topology extract <path>` — extract codebase using tree calculus + EML
+
+### Tree Calculus + EML AST Extractor
+
+- **`clawft-graphify::extract::treecalc`**: Native Rust source extractor
+  using tree calculus for structural dispatch and EML for confidence/complexity
+  scoring. No tree-sitter dependency.
+  - Tree calculus triage classifies every extracted item: Atom (constant,
+    type alias), Sequence (struct fields, enum variants), Branch (impl
+    with mixed children)
+  - EML scoring: `confidence = a * exp(b * x) + c * ln(d * x + 1)` with
+    bonuses for pub/doc. Parameters hand-initialized, trainable via
+    eml-core later.
+  - Extracts: functions, structs, enums, traits, impl blocks, constants,
+    type aliases, statics, macros with children (methods, fields, variants)
+  - Relationships: Contains, MethodOf, Implements, Extends, Calls (inferred)
+
+### LSP-Based Code Intelligence
+
+- **New crate: `clawft-lsp-extract`**: Standalone crate that spawns
+  Language Server Protocol servers (rust-analyzer, typescript-language-server,
+  pylsp, gopls) and extracts full semantic graphs via JSON-RPC.
+  - `protocol.rs`: LSP JSON-RPC wire format (Content-Length + JSON-RPC 2.0)
+  - `server.rs`: server lifecycle (spawn, initialize, query, shutdown)
+  - `extract.rs`: walk source files, query documentSymbol, parse
+    hierarchical symbols into LspGraph
+  - `graph.rs`: LspGraph/LspNode/LspEdge types with all 26 LSP SymbolKinds
+  - `config.rs`: language configs with auto-detection from file extensions
+  - Enables semantic extraction from dozens of languages via their existing
+    IDE infrastructure — tapping the "digital exhaust" that language servers
+    already compute
 
 ### Security
 
-- **Unified prompt injection defense**: `sanitize_llm_input()` at all 7
-  LLM input paths. `sanitize_schema_input()` for schema builder agents.
-- **Sprint 17 security plan**: MAESTRO-informed hardening roadmap.
+- **Unified prompt injection defense** (`sanitize_llm_input()` +
+  `sanitize_schema_input()`): Wraps existing `sanitize_skill_instructions()`
+  + `sanitize_content()` with source boundary tagging for audit trail.
+  Applies at all 7 LLM input paths identified in the MAESTRO security
+  audit (semantic extraction, memory retrieval, session history, tool
+  results, bootstrap files, schema builder inputs). Schema-specific checks
+  detect injection via YAML directives and suspicious URI schemes.
 
-### CI/CD
+- **Sprint 17 security plan** (`.planning/sprint17.md`): MAESTRO-informed
+  security hardening covering prompt injection pipeline (PI-1 through PI-5),
+  RPC authentication, plugin supply chain signing, and ontology graph
+  pipeline.
 
-- **eml-core published to crates.io** (v0.1.0) — unblocked entire pipeline
-- **cargo-workspaces** replaces manual tiered publish scripts
-- **Tiered parallel publishing** and release gate workflow
+### Vault Cultivation (v0.6.11)
 
-### Symposium
+- `weaver vault enrich` — YAML frontmatter generation with type/tag/status
+  inference from file content and path
+- `weaver vault analyze` — link graph metrics (orphans, clusters, density,
+  broken links) via union-find
+- `weaver vault suggest` — scored connection suggestions based on shared
+  tags, path proximity, keyword similarity
+- `weaver vault auto-link` — insert wikilinks for known document titles
+- `weaver vault backlinks` — generate backlink sections from incoming links
 
-17 artifacts in `.planning/symposiums/ontology-navigator/` covering schema
-design, layout algorithms, graph nesting, navigator modes, tree calculus +
-EML dual substrate, ArcKit governance, RAMP assessment (7R with Ratify),
-AI framework validation, schema builder agents, and investigative instrument
-design.
+### CI/CD Fixes
+
+- `eml-core` added to crates.io publish pipeline (was the root cause of
+  v0.6.10 publish failure — clawft-llm depends on it)
+- `eml-core v0.1.0` published to crates.io
+- Docker workflow: replaced fragile tag-push polling with `workflow_run`
+  trigger, eliminating race condition with Release workflow
+- Release gate workflow: marks GitHub releases as prerelease when
+  downstream jobs (Publish Crates, Docker) fail, so broken releases
+  are visually flagged instead of silently half-done
+
+### Symposium: Universal Topology Browser
+
+17 artifacts produced in `.planning/symposiums/ontology-navigator/`:
+
+- 8-session agenda covering schema design, layout algorithms, graph
+  nesting, navigator modes, investigative instrument use case
+- Tree calculus + EML dual substrate architecture (ADR): triage for
+  structural dispatch, EML for continuous parameters, pure Rust, <50ms
+  for 10K nodes
+- IRI-based identity architecture (ADR): word vs concept, same_as
+  mappings, OWL/RDF compatibility
+- ArcKit governance integration: 60 doc-type ontology, Wardley Map
+  geometry, traceability matrix as Diff overlay
+- Google RAMP assessment patterns: 7R disposition model (including
+  Ratify), declared-vs-observed topology diff, maturity radar
+- AI framework validation: 7 importable formal schemas (ML Schema,
+  PROV-O, DTDL, AAS, ArchiMate, BPMN, OPC UA)
+- Schema builder agent design: 5 agent types (Framework, Codebase,
+  Document, Visual, Telemetry) producing composable YAML fragments
+- Navigator mode system: Base (Explore/Timeline/Cluster/Wardley) +
+  Overlay (Diff/Heatmap/Flow/Search) + Tool (Annotate), with
+  performance budgets (base <300ms, overlay <100ms, tool <16ms)
+- Cold case investigation walkthrough scenario
+- Founder Q&A: 7 decisions (composable schemas, OWL compat, single
+  overlay mode, topological distortion for missing nodes, IRI identity)
+
+### Internal
+
+- `clawft-lsp-extract` added to workspace
+- `serde_yaml` added to clawft-weave and clawft-graphify dependencies
+- 232+ Rust tests passing across graphify (topology, layout, triage,
+  slicer, vault, VOWL export, schema inference)
+- 24 Playwright E2E tests passing for navigator
+- Fixed flaky vault suggest test (HashMap iteration order)
 
 ---
 
-## v0.6.12 — Universal Topology Browser
-
-*2026-04-17*
-
-See v0.6.13 above — the topology browser work landed across v0.6.11-0.6.13.
-v0.6.12 was the first release with all crates successfully published to
-crates.io (eml-core unblocked the pipeline).
-
----
-
-## v0.6.11 — Vault Cultivation
+## v0.6.11
 
 *2026-04-16*
 
-Ported weave-nn's Obsidian vault tooling to Rust as `weaver vault`:
-`enrich` (frontmatter), `analyze` (link graph), `suggest` (connections),
-`auto-link` (wikilinks), `backlinks` (backlink sections). CI fix: eml-core
-added to publish pipeline, Docker race eliminated via workflow_run trigger.
+### Added
+
+- **Vault cultivation** (`weaver vault`): Port of weave-nn's Obsidian vault
+  tooling to Rust. Frontmatter enrichment, wikilink extraction, link graph
+  analysis, connection suggestion, auto-linking, backlinks.
+- CI fix: eml-core added to publish pipeline, Docker race eliminated,
+  release gate marks failed releases as prerelease.
 
 ---
 
-## v0.6.10 — EML vs Baseline Attention (Measurement Release)
+## v0.6.10
 
 *2026-04-15*
 
-Two things in this release. **First**, a saturation-safe tree (`SafeTree`)
-replaces the classical `EmlTree` path inside `ToyEmlAttention` — the
-Iteration-2 substrate work. **Second — and this is the headline** — a
-plain-affine `BaselineAttention` is added alongside, trained with the
-exact same gradient-free optimizer, so the EML substrate can be measured
-head-to-head against a float-only reference. Measurement is reported
-honestly.
+### Added
 
-### The head-to-head number
+- **Head-to-head: EML vs plain affine attention.** New
+  `BaselineAttention` in `eml-core` is a plain `W·x + b` Q/K/V/out stack
+  with the *same* gradient-free coordinate-descent optimizer as
+  `ToyEmlAttention`. Same trial budget, same seed, same data — the only
+  difference is the substrate.
+  - `compare_eml_vs_baseline(d_model, d_k, seq_len, depth, cfg, rounds)`
+    runs the workload on both and returns an `AttentionComparison` with
+    param count, baseline MSE, final MSE, MSE reduction, and p99
+    inference latency for each
+  - New `attention_compare` example prints the side-by-side table
+  - Browser demo `/clawft_eml-notebook` gains an "EML vs baseline" mode
+    that runs both leg-by-leg in-browser and renders the comparison as
+    a table
+- **Measured result at the gate shape** `(d_model=4, d_k=2, seq_len=2,
+  depth=3)`, 5000 trials × 3 rounds, run 2026-04-15:
 
-At `(d_model=4, d_k=2, seq_len=2, depth=3)`, 5000 trials × 3 rounds,
-same seed (measured 2026-04-15):
+  | Metric | EML (SafeTree) | Baseline (affine) |
+  |---|---|---|
+  | Params | 352 | 148 |
+  | Baseline MSE | 1.4783 | 0.2331 |
+  | Final MSE | 1.5419 | 0.0550 |
+  | MSE reduction | -4.3% | +76.4% |
+  | p99 inference | 1161 ns | 360 ns |
 
-| Metric | EML (SafeTree) | Baseline (affine) |
-|---|---|---|
-| Params | 352 | 148 |
-| Baseline MSE | 1.4783 | 0.2331 |
-| Final MSE | 1.5419 | 0.0550 |
-| MSE reduction | -4.3% | +76.4% |
-| p99 inference | 1161 ns | 360 ns |
+  Gate passes at 7.3% reduction (per-position-mean, 15k trials). EML
+  convergence is noisy at this shape — some runs 7%, some -4%. Baseline
+  consistently 76%. Baseline is **3.23× faster at inference and uses 2.38×
+  fewer parameters**.
 
-Gate (separate run, 15k trials): 7.3% reduction. EML convergence is
-noisy; baseline is consistent.
+  Under identical optimizer + trial budget, **plain affine attention
+  reaches 76% MSE reduction where EML regresses slightly**, with 3.3×
+  lower inference latency and 2.4× fewer parameters. What EML buys at
+  this scale is the existing weight-snapping / interpretability /
+  ExoChain-audit story — not convergence speed or latency. Documented
+  openly so the decision to scale EML attention (or pivot to hybrid)
+  can be grounded in measurement.
 
-Under identical training budget and optimizer, plain affine attention
-reaches **76% MSE reduction where EML regresses slightly**, runs **3.3×
-faster** on forward pass, and uses **2.4× fewer parameters** at this
-scale. What EML buys is weight-snapping interpretability, closed-form
-expressibility, and seamless integration with the rest of the WeftOS
-EML substrate — not convergence speed or latency.
+- **NVIDIA quantum research + 0.7.x roadmap doc**:
+  `.planning/development_notes/nvidia-quantum-integration.md` +
+  `docs/src/content/docs/weftos/quantum-nvidia.mdx`. NVIDIA's "Ising"
+  product is not a QUBO solver — it's two AI models for QPU builders.
+  `cuDensityMat` inside `cuQuantum` is a plausible third `QuantumBackend`
+  for local GPU simulation. Deferred to v0.7.x after GUI. ADR-048 queued.
 
-The measurement is deliberately embedded in the release so the next
-decision (scale EML attention further, or pivot to hybrid / keep EML for
-scalar heuristics and use plain attention for sequence work) is grounded
-in numbers.
+- **EML Attention — Iteration 2** (experimental): saturation-safe tree
+  architecture replaces the classical `EmlTree` path inside
+  `ToyEmlAttention`
+  - New `SafeTree` struct: depth-N tree that evaluates
+    `eml_safe(v·c0 + c1, |v| + c2 + 1)` at each level. The `|v| + c2 + 1`
+    guard keeps the `ln` argument ≥ 1, so nested composition never hits the
+    `ln(MIN_POSITIVE) ≈ -744 → exp(20) = 4.85e8` saturation path that
+    capped Iteration 1
+  - Forward pass no longer needs the `bound_one` post-processor — raw
+    output is naturally bounded under composition
+  - Flat `params: Vec<f64>` layout (`heads·inputs + heads + heads·depth·3`)
+    exposes `params_slice`/`params_slice_mut` for joint coordinate descent
+  - JSON schema matches the browser demo's export bundle, so
+    `SafeTree::from_json` round-trips weights trained in the browser
+- **Gate shape recalibrated** to `(seq_len=2, d_model=4, d_k=2, depth=3)`.
+  SafeTree's level-0 affine scales with `inputs × heads` (~10× the prior
+  EmlTree-backed budget), so the gate uses a smaller shape to keep the
+  convergence signal sharp; larger shapes ship via the Phase-4 scaling
+  sweep
+- **Go/no-go PASS**: 7.3% MSE reduction on per-position-mean in 3 rounds,
+  p99 inference 1174 ns. All 5 criteria green
 
-### Also in this release
+### Changed
 
-- **NVIDIA Quantum roadmap doc** for v0.7.x —
-  [`/weftos/quantum-nvidia`](/weftos/quantum-nvidia). Research delivered
-  on NVIDIA's CUDA-Q + cuQuantum ecosystem. Main finding: the "Ising"
-  page is an AI model for QPU builders, not a QUBO solver; `cuDensityMat`
-  inside cuQuantum is the piece worth integrating. Deferred to v0.7.x
-  after GUI ship. ADR-048 queued.
+- `ToyEmlAttention` fields Q/K/V/softmax/out are now `SafeTree` instead
+  of `EmlModel`. The public forward/record/train_end_to_end APIs are
+  unchanged
+- Removed the Iteration-0 `ToyEmlAttention::train` method. Callers must
+  use `train_end_to_end(EndToEndTrainConfig)` exclusively
+- The `bound_one` / `bound_vec` soft-saturation post-processor is removed
+  — SafeTree doesn't need it
+- Iteration 2 gate G1 threshold is 5% MSE reduction on per-position-mean
+  (was 80% target but convergence plateau limits browser-scale CD without
+  multi-param perturbation — documented as Iteration 3 scope)
 
+### Known limitations (Iteration 3 scope)
 
-- **`SafeTree`** — new depth-N tree with `|v| + c2 + 1` safety guard.
-  Unblocks the saturation path that capped Iteration 1; EML's Iteration-1
-  bounded post-processor is removed.
-- **`BaselineAttention`** — plain affine Q/K/V/out, same API as
-  `ToyEmlAttention`, same coordinate-descent optimizer.
-- **`compare_eml_vs_baseline`** — runs identical workload on both and
-  returns an `AttentionComparison` struct. Primary artifact for the
-  measurement work.
-- **Live demo mode toggle**: [`/clawft_eml-notebook`](/clawft_eml-notebook)
-  gains an "EML vs baseline" mode that runs both leg-by-leg in-browser
-  and renders the comparison as a table. Previous "Iteration 0" and
-  "Iteration 1" modes remain.
-- Gate passes at the small reference shape.
+- **Single-param coordinate descent plateaus well short of TS-port
+  convergence.** At the browser shape (seq_len=4 d_model=8 d_k=4)
+  the TS port reaches 95% MSE reduction; Rust currently plateaus at
+  <1%. Root cause: each accepted perturbation changes output by ~1e-6
+  when a single param sits among 2800 others in a smooth SafeTree
+  landscape. Iteration 3 will add multi-param coordinated perturbation
+  (pattern search or small-batch gradient-free) to match TS behavior
+- **Identity task remains out of reach** when `d_k < d_model` because
+  the context bottleneck is information-lossy regardless of tree shape
+- The 13 unit tests + 4-phase benchmark harness still pass. Default
+  builds are byte-identical to 0.6.9
 
-### Honest calls
+---
 
-- **Single-param CD on a 352-param SafeTree plateaus at -4% to +8%
-  reduction.** The same optimizer hits 76% on a 148-param plain affine.
-  Iteration 3 would try multi-param coordinated perturbation; the
-  measurement shows this is needed to close the gap, not that SafeTree
-  is fundamentally better.
-- **Default builds byte-identical to 0.6.9.** Feature flag
-  `experimental-attention` still gates the whole module.
-- **13 attention tests + 4 new baseline tests + 40 existing** — 57 total.
-
-### Highlights
-
-- **New `SafeTree` primitive**: depth-N tree evaluating
-  `eml_safe(v·c0 + c1, |v| + c2 + 1)` at each level. The `|v| + c2 + 1`
-  guard keeps the `ln` argument ≥ 1 always, so nested composition never
-  hits the `ln(MIN_POSITIVE) ≈ -744 → exp(20) = 4.85e8` saturation path
-  that capped Iteration 1.
-- **Round-trip compatible with the browser demo's JSON export**.
-  `SafeTree::from_json` deserializes the same schema the live trainer
-  at [`/clawft_eml-notebook`](/clawft_eml-notebook) produces.
-- **Gate PASS** (5 of 5):
-  - baseline 1.64 → final 1.52 = 7.3% MSE reduction on per-position-mean
-  - p99 inference 1174 ns
-  - serialization roundtrip + polynomial scaling green
-- **Q/K/V/softmax/out** fields are now `SafeTree`. The `train_end_to_end`
-  API is unchanged; callers get saturation-safe composition without code
-  changes.
-
-### Deliberately narrower gate
-
-SafeTree's level-0 affine scales with `inputs × heads` (~10× Iteration 1's
-`EmlModel`-backed budget). The gate uses `(seq_len=2, d_model=4, d_k=2,
-depth=3)` for sharp convergence signal; larger shapes ship via the Phase-4
-scaling sweep.
-
-### What didn't change
-
-- Forward pass interface, `record`, `train_end_to_end`, `AttentionBenchmark`
-- 13 unit tests + 4-phase benchmark harness
-- Default builds are byte-identical to 0.6.9
-- Feature flag `experimental-attention` still gates the whole module
-
-### Iteration 3 scope
-
-- Multi-param coordinated perturbation. Rust single-param CD plateaus at
-  browser-scale shapes because each accepted perturbation changes output
-  by ~1e-6 when sitting among thousands of parameters. Pattern search or
-  small-batch gradient-free updates should unlock the same 90%+
-  reductions the TS port shows.
-- Identity task remains information-theoretically bounded when
-  `d_k < d_model`; revisit when raising capacity.
-
-## v0.6.9 — EML Attention, Iteration 1 (Experimental)
+## v0.6.9
 
 *2026-04-15*
 
-End-to-end joint coordinate descent across all 5 sub-models of the toy
-attention block. Gate passes: 57.8% MSE reduction in 3 rounds on the
-reference shape, 5 of 5 criteria green. Identity task remains saturated —
-an Iteration-2 concern.
+### Added
 
-### Highlights
+- **EML Attention — Iteration 1** (experimental): end-to-end joint
+  coordinate descent across all 5 sub-models (Q/K/V/softmax/out)
+  - `ToyEmlAttention::train_end_to_end(EndToEndTrainConfig)` — random-param
+    random-perturbation trials with annealed step; accepts when end-to-end
+    MSE drops on a 16-sample subset
+  - `EmlModel::{params_slice, params_slice_mut, mark_trained}` — public
+    access to the flat parameter vector for composed-model training
+  - Small-random init in `ToyEmlAttention::new` (~±0.05) replaces the
+    all-zeros default that saturated under composition
+  - Bounded forward pass: soft-saturation squash `v·1e-3 / (1 + |v·1e-3|)`
+    wraps raw `EmlModel::predict` outputs so composition can't produce
+    Inf/NaN MSE when the tree saturates at `exp(20) ≈ 4.85e8`
+- **Go/no-go gate passes** on the per-position-mean learnable task
+  - Measured Iteration-1 result at the reference shape:
+    baseline MSE 2.13 → final 0.90 = **57.8% reduction in 3 rounds**
+  - 5 of 5 gate criteria PASS: G1 MSE reduction ≥ 5%, G2 p99 ≤ 5 µs
+    (observed 2 µs), G3 timings finite, G4 JSON roundtrip, G5 polynomial
+    scaling
+- **4-phase benchmark** now reports `phase2_baseline_mse` and
+  `phase2_mse_reduction` alongside `phase2_final_mse` so future iterations
+  can quantify delta against this baseline
 
-- **Joint CD across Q/K/V/softmax/out** via `train_end_to_end`. Random-param
-  random-perturbation trials with annealed step size, accepting candidates
-  that reduce end-to-end MSE on a 16-sample subset.
-- **EmlModel params exposed** (`params_slice`, `params_slice_mut`,
-  `mark_trained`) so composed models can iterate across the union of flat
-  parameter vectors.
-- **Small-random init** (~±0.05) in the attention constructor avoids the
-  all-zeros regime where the nested tree saturates downstream.
-- **Bounded forward pass** wraps raw output in a soft-saturation squash —
-  Inf/NaN MSE no longer possible under composition.
-- **Gate PASS**: baseline 2.13 → final 0.90 at `(seq_len=4, d_model=8,
-  d_k=4, depth=3)` = 57.8% reduction. Inference p99 holds at 2 µs (well
-  under the 5 µs target).
+### Browser demo
 
-### What still doesn't work — Iteration 2 scope
+- `/clawft_eml-notebook` gains an "Iteration 1 mode" toggle that runs
+  end-to-end coordinate descent (trains all 5 sub-models jointly) instead
+  of the Iteration-0 out_model-only self-distillation
+- Live training log shows baseline MSE, per-round MSE, % reduction,
+  elapsed time
 
-The identity task does **not** converge in Iteration 1. The Rust
-`EmlTree` composition saturates when any nested `eml(x, y)` sees
-`y ≤ 0` — the `ln(MIN_POSITIVE) ≈ -744` output feeds into the next
-level's `exp(20) ≈ 4.85e8` clamp, and single-param coordinate descent
-can't escape that regime because most heads saturate together. The TS
-browser port doesn't suffer this because it wraps the tree's `y`
-argument with `|v| + c + 1` (always positive).
+### Known limitations (deferred to Iteration 2)
 
-Iteration 2 will either:
-- Swap the tree formulation to a saturation-safe shape
-- Add a learnable output projection whose weights are separate from
-  the EmlModel tree
-- Move to multi-param coordinated perturbation (pattern search)
+- **Identity task does not converge.** The Rust `EmlTree` composition
+  saturates on identity because the nested `eml(x, y)` can hit `y ≤ 0`,
+  triggering `ln(MIN_POSITIVE) ≈ -744` followed by `exp(20) ≈ 4.85e8`
+  clamping. Single-param coordinate descent cannot escape. Iteration 2
+  will either swap the tree formulation (closer to the TS port's
+  `eml(v·c0 + c1, |v| + c2 + 1)` shape) or add a proper trainable output
+  projection.
+- **Q/K/V participation is modest.** Joint CD over 328 params reduces MSE
+  by ~58% but plateaus near the bound-1 region where a majority of heads
+  remain saturated. Multi-param coordinated perturbation or a
+  saturation-safe tree would unlock further gains.
 
-### Live demo
+### Notes
 
-[`/clawft_eml-notebook`](/clawft_eml-notebook) gains an Iteration-1 mode
-that runs the joint CD in-browser and reports the same baseline-vs-final
-MSE reduction the Rust gate does.
+- The 13 unit tests and the 4-phase benchmark harness remain unchanged.
+- Default builds are byte-identical to 0.6.8.
+- Feature flag `experimental-attention` on `eml-core` still gates the
+  entire module.
 
-### Compatibility
+---
 
-- Feature flag `experimental-attention` on `eml-core` unchanged; default
-  builds are byte-identical to 0.6.8.
-- 13 unit tests + 4-phase benchmark harness still pass.
-- `AttentionBenchmark` struct gains `phase2_baseline_mse` and
-  `phase2_mse_reduction` fields (additive; deserialization of prior JSONs
-  still works via `#[serde(default)]` semantics on missing fields when
-  reading 0.6.8-era benchmark artifacts).
-
-## v0.6.8 — EML Attention, Iteration 0 (Experimental)
-
-*2026-04-15*
-
-First step toward an EML-Transformer for WeftOS. Ships a toy-scale attention
-block composed of five `EmlModel` instances, a 4-phase benchmark harness for
-quantifying future iterations, and two live demos on the docs site. All
-additive behind `experimental-attention`; default builds unchanged.
-
-### Highlights
-
-- **`ToyEmlAttention`** in `eml-core`: single-head attention block at
-  `d_model ≤ 32`, `seq_len ≤ 8`, per-submodel depth 3-5. Five learned
-  projections (Q/K/V + softmax + output) with `f64` matmul between them —
-  pragmatic hybrid consistent with the design note's Iteration 4+ guidance.
-- **Gradient-free training** via self-distillation: `train()` runs a forward
-  pass on buffered samples, derives per-submodel targets (numerical softmax
-  for `softmax_model`; `(context, target)` for `out_model`), then runs the
-  existing coordinate-descent loop.
-- **4-phase benchmark** `run_benchmark()` mirrors the WeftOS bench pattern
-  (Warmup → Convergence → Compute → Scalability) and returns a single
-  `AttentionBenchmark` struct. This sets the baseline future iterations
-  will be quantified against.
-- **Explicit go/no-go gate**. Iteration 1 is blocked until Iteration 0
-  passes: converges in ≤ 3 rounds, p99 ≤ 5 µs at the default shape, 1000
-  forward passes without NaN, serialization roundtrip, polynomial scaling.
-- **Documentation**: new [EML Attention page](/weftos/eml-attention)
-  covering architecture, benchmarks, limitations, roadmap.
-- **Live demos** deployed alongside the docs:
-  - [`/clawft_eml-attention`](/clawft_eml-attention) — pure-JS Iteration 0
-    forward-pass demonstrator with configurable shape + live latency.
-  - [`/clawft_eml-notebook`](/clawft_eml-notebook) — Python Colab notebook
-    that trains a Python mirror and exports JSON directly loadable by the
-    Rust `EmlModel::from_json` interface.
-
-### What it adds to WeftOS
-
-- Bridges the gap from scalar-output `EmlModel` wrappers (QueryFusionModel,
-  CausalCollapseModel, SurpriseScorer, etc.) to sequence-aware primitives —
-  without abandoning the gradient-free / weight-snapping / ExoChain-audited
-  posture that defines the EML substrate.
-- Ships the 4-phase benchmark as the canonical performance-quantification
-  tool for all future EML work, not just attention.
-
-### Experimental status
-
-- Feature flag `experimental-attention` on `eml-core` (off by default).
-- Default builds are byte-identical to 0.6.7.
-- Toy scale only; explicit roadmap through Iteration 4 gates each step on
-  the previous one passing benchmarks.
-- Q/K/V projections remain at default init in Iteration 0; end-to-end
-  coordinate descent lands in Iteration 1.
-
-## v0.6.7 — Quantum Cognitive Layer (Experimental)
+## v0.6.8
 
 *2026-04-15*
 
-Adds a neutral-atom quantum acceleration layer to ECC with a live Pasqal Cloud
-integration. The classical ECC path is unchanged; quantum is a compile-time
-opt-in via `quantum-pasqal`.
+### Added
 
-### Highlights
+- **EML Attention — Iteration 0** (experimental): first step toward a
+  gradient-free EML-Transformer for WeftOS
+  - `ToyEmlAttention` in `eml-core` composed of 5 `EmlModel` instances
+    (Q/K/V projections, learned softmax, output projection) with `f64`
+    matmul between them — pragmatic hybrid approach, consistent with the
+    design note's Iteration 4+ guidance
+  - `new(name, d_model, d_k, seq_len, depth)` with toy-scale guards
+    (`d_model ≤ 32`, `seq_len ≤ 8`, `depth ∈ 3..=5`)
+  - `forward`, `record`, `train`, `to_json`/`from_json`, `AttentionError`
+  - Self-distillation training: `train()` runs a forward pass on the buffer,
+    derives per-submodel targets, then runs the existing coordinate-descent
+    loop on `softmax_model` (row-softmax distillation) and `out_model`
+    (`context → target`)
+  - Feature flag `experimental-attention` on `eml-core` (off by default);
+    default builds are unchanged
+  - 13 unit tests covering construction, shape enforcement, numerical-softmax
+    stability, serialization roundtrip, training-round counting, and the
+    benchmark sanity gates
+- **4-phase benchmark harness** `run_benchmark` + `AttentionBenchmark`
+  mirroring `clawft-weave/src/commands/bench_cmd.rs` (Warmup → Transport
+  → Compute → Scalability):
+  - Phase 1: single forward-pass timing + JSON roundtrip
+  - Phase 2: convergence on a memorizable identity task (96 samples, 3 rounds)
+  - Phase 3: inference latency mean + p99 over 256 random inputs
+  - Phase 4: `(seq_len, d_model)` scaling sweep with per-point param count
+- **Docs**: new `docs/src/content/docs/weftos/eml-attention.mdx` page
+- **Live demos**:
+  - `/clawft_eml-attention` — pure-JS Iteration 0 forward-pass demonstrator
+    (WASM rebuild follows in 0.6.9)
+  - `/clawft_eml-notebook` — Python Colab notebook that trains a Python
+    mirror and exports JSON directly loadable by Rust `EmlModel::from_json`
+- **Planning**:
+  - `.planning/development_notes/eml_model_development_assessment.md` —
+    Iteration 0 plan, design rationale, 5 explicit go/no-go criteria
+- **CHANGELOG + release notes** updated for 0.6.8
 
-- **`QuantumBackend` trait** — object-safe async interface with shared vendor-neutral types (`JobHandle`, `QuantumResults`, `JobStatus`, `BackendStatus`, `EvolutionParams`, `QuantumError`). Designed for fallback chaining: try Fresnel, fall through to EMU_TN, fall through to the classical simulator.
-- **Deterministic graph → atom layout** — force-directed 2D embedding in `quantum_register::build_register`, enforcing device constraints (min 4 µm inter-atom distance, max trap extent).
-- **Live `PasqalBackend`** — end-to-end against `apis.pasqal.cloud`:
-  - Auth0 `client_credentials` with 24h token caching and 300s refresh skew
-  - Batch create / job poll / batch results / job cancel wired to real endpoints
-  - Best-effort Pulser abstract-repr JSON builder for `AnalogDevice` + global Rydberg channel
-  - `submit_raw_sequence()` escape hatch for Python-generated golden JSON
-  - `{bitstring: count}` → per-atom Rydberg probability reduction
-- **`BraketBackend` stub** — interface-only for QuEra Aquila (256 atoms) on AWS Braket. Same register code works on both vendors; live impl deferred.
-- **4-tier test strategy** — T0 local wiremock (14 tests on every CI build) → T1 EMU-FREE (free cloud emulator) → T3 EMU-TN (paid GPU emulator) → T4 Fresnel QPU. Live tiers run with `--ignored` when `PASQAL_*` env vars are set.
-- **Docs** — new [Quantum Cognitive Layer](/weftos/quantum) page covering architecture, ECC integration, 4-tier test strategy, limitations, and roadmap. Linked from the ECC page header.
+### Notes
 
-### What it adds to ECC
+- EML Attention is **additive**. Default builds are byte-identical to 0.6.7.
+- Iteration 0 deliberately keeps Q/K/V at default init — only `softmax_model`
+  and `out_model` train in this release. End-to-end coordinate descent across
+  all five sub-models is Iteration 1.
+- The two inter-projection matmuls (Q·Kᵀ and A·V) run in `f64`, not EML trees.
+  Pure-EML matmul is a research problem; the design note treats hybrid as
+  acceptable through Iteration 4+.
 
-| Operation | Classical | Quantum |
-|-----------|-----------|---------|
-| Coherent evolution `exp(-i dt H)` | First-order approximation | Exact unitary on Rydberg Hamiltonian |
-| Born-rule measurement | Simulated `norm_sq()` | True projective measurement |
-| Hypothesis collapse | Deterministic `observe()` | Real measurement statistics |
-| Subgraph exploration | Beam / MCTS | Quantum walk in superposition (Grover-like) |
-| Community detection | Label propagation | MIS / QUBO on neutral atoms |
+---
 
-### Experimental status
+## v0.6.7
 
-The layer is gated on `quantum-pasqal` / `quantum-braket` features, both off by
-default. Default builds are byte-identical to 0.6.6. `weave.toml` wiring and
-DEMOCRITUS tick integration land in 0.7.x.
+*2026-04-15*
 
-## v0.6.6 — Sprint 17: Knowledge Graph Intelligence
+### Added
+
+- **Quantum Cognitive Layer** (experimental): neutral-atom quantum acceleration for ECC
+  - `QuantumBackend` trait with object-safe async interface and shared types (`JobHandle`, `QuantumResults`, `JobStatus`, `BackendStatus`, `EvolutionParams`, `QuantumError`)
+  - `quantum_register`: deterministic force-directed graph → 2D atom-position layout with device-constraint enforcement
+  - **Live `PasqalBackend`** targeting Pasqal Cloud (EMU_FREE / EMU_TN / Fresnel):
+    - Auth0 `client_credentials` flow with 24h token caching and 300s refresh skew
+    - `POST /api/v1/batches`, `GET /api/v2/jobs/{id}`, `GET /api/v1/batches/{id}/results`, `PATCH /api/v2/jobs/{id}/cancel`
+    - Best-effort Pulser abstract-repr JSON builder for `AnalogDevice` + global Rydberg channel
+    - `submit_raw_sequence()` escape hatch for Python-generated Pulser JSON
+    - Counts → per-atom Rydberg probability parsing
+  - `BraketBackend` stub for QuEra Aquila on AWS Braket (interface only; live impl deferred)
+  - Feature flags `quantum-pasqal` and `quantum-braket` (both off by default; experimental in 0.6.x)
+  - T0 wiremock integration tests (14 tests exercising full auth + REST path)
+  - T1/T3/T4 `#[ignore]`-gated live tests against real Pasqal endpoints
+- **Docs**: new `docs/src/content/docs/weftos/quantum.mdx` page covering architecture, ECC integration, 4-tier test strategy, and roadmap
+- **Planning**: `.planning/development_notes/pasqal-integration.md` extended with dual-backend strategy (§13), tiered dev environments (§14), 0.6.x experimental scope (§15), and 4-phase test runbook (§16)
+
+### Notes
+
+- The quantum layer is **additive**. Default builds are byte-identical to 0.6.6.
+- `build_sequence_json` output is best-effort — the exact Pulser `to_abstract_repr()` schema is not fully stable. Runbook includes a Python golden-JSON validation path.
+
+---
+
+## v0.6.6
 
 *2026-04-14*
 
-### 18 Knowledge Graph Tasks
+### Added
 
-Sprint 17 delivers the full knowledge graph intelligence stack across 5,252 new lines and 170+ tests.
-
-- **EML Score Fusion** (KG-001): Hybrid query combining keyword, graph proximity, community, and type scoring
+- **18 Knowledge Graph tasks** (KG-001 through KG-018) completing Sprint 17
+- **EML Score Fusion** (KG-001): Hybrid query combining keyword, graph, community, and type scoring
 - **Community Summaries** (KG-002): GraphRAG-style summary generation for detected communities
 - **Causal Chain Tracing** (KG-003): Typed BFS with natural-language explanations
 - **RFF Spectral Analysis** (KG-004): O(m) approximate spectral analysis using random Fourier features
@@ -454,513 +702,388 @@ Sprint 17 delivers the full knowledge graph intelligence stack across 5,252 new 
 - **Conversational Exploration** (KG-016): Stateful multi-turn dialogue over knowledge graphs
 - **EML Distillation** (KG-017): Depth-4 to depth-2 model compression
 - **Newman Modularity** (KG-018): Global partition quality metric
-
-### Infrastructure
-
-- **Incremental graph updates**: Efficient delta-based graph rebuilds
-- **Multi-key HNSW indexing**: Multiple embedding keys per entity for richer semantic search
-- **Shaal synergy stubs** (KG-011/012): LogQuantized + SIMD distance configs
+- **Incremental graph updates** and **multi-key HNSW indexing**
 - New modules: `summary.rs`, `alignment.rs`, `conversation.rs`, `sensor_graph.rs`, `vector_quantization.rs`
-- 1,770 tests passing
+- 170+ new tests (1,770 total)
 
 ---
 
-## v0.6.5 — EML Self-Learning Stack + ExoChain Certification
+## v0.6.5
 
 *2026-04-04*
 
-### EML Self-Learning Functions
+### Added
 
 - **eml-core standalone crate**: Zero-dep (just serde), configurable depth 2-5, multi-head outputs, coordinate descent training (36 tests)
-- **16 EML models across 4 crates**: Coherence, governance scoring, restart strategy, health thresholds, dead letter policy, gossip timing, complexity limits, HNSW distance/ef/path/rebuild, causal collapse, surprise scoring, cluster thresholds, layout tuning, forensic coherence
-- **Two-tier pattern**: O(1) EML prediction every tick (~100ns), exact ground truth periodically, continuous self-improvement
-- **Causal collapse prediction**: `rank_evidence_by_impact()` ranks candidate edges by predicted coherence impact using perturbation theory (delta_lambda_2 = w * (phi[u] - phi[v])^2)
+- **12 EML models across 4 crates**: Coherence, governance scoring, restart strategy, health thresholds, dead letter policy, gossip timing, complexity limits, HNSW (distance/ef/path/rebuild), causal collapse, surprise scoring, cluster thresholds, layout tuning
+- **Causal collapse prediction**: `rank_evidence_by_impact()` ranks candidate edges by predicted coherence impact via perturbation theory
 - **Conversation cycle detection**: `detect_conversation_cycle()` identifies stuck/oscillating conversations via lambda_2 stagnation
+- **HNSW EML training infrastructure**: HnswEmlManager with 4 models (distance, adaptive ef, path prediction, rebuild trigger), 33 tests
 
-### ExoChain Compliance
+### Fixed
 
-- **66 gaps identified and closed**: Systematic audit of all mutation paths
-- **75+ EVENT_KIND constants**: Structured audit data across all subsystems
-- **21 governance gates**: EffectVector evaluation on all security-critical paths
-- **EML ExoChain integration**: EmlEvent types (Trained, Drift, Saved, Loaded) chain-witnessed via drain bridge
-- **Certification**: 4 independent auditors verified all critical (5/5) and high (16/16) items pass
-
-### HNSW EML Training Infrastructure
-
-- **4 models**: Distance (dimension selection), AdaptiveEf (per-query beam width), Path (entry-point prediction), Rebuild (recall-based scheduling)
-- **33 tests**, all passing
-- **Configurable via HnswEmlConfig**: train_every_n, recall_check_every_n, min_training_samples, distance_selected_dims
-
-### Pull Requests
-
-- RuView PR #387: 5 EML improvements (governance scorer, health thresholds, dead letter, gossip timing, complexity)
-- ruvector PR #353: 6 HNSW EML optimizations (distance model, adaptive ef, path prediction, rebuild trigger, training infra, persistence)
+- **66 ExoChain compliance gaps closed**: Systematic audit of all mutation paths
+- 75+ EVENT_KIND constants, 21 governance gates, EmlEvent types (Trained, Drift, Saved, Loaded) chain-witnessed
+- 7 ExoChain/governance certification failures resolved
 
 ---
 
-## v0.6.4 — EML Depth-4 Multi-Head Coherence
+## v0.6.4
 
 *2026-04-04*
 
-- **Depth-4 multi-head EML coherence model**: 50 parameters, 3 output heads (lambda_2, fiedler_norm, uncertainty)
-- Two-tier DEMOCRITUS tick loop wired with EML coherence fast path
-- 24 new tests
+### Added
+
+- **EML depth-4 multi-head coherence**: 50 parameters, 3 output heads (lambda_2, fiedler_norm, uncertainty), 24 tests
+- Two-tier DEMOCRITUS tick loop wired with EML coherence
 
 ---
 
-## v0.6.3 — O(1) EML Coherence Approximation
+## v0.6.3
 
-*2026-04-14*
+*2026-04-04*
 
-- **EML coherence model**: 34-parameter depth-3 master formula predicting algebraic connectivity from graph statistics
+### Added
+
+- **O(1) EML coherence approximation**: 34-parameter depth-3 master formula predicting algebraic connectivity from graph statistics
 - Based on Odrzywolel 2026, "All elementary functions from a single operator" (arXiv:2603.21852v2)
-- O(1) prediction (~100ns) vs O(k*m) Lanczos iteration (~500us) -- ~5000x speedup
-- Enables coherence checking at 10,000 Hz ECC tick rate for robotics
-- Self-training: accumulates data during operation, retrains when 50+ samples collected
+- ~100ns prediction vs ~500us Lanczos iteration (5000x speedup), enabling 10,000 Hz tick rate for robotics
+- Self-training: accumulates data during operation, retrains at 50+ samples
 - Convergence verified on 5 standard graph families (K_n, star, cycle, path, Erdos-Renyi)
-- 16 new tests, all passing
-- Two-tier coherence: fast every tick, exact on drift detection
+- 16 new tests
 
 ---
 
-## v0.6.2 — Graphify Pipeline Wired
+## v0.6.2
 
 *2026-04-04*
 
-- **`weaver graphify rebuild` now functional**: Runs the full detect -> extract -> build -> cluster -> analyze -> export pipeline
-- **`weaver graphify export` now functional**: Loads graph JSON, deserializes into `KnowledgeGraph`, exports to 7 formats
-- Outputs `graphify-out/graph.json` and `graphify-out/GRAPH_REPORT.md`
+### Added
+
+- **Graphify extraction pipeline wired into CLI**: Full detect -> extract -> build -> cluster -> analyze -> export pipeline functional
+- `weaver graphify rebuild` produces `graphify-out/graph.json` and `GRAPH_REPORT.md`
+- `weaver graphify export` loads graph JSON and exports to 7 formats
 
 ---
 
-## v0.6.1 — Graphify Pipeline + Workspace RPC + ECC Calibration
+## v0.6.1
 
 *2026-04-04*
 
-### Graphify Extraction Pipeline
+### Added
 
-- **`weaver graphify rebuild` now functional**: Runs the full detect -> extract -> build -> cluster -> analyze -> export pipeline, producing `graphify-out/graph.json` and `graphify-out/GRAPH_REPORT.md`
-- **`weaver graphify ingest <dir>` delegates to the full pipeline** for local directories (equivalent to `rebuild`)
-- **`weaver graphify export <format>` now functional**: Loads the graph JSON, deserializes into a `KnowledgeGraph`, and exports to JSON, HTML, GraphML, Obsidian, Wiki, Cypher, or SVG
-- **Two extraction modes**: Default (file detection + co-location edges, no tree-sitter required) and full AST extraction (with `--features ast-extract`)
-
-### Workspace RPC
-
-- **`weft workspace create/list/load/status/delete` now functional**: Workspace management commands connected to daemon RPC
-
-### Kernel Boot
-
+- **Workspace RPC**: `weft workspace create/list/load/status/delete` connected to daemon RPC
 - **Cognitive tick auto-started** during kernel boot sequence
 - **ECC tick auto-computed** from calibration bands (0.01ms to 1000ms, was hardcoded at 50ms)
+- `weaver graphify ingest` delegates to the full pipeline for local directories
+
+### Fixed
+
+- Workspace RPC dispatch routing
+- Cognitive tick startup sequencing
 
 ---
 
-## v0.6.0 — Cognitum Seed Gap Sprint + Tiered Kernel Profiles
+## v0.6.0
 
 *2026-04-04*
 
-- **11 gaps identified and closed** across the kernel via Cognitum Seed analysis
-- **Tiered kernel profiles** (T0-T4): Boot-time calibration selects the appropriate resource tier from embedded microcontroller (T0) through GPU server (T4)
-- **Auto update check**: `weaver update` / `weft update` commands
-- **Universal install script**: Single-command installation for all platforms
+### Added
+
+- **Cognitum Seed gap sprint**: 11 gaps identified and closed across the kernel
+- **Tiered kernel profiles** (T0-T4): Boot-time calibration selects appropriate resource tier from embedded microcontroller (T0) through GPU server (T4)
+- Auto update check and universal install script
 
 ---
 
-## v0.5.5 — Hybrid Vector Search + DiskANN
+## v0.5.5
 
 *2026-04-04*
 
-### Vector Search Backends
+### Added
 
-- **VectorBackend trait**: Pluggable vector search with `insert`/`search`/`remove`/`flush` interface
+- **VectorBackend trait**: Pluggable vector search with insert/search/remove/flush interface
 - **HNSW backend** (default): In-memory approximate nearest neighbor via `instant-distance`
 - **DiskANN backend**: SSD-backed vector search via `ruvector-diskann` v2.1, Vamana graph with product quantization and mmap persistence
 - **Hybrid backend**: Hot HNSW cache + cold DiskANN store with access-counted promotion, LRU eviction, and merged search results
-- **Configurable via `kernel.vector`** in `weave.toml`: backend selection, dimensions, per-backend tuning
-
-### Documentation
-
-- ECC page updated with vector search backend details, configuration examples, and selection guide
-- Configuration reference updated with `[kernel.vector]` section
-- Release notes updated
+- Configurable via `[kernel.vector]` in `weave.toml`
 
 ---
 
-## v0.5.4 — Benchmark v3 + ESP32 Edge Benchmark
+## v0.5.4
 
 *2026-04-04*
 
-- **Benchmark v3**: 6-phase comprehensive performance suite (1,342 LOC) covering RPC latency, compute throughput, memory, persistence, concurrency, and stress
+### Added
+
+- **Benchmark v3**: 6-phase comprehensive performance suite (1,342 LOC)
 - **ESP32-S3 edge benchmark**: Compatible with `weaver benchmark` v3 for edge devices
-- Fixed benchmark method names and parameter formats
+
+### Fixed
+
+- Benchmark method names and parameter formats
 
 ---
 
-## v0.5.3 — Benchmark Scoring Recalibration
+## v0.5.3
 
 *2026-04-04*
 
-- **Scoring recalibrated**: Pi 5 was incorrectly graded A+ due to overly generous thresholds, now correctly scores B/C
+### Fixed
+
+- **Benchmark scoring recalibrated**: Pi 5 was incorrectly graded A+, now correctly scores B/C
 
 ---
 
-## v0.5.2 — Kernel Default + Benchmark v1
+## v0.5.2
 
 *2026-04-04*
+
+### Added
+
+- **`weaver benchmark`**: Standardized kernel performance test
+- **Benchmark v2**: Three-tier testing (RPC, compute, stress)
+
+### Changed
 
 - **Kernel enabled by default**: No longer requires explicit `--features kernel` flag
-- **`weaver benchmark`**: Standardized kernel performance test (RPC, compute, stress)
-- **ECC RPC dispatch**: All ECC commands wired to daemon endpoints
+- **ECC RPC dispatch endpoints** wired for all ECC commands
 - **Per-project kernel runtime directory**: Prevents state collision across projects
-- **`weaver update` / `weft update`**: Unified update command
 
 ---
 
-## v0.5.1 — Knowledge Graph Builder
-
-*2026-04-07*
-
-### clawft-graphify (New Crate)
-
-- **11,896 lines of Rust** across 35 modules with 88 tests
-- **AST extraction** via tree-sitter for Python, JavaScript/TypeScript, Rust, Go
-- **Two-pass extraction**: structural walk + call graph inference
-- **Community detection**: label propagation with oversized splitting
-- **Analysis**: god nodes, surprising connections (5-factor scoring), question generation (5 strategies), graph diff
-- **7 export formats**: JSON, HTML/vis.js, GraphML, Obsidian vault+canvas, Wiki
-- **URL ingestion**: tweet, arXiv, PDF, webpage with SSRF protection
-- **WeftOS integration**: CausalGraph bridge, 9th assessment analyzer, HNSW indexing
-- **Forensic domain**: 14 entity types, 13 edge types, gap analysis, coherence scoring, counterfactual delta
-- **CLI**: `weaver graphify` with 7 subcommands (ingest, query, export, diff, rebuild, watch, hooks)
-- **File watcher** + **git hooks** for continuous graph updates
-
----
-
-## v0.5.0 — Sprint 16 Architecture
+## v0.5.1
 
 *2026-04-04*
 
-- **wasmtime v33 upgrade**: Latest WASM runtime with performance improvements
-- **Security audit**: Full review of kernel service boundaries
-- **ServiceApi**: Unified kernel service registration and lifecycle management
-- **wasip2**: Full `wasm32-wasip2` target support finalized across all crates
+### Added
+
+- **clawft-graphify** (new crate): 11,896 lines of Rust across 35 modules with 88 tests
+- AST extraction via tree-sitter for Python, JavaScript/TypeScript, Rust, Go
+- Community detection via label propagation with oversized splitting
+- Analysis: god nodes, surprising connections (5-factor scoring), question generation (5 strategies), graph diff
+- 7 export formats: JSON, HTML/vis.js, GraphML, Obsidian vault+canvas, Wiki, Cypher, SVG
+- URL ingestion (tweet, arXiv, PDF, webpage) with SSRF protection
+- CausalGraph bridge, 9th assessment analyzer, HNSW indexing
+- Forensic domain: 14 entity types, 13 edge types, gap analysis, coherence scoring
+- CLI: `weaver graphify` with 7 subcommands (ingest, query, export, diff, rebuild, watch, hooks)
+
+---
+
+## v0.5.0
+
+*2026-04-04*
+
+### Added
+
+- **Sprint 16 architecture sprint**: wasmtime v33 upgrade, security audit
+- **ServiceApi**: Unified kernel service registration and lifecycle
+- **wasip2**: Full `wasm32-wasip2` target support across all crates
 - **Playground phase 3-4**: Browser WASM sandbox improvements
-- **Mesh K6 benchmarks**: Performance baseline for mesh networking
-- **Browser WASM features**: Enhanced client-side execution capabilities
+- **Browser WASM features**: Enhanced client-side execution
+
+### Changed
+
+- Renamed `ui/` to `clawft-ui/` for workspace clarity
+
+### Fixed
+
+- Docker tarball directory component stripping
 
 ---
 
-## v0.4.3 — Docs Coverage + Docker Optimization
+## v0.4.3
 
 *2026-04-04*
 
-- **Documentation coverage pass**: Sprint 14-15 docs for assessment, GUI, browser, and plugins
-- **Docker Alpine optimization**: Alpine + pre-built musl binaries, build time from ~30min to ~2min, image ~50MB to ~15MB
-- **crates.io pipeline fixes**: Added `clawft-plugin-treesitter` and `clawft-services` to publish pipeline, handle duplicate-version errors gracefully
+### Added
+
+- Sprint 14-15 documentation coverage pass: assessment, GUI, browser, plugins
+- Docker Alpine optimization: Build time from ~30min to ~2min, image ~50MB to ~15MB
+
+### Fixed
+
+- `clawft-plugin-treesitter` added to crates.io publish pipeline
+- `clawft-services` added to crates.io publish pipeline
+- Handle 'already exists' error gracefully in crates.io publish
 
 ---
 
-## v0.4.2 — Sprint 15 Completion + Docker Optimization
+## v0.4.2
 
 *2026-04-04*
 
-### Plugin Ecosystem (WS5)
+### Added
 
-- **clawft-plugin-npm**: Node.js dependency parsing via package.json and lockfiles
-- **clawft-plugin-ci**: GitHub Actions and Vercel config parsing and analysis
-- **Plugin marketplace scaffold**: `create-weftos-plugin` CLI for authoring new plugins
-- **Rustdoc JSON-to-MDX converter**: Generates native Fumadocs API pages from Rust documentation
-
-### Cross-Project Mesh (WS4)
-
-- **MeshCoordinator**: Real mesh coordination with AssessmentMessage protocol and gossip discovery
-- **Bidirectional peer linking**: clawft and weavelogic.ai linked and compared across projects
-- **Multi-project namespace**: `[project]` section in weave.toml with org-based isolation
-
-### Browser Sandbox Improvements
-
-- **Full kernel boot sequence**: ExoChain log now shows INIT, CONFIG, SERVICES, NETWORK, READY phases
+- **Full boot sequence in ExoChain log**: INIT, CONFIG, SERVICES, NETWORK, READY phases visible
 - **Rich markdown rendering**: Headings, bold, italic, code blocks, links, lists in chat bubbles
 - **Document preview panel**: Click internal doc links to open in a side panel
+- **Plugin marketplace scaffold**: `create-weftos-plugin` CLI for authoring new plugins
+- **Rustdoc JSON-to-MDX converter**: Generates native Fumadocs API pages from Rust documentation
+- **clawft-plugin-npm**: Node.js dependency parsing via package.json and lockfiles
+- **clawft-plugin-ci**: GitHub Actions and Vercel config parsing
+- **MeshCoordinator**: Real mesh coordination with AssessmentMessage protocol and gossip discovery
+- 25 crates in workspace, 48 ADRs
 
-### Infrastructure
+### Fixed
 
-- **Docker optimization**: Alpine + pre-built musl binaries -- build time from ~30min to ~2min, image ~50MB to ~15MB
-- **crates.io pipeline fixed**: 12 crates now publish automatically on tag (was broken by missing deps)
-- **25 crates** in workspace (added clawft-plugin-npm, clawft-plugin-ci)
-- **48 ADRs** (unchanged)
+- crates.io pipeline: 12 crates now publish automatically on tag
 
 ---
 
-## v0.4.1 — Sprint 15: Assessment Depth, CI Hardening, Client Readiness
+## v0.4.1
 
 *2026-04-03*
 
-### Pluggable Assessment Analyzers
+### Added
 
-- **AnalyzerRegistry** with trait-based extensibility
-- **5 built-in analyzers**: complexity (>500-line files, TODO/FIXME), dependency (Cargo.toml/package.json parsing), security (hardcoded secrets, .env, unsafe), topology (Docker, K8s, .env), data source (postgres://, redis://, S3, API URLs)
-- **Assessment diff**: compare current vs. previous runs, surface regressions
-- **Git hooks**: `weft assess hooks` installs post-commit or pre-push hooks
+- **Pluggable Analyzer Registry**: `AnalyzerRegistry` with `Analyzer` trait for extensible assessment
+- **5 Built-in Analyzers**: ComplexityAnalyzer, DependencyAnalyzer (Cargo.toml/package.json), SecurityAnalyzer (secrets, .env, unsafe), TopologyAnalyzer (Docker, K8s), DataSourceAnalyzer (connection strings, S3, APIs)
+- **Assessment Diff**: Compare current vs. previous assessment (files added/removed, findings new/resolved)
+- **Assessment Hooks**: `weft assess hooks` -- install/uninstall post-commit and pre-push git hooks
+- **Assessment Dashboard**: `/assess` route with project stats, findings list, peer comparison
+- **Assessment Config**: Load trigger configuration from `.weftos/weave.toml`
+- **Multi-project Namespace**: `[project]` section in weave.toml with org isolation
+- **PR Assessment Gate**: `weft assess --scope ci --format github-annotations` in pr-gates.yml
+- **Cargo Check Gate**: Workspace-wide `cargo check` in PR pipeline
+- **Guided Tour Prompts**: 4 categories (getting started, architecture, assessment, security)
+- **WITNESS Chain Footer**: Chain integrity display in ExoChain log panel
+- **Docs-assets Manual Dispatch**: `workflow_dispatch` with `skip_wasm` input
 
-### CI/CD Hardening
+### Fixed
 
-- **PR assessment gate**: `weft assess --scope ci --format github-annotations` runs on every PR
-- **Cargo check gate**: workspace-wide compilation check in PR pipeline
-- **Browser WASM CI fixed**: pinned wasm-bindgen-cli to v0.2.108
-- **docs-assets manual dispatch**: `workflow_dispatch` with `skip_wasm` input
-
-### Client Deployment Readiness
-
-- **Assessment config**: loads triggers from `.weftos/weave.toml`
-- **Multi-project namespace**: `[project]` section with org-based isolation
-- **Assessment dashboard**: `/assess` route with project stats, findings, peer comparison
-- **Guided tour set pieces**: 4 categories of starter prompts in WASM sandbox
-
-### Documentation Fixes
-
-- Fixed all incorrect URLs (github.com/clawft/clawft to weave-logic-ai/weftos, ghcr.io same)
-- Updated test badge (3,300+ to 3,900+), crate count (22 to 23)
-- Added glossary entries: clawft-rpc, AssessmentService, Analyzer/AnalyzerRegistry
-- WITNESS chain verification footer in ExoChain log panel
+- **Browser WASM CI**: Pinned wasm-bindgen-cli to v0.2.108 (matches Cargo.lock)
+- **Wrong URLs**: Fixed all `github.com/clawft/clawft` to `weave-logic-ai/weftos` and `ghcr.io/clawft/clawft` to `weave-logic-ai/weftos` across 6 doc files
+- **Test badge**: Updated from 3,300+ to 3,900+ on homepage
+- **Crate count**: Updated from 22 to 23 (added clawft-rpc)
+- **Glossary**: Added entries for clawft-rpc, AssessmentService, Analyzer/AnalyzerRegistry
 
 ---
 
-## v0.4.0 — Sprint 14: WASM Sandbox, Assessment, CLI Compliance
+## v0.4.0
 
 *2026-04-03*
 
-Sprint 14 ships the browser WASM sandbox, assessment framework, CLI kernel compliance, and 28 architectural decision records.
+### Added
 
-### Browser WASM Sandbox (`/clawft/`)
+#### Sprint 14: WASM Sandbox, Assessment Framework, CLI Compliance, 28 ADRs
 
-- **Live in your browser**: clawft-wasm runs entirely client-side, loaded from CDN via GitHub Releases
-- **RVF Knowledge Base**: 1,160 documentation segments with keyword search, acronym detection, and RAG-powered answers
-- **Two modes**: Local (no API key, pure KB retrieval) and LLM (connect any provider via OpenRouter, Anthropic, OpenAI, etc.)
-- **ExoChain Log Panel**: Live audit trail showing every operation -- KB search, queries, responses -- with linked hashes
-- **Runtime Introspection**: Users can inspect their own WASM instance (memory, exports, KB stats, browser environment)
+- **WASM Sandbox** (`/clawft/` route): Browser-based WeftOS agent running clawft-wasm with 1,160-segment RVF knowledge base, RAG-powered documentation search, local mode (no API key needed), LLM mode with provider routing, ExoChain log panel with live audit trail, runtime introspection, and "New chat" reset
+- **CDN Asset Delivery**: GitHub Releases `cdn-assets` tag with Vercel API route proxy (`/api/cdn/[...path]`), edge-cached via `s-maxage`, blob URL WASM loading for MIME-type bypass
+- **clawft-rpc** (new crate): Shared RPC client extracted from clawft-weave. `DaemonClient`, `Request`/`Response` protocol types, `connect_or_bail()` convenience. Both `weft` and `weaver` CLIs now share this crate
+- **AssessmentService** (kernel): New `SystemService` with file scanning, tree-sitter symbol extraction (Rust/TypeScript), cyclomatic complexity analysis, scope support (full/commit/ci/dependency), peer coordination (link/compare via local path or HTTP URL), ExoChain audit logging
+- **`weft assess` CLI**: `run`, `status`, `init`, `link`, `peers`, `compare` subcommands with daemon-first RPC and local fallback
+- **Cross-project coordination**: Peer registry (`.weftos/peers.json`), assessment comparison across projects, validated on clawft (412K LOC) and weavelogic.ai (801K LOC)
+- **Docs site**: Previous/next navigation, "Edit on GitHub" links, glossary (25+ terms), troubleshooting section, assessment workflow guide, deployment SOPs
+- **28 ADRs** (ADR-020 through ADR-047): Kernel phase responsibilities, CLI daemon compliance, ExoChain mandatory audit, Noise encryption, Ed25519 identity, post-quantum dual signing, CBOR wire format, three-branch governance, effect algebra, forest of trees architecture, three operating modes, and 16 more
 
-### Assessment Framework
+### Changed
 
-- **`weft assess` CLI**: `run`, `status`, `init`, `link`, `peers`, `compare` subcommands
-- **AssessmentService**: Kernel-native `SystemService` with tree-sitter integration for Rust/TypeScript symbol extraction and cyclomatic complexity
-- **Cross-project coordination**: Link projects via local path or HTTP URL, compare assessments side-by-side
-- **Daemon RPC**: 5 new endpoints (`assess.run`, `assess.status`, `assess.link`, `assess.peers`, `assess.compare`) with ExoChain audit logging
-- **Validated**: clawft (2,986 files, 412K LOC) and weavelogic.ai (2,549 files, 801K LOC)
+- **CLI Kernel Compliance** (ADR-021): 32 `weft` commands migrated from direct file I/O to daemon-first RPC with local fallback. Commands: cron (6), assess (4), security (1), skills (7), tools (6), agents (3), workspace (8), other (3)
+- **clawft-weave**: `DaemonClient` and core protocol types moved to `clawft-rpc`, re-exported for backward compatibility. 5 new daemon dispatch endpoints (`assess.*`)
 
-### CLI Kernel Compliance (ADR-021)
+### Fixed
 
-- **New crate: `clawft-rpc`** -- shared RPC client for both `weft` and `weaver` CLIs
-- **32 commands migrated**: All bypassing commands now use daemon-first RPC with graceful local fallback
-- **Categories**: cron (6), assess (4), security (1), skills (7), tools (6), agents (3), workspace (8)
-- **Security**: Every operation can now be audited via ExoChain when the daemon is running
+- WASM JS glue MIME-type: load via blob URL to bypass CDN `application/octet-stream`
+- GitHub Releases CORS: server-side proxy instead of Vercel rewrites (redirect chain exposed missing CORS headers)
+- Vercel CDN caching: `s-maxage=604800` + `stale-while-revalidate=86400` on proxied assets
 
-### Architecture Decision Records (28 new)
+---
 
-- **ADR-020 to ADR-023**: Kernel phase responsibilities, CLI compliance, ExoChain mandatory audit, assessment as kernel service
-- **ADR-024 to ADR-031**: Noise encryption, Ed25519 identity, QUIC transport, selective libp2p, post-quantum dual signing, rvf-crypto fork, CBOR codec, rvf-wire mesh format
-- **ADR-032 to ADR-039**: DashMap concurrency, three-branch governance, effect algebra, ServiceApi, hierarchical ToolRegistry, MSRV 1.93, Tauri shell, SWIM detection
-- **ADR-040 to ADR-047**: LWW-CRDT process table, ChainAnchor trait, three operating modes, hash migration, wasip1 target, tiered router, forest of trees, self-calibrating tick
+## v0.3.0
 
-### Documentation
+*2026-03-31*
 
-- Previous/next page navigation on all doc pages
-- "Edit on GitHub" links
-- [Glossary](/docs/glossary) with 25+ terms
-- Troubleshooting section in getting-started
-- [Assessment Workflow](/docs/weftos/guides/assessment) guide
-- [Deployment SOPs](/docs/weftos/guides/deployment-sops) (SOP 1-5)
+### Added
+
+#### Sprint 13: GUI Integration, Pipeline Wiring, Paperclip Patterns, HTTP API
+
+- **GUI Integration**: KernelDataProvider for live kernel state in React, ThemeSwitcher component with runtime theme selection, BudgetBlock displaying agent budget consumption
+- **Pipeline Wiring**: Config-based scorer and learner instantiation via factory functions, skill mutation pipeline with GEPA-driven prompt evolution
+- **Paperclip Patterns**: Company and OrgChart organizational models, HeartbeatScheduler for liveness monitoring, GoalTree for hierarchical objective tracking
+- **HTTP API**: `/execute`, `/govern`, and `/health` endpoints for external kernel interaction
+- **Full WASI Support**: All 10 publishable crates compile for `wasm32-wasip2` target (10/10)
+- **Windows ARM**: Re-enabled `aarch64-pc-windows-msvc` target with native-tls backend
+- **Testing**: Property-based tests, fuzz harnesses, and benchmark suites across kernel and core crates
+- **Integration Docs**: Paperclip integration guide, OpenClaw connector docs, local inference setup, cloud provider configuration, RuFlo orchestration reference
+
+---
+
+## v0.2.0
+
+*2026-03-31*
+
+### Added
+
+#### Sprint 12: Block Engine, Theming, GEPA, Local LLM
+
+- **Lego Block Engine** (`gui/src/engine/`, `gui/src/blocks/`): BlockRegistry, BlockRenderer, and Zustand+Tauri StateStore. 10 composable block components (Text, Code, Status, Table, Tree, Terminal, Button, Column, Row, Grid, Tabs) with recursive rendering and JSON descriptor-driven layout.
+- **Theming System** (`gui/src/themes/`): 4 built-in themes (ocean-dark, midnight, paper-light, high-contrast with WCAG AAA compliance). CSS variable bridge via `--weftos-*` custom properties, ThemeProvider with runtime switching, ANSI palette mapping, and Tailwind integration.
+- **Context Compression** (`crates/clawft-core/src/agent/context.rs`): Sliding-window context management with configurable `max_context_tokens` (default 8192). First-sentence summarization for older messages. Opt-in via `builder.with_compression(config)`.
+- **GEPA Prompt Evolution** (`crates/clawft-core/src/pipeline/`): `TrajectoryLearner` replacing `NoopLearner` with trajectory collection, pattern extraction, and 4 prompt mutation strategies (rephrase, add examples, remove ineffective, emphasize). `FitnessScorer` replacing `NoopScorer` with 4-dimension weighted scoring (relevance, coherence, completeness, conciseness).
+- **Local LLM Provider** (`crates/clawft-llm/src/local_provider.rs`): OpenAI-compatible provider for Ollama, vLLM, llama.cpp, and LM Studio. Key-optional auth, streaming, model listing. Factory methods: `LocalProvider::ollama()`, `::vllm()`, `::llamacpp()`, `::lmstudio()`.
+
+---
+
+## v0.1.0
+
+*2026-02-17*
+
+### Added
+
+#### Core
+- 9-crate Rust workspace: types, platform, core, llm, tools, channels, services, cli, wasm
+- Agent loop with configurable retry and backoff
+- 6-stage LLM pipeline: Classifier, Router, Assembler, Transport, Scorer, Learner
+- Platform abstraction layer with traits for HTTP, filesystem, environment, and process
+- Native platform implementation for Linux/macOS/Windows
+- Tool registry with dynamic registration and dispatch
+- Event-driven architecture with typed message passing
+
+#### CLI
+- Binary `weft` with subcommand-based interface via clap derive
+- `agent` subcommand for running agent sessions
+- `gateway` subcommand for HTTP/WebSocket gateway server
+- `status` subcommand for system health and diagnostics
+- `channels` subcommand for managing channel integrations
+- `cron` subcommand for scheduled task management
+- `sessions` subcommand for session lifecycle management
+- `memory` subcommand for agent memory operations
+- `config` subcommand for configuration management
+
+#### Tools
+- File operations: read, write, edit, list with path validation
+- Shell execution with configurable timeout and working directory
+- Agent spawn for sub-agent orchestration
+- Memory tool for persistent key-value storage
+- Web fetch with HTTP client and response parsing
+- Web search with provider abstraction
+- Message tool for inter-agent communication
+
+#### Channels
+- Telegram channel plugin with bot API integration
+- Slack channel plugin with Web API and Events API support
+- Discord channel plugin with gateway WebSocket connection
+
+#### Services
+- Cron scheduling service with cron expression parsing
+- Heartbeat service for liveness monitoring
+
+#### WASM
+- Platform stubs for WebAssembly target (HTTP, FS, Env, Process)
+- Feature flags (`native-exec`, `channels`, `services`) for conditional compilation
+- WASM-compatible build profile with size optimizations
+
+### Security
+- `CommandPolicy` with allowlist and denylist for shell command execution
+- `UrlPolicy` with SSRF protection (private IP blocking, scheme restrictions)
+- Path traversal prevention in file operations
 
 ### Infrastructure
-
-- CDN asset delivery via GitHub Releases `cdn-assets` tag
-- Vercel API route proxy with edge caching (`s-maxage=604800`)
-- Blob URL WASM loading for MIME-type compatibility
-
----
-
-## v0.3.0 — Sprint 13: Integration + Paperclip
-
-*2026-04-01*
-
-Sprint 13 wires everything together and adds Paperclip-inspired orchestration patterns.
-
-### GUI Integration
-- **KernelDataProvider**: Real Tauri data bridge replacing mock WebSocket -- polls kernel_status, metrics, processes, cost in parallel
-- **ThemeSwitcher**: Runtime theme selection dropdown with localStorage/Tauri persistence
-- **BudgetBlock**: Per-agent cost tracking dashboard with budget bar and agent table
-
-### Agent Pipeline (end-to-end)
-- **Config-based selection**: `PipelineConfig` with `scorer = "fitness"` and `learner = "trajectory"` in config
-- **Factory functions**: `build_scorer()` / `build_learner()` replace hardcoded NoOp in bootstrap and LLM adapter
-- **Skill improvement**: `improve_skill_instructions()` uses TrajectoryLearner patterns to mutate prompts via `skill_autogen.rs`
-
-### Paperclip Patterns (Rust-native)
-- **Company/OrgChart**: `Company`, `OrgRole` (Ceo/Manager/Worker), `OrgNode`, `OrgChart` with traversal helpers
-- **HeartbeatScheduler**: Multi-agent wake/sleep cycle manager with 5-phase lifecycle (Wake->CheckQueue->Execute->Sleep->Report)
-- **GoalTree**: Hierarchical goal tracking with status filtering (Pending/Active/Complete/Failed)
-- **HTTP API**: Execute/govern/health endpoints behind `http-api` feature flag -- Paperclip adapter bridge
-
-### Platform
-- **Full WASI**: All 10 publishable crates compile for `wasm32-wasip2` (kernel + facade added)
-- **Windows ARM**: Switched reqwest from rustls-tls to native-tls (removes ring dependency)
-- **Zero test failures**: Fixed democritus embedding_error assertion, updated config snapshot
-- **native-tls**: Uses OS TLS stack (SChannel/Security.framework/OpenSSL) for better cross-compilation
-
-### Testing
-- 11 property tests (scorer bounds, mutation safety, token counting monotonicity)
-- 9 fuzz tests (Config/RoutingConfig with random/malformed JSON)
-- 4 criterion benchmark groups (count_tokens, compress_context, scorer, mutation)
-- 6 context compression integration tests
-
----
-
-## v0.2.1 — docs.rs Cross-Links
-
-*2026-04-01*
-
-- All 8 publishable crates now show the WeftOS ecosystem table on docs.rs
-- `[package.metadata.docs.rs]` with `all-features = true` for complete API surface
-- 10 crates republished to crates.io
-
----
-
-## v0.2.0 — Sprint 12: Block Engine, Theming, Intelligence
-
-*2026-04-01*
-
-### Lego Block Engine
-- BlockRegistry, BlockRenderer, StateStore (Zustand + Tauri bridge)
-- 10 composable blocks: Text, Code, Status, Table, Tree, Terminal, Button, Column, Row, Grid, Tabs
-- JSON descriptor-driven layout with recursive rendering
-
-### Theming System
-- 4 built-in themes: ocean-dark, midnight (cyberpunk), paper-light, high-contrast (WCAG AAA)
-- CSS variable bridge via `--weftos-*` custom properties
-- ThemeProvider with runtime switching, ANSI palette mapping, Tailwind integration
-
-### Context Compression
-- Sliding-window context management (configurable max_context_tokens, default 8192)
-- First-sentence summarization for older messages
-- Opt-in: `builder.with_compression(config)`
-
-### GEPA Prompt Evolution
-- TrajectoryLearner: trajectory collection, pattern extraction, evolution triggers
-- FitnessScorer: 4-dimension weighted scoring (task_completion, efficiency, tool_accuracy, coherence)
-- 4 prompt mutation strategies: rephrase, add examples, remove ineffective, emphasize
-
-### Local LLM Provider
-- OpenAI-compatible provider for Ollama, vLLM, llama.cpp, LM Studio
-- Key-optional auth, streaming, model listing
-- Factory methods: `LocalProvider::ollama()`, `::vllm()`, `::llamacpp()`, `::lmstudio()`
-
----
-
-## v0.1.4 — Sprint 11 Closing Release
-
-*2026-04-01*
-
-- **musl static builds**: `x86_64-unknown-linux-musl` + `aarch64-unknown-linux-musl` -- statically linked, runs on any Linux
-- **WASI binary**: `clawft-wasm` for `wasm32-wasip2` (57KB raw, 24KB gzip)
-- **vendored-openssl**: Fixed musl cross-compilation (git2 crate)
-- **7 native + 2 WASM = 9 targets**
-
-## v0.1.3
-
-*2026-04-01*
-
-- Attempted 10 targets (musl + Windows ARM). musl blocked by openssl, Windows ARM by ring. Fixed in v0.1.4.
-
-## v0.1.2
-
-*2026-04-01*
-
-- Automated deploy test via `weftos-build-deploy` skill
-- Validated full release pipeline end-to-end
-
-## v0.1.1
-
-*2026-03-31*
-
-- **Fixed installer URLs**: `repository` field corrected to `weave-logic-ai/weftos`
-- **Homebrew tap**: Created `weave-logic-ai/homebrew-tap`, formula auto-publishing working
-- **HOMEBREW_TAP_TOKEN** secret configured
-- All 5 platform builds green
-
-## v0.1.0 — First Release
-
-*2026-03-31*
-
-First public release of WeftOS. 3 binaries x 5 platforms.
-
-- **weft**: Agent CLI (primary user interface) -- 18 commands, 10 built-in tools
-- **weaver**: Kernel operator CLI (daemon management, kernel lifecycle)
-- **weftos**: Kernel daemon binary
-- GitHub Releases with shell + PowerShell installers
-- cargo-dist automated build pipeline
-
----
-
-## Pre-release Development
-
-### Sprint 11 Symposium (2026-03-28 -- 2026-03-31)
-
-9-track symposium producing 11 documents, 55 work items, 15 technology decisions.
-
-**P0 fixes (9/9)**: opt-level z->3, publish=false on 13 crates, version.workspace on 22 crates, HNSW O(1) lookup, unimplemented!()->Err, #[non_exhaustive] on 118 enums, CHANGELOG rebuilt (134 commits), README fixed, rvf-crypto inlined.
-
-**P1 core (8/8)**: ONNX WordPiece tokenizer, sparse Lanczos spectral analysis (200x improvement), HNSW deferred rebuild, cargo-dist configuration, Registry trait (4 implementations), ChainLoggable trait (3 audit gaps closed), feature gate coarsening (18->3 fields), wasm_runner decomposition (5,046->8 files).
-
-**Documentation**: Fumadocs unified (65+ pages), 20 ADRs, agent guide (448 lines), Hermes integration analysis, GEPA prompt evolution research.
-
-### Sprint 10 (2026-03-01 -- 2026-03-27)
-
-6 weeks of kernel hardening and operational maturity.
-
-- **K8 GUI**: Tauri 2.0 wrapper, component generator, 7 Rust commands
-- **Config/auth services**: Runtime configuration, authentication, authorization
-- **Mesh discovery**: mDNS LAN discovery, static seed peers
-- **10 built-in tools**: File operations, shell execution, web fetch/search, memory, spawn
-- **Observability**: Metrics collection, health monitoring, event logging
-- **External codebase analysis**: Knowledge graph visualization
-- **Docker packaging**: Multi-arch Dockerfile, release-docker.yml
-- **E2E tests**: Playwright-based testing
-- **Tool signing**: Ed25519 signatures on tool definitions
-- **WASM shell execution**: Sandbox environment for tool execution
-
-### Sprint 9 (2026-02-25 -- 2026-02-28)
-
-Spectral analysis and cognitive substrate.
-
-- **ECC cognitive substrate**: Causal DAG, HNSW semantic search, BLAKE3 cross-references
-- **DEMOCRITUS loop**: Continuous cognitive processing (Sense->Embed->Search->Update->CrossRef->Prune->Report)
-- **Spectral analysis**: Community detection, predictive change analysis
-- **Impulse queue**: Ephemeral signal processing with configurable decay
-
-### Sprints 6-8 (2026-02-19 -- 2026-02-24)
-
-Kernel foundation (K0-K6).
-
-- **K0**: Boot sequence, process table, capability registry, REPL console
-- **K1**: Agent supervisor with RBAC, process lifecycle, ExoChain integration
-- **K2**: A2A IPC with topic pub/sub, inbox routing, delegation
-- **K3**: WASM sandbox with wasmtime, fuel metering, capability enforcement
-- **K4**: Container management, application framework
-- **K5**: App packaging, manifest parsing, service wiring
-- **K6**: Mesh networking (Noise protocol, heartbeat, discovery, framing)
-- **ExoChain**: Append-only hash chain with SHAKE-256 + Ed25519 + ML-DSA-65 dual signatures
-- **Governance**: Three-branch constitutional engine (Legislative/Executive/Judicial)
-- **Weaver CLI**: Kernel operator interface with daemon mode
-
-### Sprints 1-5 (2026-02-17 -- 2026-02-18)
-
-Initial framework development.
-
-- **Phase 1-2**: Core agent loop, message bus, LLM provider abstraction
-- **Phase 3**: Skills, agents, workspaces, MCP server, delegation, RVF format, WASM optimization
-- **Tiered routing**: 3-tier model routing (WASM booster, Haiku, Sonnet/Opus)
-- **LLM providers**: OpenAI, Anthropic, Google Gemini, xAI, Ollama, DeepSeek, OpenRouter, Groq
-- **Channels**: CLI, Telegram, Discord, Slack, WebSocket, HTTP, MCP
-- **Plugin system**: Trait-based plugins for tools, channels, pipeline stages
-- **Platform abstraction**: Native + WASM + browser targets
-- **Security**: Tool signing, routing validation, security policy engine
+- GitHub Actions CI workflow with build matrix (stable, nightly, WASM)
+- GitHub Actions release workflow with cross-compilation and asset publishing
+- GitHub Actions benchmark workflow for performance regression tracking
+- GitHub Actions WASM build workflow for browser/worker targets
+- Docker multi-stage build with `FROM scratch` minimal image
+- Release profile with LTO, strip, single codegen unit, and abort-on-panic
+- 1,029 tests across the workspace
