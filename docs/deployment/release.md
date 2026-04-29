@@ -326,6 +326,60 @@ scripts/build.sh browser
 See [`wasm.md`](wasm.md) for runtime instructions and the size budgets
 enforced in CI.
 
+## Security audits
+
+`scripts/build.sh gate` and the `pr-gates.yml` CI workflow both run
+[`cargo audit`](https://crates.io/crates/cargo-audit) against the
+workspace `Cargo.lock` on every gate run. The audit fails the build if
+RustSec reports a new vulnerability or warning advisory that is not in
+the explicit ignore-list.
+
+The ignore-list lives in two places that must stay in sync:
+
+- `scripts/build.sh` — `CARGO_AUDIT_IGNORES` array.
+- `.github/workflows/pr-gates.yml` — `cargo-audit` job's
+  `--ignore` flags.
+
+Each ignored advisory is grouped in a comment by the followup Plane work
+item that tracks the eventual fix:
+
+| Followup | Cluster | Why deferred |
+|----------|---------|--------------|
+| WEFT-551 | wasmtime 33 → 43 (15 advisory IDs: 14× RUSTSEC-2026 + RUSTSEC-2025-0118) | Major-version bump; component-model API churn affects `clawft-wasm` + `clawft-kernel/runtime/wasm.rs`. |
+| WEFT-552 | rustls-webpki via rustls / reqwest / quinn alignment (3 IDs) | Coordinated TLS-stack upgrade across the workspace. |
+| WEFT-553 | unmaintained crates + unsound `rand` (6 IDs) | Multiple transitive replacements (`bincode`, `instant`, `paste`, `rustls-pemfile` 1, `serial`). |
+
+The cold-run report from the gate's introduction is at
+`.planning/reviews/0.7.0-release-gate/audit-findings/cargo-audit-cold-run-2026-04-28.md`.
+
+### When a new advisory lands
+
+1. Re-run `cargo audit` (or `scripts/build.sh audit`) to confirm the new
+   ID and which crate brings it in.
+2. If a `Solution:` line is offered and the bump is contained, fix it in
+   the next PR — preferred path.
+3. If the fix requires a coordinated multi-crate upgrade, file a Plane
+   work item against the closest milestone (`0.7.x` if it blocks ship,
+   `0.8.x` otherwise) using the labels
+   `ws02-kernel,security,audit-finding`. Cite the advisory ID, the
+   crate(s), and the report file.
+4. Add the RUSTSEC-ID to **both** ignore-lists (`scripts/build.sh` and
+   `.github/workflows/pr-gates.yml`), with a comment naming the
+   followup WEFT-N. Keep the two lists identical.
+5. When the followup lands, drop the IDs from both ignore-lists in the
+   same commit so the gate tightens automatically.
+
+### Running the audit locally
+
+```bash
+cargo install --locked cargo-audit   # one-time
+scripts/build.sh audit               # workspace audit with current ignore-list
+scripts/build.sh gate                # full 12-check gate including audit
+```
+
+`scripts/build.sh audit` is also useful before bumping a dependency: run
+it, change the dep, run it again, and diff.
+
 ## Troubleshooting a Failed Release
 
 **`Publish Crates` failed.** Most common causes: a crate has
