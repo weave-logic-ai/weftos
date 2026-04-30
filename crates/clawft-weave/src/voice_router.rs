@@ -69,6 +69,7 @@
 //! [`DaemonCommandHandler`] (calls into the daemon's `dispatch`
 //! function via an injected closure).
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -95,6 +96,97 @@ pub struct VoiceRouterConfig {
     /// wires the daemon's own node-id; tests use `None` (or any
     /// non-`None` value — capture-tier subscribe accepts any caller).
     pub subscriber_id: Option<String>,
+    /// Per-principal permission grid (WEFT-208 / SC-4). Defaults to
+    /// "every voice principal is Level 0", which only allows chat
+    /// dispatch — commands are refused outright.
+    pub permissions: VoicePermissions,
+}
+
+/// Voice-router permission table (WEFT-208 / SC-4).
+///
+/// Mirrors [`clawft_types::config::VoicePermissionConfig`] without
+/// coupling the router to the full config crate. The router clamps
+/// out-of-range levels (anything > 2) to [`VoiceLevel::Level0`] at
+/// resolve time so a bad config can never accidentally privilege a
+/// principal.
+#[derive(Debug, Clone, Default)]
+pub struct VoicePermissions {
+    /// Level applied to any principal not explicitly listed.
+    pub default_level: VoiceLevel,
+    /// Per-principal overrides, keyed by substrate `actor_id`.
+    pub principal_levels: HashMap<String, VoiceLevel>,
+    /// Allowlist of command verbs Level 1 principals may dispatch.
+    pub safe_commands: HashSet<String>,
+}
+
+impl VoicePermissions {
+    /// Resolve the permission level for a given principal. `None` and
+    /// unknown principals fall back to [`Self::default_level`].
+    pub fn level_for(&self, principal: Option<&str>) -> VoiceLevel {
+        match principal {
+            Some(id) => self
+                .principal_levels
+                .get(id)
+                .copied()
+                .unwrap_or(self.default_level),
+            None => self.default_level,
+        }
+    }
+
+    /// Build a permissions table from raw config integer levels (0/1/2);
+    /// anything outside that range is clamped to Level 0.
+    pub fn from_raw(
+        default_level: u8,
+        principal_levels: impl IntoIterator<Item = (String, u8)>,
+        safe_commands: impl IntoIterator<Item = String>,
+    ) -> Self {
+        Self {
+            default_level: VoiceLevel::from_raw(default_level),
+            principal_levels: principal_levels
+                .into_iter()
+                .map(|(k, v)| (k, VoiceLevel::from_raw(v)))
+                .collect(),
+            safe_commands: safe_commands.into_iter().collect(),
+        }
+    }
+}
+
+/// Voice principal trust level (WEFT-208 / SC-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VoiceLevel {
+    /// Read-only — chat allowed, commands refused outright. Default for
+    /// unauthenticated voice (no `actor_id` on the publish line) and
+    /// for principals not in the override table.
+    #[default]
+    Level0,
+    /// Authenticated voice — chat + commands listed in
+    /// [`VoicePermissions::safe_commands`].
+    Level1,
+    /// Privileged voice — chat + any command. Dispatched commands are
+    /// still subject to the standard kernel governance gate, so a
+    /// missing per-verb grant on the kernel side will still reject
+    /// the call.
+    Level2,
+}
+
+impl VoiceLevel {
+    /// Clamp an out-of-range raw level (anything > 2) to [`Self::Level0`].
+    pub fn from_raw(value: u8) -> Self {
+        match value {
+            1 => Self::Level1,
+            2 => Self::Level2,
+            _ => Self::Level0,
+        }
+    }
+
+    /// Numeric form, suitable for tracing fields.
+    pub fn as_u8(self) -> u8 {
+        match self {
+            Self::Level0 => 0,
+            Self::Level1 => 1,
+            Self::Level2 => 2,
+        }
+    }
 }
 
 /// Inbound chat request synthesized from a single transcript.
@@ -130,6 +222,12 @@ pub struct VoiceTurnMetadata {
     /// Whisper-reported confidence, or `None` when the response_format
     /// in use does not carry a confidence field.
     pub confidence: Option<f64>,
+    /// Voice principal as reported by the substrate publish line's
+    /// `actor_id` (set by `clawft-service-whisper` to the source
+    /// sensor node id). `None` when the publish line carries no
+    /// `actor_id` — treated as an unauthenticated voice principal by
+    /// the permission gate.
+    pub principal: Option<String>,
 }
 
 /// Trait for dispatching a transcript into an agent's conversation.
@@ -241,12 +339,14 @@ async fn handle_line(
     chat: &dyn ChatHandler,
     commands: &dyn CommandHandler,
 ) {
-    let Some(payload) = decode_publish_value(bytes) else {
+    let Some(envelope) = decode_publish_envelope(bytes) else {
         // Either a notify-kind line, or malformed JSON — both safely
         // ignored. The substrate subscription stream interleaves both
         // shapes; only publish-kind lines carry transcript bodies.
         return;
     };
+    let payload = envelope.payload;
+    let principal = envelope.actor_id;
     let Some(text_raw) = payload.text() else {
         debug!("voice consumer: skipping transcript with no text field");
         return;
@@ -257,20 +357,27 @@ async fn handle_line(
         return;
     }
 
+    let level = config.permissions.level_for(principal.as_deref());
+
     if !config.command_prefix.is_empty()
         && let Some(cmd_body) = strip_prefix_ci(text, &config.command_prefix)
     {
         let trimmed = cmd_body.trim();
         if !trimmed.is_empty() {
-            route_command(trimmed, config, commands).await;
+            route_command(trimmed, config, principal.as_deref(), level, commands).await;
             return;
         }
     }
 
+    // Chat path is allowed at every level today. The grid leaves room
+    // to deny chat at a future "Level -1" (full mute), but per the
+    // voice security spec Level 0 is "read-only", which still allows
+    // sending a chat query — only command dispatch is gated off.
     let metadata = VoiceTurnMetadata {
         source: "voice",
         transcript_topic: config.transcript_topic.clone(),
         confidence: payload.confidence,
+        principal,
     };
     let turn = VoiceChatTurn {
         target_agent: config.chat_target_agent.clone(),
@@ -285,7 +392,9 @@ async fn handle_line(
 
 async fn route_command(
     body: &str,
-    _config: &VoiceRouterConfig,
+    config: &VoiceRouterConfig,
+    principal: Option<&str>,
+    level: VoiceLevel,
     commands: &dyn CommandHandler,
 ) {
     let mut parts = body.split_whitespace();
@@ -293,12 +402,45 @@ async fn route_command(
         return;
     };
     let args: Vec<&str> = parts.collect();
-    // Placeholder permission gate (WEFT-208 will replace with the
-    // real per-verb authz check + audit hook).
-    if !permission_stub_allows(method) {
-        warn!(method, "voice consumer: command refused by placeholder gate");
-        return;
+
+    // WEFT-208 / SC-4 permission gate.
+    //
+    // Level 0: command dispatch is refused outright.
+    // Level 1: only verbs in `safe_commands` allowed.
+    // Level 2: every verb falls through to the kernel governance gate
+    //          (which has the final say via gate.check on the kernel
+    //          side; the router does not second-guess it).
+    match level {
+        VoiceLevel::Level0 => {
+            warn!(
+                event = "voice.permission.denied",
+                principal = principal.unwrap_or("<unknown>"),
+                requested_command = method,
+                level = level.as_u8(),
+                reason = "level-0 forbids command dispatch",
+                "voice consumer: command refused by permission gate"
+            );
+            return;
+        }
+        VoiceLevel::Level1 => {
+            if !config.permissions.safe_commands.contains(method) {
+                warn!(
+                    event = "voice.permission.denied",
+                    principal = principal.unwrap_or("<unknown>"),
+                    requested_command = method,
+                    level = level.as_u8(),
+                    reason = "command not in level-1 safe-commands allowlist",
+                    "voice consumer: command refused by permission gate"
+                );
+                return;
+            }
+        }
+        VoiceLevel::Level2 => {
+            // Falls through to the existing kernel-side governance gate
+            // wrapped by the daemon's `CommandHandler` impl.
+        }
     }
+
     // Single args-array param shape. Verbs that need richer params
     // are responsible for parsing the array; the alternative (a real
     // CLI parser) lives in the panel and is intentionally out of
@@ -306,21 +448,23 @@ async fn route_command(
     let params = serde_json::json!({ "args": args });
     match commands.dispatch_command(method.to_string(), params).await {
         Ok(_) => {
-            info!(method, "voice consumer: command dispatched");
+            info!(
+                method,
+                principal = principal.unwrap_or("<unknown>"),
+                level = level.as_u8(),
+                "voice consumer: command dispatched"
+            );
         }
         Err(e) => {
-            warn!(method, err = %e, "voice consumer: command dispatch failed");
+            warn!(
+                method,
+                principal = principal.unwrap_or("<unknown>"),
+                level = level.as_u8(),
+                err = %e,
+                "voice consumer: command dispatch failed"
+            );
         }
     }
-}
-
-/// Placeholder permission gate. Replaced by WEFT-208 (per-verb
-/// authorization and audit). Returns `true` for every method today;
-/// voice command routing is opt-in via `voice.consumer.enabled` so a
-/// misbehaving transcript can only reach this path when the operator
-/// has explicitly turned the consumer on.
-fn permission_stub_allows(_method: &str) -> bool {
-    true
 }
 
 /// Strip a case-insensitive prefix. Whisper output capitalization is
@@ -356,6 +500,13 @@ impl TranscriptPayload {
     }
 }
 
+/// Decoded publish-line envelope: the transcript payload + the source
+/// principal (`actor_id`) the substrate publisher attached.
+struct PublishEnvelope {
+    payload: TranscriptPayload,
+    actor_id: Option<String>,
+}
+
 /// Substrate update-line shape (see
 /// `clawft_kernel::substrate_service::build_update_line`):
 ///
@@ -363,10 +514,11 @@ impl TranscriptPayload {
 /// {"path":"…","tick":N,"kind":"publish|notify","value":{…},"actor_id":…}
 /// ```
 ///
-/// Returns the parsed `value` payload when `kind == "publish"`. Notify
-/// lines and malformed JSON return `None`; both are safely ignored
-/// upstream so the subscription stream stays alive across them.
-fn decode_publish_value(line: &[u8]) -> Option<TranscriptPayload> {
+/// Returns the parsed `value` payload + top-level `actor_id` when
+/// `kind == "publish"`. Notify lines and malformed JSON return `None`;
+/// both are safely ignored upstream so the subscription stream stays
+/// alive across them.
+fn decode_publish_envelope(line: &[u8]) -> Option<PublishEnvelope> {
     let end = if line.last() == Some(&b'\n') {
         line.len() - 1
     } else {
@@ -376,8 +528,13 @@ fn decode_publish_value(line: &[u8]) -> Option<TranscriptPayload> {
     if v.get("kind")?.as_str()? != "publish" {
         return None;
     }
+    let actor_id = v
+        .get("actor_id")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string());
     let value = v.get("value")?.clone();
-    serde_json::from_value(value).ok()
+    let payload: TranscriptPayload = serde_json::from_value(value).ok()?;
+    Some(PublishEnvelope { payload, actor_id })
 }
 
 #[cfg(test)]
@@ -423,16 +580,21 @@ mod tests {
             conv_id: "voice-test".into(),
             command_prefix: "weft ".into(),
             subscriber_id: Some("daemon".into()),
+            permissions: VoicePermissions::default(),
         }
     }
 
     fn publish_line(value: Value) -> Vec<u8> {
+        publish_line_from(value, None)
+    }
+
+    fn publish_line_from(value: Value, actor_id: Option<&str>) -> Vec<u8> {
         let v = json!({
             "path": "substrate/_derived/transcript/n-test/mic",
             "tick": 1,
             "kind": "publish",
             "value": value,
-            "actor_id": null,
+            "actor_id": actor_id,
         });
         serde_json::to_vec(&v).unwrap()
     }
@@ -459,12 +621,22 @@ mod tests {
         assert!(cmd.calls.lock().unwrap().is_empty());
     }
 
+    /// Cfg variant that grants the test principal Level 2 — used by
+    /// the legacy router-shape tests that pre-date the SC-4 gate. The
+    /// new SC-4-specific tests below build their own permission tables
+    /// inline.
+    fn cfg_level2() -> VoiceRouterConfig {
+        let mut c = cfg();
+        c.permissions.default_level = VoiceLevel::Level2;
+        c
+    }
+
     #[tokio::test]
     async fn command_path_routes_to_command_handler() {
         let chat = Arc::new(RecordingChat::default());
         let cmd = Arc::new(RecordingCommands::default());
         let line = publish_line(json!({"text": "weft status now"}));
-        handle_line(&line, &cfg(), chat.as_ref(), cmd.as_ref()).await;
+        handle_line(&line, &cfg_level2(), chat.as_ref(), cmd.as_ref()).await;
         assert!(chat.calls.lock().unwrap().is_empty());
         let calls = cmd.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
@@ -478,7 +650,7 @@ mod tests {
         let cmd = Arc::new(RecordingCommands::default());
         // Whisper sometimes capitalizes the first word.
         let line = publish_line(json!({"text": "Weft Hello"}));
-        handle_line(&line, &cfg(), chat.as_ref(), cmd.as_ref()).await;
+        handle_line(&line, &cfg_level2(), chat.as_ref(), cmd.as_ref()).await;
         assert!(chat.calls.lock().unwrap().is_empty());
         assert_eq!(cmd.calls.lock().unwrap().len(), 1);
     }
@@ -543,5 +715,248 @@ mod tests {
         handle_line(&line, &c, chat.as_ref(), cmd.as_ref()).await;
         assert_eq!(chat.calls.lock().unwrap().len(), 1);
         assert!(cmd.calls.lock().unwrap().is_empty());
+    }
+
+    // ---------------------------------------------------------------
+    // WEFT-208 / SC-4: voice permission gate tests.
+    // ---------------------------------------------------------------
+
+    fn cfg_with_permissions(perms: VoicePermissions) -> VoiceRouterConfig {
+        let mut c = cfg();
+        c.permissions = perms;
+        c
+    }
+
+    fn perms(default: VoiceLevel, overrides: &[(&str, VoiceLevel)]) -> VoicePermissions {
+        VoicePermissions {
+            default_level: default,
+            principal_levels: overrides
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), *v))
+                .collect(),
+            safe_commands: ["status", "list", "help"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+        }
+    }
+
+    #[tokio::test]
+    async fn level0_command_rejected_chat_allowed() {
+        let chat = Arc::new(RecordingChat::default());
+        let cmd = Arc::new(RecordingCommands::default());
+        let c = cfg_with_permissions(perms(VoiceLevel::Level0, &[]));
+
+        // Command path: rejected.
+        let line = publish_line_from(json!({"text": "weft status"}), Some("n-unknown"));
+        handle_line(&line, &c, chat.as_ref(), cmd.as_ref()).await;
+        assert!(cmd.calls.lock().unwrap().is_empty());
+        assert!(chat.calls.lock().unwrap().is_empty());
+
+        // Chat path: allowed.
+        let line = publish_line_from(json!({"text": "what is the time"}), Some("n-unknown"));
+        handle_line(&line, &c, chat.as_ref(), cmd.as_ref()).await;
+        assert!(cmd.calls.lock().unwrap().is_empty());
+        let calls = chat.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].metadata.principal.as_deref(),
+            Some("n-unknown")
+        );
+    }
+
+    #[tokio::test]
+    async fn level1_safe_command_allowed() {
+        let chat = Arc::new(RecordingChat::default());
+        let cmd = Arc::new(RecordingCommands::default());
+        let c = cfg_with_permissions(perms(
+            VoiceLevel::Level0,
+            &[("n-mic1", VoiceLevel::Level1)],
+        ));
+        let line = publish_line_from(json!({"text": "weft status"}), Some("n-mic1"));
+        handle_line(&line, &c, chat.as_ref(), cmd.as_ref()).await;
+        let calls = cmd.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "status");
+        assert!(chat.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn level1_non_safe_command_rejected() {
+        let chat = Arc::new(RecordingChat::default());
+        let cmd = Arc::new(RecordingCommands::default());
+        let c = cfg_with_permissions(perms(
+            VoiceLevel::Level0,
+            &[("n-mic1", VoiceLevel::Level1)],
+        ));
+        let line = publish_line_from(json!({"text": "weft shutdown now"}), Some("n-mic1"));
+        handle_line(&line, &c, chat.as_ref(), cmd.as_ref()).await;
+        assert!(cmd.calls.lock().unwrap().is_empty());
+        assert!(chat.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn level2_falls_through_to_governance_gate() {
+        // The router does not consult `gate.check` directly; once the
+        // SC-4 router-side gate clears, the call lands on the
+        // CommandHandler trait, which the daemon implementation wraps
+        // around the kernel's governance gate. The recording handler
+        // here represents that downstream surface — observing a hit
+        // proves the SC-4 gate did not block it.
+        let chat = Arc::new(RecordingChat::default());
+        let cmd = Arc::new(RecordingCommands::default());
+        let c = cfg_with_permissions(perms(
+            VoiceLevel::Level0,
+            &[("n-admin", VoiceLevel::Level2)],
+        ));
+        let line = publish_line_from(json!({"text": "weft shutdown now"}), Some("n-admin"));
+        handle_line(&line, &c, chat.as_ref(), cmd.as_ref()).await;
+        let calls = cmd.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "shutdown");
+        assert_eq!(calls[0].1, json!({"args": ["now"]}));
+        assert!(chat.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn permissions_resolver_clamps_out_of_range_levels() {
+        let p = VoicePermissions::from_raw(
+            7,
+            [("n-bad".to_string(), 99u8)],
+            ["status".to_string()],
+        );
+        assert_eq!(p.default_level, VoiceLevel::Level0);
+        assert_eq!(p.level_for(Some("n-bad")), VoiceLevel::Level0);
+        assert_eq!(p.level_for(None), VoiceLevel::Level0);
+    }
+
+    /// Audit-emission test: a Level 0 principal attempting a command
+    /// must produce a tracing event tagged
+    /// `event = "voice.permission.denied"` carrying the principal,
+    /// the requested verb, and the level. We capture the event via
+    /// a custom tracing layer so the assertion is independent of any
+    /// global subscriber configuration.
+    #[test]
+    fn permission_denied_audit_event_emits() {
+        use std::sync::Mutex as StdMutex;
+        use tracing::field::{Field, Visit};
+        use tracing::subscriber::with_default;
+        use tracing::Subscriber;
+        use tracing_subscriber::layer::{Context, SubscriberExt};
+        use tracing_subscriber::registry::LookupSpan;
+        use tracing_subscriber::Layer;
+
+        #[derive(Clone, Default)]
+        struct CapturedEvent {
+            event: Option<String>,
+            principal: Option<String>,
+            requested_command: Option<String>,
+            level: Option<u64>,
+            reason: Option<String>,
+        }
+
+        impl Visit for CapturedEvent {
+            fn record_str(&mut self, field: &Field, value: &str) {
+                match field.name() {
+                    "event" => self.event = Some(value.to_string()),
+                    "principal" => self.principal = Some(value.to_string()),
+                    "requested_command" => {
+                        self.requested_command = Some(value.to_string())
+                    }
+                    "reason" => self.reason = Some(value.to_string()),
+                    _ => {}
+                }
+            }
+            fn record_u64(&mut self, field: &Field, value: u64) {
+                if field.name() == "level" {
+                    self.level = Some(value);
+                }
+            }
+            fn record_i64(&mut self, field: &Field, value: i64) {
+                if field.name() == "level" && value >= 0 {
+                    self.level = Some(value as u64);
+                }
+            }
+            fn record_debug(
+                &mut self,
+                _field: &Field,
+                _value: &dyn std::fmt::Debug,
+            ) {
+            }
+        }
+
+        struct CapturingLayer {
+            sink: Arc<StdMutex<Vec<CapturedEvent>>>,
+        }
+
+        impl<S> Layer<S> for CapturingLayer
+        where
+            S: Subscriber + for<'a> LookupSpan<'a>,
+        {
+            fn on_event(
+                &self,
+                event: &tracing::Event<'_>,
+                _ctx: Context<'_, S>,
+            ) {
+                let mut captured = CapturedEvent::default();
+                event.record(&mut captured);
+                if captured.event.as_deref() == Some("voice.permission.denied") {
+                    self.sink.lock().unwrap().push(captured);
+                }
+            }
+        }
+
+        let sink: Arc<StdMutex<Vec<CapturedEvent>>> = Arc::new(StdMutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry()
+            .with(CapturingLayer { sink: sink.clone() });
+
+        let chat = Arc::new(RecordingChat::default());
+        let cmd = Arc::new(RecordingCommands::default());
+        let c = cfg_with_permissions(perms(VoiceLevel::Level0, &[]));
+
+        let line = publish_line_from(
+            json!({"text": "weft shutdown"}),
+            Some("n-attacker"),
+        );
+        let chat_clone = chat.clone();
+        let cmd_clone = cmd.clone();
+        let cfg_clone = c.clone();
+        // Use a plain (non-tokio) test fn + a fresh current-thread
+        // runtime so we own the subscriber installation site —
+        // `with_default` only applies on the calling thread, and
+        // `#[tokio::test]` wraps the call in its own runtime which
+        // would prevent us from constructing a second one here.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        with_default(subscriber, || {
+            rt.block_on(async {
+                handle_line(
+                    &line,
+                    &cfg_clone,
+                    chat_clone.as_ref(),
+                    cmd_clone.as_ref(),
+                )
+                .await;
+            });
+        });
+
+        // Command did not dispatch.
+        assert!(cmd.calls.lock().unwrap().is_empty());
+
+        let captured = sink.lock().unwrap();
+        assert_eq!(
+            captured.len(),
+            1,
+            "expected exactly one voice.permission.denied event, got {}",
+            captured.len()
+        );
+        let e = &captured[0];
+        assert_eq!(e.event.as_deref(), Some("voice.permission.denied"));
+        assert_eq!(e.principal.as_deref(), Some("n-attacker"));
+        assert_eq!(e.requested_command.as_deref(), Some("shutdown"));
+        assert_eq!(e.level, Some(0));
+        assert!(e.reason.is_some(), "denial event must include a reason");
     }
 }
