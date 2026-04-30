@@ -7,6 +7,7 @@
 //! `pub(crate)` is the minimum change required to make integration
 //! tests link against them.
 
+pub mod capability;
 pub mod client;
 pub mod commands;
 pub mod control;

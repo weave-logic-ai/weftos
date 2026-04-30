@@ -101,7 +101,7 @@ async fn one_shot(
     let stream = UnixStream::connect(socket).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
-    let req = serde_json::json!({ "id": "t", "method": method, "params": params });
+    let req = serde_json::json!({ "id": "t", "method": method, "params": params, "auth": "admin" });
     let mut line = serde_json::to_string(&req).unwrap();
     line.push('\n');
     writer.write_all(line.as_bytes()).await.unwrap();
@@ -177,6 +177,99 @@ async fn control_set_enabled_rejects_unknown_kind() {
     assert_eq!(resp["ok"], serde_json::Value::Bool(false));
     let err = resp["error"].as_str().unwrap_or("");
     assert!(err.contains("unknown kind"), "got: {err}");
+    let _ = shutdown_tx.send(true);
+}
+
+/// WEFT-479: anonymous callers must be denied write/admin verbs.
+///
+/// `control.set_enabled` is classified `Capability::Write`. An RPC
+/// envelope with no `auth` field falls into the anonymous bucket
+/// (`{Read, Chat}`) and the dispatcher must short-circuit with a
+/// permission-denied error before even reaching the handler.
+async fn one_shot_no_auth(
+    socket: &std::path::Path,
+    method: &str,
+    params: serde_json::Value,
+) -> serde_json::Value {
+    let stream = UnixStream::connect(socket).await.unwrap();
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    // No "auth" field — anonymous caller.
+    let req = serde_json::json!({ "id": "noauth", "method": method, "params": params });
+    let mut line = serde_json::to_string(&req).unwrap();
+    line.push('\n');
+    writer.write_all(line.as_bytes()).await.unwrap();
+    let mut ack = String::new();
+    reader.read_line(&mut ack).await.unwrap();
+    serde_json::from_str(ack.trim()).unwrap()
+}
+
+#[tokio::test]
+async fn capability_gate_rejects_anonymous_write() {
+    let (_tmp, socket, shutdown_tx, _kernel) = spawn_test_daemon().await;
+    let resp = one_shot_no_auth(
+        &socket,
+        "control.set_enabled",
+        serde_json::json!({"kind": "service", "target": "whisper", "enabled": false}),
+    )
+    .await;
+    assert_eq!(resp["ok"], serde_json::Value::Bool(false));
+    let err = resp["error"].as_str().unwrap_or("");
+    assert!(
+        err.contains("permission denied") && err.contains("Write"),
+        "expected anonymous Write rejection, got: {err}"
+    );
+    let _ = shutdown_tx.send(true);
+}
+
+#[tokio::test]
+async fn capability_gate_rejects_anonymous_admin() {
+    let (_tmp, socket, shutdown_tx, _kernel) = spawn_test_daemon().await;
+    let resp = one_shot_no_auth(
+        &socket,
+        "kernel.shutdown",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(resp["ok"], serde_json::Value::Bool(false));
+    let err = resp["error"].as_str().unwrap_or("");
+    assert!(
+        err.contains("permission denied") && err.contains("Admin"),
+        "expected anonymous Admin rejection, got: {err}"
+    );
+    let _ = shutdown_tx.send(true);
+}
+
+#[tokio::test]
+async fn capability_gate_allows_anonymous_read() {
+    let (_tmp, socket, shutdown_tx, _kernel) = spawn_test_daemon().await;
+    let resp = one_shot_no_auth(&socket, "kernel.status", serde_json::json!({})).await;
+    // kernel.status is Read, anonymous always allowed; we don't
+    // care about the body here, only that the gate didn't reject.
+    assert_eq!(resp["ok"], serde_json::Value::Bool(true), "kernel.status: {resp}");
+    let _ = shutdown_tx.send(true);
+}
+
+#[tokio::test]
+async fn capability_gate_admin_token_unlocks_admin() {
+    let (_tmp, socket, shutdown_tx, _kernel) = spawn_test_daemon().await;
+    // Use the literal-scope admin shortcut; the gate accepts this
+    // for local UDS callers (DaemonClient sets it transparently).
+    let resp = one_shot(
+        &socket,
+        "control.set_enabled",
+        serde_json::json!({"kind": "service", "target": "whisper", "enabled": false}),
+    )
+    .await;
+    // We expect a domain-level error (control state not initialized),
+    // NOT a permission-denied — meaning the gate let the call through
+    // to the handler. The exact error from the handler is asserted in
+    // the existing tests above.
+    let err = resp["error"].as_str().unwrap_or("");
+    assert!(
+        !err.contains("permission denied"),
+        "admin token must NOT be rejected by gate, got: {err}"
+    );
     let _ = shutdown_tx.send(true);
 }
 

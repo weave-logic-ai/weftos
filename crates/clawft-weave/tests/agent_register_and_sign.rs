@@ -105,7 +105,7 @@ async fn one_shot(
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
-    let req = serde_json::json!({ "id": "t", "method": method, "params": params });
+    let req = serde_json::json!({ "id": "t", "method": method, "params": params, "auth": "admin" });
     let mut line = serde_json::to_string(&req).unwrap();
     line.push('\n');
     writer.write_all(line.as_bytes()).await.unwrap();
