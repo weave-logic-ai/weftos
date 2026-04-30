@@ -439,37 +439,17 @@ pub fn validate_file_size(
 
 // ── SEC-SKILL-08: MCP tool namespace isolation ──────────────────────
 
-/// Validate that an MCP tool name uses the `{server}__{tool}` format
-/// (double underscore separator).
+/// Validate that an MCP server tool name uses the required
+/// `{server}__{tool}` format.
 ///
-/// Non-MCP tools (those without any underscore) are allowed through.
-/// Only tools that appear to come from an MCP server (contain at least
-/// one underscore) are checked for the double-underscore convention.
+/// This is the canonical validator. The historical `validate_mcp_tool_name`
+/// variant -- which silently returned `Ok(())` for any input that did
+/// not look like an MCP tool -- has been removed (WEFT-16). Callers
+/// should not pre-classify tool names; if a name reaches this function,
+/// it is treated as an MCP tool and checked for the `__` separator.
+///
+/// Returns a `SecurityViolation` if the tool name does not contain `__`.
 pub fn validate_mcp_tool_name(tool_name: &str) -> Result<(), ClawftError> {
-    // If the tool name contains no underscores at all, it is a local tool.
-    if !tool_name.contains('_') {
-        return Ok(());
-    }
-    // If it contains a double underscore, it follows the convention.
-    if tool_name.contains("__") {
-        return Ok(());
-    }
-    // It contains single underscores but no double underscore.
-    // This could be a local tool with underscores in its name (e.g.
-    // "read_file"), which is fine. We only flag tools that look like
-    // they come from an MCP server but lack the `__` separator.
-    // Heuristic: if the first segment (before the first `_`) looks like
-    // a server name (lowercase, no digits), we flag it.
-    // For simplicity, we require validation to be called explicitly for
-    // MCP tools only.
-    Ok(())
-}
-
-/// Validate that an MCP server tool name uses the required `{server}__{tool}`
-/// format. This is the strict variant called during MCP tool registration.
-///
-/// Returns an error if the tool name does not contain `__`.
-pub fn validate_mcp_tool_name_strict(tool_name: &str) -> Result<(), ClawftError> {
     if !tool_name.contains("__") {
         return Err(ClawftError::SecurityViolation {
             reason: format!(
@@ -480,6 +460,14 @@ pub fn validate_mcp_tool_name_strict(tool_name: &str) -> Result<(), ClawftError>
         });
     }
     Ok(())
+}
+
+/// Backwards-compatible alias retained for external call sites that
+/// still reference the `_strict` suffix. Both functions are now the
+/// same strict check (WEFT-16).
+#[doc(hidden)]
+pub fn validate_mcp_tool_name_strict(tool_name: &str) -> Result<(), ClawftError> {
+    validate_mcp_tool_name(tool_name)
 }
 
 /// MCP namespace prefixes considered sensitive. A wildcard-only allowlist
@@ -1014,14 +1002,28 @@ mod tests {
         assert!(err.to_string().contains("namespace format"));
     }
 
+    // WEFT-16: the historical "lenient" `validate_mcp_tool_name` that
+    // returned Ok(()) for non-MCP-shaped names has been removed. Callers
+    // should not pre-classify; if a name is passed in, it is checked.
+
     #[test]
-    fn local_tool_no_underscore_passes_lenient() {
-        assert!(validate_mcp_tool_name("ReadFile").is_ok());
+    fn local_tool_no_underscore_now_rejected() {
+        // Post-WEFT-16: lenient pass-through is gone; bare names fail
+        // because they cannot satisfy the `{server}__{tool}` shape.
+        assert!(validate_mcp_tool_name("ReadFile").is_err());
     }
 
     #[test]
-    fn local_tool_with_underscore_passes_lenient() {
-        assert!(validate_mcp_tool_name("read_file").is_ok());
+    fn local_tool_with_single_underscore_now_rejected() {
+        // Single `_` was historically tolerated; now it must be `__`.
+        assert!(validate_mcp_tool_name("read_file").is_err());
+    }
+
+    #[test]
+    fn strict_alias_delegates_to_canonical() {
+        // The `_strict` suffix is a backwards-compat alias.
+        assert!(validate_mcp_tool_name_strict("server__tool").is_ok());
+        assert!(validate_mcp_tool_name_strict("server_tool").is_err());
     }
 
     // ── WEFT-32: MCP namespace guard against wildcard ['*'] ─────────
