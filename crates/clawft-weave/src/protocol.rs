@@ -577,181 +577,21 @@ pub struct LlmPromptResult {
     pub model: Option<String>,
 }
 
-// ── Agent chat (Concierge) — vertical-slice spike ──────────
+// ── Agent chat (Concierge) ─────────────────────────────────
 //
-// `agent.chat` wraps `llm.prompt` with an identity-aware system prompt
-// and a small built-in tool surface (read_file, list_directory) that
-// lets the assistant inspect the workspace before answering.
+// `agent.chat` runs through `clawft-service-agent::AgentService`
+// against the per-conv mutex map; the daemon's dispatch is a thin
+// translator that converts these wire types into the service's
+// `InboundMessage` shape.
 //
-// The wire shape is intentionally close to `llm.prompt` for the spike;
-// post-spike commits add `conversation_id`, `tool_calls` summaries with
-// per-call duration, identity-drift signals, and substrate rehydrate.
-//
-// Plan: `docs/plans/chat-agent-v1.md` §5.
+// The wire-format types live in `clawft_types::agent_chat` (WEFT-498)
+// so neither `clawft-weave` nor `clawft-service-agent` has to depend on
+// the other for serde. Re-exports below preserve the pre-WEFT-498 import
+// paths (`clawft_weave::protocol::AgentChatParams`, etc.).
 
-/// One message in an `agent.chat` conversation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentChatMessage {
-    /// `system` / `user` / `assistant`. The daemon prepends its own
-    /// system prompt; `system` from the panel is appended after it.
-    pub role: String,
-    /// Message content.
-    pub content: String,
-}
-
-/// Parameters for `agent.chat`. The panel sends the full conversation
-/// each turn; the daemon-side concierge is stateless across requests
-/// today (substrate-backed conversation state lands in
-/// `agent-core-v1.md` Phase C3).
-///
-/// Note: there is no `permission` field. Permission is resolved
-/// server-side from the authenticated channel mapping in
-/// `.clawft/config.json` per governance review (plan §15.5).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentChatParams {
-    /// Full conversation history. Last entry should be `user`.
-    pub messages: Vec<AgentChatMessage>,
-    /// Sampling temperature; daemon default when None.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    /// Hard cap on generated tokens per LLM call inside the loop.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u32>,
-    /// Conversation identifier. Used by `agent-core-v1.md` Phase C
-    /// for the per-conv `DashMap<ConvId, Mutex<()>>`, the substrate
-    /// JSONL path (`derived/chat/<conv_id>/turns/<ulid>`), and the
-    /// heartbeat (`derived/chat/<conv_id>/status`). Defaults to an
-    /// ephemeral ULID when callers omit it so legacy panels keep
-    /// working unchanged through Phase A.
-    #[serde(default = "default_conv_id")]
-    pub conv_id: String,
-}
-
-/// agent-core-v1 Phase C2: convert the wire-shape `AgentChatParams`
-/// into the canonical `clawft_service_agent::AgentChatParams`. The
-/// two structs are intentional 1:1 mirrors (see
-/// `clawft_service_agent::protocol` module docs); D3 will delete this
-/// duplicate set and replace with a `pub use`. Until then the From
-/// impls keep the daemon's `agent.chat` dispatch one line.
-impl From<AgentChatParams> for clawft_service_agent::AgentChatParams {
-    fn from(p: AgentChatParams) -> Self {
-        clawft_service_agent::AgentChatParams {
-            messages: p
-                .messages
-                .into_iter()
-                .map(clawft_service_agent::AgentChatMessage::from)
-                .collect(),
-            temperature: p.temperature,
-            max_tokens: p.max_tokens,
-            conv_id: p.conv_id,
-        }
-    }
-}
-
-impl From<AgentChatMessage> for clawft_service_agent::AgentChatMessage {
-    fn from(m: AgentChatMessage) -> Self {
-        clawft_service_agent::AgentChatMessage {
-            role: m.role,
-            content: m.content,
-        }
-    }
-}
-
-impl From<AgentChatToolCall> for clawft_service_agent::AgentChatToolCall {
-    fn from(t: AgentChatToolCall) -> Self {
-        clawft_service_agent::AgentChatToolCall {
-            name: t.name,
-            arguments_preview: t.arguments_preview,
-            result_preview: t.result_preview,
-            success: t.success,
-        }
-    }
-}
-
-impl From<clawft_service_agent::AgentChatToolCall> for AgentChatToolCall {
-    fn from(t: clawft_service_agent::AgentChatToolCall) -> Self {
-        AgentChatToolCall {
-            name: t.name,
-            arguments_preview: t.arguments_preview,
-            result_preview: t.result_preview,
-            success: t.success,
-        }
-    }
-}
-
-impl From<clawft_service_agent::AgentChatResult> for AgentChatResult {
-    fn from(r: clawft_service_agent::AgentChatResult) -> Self {
-        AgentChatResult {
-            assistant_text: r.assistant_text,
-            tool_calls: r.tool_calls.into_iter().map(AgentChatToolCall::from).collect(),
-            finish_reason: r.finish_reason,
-            iterations: r.iterations,
-            prompt_tokens: r.prompt_tokens,
-            completion_tokens: r.completion_tokens,
-            model: r.model,
-            identity_source: r.identity_source,
-        }
-    }
-}
-
-/// Default conversation id when the caller omits `conv_id`. Generates
-/// an ephemeral ULID-shaped string (timestamp-prefixed monotonic) so
-/// successive default-id calls don't collide. Phase C will require
-/// callers to supply a stable id; until then this keeps the legacy
-/// panel wire format working.
-fn default_conv_id() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("ephemeral-{ts:013}-{n:06}")
-}
-
-/// Summary of one tool call the agent executed during a chat turn.
-/// Renders as a collapsible bubble in the panel between user and
-/// assistant turns (plan §11.4).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentChatToolCall {
-    /// Tool name (e.g. `"read_file"`, `"list_directory"`).
-    pub name: String,
-    /// JSON-stringified arguments, truncated for UI preview.
-    pub arguments_preview: String,
-    /// Tool result, truncated for UI preview.
-    pub result_preview: String,
-    /// True when the tool ran without error.
-    pub success: bool,
-}
-
-/// Result of `agent.chat`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentChatResult {
-    /// Final assistant text after the tool loop terminates.
-    pub assistant_text: String,
-    /// Tool calls executed during the loop, in order.
-    pub tool_calls: Vec<AgentChatToolCall>,
-    /// Why the loop terminated: `"stop"`, `"length"`,
-    /// `"max_iterations"`, etc.
-    pub finish_reason: String,
-    /// Number of LLM round-trips inside the loop.
-    pub iterations: u32,
-    /// Cumulative prompt tokens across iterations.
-    pub prompt_tokens: u32,
-    /// Cumulative completion tokens across iterations.
-    pub completion_tokens: u32,
-    /// Echoed model name (best-effort).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    /// Identity descriptor surfaced to the panel — diagnostic for the
-    /// drift-warning path (plan §7.8). Spike emits the loaded source
-    /// (e.g. `"docs-fallback"`) so the user knows when `weaver init`
-    /// hasn't been run.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity_source: Option<String>,
-}
+pub use clawft_types::agent_chat::{
+    AgentChatMessage, AgentChatParams, AgentChatResult, AgentChatToolCall,
+};
 
 // ── Terminal RPCs ─────────────────────────────────────────
 //
@@ -1330,69 +1170,31 @@ mod tests {
     fn agent_chat_params_default_conv_ids_are_distinct() {
         // Successive default-id calls within the same millisecond must
         // not collide — the atomic counter component differentiates.
-        let a = default_conv_id();
-        let b = default_conv_id();
+        let a = clawft_types::agent_chat::default_conv_id();
+        let b = clawft_types::agent_chat::default_conv_id();
         assert_ne!(a, b);
     }
 
-    // ── agent-core-v1 Phase C2: From-impl coverage ──────────────────
-
     #[test]
-    fn agent_chat_params_into_service_agent_round_trips() {
-        // The wire-shape AgentChatParams (clawft-weave) must convert
-        // 1:1 into the canonical clawft_service_agent::AgentChatParams.
-        // D3 deletes the duplicate; until then the From impl is the
-        // hinge.
-        let weave_params = AgentChatParams {
-            messages: vec![
-                AgentChatMessage {
-                    role: "system".into(),
-                    content: "you are a test".into(),
-                },
-                AgentChatMessage {
-                    role: "user".into(),
-                    content: "hi".into(),
-                },
-            ],
-            temperature: Some(0.7),
-            max_tokens: Some(256),
-            conv_id: "01HQABC".into(),
+    fn agent_chat_wire_and_service_types_are_identical() {
+        // Post-WEFT-498 sanity: clawft_weave::protocol::AgentChatParams
+        // and clawft_service_agent::AgentChatParams must be the same
+        // type (both re-export from clawft_types::agent_chat). If a
+        // future contributor reintroduces a duplicate, the assertion
+        // below stops compiling.
+        fn _assert_same<T>(_: T, _: T) {}
+        let p = AgentChatParams {
+            messages: Vec::new(),
+            temperature: None,
+            max_tokens: None,
+            conv_id: "x".into(),
         };
-
-        let svc_params: clawft_service_agent::AgentChatParams = weave_params.into();
-        assert_eq!(svc_params.messages.len(), 2);
-        assert_eq!(svc_params.messages[0].role, "system");
-        assert_eq!(svc_params.messages[1].content, "hi");
-        assert_eq!(svc_params.temperature, Some(0.7));
-        assert_eq!(svc_params.max_tokens, Some(256));
-        assert_eq!(svc_params.conv_id, "01HQABC");
-    }
-
-    #[test]
-    fn agent_chat_result_from_service_agent_preserves_fields() {
-        let svc_result = clawft_service_agent::AgentChatResult {
-            assistant_text: "ok".into(),
-            tool_calls: vec![clawft_service_agent::AgentChatToolCall {
-                name: "read_file".into(),
-                arguments_preview: "{\"path\":\"x\"}".into(),
-                result_preview: "stuff".into(),
-                success: true,
-            }],
-            finish_reason: "stop".into(),
-            iterations: 2,
-            prompt_tokens: 100,
-            completion_tokens: 50,
-            model: Some("Qwen3".into()),
-            identity_source: Some("clawft".into()),
+        let q: clawft_service_agent::AgentChatParams = AgentChatParams {
+            messages: Vec::new(),
+            temperature: None,
+            max_tokens: None,
+            conv_id: "y".into(),
         };
-        let wire: AgentChatResult = svc_result.into();
-        assert_eq!(wire.assistant_text, "ok");
-        assert_eq!(wire.tool_calls.len(), 1);
-        assert_eq!(wire.tool_calls[0].name, "read_file");
-        assert_eq!(wire.tool_calls[0].success, true);
-        assert_eq!(wire.iterations, 2);
-        assert_eq!(wire.prompt_tokens, 100);
-        assert_eq!(wire.model.as_deref(), Some("Qwen3"));
-        assert_eq!(wire.identity_source.as_deref(), Some("clawft"));
+        _assert_same(p, q);
     }
 }

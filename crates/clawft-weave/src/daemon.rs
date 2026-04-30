@@ -104,7 +104,7 @@ use clawft_platform::NativePlatform;
 use clawft_types::config::{Config, KernelConfig};
 
 use crate::protocol::{
-    self, AgentChatParams, AgentChatResult, AgentInspectResult,
+    self, AgentChatParams, AgentInspectResult,
     AgentSendParams, AgentSpawnParams, AgentSpawnResult, AgentStopParams,
     AgentRestartParams, ClusterJoinParams, ClusterLeaveParams, ClusterNodeInfo,
     ClusterStatusResult, CronAddParams, CronJobInfo, CronRemoveParams, IpcPublishParams,
@@ -3843,18 +3843,18 @@ async fn dispatch(
                      check daemon log for 'llm client init failed')",
                 );
             };
-            let weave_params: AgentChatParams = match serde_json::from_value(params) {
+            // Wire and service types are now both re-exports of
+            // `clawft_types::agent_chat::*` (WEFT-498), so dispatch is
+            // a direct hand-off — no `.into()` translator needed.
+            let params: AgentChatParams = match serde_json::from_value(params) {
                 Ok(p) => p,
                 Err(e) => return Response::error(format!("agent.chat: invalid params: {e}")),
             };
-            match agent.dispatch(weave_params.into()).await {
-                Ok(result) => {
-                    let wire: AgentChatResult = result.into();
-                    match serde_json::to_value(wire) {
-                        Ok(v) => Response::success(v),
-                        Err(e) => Response::error(format!("agent.chat: {e}")),
-                    }
-                }
+            match agent.dispatch(params).await {
+                Ok(result) => match serde_json::to_value(result) {
+                    Ok(v) => Response::success(v),
+                    Err(e) => Response::error(format!("agent.chat: {e}")),
+                },
                 Err(e) => Response::error(format!("agent.chat: {e}")),
             }
         }
