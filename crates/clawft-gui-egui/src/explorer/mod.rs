@@ -66,6 +66,14 @@ pub const SLOW_TICK: Duration = Duration::from_millis(1000);
 /// one selected path. Cheap: a single read per tick.
 pub const SELECT_POLL: Duration = Duration::from_millis(400);
 
+/// How long the transient "copied" confirmation label stays visible
+/// after a Copy Path / Copy Pubkey / Export Snapshot click.
+/// WEFT-273. Long enough to read; short enough that it doesn't linger
+/// after the user moves on. Matches the cadence of [`SELECT_POLL`] × 4
+/// — a single re-poll cycle plus a beat — so the label naturally
+/// drops on the next paint that picks up new data.
+pub const COPY_TOAST_DURATION: Duration = Duration::from_millis(1500);
+
 /// Opaque subscription handle. Today: the one-path we're re-polling.
 /// Wrapping this in a type lets us drop it atomically when selection
 /// changes — no dangling in-flight reads on the wrong path.
@@ -275,6 +283,11 @@ pub struct Explorer {
     /// the Explorer so a single PTY survives across frames; multi-tab
     /// would replace this with a `HashMap<SessionId, Terminal>`.
     terminal_view: terminal::Terminal,
+    /// Most recent copy-action confirmation, paired with the instant at
+    /// which it fired. Rendered as a small label next to the action row
+    /// for [`COPY_TOAST_DURATION`]; cleared on the first paint after
+    /// it expires. WEFT-273.
+    last_copy_msg: Option<(web_time::Instant, String)>,
 }
 
 impl Default for Explorer {
@@ -303,6 +316,7 @@ impl Default for Explorer {
             workshop_view: workshop::WorkshopView::default(),
             chat_view: chat::ChatView::default(),
             terminal_view: terminal::Terminal::default(),
+            last_copy_msg: None,
         }
     }
 }
@@ -543,6 +557,16 @@ impl Explorer {
             });
             return;
         };
+        // Copy-actions row sits above any badge / viewer so it's
+        // discoverable without scrolling. Painted whether or not a
+        // value has landed yet — copying just the path while a read is
+        // in flight is legitimate. WEFT-273.
+        //
+        // Clone selected_value into a local so paint_copy_actions can
+        // take &mut self without aliasing — self.selected_value is read
+        // again below to drive viewer dispatch.
+        let value_for_actions = self.selected_value.clone();
+        self.paint_copy_actions(ui, &path, value_for_actions.as_ref());
         match self.selected_value.clone() {
             Some(v) => {
                 // Object Type badge: shape-infer a type and render a
@@ -606,6 +630,119 @@ impl Explorer {
             }
         }
     }
+
+    /// Render the copy-actions chip row above the detail viewer.
+    ///
+    /// Emits three potential buttons:
+    /// 1. **Copy Path** — always visible; copies the substrate path the
+    ///    detail pane is showing. Useful for cross-referencing in chat,
+    ///    docs, or scripts.
+    /// 2. **Copy Pubkey** — visible iff the current value carries an
+    ///    obvious pubkey-shaped field at the top level (see
+    ///    [`extract_pubkey_like`]). Copies the value, not the key.
+    /// 3. **Export Snapshot** — visible iff a value has landed; copies
+    ///    a pretty-printed JSON snapshot of the current detail-pane
+    ///    value. The "snapshot" framing matches the language the audit
+    ///    used — same effect as the JSON-fallback's `copy` button, but
+    ///    surfaces it before the viewer dispatch decides what to render.
+    ///
+    /// A transient confirmation label appears next to the buttons for
+    /// [`COPY_TOAST_DURATION`] after a click, then drops on the next
+    /// paint. WEFT-273.
+    fn paint_copy_actions(
+        &mut self,
+        ui: &mut egui::Ui,
+        path: &str,
+        value: Option<&Value>,
+    ) {
+        // Drop a stale toast before painting — keeps this row visually
+        // quiet when no recent copy has happened.
+        if let Some((when, _)) = self.last_copy_msg
+            && when.elapsed() >= COPY_TOAST_DURATION
+        {
+            self.last_copy_msg = None;
+        }
+
+        ui.horizontal(|ui| {
+            if ui
+                .small_button("Copy Path")
+                .on_hover_text("Copy the substrate path to the clipboard")
+                .clicked()
+            {
+                ui.ctx().copy_text(path.to_string());
+                self.last_copy_msg =
+                    Some((web_time::Instant::now(), "path copied".to_string()));
+            }
+
+            if let Some(v) = value
+                && let Some((field, key)) = extract_pubkey_like(v)
+            {
+                if ui
+                    .small_button("Copy Pubkey")
+                    .on_hover_text(format!("Copy `{field}` value to the clipboard"))
+                    .clicked()
+                {
+                    ui.ctx().copy_text(key.clone());
+                    self.last_copy_msg = Some((
+                        web_time::Instant::now(),
+                        format!("{field} copied"),
+                    ));
+                }
+            }
+
+            if let Some(v) = value {
+                if ui
+                    .small_button("Export Snapshot")
+                    .on_hover_text("Copy a JSON snapshot of the current value")
+                    .clicked()
+                {
+                    let snapshot = serde_json::to_string_pretty(v)
+                        .unwrap_or_else(|_| v.to_string());
+                    ui.ctx().copy_text(snapshot);
+                    self.last_copy_msg =
+                        Some((web_time::Instant::now(), "snapshot copied".to_string()));
+                }
+            }
+
+            if let Some((_, ref msg)) = self.last_copy_msg {
+                ui.label(
+                    egui::RichText::new(msg)
+                        .small()
+                        .italics()
+                        .color(egui::Color32::from_rgb(140, 200, 160)),
+                );
+            }
+        });
+        ui.add_space(2.0);
+    }
+}
+
+/// Best-effort pubkey extractor for the Copy Pubkey affordance.
+///
+/// Looks for a small set of obvious top-level string fields on the
+/// value's root object. Order matters — the first match wins, so a
+/// value that has both `pubkey` and `node_id` reports `pubkey`.
+///
+/// Returns `(field-name, value)` so the toast can name *what* was
+/// copied. The field name is `'static` (one of the literal keys we
+/// probe) so callers don't have to worry about lifetimes.
+///
+/// Deliberately narrow: pubkeys live at well-known shapes (Mesh node
+/// records, identity bundles); deeper traversal would copy random
+/// strings from arbitrary substrate values.
+pub(super) fn extract_pubkey_like(value: &Value) -> Option<(&'static str, String)> {
+    let obj = value.as_object()?;
+    // Order = priority. `pubkey` is the canonical identity-system
+    // field; `peer_id` / `node_id` / `device_id` cover Mesh + identity
+    // bundle shapes that appear in the substrate today.
+    for field in ["pubkey", "peer_id", "node_id", "device_id"] {
+        if let Some(s) = obj.get(field).and_then(Value::as_str)
+            && !s.is_empty()
+        {
+            return Some((field, s.to_string()));
+        }
+    }
+    None
 }
 
 /// Render the Object Type badge for an inferred type.
@@ -706,5 +843,80 @@ mod activity_map_tests {
         let m = ActivityMap::new();
         assert!(m.is_empty());
         assert_eq!(m.len(), 0);
+    }
+}
+
+#[cfg(test)]
+mod copy_actions_tests {
+    //! WEFT-273: pubkey-shaped field detection for the Copy Pubkey
+    //! action. The field-priority order is observable behaviour
+    //! (toasts name the field) so it's pinned here.
+
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn extracts_canonical_pubkey_field() {
+        let v = json!({ "pubkey": "abc123", "extra": "ignored" });
+        let (field, key) = extract_pubkey_like(&v).expect("pubkey-shaped");
+        assert_eq!(field, "pubkey");
+        assert_eq!(key, "abc123");
+    }
+
+    #[test]
+    fn falls_back_to_peer_id() {
+        let v = json!({ "peer_id": "12D3KooW..." });
+        let (field, key) = extract_pubkey_like(&v).expect("peer_id-shaped");
+        assert_eq!(field, "peer_id");
+        assert_eq!(key, "12D3KooW...");
+    }
+
+    #[test]
+    fn falls_back_to_node_id() {
+        let v = json!({ "node_id": "node-42" });
+        let (field, _) = extract_pubkey_like(&v).expect("node_id-shaped");
+        assert_eq!(field, "node_id");
+    }
+
+    #[test]
+    fn falls_back_to_device_id() {
+        let v = json!({ "device_id": "dev-7" });
+        let (field, _) = extract_pubkey_like(&v).expect("device_id-shaped");
+        assert_eq!(field, "device_id");
+    }
+
+    #[test]
+    fn priority_pubkey_over_peer_id() {
+        let v = json!({ "peer_id": "second", "pubkey": "first" });
+        let (field, key) = extract_pubkey_like(&v).expect("priority pick");
+        assert_eq!(field, "pubkey");
+        assert_eq!(key, "first");
+    }
+
+    #[test]
+    fn rejects_empty_string_field() {
+        // An empty pubkey isn't useful to copy and would surface a
+        // misleading affordance; treat as absent.
+        let v = json!({ "pubkey": "" });
+        assert!(extract_pubkey_like(&v).is_none());
+    }
+
+    #[test]
+    fn rejects_non_string_field() {
+        let v = json!({ "pubkey": 42 });
+        assert!(extract_pubkey_like(&v).is_none());
+    }
+
+    #[test]
+    fn rejects_non_object_value() {
+        assert!(extract_pubkey_like(&json!([])).is_none());
+        assert!(extract_pubkey_like(&json!("just-a-string")).is_none());
+        assert!(extract_pubkey_like(&Value::Null).is_none());
+    }
+
+    #[test]
+    fn rejects_object_without_known_fields() {
+        let v = json!({ "name": "foo", "value": 7 });
+        assert!(extract_pubkey_like(&v).is_none());
     }
 }
