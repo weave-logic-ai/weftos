@@ -1232,6 +1232,26 @@ mod tests {
         );
     }
 
+    // ── Test 26b: window_seconds=1 accepted ──────────────────────────
+
+    /// Lower boundary -- 1 second is the smallest legal sliding window.
+    /// Pairs with `zero_window_seconds_rejected` to nail down the
+    /// half-open `(0, ..]` admissible range (WEFT-29).
+    #[test]
+    fn one_second_window_accepted() {
+        let mut config = valid_tiered_config();
+        config.rate_limiting.window_seconds = 1;
+        let errors = validate_routing_config(&config);
+        assert!(
+            !has_error(
+                &errors,
+                "routing.rate_limiting.window_seconds",
+                ValidationSeverity::Error
+            ),
+            "window_seconds=1 must be accepted (lower boundary)"
+        );
+    }
+
     // ── Test 27: unknown rate limit strategy rejected ────────────────
 
     #[test]

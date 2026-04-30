@@ -1,6 +1,7 @@
 [package]
 name = "eml-core"
 version = "0.1.0"
+publish = true
 edition = "2021"
 description = "EML (exp-ln) universal function approximation — O(1) learned functions from data"
 license = "MIT OR Apache-2.0"

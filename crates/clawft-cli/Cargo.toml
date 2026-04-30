@@ -1,6 +1,7 @@
 [package]
 name = "clawft-cli"
 version.workspace = true
+# rationale: end-user binary (`weft`); shipped via cargo-dist + Homebrew, not crates.io.
 publish = false
 edition.workspace = true
 rust-version.workspace = true
@@ -62,3 +63,9 @@ rpassword = "5"
 uuid = { workspace = true }
 serde_yaml = { workspace = true }
 toml = { workspace = true }
+# Real Ed25519 keypair generation for `weft skills keygen` (WEFT-23).
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

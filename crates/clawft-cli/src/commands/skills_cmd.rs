@@ -1151,63 +1151,104 @@ fn skills_keygen() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Standalone Ed25519 key pair generation (does not require signing feature).
+/// Standalone Ed25519 key pair generation.
 ///
-/// Uses the same format as `clawft_core::security::signing::generate_keypair`.
+/// Uses `ed25519-dalek` for proper key derivation -- both files are
+/// hex-encoded so they remain shell-friendly. Replaces the historical
+/// "(derived on first sign)" placeholder (WEFT-23).
 fn generate_keypair_standalone(output_dir: &Path) -> anyhow::Result<()> {
-    // We generate 32 random bytes as the private key seed,
-    // then derive the public key from it.
-    use std::io::Read;
+    use ed25519_dalek::SigningKey;
+    use rand::rngs::OsRng;
+    use rand::RngCore;
 
     std::fs::create_dir_all(output_dir)?;
 
-    // Read 32 random bytes from /dev/urandom (or equivalent).
+    // Generate 32 cryptographically secure random bytes as the seed.
     let mut seed = [0u8; 32];
+    OsRng.fill_bytes(&mut seed);
 
-    #[cfg(unix)]
-    {
-        let mut f = std::fs::File::open("/dev/urandom")?;
-        f.read_exact(&mut seed)?;
-    }
+    let signing_key = SigningKey::from_bytes(&seed);
+    let verifying_key = signing_key.verifying_key();
 
-    #[cfg(not(unix))]
-    {
-        // Fallback: use a simple PRNG seeded from time.
-        // This is NOT cryptographically secure on non-Unix, but acceptable for dev.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        for (i, byte) in seed.iter_mut().enumerate() {
-            *byte = ((now >> (i * 8)) & 0xFF) as u8;
-        }
-    }
-
-    // Write seed as hex (this IS the Ed25519 signing key seed).
     let priv_hex: String = seed.iter().map(|b| format!("{b:02x}")).collect();
+    let pub_hex: String = verifying_key
+        .to_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+
     let priv_path = output_dir.join("skill-signing.key");
     std::fs::write(&priv_path, &priv_hex)?;
 
-    // Set restrictive permissions.
+    // Set restrictive permissions on the private key.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&priv_path, std::fs::Permissions::from_mode(0o600))?;
     }
 
-    // Derive the public key: for Ed25519, the public key is derived from
-    // the private key seed. We store a placeholder here; the actual derivation
-    // happens when signing (the signing module handles this).
-    // For now, store the seed hash as the "public key" marker.
-    // Real Ed25519 derivation requires ed25519-dalek at runtime.
-    //
-    // NOTE: When the `signing` feature is compiled in, `weft skills publish`
-    // uses the proper Ed25519 derivation. This standalone keygen just creates
-    // the seed file, and the public key is derived on first use.
     let pub_path = output_dir.join("skill-signing.pub");
-    std::fs::write(&pub_path, "(derived on first sign)")?;
+    std::fs::write(&pub_path, &pub_hex)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod weft23_keygen_tests {
+    use super::*;
+    use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+
+    fn hex_to_bytes(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn keypair_roundtrip_and_sign_verify() {
+        // Generate into a tempdir and reload both halves.
+        let tmp = tempfile::tempdir().unwrap();
+        generate_keypair_standalone(tmp.path()).unwrap();
+
+        let priv_hex = std::fs::read_to_string(tmp.path().join("skill-signing.key")).unwrap();
+        let pub_hex = std::fs::read_to_string(tmp.path().join("skill-signing.pub")).unwrap();
+
+        // Both files must be 64 hex chars (32 raw bytes each).
+        assert_eq!(priv_hex.trim().len(), 64, "seed should be 32 bytes hex");
+        assert_eq!(pub_hex.trim().len(), 64, "pubkey should be 32 bytes hex");
+
+        // The pubkey must NOT be the legacy placeholder string.
+        assert_ne!(pub_hex.trim(), "(derived on first sign)");
+
+        // Reload and confirm the pubkey was actually derived from the seed.
+        let priv_bytes: [u8; 32] = hex_to_bytes(priv_hex.trim()).try_into().unwrap();
+        let pub_bytes: [u8; 32] = hex_to_bytes(pub_hex.trim()).try_into().unwrap();
+
+        let signing = SigningKey::from_bytes(&priv_bytes);
+        assert_eq!(
+            signing.verifying_key().to_bytes(),
+            pub_bytes,
+            "stored pubkey must match the derivation from the stored seed"
+        );
+
+        // Sign / verify a sample payload.
+        let msg = b"weft-skills-content-hash-sample";
+        let sig: Signature = signing.sign(msg);
+        let verifier = VerifyingKey::from_bytes(&pub_bytes).unwrap();
+        verifier.verify(msg, &sig).expect("signature should verify");
+    }
+
+    #[test]
+    fn two_keygens_produce_distinct_keys() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        generate_keypair_standalone(a.path()).unwrap();
+        generate_keypair_standalone(b.path()).unwrap();
+        let pa = std::fs::read_to_string(a.path().join("skill-signing.pub")).unwrap();
+        let pb = std::fs::read_to_string(b.path().join("skill-signing.pub")).unwrap();
+        assert_ne!(pa, pb, "fresh keygens must produce different pubkeys");
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -1393,12 +1434,17 @@ impl SimpleHasher {
 
 /// Try to sign content with a local key pair.
 ///
-/// Returns `(signature_hex, public_key_hex)` or `(None, None)` if no key exists.
+/// Returns `(signature_hex, public_key_hex)` or `(None, None)` if no key
+/// exists and `allow_unsigned` is set. WEFT-23 wired this to real
+/// `ed25519-dalek` signing -- the previous "(derived on first sign)"
+/// placeholder is gone.
 fn try_sign_content(
-    _content_hash: &str,
+    content_hash: &str,
     keys_dir: &Path,
     allow_unsigned: bool,
 ) -> anyhow::Result<(Option<String>, Option<String>)> {
+    use ed25519_dalek::{Signer, SigningKey};
+
     let priv_path = keys_dir.join("skill-signing.key");
     if !priv_path.exists() {
         if allow_unsigned {
@@ -1413,10 +1459,9 @@ fn try_sign_content(
         );
     }
 
-    // Read the private key hex.
+    // Read and validate the private key hex.
     let priv_hex = std::fs::read_to_string(&priv_path)?;
     let priv_hex = priv_hex.trim();
-
     if priv_hex.len() != 64 {
         anyhow::bail!(
             "invalid signing key at {} (expected 64 hex chars, got {})",
@@ -1424,24 +1469,24 @@ fn try_sign_content(
             priv_hex.len()
         );
     }
-
-    // Decode hex to bytes (validates the key format even if we cannot sign).
-    let _priv_bytes = hex_decode(priv_hex)
+    let priv_bytes = hex_decode(priv_hex)
         .map_err(|e| anyhow::anyhow!("invalid signing key hex: {e}"))?;
+    let seed: [u8; 32] = priv_bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("signing key must decode to exactly 32 bytes"))?;
 
-    // Cryptographic signing requires the `signing` feature (ed25519-dalek).
-    // Without it, we refuse to produce a signature rather than falling back
-    // to a non-cryptographic hash (FNV-1a) that would be trivially forgeable.
-    eprintln!(
-        "Warning: cryptographic signing is unavailable (built without the 'signing' feature). \
-         The skill will be published unsigned."
-    );
-    eprintln!(
-        "Rebuild with --features signing to enable Ed25519 signatures, \
-         or use --allow-unsigned to suppress this warning."
-    );
+    let signing_key = SigningKey::from_bytes(&seed);
+    let signature = signing_key.sign(content_hash.as_bytes());
+    let pubkey_bytes = signing_key.verifying_key().to_bytes();
 
-    Ok((None, None))
+    let sig_hex: String = signature
+        .to_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let pub_hex: String = pubkey_bytes.iter().map(|b| format!("{b:02x}")).collect();
+
+    Ok((Some(sig_hex), Some(pub_hex)))
 }
 
 /// Decode hex string to bytes.

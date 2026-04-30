@@ -1,7 +1,8 @@
 [package]
 name = "clawft-wasm"
 version.workspace = true
-publish = false
+# Publishable: WASM entrypoint library reused by browser / wasi consumers.
+publish = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
