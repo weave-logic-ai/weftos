@@ -28,7 +28,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use clawft_kernel::SubstrateService;
 use clawft_weave::voice_router::{
-    ChatHandler, CommandHandler, VoiceChatTurn, VoiceRouter, VoiceRouterConfig,
+    ChatHandler, CommandHandler, VoiceChatTurn, VoiceLevel, VoicePermissions, VoiceRouter,
+    VoiceRouterConfig,
 };
 use serde_json::{json, Value};
 use tokio::time::timeout;
@@ -66,12 +67,19 @@ impl CommandHandler for RecordingCommands {
 }
 
 fn router_config() -> VoiceRouterConfig {
+    // Smoke test predates SC-4; grant Level 2 by default so the
+    // command-path assertion still exercises the routing seam end-to-
+    // end. SC-4-specific permission gating has dedicated tests in the
+    // voice_router unit-test module.
+    let mut permissions = VoicePermissions::default();
+    permissions.default_level = VoiceLevel::Level2;
     VoiceRouterConfig {
         transcript_topic: TOPIC.into(),
         chat_target_agent: "concierge-bot".into(),
         conv_id: "voice-smoke".into(),
         command_prefix: "weft ".into(),
         subscriber_id: Some("daemon".into()),
+        permissions,
     }
 }
 

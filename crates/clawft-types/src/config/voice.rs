@@ -110,6 +110,77 @@ pub struct VoiceConsumerConfig {
     /// through to chat.
     #[serde(default = "default_command_prefix", alias = "commandPrefix")]
     pub command_prefix: String,
+
+    /// Per-voice-principal permission grid (WEFT-208 / SC-4).
+    ///
+    /// Determines which voice transcripts may dispatch chat queries
+    /// vs. commands, gated by a 3-level scheme:
+    ///
+    /// - **Level 0** (read-only / unauthenticated voice): chat dispatch
+    ///   allowed; command dispatch refused outright.
+    /// - **Level 1** (user / authenticated voice): chat dispatch +
+    ///   commands listed in [`safe_commands`] only.
+    /// - **Level 2** (privileged): chat + any command, subject to the
+    ///   standard governance gate at the kernel.
+    ///
+    /// Source of principal: the `actor_id` carried on the substrate
+    /// publish line that delivered the transcript (set by
+    /// `clawft-service-whisper` to the source sensor node id). Missing
+    /// principal → Level 0.
+    #[serde(default)]
+    pub permissions: VoicePermissionConfig,
+}
+
+/// Voice-router permission configuration (WEFT-208 / SC-4).
+///
+/// See [`VoiceConsumerConfig::permissions`] for the conceptual grid.
+/// All three fields default to the strictest reading: every voice
+/// principal is Level 0 (chat-only) until the operator grants higher
+/// trust.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoicePermissionConfig {
+    /// Permission level used for any voice principal not present in
+    /// [`Self::principal_levels`]. Also used when the substrate publish
+    /// line carries no `actor_id`.
+    ///
+    /// Valid values: 0, 1, 2. Out-of-range values are clamped to 0 by
+    /// the router (treated as "unknown / read-only").
+    #[serde(default = "default_voice_default_level", alias = "defaultLevel")]
+    pub default_level: u8,
+
+    /// Per-principal permission overrides. Key is the substrate
+    /// `actor_id` (typically a sensor node id like `n-bfc4cd`), value is
+    /// the level (0, 1, or 2).
+    #[serde(default, alias = "principalLevels")]
+    pub principal_levels: HashMap<String, u8>,
+
+    /// Allowlist of command verbs that Level 1 principals may dispatch.
+    /// Verbs are matched case-sensitively against the first whitespace-
+    /// delimited token of the command body (the same `method` the
+    /// router would otherwise hand to the kernel).
+    ///
+    /// Default: `["status", "list", "help"]` — the read-only verbs the
+    /// audit's voice security spec calls out as universally safe.
+    #[serde(default = "default_safe_commands", alias = "safeCommands")]
+    pub safe_commands: Vec<String>,
+}
+
+fn default_voice_default_level() -> u8 {
+    0
+}
+
+fn default_safe_commands() -> Vec<String> {
+    vec!["status".into(), "list".into(), "help".into()]
+}
+
+impl Default for VoicePermissionConfig {
+    fn default() -> Self {
+        Self {
+            default_level: default_voice_default_level(),
+            principal_levels: HashMap::new(),
+            safe_commands: default_safe_commands(),
+        }
+    }
 }
 
 fn default_transcript_topic() -> String {
@@ -136,6 +207,7 @@ impl Default for VoiceConsumerConfig {
             chat_target_agent: default_chat_target_agent(),
             conv_id: default_voice_conv_id(),
             command_prefix: default_command_prefix(),
+            permissions: VoicePermissionConfig::default(),
         }
     }
 }
