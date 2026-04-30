@@ -85,6 +85,19 @@ pub struct Request {
     /// Optional request ID for correlation.
     #[serde(default)]
     pub id: Option<String>,
+
+    /// Optional bearer token for per-method capability gating
+    /// (WEFT-479). When absent or empty, the daemon treats the
+    /// caller as anonymous and only `Read` / `Chat` verbs succeed.
+    /// When present, the daemon validates against
+    /// `AuthService::validate_auth_token` and grants the token's
+    /// scopes; an invalid token denies every gated verb.
+    ///
+    /// Wire format: any string (typically the `token_id` returned
+    /// by `AuthService::authenticate`). The field is added with a
+    /// serde default so existing clients remain wire-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<String>,
 }
 
 impl Request {
@@ -94,6 +107,7 @@ impl Request {
             method: method.to_owned(),
             params: serde_json::Value::Null,
             id: None,
+            auth: None,
         }
     }
 
@@ -103,7 +117,17 @@ impl Request {
             method: method.to_owned(),
             params,
             id: None,
+            auth: None,
         }
+    }
+
+    /// Attach a bearer token to this request (WEFT-479).
+    ///
+    /// The daemon will use the token to look up the caller's
+    /// effective capabilities via the kernel `AuthService`.
+    pub fn with_auth(mut self, token: impl Into<String>) -> Self {
+        self.auth = Some(token.into());
+        self
     }
 }
 

@@ -243,10 +243,18 @@ targets = [
     # macOS
     "x86_64-apple-darwin",
     "aarch64-apple-darwin",
-    # Windows
-    "x86_64-pc-windows-msvc",
+    # Windows: deferred to 0.8.x (WEFT-483). The named-pipe transport
+    # for the daemon RPC is not yet implemented (see
+    # `crates/clawft-rpc/src/client.rs` non-unix stub). Shipping a
+    # Windows artefact today would yield a binary whose `weft kernel`
+    # / `weft agent` paths immediately bail with "daemon not available
+    # on this platform". Re-add the target once the named-pipe
+    # transport lands; tracked in
+    # `docs/weftos/weftos-deferred-requirements.md`.
+    # "x86_64-pc-windows-msvc",
 ]
-# Installers to generate
+# Installers to generate (Windows powershell installer is a no-op
+# without a Windows binary; keep the entry for when WEFT-483 lands).
 installers = ["shell", "powershell", "homebrew"]
 # Homebrew tap repository
 tap = "weave-logic-ai/homebrew-tap"

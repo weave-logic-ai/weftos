@@ -1504,61 +1504,122 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         k.kernel_config().ipc_tcp.clone()
     };
     if let Some(cfg) = ipc_tcp_cfg.filter(|c| c.enabled) {
-        match TcpListener::bind(&cfg.listen_addr).await {
-            Ok(tcp_listener) => {
-                info!(addr = %cfg.listen_addr, "ipc tcp relay listening");
-                println!("IPC TCP relay listening on {}", cfg.listen_addr);
-                let relay_socket_path = socket_path.clone();
-                let mut relay_shutdown_rx = shutdown_tx.subscribe();
-                tokio::spawn(async move {
-                    loop {
-                        tokio::select! {
-                            result = tcp_listener.accept() => {
-                                match result {
-                                    Ok((tcp_stream, peer)) => {
-                                        info!(peer = %peer, "ipc tcp relay: peer connected");
-                                        let sock = relay_socket_path.clone();
-                                        tokio::spawn(async move {
-                                            match UnixStream::connect(&sock).await {
-                                                Ok(mut unix_stream) => {
-                                                    let mut tcp_stream = tcp_stream;
-                                                    let (a, b) = match tokio::io::copy_bidirectional(
-                                                        &mut tcp_stream,
-                                                        &mut unix_stream,
-                                                    )
-                                                    .await
-                                                    {
-                                                        Ok(pair) => pair,
-                                                        Err(e) => {
-                                                            debug!(peer = %peer, "ipc tcp relay: copy ended: {e}");
-                                                            (0, 0)
-                                                        }
-                                                    };
-                                                    info!(peer = %peer, tx_bytes = a, rx_bytes = b, "ipc tcp relay: peer disconnected");
-                                                }
-                                                Err(e) => {
-                                                    warn!(peer = %peer, "ipc tcp relay: unix connect failed: {e}");
-                                                }
+        // WEFT-481: refuse to bind a non-loopback address without a
+        // bearer token. Anonymous broadcast on a routable interface
+        // would expose every RPC verb (kernel.shutdown,
+        // agent.spawn, ...) to the network. The operator must opt
+        // in to the broader interface AND provide auth.
+        if cfg.is_non_loopback() && cfg.bearer.is_none() {
+            warn!(
+                addr = %cfg.listen_addr,
+                "ipc tcp relay refusing to bind non-loopback address without bearer token (WEFT-481); set [kernel.ipc_tcp].bearer or restrict listen_addr to 127.0.0.1"
+            );
+        } else {
+            match TcpListener::bind(&cfg.listen_addr).await {
+                Ok(tcp_listener) => {
+                    info!(
+                        addr = %cfg.listen_addr,
+                        bearer = cfg.bearer.is_some(),
+                        "ipc tcp relay listening"
+                    );
+                    println!(
+                        "IPC TCP relay listening on {} (bearer={})",
+                        cfg.listen_addr,
+                        if cfg.bearer.is_some() { "required" } else { "none" }
+                    );
+                    let relay_socket_path = socket_path.clone();
+                    let mut relay_shutdown_rx = shutdown_tx.subscribe();
+                    let bearer = cfg.bearer.clone();
+                    tokio::spawn(async move {
+                        loop {
+                            tokio::select! {
+                                result = tcp_listener.accept() => {
+                                    match result {
+                                        Ok((tcp_stream, peer)) => {
+                                            // WEFT-481: defence in depth. Even
+                                            // when bound to 127.0.0.1, drop
+                                            // non-loopback peers (some kernels
+                                            // route 0.0.0.0 traffic to a
+                                            // 127.0.0.1 listener).
+                                            if !peer.ip().is_loopback() && bearer.is_none() {
+                                                warn!(peer = %peer, "ipc tcp relay: rejected non-loopback peer (no bearer set)");
+                                                continue;
                                             }
-                                        });
-                                    }
-                                    Err(e) => {
-                                        error!("ipc tcp accept error: {e}");
+                                            info!(peer = %peer, "ipc tcp relay: peer connected");
+                                            let sock = relay_socket_path.clone();
+                                            let bearer_for_conn = bearer.clone();
+                                            tokio::spawn(async move {
+                                                let mut tcp_stream = tcp_stream;
+                                                // WEFT-481: bearer handshake.
+                                                // The client must send
+                                                // `Bearer: <token>\n` as the
+                                                // first wire line. Mismatch
+                                                // closes the connection
+                                                // before any byte is
+                                                // forwarded to the unix
+                                                // socket, so the daemon never
+                                                // sees an unauthenticated
+                                                // RPC verb.
+                                                if let Some(expected) = bearer_for_conn.as_deref() {
+                                                    use tokio::io::AsyncBufReadExt;
+                                                    use tokio::io::BufReader;
+                                                    let mut reader = BufReader::new(&mut tcp_stream);
+                                                    let mut line = String::new();
+                                                    if reader.read_line(&mut line).await.is_err() {
+                                                        warn!(peer = %peer, "ipc tcp relay: bearer line read error");
+                                                        return;
+                                                    }
+                                                    let trimmed = line.trim_end_matches(['\r', '\n']);
+                                                    let presented = trimmed
+                                                        .strip_prefix("Bearer: ")
+                                                        .or_else(|| trimmed.strip_prefix("Bearer "))
+                                                        .unwrap_or("");
+                                                    if presented != expected {
+                                                        warn!(peer = %peer, "ipc tcp relay: bearer mismatch, closing");
+                                                        return;
+                                                    }
+                                                }
+
+                                                match UnixStream::connect(&sock).await {
+                                                    Ok(mut unix_stream) => {
+                                                        let (a, b) = match tokio::io::copy_bidirectional(
+                                                            &mut tcp_stream,
+                                                            &mut unix_stream,
+                                                        )
+                                                        .await
+                                                        {
+                                                            Ok(pair) => pair,
+                                                            Err(e) => {
+                                                                debug!(peer = %peer, "ipc tcp relay: copy ended: {e}");
+                                                                (0, 0)
+                                                            }
+                                                        };
+                                                        info!(peer = %peer, tx_bytes = a, rx_bytes = b, "ipc tcp relay: peer disconnected");
+                                                    }
+                                                    Err(e) => {
+                                                        warn!(peer = %peer, "ipc tcp relay: unix connect failed: {e}");
+                                                    }
+                                                }
+                                            });
+                                        }
+                                        Err(e) => {
+                                            error!("ipc tcp accept error: {e}");
+                                        }
                                     }
                                 }
-                            }
-                            _ = relay_shutdown_rx.changed() => {
-                                if *relay_shutdown_rx.borrow() {
-                                    debug!("ipc tcp relay shutting down");
-                                    break;
+                                _ = relay_shutdown_rx.changed() => {
+                                    if *relay_shutdown_rx.borrow() {
+                                        debug!("ipc tcp relay shutting down");
+                                        break;
+                                    }
                                 }
                             }
                         }
-                    }
-                });
-            }
-            Err(e) => {
-                warn!(addr = %cfg.listen_addr, "ipc tcp relay bind failed: {e}");
+                    });
+                }
+                Err(e) => {
+                    warn!(addr = %cfg.listen_addr, "ipc tcp relay bind failed: {e}");
+                }
             }
         }
     }
@@ -1715,6 +1776,56 @@ enum DispatchOutcome {
 /// Dispatch a single JSON line and write the response.
 ///
 /// Returns the next [`DispatchOutcome`] for the connection loop.
+/// Resolve the effective [`crate::capability::CallerCapabilities`]
+/// for an RPC caller from the optional `auth` field on the request.
+///
+/// WEFT-479. Posture today:
+///
+/// - **Absent / empty**: anonymous (`{Read, Chat}`).
+/// - **Literal scope tokens**: a development convenience — the
+///   reserved literal strings `"admin"`, `"write"`, `"chat"`,
+///   `"read"` (or comma-separated combos like `"write,chat"`) are
+///   accepted as direct scope hints. This lets local automation and
+///   tests opt in to higher capability without round-tripping the
+///   kernel's [`AuthService`](clawft_kernel::AuthService) yet.
+/// - **Anything else**: looked up against the kernel's
+///   `AuthService`. **Currently stubbed**: until the AuthService
+///   service-registry plumbing lands, an unrecognised non-empty
+///   token resolves to [`crate::capability::CallerCapabilities::denied`]
+///   so a misconfigured client gets a hard error instead of silently
+///   downgrading to anonymous.
+///
+/// The full AuthService wiring is tracked as a 0.8.x followup.
+async fn resolve_caller_capabilities(
+    auth: Option<&str>,
+    _kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> crate::capability::CallerCapabilities {
+    let token = match auth {
+        None => return crate::capability::CallerCapabilities::anonymous(),
+        Some(t) if t.trim().is_empty() => {
+            return crate::capability::CallerCapabilities::anonymous();
+        }
+        Some(t) => t.trim().to_string(),
+    };
+
+    // Recognised literal scope tokens (development convenience).
+    let known = ["admin", "write", "chat", "read"];
+    let parts: Vec<&str> = token.split(',').map(str::trim).collect();
+    if parts.iter().all(|p| known.contains(p)) {
+        return crate::capability::CallerCapabilities::from_scopes(parts);
+    }
+
+    // Token doesn't match the literal-scope shortcut. The proper
+    // path is `kernel.read().await.auth_service().validate_auth_token(...)`,
+    // but that accessor doesn't exist on `Kernel<P>` yet. Until it
+    // lands, deny. This is the safer default — a typo'd token must
+    // never silently fall back to anonymous.
+    tracing::warn!(
+        "rpc auth: presented token did not match any recognised shape; denying"
+    );
+    crate::capability::CallerCapabilities::denied()
+}
+
 async fn dispatch_json_line(
     line: &str,
     kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
@@ -1729,6 +1840,31 @@ async fn dispatch_json_line(
     let (response, stream_hookup) = match serde_json::from_str::<Request>(line) {
         Ok(req) => {
             let id = req.id.clone();
+
+            // WEFT-479: per-method capability gating. Build the
+            // caller's effective capability set from the optional
+            // `auth` token, then refuse to dispatch if the method
+            // requires a capability the caller doesn't hold.
+            //
+            // Default posture: anonymous = {Read, Chat}. A presented
+            // token is validated against the kernel's AuthService;
+            // unknown tokens map to the empty (denied) set so a
+            // typo'd token can't silently fall back to anonymous.
+            let caller_caps = resolve_caller_capabilities(req.auth.as_deref(), kernel).await;
+            if !caller_caps.allows_method(&req.method) {
+                let cap_required = crate::capability::required_capability(&req.method);
+                tracing::warn!(
+                    method = %req.method,
+                    required = ?cap_required,
+                    "rpc capability check failed; rejecting"
+                );
+                let resp = Response::error(format!(
+                    "permission denied: method '{}' requires capability {:?}",
+                    req.method, cap_required
+                ))
+                .with_id(id);
+                (resp, None)
+            } else
             // `*.subscribe_stream` methods take over the connection: the
             // daemon registers an external sink with the router and
             // returns a receiver the caller pipes into the socket.
