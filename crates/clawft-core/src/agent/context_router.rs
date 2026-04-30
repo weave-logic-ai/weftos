@@ -85,9 +85,23 @@ pub struct ContextDecision {
     pub skills: Vec<String>,
 
     /// Optional restriction on which tools the LLM may see.
-    /// `None` = full registry; `Some(list)` = only those names.
-    /// Empty `Some(vec![])` means "no tools at all" (rare; useful for
-    /// pure-chat skills).
+    ///
+    /// Three-state semantics for plugin authors:
+    /// - `None` — no opinion. Full tool registry is exposed. This is
+    ///   the default and what every router should return when it has
+    ///   nothing to say about tool scope.
+    /// - `Some(list)` — narrow the registry to exactly those tool names
+    ///   (intersected with the user's grant matrix downstream — the
+    ///   router can only restrict, never expand). Names match the
+    ///   `Tool::name()` returned by `clawft-tools::register_all`.
+    /// - `Some(vec![])` — empty allowlist, deliberately. The LLM sees
+    ///   ZERO tools this turn; tool-call iterations are short-circuited.
+    ///   Use for pure-chat skills (e.g. summarisation) that explicitly
+    ///   want to forbid tool use even when the user has granted access.
+    ///
+    /// `Some(vec![])` is NOT equivalent to `None` and NOT a no-op.
+    /// Plugin authors writing a `ContextRouter` impl should default to
+    /// `None` unless they have a specific reason to restrict.
     pub tool_subset: Option<Vec<String>>,
 
     /// Clamped `[-0.3, +0.3]` nudge on the classifier's complexity
