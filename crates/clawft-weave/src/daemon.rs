@@ -994,12 +994,28 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
                 k.substrate_service().clone()
             };
             let subscriber_id = daemon_identity.node_id.clone();
+            // SC-4: translate the config-side permission grid into the
+            // router's typed VoicePermissions table. Out-of-range raw
+            // levels (anything > 2) are clamped to Level 0 by
+            // VoicePermissions::from_raw — a defensive default so a bad
+            // YAML / TOML edit can never accidentally privilege a
+            // principal.
+            let perms_cfg = &voice_consumer_cfg.permissions;
+            let permissions = crate::voice_router::VoicePermissions::from_raw(
+                perms_cfg.default_level,
+                perms_cfg
+                    .principal_levels
+                    .iter()
+                    .map(|(k, v)| (k.clone(), *v)),
+                perms_cfg.safe_commands.iter().cloned(),
+            );
             let router_cfg = crate::voice_router::VoiceRouterConfig {
                 transcript_topic: voice_consumer_cfg.transcript_topic.clone(),
                 chat_target_agent: voice_consumer_cfg.chat_target_agent.clone(),
                 conv_id: voice_consumer_cfg.conv_id.clone(),
                 command_prefix: voice_consumer_cfg.command_prefix.clone(),
                 subscriber_id: Some(subscriber_id.clone()),
+                permissions,
             };
             let chat_handler: Arc<dyn crate::voice_router::ChatHandler> =
                 Arc::new(DaemonAgentChatHandler);

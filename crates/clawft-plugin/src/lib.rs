@@ -68,9 +68,10 @@ pub mod traits;
 pub mod voice;
 
 // Re-export core types at crate root for convenience.
-pub use error::{PluginError, SkillLoadError};
+pub use error::{PluginError, SkillLoadError, WasmHostError};
 pub use manifest::{
-    PermissionDiff, PluginCapability, PluginManifest, PluginPermissions, PluginResourceConfig,
+    validate_voice_capability, PermissionDiff, PluginCapability, PluginManifest,
+    PluginPermissions, PluginResourceConfig, VoiceCapability, VoiceGrants,
 };
 pub use skill_grants::validate_allowed_tools;
 pub use message::MessagePayload;

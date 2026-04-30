@@ -12,6 +12,7 @@
 pub mod channels;
 pub mod kernel;
 pub mod personality;
+pub mod plugins;
 pub mod policies;
 pub mod voice;
 
@@ -19,6 +20,7 @@ pub mod voice;
 pub use channels::*;
 pub use kernel::*;
 pub use personality::*;
+pub use plugins::*;
 pub use policies::*;
 pub use voice::*;
 
@@ -82,6 +84,11 @@ pub struct Config {
     /// Pipeline stage selection (scorer, learner backends).
     #[serde(default)]
     pub pipeline: PipelineConfig,
+
+    /// Per-plugin runtime configuration including voice sub-permission
+    /// grants (WEFT-556 / SC-10).
+    #[serde(default)]
+    pub plugins: PluginsConfig,
 }
 
 // ── Pipeline ────────────────────────────────────────────────────────────
