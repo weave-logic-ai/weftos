@@ -14,7 +14,7 @@
 //! | [`PipelineStage`] | Processing stage in the agent pipeline |
 //! | [`Skill`] | High-level agent capability with tools and instructions |
 //! | [`MemoryBackend`] | Pluggable memory storage backend |
-//! | [`VoiceHandler`] | Voice/audio processing (placeholder for Workstream G) |
+//! | [`VoiceHandler`] | Voice/audio processing — forward-compat placeholder, no impl in 0.7.x (Workstream G) |
 //!
 //! # Supporting Traits
 //!
