@@ -597,3 +597,108 @@ jobs:
         run: |
           docker stop weft-smoke 2>/dev/null || true
           docker rm   weft-smoke 2>/dev/null || true
+
+  # -------------------------------------------------------------------
+  # VSCode dev-panel build (WEFT-485 / M6-B).
+  #
+  # Runs only when a PR touches the egui crate or the panel extension —
+  # the panel WASM bundle is downstream of clawft-gui-egui, and the
+  # extension itself ships the typed proxy that drives the webview. A
+  # change in either is allowed to require a full rebuild + tsc pass.
+  #
+  # Two-step gate:
+  #   1. `scripts/build.sh wasm-panel` — wasm-pack/cargo+bindgen+wasm-opt,
+  #      then size-budget gate against the documented panel thresholds.
+  #   2. `npm install && npm run compile` (tsc -p .) inside the extension.
+  #
+  # Either failure fails the PR. Skipped (success) on PRs that don't
+  # touch either path so unrelated work isn't slowed by Rust+Node bring-up.
+  # -------------------------------------------------------------------
+  vscode-panel-build:
+    name: VSCode panel build (wasm + tsc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            panel:
+              - 'crates/clawft-gui-egui/**'
+              - 'extensions/vscode-weft-panel/**'
+              - 'scripts/build.sh'
+              - 'scripts/bench/check-bundle-size.sh'
+              - '.github/workflows/pr-gates.yml'
+
+      - name: Install Rust toolchain
+        if: steps.filter.outputs.panel == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        if: steps.filter.outputs.panel == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-vscode-panel-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-vscode-panel-
+
+      - name: Install wasm-bindgen-cli
+        if: steps.filter.outputs.panel == 'true'
+        run: |
+          if ! command -v wasm-bindgen >/dev/null 2>&1; then
+            cargo install --locked wasm-bindgen-cli
+          fi
+          wasm-bindgen --version
+
+      - name: Install binaryen (wasm-opt)
+        if: steps.filter.outputs.panel == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binaryen
+          wasm-opt --version
+
+      - name: Build VSCode panel wasm bundle
+        if: steps.filter.outputs.panel == 'true'
+        run: scripts/build.sh wasm-panel
+
+      - name: Setup Node.js
+        if: steps.filter.outputs.panel == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install extension dependencies
+        if: steps.filter.outputs.panel == 'true'
+        run: cd extensions/vscode-weft-panel && npm install
+
+      - name: Compile extension (tsc)
+        if: steps.filter.outputs.panel == 'true'
+        run: cd extensions/vscode-weft-panel && npm run compile
+
+      # WEFT-486 / M6-B (SCAFFOLD): headless VSCode end-to-end smoke.
+      # Uses @vscode/test-electron under xvfb. The chip-icon DOM
+      # assertion is deferred to a 0.8.x followup (see test file
+      # header); today's suite asserts activation + command surface,
+      # which is enough to catch most regressions.
+      - name: Install xvfb (headless GUI host)
+        if: steps.filter.outputs.panel == 'true'
+        run: |
+          sudo apt-get install -y xvfb libnss3 libgbm1 libxshmfence1 libgtk-3-0
+      - name: Compile test suite (tsc -p test/)
+        if: steps.filter.outputs.panel == 'true'
+        run: cd extensions/vscode-weft-panel && npm run compile-tests
+      - name: Run VSCode E2E smoke (xvfb-run)
+        if: steps.filter.outputs.panel == 'true'
+        run: cd extensions/vscode-weft-panel && xvfb-run -a npm test
+
+      - name: Skip notice
+        if: steps.filter.outputs.panel != 'true'
+        run: echo "::notice::No panel-relevant paths touched — skipping wasm + tsc gate."
