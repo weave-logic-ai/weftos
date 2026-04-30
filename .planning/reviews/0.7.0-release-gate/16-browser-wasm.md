@@ -225,9 +225,13 @@ From `.planning/wasm-browser/05-task-breakdown.md` Phase 1 (BW1) — items NOT d
 - **P1.5** — there is a `wasm-browser-check` job in `pr-gates.yml`, but the
   **`wasm-browser-size` job with the 500 KB gzip budget never landed**. Combined with
   the 859 KB raw artifact this is a real gap.
-- **P1.6** — `scripts/check-features.sh` does **not exist** under `scripts/`; the
-  current entrypoint is `scripts/build.sh gate`, which covers the same checks but
-  the contract documented in step1-bw1 references the missing script name.
+- **P1.6** — RESOLVED (WEFT-409, 2026-04-30): `scripts/check-features.sh`
+  was never created and `scripts/build.sh gate` is now the canonical
+  feature-flag validation entrypoint (12 checks: native + WASI +
+  browser + clippy + bundle-size + audit + docs regen). The
+  step0-scripts-fixtures, step1-bw1, master-plan, and orchestrator
+  docs have been updated to reference `scripts/build.sh gate` instead
+  of the never-created script.
 - **P1.8** — **ADR-027 "Browser WASM Support" was never written.** The slot at
   `docs/adr/adr-027-*.md` is occupied by `adr-027-selective-libp2p.md`, an unrelated
   topic. There is no ADR for the entire W-BROWSER decision tree (hybrid vs full port

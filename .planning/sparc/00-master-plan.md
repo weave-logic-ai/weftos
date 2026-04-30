@@ -126,16 +126,18 @@ Browser plan code samples use `base_url` but actual struct has `api_base`. Add `
 
 ### A4: Feature Validation Script
 
-Create `scripts/check-features.sh` (used by every phase gate):
+Use `scripts/build.sh gate` (the canonical phase-gate entrypoint).
+WEFT-409 (2026-04-30): supersedes the originally-planned standalone
+`scripts/check-features.sh`, which was never created. `build.sh gate`
+runs the 12-check suite (native + WASI + browser + clippy + bundle-
+size + audit + docs regen) and is what every phase gate should call.
 
 ```bash
-#!/bin/bash
-set -euo pipefail
-echo "=== Native (default) ===" && cargo check --workspace
-echo "=== Native tests ===" && cargo test --workspace --no-run
-echo "=== WASI WASM (existing) ===" && cargo check --target wasm32-wasip2 -p clawft-wasm
-echo "=== Browser WASM (new) ===" && cargo check --target wasm32-unknown-unknown -p clawft-wasm --no-default-features --features browser
-echo "All targets OK"
+scripts/build.sh gate
+# Or, for individual targets:
+scripts/build.sh check        # native cargo check --workspace
+scripts/build.sh wasi         # wasm32-wasip2
+scripts/build.sh browser      # wasm32-unknown-unknown
 ```
 
 ---
@@ -203,8 +205,9 @@ cargo build --target wasm32-wasip2 --profile release-wasm -p clawft-wasm
 # Gate 4: Browser WASM check (after BW1 establishes the feature)
 cargo check --target wasm32-unknown-unknown -p clawft-wasm --no-default-features --features browser
 
-# Gate 5: Feature validation script
-scripts/check-features.sh
+# Gate 5: Feature validation (WEFT-409: scripts/build.sh gate
+# supersedes the never-created scripts/check-features.sh)
+scripts/build.sh gate
 ```
 
 ### Native Regression Risks (N1-N7)
@@ -349,7 +352,7 @@ The plan is complete when ALL of these are true:
 - [ ] Dashboard connects to both Axum backend and WASM module
 - [ ] `weft voice talk` runs full loop: listen → transcribe → agent → speak → listen
 - [ ] All documentation written (11 browser docs, 4 UI docs, voice CLI help)
-- [ ] `scripts/check-features.sh` passes all targets
+- [ ] `scripts/build.sh gate` passes all targets (WEFT-409: supersedes the never-created `scripts/check-features.sh`)
 
 ---
 
