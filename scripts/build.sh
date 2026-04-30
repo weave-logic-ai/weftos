@@ -23,6 +23,8 @@ VERBOSE=false
 DRY_RUN=false
 FORCE=false
 SERVE_PORT=""
+WASM_PANEL_MAX_RAW_KB=""
+WASM_PANEL_MAX_GZ_KB=""
 COMMAND=""
 
 # ── Reporting helpers ────────────────────────────────────────────────
@@ -344,6 +346,70 @@ cmd_bundle_size() {
     return "$rc"
 }
 
+# VSCode dev-panel wasm bundle (WEFT-484 / M6-B).
+#
+# Promotes `extensions/vscode-weft-panel/scripts/build-wasm.sh` into a
+# first-class scripts/build.sh subcommand so the panel build pipeline
+# is reachable from the same place as every other build target. The
+# inner script handles:
+#   - wasm-pack (preferred) or cargo + wasm-bindgen fallback
+#   - wasm-opt -Oz (WEFT-246) with the rustc 1.93 feature flag union
+#   - emission to extensions/vscode-weft-panel/webview/wasm/
+#
+# This wrapper additionally re-uses scripts/bench/check-bundle-size.sh
+# (the same gate WEFT-389 uses for the clawft-wasm browser bundle) to
+# enforce the documented panel budget. The clawft_gui_egui bundle is
+# distinct from the clawft-wasm bundle and rides a separate budget;
+# defaults are wider here because the panel ships eframe + egui_extras.
+#
+#   raw budget:  4500 KB  (current ~4200 KB unoptimised, ~1900 KB after wasm-opt)
+#   gz budget:   1500 KB  (current ~700-900 KB after gzip -9)
+#
+# Override by passing positional args: scripts/build.sh wasm-panel 4500 1500
+cmd_wasm_panel() {
+    header "Building VSCode dev-panel wasm bundle"
+    local inner="$ROOT/extensions/vscode-weft-panel/scripts/build-wasm.sh"
+    if [ ! -x "$inner" ]; then
+        fail "inner build script missing or not executable: $inner"
+        return 1
+    fi
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   %s\n" "$inner"
+        printf "  ${YELLOW}DRY${NC}   scripts/bench/check-bundle-size.sh <panel-bundle>\n"
+        timer_end
+        return 0
+    fi
+    if ! "$inner"; then
+        fail "panel wasm build failed"
+        timer_end
+        return 1
+    fi
+    timer_end
+
+    local bundle="$ROOT/extensions/vscode-weft-panel/webview/wasm/clawft_gui_egui_bg.wasm"
+    if [ ! -f "$bundle" ]; then
+        fail "expected bundle missing: $bundle"
+        return 1
+    fi
+    report_binary_size "$bundle" "Panel WASM (post-opt)"
+
+    # Size gate. Re-uses the clawft-wasm bundle gate against panel-specific
+    # thresholds. Override via positional args:
+    #   scripts/build.sh wasm-panel <max-raw-kb> <max-gz-kb>
+    local max_raw_kb="${1:-}"
+    local max_gz_kb="${2:-}"
+    [ -z "$max_raw_kb" ] && max_raw_kb=4500
+    [ -z "$max_gz_kb" ] && max_gz_kb=1500
+    info "Panel size gate: raw≤${max_raw_kb}KB, gz≤${max_gz_kb}KB"
+    if ! bash "$ROOT/scripts/bench/check-bundle-size.sh" \
+            "$bundle" "$max_raw_kb" "$max_gz_kb"; then
+        fail "panel bundle exceeds size budget"
+        return 1
+    fi
+    pass "Panel wasm bundle ready at extensions/vscode-weft-panel/webview/wasm/"
+}
+
 cmd_check() {
     header "Running cargo check --workspace"
     timer_start
@@ -644,6 +710,10 @@ ${BOLD}Commands:${NC}
   bundle-size     Gate browser WASM bundle (raw + gzip) against the
                   documented budget (WEFT-389 / M5-A).
                   See docs/architecture/wasm-bundle-size.md
+  wasm-panel      Build the VSCode dev-panel wasm bundle (clawft-gui-egui)
+                  via wasm-pack / cargo + wasm-bindgen + wasm-opt -Oz, then
+                  gate against the panel size budget. (WEFT-484 / M6-B)
+                  Override budget: scripts/build.sh wasm-panel <max-raw-kb> <max-gz-kb>
   check           Run cargo check --workspace (fast compile check)
   clippy          Run clippy with warnings-as-errors
   audit           Run cargo audit with 0.7.0 ignore-list (deny warnings).
@@ -689,6 +759,19 @@ parse_args() {
     if [ "$COMMAND" = "serve" ] && [ $# -gt 0 ] && [[ "$1" =~ ^[0-9]+$ ]]; then
         SERVE_PORT="$1"
         shift
+    fi
+
+    # Capture optional positional budget overrides for wasm-panel:
+    #   scripts/build.sh wasm-panel [<max-raw-kb> [<max-gz-kb>]]
+    if [ "$COMMAND" = "wasm-panel" ]; then
+        if [ $# -gt 0 ] && [[ "$1" =~ ^[0-9]+$ ]]; then
+            WASM_PANEL_MAX_RAW_KB="$1"
+            shift
+            if [ $# -gt 0 ] && [[ "$1" =~ ^[0-9]+$ ]]; then
+                WASM_PANEL_MAX_GZ_KB="$1"
+                shift
+            fi
+        fi
     fi
 
     while [ $# -gt 0 ]; do
@@ -742,6 +825,7 @@ main() {
         test)         cmd_test ;;
         test-browser) cmd_test_browser ;;
         bundle-size)  cmd_bundle_size ;;
+        wasm-panel)   cmd_wasm_panel "${WASM_PANEL_MAX_RAW_KB:-}" "${WASM_PANEL_MAX_GZ_KB:-}" ;;
         check)        cmd_check ;;
         clippy)       cmd_clippy ;;
         audit)        cmd_audit ;;
