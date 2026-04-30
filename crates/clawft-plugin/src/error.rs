@@ -70,6 +70,43 @@ pub enum SkillLoadError {
         /// Reason the manifest is rejected.
         reason: String,
     },
+
+    /// Plugin's declared voice capability has sub-permissions the operator
+    /// has not granted in `~/.clawft/config.json`'s `plugins.voice_grants`
+    /// matrix (WEFT-556 / SC-10).
+    ///
+    /// `denied` is the sorted, deduplicated list of denied sub-permissions
+    /// (e.g. `["voice.dispatch_commands", "voice.synthesize_audio"]`).
+    #[error(
+        "plugin '{plugin}' requested voice sub-permission(s) not granted: {denied:?}"
+    )]
+    VoiceCapabilityNotGranted {
+        /// Plugin id from the manifest.
+        plugin: String,
+        /// Sub-permissions the plugin asked for but isn't granted.
+        denied: Vec<String>,
+    },
+}
+
+/// Errors raised by the WASM host while running a loaded plugin.
+///
+/// # WEFT-556 / SC-10
+///
+/// Used by the host to report runtime capability denials — for example
+/// when a plugin without `voice.synthesize_audio` calls the
+/// `synthesize_audio` host function. Distinct from [`SkillLoadError`]:
+/// load errors prevent the plugin from running at all, host errors are
+/// returned to a running plugin's host call.
+#[non_exhaustive]
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum WasmHostError {
+    /// Plugin attempted a host call requiring a capability it was not
+    /// granted at load time.
+    #[error("plugin host call denied: capability '{capability}' not granted")]
+    CapabilityDenied {
+        /// Dotted capability name (e.g. `"voice.synthesize_audio"`).
+        capability: String,
+    },
 }
 
 #[cfg(test)]

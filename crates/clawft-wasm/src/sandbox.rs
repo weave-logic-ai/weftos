@@ -14,7 +14,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use clawft_plugin::{PluginPermissions, PluginResourceConfig};
+use clawft_plugin::{PluginPermissions, PluginResourceConfig, VoiceCapability};
+use clawft_plugin::error::WasmHostError;
 
 // ---------------------------------------------------------------------------
 // NetworkAllowlist
@@ -146,6 +147,19 @@ pub struct PluginSandbox {
     pub env_var_allowlist: HashSet<String>,
     /// Env var patterns that trigger warnings.
     pub env_var_sensitive_patterns: Vec<regex::Regex>,
+    /// Voice capability granted to this plugin (WEFT-556 / SC-10).
+    ///
+    /// Populated at load time AFTER
+    /// [`clawft_plugin::manifest::validate_voice_capability`] has
+    /// confirmed the manifest's [`VoiceCapability`] is fully covered by
+    /// the operator's [`VoiceGrants`]. The value stored here is the
+    /// **manifest's request**, not the grant matrix — the load-time
+    /// validator ensures the request is a subset, so guarding on the
+    /// stored request is equivalent to guarding on the grant.
+    ///
+    /// `None` means the plugin has no voice access; every voice host
+    /// call short-circuits to [`WasmHostError::CapabilityDenied`].
+    pub voice: Option<VoiceCapability>,
 }
 
 impl PluginSandbox {
@@ -202,6 +216,77 @@ impl PluginSandbox {
             env_var_sensitive_patterns,
             permissions,
             plugin_id,
+            voice: None,
+        }
+    }
+
+    /// Attach the validated voice capability for this plugin
+    /// (WEFT-556 / SC-10).
+    ///
+    /// Should be called by the loader AFTER
+    /// [`clawft_plugin::manifest::validate_voice_capability`] has
+    /// confirmed the request is fully covered by the operator's grant.
+    /// Passing `None` (or an empty `VoiceCapability`) leaves the plugin
+    /// with no voice access; every voice host call will short-circuit.
+    pub fn with_voice_capability(mut self, voice: Option<VoiceCapability>) -> Self {
+        self.voice = voice.filter(|v| !v.is_empty());
+        self
+    }
+
+    /// Check whether the plugin may receive a voice transcript publish
+    /// for `topic` (WEFT-556 / SC-10).
+    ///
+    /// The host MUST consult this before forwarding any substrate
+    /// transcript publish to the plugin. Returns
+    /// [`WasmHostError::CapabilityDenied`] when:
+    ///
+    /// - The plugin has no voice capability at all, OR
+    /// - `read_transcripts` is not granted, OR
+    /// - The plugin declared a non-empty `transcript_topics` allowlist
+    ///   and `topic` is not in it.
+    pub fn check_can_read_transcript(
+        &self,
+        topic: &str,
+    ) -> Result<(), WasmHostError> {
+        let Some(voice) = &self.voice else {
+            return Err(WasmHostError::CapabilityDenied {
+                capability: "voice.read_transcripts".into(),
+            });
+        };
+        if !voice.read_transcripts {
+            return Err(WasmHostError::CapabilityDenied {
+                capability: "voice.read_transcripts".into(),
+            });
+        }
+        if !voice.transcript_topics.is_empty()
+            && !voice.transcript_topics.iter().any(|t| t == topic)
+        {
+            return Err(WasmHostError::CapabilityDenied {
+                capability: format!("voice.transcript_topic:{topic}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// Check whether the plugin may dispatch commands derived from a
+    /// voice transcript (WEFT-556 / SC-10).
+    pub fn check_can_dispatch_command(&self) -> Result<(), WasmHostError> {
+        match &self.voice {
+            Some(v) if v.dispatch_commands => Ok(()),
+            _ => Err(WasmHostError::CapabilityDenied {
+                capability: "voice.dispatch_commands".into(),
+            }),
+        }
+    }
+
+    /// Check whether the plugin may call `host.synthesize_audio(text)`
+    /// (WEFT-556 / SC-10).
+    pub fn check_can_synthesize_audio(&self) -> Result<(), WasmHostError> {
+        match &self.voice {
+            Some(v) if v.synthesize_audio => Ok(()),
+            _ => Err(WasmHostError::CapabilityDenied {
+                capability: "voice.synthesize_audio".into(),
+            }),
         }
     }
 }
@@ -1321,5 +1406,174 @@ mod tests {
         assert_eq!(MAX_READ_SIZE, 8 * 1024 * 1024);
         assert_eq!(MAX_WRITE_SIZE, 4 * 1024 * 1024);
         assert_eq!(MAX_LOG_MESSAGE_SIZE, 4096);
+    }
+
+    // ── WEFT-556 / SC-10: voice capability runtime gating tests ─────
+
+    fn empty_sandbox() -> PluginSandbox {
+        PluginSandbox::from_manifest(
+            "voice-test".into(),
+            PluginPermissions::default(),
+            &PluginResourceConfig::default(),
+        )
+    }
+
+    #[test]
+    fn voice_default_sandbox_has_no_voice_capability() {
+        let sb = empty_sandbox();
+        assert!(sb.voice.is_none());
+    }
+
+    #[test]
+    fn voice_with_capability_filters_empty_to_none() {
+        let sb = empty_sandbox().with_voice_capability(Some(VoiceCapability::default()));
+        // An all-false VoiceCapability is treated as "no voice access"
+        // so the sandbox should NOT store it.
+        assert!(sb.voice.is_none());
+    }
+
+    #[test]
+    fn voice_check_read_transcript_denies_without_capability() {
+        let sb = empty_sandbox();
+        let err = sb
+            .check_can_read_transcript("weftos.voice.transcripts.v1")
+            .expect_err("must deny");
+        assert_eq!(
+            err,
+            WasmHostError::CapabilityDenied {
+                capability: "voice.read_transcripts".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn voice_check_read_transcript_denies_when_only_synthesize() {
+        // Plugin granted synthesize_audio but NOT read_transcripts ->
+        // transcript publishes must still be denied.
+        let voice = VoiceCapability {
+            synthesize_audio: true,
+            ..Default::default()
+        };
+        let sb = empty_sandbox().with_voice_capability(Some(voice));
+        let err = sb
+            .check_can_read_transcript("any.topic")
+            .expect_err("must deny");
+        assert_eq!(
+            err,
+            WasmHostError::CapabilityDenied {
+                capability: "voice.read_transcripts".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn voice_check_read_transcript_allows_when_granted() {
+        let voice = VoiceCapability {
+            read_transcripts: true,
+            ..Default::default()
+        };
+        let sb = empty_sandbox().with_voice_capability(Some(voice));
+        assert!(sb.check_can_read_transcript("any.topic").is_ok());
+    }
+
+    #[test]
+    fn voice_check_read_transcript_enforces_topic_allowlist() {
+        let voice = VoiceCapability {
+            read_transcripts: true,
+            transcript_topics: vec!["weftos.voice.transcripts.v1".into()],
+            ..Default::default()
+        };
+        let sb = empty_sandbox().with_voice_capability(Some(voice));
+        assert!(sb
+            .check_can_read_transcript("weftos.voice.transcripts.v1")
+            .is_ok());
+        let err = sb
+            .check_can_read_transcript("other.topic")
+            .expect_err("must deny non-listed topic");
+        match err {
+            WasmHostError::CapabilityDenied { capability } => {
+                assert_eq!(capability, "voice.transcript_topic:other.topic");
+            }
+            #[allow(unreachable_patterns)]
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn voice_check_dispatch_command_denies_without_capability() {
+        let sb = empty_sandbox();
+        let err = sb.check_can_dispatch_command().expect_err("must deny");
+        assert_eq!(
+            err,
+            WasmHostError::CapabilityDenied {
+                capability: "voice.dispatch_commands".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn voice_check_dispatch_command_denies_when_only_read() {
+        // read_transcripts alone does NOT grant dispatch.
+        let voice = VoiceCapability {
+            read_transcripts: true,
+            ..Default::default()
+        };
+        let sb = empty_sandbox().with_voice_capability(Some(voice));
+        assert!(sb.check_can_dispatch_command().is_err());
+    }
+
+    #[test]
+    fn voice_check_dispatch_command_allows_when_granted() {
+        let voice = VoiceCapability {
+            dispatch_commands: true,
+            ..Default::default()
+        };
+        let sb = empty_sandbox().with_voice_capability(Some(voice));
+        assert!(sb.check_can_dispatch_command().is_ok());
+    }
+
+    #[test]
+    fn voice_check_synthesize_audio_denies_without_capability() {
+        let sb = empty_sandbox();
+        let err = sb.check_can_synthesize_audio().expect_err("must deny");
+        assert_eq!(
+            err,
+            WasmHostError::CapabilityDenied {
+                capability: "voice.synthesize_audio".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn voice_check_synthesize_audio_denies_when_only_read() {
+        let voice = VoiceCapability {
+            read_transcripts: true,
+            ..Default::default()
+        };
+        let sb = empty_sandbox().with_voice_capability(Some(voice));
+        assert!(sb.check_can_synthesize_audio().is_err());
+    }
+
+    #[test]
+    fn voice_check_synthesize_audio_allows_when_granted() {
+        let voice = VoiceCapability {
+            synthesize_audio: true,
+            ..Default::default()
+        };
+        let sb = empty_sandbox().with_voice_capability(Some(voice));
+        assert!(sb.check_can_synthesize_audio().is_ok());
+    }
+
+    #[test]
+    fn voice_capability_isolation_between_sandboxes() {
+        // Each sandbox has its own voice cap; flipping one doesn't
+        // affect the other.
+        let sb_a = empty_sandbox().with_voice_capability(Some(VoiceCapability {
+            read_transcripts: true,
+            ..Default::default()
+        }));
+        let sb_b = empty_sandbox(); // no voice
+        assert!(sb_a.check_can_read_transcript("t").is_ok());
+        assert!(sb_b.check_can_read_transcript("t").is_err());
     }
 }
