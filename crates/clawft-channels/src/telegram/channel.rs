@@ -26,7 +26,16 @@ use super::client::TelegramClient;
 const DEFAULT_POLL_TIMEOUT_SECS: u64 = 30;
 
 /// Default delay between poll cycles in seconds.
-const DEFAULT_POLL_INTERVAL_SECS: u64 = 1;
+///
+/// `getUpdates` already blocks server-side for `DEFAULT_POLL_TIMEOUT_SECS`
+/// (30s) before returning, and `tokio::select!` yields cooperatively
+/// between iterations. The extra inter-poll sleep adds latency for
+/// inbound messages without buying additional fairness, so the default
+/// is `0` (no extra sleep). The field remains configurable for operators
+/// who want explicit back-pressure on tight error/retry loops; the
+/// `if self.poll_interval_secs > 0` guard skips the sleep entirely
+/// when set to `0`.
+const DEFAULT_POLL_INTERVAL_SECS: u64 = 0;
 
 /// Delay before retrying after an error, in seconds.
 const ERROR_RETRY_DELAY_SECS: u64 = 5;

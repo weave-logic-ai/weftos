@@ -212,6 +212,10 @@ On startup, the Telegram channel:
 
 1. Calls `getMe` to verify the bot token.
 2. Enters a long-polling loop calling `getUpdates` with a 30-second timeout.
+   The Bot API blocks server-side until an update arrives or the timeout
+   elapses, so no extra client-side sleep is needed between cycles
+   (default `poll_interval_secs = 0`). Operators can raise this value if
+   they want explicit back-pressure on tight retry loops.
 3. For each update containing a text message:
    - Extracts `sender_id`, `chat_id`, and `content`.
    - Checks the allow-list. Disallowed users are silently ignored.
