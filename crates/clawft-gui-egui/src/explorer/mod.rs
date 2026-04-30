@@ -676,32 +676,29 @@ impl Explorer {
 
             if let Some(v) = value
                 && let Some((field, key)) = extract_pubkey_like(v)
-            {
-                if ui
+                && ui
                     .small_button("Copy Pubkey")
                     .on_hover_text(format!("Copy `{field}` value to the clipboard"))
                     .clicked()
-                {
-                    ui.ctx().copy_text(key.clone());
-                    self.last_copy_msg = Some((
-                        web_time::Instant::now(),
-                        format!("{field} copied"),
-                    ));
-                }
+            {
+                ui.ctx().copy_text(key.clone());
+                self.last_copy_msg = Some((
+                    web_time::Instant::now(),
+                    format!("{field} copied"),
+                ));
             }
 
-            if let Some(v) = value {
-                if ui
+            if let Some(v) = value
+                && ui
                     .small_button("Export Snapshot")
                     .on_hover_text("Copy a JSON snapshot of the current value")
                     .clicked()
-                {
-                    let snapshot = serde_json::to_string_pretty(v)
-                        .unwrap_or_else(|_| v.to_string());
-                    ui.ctx().copy_text(snapshot);
-                    self.last_copy_msg =
-                        Some((web_time::Instant::now(), "snapshot copied".to_string()));
-                }
+            {
+                let snapshot = serde_json::to_string_pretty(v)
+                    .unwrap_or_else(|_| v.to_string());
+                ui.ctx().copy_text(snapshot);
+                self.last_copy_msg =
+                    Some((web_time::Instant::now(), "snapshot copied".to_string()));
             }
 
             if let Some((_, ref msg)) = self.last_copy_msg {
