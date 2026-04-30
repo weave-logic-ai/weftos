@@ -1503,6 +1503,80 @@ All deferred items MUST pass these checks before merge:
 
 ---
 
-**Last Updated**: 2026-03-01
+## Windows transport — named-pipe RPC (deferred to 0.8.x)
+
+### Status
+**Deferred** — `x86_64-pc-windows-msvc` is excluded from the 0.7.0
+cargo-dist target list.
+
+### Priority
+**Medium** — required to ship a usable Windows binary; not required
+for 0.7.0 because Linux (glibc + musl) and macOS (x86_64 + arm64)
+cover the supported deployment surface.
+
+### Code References
+- `crates/clawft-rpc/src/client.rs:55-80` — non-Unix `DaemonClient`
+  stub. `connect()` returns `None`; every RPC call bails with
+  "daemon not available on this platform".
+- `crates/clawft-weave/src/daemon.rs:1496-1564` — TCP relay path
+  (`ipc_tcp`) is the only cross-platform escape hatch today, and it
+  forwards to a Unix socket on the daemon side, so it does not help
+  Windows-native callers.
+- `Cargo.toml:240-250` (`[workspace.metadata.dist] targets = [...]`)
+  — Windows target commented out, with a pointer back here.
+
+### Implementation steps
+
+1. Add `tokio` features for named-pipe I/O on Windows:
+   ```toml
+   # crates/clawft-rpc/Cargo.toml
+   [target.'cfg(windows)'.dependencies]
+   tokio = { workspace = true, features = ["net"] }  # already inherits
+   windows-sys = { version = "0.59", features = [
+       "Win32_Foundation",
+       "Win32_System_Pipes",
+       "Win32_Storage_FileSystem",
+   ] }
+   ```
+
+2. Replace the `mod imp` stub in
+   `crates/clawft-rpc/src/client.rs:56-80` with a real client that
+   dials a named pipe (`\\.\pipe\clawft-kernel`):
+   ```rust
+   use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
+   ```
+
+3. Mirror the unix-side pipe path in
+   `crates/clawft-weave/src/daemon.rs` — bind a
+   `ServerOptions::new().create(pipe_name)?` named-pipe server next
+   to the existing `UnixListener` accept loop. Reuse
+   `dispatch_json_line` / `handle_json_connection`.
+
+4. Update `crates/clawft-rpc/src/protocol.rs:21-56`
+   (`runtime_dir` / `socket_path`) to return the pipe name on
+   Windows. The `kernel.pid` / `kernel.log` files still belong on
+   the filesystem.
+
+5. Re-enable `x86_64-pc-windows-msvc` in `Cargo.toml`
+   `[workspace.metadata.dist]`. Verify the powershell installer
+   produces a working binary.
+
+### Verification
+
+- `cargo test -p clawft-rpc --target x86_64-pc-windows-msvc` passes.
+- `weft kernel start --foreground` on Windows accepts named-pipe
+  connections from `weft kernel status`.
+- The `cargo-dist`-built MSI / zip artefact installs and runs end-
+  to-end (CI matrix gate).
+
+### Tracking
+
+- Plane: WEFT-483 (deferred from 0.7.0).
+- Once landed, drop the `cfg(not(unix))` stub and update the
+  pointer in `crates/clawft-rpc/src/client.rs`.
+
+---
+
+**Last Updated**: 2026-04-28
 **Maintainer**: Project Owner
 **Status**: Living document - update as items are completed

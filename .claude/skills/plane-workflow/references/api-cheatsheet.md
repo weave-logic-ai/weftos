@@ -39,6 +39,10 @@ curl -sf -H "$H_AUTH" "$BASE/issues/?per_page=100" | jq '.results[] | {id, seque
 > `mcp__plane__list_work_items`, `mcp__plane__get_me` all return HTTP
 > 404. Use the curl forms above. `mcp__plane__create_work_item` and
 > `mcp__plane__update_work_item` work fine if you only need a one-shot.
+> Upstream issue and minimal repro live at
+> `.planning/sparc/voice/plane-mcp-upstream-issue.md` (tracks
+> WEFT-478). The wrapper script `scripts/plane.sh` is the load-bearing
+> path; do not wait for the upstream fix.
 
 ## Create work item
 
