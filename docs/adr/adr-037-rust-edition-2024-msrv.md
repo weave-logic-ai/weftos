@@ -16,7 +16,7 @@ The workspace uses Rust Edition 2024 with MSRV 1.93, configured in the root `Car
 
 ```toml
 [workspace.package]
-version = "0.3.1"
+version = "0.X.Y"          # see workspace Cargo.toml for the current value
 edition = "2024"
 rust-version = "1.93"
 ```
@@ -43,4 +43,4 @@ This is an aggressive choice:
 
 ### Neutral
 - MSRV is enforced by `cargo`'s `rust-version` field; CI will catch MSRV violations via `cargo check`
-- After 1.0 release, MSRV bumps become semver-breaking changes under the Rust ecosystem convention; pre-1.0 (current: 0.3.1) they are acceptable as minor version bumps per ADR-001
+- After 1.0 release, MSRV bumps become semver-breaking changes under the Rust ecosystem convention; pre-1.0 they are acceptable as minor version bumps per ADR-001
