@@ -11,6 +11,8 @@ pub mod capture;
 #[cfg(feature = "voice-vad")]
 pub mod playback;
 #[cfg(feature = "voice-vad")]
+pub mod privacy_indicator;
+#[cfg(feature = "voice-vad")]
 pub mod vad;
 
 #[cfg(feature = "voice-stt")]
