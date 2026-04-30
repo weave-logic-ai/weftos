@@ -392,10 +392,21 @@ Source: `.planning/sonobuoy/{SYNTHESIS.md,GAPS.md,RANGING.md,papers/analysis/}`.
 - **cognitum-seed-gaps**: drove `tiered-kernel-profiles.md` and SPRINT.md.
 - **cold-case-ecc**: drove the ECC-XAI infographic (v1, v2), legal deep dive,
   `case-examples.md`, deck-spec.md, research-foundations.md.
-- **compositional-ui**: see Stream 9 / 10.
+- **compositional-ui**: cross-referenced into Stream 8 (GUI dev panel +
+  protocol-spec, see `08-weftos-gui.md` lines 466-477), Stream 13
+  (App Substrate Surface ADR set, see `13-app-substrate-surface.md`
+  lines 479-490), and Stream 15 (IDE bridge protocol ADR-018, see
+  `15-mcp-integration.md` line 309). Symposium output is wired.
 - **ontology-navigator**: drove `adr-identity-iri.md` and
   `adr-treecalc-eml-architecture.md` plus 13 session findings + synthesis.
-- **RLM - arxiv-2512.24601**: paper-specific symposium.
+- **RLM - arxiv-2512.24601**: CLOSED (paper-specific session).
+  Output is fully self-contained in
+  `.planning/symposiums/RLM - arxiv-2512.24601/` (00-synthesis,
+  01-paper-summary, 02-weftos-mapping, 03-adoption-candidates,
+  04-gaps-and-risks). Adoption candidates listed in `03-` are deferred
+  to 0.8.x+ research cycles; no follow-up workstream owns them yet.
+  Revisit trigger: when KG / RoMem work in Stream 17 (WEFT-514/515)
+  reaches a point where recursive-LM patterns become relevant.
 
 ### Quantum Integrations
 
@@ -611,10 +622,13 @@ Ancillary code-adjacent TODO references found:
   these are research, but the comparison surfaces no fewer than 10
   distinct gap targets that no workstream owns.
 - **WiFi DensePose / RuView** — interesting but no integration target.
-- **`compositional-ui` symposium** outputs not visibly cross-referenced into
-  Stream 9/10 audits.
-- **`RLM - arxiv-2512.24601` symposium** — paper-specific session, no
-  follow-up tracked.
+- ~~**`compositional-ui` symposium** outputs not visibly cross-referenced into
+  Stream 9/10 audits.~~ — RESOLVED (WEFT-540): compositional-ui is
+  cross-referenced from streams 8, 13, and 15. See "Other Symposiums"
+  section above for the explicit citation map.
+- ~~**`RLM - arxiv-2512.24601` symposium** — paper-specific session, no
+  follow-up tracked.~~ — CLOSED (WEFT-540): rationale and revisit
+  trigger recorded in "Other Symposiums" section above.
 - The Closure-SDK conceptual takeaway is logged but not assigned a future
   revisit trigger.
 
@@ -665,7 +679,7 @@ sprints.)
 | T37 | NVIDIA: scaffold cuDensityMat `SimulatorBackend` behind `quantum-nvidia` feature flag (post-GUI v0.7.x). | D50 | 17 | P3 | research |
 | T38 | Gaming-robotics: kick off first experiment (any of the 8). | D51 | 17 + future | P3 | research |
 | T39 | Cross-link symposium output (`compositional-ui`, `RLM - arxiv-2512.24601`) into responsible streams or mark closed. | "Orphaned" | 17 + various | P3 | docs |
-| T40 | Decide whether to add a single "research → feature" pipeline index (vs ADR-only). | Q7 | 17 + ADRs | P3 | docs |
+| T40 | ~~Decide whether to add a single "research → feature" pipeline index (vs ADR-only).~~ DECIDED 2026-04-30 (WEFT-541): **ADR-only**. The "Released Features" section of this audit doc + each ADR's "Status: Accepted" + the "Status & Timeline" table at top serve as the de-facto landed-as-feature index. Adding a parallel index file duplicates source-of-truth and drifts. If audit-time discovery becomes painful again, revisit at the next release-gate review. | Q7 | 17 + ADRs | P3 | docs |
 | T41 | Decide ECC `boot_ecc()` fold-vs-fork. | Q1 | 17 | P2 | kernel |
 | T42 | Decide on 192-dim SIGReg latent dimensionality. | Q2, ADR-050 | 17 | P1 | research |
 | T43 | Decide ECC governance "rotate but not revoke" policy expression. | Q5 | 17 + 8 | P2 | security |
