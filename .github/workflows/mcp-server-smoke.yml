@@ -1,0 +1,71 @@
+name: MCP server smoke
+
+# WEFT-487: end-to-end round-trip for `weft mcp-server`. Builds the
+# binary, spawns it on stdio, sends an `initialize`, then `tools/list`,
+# asserts at least one builtin tool is reported, then `tools/call` on
+# the simplest builtin (`echo`) and asserts a result content block
+# came back.
+
+on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'crates/clawft-cli/src/commands/mcp_server.rs'
+      - 'crates/clawft-services/src/mcp/**'
+      - 'crates/clawft-core/src/tools/**'
+      - '.github/workflows/mcp-server-smoke.yml'
+  push:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: mcp-smoke-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: tools/list + tools/call round-trip
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-mcp-smoke-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-mcp-smoke-
+
+      - name: Build weft binary
+        run: scripts/build.sh native-debug --features services
+
+      - name: Locate binary
+        id: bin
+        run: |
+          set -euo pipefail
+          BIN="$(find target/debug -maxdepth 2 -type f -name 'weft' -executable | head -1)"
+          if [ -z "$BIN" ]; then
+            echo "weft binary not found under target/debug" >&2
+            exit 1
+          fi
+          echo "bin=$BIN" >> "$GITHUB_OUTPUT"
+          echo "Using $BIN"
+          "$BIN" --version || true
+
+      - name: Smoke-test mcp-server (initialize + tools/list + tools/call)
+        env:
+          WEFT_BIN: ${{ steps.bin.outputs.bin }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/mcp_smoke.py
