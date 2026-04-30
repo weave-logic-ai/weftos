@@ -602,6 +602,95 @@ The full daemon path (with `DAEMON_AGENT` wired) is covered by the
 booting the LLM service -- that is integration-test territory once
 the voice security controls land.
 
+## Mic Privacy Indicator (WEFT-207 / SC-1)
+
+The sensor-side counterpart to the substrate STT consumer is the
+mic privacy indicator. Whenever a microphone capture stream opens
+(or closes), the capture path emits the indicator on **two
+surfaces** so subscribers can choose the one that matches their
+trust model:
+
+| Surface | Where | Payload | Consumer |
+| --- | --- | --- | --- |
+| Tracing event | `target = "voice.privacy.indicator"` | structured `tracing` fields (`state`, `device`, `sample_rate`, `channels`, `ts_unix_micros`, `topic`) | chain layer, syslog, `tracing-subscriber` filter |
+| Substrate topic | `weftos.voice.indicator.v1` | JSON `IndicatorPayload` | future GUI (`clawft-gui-egui`), web UI, third-party tray apps |
+
+Both surfaces fire from a single seam --
+`crates/clawft-plugin/src/voice/privacy_indicator.rs::emit_indicator`
+-- so they cannot drift. The capture handle (`AudioCapture`) wires
+its `start` / `stop` (and `Drop` failsafe) through that seam, which
+means the indicator already covers the in-tree stub *and* the
+0.8.x in-process `cpal::Stream::new` path that lands later.
+
+### Payload schema (v1)
+
+```json
+{
+  "state":          "capturing" | "idle",
+  "device":         "USB Mic" | null,        // null = system default
+  "sample_rate":    16000,                    // Hz the capture spec asked for
+  "channels":       1,                        // channel count
+  "ts_unix_micros": 1714435200000000          // wall-clock μs since epoch
+}
+```
+
+The `state` strings are stable; treat them as wire contract.
+
+### Subscribing from a UI
+
+```rust
+// Pseudo-code for a future GUI consumer.
+let mut sub = substrate.subscribe(
+    clawft_plugin::voice::privacy_indicator::INDICATOR_TOPIC,
+    /* caller_id = */ "gui-mic-indicator",
+)?;
+while let Some(line) = sub.next().await {
+    let payload: IndicatorPayload = serde_json::from_slice(&line.value)?;
+    match payload.state.as_str() {
+        "capturing" => render_red_dot(payload.device.as_deref()),
+        "idle"      => clear_red_dot(),
+        _           => {} // forward-compat
+    }
+}
+```
+
+The CLI / TUI today renders the indicator by subscribing to the
+tracing target via the existing chain-event layer; once the GUI
+ships it consumes the substrate topic instead, with zero changes
+on the capture side.
+
+### Wiring a substrate publisher
+
+`clawft-plugin` is intentionally substrate-free, so the capture
+layer publishes indicator events through the
+`IndicatorPublisher` trait. The default constructor wires
+`NoopIndicatorPublisher` (tracing-only); the daemon installs a
+substrate-aware publisher at boot:
+
+```rust
+let pub_ = Arc::new(SubstrateIndicatorPublisher::new(
+    substrate.clone(),
+    /* topic = */ INDICATOR_TOPIC,
+));
+let cap = AudioCapture::new_with_publisher(spec.into(), pub_);
+```
+
+Tests use `InMemoryIndicatorPublisher` to assert on the exact
+payload sequence without booting substrate.
+
+### Audit invariants
+
+- A `start` always emits exactly one `capturing` event; a
+  duplicate `start` is a no-op.
+- A `stop` (or `Drop` while active) always emits exactly one
+  `idle` event; a duplicate `stop` is a no-op.
+- A capture that is never started emits zero indicator events.
+
+These are enforced by the unit tests in
+`crates/clawft-plugin/src/voice/capture.rs` and
+`crates/clawft-plugin/src/voice/privacy_indicator.rs`. Treat
+them as acceptance criteria for any future capture backend.
+
 ---
 
 ## Further Reading
