@@ -42,6 +42,115 @@ pub struct PluginManifest {
     /// Tools provided by this plugin.
     #[serde(default)]
     pub tools: Vec<String>,
+
+    /// Voice capability declaration (WEFT-556 / SC-10).
+    ///
+    /// Plugins MUST declare this section AND list `PluginCapability::Voice`
+    /// in [`PluginManifest::capabilities`] before the WASM host will
+    /// forward voice transcripts or accept synthesize-audio host calls.
+    /// Each sub-permission is independently gated against the user's
+    /// per-plugin grant matrix at load time.
+    ///
+    /// `None` (the default) means the plugin requests no voice access.
+    #[serde(default)]
+    pub voice: Option<VoiceCapability>,
+}
+
+/// Per-plugin voice capability declaration (WEFT-556 / SC-10).
+///
+/// A plugin requests voice access by setting this in its manifest:
+///
+/// ```json
+/// {
+///   "capabilities": ["voice"],
+///   "voice": {
+///     "read_transcripts": true,
+///     "dispatch_commands": false,
+///     "synthesize_audio": true,
+///     "transcript_topics": ["weftos.voice.transcripts.v1"]
+///   }
+/// }
+/// ```
+///
+/// Each sub-permission is independent and must be granted by the user
+/// (via [`VoiceGrants`](crate::manifest::VoiceGrants) loaded from
+/// `~/.clawft/config.json`'s `plugins.voice_grants.<plugin_id>`).
+///
+/// At load time the manifest is intersected with the grant matrix via
+/// [`validate_voice_capability`]; any `true` here that the user has not
+/// granted causes [`SkillLoadError::VoiceCapabilityNotGranted`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoiceCapability {
+    /// Plugin RECEIVES voice transcripts as input via the WASM host's
+    /// substrate-publish forwarding path.
+    #[serde(default, alias = "readTranscripts")]
+    pub read_transcripts: bool,
+
+    /// Plugin may dispatch commands derived from voice transcripts back
+    /// into the daemon's RPC surface. Strictly more powerful than
+    /// `read_transcripts` and must be granted independently.
+    #[serde(default, alias = "dispatchCommands")]
+    pub dispatch_commands: bool,
+
+    /// Plugin may call `host.synthesize_audio(text)` to produce TTS
+    /// output. Without this sub-permission the host returns
+    /// [`WasmHostError::CapabilityDenied`](crate::error::WasmHostError::CapabilityDenied)
+    /// at runtime.
+    #[serde(default, alias = "synthesizeAudio")]
+    pub synthesize_audio: bool,
+
+    /// Specific substrate transcript topics the plugin wants to
+    /// subscribe to. Empty = the plugin accepts whatever default
+    /// topic the host forwards (typically the daemon's
+    /// `voice.consumer.transcript_topic`). Non-empty topics are still
+    /// gated by `read_transcripts`.
+    #[serde(default, alias = "transcriptTopics")]
+    pub transcript_topics: Vec<String>,
+}
+
+impl VoiceCapability {
+    /// Returns `true` when no sub-permission is requested. A plugin in
+    /// this state has effectively declared no voice access; the host
+    /// treats it the same as a missing manifest entry.
+    pub fn is_empty(&self) -> bool {
+        !self.read_transcripts
+            && !self.dispatch_commands
+            && !self.synthesize_audio
+            && self.transcript_topics.is_empty()
+    }
+}
+
+/// Per-plugin voice sub-permission grants (WEFT-556 / SC-10).
+///
+/// Loaded from `~/.clawft/config.json`'s
+/// `plugins.voice_grants.<plugin_id>` and consumed by
+/// [`validate_voice_capability`]. Each field mirrors the corresponding
+/// [`VoiceCapability`] field but represents what the **operator** has
+/// approved rather than what the plugin **requested**.
+///
+/// Defaults to all-false: the operator must explicitly opt each
+/// sub-permission in.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoiceGrants {
+    /// Operator allows the plugin to receive voice transcripts.
+    #[serde(default, alias = "readTranscripts")]
+    pub read_transcripts: bool,
+
+    /// Operator allows the plugin to dispatch commands derived from
+    /// voice transcripts.
+    #[serde(default, alias = "dispatchCommands")]
+    pub dispatch_commands: bool,
+
+    /// Operator allows the plugin to synthesize TTS audio.
+    #[serde(default, alias = "synthesizeAudio")]
+    pub synthesize_audio: bool,
+
+    /// Topics the operator has whitelisted. Empty = any topic the
+    /// plugin requests is allowed (subject to the boolean grants
+    /// above). Non-empty = each topic in the manifest must appear in
+    /// this list.
+    #[serde(default, alias = "transcriptTopics")]
+    pub transcript_topics: Vec<String>,
 }
 
 /// Plugin capability types.
@@ -368,11 +477,122 @@ impl PluginManifest {
             wasm_module: None,
             skills: Vec::new(),
             tools: Vec::new(),
+            voice: None,
         };
 
         manifest.validate()?;
         Ok(manifest)
     }
+}
+
+// ── WEFT-556 / SC-10: voice capability gating ───────────────────────────
+
+use crate::error::SkillLoadError;
+
+/// Validate the manifest's [`VoiceCapability`] against the operator's
+/// per-plugin [`VoiceGrants`] (WEFT-556 / SC-10).
+///
+/// Returns:
+///
+/// - `Ok(())` if the manifest declares no voice capability, OR if every
+///   sub-permission set in the manifest is also granted by the operator.
+/// - [`SkillLoadError::VoiceCapabilityNotGranted`] if any sub-permission
+///   the manifest requests is not granted, OR if the manifest declares
+///   `voice` capability membership without listing it in the
+///   `capabilities` array, OR if a transcript topic in the manifest is
+///   not in the operator's allowlist (when the allowlist is non-empty).
+///
+/// # Behavior matrix
+///
+/// | manifest.voice | capabilities ⊇ Voice | grants exist? | result |
+/// |----------------|----------------------|---------------|--------|
+/// | None | – | – | Ok |
+/// | Some(empty) | – | – | Ok |
+/// | Some(any) | no | – | Err (capabilities mismatch) |
+/// | Some(req) | yes | None | Err (not granted) |
+/// | Some(req) | yes | Some(g) | Ok iff `req ⊆ g` |
+pub fn validate_voice_capability(
+    plugin_id: &str,
+    capabilities: &[PluginCapability],
+    requested: Option<&VoiceCapability>,
+    granted: Option<&VoiceGrants>,
+) -> Result<(), SkillLoadError> {
+    let Some(req) = requested else {
+        // Plugin declared no voice section at all.
+        return Ok(());
+    };
+
+    // An all-false manifest entry is treated identically to None: the
+    // plugin asked for nothing, so nothing to validate.
+    if req.is_empty() {
+        return Ok(());
+    }
+
+    // The plugin asks for at least one voice sub-permission. The top-level
+    // capabilities array MUST also list `Voice`, otherwise the manifest
+    // is internally inconsistent.
+    if !capabilities.contains(&PluginCapability::Voice) {
+        return Err(SkillLoadError::VoiceCapabilityNotGranted {
+            plugin: plugin_id.to_string(),
+            denied: vec!["voice (capability not declared in capabilities[])".into()],
+        });
+    }
+
+    let Some(grants) = granted else {
+        // Plugin requested voice perms but the operator has not granted
+        // anything for this plugin id. Reject with a list of every
+        // sub-permission the plugin asked for.
+        return Err(SkillLoadError::VoiceCapabilityNotGranted {
+            plugin: plugin_id.to_string(),
+            denied: collect_requested_perms(req),
+        });
+    };
+
+    let mut denied: Vec<String> = Vec::new();
+    if req.read_transcripts && !grants.read_transcripts {
+        denied.push("voice.read_transcripts".into());
+    }
+    if req.dispatch_commands && !grants.dispatch_commands {
+        denied.push("voice.dispatch_commands".into());
+    }
+    if req.synthesize_audio && !grants.synthesize_audio {
+        denied.push("voice.synthesize_audio".into());
+    }
+    if !grants.transcript_topics.is_empty() {
+        for topic in &req.transcript_topics {
+            if !grants.transcript_topics.contains(topic) {
+                denied.push(format!("voice.transcript_topic:{topic}"));
+            }
+        }
+    }
+
+    if denied.is_empty() {
+        Ok(())
+    } else {
+        denied.sort();
+        denied.dedup();
+        Err(SkillLoadError::VoiceCapabilityNotGranted {
+            plugin: plugin_id.to_string(),
+            denied,
+        })
+    }
+}
+
+fn collect_requested_perms(req: &VoiceCapability) -> Vec<String> {
+    let mut out = Vec::new();
+    if req.read_transcripts {
+        out.push("voice.read_transcripts".into());
+    }
+    if req.dispatch_commands {
+        out.push("voice.dispatch_commands".into());
+    }
+    if req.synthesize_audio {
+        out.push("voice.synthesize_audio".into());
+    }
+    for topic in &req.transcript_topics {
+        out.push(format!("voice.transcript_topic:{topic}"));
+    }
+    out
 }
 
 /// Minimal hand-rolled TOML scanner that recognizes simple `[section]` lines
@@ -949,6 +1169,275 @@ version = "1.0.0"
         let manifest = PluginManifest::from_legacy_toml(toml).unwrap();
         assert_eq!(manifest.name, "commenter");
         assert_eq!(manifest.version, "1.0.0");
+    }
+
+    // ── WEFT-556 / SC-10: voice capability tests ────────────────────
+
+    fn cap_voice() -> Vec<PluginCapability> {
+        vec![PluginCapability::Voice]
+    }
+
+    #[test]
+    fn voice_capability_parses_from_manifest_json() {
+        let json = serde_json::json!({
+            "id": "com.example.voice-plugin",
+            "name": "Voice Plugin",
+            "version": "0.1.0",
+            "capabilities": ["voice"],
+            "voice": {
+                "read_transcripts": true,
+                "dispatch_commands": false,
+                "synthesize_audio": true,
+                "transcript_topics": ["weftos.voice.transcripts.v1"]
+            }
+        })
+        .to_string();
+        let manifest = PluginManifest::from_json(&json).unwrap();
+        let voice = manifest.voice.expect("voice section parsed");
+        assert!(voice.read_transcripts);
+        assert!(!voice.dispatch_commands);
+        assert!(voice.synthesize_audio);
+        assert_eq!(
+            voice.transcript_topics,
+            vec!["weftos.voice.transcripts.v1"]
+        );
+    }
+
+    #[test]
+    fn voice_capability_camel_case_aliases() {
+        let json = serde_json::json!({
+            "id": "com.example.camel",
+            "name": "Camel",
+            "version": "0.1.0",
+            "capabilities": ["voice"],
+            "voice": {
+                "readTranscripts": true,
+                "dispatchCommands": true,
+                "synthesizeAudio": false,
+                "transcriptTopics": ["t.a"]
+            }
+        })
+        .to_string();
+        let manifest = PluginManifest::from_json(&json).unwrap();
+        let voice = manifest.voice.unwrap();
+        assert!(voice.read_transcripts);
+        assert!(voice.dispatch_commands);
+        assert!(!voice.synthesize_audio);
+        assert_eq!(voice.transcript_topics, vec!["t.a"]);
+    }
+
+    #[test]
+    fn manifest_without_voice_section_defaults_to_none() {
+        let json = serde_json::json!({
+            "id": "com.example.no-voice",
+            "name": "Quiet",
+            "version": "0.1.0",
+            "capabilities": ["tool"]
+        })
+        .to_string();
+        let manifest = PluginManifest::from_json(&json).unwrap();
+        assert!(manifest.voice.is_none());
+    }
+
+    #[test]
+    fn voice_capability_is_empty_detects_all_false() {
+        let v = VoiceCapability::default();
+        assert!(v.is_empty());
+        let v = VoiceCapability {
+            read_transcripts: true,
+            ..Default::default()
+        };
+        assert!(!v.is_empty());
+    }
+
+    #[test]
+    fn validate_voice_no_request_succeeds_without_grant() {
+        let r = validate_voice_capability("p", &[PluginCapability::Tool], None, None);
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn validate_voice_empty_request_succeeds_without_grant() {
+        let req = VoiceCapability::default();
+        let r = validate_voice_capability("p", &cap_voice(), Some(&req), None);
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn validate_voice_request_without_capability_decl_rejects() {
+        // The plugin asks for voice perms but didn't list `Voice` in
+        // its `capabilities[]` array. That's an internally inconsistent
+        // manifest and must be rejected.
+        let req = VoiceCapability {
+            read_transcripts: true,
+            ..Default::default()
+        };
+        let grants = VoiceGrants {
+            read_transcripts: true,
+            ..Default::default()
+        };
+        let err = validate_voice_capability(
+            "p",
+            &[PluginCapability::Tool],
+            Some(&req),
+            Some(&grants),
+        )
+        .expect_err("must reject");
+        match err {
+            SkillLoadError::VoiceCapabilityNotGranted { plugin, denied } => {
+                assert_eq!(plugin, "p");
+                assert!(denied.iter().any(|d| d.contains("capabilities[]")));
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_voice_request_without_grant_rejects() {
+        // Plugin requests dispatch_commands but operator hasn't granted
+        // anything (no entry in voice_grants for this plugin).
+        let req = VoiceCapability {
+            dispatch_commands: true,
+            ..Default::default()
+        };
+        let err = validate_voice_capability("p", &cap_voice(), Some(&req), None)
+            .expect_err("must reject");
+        match err {
+            SkillLoadError::VoiceCapabilityNotGranted { plugin, denied } => {
+                assert_eq!(plugin, "p");
+                assert_eq!(denied, vec!["voice.dispatch_commands"]);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_voice_dispatch_without_grant_is_the_canonical_failure() {
+        // Plugin declares dispatch_commands: true but the operator hasn't
+        // granted voice.commands -> reject with VoiceCapabilityNotGranted.
+        let req = VoiceCapability {
+            read_transcripts: true,
+            dispatch_commands: true,
+            ..Default::default()
+        };
+        let grants = VoiceGrants {
+            read_transcripts: true,
+            // dispatch_commands NOT granted
+            ..Default::default()
+        };
+        let err = validate_voice_capability("p", &cap_voice(), Some(&req), Some(&grants))
+            .expect_err("must reject");
+        match err {
+            SkillLoadError::VoiceCapabilityNotGranted { denied, .. } => {
+                assert!(denied.contains(&"voice.dispatch_commands".to_string()));
+                // read_transcripts WAS granted, so it must NOT appear:
+                assert!(!denied.contains(&"voice.read_transcripts".to_string()));
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_voice_full_grant_succeeds() {
+        let req = VoiceCapability {
+            read_transcripts: true,
+            dispatch_commands: true,
+            synthesize_audio: true,
+            transcript_topics: vec!["t.a".into(), "t.b".into()],
+        };
+        let grants = VoiceGrants {
+            read_transcripts: true,
+            dispatch_commands: true,
+            synthesize_audio: true,
+            transcript_topics: vec!["t.a".into(), "t.b".into(), "t.c".into()],
+        };
+        let r =
+            validate_voice_capability("p", &cap_voice(), Some(&req), Some(&grants));
+        assert!(r.is_ok(), "got: {r:?}");
+    }
+
+    #[test]
+    fn validate_voice_topic_not_whitelisted_rejects() {
+        // Operator's allowlist is non-empty but doesn't include the
+        // topic the plugin asked for.
+        let req = VoiceCapability {
+            read_transcripts: true,
+            transcript_topics: vec!["weftos.voice.transcripts.v1".into()],
+            ..Default::default()
+        };
+        let grants = VoiceGrants {
+            read_transcripts: true,
+            transcript_topics: vec!["other.topic".into()],
+            ..Default::default()
+        };
+        let err = validate_voice_capability("p", &cap_voice(), Some(&req), Some(&grants))
+            .expect_err("must reject topic");
+        match err {
+            SkillLoadError::VoiceCapabilityNotGranted { denied, .. } => {
+                assert!(denied
+                    .iter()
+                    .any(|d| d == "voice.transcript_topic:weftos.voice.transcripts.v1"));
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_voice_empty_grant_topics_means_any_topic_ok() {
+        // Operator left transcript_topics empty -> any topic is fine
+        // as long as the boolean grants cover the request.
+        let req = VoiceCapability {
+            read_transcripts: true,
+            transcript_topics: vec!["topic.x".into()],
+            ..Default::default()
+        };
+        let grants = VoiceGrants {
+            read_transcripts: true,
+            transcript_topics: Vec::new(),
+            ..Default::default()
+        };
+        let r =
+            validate_voice_capability("p", &cap_voice(), Some(&req), Some(&grants));
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn validate_voice_denied_list_is_sorted_and_deduped() {
+        let req = VoiceCapability {
+            read_transcripts: true,
+            dispatch_commands: true,
+            synthesize_audio: true,
+            ..Default::default()
+        };
+        let grants = VoiceGrants::default(); // all false
+        let err = validate_voice_capability("p", &cap_voice(), Some(&req), Some(&grants))
+            .expect_err("must reject");
+        match err {
+            SkillLoadError::VoiceCapabilityNotGranted { denied, .. } => {
+                assert_eq!(
+                    denied,
+                    vec![
+                        "voice.dispatch_commands",
+                        "voice.read_transcripts",
+                        "voice.synthesize_audio",
+                    ]
+                );
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn voice_capability_serde_roundtrip() {
+        let v = VoiceCapability {
+            read_transcripts: true,
+            dispatch_commands: false,
+            synthesize_audio: true,
+            transcript_topics: vec!["t.a".into()],
+        };
+        let json = serde_json::to_string(&v).unwrap();
+        let restored: VoiceCapability = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, v);
     }
 
     #[test]

@@ -767,6 +767,7 @@ mod tests {
             wasm_module: None,
             skills: vec![],
             tools: vec![],
+            voice: None,
         };
 
         let config = PluginConfig::from_manifest(&manifest);
