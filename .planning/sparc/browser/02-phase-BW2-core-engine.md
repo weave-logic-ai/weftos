@@ -450,7 +450,7 @@ Recommended: Add `web-time` or `instant` as a dependency for the browser feature
 - [ ] `cargo test --workspace` -- zero regressions
 - [ ] `cargo build --release --bin weft` -- native CLI builds
 - [ ] `cargo build --target wasm32-wasip2 --profile release-wasm -p clawft-wasm` -- WASI build works
-- [ ] `scripts/check-features.sh` passes
+- [ ] `scripts/build.sh gate` passes (WEFT-409: supersedes the never-created `scripts/check-features.sh`)
 
 ### Test Commands
 
