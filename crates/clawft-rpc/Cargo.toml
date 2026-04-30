@@ -17,3 +17,10 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "net", "rt"] }
 anyhow = { workspace = true }
 dirs = { workspace = true }
+# `blocking` for the version_check fire-and-forget thread (no tokio
+# runtime in std::thread::spawn). Other features stay default-off to
+# keep this crate's compile cost minimal — it is a foundation dep.
+reqwest = { workspace = true, features = ["blocking"] }
+
+[dev-dependencies]
+mockito = "1"
