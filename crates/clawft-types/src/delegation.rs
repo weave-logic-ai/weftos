@@ -16,6 +16,21 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelegationConfig {
     /// Whether Claude AI delegation is enabled.
+    ///
+    /// **Default divergence (footgun, documented intentionally):**
+    /// - `DelegationConfig::default()` sets this to `true` so a freshly
+    ///   constructed config — used when no `[delegation]` table is present —
+    ///   degrades gracefully (the engine treats Claude as unavailable when
+    ///   no API key is configured).
+    /// - `serde(default)` here uses [`bool::default()`] (which is `false`),
+    ///   so a `[delegation]` table that *omits* this key parses as
+    ///   `claude_enabled = false`.
+    ///
+    /// In other words: write nothing → Claude on; write `[delegation]` with
+    /// other keys but no `claude_enabled` → Claude off. Tests in this module
+    /// pin both behaviours (`delegation_config_defaults`,
+    /// `delegation_config_from_empty_json`); if you change the runtime
+    /// default, update both.
     #[serde(default)]
     pub claude_enabled: bool,
 
@@ -162,6 +177,10 @@ mod tests {
 
     #[test]
     fn delegation_config_from_empty_json() {
+        // WEFT-203: pinning the documented divergence between
+        // `Default::default()` (claude_enabled = true) and
+        // `serde(default)` on `{}` (claude_enabled = false). See the
+        // doc-comment on `DelegationConfig::claude_enabled`.
         let cfg: DelegationConfig = serde_json::from_str("{}").unwrap();
         assert!(!cfg.claude_enabled);
         assert_eq!(cfg.claude_model, "claude-sonnet-4-20250514");
