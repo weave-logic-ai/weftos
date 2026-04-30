@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 description = "LSP-based code intelligence extraction — tap any language server for full semantic graphs"
 keywords = ["lsp", "code-analysis", "knowledge-graph", "ast", "semantic"]
+# rationale: internal build-tool extracting code intelligence; not a public API.
 publish = false
 
 [dependencies]

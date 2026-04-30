@@ -1,7 +1,8 @@
 [package]
 name = "clawft-security"
 version.workspace = true
-publish = false
+# Publishable: reusable hardening / audit primitives.
+publish = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

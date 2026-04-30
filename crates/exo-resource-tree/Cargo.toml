@@ -1,6 +1,7 @@
 [package]
 name = "exo-resource-tree"
 version.workspace = true
+publish = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

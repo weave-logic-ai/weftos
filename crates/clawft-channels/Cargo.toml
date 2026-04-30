@@ -1,7 +1,8 @@
 [package]
 name = "clawft-channels"
 version.workspace = true
-publish = false
+# Publishable: reusable channel plugin API.
+publish = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

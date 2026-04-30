@@ -1,6 +1,7 @@
 [package]
 name = "clawft-weave"
 version.workspace = true
+# rationale: operator binary (`weaver`); shipped via cargo-dist, not crates.io.
 publish = false
 edition.workspace = true
 rust-version.workspace = true

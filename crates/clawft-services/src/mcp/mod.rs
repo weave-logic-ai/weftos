@@ -26,8 +26,36 @@ pub use transport::{
 /// The MCP protocol version negotiated during initialize.
 ///
 /// This constant is the single source of truth for protocol version
-/// strings used in both client and server code.
+/// strings used in both client and server code. We always send this
+/// in our `initialize` request.
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+
+/// Protocol versions we accept on the server side of the handshake.
+///
+/// WEFT-489. If the remote server's `initialize` response reports a
+/// `protocolVersion` outside this set, [`McpSession::connect`] aborts
+/// the session with [`crate::error::ServiceError::McpProtocolVersionMismatch`]
+/// after logging a `warn!` so the operator sees the rejection.
+///
+/// Order is informational; we use set semantics. The current value
+/// includes the previous published versions plus our negotiated
+/// version so a server that lags one revision still attaches.
+pub const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
+    "2024-11-05",
+    "2025-03-26",
+    "2025-06-18",
+];
+
+/// Returns true if `version` is in our supported set.
+///
+/// Empty string is treated as "server omitted the field" and falls
+/// back to our advertised version (which is always supported).
+pub fn is_supported_protocol_version(version: &str) -> bool {
+    if version.is_empty() {
+        return true;
+    }
+    MCP_SUPPORTED_PROTOCOL_VERSIONS.contains(&version)
+}
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -240,6 +268,25 @@ impl McpSession {
             .and_then(|v| v.as_str())
             .unwrap_or(MCP_PROTOCOL_VERSION)
             .to_string();
+
+        // WEFT-489: reject foreign protocol versions before sending
+        // `notifications/initialized`. A non-matching server gets a
+        // hard error here rather than at the first tools/list (where
+        // the failure mode is much harder to diagnose).
+        if !is_supported_protocol_version(&protocol_version) {
+            tracing::warn!(
+                ours = ?MCP_SUPPORTED_PROTOCOL_VERSIONS,
+                theirs = %protocol_version,
+                "mcp initialize: protocol-version mismatch, aborting session"
+            );
+            return Err(ServiceError::McpProtocolVersionMismatch {
+                ours: MCP_SUPPORTED_PROTOCOL_VERSIONS
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect(),
+                theirs: protocol_version,
+            });
+        }
 
         // Step 3: Send initialized notification.
         client
@@ -642,6 +689,74 @@ mod tests {
     }
 
     // ── ServerCapabilities / ServerInfo serde tests ─────────────────────
+
+    // ── Protocol-version handshake tests (WEFT-489) ─────────────────────
+
+    #[test]
+    fn supported_protocol_version_set_includes_current() {
+        // The version we send in our initialize request must always
+        // be in the accepted set, otherwise we'd reject our own peers.
+        assert!(is_supported_protocol_version(MCP_PROTOCOL_VERSION));
+    }
+
+    #[test]
+    fn supported_protocol_version_set_includes_legacy() {
+        assert!(is_supported_protocol_version("2024-11-05"));
+        assert!(is_supported_protocol_version("2025-03-26"));
+    }
+
+    #[test]
+    fn unsupported_protocol_version_rejected() {
+        assert!(!is_supported_protocol_version("1999-01-01"));
+        assert!(!is_supported_protocol_version("foo"));
+        assert!(!is_supported_protocol_version("2099-12-31"));
+    }
+
+    #[test]
+    fn empty_protocol_version_falls_back_to_supported() {
+        // Server omitted the field — treat as supported (we
+        // negotiated to our advertised version anyway).
+        assert!(is_supported_protocol_version(""));
+    }
+
+    #[tokio::test]
+    async fn session_connect_rejects_unsupported_protocol_version() {
+        // Server replies with a deliberately bogus version.
+        let response = make_success_response(
+            1,
+            serde_json::json!({
+                "protocolVersion": "1999-01-01",
+                "capabilities": {},
+                "serverInfo": { "name": "rogue-server", "version": "0.1" }
+            }),
+        );
+        let transport = MockTransport::new(vec![response]);
+        let result = McpSession::connect(Box::new(transport)).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ServiceError::McpProtocolVersionMismatch { ours, theirs } => {
+                assert!(ours.contains(&MCP_PROTOCOL_VERSION.to_string()));
+                assert_eq!(theirs, "1999-01-01");
+            }
+            other => panic!("expected McpProtocolVersionMismatch, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn session_connect_accepts_legacy_protocol_version() {
+        // Server reports the previous published version — should attach.
+        let response = make_success_response(
+            1,
+            serde_json::json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "legacy-server", "version": "1.0" }
+            }),
+        );
+        let transport = MockTransport::new(vec![response]);
+        let session = McpSession::connect(Box::new(transport)).await.unwrap();
+        assert_eq!(session.protocol_version, "2024-11-05");
+    }
 
     #[test]
     fn server_capabilities_default() {

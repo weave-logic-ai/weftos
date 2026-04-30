@@ -4,6 +4,7 @@ version = "0.5.4"
 edition = "2021"
 description = "WeftOS edge benchmark for ESP32-S3"
 license = "MIT OR Apache-2.0"
+# rationale: benchmark binary for ESP32-S3 hardware; not a reusable library.
 publish = false
 
 [dependencies]

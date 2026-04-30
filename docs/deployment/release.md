@@ -21,6 +21,31 @@ The workspace `Cargo.toml` is the source of truth for the version. The
 `Publish Crates` workflow refuses to run if the tag and the workspace
 version disagree.
 
+## Publish policy
+
+Every workspace crate carries an explicit `publish = ...` line in its
+`Cargo.toml`. This makes the policy grep-able and prevents silent
+opt-outs by relying on the cargo default.
+
+- **Default is `publish = true`.** Library crates that other consumers
+  (in-tree or downstream) might depend on ship to crates.io.
+- **`publish = false` requires an inline `# rationale: ...` comment**
+  on the line above. Acceptable rationales today:
+  - End-user binary shipped via `cargo-dist` / Homebrew, not crates.io
+    (e.g. `clawft-cli`'s `weft`, `clawft-weave`'s `weaver`).
+  - Internal build / test-harness tool (e.g. `clawft-casestudy-gen-qsr`,
+    `clawft-lsp-extract`).
+  - Hardware benchmark binary (`clawft-edge-bench`).
+
+When adding a new crate, copy the policy from a sibling: add either
+`publish = true` (preferred) or `publish = false` plus a one-line
+`# rationale: ...` comment so future readers do not have to guess.
+
+The `Publish Crates` workflow already iterates `publish = true` crates
+in topological order (see [`#4 Publish Crates`](#4-publish-crates----publish-cratesyml)
+below); flipping a crate to `publish = true` automatically enrolls it
+in the next release.
+
 ## Tag, Push, Done
 
 The shipping flow:
@@ -325,6 +350,35 @@ scripts/build.sh browser
 
 See [`wasm.md`](wasm.md) for runtime instructions and the size budgets
 enforced in CI.
+
+## CI gates
+
+`pr-gates.yml` is the merge gate. Every job listed below is **required**;
+none of them are allowed to skip on failure (no `|| true`, no
+`::warning::` fallback for "feature not yet implemented"). A red gate
+blocks merge.
+
+| Job                              | Owner          | Notes                                                                 |
+|----------------------------------|----------------|-----------------------------------------------------------------------|
+| `Clippy lint`                    | clippy         | `-D warnings` workspace-wide.                                          |
+| `Test suite`                     | cargo test     | Full workspace.                                                        |
+| `WASM size gate`                 | wasm-size      | Asserts wasip2 binary < 300 KB raw / 120 KB gzipped.                  |
+| `Binary size check`              | binary-size    | Asserts release `weft` < 10 MB.                                        |
+| `Browser WASM check`             | wasm-browser-check | **Hard gate (WEFT-447)**: `cargo check` for `wasm32-unknown-unknown`, no warning fallback. |
+| `Browser WASM regression suite`  | browser-wasm-tests | Headless Chrome via `wasm-pack` (M5-A / WEFT-388).                  |
+| `Browser WASM bundle size`       | browser-wasm-bundle-size | Post-bindgen `_bg.wasm` budget gate (WEFT-389).               |
+| `Voice feature check`            | voice-feature-check | Compilation check for the `voice` feature on `clawft-plugin`.      |
+| `UI lint and type-check`         | ui-check       | Skipped only when `clawft-ui/` is absent.                              |
+| `Docs site build`                | docs-build     | **WEFT-448**: Fumadocs Next.js build; runs only on `docs/src/**` changes. |
+| `Cargo audit`                    | cargo-audit    | Mirrors `CARGO_AUDIT_IGNORES` in `scripts/build.sh`.                   |
+| `Cargo Check`                    | check          | Fast workspace `cargo check`.                                          |
+| `Assessment`                     | assess         | Runs `weft assess run --scope ci`.                                     |
+| `Integration smoke test`         | smoke-test     | **WEFT-550**: builds Docker image, starts `weft gateway`, probes `/api/health` with a 30s deadline; fails on first-3s crash. |
+
+To make any of these jobs **required for merge** in repository
+settings, add the job name to `Settings -> Branches -> master ->
+Require status checks to pass`. Job names match the `name:` field in
+`pr-gates.yml`.
 
 ## Security audits
 
