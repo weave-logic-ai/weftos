@@ -36,6 +36,26 @@ pub struct TranscriptEntry {
 ///
 /// This logger is append-only and does not require locking for
 /// single-session use.
+///
+/// # Join key contract (WEFT-241)
+///
+/// The `session_id` passed to [`TranscriptLogger::new`] is the join
+/// key against substrate-side transcripts produced by
+/// `clawft-service-whisper`. The substrate publishes transcripts on
+/// `substrate/_derived/transcript/<source-node-id>/mic` (see
+/// `clawft_service_whisper::derive_source_node_from_path`); the
+/// `<source-node-id>` segment is the canonical key.
+///
+/// To correlate an in-process [`TranscriptLogger`] log file with the
+/// substrate transcript stream, callers MUST set
+/// `session_id == <source-node-id>`. The sensor node publishing the
+/// PCM owns this identifier; the agent / consumer reads it off the
+/// transcript path. Any other choice (UUID per session, agent name,
+/// etc.) breaks the join.
+///
+/// Per ADR-053, substrate-side `clawft-service-whisper` is the
+/// canonical 0.7.0 STT path; this logger is the agent-side companion
+/// that records consumed transcripts in the workspace.
 pub struct TranscriptLogger {
     path: PathBuf,
 }
@@ -44,6 +64,10 @@ impl TranscriptLogger {
     /// Create a new logger for the given session.
     ///
     /// Creates the transcript directory if it does not exist.
+    ///
+    /// `session_id` should be the substrate `<source-node-id>` that
+    /// produced the transcripts being recorded — see the type-level
+    /// docs (WEFT-241) for the join-key contract.
     pub fn new(workspace: &Path, session_id: &str) -> std::io::Result<Self> {
         let dir = workspace.join(".clawft").join("transcripts");
         std::fs::create_dir_all(&dir)?;

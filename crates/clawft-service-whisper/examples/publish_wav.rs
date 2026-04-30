@@ -1,6 +1,20 @@
 //! Test harness: publish a WAV file's PCM into substrate as pcm_chunk
 //! events, driving the whisper service without needing the ESP32.
 //!
+//! # Status (WEFT-237)
+//!
+//! Kept as a long-lived dev/operator harness for the canonical
+//! substrate-side STT path (see ADR-053). It exercises the full
+//! sensor → PCM → window → whisper → transcript loop in-process,
+//! making it the lowest-friction reproducer when the live deployment
+//! is misbehaving and the easiest entry point for new contributors
+//! who need to see the substrate STT contract end-to-end without
+//! standing up sensor hardware.
+//!
+//! Do not delete: it underpins manual triage of the canonical STT
+//! path and serves as live documentation of the
+//! `substrate/_derived/transcript/<source-node-id>/mic` shape.
+//!
 //! # Usage
 //!
 //! ```bash
