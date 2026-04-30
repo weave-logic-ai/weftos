@@ -1,6 +1,7 @@
 [package]
 name = "clawft-cli"
 version.workspace = true
+# rationale: end-user binary (`weft`); shipped via cargo-dist + Homebrew, not crates.io.
 publish = false
 edition.workspace = true
 rust-version.workspace = true

@@ -21,6 +21,31 @@ The workspace `Cargo.toml` is the source of truth for the version. The
 `Publish Crates` workflow refuses to run if the tag and the workspace
 version disagree.
 
+## Publish policy
+
+Every workspace crate carries an explicit `publish = ...` line in its
+`Cargo.toml`. This makes the policy grep-able and prevents silent
+opt-outs by relying on the cargo default.
+
+- **Default is `publish = true`.** Library crates that other consumers
+  (in-tree or downstream) might depend on ship to crates.io.
+- **`publish = false` requires an inline `# rationale: ...` comment**
+  on the line above. Acceptable rationales today:
+  - End-user binary shipped via `cargo-dist` / Homebrew, not crates.io
+    (e.g. `clawft-cli`'s `weft`, `clawft-weave`'s `weaver`).
+  - Internal build / test-harness tool (e.g. `clawft-casestudy-gen-qsr`,
+    `clawft-lsp-extract`).
+  - Hardware benchmark binary (`clawft-edge-bench`).
+
+When adding a new crate, copy the policy from a sibling: add either
+`publish = true` (preferred) or `publish = false` plus a one-line
+`# rationale: ...` comment so future readers do not have to guess.
+
+The `Publish Crates` workflow already iterates `publish = true` crates
+in topological order (see [`#4 Publish Crates`](#4-publish-crates----publish-cratesyml)
+below); flipping a crate to `publish = true` automatically enrolls it
+in the next release.
+
 ## Tag, Push, Done
 
 The shipping flow:
