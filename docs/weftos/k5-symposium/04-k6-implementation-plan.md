@@ -390,7 +390,7 @@ classical Noise -- graceful degradation, no connection failure.
 
 | File | Purpose | Lines |
 |------|---------|:-----:|
-| `mesh/handshake.rs` | KEM upgrade step after Noise XX completes | ~60 |
+| `mesh_handshake.rs` | KEM upgrade step after Noise XX completes (flat layout: `crates/clawft-kernel/src/mesh_handshake.rs`) | ~60 |
 | Changes to `mesh_noise.rs` | Add `kem_supported` to handshake payload, rekey after KEM | ~30 |
 | Changes to `mesh_listener.rs` | Wire KEM upgrade into accept path | ~10 |
 
