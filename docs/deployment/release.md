@@ -351,6 +351,35 @@ scripts/build.sh browser
 See [`wasm.md`](wasm.md) for runtime instructions and the size budgets
 enforced in CI.
 
+## CI gates
+
+`pr-gates.yml` is the merge gate. Every job listed below is **required**;
+none of them are allowed to skip on failure (no `|| true`, no
+`::warning::` fallback for "feature not yet implemented"). A red gate
+blocks merge.
+
+| Job                              | Owner          | Notes                                                                 |
+|----------------------------------|----------------|-----------------------------------------------------------------------|
+| `Clippy lint`                    | clippy         | `-D warnings` workspace-wide.                                          |
+| `Test suite`                     | cargo test     | Full workspace.                                                        |
+| `WASM size gate`                 | wasm-size      | Asserts wasip2 binary < 300 KB raw / 120 KB gzipped.                  |
+| `Binary size check`              | binary-size    | Asserts release `weft` < 10 MB.                                        |
+| `Browser WASM check`             | wasm-browser-check | **Hard gate (WEFT-447)**: `cargo check` for `wasm32-unknown-unknown`, no warning fallback. |
+| `Browser WASM regression suite`  | browser-wasm-tests | Headless Chrome via `wasm-pack` (M5-A / WEFT-388).                  |
+| `Browser WASM bundle size`       | browser-wasm-bundle-size | Post-bindgen `_bg.wasm` budget gate (WEFT-389).               |
+| `Voice feature check`            | voice-feature-check | Compilation check for the `voice` feature on `clawft-plugin`.      |
+| `UI lint and type-check`         | ui-check       | Skipped only when `clawft-ui/` is absent.                              |
+| `Docs site build`                | docs-build     | **WEFT-448**: Fumadocs Next.js build; runs only on `docs/src/**` changes. |
+| `Cargo audit`                    | cargo-audit    | Mirrors `CARGO_AUDIT_IGNORES` in `scripts/build.sh`.                   |
+| `Cargo Check`                    | check          | Fast workspace `cargo check`.                                          |
+| `Assessment`                     | assess         | Runs `weft assess run --scope ci`.                                     |
+| `Integration smoke test`         | smoke-test     | **WEFT-550**: builds Docker image, starts `weft gateway`, probes `/api/health` with a 30s deadline; fails on first-3s crash. |
+
+To make any of these jobs **required for merge** in repository
+settings, add the job name to `Settings -> Branches -> master ->
+Require status checks to pass`. Job names match the `name:` field in
+`pr-gates.yml`.
+
 ## Security audits
 
 `scripts/build.sh gate` and the `pr-gates.yml` CI workflow both run

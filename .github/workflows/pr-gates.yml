@@ -167,6 +167,11 @@ jobs:
 
   # -------------------------------------------------------------------
   # Browser WASM: compilation check for wasm32-unknown-unknown
+  #
+  # HARD GATE (WEFT-447). The historical "skip on failure" behaviour
+  # was retired once BW1 / browser feature flags landed. Any regression
+  # that breaks the browser-target build must fail this job. There is
+  # no warning fallback — see docs/deployment/release.md "CI gates".
   # -------------------------------------------------------------------
   wasm-browser-check:
     name: Browser WASM check
@@ -190,15 +195,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-wasm-browser-
 
-      - name: Check browser WASM compilation
-        run: |
-          # This check will start passing once BW1 (feature flags) is complete.
-          # Until then, it validates that the browser feature flag infrastructure exists.
-          if cargo check --target wasm32-unknown-unknown -p clawft-wasm --no-default-features --features browser 2>/dev/null; then
-            echo "Browser WASM check passed"
-          else
-            echo "::warning::Browser WASM check skipped (feature not yet implemented)"
-          fi
+      - name: Check browser WASM compilation (hard gate)
+        run: cargo check --target wasm32-unknown-unknown -p clawft-wasm --no-default-features --features browser
 
       - name: Verify native still works
         run: cargo check --workspace
@@ -490,8 +488,54 @@ jobs:
         run: target/release/weft assess run --scope ci --format github-annotations
 
   # -------------------------------------------------------------------
-  # Integration smoke test: build Docker image, start gateway, check
-  # /health, shut down
+  # Docs build (WEFT-448).
+  #
+  # Compiles the Fumadocs Next.js site so MDX syntax errors block
+  # merge. Triggered only when docs/src/** or this workflow change,
+  # because a full Next build is slow on cold caches.
+  # -------------------------------------------------------------------
+  docs-build:
+    name: Docs site build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect docs changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            docs:
+              - 'docs/src/**'
+              - '.github/workflows/pr-gates.yml'
+
+      - name: Setup Node.js
+        if: steps.filter.outputs.docs == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: docs/src/package-lock.json
+
+      - name: Install docs dependencies
+        if: steps.filter.outputs.docs == 'true'
+        run: cd docs/src && npm ci
+
+      - name: Build docs site
+        if: steps.filter.outputs.docs == 'true'
+        run: cd docs/src && npm run build
+
+      - name: Skip notice
+        if: steps.filter.outputs.docs != 'true'
+        run: echo "No docs/src changes — skipping docs build."
+
+  # -------------------------------------------------------------------
+  # Integration smoke test (WEFT-550).
+  #
+  # Builds the Docker image, starts `weft gateway`, and probes the
+  # gateway's HTTP /api/health endpoint via curl with a bounded retry
+  # budget. Fails if the container exits within 3 seconds, or if
+  # /api/health does not return 200 within ~30 seconds.
   # -------------------------------------------------------------------
   smoke-test:
     name: Integration smoke test
@@ -514,23 +558,42 @@ jobs:
 
       - name: Start gateway container
         run: |
-          docker run --rm -d \
+          docker run -d \
             --name weft-smoke \
             -p 8080:8080 \
-            weft:smoke-test gateway || true
+            weft:smoke-test gateway
 
-      - name: Wait for health endpoint
+      - name: Verify container survives the first 3 seconds
         run: |
-          # The gateway may not have a /health endpoint yet, so we just
-          # verify the container starts and stays running for 5 seconds.
-          echo "Waiting for container to stabilize..."
-          sleep 5
-          if docker ps --filter "name=weft-smoke" --format "{{.Names}}" | grep -q weft-smoke; then
-            echo "Container is running."
-          else
-            echo "::warning::Container exited (may not have gateway /health yet)"
+          sleep 3
+          if ! docker ps --filter "name=weft-smoke" --format "{{.Names}}" | grep -q weft-smoke; then
+            echo "::error::Container exited within 3 seconds — startup crash."
+            docker logs weft-smoke || true
+            exit 1
           fi
+          echo "Container is still running after 3s."
+
+      - name: Probe /api/health (bounded retry, 30s budget)
+        run: |
+          deadline=$(( $(date +%s) + 30 ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            code=$(curl -s -o /tmp/health.body -w '%{http_code}' \
+                       --max-time 3 http://127.0.0.1:8080/api/health || echo "000")
+            if [ "$code" = "200" ]; then
+              echo "Gateway /api/health returned 200."
+              cat /tmp/health.body
+              echo
+              exit 0
+            fi
+            echo "  /api/health returned ${code}, retrying..."
+            sleep 2
+          done
+          echo "::error::Gateway /api/health never returned 200 within 30s."
+          docker logs weft-smoke || true
+          exit 1
 
       - name: Shut down container
         if: always()
-        run: docker stop weft-smoke 2>/dev/null || true
+        run: |
+          docker stop weft-smoke 2>/dev/null || true
+          docker rm   weft-smoke 2>/dev/null || true

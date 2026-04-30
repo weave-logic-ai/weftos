@@ -441,26 +441,16 @@ The image exposes `/root/.clawft` as a volume for persistent configuration and s
 
 ## Release Packaging
 
-The release packaging script creates distributable archives:
+Release archives are produced by [`cargo-dist`](https://opensource.axo.dev/cargo-dist/)
+inside the `Release` workflow (`.github/workflows/release.yml`). The
+target matrix and per-archive contents come from
+`[workspace.metadata.dist]` in the workspace `Cargo.toml`. The flow is
+documented end-to-end in [`docs/deployment/release.md`](../deployment/release.md).
 
-```bash
-./scripts/release/package.sh <version> <target> <binary-path>
-
-# Example
-./scripts/release/package.sh 0.1.0 x86_64-unknown-linux-musl target/x86_64-unknown-linux-musl/release/weft
-```
-
-Output in `dist/`:
-- `weft-0.1.0-x86_64-unknown-linux-musl.zip` -- Archive with binary + docs
-- `weft-0.1.0-x86_64-unknown-linux-musl.sha256` -- SHA-256 checksum
-
-The archive includes: binary, README.md, LICENSE, CHANGELOG.md, quickstart.md, configuration.md, and an internal checksums.txt.
-
-For all platforms at once:
-
-```bash
-bash scripts/release/package-all.sh 0.1.0
-```
+The legacy hand-rolled `scripts/release/package.sh` and
+`scripts/release/package-all.sh` were retired in WEFT-449 — cargo-dist
+now owns archive packaging, sigstore attestations, and the universal
+installer in lockstep.
 
 ## CI/CD
 

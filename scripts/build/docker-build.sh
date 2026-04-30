@@ -1,11 +1,29 @@
 #!/usr/bin/env bash
-# Build a minimal Docker image for weft.
-# Usage: ./scripts/build/docker-build.sh [--tag <tag>] [--push]
+# Build a local Docker image for weft (clawft CLI).
+#
+# This wraps the canonical Dockerfile (which downloads a published
+# musl tarball from the matching GitHub Release). It is intended for
+# local smoke testing of the published-image path; the tag-driven
+# release-docker.yml workflow is what actually publishes images to
+# GHCR.
+#
+# Image name + tag are aligned with docker-compose.yml and the
+# release-docker.yml workflow (WEFT-441 / WEFT-450):
+#   ghcr.io/weave-logic-ai/weftos:<tag>
+#
+# The host architecture is auto-detected and passed to buildx so the
+# resulting image targets the local machine. Cross-arch / multi-arch
+# builds are out of scope here — those go through release-docker.yml.
+#
+# Usage:
+#   ./scripts/build/docker-build.sh [--tag TAG] [--version VERSION]
+#                                   [--image NAME] [--platform PLATFORM]
+#                                   [--push]
 #
 # Examples:
-#   ./scripts/build/docker-build.sh
-#   ./scripts/build/docker-build.sh --tag v0.1.0
-#   ./scripts/build/docker-build.sh --tag latest --push
+#   ./scripts/build/docker-build.sh --version 0.6.19
+#   ./scripts/build/docker-build.sh --tag v0.7.0 --version 0.7.0 --push
+#   ./scripts/build/docker-build.sh --platform linux/arm64 --version 0.7.0
 
 set -euo pipefail
 
@@ -22,57 +40,86 @@ ok()    { printf "${GREEN}[OK]${NC}    %s\n" "$*"; }
 warn()  { printf "${YELLOW}[WARN]${NC}  %s\n" "$*"; }
 err()   { printf "${RED}[ERROR]${NC} %s\n" "$*" >&2; }
 
-usage() {
-    cat <<'EOF'
-Build a minimal Docker image for weft (clawft CLI).
+# Default image / repo name. Kept in lockstep with docker-compose.yml
+# and release-docker.yml's $IMAGE_NAME.
+DEFAULT_IMAGE_REPO="ghcr.io/weave-logic-ai/weftos"
 
-Usage: docker-build.sh [--tag <tag>] [--push]
+usage() {
+    cat <<EOF
+Build a local Docker image for weft (clawft CLI).
+
+Usage: docker-build.sh [options]
 
 Options:
-  --tag <tag>    Docker image tag (default: latest).
-                 The image is always named "clawft:<tag>".
-  --push         Push the image to the registry after building.
-                 Requires prior `docker login`.
-  --help         Show this help message.
+  --tag <tag>           Docker image tag (default: latest).
+  --version <ver>       Release version baked into the image as the
+                        VERSION build-arg. Required when --tag is not a
+                        SemVer tag like v0.7.0; otherwise derived by
+                        stripping the leading 'v'.
+  --image <name>        Override the image repository name.
+                        Default: ${DEFAULT_IMAGE_REPO}
+  --platform <plat>     buildx --platform value (default: auto-detected
+                        from the host: linux/amd64 or linux/arm64).
+  --push                Push the image to the registry after building.
+                        Requires prior \`docker login\`.
+  --help                Show this help message.
 
 Examples:
-  docker-build.sh
-  docker-build.sh --tag v0.1.0
-  docker-build.sh --tag latest --push
+  docker-build.sh --version 0.6.19
+  docker-build.sh --tag v0.7.0 --version 0.7.0 --push
+  docker-build.sh --platform linux/arm64 --version 0.7.0
 EOF
     exit 0
 }
 
 # --- Parse arguments ---
 IMAGE_TAG="latest"
+IMAGE_REPO="${DEFAULT_IMAGE_REPO}"
+VERSION=""
+PLATFORM=""
 PUSH=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --tag)
-            if [ $# -lt 2 ]; then
-                err "--tag requires a value"
-                exit 1
-            fi
-            IMAGE_TAG="$2"
-            shift 2
-            ;;
-        --push)
-            PUSH=true
-            shift
-            ;;
-        --help|-h)
-            usage
-            ;;
-        *)
-            err "Unknown option: $1"
-            printf "\n"
-            usage
-            ;;
+            [ $# -ge 2 ] || { err "--tag requires a value"; exit 1; }
+            IMAGE_TAG="$2"; shift 2 ;;
+        --version)
+            [ $# -ge 2 ] || { err "--version requires a value"; exit 1; }
+            VERSION="$2"; shift 2 ;;
+        --image)
+            [ $# -ge 2 ] || { err "--image requires a value"; exit 1; }
+            IMAGE_REPO="$2"; shift 2 ;;
+        --platform)
+            [ $# -ge 2 ] || { err "--platform requires a value"; exit 1; }
+            PLATFORM="$2"; shift 2 ;;
+        --push)  PUSH=true; shift ;;
+        --help|-h) usage ;;
+        *) err "Unknown option: $1"; printf "\n"; usage ;;
     esac
 done
 
-IMAGE_NAME="clawft:${IMAGE_TAG}"
+# --- Derive VERSION from tag when possible ---
+if [ -z "$VERSION" ]; then
+    case "$IMAGE_TAG" in
+        v*.*.*) VERSION="${IMAGE_TAG#v}" ;;
+        *) err "--version is required when --tag is not v<semver> (got '${IMAGE_TAG}')"
+           exit 1 ;;
+    esac
+fi
+
+# --- Auto-detect host platform ---
+if [ -z "$PLATFORM" ]; then
+    HOST_ARCH=$(uname -m)
+    case "$HOST_ARCH" in
+        x86_64|amd64) PLATFORM="linux/amd64" ;;
+        aarch64|arm64) PLATFORM="linux/arm64" ;;
+        *) err "Unsupported host arch: ${HOST_ARCH}. Pass --platform explicitly."
+           exit 1 ;;
+    esac
+fi
+
+IMAGE_NAME="${IMAGE_REPO}:${IMAGE_TAG}"
 
 # --- Resolve workspace root ---
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -80,6 +127,8 @@ WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 info "Workspace root: $WORKSPACE_ROOT"
 info "Image:          $IMAGE_NAME"
+info "Version arg:    $VERSION"
+info "Platform:       $PLATFORM"
 
 # --- Check prerequisites ---
 if ! command -v docker >/dev/null 2>&1; then
@@ -87,74 +136,50 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-# --- Determine if cross is available, fall back to cargo ---
-MUSL_TARGET="x86_64-unknown-linux-musl"
-BUILD_CMD="cargo"
-if command -v cross >/dev/null 2>&1; then
-    BUILD_CMD="cross"
-    info "Using 'cross' for static musl build."
-else
-    warn "'cross' not found, falling back to 'cargo'."
-    warn "Ensure the $MUSL_TARGET target and musl toolchain are installed."
-fi
-
-# --- Build static binary ---
-info "Building static binary for $MUSL_TARGET..."
-
-(cd "$WORKSPACE_ROOT" && "$BUILD_CMD" build --release --target "$MUSL_TARGET" -p clawft-cli)
-
-BINARY_PATH="$WORKSPACE_ROOT/target/$MUSL_TARGET/release/weft"
-
-if [ ! -f "$BINARY_PATH" ]; then
-    err "Build succeeded but binary not found at: $BINARY_PATH"
+if ! docker buildx version >/dev/null 2>&1; then
+    err "'docker buildx' is not available — required for --platform builds."
     exit 1
 fi
 
-ok "Static binary built: $BINARY_PATH"
+# --- Build via buildx ---
+info "Building Docker image with buildx..."
 
-# --- Prepare Docker build context ---
-DOCKER_BUILD_DIR="$WORKSPACE_ROOT/docker-build"
-mkdir -p "$DOCKER_BUILD_DIR"
+BUILDX_OUTPUT="--load"
+if [ "$PUSH" = true ]; then
+    BUILDX_OUTPUT="--push"
+fi
 
-cp "$BINARY_PATH" "$DOCKER_BUILD_DIR/weft-linux-x86_64"
-chmod +x "$DOCKER_BUILD_DIR/weft-linux-x86_64"
-
-info "Binary staged to docker-build/weft-linux-x86_64"
-
-# --- Build Docker image ---
-info "Building Docker image: $IMAGE_NAME"
-
-docker build -t "$IMAGE_NAME" -f "$WORKSPACE_ROOT/Dockerfile" "$WORKSPACE_ROOT"
+# shellcheck disable=SC2086
+docker buildx build \
+    --platform "$PLATFORM" \
+    --build-arg "VERSION=${VERSION}" \
+    -t "$IMAGE_NAME" \
+    -f "$WORKSPACE_ROOT/Dockerfile" \
+    $BUILDX_OUTPUT \
+    "$WORKSPACE_ROOT"
 
 ok "Docker image built: $IMAGE_NAME"
 
-# --- Validate image size ---
-MAX_IMAGE_SIZE_MB=20
-IMAGE_SIZE_BYTES=$(docker image inspect "$IMAGE_NAME" --format='{{.Size}}' 2>/dev/null)
-IMAGE_SIZE_MB=$(echo "scale=2; $IMAGE_SIZE_BYTES / 1048576" | bc)
+# --- Validate image size (only when loaded into local docker) ---
+if [ "$PUSH" != true ]; then
+    MAX_IMAGE_SIZE_MB=20
+    IMAGE_SIZE_BYTES=$(docker image inspect "$IMAGE_NAME" --format='{{.Size}}' 2>/dev/null)
+    IMAGE_SIZE_MB=$(echo "scale=2; $IMAGE_SIZE_BYTES / 1048576" | bc)
 
-info "Image size: ${IMAGE_SIZE_MB} MB"
+    info "Image size: ${IMAGE_SIZE_MB} MB"
 
-OVER_LIMIT=$(echo "$IMAGE_SIZE_MB > $MAX_IMAGE_SIZE_MB" | bc -l)
-if [ "$OVER_LIMIT" -eq 1 ]; then
-    err "Image exceeds ${MAX_IMAGE_SIZE_MB} MB limit (${IMAGE_SIZE_MB} MB)."
-    err "Check binary size and Dockerfile for unnecessary layers."
-    exit 1
-fi
+    OVER_LIMIT=$(echo "$IMAGE_SIZE_MB > $MAX_IMAGE_SIZE_MB" | bc -l)
+    if [ "$OVER_LIMIT" -eq 1 ]; then
+        err "Image exceeds ${MAX_IMAGE_SIZE_MB} MB limit (${IMAGE_SIZE_MB} MB)."
+        err "Check binary size and Dockerfile for unnecessary layers."
+        exit 1
+    fi
 
-ok "Image size within ${MAX_IMAGE_SIZE_MB} MB limit."
+    ok "Image size within ${MAX_IMAGE_SIZE_MB} MB limit."
 
-# --- Print details ---
-printf "\n"
-info "Image details:"
-docker image ls "$IMAGE_NAME"
-
-# --- Push if requested ---
-if [ "$PUSH" = true ]; then
     printf "\n"
-    info "Pushing $IMAGE_NAME to registry..."
-    docker push "$IMAGE_NAME"
-    ok "Image pushed: $IMAGE_NAME"
+    info "Image details:"
+    docker image ls "$IMAGE_NAME"
 fi
 
 printf "\n"

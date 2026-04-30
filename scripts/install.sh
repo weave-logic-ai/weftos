@@ -8,6 +8,19 @@
 # Installs or updates: weft, weaver, weftos
 # Detects platform automatically.
 # Idempotent — safe to run multiple times.
+#
+# Provenance verification (WEFT-451):
+#   By default, every downloaded archive is verified against the
+#   sigstore attestation that cargo-dist publishes alongside the
+#   release. Verification requires the GitHub CLI (`gh`) to be
+#   installed and on $PATH. Without `gh`, the installer prints a
+#   warning and continues; pass `--no-verify` (or set
+#   WEFTOS_NO_VERIFY=1) to skip the check explicitly.
+#
+# Flags:
+#   --verify       Force attestation verification (default).
+#                  Aborts the install if `gh` is missing.
+#   --no-verify    Skip attestation verification entirely.
 
 set -eu
 
@@ -15,6 +28,27 @@ REPO="weave-logic-ai/weftos"
 INSTALL_DIR="${WEFTOS_INSTALL_DIR:-/usr/local/bin}"
 BINS="clawft-cli clawft-weave weftos"
 BIN_NAMES="weft weaver weftos"
+
+# Verify mode: default | force | skip
+# - default: verify if `gh` is available, warn otherwise
+# - force:   `gh` must be present; abort if missing
+# - skip:    never verify
+VERIFY_MODE="default"
+if [ "${WEFTOS_NO_VERIFY:-0}" = "1" ]; then
+    VERIFY_MODE="skip"
+fi
+
+# Allow CLI flags to override env-driven default.
+for arg in "$@"; do
+    case "$arg" in
+        --verify)    VERIFY_MODE="force" ;;
+        --no-verify) VERIFY_MODE="skip" ;;
+        --help|-h)
+            sed -n '1,30p' "$0"
+            exit 0
+            ;;
+    esac
+done
 
 # Colors
 RED='\033[0;31m'
@@ -27,6 +61,36 @@ info() { printf "${CYAN}→${NC} %s\n" "$1"; }
 ok()   { printf "${GREEN}✓${NC} %s\n" "$1"; }
 warn() { printf "${YELLOW}!${NC} %s\n" "$1"; }
 err()  { printf "${RED}✗${NC} %s\n" "$1" >&2; exit 1; }
+
+# Verify a downloaded asset against its sigstore attestation.
+# Returns 0 on success, non-zero on hard failure (and exits if VERIFY_MODE=force).
+verify_attestation() {
+    asset_path="$1"
+    asset_name="$2"
+
+    if [ "$VERIFY_MODE" = "skip" ]; then
+        return 0
+    fi
+
+    if ! command -v gh >/dev/null 2>&1; then
+        if [ "$VERIFY_MODE" = "force" ]; then
+            err "gh CLI not found but --verify was requested. Install gh from https://cli.github.com/ or pass --no-verify."
+        fi
+        warn "gh CLI not found — skipping attestation check for $asset_name (pass --no-verify to silence)."
+        return 0
+    fi
+
+    if gh attestation verify "$asset_path" --repo "$REPO" >/dev/null 2>&1; then
+        ok "Attestation verified: $asset_name"
+        return 0
+    fi
+
+    if [ "$VERIFY_MODE" = "force" ]; then
+        err "Attestation verification FAILED for $asset_name. Refusing to install — possible tampered download."
+    fi
+    warn "Attestation verification failed for $asset_name (continuing because not in --verify mode)."
+    return 1
+}
 
 # Detect platform
 detect_triple() {
@@ -86,6 +150,11 @@ main() {
 
     TRIPLE=$(detect_triple)
     info "Platform: $TRIPLE"
+    case "$VERIFY_MODE" in
+        force)   info "Provenance: gh attestation verify (required)" ;;
+        skip)    info "Provenance: skipped (--no-verify)" ;;
+        default) info "Provenance: gh attestation verify (best-effort; pass --verify to require)" ;;
+    esac
 
     LATEST=$(get_latest_version)
     if [ -z "$LATEST" ]; then
@@ -127,6 +196,10 @@ main() {
         info "Downloading $bin_name..."
         tmpdir=$(mktemp -d)
         if curl -fsSL -o "$tmpdir/$asset" "$url" 2>/dev/null; then
+            # Sigstore attestation check (WEFT-451). In default mode we
+            # proceed on missing `gh`; in --verify mode we abort on any
+            # verification failure inside verify_attestation.
+            verify_attestation "$tmpdir/$asset" "$asset" || true
             tar xzf "$tmpdir/$asset" --strip-components=1 -C "$tmpdir"
             if [ -f "$tmpdir/$bin_name" ]; then
                 chmod +x "$tmpdir/$bin_name"
