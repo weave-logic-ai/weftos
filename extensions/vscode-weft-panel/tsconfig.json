@@ -17,5 +17,5 @@
     "forceConsistentCasingInFileNames": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "out", ".vscode-test"]
+  "exclude": ["node_modules", "out", "out-test", ".vscode-test", "test"]
 }
