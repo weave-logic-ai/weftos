@@ -20,6 +20,70 @@ use super::{Explorer, TreeNode, ACTIVITY_WINDOW};
 /// frames the panel.
 pub const ROOT_PREFIX: &str = "substrate";
 
+/// Tree filter chip row state. Persists within a session so the user's
+/// triage choice survives panel toggle / re-mount. WEFT-270.
+///
+/// Filters are AND-combined: a row is shown if it passes every active
+/// filter. The default state is "show everything" (no filters active)
+/// so the tree behaves identically to the pre-filter pane until the
+/// user opts in.
+#[derive(Debug, Clone, Default)]
+pub struct TreeFilters {
+    /// Substring match against the path's last segment (case-
+    /// insensitive). Empty = inactive.
+    pub name_query: String,
+    /// Show only paths that have published a value within
+    /// [`crate::explorer::ACTIVITY_WINDOW`]. Default off.
+    pub active_only: bool,
+    /// Show only the well-known sensor sub-tree (any path containing
+    /// `/sensor/`). Default off — `false` means "no sensor filter".
+    pub sensors_only: bool,
+    /// Hide leaves (`has_value && child_count == 0`). Useful when
+    /// scanning the structural shape of the substrate. Default off.
+    pub hide_leaves: bool,
+}
+
+impl TreeFilters {
+    /// True if any filter is active. Used to render a small "filtered"
+    /// hint next to the chip row.
+    pub fn any_active(&self) -> bool {
+        !self.name_query.is_empty() || self.active_only || self.sensors_only || self.hide_leaves
+    }
+
+    /// Decide whether `child` passes the active filters. The active-
+    /// only filter consults the parent Explorer's activity map, which
+    /// is why this lives on a method that takes `&Explorer`.
+    fn passes(&self, ex: &Explorer, child: &TreeNode) -> bool {
+        let last = last_segment(&child.path);
+        if !self.name_query.is_empty() {
+            let q = self.name_query.to_ascii_lowercase();
+            if !last.to_ascii_lowercase().contains(&q) {
+                return false;
+            }
+        }
+        if self.sensors_only && !child.path.contains("/sensor/") && !child.path.ends_with("/sensor")
+        {
+            return false;
+        }
+        if self.hide_leaves && child.has_value && child.child_count == 0 {
+            return false;
+        }
+        if self.active_only {
+            // Activity dot lives on the path itself — a row is "active"
+            // if its full path has a recent activity stamp.
+            let active = ex
+                .activity
+                .get(&child.path)
+                .map(|t| t.elapsed() <= ACTIVITY_WINDOW)
+                .unwrap_or(false);
+            if !active {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// Render the left tree pane. Returns the path newly selected this
 /// frame (if any) so the caller can swap subscriptions atomically.
 ///
@@ -39,6 +103,12 @@ pub fn paint(ui: &mut egui::Ui, ex: &mut Explorer) -> Option<String> {
         to_request.push(ROOT_PREFIX.to_string());
     }
     ex.expanded.insert(ROOT_PREFIX.to_string());
+
+    // WEFT-270: chip row above the tree — type/status filters that
+    // narrow what gets rendered. Painted outside the ScrollArea so it
+    // stays pinned even when the tree scrolls.
+    paint_filter_chips(ui, &mut ex.tree_filters);
+    ui.separator();
 
     egui::ScrollArea::both()
         .auto_shrink([false, false])
@@ -65,7 +135,13 @@ pub fn paint(ui: &mut egui::Ui, ex: &mut Explorer) -> Option<String> {
                     );
                 }
                 Some(kids) => {
-                    for child in kids {
+                    let filters = ex.tree_filters.clone();
+                    let mut shown = 0_usize;
+                    for child in kids.iter() {
+                        if !filters.passes(ex, child) {
+                            continue;
+                        }
+                        shown += 1;
                         let label = last_segment(&child.path);
                         let is_leaf = child.has_value && child.child_count == 0;
                         render_node(
@@ -77,6 +153,14 @@ pub fn paint(ui: &mut egui::Ui, ex: &mut Explorer) -> Option<String> {
                             is_leaf,
                             &mut newly_selected,
                             &mut to_request,
+                        );
+                    }
+                    if shown == 0 && filters.any_active() {
+                        ui.label(
+                            egui::RichText::new("(no rows match the current filter)")
+                                .italics()
+                                .small()
+                                .color(egui::Color32::from_rgb(140, 140, 150)),
                         );
                     }
                 }
@@ -265,6 +349,66 @@ fn last_segment(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
+/// Paint the WEFT-270 chip row above the substrate tree. Mutates the
+/// passed `TreeFilters` directly — the caller stores the state on the
+/// owning [`Explorer`] so changes persist within the session.
+///
+/// Layout: a single horizontal row with a search field, three toggle
+/// chips, and a "clear" pill that appears only when at least one
+/// filter is active. The row deliberately renders quietly when no
+/// filters are set so users who don't need it don't see chrome.
+fn paint_filter_chips(ui: &mut egui::Ui, filters: &mut TreeFilters) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            egui::RichText::new("filter:")
+                .small()
+                .color(egui::Color32::from_rgb(140, 140, 150)),
+        );
+
+        // Name search: small TextEdit. ~14ch wide so the row still fits
+        // a typical 220 px tree column.
+        let name_resp = ui.add(
+            egui::TextEdit::singleline(&mut filters.name_query)
+                .hint_text("name…")
+                .desired_width(96.0),
+        );
+        name_resp.on_hover_text("Filter rows by substring of the last path segment.");
+
+        // Toggle chips. `Button::selectable` gives us the inverted
+        // background that reads as "this filter is on".
+        if ui
+            .add(egui::Button::selectable(filters.active_only, "active"))
+            .on_hover_text("Show only paths that have published recently.")
+            .clicked()
+        {
+            filters.active_only = !filters.active_only;
+        }
+        if ui
+            .add(egui::Button::selectable(filters.sensors_only, "sensors"))
+            .on_hover_text("Show only paths under .../sensor/...")
+            .clicked()
+        {
+            filters.sensors_only = !filters.sensors_only;
+        }
+        if ui
+            .add(egui::Button::selectable(filters.hide_leaves, "no leaves"))
+            .on_hover_text("Hide leaf paths to scan structure only.")
+            .clicked()
+        {
+            filters.hide_leaves = !filters.hide_leaves;
+        }
+
+        if filters.any_active()
+            && ui
+                .small_button("clear")
+                .on_hover_text("Clear all active filters.")
+                .clicked()
+        {
+            *filters = TreeFilters::default();
+        }
+    });
+}
+
 /// Parse a `substrate.list` response into a Vec of children. Tolerant
 /// of shape drift — returns an empty Vec when the response doesn't
 /// match the expected envelope.
@@ -329,6 +473,108 @@ mod tests {
         assert_eq!(last_segment("substrate/sensor/mic"), "mic");
         assert_eq!(last_segment("root"), "root");
         assert_eq!(last_segment(""), "");
+    }
+
+    #[test]
+    fn tree_filters_default_passes_everything() {
+        // WEFT-270 acceptance: a fresh TreeFilters has no filters set,
+        // so the tree behaves identically to the pre-filter pane.
+        let f = TreeFilters::default();
+        assert!(!f.any_active());
+        // We can't easily build an Explorer here without paint side
+        // effects, so the integration of `passes` is exercised via the
+        // dedicated tests below using a minimal Explorer.
+    }
+
+    #[test]
+    fn tree_filters_name_query_substring() {
+        let mut f = TreeFilters::default();
+        f.name_query = "MIC".into();
+        assert!(f.any_active());
+        // Build a minimal Explorer with no activity to drive `passes`.
+        let ex = Explorer::default();
+        let mic = TreeNode {
+            path: "substrate/n-bfc4cd/sensor/mic".into(),
+            has_value: true,
+            child_count: 0,
+        };
+        let tof = TreeNode {
+            path: "substrate/n-bfc4cd/sensor/tof".into(),
+            has_value: true,
+            child_count: 0,
+        };
+        // Search is case-insensitive — "MIC" matches "mic".
+        assert!(f.passes(&ex, &mic));
+        assert!(!f.passes(&ex, &tof));
+    }
+
+    #[test]
+    fn tree_filters_sensors_only() {
+        let mut f = TreeFilters::default();
+        f.sensors_only = true;
+        let ex = Explorer::default();
+        let mic = TreeNode {
+            path: "substrate/n-bfc4cd/sensor/mic".into(),
+            has_value: true,
+            child_count: 0,
+        };
+        let health = TreeNode {
+            path: "substrate/n-bfc4cd/health".into(),
+            has_value: true,
+            child_count: 0,
+        };
+        assert!(f.passes(&ex, &mic));
+        assert!(!f.passes(&ex, &health));
+    }
+
+    #[test]
+    fn tree_filters_hide_leaves() {
+        let mut f = TreeFilters::default();
+        f.hide_leaves = true;
+        let ex = Explorer::default();
+        let leaf = TreeNode {
+            path: "substrate/n-bfc4cd/health".into(),
+            has_value: true,
+            child_count: 0,
+        };
+        let inner = TreeNode {
+            path: "substrate/n-bfc4cd".into(),
+            has_value: false,
+            child_count: 4,
+        };
+        assert!(!f.passes(&ex, &leaf));
+        assert!(f.passes(&ex, &inner));
+    }
+
+    #[test]
+    fn tree_filters_active_only_blocks_quiet_paths() {
+        let mut f = TreeFilters::default();
+        f.active_only = true;
+        let ex = Explorer::default();
+        // Nothing's been recorded as active — the "active only" filter
+        // should hide every row.
+        let mic = TreeNode {
+            path: "substrate/n-bfc4cd/sensor/mic".into(),
+            has_value: true,
+            child_count: 0,
+        };
+        assert!(!f.passes(&ex, &mic));
+    }
+
+    #[test]
+    fn tree_filters_active_only_admits_recently_active_path() {
+        use ::web_time::Instant;
+        let mut f = TreeFilters::default();
+        f.active_only = true;
+        let mut ex = Explorer::default();
+        let path = "substrate/n-bfc4cd/sensor/mic".to_string();
+        ex.activity.insert(path.clone(), Instant::now());
+        let mic = TreeNode {
+            path,
+            has_value: true,
+            child_count: 0,
+        };
+        assert!(f.passes(&ex, &mic));
     }
 
     #[test]

@@ -131,6 +131,12 @@ pub fn infer(value: &Value) -> Option<InferredType> {
     // source ordering here is the tie-breaker.
     //
     // [[OBJECT_TYPES_REGISTRATIONS_INSERT]]
+    if types::health_report::HealthReport::matches(value) > 0 {
+        return Some(InferredType {
+            name: types::health_report::HealthReport::name(),
+            display: types::health_report::HealthReport::display_name(),
+        });
+    }
     if types::audio_stream::AudioStream::matches(value) > 0 {
         return Some(InferredType {
             name: types::audio_stream::AudioStream::name(),
@@ -141,6 +147,20 @@ pub fn infer(value: &Value) -> Option<InferredType> {
         return Some(InferredType {
             name: types::chain_event::ChainEvent::name(),
             display: types::chain_event::ChainEvent::display_name(),
+        });
+    }
+    // Node before Mesh: a value carrying node-identity + sub-section
+    // is more specifically a Node than a structural Mesh root.
+    if types::node::Node::matches(value) > 0 {
+        return Some(InferredType {
+            name: types::node::Node::name(),
+            display: types::node::Node::display_name(),
+        });
+    }
+    if types::sensor::Sensor::matches(value) > 0 {
+        return Some(InferredType {
+            name: types::sensor::Sensor::name(),
+            display: types::sensor::Sensor::display_name(),
         });
     }
     if types::mesh::Mesh::matches(value) > 0 {

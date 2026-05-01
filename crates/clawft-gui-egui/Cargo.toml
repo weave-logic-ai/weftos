@@ -217,10 +217,35 @@ default = ["native"]
 native = []
 # Optional procedural boot sounds (pulls in rodio → cpal → alsa).
 audio = ["dep:rodio"]
-# Vendored demo_lab files (fractal_clock.rs, http_app.rs) carry upstream
-# `#[cfg_attr(feature = "serde", ...)]` gates. Declaring the feature
-# (even if unused) keeps clippy's `-D warnings` happy without editing
-# the vendored source.
+# WEFT-287: vendored vs upstream egui_demo_lib decision.
+#
+# Decision: **continue vendoring** `fractal_clock.rs`, `http_app.rs`,
+# and `custom3d_glow.rs` from upstream `emilk/egui` into
+# `src/bin/demo_lab_vendored/` (currently tracking 0.34).
+#
+# Why we don't depend on `egui_demo_app`:
+#   Those three demos live in `egui_demo_app`, which is a *binary-
+#   only* crate in the upstream workspace. There is no published
+#   library that re-exports them. Depending on the binary crate would
+#   force a renamed `[[bin]]` shim plus the wgpu/glutin trees the
+#   crate pulls for its full `cargo run`, which we don't otherwise
+#   need. The size and dependency cost outweighs the drift risk for
+#   three small files.
+#
+# Why we don't drop them entirely:
+#   `weft-demo-lab` paints upstream demos beside our themed panels so
+#   theming changes can be A/B'd against a known control. Dropping
+#   the upstream demos collapses that proof.
+#
+# Maintenance contract: the vendored files are byte-for-byte from
+# upstream and re-vendored verbatim when egui bumps; they are never
+# edited in-tree. The `#[cfg_attr(feature = "serde", ...)]` lines
+# they carry are upstream's optional-persistence gates and the
+# `serde` feature below exists *solely* to keep those `cfg_attr` lines
+# from generating an `unexpected_cfgs` warning under `-D warnings`.
+# The feature is intentionally never enabled — leaving it declared is
+# the lowest-friction way to honour the "no edits to vendored files"
+# rule.
 serde = []
 # WEFT-248: opt-in live smoke test against a running daemon + llama-server.
 # Spawned binaries and network calls don't run under default CI; this

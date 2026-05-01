@@ -20,7 +20,7 @@
 //! leaf viewer. This is intentional: the Explorer's top-level snapshot
 //! should display as a Mesh, not as a mis-classified leaf.
 
-use super::super::{ObjectType, PropertyDecl, PropertyKind};
+use super::super::{ObjectType, ObjectTypeCapabilities, PropertyDecl, PropertyKind};
 use serde_json::Value;
 
 /// Known top-level substrate sections the daemon populates. A value
@@ -90,6 +90,21 @@ impl ObjectType for Mesh {
                 doc: "Sensor roots (mic, tof, camera, …).",
             },
         ]
+    }
+
+    fn capabilities() -> ObjectTypeCapabilities {
+        ObjectTypeCapabilities {
+            // WEFT-276: read-only Action surface for the Mesh root.
+            // Surfaces in the Explorer detail pane as a passive list
+            // until the Action pipeline (T08-33+) lands.
+            applicable_actions: &[
+                "mesh.export_snapshot",
+                "mesh.list_nodes",
+                "mesh.refresh",
+            ],
+            events_emitted: &[],
+            default_viewer_priority_hint: Some(20),
+        }
     }
 }
 

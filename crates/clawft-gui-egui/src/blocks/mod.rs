@@ -1,4 +1,54 @@
-//! Ported block demos (mock data, no kernel IPC yet).
+//! Legacy demo blocks — the 12-item demo gallery shown by the
+//! `weft-demo-lab` binary and the [`Desktop`](crate::shell::desktop)
+//! showroom panel.
+//!
+//! # Relationship to [`crate::canon`]  (WEFT-286)
+//!
+//! There are intentionally two parallel widget paths in this crate:
+//!
+//! | Path        | Purpose                                  | Surface           |
+//! |-------------|------------------------------------------|-------------------|
+//! | `canon/`    | The frozen 21-primitive vocabulary       | Production renderer |
+//! | `blocks/`   | Demo gallery + theming spike             | `weft-demo-lab` + Desktop showroom |
+//!
+//! `canon/` is the system-of-record. ADR-001 froze the 21-primitive
+//! vocabulary; every renderer (egui, ratatui, web) is required to
+//! speak it, and a [`canon::CanonResponse`] is what flows back through
+//! the kernel boundary. New product-facing UI is built out of canon
+//! primitives.
+//!
+//! `blocks/` is the original 12-block demo gallery — predates ADR-001
+//! and exists for two non-trivial reasons:
+//!
+//! 1. **Theming proof.** `weft-demo-lab` paints both the upstream
+//!    `egui_demo_lib::DemoWindows` and the WeftOS-themed blocks
+//!    side-by-side so a theming change can be visually A/B'd against
+//!    a known control.  The blocks intentionally cover 12 *different*
+//!    layout primitives (text, table, tree, tabs, oscilloscope, …)
+//!    to exercise the theme broadly.
+//! 2. **Showroom continuity.** The Desktop's
+//!    [`BlockKind`](crate::shell::desktop::BlockKind) panel still
+//!    reaches into `blocks::*::show` for its built-in showcase tab.
+//!    Replacing those call sites with canon primitives is the long-
+//!    arc retirement plan; the wrappers don't exist yet.
+//!
+//! The 0.6.19 changelog mentioned a "retrofit pass" that rewrote
+//! several blocks in terms of canon primitives. That work was
+//! partial — most blocks still hold their own egui code. The
+//! retirement plan, captured here so future readers don't re-discover
+//! it from changelogs:
+//!
+//! 1. **Wrap, then retire.** Each `blocks::<name>::show` becomes a
+//!    thin call into the equivalent canon primitive (e.g.
+//!    `blocks::table` → `canon::Table`, `blocks::tabs` →
+//!    `canon::Tabs`).
+//! 2. **Drop the BlockKind variant** from `shell::desktop` once the
+//!    showroom can reach the wrapped block via the canon registry.
+//! 3. **Retire `weft-demo-lab` blocks tab** when the canon gallery
+//!    covers enough primitives for the theming proof.
+//!
+//! Until that retirement is complete this module remains live; it is
+//! **not** dead code.
 
 pub mod budget;
 pub mod button;
