@@ -19,16 +19,26 @@
 //!   as advisory and expects the app-manifest layer (M1.5-A, TODO) to
 //!   enforce it before calling `open`.
 //! - No dynamic-lib adapter registration (ADR-017 §3 path 2 — deferred).
-//! - No adapter-health topic (`substrate/meta/adapter/<id>/health`,
-//!   ADR-017 §7) — stub in kernel adapter, surfaces as TODO.
 //! - [`PermissionReq`] is a re-export of
 //!   [`clawft_app::manifest::Permission`] (unified in M1.5-D).
+//!
+//! # Adapter-health topic
+//!
+//! Each subscription emits lifecycle events on
+//! `substrate/meta/adapter/<id>/health` (see [`health`]) — `subscription-opened`
+//! immediately after a successful [`OntologyAdapter::open`], and
+//! `subscription-closed` when the drain task exits (graceful close or
+//! abort). Adapters that emit their own per-payload health snapshots
+//! (per [`healthcheck`]) write to `substrate/meta/adapter/<id>/healthcheck`
+//! independently. ADR-017 §7 obligation satisfied for in-tree adapters.
 
 #![deny(rust_2018_idioms)]
 #![warn(missing_docs)]
 
 pub mod adapter;
 pub mod delta;
+pub mod health;
+pub mod healthcheck;
 pub mod projection;
 pub mod snapshot;
 
@@ -83,9 +93,20 @@ pub mod physical;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mic;
 
+/// Rfkill enumerated-state sensor adapter. Reads `/sys/class/rfkill/*`
+/// and emits one of `unblocked | soft-blocked | hard-blocked | absent`
+/// per radio class (wifi, bluetooth, wwan). Native-only — sysfs is
+/// Linux-specific. The second [`physical::Characterization`] exemplar
+/// (after [`mic`]'s `Rate`) — exercises the `Enumerated` arm of the
+/// spectrometer-principle framework.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod rfkill;
+
 pub use adapter::{
     AdapterError, BufferPolicy, OntologyAdapter, PermissionReq, RefreshHint, Sensitivity, SubId,
     Subscription, TopicDecl,
 };
 pub use delta::StateDelta;
+pub use health::{health_topic_path, AdapterHealthEvent};
+pub use healthcheck::{healthcheck_topic_path, SensorHealthReport, SensorStatus};
 pub use snapshot::{OntologySnapshot, Substrate};
