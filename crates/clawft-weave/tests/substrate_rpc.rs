@@ -372,6 +372,150 @@ async fn substrate_subscribe_streams_updates() {
     let _ = shutdown_tx.send(true);
 }
 
+/// WEFT-435: a `substrate.notify` with no preceding publish must
+/// still wake an active subscriber. Distinct from
+/// `substrate_subscribe_streams_updates` (which interleaves publish +
+/// notify) — this isolates the wake-on-notify-only path so a
+/// regression that, say, only fanned out on value writes would be
+/// caught here.
+#[tokio::test]
+async fn substrate_notify_wakes_subscriber_without_prior_publish() {
+    let (_tmp, socket, shutdown_tx) = spawn_test_daemon().await;
+    let node = TestNode::register(&socket, 41).await;
+    let path = node.path("test/notify-only");
+
+    // Open a streaming subscribe on a fresh path that has never been
+    // published. No initial value should be sent.
+    let stream = UnixStream::connect(&socket).await.unwrap();
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let sub = serde_json::json!({
+        "id": "notify-sub",
+        "method": "substrate.subscribe",
+        "params": { "path": path },
+    });
+    let mut line = serde_json::to_string(&sub).unwrap();
+    line.push('\n');
+    writer.write_all(line.as_bytes()).await.unwrap();
+    let mut ack = String::new();
+    reader.read_line(&mut ack).await.unwrap();
+    let ack_v: serde_json::Value = serde_json::from_str(ack.trim()).unwrap();
+    assert_eq!(ack_v["ok"], serde_json::Value::Bool(true), "subscribe ack: {ack_v}");
+
+    // Read tick before notify so we can assert it advances.
+    let read_before = one_shot(
+        &socket,
+        "substrate.read",
+        serde_json::json!({ "path": path }),
+    )
+    .await;
+    let tick_before = read_before["result"]["tick"].as_u64().unwrap_or(0);
+
+    // Pure notify-only signal — no value change.
+    let notify_resp = one_shot(
+        &socket,
+        "substrate.notify",
+        serde_json::json!({ "path": path }),
+    )
+    .await;
+    assert_eq!(notify_resp["ok"], serde_json::Value::Bool(true));
+    let tick_after = notify_resp["result"]["tick"].as_u64().unwrap();
+    assert!(
+        tick_after > tick_before,
+        "notify must advance tick: before={tick_before} after={tick_after}"
+    );
+
+    // Subscriber should observe a notify line within a reasonable
+    // window. Timeout bounds the failure mode (a regression that
+    // doesn't fan out notifies would hang forever otherwise).
+    let mut buf = String::new();
+    tokio::time::timeout(Duration::from_secs(2), reader.read_line(&mut buf))
+        .await
+        .expect("notify must wake subscriber within 2s")
+        .expect("read_line: subscriber stream closed");
+    let evt: serde_json::Value = serde_json::from_str(buf.trim()).unwrap();
+    assert_eq!(
+        evt["kind"], "notify",
+        "first event after notify-only must be a notify, got: {evt}"
+    );
+    assert_eq!(
+        evt["path"], path,
+        "notify must carry the subscribed path"
+    );
+    assert_eq!(
+        evt["tick"].as_u64().unwrap(),
+        tick_after,
+        "notify event tick must match the notify response tick"
+    );
+
+    // Confirm value remained null (notify is signal-only — no
+    // payload mutation).
+    let read_after = one_shot(
+        &socket,
+        "substrate.read",
+        serde_json::json!({ "path": path }),
+    )
+    .await;
+    assert!(
+        read_after["result"]["value"].is_null(),
+        "notify must not mutate value: {read_after}"
+    );
+
+    let _ = shutdown_tx.send(true);
+}
+
+/// WEFT-435 companion: two consecutive notifies on the same path
+/// each wake the subscriber in order. Catches a regression where
+/// only the first notify after subscribe fans out (e.g. accidental
+/// dedupe by `last_tick == prev_tick`).
+#[tokio::test]
+async fn substrate_notify_back_to_back_delivers_both_events() {
+    let (_tmp, socket, shutdown_tx) = spawn_test_daemon().await;
+    let node = TestNode::register(&socket, 43).await;
+    let path = node.path("test/notify-burst");
+
+    let stream = UnixStream::connect(&socket).await.unwrap();
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let sub = serde_json::json!({
+        "id": "notify-burst-sub",
+        "method": "substrate.subscribe",
+        "params": { "path": path },
+    });
+    let mut line = serde_json::to_string(&sub).unwrap();
+    line.push('\n');
+    writer.write_all(line.as_bytes()).await.unwrap();
+    let mut ack = String::new();
+    reader.read_line(&mut ack).await.unwrap();
+    let ack_v: serde_json::Value = serde_json::from_str(ack.trim()).unwrap();
+    assert_eq!(ack_v["ok"], serde_json::Value::Bool(true));
+
+    // Two notifies in quick succession; each must produce a wakeup.
+    one_shot(&socket, "substrate.notify", serde_json::json!({ "path": path })).await;
+    one_shot(&socket, "substrate.notify", serde_json::json!({ "path": path })).await;
+
+    let mut buf1 = String::new();
+    tokio::time::timeout(Duration::from_secs(2), reader.read_line(&mut buf1))
+        .await
+        .expect("first notify must wake subscriber")
+        .unwrap();
+    let e1: serde_json::Value = serde_json::from_str(buf1.trim()).unwrap();
+    assert_eq!(e1["kind"], "notify");
+    let tick1 = e1["tick"].as_u64().unwrap();
+
+    let mut buf2 = String::new();
+    tokio::time::timeout(Duration::from_secs(2), reader.read_line(&mut buf2))
+        .await
+        .expect("second notify must also wake subscriber")
+        .unwrap();
+    let e2: serde_json::Value = serde_json::from_str(buf2.trim()).unwrap();
+    assert_eq!(e2["kind"], "notify");
+    let tick2 = e2["tick"].as_u64().unwrap();
+    assert!(tick2 > tick1, "ticks must monotonically advance: {tick1} → {tick2}");
+
+    let _ = shutdown_tx.send(true);
+}
+
 // ── node-identity write gate ───────────────────────────────────
 
 #[tokio::test]

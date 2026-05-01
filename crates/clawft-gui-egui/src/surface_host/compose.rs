@@ -2,15 +2,21 @@
 //! primitives in this crate. This is the hot path from ADR-016 §4
 //! ("Frame time").
 //!
-//! For M1.5 the wiring covers:
-//! - `ui://stack`, `ui://strip`, `ui://grid` containers.
-//! - `ui://pressable`, `ui://chip`, `ui://gauge`, `ui://table`,
-//!   `ui://stream-view` leaves.
-//!
-//! Every other canon IRI falls through to [`render_todo`] which
-//! paints a visible `"TODO: <iri> not wired in M1.5"` label so the
-//! surface still renders without a panic. Sibling M1.6+ milestones
-//! light these up one by one.
+//! Wiring status (WEFT-421 sweep, 0.7-cycle):
+//! - **Containers** (`ui://stack`, `ui://strip`, `ui://grid`,
+//!   `ui://dock`, `ui://modal`, `ui://tabs`, `ui://sheet`,
+//!   `ui://tree`) — wired.
+//! - **Leaves** (`ui://pressable`, `ui://chip`, `ui://gauge`,
+//!   `ui://table`, `ui://stream-view`, `ui://field`, `ui://toggle`,
+//!   `ui://select`, `ui://slider`, `ui://plot`, `ui://media`,
+//!   `ui://canvas`) — wired. Media renders an `egui::Image` from
+//!   the bound `uri`; Canvas renders a checkerboard backdrop as a
+//!   placeholder painter (declarative draw-commands are M2+).
+//! - **Sensor leaves** (`ui://heatmap`, `ui://waveform`) — wired.
+//! - `ui://foreign` — still falls through to [`render_todo`]: the
+//!   primitive is the host-app boundary (ADR-001 row 21) and needs
+//!   the cross-app surface contract before it can render anything
+//!   honest. Tracked as a follow-up in 0.8.x.
 //!
 //! **M1.5.1a**: affordances declared on a `ui://table` or `ui://gauge`
 //! are wired end-to-end. A row click on a table with an affordance, or
@@ -36,9 +42,9 @@ use clawft_surface::substrate::OntologySnapshot;
 use clawft_surface::tree::{AffordanceDecl, AttrValue, IdentityIri, SurfaceNode, SurfaceTree};
 
 use crate::canon::{
-    pressable::PressableStyle, CanonResponse, CanonWidget, CellSize, Chip, ChipTone, Field,
-    FieldKind, FieldValue, Gauge, Grid, Pressable, Sheet, Slider, Stack, StackAxis, StreamView,
-    Strip, StripAxis, Table, TableColumn, Tabs, Toggle,
+    pressable::PressableStyle, Canvas, CanonResponse, CanonWidget, CellSize, Chip, ChipTone, Field,
+    FieldKind, FieldValue, Gauge, Grid, Media, MediaFit, Pressable, Sheet, Slider, Stack, StackAxis,
+    StreamView, Strip, StripAxis, Table, TableColumn, Tabs, Toggle,
 };
 
 /// A verb activation picked up by the composer during a frame. The
@@ -213,6 +219,22 @@ fn render_node(
         // surfaces declaring `ui://plot` render rather than
         // fall-through to the TODO label.
         IdentityIri::Plot => render_plot(node, snap, ui, frame),
+        // WEFT-421: ui://media — load an `egui::Image` from the
+        // bound `uri`. Bindings drive the URI so a surface like
+        // `uri = "$substrate/avatar/url"` reactively updates.
+        IdentityIri::Media => render_media(node, snap, ui, frame),
+        // WEFT-421: ui://canvas — placeholder painter that draws a
+        // light checkerboard so the primitive is visually present.
+        // Declarative draw-commands (paint/erase verb pipeline) are
+        // a separate follow-up; this wiring removes the TODO label
+        // and gives the primitive a stable hit-testable rect.
+        IdentityIri::Canvas => render_canvas(node, snap, ui, frame),
+        // ui://foreign is the host-app boundary primitive (ADR-001
+        // row 21). It needs the cross-app surface contract (host-
+        // managed embedded surface, owned scroll/focus, untrusted
+        // event boundary) before it can render anything honest.
+        // Until then, fall through to render_todo so it stays
+        // visible to authors.
         other => render_todo(other, &node.path, ui),
     }
 }
@@ -1199,6 +1221,104 @@ fn render_plot(
         .unwrap_or_default();
     let p = crate::canon::Plot::new(&node.path).points(&series).variant(0);
     let resp = p.show(ui);
+    frame.push_response(resp);
+}
+
+// ── Media + Canvas (WEFT-421) ──────────────────────────────────────
+
+/// `ui://media` — render a decoded image / icon / glyph from a
+/// bound `uri`. Optional `alt` binding feeds the accessible name;
+/// `fit` attr selects contain/cover/stretch (default contain). When
+/// the URI is missing or unresolved, paints a muted placeholder so
+/// the surface still has a visible footprint.
+fn render_media(
+    node: &SurfaceNode,
+    snap: &OntologySnapshot,
+    ui: &mut egui::Ui,
+    frame: &mut Frame<'_>,
+) {
+    let uri = bound_string(node, "uri", snap);
+    let alt = bound_string(node, "alt", snap);
+    let fit = attr_str(node, "fit")
+        .and_then(|s| match s {
+            "contain" => Some(MediaFit::Contain),
+            "cover" => Some(MediaFit::Cover),
+            "stretch" => Some(MediaFit::Stretch),
+            _ => None,
+        })
+        .unwrap_or(MediaFit::Contain);
+    let clickable = !node.affordances.is_empty();
+
+    match uri {
+        Some(u) if !u.is_empty() => {
+            // `Cow<'static, str>` requires an owned String — clone the
+            // URI into the widget so the borrow checker is happy.
+            let mut media = Media::new(&node.path, u).fit(fit).clickable(clickable);
+            if let Some(a) = alt {
+                media = media.alt(a);
+            }
+            let resp = media.show(ui);
+            if clickable
+                && resp.inner.clicked()
+                && let Some(dispatch) = build_dispatch(node, None)
+            {
+                frame.push_dispatch(dispatch);
+            }
+            frame.push_response(resp);
+        }
+        _ => {
+            // Honest placeholder: shows that the primitive is wired
+            // but the URI binding produced nothing useful. Distinct
+            // from the TODO label, which signals "primitive not
+            // implemented at all."
+            ui.label(
+                egui::RichText::new(format!("media: no uri ({})", node.path))
+                    .color(egui::Color32::from_rgb(160, 160, 170))
+                    .italics(),
+            );
+        }
+    }
+}
+
+/// `ui://canvas` — placeholder painter. Allocates a typed rect at
+/// the configured `size_w` × `size_h` (defaults 240×160 px) and
+/// paints a faint checkerboard so the canvas is visible on screen.
+/// Authoring declarative draw-commands (the paint/erase/select/
+/// pan/zoom verb pipeline declared in the canon Canvas widget) is
+/// out-of-scope here — the surface IR has no expression form for
+/// arbitrary draw calls yet. This wiring removes the TODO label
+/// and gives the primitive a stable hit-testable footprint that
+/// downstream affordances (zoom/pan) can hang off.
+fn render_canvas(
+    node: &SurfaceNode,
+    _snap: &OntologySnapshot,
+    ui: &mut egui::Ui,
+    frame: &mut Frame<'_>,
+) {
+    let w = attr_number(node, "size_w").unwrap_or(240.0) as f32;
+    let h = attr_number(node, "size_h").unwrap_or(160.0) as f32;
+    let canvas = Canvas::new(&node.path, egui::vec2(w, h), |painter, rect, _xform| {
+        // Faint checkerboard so the canvas is visibly there.
+        let cell = 16.0_f32;
+        let cols = ((rect.width() / cell).ceil() as usize).max(1);
+        let rows = ((rect.height() / cell).ceil() as usize).max(1);
+        let pale = egui::Color32::from_rgb(34, 34, 40);
+        let dark = egui::Color32::from_rgb(24, 24, 28);
+        for r in 0..rows {
+            for c in 0..cols {
+                let x0 = rect.left() + c as f32 * cell;
+                let y0 = rect.top() + r as f32 * cell;
+                let cell_rect = egui::Rect::from_min_size(
+                    egui::pos2(x0, y0),
+                    egui::vec2(cell, cell),
+                )
+                .intersect(rect);
+                let color = if (r + c) % 2 == 0 { dark } else { pale };
+                painter.rect_filled(cell_rect, 0.0, color);
+            }
+        }
+    });
+    let resp = canvas.show(ui);
     frame.push_response(resp);
 }
 
