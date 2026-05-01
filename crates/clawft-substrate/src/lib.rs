@@ -84,6 +84,16 @@ pub mod physical;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mic;
 
+/// Presence reference sensor adapter — exemplar for the
+/// `Characterization::Presence` tier. Companion to [`mic`] (which
+/// exemplifies `Rate`). File-backed preview stub: reads one byte
+/// (0 / non-zero) from a configurable path and emits
+/// `{ present: bool, transitions: u64 }` on
+/// `substrate/sensor/presence`. Real GPIO / sysfs backing lands in
+/// a follow-up.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod presence;
+
 pub use adapter::{
     AdapterError, BufferPolicy, OntologyAdapter, PermissionReq, RefreshHint, Sensitivity, SubId,
     Subscription, TopicDecl,
