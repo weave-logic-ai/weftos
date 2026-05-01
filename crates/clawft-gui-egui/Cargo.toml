@@ -74,6 +74,15 @@ egui_demo_lib = "0.34"
 # NB: egui_dock 0.19 tracks egui 0.34. (0.14 tracked egui 0.29.)
 # ADR-001 row 10 — `ui://dock` is implemented via this crate.
 egui_dock = "0.19"
+# WEFT-252: markdown rendering for assistant turns in the chat panel.
+# `egui_commonmark` 0.23 tracks egui 0.34. Default features are disabled
+# (they would pull `load-images` → broader image-decoder set than the
+# PNG-only pin we keep above for the WEFT-246 wasm bundle budget) and
+# only `pulldown_cmark` is re-enabled — that's the parser the renderer
+# needs at runtime. No `fetch` (no network egress from chat bubbles),
+# no `svg`, no `embedded_image`, no `macros` (compile-time markdown is
+# wrong for runtime LLM output).
+egui_commonmark = { version = "0.23", default-features = false, features = ["pulldown_cmark"] }
 log = "0.4"
 serde_json = { workspace = true }
 parking_lot = { workspace = true }
