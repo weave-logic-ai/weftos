@@ -413,10 +413,21 @@ cmd_bundle_size() {
 # distinct from the clawft-wasm bundle and rides a separate budget;
 # defaults are wider here because the panel ships eframe + egui_extras.
 #
-#   raw budget:  4500 KB  (current ~4200 KB unoptimised, ~1900 KB after wasm-opt)
-#   gz budget:   1500 KB  (current ~700-900 KB after gzip -9)
+#   raw budget:  7600 KB  (current ~7300 KB after wasm-opt -Oz)
+#   gz budget:   3500 KB  (current ~3400 KB after gzip -9)
 #
-# Override by passing positional args: scripts/build.sh wasm-panel 4500 1500
+# The budget was raised from the original WEFT-484 ceiling (4500/1500
+# KB) after the M7+M7b feature wave landed: chat-panel markdown
+# (egui_commonmark), terminal scrollback + glyph styling, canon
+# Field::Date (jiff) + Field::Code, Workshop Grid/Tabs layouts, three
+# new viewers (HealthViewer / SensorViewer / sparkline), tree filters,
+# breadcrumb navigation, and Object Type registrations for Mesh /
+# Sensor / Node. Trimming back toward 4500 / 1500 is tracked as a
+# separate optimisation pass (twiggy + cargo bloat investigation,
+# optional-dep audits, possible bundle splitting). Until that lands,
+# the Cursor webview ships at ~7.3 MB raw / ~3.4 MB gz.
+#
+# Override by passing positional args: scripts/build.sh wasm-panel 7600 3500
 cmd_wasm_panel() {
     header "Building VSCode dev-panel wasm bundle"
     local inner="$ROOT/extensions/vscode-weft-panel/scripts/build-wasm.sh"
@@ -450,8 +461,8 @@ cmd_wasm_panel() {
     #   scripts/build.sh wasm-panel <max-raw-kb> <max-gz-kb>
     local max_raw_kb="${1:-}"
     local max_gz_kb="${2:-}"
-    [ -z "$max_raw_kb" ] && max_raw_kb=4500
-    [ -z "$max_gz_kb" ] && max_gz_kb=1500
+    [ -z "$max_raw_kb" ] && max_raw_kb=7600
+    [ -z "$max_gz_kb" ] && max_gz_kb=3500
     info "Panel size gate: raw≤${max_raw_kb}KB, gz≤${max_gz_kb}KB"
     if ! bash "$ROOT/scripts/bench/check-bundle-size.sh" \
             "$bundle" "$max_raw_kb" "$max_gz_kb"; then
