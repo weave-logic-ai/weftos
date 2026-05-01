@@ -27,6 +27,10 @@ interface ClawftWasm {
   init(config_json: string): Promise<void>;
   send_message(text: string): Promise<string>;
   set_env(key: string, value: string): void;
+  /** WEFT-307: JSON-Schema introspection for a registered tool. */
+  tool_schema?(slug: string): string;
+  /** WEFT-307: list of registered tool names. */
+  tool_list?(): string;
 }
 
 // ---------------------------------------------------------------------------
@@ -201,9 +205,22 @@ export class WasmAdapter implements BackendAdapter {
     ];
   }
 
-  async getToolSchema(): Promise<Record<string, unknown> | null> {
-    // Schema introspection deferred to future WASM entry point
-    return null;
+  async getToolSchema(name: string): Promise<Record<string, unknown> | null> {
+    // WEFT-307: clawft-wasm exposes a `tool_schema(slug)` entry point
+    // that returns either `null` or a JSON object with `name`,
+    // `description`, and `parameters` (JSON-Schema). Fall back to
+    // returning `null` when the runtime isn't initialized yet or the
+    // build predates the entry point.
+    if (!this.wasm || typeof this.wasm.tool_schema !== "function") {
+      return null;
+    }
+    try {
+      const raw = this.wasm.tool_schema(name);
+      const parsed = JSON.parse(raw) as Record<string, unknown> | null;
+      return parsed;
+    } catch {
+      return null;
+    }
   }
 
   // -- Memory (in-memory store in WASM mode) --

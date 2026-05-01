@@ -136,6 +136,7 @@ mod browser_entry {
 
     use clawft_core::agent::loop_core::AgentLoop;
     use clawft_core::bootstrap::AppContext;
+    use clawft_core::tools::registry::ToolRegistry;
     use clawft_llm::browser_transport::BrowserLlmClient;
     use clawft_llm::config::LlmProviderConfig;
     use clawft_platform::BrowserPlatform;
@@ -154,6 +155,10 @@ mod browser_entry {
     /// shape to the native daemon's `agent.chat` path.
     struct BrowserRuntime {
         agent: Arc<AgentLoop<BrowserPlatform>>,
+        /// Snapshot of the tool registry kept alive for introspection
+        /// entry points (`tool_schema`, `tool_list`). Captured before
+        /// `ctx.into_agent_loop()` consumes the AppContext (WEFT-307).
+        tools: Arc<ToolRegistry>,
     }
 
     // SAFETY: wasm32-unknown-unknown is single-threaded; nothing here
@@ -343,10 +348,15 @@ mod browser_entry {
         let pipeline = clawft_core::bootstrap::build_browser_pipeline(&config, client);
         ctx.set_pipeline(pipeline);
 
+        // WEFT-307: snapshot the tool registry before `into_agent_loop`
+        // consumes the AppContext so JS callers can introspect tool
+        // schemas via `tool_schema(slug)`.
+        let tools = ctx.tools_arc();
+
         let agent = Arc::new(ctx.into_agent_loop());
 
         RUNTIME
-            .set(BrowserRuntime { agent })
+            .set(BrowserRuntime { agent, tools })
             .map_err(|_| JsValue::from_str("already initialized"))?;
 
         web_sys::console::log_1(
@@ -393,6 +403,55 @@ mod browser_entry {
     #[wasm_bindgen]
     pub fn set_env(_key: &str, _value: &str) {
         // Browser env vars are managed by BrowserPlatform.env()
+    }
+
+    // -------------------------------------------------------------------
+    // Tool introspection (WEFT-307)
+    // -------------------------------------------------------------------
+
+    /// Return the JSON-Schema for a registered tool, or `null` if
+    /// no tool with that name exists.
+    ///
+    /// The shape mirrors the Axum API's `/api/tools/{slug}/schema`
+    /// response so the dashboard's `/tools` route can render the same
+    /// JSON-Schema viewer in either backend mode:
+    ///
+    /// ```json
+    /// {
+    ///   "name": "<slug>",
+    ///   "description": "...",
+    ///   "parameters": { ...JSON-Schema... }
+    /// }
+    /// ```
+    ///
+    /// The runtime must already be initialized via [`init`].
+    #[wasm_bindgen]
+    pub fn tool_schema(slug: &str) -> String {
+        let Some(rt) = RUNTIME.get() else {
+            return "null".to_string();
+        };
+        match rt.tools.get(slug) {
+            Some(tool) => serde_json::json!({
+                "name": tool.name(),
+                "description": tool.description(),
+                "parameters": tool.parameters(),
+            })
+            .to_string(),
+            None => "null".to_string(),
+        }
+    }
+
+    /// Return the list of registered tool names as a JSON array string.
+    ///
+    /// The list is sorted alphabetically. Useful for the dashboard's
+    /// `/tools` route to enumerate browser-mode tools without
+    /// hardcoding the subset in `wasm-adapter.ts::listTools`.
+    #[wasm_bindgen]
+    pub fn tool_list() -> String {
+        let Some(rt) = RUNTIME.get() else {
+            return "[]".to_string();
+        };
+        serde_json::to_string(&rt.tools.list()).unwrap_or_else(|_| "[]".to_string())
     }
 
     // -------------------------------------------------------------------
