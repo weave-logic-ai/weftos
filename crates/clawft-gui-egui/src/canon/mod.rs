@@ -114,6 +114,29 @@ mod tests {
         assert_eq!(FieldValue::Text(String::new()).as_kind_tag(), "Text");
         assert_eq!(FieldValue::Number(0.0).as_kind_tag(), "Number");
         assert_eq!(FieldValue::Choice(0).as_kind_tag(), "Choice");
+        // [WEFT-265 / WEFT-266] Date + Code variants land on
+        // FieldValue alongside the original three.
+        let d = FieldValue::Date(jiff::civil::Date::new(2026, 1, 1).unwrap());
+        assert_eq!(d.as_kind_tag(), "Date");
+        let c = FieldValue::Code {
+            lang: "rust".into(),
+            src: String::new(),
+        };
+        assert_eq!(c.as_kind_tag(), "Code");
+    }
+
+    #[test]
+    fn field_kind_constructors_match_values() {
+        // Smoke: builder constructors produce the right kind variants
+        // so a caller can pair them with a matching FieldValue.
+        match FieldKind::date() {
+            FieldKind::Date => {}
+            other => panic!("date() must produce Date, got {other:?}"),
+        }
+        match FieldKind::code("rust") {
+            FieldKind::Code { language } => assert_eq!(language.as_ref(), "rust"),
+            other => panic!("code() must produce Code, got {other:?}"),
+        }
     }
 
     #[test]

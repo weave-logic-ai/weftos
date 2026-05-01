@@ -1,11 +1,20 @@
 //! `ui://field` — typed input binding primitive (ADR-001 row 3).
 //!
 //! Session-5 §3 lists five candidate egui surfaces (`TextEdit`,
-//! `DragValue`, `DatePickerButton`, `ComboBox`, `CodeEditor`). This
-//! first pass ships three: `Text`, `Number`, `Choice`. `Date`
-//! (DatePickerButton) and `Code` (CodeEditor) are explicit TODOs —
-//! they require separate state shapes (naïve date / multi-line code
-//! buffer) that the current `FieldValue` enum doesn't yet model.
+//! `DragValue`, `DatePickerButton`, `ComboBox`, `CodeEditor`). All
+//! five surfaces are now wired:
+//!
+//! * `Text`   — `egui::TextEdit::singleline` / `multiline`.
+//! * `Number` — `egui::DragValue`.
+//! * `Choice` — `egui::ComboBox`.
+//! * `Date`   — `egui_extras::DatePickerButton` (jiff::civil::Date —
+//!   egui_extras 0.34 moved off chrono; the original Plane
+//!   spec referenced chrono::NaiveDate but the underlying
+//!   widget API is now jiff). [WEFT-265]
+//! * `Code`   — `egui::TextEdit::multiline` + `egui_extras::syntax_highlighting`
+//!   (built-in highlighter; supports rust/cpp/python/toml
+//!   without needing the heavyweight `syntect` feature).
+//!   [WEFT-266]
 
 use std::borrow::Cow;
 
@@ -41,8 +50,7 @@ static MUTATION_AXES: &[MutationAxis] = &[
     MutationAxis::new("validation-hint"),
 ];
 
-/// Which egui surface the field should render with. `Date` and `Code`
-/// are deliberately left out of this first pass; see file header.
+/// Which egui surface the field should render with.
 #[derive(Clone, Debug)]
 pub enum FieldKind {
     Text {
@@ -58,8 +66,16 @@ pub enum FieldKind {
     Choice {
         options: &'static [&'static str],
     },
-    // TODO: Date  — `egui_extras::DatePickerButton` + chrono::NaiveDate state.
-    // TODO: Code  — `egui::TextEdit::multiline` + `egui_extras::syntax_highlighting`.
+    /// Calendar date picker. Pairs with [`FieldValue::Date`].
+    Date,
+    /// Multi-line code editor with built-in syntax highlighting.
+    /// `language` is fed to `egui_extras::syntax_highlighting::highlight`
+    /// — known values without the optional `syntect` feature are
+    /// `rs`/`rust`, `c`/`cpp`/`c++`/`h`/`hpp`, `py`/`python`, `toml`.
+    /// Unknown languages render as plain monospace.
+    Code {
+        language: Cow<'static, str>,
+    },
 }
 
 impl FieldKind {
@@ -94,6 +110,16 @@ impl FieldKind {
     pub fn choice(options: &'static [&'static str]) -> Self {
         Self::Choice { options }
     }
+
+    pub fn date() -> Self {
+        Self::Date
+    }
+
+    pub fn code(language: impl Into<Cow<'static, str>>) -> Self {
+        Self::Code {
+            language: language.into(),
+        }
+    }
 }
 
 /// Bound value that the caller threads through as a `&mut`. Enum
@@ -104,6 +130,13 @@ pub enum FieldValue {
     Text(String),
     Number(f64),
     Choice(usize),
+    /// Calendar date. Uses `jiff::civil::Date` because that is the
+    /// shape `egui_extras::DatePickerButton` consumes in 0.34.
+    Date(jiff::civil::Date),
+    /// Multi-line source code buffer. `lang` is the syntax-highlighter
+    /// language hint (see [`FieldKind::Code::language`]); `src` is the
+    /// edit buffer.
+    Code { lang: String, src: String },
 }
 
 impl FieldValue {
@@ -112,6 +145,8 @@ impl FieldValue {
             Self::Text(_) => "Text",
             Self::Number(_) => "Number",
             Self::Choice(_) => "Choice",
+            Self::Date(_) => "Date",
+            Self::Code { .. } => "Code",
         }
     }
 }
@@ -270,6 +305,72 @@ impl CanonWidget for Field<'_> {
                             None
                         };
                         (combo.response, chosen)
+                    }
+                    (FieldKind::Date, FieldValue::Date(date)) => {
+                        // egui_extras 0.34 DatePickerButton needs a
+                        // stable id-salt distinct per Field instance —
+                        // reuse the canon Field id rendered as a
+                        // string so the popup state survives across
+                        // frames (id_salt takes &str, not Hash).
+                        let salt = format!("{:?}", id);
+                        let r = ui.add(
+                            egui_extras::DatePickerButton::new(date).id_salt(&salt),
+                        );
+                        let chosen: Option<&'static str> = if enabled && r.changed() {
+                            Some("edit")
+                        } else {
+                            None
+                        };
+                        (r, chosen)
+                    }
+                    (FieldKind::Code { language }, FieldValue::Code { lang, src }) => {
+                        // Effective language: prefer the FieldKind
+                        // hint (the schema-declared shape) but fall
+                        // back to the value-bound `lang` if the kind
+                        // didn't pin one.
+                        let effective_lang = if !language.is_empty() {
+                            language.as_ref()
+                        } else {
+                            lang.as_str()
+                        };
+                        let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                            let mut layout_job =
+                                egui_extras::syntax_highlighting::highlight(
+                                    ui.ctx(),
+                                    ui.style(),
+                                    &egui_extras::syntax_highlighting::CodeTheme::from_style(
+                                        ui.style(),
+                                    ),
+                                    buf.as_str(),
+                                    effective_lang,
+                                );
+                            layout_job.wrap.max_width = wrap_width;
+                            ui.ctx().fonts_mut(|f| f.layout_job(layout_job))
+                        };
+                        let r = ui.add(
+                            egui::TextEdit::multiline(src)
+                                .font(egui::TextStyle::Monospace)
+                                .code_editor()
+                                .desired_rows(4)
+                                .layouter(&mut layouter),
+                        );
+                        let chosen: Option<&'static str> = if !enabled {
+                            None
+                        } else if r.lost_focus()
+                            && ui.input(|i| {
+                                i.modifiers.command_only()
+                                    && i.key_pressed(egui::Key::Enter)
+                            })
+                        {
+                            // Cmd/Ctrl-Enter commits a code field; bare
+                            // Enter should insert a newline (multiline).
+                            Some("commit")
+                        } else if r.changed() {
+                            Some("edit")
+                        } else {
+                            None
+                        };
+                        (r, chosen)
                     }
                     _ => {
                         let r = ui.label(format!(
