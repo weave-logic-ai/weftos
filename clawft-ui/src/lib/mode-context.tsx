@@ -21,6 +21,7 @@ import { WasmAdapter } from "./adapters/wasm-adapter.ts";
 import type { LoadProgress } from "./wasm-loader.ts";
 import { ModeContext } from "./mode-store.ts";
 import type { ModeContextValue } from "./mode-store.ts";
+import { consumeUrlToken, readStoredToken } from "./use-auth.ts";
 
 // ---------------------------------------------------------------------------
 // Provider
@@ -39,6 +40,11 @@ export function ModeProvider({ children }: ModeProviderProps) {
   const [loadProgress, setLoadProgress] = useState<LoadProgress | null>(null);
 
   useEffect(() => {
+    // Consume any single-use URL token first (WEFT-309). This persists the
+    // token to localStorage and strips it from the address bar before any
+    // adapter reads `readStoredToken()` below.
+    consumeUrlToken();
+
     // Determine mode: URL param > env var > default "axum"
     const params = new URLSearchParams(window.location.search);
     const urlMode = params.get("mode");
@@ -72,8 +78,7 @@ export function ModeProvider({ children }: ModeProviderProps) {
             : "/api/health";
           const response = await fetch(healthUrl, { method: "GET" });
           if (response.ok) {
-            const token =
-              localStorage.getItem("clawft-token") ?? undefined;
+            const token = readStoredToken() ?? undefined;
             const axumAdapter = new AxumAdapter(apiUrl, wsUrl, token);
             await axumAdapter.init();
             setAdapter(axumAdapter);
@@ -95,8 +100,7 @@ export function ModeProvider({ children }: ModeProviderProps) {
         }
       } else {
         // Default: Axum mode
-        const token =
-          localStorage.getItem("clawft-token") ?? undefined;
+        const token = readStoredToken() ?? undefined;
         const axumAdapter = new AxumAdapter(apiUrl, wsUrl, token);
         await axumAdapter.init();
         setAdapter(axumAdapter);
