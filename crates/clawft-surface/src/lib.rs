@@ -10,17 +10,12 @@
 //!
 //! # M1.5 scope reductions vs ADR-016 §5
 //!
-//! The binding expression language implemented here is a strict
-//! subset of the grammar in ADR-016 §5. Concretely, the following
-//! are *not* implemented and are expected to land in M1.6+:
+//! The binding expression language implemented here is a near-total
+//! subset of the grammar in ADR-016 §5. As of 0.7.0 the wired
+//! combinators are `count`, `filter`, `sort`, `len`, `first`, `last`
+//! plus the `fmt_*` and `exists` helpers. The following are *still*
+//! out of scope and are expected to land in M1.6+:
 //!
-//! - `sort(list, key)` — no ordering combinator. Only `count`,
-//!   `filter`, `len`, `first`, `last` are wired.
-//! - `.first`/`.last` as field-access shorthand — both exist only as
-//!   function calls (`first($xs)`, `last($xs)`); the dotted form is
-//!   parsed as an ordinary field access and returns `Null`.
-//! - Scientific-notation (`1e5`) and hexadecimal (`0xff`) number
-//!   literals — only decimal integers and finite-decimal floats.
 //! - Ternary `?:` operator — explicitly rejected with
 //!   `ParseError::TernaryNotSupported`.
 //! - Nested lambdas — a lambda body that itself contains `->` is
@@ -29,6 +24,14 @@
 //!   beside another `t -> …` at the same depth) are permitted.
 //! - User-defined compositions (`[compositions.*]`) — the TOML
 //!   parser does not read this table.
+//!
+//! Already shipped in 0.7.0 (history note for downstream readers):
+//! - `sort(list, key)` ordering combinator (WEFT-423).
+//! - `.first` / `.last` field-access shorthand on list values
+//!   (WEFT-422); the function-call form `first($xs)` / `last($xs)`
+//!   continues to work.
+//! - Scientific (`1e5`, `1.5e-3`) and hex (`0xff`) number literals
+//!   (WEFT-424).
 //!
 //! See `.planning/symposiums/compositional-ui/adrs/adr-016-surface-description.md`
 //! §5 for the full authoritative grammar.
