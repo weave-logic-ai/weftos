@@ -195,6 +195,23 @@ pub async fn run_with_config(
     #[cfg(not(feature = "api"))]
     let api_broadcaster: Option<()> = None;
 
+    // WEFT-306: wire the render_ui tool to the broadcaster so agent-
+    // emitted CanvasCommands fan out to dashboard `/canvas` clients on
+    // the `canvas` topic. `register` replaces the unwired instance
+    // installed by `clawft_tools::register_all`. We must do this BEFORE
+    // `build_api_state(&ctx, ...)` snapshots the tool registry.
+    #[cfg(feature = "api")]
+    if let Some(ref broadcaster) = api_broadcaster {
+        let canvas_publisher: Arc<dyn clawft_tools::render_ui::CanvasPublisher> =
+            Arc::new(BroadcasterCanvasPublisher {
+                broadcaster: broadcaster.clone(),
+            });
+        ctx.tools_mut().register(Arc::new(
+            clawft_tools::render_ui::RenderUiTool::with_publisher(canvas_publisher),
+        ));
+        debug!("render_ui tool wired to canvas topic broadcaster");
+    }
+
     #[cfg(feature = "api")]
     let api_handle: Option<tokio::task::JoinHandle<()>> = if config.gateway.api_enabled {
         let broadcaster = api_broadcaster.clone().expect("broadcaster created above");
@@ -565,6 +582,23 @@ struct BroadcasterPublisher {
 #[cfg(all(feature = "api", feature = "channels"))]
 #[async_trait::async_trait]
 impl WebPublisher for BroadcasterPublisher {
+    async fn publish(&self, topic: &str, message: serde_json::Value) {
+        self.broadcaster.publish(topic, message).await;
+    }
+}
+
+/// Bridges [`TopicBroadcaster`] to the
+/// [`clawft_tools::render_ui::CanvasPublisher`] trait so the
+/// `render_ui` tool can fan validated CanvasCommands out to
+/// `/canvas` clients via the `canvas` WebSocket topic (WEFT-306).
+#[cfg(feature = "api")]
+struct BroadcasterCanvasPublisher {
+    broadcaster: Arc<TopicBroadcaster>,
+}
+
+#[cfg(feature = "api")]
+#[async_trait::async_trait]
+impl clawft_tools::render_ui::CanvasPublisher for BroadcasterCanvasPublisher {
     async fn publish(&self, topic: &str, message: serde_json::Value) {
         self.broadcaster.publish(topic, message).await;
     }
