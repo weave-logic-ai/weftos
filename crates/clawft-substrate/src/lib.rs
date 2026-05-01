@@ -98,9 +98,19 @@ pub mod mic;
 /// per radio class (wifi, bluetooth, wwan). Native-only — sysfs is
 /// Linux-specific. The second [`physical::Characterization`] exemplar
 /// (after [`mic`]'s `Rate`) — exercises the `Enumerated` arm of the
-/// spectrometer-principle framework.
+/// spectrometer-principle framework. WEFT-419 (M7b-1).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod rfkill;
+
+/// Presence reference sensor adapter — exemplar for the
+/// `Characterization::Presence` tier. Companion to [`mic`] (which
+/// exemplifies `Rate`). File-backed preview stub: reads one byte
+/// (0 / non-zero) from a configurable path and emits
+/// `{ present: bool, transitions: u64 }` on
+/// `substrate/sensor/presence`. Real GPIO / sysfs backing lands in
+/// a follow-up. WEFT-436 (M7b-4).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod presence;
 
 pub use adapter::{
     AdapterError, BufferPolicy, OntologyAdapter, PermissionReq, RefreshHint, Sensitivity, SubId,
@@ -108,5 +118,16 @@ pub use adapter::{
 };
 pub use delta::StateDelta;
 pub use health::{health_topic_path, AdapterHealthEvent};
+// M7b-1 (WEFT-415/417/432): per-adapter healthcheck wire format used by
+// snapshot.rs + mic.rs. Topic path is `substrate/meta/adapter/<id>/healthcheck`.
 pub use healthcheck::{healthcheck_topic_path, SensorHealthReport, SensorStatus};
+// M7b-4 (WEFT-437): full HEALTHCHECK-CONTRACT.md typed shapes + classifier
+// + path helpers for the daemon-side aggregator at
+// `substrate/<node-id>/health/{sensor/<name> | node}`.
+pub use healthcheck::{
+    HealthGranularity, NodeHealth, RebootReason, SensorHealth, Status as HealthStatus,
+    classify_value as classify_health_value, node_health_derived_path, node_health_path,
+    node_health_raw_path, sensor_health_derived_path, sensor_health_path,
+    sensor_health_raw_path,
+};
 pub use snapshot::{OntologySnapshot, Substrate};

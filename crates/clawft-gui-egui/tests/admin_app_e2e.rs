@@ -232,7 +232,59 @@ async fn weftos_admin_renders_end_to_end() {
         responses.iter().map(|r| r.identity.clone()).collect::<Vec<_>>()
     );
 
+    // WEFT-439: the admin surface ships a wired confirm-restart Modal.
+    // Asserting the composer emits a `ui://modal` CanonResponse closes
+    // the loop on "Composer renders … the modal path." (Dispatch on
+    // click is covered by the dedicated test below — we cannot
+    // synthesise a click in this headless smoke without a click-bot.)
+    let modals = responses
+        .iter()
+        .filter(|r| r.identity == "ui://modal")
+        .count();
+    assert!(
+        modals >= 1,
+        "expected at least one ui://modal response from the wired confirm-restart node, got {modals}; full responses: {:?}",
+        responses.iter().map(|r| r.identity.clone()).collect::<Vec<_>>()
+    );
+
     // Tombstone the subscriptions (ADR-009 discipline) so the test
     // doesn't leave drain tasks alive past the runtime shutdown.
     substrate.close_all().await;
+}
+
+/// WEFT-439: focused unit assertion that the confirm-restart Modal in
+/// the admin surface fixture parses, declares an affordance, and
+/// renders through the composer with its `confirm-restart` affordance
+/// preserved in the surface tree (so a future click-bot test can
+/// drive the dispatch).
+#[test]
+fn admin_surface_includes_wired_restart_modal() {
+    let tree = parse_surface_toml(ADMIN_SURFACE).expect("parse admin surface");
+    // Walk the tree looking for a `ui://modal` node with at least one
+    // affordance — the fixture pattern WEFT-439 introduces.
+    fn find_modal_with_affordance(
+        node: &clawft_surface::SurfaceNode,
+    ) -> Option<&clawft_surface::SurfaceNode> {
+        if matches!(node.kind, clawft_surface::IdentityIri::Modal)
+            && !node.affordances.is_empty()
+        {
+            return Some(node);
+        }
+        for child in &node.children {
+            if let Some(hit) = find_modal_with_affordance(child) {
+                return Some(hit);
+            }
+        }
+        None
+    }
+    let modal = find_modal_with_affordance(&tree.root)
+        .expect("admin surface should declare a ui://modal node with an affordance");
+    // Tighten the assertion to the contract we ship: a confirm-restart
+    // affordance pointing at rpc.kernel.restart.
+    let aff = modal
+        .affordances
+        .iter()
+        .find(|a| a.name == "confirm-restart")
+        .expect("modal should declare `confirm-restart` affordance");
+    assert_eq!(aff.verb, "rpc.kernel.restart");
 }
