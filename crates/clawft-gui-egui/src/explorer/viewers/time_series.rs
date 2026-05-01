@@ -47,6 +47,73 @@ const MAX_HISTORY: usize = 240;
 /// (paint is single-threaded inside the egui pass).
 static HISTORY: Mutex<Option<HashMap<String, Vec<f64>>>> = Mutex::new(None);
 
+/// Append a sample to the per-path history ring and return the
+/// current snapshot. Public so other viewers (HealthViewer,
+/// SensorViewer) can embed an inline sparkline for a named scalar
+/// field without re-dispatching through the viewer registry.
+/// WEFT-271.
+pub fn record_sample(path: &str, v: f64) -> Vec<f64> {
+    push_sample(path, v)
+}
+
+/// Paint a compact inline sparkline for `path` at `height` pixels
+/// tall. Width fills the available space (clamped to a sane band).
+/// Returns silently if `value` is non-numeric so callers can fan this
+/// out across a list of optional fields without pre-checking each.
+/// WEFT-271.
+pub fn embed_sparkline(
+    ui: &mut egui::Ui,
+    path: &str,
+    value: &Value,
+    height: f32,
+) {
+    let Some(current) = value.as_f64() else {
+        return;
+    };
+    let history = push_sample(path, current);
+    let w = ui.available_width().clamp(120.0, 480.0);
+    let (rect, _resp) =
+        ui.allocate_exact_size(egui::vec2(w, height), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(18, 18, 24));
+    if history.len() < 2 {
+        return;
+    }
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for v in &history {
+        if v.is_finite() {
+            if *v < lo {
+                lo = *v;
+            }
+            if *v > hi {
+                hi = *v;
+            }
+        }
+    }
+    if !lo.is_finite() || !hi.is_finite() {
+        lo = 0.0;
+        hi = 1.0;
+    }
+    if (hi - lo).abs() < f64::EPSILON {
+        lo -= 0.5;
+        hi += 0.5;
+    }
+    let span = hi - lo;
+    let denom = (history.len() - 1).max(1) as f32;
+    let mut points = Vec::with_capacity(history.len());
+    for (i, v) in history.iter().enumerate() {
+        let t = i as f32 / denom;
+        let x = rect.left() + t * rect.width();
+        let n = ((v - lo) / span).clamp(0.0, 1.0) as f32;
+        let y = rect.bottom() - n * rect.height();
+        points.push(egui::pos2(x, y));
+    }
+    painter.add(egui::epaint::PathShape::line(
+        points,
+        egui::Stroke::new(1.2, egui::Color32::from_rgb(110, 200, 240)),
+    ));
+}
+
 fn push_sample(path: &str, v: f64) -> Vec<f64> {
     let mut guard = HISTORY.lock().unwrap();
     let map = guard.get_or_insert_with(HashMap::new);

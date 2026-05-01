@@ -16,9 +16,11 @@ pub mod chain_tail;
 pub mod connection_badge;
 pub mod depth_map;
 pub mod graph;
+pub mod health;
 pub mod mesh_nodes;
 pub mod pcm_chunk;
 pub mod process_table;
+pub mod sensor;
 pub mod time_series;
 pub mod waveform;
 
@@ -36,6 +38,21 @@ pub fn dispatch(ui: &mut egui::Ui, path: &str, value: &serde_json::Value) {
     // [[VIEWERS_REGISTRATIONS_INSERT]]
     if pcm_chunk::PcmChunkViewer::matches(value) > 0 {
         pcm_chunk::PcmChunkViewer::paint(ui, path, value);
+        return;
+    }
+    // HealthViewer (priority 12) ahead of waveform/audio so that a
+    // health snapshot under `substrate/<node>/health` always wins,
+    // even if it carries a stray scalar that another viewer would
+    // half-match. WEFT-268.
+    if health::HealthViewer::matches(value) > 0 {
+        health::HealthViewer::paint(ui, path, value);
+        return;
+    }
+    // SensorViewer (priority 8) sits below specialised payload viewers
+    // so audio/depth/PCM still win on the inner leaves; it catches the
+    // `{kind: ..., raw, summary}` envelope shape. WEFT-269.
+    if sensor::SensorViewer::matches(value) > 0 {
+        sensor::SensorViewer::paint(ui, path, value);
         return;
     }
     if waveform::WaveformViewer::matches(value) > 0 {

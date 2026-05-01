@@ -74,6 +74,38 @@ pub const SELECT_POLL: Duration = Duration::from_millis(400);
 /// drops on the next paint that picks up new data.
 pub const COPY_TOAST_DURATION: Duration = Duration::from_millis(1500);
 
+/// egui memory key used by viewers to request a tree navigation.
+///
+/// The Explorer drains this on every `show()` and, when populated,
+/// runs the same `on_select` path as a tree click. This keeps viewer
+/// code stateless (no `&mut Explorer` plumbing through every viewer
+/// signature) while still giving them a return channel for navigation
+/// intent. WEFT-272.
+pub const NAV_INTENT_KEY: &str = "weft-explorer-nav-intent";
+
+/// Push a "navigate to this substrate path" intent onto the egui
+/// memory stash. Called from inside viewers that paint breadcrumb
+/// buttons (HealthViewer, SensorViewer). The Explorer drains the
+/// intent on its next `show()` and triggers the same selection path
+/// a tree click would.
+///
+/// Idempotent within a frame: a viewer that paints the same breadcrumb
+/// twice in one frame and the user clicks both copies still results in
+/// one navigation — egui's memory stash overwrites the value, and the
+/// Explorer drains it once. WEFT-272.
+pub fn request_navigation(ctx: &egui::Context, path: String) {
+    let id = egui::Id::new(NAV_INTENT_KEY);
+    ctx.data_mut(|d| d.insert_temp(id, path));
+}
+
+/// Drain the most recent navigation intent posted by a viewer. Returns
+/// the path the Explorer should switch its selection to, or `None`
+/// when no viewer requested navigation since the last drain. WEFT-272.
+pub fn take_navigation_request(ctx: &egui::Context) -> Option<String> {
+    let id = egui::Id::new(NAV_INTENT_KEY);
+    ctx.data_mut(|d| d.remove_temp::<String>(id))
+}
+
 /// Opaque subscription handle. Today: the one-path we're re-polling.
 /// Wrapping this in a type lets us drop it atomically when selection
 /// changes — no dangling in-flight reads on the wrong path.
@@ -288,6 +320,12 @@ pub struct Explorer {
     /// for [`COPY_TOAST_DURATION`]; cleared on the first paint after
     /// it expires. WEFT-273.
     last_copy_msg: Option<(web_time::Instant, String)>,
+    /// Tree filter state: the chip row above the substrate tree narrows
+    /// what rows are rendered. Filters persist within a session
+    /// (in-memory only) so a user who picks "active only" while
+    /// triaging doesn't lose the choice across panel toggles.
+    /// WEFT-270.
+    pub tree_filters: tree::TreeFilters,
 }
 
 impl Default for Explorer {
@@ -317,6 +355,7 @@ impl Default for Explorer {
             chat_view: chat::ChatView::default(),
             terminal_view: terminal::Terminal::default(),
             last_copy_msg: None,
+            tree_filters: tree::TreeFilters::default(),
         }
     }
 }
@@ -325,6 +364,15 @@ impl Explorer {
     /// Paint the two-pane Explorer layout inside `ui`. `live` is the
     /// RPC transport handle used to fire substrate.list / substrate.read.
     pub fn show(&mut self, ui: &mut egui::Ui, live: &Arc<Live>) {
+        // 0. Drain any navigation intent posted by a viewer in the
+        //    previous frame (or earlier this frame, in the rare case
+        //    of two paints per frame). Treated identically to a tree
+        //    click — runs through `on_select` so the subscription
+        //    handle swaps cleanly. WEFT-272.
+        if let Some(target) = take_navigation_request(ui.ctx()) {
+            self.on_select(target, live);
+        }
+
         // 1. Tick: fire any due list re-polls and selected-path reads.
         self.tick(live);
 
