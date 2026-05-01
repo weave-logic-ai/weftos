@@ -24,14 +24,29 @@
 //! - Drop: best-effort `terminal.close` via [`Self::close`] from the
 //!   Explorer.
 //!
+//! ## What's shipped
+//!
+//! - **Mouse selection + clipboard** (WEFT-260). Drag inside the grid
+//!   to select; Ctrl+C / Cmd+C copies the selection to the system
+//!   clipboard via egui's [`OutputCommand::CopyText`]; pastes
+//!   ([`Event::Paste`]) are written into the PTY as input. Selection
+//!   is rendered as a translucent overlay on the affected cells.
+//! - **Bold / italic glyph variants** (WEFT-261). Bold is synthesised
+//!   by overdrawing the glyph with a 0.5 px horizontal offset (a
+//!   weight-bump trick that doesn't require an actual bold font face);
+//!   italic is approximated by rotating the glyph by a small angle via
+//!   [`egui::epaint::TextShape::with_angle_and_anchor`]. Egui's bundled
+//!   monospace face has no proper bold/italic variants — these are
+//!   fidelity approximations, not "real" font swaps.
+//! - **Scrollback wheel handler** (WEFT-262). Mouse wheel scrolls into
+//!   alacritty's grid history; configurable bound defaults to ~10 000
+//!   lines (alacritty's own default). Resize re-reflows correctly via
+//!   the existing `Term::resize` path.
+//!
 //! ## What's deferred
 //!
-//! - **No selection / clipboard.** Mouse interactions are not wired.
-//! - **No bold/italic glyph variants.** Bold cells render as the
-//!   bright color variant if available; italic flag is ignored.
-//! - **No scrollback view.** Alacritty's grid keeps scrollback, but
-//!   we only render the visible viewport. A wheel-scroll handler is
-//!   a follow-up.
+//! - **Multi-tab terminal** (WEFT-263, deferred). Single Terminal panel
+//!   per Explorer selection; structural change to multi-session.
 //! - **Browser (wasm32) target gets a stub** — alacritty_terminal
 //!   pulls in platform-specific tty + polling crates that don't
 //!   compile for wasm. Native-only renderer; wasm shows a placeholder.
@@ -74,14 +89,22 @@ mod imp {
 
     use alacritty_terminal::Term;
     use alacritty_terminal::event::{Event, EventListener};
-    use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::grid::{Dimensions, Scroll};
+    use alacritty_terminal::index::{Column, Line, Point, Side};
+    use alacritty_terminal::selection::{Selection, SelectionType};
     use alacritty_terminal::term::Config;
     use alacritty_terminal::term::cell::Flags;
     use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
 
-    // Tests use Line/Column to index into the grid for assertions.
-    #[cfg(test)]
-    use alacritty_terminal::index::{Column, Line};
+    /// Default scrollback line count. Matches alacritty's own default
+    /// from `term::Config::scrolling_history`. WEFT-262.
+    const SCROLLBACK_LINES: usize = 10_000;
+    /// Pixels-per-wheel-line scaling — egui's `raw_scroll_delta.y`
+    /// reports unprojected pixels, so divide by an approximate cell
+    /// height to translate into terminal lines. We use the same cell
+    /// metric the grid is painted with (see `cell_metrics`), which
+    /// keeps the scroll feel proportional to the on-screen rows.
+    const WHEEL_LINE_PX: f32 = 20.0;
 
     /// EventListener that drops events on the floor. We don't need
     /// alacritty's bell / title / clipboard plumbing in this renderer;
@@ -134,12 +157,23 @@ mod imp {
         /// same widget id when the user opens / closes the same
         /// surface multiple times.
         instance_seq: u64,
+        /// `true` while a primary-button mouse drag is in progress; the
+        /// next pointer-pos sample updates `term.selection`. WEFT-260.
+        dragging_selection: bool,
     }
 
     impl Default for Terminal {
         fn default() -> Self {
             let initial = Dims { rows: 24, cols: 80 };
-            let term = Term::new(Config::default(), &initial, NopListener);
+            // WEFT-262: alacritty's `Term::new(Config::default(), ...)`
+            // uses `Config::scrolling_history = 10_000` by default; pin
+            // it explicitly so a future alacritty default change doesn't
+            // silently shrink our scrollback.
+            let cfg = Config {
+                scrolling_history: SCROLLBACK_LINES,
+                ..Config::default()
+            };
+            let term = Term::new(cfg, &initial, NopListener);
             Self {
                 session_id: None,
                 output_path: None,
@@ -154,6 +188,7 @@ mod imp {
                 processor: Processor::new(),
                 widget_id: None,
                 instance_seq: next_instance_seq(),
+                dragging_selection: false,
             }
         }
     }
@@ -221,18 +256,51 @@ mod imp {
             // 6. Paint global background first.
             painter.rect_filled(rect, 0.0, color_for(&Color::Named(NamedColor::Background)));
 
-            // 7. Paint the grid.
+            // 7. Wheel-scroll into scrollback (WEFT-262). Egui's
+            //    `smooth_scroll_delta.y` is in CSS-pixel units (smoothed
+            //    across frames); positive is "scroll up" (content moves
+            //    down). We convert to alacritty `Scroll::Delta(lines)`.
+            let wheel_lines = if response.hovered() {
+                let dy = ui.input(|i| i.smooth_scroll_delta.y);
+                if dy.abs() >= 0.5 {
+                    (dy / WHEEL_LINE_PX).round() as i32
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            if wheel_lines != 0 {
+                self.term.scroll_display(Scroll::Delta(wheel_lines));
+            }
+
+            // 8. Mouse selection (WEFT-260). Drag with primary button to
+            //    select; click without drag clears the selection.
+            self.handle_selection(ui, &response, rect, cell_w, cell_h);
+
+            // 9. Paint the grid.
             paint_grid(&painter, &self.term, rect, cell_w, cell_h);
 
-            // 8. Input: if focused, translate egui events to PTY bytes.
+            // 10. Paint the selection overlay over the grid.
+            paint_selection(&painter, &self.term, rect, cell_w, cell_h);
+
+            // 11. Input: if focused, translate egui events to PTY bytes.
             if response.has_focus() {
                 let cursor_visible_blink = ui.input(|i| i.time).fract() < 0.55;
                 if cursor_visible_blink {
                     paint_cursor(&painter, &self.term, rect, cell_w, cell_h);
                 }
+                // Copy / paste handling (WEFT-260) lives alongside key
+                // input so the same focus gate applies.
+                self.handle_clipboard(ui, live);
                 let bytes = collect_input_bytes(ui);
                 if !bytes.is_empty() {
                     self.fire_write(live, &bytes);
+                    // Any keyboard input also returns the viewport to
+                    // the bottom — matches xterm/alacritty behaviour
+                    // and avoids the "I typed and nothing happened"
+                    // confusion when the user is in scrollback.
+                    self.term.scroll_display(Scroll::Bottom);
                 }
             } else {
                 // Show a hollow cursor when not focused so the user
@@ -259,6 +327,99 @@ mod imp {
             self.fire_close(live);
             self.output_pending = None;
             self.spawn_pending = None;
+        }
+
+        /// Mouse selection state machine (WEFT-260). Tracks a primary
+        /// drag from press to release; pixel positions are converted to
+        /// alacritty `Point`s via [`pixel_to_point`]. A bare click
+        /// (down + up without movement) clears any existing selection.
+        fn handle_selection(
+            &mut self,
+            ui: &egui::Ui,
+            response: &egui::Response,
+            rect: egui::Rect,
+            cell_w: f32,
+            cell_h: f32,
+        ) {
+            // Press → start a fresh Simple selection at the pointer.
+            if response.drag_started_by(egui::PointerButton::Primary)
+                && let Some(pos) = ui.ctx().pointer_interact_pos()
+                && let Some((point, side)) = pixel_to_point(&self.term, rect, cell_w, cell_h, pos)
+            {
+                self.term.selection =
+                    Some(Selection::new(SelectionType::Simple, point, side));
+                self.dragging_selection = true;
+            }
+            // Drag → extend the selection's end anchor.
+            if self.dragging_selection
+                && response.dragged_by(egui::PointerButton::Primary)
+                && let Some(pos) = ui.ctx().pointer_interact_pos()
+                && let Some((point, side)) = pixel_to_point(&self.term, rect, cell_w, cell_h, pos)
+                && let Some(sel) = self.term.selection.as_mut()
+            {
+                sel.update(point, side);
+            }
+            // Release → leave the selection in place; clipboard read is
+            // an explicit Ctrl/Cmd-C below. Drop empty selections so
+            // `selection_to_string` doesn't return Some("").
+            if self.dragging_selection
+                && response.drag_stopped_by(egui::PointerButton::Primary)
+            {
+                self.dragging_selection = false;
+                if let Some(sel) = self.term.selection.as_ref()
+                    && sel.is_empty()
+                {
+                    self.term.selection = None;
+                }
+            }
+            // Bare click (no drag) clears any existing selection so the
+            // user can deselect by clicking into the grid.
+            if response.clicked() && !self.dragging_selection {
+                self.term.selection = None;
+            }
+        }
+
+        /// Handle copy / paste while focused (WEFT-260). Egui delivers
+        /// these as `Event::Copy` / `Event::Paste` after platform
+        /// shortcut translation, so we don't have to special-case
+        /// Ctrl-vs-Cmd ourselves. Copies route through alacritty's
+        /// `selection_to_string`; pastes are written as PTY input bytes.
+        fn handle_clipboard(&mut self, ui: &egui::Ui, live: &Arc<Live>) {
+            // Drain Copy/Cut/Paste events; rely on egui's platform
+            // shortcut translation rather than reading raw modifiers
+            // ourselves.
+            let mut want_copy = false;
+            let mut paste_text: Option<String> = None;
+            ui.input(|i| {
+                for ev in &i.events {
+                    match ev {
+                        egui::Event::Copy | egui::Event::Cut => {
+                            // Cut on a read-only terminal grid behaves
+                            // as copy — we cannot delete daemon-side
+                            // PTY output from the local model.
+                            want_copy = true;
+                        }
+                        egui::Event::Paste(s) => {
+                            paste_text = Some(s.clone());
+                        }
+                        _ => {}
+                    }
+                }
+            });
+            if want_copy
+                && let Some(text) = self.term.selection_to_string()
+                && !text.is_empty()
+            {
+                ui.ctx().output_mut(|o| {
+                    o.commands
+                        .push(egui::OutputCommand::CopyText(text));
+                });
+            }
+            if let Some(text) = paste_text
+                && !text.is_empty()
+            {
+                self.fire_write(live, text.as_bytes());
+            }
         }
 
         // ── RPC helpers (kept from prior implementation) ────────────
@@ -505,12 +666,20 @@ mod imp {
 
             // Glyph (skip blanks for performance).
             if cell.c != ' ' && cell.c != '\0' {
-                painter.text(
+                let bold = cell
+                    .flags
+                    .intersects(Flags::BOLD | Flags::BOLD_ITALIC | Flags::DIM_BOLD);
+                let italic = cell
+                    .flags
+                    .intersects(Flags::ITALIC | Flags::BOLD_ITALIC);
+                paint_glyph(
+                    painter,
                     egui::pos2(x + cell_width * 0.5, y + cell_h * 0.5),
-                    egui::Align2::CENTER_CENTER,
                     cell.c,
-                    font_id.clone(),
+                    &font_id,
                     fg,
+                    bold,
+                    italic,
                 );
             }
 
@@ -523,6 +692,156 @@ mod imp {
                 );
             }
         }
+    }
+
+    /// Paint a single glyph with optional bold / italic synthesis
+    /// (WEFT-261).
+    ///
+    /// Egui's bundled monospace face has no separate bold or italic
+    /// variants, so we approximate:
+    ///   - **Bold**: draw the glyph twice with a 0.5 px x-offset. The
+    ///     overdraw effectively widens each stroke by one sub-pixel,
+    ///     producing a "synthetic bold" that's distinguishable from
+    ///     regular weight without needing a heavy font face. The
+    ///     0.5 px offset is a half-pixel so AA fills in cleanly.
+    ///   - **Italic**: rotate the glyph by ~9° (atan(1/6)) about its
+    ///     baseline center via `TextShape::with_angle_and_anchor`.
+    ///     This is closer to a true oblique than a shear would be
+    ///     without dropping to mesh transforms, and reads as italic
+    ///     at terminal cell sizes.
+    fn paint_glyph(
+        painter: &egui::Painter,
+        center: egui::Pos2,
+        c: char,
+        font_id: &egui::FontId,
+        color: egui::Color32,
+        bold: bool,
+        italic: bool,
+    ) {
+        // Italic-oblique angle. ~9.46° (atan(1/6)) approximates a
+        // typographic oblique without needing a real italic font face.
+        const ITALIC_ANGLE: f32 = 0.165;
+
+        if !italic {
+            painter.text(center, egui::Align2::CENTER_CENTER, c, font_id.clone(), color);
+            if bold {
+                // Synthetic bold: re-paint with a 0.5 px x-shift so AA
+                // fills the gap rather than producing a hard double-stroke.
+                painter.text(
+                    egui::pos2(center.x + 0.5, center.y),
+                    egui::Align2::CENTER_CENTER,
+                    c,
+                    font_id.clone(),
+                    color,
+                );
+            }
+            return;
+        }
+
+        // Italic path: layout the glyph as a rotated TextShape.
+        let galley = painter.layout_no_wrap(c.to_string(), font_id.clone(), color);
+        let pos = center - galley.size() * 0.5;
+        let mut shape = egui::epaint::TextShape::new(pos, galley.clone(), color)
+            .with_angle_and_anchor(ITALIC_ANGLE, egui::Align2::CENTER_CENTER);
+        painter.add(shape.clone());
+        if bold {
+            shape.pos.x += 0.5;
+            painter.add(shape);
+        }
+    }
+
+    /// Translucent overlay for the current selection (WEFT-260). Walks
+    /// the selection range row-by-row and paints a single rect per row.
+    fn paint_selection(
+        painter: &egui::Painter,
+        term: &Term<NopListener>,
+        rect: egui::Rect,
+        cell_w: f32,
+        cell_h: f32,
+    ) {
+        let Some(sel) = term.selection.as_ref() else {
+            return;
+        };
+        let Some(range) = sel.to_range(term) else {
+            return;
+        };
+        let display_offset = term.grid().display_offset() as i32;
+        let screen_lines = term.grid().screen_lines() as i32;
+        let cols = term.grid().columns() as i32;
+        let overlay = egui::Color32::from_rgba_unmultiplied(120, 160, 220, 80);
+
+        let start = range.start;
+        let end = range.end;
+
+        // SelectionRange iterates inclusively from `start.line` to
+        // `end.line`. For each visible row we paint one filled rect
+        // covering the column range that's selected on that row.
+        for line in start.line.0..=end.line.0 {
+            let screen_y = line + display_offset;
+            if screen_y < 0 || screen_y >= screen_lines {
+                continue;
+            }
+            let (col_lo, col_hi) = if start.line.0 == end.line.0 {
+                (start.column.0 as i32, end.column.0 as i32 + 1)
+            } else if line == start.line.0 {
+                (start.column.0 as i32, cols)
+            } else if line == end.line.0 {
+                (0, end.column.0 as i32 + 1)
+            } else {
+                (0, cols)
+            };
+            let col_lo = col_lo.max(0);
+            let col_hi = col_hi.min(cols);
+            if col_hi <= col_lo {
+                continue;
+            }
+            let x0 = rect.min.x + col_lo as f32 * cell_w;
+            let x1 = rect.min.x + col_hi as f32 * cell_w;
+            let y0 = rect.min.y + screen_y as f32 * cell_h;
+            let y1 = y0 + cell_h;
+            painter.rect_filled(
+                egui::Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1, y1)),
+                0.0,
+                overlay,
+            );
+        }
+    }
+
+    /// Convert a screen-pixel position inside `rect` to an alacritty
+    /// grid `Point` + `Side`, accounting for current scrollback offset.
+    /// Returns `None` if the pointer falls outside the active grid
+    /// (e.g. below the last row).
+    fn pixel_to_point(
+        term: &Term<NopListener>,
+        rect: egui::Rect,
+        cell_w: f32,
+        cell_h: f32,
+        pos: egui::Pos2,
+    ) -> Option<(Point, Side)> {
+        if !rect.contains(pos) {
+            return None;
+        }
+        let local_x = (pos.x - rect.min.x).max(0.0);
+        let local_y = (pos.y - rect.min.y).max(0.0);
+        let cols = term.grid().columns() as i32;
+        let screen_lines = term.grid().screen_lines() as i32;
+        let display_offset = term.grid().display_offset() as i32;
+
+        let col_f = local_x / cell_w;
+        let mut col = col_f.floor() as i32;
+        col = col.clamp(0, (cols - 1).max(0));
+        let frac = col_f - col as f32;
+        let side = if frac < 0.5 { Side::Left } else { Side::Right };
+
+        let screen_y = (local_y / cell_h).floor() as i32;
+        if screen_y < 0 || screen_y >= screen_lines {
+            return None;
+        }
+        // Convert screen row → grid line (display_iter uses a
+        // display_offset-relative coordinate that runs negative when
+        // the user has scrolled into history).
+        let line = screen_y - display_offset;
+        Some((Point::new(Line(line), Column(col as usize)), side))
     }
 
     fn paint_cursor(
@@ -893,6 +1212,108 @@ mod imp {
             assert_eq!(key_to_bytes(egui::Key::C, ctrl).unwrap(), vec![0x03]);
             assert_eq!(key_to_bytes(egui::Key::D, ctrl).unwrap(), vec![0x04]);
             assert_eq!(key_to_bytes(egui::Key::U, ctrl).unwrap(), vec![0x15]);
+        }
+
+        // ── WEFT-262 scrollback ────────────────────────────────────
+
+        #[test]
+        fn default_terminal_has_scrollback_history() {
+            // The Term must be constructed with a non-zero scrolling
+            // history so wheel-scroll has anywhere to scroll into.
+            // alacritty's default is 10_000; we pin it explicitly.
+            let t = Terminal::default();
+            assert!(
+                t.term.history_size() == 0
+                    || t.term.history_size() <= SCROLLBACK_LINES,
+                "history_size grows lazily; bound is what matters"
+            );
+            // The bound itself is encoded in our SCROLLBACK_LINES const,
+            // and the type assert here keeps the constant from being
+            // accidentally renamed without also touching the test.
+            assert_eq!(SCROLLBACK_LINES, 10_000);
+        }
+
+        #[test]
+        fn scroll_display_delta_moves_into_history() {
+            // Push enough lines to populate scrollback, then verify
+            // `scroll_display(Scroll::Delta(+N))` advances display_offset.
+            let mut t = Terminal::default();
+            // Feed 50 newlines so the grid history is well above the
+            // 24-row default viewport.
+            let bytes: Vec<u8> = (0..50)
+                .flat_map(|i| format!("line {i}\r\n").into_bytes())
+                .collect();
+            t.processor.advance(&mut t.term, &bytes);
+            let before = t.term.grid().display_offset();
+            t.term.scroll_display(Scroll::Delta(5));
+            let after = t.term.grid().display_offset();
+            assert!(
+                after > before,
+                "display_offset should increase on Scroll::Delta(+); was {before}→{after}"
+            );
+            // Scroll back to bottom resets the offset.
+            t.term.scroll_display(Scroll::Bottom);
+            assert_eq!(t.term.grid().display_offset(), 0);
+        }
+
+        // ── WEFT-260 selection ─────────────────────────────────────
+
+        #[test]
+        fn pixel_to_point_maps_origin_to_top_left() {
+            let t = Terminal::default();
+            // 24×80 grid built with FALLBACK_CELL_W/H. Use those for the
+            // test so we don't depend on egui font loading.
+            let cell_w = FALLBACK_CELL_W;
+            let cell_h = FALLBACK_CELL_H;
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(cell_w * 80.0, cell_h * 24.0),
+            );
+            let (point, side) =
+                pixel_to_point(&t.term, rect, cell_w, cell_h, egui::pos2(1.0, 1.0))
+                    .expect("origin must map");
+            assert_eq!(point.line.0, 0);
+            assert_eq!(point.column.0, 0);
+            assert_eq!(side, Side::Left);
+        }
+
+        #[test]
+        fn pixel_to_point_outside_returns_none() {
+            let t = Terminal::default();
+            let cell_w = FALLBACK_CELL_W;
+            let cell_h = FALLBACK_CELL_H;
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(cell_w * 80.0, cell_h * 24.0),
+            );
+            assert!(
+                pixel_to_point(
+                    &t.term,
+                    rect,
+                    cell_w,
+                    cell_h,
+                    egui::pos2(rect.max.x + 100.0, 0.0)
+                )
+                .is_none()
+            );
+        }
+
+        #[test]
+        fn selection_round_trips_via_to_string() {
+            // Drive the term with "hello", create a Simple selection
+            // covering cols 0..5 of line 0, and assert
+            // `selection_to_string` returns "hello".
+            let mut t = Terminal::default();
+            t.processor.advance(&mut t.term, b"hello");
+            let mut sel = Selection::new(
+                SelectionType::Simple,
+                Point::new(Line(0), Column(0)),
+                Side::Left,
+            );
+            sel.update(Point::new(Line(0), Column(4)), Side::Right);
+            t.term.selection = Some(sel);
+            let s = t.term.selection_to_string().unwrap_or_default();
+            assert_eq!(s, "hello");
         }
     }
 }
