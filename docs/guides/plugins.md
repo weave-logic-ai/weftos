@@ -13,7 +13,7 @@ autonomous skill creation, slash-command integration, and MCP tool exposure.
 | Pipeline Stages | `PipelineStage` | Custom processing stages in the agent pipeline |
 | Skills | `Skill` | High-level agent capabilities with tools and instructions |
 | Memory Backends | `MemoryBackend` | Pluggable memory storage (vector, KV, graph) |
-| Voice Handlers | `VoiceHandler` | Voice/audio processing (reserved for Workstream G) |
+| Voice Handlers | `VoiceHandler` | Voice/audio processing — **forward-compat placeholder** in 0.7.x: `pub` API surface only, no production impl, no plugin-loader path exercises it. Real impls (VAD / STT / TTS / wake-word) land in Workstream G. See `crates/clawft-plugin/src/traits.rs` (WEFT-77). |
 
 ## Plugin Manifest
 

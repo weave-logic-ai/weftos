@@ -42,6 +42,8 @@ scripts/build.sh native-debug    # Debug build (fast)
 scripts/build.sh wasi            # WASM for WASI (wasm32-wasip1)
 scripts/build.sh browser         # WASM for browser (wasm32-unknown-unknown)
 scripts/build.sh ui              # React frontend (tsc + vite)
+scripts/build.sh ui-docker       # Multi-stage clawft-ui Docker image (WEFT-317)
+scripts/build.sh ui-e2e          # Run the clawft-ui Playwright E2E suite (WEFT-314)
 scripts/build.sh all             # Build everything
 scripts/build.sh test            # cargo test --workspace
 scripts/build.sh check           # cargo check --workspace
@@ -58,6 +60,17 @@ scripts/build.sh native --features voice          # CLI with voice
 scripts/build.sh native --features voice,channels # CLI with voice + Discord
 scripts/build.sh native --dry-run                 # Preview commands
 scripts/build.sh gate                             # Run all 11 phase gate checks
+
+# Dashboard (clawft-ui) sub-commands
+scripts/build.sh ui-docker                        # Builds the multi-stage
+                                                  # clawft-ui Docker image
+                                                  # via clawft-ui/Dockerfile;
+                                                  # tag overridable via
+                                                  # CLAWFT_UI_DOCKER_TAG
+                                                  # (default: clawft-ui:dev).
+scripts/build.sh ui-e2e                           # Installs Playwright +
+                                                  # chromium and runs the
+                                                  # clawft-ui E2E suite.
 ```
 
 ## Quick Reference (raw cargo)

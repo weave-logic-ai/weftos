@@ -1,3 +1,141 @@
+# Session handoff — 2026-05-01 — M7/M7b/M7c 0.8.x burn-down — 65 commits, ~70 items shipped
+
+## What landed this session (post-audit-execution)
+
+The first heavy execution wave against the 0.7.0 release-gate audit (filed
+2026-04-28 as WEFT-8 .. WEFT-550) shipped on `m7-08-sweep` as 65 commits
+between `7a8805ec` and `81dd34c6`, organized into three milestones (M7,
+M7b, M7c) and ~70 closed Plane items. The workspace is green
+(`scripts/build.sh check` passes) and no docs/code touched ADRs other
+than this session's index update.
+
+### Workstream-by-workstream (sweep summary)
+
+**ws01-04 — kernel / pipeline / plugin:**
+- `1272d4b6` — replace `curl` shell-out in `version_check` with
+  `reqwest::blocking` (WEFT-12).
+- `bd58db14` — relocate `AgentChat` wire types from
+  `clawft-weave::protocol` and `clawft-service-agent::protocol` to the
+  canonical `clawft-types::agent_chat` (WEFT-498); daemon dispatch
+  drops the no-op `.into()` translators.
+- `7acabf83` — add VoiceHandler forward-compat banner doc (WEFT-77):
+  trait kept `pub` with a clear "no production impl in 0.7.x" warning.
+- `cfca6628` — document `claude_enabled` config default divergence
+  (WEFT-203).
+- `6bc5085f` — standardize flat `mesh_*.rs` layout in K6 plans
+  (WEFT-116).
+
+**ws05 channels:**
+- `85990c3f` — Telegram: drop redundant 1s inter-poll sleep; the Bot
+  API `getUpdates` long-poll already provides the wait (WEFT-172).
+  `poll_interval_secs` defaults to `0`.
+
+**ws06 memory / workspace:**
+- `7fd61912` — `WorkspaceManager::load` now bumps `last_accessed`
+  (WEFT-88).
+
+**ws08 weftos-gui (egui explorer + chat + canon + terminal + workshop):**
+- `5c3242b3`, `5a55f1e6` — Copy Path / Copy Pubkey / Export Snapshot
+  row above the detail viewer (WEFT-273).
+- `2633c002` — HealthViewer + SensorViewer + tree filter chip row +
+  sparkline embed + Sensor↔Node breadcrumb intent
+  (`request_navigation` / `take_navigation_request`) + ObjectType
+  registrations for `HealthReport` and `Sensor` and `Node`
+  (WEFT-268..272, 276).
+- `67584ed8` — chat panel: markdown rendering, system-prompt UI,
+  heartbeat label, identity-drift warning (WEFT-252,255,257,259).
+- `a65797e8` — admin/composer: confirm-restart Modal wired into the
+  admin surface (WEFT-439).
+- `04479bee`, `a0e74589` — canon `Field::Date` (jiff) +
+  `Field::Code`; large-N `Select` via TableBuilder (WEFT-265,266,267).
+- `d2b245a0` — workshop: parameterization, Grid + Tabs layouts,
+  `viewer_hint` dispatch.
+- `d09ae413` — terminal: mouse selection + clipboard, bold/italic
+  glyphs, scrollback + wheel (WEFT-260,261,262).
+- `8869808f` — document `blocks/` vs canon duality + `egui_demo_lib`
+  vendoring decision (WEFT-286,287).
+- `7b50f856` — confirm `npm run package` + `.vsix` flow for the
+  vscode-panel (WEFT-289).
+
+**ws09 clawft-dashboard (clawft-ui + clawft-services):**
+- `5da9ad4f` — WebSocket heartbeat (30s ping / 60s timeout) with
+  dead-connection eviction (WEFT-300).
+- `b3865cb9` — wire `render_ui` to the canvas WS broadcaster
+  (WEFT-306).
+- `cf1c6ed9` — expose `tool_schema()` / `tool_list()` from the WASM
+  adapter (WEFT-307).
+- `22c8143d` — real Cmd+K command palette with fuzzy search and
+  recents (WEFT-308).
+- `a5b862f9` — `useAuth` hook with single-use URL-token bootstrap
+  (WEFT-309).
+- `b2a4f31b` — `cors_proxy` URL HTTPS validation in production
+  (WEFT-310).
+- `c2e11d3a` — PWA manifest + service worker + offline shell
+  (WEFT-311).
+- `f2e11124` — Tauri 2.0 desktop shell scaffold (WEFT-313).
+- `4ef4afbf` — Playwright E2E suite scaffold (WEFT-314).
+- `5db46678` — jsx-a11y static lint + JS bundle-size budget gate
+  (WEFT-315).
+- `edaf1ed7` — multi-stage Dockerfile + nginx config for the
+  dashboard (WEFT-317).
+- `d6fba88d` — ADR-055 BackendAdapter contract for the agent
+  dashboard (WEFT-319).
+
+**ws10 voice:**
+- `a3af07e2` — voice docs: join-key contract + `publish_wav` role per
+  ADR-053 (substrate-side whisper canonical) (WEFT-237, WEFT-241).
+
+**ws13 app-substrate / surface:**
+- `8e9c6d2a` — substrate: `healthcheck` module codifying
+  HEALTHCHECK-CONTRACT.md (WEFT-437); `Status` / `NodeHealth` /
+  `SensorHealth` types + path helpers + classifier.
+- `5223adb7` — substrate: `adapter-health` topic
+  (`substrate/meta/adapter/<id>/health`), sensor healthcheck shim,
+  rfkill exemplar (WEFT-415, 417, 419).
+- `c4bf593c` — substrate: Presence exemplar adapter (WEFT-436).
+- `2a4eae93` — substrate: mic adapter emits per-sensor healthcheck
+  contract (WEFT-432).
+- `207fe8aa` — clippy fix in `presence::run` loop (WEFT-436).
+- `c39e35f4` — substrate-rpc: tests cover `substrate.notify`
+  consumer-wakeup semantics (WEFT-435); per-node-prefix write gate
+  audit-only close (WEFT-433).
+- `36d5743b` — surface DSL: `sort(list, key)` combinator + `.first` /
+  `.last` field access + scientific (`1e5`) and hex (`0xff`) number
+  literals (WEFT-422, 423, 424).
+- `6091fae8` — surface: drop unused egui dep, fold the
+  `substrate.rs` shim (WEFT-426, 428).
+- `107939b4` — surface: wire `ui://media` + `ui://canvas` composer
+  renderers (WEFT-421).
+- `d24acfa3` — graphify: drop dead `clawft-llm` optional dep
+  (WEFT-383).
+
+**ws14 deployment / release:**
+- `5a14255d` — ADR-037: replace stale `0.3.1` example with `0.X.Y`
+  placeholder (WEFT-470).
+- `fd0f89d6` — `docs/deployment/wasm.md`: refresh `wasm32-wasip2` +
+  wasmtime 33 (WEFT-467).
+- `59a2758f` — `Dockerfile.alpine` documented as the kernel-only
+  build image (WEFT-469).
+- `9630a534` — retire `scripts/check-features.sh`; the
+  browser-feature gate moved into `scripts/build.sh gate` (WEFT-409).
+
+**ws17 research:**
+- `d5f6fd5d` — close orphan symposium + research-index decisions
+  (WEFT-540, WEFT-541).
+
+**Spawned for follow-up:**
+- WEFT-560 — PWA push + VAPID keys.
+- WEFT-561 — axe-core + Playwright accessibility suite across all
+  14 routes.
+
+### Build / test status
+
+- `scripts/build.sh check` — green at HEAD `81dd34c6`.
+- ADR-055 added to `docs/adr/README.md` index (this session).
+- 65 commits not yet pushed; this session is docs-sync only.
+
+---
+
 # Session handoff — 2026-04-28 — Plane workflow shipped + 543 audit items filed
 
 ## What landed this session (post-audit-triage)
