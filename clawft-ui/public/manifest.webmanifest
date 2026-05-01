@@ -1,0 +1,22 @@
+{
+  "name": "ClawFT Agent Dashboard",
+  "short_name": "ClawFT",
+  "description": "Browser-mode AI agent runtime and dashboard for ClawFT.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f172a",
+  "theme_color": "#1e293b",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["productivity", "developer", "utilities"],
+  "icons": [
+    {
+      "src": "/vite.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
