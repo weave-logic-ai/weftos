@@ -1,6 +1,7 @@
-//! WEFT-244 + WEFT-245: composer surface IR dispatch for the
-//! additional canon IRIs (`ui://field`, plus toggle / select /
-//! slider / sheet / modal / dock / tabs / tree / plot).
+//! WEFT-244 + WEFT-245 + WEFT-421: composer surface IR dispatch for
+//! the additional canon IRIs (`ui://field`, plus toggle / select /
+//! slider / sheet / modal / dock / tabs / tree / plot / media /
+//! canvas).
 //!
 //! Each test builds a tiny surface tree with one of the IRIs as a
 //! child of a stack, runs the headless composer, and asserts that
@@ -167,4 +168,39 @@ fn plot_iri_renders_with_points() {
     snap.put("series", json!([1.0, 4.0, 9.0, 16.0, 25.0]));
     let resps = render_headless(&tree, snap);
     assert!(resps.iter().any(|r| r.identity == "ui://plot"));
+}
+
+#[test]
+fn media_iri_renders_with_uri_binding() {
+    // ui://media — load an egui::Image from the bound `uri`. With a
+    // real URI binding the renderer should emit a `ui://media`
+    // response (not the muted no-uri placeholder, which is a plain
+    // ui.label and produces no CanonResponse).
+    let n = NodeBuilder::new(IdentityIri::Media, "/root/media").bind("uri", "$avatar_url");
+    let tree = one_node_surface(n);
+    let mut snap = OntologySnapshot::empty();
+    snap.put("avatar_url", json!("https://example.test/avatar.png"));
+    let resps = render_headless(&tree, snap);
+    let kinds: Vec<&str> = resps.iter().map(|r| r.identity.as_ref()).collect();
+    assert!(
+        kinds.contains(&"ui://media"),
+        "expected ui://media response when uri is bound; got {kinds:?}"
+    );
+}
+
+#[test]
+fn canvas_iri_renders_placeholder_painter() {
+    // ui://canvas — placeholder painter (faint checkerboard). The
+    // primitive must register a CanonResponse so it doesn't fall
+    // through to render_todo.
+    let n = NodeBuilder::new(IdentityIri::Canvas, "/root/canvas")
+        .attr("size_w", AttrValue::Number(120.0))
+        .attr("size_h", AttrValue::Number(80.0));
+    let tree = one_node_surface(n);
+    let resps = render_headless(&tree, OntologySnapshot::empty());
+    let kinds: Vec<&str> = resps.iter().map(|r| r.identity.as_ref()).collect();
+    assert!(
+        kinds.contains(&"ui://canvas"),
+        "expected ui://canvas response; got {kinds:?}"
+    );
 }
