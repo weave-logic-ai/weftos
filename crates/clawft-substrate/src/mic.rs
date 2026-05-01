@@ -47,6 +47,9 @@ use crate::adapter::{
     Subscription, TopicDecl,
 };
 use crate::delta::StateDelta;
+use crate::healthcheck::{
+    build_report_delta as build_health_delta, SensorHealthReport, SensorStatus,
+};
 use crate::physical::{
     Characterization, PhysicalSensorAdapter, SensorCalibration, SensorInterface,
 };
@@ -61,24 +64,44 @@ use crate::physical::AudioDirection;
 const WINDOW_SAMPLES: usize = 8000;
 /// Default sample rate assumed when none is configured.
 const DEFAULT_SAMPLE_RATE: u32 = 16_000;
-/// Channel depth for the singleton topic.
-const CHAN: usize = 1;
+/// Channel depth for the singleton topic. Sized to comfortably hold
+/// the per-tick payload-plus-health pair (2 deltas) plus one tick of
+/// slack for slow consumers.
+const CHAN: usize = 4;
 /// Emission cadence — matches WINDOW_SAMPLES at DEFAULT_SAMPLE_RATE.
 const TICK_MS: u64 = 500;
 
 /// Declared topics.
-pub const TOPICS: &[TopicDecl] = &[TopicDecl {
-    path: "substrate/sensor/mic",
-    shape: "ontology://audio-level",
-    refresh_hint: RefreshHint::Periodic { ms: TICK_MS },
-    // Audio-capture data CAN leak user content even at RMS level
-    // (speech envelope is recoverable). `Capture` sensitivity per
-    // ADR-012 forces a per-goal `CapabilityGrant` rather than a
-    // one-off install-time prompt.
-    sensitivity: Sensitivity::Capture,
-    buffer_policy: BufferPolicy::Refuse,
-    max_len: None,
-}];
+///
+/// The mic adapter declares two topics:
+/// - `substrate/sensor/mic` — the level-meter payload (RMS / peak dBFS).
+/// - `substrate/meta/adapter/mic/healthcheck` — the per-sensor health
+///   report (HEALTHCHECK-CONTRACT.md §3). Both are emitted from the
+///   same poller; opening either subscribes to the shared producer
+///   loop. The healthcheck path uses [`Sensitivity::Public`] because
+///   it carries no audio content — only liveness counters.
+pub const TOPICS: &[TopicDecl] = &[
+    TopicDecl {
+        path: "substrate/sensor/mic",
+        shape: "ontology://audio-level",
+        refresh_hint: RefreshHint::Periodic { ms: TICK_MS },
+        // Audio-capture data CAN leak user content even at RMS level
+        // (speech envelope is recoverable). `Capture` sensitivity per
+        // ADR-012 forces a per-goal `CapabilityGrant` rather than a
+        // one-off install-time prompt.
+        sensitivity: Sensitivity::Capture,
+        buffer_policy: BufferPolicy::Refuse,
+        max_len: None,
+    },
+    TopicDecl {
+        path: "substrate/meta/adapter/mic/healthcheck",
+        shape: "ontology://sensor-health-report",
+        refresh_hint: RefreshHint::Periodic { ms: TICK_MS },
+        sensitivity: Sensitivity::Public,
+        buffer_policy: BufferPolicy::Refuse,
+        max_len: None,
+    },
+];
 
 /// Permissions — capture requires a dedicated grant; M1.5.2+ will
 /// wire that through governance. For the preview, `open` still
@@ -161,7 +184,13 @@ impl OntologyAdapter for MicrophoneAdapter {
         topic: &str,
         _args: Value,
     ) -> Result<Subscription, AdapterError> {
-        if topic != "substrate/sensor/mic" {
+        // Both declared topics share the same producer loop — the
+        // poller emits the level payload AND the per-sensor health
+        // report on every tick. Subscribing to either gives the caller
+        // the full delta stream; the substrate routes by path.
+        if topic != "substrate/sensor/mic"
+            && topic != "substrate/meta/adapter/mic/healthcheck"
+        {
             return Err(AdapterError::UnknownTopic(topic.into()));
         }
         let id = {
@@ -245,30 +274,107 @@ async fn poll_level(
     // to be a rolling buffer (test, synthetic stream, or mmapped
     // audio bridge) — we read the tail.
     let mut cursor: u64 = 0;
+    // Healthcheck producer state — counts ticks + errors so we can
+    // emit the per-sensor health shape per HEALTHCHECK-CONTRACT.md §3.
+    // Configured rate is `1000 / TICK_MS` Hz.
+    let mut tick_count: u64 = 0;
+    let mut error_count: u64 = 0;
+    let mut last_emit_ts: u64 = 0;
+    let mut last_error: Option<String> = None;
+    // Emit an initial `unknown`-status report so subscribers see the
+    // healthcheck path populated immediately (contract §9 open question
+    // 1: ship `unknown` for the pre-first-emit window).
+    let configured_rate_hz = 1000.0 / TICK_MS as f64;
+    let initial_report = SensorHealthReport::unknown(configured_rate_hz);
+    if tx
+        .send(build_health_delta("mic", &initial_report))
+        .await
+        .is_err()
+    {
+        return;
+    }
 
     loop {
         tokio::select! {
             _ = &mut cancel_rx => return,
             _ = ticker.tick() => {
+                tick_count += 1;
                 let value = read_and_measure(&source_path, sample_rate, &mut cursor);
-                // If the backing file is missing we emit nothing. Otherwise
-                // we'd overwrite externally-published values (e.g. from the
-                // ESP32 bridge calling `substrate.publish`) on every tick
-                // with `{available: false, reason: "source-missing"}`,
-                // which has no `rms_db` key and breaks the gauge binding.
-                if value.get("reason").and_then(Value::as_str) == Some("source-missing") {
-                    continue;
-                }
-                let delta = StateDelta::Replace {
-                    path: "substrate/sensor/mic".to_string(),
-                    value,
+                let reason = value
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                // If the backing file is missing we emit nothing on the
+                // primary topic. Otherwise we'd overwrite
+                // externally-published values (e.g. from the ESP32 bridge
+                // calling `substrate.publish`) on every tick with
+                // `{available: false, reason: "source-missing"}`, which
+                // has no `rms_db` key and breaks the gauge binding. The
+                // healthcheck path *does* still update so subscribers
+                // can see the sensor is unhealthy.
+                let payload_published = if reason.as_deref() == Some("source-missing") {
+                    error_count += 1;
+                    last_error = Some("source-missing".into());
+                    false
+                } else {
+                    let delta = StateDelta::Replace {
+                        path: "substrate/sensor/mic".to_string(),
+                        value,
+                    };
+                    if tx.send(delta).await.is_err() {
+                        return;
+                    }
+                    last_emit_ts = now_ms();
+                    true
                 };
-                if tx.send(delta).await.is_err() {
+
+                // Build + send the per-sensor health report. Cadence
+                // policy: every tick is fine at 2 Hz (contract §3.3 —
+                // "every emit, or at least every N=4 emits"); this keeps
+                // the producer state machine simple.
+                let observed_rate_hz = if payload_published {
+                    // Tracking observed-rate from inside the producer is
+                    // necessarily approximate (a true rolling-window
+                    // measurement belongs to the §7 aggregator). For the
+                    // preview we report `configured` when the last tick
+                    // succeeded and zero otherwise — this is what
+                    // `derive_status` needs to produce a useful status.
+                    configured_rate_hz
+                } else {
+                    0.0
+                };
+                let mut report = SensorHealthReport {
+                    status: SensorStatus::Unknown,
+                    last_emit_ts,
+                    configured_rate_hz,
+                    observed_rate_hz,
+                    error_count,
+                    tick: tick_count,
+                    since_ms: None,
+                    last_error: last_error.clone(),
+                    notes: reason.map(|r| format!("read-result: {r}")),
+                };
+                report.status = SensorHealthReport::derive_status(
+                    observed_rate_hz,
+                    configured_rate_hz,
+                    if payload_published { 0 } else { 1 },
+                );
+                if tx.send(build_health_delta("mic", &report)).await.is_err() {
                     return;
                 }
             }
         }
     }
+}
+
+/// Wall-clock millis since UNIX epoch — small helper kept private so
+/// the system-time read isn't sprinkled through the poller body.
+fn now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Read up to `WINDOW_SAMPLES` from the file at `cursor`, compute
@@ -477,5 +583,98 @@ mod tests {
         // round-trips.
         let d = AudioDirection::Capture;
         assert_eq!(d, AudioDirection::Capture);
+    }
+
+    #[test]
+    fn declares_both_payload_and_healthcheck_topics() {
+        // WEFT-432: the mic adapter declares the per-sensor
+        // healthcheck topic alongside its level-meter payload.
+        let paths: Vec<&str> = TOPICS.iter().map(|t| t.path).collect();
+        assert!(paths.contains(&"substrate/sensor/mic"));
+        assert!(paths.contains(&"substrate/meta/adapter/mic/healthcheck"));
+    }
+
+    #[tokio::test]
+    async fn open_succeeds_for_healthcheck_topic() {
+        // WEFT-432: subscribers can open the healthcheck topic directly.
+        let a = MicrophoneAdapter::new();
+        let r = a
+            .open("substrate/meta/adapter/mic/healthcheck", Value::Null)
+            .await;
+        assert!(r.is_ok(), "open(healthcheck) should succeed: {r:?}");
+    }
+
+    #[tokio::test]
+    async fn poller_emits_initial_unknown_health_report() {
+        // WEFT-432: the contract calls for an `unknown` pre-first-emit
+        // report so subscribers see the path populated immediately.
+        // Verify it's the very first delta the poller produces.
+        let dir = TempDir::new().unwrap();
+        let path = write_pcm(&dir, "silence.raw", &[0i16; 1024]);
+        let a = MicrophoneAdapter::with_source(path, 16000);
+        let mut sub = a
+            .open("substrate/sensor/mic", Value::Null)
+            .await
+            .expect("open");
+
+        // The very first delta must be the unknown-status health
+        // report — sent before the ticker has fired.
+        let first = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            sub.rx.recv(),
+        )
+        .await
+        .expect("recv timed out")
+        .expect("channel closed");
+        match first {
+            StateDelta::Replace { path, value } => {
+                assert_eq!(path, "substrate/meta/adapter/mic/healthcheck");
+                assert_eq!(value["status"], "unknown");
+                assert_eq!(value["configured_rate_hz"], 1000.0 / TICK_MS as f64);
+                assert_eq!(value["error_count"], 0);
+            }
+            other => panic!("expected Replace, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn poller_emits_degraded_health_report_when_source_missing() {
+        // WEFT-432: when the backing audio source is missing, the
+        // poller must surface that on the healthcheck path (status:
+        // degraded — error counter increments while observed rate
+        // drops to zero). This is honest reporting per the contract:
+        // the sensor *can* tell you it tried to read and failed, even
+        // before the §4.2 "down for 10s" threshold trips.
+        // The legacy `substrate/sensor/mic` payload is NOT overwritten
+        // (covered by `missing_source_emits_unavailable`).
+        let nonexistent = PathBuf::from("/nonexistent/weftos/mic-test.raw");
+        let a = MicrophoneAdapter::with_source(nonexistent, 16000);
+        let mut sub = a
+            .open("substrate/meta/adapter/mic/healthcheck", Value::Null)
+            .await
+            .expect("open");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut got_unhealthy = false;
+        while std::time::Instant::now() < deadline {
+            let delta = tokio::time::timeout(
+                std::time::Duration::from_millis(700),
+                sub.rx.recv(),
+            )
+            .await;
+            let Ok(Some(delta)) = delta else { continue };
+            if let StateDelta::Replace { path, value } = delta
+                && path == "substrate/meta/adapter/mic/healthcheck"
+                && (value["status"] == "degraded" || value["status"] == "down")
+                && value["error_count"].as_u64().unwrap_or(0) > 0
+            {
+                got_unhealthy = true;
+                break;
+            }
+        }
+        assert!(
+            got_unhealthy,
+            "expected at least one degraded/down-status health report with error_count > 0"
+        );
     }
 }
