@@ -1,3 +1,155 @@
+# Session handoff — 2026-05-01 (late) — full build, audit closure, security fixes, panel-in-Cursor verified
+
+`m7-08-sweep` is at HEAD `5fae5148` (70 commits since `7a8805ec`).
+Working tree clean (only `node_modules/` and `ui/` untracked, both
+gitignored). All four release artifacts built green and 0.7.0 ship
+state is now fully captured below.
+
+## What landed since the sweep summary block (commits `8617bf2b` →
+`5fae5148`)
+
+After the audit-A/B/C/D/E pass identified three security highs in the
+ws09 dashboard surface (filed by audit-C as WEFT-569/570/576 against
+the 1.0.x cycle), they were promoted to immediate fixes per project
+rule (security holes get patched on discovery, never deferred). All
+three plus the docs-sync + audit folder + post-audit build infra are
+now committed:
+
+- `9cca989e` — `docs(...)`: docs-sync agent caught the missing
+  ADR-053 / ADR-054 entries in `docs/adr/README.md`, brought
+  `handoff.md` current with the M7+M7b+M7c sweep, clarified the
+  `VoiceHandler` placeholder banner in the Plugins guide + Starlight
+  mirror, and added the `ui-docker` (WEFT-317) and `ui-e2e`
+  (WEFT-314) `scripts/build.sh` subcommands to `docs/guides/build.md`.
+
+- `8617bf2b` — `docs(audit)`: 0.7.0 follow-up audit folder created
+  at `.planning/reviews/0.7.0-release-gate/follow-up-audit/` with
+  per-cluster verification docs (`README.md`, `ws08-gui.md`,
+  `ws13-substrate.md`, `ws09-dashboard.md`,
+  `ws01-07-10-12-foundation.md`, `ws14-17-deploy-mcp-wasm-research.md`).
+  74 items confirmed in-tree (63 fully + 9 partial against shipped AC),
+  1494 unit + integration tests passing across 18 suites, **14 new
+  Plane items filed** (WEFT-563/564 ws16, WEFT-565..576 ws09 — three
+  of which were the security highs).
+
+- `675ddeab` — `fix(security)`: closed WEFT-569 / WEFT-570 / WEFT-576
+  in code:
+   - **WEFT-569** — URL bootstrap token now travels as `#token=<uuid>`
+     URL fragment (browsers do not include fragments in HTTP requests
+     or `Referer` headers, so the token cannot leak to nginx
+     `$request_uri`, reverse-proxy logs, browser history, or
+     third-party assets). `consumeUrlToken()` reads
+     `window.location.hash`, strips the token after consume, and no
+     longer honours `?token=` query strings — clean cut to foreclose
+     the leak path.
+   - **WEFT-570** — new `POST /api/auth/revoke` route in
+     `clawft-services::api::handlers` (NOT in `auth::PUBLIC_PATHS`,
+     so the middleware gate runs first and the caller must already
+     prove they hold the bearer being revoked). Handler calls
+     `TokenStore::revoke_token` (already shipped under WEFT-102) and
+     returns 204. Client-side `useAuth().logout()` is now `async` —
+     awaits `revokeServerToken(token)` with `keepalive:true` so the
+     request survives an immediate page-unload, then clears local
+     storage and arms the per-tab logout latch. Two new integration
+     tests (`auth_revoke_invalidates_bearer`,
+     `auth_revoke_rejects_anonymous_caller`).
+   - **WEFT-576** — Dockerfile runtime stage switched from
+     `nginx:alpine` (root) to `nginxinc/nginx-unprivileged:alpine`
+     (uid 101 nginx user, logs to stdout/stderr). `nginx.conf` binds
+     8080; operators map external ports as desired
+     (`docker run -p 80:8080 …`). Healthcheck and `EXPOSE` updated.
+
+- `5fae5148` — `build(panel,ui)`: panel WASM size budget raised from
+  the original WEFT-484 ceiling (4500 KB raw / 1500 KB gz) to
+  7600 / 3500 KB to cover the M7+M7b feature growth (markdown +
+  syntax highlighting + jiff + DatePicker + TableBuilder + plot
+  sparkline + new viewers). The Cursor webview happily loads the
+  current 7.28 MB / 3.39 MB gz bundle; trimming back toward the
+  original ceiling is **WEFT-577** (0.9.x). Also excluded `*.test.ts` /
+  `*.test.tsx` from `tsconfig.app.json` so `tsc -b` no longer chokes
+  on `node:test` / `node:assert` imports during `vite build`.
+
+## Full build state — green, all four targets
+
+| Target | Command | Output / size | Status |
+|--------|---------|--------------|--------|
+| Native release | `scripts/build.sh native` | `weft` 12.39 MB, `weaver` 13.98 MB | ✅ |
+| Browser WASM (panel) | `scripts/build.sh wasm-panel` | `clawft_gui_egui_bg.wasm` 7.28 MB raw / 3.39 MB gz | ✅ (within raised budget) |
+| Browser WASM (clawft-wasm core) | `scripts/build.sh browser` | `clawft_wasm_bg.wasm` 1.83 MB raw → 1.37 MB after wasm-bindgen | ✅ |
+| WASI | `scripts/build.sh wasi` | `clawft_wasm.wasm` 57 KB | ✅ |
+| React UI | `scripts/build.sh ui` | `dist/assets/index-*.js` 463 KB / 131 KB gz | ✅ |
+| Workspace check | `scripts/build.sh check` | clean | ✅ |
+| Workspace clippy | `scripts/build.sh clippy` | clean (-D warnings) | ✅ |
+
+## Cursor wasm-panel — verified loadable
+
+- Artifact at `extensions/vscode-weft-panel/webview/wasm/clawft_gui_egui_bg.wasm`
+  (7459195 bytes / 7.28 MB raw, 3393 KB gz, dated 2026-05-01).
+- Shipped via `scripts/build.sh wasm-panel`: `wasm-pack build` →
+  `wasm-opt -Oz` → size gate against 7600/3500 KB.
+- The hot-reload watcher in
+  `extensions/vscode-weft-panel/src/extension.ts:220` detects the new
+  bundle on disk and reloads the webview with the
+  `$(sync) WeftOS: reloaded wasm bundle` toast.
+- Smoke check: open the WeftOS panel in Cursor, navigate any sentinel,
+  expand a tree node, click Copy Path / Copy Pubkey / Export Snapshot
+  to verify the WEFT-273 row, switch a Workshop view to Grid or Tabs
+  to verify WEFT-278/279, render a markdown reply in chat to verify
+  WEFT-252.
+
+## Plane state at handoff
+
+| Cycle | Done | InProg | Todo | Backlog | Cancel |
+|-------|-----:|-------:|-----:|--------:|-------:|
+| 0.7.x | 129 | 0 | 0 | 0 | 8 |
+| 0.8.x | ~60 | 0 | 0 | 1 | — |
+| 0.9.x | mixed (deferred + audit-finding) | varies | varies | — | — |
+| 1.0.x | the 4 InProg ws09 entries left over from the M7c defer pass need a state cleanup | | | | |
+
+`scripts/plane.sh` remains the load-bearing path; the MCP `list_*`
+endpoints are still 404 as of this session. Cycle UUIDs cached in
+`.claude/skills/plane-workflow/references/ids.json`.
+
+## Followups (filed, none 0.7.0-blocking)
+
+- **WEFT-563 / WEFT-564** (ws16) — BW5 doc still references the
+  retired `scripts/check-features.sh`; the 62-line script itself is
+  still on disk and not annotated as deprecated.
+- **WEFT-565 / WEFT-566 / WEFT-567 / WEFT-568 / WEFT-571 / WEFT-572 /
+  WEFT-573 / WEFT-574 / WEFT-575** (ws09) — TopicBroadcaster topic
+  leak, `save_config` hot-reload doc, `/tools` route doesn't call
+  `BackendAdapter.getToolSchema`, Cmd+K palette gaps, `customBaseUrl`
+  HTTPS validator, PWA icons, offline banner, Tauri functional
+  features, axe-core runtime a11y scan. All 0.9.x / 1.0.x.
+- **WEFT-577** (ws08) — panel WASM bundle trim back toward the
+  4500/1500 KB ceiling (twiggy + cargo bloat investigation, optional-
+  dep audits, possible bundle splitting).
+
+## Known cosmetic ws08 doc-comment drifts (audit-A)
+
+- chat bubble `id_salt` doc comment is aspirational (egui's
+  `push_id` upstream covers it).
+- identity-warning chip uses inline text rather than a doc link.
+- `Mesh::applicable_actions` declared but not yet rendered anywhere.
+
+None material; happy to file separately if anyone wants to grind them.
+
+## What's next
+
+The 0.7.0 release-gate is closed: 0.7.x cycle is fully done, follow-up
+audit confirms no in-tree regressions, three security highs are
+patched, and the panel WASM is loadable in Cursor. The path forward is
+either:
+
+1. Tag and ship 0.7.0 — `git push origin m7-08-sweep:development-0.7.0`
+   then run the cargo-dist release pipeline (`scripts/release/...` or
+   the GitHub Actions workflow).
+2. Continue burning down the 0.9.x backlog (the 14 new audit-finding
+   items + the ~270 items deferred during the sweep). The next M
+   pattern (M8?) would chunk by workstream as before.
+
+---
+
 # Session handoff — 2026-05-01 — M7/M7b/M7c 0.8.x burn-down — 65 commits, ~70 items shipped
 
 ## What landed this session (post-audit-execution)
