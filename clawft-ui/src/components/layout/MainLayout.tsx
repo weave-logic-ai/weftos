@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Link, Outlet } from "@tanstack/react-router";
+import { Link, Outlet, useNavigate } from "@tanstack/react-router";
 import { useThemeStore } from "../../stores/theme-store";
 import { useAgentStore } from "../../stores/agent-store";
 import { wsClient } from "../../lib/ws-client";
@@ -9,6 +9,7 @@ import { VoiceStatusBar } from "../voice/status-bar";
 import { TalkModeOverlay } from "../voice/talk-overlay";
 import { useBackend } from "../../lib/use-backend.ts";
 import type { BackendCapabilities } from "../../lib/backend-adapter.ts";
+import { CommandPalette, type PaletteItem } from "./command-palette";
 
 interface NavItem {
   path: string;
@@ -41,6 +42,7 @@ export function MainLayout() {
   const { theme, toggleTheme } = useThemeStore();
   const { wsConnected, setWsConnected } = useAgentStore();
   const { capabilities, mode } = useBackend();
+  const navigate = useNavigate();
 
   // Filter nav items based on backend capabilities
   const visibleNavItems = useMemo(
@@ -50,6 +52,39 @@ export function MainLayout() {
       ),
     [capabilities],
   );
+
+  // WEFT-308: build the command palette index from current nav items
+  // plus a couple of always-available actions. The index is rebuilt
+  // whenever capabilities change so palette content stays in sync
+  // with the sidebar.
+  const paletteItems = useMemo<PaletteItem[]>(() => {
+    const navActions: PaletteItem[] = visibleNavItems.map((item) => ({
+      id: `goto:${item.path}`,
+      label: `Go to ${item.label}`,
+      hint: item.path,
+      icon: item.icon,
+      action: () => navigate({ to: item.path }),
+    }));
+
+    const utilActions: PaletteItem[] = [
+      {
+        id: "action:toggle-theme",
+        label: theme === "dark" ? "Switch to light mode" : "Switch to dark mode",
+        hint: "Theme",
+        icon: theme === "dark" ? "L" : "D",
+        action: toggleTheme,
+      },
+      {
+        id: "action:toggle-sidebar",
+        label: collapsed ? "Expand sidebar" : "Collapse sidebar",
+        hint: "Layout",
+        icon: collapsed ? ">" : "<",
+        action: () => setCollapsed((c) => !c),
+      },
+    ];
+
+    return [...navActions, ...utilActions];
+  }, [visibleNavItems, navigate, theme, toggleTheme, collapsed]);
 
   // Apply theme class to html element
   useEffect(() => {
@@ -204,29 +239,12 @@ export function MainLayout() {
       {/* Talk Mode overlay */}
       <TalkModeOverlay />
 
-      {/* Command palette placeholder */}
-      {cmdKOpen && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center pt-24">
-          <div
-            className="fixed inset-0 bg-black/50"
-            onClick={() => setCmdKOpen(false)}
-            aria-hidden="true"
-          />
-          <div className="relative z-50 w-full max-w-lg rounded-lg border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-800">
-            <input
-              type="text"
-              placeholder="Search commands..."
-              className="w-full rounded-lg border-0 bg-transparent px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none dark:text-gray-100 dark:placeholder-gray-500"
-              autoFocus
-            />
-            <div className="border-t border-gray-200 px-4 py-3 dark:border-gray-700">
-              <p className="text-xs text-gray-400 dark:text-gray-500">
-                Command palette coming soon. Press Escape to close.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* WEFT-308: real fuzzy-search command palette */}
+      <CommandPalette
+        open={cmdKOpen}
+        onClose={() => setCmdKOpen(false)}
+        items={paletteItems}
+      />
     </div>
   );
 }
