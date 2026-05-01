@@ -47,3 +47,7 @@ regex = { workspace = true }
 mockito = "1"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+# WEFT-300: end-to-end heartbeat tests drive the WS handler with a
+# real client over a localhost TCP socket.
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
