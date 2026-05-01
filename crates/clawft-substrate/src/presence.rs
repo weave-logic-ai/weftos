@@ -259,11 +259,11 @@ async fn poll_presence(
                     continue;
                 }
                 // Increment transition counter when `present` changes.
-                if let Some(present) = read.get("present").and_then(Value::as_bool) {
-                    if last != Some(present) {
-                        transitions = transitions.saturating_add(1);
-                        last = Some(present);
-                    }
+                if let Some(present) = read.get("present").and_then(Value::as_bool)
+                    && last != Some(present)
+                {
+                    transitions = transitions.saturating_add(1);
+                    last = Some(present);
                 }
                 let mut value = read;
                 if let Some(obj) = value.as_object_mut() {
