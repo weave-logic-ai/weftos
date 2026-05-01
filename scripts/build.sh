@@ -242,6 +242,57 @@ cmd_ui() {
     fi
 }
 
+cmd_ui_docker() {
+    header "Building clawft-ui Docker image (multi-stage)"
+    if [ ! -f "$ROOT/clawft-ui/Dockerfile" ]; then
+        skip "clawft-ui/Dockerfile not found — skipping"
+        return 0
+    fi
+    if ! command -v docker >/dev/null 2>&1; then
+        fail "docker not installed; install Docker Engine to build the UI image"
+        return 1
+    fi
+    local tag="${CLAWFT_UI_DOCKER_TAG:-clawft-ui:dev}"
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   docker build -f clawft-ui/Dockerfile -t %s .\n" "$tag"
+    else
+        (cd "$ROOT" && docker build -f clawft-ui/Dockerfile -t "$tag" .)
+        local size
+        size=$(docker image inspect "$tag" --format='{{.Size}}' 2>/dev/null)
+        if [ -n "$size" ]; then
+            local mb=$((size / 1024 / 1024))
+            printf "  ${CYAN}SIZE${NC}  %s image: %d MB\n" "$tag" "$mb"
+        fi
+    fi
+    timer_end
+}
+
+cmd_ui_e2e() {
+    header "Running clawft-ui Playwright E2E suite"
+    if [ ! -d "$ROOT/clawft-ui/tests" ]; then
+        skip "clawft-ui/tests/ not found — Playwright suite not scaffolded"
+        return 0
+    fi
+    if [ ! -d "$ROOT/clawft-ui/node_modules" ]; then
+        printf "  ${CYAN}INFO${NC}  installing clawft-ui dependencies\n"
+        if [ "$DRY_RUN" = true ]; then
+            printf "  ${YELLOW}DRY${NC}   cd clawft-ui && npm ci\n"
+        else
+            (cd "$ROOT/clawft-ui" && npm ci --no-audit --no-fund)
+        fi
+    fi
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   cd clawft-ui && npx playwright install --with-deps chromium && npx playwright test\n"
+    else
+        (cd "$ROOT/clawft-ui" \
+            && npx playwright install --with-deps chromium \
+            && npx playwright test)
+    fi
+    timer_end
+}
+
 cmd_releases_mdx() {
     header "Regenerating docs releases.mdx from CHANGELOG.md"
     if [ ! -x "$ROOT/scripts/build-releases-mdx.sh" ]; then
@@ -701,6 +752,10 @@ ${BOLD}Commands:${NC}
   wasi            Build WASM for WASI (wasm32-wasip2)
   browser         Build WASM for browser (wasm32-unknown-unknown)
   ui              Build React frontend (tsc + vite)
+  ui-docker       Build the clawft-ui multi-stage Docker image (WEFT-317).
+                  Override tag with CLAWFT_UI_DOCKER_TAG=...
+  ui-e2e          Run the clawft-ui Playwright E2E suite (WEFT-314).
+                  Installs npm deps + chromium on first run.
   releases-mdx    Regenerate docs/src/content/docs/weftos/vision/releases.mdx
                   from CHANGELOG.md (also runs as --check before commits)
   all             Build everything (native + wasi + browser + ui)
@@ -820,6 +875,8 @@ main() {
         wasi)         cmd_wasi ;;
         browser)      cmd_browser ;;
         ui)           cmd_ui ;;
+        ui-docker)    cmd_ui_docker ;;
+        ui-e2e)       cmd_ui_e2e ;;
         releases-mdx) cmd_releases_mdx ;;
         all)          cmd_all ;;
         test)         cmd_test ;;
