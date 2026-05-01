@@ -36,19 +36,29 @@ COPY clawft-ui/ ./
 RUN npm run build && npm prune --production
 
 # ── Stage 2: serve ───────────────────────────────────────────────────
-FROM nginx:alpine
+#
+# `nginxinc/nginx-unprivileged` is the upstream Nginx image configured
+# to run as the `nginx` user (uid 101) with logs going to stdout/stderr
+# and the worker binding to port 8080 — so we never run as root inside
+# the container, regardless of how the host orchestrator schedules it.
+# WEFT-576 (security audit: don't run as root).
+#
+# The default upstream image listens on 8080 and we mirror that in
+# `nginx.conf`. Operators map external ports as they wish:
+#
+#   docker run -p 80:8080 ghcr.io/.../clawft-ui:0.7.0   # public 80
+#   docker run -p 8080:8080 ghcr.io/.../clawft-ui:0.7.0 # 1:1
+FROM nginxinc/nginx-unprivileged:alpine
 
-# Drop privileges where possible. nginx:alpine still needs root to bind 80
-# and to write the access/error logs, so we keep the default user but
-# disable the daemonize fork (the image's CMD already does this).
+# Static SPA assets — `nginx-unprivileged` uses the same html dir.
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY clawft-ui/nginx.conf /etc/nginx/conf.d/default.conf
 
-# Healthcheck: a 200 on / means the SPA index served (and so the WASM
-# fallback / mime types are in play). curl is in alpine by default.
+# Healthcheck on the unprivileged port. wget is in the alpine base.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD wget -q --spider http://localhost/ || exit 1
+  CMD wget -q --spider http://localhost:8080/ || exit 1
 
-EXPOSE 80
+EXPOSE 8080
 
-CMD ["nginx", "-g", "daemon off;"]
+# `nginx-unprivileged`'s default CMD already runs `nginx -g daemon off;`
+# as the non-root user. Inheriting it is correct.

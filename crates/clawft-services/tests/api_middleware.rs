@@ -245,6 +245,82 @@ async fn auth_middleware_allows_token_endpoint_without_token() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
+/// WEFT-570: `POST /api/auth/revoke` must require a valid Bearer
+/// (it is NOT in the public-paths allowlist) and, on success, the
+/// token cannot be reused for any subsequent protected request.
+#[tokio::test]
+async fn auth_revoke_invalidates_bearer() {
+    let (state, auth) = make_state();
+    let token = auth.generate_token(3600).unwrap();
+    let app = build_router(state, &[], None);
+
+    // Sanity: token works against a protected route.
+    let probe = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(probe.status(), StatusCode::OK);
+
+    // Revoke must succeed (204 No Content) and require the bearer.
+    let revoke = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/auth/revoke")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(revoke.status(), StatusCode::NO_CONTENT);
+
+    // Subsequent request with the same bearer is now 401.
+    let after = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(after.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// WEFT-570: revoke without a Bearer must be rejected by the auth
+/// middleware itself (401), not silently 204'd. The endpoint is NOT
+/// public — the caller must already prove they hold the token they're
+/// asking us to revoke.
+#[tokio::test]
+async fn auth_revoke_rejects_anonymous_caller() {
+    let (state, _auth) = make_state();
+    let app = build_router(state, &[], None);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/auth/revoke")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
 #[tokio::test]
 async fn cors_denies_unconfigured_origin() {
     let (state, _auth) = make_state();
