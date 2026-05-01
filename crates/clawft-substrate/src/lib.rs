@@ -29,6 +29,7 @@
 
 pub mod adapter;
 pub mod delta;
+pub mod healthcheck;
 pub mod projection;
 pub mod snapshot;
 
@@ -88,4 +89,10 @@ pub use adapter::{
     Subscription, TopicDecl,
 };
 pub use delta::StateDelta;
+pub use healthcheck::{
+    HealthGranularity, NodeHealth, RebootReason, SensorHealth, Status as HealthStatus,
+    classify_value as classify_health_value, node_health_derived_path, node_health_path,
+    node_health_raw_path, sensor_health_derived_path, sensor_health_path,
+    sensor_health_raw_path,
+};
 pub use snapshot::{OntologySnapshot, Substrate};
