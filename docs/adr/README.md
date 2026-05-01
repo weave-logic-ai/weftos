@@ -55,13 +55,14 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | [ADR-047](adr-047-self-calibrating-tick.md) | Self-calibrating cognitive tick | Accepted | Architecture | DEMOCRITUS |
 | [ADR-048](adr-048-kernel-phase-responsibilities.md) | Kernel phase (K-level) responsibilities | Accepted | Architecture | Sprint 14 (formerly ADR-020 — renumbered 2026-04-28 / WEFT-140) |
 | [ADR-049](adr-049-weftos-kernel.md) | WeftOS kernel architecture overview | Accepted | Architecture | K0 (formerly `architecture/adr-028-weftos-kernel.md` — renumbered + relocated 2026-04-28 / WEFT-140) |
+| [ADR-055](adr-055-backend-adapter-contract.md) | BackendAdapter contract for the agent dashboard | Accepted | GUI | 0.7.0 release-gate audit (WEFT-319) |
 
 ## Categories
 
 | Category | ADRs | Description |
 |----------|------|-------------|
 | **Release** | 001, 002, 012, 029, 037, 044 | Versioning, distribution, and build decisions |
-| **GUI** | 003, 004, 005, 006, 007, 013, 016, 038 | UI/UX technology and architecture decisions |
+| **GUI** | 003, 004, 005, 006, 007, 013, 016, 038, 055 | UI/UX technology and architecture decisions |
 | **Architecture** | 010, 017, 019, 020, 021, 022, 023, 026, 027, 030, 031, 033, 034, 035, 036, 039, 040, 041, 042, 045, 046, 047, 048, 049 | Core system design decisions |
 | **Security** | 024, 025, 028, 043 | Cryptography, identity, and chain-integrity decisions |
 | **Performance** | 009, 011, 032 | Algorithmic and optimization decisions |
