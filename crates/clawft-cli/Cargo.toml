@@ -38,7 +38,7 @@ clawft-rpc = { workspace = true }
 clawft-types = { workspace = true }
 clawft-platform = { workspace = true }
 clawft-core = { workspace = true, features = ["native", "full"] }
-clawft-tools = { workspace = true, features = ["native-exec", "native"] }
+clawft-tools = { workspace = true, features = ["native-exec", "native", "canvas"] }
 clawft-channels = { workspace = true, optional = true }
 clawft-llm = { workspace = true }
 clawft-services = { workspace = true, optional = true }
