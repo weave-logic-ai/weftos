@@ -8,3 +8,8 @@ tsconfig.json
 **/*.ts
 node_modules/**
 !out/**
+# WEFT-289: drop wasm-pack scaffolding from the .vsix. The wasm
+# bytes + JS glue are required (loaded by the webview); the
+# co-emitted package.json + .gitignore are not.
+webview/wasm/package.json
+webview/wasm/.gitignore

@@ -29,7 +29,7 @@
     "compile": "tsc -p .",
     "compile-tests": "tsc -p test/",
     "watch": "tsc -w -p .",
-    "package": "vsce package",
+    "package": "vsce package --allow-missing-repository",
     "pretest": "npm run compile && npm run compile-tests",
     "test": "node ./out-test/runTest.js"
   },
