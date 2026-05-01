@@ -1009,34 +1009,71 @@ fn render_sheet(
 
 fn render_modal(
     node: &SurfaceNode,
-    _snap: &OntologySnapshot,
+    snap: &OntologySnapshot,
     ui: &mut egui::Ui,
     frame: &mut Frame<'_>,
 ) {
-    // `ui://modal` needs a body callback (FnOnce<&mut egui::Ui>) and
-    // a persistent open-state. Surface IR doesn't yet model an
-    // open/dismiss handshake — for M4-C we render a labelled
-    // placeholder so the IRI stops falling through to `render_todo`.
-    // Full wiring (with a `Modality` attribute, body composition,
-    // and dismiss-dispatch) ships with M5 surface state.
+    // WEFT-439: render modal contents inline (always-visible) so its
+    // children compose + dispatch through the normal frame plumbing.
+    // The full open/dismiss handshake (Modality attribute, persistent
+    // open-state, focus trap) still ships with M5 surface state — but
+    // rendering inline today means the admin surface can declare a
+    // confirm-restart modal and exercise the composer's dispatch path
+    // end-to-end without a surface-state runtime.
     let title = node
         .attrs
         .get("title")
         .and_then(AttrValue::as_str)
         .unwrap_or("modal");
+
+    let mut child = ComposeOutcome::default();
     let resp = ui
         .group(|ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("[modal]").color(egui::Color32::from_rgb(180, 160, 110)));
-                ui.label(title);
+                ui.label(
+                    egui::RichText::new("[modal]")
+                        .color(egui::Color32::from_rgb(180, 160, 110)),
+                );
+                ui.label(egui::RichText::new(title).strong());
             });
-            ui.label(
-                egui::RichText::new(format!("({} children)", node.children.len()))
-                    .small()
-                    .color(egui::Color32::from_rgb(140, 140, 150)),
-            );
+            ui.separator();
+            // Compose children inline so pressables / fields inside
+            // the modal body emit dispatches normally.
+            let mut child_frame = Frame {
+                responses: &mut child.responses,
+                dispatches: &mut child.dispatches,
+            };
+            for c in &node.children {
+                render_node(c, snap, ui, &mut child_frame);
+            }
+            // Action strip: render any modal-level affordances as
+            // small buttons. WEFT-439 specifically wants a
+            // confirm-restart pattern — declaring one or more
+            // affordances on the Modal node yields one button per
+            // affordance with the standard dispatch shape.
+            if !node.affordances.is_empty() {
+                ui.separator();
+                let mut local: Vec<PendingDispatch> = Vec::new();
+                ui.horizontal(|ui| {
+                    for aff in &node.affordances {
+                        let label = prettify(&aff.name);
+                        if ui
+                            .small_button(label)
+                            .on_hover_text(format!("{} — {}", aff.name, aff.verb))
+                            .clicked()
+                            && let Some(dispatch) = build_dispatch(node, Some(aff))
+                        {
+                            local.push(dispatch);
+                        }
+                    }
+                });
+                for d in local {
+                    child.dispatches.push(d);
+                }
+            }
         })
         .response;
+    frame.merge(child);
     frame.push_response(CanonResponse::from_egui(
         resp,
         std::borrow::Cow::Borrowed("ui://modal"),

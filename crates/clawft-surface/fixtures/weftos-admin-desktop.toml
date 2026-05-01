@@ -71,3 +71,23 @@ attrs    = { min = 0.0, max = 100.0 }
 type     = "ui://stream-view"
 id       = "/root/logs"
 bindings = { stream = "$substrate/kernel/logs" }
+
+# --- Confirm-restart modal (WEFT-439) ---------------------------------
+# A wired ui://modal with an affordance, exercising the modal path
+# in the composer outside the demo lab. Renders inline today (always-
+# visible) — the open/dismiss handshake ships with M5 surface state.
+[[surfaces.root.children]]
+type  = "ui://modal"
+id    = "/root/restart-modal"
+attrs = { title = "Confirm restart" }
+
+  [[surfaces.root.children.children]]
+  type  = "ui://chip"
+  id    = "/root/restart-modal/prompt"
+  attrs = { label = "Restart kernel? In-flight RPCs may drop." }
+
+  [[surfaces.root.children.affordances]]
+  name        = "confirm-restart"
+  verb        = "rpc.kernel.restart"
+  invocations = ["pointer", "voice"]
+  args_schema = "ontology://kernel/restart"

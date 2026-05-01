@@ -1124,7 +1124,6 @@ dependencies = [
  "async-trait",
  "blake3",
  "clawft-kernel",
- "clawft-llm",
  "clawft-treecalc",
  "dashmap",
  "eml-core",
