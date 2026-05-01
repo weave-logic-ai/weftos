@@ -27,6 +27,9 @@ export function CardTitle({
   ...props
 }: HTMLAttributes<HTMLHeadingElement>) {
   return (
+    // jsx-a11y/heading-has-content: content arrives via {...props}.children
+    // from the caller; the rule cannot see through prop spread.
+    // eslint-disable-next-line jsx-a11y/heading-has-content
     <h3
       className={cn(
         "text-lg font-semibold leading-none tracking-tight text-gray-900 dark:text-gray-100",
