@@ -68,7 +68,16 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 egui = "0.34"
-egui_extras = { version = "0.34", features = ["all_loaders"] }
+# `datepicker` enables `egui_extras::DatePickerButton` (canon `Field::Date`).
+# Note: egui_extras 0.34's datepicker is built on `jiff::civil::Date`, not
+# `chrono::NaiveDate` — the original Plane spec referenced chrono but the
+# library moved to jiff. We expose `jiff::civil::Date` through `FieldValue::Date`
+# so the surface stays in sync with the underlying widget.
+egui_extras = { version = "0.34", features = ["all_loaders", "datepicker"] }
+# Brought in transitively by `egui_extras/datepicker`; named here as a
+# direct dep so canon `FieldValue::Date(jiff::civil::Date)` can be
+# spelled in this crate's public surface without a re-export hop.
+jiff = { version = "0.2.23", default-features = false, features = ["std"] }
 egui_plot = "0.35"
 egui_demo_lib = "0.34"
 # NB: egui_dock 0.19 tracks egui 0.34. (0.14 tracked egui 0.29.)

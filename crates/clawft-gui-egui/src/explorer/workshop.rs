@@ -22,25 +22,42 @@
 //! {
 //!   "title": "Mic diagnostic",
 //!   "layout": "rows",
+//!   "params": { "node": "n-6f3a9c" },
 //!   "panels": [
 //!     {
 //!       "title": "RMS gauge",
 //!       "substrate_path": "substrate/sensor/mic",
 //!       "viewer_hint": "auto",
 //!       "min_height": 120
+//!     },
+//!     {
+//!       "title": "Per-node mic",
+//!       "substrate_path_template": "substrate/${node}/sensor/mic"
 //!     }
 //!   ]
 //! }
 //! ```
 //!
 //! * `title` — optional string; rendered as the Workshop heading.
-//! * `layout` — one of `rows` (default), `grid`, `tabs`. Only `rows`
-//!   is implemented in the MVP; the enum is reserved open so future
-//!   layouts plug in without a schema bump.
-//! * `panels` — ordered array of [`WorkshopPanel`]s, each pointing at a
-//!   substrate path. `viewer_hint` is reserved for explicit viewer
-//!   overrides; today `"auto"` (or unset) routes through
-//!   [`super::viewers::dispatch`].
+//! * `layout` — one of `rows` (default), `grid`, `tabs`. All three are
+//!   implemented (`grid` paints an `egui::Grid`, `tabs` paints a
+//!   selectable tab bar). Unknown layouts round-trip through
+//!   [`WorkshopLayout::Unknown`] and degrade to rows.
+//! * `panels` — ordered array of [`WorkshopPanel`]s. Each panel must
+//!   resolve to a substrate path: either supply `substrate_path`
+//!   directly, or supply `substrate_path_template` (with `${param}`
+//!   placeholders) plus the top-level `params` map.
+//! * `params` — optional `{ name: string }` map. Values substitute
+//!   into every panel's `substrate_path_template` via `${name}`. A
+//!   placeholder with no matching param parses successfully but the
+//!   panel renders a small "missing param `<name>`" hint at paint
+//!   time. [WEFT-274]
+//! * `viewer_hint` — explicit viewer override. `"auto"` (or unset) is
+//!   shape-dispatched via [`super::viewers::dispatch`]; any other value
+//!   that names a registered viewer ([`viewer_for_hint`]) routes the
+//!   panel through that viewer directly. Unknown hints fall back to
+//!   shape-dispatch with a small debug hint so the writer can see
+//!   their hint didn't match. [WEFT-280]
 //!
 //! ## Hot-reload mechanism
 //!
@@ -105,10 +122,15 @@ const DEFAULT_MIN_HEIGHT: f32 = 80.0;
 pub struct Workshop {
     /// Optional display title for the composition.
     pub title: Option<String>,
-    /// Layout strategy. `rows` is the only implemented variant;
+    /// Layout strategy. `rows`, `grid`, and `tabs` are implemented;
     /// unknown layout strings round-trip through [`WorkshopLayout::Unknown`]
     /// so a forward-compatible writer doesn't get silently clipped.
     pub layout: WorkshopLayout,
+    /// Top-level parameter map, substituted into every panel's
+    /// `substrate_path_template`. `${name}` placeholders resolve to
+    /// the matching value here. Missing params render an inline
+    /// per-panel hint at paint time. [WEFT-274]
+    pub params: HashMap<String, String>,
     /// Ordered panel list. Empty is legal (Workshop renders its title
     /// and an empty-state hint).
     pub panels: Vec<WorkshopPanel>,
@@ -146,11 +168,26 @@ pub struct WorkshopPanel {
     /// Display label for the panel header. Optional; when absent the
     /// substrate path is shown as the header.
     pub title: Option<String>,
-    /// Substrate path whose value this panel renders. Required.
+    /// Substrate path whose value this panel renders. Either this
+    /// field is set directly, or it is derived from
+    /// `substrate_path_template` after [`Workshop::params`]
+    /// substitution. Empty after substitution → panel renders an
+    /// inline error.
     pub substrate_path: String,
+    /// Original `${param}`-bearing template, kept around so
+    /// `paint_panel` can show a sensible hint when a placeholder is
+    /// missing. `None` when the panel was authored with a literal
+    /// `substrate_path`. [WEFT-274]
+    pub substrate_path_template: Option<String>,
+    /// Substitution status:
+    /// * `Ok(())` — every `${name}` placeholder in the template was
+    ///   resolved (or there was no template).
+    /// * `Err(name)` — a `${name}` placeholder had no matching key
+    ///   in [`Workshop::params`]; rendered as an inline hint.
+    pub substitution_status: Result<(), String>,
     /// Explicit viewer name to force, or `"auto"` / unset for
-    /// shape-dispatched default. Reserved — the MVP only honors
-    /// `auto`.
+    /// shape-dispatched default. Recognised viewer names see
+    /// [`viewer_for_hint`]. [WEFT-280]
     pub viewer_hint: String,
     /// Optional per-panel minimum height in logical pixels.
     pub min_height: Option<f32>,
@@ -172,9 +209,29 @@ pub fn parse(value: &Value) -> Result<Workshop, String> {
         .as_array()
         .ok_or_else(|| "workshop `panels` must be an array".to_string())?;
 
+    // Parse top-level `params` map first so panels can substitute.
+    // Stringy values only — the param substitution lives in the
+    // path string and JSON arrays/objects don't have a sensible
+    // textual encoding for that role.
+    let mut params: HashMap<String, String> = HashMap::new();
+    if let Some(p) = obj.get("params") {
+        let map = p
+            .as_object()
+            .ok_or_else(|| "workshop `params` must be a JSON object".to_string())?;
+        for (k, v) in map {
+            let s = v.as_str().ok_or_else(|| {
+                format!(
+                    "workshop `params.{k}` must be a string (numbers and bools \
+                     have no canonical path-component encoding)"
+                )
+            })?;
+            params.insert(k.clone(), s.to_string());
+        }
+    }
+
     let mut panels = Vec::with_capacity(panels_arr.len());
     for (i, p) in panels_arr.iter().enumerate() {
-        panels.push(parse_panel(p).map_err(|e| format!("panels[{i}]: {e}"))?);
+        panels.push(parse_panel(p, &params).map_err(|e| format!("panels[{i}]: {e}"))?);
     }
 
     let title = obj
@@ -191,19 +248,32 @@ pub fn parse(value: &Value) -> Result<Workshop, String> {
     Ok(Workshop {
         title,
         layout,
+        params,
         panels,
     })
 }
 
-fn parse_panel(value: &Value) -> Result<WorkshopPanel, String> {
+fn parse_panel(value: &Value, params: &HashMap<String, String>) -> Result<WorkshopPanel, String> {
     let obj = value
         .as_object()
         .ok_or_else(|| "panel must be a JSON object".to_string())?;
-    let substrate_path = obj
-        .get("substrate_path")
+    // Either a literal substrate_path or a templated form. Authoring
+    // both is permitted (the literal wins) so a writer can switch
+    // between them mid-iteration.
+    let substrate_path_template = obj
+        .get("substrate_path_template")
         .and_then(Value::as_str)
-        .ok_or_else(|| "missing required `substrate_path` string".to_string())?
-        .to_string();
+        .map(str::to_string);
+    let (substrate_path, substitution_status) =
+        if let Some(literal) = obj.get("substrate_path").and_then(Value::as_str) {
+            (literal.to_string(), Ok(()))
+        } else if let Some(tmpl) = substrate_path_template.as_deref() {
+            substitute(tmpl, params)
+        } else {
+            return Err(
+                "missing required `substrate_path` (or `substrate_path_template`) string".into(),
+            );
+        };
     let title = obj
         .get("title")
         .and_then(Value::as_str)
@@ -224,9 +294,65 @@ fn parse_panel(value: &Value) -> Result<WorkshopPanel, String> {
     Ok(WorkshopPanel {
         title,
         substrate_path,
+        substrate_path_template,
+        substitution_status,
         viewer_hint,
         min_height,
     })
+}
+
+/// Substitute `${name}` placeholders in `template` against `params`.
+///
+/// Returns `(rendered_path, Ok(()))` when every placeholder resolved,
+/// or `(partial_path, Err(missing_name))` for the first missing
+/// placeholder. The partial path retains the literal `${missing}`
+/// substring so the panel renders something diagnosable rather than
+/// nothing.
+///
+/// Syntax: `${name}` only — no default values, no escaping. This
+/// keeps the writer side trivial (TOML keys map 1-to-1 to
+/// placeholder names) and matches the example proposed in
+/// EXPLORER-MANAGEMENT-SURFACE §6.2 verbatim.
+fn substitute(template: &str, params: &HashMap<String, String>) -> (String, Result<(), String>) {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    let mut first_missing: Option<String> = None;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        match after.find('}') {
+            Some(end) => {
+                let name = &after[..end];
+                match params.get(name) {
+                    Some(v) => out.push_str(v),
+                    None => {
+                        if first_missing.is_none() {
+                            first_missing = Some(name.to_string());
+                        }
+                        // Keep the literal `${name}` so the rendered
+                        // path is at least diagnosable.
+                        out.push_str("${");
+                        out.push_str(name);
+                        out.push('}');
+                    }
+                }
+                rest = &after[end + 1..];
+            }
+            None => {
+                // Unterminated `${` — treat as literal and bail.
+                out.push_str(&rest[start..]);
+                return (
+                    out,
+                    Err("unterminated `${` placeholder in substrate_path_template".to_string()),
+                );
+            }
+        }
+    }
+    out.push_str(rest);
+    match first_missing {
+        Some(name) => (out, Err(name)),
+        None => (out, Ok(())),
+    }
 }
 
 /// Shape-match a substrate value as a Workshop. Returns the priority
@@ -333,13 +459,15 @@ impl WorkshopView {
         paint_header(ui, &workshop);
         match workshop.layout {
             WorkshopLayout::Rows => self.paint_rows(ui, &workshop),
-            WorkshopLayout::Grid | WorkshopLayout::Tabs | WorkshopLayout::Unknown => {
-                // Fall back to rows for unimplemented layouts. A small
-                // hint makes the degradation visible so the writer
-                // knows why their grid/tabs layout looks vertical.
+            WorkshopLayout::Grid => self.paint_grid(ui, &workshop),
+            WorkshopLayout::Tabs => self.paint_tabs(ui, &workshop),
+            WorkshopLayout::Unknown => {
+                // Unknown layouts fall back to rows with a small
+                // diagnostic so a forward-compatible writer can see
+                // their layout string didn't match the registered set.
                 ui.label(
                     egui::RichText::new(format!(
-                        "layout `{:?}` not yet rendered — falling back to rows",
+                        "layout `{:?}` not implemented — falling back to rows",
                         workshop.layout
                     ))
                     .italics()
@@ -421,15 +549,7 @@ impl WorkshopView {
 
     /// Rows layout: vertical ScrollArea + per-panel Frame.
     fn paint_rows(&self, ui: &mut egui::Ui, workshop: &Workshop) {
-        if workshop.panels.is_empty() {
-            ui.vertical_centered(|ui| {
-                ui.add_space(16.0);
-                ui.label(
-                    egui::RichText::new("(empty Workshop — publish a `panels` array)")
-                        .italics()
-                        .color(egui::Color32::from_rgb(160, 160, 170)),
-                );
-            });
+        if Self::paint_empty_state(ui, workshop) {
             return;
         }
         egui::ScrollArea::vertical()
@@ -440,6 +560,110 @@ impl WorkshopView {
                     ui.add_space(6.0);
                 }
             });
+    }
+
+    /// Grid layout: square-ish grid via `egui::Grid`. Column count is
+    /// derived from the panel count (`ceil(sqrt(n))`) so a 4-panel
+    /// Workshop renders 2×2, a 9-panel Workshop renders 3×3, etc. The
+    /// row order is left-to-right top-to-bottom per `WorkshopPanel`
+    /// order so the schema's ordering survives the layout.
+    /// [WEFT-278]
+    fn paint_grid(&self, ui: &mut egui::Ui, workshop: &Workshop) {
+        if Self::paint_empty_state(ui, workshop) {
+            return;
+        }
+        let cols = grid_columns_for(workshop.panels.len());
+        let cell_w = (ui.available_width() / cols as f32).max(120.0) - 12.0;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new(("workshop-grid", workshop.panels.len(), cols))
+                    .num_columns(cols)
+                    .spacing(egui::vec2(8.0, 8.0))
+                    .show(ui, |ui| {
+                        for (idx, panel) in workshop.panels.iter().enumerate() {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(cell_w, 0.0),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    ui.set_min_width(cell_w);
+                                    self.paint_panel(ui, idx, panel);
+                                },
+                            );
+                            if (idx + 1) % cols == 0 {
+                                ui.end_row();
+                            }
+                        }
+                        // Close out the trailing partial row so the
+                        // grid finalizes cleanly.
+                        if !workshop.panels.is_empty()
+                            && !workshop.panels.len().is_multiple_of(cols)
+                        {
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+
+    /// Tabs layout: a horizontal selectable tab bar across panel
+    /// titles, with the selected panel rendered in full beneath. The
+    /// active tab is per-Workshop egui memory, so re-parsing the
+    /// schema on each frame doesn't reset the user's selection. The
+    /// selected index is clamped to `panels.len() - 1` whenever a
+    /// hot-reload shrinks the panel count. [WEFT-279]
+    fn paint_tabs(&self, ui: &mut egui::Ui, workshop: &Workshop) {
+        if Self::paint_empty_state(ui, workshop) {
+            return;
+        }
+        // Persist the active tab index across frames. Keyed off the
+        // ui id of the current scope so two stacked Workshops each
+        // get their own tab state.
+        let mem_id = ui.id().with("workshop-tabs-active");
+        let mut active = ui
+            .ctx()
+            .data(|d| d.get_temp::<usize>(mem_id))
+            .unwrap_or(0);
+        if active >= workshop.panels.len() {
+            active = workshop.panels.len() - 1;
+        }
+        ui.horizontal_wrapped(|ui| {
+            for (idx, panel) in workshop.panels.iter().enumerate() {
+                let label = panel
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| panel.substrate_path.clone());
+                if ui.selectable_label(active == idx, label).clicked() {
+                    active = idx;
+                }
+            }
+        });
+        ui.separator();
+        ui.ctx().data_mut(|d| d.insert_temp(mem_id, active));
+        if let Some(panel) = workshop.panels.get(active) {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    self.paint_panel(ui, active, panel);
+                });
+        }
+    }
+
+    /// Empty-state placeholder shared by all three layouts. Returns
+    /// `true` when it painted (caller should bail out), `false` when
+    /// the panel list is non-empty.
+    fn paint_empty_state(ui: &mut egui::Ui, workshop: &Workshop) -> bool {
+        if !workshop.panels.is_empty() {
+            return false;
+        }
+        ui.vertical_centered(|ui| {
+            ui.add_space(16.0);
+            ui.label(
+                egui::RichText::new("(empty Workshop — publish a `panels` array)")
+                    .italics()
+                    .color(egui::Color32::from_rgb(160, 160, 170)),
+            );
+        });
+        true
     }
 
     fn paint_panel(&self, ui: &mut egui::Ui, idx: usize, panel: &WorkshopPanel) {
@@ -474,6 +698,19 @@ impl WorkshopView {
                         egui::vec2(ui.available_width(), min_h),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
+                            // [WEFT-274] Surface a missing-param hint
+                            // before any subscription state — the
+                            // panel's path is broken until the writer
+                            // supplies the param.
+                            if let Err(missing) = &panel.substitution_status {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "missing param `{missing}` in `substrate_path_template`"
+                                    ))
+                                    .small()
+                                    .color(egui::Color32::from_rgb(220, 170, 120)),
+                                );
+                            }
                             let sub = self.subs.get(&panel.substrate_path);
                             match sub {
                                 Some(sub) => {
@@ -486,8 +723,14 @@ impl WorkshopView {
                                     }
                                     match &sub.value {
                                         Some(v) => {
-                                            super::viewers::dispatch(
+                                            // [WEFT-280] Honor explicit
+                                            // viewer_hint when the name
+                                            // matches a registered
+                                            // viewer; fall through to
+                                            // shape-dispatch otherwise.
+                                            paint_with_viewer_hint(
                                                 ui,
+                                                &panel.viewer_hint,
                                                 &panel.substrate_path,
                                                 v,
                                             );
@@ -514,6 +757,79 @@ impl WorkshopView {
                 });
             });
     }
+}
+
+/// Compute the column count for a square-ish grid layout.
+/// `ceil(sqrt(n))` so 1→1, 2→2, 3→2, 4→2, 5→3, 9→3, 10→4. Defaults
+/// to 1 when the panel list is empty (the empty-state shortcut
+/// short-circuits before this is reached, but a safe fallback keeps
+/// the helper total).
+pub(crate) fn grid_columns_for(n: usize) -> usize {
+    if n <= 1 {
+        return n.max(1);
+    }
+    let sqrt = (n as f64).sqrt().ceil() as usize;
+    sqrt.max(1)
+}
+
+/// Resolve a panel's `viewer_hint` to an explicit viewer paint
+/// function. `"auto"` (and unset) routes through the shape-matcher
+/// dispatcher, which is the legacy behavior. Named hints that match
+/// a registered viewer route directly to it. Unknown names fall
+/// back to shape-dispatch with an inline diagnostic so the writer
+/// sees their hint didn't match. [WEFT-280]
+pub(crate) fn paint_with_viewer_hint(
+    ui: &mut egui::Ui,
+    hint: &str,
+    path: &str,
+    value: &Value,
+) {
+    let trimmed = hint.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+        super::viewers::dispatch(ui, path, value);
+        return;
+    }
+    if let Some(paint) = viewer_for_hint(trimmed) {
+        paint(ui, path, value);
+        return;
+    }
+    ui.label(
+        egui::RichText::new(format!(
+            "viewer_hint `{trimmed}` is not a registered viewer — falling back to auto"
+        ))
+        .italics()
+        .small()
+        .color(egui::Color32::from_rgb(200, 170, 120)),
+    );
+    super::viewers::dispatch(ui, path, value);
+}
+
+/// Map a viewer-hint name to the matching viewer's paint function.
+/// Names are stable lower-snake-case identifiers chosen to mirror the
+/// module name of each viewer. Returns `None` for any name not in the
+/// registered set; the caller falls back to shape-dispatch in that
+/// case so a typo never blanks a panel.
+///
+/// To register a new viewer here, add a `"name" => &paint_fn` arm and
+/// keep the names sorted alphabetically.
+pub(crate) fn viewer_for_hint(
+    name: &str,
+) -> Option<fn(&mut egui::Ui, &str, &Value)> {
+    use super::viewers::*;
+    Some(match name {
+        "audio_meter" => audio_meter::AudioMeterViewer::paint,
+        "chain_tail" => chain_tail::ChainTailViewer::paint,
+        "connection_badge" => connection_badge::ConnectionBadgeViewer::paint,
+        "depth_map" => depth_map::DepthMapViewer::paint,
+        "graph" => graph::GraphViewer::paint,
+        "json" | "json_fallback" => json_fallback::JsonFallbackViewer::paint,
+        "mesh_nodes" => mesh_nodes::MeshNodesViewer::paint,
+        "pcm_chunk" => pcm_chunk::PcmChunkViewer::paint,
+        "process_table" => process_table::ProcessTableViewer::paint,
+        "time_series" => time_series::TimeSeriesViewer::paint,
+        "waveform" => waveform::WaveformViewer::paint,
+        _ => return None,
+    })
 }
 
 fn paint_header(ui: &mut egui::Ui, workshop: &Workshop) {
@@ -691,26 +1007,25 @@ mod tests {
         assert_eq!(WorkshopLayout::default(), WorkshopLayout::Rows);
     }
 
+    fn panel(path: &str) -> WorkshopPanel {
+        WorkshopPanel {
+            title: None,
+            substrate_path: path.into(),
+            substrate_path_template: None,
+            substitution_status: Ok(()),
+            viewer_hint: "auto".into(),
+            min_height: None,
+        }
+    }
+
     #[test]
     fn reconcile_adds_and_removes_subs() {
         let mut view = WorkshopView::default();
         let w1 = Workshop {
             title: None,
             layout: WorkshopLayout::Rows,
-            panels: vec![
-                WorkshopPanel {
-                    title: None,
-                    substrate_path: "a".into(),
-                    viewer_hint: "auto".into(),
-                    min_height: None,
-                },
-                WorkshopPanel {
-                    title: None,
-                    substrate_path: "b".into(),
-                    viewer_hint: "auto".into(),
-                    min_height: None,
-                },
-            ],
+            params: HashMap::new(),
+            panels: vec![panel("a"), panel("b")],
         };
         view.reconcile_subs(&w1);
         assert_eq!(view.subs.len(), 2);
@@ -723,20 +1038,8 @@ mod tests {
         let w2 = Workshop {
             title: None,
             layout: WorkshopLayout::Rows,
-            panels: vec![
-                WorkshopPanel {
-                    title: None,
-                    substrate_path: "b".into(),
-                    viewer_hint: "auto".into(),
-                    min_height: None,
-                },
-                WorkshopPanel {
-                    title: None,
-                    substrate_path: "c".into(),
-                    viewer_hint: "auto".into(),
-                    min_height: None,
-                },
-            ],
+            params: HashMap::new(),
+            panels: vec![panel("b"), panel("c")],
         };
         view.reconcile_subs(&w2);
         assert_eq!(view.subs.len(), 2);
@@ -746,6 +1049,120 @@ mod tests {
         // Sanity: `b`'s sub struct survives in place (HashMap may
         // relocate, but it wasn't recreated as a fresh PanelSub).
         let _ = b_ptr_addr; // Just document intent.
+    }
+
+    #[test]
+    fn parse_resolves_substrate_path_template_with_params() {
+        // [WEFT-274] `${name}` placeholders substitute from the
+        // top-level `params` map when no literal `substrate_path`
+        // is present.
+        let v = json!({
+            "params": { "node": "n-6f3a9c" },
+            "panels": [
+                { "substrate_path_template": "substrate/${node}/sensor/mic" }
+            ]
+        });
+        let w = parse(&v).expect("templated workshop parses");
+        assert_eq!(w.panels[0].substrate_path, "substrate/n-6f3a9c/sensor/mic");
+        assert!(w.panels[0].substitution_status.is_ok());
+        assert_eq!(
+            w.panels[0].substrate_path_template.as_deref(),
+            Some("substrate/${node}/sensor/mic")
+        );
+    }
+
+    #[test]
+    fn parse_records_missing_param_for_template() {
+        let v = json!({
+            "panels": [
+                { "substrate_path_template": "substrate/${node}/sensor/mic" }
+            ]
+        });
+        let w = parse(&v).expect("template-without-params still parses");
+        // Path retains the literal `${node}` so paint sees something.
+        assert_eq!(w.panels[0].substrate_path, "substrate/${node}/sensor/mic");
+        assert_eq!(
+            w.panels[0].substitution_status.as_ref().unwrap_err(),
+            "node"
+        );
+    }
+
+    #[test]
+    fn parse_literal_path_wins_over_template() {
+        // Both fields present: literal wins, no substitution attempted.
+        let v = json!({
+            "params": { "node": "n-aaa" },
+            "panels": [
+                {
+                    "substrate_path": "substrate/literal",
+                    "substrate_path_template": "substrate/${node}/sensor/mic"
+                }
+            ]
+        });
+        let w = parse(&v).unwrap();
+        assert_eq!(w.panels[0].substrate_path, "substrate/literal");
+        assert!(w.panels[0].substitution_status.is_ok());
+    }
+
+    #[test]
+    fn parse_rejects_non_string_param() {
+        // Numbers/bools have no canonical encoding into a path
+        // component — we reject them at parse time so the writer sees
+        // the error immediately.
+        let v = json!({
+            "params": { "tries": 3 },
+            "panels": []
+        });
+        let err = parse(&v).unwrap_err();
+        assert!(err.contains("`params.tries`"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_rejects_panel_without_path_or_template() {
+        let v = json!({
+            "panels": [{ "title": "no path" }]
+        });
+        let err = parse(&v).unwrap_err();
+        assert!(err.contains("substrate_path"), "got: {err}");
+    }
+
+    #[test]
+    fn substitute_handles_unterminated_placeholder() {
+        let mut params = HashMap::new();
+        params.insert("a".to_string(), "x".to_string());
+        let (out, status) = substitute("substrate/${a}/${unterminated", &params);
+        // First half resolved; the trailing `${unterminated` is
+        // surfaced as a parse error.
+        assert!(out.starts_with("substrate/x/"));
+        assert!(status.unwrap_err().contains("unterminated"));
+    }
+
+    #[test]
+    fn grid_columns_are_squareish() {
+        // [WEFT-278] sqrt-shaped grid keeps cells visually balanced.
+        assert_eq!(grid_columns_for(0), 1);
+        assert_eq!(grid_columns_for(1), 1);
+        assert_eq!(grid_columns_for(2), 2);
+        assert_eq!(grid_columns_for(3), 2);
+        assert_eq!(grid_columns_for(4), 2);
+        assert_eq!(grid_columns_for(5), 3);
+        assert_eq!(grid_columns_for(9), 3);
+        assert_eq!(grid_columns_for(10), 4);
+    }
+
+    #[test]
+    fn viewer_for_hint_resolves_known_names() {
+        // [WEFT-280] Named hints map to registered viewers; unknown
+        // names return None so the dispatcher falls back to auto.
+        assert!(viewer_for_hint("audio_meter").is_some());
+        assert!(viewer_for_hint("waveform").is_some());
+        assert!(viewer_for_hint("graph").is_some());
+        assert!(viewer_for_hint("json").is_some());
+        assert!(viewer_for_hint("json_fallback").is_some());
+        // Case-sensitive on purpose — viewer names are stable
+        // identifiers, not user-facing text.
+        assert!(viewer_for_hint("Audio_Meter").is_none());
+        assert!(viewer_for_hint("not_a_real_viewer").is_none());
     }
 
     #[test]
