@@ -173,6 +173,11 @@ The UI supports four backend modes, controlled by the `VITE_BACKEND_MODE` enviro
 
 Each mode is implemented as a `BackendAdapter`. The `ModeProvider` component in `src/lib/mode-context.tsx` initializes the correct adapter based on the configured mode, and all data-fetching code accesses the adapter via the `useBackend()` hook.
 
+The contract — interface, mode selection, auth model (Bearer + future
+Tailscale), browser-only encrypted IndexedDB key storage, and the
+MSW-first development pattern — is documented in
+[ADR-055: BackendAdapter contract](../adr/adr-055-backend-adapter-contract.md).
+
 ## API Architecture
 
 ### Bridge Pattern

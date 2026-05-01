@@ -20,6 +20,14 @@ gui/node_modules/
 gui/dist/
 clawft-ui/node_modules/
 clawft-ui/dist/
+# WEFT-313: Tauri auto-generated capability/schema files for the dashboard shell.
+clawft-ui/src-tauri/gen/
+clawft-ui/src-tauri/target/
+clawft-ui/src-tauri/Cargo.lock
+# WEFT-314: Playwright local artefacts.
+clawft-ui/test-results/
+clawft-ui/playwright-report/
+clawft-ui/.playwright/
 .vercel
 # KB: commit .gz only, decompress client-side or via CI
 docs/src/public/kb/weftos-docs.rvf.json
