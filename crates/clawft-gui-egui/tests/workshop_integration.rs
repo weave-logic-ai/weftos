@@ -107,6 +107,99 @@ fn substrate_republish_changes_workshop_shape() {
 }
 
 #[test]
+fn substrate_workshop_with_parameter_template_substitutes() {
+    // [WEFT-274] A Workshop publish that uses
+    // `substrate_path_template` + `params` round-trips through the
+    // substrate and parses with the placeholders resolved on the
+    // reader side.
+    let substrate = Substrate::new();
+    let v = json!({
+        "title": "per-node mic",
+        "params": { "node": "n-6f3a9c" },
+        "panels": [
+            { "substrate_path_template": "substrate/${node}/sensor/mic" }
+        ]
+    });
+    substrate.apply(StateDelta::Replace {
+        path: WORKSHOP_PATH.to_string(),
+        value: v,
+    });
+    let read_back = substrate.get(WORKSHOP_PATH).unwrap();
+    let parsed = workshop::parse(&read_back).expect("templated workshop parses");
+    assert_eq!(
+        parsed.panels[0].substrate_path,
+        "substrate/n-6f3a9c/sensor/mic"
+    );
+    assert!(parsed.panels[0].substitution_status.is_ok());
+    assert_eq!(parsed.params.get("node").map(String::as_str), Some("n-6f3a9c"));
+}
+
+#[test]
+fn substrate_workshop_grid_layout_round_trips() {
+    // [WEFT-278] Grid layout publishes parse to WorkshopLayout::Grid
+    // — the layout decoder + new variant survive the substrate round
+    // trip end-to-end.
+    let substrate = Substrate::new();
+    let v = json!({
+        "layout": "grid",
+        "panels": [
+            { "substrate_path": "substrate/a" },
+            { "substrate_path": "substrate/b" },
+            { "substrate_path": "substrate/c" },
+            { "substrate_path": "substrate/d" }
+        ]
+    });
+    substrate.apply(StateDelta::Replace {
+        path: WORKSHOP_PATH.to_string(),
+        value: v,
+    });
+    let parsed = workshop::parse(&substrate.get(WORKSHOP_PATH).unwrap()).unwrap();
+    assert_eq!(parsed.layout, WorkshopLayout::Grid);
+    assert_eq!(parsed.panels.len(), 4);
+}
+
+#[test]
+fn substrate_workshop_tabs_layout_round_trips() {
+    // [WEFT-279] Symmetry: tabs layout also round-trips.
+    let substrate = Substrate::new();
+    let v = json!({
+        "layout": "tabs",
+        "panels": [
+            { "title": "Tab A", "substrate_path": "substrate/a" },
+            { "title": "Tab B", "substrate_path": "substrate/b" }
+        ]
+    });
+    substrate.apply(StateDelta::Replace {
+        path: WORKSHOP_PATH.to_string(),
+        value: v,
+    });
+    let parsed = workshop::parse(&substrate.get(WORKSHOP_PATH).unwrap()).unwrap();
+    assert_eq!(parsed.layout, WorkshopLayout::Tabs);
+    assert_eq!(parsed.panels[0].title.as_deref(), Some("Tab A"));
+}
+
+#[test]
+fn substrate_workshop_viewer_hint_named_round_trips() {
+    // [WEFT-280] A panel may pin viewer_hint to a named viewer.
+    // The hint string must round-trip through the substrate so the
+    // dispatcher can resolve it on render.
+    let substrate = Substrate::new();
+    substrate.apply(StateDelta::Replace {
+        path: WORKSHOP_PATH.to_string(),
+        value: json!({
+            "panels": [
+                {
+                    "substrate_path": "substrate/sensor/mic",
+                    "viewer_hint": "audio_meter"
+                }
+            ]
+        }),
+    });
+    let parsed = workshop::parse(&substrate.get(WORKSHOP_PATH).unwrap()).unwrap();
+    assert_eq!(parsed.panels[0].viewer_hint, "audio_meter");
+}
+
+#[test]
 fn substrate_workshop_unrelated_path_untouched() {
     let substrate = Substrate::new();
 
