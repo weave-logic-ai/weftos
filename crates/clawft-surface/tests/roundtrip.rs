@@ -21,13 +21,18 @@ fn parses_admin_fixture() {
     assert!(tree.inputs.contains(&Input::Pointer));
     assert_eq!(tree.subscriptions.len(), 4);
     assert_eq!(tree.root.kind, IdentityIri::Grid);
-    assert_eq!(tree.root.children.len(), 4, "four quadrants");
+    // Five children today: four quadrants + the empty/loading/offline
+    // state sections appended for D-EM01 compliance under WEFT-589.
+    assert_eq!(tree.root.children.len(), 5);
 }
 
 #[test]
 fn toml_primitive_counts_match_expectations() {
     let tree = parse_surface_toml(FIXTURE).expect("parse");
-    assert_eq!(tree.count_of("ui://chip"), 2);
+    // Counts reflect the canonical four quadrants plus the state
+    // sections (empty/loading/offline) added under WEFT-589 for
+    // D-EM01 compliance. Bump these whenever the fixture grows.
+    assert_eq!(tree.count_of("ui://chip"), 3);
     assert_eq!(tree.count_of("ui://gauge"), 1);
     assert_eq!(tree.count_of("ui://table"), 1);
     assert_eq!(tree.count_of("ui://stream-view"), 1);

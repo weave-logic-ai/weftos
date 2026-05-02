@@ -65,7 +65,9 @@ fn admin_panel_emits_expected_primitive_counts() {
 
     let count = |iri: &str| responses.iter().filter(|r| r.identity == iri).count();
     assert_eq!(count("ui://grid"), 1, "one top-level grid");
-    assert_eq!(count("ui://chip"), 2, "two overview chips");
+    // Three chips: two overview chips + the chip declared in the
+    // empty-state section appended for D-EM01 compliance under WEFT-589.
+    assert_eq!(count("ui://chip"), 3);
     assert_eq!(count("ui://table"), 1, "one process table");
     assert_eq!(count("ui://gauge"), 1, "one mesh-listener gauge");
     assert_eq!(count("ui://stream-view"), 1, "one log stream");

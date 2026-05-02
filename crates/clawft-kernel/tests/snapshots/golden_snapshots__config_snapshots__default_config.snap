@@ -1,9 +1,15 @@
 ---
 source: crates/clawft-kernel/tests/golden_snapshots.rs
+assertion_line: 207
 expression: json
 ---
 {
   "agents": {
+    "cost_budget": {
+      "max_iterations_per_conv": 30,
+      "max_tokens_per_conv": 200000,
+      "max_usd_per_conv": 1.0
+    },
     "defaults": {
       "max_tokens": 8192,
       "max_tool_iterations": 20,
@@ -151,6 +157,9 @@ expression: json
     "learner": "noop",
     "scorer": "noop"
   },
+  "plugins": {
+    "voice_grants": {}
+  },
   "providers": {
     "aihubmix": {
       "api_base": null,
@@ -266,6 +275,7 @@ expression: json
     }
   },
   "routing": {
+    "context_router": "null",
     "cost_budgets": {
       "global_daily_limit_usd": 0.0,
       "global_monthly_limit_usd": 0.0,
@@ -346,6 +356,7 @@ expression: json
     "tiers": []
   },
   "tools": {
+    "allowed_tools": [],
     "command_policy": {
       "allowlist": [],
       "denylist": [],
@@ -381,6 +392,22 @@ expression: json
       "enabled": false,
       "stt_provider": "",
       "tts_provider": ""
+    },
+    "consumer": {
+      "chat_target_agent": "concierge-bot",
+      "command_prefix": "weft ",
+      "conv_id": "voice-default",
+      "enabled": false,
+      "permissions": {
+        "default_level": 0,
+        "principal_levels": {},
+        "safe_commands": [
+          "status",
+          "list",
+          "help"
+        ]
+      },
+      "transcript_topic": "substrate/_derived/transcript/n-bfc4cd/mic"
     },
     "enabled": false,
     "personalities": {},
