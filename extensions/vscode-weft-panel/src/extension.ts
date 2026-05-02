@@ -51,6 +51,13 @@ const STATIC_ALLOWED_METHODS = new Set<string>([
     "kernel.logs",
     "kernel.kill-process",
     "kernel.restart-service",
+    // Service lifecycle (WEFT-579..591 follow-up): the desktop
+    // Services panel's contextual buttons submit these directly.
+    // Daemon dispatches them to SystemService::{start,stop} on the
+    // matching kernel ServiceRegistry entry.
+    "service.start",
+    "service.stop",
+    "service.restart",
     "cluster.status",
     "cluster.nodes",
     "chain.status",
