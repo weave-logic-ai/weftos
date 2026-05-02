@@ -28,7 +28,9 @@ use crate::manifest::AppManifest;
 use crate::validation::{ValidationError, validate};
 
 /// A row in the local app registry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Eq` is intentionally omitted — see [`AppManifest`] for the reason.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstalledApp {
     /// The full parsed manifest.
     pub manifest: AppManifest,
@@ -254,6 +256,7 @@ mod tests {
                 flag: "test".to_string(),
             }],
             surfaces: vec![SurfaceRef::from("surfaces/main.toml")],
+            surface_states: None,
             subscriptions: vec![],
             influences: vec![],
             permissions: vec![],

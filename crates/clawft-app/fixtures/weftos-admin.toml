@@ -1,10 +1,18 @@
 # WeftOS Admin — ADR-015 §concrete-example (declarative-TOML form).
 #
 # NOTE on key order: top-level scalars / arrays appear before any
-# `[[entry_points]]` or `[narration]` sections because TOML binds
-# subsequent bare-key lines to the most recently opened table. The
-# ADR's example is rendered in prose order for readability; on-disk
-# manifests must keep free-standing keys ahead of tables.
+# `[[entry_points]]`, `[narration]`, or `[surfaces.*]` sections because
+# TOML binds subsequent bare-key lines to the most recently opened
+# table. The ADR's example is rendered in prose order for readability;
+# on-disk manifests must keep free-standing keys ahead of tables.
+#
+# NOTE on `surface_refs` vs `surfaces`: the manifest's surface list is
+# keyed `surface_refs` so the dotted-table tree `[surfaces.empty_state]`
+# / `[surfaces.loading_state]` / `[surfaces.offline_state]` (DESIGN.md
+# §5 D-EM01 contract) can coexist with it. Older manifests that still
+# spell the list `surfaces = [...]` need to be migrated when they pick
+# up state surfaces — TOML disallows a bare-array and a dotted-table
+# sharing the same key.
 id       = "app://weftos.admin"
 name     = "WeftOS Admin"
 version  = "0.1.0"
@@ -13,7 +21,7 @@ icon     = "assets/admin.svg"
 supported_modes  = ["ide", "desktop", "single-app"]
 supported_inputs = ["pointer", "hybrid", "voice"]
 
-surfaces = [
+surface_refs = [
     "surfaces/admin-main.toml",
     "surfaces/admin-kiosk.toml",
 ]
@@ -55,3 +63,23 @@ phrase = "weft, admin status"
 "substrate/kernel/status" = """
 Kernel is {{status.state}}. Uptime {{duration(status.started_at)}}.
 """
+
+# ── D-EM01 state surfaces (DESIGN.md §5) ─────────────────────────────
+# Mandatory on every app-window archetype. Today these are descriptive
+# only — the surface composer reads them at render time once 0.8.x
+# wires them up. Authored in lockstep with `weftos-admin-desktop.toml`.
+
+[surfaces.empty_state]
+type  = "ui://stack"
+id    = "/empty"
+attrs = { axis = "vertical" }
+
+[surfaces.loading_state]
+type  = "ui://stack"
+id    = "/loading"
+attrs = { axis = "vertical" }
+
+[surfaces.offline_state]
+type     = "ui://chip"
+id       = "/offline"
+bindings = { tone = '"crit"', label = '"◉ Demo mode — kernel daemon offline"' }

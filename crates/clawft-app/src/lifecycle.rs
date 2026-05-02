@@ -200,6 +200,7 @@ mod tests {
                 flag: "ex".to_string(),
             }],
             surfaces: vec![SurfaceRef::from("s.toml")],
+            surface_states: None,
             subscriptions: vec![],
             influences: vec![],
             permissions: vec![],
