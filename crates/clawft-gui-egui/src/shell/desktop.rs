@@ -121,6 +121,11 @@ pub struct Desktop {
     /// WEFT-581. Persisted across frames so the tab survives a
     /// switch away and back to the Services sidebar entry.
     pub services_tab: crate::apps::services::ServicesTab,
+
+    /// Per-field debounce + selection buffer for the Settings app.
+    /// Survives across frames so an in-flight edit is not clobbered
+    /// by the next snapshot tick. WEFT-583.
+    pub settings_state: crate::apps::settings::SettingsState,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -274,6 +279,7 @@ impl Default for Desktop {
             prev_active: sidebar::SidebarTarget::Files,
             log_filter: crate::apps::logs::LogLevelFilter::default(),
             services_tab: crate::apps::services::ServicesTab::default(),
+            settings_state: crate::apps::settings::SettingsState::default(),
         }
     }
 }
