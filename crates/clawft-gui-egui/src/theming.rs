@@ -22,6 +22,7 @@ pub struct Tokens {
     // Surfaces
     pub bg_app: egui::Color32,       // app root
     pub bg_panel: egui::Color32,     // side panels, dock, tray
+    pub bg_sidebar: egui::Color32,   // desktop sidebar (lifted neutral charcoal — DESIGN.md §2.1)
     pub bg_surface: egui::Color32,   // cards / windows / inset frames
     pub bg_hover: egui::Color32,     // hover state
     pub bg_active: egui::Color32,    // pressed / selected
@@ -51,6 +52,9 @@ impl Default for Tokens {
         Self {
             bg_app: egui::Color32::from_rgb(8, 8, 10),
             bg_panel: egui::Color32::from_rgb(14, 14, 18),
+            // Lifted neutral charcoal — pure desaturated grey, no hue cast.
+            // Phase 1 of the 0.8.0 desktop wave (DESIGN.md §2.1, §5).
+            bg_sidebar: egui::Color32::from_rgb(0x2A, 0x2A, 0x30),
             bg_surface: egui::Color32::from_rgb(22, 22, 28),
             bg_hover: egui::Color32::from_rgb(32, 32, 40),
             bg_active: egui::Color32::from_rgb(44, 44, 54),
@@ -171,5 +175,81 @@ impl Tokens {
         }
 
         s
+    }
+}
+
+// ── Token contract test ─────────────────────────────────────────────
+//
+// Every value below mirrors `docs/DESIGN.md` §2.1 + §2.3 and
+// `.claude/skills/weftos-design/references/tokens.md`. If you change a
+// token in `Tokens::default`, update this test, DESIGN.md, AND
+// `tokens.md` in the same commit. A diff in only one of the three is a
+// drift bug that the design audit (§10) is designed to catch.
+//
+// This is a Phase 1 (0.8.0) gate — see
+// `docs/plans/desktop-implementation-0.8.0.md`.
+
+#[cfg(test)]
+mod token_contract {
+    use super::Tokens;
+    use eframe::egui::Color32;
+
+    #[track_caller]
+    fn assert_token(actual: Color32, expected: Color32, name: &str) {
+        assert_eq!(
+            actual,
+            expected,
+            "token `{name}` drifted from DESIGN.md §2.1 / tokens.md"
+        );
+    }
+
+    #[test]
+    fn palette_matches_design_md() {
+        let t = Tokens::default();
+        // Surfaces (DESIGN.md §2.1 palette table)
+        assert_token(t.bg_app,     Color32::from_rgb(0x08, 0x08, 0x0A), "bg_app");
+        assert_token(t.bg_panel,   Color32::from_rgb(0x0E, 0x0E, 0x12), "bg_panel");
+        assert_token(t.bg_sidebar, Color32::from_rgb(0x2A, 0x2A, 0x30), "bg_sidebar");
+        assert_token(t.bg_surface, Color32::from_rgb(0x16, 0x16, 0x1C), "bg_surface");
+        assert_token(t.bg_hover,   Color32::from_rgb(0x20, 0x20, 0x28), "bg_hover");
+        assert_token(t.bg_active,  Color32::from_rgb(0x2C, 0x2C, 0x36), "bg_active");
+        // Strokes (white @ low alpha; egui stores premultiplied)
+        assert_token(
+            t.stroke_hair,
+            Color32::from_rgba_unmultiplied(255, 255, 255, 14),
+            "stroke_hair",
+        );
+        assert_token(
+            t.stroke_soft,
+            Color32::from_rgba_unmultiplied(255, 255, 255, 24),
+            "stroke_soft",
+        );
+        // Text
+        assert_token(t.text_primary,   Color32::from_rgb(0xE0, 0xDE, 0xE8), "text_primary");
+        assert_token(t.text_secondary, Color32::from_rgb(0xAA, 0xA8, 0xB4), "text_secondary");
+        assert_token(t.text_dim,       Color32::from_rgb(0x70, 0x6E, 0x7A), "text_dim");
+        // Accent
+        assert_token(t.accent, Color32::from_rgb(0xC4, 0xA2, 0x5C), "accent");
+        assert_token(
+            t.accent_dim,
+            Color32::from_rgba_unmultiplied(0xC4, 0xA2, 0x5C, 80),
+            "accent_dim",
+        );
+        // State
+        assert_token(t.ok,   Color32::from_rgb(0x6E, 0xC8, 0x96), "ok");
+        assert_token(t.warn, Color32::from_rgb(0xDC, 0xAF, 0x55), "warn");
+        assert_token(t.crit, Color32::from_rgb(0xDC, 0x5F, 0x5F), "crit");
+    }
+
+    #[test]
+    fn shape_tokens_match_design_md() {
+        let t = Tokens::default();
+        // DESIGN.md §2.3 — Spacing & radius
+        assert_eq!(t.rounding, 4.0, "rounding");
+        assert_eq!(t.rounding_tight, 3.0, "rounding_tight");
+        assert_eq!(t.spacing.x, 6.0, "spacing.x");
+        assert_eq!(t.spacing.y, 6.0, "spacing.y");
+        assert_eq!(t.button_padding.x, 10.0, "button_padding.x");
+        assert_eq!(t.button_padding.y, 5.0, "button_padding.y");
     }
 }
