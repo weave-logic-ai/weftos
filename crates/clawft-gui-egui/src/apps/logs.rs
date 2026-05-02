@@ -2,12 +2,22 @@
 //! sidebar 8, archetype `stream`, group expandable in sidebar.
 //! Phase 3 stub; filter strip + tail control ship under WEFT-586.
 
+use std::sync::Arc;
+
 use eframe::egui;
 
-use crate::live::Snapshot;
+use crate::live::{Live, Snapshot};
+use crate::shell::desktop::Desktop;
 use crate::shell::sidebar::LogsTab;
 
-pub fn show(ui: &mut egui::Ui, rect: egui::Rect, snap: &Snapshot, tab: LogsTab) {
+pub fn show(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    _desk: &mut Desktop,
+    _live: &Arc<Live>,
+    snap: &Snapshot,
+    tab: LogsTab,
+) {
     let heading = match tab {
         LogsTab::System => "Logs · System",
         LogsTab::WitnessChain => "Logs · Witness chain",

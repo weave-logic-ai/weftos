@@ -27,33 +27,42 @@ pub mod settings;
 pub mod state;
 pub mod terminal;
 
+use std::sync::Arc;
+
 use eframe::egui;
 
-use crate::live::Snapshot;
+use crate::live::{Live, Snapshot};
+use crate::shell::desktop::Desktop;
 use crate::shell::sidebar::SidebarTarget;
 
 /// Dispatch to the active app. Called from `desktop::show()` after
 /// painting the sidebar + wallpaper.
+///
+/// Apps receive `&mut Desktop` so they can read/write their own state
+/// (Explorer expansion set, blocks demo state, app registry, etc.) and
+/// `&Arc<Live>` so they can submit RPC commands through the live bridge.
 pub fn dispatch(
     ui: &mut egui::Ui,
     rect: egui::Rect,
-    target: SidebarTarget,
+    desk: &mut Desktop,
+    live: &Arc<Live>,
     snap: &Snapshot,
 ) {
+    let target = desk.sidebar.active;
     match target {
-        SidebarTarget::Files => files::show(ui, rect, snap),
-        SidebarTarget::Processes => processes::show(ui, rect, snap),
-        SidebarTarget::Services => services::show(ui, rect, snap),
-        SidebarTarget::Network(tab) => network::show(ui, rect, snap, tab),
-        SidebarTarget::Settings => settings::show(ui, rect, snap),
-        SidebarTarget::Scheduler => scheduler::show(ui, rect, snap),
-        SidebarTarget::Monitor => monitor::show(ui, rect, snap),
-        SidebarTarget::Logs(tab) => logs::show(ui, rect, snap, tab),
-        SidebarTarget::Terminal => terminal::show(ui, rect, snap),
-        SidebarTarget::Chat => chat::show(ui, rect, snap),
-        SidebarTarget::Admin => admin::show(ui, rect, snap),
-        SidebarTarget::Explorer => explorer::show(ui, rect, snap),
-        SidebarTarget::Apps(tab) => launcher::show(ui, rect, snap, tab),
+        SidebarTarget::Files => files::show(ui, rect, desk, live, snap),
+        SidebarTarget::Processes => processes::show(ui, rect, desk, live, snap),
+        SidebarTarget::Services => services::show(ui, rect, desk, live, snap),
+        SidebarTarget::Network(tab) => network::show(ui, rect, desk, live, snap, tab),
+        SidebarTarget::Settings => settings::show(ui, rect, desk, live, snap),
+        SidebarTarget::Scheduler => scheduler::show(ui, rect, desk, live, snap),
+        SidebarTarget::Monitor => monitor::show(ui, rect, desk, live, snap),
+        SidebarTarget::Logs(tab) => logs::show(ui, rect, desk, live, snap, tab),
+        SidebarTarget::Terminal => terminal::show(ui, rect, desk, live, snap),
+        SidebarTarget::Chat => chat::show(ui, rect, desk, live, snap),
+        SidebarTarget::Admin => admin::show(ui, rect, desk, live, snap),
+        SidebarTarget::Explorer => explorer::show(ui, rect, desk, live, snap),
+        SidebarTarget::Apps(tab) => launcher::show(ui, rect, desk, live, snap, tab),
     }
 }
 

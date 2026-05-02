@@ -3,14 +3,19 @@
 //! stub; full implementation wraps the existing chip TOML fixtures
 //! under WEFT-582.
 
+use std::sync::Arc;
+
 use eframe::egui;
 
-use crate::live::Snapshot;
+use crate::live::{Live, Snapshot};
+use crate::shell::desktop::Desktop;
 use crate::shell::sidebar::NetworkTab;
 
 pub fn show(
     ui: &mut egui::Ui,
     rect: egui::Rect,
+    _desk: &mut Desktop,
+    _live: &Arc<Live>,
     snap: &Snapshot,
     tab: NetworkTab,
 ) {

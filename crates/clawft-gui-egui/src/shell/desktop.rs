@@ -126,57 +126,13 @@ impl BlockKind {
 }
 
 impl Desktop {
-    /// Apply a sidebar click. Returns `Some(chip_id)` to open in the
-    /// legacy chip-detail floating window when the new app module
-    /// hasn't been written yet.
-    ///
-    /// During Phase 2a (0.8.0) every target translates to either an
-    /// `open_chip` action (legacy) or a no-op. As Phase 3 lands each
-    /// `apps/<id>.rs` module, the corresponding arm graduates from
-    /// the chip pathway to its first-class app render in `desktop.rs`.
-    pub fn apply_sidebar_action(
-        &mut self,
-        action: sidebar::SidebarAction,
-        _live: &std::sync::Arc<crate::live::Live>,
-    ) -> Option<tray::ChipId> {
-        match action {
-            sidebar::SidebarAction::Open(target) => {
-                self.sidebar.apply(sidebar::SidebarAction::Open(target));
-                match target {
-                    // Legacy chip pathway — kept until Phase 3 replaces.
-                    sidebar::SidebarTarget::Network(_)
-                    | sidebar::SidebarTarget::Logs(sidebar::LogsTab::WitnessChain) => {
-                        Some(tray::ChipId::Mesh)
-                    }
-                    sidebar::SidebarTarget::Explorer => Some(tray::ChipId::Explorer),
-                    sidebar::SidebarTarget::Admin => {
-                        // Admin app already lives behind `Apps` legacy
-                        // panel — flip the launcher open and select it.
-                        self.launcher_open = true;
-                        self.section = PanelSection::Apps;
-                        if self.selected_app.is_none() {
-                            self.selected_app = Some("app://weftos.admin".to_string());
-                        }
-                        None
-                    }
-                    sidebar::SidebarTarget::Apps(_) => {
-                        self.launcher_open = true;
-                        self.section = PanelSection::Apps;
-                        None
-                    }
-                    // Files / Processes / Services / Settings / Scheduler
-                    // / Monitor / Logs(System) / Terminal / Chat — Phase 3
-                    // will own these. No-op for now.
-                    _ => None,
-                }
-            }
-            sidebar::SidebarAction::ToggleGroup(_)
-            | sidebar::SidebarAction::ToggleCollapsed
-            | sidebar::SidebarAction::ToggleHidden => {
-                self.sidebar.apply(action);
-                None
-            }
-        }
+    /// Apply a sidebar click. After WEFT-579..591 graduation, every
+    /// target is owned by its `apps/<id>.rs` module — sidebar actions
+    /// are pure delegations to `Sidebar::apply`. The legacy chip-detail
+    /// window and floating Blocks launcher were retired together with
+    /// the bottom tray when this graduation wave landed.
+    pub fn apply_sidebar_action(&mut self, action: sidebar::SidebarAction) {
+        self.sidebar.apply(action);
     }
 }
 
@@ -305,105 +261,26 @@ pub fn show(
     let t = desk.boot_started.elapsed().as_secs_f32();
     grid::paint(ui, rect, t);
 
-    // Sidebar paint + click handling. Phase 2a integration — clicks
-    // update the active sidebar target; the new `apps::dispatch` path
-    // renders the corresponding app body in the wallpaper region.
-    // Legacy chip-detail / launcher window remain alongside as a
-    // safety net until Phase 3 graduates the existing chip surfaces.
+    // Sidebar paint + click handling. WEFT-579..591 graduation: every
+    // sidebar target is owned by its `apps/<id>.rs` module, so the
+    // sidebar action is a pure delegation. No more dual-render with
+    // legacy chip-detail or launcher floating windows.
     let sidebar_action = sidebar::paint(ui, sidebar_rect, &desk.sidebar, snap);
     if let Some(action) = sidebar_action {
-        let _ = desk.apply_sidebar_action(action, live);
+        desk.apply_sidebar_action(action);
     }
 
-    // Active app body — DESIGN.md §4.1 / §9. Phase 3 stubs; real
-    // implementations land per WEFT-579..591.
-    crate::apps::dispatch(ui, rect, desk.sidebar.active, snap);
-
-    // Tray (also toggles the launcher window + tracks open chip detail).
-    // Lives in the wallpaper region only, never under the sidebar.
-    tray::paint(
-        ui,
-        rect,
-        snap,
-        &mut desk.launcher_open,
-        &mut desk.open_chip,
-    );
-
-    // Floating "Blocks" window when launcher is active.
-    if desk.launcher_open {
-        let mut open = true;
-        egui::Window::new("Blocks")
-            .collapsible(true)
-            .resizable(true)
-            .default_size(egui::vec2(780.0, 520.0))
-            .default_pos(egui::pos2(rect.left() + 60.0, rect.top() + 60.0))
-            .open(&mut open)
-            .frame(window_frame())
-            .show(ui.ctx(), |ui| {
-                render_blocks_window(ui, desk, live, snap);
-            });
-        if !open {
-            desk.launcher_open = false;
-        }
-    }
-
-    // Floating chip-detail window — sourced from the per-chip
-    // surface.toml fixture, rendered through the composer so bindings
-    // resolve from the live substrate snapshot. The composer also
-    // drains any affordance dispatches back through `Live::submit`,
-    // matching the Admin app's write path so a future fixture can
-    // declare e.g. a "toggle rfkill" button and have it work without
-    // touching host code. Falls back to a raw JSON dump if the
-    // fixture failed to parse at startup.
-    if let Some(chip) = desk.open_chip {
-        let mut open = true;
-        let title = format!("{} · {}", chip.label(), chip.substrate_path());
-        // Explorer is the outlier: it needs `&mut Desktop` to mutate
-        // its own state (expansion set, selection, subscription), and
-        // it uses a bigger default window because a two-pane layout
-        // at 420x320 is cramped. Everything else flows through the
-        // shared `render_chip_detail` helper.
-        let is_explorer = matches!(chip, tray::ChipId::Explorer);
-        let (def_size, def_pos) = if is_explorer {
-            (
-                egui::vec2(760.0, 520.0),
-                egui::pos2(rect.left() + 80.0, rect.top() + 80.0),
-            )
-        } else {
-            (
-                egui::vec2(420.0, 320.0),
-                egui::pos2(rect.right() - 460.0, rect.bottom() - 420.0),
-            )
-        };
-        egui::Window::new(title)
-            .collapsible(true)
-            .resizable(true)
-            .default_size(def_size)
-            .default_pos(def_pos)
-            .open(&mut open)
-            .frame(window_frame())
-            .show(ui.ctx(), |ui| {
-                if is_explorer {
-                    render_explorer(ui, desk, live, snap);
-                } else {
-                    render_chip_detail(ui, desk, chip, live, snap);
-                }
-            });
-        if !open {
-            // Closing the Explorer window drops its active subscription
-            // so no background re-read polls run against a hidden panel.
-            if is_explorer {
-                desk.explorer.close(live);
-            }
-            desk.open_chip = None;
-        }
-    }
+    // Active app body — DESIGN.md §4.1 / §9. Each app owns its own
+    // panel; the dispatcher hands it `&mut Desktop` and `&Arc<Live>`
+    // so it can mutate its own state and submit RPC commands.
+    crate::apps::dispatch(ui, rect, desk, live, snap);
 }
 
 /// Render the Explorer panel body inside the chip-detail window.
 /// Splits header + two-pane layout; the Explorer itself draws the
 /// SidePanel / CentralPanel pair internally.
-fn render_explorer(
+#[allow(dead_code)] // wired up by `apps/explorer.rs` (WEFT-590) graduation
+pub(crate) fn render_explorer(
     ui: &mut egui::Ui,
     desk: &mut Desktop,
     live: &std::sync::Arc<crate::live::Live>,
@@ -424,7 +301,8 @@ fn render_explorer(
 /// fixture (composer path); falls back to a pretty-printed JSON dump
 /// of the substrate subtree if the fixture is missing / failed to
 /// parse, so the window is never blank.
-fn render_chip_detail(
+#[allow(dead_code)] // wired up by `apps/network.rs` (WEFT-582) graduation
+pub(crate) fn render_chip_detail(
     ui: &mut egui::Ui,
     desk: &Desktop,
     chip: tray::ChipId,
@@ -510,7 +388,8 @@ fn render_chip_detail(
 /// connected, amber for connecting (first poll in flight), red for
 /// disconnected. Shown in the chip-detail header so the user can see
 /// the connection's state without hunting for it.
-fn connection_pill(ui: &mut egui::Ui, conn: crate::live::Connection) {
+#[allow(dead_code)] // wired up by chip-detail-using app graduations
+pub(crate) fn connection_pill(ui: &mut egui::Ui, conn: crate::live::Connection) {
     let (text, color) = match conn {
         crate::live::Connection::Connected => (
             "● connected",
@@ -537,7 +416,8 @@ fn connection_pill(ui: &mut egui::Ui, conn: crate::live::Connection) {
 /// `snap.last_error` so the user sees *why* they're looking at an
 /// empty panel — stale extension JS / daemon crashed / adapter not
 /// wired / etc.
-fn render_empty_hint(ui: &mut egui::Ui, chip: tray::ChipId, snap: &Snapshot) {
+#[allow(dead_code)] // wired up by chip-detail-using app graduations
+pub(crate) fn render_empty_hint(ui: &mut egui::Ui, chip: tray::ChipId, snap: &Snapshot) {
     let (body, show_error) = match snap.connection {
         crate::live::Connection::Connecting => (
             "Waiting for first poll tick (~1s).".to_string(),
@@ -593,7 +473,8 @@ fn render_empty_hint(ui: &mut egui::Ui, chip: tray::ChipId, snap: &Snapshot) {
         }
 }
 
-fn window_frame() -> egui::Frame {
+#[allow(dead_code)] // wired up by graduations needing floating windows
+pub(crate) fn window_frame() -> egui::Frame {
     egui::Frame::window(&egui::Style::default())
         .fill(egui::Color32::from_rgba_unmultiplied(18, 18, 24, 235))
         .stroke(egui::Stroke::new(
@@ -604,7 +485,8 @@ fn window_frame() -> egui::Frame {
         .inner_margin(egui::Margin::same(8))
 }
 
-fn render_blocks_window(
+#[allow(dead_code)] // wired up by `apps/launcher.rs` (WEFT-591) graduation
+pub(crate) fn render_blocks_window(
     ui: &mut egui::Ui,
     desk: &mut Desktop,
     live: &std::sync::Arc<crate::live::Live>,
@@ -727,7 +609,8 @@ fn render_blocks_window(
 /// the primitive" → "daemon handler fires." Replies are
 /// fire-and-forget for now; the substrate's next poll tick surfaces
 /// the result (e.g. the killed PID disappears from `kernel.ps`).
-fn render_selected_app(
+#[allow(dead_code)] // wired up by `apps/admin.rs` (WEFT-589) graduation
+pub(crate) fn render_selected_app(
     ui: &mut egui::Ui,
     desk: &Desktop,
     live: &std::sync::Arc<crate::live::Live>,

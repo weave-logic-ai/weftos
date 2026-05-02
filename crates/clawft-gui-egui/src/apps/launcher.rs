@@ -3,12 +3,22 @@
 //! field + category filter ship under WEFT-591. The Developer
 //! sub-tab is where the existing Blocks / Canon demos relocate.
 
+use std::sync::Arc;
+
 use eframe::egui;
 
-use crate::live::Snapshot;
+use crate::live::{Live, Snapshot};
+use crate::shell::desktop::Desktop;
 use crate::shell::sidebar::AppsTab;
 
-pub fn show(ui: &mut egui::Ui, rect: egui::Rect, snap: &Snapshot, tab: AppsTab) {
+pub fn show(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    _desk: &mut Desktop,
+    _live: &Arc<Live>,
+    snap: &Snapshot,
+    tab: AppsTab,
+) {
     let heading = match tab {
         AppsTab::BuiltIn => "Apps · Built-in",
         AppsTab::Installed => "Apps · Installed",
