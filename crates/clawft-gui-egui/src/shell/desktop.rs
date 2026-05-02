@@ -90,6 +90,11 @@ pub struct Desktop {
     /// alongside for now and is retired one app at a time during
     /// Phase 3.
     pub sidebar: sidebar::Sidebar,
+
+    /// Per-field debounce + selection buffer for the Settings app.
+    /// Survives across frames so an in-flight edit is not clobbered
+    /// by the next snapshot tick. WEFT-583.
+    pub settings_state: crate::apps::settings::SettingsState,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -234,6 +239,7 @@ impl Default for Desktop {
             chip_surfaces,
             explorer: Explorer::default(),
             sidebar: sidebar::Sidebar::default(),
+            settings_state: crate::apps::settings::SettingsState::default(),
         }
     }
 }
