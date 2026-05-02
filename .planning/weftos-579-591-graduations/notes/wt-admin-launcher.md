@@ -132,7 +132,7 @@ Branch: `feat/weft-589-591` off `master @ 4083f9f1` (Phase A).
 **Commits** (on `feat/weft-589-591`):
 
 - `aa48c92a` — feat(apps): graduate Admin app (WEFT-589)
-- `<filled after second commit>` — feat(apps): graduate Apps launcher (WEFT-591)
+- `1f5c05a5` — feat(apps): graduate Apps launcher (WEFT-591)
 
 **Followups filed**: none. The two pre-existing `clawft-surface`
 test failures should be picked up by whoever owns WEFT-439 / the
