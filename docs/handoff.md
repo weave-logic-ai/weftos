@@ -1,3 +1,98 @@
+# Session handoff — 2026-05-02 (early morning) — local merge to master, see-how-it-lands
+
+Local-only merge of the full work pipeline to `master`. Not tagged.
+Not pushed. The user wants to evaluate how the 323-commit divergence
+lands on master before deciding on push / tag / origin update.
+
+## Branch state at HEAD
+
+```
+master  b6c6e46f  merge: weftos-design-0.8.0 — m7-08-sweep + 0.8.0 desktop wave
+        cf3efd72  docs(handoff): 2026-05-01 night-late — phases 0-5 shipped
+        28456329  ci(weftos-design): audit ratchet + surface contract gate
+        1d5dbdad  feat(shell): canonical sidebar + apps dispatch + 12 stubs
+        c2268c04  feat(theming): bg_sidebar token + DESIGN.md contract test
+        0adf1bca  docs(design): WeftOS design system v0.1 + 0.8.0 desktop plan
+        ... 70 m7-08-sweep commits (M7+M7b+M7c 0.8.x burn-down + 0.7.0 close) ...
+        2b33b10a  merge: origin/master into development-0.7.0 for v0.6.19
+        b9b439fe  Merge pull request #31 (origin/master tip — fast-forwarded
+                  from b88c48df at start of session)
+```
+
+- `master` is **324 commits ahead of `origin/master`**.
+- Local `master` was fast-forwarded from `b88c48df` → `b9b439fe`
+  before the merge (1 unrelated upstream commit picked up).
+- `weftos-design-0.8.0` (the design wave) and `m7-08-sweep` (the
+  0.7.0 close + 0.8.x burn-down) both still exist locally as
+  reference branches.
+- Merge is `--no-ff` so the design-wave 5-commit cluster is visible
+  as a discrete unit on top of the m7-08-sweep history.
+
+## How the merge ran
+
+- **0 conflicts.** Git auto-merged; `weftos-design-0.8.0` was a
+  strict descendant of `m7-08-sweep`, which itself was a descendant
+  of an old master tip. The merge needed no intervention.
+- 324 files touched between `origin/master` and the merge tip
+  (verified via `git diff --stat`).
+
+## Validation at the merge tip on `master`
+
+- `scripts/build.sh check` ✅ (18s)
+- `scripts/build.sh clippy` ✅ (30s, `-D warnings`)
+- `cargo test -p clawft-gui-egui --lib` → **337 / 337** pass
+- `audit-theme.sh --baseline` → "holds at 246 offenders"
+
+Everything that was green on `weftos-design-0.8.0` is still green on
+`master`. The token-contract test, the 7 sidebar tests, and the 4
+state-helper tests all pass through the merge unchanged.
+
+## Not done (per the user's instructions)
+
+- **No tag.** `weftos-0.8.0` or similar will only land after
+  evaluation. The branch `weftos-design-0.8.0` and `m7-08-sweep`
+  remain live for fallback.
+- **No push.** `git push origin master` would publish the 324
+  commits to `origin/master` and trigger any post-push CI / release
+  pipelines.
+- **No origin/master `--force` overwrite.** The local history is a
+  clean fast-forward + merge; a regular `git push origin master`
+  is what would land it on origin (no force needed).
+
+## Rollback path if review reveals an issue
+
+```bash
+git checkout master
+git reset --hard b9b439fe   # back to origin/master tip
+# then re-checkout weftos-design-0.8.0 to keep working
+```
+
+`weftos-design-0.8.0` and `m7-08-sweep` branches are unchanged by
+the merge — they still point at their original tips and can be
+re-merged or rebased later.
+
+## Next-session options
+
+1. **`git push origin master`** — publish the 324 commits, kicks
+   off pr-gates / publish-crates / release pipelines depending on
+   what's wired. Expect the new `weftos-design` CI job to gate
+   future PRs.
+2. **`git tag v0.7.0` (then push tag)** — only after a deliberate
+   ship decision; would trigger the cargo-dist release pipeline.
+3. **Push `weftos-design-0.8.0` separately as a feature branch**
+   and open a normal PR against `origin/master` for review without
+   blowing up local-only history.
+4. **Wait** — keep evaluating locally; the merge is reversible as
+   above.
+
+The audit ratchet at `.planning/weftos-design/baseline-color-drift.txt`
+(246) and the new `weftos-design` CI job in `.github/workflows/
+pr-gates.yml` will police the contract going forward — any PR that
+adds new `Color32::from_rgb` literals outside `theming.rs` without
+graduating equivalents will fail CI.
+
+---
+
 # Session handoff — 2026-05-01 (night, late) — Phases 0-5 of 0.8.0 desktop wave shipped
 
 Branch `weftos-design-0.8.0` (forked from `m7-08-sweep`) is at HEAD
