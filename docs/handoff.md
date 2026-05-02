@@ -1,3 +1,126 @@
+# Session handoff — 2026-05-02 (mid-day) — WEFT-579..591 graduation wave + tray retirement
+
+The 0.7.0 release-blocker. The user opened the panel in Cursor, saw
+that the new sidebar's apps were empty stubs (Phase 3 placeholders
+from the 0.8.0 design wave), the bottom tray was still present, and
+clicking Admin or Apps double-rendered with the legacy floating Blocks
+window. Marching orders: graduate WEFT-579..591, kill the tray,
+parallel git worktrees, detailed notes.
+
+## Branch state
+
+`feat/weftos-579-591-graduations` off `master @ b6c6e46f`. **20 commits
+ahead.** Not pushed, not tagged. WASM panel rebuilt at
+`extensions/vscode-weft-panel/webview/wasm/` (7.24 MB raw / 3.44 MB gz,
+within the 7600/3500 KB budget) so Cursor will reload to the
+graduated UI on next focus.
+
+## Phases
+
+**Phase A** — `4083f9f1 feat(shell): retire bottom tray + chip/launcher
+floating windows`. Single commit on the graduation branch before the
+worktree fan-out: removes the `tray::paint` call, the floating Blocks
+launcher window, and the floating chip-detail window from
+`shell/desktop.rs::show`. Broadens `apps::dispatch` to take
+`&mut Desktop` and `&Arc<Live>` so each app can mutate its own state
+and submit RPC commands. Collapses `Desktop::apply_sidebar_action`
+from a chip-routing dual-render into a pure `Sidebar::apply`
+delegation. Helpers needed by upcoming graduations
+(`render_blocks_window`, `render_selected_app`, `render_chip_detail`,
+`render_explorer`, `render_empty_hint`, `connection_pill`,
+`window_frame`) bumped to `pub(crate)` with `#[allow(dead_code)]`
+until the graduations call them. Validation: `check + clippy + lib
+tests` clean (337/337).
+
+**Worktree fan-out (5 parallel agents)** — each rooted at the Phase A
+tip. Notes for each in `.planning/weftos-579-591-graduations/notes/`.
+
+| Cluster | Branch | Items | Commits | Net tests |
+|---|---|---|---|---|
+| wt-admin-launcher | `feat/weft-589-591` | WEFT-589 (Admin), WEFT-591 (Apps launcher) | `aa48c92a`, `1f5c05a5`, `5ce9128f` | 337 → 339 |
+| wt-explorer-tty-chat | `feat/weft-587-588-590` | WEFT-587 (Terminal), WEFT-588 (Chat), WEFT-590 (Explorer) | `b18b3c5e`, `76679dc5`, `7417f9f1` | 337 → 337 |
+| wt-network-logs | `feat/weft-582-586` | WEFT-582 (Network), WEFT-586 (Logs) | `d65bc2ea`, `1f1d3d90` | 337 → 344 |
+| wt-files-procs-svcs | `feat/weft-579-580-581` | WEFT-579 (Files), WEFT-580 (Processes), WEFT-581 (Services) | `aeeb5447`, `f7e0d324`, `faa962d8` | 337 → 352 |
+| wt-settings-sched-mon | `feat/weft-583-584-585` | WEFT-583 (Settings), WEFT-584 (Scheduler), WEFT-585 (Monitor) | `0421739f`, `314ca9db`, `fdc407ef` | 341 → 344 |
+
+**Merge sweep** (`feat/weftos-579-591-graduations`):
+- merge admin-launcher (no conflicts)
+- merge explorer-tty-chat (auto-resolved on `desktop.rs`)
+- merge network-logs (manual union on Desktop fields: `prev_active`
+  + `log_filter`)
+- merge files-procs-svcs (manual union: `+ services_tab`)
+- merge settings-sched-mon (manual union: `+ settings_state`)
+
+Final integrated `Desktop` struct grew six new fields across the wave:
+`prev_active`, `log_filter`, `services_tab`, `settings_state`,
+`terminal`, `chat`. `apps::dispatch` gained Explorer-leave lifecycle
+hygiene (closes the substrate.list/read polls when the user navigates
+away).
+
+**Phase Z (housekeeping)** — `2fc61d5a test: refresh stale assertions
++ kernel config snapshot post-graduation`:
+- `clawft-surface/tests/roundtrip.rs` primitive counts and
+  `root.children.len()` bumped for D-EM01 fixture additions.
+- `clawft-gui-egui/tests/surface_headless_render.rs` chip count 2 → 3.
+- `clawft-kernel/tests/snapshots/...default_config.snap` accepted —
+  `tools.allowed_tools` and `voice.consumer.*` are real daemon fields
+  that drifted before this work; the graduation's full workspace test
+  gate just surfaced them.
+
+## What the user sees now
+
+1. **No bottom tray.** The 42px frosted bar is gone.
+2. **No dual-render.** Clicking Admin shows the Admin app body in the
+   wallpaper region; the floating Blocks window is retired entirely.
+3. **All 12 sidebar apps work.** Files renders the list-detail
+   archetype shell (toolbar / left tree / right pane); Processes
+   renders the canonical `kernel.ps` table via the existing
+   `ProcessTableViewer`; Services has a tabbed table with per-row
+   restart affordance; Network has Mesh (composer) + Wi-Fi/Bluetooth
+   (JSON dump); Settings is a list-detail schema-driven form with
+   500ms debounce on `workspace.config.set`; Scheduler is the
+   archetype-shape stub (adapter is 0.9.x); Monitor is a tile-grid
+   dashboard with Kernel/Mesh/Chain/Mic/ToF/Battery tiles; Logs has a
+   filter strip + monospace stream view + Witness chain tab; Terminal
+   and Chat lift the existing PTY and concierge-bot panels into
+   sidebar apps; Admin renders the surface-composer-driven panel;
+   Explorer hosts the existing `Explorer` two-pane viewer; Apps has
+   Built-in / Installed / Developer tabs (Developer hosts the legacy
+   Blocks/Canon/Apps demos that used to live in the floating window).
+
+## Validation
+
+| Gate | Result |
+|---|---|
+| `scripts/build.sh check` | clean |
+| `scripts/build.sh clippy` (`-D warnings`) | clean |
+| `cargo test -p clawft-gui-egui --lib` | **368 / 368 pass** (+31 across the wave) |
+| `cargo test -p clawft-surface --test roundtrip` | 4 / 4 |
+| `cargo test -p clawft-gui-egui --test surface_headless_render` | 4 / 4 |
+| `cargo test -p clawft-kernel --test golden_snapshots` | 14 / 14 |
+| `cargo test --workspace` | **1938 / 1939** — only `embedding_onnx::tests::wordpiece_load_valid_vocab` flaky under parallelism (passes in isolation; pre-existing) |
+| `audit-theme.sh --baseline` | holds at 246 |
+| `audit-surface.sh weftos-admin.toml` | clean |
+| `audit-surface.sh weftos-admin-desktop.toml` | clean |
+| `scripts/build.sh wasm-panel` | 7.24 MB raw / 3.44 MB gz, within budget |
+
+## Followups
+
+1. **Plane state** — `WEFT-578..591` should transition Done with the
+   commit SHAs above. They're in the 0.8.x cycle today; the user
+   asked for them to count toward 0.7.0 release-blockers, so move
+   them to `0.7.x`.
+2. **`embedding_onnx::tests::wordpiece_load_valid_vocab` flake** —
+   isolate or fix the parallel-test interaction in
+   `clawft-kernel`.
+3. **Push or tag.** Branch is local-only; no `git push`, no
+   `git tag v0.7.0`. The user evaluates first.
+4. **Worktrees** — five worktrees still live at `/home/aepod/dev/
+   worktrees/wt-*`. Run `git worktree remove` once review is done
+   (or leave as scratch space).
+
+---
+
 # Session handoff — 2026-05-02 (early morning) — local merge to master, see-how-it-lands
 
 Local-only merge of the full work pipeline to `master`. Not tagged.
