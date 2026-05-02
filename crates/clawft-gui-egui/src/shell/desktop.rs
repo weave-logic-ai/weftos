@@ -301,7 +301,6 @@ pub(crate) fn render_explorer(
 /// fixture (composer path); falls back to a pretty-printed JSON dump
 /// of the substrate subtree if the fixture is missing / failed to
 /// parse, so the window is never blank.
-#[allow(dead_code)] // wired up by `apps/network.rs` (WEFT-582) graduation
 pub(crate) fn render_chip_detail(
     ui: &mut egui::Ui,
     desk: &Desktop,
@@ -388,7 +387,6 @@ pub(crate) fn render_chip_detail(
 /// connected, amber for connecting (first poll in flight), red for
 /// disconnected. Shown in the chip-detail header so the user can see
 /// the connection's state without hunting for it.
-#[allow(dead_code)] // wired up by chip-detail-using app graduations
 pub(crate) fn connection_pill(ui: &mut egui::Ui, conn: crate::live::Connection) {
     let (text, color) = match conn {
         crate::live::Connection::Connected => (
@@ -416,7 +414,6 @@ pub(crate) fn connection_pill(ui: &mut egui::Ui, conn: crate::live::Connection) 
 /// `snap.last_error` so the user sees *why* they're looking at an
 /// empty panel — stale extension JS / daemon crashed / adapter not
 /// wired / etc.
-#[allow(dead_code)] // wired up by chip-detail-using app graduations
 pub(crate) fn render_empty_hint(ui: &mut egui::Ui, chip: tray::ChipId, snap: &Snapshot) {
     let (body, show_error) = match snap.connection {
         crate::live::Connection::Connecting => (
