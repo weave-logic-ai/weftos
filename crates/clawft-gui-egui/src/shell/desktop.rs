@@ -5,7 +5,7 @@ use eframe::egui;
 use super::{grid, sidebar, tray};
 use crate::blocks;
 use crate::canon_demos::{self, CanonDemoState, CanonKind};
-use crate::explorer::Explorer;
+use crate::explorer::{self, Explorer};
 use crate::live::Snapshot;
 use crate::surface_host;
 use clawft_app::registry::AppRegistry;
@@ -83,6 +83,13 @@ pub struct Desktop {
     /// Ontology Explorer panel state — left-tree + right-detail. The
     /// Explorer tray chip opens this; see `.planning/explorer/PROJECT-PLAN.md`.
     pub explorer: Explorer,
+
+    /// Standalone Terminal sidebar app state (WEFT-587). Independent
+    /// instance from `explorer.terminal_view` (which backs the
+    /// substrate-sentinel dispatch path inside the Explorer detail
+    /// pane). Two separate panels by design — different UX surfaces,
+    /// no shared session.
+    pub terminal: explorer::terminal::Terminal,
 
     /// Canonical desktop sidebar — DESIGN.md §5. Phase 2a (0.8.0) of
     /// the desktop revision. Replaces the launcher window and the
@@ -233,6 +240,7 @@ impl Default for Desktop {
             app_surfaces,
             chip_surfaces,
             explorer: Explorer::default(),
+            terminal: explorer::terminal::Terminal::default(),
             sidebar: sidebar::Sidebar::default(),
         }
     }
