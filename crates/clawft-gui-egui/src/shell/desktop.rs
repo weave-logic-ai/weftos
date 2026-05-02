@@ -609,7 +609,10 @@ pub(crate) fn render_blocks_window(
 /// the primitive" → "daemon handler fires." Replies are
 /// fire-and-forget for now; the substrate's next poll tick surfaces
 /// the result (e.g. the killed PID disappears from `kernel.ps`).
-#[allow(dead_code)] // wired up by `apps/admin.rs` (WEFT-589) graduation
+///
+/// WEFT-589: called from `apps::admin::show`. The caller paints its
+/// own heading via `apps::paint_heading`, so this helper renders the
+/// offline banner + composer body only — no inline heading row.
 pub(crate) fn render_selected_app(
     ui: &mut egui::Ui,
     desk: &Desktop,
@@ -631,14 +634,6 @@ pub(crate) fn render_selected_app(
         );
         return;
     };
-
-    if let Some(installed) = desk.app_registry.get(app_id) {
-        ui.horizontal(|ui| {
-            ui.heading(&installed.manifest.name);
-            ui.separator();
-            ui.monospace(&installed.manifest.id);
-        });
-    }
 
     // Offline banner — before the composer runs so it's always visible
     // at the top of the app pane, not buried under the 2x2 grid. The

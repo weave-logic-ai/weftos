@@ -185,7 +185,12 @@ impl<'de> Deserialize<'de> for Permission {
 /// directly in Rust for crate-form apps. Validation lives in
 /// [`crate::validation::validate`]; parsing here is schema-shape
 /// only.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Eq` is intentionally omitted — `surface_states` carries an
+/// opaque `toml::Value` which does not implement `Eq` (TOML floats
+/// are `PartialEq` only). `PartialEq` is sufficient for round-trip
+/// tests; no consumer collects manifests into a hash-based set.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppManifest {
     /// `app://<dotted-path>` IRI.
     pub id: String,
@@ -207,8 +212,23 @@ pub struct AppManifest {
     pub entry_points: Vec<EntryPoint>,
 
     /// Surface refs — file paths, Rust type ids, or inline handles.
-    #[serde(default)]
+    ///
+    /// TOML key is `surface_refs` (renamed from `surfaces`) so the
+    /// `[surfaces.empty_state]` / `[surfaces.loading_state]` /
+    /// `[surfaces.offline_state]` D-EM01 state sections required by
+    /// DESIGN.md §5 can coexist with the refs list. The `surfaces`
+    /// dotted-table tree is parsed opaquely into [`Self::surface_states`].
+    #[serde(default, rename = "surface_refs")]
     pub surfaces: Vec<SurfaceRef>,
+
+    /// D-EM01 state surface descriptions (DESIGN.md §5) — keyed by
+    /// `empty_state` / `loading_state` / `offline_state` under the
+    /// `[surfaces]` parent table in the manifest TOML. Opaque
+    /// `toml::Value` for now: the surface composer reads them at
+    /// render time once 0.8.x wires them up. Today they exist to
+    /// satisfy `audit-surface.sh` D-EM01 and document the contract.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "surfaces")]
+    pub surface_states: Option<toml::Value>,
 
     /// Ontology topic paths this app reads.
     #[serde(default)]
@@ -327,6 +347,7 @@ mod tests {
                 flag: "admin".to_string(),
             }],
             surfaces: vec![SurfaceRef::from("surfaces/admin-main.toml")],
+            surface_states: None,
             subscriptions: vec!["substrate/kernel/status".to_string()],
             influences: vec!["kernel.restart-service".to_string()],
             permissions: vec![Permission::FsPath("/var/log".to_string())],

@@ -91,3 +91,26 @@ attrs = { title = "Confirm restart" }
   verb        = "rpc.kernel.restart"
   invocations = ["pointer", "voice"]
   args_schema = "ontology://kernel/restart"
+
+# ── D-EM01 state surfaces (DESIGN.md §5) ─────────────────────────────
+# Mandatory on every app-window archetype. These bind to the most
+# recently appended `[[surfaces]]` entry (the desktop variant above) —
+# the surface composer renders them in place of `root` when the bound
+# subscriptions resolve to nothing / are loading / the daemon is
+# offline. Mirrored in `crates/clawft-app/fixtures/weftos-admin.toml`
+# so the manifest and the surface description stay in lockstep.
+
+[surfaces.empty_state]
+type  = "ui://stack"
+id    = "/empty"
+attrs = { axis = "vertical" }
+
+[surfaces.loading_state]
+type  = "ui://stack"
+id    = "/loading"
+attrs = { axis = "vertical" }
+
+[surfaces.offline_state]
+type     = "ui://chip"
+id       = "/offline"
+bindings = { tone = '"crit"', label = '"◉ Demo mode — kernel daemon offline"' }

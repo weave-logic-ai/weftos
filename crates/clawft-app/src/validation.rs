@@ -218,6 +218,7 @@ mod tests {
                 flag: "admin".to_string(),
             }],
             surfaces: vec![SurfaceRef::from("surfaces/admin-main.toml")],
+            surface_states: None,
             subscriptions: vec!["substrate/kernel/status".to_string()],
             influences: vec!["kernel.restart-service".to_string()],
             permissions: vec![],
