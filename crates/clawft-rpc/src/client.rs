@@ -3,8 +3,6 @@
 //! On Unix, connects over a Unix domain socket. On other platforms,
 //! `connect()` always returns `None` (daemon transport not yet available).
 
-use crate::protocol::{Request, Response};
-
 // ── Unix implementation ──────────────────────────────────────────
 
 #[cfg(unix)]
@@ -28,7 +26,22 @@ mod imp {
         }
 
         /// Send a request and wait for the response.
-        pub async fn call(&mut self, request: Request) -> anyhow::Result<Response> {
+        ///
+        /// WEFT-479: when the request has no `auth` set, the client
+        /// transparently attaches an `admin` scope token. The unix-
+        /// socket path is filesystem-permission-gated, so any caller
+        /// who can connect to the socket is already trusted to admin
+        /// the daemon. The capability gate is the load-bearing
+        /// defence on the TCP relay path (where bearer auth at the
+        /// connection layer is the additional control); on the local
+        /// UDS path it would be redundant. A caller that explicitly
+        /// passes a non-admin scope (`Request::with_auth("read")`)
+        /// keeps that scope; only an absent token gets the implicit
+        /// upgrade.
+        pub async fn call(&mut self, mut request: Request) -> anyhow::Result<Response> {
+            if request.auth.is_none() {
+                request.auth = Some("admin".to_string());
+            }
             let mut json = serde_json::to_string(&request)?;
             json.push('\n');
 
@@ -62,7 +75,12 @@ mod imp {
     /// Stub daemon client for non-Unix platforms.
     ///
     /// `connect()` always returns `None`. Windows named-pipe transport
-    /// is planned for v0.2.
+    /// is deferred to 0.8.x (WEFT-483) — the 0.7.0 release matrix in
+    /// `cargo-dist.toml` (`[workspace.metadata.dist]`) excludes
+    /// `x86_64-pc-windows-msvc` for that reason. When the named-pipe
+    /// transport lands, replace this stub with a
+    /// `tokio::net::windows::named_pipe::ClientOptions`-based impl
+    /// that mirrors the unix `DaemonClient` API and re-add the target.
     pub struct DaemonClient;
 
     impl DaemonClient {

@@ -164,10 +164,10 @@ fn discover_recursive(dir: &Path, extensions: &[String], out: &mut Vec<std::path
         }
         if path.is_dir() {
             discover_recursive(&path, extensions, out);
-        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            if extensions.iter().any(|e| e == ext) {
-                out.push(path);
-            }
+        } else if let Some(ext) = path.extension().and_then(|e| e.to_str())
+            && extensions.iter().any(|e| e == ext)
+        {
+            out.push(path);
         }
     }
 }

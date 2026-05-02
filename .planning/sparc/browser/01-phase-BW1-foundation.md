@@ -29,7 +29,7 @@ This phase introduces `native`/`browser` feature flags to the foundation crates 
 | `crates/clawft-platform/src/config_loader.rs` | Fix `path.exists()` leak at line 38-39; use `fs.exists()` or accept boolean param | P1.4 |
 | `crates/clawft-plugin/Cargo.toml` | Make `tokio-util` optional behind `native` feature | P1.2b |
 | `.github/workflows/pr-gates.yml` | Add `wasm-browser-check` job | P1.5 |
-| `scripts/check-features.sh` | New file: feature flag validation script | P1.6 |
+| ~~`scripts/check-features.sh`~~ → `scripts/build.sh gate` | Feature-flag validation script. SUPERSEDED (WEFT-409, 2026-04-30): `scripts/build.sh gate` covers the same checks (native + WASI + browser + clippy + bundle-size) and is the canonical entrypoint. The standalone script was never created. | P1.6 |
 | `docs/architecture/adr-027-browser-wasm-support.md` | New file: ADR for browser WASM decision | P1.8 |
 | `docs/development/feature-flags.md` | New file: feature flag guide | P1.9 |
 
@@ -560,23 +560,25 @@ wasm-browser-check:
    - Mutual exclusivity of `native`/`browser`
    - Adding new dependencies: decision tree
 
-### New File: `scripts/check-features.sh`
+### Feature Validation: `scripts/build.sh gate` (SUPERSEDES `scripts/check-features.sh`)
+
+WEFT-409 (2026-04-30): The original plan called for a standalone
+`scripts/check-features.sh`. It was never created. The canonical
+phase-gate entrypoint is now `scripts/build.sh gate`, which runs the
+12-check suite (native + WASI + browser + clippy + bundle-size + audit
++ docs regen check). Use it whenever this doc says "feature flag
+validation script".
 
 ```bash
-#!/bin/bash
-set -euo pipefail
+# Canonical phase gate (replaces scripts/check-features.sh)
+scripts/build.sh gate
 
-echo "=== Native (default) ==="
-cargo check --workspace
-cargo test --workspace --no-run
-
-echo "=== WASI WASM (existing) ==="
-cargo check --target wasm32-wasip2 -p clawft-wasm
-
-echo "=== Browser WASM foundation (BW1) ==="
-cargo check --target wasm32-unknown-unknown -p clawft-types --no-default-features
-cargo check --target wasm32-unknown-unknown -p clawft-platform --no-default-features
-cargo check --target wasm32-unknown-unknown -p clawft-plugin --no-default-features
-
-echo "All targets OK"
+# Or, for a fast iteration loop, just the cargo check across targets:
+scripts/build.sh check        # native cargo check --workspace
+scripts/build.sh wasi         # wasm32-wasip2 build
+scripts/build.sh browser      # wasm32-unknown-unknown build
 ```
+
+The exact targets covered by `scripts/build.sh gate` are documented
+inline in `scripts/build.sh` (search for `phase_gate()`), and any new
+target should be added there rather than to a parallel script.

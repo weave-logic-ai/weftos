@@ -365,7 +365,7 @@ pub fn register_delegation(
 
 #[cfg(all(test, feature = "services"))]
 mod tests {
-    use std::collections::HashMap;
+    
 
     use super::*;
     use clawft_services::mcp::transport::McpTransport;

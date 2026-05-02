@@ -8,7 +8,8 @@
  * - Model selection
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { validateCorsProxyUrl } from "../../lib/url-validator.ts";
 
 // ---------------------------------------------------------------------------
 // Provider and model configuration
@@ -138,11 +139,41 @@ export function BrowserConfig({ onConfigured }: BrowserConfigProps) {
   const selectedProvider = PROVIDERS.find((p) => p.value === provider);
   const needsProxy = !selectedProvider?.browserDirect;
 
+  // Re-validate the proxy URL whenever the input changes (covers the legacy-
+  // stored values surfaced after `useEffect` below restores them).
+  useEffect(() => {
+    if (!needsProxy) {
+      setError(null);
+      return;
+    }
+    const result = validateCorsProxyUrl(corsProxy);
+    if (!result.valid) {
+      setError(result.error ?? "Invalid CORS proxy URL.");
+    } else if (error?.startsWith("HTTP CORS proxy") || error?.startsWith("Unsupported")) {
+      // Clear the validator-specific error once the user fixes it.
+      setError(null);
+    }
+    // We intentionally exclude `error` from deps to avoid clear/set ping-pong.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [corsProxy, needsProxy]);
+
   const handleSave = useCallback(async () => {
     setSaving(true);
     setError(null);
 
     try {
+      // Hard-stop on an invalid proxy URL so we never write a non-HTTPS public
+      // proxy to IndexedDB. Keeps the HTTPS-in-production rule enforced even
+      // if a user races the save button before the effect has run.
+      if (needsProxy) {
+        const result = validateCorsProxyUrl(corsProxy);
+        if (!result.valid) {
+          setError(result.error ?? "Invalid CORS proxy URL.");
+          setSaving(false);
+          return;
+        }
+      }
+
       const encryptedKey = apiKey ? await encryptApiKey(apiKey) : undefined;
 
       const config: Record<string, unknown> = {

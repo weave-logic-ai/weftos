@@ -39,6 +39,7 @@ impl HeartbeatConfig {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum HeartbeatPhase {
     /// Agent is waking up and initialising for the tick.
     Wake,
@@ -47,6 +48,7 @@ pub enum HeartbeatPhase {
     /// Agent is executing queued work.
     Execute,
     /// Agent is idle, waiting for the next tick.
+    #[default]
     Sleep,
     /// Agent is reporting results from this cycle.
     Report,
@@ -65,11 +67,6 @@ impl HeartbeatPhase {
     }
 }
 
-impl Default for HeartbeatPhase {
-    fn default() -> Self {
-        Self::Sleep
-    }
-}
 
 impl std::fmt::Display for HeartbeatPhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

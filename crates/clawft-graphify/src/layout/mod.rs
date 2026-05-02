@@ -15,7 +15,6 @@ use crate::relationship::RelationType;
 use crate::topology::{Geometry, TopologySchema};
 
 use positioned::{PositionedEdge, PositionedGraph, PositionedNode};
-use triage::TopologyForm;
 
 /// Lay out a knowledge graph using a topology schema.
 ///

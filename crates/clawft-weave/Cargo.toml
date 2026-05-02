@@ -1,6 +1,7 @@
 [package]
 name = "clawft-weave"
 version.workspace = true
+# rationale: operator binary (`weaver`); shipped via cargo-dist, not crates.io.
 publish = false
 edition.workspace = true
 rust-version.workspace = true
@@ -23,15 +24,25 @@ path = "src/main.rs"
 dist = true
 
 [features]
-default = ["exochain", "cluster", "ecc", "mesh"]
+default = ["agent-core-chat", "cluster", "ecc", "exochain", "mesh"]
 cluster = ["clawft-kernel/cluster"]
 ecc = ["clawft-kernel/ecc", "dep:blake3"]
 exochain = ["clawft-kernel/exochain", "dep:exo-resource-tree"]
 mesh = ["clawft-kernel/mesh"]
 rvf-rpc = ["dep:weftos-rvf-wire", "dep:rvf-types"]
+# agent-core-v1 Phase D3 (the cutover): `agent.chat` always routes
+# through `clawft-service-agent::AgentService::dispatch`. The flag is
+# left in place and on-by-default so a regression can be rolled back
+# with a single revert + flag flip; with the spike body deleted there
+# is no fallback path to disable, but the toggle still controls
+# whether the dispatch flattens to a hard error when the service
+# isn't wired (off ⇒ unreachable!) or surfaces a typed error (on).
+# See `docs/plans/agent-core-v1.md` Phase C2/D3 for the cutover
+# semantics.
+agent-core-chat = []
 
 [dependencies]
-clawft-core = { workspace = true, features = ["native"] }
+clawft-core = { workspace = true, features = ["native", "rvf", "embedding-router"] }
 eml-core = { workspace = true }
 clawft-graphify = { workspace = true, default-features = false }
 clawft-kernel = { workspace = true, features = ["native"] }
@@ -47,6 +58,7 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 weftos-leaf-types = { path = "../weftos-leaf-types", features = ["std"] }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 comfy-table = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
@@ -54,6 +66,24 @@ dirs = { workspace = true }
 tempfile = { workspace = true }
 blake3 = { workspace = true, optional = true }
 ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+dashmap = { workspace = true }
+clawft-service-whisper = { workspace = true }
+clawft-service-llm = { workspace = true }
+clawft-service-terminal = { workspace = true }
+clawft-service-classify = { workspace = true }
+clawft-service-agent = { workspace = true }
+clawft-tools = { workspace = true, features = ["native"] }
+# Base64 encoding for terminal RPC payloads (PTY bytes don't survive
+# raw JSON; chunks ride as { data: <base64>, ... }).
+base64 = "0.22"
+# `.env` loader. The daemon reads OPENROUTER_API_KEY (and friends) from
+# the environment; loading `.env` from cwd at startup makes the
+# OpenRouter takeover work without forcing the user to export keys
+# in their shell rc.
+dotenvy = "0.15"
 exo-resource-tree = { workspace = true, optional = true }
 weftos-rvf-wire = { workspace = true, optional = true }
 rvf-types = { workspace = true, optional = true }

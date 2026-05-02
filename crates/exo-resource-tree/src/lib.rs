@@ -43,6 +43,9 @@ pub use delegation::DelegationCert;
 pub use error::{TreeError, TreeResult};
 pub use model::{Action, ResourceId, ResourceKind, ResourceNode, Role};
 pub use mutation::{MutationEvent, MutationLog};
-pub use permission::{check as check_permission, Decision};
+pub use permission::{
+    check as check_permission, AclPolicy, CapabilityChecker, Decision, Effect,
+    EffectiveAclCache, Principal,
+};
 pub use scoring::NodeScoring;
 pub use tree::ResourceTree;

@@ -27,54 +27,59 @@ These are build-time variables (Vite inlines them during `npm run build`).
 
 ## Docker Deployment
 
-### UI Container (nginx)
+The dashboard ships a multi-stage Dockerfile at `clawft-ui/Dockerfile`
+(WEFT-317) that builds the SPA under `node:lts-alpine` and serves the
+resulting `dist/` from `nginx:alpine`. No Node.js in the runtime image.
 
-```dockerfile
-# ui/Dockerfile
-FROM node:20-alpine AS build
-WORKDIR /app
-COPY ui/package*.json ./
-RUN npm ci
-COPY ui/ ./
-RUN npm run build
+### Build
 
-FROM nginx:alpine
-COPY --from=build /app/dist /usr/share/nginx/html
-COPY ui/nginx.conf /etc/nginx/conf.d/default.conf
-EXPOSE 80
+From the repo root (the build context must contain the `clawft-ui/`
+directory so the `COPY clawft-ui/...` instructions resolve):
+
+```bash
+# Direct
+docker build -f clawft-ui/Dockerfile -t clawft-ui:0.7.0 .
+
+# Or via the build wrapper
+scripts/build.sh ui-docker
+
+# Override the tag
+CLAWFT_UI_DOCKER_TAG=ghcr.io/weave-logic-ai/clawft-ui:0.7.0 \
+  scripts/build.sh ui-docker
+
+# Point the bundle at a remote API
+docker build -f clawft-ui/Dockerfile \
+  --build-arg VITE_API_URL=https://api.example.com \
+  -t clawft-ui:0.7.0 .
 ```
+
+The runtime image is approximately 50 MB compressed (nginx:alpine base
+plus the SPA bundle). `scripts/build.sh ui-docker` prints the actual
+size after each build.
+
+### Run
+
+```bash
+docker run --rm -p 8080:80 clawft-ui:0.7.0
+# open http://localhost:8080
+```
+
+The image expects to talk to an Axum gateway at the **same origin**
+(`/api`, `/ws`). Either reverse-proxy in front of it or run alongside
+the gateway via Docker Compose.
 
 ### nginx Configuration
 
-```nginx
-# ui/nginx.conf
-server {
-    listen 80;
-    server_name _;
-    root /usr/share/nginx/html;
-    index index.html;
+`clawft-ui/nginx.conf` is the canonical config baked into the image:
 
-    # SPA fallback
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    # WASM content type
-    types {
-        application/wasm wasm;
-    }
-
-    # Cache static assets
-    location /assets/ {
-        expires 1y;
-        add_header Cache-Control "public, immutable";
-    }
-
-    # Gzip
-    gzip on;
-    gzip_types text/plain text/css application/json application/javascript application/wasm;
-}
-```
+- SPA fallback: `try_files $uri $uri/ /index.html` so React Router
+  handles deep links.
+- `application/wasm` MIME type for `.wasm` assets so
+  `WebAssembly.instantiateStreaming()` works in browser-only mode.
+- `Cache-Control: public, immutable` for hashed `/assets/*` files
+  (Vite emits content-hashed filenames, so this is safe).
+- `gzip on` for HTML / JS / CSS / WASM with a 1 KB minimum.
+- `server_tokens off` to suppress the nginx version banner.
 
 ### Docker Compose
 
@@ -93,7 +98,7 @@ services:
   ui:
     build:
       context: .
-      dockerfile: ui/Dockerfile
+      dockerfile: clawft-ui/Dockerfile
       args:
         VITE_API_URL: http://backend:18789
     ports:
@@ -198,7 +203,7 @@ The `weft ui` command serves the UI from a binary with embedded static files usi
 
 ```bash
 # Build the UI first
-cd ui && npm run build && cd ..
+cd clawft-ui && npm run build && cd ..
 
 # Build the Rust binary (includes dist/ via rust-embed)
 cargo build --release --bin weft

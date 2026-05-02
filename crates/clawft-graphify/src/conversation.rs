@@ -184,12 +184,12 @@ impl ConversationContext {
         };
 
         // Update state.
-        if topic_shift {
+        if topic_shift
+            || (!scored.is_empty()
+                && (self.topic_stack.is_empty()
+                    || self.topic_stack.last().map(|s| s.as_str()) != Some(question)))
+        {
             self.topic_stack.push(question.to_string());
-        } else if !scored.is_empty() {
-            if self.topic_stack.is_empty() || self.topic_stack.last().map(|s| s.as_str()) != Some(question) {
-                self.topic_stack.push(question.to_string());
-            }
         }
 
         // Update focus to new results.

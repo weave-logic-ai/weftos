@@ -51,6 +51,7 @@ pub fn eml_models_dir(runtime_dir: &Path) -> PathBuf {
 /// This does NOT include graphify, LLM, or benchmark models -- those
 /// are persisted by their respective crates. This bundle covers the 7
 /// models owned by `clawft-kernel`.
+#[derive(Default)]
 pub struct KernelEmlModels {
     pub coherence: EmlCoherenceModel,
     pub governance_scorer: GovernanceScorerModel,
@@ -61,19 +62,6 @@ pub struct KernelEmlModels {
     pub complexity: ComplexityModel,
 }
 
-impl Default for KernelEmlModels {
-    fn default() -> Self {
-        Self {
-            coherence: EmlCoherenceModel::new(),
-            governance_scorer: GovernanceScorerModel::new(),
-            restart_strategy: RestartStrategyModel::new(),
-            health_threshold: HealthThresholdModel::new(),
-            dead_letter: DeadLetterModel::new(),
-            gossip_timing: GossipTimingModel::new(),
-            complexity: ComplexityModel::new(),
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Save/Load helpers

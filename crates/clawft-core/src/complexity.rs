@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn default_trait_creates_valid_analyzer() {
-        let a = TaskComplexityAnalyzer::default();
+        let a = TaskComplexityAnalyzer;
         let score = a.analyze("hello");
         assert!(score >= 0.0);
         assert!(score <= 1.0);

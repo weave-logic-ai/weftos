@@ -181,10 +181,18 @@ fn run_driver(live: Arc<Live>, mut cmd_rx: tokio::sync::mpsc::Receiver<Command>)
         // and inject a Replace into the local substrate so the legacy
         // `Snapshot` shape sees them. 250ms cadence matches SNAPSHOT_MS.
         let mut relay_client: Option<DaemonClient> = None;
-        const RELAYED_PATHS: &[&str] = &[
-            "substrate/sensor/tof",
-            "substrate/sensor/mic",
-        ];
+        // ToF stays at the legacy flat path until its own per-node
+        // migration lands (see open loop in handoff). Mic moved to
+        // `substrate/<source-node>/sensor/mic/rms` under the Phase 3
+        // node-identity gate, so we can't hardcode the path here —
+        // we discover it from a one-shot `substrate.list` after the
+        // first connect (see [`super::mic_discovery::find_mic_path`])
+        // and then route it through the same relay loop. `None`
+        // means we either haven't tried discovery yet OR no mic was
+        // present at boot; the relay reattempts discovery whenever
+        // the daemon connection drops and reconnects.
+        let mut discovered_mic_path: Option<String> = None;
+        const TOF_RELAYED_PATH: &str = "substrate/sensor/tof";
 
         let mut ticker = tokio::time::interval(std::time::Duration::from_millis(SNAPSHOT_MS));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -192,13 +200,31 @@ fn run_driver(live: Arc<Live>, mut cmd_rx: tokio::sync::mpsc::Receiver<Command>)
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
+                    // Lazy mic-path discovery — runs at most one
+                    // `substrate.list` per (re)connect. Idempotent
+                    // when already resolved (the inner check returns
+                    // immediately).
+                    discover_mic_path_once(
+                        &mut relay_client,
+                        &mut discovered_mic_path,
+                    )
+                    .await;
+                    let mut paths: Vec<&str> = vec![TOF_RELAYED_PATH];
+                    if let Some(p) = discovered_mic_path.as_deref() {
+                        paths.push(p);
+                    }
                     relay_external_paths(
                         &substrate,
                         &mut relay_client,
-                        RELAYED_PATHS,
+                        &paths,
                     )
                     .await;
-                    refresh_snapshot(&substrate, &live).await;
+                    refresh_snapshot(
+                        &substrate,
+                        &live,
+                        discovered_mic_path.as_deref(),
+                    )
+                    .await;
                 }
                 Some(cmd) = cmd_rx.recv() => {
                     match cmd {
@@ -223,7 +249,18 @@ fn run_driver(live: Arc<Live>, mut cmd_rx: tokio::sync::mpsc::Receiver<Command>)
 /// (M1.5-B) lands, shell and blocks modules will read
 /// [`clawft_substrate::OntologySnapshot`] directly and this function
 /// goes away.
-async fn refresh_snapshot(substrate: &Arc<Substrate>, live: &Arc<Live>) {
+///
+/// `mic_path` is the discovered per-node mic path (e.g.
+/// `substrate/n-bfc4cd/sensor/mic/rms`) or `None` if the discovery
+/// hasn't completed yet (or no mic is present in the mesh). When
+/// `None`, `Snapshot::audio_mic` stays unset and the tray-chip mic
+/// gauge renders its dimmed "no mic" state instead of polling a
+/// stale legacy path.
+async fn refresh_snapshot(
+    substrate: &Arc<Substrate>,
+    live: &Arc<Live>,
+    mic_path: Option<&str>,
+) {
     let snap = substrate.snapshot();
 
     let status = snap.get("substrate/kernel/status").cloned();
@@ -248,7 +285,11 @@ async fn refresh_snapshot(substrate: &Arc<Substrate>, live: &Arc<Live>) {
     let bluetooth = snap.get("substrate/bluetooth").cloned();
     let mesh_status = snap.get("substrate/mesh/status").cloned();
     let chain_status = snap.get("substrate/chain/status").cloned();
-    let audio_mic = snap.get("substrate/sensor/mic").cloned();
+    // Audio mic is now per-node (`substrate/<node>/sensor/mic/rms`);
+    // the legacy flat path is gone. Read whatever path discovery
+    // resolved to. `None` -> Snapshot::audio_mic stays None and the
+    // chip renders "no mic".
+    let audio_mic = mic_path.and_then(|p| snap.get(p).cloned());
     let tof_depth = snap.get("substrate/sensor/tof").cloned();
 
     // Heuristic: if any real data from the adapter has landed in the
@@ -284,6 +325,57 @@ async fn refresh_snapshot(substrate: &Arc<Substrate>, live: &Arc<Live>) {
         // Keep last_error as-is; the adapter pollers are silent on
         // transient failures by design (they just reconnect).
     });
+}
+
+/// One-shot mic-path discovery. On the first call after a (re)connect,
+/// asks the daemon for `substrate.list { prefix: "substrate", depth: 4 }`
+/// and runs the response through [`super::mic_discovery::find_mic_path`].
+/// Once `mic_path` is `Some`, this is a near-zero-cost no-op (no RPC).
+///
+/// Why depth 4: per-node mic publishes land at
+/// `substrate/<node-id>/sensor/mic/rms` — that's 4 path segments
+/// below the root. `substrate.list` is bounded by depth so we ask
+/// for exactly what we need rather than a full-tree walk.
+///
+/// On RPC failure we leave `mic_path` as `None` and try again next
+/// tick. We deliberately do NOT clear an already-discovered path on
+/// transient list failures — discovery is sticky until the daemon
+/// connection itself drops (which nulls `client_opt` from the relay
+/// path, after which we'd want to re-discover anyway). Re-discovery
+/// is therefore handled implicitly: when the next list-call fires
+/// against a fresh client it will repopulate `mic_path` to whatever
+/// the new daemon reports.
+async fn discover_mic_path_once(
+    client_opt: &mut Option<DaemonClient>,
+    mic_path: &mut Option<String>,
+) {
+    if mic_path.is_some() {
+        return;
+    }
+    if client_opt.is_none() {
+        *client_opt = DaemonClient::connect().await;
+    }
+    let Some(client) = client_opt.as_mut() else {
+        return;
+    };
+    let params = serde_json::json!({ "prefix": "substrate", "depth": 4 });
+    let resp = match client
+        .call(Request::with_params("substrate.list", params))
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            // Connection died — null it so the relay path reconnects
+            // next tick. Discovery will run against the fresh client.
+            *client_opt = None;
+            return;
+        }
+    };
+    if !resp.ok {
+        return;
+    }
+    let result = resp.result.unwrap_or(Value::Null);
+    *mic_path = super::mic_discovery::find_mic_path(&result);
 }
 
 /// Poll the daemon's `substrate.read` for each listed path and inject
@@ -328,14 +420,13 @@ async fn relay_external_paths(
         let result = resp.result.unwrap_or(Value::Null);
         // Expected shape from substrate.read:
         // `{value: Option<Value>, tick: u64, sensitivity: String}`.
-        if let Some(value) = result.get("value").cloned() {
-            if !value.is_null() {
+        if let Some(value) = result.get("value").cloned()
+            && !value.is_null() {
                 substrate.apply(clawft_substrate::StateDelta::Replace {
                     path: path.to_string(),
                     value,
                 });
             }
-        }
     }
 }
 

@@ -311,8 +311,8 @@ impl AssessmentService {
     ) -> Result<AssessmentReport, String> {
         let files = match scope {
             "commit" => collect_git_changed_files(project_dir)?,
-            "ci" => collect_files_filtered(project_dir, |p| is_ci_file(p)),
-            "dependency" => collect_files_filtered(project_dir, |p| is_dependency_file(p)),
+            "ci" => collect_files_filtered(project_dir, is_ci_file),
+            "dependency" => collect_files_filtered(project_dir, is_dependency_file),
             _ => collect_all_files(project_dir),
         };
 
@@ -573,8 +573,8 @@ impl AssessmentService {
 
         let initial_files = match scope {
             "commit" => collect_git_changed_files(project).unwrap_or_default(),
-            "ci" => collect_files_filtered(project, |p| is_ci_file(p)),
-            "dependency" => collect_files_filtered(project, |p| is_dependency_file(p)),
+            "ci" => collect_files_filtered(project, is_ci_file),
+            "dependency" => collect_files_filtered(project, is_dependency_file),
             _ => collect_all_files(project),
         };
 
@@ -622,8 +622,8 @@ impl AssessmentService {
             // Also check if any findings reference directories we haven't walked
             for finding in &findings {
                 let path = project.join(&finding.file);
-                if let Some(parent) = path.parent() {
-                    if parent.is_dir() {
+                if let Some(parent) = path.parent()
+                    && parent.is_dir() {
                         let mut extra = Vec::new();
                         walk_dir(parent, &mut extra, &|_| true);
                         for f in extra {
@@ -633,7 +633,6 @@ impl AssessmentService {
                             }
                         }
                     }
-                }
             }
 
             total_discovered += new_files.len();
@@ -642,10 +641,12 @@ impl AssessmentService {
 
         // Build summary from all scanned files
         let all_files: Vec<PathBuf> = all_scanned.into_iter().collect();
-        let mut summary = AssessmentSummary::default();
-        summary.total_files = all_files.len();
-        summary.discovery_rounds = round;
-        summary.files_discovered = total_discovered;
+        let mut summary = AssessmentSummary {
+            total_files: all_files.len(),
+            discovery_rounds: round,
+            files_discovered: total_discovered,
+            ..Default::default()
+        };
 
         for path in &all_files {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -928,11 +929,10 @@ fn walk_dir<F: Fn(&Path) -> bool>(dir: &Path, out: &mut Vec<PathBuf>, predicate:
     for entry in entries.flatten() {
         let path = entry.path();
         // Skip hidden dirs and common noise
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name.starts_with('.') || name == "target" || name == "node_modules" {
+        if let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && (name.starts_with('.') || name == "target" || name == "node_modules") {
                 continue;
             }
-        }
         if path.is_dir() {
             walk_dir(&path, out, predicate);
         } else if predicate(&path) {

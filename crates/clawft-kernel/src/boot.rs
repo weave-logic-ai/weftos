@@ -132,6 +132,8 @@ pub struct Kernel<P: Platform> {
     #[cfg(feature = "native")]
     agent_registry: crate::agent_registry::AgentRegistry,
     #[cfg(feature = "native")]
+    node_registry: crate::node_registry::NodeRegistry,
+    #[cfg(feature = "native")]
     substrate_service: crate::substrate_service::SubstrateService,
     #[cfg(feature = "exochain")]
     chain: ChainSubsystem,
@@ -1670,6 +1672,8 @@ impl<P: Platform> Kernel<P> {
             #[cfg(feature = "native")]
             agent_registry: crate::agent_registry::AgentRegistry::new(),
             #[cfg(feature = "native")]
+            node_registry: crate::node_registry::NodeRegistry::new(),
+            #[cfg(feature = "native")]
             substrate_service: crate::substrate_service::SubstrateService::new(),
             #[cfg(feature = "exochain")]
             chain: ChainSubsystem {
@@ -1853,6 +1857,19 @@ impl<P: Platform> Kernel<P> {
         &self.agent_registry
     }
 
+    /// Get the node identity registry.
+    ///
+    /// Maps node-ids to their ed25519 public keys. The daemon
+    /// registers its own node here at boot; remote nodes (ESP32
+    /// leaves, future kernel-class peers) register via a future
+    /// `node.register` RPC. Consulted by the substrate publish gate
+    /// to verify node signatures and by the Explorer's tree to
+    /// resolve labels.
+    #[cfg(feature = "native")]
+    pub fn node_registry(&self) -> &crate::node_registry::NodeRegistry {
+        &self.node_registry
+    }
+
     /// Get the substrate RPC service.
     ///
     /// Backs the `substrate.read`, `substrate.publish`,
@@ -2029,6 +2046,7 @@ mod tests {
                     max_tool_iterations: 5,
                     memory_window: 10,
                 },
+                ..AgentsConfig::default()
             },
             ..Config::default()
         }
@@ -2880,7 +2898,7 @@ mod tests {
             .await
             .unwrap();
         let log = kernel.boot_log();
-        assert!(log.events().len() > 0, "boot log should have events");
+        assert!(!log.events().is_empty(), "boot log should have events");
     }
 
     #[tokio::test]

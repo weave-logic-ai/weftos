@@ -232,17 +232,32 @@ impl SandboxPolicy {
     }
 
     /// Check whether a file path is readable.
+    ///
+    /// Uses canonicalize + canonical-prefix comparison to defeat
+    /// `..` traversal and unresolved symlinks. The target must exist
+    /// for a read check; if it doesn't, the path is rejected.
     pub fn is_path_readable(&self, path: &std::path::Path) -> bool {
-        self.filesystem.readable_paths.iter().any(|allowed| {
-            path.starts_with(allowed)
-        })
+        is_path_within_allowlist(path, &self.filesystem.readable_paths, false)
     }
 
     /// Check whether a file path is writable.
+    ///
+    /// Uses canonicalize + canonical-prefix comparison. For not-yet-
+    /// existing targets we canonicalize the parent directory and
+    /// re-append the leaf so legitimate new-file creation is permitted.
+    ///
+    /// Identity hard-deny (agent-core-v1 Phase D1): writes to
+    /// `.clawft/SOUL.md`, `.clawft/IDENTITY.md`, and
+    /// `.clawft/SOUL.journal.md` are denied unconditionally — even
+    /// when the workspace allowlist would otherwise cover them.
+    /// `SOUL.journal.md` is the agent's self-observation log; agent
+    /// writes to it must go through a substrate-mediated topic
+    /// (Phase F1/F2), not direct filesystem writes.
     pub fn is_path_writable(&self, path: &std::path::Path) -> bool {
-        self.filesystem.writable_paths.iter().any(|allowed| {
-            path.starts_with(allowed)
-        })
+        if is_protected_identity_path(path) {
+            return false;
+        }
+        is_path_within_allowlist(path, &self.filesystem.writable_paths, true)
     }
 
     /// Check whether a command is allowed by the process policy.
@@ -291,6 +306,101 @@ impl SandboxPolicy {
             other => other.clone(),
         }
     }
+}
+
+/// Canonicalize `path` and check whether the result is contained in
+/// any of the canonical roots derived from `allowlist`.
+///
+/// `allow_missing_target` controls behavior when `path` does not yet
+/// exist on disk:
+/// - `false` (read checks): reject. Symlink targets must already
+///   resolve to a real file inside the allowlist.
+/// - `true` (write checks): canonicalize the parent directory and
+///   re-append the leaf, so creating a new file inside an allowed
+///   root is permitted.
+///
+/// Mirrors the spike's `resolve_workspace_path` idiom in
+/// `clawft-weave::daemon`. By routing both sides through
+/// `Path::canonicalize`, traversal segments (`..`), unresolved
+/// symlinks, and Windows extended-length prefixes (`\\?\`) all
+/// normalize identically, so the `starts_with` check is sound on
+/// every supported platform.
+fn is_path_within_allowlist(
+    path: &std::path::Path,
+    allowlist: &[std::path::PathBuf],
+    allow_missing_target: bool,
+) -> bool {
+    if allowlist.is_empty() {
+        return false;
+    }
+
+    let target_canon = match path.canonicalize() {
+        Ok(c) => c,
+        Err(_) if allow_missing_target => {
+            // Target may not exist yet (e.g. file we're about to
+            // create). Canonicalize the parent directory and re-append
+            // the leaf so we can still verify containment.
+            let parent = match path.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p,
+                _ => return false,
+            };
+            let parent_canon = match parent.canonicalize() {
+                Ok(c) => c,
+                Err(_) => return false,
+            };
+            match path.file_name() {
+                Some(name) => parent_canon.join(name),
+                None => return false,
+            }
+        }
+        Err(_) => return false,
+    };
+
+    allowlist.iter().any(|allowed| match allowed.canonicalize() {
+        Ok(allowed_canon) => target_canon.starts_with(&allowed_canon),
+        Err(_) => false,
+    })
+}
+
+/// File names inside `.clawft/` that are NEVER writable by the agent,
+/// regardless of the workspace allowlist (agent-core-v1 Phase D1).
+///
+/// - `SOUL.md` and `IDENTITY.md`: identity files. Hand-edited by
+///   the operator; agent writes would corrupt the binding-thread
+///   integrity check.
+/// - `SOUL.journal.md`: the append-only self-observation log. Agent
+///   writes are legitimate but must flow through a substrate-mediated
+///   topic with a `DerivedWriteGrant` (Phase F1/F2) so the
+///   `chain.rs` witness records the append. Direct filesystem writes
+///   bypass that audit, so we deny them here too.
+const PROTECTED_IDENTITY_FILENAMES: &[&str] =
+    &["SOUL.md", "IDENTITY.md", "SOUL.journal.md"];
+
+/// Return `true` when `path`'s tail is `<...>/.clawft/<protected>`.
+///
+/// Operates on the lexical path so it works for both existing and
+/// not-yet-existing targets (write checks call this before
+/// canonicalize). The match is anchored on the **last two**
+/// components: `.clawft/SOUL.md` matches; a stray `SOUL.md` outside
+/// a `.clawft/` directory does not.
+fn is_protected_identity_path(path: &std::path::Path) -> bool {
+    let mut comps = path.components().rev();
+    let leaf = match comps.next() {
+        Some(std::path::Component::Normal(name)) => name,
+        _ => return false,
+    };
+    let parent = match comps.next() {
+        Some(std::path::Component::Normal(name)) => name,
+        _ => return false,
+    };
+    if parent != std::ffi::OsStr::new(".clawft") {
+        return false;
+    }
+    let leaf_str = match leaf.to_str() {
+        Some(s) => s,
+        None => return false,
+    };
+    PROTECTED_IDENTITY_FILENAMES.contains(&leaf_str)
 }
 
 /// Check whether a domain matches a pattern (exact or wildcard).
@@ -477,30 +587,148 @@ mod tests {
 
     #[test]
     fn path_readable_check() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let file = workspace.path().join("file.rs");
+        std::fs::write(&file, b"fn main() {}").expect("write file");
+
         let policy = SandboxPolicy {
             agent_id: "test".into(),
             filesystem: FilesystemPolicy {
-                readable_paths: vec![PathBuf::from("/home/user/workspace")],
+                readable_paths: vec![workspace.path().to_path_buf()],
                 ..Default::default()
             },
             ..Default::default()
         };
-        assert!(policy.is_path_readable(Path::new("/home/user/workspace/file.rs")));
-        assert!(!policy.is_path_readable(Path::new("/etc/passwd")));
+        assert!(policy.is_path_readable(&file));
+        // A path outside the allowlist must reject. /etc exists on
+        // Unix; on platforms where it doesn't, canonicalize fails and
+        // the helper still rejects.
+        assert!(!policy.is_path_readable(Path::new("/etc")));
     }
 
     #[test]
     fn path_writable_check() {
+        let sandbox = tempfile::tempdir().expect("tempdir");
+        let target = sandbox.path().join("output.txt");
+        // Write target does not yet exist — must still permit because
+        // the parent canonicalizes inside the allowlist.
         let policy = SandboxPolicy {
             agent_id: "test".into(),
             filesystem: FilesystemPolicy {
-                writable_paths: vec![PathBuf::from("/tmp/sandbox")],
+                writable_paths: vec![sandbox.path().to_path_buf()],
                 ..Default::default()
             },
             ..Default::default()
         };
-        assert!(policy.is_path_writable(Path::new("/tmp/sandbox/output.txt")));
-        assert!(!policy.is_path_writable(Path::new("/etc/config")));
+        assert!(policy.is_path_writable(&target));
+        assert!(!policy.is_path_writable(Path::new("/etc")));
+    }
+
+    #[test]
+    fn path_readable_rejects_dotdot_traversal() {
+        // /workspace/../etc/passwd-style escape. Set up two real
+        // siblings under a shared root so canonicalize has something
+        // to chew on; then ask the policy whether
+        // <workspace>/../<sibling>/secret is readable. The lexical
+        // starts_with implementation said yes; the canonical one must
+        // say no.
+        let root = tempfile::tempdir().expect("tempdir");
+        let workspace = root.path().join("workspace");
+        let secrets = root.path().join("etc");
+        std::fs::create_dir(&workspace).expect("mkdir workspace");
+        std::fs::create_dir(&secrets).expect("mkdir etc");
+        let secret_file = secrets.join("passwd");
+        std::fs::write(&secret_file, b"root:x:0:0").expect("write secret");
+
+        let policy = SandboxPolicy {
+            agent_id: "test".into(),
+            filesystem: FilesystemPolicy {
+                readable_paths: vec![workspace.clone()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let traversal = workspace.join("..").join("etc").join("passwd");
+        assert!(
+            !policy.is_path_readable(&traversal),
+            "lexical starts_with would have accepted this; canonicalize must reject"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_readable_rejects_symlink_escape() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let workspace = root.path().join("workspace");
+        let outside = root.path().join("outside");
+        std::fs::create_dir(&workspace).expect("mkdir workspace");
+        std::fs::create_dir(&outside).expect("mkdir outside");
+        let secret = outside.join("secret.txt");
+        std::fs::write(&secret, b"secret").expect("write secret");
+
+        // workspace/escape -> ../outside/secret.txt
+        let link = workspace.join("escape");
+        std::os::unix::fs::symlink(&secret, &link).expect("create symlink");
+
+        let policy = SandboxPolicy {
+            agent_id: "test".into(),
+            filesystem: FilesystemPolicy {
+                readable_paths: vec![workspace.clone()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        // The lexical check would have accepted `link` since it's
+        // literally inside `workspace`; canonicalize must follow the
+        // symlink and reject because the target is outside.
+        assert!(!policy.is_path_readable(&link));
+    }
+
+    #[test]
+    fn path_writable_permits_not_yet_existing_target() {
+        let sandbox = tempfile::tempdir().expect("tempdir");
+        let new_file = sandbox.path().join("does-not-exist-yet.txt");
+        assert!(
+            !new_file.exists(),
+            "precondition: target must not exist for this test"
+        );
+
+        let policy = SandboxPolicy {
+            agent_id: "test".into(),
+            filesystem: FilesystemPolicy {
+                writable_paths: vec![sandbox.path().to_path_buf()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(policy.is_path_writable(&new_file));
+
+        // But if the parent itself doesn't exist, reject.
+        let nested = sandbox.path().join("missing-dir").join("file.txt");
+        assert!(!policy.is_path_writable(&nested));
+    }
+
+    #[test]
+    fn path_readable_allowlist_with_trailing_slash() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let file = workspace.path().join("file.rs");
+        std::fs::write(&file, b"hi").expect("write file");
+
+        // PathBuf reconstructed with a trailing separator. Both sides
+        // go through canonicalize, so the comparison must still match.
+        let mut allowed_with_slash = workspace.path().as_os_str().to_owned();
+        allowed_with_slash.push(std::path::MAIN_SEPARATOR.to_string());
+        let policy = SandboxPolicy {
+            agent_id: "test".into(),
+            filesystem: FilesystemPolicy {
+                readable_paths: vec![PathBuf::from(allowed_with_slash)],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(policy.is_path_readable(&file));
     }
 
     #[test]
@@ -618,5 +846,93 @@ mod tests {
         assert_eq!(restored.sandbox_type, SandboxType::Combined);
         assert!(restored.network.allow_network);
         assert!(restored.audit_logging);
+    }
+
+    // ── Identity hard-deny (agent-core-v1 Phase D1) ─────────────────
+
+    fn identity_writable_policy(workspace: &std::path::Path) -> SandboxPolicy {
+        SandboxPolicy {
+            agent_id: "identity-test".into(),
+            filesystem: FilesystemPolicy {
+                writable_paths: vec![workspace.to_path_buf()],
+                allow_create: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn writes_to_clawft_soul_md_are_denied_even_when_allowlisted() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let clawft = workspace.path().join(".clawft");
+        std::fs::create_dir_all(&clawft).unwrap();
+        std::fs::write(clawft.join("SOUL.md"), "ignored").unwrap();
+
+        let policy = identity_writable_policy(workspace.path());
+        // Sanity: a sibling file in the same workspace IS writable.
+        assert!(policy.is_path_writable(&workspace.path().join("note.txt")));
+        // Identity files are denied.
+        assert!(!policy.is_path_writable(&clawft.join("SOUL.md")));
+    }
+
+    #[test]
+    fn writes_to_clawft_identity_md_are_denied_even_when_allowlisted() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let clawft = workspace.path().join(".clawft");
+        std::fs::create_dir_all(&clawft).unwrap();
+        std::fs::write(clawft.join("IDENTITY.md"), "ignored").unwrap();
+
+        let policy = identity_writable_policy(workspace.path());
+        assert!(!policy.is_path_writable(&clawft.join("IDENTITY.md")));
+    }
+
+    #[test]
+    fn writes_to_clawft_soul_journal_md_are_denied_even_when_allowlisted() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let clawft = workspace.path().join(".clawft");
+        std::fs::create_dir_all(&clawft).unwrap();
+        // SOUL.journal.md doesn't exist yet — the deny must hit even
+        // for the not-yet-existing-target path.
+        let policy = identity_writable_policy(workspace.path());
+        assert!(!policy.is_path_writable(&clawft.join("SOUL.journal.md")));
+    }
+
+    #[test]
+    fn deny_is_filename_anchored_under_dot_clawft() {
+        // Same filenames OUTSIDE a `.clawft/` dir do not match the
+        // hard-deny rule. (The allowlist still gets the final say.)
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let policy = identity_writable_policy(workspace.path());
+        // A workspace-root SOUL.md must still be writable — this
+        // protects against false positives when an agent project
+        // happens to author a top-level `SOUL.md` doc.
+        let stray = workspace.path().join("SOUL.md");
+        assert!(policy.is_path_writable(&stray));
+    }
+
+    #[test]
+    fn protected_identity_path_predicate_matches_expected_set() {
+        assert!(is_protected_identity_path(std::path::Path::new(
+            "/workspace/.clawft/SOUL.md"
+        )));
+        assert!(is_protected_identity_path(std::path::Path::new(
+            "/workspace/.clawft/IDENTITY.md"
+        )));
+        assert!(is_protected_identity_path(std::path::Path::new(
+            "/workspace/.clawft/SOUL.journal.md"
+        )));
+        // Negative: similarly-named files outside `.clawft/` don't match.
+        assert!(!is_protected_identity_path(std::path::Path::new(
+            "/workspace/SOUL.md"
+        )));
+        assert!(!is_protected_identity_path(std::path::Path::new(
+            "/workspace/.clawft/agents.md"
+        )));
+        // Negative: a directory called `.clawft/SOUL.md/` does NOT
+        // match because we anchor on the leaf-as-file.
+        assert!(is_protected_identity_path(std::path::Path::new(
+            ".clawft/SOUL.md"
+        )));
     }
 }

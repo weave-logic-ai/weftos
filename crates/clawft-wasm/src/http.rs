@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn wasi_http_client_default() {
-        let _client = WasiHttpClient::default();
+        let _client = WasiHttpClient;
     }
 
     #[test]

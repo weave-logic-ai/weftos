@@ -1,0 +1,61 @@
+[package]
+name = "clawft-service-whisper"
+version.workspace = true
+publish = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "WeftOS whisper.cpp transcription service — HTTP client pipeline from substrate PCM to substrate transcript. Phase 2 Track 4 spike probing the sensor-ingestion pipeline primitive (Machinery + Functions)."
+
+[dependencies]
+# Async runtime — tokio 'full' matches the daemon, which is the intended host.
+tokio = { workspace = true }
+
+# Serde for substrate payloads + whisper JSON response shape.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# HTTP client — multipart for POST /inference, json for parsing, rustls to
+# avoid OpenSSL build friction on CI hosts. default-tls is off upstream.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "multipart",
+    "rustls-tls",
+    "stream",
+] }
+
+# PCM payload is base64-encoded JSON per the b64-in-JSON MVP path; a binary
+# substrate side-channel is explicitly deferred (see journal §Q1).
+base64 = "0.22"
+
+# Structured logs.
+tracing = { workspace = true }
+
+# Kernel SubstrateService + SubscriberId — in-process pub/sub. We enable
+# the full default-feature set (native + ecc + exochain + cluster + mesh +
+# tilezero) because the kernel crate has internal cross-feature references
+# that don't compile with `native` alone, and the whisper service is
+# daemon-hosted so those heavier features are already compiled in upstream.
+clawft-kernel = { workspace = true, features = ["native", "ecc", "exochain", "cluster", "mesh", "tilezero"] }
+
+# Error handling.
+thiserror = { workspace = true }
+
+# Model integrity (WEFT-209 / SC-7): SHA-256 over on-disk model files
+# + Ed25519 verify of the signed manifest sitting alongside them. The
+# trusted public keys live under ~/.clawft/trust-roots/voice/.
+sha2 = { workspace = true }
+ed25519-dalek = { workspace = true }
+hex = "0.4"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+wiremock = "0.6"
+tempfile = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[[example]]
+name = "publish_wav"
+path = "examples/publish_wav.rs"

@@ -25,6 +25,7 @@ pub fn api_routes() -> Router<ApiState> {
         .route("/tools/{name}/schema", get(get_tool_schema))
         // Auth
         .route("/auth/token", post(create_token))
+        .route("/auth/revoke", post(revoke_token))
         // Health check
         .route("/health", get(health_check))
         // Delegation monitoring
@@ -113,6 +114,41 @@ async fn create_token(
     Ok(Json(serde_json::json!({ "token": token })))
 }
 
+/// `POST /api/auth/revoke` — server-side logout for the bearer used to
+/// authenticate this very request. WEFT-570.
+///
+/// The auth middleware already validated the `Authorization: Bearer
+/// <token>` header before this handler runs, so we know the caller
+/// holds the token they're asking us to revoke. We pull the token back
+/// out of the request headers, mark it revoked in the `TokenStore`, and
+/// return 204 No Content. Subsequent uses of the same token return 401
+/// from the auth middleware on their next request.
+///
+/// This route is NOT in `auth::PUBLIC_PATHS` — anonymous callers cannot
+/// hit it. The "you must already be authenticated to revoke yourself"
+/// invariant means there is no way for one user to revoke another
+/// user's token through this endpoint.
+async fn revoke_token(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+) -> axum::http::StatusCode {
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .map(str::to_string);
+
+    match token {
+        Some(t) if state.auth.revoke_token(&t) => axum::http::StatusCode::NO_CONTENT,
+        // Unknown / already-revoked / missing bearer: treat as no-op.
+        // The middleware that admitted this request already validated
+        // the bearer, so the only way `revoke_token` returns false here
+        // is a race with cleanup (token expired between admission and
+        // handler) — semantically still "your session is gone".
+        _ => axum::http::StatusCode::NO_CONTENT,
+    }
+}
+
 /// Server start time, set once at process start.
 static START_TIME: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
@@ -127,12 +163,6 @@ async fn health_check() -> Json<serde_json::Value> {
     }))
 }
 
-// TODO: Add Content-Security-Policy (CSP) middleware via tower layer.
-// Example: tower_http::set_header::SetResponseHeaderLayer for CSP headers.
-//
-// TODO: Add rate limiting middleware via tower::limit::RateLimitLayer
-// or a dedicated crate like tower-governor for production use.
-// Configuration should be per-endpoint with sensible defaults:
-//   - /api/auth/token: 5 req/min
-//   - /api/delegation/*: 60 req/min
-//   - /api/monitoring/*: 30 req/min
+// CSP, CORS deny-by-default, per-IP rate limiting, and Bearer-token
+// auth are all implemented in `super::middleware` and `super::auth`,
+// and wired in `super::build_router`. See WEFT-99/100/101/298.

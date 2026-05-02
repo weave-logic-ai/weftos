@@ -79,8 +79,10 @@ pub struct PingResponse {
 /// Clock source quality (higher = better, wins authority election).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ClockSource {
     /// Local monotonic clock only (no external sync).
+    #[default]
     Local = 0,
     /// Synchronized via mesh heartbeat from another node.
     Mesh = 1,
@@ -92,11 +94,6 @@ pub enum ClockSource {
     Gps = 4,
 }
 
-impl Default for ClockSource {
-    fn default() -> Self {
-        Self::Local
-    }
-}
 
 /// Mesh time synchronization state for a node.
 #[derive(Debug, Clone)]

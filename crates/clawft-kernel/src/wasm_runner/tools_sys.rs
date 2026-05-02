@@ -357,11 +357,10 @@ pub fn execute_shell(cmd: &ShellCommand) -> Result<ShellResult, ToolError> {
 
     // Sandbox path check: if sandbox_config has allowed_paths,
     // reject commands that reference paths outside the sandbox.
-    if let Some(ref sandbox) = cmd.sandbox_config {
-        if sandbox.sudo_override {
+    if let Some(ref sandbox) = cmd.sandbox_config
+        && sandbox.sudo_override {
             tracing::warn!(command = %cmd.command, "shell exec with sudo override");
         }
-    }
 
     // Builtin dispatch: for now, handle a small set of safe builtins.
     // Real execution would compile to WASM and run in the sandbox.

@@ -99,7 +99,22 @@ impl CanonResponse {
             path: Vec::new(),
         };
 
-        let (pointer, drag) = ctx.input(|i| (i.pointer.delta(), inner.drag_delta()));
+        // `Response::drag_delta()` internally calls `ctx.input(...)`
+        // to read the pointer delta on the active-drag path. If we call
+        // it from *inside* a `ctx.input(|i| ...)` closure, we nest two
+        // read-locks on egui's Context RwLock on the same thread.
+        // `std::sync::RwLock::read()` recursion is documented as
+        // platform-dependent: Linux (futex) typically permits it, but
+        // Windows (SRWLock-backed) **deadlocks**. Symptom: the UI
+        // thread freezes the moment a drag begins, no panic, no log.
+        //
+        // Observed end-to-end by the vector-synth-gui spike
+        // (https://github.com/ … /vector-synth) on a Windows release
+        // build of a canon `Slider` wired to a drag-able numeric
+        // control. Read the drag delta BEFORE entering the closure to
+        // avoid the reentrancy regardless of platform.
+        let drag = inner.drag_delta();
+        let pointer = ctx.input(|i| i.pointer.delta());
         let doppler = Doppler {
             drag,
             pointer,

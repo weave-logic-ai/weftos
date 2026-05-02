@@ -8,13 +8,17 @@
 //!   pair from `extensions/vscode-weft-panel/webview/wasm/`.
 
 pub mod app;
+pub mod apps;
 pub mod blocks;
 pub mod canon;
 pub mod canon_demos;
+pub mod explorer;
 pub mod live;
+pub mod ontology;
 pub mod shell;
 pub mod surface_host;
 pub mod theming;
+pub mod wasm_time;
 
 pub use app::ClawftApp;
 

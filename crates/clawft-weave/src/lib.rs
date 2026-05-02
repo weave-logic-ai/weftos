@@ -7,11 +7,15 @@
 //! `pub(crate)` is the minimum change required to make integration
 //! tests link against them.
 
+pub mod capability;
 pub mod client;
 pub mod commands;
+pub mod control;
 #[cfg(unix)]
 pub mod daemon;
+pub mod node_identity;
 pub mod protocol;
+pub mod voice_router;
 #[cfg(feature = "rvf-rpc")]
 pub mod rvf_codec;
 #[cfg(feature = "rvf-rpc")]

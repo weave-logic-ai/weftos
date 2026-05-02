@@ -111,9 +111,7 @@ pub fn featurize_weekly(rollup: &WeeklyRollup, baseline_weekly_sales: f64) -> Fe
 
     let mut v = vec![rev, cogs_r, labor_r, labor_hours, avg_ticket, tickets];
     // DOW one-hot is N/A for weekly — leave zero so the vector shape matches.
-    for _ in 0..7 {
-        v.push(0.0);
-    }
+    v.extend([0.0; 7]);
     let year_phase = (rollup.week_index as f32 / 52.0) * std::f32::consts::TAU;
     v.push(year_phase.sin());
     v.push(year_phase.cos());
@@ -143,9 +141,7 @@ pub fn featurize_monthly(rollup: &MonthlyRollup, baseline_monthly_sales: f64) ->
     let budget_mag = budget_var.abs();
 
     let mut v = vec![rev, cogs_r, labor_r, labor_hours, avg_ticket, tickets];
-    for _ in 0..7 {
-        v.push(0.0);
-    }
+    v.extend([0.0; 7]);
     // Parse month index from "YYYY-MM"
     let month_num = rollup
         .year_month

@@ -39,11 +39,10 @@ impl IdMap {
 
     fn insert(&mut self, id: u64, key: String) {
         // Remove old key mapping if this id was previously used.
-        if let Some(old_key) = self.id_to_key.insert(id, key.clone()) {
-            if old_key != key {
+        if let Some(old_key) = self.id_to_key.insert(id, key.clone())
+            && old_key != key {
                 self.key_to_id.remove(&old_key);
             }
-        }
         self.key_to_id.insert(key, id);
     }
 

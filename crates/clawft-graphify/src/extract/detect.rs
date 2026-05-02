@@ -370,15 +370,14 @@ impl Manifest {
         let mut entries = HashMap::new();
         for file_list in detection.files.values() {
             for f in file_list {
-                if let Ok(meta) = std::fs::metadata(f) {
-                    if let Ok(mtime) = meta.modified() {
+                if let Ok(meta) = std::fs::metadata(f)
+                    && let Ok(mtime) = meta.modified() {
                         let secs = mtime
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs_f64();
                         entries.insert(f.clone(), secs);
                     }
-                }
             }
         }
         Self { entries }

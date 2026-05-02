@@ -273,6 +273,48 @@ impl ToolProvider for SkillToolProvider {
             .clone()
     }
 
+    /// Execute a skill as an MCP `tools/call`.
+    ///
+    /// # Contract
+    ///
+    /// A skill tool call returns the **SKILL.md prompt body** as the
+    /// result content, NOT the output of running the skill against the
+    /// LLM. The returned text is the same instructional prompt the
+    /// skill would have surfaced if loaded directly via the agent
+    /// loop — the calling LLM is expected to treat it as a refresher
+    /// or "expand this skill into action" directive and continue
+    /// reasoning with that prompt now in context.
+    ///
+    /// This contract exists because skills are LLM prompts plus
+    /// metadata, not standalone executables. Returning the prompt
+    /// body lets a remote MCP client (Claude Desktop, the WeftOS
+    /// `weft mcp-server` REPL, an IDE bridge) ask "what does this
+    /// skill say to do?" without needing access to the local skill
+    /// registry. The remote LLM then either follows the prompt
+    /// directly or chains into other tool calls described by it.
+    ///
+    /// # Lookup
+    ///
+    /// 1. The tool name must be in the registered tool list. Names
+    ///    not in the list return [`ToolError::NotFound`] — the
+    ///    middleware pipeline never sees an unknown skill.
+    /// 2. The `args` JSON value is forwarded to the dispatcher
+    ///    closure verbatim. The dispatcher is responsible for
+    ///    interpreting any template variables (the skill's
+    ///    `variables` list informs `inputSchema` generation in
+    ///    [`skill_to_tool_definition`], but argument substitution
+    ///    happens inside the dispatcher).
+    /// 3. The dispatcher returns either the prompt body string (the
+    ///    happy path) or an error message. Errors are wrapped as a
+    ///    [`CallToolResult::error`] (NOT a [`ToolError`]) so the
+    ///    LLM sees them in-band as a tool result and can reason
+    ///    about them, instead of breaking the call chain.
+    ///
+    /// # See also
+    ///
+    /// `docs/architecture/skill-tool-contract.md` for the wire-level
+    /// example, the SKILL.md → ToolDefinition mapping, and the
+    /// failure-mode taxonomy.
     async fn call_tool(&self, name: &str, args: Value) -> Result<CallToolResult, ToolError> {
         // Snapshot the tool list to avoid holding the lock during dispatch.
         let has_tool = {
@@ -286,6 +328,9 @@ impl ToolProvider for SkillToolProvider {
 
         let fut = (self.dispatcher)(name, args);
         match fut.await {
+            // Per-contract: the dispatcher returns the SKILL.md prompt
+            // body. The MCP client treats this as in-band text content
+            // (the LLM uses it as a refresher / instruction).
             Ok(output) => Ok(CallToolResult::text(output)),
             Err(msg) => Ok(CallToolResult::error(msg)),
         }

@@ -104,10 +104,10 @@ fn collect_extensions(
         }
         if path.is_dir() {
             collect_extensions(&path, exts, depth - 1)?;
-        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            if !exts.contains(&ext.to_string()) {
-                exts.push(ext.to_string());
-            }
+        } else if let Some(ext) = path.extension().and_then(|e| e.to_str())
+            && !exts.contains(&ext.to_string())
+        {
+            exts.push(ext.to_string());
         }
     }
     Ok(())

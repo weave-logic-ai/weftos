@@ -43,6 +43,8 @@ pub mod slack;
 pub mod teams;
 pub mod telegram;
 pub mod traits;
+#[cfg(feature = "voice")]
+pub mod voice;
 pub mod web;
 #[cfg(feature = "whatsapp")]
 pub mod whatsapp;

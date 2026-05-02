@@ -109,6 +109,7 @@
       },
       "channels": {
         "cli": { "level": 2 },
+        "agent.chat": { "level": 2, "tool_access": ["*"] },
         "telegram": { "level": 1 },
         "discord": { "level": 0 },
         "slack": { "level": 0 }

@@ -128,7 +128,7 @@ impl ResourceNode {
 
 /// Role an agent may hold on a resource.
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Role {
     Owner,
     Admin,
@@ -139,7 +139,7 @@ pub enum Role {
 
 /// An action that may be performed on a resource.
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Action {
     Read,
     Write,

@@ -188,17 +188,17 @@ impl CanonWidget for Chip {
             .small();
 
         let inner = if interactive {
-            egui::Frame::none()
+            egui::Frame::new()
                 .fill(fill)
-                .rounding(10.0)
-                .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+                .corner_radius(10.0)
+                .inner_margin(egui::Margin::symmetric(8, 3))
                 .show(ui, |ui| ui.selectable_label(self.selected, rich))
                 .inner
         } else {
-            let r = egui::Frame::none()
+            let r = egui::Frame::new()
                 .fill(fill)
-                .rounding(10.0)
-                .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+                .corner_radius(10.0)
+                .inner_margin(egui::Margin::symmetric(8, 3))
                 .show(ui, |ui| ui.label(rich));
             r.response
         };

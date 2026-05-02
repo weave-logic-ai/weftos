@@ -163,10 +163,8 @@ fn compress_context_respects_budget() {
                 original_count + 1,
             );
             // Metadata should be self-consistent.
-            assert_eq!(
-                result.metadata.messages_summarized > 0
-                    || result.messages.len() <= original_count,
-                true,
+            assert!(
+                result.metadata.messages_summarized > 0 || result.messages.len() <= original_count,
                 "if tokens exceed budget, summarization should occur or messages should shrink",
             );
         }

@@ -1,17 +1,42 @@
 [package]
 name = "clawft-gui-egui"
 version.workspace = true
+publish = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "egui/eframe native GUI spike for ClawFT — ports the 12 core UI blocks"
 
-# wasm-pack settings: disable wasm-opt because the cached wasm-opt
-# pinned by wasm-pack is old and rejects modern Rust's bulk-memory
-# output. We take the (modest) size hit.
+# wasm-pack settings: enable wasm-opt with `-Oz` (size-optimized)
+# for release builds.
+#
+# History: wasm-pack used to bundle an old binaryen whose `wasm-opt`
+# rejected modern Rust's bulk-memory output. wasm-pack ≥ 0.13 picks
+# up a system `wasm-opt` instead, and the in-repo build script
+# (`extensions/vscode-weft-panel/scripts/build-wasm.sh`) also has a
+# post-bindgen `wasm-opt -Oz` pass as a belt-and-braces fallback for
+# the cargo+wasm-bindgen path. Either way the published bundle is
+# now optimised. WEFT-246.
+#
+# The size impact matters: cold-load over the VSCode webview's local
+# resource loader pays ~3× the size of an uncached wasm bundle (gzip
+# parses + caches per-file for resource:// URLs). Without `-Oz` the
+# bundle was ~4.2 MB; with it the bundle drops below ~2 MB, putting
+# panel boot below 1.5 s on a typical dev box.
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = false
+# Older binaryen versions (≤ 116) refuse modern Rust output unless we
+# pass the feature-enable flags rustc 1.93 emits. The build script's
+# fallback path uses the same set; keep them in sync.
+wasm-opt = [
+    "--enable-bulk-memory",
+    "--enable-nontrapping-float-to-int",
+    "--enable-sign-ext",
+    "--enable-mutable-globals",
+    "--enable-multivalue",
+    "--enable-reference-types",
+    "-Oz",
+]
 
 # ── Native-only bins (excluded from wasm via target.cfg) ─────────────
 
@@ -25,6 +50,14 @@ name = "weft-demo-lab"
 path = "src/bin/demo_lab.rs"
 required-features = ["native"]
 
+# Standalone reproduction for the `CanonResponse::from_egui` Windows
+# RwLock-reentrancy deadlock (fixed in this commit). Native-only — the
+# wasm target excludes eframe's native window loop.
+[[example]]
+name = "canon_slider_windows_deadlock_repro"
+path = "examples/canon_slider_windows_deadlock_repro.rs"
+required-features = ["native"]
+
 [lib]
 name = "clawft_gui_egui"
 path = "src/lib.rs"
@@ -34,13 +67,31 @@ crate-type = ["cdylib", "rlib"]
 # ── Cross-target dependencies ────────────────────────────────────────
 
 [dependencies]
-egui = "0.29"
-egui_extras = { version = "0.29", features = ["all_loaders"] }
-egui_plot = "0.29"
-egui_demo_lib = "0.29"
-# NB: egui_dock 0.14 is the egui-0.29-compatible line (0.13 tracks 0.28).
+egui = "0.34"
+# `datepicker` enables `egui_extras::DatePickerButton` (canon `Field::Date`).
+# Note: egui_extras 0.34's datepicker is built on `jiff::civil::Date`, not
+# `chrono::NaiveDate` — the original Plane spec referenced chrono but the
+# library moved to jiff. We expose `jiff::civil::Date` through `FieldValue::Date`
+# so the surface stays in sync with the underlying widget.
+egui_extras = { version = "0.34", features = ["all_loaders", "datepicker"] }
+# Brought in transitively by `egui_extras/datepicker`; named here as a
+# direct dep so canon `FieldValue::Date(jiff::civil::Date)` can be
+# spelled in this crate's public surface without a re-export hop.
+jiff = { version = "0.2.23", default-features = false, features = ["std"] }
+egui_plot = "0.35"
+egui_demo_lib = "0.34"
+# NB: egui_dock 0.19 tracks egui 0.34. (0.14 tracked egui 0.29.)
 # ADR-001 row 10 — `ui://dock` is implemented via this crate.
-egui_dock = "0.14"
+egui_dock = "0.19"
+# WEFT-252: markdown rendering for assistant turns in the chat panel.
+# `egui_commonmark` 0.23 tracks egui 0.34. Default features are disabled
+# (they would pull `load-images` → broader image-decoder set than the
+# PNG-only pin we keep above for the WEFT-246 wasm bundle budget) and
+# only `pulldown_cmark` is re-enabled — that's the parser the renderer
+# needs at runtime. No `fetch` (no network egress from chat bubbles),
+# no `svg`, no `embedded_image`, no `macros` (compile-time markdown is
+# wrong for runtime LLM output).
+egui_commonmark = { version = "0.23", default-features = false, features = ["pulldown_cmark"] }
 log = "0.4"
 serde_json = { workspace = true }
 parking_lot = { workspace = true }
@@ -48,11 +99,39 @@ parking_lot = { workspace = true }
 # Without this, wasm32-unknown-unknown panics ("time not implemented on
 # this platform") the moment any UI code hits a clock.
 web-time = "1"
-# egui_extras's `all_loaders` turns on the `image` crate dep but leaves format
-# features OFF (default-features=false and no overrides). Feature unification
-# from other crates in the tree doesn't reliably pick up PNG for the wasm
-# target, so the boot logo silently fails to decode. Pin `png` explicitly.
+# NOTE (WEFT-251): the `image` crate is feature-pinned to PNG only.
+#
+# Why "png" and nothing else:
+#   1. egui_extras's `all_loaders` brings `image` in as a transitive
+#      dep but leaves all format features OFF (default-features=false,
+#      no overrides). Feature unification across the workspace
+#      doesn't reliably enable PNG on `wasm32-unknown-unknown`, so
+#      without this explicit pin the boot logo silently fails to
+#      decode in the VSCode webview.
+#   2. PNG is the only format the egui shell *actually* renders today
+#      (the boot splash, the chip icons, the surface-host placeholder
+#      thumbnails are all PNG). Pulling JPEG/WebP/AVIF/etc. in via
+#      `image = "default"` adds ~600 KB of dead decoders to the wasm
+#      bundle — directly opposed to WEFT-246's size budget.
+#
+# Updating this list:
+#   - Adding a format (e.g. WebP) means a measurable wasm bundle
+#     hit. Profile the impact (`scripts/build.sh browser` and
+#     check `extensions/vscode-weft-panel/webview/wasm/` size)
+#     and update the WEFT-246 size note in the wasm-pack metadata
+#     above if you go above the ~2 MB target.
+#   - The native build pays roughly the same cost in stripped-bin
+#     size; the wasm size dominates because cold-load is webview-
+#     local and gzip caching is per-resource, not per-tab.
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Two consumers in this crate:
+#  - PcmChunkViewer's inline waveform mini-plot (decodes the
+#    pcm_chunk payload's i16le data field for the Explorer).
+#  - terminal::Terminal panel (decodes PTY output chunks pushed
+#    from the daemon-side terminal service via substrate).
+# Cross-target (native + wasm). Pinned to match the version
+# `clawft-service-whisper` already brings in.
+base64 = "0.22"
 
 # M1.5-C + M1.5-D/E: substrate state tree + ADR-017 OntologyAdapter
 # trait + surface-description composer. Compiles on wasm (adapter trait
@@ -63,11 +142,17 @@ clawft-substrate = { workspace = true }
 clawft-app = { workspace = true }
 # M1.5-B + M1.5-D/E: surface-description IR + composer (ADR-016).
 clawft-surface = { workspace = true }
-
 # ── Native-only dependencies ─────────────────────────────────────────
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+eframe = { version = "0.34", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+# alacritty_terminal provides the VT/ANSI parser + Term grid model.
+# We feed PTY bytes (received from the daemon-side
+# clawft-service-terminal via substrate) through `vte::ansi::Processor`
+# into a `Term<NopListener>`, then walk the grid in egui to paint
+# colored cells and glyphs. Native-only: alacritty pulls in
+# platform-specific tty + polling crates that don't compile for wasm.
+alacritty_terminal = "0.25"
 tokio = { workspace = true }
 clawft-rpc = { workspace = true }
 ehttp = { version = "0.5", features = ["native-async"] }
@@ -76,7 +161,7 @@ poll-promise = "0.3"
 # ── Wasm-only dependencies (compiled for `wasm32-unknown-unknown`) ──
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow"] }
+eframe = { version = "0.34", default-features = false, features = ["default_fonts", "glow"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
@@ -93,6 +178,36 @@ futures = { version = "0.3", default-features = false, features = ["std"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
+# Track 5 Workshop: TOML→substrate file-watcher example. These crates
+# stay in dev-dependencies so the release build of clawft-gui-egui
+# doesn't pull them; `cargo run --example workshop-watcher` compiles
+# them on demand.
+notify = { workspace = true }
+toml = { workspace = true }
+clap = { workspace = true }
+clawft-rpc = { workspace = true }
+anyhow = { workspace = true }
+# workshop-watcher migrated to the Phase 3 node-identity gate: it
+# generates an ephemeral ed25519 keypair, calls `node.register`,
+# and signs every `substrate.publish` over `node_publish_payload`.
+# `clawft-kernel` exposes the canonical payload helpers and the
+# node-id derivation used by the example.
+ed25519-dalek = { workspace = true }
+# `OsRng` for the example's ephemeral keypair generation. The
+# workspace pins rand 0.8, which is what `ed25519-dalek` 2.x's
+# `SigningKey::generate(&mut OsRng)` expects via the `rand_core`
+# feature.
+rand = { workspace = true }
+# Need `node_registry::{node_register_payload, node_publish_payload,
+# node_id_from_pubkey}` for the example. The workspace clawft-kernel
+# entry sets `default-features = false`; we restore the kernel's
+# default feature set here because individual features
+# (e.g. `native` alone) don't compile in isolation. This is a
+# dev-dep so the cost only hits `cargo run --example`, not the
+# release build of the gui-egui library.
+clawft-kernel = { workspace = true, features = [
+    "native", "exochain", "cluster", "tilezero", "ecc", "mesh",
+] }
 
 # ── Features ─────────────────────────────────────────────────────────
 
@@ -102,11 +217,43 @@ default = ["native"]
 native = []
 # Optional procedural boot sounds (pulls in rodio → cpal → alsa).
 audio = ["dep:rodio"]
-# Vendored demo_lab files (fractal_clock.rs, http_app.rs) carry upstream
-# `#[cfg_attr(feature = "serde", ...)]` gates. Declaring the feature
-# (even if unused) keeps clippy's `-D warnings` happy without editing
-# the vendored source.
+# WEFT-287: vendored vs upstream egui_demo_lib decision.
+#
+# Decision: **continue vendoring** `fractal_clock.rs`, `http_app.rs`,
+# and `custom3d_glow.rs` from upstream `emilk/egui` into
+# `src/bin/demo_lab_vendored/` (currently tracking 0.34).
+#
+# Why we don't depend on `egui_demo_app`:
+#   Those three demos live in `egui_demo_app`, which is a *binary-
+#   only* crate in the upstream workspace. There is no published
+#   library that re-exports them. Depending on the binary crate would
+#   force a renamed `[[bin]]` shim plus the wgpu/glutin trees the
+#   crate pulls for its full `cargo run`, which we don't otherwise
+#   need. The size and dependency cost outweighs the drift risk for
+#   three small files.
+#
+# Why we don't drop them entirely:
+#   `weft-demo-lab` paints upstream demos beside our themed panels so
+#   theming changes can be A/B'd against a known control. Dropping
+#   the upstream demos collapses that proof.
+#
+# Maintenance contract: the vendored files are byte-for-byte from
+# upstream and re-vendored verbatim when egui bumps; they are never
+# edited in-tree. The `#[cfg_attr(feature = "serde", ...)]` lines
+# they carry are upstream's optional-persistence gates and the
+# `serde` feature below exists *solely* to keep those `cfg_attr` lines
+# from generating an `unexpected_cfgs` warning under `-D warnings`.
+# The feature is intentionally never enabled — leaving it declared is
+# the lowest-friction way to honour the "no edits to vendored files"
+# rule.
 serde = []
+# WEFT-248: opt-in live smoke test against a running daemon + llama-server.
+# Spawned binaries and network calls don't run under default CI; this
+# feature gates the test so `scripts/build.sh test` stays hermetic.
+#
+# Enable with:
+#   cargo test -p clawft-gui-egui --features live-smoke -- --ignored
+live-smoke = []
 
 [dependencies.rodio]
 version = "0.19"

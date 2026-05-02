@@ -260,7 +260,7 @@ mod tests {
     #[test]
     fn ema_clamped_to_unit_range() {
         let score = update_hallucination_score(1.0, 1, 0, HALLUCINATION_EMA_ALPHA);
-        assert!(score >= 0.0 && score <= 1.0, "score={score}");
+        assert!((0.0..=1.0).contains(&score), "score={score}");
     }
 
     // ── score_to_boost tests ────────────────────────────────────────
@@ -313,7 +313,7 @@ mod tests {
             &[(
                 "call-1".into(),
                 "write_file".into(),
-                format!(r#"{{"path": "exists.txt"}}"#),
+                r#"{"path": "exists.txt"}"#.to_string(),
             )],
         )
         .await;

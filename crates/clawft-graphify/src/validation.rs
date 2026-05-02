@@ -91,30 +91,27 @@ pub fn validate_extraction(data: &serde_json::Value) -> Vec<String> {
                             errors.push(format!("Edge {i} missing required field '{field}'"));
                         }
                     }
-                    if let Some(conf) = edge.get("confidence").and_then(|v| v.as_str()) {
-                        if Confidence::from_str_loose(conf).is_none() {
+                    if let Some(conf) = edge.get("confidence").and_then(|v| v.as_str())
+                        && Confidence::from_str_loose(conf).is_none() {
                             errors.push(format!(
                                 "Edge {i} has invalid confidence '{conf}' - must be one of {:?}",
                                 Confidence::VALID_STRINGS,
                             ));
                         }
-                    }
                     // Dangling references: warn but don't block.
                     if !node_ids.is_empty() {
-                        if let Some(src) = edge.get("source").and_then(|v| v.as_str()) {
-                            if !node_ids.contains(src) {
+                        if let Some(src) = edge.get("source").and_then(|v| v.as_str())
+                            && !node_ids.contains(src) {
                                 errors.push(format!(
                                     "Edge {i} source '{src}' does not match any node id"
                                 ));
                             }
-                        }
-                        if let Some(tgt) = edge.get("target").and_then(|v| v.as_str()) {
-                            if !node_ids.contains(tgt) {
+                        if let Some(tgt) = edge.get("target").and_then(|v| v.as_str())
+                            && !node_ids.contains(tgt) {
                                 errors.push(format!(
                                     "Edge {i} target '{tgt}' does not match any node id"
                                 ));
                             }
-                        }
                     }
                 }
             } else {

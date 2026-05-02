@@ -325,14 +325,13 @@ impl MeshRuntime {
         // form `{"topic": "<topic-name>"}` to register interest. We record
         // the subscription and consume the message — it does not propagate
         // to the local router or any local subscribers.
-        if let MessageTarget::Topic(ref ctrl_topic) = message.target {
-            if ctrl_topic == "mesh.subscribe" {
-                if let MessagePayload::Json(ref payload) = message.payload {
-                    if let Some(topic) = payload.get("topic").and_then(|v| v.as_str()) {
+        if let MessageTarget::Topic(ref ctrl_topic) = message.target
+            && ctrl_topic == "mesh.subscribe" {
+                if let MessagePayload::Json(ref payload) = message.payload
+                    && let Some(topic) = payload.get("topic").and_then(|v| v.as_str()) {
                         self.register_peer_topic(topic, &envelope.source_node);
                         return Ok(());
                     }
-                }
                 // Malformed subscribe — drop silently rather than routing to
                 // local subscribers who have no idea what to do with it.
                 warn!(
@@ -341,7 +340,6 @@ impl MeshRuntime {
                 );
                 return Ok(());
             }
-        }
 
         router.send(message).await
     }

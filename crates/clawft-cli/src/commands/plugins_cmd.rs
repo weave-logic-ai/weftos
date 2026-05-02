@@ -89,10 +89,13 @@ fn create_plugin(name: &str, plugin_type: &str, dir: Option<&str>) -> anyhow::Re
     // src/lib.rs
     std::fs::write(src_dir.join("lib.rs"), lib_rs_template(name, plugin_type))?;
 
-    // .weftos-plugin.toml
+    // clawft.plugin.json (canonical format per WEFT-64). The legacy
+    // `.weftos-plugin.toml` is still readable via
+    // `PluginManifest::from_legacy_toml` for backward compatibility, but
+    // the scaffolder only emits JSON now.
     std::fs::write(
-        root.join(".weftos-plugin.toml"),
-        plugin_manifest_template(name, plugin_type),
+        root.join("clawft.plugin.json"),
+        plugin_manifest_template_json(name, plugin_type),
     )?;
 
     // README.md
@@ -286,6 +289,37 @@ mod tests {{
     }
 }
 
+/// Render the canonical `clawft.plugin.json` manifest for the given
+/// plugin name and type. Matches the schema parsed by
+/// `clawft_plugin::PluginManifest::from_json`.
+fn plugin_manifest_template_json(name: &str, plugin_type: &str) -> String {
+    let capability = match plugin_type {
+        "tool" => "tool",
+        "channel" => "channel",
+        "analyzer" => "pipeline_stage",
+        "skill" => "skill",
+        _ => "tool",
+    };
+    let id = format!("weftos.plugin.{name}");
+    serde_json::to_string_pretty(&serde_json::json!({
+        "id": id,
+        "name": name,
+        "version": "0.1.0",
+        "capabilities": [capability],
+        "permissions": {
+            "network": [],
+            "filesystem": [],
+            "env_vars": [],
+            "shell": false
+        }
+    }))
+    .unwrap_or_else(|_| String::from("{}"))
+}
+
+/// Legacy TOML template (kept for backward-compat reference / tests).
+/// Not emitted by the scaffolder anymore (WEFT-64) but still produced by
+/// some downstream tooling and accepted by the deprecated TOML reader.
+#[cfg(test)]
 fn plugin_manifest_template(name: &str, plugin_type: &str) -> String {
     format!(
         r#"[plugin]
@@ -325,14 +359,16 @@ cargo test -p clawft-plugin-{name}
 
 ## Plugin Manifest
 
-See `.weftos-plugin.toml` for metadata and compatibility requirements.
+See `clawft.plugin.json` for metadata and capability declarations
+(canonical schema). The older `.weftos-plugin.toml` format is still
+parseable for backward compatibility but is deprecated.
 "#
     )
 }
 
 /// Convert a snake_case or kebab-case identifier to PascalCase.
 fn to_pascal_case(s: &str) -> String {
-    s.split(|c: char| c == '_' || c == '-')
+    s.split(['_', '-'])
         .filter(|part| !part.is_empty())
         .map(|part| {
             let mut chars = part.chars();
@@ -397,26 +433,37 @@ fn validate_plugin(path: &str) -> anyhow::Result<()> {
         }
     }
 
-    // Check .weftos-plugin.toml exists and parses.
-    let manifest_path = root.join(".weftos-plugin.toml");
-    if manifest_path.exists() {
-        let contents = std::fs::read_to_string(&manifest_path)?;
-        match toml::from_str::<toml::Value>(&contents) {
-            Ok(val) => {
-                if val.get("plugin").is_none() {
-                    errors.push(".weftos-plugin.toml: missing [plugin] table".to_string());
-                }
-                if val.get("compatibility").is_none() {
-                    warnings
-                        .push(".weftos-plugin.toml: missing [compatibility] table".to_string());
-                }
-            }
-            Err(e) => {
-                errors.push(format!(".weftos-plugin.toml: parse error: {e}"));
-            }
+    // Check the canonical clawft.plugin.json (or legacy .weftos-plugin.toml)
+    // exists and parses. Per WEFT-64 the canonical format is JSON; if only
+    // the legacy TOML is present, accept it but warn.
+    let json_manifest = root.join("clawft.plugin.json");
+    let toml_manifest = root.join(".weftos-plugin.toml");
+    if json_manifest.exists() {
+        let contents = std::fs::read_to_string(&json_manifest)?;
+        match clawft_plugin::PluginManifest::from_json(&contents) {
+            Ok(_) => {}
+            Err(e) => errors.push(format!("clawft.plugin.json: {e}")),
+        }
+        if toml_manifest.exists() {
+            warnings.push(
+                "both clawft.plugin.json and .weftos-plugin.toml present; \
+                 the JSON is canonical -- delete the TOML to silence."
+                    .to_string(),
+            );
+        }
+    } else if toml_manifest.exists() {
+        warnings.push(
+            ".weftos-plugin.toml is deprecated; please migrate to \
+             clawft.plugin.json (WEFT-64)."
+                .to_string(),
+        );
+        let contents = std::fs::read_to_string(&toml_manifest)?;
+        match clawft_plugin::PluginManifest::from_legacy_toml(&contents) {
+            Ok(_) => {}
+            Err(e) => errors.push(format!(".weftos-plugin.toml: {e}")),
         }
     } else {
-        errors.push(".weftos-plugin.toml not found".to_string());
+        errors.push("no plugin manifest found (clawft.plugin.json)".to_string());
     }
 
     // Report results.
@@ -471,6 +518,33 @@ mod tests {
             parsed["plugin"]["name"].as_str().unwrap(),
             "test"
         );
+    }
+
+    #[test]
+    fn manifest_template_json_parses_via_plugin_manifest() {
+        // Per WEFT-64 the canonical manifest format is JSON. The scaffolder
+        // template must round-trip through `PluginManifest::from_json`.
+        for plugin_type in ["analyzer", "channel", "tool", "skill", "generic"] {
+            let t = plugin_manifest_template_json("scaffold-test", plugin_type);
+            let manifest = clawft_plugin::PluginManifest::from_json(&t)
+                .unwrap_or_else(|e| panic!("type {plugin_type}: {e}"));
+            assert_eq!(manifest.name, "scaffold-test");
+            assert_eq!(manifest.id, "weftos.plugin.scaffold-test");
+        }
+    }
+
+    #[test]
+    fn manifest_template_json_and_legacy_toml_match() {
+        let json = plugin_manifest_template_json("twins", "tool");
+        let toml = plugin_manifest_template("twins", "tool");
+
+        let from_json = clawft_plugin::PluginManifest::from_json(&json).unwrap();
+        let from_toml = clawft_plugin::PluginManifest::from_legacy_toml(&toml).unwrap();
+
+        assert_eq!(from_json.name, from_toml.name);
+        assert_eq!(from_json.version, from_toml.version);
+        assert_eq!(from_json.capabilities, from_toml.capabilities);
+        assert_eq!(from_json.id, from_toml.id);
     }
 
     #[test]

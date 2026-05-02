@@ -38,11 +38,18 @@ impl eframe::App for ClawftApp {
         [0.0, 0.0, 0.0, 1.0]
     }
 
+    // eframe 0.34 added a required `ui` method on `App`. We still drive
+    // the app from the (now-deprecated) `update` method below — eframe
+    // calls both each frame, so an empty `ui` keeps the trait satisfied
+    // without restructuring the app body.
+    fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
+
+    #[allow(deprecated)]
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let snap = self.live.snapshot();
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(egui::Color32::BLACK))
+            .frame(egui::Frame::new().fill(egui::Color32::BLACK))
             .show(ctx, |ui| match &mut self.phase {
                 Phase::Boot {
                     started,

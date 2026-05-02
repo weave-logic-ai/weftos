@@ -169,23 +169,23 @@ cargo check --target wasm32-unknown-unknown -p <crate> --no-default-features --f
 
 ### Feature Flag Validation Script
 
-Each phase should be verified with `scripts/check-features.sh`:
+Each phase should be verified with `scripts/build.sh gate` (WEFT-409,
+2026-04-30: supersedes the never-created `scripts/check-features.sh`):
 
 ```bash
-#!/bin/bash
-set -euo pipefail
-echo "=== Native (default) ==="
-cargo check --workspace
-cargo test --workspace --no-run
+# Full phase gate — 12 checks: native + WASI + browser + clippy +
+# bundle-size + audit + docs regen
+scripts/build.sh gate
 
-echo "=== WASI WASM (existing) ==="
-cargo check --target wasm32-wasip2 -p clawft-wasm
-
-echo "=== Browser WASM (new) ==="
-cargo check --target wasm32-unknown-unknown -p clawft-wasm --no-default-features --features browser
-
-echo "All targets OK"
+# Equivalent fast iteration loop
+scripts/build.sh check        # native cargo check --workspace
+scripts/build.sh wasi         # wasm32-wasip2 build
+scripts/build.sh browser      # wasm32-unknown-unknown build
 ```
+
+The full target matrix lives inline in `scripts/build.sh` (search for
+`phase_gate()`); add new targets there rather than to a parallel
+script.
 
 ---
 

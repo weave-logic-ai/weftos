@@ -1,0 +1,45 @@
+[package]
+name = "clawft-service-classify"
+version.workspace = true
+publish = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "WeftOS audio-classification Stage — sits between mic PCM and STT inference. Initial impl is energy-based VAD; the ClassifierBackend trait keeps the emission shape generic so a llama.cpp-hosted classifier (music / speech / noise / ...) can swap in without changing any subscriber's wire-format code."
+
+[dependencies]
+# Async runtime — tokio 'full' matches the daemon, which is the intended host.
+tokio = { workspace = true }
+
+# Serde for substrate payloads + Classification wire shape.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# PCM payload arrives base64-encoded in JSON (matches the firmware's
+# pcm_chunk wire shape; see clawft-service-whisper::windower::PcmChunk).
+base64 = "0.22"
+
+# Structured logs.
+tracing = { workspace = true }
+
+# Kernel SubstrateService — in-process pub/sub. Same heavy default-feature
+# set as the whisper sibling: the kernel crate has internal cross-feature
+# references that don't compile with `native` alone, and this service is
+# daemon-hosted so the heavier features are already compiled in upstream.
+clawft-kernel = { workspace = true, features = [
+    "native",
+    "ecc",
+    "exochain",
+    "cluster",
+    "mesh",
+    "tilezero",
+] }
+
+# Error handling.
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+tracing-subscriber = { workspace = true }

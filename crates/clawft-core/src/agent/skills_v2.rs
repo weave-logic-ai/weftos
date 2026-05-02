@@ -893,7 +893,7 @@ Instructions.
 
         // Create both formats in the same directory.
         let skill_md =
-            format!("---\nname: dual\ndescription: SKILL.md version\n---\n\nSKILL.md instructions");
+            "---\nname: dual\ndescription: SKILL.md version\n---\n\nSKILL.md instructions".to_string();
         std::fs::write(skill_dir.join("SKILL.md"), skill_md).unwrap();
 
         let skill_json = serde_json::json!({

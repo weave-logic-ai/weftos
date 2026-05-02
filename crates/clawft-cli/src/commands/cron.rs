@@ -122,11 +122,10 @@ pub async fn cron_list(_config: &Config) -> anyhow::Result<()> {
             return Ok(());
         }
         // If the daemon returned an error (e.g. unknown method), fall through.
-        if let Some(ref err) = resp.error {
-            if !err.contains("unknown method") {
+        if let Some(ref err) = resp.error
+            && !err.contains("unknown method") {
                 anyhow::bail!("{err}");
             }
-        }
         eprintln!("warning: daemon does not support cron.list yet, falling back to local store (deprecated)");
     }
 
@@ -239,11 +238,10 @@ pub async fn cron_add(
             println!("Cron job '{name}' created with ID: {job_id}");
             return Ok(());
         }
-        if let Some(ref err) = resp.error {
-            if !err.contains("unknown method") {
+        if let Some(ref err) = resp.error
+            && !err.contains("unknown method") {
                 anyhow::bail!("{err}");
             }
-        }
         eprintln!("warning: daemon does not support cron.add yet, falling back to local store (deprecated)");
     }
 
@@ -300,11 +298,10 @@ pub async fn cron_remove(job_id: String, _config: &Config) -> anyhow::Result<()>
             println!("Cron job '{job_id}' removed.");
             return Ok(());
         }
-        if let Some(ref err) = resp.error {
-            if !err.contains("unknown method") {
+        if let Some(ref err) = resp.error
+            && !err.contains("unknown method") {
                 anyhow::bail!("{err}");
             }
-        }
         eprintln!("warning: daemon does not support cron.remove yet, falling back to local store (deprecated)");
     }
 
@@ -346,11 +343,10 @@ pub async fn cron_enable(job_id: String, enabled: bool, _config: &Config) -> any
             println!("Cron job '{job_id}' {state}.");
             return Ok(());
         }
-        if let Some(ref err) = resp.error {
-            if !err.contains("unknown method") {
+        if let Some(ref err) = resp.error
+            && !err.contains("unknown method") {
                 anyhow::bail!("{err}");
             }
-        }
         eprintln!(
             "warning: daemon does not support {method} yet, falling back to local store (deprecated)"
         );
@@ -400,11 +396,10 @@ pub async fn cron_run(job_id: String, _config: &Config) -> anyhow::Result<()> {
             }
             return Ok(());
         }
-        if let Some(ref err) = resp.error {
-            if !err.contains("unknown method") {
+        if let Some(ref err) = resp.error
+            && !err.contains("unknown method") {
                 anyhow::bail!("{err}");
             }
-        }
         eprintln!(
             "warning: daemon does not support cron.run yet, falling back to local store (deprecated)"
         );

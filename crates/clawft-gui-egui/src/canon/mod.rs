@@ -114,6 +114,54 @@ mod tests {
         assert_eq!(FieldValue::Text(String::new()).as_kind_tag(), "Text");
         assert_eq!(FieldValue::Number(0.0).as_kind_tag(), "Number");
         assert_eq!(FieldValue::Choice(0).as_kind_tag(), "Choice");
+        // [WEFT-265 / WEFT-266] Date + Code variants land on
+        // FieldValue alongside the original three.
+        let d = FieldValue::Date(jiff::civil::Date::new(2026, 1, 1).unwrap());
+        assert_eq!(d.as_kind_tag(), "Date");
+        let c = FieldValue::Code {
+            lang: "rust".into(),
+            src: String::new(),
+        };
+        assert_eq!(c.as_kind_tag(), "Code");
+    }
+
+    #[test]
+    fn field_kind_constructors_match_values() {
+        // Smoke: builder constructors produce the right kind variants
+        // so a caller can pair them with a matching FieldValue.
+        match FieldKind::date() {
+            FieldKind::Date => {}
+            other => panic!("date() must produce Date, got {other:?}"),
+        }
+        match FieldKind::code("rust") {
+            FieldKind::Code { language } => assert_eq!(language.as_ref(), "rust"),
+            other => panic!("code() must produce Code, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn select_crosses_over_to_table_form_at_threshold() {
+        // [WEFT-267] Default threshold flips Select to TableBuilder
+        // form once the option count grows past a typical screen.
+        // 12-option Select stays as ComboBox; 64-option Select goes
+        // table.
+        const SMALL: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"];
+        const LARGE_LEN: usize = 64;
+        const LARGE: &[&str; LARGE_LEN] = &[""; LARGE_LEN];
+        let mut sel = 0usize;
+        let small = Select::new("s", "", SMALL, &mut sel);
+        assert!(!small.uses_table_form(), "12 options stay as ComboBox");
+        let mut sel2 = 0usize;
+        let large = Select::new("l", "", LARGE.as_slice(), &mut sel2);
+        assert!(large.uses_table_form(), "64 options switch to table");
+        // Override flips the decision both ways.
+        let mut sel3 = 0usize;
+        let forced_table = Select::new("ft", "", SMALL, &mut sel3).table_threshold(0);
+        assert!(forced_table.uses_table_form());
+        let mut sel4 = 0usize;
+        let forced_combo =
+            Select::new("fc", "", LARGE.as_slice(), &mut sel4).table_threshold(usize::MAX);
+        assert!(!forced_combo.uses_table_form());
     }
 
     #[test]

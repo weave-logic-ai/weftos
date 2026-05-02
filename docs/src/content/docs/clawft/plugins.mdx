@@ -14,7 +14,7 @@ The clawft plugin system provides six core extension points through the `clawft-
 | Pipeline Stages | `PipelineStage` | Custom processing stages in the agent pipeline |
 | Skills | `Skill` | High-level agent capabilities with tools and instructions |
 | Memory Backends | `MemoryBackend` | Pluggable memory storage (vector, KV, graph) |
-| Voice Handlers | `VoiceHandler` | Voice/audio processing |
+| Voice Handlers | `VoiceHandler` | Voice/audio processing — **forward-compat placeholder** in 0.7.x: trait surface only, no production impl is shipped, no plugin-loader path exercises it. Real impls land with Workstream G (VAD / STT / TTS / wake-word). |
 
 ## Plugin Manifest
 

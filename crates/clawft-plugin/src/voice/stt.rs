@@ -13,7 +13,9 @@ pub struct SttResult {
 
 /// Streaming speech-to-text engine.
 ///
-/// Currently a stub -- real sherpa-rs integration after VP.
+/// Currently a stub -- real sherpa-rs integration is deferred to the
+/// 0.8.x in-process voice backend (see ADR-053). 0.7.0 ships with
+/// substrate-side STT via `clawft-service-whisper`.
 pub struct SpeechToText {
     model_path: std::path::PathBuf,
     language: String,

@@ -1,0 +1,219 @@
+[
+  {
+    "name": "ws13: clawft-app — decide UnknownMode validation variant fate",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 1; §clawft-app deferred items).\n\n## Problem / gap\n\n`ValidationError::UnknownMode` is dead code — serde rejects out-of-set `supported_modes` values at parse time. Decision is open: wire a Rust-constructed-manifest check, or delete the variant.\n\n## Acceptance criteria\n\n- [ ] Decide whether the variant covers Rust-constructed manifests or should be deleted.\n- [ ] If kept: add a Rust-side validation path + unit test.\n- [ ] If deleted: remove the variant and update tests/docs.\n\n## Dependencies\n\n- None.\n\n## Notes\n\n- `crates/clawft-app/src/validation.rs`.\n- ROADMAP §\"Review-deferred follow-ups\" beads (<30 LoC).\n"
+  },
+  {
+    "name": "ws13: clawft-app — add registry corruption quarantine path",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 2; §clawft-app deferred items).\n\n## Problem / gap\n\nRegistry corruption recovery currently returns a JSON error to the caller. A quarantine path (rename to `apps.json.corrupt-<ts>`) plus backup/repair would let the daemon self-heal a damaged registry instead of erroring out.\n\n## Acceptance criteria\n\n- [ ] On JSON parse failure, rename `apps.json` to `apps.json.corrupt-<ts>` and start fresh.\n- [ ] Unit test covers the rename + recovery path.\n- [ ] Logs/telemetry surface the corruption event.\n\n## Dependencies\n\n- None.\n\n## Notes\n\n- `crates/clawft-app/src/registry.rs`.\n"
+  },
+  {
+    "name": "ws13: clawft-app — emit lifecycle teardown tombstone on uninstall-while-enabled",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 3; §clawft-app deferred items).\n\n## Problem / gap\n\n`uninstall` while enabled does NOT yet run the ADR-015 §Lifecycle teardown (surfaces / subscriptions / affordances) because compositor-level hooks don't exist. Need to emit a tombstone the compositor can catch when the M1.6+ hooks land.\n\n## Acceptance criteria\n\n- [ ] Uninstall on an enabled app records a tombstone event/result.\n- [ ] Compositor consumers can subscribe to the tombstone.\n- [ ] Test exercises uninstall-while-enabled and confirms tombstone emission.\n\n## Dependencies\n\n- ADR-015 lifecycle hook implementation (M1.6+).\n\n## Notes\n\n- `crates/clawft-app/src/lifecycle.rs`.\n"
+  },
+  {
+    "name": "ws13: clawft-app — wire ADR-015 rule 6 once clawft-adapter exists",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "gap", "governance"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 4; TODOs `clawft-app/src/lib.rs:13`, `validation.rs:172–178`).\n\n## Problem / gap\n\nADR-015 rule 6 (permission ↔ adapter consistency check) is TODO'd until ADR-017/`clawft-adapter` lands. The `let _ = Permission::Camera;` placeholder is kept in scope. Governance at install time is the backstop today.\n\n## Acceptance criteria\n\n- [ ] Implement rule 6 once `clawft-adapter` (or equivalent registry) exists.\n- [ ] Add validation tests for permission/adapter mismatches.\n- [ ] Remove the `let _ = Permission::Camera;` placeholder.\n\n## Dependencies\n\n- `clawft-adapter` crate (does not exist yet).\n- ADR-017 finalisation.\n\n## Notes\n\n- `crates/clawft-app/src/{lib.rs:13,validation.rs:172–178}`.\n"
+  },
+  {
+    "name": "ws13: clawft-app — cover wasm to_toml_string failure path with negative test",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "tests"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 5; orphaned/ambiguous: `ManifestParseError::Serialize` wasm32 path unverified).\n\n## Problem / gap\n\nThe `web-time` switch handled `SystemTime` but not `toml::ser::Error`. The wasm32 serialize-failure path is unverified.\n\n## Acceptance criteria\n\n- [ ] Add a negative test that triggers `ManifestParseError::Serialize` under wasm32.\n- [ ] Confirm the failure surfaces cleanly without panic.\n\n## Dependencies\n\n- None.\n\n## Notes\n\n- `crates/clawft-app/src/manifest.rs`.\n"
+  },
+  {
+    "name": "ws13: clawft-substrate — emit substrate/meta/adapter/<id>/health from each adapter",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 6; ADR-017 §7; `clawft-substrate/src/lib.rs:23`).\n\n## Problem / gap\n\nThe `substrate/meta/adapter/<id>/health` topic is stubbed in the kernel adapter and not emitted anywhere else. Adapter health is invisible to surfaces today.\n\n## Acceptance criteria\n\n- [ ] Each in-tree adapter (kernel/network/bluetooth/mesh/chain/mic) emits a health topic.\n- [ ] Topic shape documented in ADR-017 alignment.\n- [ ] Tests cover at least one adapter's health emissions.\n\n## Dependencies\n\n- Coordinates with task 23 (per-sensor healthcheck contract emitter).\n\n## Notes\n\n- ROADMAP §\"Review-deferred follow-ups\".\n"
+  },
+  {
+    "name": "ws13: clawft-substrate — per-id Replace/Remove deltas on processes/services topics",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "tech-debt", "performance"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 7; `kernel.rs:13`).\n\n## Problem / gap\n\nProcesses/services topics emit a whole-list `Replace` per tick. Per-pid / per-name `Replace` + `Remove` deltas are deferred to M1.6+ pending a daemon-side row-id contract.\n\n## Acceptance criteria\n\n- [ ] Daemon RPC grows a row-id contract for processes/services.\n- [ ] Adapter emits per-row Replace/Remove deltas.\n- [ ] Tests confirm reduced delta size on steady-state ticks.\n\n## Dependencies\n\n- Daemon-side row-id contract change.\n\n## Notes\n\n- `crates/clawft-substrate/src/kernel.rs`.\n"
+  },
+  {
+    "name": "ws13: clawft-substrate — surface Subscription closed via adapter-health topic on teardown",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "bug", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 8; deferred §clawft-substrate adapter-health).\n\n## Problem / gap\n\nNo liveness ping or auto-reconnect signal — the drain task silently exits when the sender closes. Subscribers cannot tell the difference between idle and dead.\n\n## Acceptance criteria\n\n- [ ] Drain-task exit emits a `Subscription closed` event on the adapter-health topic.\n- [ ] Test exercises adapter teardown and asserts the emission.\n\n## Dependencies\n\n- Task 6 (adapter-health topic shape).\n\n## Notes\n\n- `crates/clawft-substrate/src/adapter.rs`, `snapshot.rs`.\n"
+  },
+  {
+    "name": "ws13: clawft-substrate — migrate mic adapter to substrate/<node-id>/sensor/mic/{summary,pcm}",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 9; `JOURNALED-SENSOR-MIC.md`; `mic.rs:33,84,192–202`).\n\n## Problem / gap\n\nThe in-tree `MicrophoneAdapter` still emits the legacy flat `substrate/sensor/mic` summary only — no `pcm` topic, no node-scoped path. ESP32-signed publish path is only declared in planning.\n\n## Acceptance criteria\n\n- [ ] Mic adapter publishes under `substrate/<node-id>/sensor/mic/{summary,pcm}`.\n- [ ] `pcm` ships as a windowed-`Append` topic.\n- [ ] Cutover documented in `ADOPTION.md` (see task 29).\n\n## Dependencies\n\n- Resolution of legacy-flat vs node-scoped naming (task 29).\n- ESP32 node signing prefix gate (task 24).\n\n## Notes\n\n- `crates/clawft-substrate/src/mic.rs`.\n"
+  },
+  {
+    "name": "ws13: clawft-substrate — ship a second Characterization exemplar (Enumerated or Spectral)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 10; sensor-framework deferred items).\n\n## Problem / gap\n\nOnly `Characterization::Rate` is exercised (mic). No `Presence` / `Enumerated` / `Spectral` / `Identifying` adapter ships. Need at least one more exemplar to validate the framework.\n\n## Acceptance criteria\n\n- [ ] Implement an `Enumerated` rfkill adapter or a `Spectral` FFT-mic.\n- [ ] Tests cover the new characterization path.\n- [ ] Adapter registered in the substrate lineup.\n\n## Dependencies\n\n- None.\n\n## Notes\n\n- `crates/clawft-substrate/src/physical.rs`.\n"
+  },
+  {
+    "name": "ws13: clawft-substrate — implement cross-platform network/bluetooth or document Linux-only",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "gap", "docs"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 11; cross-platform stubs).\n\n## Problem / gap\n\n`network` / `bluetooth` adapters return `absent` on non-Linux; macOS / Windows variants are unscheduled. Either ship them or document the Linux-only constraint.\n\n## Acceptance criteria\n\n- [ ] Either implement macOS / Windows adapter variants, OR\n- [ ] Update docs to clearly state Linux-only support and behaviour on other OSes.\n- [ ] Surface non-Linux fallback in adapter-health (sysfs error cause).\n\n## Dependencies\n\n- Task 6 (adapter-health surfacing).\n\n## Notes\n\n- `crates/clawft-substrate/src/{network,bluetooth}.rs`.\n"
+  },
+  {
+    "name": "ws13: clawft-surface — wire 13 stub-leaf canon primitives in the composer",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 12; `tree.rs:119,276`; `compose.rs:11,681,686`).\n\n## Problem / gap\n\n13 of the 21 canon leaves ship as M1.5 stub `TODO:` labels: Field, Toggle, Select, Slider, Plot, Media, Canvas, Foreign, Modal, Tabs, Sheet, Dock, Tree. Any non-switched IR node renders \"TODO: <iri> not wired in M1.5\". This is a substantial surface gap visible to any third-party app.\n\n## Acceptance criteria\n\n- [ ] All 13 stub-leaf primitives have working composer renderers (~80 LoC each).\n- [ ] Each primitive has fixture coverage in admin or demo surfaces.\n- [ ] Composer no longer emits TODO labels for canon IRIs.\n\n## Dependencies\n\n- May coordinate with task 18 (canon-types extraction) for cleaner architecture.\n\n## Notes\n\n- Significant effort (13 × ~80 LoC). Largest single bead in this WS.\n"
+  },
+  {
+    "name": "ws13: clawft-surface — add .first/.last field-access shorthand support",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 13; deferred §clawft-surface; `lib.rs` header).\n\n## Problem / gap\n\n`.first` / `.last` as field-access shorthand is not supported (only function-call form). Documented in `lib.rs` header.\n\n## Acceptance criteria\n\n- [ ] Parser accepts `$path.first` and `$path.last` as field-access shorthand.\n- [ ] Evaluator returns the same result as the function-call form.\n- [ ] Round-trip and eval tests cover both forms.\n\n## Dependencies\n\n- None.\n\n## Notes\n\n- `crates/clawft-surface/src/parse/expr.rs`, `eval.rs`.\n"
+  },
+  {
+    "name": "ws13: clawft-surface — implement sort(list, key) ordering combinator",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 14; ADR-016 §5; deferred §clawft-surface).\n\n## Problem / gap\n\n`sort(list, key)` ordering combinator from ADR-016 §5 is not implemented in the evaluator or arity table.\n\n## Acceptance criteria\n\n- [ ] Add `sort` to the static arity table.\n- [ ] Implement evaluator branch with key-lambda binding.\n- [ ] Tests cover sort-by-field and sort-by-derived-value.\n\n## Dependencies\n\n- None.\n\n## Notes\n\n- `crates/clawft-surface/src/{eval.rs,parse/expr.rs}`.\n"
+  },
+  {
+    "name": "ws13: clawft-surface — accept scientific (1e5) and hex (0xff) number literals",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 15; deferred §clawft-surface).\n\n## Problem / gap\n\nScientific (`1e5`) / hex (`0xff`) number literals are not accepted by the expression parser.\n\n## Acceptance criteria\n\n- [ ] Parser accepts both literal forms.\n- [ ] Tests confirm correct numeric value lowering.\n\n## Dependencies\n\n- None.\n\n## Notes\n\n- `crates/clawft-surface/src/parse/expr.rs`.\n"
+  },
+  {
+    "name": "ws13: clawft-surface — parse [compositions.*] and expand in composer",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 16; deferred §clawft-surface).\n\n## Problem / gap\n\nUser-defined compositions (`[compositions.*]`) are not parsed, so reusable surface fragments cannot be authored in TOML.\n\n## Acceptance criteria\n\n- [ ] TOML parser accepts `[compositions.*]` blocks.\n- [ ] Composer expands referenced compositions during render.\n- [ ] Round-trip test covers a multi-composition surface.\n\n## Dependencies\n\n- None.\n\n## Notes\n\n- `crates/clawft-surface/src/parse/toml.rs`.\n"
+  },
+  {
+    "name": "ws13: clawft-surface — drop unused egui dep from Cargo.toml",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "tech-debt", "orphan"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 17; orphaned/ambiguous list).\n\n## Problem / gap\n\n`clawft-surface/Cargo.toml` keeps `egui = \"0.34\"` with the comment \"kept for now; can drop once eval.rs is fully UI-free.\" `eval.rs` no longer references egui — the dep can be dropped, unblocking the surface crate for non-egui consumers (browser canvas, terminal).\n\n## Acceptance criteria\n\n- [ ] Remove the egui dependency from `clawft-surface/Cargo.toml`.\n- [ ] `scripts/build.sh check` passes on native and wasi/browser targets.\n\n## Dependencies\n\n- Task 18 (canon-types extraction) may simplify this further but is not required.\n\n## Notes\n\n- Trivial (<5 LoC).\n"
+  },
+  {
+    "name": "ws13: clawft-surface — extract canon types and move composer back to clawft-surface",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 18; deferred §clawft-surface; cross-cutting §3).\n\n## Problem / gap\n\nThe composer runtime lives in `clawft-gui-egui::surface_host` rather than in `clawft-surface`. The previously-cyclic dep is broken (`f5e40c3`) by composer relocation — but the proper fix (extract canon types to a shared crate, move composer back) is unscheduled.\n\n## Acceptance criteria\n\n- [ ] New shared canon-types crate created and consumed by both `clawft-surface` and `clawft-gui-egui`.\n- [ ] Composer runtime relocated into `clawft-surface`.\n- [ ] No cyclic deps; gate passes.\n\n## Dependencies\n\n- Task 17 (drop egui dep) becomes natural after this lands.\n\n## Notes\n\n- Cross-cutting architecture work.\n"
+  },
+  {
+    "name": "ws13: clawft-surface — replace 14-line src/substrate.rs shim with direct re-export",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "tech-debt", "orphan"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 19; orphaned/ambiguous).\n\n## Problem / gap\n\n`clawft-surface/src/substrate.rs` is a 14-line shim re-exporting `OntologySnapshot` from `clawft_substrate::snapshot`. Decide: keep the indirection or fold into `lib.rs`.\n\n## Acceptance criteria\n\n- [ ] Either fold the shim into `lib.rs` or document why the indirection exists.\n- [ ] Downstream consumers continue to compile.\n\n## Dependencies\n\n- None.\n\n## Notes\n\n- `crates/clawft-surface/src/substrate.rs`.\n"
+  },
+  {
+    "name": "ws13: integration — wire real ADR-012 governance::Gate through Substrate::subscribe_adapter",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "stub", "governance", "security"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 20; `lifecycle.rs:11,72`; `clawft-substrate/src/lib.rs:19`; `adapter.rs:133`).\n\n## Problem / gap\n\nThe real ADR-012 governance gate is M1.6+. `NoopGate` / `StrictGate` are placeholders, the app-manifest layer governance hook into `OntologyAdapter::open` is TODO'd (`permissions()` is advisory), and `AdapterError::PermissionDenied` is never emitted.\n\n## Acceptance criteria\n\n- [ ] Replace placeholder gates with an ADR-012-backed implementation.\n- [ ] Plumb the gate through `Substrate::subscribe_adapter` and `OntologyAdapter::open`.\n- [ ] Adapters emit `AdapterError::PermissionDenied` when denied.\n- [ ] Integration tests cover allow/deny paths.\n\n## Dependencies\n\n- ADR-012 governance work (M1.6+).\n\n## Notes\n\n- High-impact security/governance bead.\n"
+  },
+  {
+    "name": "ws13: integration — implement honest affordance ∩ permit intersection in compose::honest_affordances",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "stub", "governance", "security"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 21; `compose.rs:804`; cross-cutting §2).\n\n## Problem / gap\n\n`AffordanceDecl` passes through composer unfiltered (ADR-006 rule 2 intersection lives in `surface_host/compose.rs:804::honest_affordances`, currently identity). Real wiring lands with M2's active-radar loop.\n\n## Acceptance criteria\n\n- [ ] Implement actual intersection of declared affordances and permission grants.\n- [ ] Surfaces hide affordances the user/app cannot perform.\n- [ ] Tests cover allow/deny intersections.\n\n## Dependencies\n\n- Task 20 (governance gate).\n- ADR-008 goal-aggregate (M2).\n\n## Notes\n\n- Honesty/UX safety bead.\n"
+  },
+  {
+    "name": "ws13: integration — drive variant_id stamping in CanonResponse from surface binding",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 22; cross-cutting §1).\n\n## Problem / gap\n\n`variant_id` stamping is identity-mapped; ADR-006 head-metadata plumbing exists but doesn't drive rendering.\n\n## Acceptance criteria\n\n- [ ] Surface bindings can specify `variant_id`.\n- [ ] `CanonResponse` carries through the binding-derived `variant_id`.\n- [ ] Tests cover variant selection by binding.\n\n## Dependencies\n\n- Possibly task 18 (canon types extraction).\n\n## Notes\n\n- Aligns with session-3 §6 variant reconciliation question.\n"
+  },
+  {
+    "name": "ws13: integration — implement per-sensor healthcheck contract emitter",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 23; `HEALTHCHECK-CONTRACT.md`).\n\n## Problem / gap\n\n`HEALTHCHECK-CONTRACT.md` describes a per-sensor health shape; nothing emits it yet. Cross-cuts task 6 (adapter health) and task 9 (mic node-scoped path).\n\n## Acceptance criteria\n\n- [ ] Implement `clawft-substrate::healthcheck` module per the contract.\n- [ ] At least the mic adapter emits per-sensor health.\n- [ ] Tests cover the per-sensor health shape.\n\n## Dependencies\n\n- Task 6 (adapter-health topic) and task 9 (mic path migration).\n\n## Notes\n\n- See task 28 below — this task subsumes that one.\n"
+  },
+  {
+    "name": "ws13: substrate-rpc — enforce per-node-prefix write gate on substrate.publish",
+    "priority": "high",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "gap", "security"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 24; `JOURNALED-NODE-ESP32.md`; daemon ~2210–2920).\n\n## Problem / gap\n\nThe `substrate.publish` handler verifies signatures but the typed prefix rule (only the owning node may write `substrate/<node-id>/*`) is not yet expressed. This is a security boundary for the ESP32 path.\n\n## Acceptance criteria\n\n- [ ] Publish handler enforces that the node signing the write owns the prefix.\n- [ ] Mismatched node-id/prefix rejected with a typed error.\n- [ ] Integration test in `substrate_rpc.rs` covers allow/deny.\n\n## Dependencies\n\n- Task 9 (mic node-scoped path adoption).\n\n## Notes\n\n- `crates/clawft-weave/src/daemon.rs`.\n"
+  },
+  {
+    "name": "ws13: substrate-rpc — add streaming log endpoint so kernel adapter drops poll fallback",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "tech-debt", "performance"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 25; `kernel.rs:319–321,412,437`).\n\n## Problem / gap\n\nThe log poller is a periodic poll fallback because the daemon RPC has no streaming log endpoint (despite the topic declaring `RefreshHint::EventDriven` — declared intent ≠ runtime today). `diff_tail` Finding-1 fix is option-2 (capped-tail + capped-returns); option-1 (monotonic `seq: u64` per entry) is deferred pending the RPC change.\n\n## Acceptance criteria\n\n- [ ] Daemon exposes a streaming log RPC.\n- [ ] Kernel adapter drops the periodic poll fallback.\n- [ ] Optional: introduce monotonic `seq: u64` per entry (option-1 fix).\n- [ ] Tests cover the streaming path.\n\n## Dependencies\n\n- None.\n\n## Notes\n\n- `crates/clawft-substrate/src/kernel.rs`, `crates/clawft-weave/src/daemon.rs`.\n"
+  },
+  {
+    "name": "ws13: substrate-rpc — test substrate.notify consumer wakeup semantics in integration suite",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "tests"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 26).\n\n## Problem / gap\n\nThe integration suite does not yet exercise consumer-wakeup semantics for `substrate.notify`.\n\n## Acceptance criteria\n\n- [ ] Add an integration test that confirms `substrate.notify` wakes a subscribed consumer.\n- [ ] Test runs in `substrate_rpc.rs` alongside existing publish/read/subscribe coverage.\n\n## Dependencies\n\n- None.\n\n## Notes\n\n- `crates/clawft-weave/tests/substrate_rpc.rs`.\n"
+  },
+  {
+    "name": "ws13: sensors — ship a Presence exemplar adapter",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 27; sensor-framework deferred items).\n\n## Problem / gap\n\nNo `Presence` characterization adapter ships. Sensor-framework is exercised only by `Rate` (mic).\n\n## Acceptance criteria\n\n- [ ] Implement a `Presence` exemplar adapter.\n- [ ] Tests cover its emission shape.\n- [ ] Documented in sensor-framework adoption notes.\n\n## Dependencies\n\n- Coordinates with task 10 (second Characterization exemplar) — this task is one valid choice for that exemplar.\n\n## Notes\n\n- May be merged with task 10 during scheduling.\n"
+  },
+  {
+    "name": "ws13: sensors — implement HEALTHCHECK-CONTRACT.md as clawft-substrate::healthcheck module",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 28; `HEALTHCHECK-CONTRACT.md`).\n\n## Problem / gap\n\nThe healthcheck contract has no in-tree representation; it lives only in planning docs.\n\n## Acceptance criteria\n\n- [ ] Land a `clawft-substrate::healthcheck` module that codifies the contract.\n- [ ] Adapters can produce contract-compliant health payloads.\n- [ ] Tests validate the module's API.\n\n## Dependencies\n\n- Task 23 may subsume this — coordinate scheduling.\n\n## Notes\n\n- Effectively a duplicate of task 23 framing, retained because the audit listed both. Implementer may merge.\n"
+  },
+  {
+    "name": "ws13: sensors — resolve legacy-flat-path vs node-scoped-path naming and ship migration",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "governance", "docs"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 29; `ADOPTION.md`).\n\n## Problem / gap\n\n`ADOPTION.md` flags the legacy-flat-path vs node-scoped-path decision but no migration PR exists. Without resolution, mic adapter migration (task 9) and per-node write gate (task 24) cannot land cleanly.\n\n## Acceptance criteria\n\n- [ ] Decide on the canonical path layout in `ADOPTION.md`.\n- [ ] Land a migration PR that updates emitters and consumers.\n- [ ] Document any compatibility shims and a removal date.\n\n## Dependencies\n\n- Blocks tasks 9 and 24.\n\n## Notes\n\n- `.planning/ontology/ADOPTION.md`.\n"
+  },
+  {
+    "name": "ws13: weftos-admin — add wired Modal (\"confirm restart\") to admin surface",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "gap", "tests"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 30).\n\n## Problem / gap\n\nThe Modal container is only exercised in the demo lab. Need a real wired Modal in the admin surface (e.g., \"confirm restart\") to exercise the container outside the demo.\n\n## Acceptance criteria\n\n- [ ] Add a Modal node to the admin surface fixture.\n- [ ] Composer renders and dispatches affordances correctly.\n- [ ] Admin e2e test exercises the modal path.\n\n## Dependencies\n\n- Task 12 (wire stub-leaf primitives — Modal is among the 13).\n\n## Notes\n\n- `crates/clawft-surface/fixtures/weftos-admin-desktop.toml`, admin e2e harness.\n"
+  },
+  {
+    "name": "ws13: weftos-admin — migrate auto-install-from-fixture flow off web-time workaround",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws13-app-substrate", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n\n`.planning/reviews/0.7.0-release-gate/13-app-substrate-surface.md` (task 31).\n\n## Problem / gap\n\nThe auto-install-on-boot bundled-fixture flow relies on a `web-time` workaround instead of a real install pipeline.\n\n## Acceptance criteria\n\n- [ ] Real install pipeline replaces the bundled-fixture auto-install workaround.\n- [ ] Boot still ensures the Apps tab has WeftOS Admin content.\n- [ ] Tests cover the new install flow.\n\n## Dependencies\n\n- A real install pipeline must exist.\n\n## Notes\n\n- Tracks the M1.5.1α follow-on item.\n"
+  }
+]

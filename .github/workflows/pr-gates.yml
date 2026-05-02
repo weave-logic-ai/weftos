@@ -167,6 +167,11 @@ jobs:
 
   # -------------------------------------------------------------------
   # Browser WASM: compilation check for wasm32-unknown-unknown
+  #
+  # HARD GATE (WEFT-447). The historical "skip on failure" behaviour
+  # was retired once BW1 / browser feature flags landed. Any regression
+  # that breaks the browser-target build must fail this job. There is
+  # no warning fallback — see docs/deployment/release.md "CI gates".
   # -------------------------------------------------------------------
   wasm-browser-check:
     name: Browser WASM check
@@ -190,18 +195,101 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-wasm-browser-
 
-      - name: Check browser WASM compilation
-        run: |
-          # This check will start passing once BW1 (feature flags) is complete.
-          # Until then, it validates that the browser feature flag infrastructure exists.
-          if cargo check --target wasm32-unknown-unknown -p clawft-wasm --no-default-features --features browser 2>/dev/null; then
-            echo "Browser WASM check passed"
-          else
-            echo "::warning::Browser WASM check skipped (feature not yet implemented)"
-          fi
+      - name: Check browser WASM compilation (hard gate)
+        run: cargo check --target wasm32-unknown-unknown -p clawft-wasm --no-default-features --features browser
 
       - name: Verify native still works
         run: cargo check --workspace
+
+  # -------------------------------------------------------------------
+  # Browser WASM regression suite (WEFT-388 / M5-A).
+  #
+  # Runs `crates/clawft-wasm/tests/browser_pipeline.rs` under headless
+  # Chrome via wasm-pack. Pins chromedriver to the matching Chrome
+  # version that ships on the Ubuntu runner image — `wasm-pack`'s own
+  # downloader has shipped mismatched binaries in the past, so we
+  # install chromedriver explicitly via Chrome-for-Testing.
+  # -------------------------------------------------------------------
+  browser-wasm-tests:
+    name: Browser WASM regression suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-browser-tests-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-browser-tests-
+
+      - name: Install wasm-pack
+        run: |
+          if ! command -v wasm-pack >/dev/null 2>&1; then
+            curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          fi
+          wasm-pack --version
+
+      - name: Install Chrome + matching chromedriver
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+          install-chromedriver: true
+
+      - name: Run browser WASM regression suite
+        run: scripts/build.sh test-browser
+
+  # -------------------------------------------------------------------
+  # Browser WASM bundle size gate (WEFT-389 / M5-A).
+  #
+  # Builds the release-wasm bundle, runs `wasm-bindgen` glue, and
+  # checks the post-bindgen `_bg.wasm` against a documented budget.
+  # Fails on regression. Budget rationale + revision protocol live in
+  # `docs/architecture/wasm-bundle-size.md`.
+  # -------------------------------------------------------------------
+  browser-wasm-bundle-size:
+    name: Browser WASM bundle size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-bundle-size-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-bundle-size-
+
+      - name: Install wasm-bindgen-cli
+        run: |
+          if ! command -v wasm-bindgen >/dev/null 2>&1; then
+            cargo install --locked wasm-bindgen-cli
+          fi
+          wasm-bindgen --version
+
+      - name: Build browser WASM bundle
+        run: scripts/build.sh browser
+
+      - name: Run bundle-size gate
+        run: scripts/build.sh bundle-size
 
   # -------------------------------------------------------------------
   # Voice: feature compilation check
@@ -247,11 +335,11 @@ jobs:
       - name: Check if UI directory exists
         id: check-ui
         run: |
-          if [ -d "ui" ] && [ -f "ui/package.json" ]; then
+          if [ -d "clawft-ui" ] && [ -f "clawft-ui/package.json" ]; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::UI directory not found, skipping UI checks"
+            echo "::notice::clawft-ui directory not found, skipping UI checks"
           fi
 
       - name: Setup Node.js
@@ -268,19 +356,79 @@ jobs:
 
       - name: Install dependencies
         if: steps.check-ui.outputs.exists == 'true'
-        run: cd ui && pnpm install --frozen-lockfile
+        run: cd clawft-ui && pnpm install --frozen-lockfile
 
       - name: Lint
         if: steps.check-ui.outputs.exists == 'true'
-        run: cd ui && pnpm lint
+        run: cd clawft-ui && pnpm lint
 
       - name: Type check
         if: steps.check-ui.outputs.exists == 'true'
-        run: cd ui && pnpm type-check
+        run: cd clawft-ui && pnpm type-check
 
       - name: Test
         if: steps.check-ui.outputs.exists == 'true'
-        run: cd ui && pnpm test --run
+        run: cd clawft-ui && pnpm test --run
+
+  # -------------------------------------------------------------------
+  # Cargo Audit: fail on new RustSec advisories.
+  # The ignore-list mirrors CARGO_AUDIT_IGNORES in scripts/build.sh and
+  # tracks the same WEFT-551/552/553 followups. When those land, drop
+  # the matching IDs here too. See:
+  #   .planning/reviews/0.7.0-release-gate/audit-findings/cargo-audit-cold-run-2026-04-28.md
+  # -------------------------------------------------------------------
+  cargo-audit:
+    name: Cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo-audit binary
+        id: cache-cargo-audit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: ${{ runner.os }}-cargo-audit-bin-v0.22.1
+
+      - name: Install cargo-audit
+        if: steps.cache-cargo-audit.outputs.cache-hit != 'true'
+        run: cargo install --locked cargo-audit --version ^0.22
+
+      - name: Run cargo audit
+        run: |
+          # Ignores tracked as 0.8.x followups (must stay in sync with
+          # CARGO_AUDIT_IGNORES in scripts/build.sh):
+          #   WEFT-551 wasmtime 33 → 43 (15 IDs)
+          #   WEFT-552 rustls-webpki bump (3 IDs)
+          #   WEFT-553 unmaintained + unsound rand (6 IDs)
+          cargo audit --deny warnings \
+            --ignore RUSTSEC-2025-0118 \
+            --ignore RUSTSEC-2026-0006 \
+            --ignore RUSTSEC-2026-0020 \
+            --ignore RUSTSEC-2026-0021 \
+            --ignore RUSTSEC-2026-0085 \
+            --ignore RUSTSEC-2026-0086 \
+            --ignore RUSTSEC-2026-0087 \
+            --ignore RUSTSEC-2026-0088 \
+            --ignore RUSTSEC-2026-0089 \
+            --ignore RUSTSEC-2026-0091 \
+            --ignore RUSTSEC-2026-0092 \
+            --ignore RUSTSEC-2026-0093 \
+            --ignore RUSTSEC-2026-0094 \
+            --ignore RUSTSEC-2026-0095 \
+            --ignore RUSTSEC-2026-0096 \
+            --ignore RUSTSEC-2026-0098 \
+            --ignore RUSTSEC-2026-0099 \
+            --ignore RUSTSEC-2026-0104 \
+            --ignore RUSTSEC-2017-0008 \
+            --ignore RUSTSEC-2024-0384 \
+            --ignore RUSTSEC-2024-0436 \
+            --ignore RUSTSEC-2025-0134 \
+            --ignore RUSTSEC-2025-0141 \
+            --ignore RUSTSEC-2026-0097
 
   # -------------------------------------------------------------------
   # Cargo Check: fast workspace-wide compilation check
@@ -340,8 +488,54 @@ jobs:
         run: target/release/weft assess run --scope ci --format github-annotations
 
   # -------------------------------------------------------------------
-  # Integration smoke test: build Docker image, start gateway, check
-  # /health, shut down
+  # Docs build (WEFT-448).
+  #
+  # Compiles the Fumadocs Next.js site so MDX syntax errors block
+  # merge. Triggered only when docs/src/** or this workflow change,
+  # because a full Next build is slow on cold caches.
+  # -------------------------------------------------------------------
+  docs-build:
+    name: Docs site build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect docs changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            docs:
+              - 'docs/src/**'
+              - '.github/workflows/pr-gates.yml'
+
+      - name: Setup Node.js
+        if: steps.filter.outputs.docs == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: docs/src/package-lock.json
+
+      - name: Install docs dependencies
+        if: steps.filter.outputs.docs == 'true'
+        run: cd docs/src && npm ci
+
+      - name: Build docs site
+        if: steps.filter.outputs.docs == 'true'
+        run: cd docs/src && npm run build
+
+      - name: Skip notice
+        if: steps.filter.outputs.docs != 'true'
+        run: echo "No docs/src changes — skipping docs build."
+
+  # -------------------------------------------------------------------
+  # Integration smoke test (WEFT-550).
+  #
+  # Builds the Docker image, starts `weft gateway`, and probes the
+  # gateway's HTTP /api/health endpoint via curl with a bounded retry
+  # budget. Fails if the container exits within 3 seconds, or if
+  # /api/health does not return 200 within ~30 seconds.
   # -------------------------------------------------------------------
   smoke-test:
     name: Integration smoke test
@@ -364,23 +558,210 @@ jobs:
 
       - name: Start gateway container
         run: |
-          docker run --rm -d \
+          docker run -d \
             --name weft-smoke \
             -p 8080:8080 \
-            weft:smoke-test gateway || true
+            weft:smoke-test gateway
 
-      - name: Wait for health endpoint
+      - name: Verify container survives the first 3 seconds
         run: |
-          # The gateway may not have a /health endpoint yet, so we just
-          # verify the container starts and stays running for 5 seconds.
-          echo "Waiting for container to stabilize..."
-          sleep 5
-          if docker ps --filter "name=weft-smoke" --format "{{.Names}}" | grep -q weft-smoke; then
-            echo "Container is running."
-          else
-            echo "::warning::Container exited (may not have gateway /health yet)"
+          sleep 3
+          if ! docker ps --filter "name=weft-smoke" --format "{{.Names}}" | grep -q weft-smoke; then
+            echo "::error::Container exited within 3 seconds — startup crash."
+            docker logs weft-smoke || true
+            exit 1
           fi
+          echo "Container is still running after 3s."
+
+      - name: Probe /api/health (bounded retry, 30s budget)
+        run: |
+          deadline=$(( $(date +%s) + 30 ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            code=$(curl -s -o /tmp/health.body -w '%{http_code}' \
+                       --max-time 3 http://127.0.0.1:8080/api/health || echo "000")
+            if [ "$code" = "200" ]; then
+              echo "Gateway /api/health returned 200."
+              cat /tmp/health.body
+              echo
+              exit 0
+            fi
+            echo "  /api/health returned ${code}, retrying..."
+            sleep 2
+          done
+          echo "::error::Gateway /api/health never returned 200 within 30s."
+          docker logs weft-smoke || true
+          exit 1
 
       - name: Shut down container
         if: always()
-        run: docker stop weft-smoke 2>/dev/null || true
+        run: |
+          docker stop weft-smoke 2>/dev/null || true
+          docker rm   weft-smoke 2>/dev/null || true
+
+  # -------------------------------------------------------------------
+  # VSCode dev-panel build (WEFT-485 / M6-B).
+  #
+  # Runs only when a PR touches the egui crate or the panel extension —
+  # the panel WASM bundle is downstream of clawft-gui-egui, and the
+  # extension itself ships the typed proxy that drives the webview. A
+  # change in either is allowed to require a full rebuild + tsc pass.
+  #
+  # Two-step gate:
+  #   1. `scripts/build.sh wasm-panel` — wasm-pack/cargo+bindgen+wasm-opt,
+  #      then size-budget gate against the documented panel thresholds.
+  #   2. `npm install && npm run compile` (tsc -p .) inside the extension.
+  #
+  # Either failure fails the PR. Skipped (success) on PRs that don't
+  # touch either path so unrelated work isn't slowed by Rust+Node bring-up.
+  # -------------------------------------------------------------------
+  vscode-panel-build:
+    name: VSCode panel build (wasm + tsc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            panel:
+              - 'crates/clawft-gui-egui/**'
+              - 'extensions/vscode-weft-panel/**'
+              - 'scripts/build.sh'
+              - 'scripts/bench/check-bundle-size.sh'
+              - '.github/workflows/pr-gates.yml'
+
+      - name: Install Rust toolchain
+        if: steps.filter.outputs.panel == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        if: steps.filter.outputs.panel == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-vscode-panel-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-vscode-panel-
+
+      - name: Install wasm-bindgen-cli
+        if: steps.filter.outputs.panel == 'true'
+        run: |
+          if ! command -v wasm-bindgen >/dev/null 2>&1; then
+            cargo install --locked wasm-bindgen-cli
+          fi
+          wasm-bindgen --version
+
+      - name: Install binaryen (wasm-opt)
+        if: steps.filter.outputs.panel == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binaryen
+          wasm-opt --version
+
+      - name: Build VSCode panel wasm bundle
+        if: steps.filter.outputs.panel == 'true'
+        run: scripts/build.sh wasm-panel
+
+      - name: Setup Node.js
+        if: steps.filter.outputs.panel == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install extension dependencies
+        if: steps.filter.outputs.panel == 'true'
+        run: cd extensions/vscode-weft-panel && npm install
+
+      - name: Compile extension (tsc)
+        if: steps.filter.outputs.panel == 'true'
+        run: cd extensions/vscode-weft-panel && npm run compile
+
+      # WEFT-486 / M6-B (SCAFFOLD): headless VSCode end-to-end smoke.
+      # Uses @vscode/test-electron under xvfb. The chip-icon DOM
+      # assertion is deferred to a 0.8.x followup (see test file
+      # header); today's suite asserts activation + command surface,
+      # which is enough to catch most regressions.
+      - name: Install xvfb (headless GUI host)
+        if: steps.filter.outputs.panel == 'true'
+        run: |
+          sudo apt-get install -y xvfb libnss3 libgbm1 libxshmfence1 libgtk-3-0
+      - name: Compile test suite (tsc -p test/)
+        if: steps.filter.outputs.panel == 'true'
+        run: cd extensions/vscode-weft-panel && npm run compile-tests
+      - name: Run VSCode E2E smoke (xvfb-run)
+        if: steps.filter.outputs.panel == 'true'
+        run: cd extensions/vscode-weft-panel && xvfb-run -a npm test
+
+      - name: Skip notice
+        if: steps.filter.outputs.panel != 'true'
+        run: echo "::notice::No panel-relevant paths touched — skipping wasm + tsc gate."
+
+  # -------------------------------------------------------------------
+  # weftos-design audit — ws08 0.8.0 desktop wave
+  #
+  # Two gates:
+  #   1. Theme drift ratchet — `Color32::from_rgb` outside theming.rs
+  #      can decrease but never increase past the recorded baseline.
+  #   2. Surface contract — every TOML in clawft-app/fixtures and
+  #      clawft-surface/fixtures audited against DESIGN.md §3 / §5
+  #      (D-NS01 unknown primitive, D-FG01 ui://foreign without
+  #      graduation TODO, D-EM01 missing empty/loading/offline states).
+  #
+  # Skip when the PR doesn't touch the GUI crate, fixtures, the skill,
+  # or DESIGN.md / tokens.md — these gates are useless on unrelated PRs.
+  # -------------------------------------------------------------------
+  weftos-design:
+    name: weftos-design audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect relevant changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            design:
+              - 'crates/clawft-gui-egui/src/**'
+              - 'crates/clawft-app/fixtures/**'
+              - 'crates/clawft-surface/fixtures/**'
+              - 'docs/DESIGN.md'
+              - '.claude/skills/weftos-design/**'
+              - '.planning/weftos-design/**'
+
+      - name: Audit theme (color drift ratchet)
+        if: steps.filter.outputs.design == 'true'
+        run: |
+          bash .claude/skills/weftos-design/scripts/audit-theme.sh \
+            --baseline .planning/weftos-design/baseline-color-drift.txt
+
+      - name: Audit fixtures (surface contract)
+        if: steps.filter.outputs.design == 'true'
+        run: |
+          fails=0
+          for f in crates/clawft-surface/fixtures/*.toml \
+                   crates/clawft-app/fixtures/*.toml; do
+            [ -f "$f" ] || continue
+            if ! bash .claude/skills/weftos-design/scripts/audit-surface.sh "$f"; then
+              fails=$((fails+1))
+            fi
+          done
+          # During Phase 3 the existing weftos-admin.toml carries 3
+          # known D-EM01 violations tracked under WEFT-589. Allow a
+          # fixed allowance until that ticket lands; tighten once the
+          # admin app graduates.
+          if [ "$fails" -gt 1 ]; then
+            echo "::error::weftos-design surface audit: $fails fixture(s) failed (allowance: 1)"
+            exit 1
+          fi
+
+      - name: Skip notice
+        if: steps.filter.outputs.design != 'true'
+        run: echo "::notice::No design-relevant paths touched — skipping audit."

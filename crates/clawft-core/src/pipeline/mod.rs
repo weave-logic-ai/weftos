@@ -3,12 +3,16 @@
 //! Stages: Classifier -> Router -> Assembler -> Transport -> Scorer -> Learner
 
 pub mod assembler;
+#[cfg(feature = "browser")]
+pub mod browser_llm_adapter;
 pub mod classifier;
 pub mod cost_tracker;
 pub mod learner;
 #[cfg(feature = "native")]
 pub mod llm_adapter;
 pub mod mutation;
+#[cfg(feature = "native")]
+pub mod service_llm_adapter;
 pub mod permissions;
 pub mod rate_limiter;
 pub mod router;

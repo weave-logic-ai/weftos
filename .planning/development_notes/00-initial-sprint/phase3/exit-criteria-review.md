@@ -1,5 +1,11 @@
 # Phase 3 Exit Criteria Review
 
+> **HISTORICAL — 2026-02-17 snapshot (WEFT-25, archived 2026-04-28).**
+> Phase-3 exit-criteria review from the initial port sprint. Test
+> counts, clippy state, and exit-criteria below pre-date the WeftOS
+> rebrand and the 0.6.x → 0.7.0 release-gate work. Current state lives
+> in `.planning/reviews/0.7.0-release-gate/`.
+
 **Date**: 2026-02-17
 **Round**: 4 (in progress)
 **Reviewer**: Exit criteria agent (Round 4)

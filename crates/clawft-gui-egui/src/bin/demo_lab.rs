@@ -126,6 +126,7 @@ fn swatch(ui: &mut egui::Ui, color: egui::Color32, label: &str) {
         2.0,
         color,
         egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 36)),
+        egui::StrokeKind::Inside,
     );
     ui.label(egui::RichText::new(label).small().weak());
     ui.add_space(4.0);
@@ -148,6 +149,9 @@ impl eframe::App for DemoLab {
         }
     }
 
+    fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
+
+    #[allow(deprecated)]
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         // Re-apply the theme only on toggle, so we don't fight the built-in demos' internal
         // style tweaks every frame.
@@ -156,7 +160,7 @@ impl eframe::App for DemoLab {
                 theming::apply(ctx);
             } else {
                 ctx.set_visuals(egui::Visuals::dark());
-                ctx.set_style(egui::Style::default());
+                ctx.set_global_style(egui::Style::default());
             }
             self.prev_theme_on = self.theme_on;
         }
@@ -166,7 +170,14 @@ impl eframe::App for DemoLab {
         });
 
         match self.tab {
-            Tab::Demos => self.demo_windows.ui(ctx),
+            Tab::Demos => {
+                // egui_demo_lib 0.34: `DemoWindows::ui` now takes
+                // `&mut Ui`, not `&Context`. Wrap in a CentralPanel
+                // to give it one.
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    self.demo_windows.ui(ui);
+                });
+            }
             Tab::FractalClock => {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let t = now_secs() - self.start_secs;

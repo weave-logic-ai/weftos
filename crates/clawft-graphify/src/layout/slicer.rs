@@ -165,12 +165,11 @@ fn build_slice(
             let key = (src.id.clone(), tgt.id.clone(), rel_label.clone());
             if !seen_edge_keys.contains(&key) {
                 seen_edge_keys.insert(key);
-                if let (Some(&si), Some(&ti)) = (id_to_idx.get(&src.id), id_to_idx.get(&tgt.id)) {
-                    if si != ti {
+                if let (Some(&si), Some(&ti)) = (id_to_idx.get(&src.id), id_to_idx.get(&tgt.id))
+                    && si != ti {
                         edge_pairs.push((si, ti));
                         slice_edges.push((src.id.clone(), tgt.id.clone(), rel_label.clone()));
                     }
-                }
             }
             continue;
         }

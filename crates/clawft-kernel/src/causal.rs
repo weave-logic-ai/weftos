@@ -5,6 +5,12 @@
 //! with weights and provenance metadata. Built on `DashMap` for safe
 //! concurrent access from multiple agent threads.
 
+// The later sections of this file host k-means / covariance / PCA math
+// where indexed `for i in 0..n { a[i][j] = ... }` loops are more
+// readable than iterator combinators. Scope the allow to the whole
+// file so the math reads like math.
+#![allow(clippy::needless_range_loop)]
+
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -819,27 +825,25 @@ impl CausalGraph {
 
             // Forward edges.
             for edge in self.get_forward_edges(id) {
-                if let Some(&j) = id_to_idx.get(&edge.target) {
-                    if i != j {
+                if let Some(&j) = id_to_idx.get(&edge.target)
+                    && i != j {
                         let w = edge.weight as f64;
                         adj[i].push((j, w));
                         adj[j].push((i, w));
                         degree[i] += w;
                         degree[j] += w;
                     }
-                }
             }
             // Reverse edges — only upper triangle to avoid double-counting.
             for edge in self.get_reverse_edges(id) {
-                if let Some(&j) = id_to_idx.get(&edge.source) {
-                    if i != j && j > i {
+                if let Some(&j) = id_to_idx.get(&edge.source)
+                    && i != j && j > i {
                         let w = edge.weight as f64;
                         adj[i].push((j, w));
                         adj[j].push((i, w));
                         degree[i] += w;
                         degree[j] += w;
                     }
-                }
             }
         }
 
@@ -1026,26 +1030,24 @@ impl CausalGraph {
         for &id in &sorted_ids {
             let i = id_to_idx[&id];
             for edge in self.get_forward_edges(id) {
-                if let Some(&j) = id_to_idx.get(&edge.target) {
-                    if i != j {
+                if let Some(&j) = id_to_idx.get(&edge.target)
+                    && i != j {
                         let w = edge.weight as f64;
                         adj[i].push((j, w));
                         adj[j].push((i, w));
                         degree[i] += w;
                         degree[j] += w;
                     }
-                }
             }
             for edge in self.get_reverse_edges(id) {
-                if let Some(&j) = id_to_idx.get(&edge.source) {
-                    if i != j && j > i {
+                if let Some(&j) = id_to_idx.get(&edge.source)
+                    && i != j && j > i {
                         let w = edge.weight as f64;
                         adj[i].push((j, w));
                         adj[j].push((i, w));
                         degree[i] += w;
                         degree[j] += w;
                     }
-                }
             }
         }
         // Recompute degree from adjacency for correctness.
@@ -1070,7 +1072,7 @@ impl CausalGraph {
         // Generate deterministic pseudo-random vectors using a simple LCG.
         // We avoid pulling in rand to keep dependencies minimal.
         let mut seed: u64 = 0xDEAD_BEEF_CAFE_BABEu64;
-        let mut next_gaussian = |seed: &mut u64| -> f64 {
+        let next_gaussian = |seed: &mut u64| -> f64 {
             // Box-Muller from two uniform values via LCG.
             let uniform = |s: &mut u64| -> f64 {
                 *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -1112,8 +1114,8 @@ impl CausalGraph {
         }
 
         // Step 3: Eigendecompose the small m x m matrix.
-        let diag: Vec<f64> = (0..m).map(|i| c_mat[i][i]).collect();
-        let off: Vec<f64> = if m > 1 {
+        let _diag: Vec<f64> = (0..m).map(|i| c_mat[i][i]).collect();
+        let _off: Vec<f64> = if m > 1 {
             (0..m - 1).map(|i| c_mat[i][i + 1]).collect()
         } else {
             Vec::new()
@@ -2558,8 +2560,8 @@ mod tests {
     #[test]
     fn spectral_disconnected_graph_zero_lambda2() {
         let g = make_graph();
-        let a = g.add_node("A".into(), serde_json::json!({}));
-        let b = g.add_node("B".into(), serde_json::json!({}));
+        let _a = g.add_node("A".into(), serde_json::json!({}));
+        let _b = g.add_node("B".into(), serde_json::json!({}));
         // No edges — disconnected.
         let result = g.spectral_analysis(50);
         assert!(
@@ -2902,22 +2904,20 @@ mod tests {
         for &id in &sorted_ids {
             let i = id_to_idx[&id];
             for edge in g.get_forward_edges(id) {
-                if let Some(&j) = id_to_idx.get(&edge.target) {
-                    if i != j {
+                if let Some(&j) = id_to_idx.get(&edge.target)
+                    && i != j {
                         let w = edge.weight as f64;
                         laplacian[i][j] -= w;
                         laplacian[j][i] -= w;
                     }
-                }
             }
             for edge in g.get_reverse_edges(id) {
-                if let Some(&j) = id_to_idx.get(&edge.source) {
-                    if i != j && j > i {
+                if let Some(&j) = id_to_idx.get(&edge.source)
+                    && i != j && j > i {
                         let w = edge.weight as f64;
                         laplacian[i][j] -= w;
                         laplacian[j][i] -= w;
                     }
-                }
             }
         }
         for i in 0..n {
@@ -3382,7 +3382,7 @@ mod tests {
         };
         let weights = compute_shadows(&g, &config, 100);
         for &w in weights.values() {
-            assert!(w >= 0.0 && w <= 1.0, "weight {w} out of range");
+            assert!((0.0..=1.0).contains(&w), "weight {w} out of range");
         }
     }
 
@@ -3448,10 +3448,8 @@ mod tests {
     #[test]
     fn batched_max_volatility_high_volatility_uniform() {
         // Sequence form for a kind whose volatility > 1.0.
-        let edges = vec![
-            make_edge(1, 2, CausalEdgeType::Correlates),
-            make_edge(1, 3, CausalEdgeType::Correlates),
-        ];
+        let edges = [make_edge(1, 2, CausalEdgeType::Correlates),
+            make_edge(1, 3, CausalEdgeType::Correlates)];
         assert_eq!(max_volatility_batched(edges.iter()), 2.0);
     }
 

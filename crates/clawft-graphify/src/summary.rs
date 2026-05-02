@@ -84,13 +84,11 @@ fn generate_one(
     let mut source_file_set: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     for id in members {
-        if let Some(entity) = kg.entity(id) {
-            if let Some(ref sf) = entity.source_file {
-                if !sf.is_empty() {
+        if let Some(entity) = kg.entity(id)
+            && let Some(ref sf) = entity.source_file
+                && !sf.is_empty() {
                     source_file_set.insert(sf.clone());
                 }
-            }
-        }
     }
     let mut source_files: Vec<String> = source_file_set.into_iter().collect();
     source_files.sort();

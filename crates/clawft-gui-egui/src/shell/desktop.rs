@@ -2,9 +2,10 @@
 
 use eframe::egui;
 
-use super::{grid, tray};
+use super::{grid, sidebar, tray};
 use crate::blocks;
 use crate::canon_demos::{self, CanonDemoState, CanonKind};
+use crate::explorer::Explorer;
 use crate::live::Snapshot;
 use crate::surface_host;
 use clawft_app::registry::AppRegistry;
@@ -31,24 +32,16 @@ const CHIP_SURFACE_MESH: &str =
     include_str!("../../../clawft-surface/fixtures/weftos-chip-mesh.toml");
 const CHIP_SURFACE_EXOCHAIN: &str =
     include_str!("../../../clawft-surface/fixtures/weftos-chip-exochain.toml");
-const CHIP_SURFACE_WIFI: &str =
-    include_str!("../../../clawft-surface/fixtures/weftos-chip-wifi.toml");
-const CHIP_SURFACE_BLUETOOTH: &str =
-    include_str!("../../../clawft-surface/fixtures/weftos-chip-bluetooth.toml");
-const CHIP_SURFACE_AUDIO: &str =
-    include_str!("../../../clawft-surface/fixtures/weftos-chip-audio.toml");
-const CHIP_SURFACE_TOF: &str =
-    include_str!("../../../clawft-surface/fixtures/weftos-chip-tof.toml");
 
-fn chip_surface_toml(chip: tray::ChipId) -> &'static str {
+/// TOML surface fixture for chips that render through the composer.
+/// Returns `None` for chips rendered by bespoke panel code (today:
+/// Explorer — see `render_explorer_placeholder`).
+fn chip_surface_toml(chip: tray::ChipId) -> Option<&'static str> {
     match chip {
-        tray::ChipId::Kernel => CHIP_SURFACE_KERNEL,
-        tray::ChipId::Mesh => CHIP_SURFACE_MESH,
-        tray::ChipId::ExoChain => CHIP_SURFACE_EXOCHAIN,
-        tray::ChipId::Wifi => CHIP_SURFACE_WIFI,
-        tray::ChipId::Bluetooth => CHIP_SURFACE_BLUETOOTH,
-        tray::ChipId::Audio => CHIP_SURFACE_AUDIO,
-        tray::ChipId::Tof => CHIP_SURFACE_TOF,
+        tray::ChipId::Kernel => Some(CHIP_SURFACE_KERNEL),
+        tray::ChipId::Mesh => Some(CHIP_SURFACE_MESH),
+        tray::ChipId::ExoChain => Some(CHIP_SURFACE_EXOCHAIN),
+        tray::ChipId::Explorer => None,
     }
 }
 
@@ -87,6 +80,16 @@ pub struct Desktop {
     /// entries mean the fixture failed to parse (fallback to the
     /// raw-JSON view kicks in).
     pub chip_surfaces: std::collections::BTreeMap<tray::ChipId, SurfaceTree>,
+    /// Ontology Explorer panel state — left-tree + right-detail. The
+    /// Explorer tray chip opens this; see `.planning/explorer/PROJECT-PLAN.md`.
+    pub explorer: Explorer,
+
+    /// Canonical desktop sidebar — DESIGN.md §5. Phase 2a (0.8.0) of
+    /// the desktop revision. Replaces the launcher window and the
+    /// tray chips as the primary launcher; the legacy chrome remains
+    /// alongside for now and is retired one app at a time during
+    /// Phase 3.
+    pub sidebar: sidebar::Sidebar,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -120,6 +123,61 @@ impl BlockKind {
         (BlockKind::Layout, "Layout"),
         (BlockKind::Oscilloscope, "Oscilloscope"),
     ];
+}
+
+impl Desktop {
+    /// Apply a sidebar click. Returns `Some(chip_id)` to open in the
+    /// legacy chip-detail floating window when the new app module
+    /// hasn't been written yet.
+    ///
+    /// During Phase 2a (0.8.0) every target translates to either an
+    /// `open_chip` action (legacy) or a no-op. As Phase 3 lands each
+    /// `apps/<id>.rs` module, the corresponding arm graduates from
+    /// the chip pathway to its first-class app render in `desktop.rs`.
+    pub fn apply_sidebar_action(
+        &mut self,
+        action: sidebar::SidebarAction,
+        _live: &std::sync::Arc<crate::live::Live>,
+    ) -> Option<tray::ChipId> {
+        match action {
+            sidebar::SidebarAction::Open(target) => {
+                self.sidebar.apply(sidebar::SidebarAction::Open(target));
+                match target {
+                    // Legacy chip pathway — kept until Phase 3 replaces.
+                    sidebar::SidebarTarget::Network(_)
+                    | sidebar::SidebarTarget::Logs(sidebar::LogsTab::WitnessChain) => {
+                        Some(tray::ChipId::Mesh)
+                    }
+                    sidebar::SidebarTarget::Explorer => Some(tray::ChipId::Explorer),
+                    sidebar::SidebarTarget::Admin => {
+                        // Admin app already lives behind `Apps` legacy
+                        // panel — flip the launcher open and select it.
+                        self.launcher_open = true;
+                        self.section = PanelSection::Apps;
+                        if self.selected_app.is_none() {
+                            self.selected_app = Some("app://weftos.admin".to_string());
+                        }
+                        None
+                    }
+                    sidebar::SidebarTarget::Apps(_) => {
+                        self.launcher_open = true;
+                        self.section = PanelSection::Apps;
+                        None
+                    }
+                    // Files / Processes / Services / Settings / Scheduler
+                    // / Monitor / Logs(System) / Terminal / Chat — Phase 3
+                    // will own these. No-op for now.
+                    _ => None,
+                }
+            }
+            sidebar::SidebarAction::ToggleGroup(_)
+            | sidebar::SidebarAction::ToggleCollapsed
+            | sidebar::SidebarAction::ToggleHidden => {
+                self.sidebar.apply(action);
+                None
+            }
+        }
+    }
 }
 
 impl Default for Desktop {
@@ -183,12 +241,16 @@ impl Default for Desktop {
             tray::ChipId::Kernel,
             tray::ChipId::Mesh,
             tray::ChipId::ExoChain,
-            tray::ChipId::Wifi,
-            tray::ChipId::Bluetooth,
-            tray::ChipId::Audio,
-            tray::ChipId::Tof,
+            tray::ChipId::Explorer,
         ] {
-            match clawft_surface::parse::parse_surface_toml(chip_surface_toml(chip)) {
+            // Explorer has no surface fixture — its detail window is
+            // rendered by `render_explorer_placeholder` (MVP) until the
+            // tree-view panel from `.planning/explorer/PROJECT-PLAN.md`
+            // ships. Skip it here.
+            let Some(toml) = chip_surface_toml(chip) else {
+                continue;
+            };
+            match clawft_surface::parse::parse_surface_toml(toml) {
                 Ok(tree) => {
                     chip_surfaces.insert(chip, tree);
                 }
@@ -214,6 +276,8 @@ impl Default for Desktop {
             selected_app,
             app_surfaces,
             chip_surfaces,
+            explorer: Explorer::default(),
+            sidebar: sidebar::Sidebar::default(),
         }
     }
 }
@@ -224,13 +288,39 @@ pub fn show(
     live: &std::sync::Arc<crate::live::Live>,
     snap: &Snapshot,
 ) {
-    let rect = ui.max_rect();
+    let total = ui.max_rect();
 
-    // Wallpaper — warped grid.
+    // Sidebar reserves the left edge — DESIGN.md §5.
+    let sidebar_w = desk.sidebar.reserved_width();
+    let sidebar_rect = egui::Rect::from_min_max(
+        total.min,
+        egui::pos2(total.left() + sidebar_w, total.bottom()),
+    );
+    let rect = egui::Rect::from_min_max(
+        egui::pos2(total.left() + sidebar_w, total.top()),
+        total.max,
+    );
+
+    // Wallpaper — warped grid (right of the sidebar only).
     let t = desk.boot_started.elapsed().as_secs_f32();
     grid::paint(ui, rect, t);
 
+    // Sidebar paint + click handling. Phase 2a integration — clicks
+    // update the active sidebar target; the new `apps::dispatch` path
+    // renders the corresponding app body in the wallpaper region.
+    // Legacy chip-detail / launcher window remain alongside as a
+    // safety net until Phase 3 graduates the existing chip surfaces.
+    let sidebar_action = sidebar::paint(ui, sidebar_rect, &desk.sidebar, snap);
+    if let Some(action) = sidebar_action {
+        let _ = desk.apply_sidebar_action(action, live);
+    }
+
+    // Active app body — DESIGN.md §4.1 / §9. Phase 3 stubs; real
+    // implementations land per WEFT-579..591.
+    crate::apps::dispatch(ui, rect, desk.sidebar.active, snap);
+
     // Tray (also toggles the launcher window + tracks open chip detail).
+    // Lives in the wallpaper region only, never under the sidebar.
     tray::paint(
         ui,
         rect,
@@ -268,20 +358,66 @@ pub fn show(
     if let Some(chip) = desk.open_chip {
         let mut open = true;
         let title = format!("{} · {}", chip.label(), chip.substrate_path());
+        // Explorer is the outlier: it needs `&mut Desktop` to mutate
+        // its own state (expansion set, selection, subscription), and
+        // it uses a bigger default window because a two-pane layout
+        // at 420x320 is cramped. Everything else flows through the
+        // shared `render_chip_detail` helper.
+        let is_explorer = matches!(chip, tray::ChipId::Explorer);
+        let (def_size, def_pos) = if is_explorer {
+            (
+                egui::vec2(760.0, 520.0),
+                egui::pos2(rect.left() + 80.0, rect.top() + 80.0),
+            )
+        } else {
+            (
+                egui::vec2(420.0, 320.0),
+                egui::pos2(rect.right() - 460.0, rect.bottom() - 420.0),
+            )
+        };
         egui::Window::new(title)
             .collapsible(true)
             .resizable(true)
-            .default_size(egui::vec2(420.0, 320.0))
-            .default_pos(egui::pos2(rect.right() - 460.0, rect.bottom() - 420.0))
+            .default_size(def_size)
+            .default_pos(def_pos)
             .open(&mut open)
             .frame(window_frame())
             .show(ui.ctx(), |ui| {
-                render_chip_detail(ui, desk, chip, live, snap);
+                if is_explorer {
+                    render_explorer(ui, desk, live, snap);
+                } else {
+                    render_chip_detail(ui, desk, chip, live, snap);
+                }
             });
         if !open {
+            // Closing the Explorer window drops its active subscription
+            // so no background re-read polls run against a hidden panel.
+            if is_explorer {
+                desk.explorer.close(live);
+            }
             desk.open_chip = None;
         }
     }
+}
+
+/// Render the Explorer panel body inside the chip-detail window.
+/// Splits header + two-pane layout; the Explorer itself draws the
+/// SidePanel / CentralPanel pair internally.
+fn render_explorer(
+    ui: &mut egui::Ui,
+    desk: &mut Desktop,
+    live: &std::sync::Arc<crate::live::Live>,
+    snap: &Snapshot,
+) {
+    ui.horizontal(|ui| {
+        ui.heading("Explorer");
+        ui.separator();
+        ui.monospace("substrate/");
+        ui.separator();
+        connection_pill(ui, snap.connection);
+    });
+    ui.separator();
+    desk.explorer.show(ui, live);
 }
 
 /// Render the chip-detail window. Prefers the per-chip surface
@@ -303,6 +439,11 @@ fn render_chip_detail(
         connection_pill(ui, snap.connection);
     });
     ui.separator();
+
+    // Explorer is handled out-of-band by `render_explorer` in the
+    // window-rendering code above — it needs `&mut Desktop` to mutate
+    // its panel state, which this helper (`&Desktop`) can't provide.
+    debug_assert!(!matches!(chip, tray::ChipId::Explorer));
 
     // Surface-composer path (preferred). The ontology snapshot is the
     // same source of truth the Admin app reads, so fixtures written
@@ -427,31 +568,11 @@ fn render_empty_hint(ui: &mut egui::Ui, chip: tray::ChipId, snap: &Snapshot) {
                     .to_string(),
                 true,
             ),
-            tray::ChipId::Wifi | tray::ChipId::Bluetooth => (
-                "Native-only adapter — the NetworkAdapter and \
-                 BluetoothAdapter run against /sys/class on native. \
-                 The wasm webview bridge doesn't ship until M1.6+."
-                    .to_string(),
-                false,
-            ),
-            tray::ChipId::Audio => (
-                "No microphone data yet. The adapter reads raw \
-                 s16le PCM from /tmp/weftos/mic/stream.raw; until a \
-                 CPAL/ALSA/WASAPI bridge lands, this file needs an \
-                 external feeder (test fixture or future capture \
-                 sidecar). Native-only."
-                    .to_string(),
-                false,
-            ),
-            tray::ChipId::Tof => (
-                "No ToF frames yet. Expected shape at \
-                 substrate/sensor/tof: \
-                 {available, width, height, depths_mm:[u16;w*h], \
-                 min_mm?, max_mm?, frame_count?}. Bridge should \
-                 publish via substrate.publish as new frames arrive. \
-                 0xFFFF pixels are treated as 'no valid reading' per \
-                 VL53L5CX/L7CX convention."
-                    .to_string(),
+            tray::ChipId::Explorer => (
+                // Unreachable in practice — Explorer short-circuits into
+                // `render_explorer_placeholder` before chip_subtree is
+                // consulted. Kept exhaustive for the compiler.
+                "Explorer uses a dedicated detail view.".to_string(),
                 false,
             ),
         },
@@ -461,8 +582,8 @@ fn render_empty_hint(ui: &mut egui::Ui, chip: tray::ChipId, snap: &Snapshot) {
             .italics()
             .color(egui::Color32::from_rgb(170, 170, 180)),
     );
-    if show_error {
-        if let Some(err) = &snap.last_error {
+    if show_error
+        && let Some(err) = &snap.last_error {
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new(format!("last error: {err}"))
@@ -470,7 +591,6 @@ fn render_empty_hint(ui: &mut egui::Ui, chip: tray::ChipId, snap: &Snapshot) {
                     .color(egui::Color32::from_rgb(220, 140, 140)),
             );
         }
-    }
 }
 
 fn window_frame() -> egui::Frame {
@@ -480,8 +600,8 @@ fn window_frame() -> egui::Frame {
             1.0,
             egui::Color32::from_rgba_unmultiplied(255, 255, 255, 25),
         ))
-        .rounding(10.0)
-        .inner_margin(egui::Margin::same(8.0))
+        .corner_radius(10.0)
+        .inner_margin(egui::Margin::same(8))
 }
 
 fn render_blocks_window(
@@ -490,9 +610,9 @@ fn render_blocks_window(
     live: &std::sync::Arc<crate::live::Live>,
     snap: &Snapshot,
 ) {
-    egui::SidePanel::left("blocks_nav")
+    egui::Panel::left("blocks_nav")
         .resizable(false)
-        .default_width(170.0)
+        .default_size(170.0)
         .show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 if ui
@@ -514,6 +634,17 @@ fn render_blocks_window(
                     desk.section = PanelSection::Apps;
                 }
             });
+            ui.separator();
+            // Launcher-menu entry for the Ontology Explorer (plan §6 Q1
+            // default). Clicking opens the Explorer chip-detail window
+            // the same way the Explorer tray chip does.
+            if ui
+                .button(egui::RichText::new("⌸ Open Explorer").monospace())
+                .on_hover_text("Tree view of the substrate namespace")
+                .clicked()
+            {
+                desk.open_chip = Some(tray::ChipId::Explorer);
+            }
             ui.separator();
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])

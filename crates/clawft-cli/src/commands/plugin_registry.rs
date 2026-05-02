@@ -2,6 +2,12 @@
 //!
 //! The registry stores metadata about installed and available plugins
 //! in `~/.clawft/plugins/index.json`.
+//!
+//! Types and helpers here are wired through the `plugin` subcommands
+//! in later phases; left in place as the module's intended public
+//! surface so the layout doesn't churn when that work lands.
+
+#![allow(dead_code)]
 
 use std::path::PathBuf;
 

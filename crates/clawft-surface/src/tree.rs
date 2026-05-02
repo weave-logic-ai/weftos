@@ -110,13 +110,12 @@ pub enum IdentityIri {
     Tabs,
     Sheet,
     Tree,
-    // Leaves (M1.5 wired)
+    // Leaves
     Pressable,
     Chip,
     Gauge,
     Table,
     StreamView,
-    // Leaves (M1.5 stub — rendered as TODO label)
     Field,
     Toggle,
     Select,
@@ -124,6 +123,10 @@ pub enum IdentityIri {
     Plot,
     Media,
     Canvas,
+    // ui://foreign (host-app boundary, ADR-001 row 21) is the only
+    // canon leaf still routed through the composer's TODO fallback —
+    // it needs the cross-app surface contract before it can render
+    // anything honest.
     Foreign,
     // Sensor-oriented leaves (M1.5.3). Not in the ADR-001 canonical 21;
     // added as the hardware loop matured past what Plot/Canvas could

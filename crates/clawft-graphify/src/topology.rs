@@ -33,7 +33,9 @@ pub struct TopologySchema {
 /// How instances of a node type are spatially arranged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum Geometry {
+    #[default]
     Force,
     Tree,
     Layered,
@@ -45,11 +47,6 @@ pub enum Geometry {
     Wardley,
 }
 
-impl Default for Geometry {
-    fn default() -> Self {
-        Self::Force
-    }
-}
 
 /// Configuration for a node type in the topology.
 #[derive(Debug, Clone, Serialize, Deserialize)]

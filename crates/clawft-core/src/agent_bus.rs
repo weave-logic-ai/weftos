@@ -380,7 +380,7 @@ mod tests {
             let msg = InterAgentMessage::new(
                 "sender",
                 "agent-a",
-                &format!("task-{i}"),
+                format!("task-{i}"),
                 json!({}),
                 Duration::from_secs(60),
             );

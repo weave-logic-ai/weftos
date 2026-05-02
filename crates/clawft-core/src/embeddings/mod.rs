@@ -20,8 +20,6 @@ pub mod progressive;
 #[cfg(feature = "rvf")]
 pub mod quantization;
 #[cfg(feature = "rvf")]
-pub mod rvf_io;
-#[cfg(feature = "rvf")]
 pub mod rvf_stub;
 #[cfg(feature = "rvf")]
 pub mod witness;

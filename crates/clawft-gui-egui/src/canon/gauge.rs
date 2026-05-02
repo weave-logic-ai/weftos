@@ -195,7 +195,8 @@ impl CanonWidget for Gauge {
                     egui::Color32::from_rgba_unmultiplied(220, 160, 40, alpha),
                 );
                 let rect = ui.min_rect();
-                ui.painter().rect_stroke(rect, 4.0, stroke);
+                ui.painter()
+                    .rect_stroke(rect, 4.0, stroke, egui::StrokeKind::Inside);
             }
         });
 

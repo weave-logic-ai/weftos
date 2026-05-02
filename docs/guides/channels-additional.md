@@ -1,7 +1,25 @@
 # Additional Channels Guide
 
-This guide covers the eight channel adapters added in the improvements sprint.
-For the core channel architecture, original channels (Telegram, Slack, Discord),
+> **Status -- planning stubs, not production**: with the exception of
+> Discord Resume (E1, folded into the production Discord adapter), the
+> seven adapters in this guide -- Email, WhatsApp, Signal, Matrix, IRC,
+> Google Chat, Microsoft Teams -- are compile-time placeholders. Their
+> trait implementations, config types, factories, and unit tests have
+> landed, but the network transports have **not**. `start()` waits for
+> cancellation and `send()` returns a synthetic ID without contacting
+> the platform. Enabling any of these features in production today
+> will cause outbound messages to be silently dropped. The runtime
+> work is tracked as Tasks 1-7 in
+> `.planning/reviews/0.7.0-release-gate/05-channels.md` and per-item in
+> `.planning/sparc/phase4/06-channel-enhancements/04-element-06-tracker.md`.
+> The configuration schemas below are stable and correct -- they are
+> safe to draft against -- but you should treat the channels themselves
+> as roadmap until the linked tasks ship.
+
+This guide covers the seven channel-adapter stubs added in the
+improvements sprint, plus the Discord Resume enhancement that ships
+inside the production Discord adapter. For the core channel
+architecture, original channels (Telegram, Slack, Discord),
 multi-channel gateway, and custom channel development, see
 [channels.md](channels.md).
 

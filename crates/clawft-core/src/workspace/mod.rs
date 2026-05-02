@@ -198,21 +198,54 @@ impl WorkspaceManager {
     /// Load a workspace by name or path string.
     ///
     /// Returns the workspace root path if found.
+    ///
+    /// As a side effect, when the workspace resolves to a registry entry
+    /// (whether by name or by absolute path), `last_accessed` is bumped to
+    /// `now()` and the registry is persisted atomically. Path-only loads
+    /// that miss the registry do not touch state.
     pub fn load(&mut self, name_or_path: &str) -> Result<PathBuf> {
         // Try by name first
         if let Some(entry) = self.registry.find_by_name(name_or_path) {
-            return Ok(entry.path.clone());
+            let path = entry.path.clone();
+            self.touch_last_accessed_by_name(name_or_path)?;
+            return Ok(path);
         }
 
         // Try as a path
         let path = PathBuf::from(name_or_path);
         if path.join(".clawft").is_dir() {
+            // If this path is also in the registry, bump its last_accessed.
+            if let Some(name) =
+                self.registry.find_by_path(&path).map(|e| e.name.clone())
+            {
+                self.touch_last_accessed_by_name(&name)?;
+            }
             return Ok(path);
         }
 
         Err(ClawftError::ConfigInvalid {
             reason: format!("workspace not found: {name_or_path}"),
         })
+    }
+
+    /// Update `last_accessed` to `now()` for the named entry and persist.
+    ///
+    /// No-op if the name is not registered (called only after a successful
+    /// lookup, but defensive for concurrent removal).
+    fn touch_last_accessed_by_name(&mut self, name: &str) -> Result<()> {
+        let now = chrono::Utc::now();
+        let mut changed = false;
+        for entry in &mut self.registry.workspaces {
+            if entry.name == name {
+                entry.last_accessed = Some(now);
+                changed = true;
+                break;
+            }
+        }
+        if changed {
+            self.save_registry()?;
+        }
+        Ok(())
     }
 
     /// Get the status of a workspace at the given path.
@@ -309,7 +342,7 @@ pub(crate) mod tests {
         let result = temp_env::with_var(
             "CLAWFT_WORKSPACE",
             Some("/nonexistent/path/for/test"),
-            || discover_workspace(),
+            discover_workspace,
         );
 
         assert!(result.is_some());
@@ -439,6 +472,101 @@ pub(crate) mod tests {
         assert_eq!(status.session_count, 0);
         assert!(status.has_config);
         assert!(status.has_clawft_md);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workspace_manager_load_by_name_bumps_last_accessed() {
+        let (dir, registry_path) = temp_registry("load-bumps-name");
+        let mut wm = WorkspaceManager::with_registry_path(registry_path.clone())
+            .unwrap();
+
+        wm.create("recency", &dir).unwrap();
+        let before = wm
+            .registry
+            .find_by_name("recency")
+            .and_then(|e| e.last_accessed)
+            .expect("create populates last_accessed");
+
+        // Sleep just enough that the timestamp comparison is meaningful.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        wm.load("recency").unwrap();
+
+        let after = wm
+            .registry
+            .find_by_name("recency")
+            .and_then(|e| e.last_accessed)
+            .expect("load preserves last_accessed");
+        assert!(
+            after > before,
+            "load should advance last_accessed: before={before} after={after}"
+        );
+
+        // And the bump must be persisted.
+        let on_disk = WorkspaceRegistry::load(&registry_path).unwrap();
+        let persisted = on_disk
+            .find_by_name("recency")
+            .and_then(|e| e.last_accessed)
+            .expect("persisted entry has last_accessed");
+        assert_eq!(persisted, after);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workspace_manager_load_by_path_bumps_last_accessed_when_registered() {
+        let (dir, registry_path) = temp_registry("load-bumps-path");
+        let mut wm = WorkspaceManager::with_registry_path(registry_path)
+            .unwrap();
+
+        let ws_path = wm.create("path-recency", &dir).unwrap();
+        let before = wm
+            .registry
+            .find_by_name("path-recency")
+            .and_then(|e| e.last_accessed)
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        wm.load(ws_path.to_str().unwrap()).unwrap();
+
+        let after = wm
+            .registry
+            .find_by_name("path-recency")
+            .and_then(|e| e.last_accessed)
+            .unwrap();
+        assert!(after > before);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workspace_manager_load_orders_by_recency_after_use() {
+        let (dir, registry_path) = temp_registry("load-recency-order");
+        let mut wm = WorkspaceManager::with_registry_path(registry_path)
+            .unwrap();
+
+        // Create A then B; load A — A should now be more recent than B.
+        wm.create("ws-a", &dir).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        wm.create("ws-b", &dir).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        wm.load("ws-a").unwrap();
+
+        let a = wm
+            .registry
+            .find_by_name("ws-a")
+            .and_then(|e| e.last_accessed)
+            .unwrap();
+        let b = wm
+            .registry
+            .find_by_name("ws-b")
+            .and_then(|e| e.last_accessed)
+            .unwrap();
+        assert!(
+            a > b,
+            "ws-a was loaded after ws-b created; a should be newer"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

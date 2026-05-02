@@ -1,0 +1,618 @@
+[
+  {
+    "name": "ws11: agent-core-v1.1 — implement per-conversation cost circuit-breaker",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "release-gate-blocker", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — \"What's Left\" deferred item #9 (per-conv cost circuit-breaker); cross-ref `docs/plans/chat-agent-v1.md` §5.6 + §17.v1.1.\n\n## Problem / gap\nv1 only carries a *minimal* per-conv cost cap. The full circuit-breaker — soft warnings at 80%, separate caps for read-only vs write tools, integration with daily/monthly budgets — is unimplemented. The audit flags this as a ship-gate risk for the chat agent at 0.7.0: a runaway tool loop or model can burn through arbitrary cost without intervention.\n\n## Acceptance criteria\n- [ ] Per-conv cost ledger tracks tokens + tool-call cost across the loop's lifetime\n- [ ] Soft warning emitted at 80% of cap (panel-visible + tracing event)\n- [ ] Separate caps configurable for read-only vs write tool effects\n- [ ] Integration with daily / monthly budget rollups in `Config` (or documented stub)\n- [ ] Hard halt when cap is exceeded; surface as typed `agent.chat` error\n- [ ] Unit tests for breach paths (warn, halt, daily-rollover)\n- [ ] Documented in `docs/plans/agent-core-v1.md` follow-ups section\n\n## Dependencies\n- Blocks: 0.7.0 release-gate sign-off (audit-flagged ship risk)\n- Blocked-by: none (current cap stub is in tree)\n\n## Notes\nCurrent cap location: search for `cost` / `budget` in `crates/clawft-core/src/agent/loop_core.rs` and `crates/clawft-service-agent/src/service.rs`. The audit flagged this as the single deferred-item that *might* warrant 0.7.x ship-gate treatment vs. the rest of the 0.8.x v1.1 backlog."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — thread per-iteration CancellationToken into run_tool_loop",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — Critical path #1; `crates/clawft-service-agent/src/service.rs:209` `TODO(Phase D2)`; deferred item #7.\n\n## Problem / gap\nAC-10 cancel only catches whole-turn cancellations via outer `tokio::select!`. Per-iteration cancellation inside `loop_core::run_tool_loop` requires a `&CancellationToken` parameter threaded through `AgentLoop::handle_turn` and observed at the top of each iteration. Today an in-flight tool call cannot be interrupted mid-turn; the user must wait for the current iteration to drain.\n\n## Acceptance criteria\n- [ ] `AgentLoop::handle_turn` accepts `cancel: &CancellationToken`\n- [ ] `loop_core::run_tool_loop` checks the token at iteration boundary\n- [ ] `AgentService::dispatch` threads the per-conv token through\n- [ ] Existing `agent.chat.cancel` RPC test extended to assert mid-turn break\n- [ ] No regression on the 12 existing `#[tokio::test]` blocks in `loop_core.rs`\n\n## Dependencies\n- Blocks: smoother long-tool-call UX in panel\n- Blocked-by: none\n\n## Notes\nEstimated ~150 LoC, single commit. Files: `crates/clawft-core/src/agent/loop_core.rs`, `crates/clawft-service-agent/src/service.rs`."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — expose public chain.append RPC for soul promote + agent journal",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — Critical path #2; `crates/clawft-weave/src/commands/soul_cmd.rs:246` `TODO(agent-core-v1.1)`; deferred item #1.\n\n## Problem / gap\n`weaver soul promote` writes a `WitnessRecord` payload to `<workspace>/.weftos/audit/soul-promote.log` (JSONL) plus a `tracing::info!(target = \"chain_event\", ...)` event, because the daemon does not yet expose a public `chain.append` RPC. The trait shape is forward-compatible; switching when the wire ships is a drop-in.\n\n## Acceptance criteria\n- [ ] New daemon RPC arm accepting a `WitnessRecord` payload\n- [ ] New types in `crates/clawft-service-agent/src/protocol.rs`\n- [ ] `weaver soul promote` switched from local-audit-log fallback to RPC call\n- [ ] Local-audit-log fallback retained as offline mode (or removed with rollout doc)\n- [ ] Unit + integration tests covering the new RPC arm\n- [ ] `TODO(agent-core-v1.1)` removed\n\n## Dependencies\n- Blocks: agent-side journal-write path (separate task)\n- Blocked-by: none — daemon dispatch is in tree\n\n## Notes\n~250 LoC + tests. Files: `crates/clawft-weave/src/daemon.rs`, `crates/clawft-weave/src/commands/soul_cmd.rs:239-265`, `crates/clawft-service-agent/src/protocol.rs`."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — promote workspace/global PermissionResolver split",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "security", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — Critical path #3; `crates/clawft-core/src/bootstrap.rs:633` `TODO(v1.1)`.\n\n## Problem / gap\nWorkspace overlay is deep-merged into `config.routing` upstream in `config_loader::load_config_raw`, so workspace policy reaches the resolver but the security-ceiling pattern (`enforce_workspace_ceiling` clamping workspace permissions against system-wide bounds) is bypassed. Fine for single-user kernels; required for multi-tenant.\n\n## Acceptance criteria\n- [ ] `PermissionResolver::new(global, Some(workspace))` two-arg signature\n- [ ] `enforce_workspace_ceiling` clamps workspace permissions against global ceiling\n- [ ] Loader splits workspace from global at the loader layer (not via deep merge)\n- [ ] Tests for `workspace.write > global.write` clamps to global\n- [ ] Tests for `workspace.read < global.read` keeps workspace\n- [ ] `TODO(v1.1)` removed\n\n## Dependencies\n- Blocks: any multi-tenant deployment\n- Blocked-by: none\n\n## Notes\n~300 LoC + tests. Files: `crates/clawft-core/src/bootstrap.rs`, `crates/clawft-platform/src/config_loader.rs`, `crates/clawft-core/src/pipeline/permissions.rs`."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — stabilize append_turns_are_monotonic flake via injectable clock",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "tests", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — \"Open questions\" C3 monotonic-ULID test flake; `crates/clawft-service-agent/tests/substrate_sink.rs:113`.\n\n## Problem / gap\n`append_turns_are_monotonic` occasionally fails when two appends land in the same millisecond. The per-conv counter suffix in `turn_id_for` was added to address this but the test still races. Needs a reliable injectable clock or a deterministic counter to fully stabilize.\n\n## Acceptance criteria\n- [ ] `SubstrateConversationSink` accepts an injectable clock (e.g. `dyn Clock` or `Arc<dyn Fn() -> SystemTime>`)\n- [ ] Test uses a deterministic clock yielding same-ms appends\n- [ ] Production path keeps `SystemTime::now()` default\n- [ ] Test flake re-run 100× shows zero failures\n\n## Dependencies\n- Blocks: confidence in CI rotation\n- Blocked-by: none\n\n## Notes\nFile: `crates/clawft-service-agent/src/substrate_sink.rs`."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — promote overlay_probe + resolver_live_probe diagnostics into CI",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "tests", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — Quality bar item #5; \"Open questions\" #4.\n\n## Problem / gap\n`overlay_probe` and `resolver_live_probe` (`crates/clawft-core/tests/resolver_live_probe.rs`) are `#[ignore]`-marked diagnostics that run live config through the production resolver. Useful for verifying the wire end-to-end but not in CI rotation.\n\n## Acceptance criteria\n- [ ] Hermetic workspace fixture under `crates/clawft-core/tests/fixtures/`\n- [ ] `#[ignore]` removed; tests run in default `cargo test`\n- [ ] `scripts/build.sh test` covers both\n- [ ] Tests pass on macOS + Linux CI runners\n\n## Dependencies\n- Blocks: confidence in resolver wire on regression\n- Blocked-by: none\n\n## Notes\nMust not break when run from a non-clawft cwd."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — plumb tool_calls / token / model fields through OutboundMessage",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #8; `crates/clawft-service-agent/src/protocol.rs:107-141`, `service.rs:377-398`.\n\n## Problem / gap\n`AgentChatResult` fields `tool_calls`, `prompt_tokens`, `completion_tokens`, `model`, `identity_source` default to empty/zero/None at the wire because `OutboundMessage` is a generic bus envelope without these fields. Loop's result type needs enriching to thread them through; tests in `protocol.rs:179-201` pin the C1 shape so the panel keeps tolerating defaults across the cutover.\n\n## Acceptance criteria\n- [ ] `OutboundMessage` (or sibling envelope) carries the five fields\n- [ ] Loop populates them on every turn (zeros become real values)\n- [ ] `AgentChatResult` deserializes non-zero values\n- [ ] Panel UI tests updated to assert real values\n- [ ] Existing C1 shape tests still pass (back-compat)\n\n## Dependencies\n- Blocks: panel cost/usage display, observability\n- Blocked-by: none\n\n## Notes\nKnown shortfall pinned by existing tests."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — notify-driven hot-reload watcher for identity files",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "performance", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #16; `crates/clawft-core/src/agent/identity.rs:36-38`.\n\n## Problem / gap\n`FileIdentityProvider` re-reads `.clawft/SOUL.md` + `IDENTITY.md` on every call. Files are small so it's cheap today, but a `notify`-driven watcher with cache invalidation \"arrives when measurement says it earns its keep.\"\n\n## Acceptance criteria\n- [ ] Watcher gated behind a feature flag (or always-on if cheap)\n- [ ] Invalidates cache on file change\n- [ ] Re-reads on next call\n- [ ] Test verifies edit-then-call returns new contents\n- [ ] No regression on platforms without notify\n\n## Dependencies\n- Blocked-by: none (low-priority — measurement-driven)\n\n## Notes\nMeasurement first. Profile current re-read cost before landing watcher."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — agent-side SOUL.journal.md write path during chat turns",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #4; Operator-surface task #8.\n\n## Problem / gap\nF2 lands the *operator* side of `weaver soul promote`. The agent's self-observation write path during chat turns — the loop noticing drift and appending to `SOUL.journal.md` — is deferred. With an empty journal `weaver soul promote` exits cleanly.\n\n## Acceptance criteria\n- [ ] Hook in `loop_core` that can append drift observations to `SOUL.journal.md`\n- [ ] Gated by the existing `soul_journal` substrate write grant (from F1)\n- [ ] Drift detection signal documented (heuristic or model-decided)\n- [ ] Test: a synthetic drift turn produces a journal entry\n- [ ] Test: `weaver soul promote` picks up the entry\n\n## Dependencies\n- Blocks: closed-loop SOUL evolution\n- Blocked-by: chain.append RPC is a softer prerequisite (journal can persist locally first)\n\n## Notes\nF1 grant already exists; the loop just needs the write hook."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — interactive Defer UX prompt-and-resume in panel",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #2; `loop_core.rs:1090-1094` follow-up note; `crates/clawft-kernel/src/gate.rs:14-34`.\n\n## Problem / gap\nD2 surfaces `GateDecision::Defer { reason }` as a structured tool-result the LLM can re-plan against. Real interactive defer (panel-side prompt with human-in-the-loop hook) is v1.1 — needs panel UI work.\n\n## Acceptance criteria\n- [ ] Panel surfaces `Defer { reason }` as a modal / inline prompt\n- [ ] User decision (allow/deny/cancel) returned to the loop via new RPC\n- [ ] Loop suspends until decision arrives\n- [ ] Timeout / default-deny path documented\n- [ ] E2E test: deferred tool resumes after user approval\n\n## Dependencies\n- Blocks: real human-in-the-loop governance\n- Blocked-by: per-iteration cancel token wiring (so suspended loops can be cancelled)\n\n## Notes\nCross-stream: panel UI work in W-UI / 15."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — per-user agent_ids for multi-tenant chat",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #3; Operator-surface task #10.\n\n## Problem / gap\nChat is single-tenant: one `concierge-bot` principal registered at boot per D2. Per-user agent_ids (multi-tenant chat) ship in a future phase. Plumb caller identity through `AgentService::dispatch` so each panel/CLI session gets its own principal in the kernel `AgentRegistry`.\n\n## Acceptance criteria\n- [ ] `AgentService::dispatch` accepts caller-identity argument\n- [ ] Kernel `AgentRegistry` registers per-caller principal lazily\n- [ ] Permission resolver applies per-caller policy\n- [ ] Tests: two callers, two principals, isolation verified\n\n## Dependencies\n- Blocks: multi-user deployments\n- Blocked-by: workspace/global resolver split (security ceiling clamp)\n\n## Notes\nPaired with ceiling-clamp work; both are multi-tenant prerequisites."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — register agent.chat SystemService for weft status",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "gap", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #12; Operator-surface task #11.\n\n## Problem / gap\n`agent.chat` should register a `SystemService` impl tracking last-completion-time so `weft status` shows it (kernel C2 surface). Today `weft status` has no visibility into agent-loop state.\n\n## Acceptance criteria\n- [ ] `SystemService` impl registered at `AgentService` init\n- [ ] Tracks: last-completion-time, in-flight count, per-conv lock contention\n- [ ] `weft status` displays new fields\n- [ ] Unit tests for the impl\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nKernel C2 surface lives in `crates/clawft-kernel`."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — typed error variants for agent.chat",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #11; Operator-surface task #12.\n\n## Problem / gap\nv1 surfaces strings via `Response::error(\"agent.chat: <inner>\")` mirroring `llm.prompt`. Typed variants are deferred to v1.1. Replace string-format with a typed enum the panel can branch on.\n\n## Acceptance criteria\n- [ ] `AgentChatError` enum with structured variants\n- [ ] Wire-format JSON includes `error_kind` discriminator\n- [ ] Existing string-format response retained for back-compat (or migration documented)\n- [ ] Panel branches on at least 3 variants (timeout, gate-deny, llm-error)\n- [ ] Tests for each variant\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nPanel can branch on canonical error kinds instead of string-matching."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — observability path logging router decisions to substrate",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "gap", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — Router-phasing task #13; deferred item #15; `chat-agent-v1.md:682,695`.\n\n## Problem / gap\nLogging every router decision to `substrate/<node>/agent/routing/recent` is required to seed the v1→v2 promotion gate (\"≥ 1,000 logged decisions\") and the v2→v2.5 gate (\"fallback rate < 25% over 7 days\"). Without these, router-phase metrics are best-effort.\n\n## Acceptance criteria\n- [ ] Every `ContextRouter::route` call appends a decision record\n- [ ] Path: `substrate/<node>/agent/routing/recent/<ulid>`\n- [ ] Record includes: query, selected route, alternatives, confidence, latency\n- [ ] Bounded retention (last N or last X days)\n- [ ] Test: 100 routes produce 100 substrate entries\n\n## Dependencies\n- Blocks: `weft routing trace` / `replay` commands\n- Blocked-by: none\n\n## Notes\nSubstrate write grant probably exists (re-use `agent_routing` or add)."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — weft routing trace + replay commands",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "tooling", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — Router-phasing task #14; deferred item #15.\n\n## Problem / gap\n`weft routing trace` and `weft routing replay` commands read from the substrate routing path and expose p99 latency + fallback-rate metrics in `weft status`. Required for promotion-gate verification.\n\n## Acceptance criteria\n- [ ] `weft routing trace --conv <id>` shows per-decision detail\n- [ ] `weft routing replay <ulid>` re-runs a logged route on the live router\n- [ ] `weft status` includes p99 latency + fallback rate aggregates\n- [ ] Documentation in `docs/cli/`\n\n## Dependencies\n- Blocked-by: substrate router-decision logging path\n\n## Notes\nFiles: `crates/clawft-cli/src/commands/`."
+  },
+  {
+    "name": "ws11: agent-core-v2.5 — sona-backed rerank step on HybridRouter",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #6; Router-phasing task #15; `.planning/development_notes/ruv-ecosystem-analysis-20260414.md`.\n\n## Problem / gap\n`HybridRouter` ships plumbing only — chains a primary + fallback `ContextRouter`. The real v2.5 design layers a sona-backed rerank step on top of the primary's top-K. Deferred until `sona` clears the ruv-ecosystem stability gate.\n\n## Acceptance criteria\n- [ ] `SonaReranker` adapter trait\n- [ ] `HybridRouter` invokes rerank on top-K from primary\n- [ ] Fallback if sona unavailable\n- [ ] Latency budget check (rerank cost vs benefit)\n- [ ] Shadow-mode evaluation before promotion\n\n## Dependencies\n- Blocked-by: upstream — `sona` ruv-ecosystem stability gate\n\n## Notes\nBlocked on external upstream (`sona` crate stability). Track the ruv-ecosystem analysis doc for lift signal."
+  },
+  {
+    "name": "ws11: agent-core-v3 — MicroLoraRouter behind ruvllm-wasm 11-pattern HNSW cap lift",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #5; Router-phasing task #16; `crates/clawft-core/src/agent/context_router/hybrid.rs:44` `TODO(agent-core-v1 phase E3+)`; `docs/research/rvf-context-router.md:118-128`.\n\n## Problem / gap\nv3 `MicroLoraRouter` is explicitly deferred until `ruvllm-wasm` lifts the documented 11-pattern HNSW cap. The 35+-skill clawft catalog overruns ruvllm-wasm v2.0.1's per-index ceiling. v3 needs MicroLoRA adapter trained on logged decisions + journal preferences with mandatory shadow-mode + WITNESS audit before promotion.\n\n## Acceptance criteria\n- [ ] MicroLoRA adapter training pipeline (offline, on logged decisions)\n- [ ] Shadow-mode runtime path that scores the v3 route alongside v2/v2.5 without acting\n- [ ] WITNESS audit emits chain entries for each shadow decision\n- [ ] Promotion gate documented (recall + latency + fallback thresholds)\n- [ ] `TODO(agent-core-v1 phase E3+)` removed\n\n## Dependencies\n- Blocked-by: upstream — `ruvllm-wasm` lifting 11-pattern HNSW cap (or switch to native `ruvector-diskann@2.1` and accept WASM-no-go)\n- Blocked-by: substrate router-decision logging (training data)\n\n## Notes\nBlocked on external upstream `ruvllm-wasm`. Cross-stream blocker shared with WS12 (graphify HNSW)."
+  },
+  {
+    "name": "ws11: de-duplicate clawft_weave::protocol vs clawft_service_agent::protocol types",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — Cleanup task #17; \"Orphaned work\" duplicate-protocol-types item; `protocol.rs:1-21`.\n\n## Problem / gap\n`clawft_service_agent::protocol::*` and `clawft_weave::protocol::AgentChat*` mirror each other byte-for-byte. The plan calls out a Phase C2 follow-up to make weave re-export from service-agent; never landed. Duplication pinned by matching tests but is real duplication.\n\n## Acceptance criteria\n- [ ] `clawft_weave::protocol` re-exports `AgentChat*` from `clawft_service_agent::protocol`\n- [ ] Both crates' tests still pass\n- [ ] No external API breakage (re-exports preserve names)\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nKnown deferred Phase C2 follow-up."
+  },
+  {
+    "name": "ws11: confirm agent.chat \"agent service not wired\" error path has integration coverage",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "tests"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — Cleanup task #19; \"Orphaned work\" `handle_agent_chat` body item; `daemon.rs:3591`.\n\n## Problem / gap\n`handle_agent_chat` was deleted in D3 (~360 LoC). The dispatch arm at `daemon.rs:3591` is a one-liner that surfaces \"agent service not wired\" if `DAEMON_AGENT.get()` is None. Need to verify the typed-error path is actually exercised when LLM init fails — there is no integration test covering that fallback today.\n\n## Acceptance criteria\n- [ ] Integration test in `crates/clawft-weave/tests/` constructs a daemon without `DAEMON_AGENT` and asserts the error response shape\n- [ ] Test runs in `scripts/build.sh test`\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nTrivial; spot-check task."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — per-tool Permit token + proof-of-permission API",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "security", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — In-source v1.1 follow-up at `loop_core.rs:1070-1073`; `kernel_gate.rs:24, 66, 89`.\n\n## Problem / gap\nPer-tool `Permit { token }` is currently discarded — the plan calls out \"optionally pass the token to tools.execute\" as a follow-up that requires a tool-side proof-of-permission API the registry doesn't yet expose. Kernel-side `Deny { reason, receipt }` also drops `receipt` because the panel UX has nowhere to render it. `Permit::token: Option<Vec<u8>>` is hex-encoded but only \"kernel-permit\" sentinel propagates when None.\n\n## Acceptance criteria\n- [ ] `ToolRegistry::execute` accepts an optional `Permit` token\n- [ ] Tools verify-or-ignore the token (back-compat)\n- [ ] Kernel `Deny.receipt` plumbed to panel\n- [ ] `Permit.token` propagates real token bytes, not sentinel\n- [ ] Tests for token round-trip + receipt display\n\n## Dependencies\n- Blocked-by: panel UX work (cross-stream W-UI/15)\n\n## Notes\nProof-of-permission is the security upgrade; current state is advisory."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — hard-refuse on binding-thread mismatch (governance rule)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "security", "governance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — In-source v1.1 follow-up at `identity.rs:57`; deferred item #13.\n\n## Problem / gap\nBinding-thread mismatch today annotates the prompt and emits a `warn!` — does not refuse to run. Hard refusal is v1.1. Today's check is at load time only (SHA-256 hash + `BINDING_THREAD_EXCERPT` substring match in `IdentityLoader`). v1.1 promotes this to a governance rule (`soul.binding_thread_intact`) evaluated by `gate.check` on every turn.\n\n## Acceptance criteria\n- [ ] New governance rule `soul.binding_thread_intact`\n- [ ] Evaluated by `gate.check` on every turn (not just load time)\n- [ ] Hard refusal path: `Deny { reason: \"binding-thread mismatch\" }`\n- [ ] Configurable: warn-only (current) vs deny (v1.1 default)\n- [ ] Tests for both modes\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nSecurity-relevant: prevents prompt-injection from disabling SOUL binding."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — Arc<RwLock<LlmClient>> runtime swap on env rotation",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #18; plan risk #2; `crates/clawft-core/tests/resolver_live_probe.rs` (`#[ignore]`).\n\n## Problem / gap\n`daemon_llm()` captures the client once at boot; runtime env changes (e.g. `OPENROUTER_API_KEY` rotated mid-session) go stale. Tracked by the resolver-live-probe diagnostic.\n\n## Acceptance criteria\n- [ ] `LlmClient` wrapped in `Arc<RwLock<...>>`\n- [ ] `control.set_enabled(\"llm\", _)` triggers re-read of env + new client\n- [ ] Existing call-sites get `read()` access\n- [ ] Test: env change → next call uses new key\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nLow-priority — affects long-running daemons with mid-session key rotation."
+  },
+  {
+    "name": "ws11: agent-core-v1.1 — agent.workspace_root config key",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #17; `crates/clawft-weave/src/daemon.rs:702`, `crates/clawft-core/src/agent/identity.rs:179`.\n\n## Problem / gap\nToday workspace = daemon CWD. Plan §15.4 calls out a future config key `agent.workspace_root`. Two source markers reference this.\n\n## Acceptance criteria\n- [ ] New config key under `[agent]` section\n- [ ] Daemon resolves identity files from configured root\n- [ ] Falls back to CWD if unset (back-compat)\n- [ ] Test: daemon launched from `/tmp` with `workspace_root=/home/user/proj`\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nUseful for systemd-launched daemons that want a fixed workspace independent of CWD."
+  },
+  {
+    "name": "ws11: agent-core — after-3-denials EscalateToHuman governance path",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "governance", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #10; `chat-agent-v1.md` §5.5; governance recommendation 4.\n\n## Problem / gap\nv1 just stops the loop with `agent: gate denied tool calls 3x; halting`. Full implementation per governance recommendation 4 is v1.1: surface `EscalateToHuman` instead of silent halt.\n\n## Acceptance criteria\n- [ ] After 3 consecutive `Deny`s the loop emits `EscalateToHuman` decision\n- [ ] Panel UI shows escalation prompt (cross-stream W-UI/15)\n- [ ] User decision (allow/abort/refine) returned via new RPC\n- [ ] Loop resumes on allow with refined plan\n- [ ] Test: 3-deny path produces escalation event\n\n## Dependencies\n- Blocked-by: panel UX (cross-stream)\n- Blocked-by: interactive Defer UX (related path)\n\n## Notes\nGovernance recommendation 4."
+  },
+  {
+    "name": "ws11: agent-core — multi-conversation sidebar UI for panel",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #14; `chat-agent-v1.md:226`.\n\n## Problem / gap\nPanel uses `substrate.list` on first selection to find the most-recent conv. Sidebar listing UI deferred per `chat-agent-v1.md:226`.\n\n## Acceptance criteria\n- [ ] Sidebar lists all conversations with title + last-message timestamp\n- [ ] Click switches active conv\n- [ ] New-conv button creates a fresh conv_id\n- [ ] Conversation rename / archive\n- [ ] Tests for the new UI components\n\n## Dependencies\n- Blocked-by: panel UI work (cross-stream W-UI/15)\n\n## Notes\nCross-stream W-UI/15."
+  },
+  {
+    "name": "ws11: agent-core — Phase 4 MemoryConsolidator periodic distillation",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #20; Phase 4 bridge between `memory.rs` and `ConversationStore`.\n\n## Problem / gap\n`crates/clawft-core/src/agent/learning/` is the planned home for periodic distillation from `ConversationStore` (per-turn substrate) → `MemoryStore` (`MEMORY.md` / `HISTORY.md`). Closes the `memory.rs` vs `ConversationSink` boundary system-architect raised. Module doesn't exist yet.\n\n## Acceptance criteria\n- [ ] New module `crates/clawft-core/src/agent/learning/consolidator.rs`\n- [ ] Periodic task reads N recent turns and distills to `MEMORY.md`\n- [ ] Configurable cadence (every K turns or every T minutes)\n- [ ] Idempotent: re-running on same turns produces same distillation\n- [ ] Tests for consolidation correctness\n\n## Dependencies\n- Blocked-by: substrate sink stable (already shipped)\n\n## Notes\nClosing the boundary issue raised by system-architect."
+  },
+  {
+    "name": "ws11: agent-core — Phase 4 skills auto-promotion from .claude/skills to .clawft/skills",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #21; `crates/clawft-core/src/agent/skill_autogen.rs`.\n\n## Problem / gap\nAfter enough successful uses of a `.claude/skills/*` skill, promote to `.clawft/skills/` for faster routing. Detector hooks are in `skill_autogen.rs` but the autopromote path is manual today.\n\n## Acceptance criteria\n- [ ] Configurable promotion threshold (e.g. ≥10 successful invocations)\n- [ ] Auto-promote on threshold breach\n- [ ] Audit log entry per promotion\n- [ ] Tests for the threshold + promotion path\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nQuality-of-life feature; not user-visible failure when missing."
+  },
+  {
+    "name": "ws11: agent-core — cross-agent delegation via existing delegate_tool",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #22.\n\n## Problem / gap\n`delegate_tool` already exists; chat agent should be able to spawn specialist agents from `agents/` profiles. v1 doesn't wire it.\n\n## Acceptance criteria\n- [ ] Chat agent can invoke `delegate_tool` to spawn a specialist\n- [ ] Specialist agent profile loaded from `agents/<name>.toml`\n- [ ] Result returned to chat-agent loop\n- [ ] Test: chat agent delegates a code-review subtask and receives output\n\n## Dependencies\n- Blocked-by: none — delegate_tool exists\n\n## Notes\nNeed clarity on profile schema before landing."
+  },
+  {
+    "name": "ws11: agent-core — Phase 2 voice + streaming chat path",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws11-agent-core-v1", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/11-agent-core-v1.md` — deferred item #19.\n\n## Problem / gap\n`audio_transcribe` / `audio_synthesize` / `voice_listen` / `voice_speak` already exist as tools. Chat path needs `TurnContent::Audio` populated and `agent.chat_stream` connection-takeover RPC. `TurnContent::Mixed` enum is pinned from day 1 (substrate JSONL ready) but never constructed today.\n\n## Acceptance criteria\n- [ ] Loop populates `TurnContent::Audio` when audio inputs arrive\n- [ ] New `agent.chat_stream` RPC for streamed responses\n- [ ] Voice + text mixed turns persisted via existing substrate sink\n- [ ] Browser streaming alignment (cross-stream WS16)\n\n## Dependencies\n- Blocked-by: browser streaming path (cross-stream WS16)\n\n## Notes\n0.9.x cycle — aligns with browser SSE / ReadableStream work."
+  },
+  {
+    "name": "ws12: KG — replace vector_diskann.rs HashMap linear-scan stub",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "stub", "performance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — Sprint 16 carry-over (`vector-hybrid.md`); `crates/clawft-kernel/src/vector_diskann.rs`.\n\n## Problem / gap\nWorkspace already declares `ruvector-diskann = \"2.1\"` per `docs/research/rvf-context-router.md:53`, but `vector_diskann.rs` is still a brute-force `HashMap` linear-scan stub. The hybrid backend already merges hot HNSW + cold-stub so users see a working surface, but cold-tier perf is O(n).\n\n## Acceptance criteria\n- [ ] Replace `HashMap` linear scan with real `ruvector-diskann@2.1` calls\n- [ ] Behind a `diskann` feature flag\n- [ ] Brute-force fallback retained for the feature-off path\n- [ ] Benchmarks: hybrid vs pure HNSW vs DiskANN-only on 100K+ vectors\n- [ ] Tests pass under both feature flags\n\n## Dependencies\n- Blocked-by: upstream — `ruvector-diskann` 2.1 production crate publication\n\n## Notes\nBlocked on external upstream `ruvector-diskann` crate publication. Workspace already declares the version."
+  },
+  {
+    "name": "ws12: KG-011 — activate LogQuantized for DiskANN once shaal PR #352 merges",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "stub"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — KG-011 stub; `crates/clawft-kernel/src/vector_quantization.rs:22-86`.\n\n## Problem / gap\n`LogQuantizedConfig::is_available()` returns `false` with `TODO(KG-011): Check ruvector-core version once PR #352 merges`. Config types ship; activation gated on upstream merge.\n\n## Acceptance criteria\n- [ ] `is_available()` returns `true` when ruvector-core PR #352 features are present\n- [ ] Activation path tested with real LogQuantized index\n- [ ] Recall benchmark vs uncompressed baseline\n- [ ] `TODO(KG-011)` removed\n\n## Dependencies\n- Blocked-by: upstream — shaal `ruvector-core` PR #352 merge + release\n\n## Notes\nBlocked on external upstream. 0.9.x cycle is contingent on upstream timeline."
+  },
+  {
+    "name": "ws12: KG-012 — activate unified SIMD distance kernel once shaal PR #352 merges",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "stub"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — KG-012 stub; `crates/clawft-kernel/src/vector_quantization.rs:89-153`.\n\n## Problem / gap\n`SimdDistanceConfig::is_available()` returns `false` mirroring KG-011. Configs ship; activation gated on upstream merge.\n\n## Acceptance criteria\n- [ ] `is_available()` returns `true` when ruvector-core PR #352 features are present\n- [ ] SIMD path benchmarked vs scalar baseline\n- [ ] x86_64 + aarch64 coverage\n- [ ] `TODO(KG-012)` removed\n\n## Dependencies\n- Blocked-by: upstream — shaal `ruvector-core` PR #352 merge + release\n\n## Notes\nBlocked on external upstream. Same merge as KG-011."
+  },
+  {
+    "name": "ws12: KG-013 — spatio-temporal GNN for sonobuoy (K-STEMIT)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — KG-013, P1 not started; `knowledge-graph-paper-survey-phase2.md:525`.\n\n## Problem / gap\nNot started. Would create `clawft-sensor/` crate or live in sonobuoy firmware. K-STEMIT spatio-temporal dual-branch architecture for sensor systems.\n\n## Acceptance criteria\n- [ ] New `clawft-sensor/` crate (or sonobuoy firmware module) with spatial + temporal branches\n- [ ] Integration tests against synthetic sonobuoy data\n- [ ] ADR-053 (named in phase2 survey but not written)\n\n## Dependencies\n- Blocked-by: ADR-053 design\n\n## Notes\nSpeculative cycle — depends on sonobuoy program priority. Could slip to 0.9.x."
+  },
+  {
+    "name": "ws12: KG-015 — EA-Agent entity alignment for multi-repo dedup",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — KG-015, P2 not started.\n\n## Problem / gap\nNot started. LLM-agent-based multi-repo dedup. Builds on KG-008 single-repo dedup (CodaRAG, shipped).\n\n## Acceptance criteria\n- [ ] `EaAgent` module under `clawft-graphify/src/`\n- [ ] LLM-agent dispatch path for entity alignment proposals\n- [ ] Confidence scoring + manual override\n- [ ] Test against multi-repo fixture\n\n## Dependencies\n- Blocked-by: agent-core delegation path (cross-stream WS11 task `cross-agent delegation`)\n\n## Notes\nLeverages chat-agent delegation when that lands."
+  },
+  {
+    "name": "ws12: KG-017 — knowledge distillation for edge EML (SevenNet-Nano)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap", "performance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — KG-017, P2 not started.\n\n## Problem / gap\nNot started. Distill depth-4 EML → depth-2 for WASM/ESP32. Edge-deployable EML.\n\n## Acceptance criteria\n- [ ] Distillation pipeline (offline) producing depth-2 weights\n- [ ] Runtime path that loads depth-2 weights when on edge target\n- [ ] Recall delta vs depth-4 documented\n- [ ] WASM target tested\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nCross-stream alignment with WS16 (browser-wasm)."
+  },
+  {
+    "name": "ws12: KG-018 — Newman modularity scoring as alternative to cohesion",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — KG-018, P2 not started.\n\n## Problem / gap\nNot started. Newman modularity Q is an alternative to current cohesion scoring in `cluster.rs`. Side-by-side comparison would inform which signal to surface.\n\n## Acceptance criteria\n- [ ] `newman_modularity()` function in `cluster.rs`\n- [ ] Score returned alongside cohesion in community summaries\n- [ ] Tests on canonical graphs (karate club, etc.)\n- [ ] Documentation comparing the two metrics\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nTiny effort; should land easily."
+  },
+  {
+    "name": "ws12: OG-2 — OWL/RDF ingestion (Turtle, JSON-LD)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — OG-2, ontology graph pipeline open.\n\n## Problem / gap\nNot started. Needs `oxigraph` or `sophia` crate to map RDF triples → graphify entities + relationships.\n\n## Acceptance criteria\n- [ ] New ingest module `crates/clawft-graphify/src/ingest/rdf.rs`\n- [ ] Turtle parser path\n- [ ] JSON-LD parser path\n- [ ] RDF triple → `Entity`/`Relationship` mapping documented\n- [ ] Round-trip test (RDF → graphify → VOWL export → ontology assertions)\n\n## Dependencies\n- Blocked-by: dependency choice (oxigraph vs sophia)\n\n## Notes\nOG-1 (VOWL export) is shipped; OG-2 closes the ingest side."
+  },
+  {
+    "name": "ws12: OG-3 — Barnes-Hut force layout + positioned-SVG export",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap", "performance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — OG-3 partial; `layout/force_layout.rs` (216 lines).\n\n## Problem / gap\nBasic force layout exists but Barnes-Hut O(n log n) and the SVG positioned-output pipeline still need work. Today the layout is O(n²).\n\n## Acceptance criteria\n- [ ] Barnes-Hut quad-tree implementation with O(n log n) force computation\n- [ ] Theta parameter configurable (default 0.5)\n- [ ] Positioned-SVG exporter (`export/svg.rs`)\n- [ ] Benchmark: 10K node graph improves vs current O(n²) baseline\n- [ ] Tests for tree subdivision + force aggregation\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nMASTER_PLAN.md also notes `export/svg.rs` is open."
+  },
+  {
+    "name": "ws12: OG-4 — VOWL visual encoding rules in SVG export",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — OG-4 open.\n\n## Problem / gap\nNot started. Layer VOWL visual encoding rules (class circles, property arrows, equivalence ellipses, etc.) onto `export/html.rs` or new SVG export.\n\n## Acceptance criteria\n- [ ] VOWL rule mapping documented (class → circle, property → labeled arrow, etc.)\n- [ ] SVG export emits VOWL-compliant shapes\n- [ ] Visual regression test against 3 canonical ontologies\n- [ ] WebVOWL parity check\n\n## Dependencies\n- Blocked-by: OG-3 positioned-SVG exporter (depends on layout output)\n\n## Notes\nWebVOWL JSON output (OG-1) is shipped; OG-4 closes the SVG side."
+  },
+  {
+    "name": "ws12: KG-004 — benchmark RFF vs Lanczos vs EML lambda₂ on 1K/10K/100K graphs",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "performance", "tests"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — KG-004 done in tree, benchmark open; `arxiv-2603-21852-analysis.md`.\n\n## Problem / gap\nRFF spectral embedding shipped at `causal.rs:3171`. Performance comparison vs Lanczos (sparse O(k·m), ADR-009) and EML-approximated lambda₂ on 1K / 10K / 100K node graphs is the open piece. Need a clear rule for which path runs when.\n\n## Acceptance criteria\n- [ ] Benchmark harness covering 3 graph sizes\n- [ ] Latency + accuracy metrics for each path\n- [ ] Decision rule (size threshold or graph property) documented\n- [ ] Dispatcher in `causal.rs` selects path automatically\n- [ ] Tests for dispatcher\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nTrue performance question; results inform default behaviour."
+  },
+  {
+    "name": "ws12: layout — implement Sugiyama layered layout (currently falls back to tree)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap", "bug"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — `crates/clawft-graphify/src/layout/mod.rs:49` `TODO: Sugiyama`.\n\n## Problem / gap\n`Geometry::Layered` falls back silently to `layout_as_tree` instead of a real Sugiyama / hierarchical-graph layered layout. Behavioural footgun — users requesting `Layered` get tree layout with no warning.\n\n## Acceptance criteria\n- [ ] Sugiyama algorithm implementation (cycle removal, layering, ordering, coordinate assignment)\n- [ ] `Geometry::Layered` dispatches to it\n- [ ] Test fixtures: known graph → expected layered layout positions\n- [ ] Falls back loudly if implementation incomplete (return Err, not silent tree fallback)\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nSilent fallback is the bug; explicit failure is better than wrong layout."
+  },
+  {
+    "name": "ws12: vector — wire VectorBackend into DemocritusLoop",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — Sprint 16 carry-over; `vector-hybrid.md` next-steps.\n\n## Problem / gap\n`DemocritusLoop` currently uses raw `HnswService`. Sprint 16 introduced the `VectorBackend` trait + four impls; the loop has not migrated.\n\n## Acceptance criteria\n- [ ] `DemocritusLoop` accepts `Arc<dyn VectorBackend>`\n- [ ] Default = HNSW backend (back-compat)\n- [ ] Tests cover hybrid backend path\n- [ ] No regression on Democritus tests\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nRefactor; the substrate is in place."
+  },
+  {
+    "name": "ws12: vector — ecc.vector-config RPC to show active backend",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — Sprint 16 carry-over; `vector-hybrid.md`.\n\n## Problem / gap\nNo introspection RPC for which `VectorBackend` is active. Operators have to read config or trust the build.\n\n## Acceptance criteria\n- [ ] New RPC `ecc.vector-config` returns backend name + parameters\n- [ ] CLI command `weft ecc vector-config`\n- [ ] Test for the RPC arm\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nObservability quality-of-life."
+  },
+  {
+    "name": "ws12: vector — diskann feature flag for real impl",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — Sprint 16 carry-over; `vector-hybrid.md`.\n\n## Problem / gap\nWhen the real DiskANN backend lands (separate task), it needs a `diskann` feature flag for opt-in.\n\n## Acceptance criteria\n- [ ] `diskann` feature in `crates/clawft-kernel/Cargo.toml`\n- [ ] Real impl gated behind it\n- [ ] Brute-force HashMap stub remains as feature-off fallback\n- [ ] CI matrix covers both flags\n\n## Dependencies\n- Blocked-by: real DiskANN backend implementation (separate task)\n\n## Notes\nPaired with the DiskANN-replacement task."
+  },
+  {
+    "name": "ws12: vector — hybrid vs pure HNSW benchmark for ECC workloads",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "tests", "performance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — Sprint 16 carry-over; `vector-hybrid.md`.\n\n## Problem / gap\nNo head-to-head benchmark for hybrid (hot HNSW + cold DiskANN) vs pure HNSW on ECC workload mix.\n\n## Acceptance criteria\n- [ ] Benchmark harness with realistic ECC workload distribution\n- [ ] Results published in `docs/research/`\n- [ ] Decision rule documented (when to recommend hybrid)\n\n## Dependencies\n- Blocked-by: real DiskANN backend (otherwise compares HNSW vs HNSW+stub)\n\n## Notes\nReally meaningful only after DiskANN is real."
+  },
+  {
+    "name": "ws12: weaver graphify rebuild — full extraction-pipeline integration",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — `phase45-notes.md` carry-over.\n\n## Problem / gap\nCurrently the `rebuild` CLI exists but the integration path against the real extraction pipeline is partially stubbed. `weaver graphify rebuild` should drive a full extract → analyze → store cycle.\n\n## Acceptance criteria\n- [ ] `rebuild` runs full extraction pipeline end-to-end\n- [ ] Cache invalidation honoured (BLAKE3 + EXTRACTOR_VERSION)\n- [ ] Idempotent\n- [ ] Tests on a small fixture repo\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nFile: `crates/clawft-weave/src/commands/graphify_cmd.rs`."
+  },
+  {
+    "name": "ws12: ingest — replace StubHttpClient with real reqwest-based HTTP client",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "stub"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — `phase45-notes.md` carry-over.\n\n## Problem / gap\n`StubHttpClient` is the default for URL ingestion. Production reqwest-based client is not yet wired.\n\n## Acceptance criteria\n- [ ] `ReqwestHttpClient` impl behind a feature flag\n- [ ] Default to `ReqwestHttpClient` for production binaries\n- [ ] `StubHttpClient` retained for tests\n- [ ] Test ingestion of a real arxiv paper\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\n`SSRF` protection (file://, localhost, RFC1918) already in place at `ingest.rs`."
+  },
+  {
+    "name": "ws12: graphify — MCP server (Phase 6)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — `phase45-notes.md` carry-over (Phase 6).\n\n## Problem / gap\nMaster plan Phase 6 calls for an MCP server exposing graphify capabilities to MCP clients. Not started.\n\n## Acceptance criteria\n- [ ] MCP server crate (or integration into existing MCP transport)\n- [ ] Tools: `query`, `ingest`, `export`, `diff`\n- [ ] Documentation under `docs/mcp/`\n- [ ] Integration test against a reference MCP client\n\n## Dependencies\n- Blocked-by: clarification on which MCP transport (stdio vs HTTP)\n\n## Notes\n0.8.x cycle is tentative — depends on Phase 6 priority."
+  },
+  {
+    "name": "ws12: graphify — extraction + graph_ops benchmarks (Phase 6)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "tests", "performance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — `phase45-notes.md` carry-over (Phase 6); `MASTER_PLAN.md`.\n\n## Problem / gap\n`benches/extraction.rs` and `benches/graph_ops.rs` named in master plan; not present in tree.\n\n## Acceptance criteria\n- [ ] `crates/clawft-graphify/benches/extraction.rs` with criterion benches\n- [ ] `crates/clawft-graphify/benches/graph_ops.rs` with criterion benches\n- [ ] CI runs benches on PRs labeled `perf`\n- [ ] Baseline numbers checked in\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nFoundation for performance regression detection."
+  },
+  {
+    "name": "ws12: graphify — write ADR-049 (graphify port)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "docs", "governance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — open ADRs; `MASTER_PLAN.md:3` lists ADR-049 as \"pending\".\n\n## Problem / gap\nADR-049 (graphify port from Python to Rust) is the canonical decision record for the entire workstream. Status \"pending\" in master plan; never written.\n\n## Acceptance criteria\n- [ ] `docs/adr/adr-049-graphify-port.md`\n- [ ] Captures: port motivation, crate layout, feature gates, language coverage, deferred items\n- [ ] References MASTER_PLAN, phase notes, paper surveys\n- [ ] Status: Accepted\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nPure docs."
+  },
+  {
+    "name": "ws12: graphify — write ADR-050..053 candidates from phase2 paper survey",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "docs", "governance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — open ADRs; `knowledge-graph-paper-survey-phase2.md:519-527`.\n\n## Problem / gap\nFour ADRs candidate per phase2 survey for already-shipped algorithms: ADR-050 SGKR (KG-006 shipped), ADR-051 CodaRAG entity dedup HNSW pre-filter (KG-008 shipped), ADR-052 TransFIR codebook cold-start (KG-014 shipped), ADR-053 K-STEMIT spatio-temporal (KG-013 not started).\n\n## Acceptance criteria\n- [ ] `docs/adr/adr-050-sgkr-dependency-graph-retrieval.md`\n- [ ] `docs/adr/adr-051-codarag-entity-dedup-hnsw-prefilter.md`\n- [ ] `docs/adr/adr-052-transfir-codebook-cold-start.md`\n- [ ] `docs/adr/adr-053-kstemit-spatio-temporal-architecture.md` (status: Proposed for KG-013)\n- [ ] All ADRs reference the source papers + KG-NNN tasks\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nRetrospective ADRs for shipped work — must be written for governance compliance."
+  },
+  {
+    "name": "ws12: graphify — incremental graph updates (LightRAG set-union dedup)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap", "performance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — LightRAG P1; `arxiv-2410-05779-analysis.md`.\n\n## Problem / gap\n`pipeline.rs::Pipeline::run_incremental()` is sketched in the analysis doc but not implemented in tree. LightRAG-style set-union-with-dedup is a P1 win: 10-100× faster re-analysis on small change deltas.\n\n## Acceptance criteria\n- [ ] `Pipeline::run_incremental(changed_files: &[Path])` method\n- [ ] Set-union with dedup against current graph\n- [ ] Benchmark vs full rebuild on a small change\n- [ ] Test correctness vs full rebuild output\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\n10-100× speedup is the prize."
+  },
+  {
+    "name": "ws12: graphify — multi-key HNSW indexing (LightRAG P2)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — LightRAG P2.\n\n## Problem / gap\nLightRAG-style multi-key embedding (entity name, type, context) per LightRAG analysis P2. Not implemented; would touch `hnsw_service.rs::insert()` and the bridge embedding flow.\n\n## Acceptance criteria\n- [ ] `HnswService::insert_multi_key` accepts multiple keys per entity\n- [ ] Bridge embedding flow generates per-key embeddings\n- [ ] Recall improvement measured vs single-key baseline\n- [ ] Tests for multi-key retrieval\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nQuality lift; not perf."
+  },
+  {
+    "name": "ws12: graphify — edge embeddings for relationship queries (LightRAG P5)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — LightRAG P5.\n\n## Problem / gap\nEmbed relationships not just entities, for \"how does X interact with Y?\" queries. Not implemented.\n\n## Acceptance criteria\n- [ ] `Relationship` carries an embedding field\n- [ ] HNSW index over relationships\n- [ ] Query path: relationship-anchored retrieval\n- [ ] Test fixture covering interaction queries\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nUnlocks new query patterns."
+  },
+  {
+    "name": "ws12: graphify — graph-aware HNSW re-ranking (LightRAG P4)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — LightRAG P4.\n\n## Problem / gap\nRe-rank HNSW neighbors by graph topology (degree, community, centrality). Not implemented; would bridge `hnsw_service.rs` and `analyze.rs`.\n\n## Acceptance criteria\n- [ ] `GraphAwareReranker` trait\n- [ ] Default impl using degree + community\n- [ ] Toggleable in query path\n- [ ] Recall + relevance benchmark\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nLayered improvement on retrieval quality."
+  },
+  {
+    "name": "ws12: graphify — discover_hyperedges() pipeline step",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — Open question #9.\n\n## Problem / gap\n`Hyperedge` type exists at `model.rs` and `KnowledgeGraph::hyperedges` is populated by analysis but no first-class hyperedge detection algorithm runs in the pipeline yet — `pipeline.rs` does not call a `discover_hyperedges()` step.\n\n## Acceptance criteria\n- [ ] `discover_hyperedges()` in `analyze.rs` or new module\n- [ ] Detection algorithm documented (motif-based, LP-based, or other)\n- [ ] Pipeline step invokes it\n- [ ] Tests for hyperedge detection on canonical graphs\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nType is in tree; algorithm + dispatch is the gap."
+  },
+  {
+    "name": "ws12: graphify — vault domain hyperedges + SUGGEST→ratify→CRDT pipeline",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — Open question #11; ontology navigator symposium.\n\n## Problem / gap\n`vault/` ships v0.6.11 frontmatter + wikilink analysis but the SUGGEST → ratify → CRDT pipeline from the Ontology Navigator symposium (Sprint 22 plan, Phase 5 codebase schema agent) is not started.\n\n## Acceptance criteria\n- [ ] `SUGGEST` step proposes vault hyperedges\n- [ ] User-facing ratify UI (cross-stream W-UI/15)\n- [ ] Ratified edges committed to CRDT-backed graph store\n- [ ] Tests for the round-trip\n\n## Dependencies\n- Blocked-by: panel UI (cross-stream)\n- Blocked-by: CRDT graph store design\n\n## Notes\nSprint 22 plan; tentative cycle."
+  },
+  {
+    "name": "ws12: graphify — index-based optimization for forensic gap_analysis (O(n·m) cliff)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "performance", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — `phase3-notes.md` carry-over.\n\n## Problem / gap\n`gap_analysis()` is O(n·m) and \"should be optimized with indexes for large graphs.\" Acceptable below 10K entities; known cliff above.\n\n## Acceptance criteria\n- [ ] Index-based implementation (timeline + entity hash)\n- [ ] Benchmark on 10K and 100K-entity forensic graphs\n- [ ] Asymptotic improvement vs O(n·m) baseline\n- [ ] Tests for correctness vs current implementation\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nMeaningful only for large forensic deployments."
+  },
+  {
+    "name": "ws12: graphify — adaptive HNSW rebuild_threshold (EML coherence two-tier)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "performance", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — Open question #12; `eml-coherence.md`; `hnsw-eml-analysis.md` §6.\n\n## Problem / gap\nThe canonical two-tier pattern (fast EML every tick + slow ground truth periodically) is laid out in the docs but the slow-path sampling cadence in `hnsw_store.rs` is still a fixed `rebuild_threshold = 100`. Adaptive rebuild (HNSW-EML §2g) is open.\n\n## Acceptance criteria\n- [ ] EML model predicts when index degradation crosses recall threshold\n- [ ] Rebuild triggered adaptively, not on fixed count\n- [ ] Benchmark: workload that benefits (clustered insertions) vs flat workload\n- [ ] Falls back to fixed threshold if EML unavailable\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nOne of 8 HNSW-EML opportunities identified."
+  },
+  {
+    "name": "ws12: graphify — vision_extract end-to-end test fixture",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "tests"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — Orphaned-work item.\n\n## Problem / gap\n`vision_extract.rs` (246 lines) is feature-gated (`vision-extract`) and shipped, but no end-to-end test runs through it (the feature-gate is off by default and no fixture in `crates/clawft-graphify/schemas/`).\n\n## Acceptance criteria\n- [ ] Test fixture (small image / diagram) under `crates/clawft-graphify/tests/fixtures/`\n- [ ] E2E test gated behind `vision-extract` feature\n- [ ] CI matrix runs the feature flag\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nDead-code risk if untested."
+  },
+  {
+    "name": "ws12: graphify — schema-based edge validation in validation.rs",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — Orphaned-work item; `.planning/symposiums/ontology-navigator/session-4-pipeline-findings.md`.\n\n## Problem / gap\n`validation.rs` (213 lines) implements JSON-shape validation only; schema-based edge validation is flagged \"Minimal\" in the symposium pipeline findings.\n\n## Acceptance criteria\n- [ ] Schema-driven edge validator (relationship type ↔ allowed entity-type pairs)\n- [ ] Loadable from VOWL / RDF schema or programmatic schema\n- [ ] Validation errors reported with entity context\n- [ ] Tests on a canonical schema\n\n## Dependencies\n- Blocked-by: schema source decision (VOWL ingest from OG-2 helps)\n\n## Notes\nLoosely coupled with OG-2."
+  },
+  {
+    "name": "ws12: graphify — clean up dead clawft-llm optional dep flag",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — Orphaned-work item; `Cargo.toml:67`.\n\n## Problem / gap\n`clawft-llm` workspace dep is declared optional in `Cargo.toml:67` but no feature in this crate enables it — semantic extraction takes an `FnOnce(String) -> Future` callback instead. Intentional (testability) but the LLM-bridge feature flag named in `phase45-notes.md` is effectively dead.\n\n## Acceptance criteria\n- [ ] Either remove the optional dep declaration\n- [ ] Or wire a feature flag that uses it\n- [ ] Decision documented in `Cargo.toml` comment\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nBookkeeping."
+  },
+  {
+    "name": "ws12: graphify — adaptive ef (HNSW-EML opportunity)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "performance", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — HNSW-EML opportunity 2b/1.\n\n## Problem / gap\nAdaptive ef (beam width per query) yields 1.5-3× search speedup. Open. Feature wires into `HnswStore::query()`.\n\n## Acceptance criteria\n- [ ] EML model predicts optimal ef per query\n- [ ] Falls back to default ef if model unavailable\n- [ ] Benchmark vs fixed ef\n- [ ] Tests\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nSmall-effort win."
+  },
+  {
+    "name": "ws12: graphify — search-path prediction (HNSW-EML #4, biggest single win)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "performance", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — HNSW-EML opportunity 4; `hnsw-eml-deep-analysis.md` (named as biggest single win).\n\n## Problem / gap\nRegion → entry-node lookup yields 2-5× search speedup. Open. Medium effort.\n\n## Acceptance criteria\n- [ ] Region-to-entry-node lookup table (built offline or learned)\n- [ ] HNSW search uses predicted entry node\n- [ ] Benchmark vs default entry-node\n- [ ] Tests\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nFlagged in deep-analysis as biggest single HNSW-EML win."
+  },
+  {
+    "name": "ws12: graphify — cosine-similarity decomposition for distance speedup",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "performance", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — HNSW-EML opportunity 3.\n\n## Problem / gap\nDimension-selective cosine yields 10-30× distance speedup. Open. Medium effort.\n\n## Acceptance criteria\n- [ ] Dimension-importance ranking precomputed\n- [ ] Distance kernel uses top-K dims for early-out\n- [ ] Recall delta documented\n- [ ] Benchmark vs full distance\n- [ ] Tests\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nQuality vs speed knob."
+  },
+  {
+    "name": "ws12: graphify — verify+restore standalone export/cypher.rs and export/svg.rs",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws12-knowledge-graph", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/12-knowledge-graph-graphify.md` — `MASTER_PLAN.md` carry-over.\n\n## Problem / gap\n`MASTER_PLAN.md` named `export/cypher.rs` and `export/svg.rs`. Cypher is currently realized inside `export/wiki.rs` flow only; `svg.rs` is not in tree.\n\n## Acceptance criteria\n- [ ] Standalone `export/cypher.rs` (or document the wiki.rs design choice)\n- [ ] `export/svg.rs` shipped with positioned-output (overlaps OG-3)\n- [ ] Tests for both exports\n\n## Dependencies\n- Blocked-by: OG-3 force layout for SVG\n\n## Notes\nDoc-vs-tree drift; resolve either way."
+  },
+  {
+    "name": "ws16: browser — wasm-bindgen-test regression suite for init() + send_message() pipeline",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tests", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P0.4; `.planning/reviews/0.7.0-release-gate/16b-browser-pipeline-wire-plan.md` — \"What did NOT land\".\n\n## Problem / gap\nThe full 6-stage pipeline now runs on every browser turn (16b wire-through landed in this session). However NO `wasm-bindgen-test` harness exists in the workspace — `grep wasm_bindgen_test crates/` returns zero. Without a regression suite, the freshly-wired pipeline can silently break on the next refactor. The audit flags this as a 0.7.x ship-gate concern: \"no test coverage = regression risk.\"\n\n## Acceptance criteria\n- [ ] `crates/clawft-wasm/tests/browser_*.rs` covers: `BrowserHttpClient` round-trip, `BrowserFileSystem` write/read/list/delete, `init()` + `send_message()` happy-path against a local fake LLM endpoint\n- [ ] `wasm-pack test --headless` runs in CI via `wasm-browser.yml`\n- [ ] At least one regression test asserts the 6-stage pipeline path is reached (not the bypass) — e.g. by inspecting a side-effect from the classifier or scorer stage\n- [ ] Test runtime fits the existing CI budget\n\n## Dependencies\n- Blocks: 0.7.0 release-gate sign-off (audit-flagged regression risk)\n- Blocked-by: none — pipeline wire-through is in tree\n\n## Notes\nThe 16b plan explicitly defers this as P0.4. Without it any future refactor of `pipeline/browser_llm_adapter.rs` or the `?Send` `async_trait` can silently revert to LLM-direct without anyone noticing."
+  },
+  {
+    "name": "ws16: browser — binary size budget audit (1.32 MB → wasm-opt -Oz CI gate)",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "release-gate-blocker", "performance", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P0.5, P1.5; `.planning/reviews/0.7.0-release-gate/16b-browser-pipeline-wire-plan.md` — \"What did NOT land\".\n\n## Problem / gap\nWiring the full pipeline grew the bindgen artifact from ~840 KB to ~1.32 MB — well over the planning target of <300 KB raw / <120 KB gzip. `wasm-opt -Oz` is not yet wired into `wasm-browser.yml`. No CI size gate. The `wasm-browser-size` job referenced in P1.5 was never added. The audit flags this as a 0.7.x ship-gate concern: a 1.32 MB unoptimized bundle without a budget check is a real risk for browser users.\n\n## Acceptance criteria\n- [ ] `wasm-opt -Oz` wired into `wasm-browser.yml`\n- [ ] Step summary captures raw + gzip sizes after `wasm-opt`\n- [ ] CI fails PRs that bust the documented budget (or relax the budget in writing with a documented rationale)\n- [ ] Decision documented: keep <300 KB target or relax to <X KB\n- [ ] `pr-gates.yml` has the `wasm-browser-size` job (P1.5 follow-through)\n- [ ] First post-`wasm-opt` raw + gzip numbers checked in to `docs/browser/`\n\n## Dependencies\n- Blocks: 0.7.0 release-gate sign-off\n- Blocked-by: none\n\n## Notes\nAccept that pipeline wire-through cost real bytes — but at least gate further drift."
+  },
+  {
+    "name": "ws16: browser — streaming chat via ReadableStream / wasm-streams",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16b-browser-pipeline-wire-plan.md` — \"What did NOT land\"; `.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — \"Streaming via ReadableStream\".\n\n## Problem / gap\n`StreamCallback = Box<dyn FnMut(&str) -> bool + Send>` is incompatible with the browser's single-threaded `!Send` model. `PipelineRegistry::complete_stream` and `LlmTransport::complete_stream` default impl are gated `#[cfg(not(feature = \"browser\"))]`. A browser streaming entry needs a `?Send` callback type or migration to `wasm-streams` / `ReadableStream` SSE parser. `browser_delay()` is also a no-op `yield`; should upgrade to `gloo-timers`.\n\n## Acceptance criteria\n- [ ] Browser-flavoured stream callback type without `Send` bound (or `wasm-streams` rewrite)\n- [ ] Browser streaming path through the pipeline\n- [ ] `browser_delay()` migrated to `gloo-timers` so backoff actually waits\n- [ ] CORS-proxy compatibility for SSE\n- [ ] Test exercising streamed chunks via the pipeline\n\n## Dependencies\n- Blocked-by: design choice (callback vs `wasm-streams`)\n\n## Notes\n0.8.x. Pairs naturally with the W-UI/15 streaming UI work and with WS11 voice + streaming Phase 2."
+  },
+  {
+    "name": "ws16: browser — wire set_env to BrowserEnvironment via OnceLock<BrowserRuntime>",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "gap", "bug"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P0.3; `.planning/reviews/0.7.0-release-gate/16b-browser-pipeline-wire-plan.md` — \"What did NOT land\"; `crates/clawft-wasm/src/lib.rs:353-355`; step6-bw6 \"set_env wiring\".\n\n## Problem / gap\nAfter pipeline wire-through, `BrowserPlatform` is moved into `AgentLoop`, so `BrowserRuntime` no longer retains a handle to the live `BrowserEnvironment`. `set_env` is documented as a no-op with a TODO. JS callers cannot mutate live env state. `BrowserPlatform::with_env` is the only constructor that takes pre-populated env, and `init()` doesn't expose a way to seed it from JS.\n\n## Acceptance criteria\n- [ ] `BrowserRuntime` stores `Arc<BrowserEnvironment>` clone alongside the agent\n- [ ] `set_env(key, value)` mutates through it\n- [ ] `init()` accepts a pre-seeded env map (optional)\n- [ ] Test: set_env then read via Platform.env() returns the new value\n- [ ] Doc updated\n\n## Dependencies\n- Blocked-by: none — wire-through landed; just needs the handle\n\n## Notes\nHistoric BW5/BW6 follow-up; now blocked only by 16b's design (move-into-AgentLoop)."
+  },
+  {
+    "name": "ws16: browser — implement OPFS-backed BrowserFileSystem behind browser-opfs feature",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P0.2; step4-bw4 §3.2; `crates/clawft-platform/src/browser/{mod,fs}.rs`.\n\n## Problem / gap\n`BrowserFileSystem` is in-memory (`Mutex<HashMap<PathBuf, String>>`). On reload everything vanishes. Real OPFS persistence blocked by `web-sys` `FileSystemDirectoryHandle` / `FileSystemFileHandle` bindings being behind unstable feature flags. No plan currently lists which `web-sys` version unblocks this.\n\n## Acceptance criteria\n- [ ] OPFS impl behind a new `browser-opfs` sub-feature\n- [ ] In-memory variant retained as fallback\n- [ ] `web-sys` feature flags identified + version requirement documented\n- [ ] `clawft-tools/src/file_tools.rs` `resolve_sandbox_path` / `path_exists` audited for OPFS-no-symlink assumption\n- [ ] OPFS-aware `ListDirectoryTool` metadata (real `is_dir`/`size`)\n- [ ] Persistence test: write → reload page → read returns same content\n- [ ] Browser `dirs::home_dir()` collision (relative `.clawft/skills` vs OPFS `/clawft`) resolved\n\n## Dependencies\n- Blocked-by: upstream — `web-sys` stabilising `FileSystem*Handle` bindings\n\n## Notes\nBlocked on external upstream `web-sys`. Once unblocked, the OPFS-file-ops test (P6.3), config-persistence test (P6.4), conversation-history persistence (P2 task), and ListDirectoryTool metadata all unlock."
+  },
+  {
+    "name": "ws16: browser — write ADR-027 Browser WASM Support",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "docs", "governance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P1, task #6; P1.8 in task breakdown.\n\n## Problem / gap\nADR-027 \"Browser WASM Support\" was never written. Slot at `docs/adr/adr-027-*.md` is occupied by `adr-027-selective-libp2p.md`, an unrelated topic. There is no ADR for the entire W-BROWSER decision tree (hybrid vs full port vs thin client, feature-flag mutex, OPFS deferral, async_trait `?Send` tax, CORS-proxy convention).\n\n## Acceptance criteria\n- [ ] Pick a fresh ADR number (not 027 — that slot is taken)\n- [ ] `docs/adr/adr-NNN-browser-wasm-support.md` written\n- [ ] Captures: hybrid vs full-port vs thin-client decision, `native ⊻ browser` feature-mutex, OPFS deferral, async_trait `?Send` tax, CORS-proxy convention, signing/release model\n- [ ] References existing `docs/architecture/wasm-browser-portability-analysis.md`\n- [ ] Status: Accepted (retroactively for landed scope)\n\n## Dependencies\n- Blocked-by: ADR number assignment\n\n## Notes\nCorrect the ADR-027 collision in the planning material."
+  },
+  {
+    "name": "ws16: browser — write docs/development/feature-flags.md",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "docs"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P1, task #7; P1.9.\n\n## Problem / gap\n`docs/development/feature-flags.md` (rules for adding new deps so they don't break the WASM target) was never written.\n\n## Acceptance criteria\n- [ ] `docs/development/feature-flags.md`\n- [ ] Workspace `default-features = false` discipline\n- [ ] How to add new deps without breaking WASM target\n- [ ] `native` ⊻ `browser` mutex rationale\n- [ ] Per-crate feature flag inventory\n- [ ] Linked from CLAUDE.md and root README\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nReader-facing process doc."
+  },
+  {
+    "name": "ws16: browser — write docs/browser/cors-provider-setup.md + config-schema.md",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "docs"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P1, task #8; P3.6, P3.7.\n\n## Problem / gap\nTwo planned docs never created:\n- `docs/browser/cors-provider-setup.md` — per-provider CORS recipes\n- `docs/browser/config-schema.md` — full annotated `config.json` schema for browser mode\n`docs/browser/deployment.md` has a small CORS section but not the per-provider matrix.\n\n## Acceptance criteria\n- [ ] `docs/browser/cors-provider-setup.md` covers OpenRouter, OpenAI, Anthropic, Groq, DeepSeek, Gemini, xAI\n- [ ] `docs/browser/config-schema.md` annotates every key in browser-mode `config.json`\n- [ ] Linked from `docs/browser/quickstart.md`\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nUser-facing docs."
+  },
+  {
+    "name": "ws16: browser — update root README.md and CLAUDE.md with browser build instructions",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "docs"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P1, task #9; P6.10.\n\n## Problem / gap\nNeither the root `README.md` nor `CLAUDE.md` mentions the browser stack. Discoverability gap.\n\n## Acceptance criteria\n- [ ] `README.md` has a Browser Build section linking to `docs/browser/`\n- [ ] `CLAUDE.md` notes `scripts/build.sh browser` and the `--features browser` flag\n- [ ] Brief mention of W-BROWSER scope (compile + transport + harness + pipeline wired)\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nLow effort; high discoverability return."
+  },
+  {
+    "name": "ws16: browser — compile_error! when both native and browser features are enabled",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "tech-debt", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P1, task #10; cross-cutting risks.\n\n## Problem / gap\nMutual-exclusion enforcement is by convention only — no `compile_error!` if someone enables both `native` and `browser` features. Crate stack relies on consumers to set `default-features = false` and pick one. Easy to break silently.\n\n## Acceptance criteria\n- [ ] `compile_error!` block in each affected crate when both features are enabled\n- [ ] Clear error message naming the conflict\n- [ ] CI test that asserts the compile_error fires\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nFail-loud over fail-silent."
+  },
+  {
+    "name": "ws16: browser — split clawft-wasm host code into dedicated crate",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P2, task #11; \"Open questions\" #2.\n\n## Problem / gap\nThe two `#[cfg(feature = \"wasm-plugins\")]` modules (`sandbox`, `engine`, `permission_store`, `audit` totalling ~28 KLOC) are wasmtime-host code that runs on *native* / wasip2 — not the browser. They sit in `clawft-wasm` because of historical crate naming and are completely orthogonal to W-BROWSER.\n\n## Acceptance criteria\n- [ ] New crate `clawft-wasm-host` (or merge into `clawft-services`)\n- [ ] Host code moved out of `clawft-wasm`\n- [ ] `clawft-wasm` becomes pure browser/wasip2 entry\n- [ ] Existing public APIs preserved via re-exports\n- [ ] CI matrix updated\n- [ ] No regression on `wasm-plugins` consumers\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nLarge refactor; pure re-org."
+  },
+  {
+    "name": "ws16: browser — persistent conversation history via OPFS (CLAUDE.md-per-group)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P2, task #12; \"Open questions\" #6.\n\n## Problem / gap\n`OnceLock<BrowserRuntime>` puts the `Mutex<Vec<ChatMessage>>` in module-scope memory; on reload it vanishes. Plan called for `CLAUDE.md`-per-group in OPFS (mirroring openbrowserclaw); not designed.\n\n## Acceptance criteria\n- [ ] Design doc for CLAUDE.md-per-group OPFS layout\n- [ ] Serializer for conversation history on `send_message` exit\n- [ ] Deserializer on `init()`\n- [ ] Test: conversation persists across simulated reload\n- [ ] Config-persistence test (P6.4) lights up\n\n## Dependencies\n- Blocked-by: OPFS-backed BrowserFileSystem (separate task)\n\n## Notes\nPaired with OPFS impl."
+  },
+  {
+    "name": "ws16: browser — Web Worker harness variant",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P2, task #13; P6.6; \"Open questions\" #5.\n\n## Problem / gap\nMain-thread WASM blocks UI on long LLM calls. `BrowserHttpClient` is already worker-ready (uses `WorkerGlobalScope::fetch` fallback), but the harness never instantiates it in a worker. Decision and a `worker.js` template owe.\n\n## Acceptance criteria\n- [ ] `worker.js` template under `crates/clawft-wasm/www/`\n- [ ] Worker variant of harness instantiates the WASM in a Web Worker\n- [ ] Documentation in `docs/browser/` for worker mode\n- [ ] Test: long LLM call via worker doesn't block synthetic UI tick\n\n## Dependencies\n- Blocked-by: none — http client supports both already\n\n## Notes\nUI responsiveness improvement."
+  },
+  {
+    "name": "ws16: browser — gitignore or stub-replace pre-built www/pkg artifact",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "tech-debt", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P2, task #15; \"Orphaned work\".\n\n## Problem / gap\nPre-built `www/pkg/` is checked in (Apr 20 commit). Either it should be `.gitignore`d and rebuilt by the harness boot script, or there should be a stale-artifact check in CI. Currently it can drift silently from the `wasm-browser.yml` output.\n\n## Acceptance criteria\n- [ ] Decision: gitignore vs stale-check\n- [ ] If gitignore: `crates/clawft-wasm/www/pkg/` added to `.gitignore`; harness boot rebuilds\n- [ ] If stale-check: CI verifies checked-in artefact matches a fresh build\n- [ ] Documented in `docs/browser/building.md`\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nSplit-the-difference choice; either is OK."
+  },
+  {
+    "name": "ws16: browser — fix unreachable_code warning in workspace/agent.rs:257",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "tech-debt", "bug"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P2, task #16; appears in every browser phase-gate doc from BW2 onward.\n\n## Problem / gap\nPre-existing warning at `crates/clawft-core/src/workspace/agent.rs:257` (unreachable expression on non-Unix targets). Flagged as \"non-blocking\" in BW2-BW6 phase gates and never fixed.\n\n## Acceptance criteria\n- [ ] Warning fixed (cfg-gate the unreachable arm or restructure)\n- [ ] `scripts/build.sh check` clean for browser target\n- [ ] No regression on Unix builds\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nLow-effort hygiene fix."
+  },
+  {
+    "name": "ws16: browser — audit ADR-044 vs reality (wasip1 vs wasip2 + script alignment)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "docs", "governance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P2, task #17; \"Orphaned work\" wasm32-wasi rename item.\n\n## Problem / gap\nADR-044 documents wasip1 default with intent to migrate to wasip2 in \"Sprint 12\". That migration was never executed at the ADR level, but `scripts/build.sh wasi` and `release-wasi.yml` already say `wasm32-wasip2`. Doc is stale rather than the code; inconsistency remains.\n\n## Acceptance criteria\n- [ ] Decision: ratify wasip2 migration in ADR-044 (or revert scripts to wasip1)\n- [ ] ADR-044 updated to reflect actual shipping target\n- [ ] CI / scripts / docs consistent\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nDoc-vs-code drift."
+  },
+  {
+    "name": "ws16: browser — data-driven provider-routing fallback order",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "gap", "tech-debt"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P2, task #18; \"Open questions\" #7.\n\n## Problem / gap\nHard-coded fallback chain `[\"openrouter\", \"openai\", \"anthropic\", \"groq\", \"deepseek\", \"gemini\", \"xai\"]` in `resolve_provider`. Suitable for a demo but should be data-driven from config.\n\n## Acceptance criteria\n- [ ] `Config` carries `provider_fallback_order: Vec<String>`\n- [ ] `resolve_provider` reads from config\n- [ ] Default preserves current order (back-compat)\n- [ ] Test for custom order\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nUser-facing flexibility."
+  },
+  {
+    "name": "ws16: browser — sign + version browser bundle artefact (parity with WASI release)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "security", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — \"Open questions\" #8.\n\n## Problem / gap\nThe release artifact attached to tags via `wasm-browser.yml` is unsigned. Signing parity with the WASI release flow (`release-wasi.yml`) is not in scope of any current step doc.\n\n## Acceptance criteria\n- [ ] Signing pipeline mirrored from `release-wasi.yml`\n- [ ] Public verification doc under `docs/browser/`\n- [ ] CI step adds detached signature\n- [ ] First signed release tagged\n\n## Dependencies\n- Blocked-by: signing key strategy (likely shared with WASI flow)\n\n## Notes\nSupply-chain hygiene."
+  },
+  {
+    "name": "ws16: browser — threat-model note on api_key in JS-readable WASM memory",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "security", "docs"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — \"Cross-cutting risks\".\n\n## Problem / gap\n`BrowserLlmClient` keeps `api_key: SecretString` in JS-readable memory once injected via `init(config_json)`. Any XSS in the host page lifts the key. UI side at least encrypts in IndexedDB; the WASM side does not. Worth an explicit threat-model note (and ideally mitigations).\n\n## Acceptance criteria\n- [ ] Threat-model note in `docs/browser/architecture.md` or new `docs/browser/security.md`\n- [ ] Documents: XSS exposure, WASM-memory readability, mitigations (CSP, key scoping, ephemeral keys)\n- [ ] Recommendations for production deployments\n- [ ] (Optional) prototype of zeroising at end of `complete()`\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nDocumentation-first; design follow-ups can land later."
+  },
+  {
+    "name": "ws16: browser — performance profiling baseline (load, init, first-msg, memory)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "tests", "performance"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P6.5.\n\n## Problem / gap\nNo metrics captured anywhere for browser load / init / first-msg latency or memory. Baseline missing.\n\n## Acceptance criteria\n- [ ] Profiling script (puppeteer / playwright) measures page-load → first message round-trip\n- [ ] Memory snapshot after first turn\n- [ ] Numbers checked in to `docs/browser/performance.md`\n- [ ] CI captures values in step summary (info-only, not gate)\n\n## Dependencies\n- Blocked-by: wasm-bindgen-test harness (separate 0.7.x task) — share infra\n\n## Notes\nObservability foundation."
+  },
+  {
+    "name": "ws16: browser — final regression suite + ≤10% test-duration regression check (P6.7)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "tests", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P6.7 partial.\n\n## Problem / gap\nThe per-crate `gate` matrix runs every PR but no timing comparison. The promised \"final regression suite + docker smoke + ≤10% test-duration regression\" is partial.\n\n## Acceptance criteria\n- [ ] CI captures test-suite duration as an artefact\n- [ ] Comparison against prior runs\n- [ ] Fail (or warn) on >10% regression\n- [ ] Docker smoke test against the harness pkg\n\n## Dependencies\n- Blocked-by: wasm-bindgen-test harness so durations have meaning\n\n## Notes\nQuality bar; not user-visible."
+  },
+  {
+    "name": "ws16: browser — retire or document scripts/check-features.sh contract",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws16-browser-wasm", "audit-finding", "audit-0.7.0", "docs", "tooling"],
+    "description_md": "## Source\n`.planning/reviews/0.7.0-release-gate/16-browser-wasm.md` — P1.6.\n\n## Problem / gap\n`scripts/check-features.sh` does not exist under `scripts/`. Current entrypoint is `scripts/build.sh gate`, which covers the same checks, but the contract documented in step1-bw1 references the missing script name.\n\n## Acceptance criteria\n- [ ] Decision: rename `scripts/build.sh gate` reference into `scripts/check-features.sh` (or doc fix)\n- [ ] step1-bw1 doc updated to point at the real script\n- [ ] CI doesn't break\n\n## Dependencies\n- Blocked-by: none\n\n## Notes\nDoc-only fix."
+  }
+]

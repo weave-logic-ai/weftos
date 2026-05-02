@@ -974,8 +974,8 @@ pub fn probe_corpus(
             mean[d] += vec[d] as f64;
         }
     }
-    for d in 0..dims {
-        mean[d] /= sample_n as f64;
+    for slot in mean.iter_mut().take(dims) {
+        *slot /= sample_n as f64;
     }
     for vec in sample {
         for d in 0..dims.min(vec.len()) {
@@ -1532,7 +1532,7 @@ pub fn run_hnsw_benchmark(
     // but don't change ef.
     let mut store_overhead = build_store(&corpus, static_ef);
     {
-        let mut eml_overhead = HnswEmlManager::new(HnswEmlConfig {
+        let eml_overhead = HnswEmlManager::new(HnswEmlConfig {
             enabled: true,
             ..Default::default()
         });
@@ -2046,7 +2046,7 @@ mod tests {
         let hnsw = vec![vec!["a".into(), "b".into()]];
         let exact = vec![vec!["a".into(), "c".into()]];
         let recall = m.measure_recall(&hnsw, &exact, 500, 20, 5);
-        assert!(recall >= 0.0 && recall <= 1.0);
+        assert!((0.0..=1.0).contains(&recall));
 
         // Predict (untrained)
         let ef_pred = m.predict_ef(&[1.0, 0.0, 0.0], 500);
@@ -2145,19 +2145,19 @@ mod tests {
         }
         eprintln!("──────────────────────────────────────────────────────────────────");
         eprintln!("Phase 3 — Compute (4-arm A/B)");
-        eprintln!("");
+        eprintln!();
         eprintln!("                          recall@10    mean (ns)    p99 (ns)");
         eprintln!("  Control (flat HNSW):     {:.4}    {:>10}    {:>10}", c.recall, c.mean_ns, c.p99_ns);
         eprintln!("  Overhead (EML nop):      {:.4}    {:>10}    {:>10}", o.recall, o.mean_ns, o.p99_ns);
         eprintln!("  Adaptive ef (EML):       {:.4}    {:>10}    {:>10}", a.recall, a.mean_ns, a.p99_ns);
         eprintln!("  Tiered (coarse→fine):    {:.4}    {:>10}    {:>10}", t.recall, t.mean_ns, t.p99_ns);
-        eprintln!("");
+        eprintln!();
         eprintln!("  EML overhead:        {:>+.1}% mean latency", overhead_pct);
         eprintln!("  Tiered vs control:   {:>.2}× speed, {:>+.4} recall",
             tiered_speedup, t.recall - c.recall);
         eprintln!("──────────────────────────────────────────────────────────────────");
         eprintln!("Phase 4 — Scalability");
-        eprintln!("");
+        eprintln!();
         eprintln!("  N        control              adaptive");
         eprintln!("           recall   mean(ns)    recall   mean(ns)");
         for pt in &bench.phase4_scaling {

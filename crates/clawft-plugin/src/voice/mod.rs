@@ -11,6 +11,8 @@ pub mod capture;
 #[cfg(feature = "voice-vad")]
 pub mod playback;
 #[cfg(feature = "voice-vad")]
+pub mod privacy_indicator;
+#[cfg(feature = "voice-vad")]
 pub mod vad;
 
 #[cfg(feature = "voice-stt")]
@@ -40,7 +42,7 @@ pub mod fallback;
 pub mod transcript_log;
 
 // Re-export key types
-pub use config::VoicePipelineConfig;
+pub use config::{VoiceAudioConfig, VoiceCaptureSpec, VoicePipelineConfig, VoicePlaybackSpec};
 pub use models::ModelDownloadManager;
 pub use channel::{VoiceChannel, VoiceStatus};
 pub use echo::{EchoCanceller, EchoCancellerConfig};

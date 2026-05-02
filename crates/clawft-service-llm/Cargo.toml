@@ -1,0 +1,36 @@
+[package]
+name = "clawft-service-llm"
+version.workspace = true
+publish = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "WeftOS LLM service — HTTP client to a locally-hosted llama.cpp (or any OpenAI-compatible) chat-completions endpoint, exposed to the daemon as the `llm.prompt` RPC."
+
+[dependencies]
+# Async runtime — tokio 'full' matches the daemon, which is the intended host.
+tokio = { workspace = true }
+
+# Serde for chat request / completion JSON shapes.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# HTTP client — JSON only (no multipart needed); rustls to avoid OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "stream",
+] }
+
+# Structured logs.
+tracing = { workspace = true }
+
+# Error handling.
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+wiremock = "0.6"
+tracing-subscriber = { workspace = true }

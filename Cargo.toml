@@ -11,15 +11,12 @@ members = [
     "crates/clawft-cli",
     "crates/clawft-wasm",
     "crates/clawft-plugin",
-    "crates/clawft-plugin-git",
-    "crates/clawft-plugin-cargo",
-    "crates/clawft-plugin-oauth2",
+    # Only `clawft-plugin-treesitter` remains a workspace member -- it is
+    # consumed by `clawft-kernel` (assessment::extract_symbols) under the
+    # kernel's `treesitter` feature. The other eight `clawft-plugin-*`
+    # crates were moved to `crates/archive/` per ADR-051; they are
+    # excluded from the workspace below.
     "crates/clawft-plugin-treesitter",
-    "crates/clawft-plugin-browser",
-    "crates/clawft-plugin-calendar",
-    "crates/clawft-plugin-containers",
-    "crates/clawft-plugin-npm",
-    "crates/clawft-plugin-ci",
     "crates/clawft-security",
     "crates/clawft-kernel",
     "crates/clawft-rpc",
@@ -36,9 +33,23 @@ members = [
     "crates/clawft-surface",
     "crates/clawft-treecalc",
     "crates/clawft-casestudy-gen-qsr",
+    "crates/clawft-service-whisper",
+    "crates/clawft-service-llm",
+    "crates/clawft-service-terminal",
+    "crates/clawft-service-classify",
+    "crates/clawft-service-agent",
 ]
 exclude = [
     "gui/src-tauri",
+    # WEFT-313: Tauri 2.0 desktop shell wrapping the clawft-ui dashboard.
+    # Excluded from the workspace so kernel developers do not need the
+    # platform WebView SDKs (libwebkit2gtk-4.1-dev on Linux, WebView2 on
+    # Windows) to build the core crates.
+    "clawft-ui/src-tauri",
+    # Archived per ADR-051 (clawft-plugin-* fate). These crates are
+    # preserved in-tree for git-history continuity and possible future
+    # revival, but are not part of the active workspace build.
+    "crates/archive",
 ]
 
 [workspace.package]
@@ -160,6 +171,10 @@ blake3 = "1.5"
 # Concurrent hash map
 dashmap = "6"
 
+# ULID (sortable, ms-prefixed unique ids; used for substrate per-turn
+# JSONL keys in clawft-service-agent's substrate sink).
+ulid = "1"
+
 # Distributed coordination (crates.io — upstream ruvnet)
 ruvector-cluster = "2.0"
 ruvector-raft = "2.0"
@@ -169,31 +184,37 @@ cognitum-gate-tilezero = "0.1"
 parking_lot = "0.12"
 futures = "0.3"
 
-# Internal crates (version + path: version for crates.io, path for workspace)
-clawft-rpc = { version = "0.6.6", path = "crates/clawft-rpc" }
-clawft-types = { version = "0.6.6", path = "crates/clawft-types", default-features = false }
-clawft-platform = { version = "0.6.6", path = "crates/clawft-platform", default-features = false }
-clawft-core = { version = "0.6.6", path = "crates/clawft-core", default-features = false }
-clawft-tools = { version = "0.6.6", path = "crates/clawft-tools", default-features = false }
-clawft-channels = { version = "0.6.6", path = "crates/clawft-channels" }
-clawft-llm = { version = "0.6.6", path = "crates/clawft-llm", default-features = false }
-clawft-services = { version = "0.6.6", path = "crates/clawft-services" }
-clawft-plugin = { version = "0.6.6", path = "crates/clawft-plugin", default-features = false }
-clawft-plugin-git = { version = "0.6.6", path = "crates/clawft-plugin-git" }
-clawft-plugin-cargo = { version = "0.6.6", path = "crates/clawft-plugin-cargo" }
-clawft-plugin-oauth2 = { version = "0.6.6", path = "crates/clawft-plugin-oauth2" }
-clawft-plugin-treesitter = { version = "0.6.6", path = "crates/clawft-plugin-treesitter" }
-clawft-plugin-browser = { version = "0.6.6", path = "crates/clawft-plugin-browser" }
-clawft-plugin-calendar = { version = "0.6.6", path = "crates/clawft-plugin-calendar" }
-clawft-plugin-containers = { version = "0.6.6", path = "crates/clawft-plugin-containers" }
-clawft-graphify = { version = "0.6.6", path = "crates/clawft-graphify", default-features = false }
-clawft-security = { version = "0.6.6", path = "crates/clawft-security" }
-clawft-kernel = { version = "0.6.6", path = "crates/clawft-kernel", default-features = false }
-exo-resource-tree = { version = "0.6.6", path = "crates/exo-resource-tree" }
-weftos = { version = "0.6.6", path = "crates/weftos", default-features = false }
-clawft-substrate = { version = "0.6.6", path = "crates/clawft-substrate" }
-clawft-app = { version = "0.6.6", path = "crates/clawft-app" }
-clawft-surface = { version = "0.6.6", path = "crates/clawft-surface" }
+# Internal crates (version + path: version for crates.io, path for workspace).
+# Versions MUST track `workspace.package.version` so that bumping the workspace
+# version atomically updates all path-dep version constraints (WEFT-8).
+clawft-rpc = { version = "0.6.19", path = "crates/clawft-rpc" }
+clawft-types = { version = "0.6.19", path = "crates/clawft-types", default-features = false }
+clawft-platform = { version = "0.6.19", path = "crates/clawft-platform", default-features = false }
+clawft-core = { version = "0.6.19", path = "crates/clawft-core", default-features = false }
+clawft-tools = { version = "0.6.19", path = "crates/clawft-tools", default-features = false }
+clawft-channels = { version = "0.6.19", path = "crates/clawft-channels" }
+clawft-llm = { version = "0.6.19", path = "crates/clawft-llm", default-features = false }
+clawft-services = { version = "0.6.19", path = "crates/clawft-services" }
+clawft-plugin = { version = "0.6.19", path = "crates/clawft-plugin", default-features = false }
+# Only the treesitter plugin retains a workspace dependency entry --
+# it is the sole orphan-survivor (ADR-051) and is wired into
+# `clawft-kernel` via the `treesitter` feature. The other eight
+# `clawft-plugin-*` crates live under `crates/archive/` and are not
+# referenced by the active workspace build.
+clawft-plugin-treesitter = { version = "0.6.19", path = "crates/clawft-plugin-treesitter" }
+clawft-graphify = { version = "0.6.19", path = "crates/clawft-graphify", default-features = false }
+clawft-security = { version = "0.6.19", path = "crates/clawft-security" }
+clawft-kernel = { version = "0.6.19", path = "crates/clawft-kernel", default-features = false }
+exo-resource-tree = { version = "0.6.19", path = "crates/exo-resource-tree" }
+weftos = { version = "0.6.19", path = "crates/weftos", default-features = false }
+clawft-substrate = { version = "0.6.19", path = "crates/clawft-substrate" }
+clawft-app = { version = "0.6.19", path = "crates/clawft-app" }
+clawft-surface = { version = "0.6.19", path = "crates/clawft-surface" }
+clawft-service-whisper = { version = "0.6.19", path = "crates/clawft-service-whisper" }
+clawft-service-llm = { version = "0.6.19", path = "crates/clawft-service-llm" }
+clawft-service-terminal = { version = "0.6.19", path = "crates/clawft-service-terminal" }
+clawft-service-classify = { version = "0.6.19", path = "crates/clawft-service-classify" }
+clawft-service-agent = { version = "0.6.19", path = "crates/clawft-service-agent" }
 
 # EML (exp-ln) function approximation
 eml-core = { version = "0.1.0", path = "crates/eml-core" }
@@ -227,10 +248,18 @@ targets = [
     # macOS
     "x86_64-apple-darwin",
     "aarch64-apple-darwin",
-    # Windows
-    "x86_64-pc-windows-msvc",
+    # Windows: deferred to 0.8.x (WEFT-483). The named-pipe transport
+    # for the daemon RPC is not yet implemented (see
+    # `crates/clawft-rpc/src/client.rs` non-unix stub). Shipping a
+    # Windows artefact today would yield a binary whose `weft kernel`
+    # / `weft agent` paths immediately bail with "daemon not available
+    # on this platform". Re-add the target once the named-pipe
+    # transport lands; tracked in
+    # `docs/weftos/weftos-deferred-requirements.md`.
+    # "x86_64-pc-windows-msvc",
 ]
-# Installers to generate
+# Installers to generate (Windows powershell installer is a no-op
+# without a Windows binary; keep the entry for when WEFT-483 lands).
 installers = ["shell", "powershell", "homebrew"]
 # Homebrew tap repository
 tap = "weave-logic-ai/homebrew-tap"

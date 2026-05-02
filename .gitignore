@@ -1,10 +1,17 @@
-.claude
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/plane-workflow/
+!.claude/skills/weftos-design/
 .claude-flow/
 .hive-mind
 .swarm/
 target/
 .env
 .env-keys.json
+# Documented Vite build-time template files (no secrets) — keep tracked.
+!clawft-ui/.env
+!clawft-ui/.env.mock
 crates/clawft-wasm/www/pkg/
 
 # WeftOS runtime state
@@ -12,8 +19,16 @@ weave.toml
 .weftos/
 gui/node_modules/
 gui/dist/
-ui/node_modules/
-ui/dist/
+clawft-ui/node_modules/
+clawft-ui/dist/
+# WEFT-313: Tauri auto-generated capability/schema files for the dashboard shell.
+clawft-ui/src-tauri/gen/
+clawft-ui/src-tauri/target/
+clawft-ui/src-tauri/Cargo.lock
+# WEFT-314: Playwright local artefacts.
+clawft-ui/test-results/
+clawft-ui/playwright-report/
+clawft-ui/.playwright/
 .vercel
 # KB: commit .gz only, decompress client-side or via CI
 docs/src/public/kb/weftos-docs.rvf.json
@@ -23,3 +38,6 @@ docs/src/public/kb/*.rvf.json
 docs/src/public/kb/*.rvf.json.gz
 .planning/sonobuoy/papers/pdfs/
 .planning/clients/weave.toml
+
+# WeftOS
+graphify-out/

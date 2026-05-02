@@ -34,6 +34,13 @@ IDENTITY       Ed25519 keypair = node identity, governance.genesis = trust root
 
 ### Files to Create
 
+> **Layout standard: flat.** All mesh modules live directly under
+> `crates/clawft-kernel/src/` as `mesh_*.rs`. There is no `mesh/`
+> subdirectory; any reference to `mesh/<name>.rs` in older drafts is
+> superseded by `mesh_<name>.rs`. The single exception in the tree
+> (`assessment/mesh.rs`) is part of the unrelated `assessment/` module
+> and intentionally not part of the mesh-framework namespace.
+
 | File | Phase | Purpose |
 |------|-------|---------|
 | `crates/clawft-kernel/src/mesh.rs` | K6.1 | `MeshTransport` trait, `MeshStream`, `TransportListener` |
@@ -51,6 +58,7 @@ IDENTITY       Ed25519 keypair = node identity, governance.genesis = trust root
 | `crates/clawft-kernel/src/mesh_dedup.rs` | K6.3 | Message deduplication (bloom filter on message IDs) |
 | `crates/clawft-kernel/src/mesh_chain.rs` | K6.4 | Chain replication: delta sync, bridge events, subscription forwarding |
 | `crates/clawft-kernel/src/mesh_tree.rs` | K6.4 | Tree sync: snapshot transfer, Merkle proof exchange |
+| `crates/clawft-kernel/src/mesh_handshake.rs` | K6.4b | Optional ML-KEM-768 hybrid KEM upgrade after Noise XX |
 | `crates/clawft-kernel/src/mesh_process.rs` | K6.5 | Distributed process table (CRDT gossip) |
 | `crates/clawft-kernel/src/mesh_service_adv.rs` | K6.5 | Service advertisement and cluster-wide resolution |
 | `crates/clawft-kernel/src/mesh_heartbeat.rs` | K6.5 | SWIM-style heartbeat + failure detection |
@@ -1417,7 +1425,7 @@ Graceful degradation — nodes that don't support KEM stay on classical Noise.
 **Dependencies**: `ruvector-dag` with `production-crypto` feature (ML-KEM-768 already implemented)
 
 **Files**:
-- `crates/clawft-kernel/src/mesh/handshake.rs` — KEM upgrade step after Noise XX
+- `crates/clawft-kernel/src/mesh_handshake.rs` — KEM upgrade step after Noise XX (flat layout; see "Files to Create" preamble)
 - Reuses `ruvector-dag/src/qudag/crypto/ml_kem.rs` (MlKem768::encapsulate/decapsulate)
 
 **Tests**:

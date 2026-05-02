@@ -73,10 +73,55 @@ pub struct RoutingConfig {
     /// Rate limiting settings.
     #[serde(default, alias = "rateLimiting")]
     pub rate_limiting: RateLimitConfig,
+
+    /// Pre-LLM `ContextRouter` selector
+    /// (`docs/plans/agent-core-v1.md` Phase E1).
+    ///
+    /// Decides which `ContextRouter` impl the daemon attaches to its
+    /// chat path. The router runs *before* the LLM call to nudge
+    /// classification (`complexity_hint`) and surface an `archetype`
+    /// label; it never picks a model. See
+    /// `docs/research/rvf-context-router.md` for the contract.
+    ///
+    /// Supported values:
+    ///
+    /// - `"null"` (default) — v0 [`NullRouter`]: no-op, current
+    ///   behaviour preserved bit-for-bit.
+    /// - `"llm-classifier"` — v1 [`LlmClassifierRouter`]: round-trips
+    ///   the user's message against the daemon's `LlmClient` and reads
+    ///   back `{archetype, complexity}`. v1 → v2 promotion gate (7-day
+    ///   fallback rate < 25%) is policy, not code.
+    /// - `"embedding"` — v2 `EmbeddingRouter` (Phase E2): builds an
+    ///   in-memory `ruvector-diskann@2.1` index over hand-authored
+    ///   skill descriptors at boot, retrieves top-K nearest skills per
+    ///   turn via the crate-local `Embedder` trait (production:
+    ///   `ApiEmbedder` against an OpenAI-compat `/embeddings`;
+    ///   fallback: `HashEmbedder` SHA-256 floor).
+    /// - `"hybrid"` — v2.5 `HybridRouter` (Phase E3, plumbing only):
+    ///   chains v2 `EmbeddingRouter` (primary) with v1
+    ///   `LlmClassifierRouter` (fallback). The primary's decision is
+    ///   returned unless it is structurally empty, in which case the
+    ///   fallback runs. The sona-backed rerank step that v2.5
+    ///   ultimately gets is deferred until ruv-ecosystem stability
+    ///   clears; v3 (`MicroLoraRouter`) is deferred until ruvllm-wasm
+    ///   lifts its 11-pattern HNSW cap
+    ///   (`docs/research/rvf-context-router.md:118-128`).
+    ///
+    /// [`NullRouter`]: ../../clawft_core/agent/context_router/struct.NullRouter.html
+    /// [`LlmClassifierRouter`]: ../../clawft_core/agent/context_router/llm_classifier/struct.LlmClassifierRouter.html
+    #[serde(default = "default_context_router", alias = "contextRouter")]
+    pub context_router: String,
 }
 
 fn default_routing_mode() -> String {
     "static".into()
+}
+
+/// Default for [`RoutingConfig::context_router`]: keep v0 NullRouter
+/// live so existing deployments see no behaviour change. Operators
+/// flip to `"llm-classifier"` to enable the Phase E1 router.
+fn default_context_router() -> String {
+    "null".into()
 }
 
 impl Default for RoutingConfig {
@@ -90,6 +135,7 @@ impl Default for RoutingConfig {
             escalation: EscalationConfig::default(),
             cost_budgets: CostBudgetConfig::default(),
             rate_limiting: RateLimitConfig::default(),
+            context_router: default_context_router(),
         }
     }
 }

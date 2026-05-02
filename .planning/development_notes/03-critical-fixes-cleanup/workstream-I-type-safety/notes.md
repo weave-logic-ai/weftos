@@ -33,9 +33,19 @@
 
 ### I6: Dead code removal (P2) -- DONE
 - Removed `#[allow(dead_code)]` from `evict_if_needed` in `clawft-core/src/pipeline/rate_limiter.rs`
-- Added `// TODO(E1)` tracking comments for Discord `ResumePayload`
-- Added `// TODO(C5)` for interactive slash-command framework
 - Removed no-op CLI flags or documented with tracking TODOs
+
+**Status note (2026-04-28, WEFT-22)**: The `// TODO(E1)` markers on
+Discord `ResumePayload` and the `// TODO(C5)` markers on the
+interactive slash-command framework that this work originally added
+have been removed from the codebase. Both substreams have shipped:
+`ResumePayload` is in active use in
+`crates/clawft-channels/src/discord/{channel,events}.rs` (Discord
+gateway resume), and the interactive slash-command framework lives
+under `crates/clawft-cli/src/interactive/` with `mod.rs` /
+`builtins.rs` etc. wired into `weft agent` via
+`crates/clawft-cli/src/commands/agent.rs`. No stale markers remain;
+nothing left to track.
 
 ### I7: Fix always-true test assertion (P2) -- DONE
 - `clawft-core/src/pipeline/transport.rs` test now asserts specific expected outcome

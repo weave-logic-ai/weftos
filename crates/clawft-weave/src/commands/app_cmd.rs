@@ -102,7 +102,7 @@ pub async fn run(args: AppArgs) -> anyhow::Result<()> {
                 if apps.is_empty() {
                     println!("No applications installed");
                 } else {
-                    println!("{:<20} {:<12} {}", "NAME", "STATUS", "VERSION");
+                    println!("{:<20} {:<12} VERSION", "NAME", "STATUS");
                     for app in apps {
                         println!(
                             "{:<20} {:<12} {}",

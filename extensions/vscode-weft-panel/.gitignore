@@ -1,5 +1,7 @@
 node_modules/
 out/
+out-test/
+.vscode-test/
 *.vsix
 package-lock.json
 webview/wasm/

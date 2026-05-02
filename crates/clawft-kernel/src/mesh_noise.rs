@@ -830,7 +830,7 @@ mod tests {
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let restored: KemConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.kem_supported, true);
+        assert!(restored.kem_supported);
         assert_eq!(restored.kem_public_key.unwrap().len(), 1184);
     }
 

@@ -180,6 +180,6 @@ mod tests {
     #[test]
     fn tool_name_and_description() {
         assert_eq!("delegate_task", "delegate_task");
-        assert!("Delegate a complex task to Claude".len() > 0);
+        assert!(!"Delegate a complex task to Claude".is_empty());
     }
 }

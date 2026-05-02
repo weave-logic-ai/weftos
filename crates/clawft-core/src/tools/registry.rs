@@ -16,6 +16,135 @@ use tracing::debug;
 
 use clawft_types::routing::UserPermissions;
 
+#[cfg(feature = "native")]
+use std::sync::Mutex as StdMutex;
+#[cfg(feature = "native")]
+use std::sync::OnceLock;
+#[cfg(feature = "native")]
+use std::path::PathBuf;
+
+// ── WEFT-37: per-path advisory locks ────────────────────────────────
+//
+// D1 of the pipeline-reliability sprint shipped parallel tool execution
+// (see `agent/loop_core.rs` — `futures::join_all` over per-tool-call
+// futures) but explicitly punted on per-path serialization. The hazard:
+// two tools writing the same canonical path concurrently, producing
+// torn reads or interleaved writes. This module provides a process-
+// global `path → tokio::Mutex` map. When a tool whose argument JSON
+// references a path is executed, the registry acquires the
+// corresponding mutex for the duration of the call, serialising
+// same-path executions while letting non-overlapping paths run fully
+// in parallel.
+//
+// The lock map is native-only because:
+//  - browser/wasm has a single-threaded executor — concurrent FS
+//    operations on the same path can't interleave there.
+//  - tokio::sync::Mutex is the natural fit for "hold across await
+//    points"; pulling in a wasm-friendly equivalent for a hazard that
+//    only exists on native is gold-plating.
+
+#[cfg(feature = "native")]
+type PathLockMap = HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>;
+
+#[cfg(feature = "native")]
+static PATH_LOCKS: OnceLock<StdMutex<PathLockMap>> = OnceLock::new();
+
+#[cfg(feature = "native")]
+fn path_locks() -> &'static StdMutex<PathLockMap> {
+    PATH_LOCKS.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+/// Names of common JSON keys that carry filesystem paths in the
+/// built-in tool argument schema. Used to extract the path(s) to lock
+/// before executing a tool.
+#[cfg(feature = "native")]
+const PATH_ARG_KEYS: &[&str] = &["path", "file", "file_path", "filepath", "target"];
+
+/// Extract candidate path strings from a tool argument JSON value.
+///
+/// Returns one [`PathBuf`] per recognised key in [`PATH_ARG_KEYS`].
+/// Multi-path tools (e.g. a hypothetical `copy {from, to}`) can lock
+/// both keys via the canonical separator semantics — we just collect
+/// every key found.
+#[cfg(feature = "native")]
+fn extract_paths(args: &serde_json::Value) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Some(obj) = args.as_object() else {
+        return out;
+    };
+    for key in PATH_ARG_KEYS {
+        if let Some(s) = obj.get(*key).and_then(|v| v.as_str())
+            && !s.is_empty()
+        {
+            out.push(canonicalize_for_lock(s));
+        }
+    }
+    out
+}
+
+/// Canonicalise a path string for use as a lock key. Two callers
+/// referring to the same file via different relative spellings must
+/// land on the same lock entry, so we resolve to an absolute path
+/// where possible and fall back to a normalised representation.
+///
+/// We deliberately do NOT call `std::fs::canonicalize` (which requires
+/// the file to exist and would fail for new files); instead we
+/// normalise components with `Path::components` to collapse `.` and
+/// `..` segments without touching the filesystem.
+#[cfg(feature = "native")]
+fn canonicalize_for_lock(raw: &str) -> PathBuf {
+    use std::path::{Component, Path};
+    let p = Path::new(raw);
+    let absolute = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("/"))
+            .join(p)
+    };
+    let mut out = PathBuf::new();
+    for c in absolute.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Acquire (and lazily-create) the advisory lock for the given path.
+///
+/// The returned `OwnedMutexGuard` keeps the lock map entry alive and
+/// is dropped at the end of the tool execution scope. The lock entries
+/// are kept in the map indefinitely — the working set of paths a
+/// long-lived agent touches is bounded enough in practice that we
+/// don't bother garbage-collecting unused entries.
+#[cfg(feature = "native")]
+async fn acquire_path_lock(
+    path: PathBuf,
+) -> tokio::sync::OwnedMutexGuard<()> {
+    let lock = {
+        let mut map = path_locks().lock().expect("path lock map poisoned");
+        map.entry(path)
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    };
+    lock.lock_owned().await
+}
+
+/// Test helper: clear the global advisory lock map between tests so
+/// each test starts with a clean state. Inside the `cfg(test)`
+/// boundary; the production code path never calls this.
+#[cfg(all(test, feature = "native"))]
+pub(crate) fn _clear_path_locks_for_test() {
+    if let Some(map) = PATH_LOCKS.get() {
+        map.lock().expect("path lock map poisoned").clear();
+    }
+}
+
 /// Error type for tool execution.
 ///
 /// Covers the common failure modes: unknown tool, bad arguments,
@@ -189,6 +318,23 @@ pub fn check_tool_permission(
                 "tool is not in the allowed tools for permission level {}",
                 permissions.level,
             ),
+        });
+    }
+
+    // Step 2b (WEFT-32): MCP wildcard namespace guard.
+    //
+    // A bare `["*"]` allowlist must NOT cover sensitive MCP namespaces
+    // (`exec_*`, `shell_*`, `system_*`, ...). The operator has to opt
+    // in to each sensitive namespace explicitly. This stops the
+    // attack vector where a benign-looking `tool_access: ["*"]`
+    // exposes a maliciously-registered `exec__shell` tool.
+    if let Err(err) = crate::security::validate_mcp_namespace_against_wildcard(
+        tool_name,
+        &permissions.tool_access,
+    ) {
+        return Err(ToolError::PermissionDenied {
+            tool: tool_name.to_string(),
+            reason: format!("MCP namespace guard: {err}"),
         });
     }
 
@@ -476,6 +622,14 @@ impl ToolRegistry {
     ///
     /// Returns [`ToolError::NotFound`] if no tool with that name is registered.
     /// Returns [`ToolError::PermissionDenied`] if the caller lacks permission.
+    ///
+    /// WEFT-37: when a tool's argument JSON references a filesystem
+    /// path (via `path`, `file`, `file_path`, etc.), this method
+    /// acquires the corresponding per-path advisory lock for the
+    /// duration of execution. Concurrent invocations against the same
+    /// canonical path serialise; non-overlapping paths still run in
+    /// full parallel. Native-only — browser/wasm has a single-threaded
+    /// executor.
     pub async fn execute(
         &self,
         name: &str,
@@ -495,7 +649,30 @@ impl ToolRegistry {
         }
 
         debug!(tool = %name, "executing tool");
-        tool.execute(args).await
+
+        // WEFT-37: per-path advisory locks (native only).
+        #[cfg(feature = "native")]
+        {
+            let paths = extract_paths(&args);
+            // Sort paths so two callers locking the same set of paths
+            // acquire them in the same order — prevents A-then-B vs
+            // B-then-A deadlocks when a tool args object references
+            // multiple paths at once.
+            let mut sorted = paths;
+            sorted.sort();
+            sorted.dedup();
+            // Hold guards for the duration of the call.
+            let mut _guards: Vec<tokio::sync::OwnedMutexGuard<()>> =
+                Vec::with_capacity(sorted.len());
+            for p in sorted {
+                _guards.push(acquire_path_lock(p).await);
+            }
+            return tool.execute(args).await;
+        }
+        #[cfg(not(feature = "native"))]
+        {
+            tool.execute(args).await
+        }
     }
 
     /// Return the number of registered tools.
@@ -1405,5 +1582,177 @@ mod tests {
             result.unwrap_err(),
             ToolError::PermissionDenied { .. }
         ));
+    }
+
+    // ── WEFT-37: per-path advisory locks ───────────────────────────
+
+    /// A tool that records each invocation's "scope" — defined as
+    /// "entered before previous one exited" — into a shared vector.
+    /// If two invocations against the same path are properly
+    /// serialised, every call records `{started: T, finished: T+ε}`
+    /// with no overlap.
+    #[cfg(feature = "native")]
+    struct InterleaveTool {
+        log: Arc<StdMutex<Vec<(u64, &'static str)>>>,
+        delay_ms: u64,
+    }
+
+    #[cfg(feature = "native")]
+    #[async_trait]
+    impl Tool for InterleaveTool {
+        fn name(&self) -> &str {
+            "interleave"
+        }
+        fn description(&self) -> &str {
+            "test tool that logs entry/exit events"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": { "path": { "type": "string" } },
+                "required": ["path"]
+            })
+        }
+        async fn execute(
+            &self,
+            args: serde_json::Value,
+        ) -> Result<serde_json::Value, ToolError> {
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let id = args.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+            let _ = path; // unused in event log; lock is keyed off it
+            {
+                let mut log = self.log.lock().expect("log poisoned");
+                log.push((id, "enter"));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
+            {
+                let mut log = self.log.lock().expect("log poisoned");
+                log.push((id, "exit"));
+            }
+            Ok(serde_json::json!({ "ok": true }))
+        }
+    }
+
+    #[cfg(feature = "native")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn weft37_same_path_executions_serialize() {
+        _clear_path_locks_for_test();
+
+        let log = Arc::new(StdMutex::new(Vec::<(u64, &'static str)>::new()));
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(InterleaveTool {
+            log: log.clone(),
+            delay_ms: 20,
+        }));
+        let registry = Arc::new(registry);
+
+        // Spawn 10 parallel calls all hitting the same path.
+        let mut handles = Vec::new();
+        for id in 0..10u64 {
+            let r = registry.clone();
+            handles.push(tokio::spawn(async move {
+                r.execute(
+                    "interleave",
+                    serde_json::json!({ "path": "/tmp/weft37-shared", "id": id }),
+                    None,
+                )
+                .await
+            }));
+        }
+        for h in handles {
+            h.await.expect("task panicked").expect("tool failed");
+        }
+
+        // Verify the log is strictly enter/exit per call — no two
+        // enters in a row.
+        let log = log.lock().expect("log poisoned");
+        let mut depth: i32 = 0;
+        for (_id, kind) in log.iter() {
+            match *kind {
+                "enter" => {
+                    depth += 1;
+                    assert!(
+                        depth <= 1,
+                        "two parallel calls overlapped on the same path; \
+                         events: {:?}",
+                        log
+                    );
+                }
+                "exit" => depth -= 1,
+                _ => panic!("unexpected kind {kind}"),
+            }
+        }
+        assert_eq!(depth, 0, "every enter must be matched by an exit");
+        assert_eq!(log.len(), 20, "expected 10 enter + 10 exit events");
+    }
+
+    #[cfg(feature = "native")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn weft37_distinct_paths_run_in_parallel() {
+        _clear_path_locks_for_test();
+
+        let log = Arc::new(StdMutex::new(Vec::<(u64, &'static str)>::new()));
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(InterleaveTool {
+            log: log.clone(),
+            delay_ms: 50,
+        }));
+        let registry = Arc::new(registry);
+
+        let start = std::time::Instant::now();
+        let mut handles = Vec::new();
+        for id in 0..4u64 {
+            let r = registry.clone();
+            handles.push(tokio::spawn(async move {
+                r.execute(
+                    "interleave",
+                    serde_json::json!({
+                        "path": format!("/tmp/weft37-distinct-{id}"),
+                        "id": id,
+                    }),
+                    None,
+                )
+                .await
+            }));
+        }
+        for h in handles {
+            h.await.expect("task panicked").expect("tool failed");
+        }
+        let elapsed = start.elapsed();
+
+        // 4 parallel 50ms tasks should finish in well under serial
+        // 4 × 50ms = 200ms. Allow generous slack for CI noise.
+        assert!(
+            elapsed.as_millis() < 180,
+            "distinct-path executions did not run in parallel; took {}ms",
+            elapsed.as_millis()
+        );
+    }
+
+    #[cfg(feature = "native")]
+    #[test]
+    fn weft37_canonicalize_collapses_dot_segments() {
+        let a = canonicalize_for_lock("/tmp/foo/./bar");
+        let b = canonicalize_for_lock("/tmp/foo/bar");
+        let c = canonicalize_for_lock("/tmp/foo/baz/../bar");
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+    }
+
+    #[cfg(feature = "native")]
+    #[test]
+    fn weft37_extract_paths_supports_common_keys() {
+        for key in &["path", "file", "file_path", "filepath", "target"] {
+            let args = serde_json::json!({ *key: "/tmp/x" });
+            let paths = extract_paths(&args);
+            assert_eq!(paths.len(), 1, "key {key} did not extract");
+        }
+        // Args without a recognised key produce no paths.
+        let none = extract_paths(&serde_json::json!({ "text": "hello" }));
+        assert!(none.is_empty());
     }
 }

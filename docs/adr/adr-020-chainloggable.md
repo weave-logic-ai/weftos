@@ -3,6 +3,12 @@
 **Date**: 2026-03-28
 **Status**: Accepted
 **Deciders**: Sprint 11 Symposium Tracks 1, 2, 4, 8 (compound theme)
+**Note (2026-04-28, WEFT-140)**: ADR-020 was previously shared with
+"Kernel Phase (K-Level) Responsibilities". The kernel-phases ADR has
+been renumbered to ADR-048; this ChainLoggable ADR keeps the 020
+slot since it is the older Sprint-11 decision (2026-03-28 vs the
+kernel-phases ADR's 2026-04-03 date) and is referenced by ADR-019
+(Registry Trait) as a sibling Track-1 extraction.
 
 ## Context
 

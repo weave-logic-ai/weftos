@@ -668,6 +668,11 @@ impl TieredSearch {
         self.full_store.len()
     }
 
+    /// True when the index has no entries.
+    pub fn is_empty(&self) -> bool {
+        self.full_store.is_empty()
+    }
+
     /// Run a tiered search.
     ///
     /// 1. Query the coarse HNSW (projected dims) for ~50× top_k candidates.

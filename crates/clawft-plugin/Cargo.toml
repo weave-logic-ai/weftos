@@ -1,6 +1,7 @@
 [package]
 name = "clawft-plugin"
 version.workspace = true
+publish = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -17,7 +18,13 @@ rustdoc-args = ["--cfg", "docsrs"]
 [features]
 default = ["native"]
 native = ["dep:tokio-util"]
-voice = ["voice-vad", "voice-wake", "dep:tokio"]
+# Voice umbrella: pulls in every in-tree voice subfeature so callers
+# can opt into the full STT + TTS scaffold with a single flag. Per
+# WEFT-212 this MUST include voice-stt and voice-tts; previously the
+# umbrella only enabled VAD + wake, which left voice-stt and
+# voice-tts orphaned and meant `cargo build --features voice` built
+# a silently-incomplete pipeline.
+voice = ["voice-vad", "voice-wake", "voice-stt", "voice-tts", "dep:tokio"]
 voice-stt = []
 voice-tts = []
 voice-vad = []
@@ -37,3 +44,4 @@ reqwest = { workspace = true, default-features = false, features = ["json", "mul
 
 [dev-dependencies]
 tokio = { workspace = true }
+tempfile = { workspace = true }

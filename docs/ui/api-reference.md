@@ -53,7 +53,7 @@ enabled. The default port is `18789`.
 cargo run --bin clawft
 
 # Or with a custom port and UI directory
-cargo run --bin clawft -- --api-port 3100 --ui-dir ./ui/dist
+cargo run --bin clawft -- --api-port 3100 --ui-dir ./clawft-ui/dist
 ```
 
 ### Quick Smoke Test
@@ -198,6 +198,41 @@ curl -X POST http://localhost:18789/api/auth/token
 - Tokens are stored in-memory and are lost on server restart.
 - When auth middleware is enabled, include the token as:
   `Authorization: Bearer a1b2c3d4-e5f6-7890-abcd-ef1234567890`
+
+### Client-side token lifecycle (`use-auth`)
+
+The dashboard ships a `useAuth()` React hook in
+`clawft-ui/src/lib/use-auth.ts` that owns the bearer token end-to-end.
+Two security properties are enforced (WEFT-309):
+
+1. **Single-use URL tokens.** When `weft ui` opens the browser at
+   `https://<host>/?token=<uuid>`, the hook reads the value once on
+   first paint, persists it to `localStorage["clawft-token"]`, and
+   immediately strips `?token` from the address bar via
+   `history.replaceState`. Reload, share, or screenshot of the URL
+   never leaks the token.
+
+2. **Terminal logout.** `logout()` clears `localStorage` *and* sets a
+   per-tab `sessionStorage["clawft-logged-out"]` latch. A stale
+   `?token=` left in the address bar (e.g. from the back button) does
+   not silently re-auth the user; the latch is cleared only when a
+   fresh token is explicitly written via `setToken()` or
+   `POST /api/auth/token`.
+
+`api-client.ts` reads the token via the shared helpers
+(`readStoredToken` / `writeStoredToken` / `clearStoredToken`) so all
+network calls observe the same token, even when the change originated
+from another tab.
+
+```tsx
+import { useAuth } from "../lib/use-auth";
+
+function NavBar() {
+  const { token, ready, logout } = useAuth();
+  if (!ready) return null;
+  return token ? <button onClick={logout}>Sign out</button> : <SignIn />;
+}
+```
 
 ---
 
@@ -2123,16 +2158,16 @@ the static file from that directory, with `index.html` appended for directories
 (SPA-style routing).
 
 ```bash
-# Serve the built UI from ./ui/dist
-cargo run --bin clawft -- --ui-dir ./ui/dist
+# Serve the built UI from ./clawft-ui/dist
+cargo run --bin clawft -- --ui-dir ./clawft-ui/dist
 ```
 
 With this configuration:
 - `GET /api/agents` -- handled by the API router
 - `GET /ws` -- handled by the WebSocket router
-- `GET /` -- serves `./ui/dist/index.html`
-- `GET /settings` -- serves `./ui/dist/index.html` (SPA fallback)
-- `GET /assets/style.css` -- serves `./ui/dist/assets/style.css`
+- `GET /` -- serves `./clawft-ui/dist/index.html`
+- `GET /settings` -- serves `./clawft-ui/dist/index.html` (SPA fallback)
+- `GET /assets/style.css` -- serves `./clawft-ui/dist/assets/style.css`
 
 ---
 

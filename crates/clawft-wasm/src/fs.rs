@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn wasi_filesystem_default() {
-        let _fs = WasiFileSystem::default();
+        let _fs = WasiFileSystem;
     }
 
     #[test]

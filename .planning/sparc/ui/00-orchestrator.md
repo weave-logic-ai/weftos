@@ -1,8 +1,25 @@
 # SPARC UI Element: Web Dashboard + Live Canvas
 
+> **Status (2026-04-28): Implemented with deferred tracks.** Sprint S1
+> (foundation + core views) and S2 (Live Canvas + advanced views) shipped
+> in 0.6.x; S3.1 / S3.2 / S3.6 / S3.7 shipped; S3.3 (PWA / mobile),
+> S3.4 (Tauri shell), and parts of S3.5 (CSP, rate-limit, E2E, a11y,
+> Tailscale, multi-user) are deferred. The dashboard codebase moved
+> from `ui/` to `clawft-ui/` (CHANGELOG 0.6.19, 2026-04-22) and the
+> toolchain rename was completed in WEFT-292/293/294/295/296/297/318
+> (0.7.0 release wave M1-E).
+>
+> Per-row `Status: Not Started` markers in this file and in
+> `01-phase-S1-foundation-core-views.md` / `05-ui-tracker.md` are
+> stale — they were never refreshed as work landed. The de-facto
+> trackers are the audit doc
+> (`.planning/reviews/0.7.0-release-gate/09-clawft-agent-dashboard.md`)
+> plus Plane work items WEFT-292..321 under label
+> `ws09-clawft-dashboard`. Future updates happen in Plane, not here.
+
 **Workstream**: W-UI (Web Dashboard + Live Canvas)
 **Timeline**: Weeks 1-10 (parallel with voice sprint)
-**Status**: Planning
+**Status**: Implemented (S1 + S2 + most of S3); see banner above for deferred items.
 **Dependencies**: B5 (shared tool registry builder), C3/C4/C6 (skill system for skill browser), H1/H2 (memory for explorer), L1 (agent routing), M1/M2 (delegation for monitor), D5/D6 (latency/cost data), W-BROWSER Phase 5 (WASM entry points for browser-only mode)
 **Blocks**: K6 (native shells via Tauri), VS3 (voice UI integration -- S2 blocks VS3 canvas voice hooks)
 

@@ -427,4 +427,132 @@ mod tests {
         let restored: IdeSymbol = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.name, "main");
     }
+
+    // ── Integration tests: backend dispatch + MCP result shape (WEFT-491) ─
+
+    /// Verify each IDE tool routes to the right handler in a custom
+    /// dispatcher and the result content is text-shaped per MCP.
+    #[tokio::test]
+    async fn ide_dispatcher_routes_each_tool_to_correct_handler() {
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        // Record which tool names were invoked, in order.
+        let calls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let calls_dispatcher = calls.clone();
+
+        let provider = IdeToolProvider::new(move |name, _args| {
+            let calls = calls_dispatcher.clone();
+            let name = name.to_string();
+            Box::pin(async move {
+                calls.lock().unwrap().push(name.clone());
+                // Echo the tool name back so we can also assert the
+                // payload routing.
+                Ok(format!("dispatched:{name}"))
+            })
+        });
+
+        for tool in [
+            "ide_open_file",
+            "ide_edit",
+            "ide_diagnostics",
+            "ide_symbols",
+            "ide_hover",
+        ] {
+            let result = provider
+                .call_tool(tool, serde_json::json!({}))
+                .await
+                .expect("call must not error");
+            assert!(!result.is_error, "tool {tool} unexpectedly errored");
+            // MCP schema: result.content is a vec; text result has
+            // exactly one ContentBlock::Text.
+            assert_eq!(result.content.len(), 1);
+            match &result.content[0] {
+                super::super::provider::ContentBlock::Text { text } => {
+                    assert_eq!(text, &format!("dispatched:{tool}"));
+                }
+            }
+        }
+
+        // All five tools dispatched, in the order called above.
+        let invoked = calls.lock().unwrap().clone();
+        assert_eq!(
+            invoked,
+            vec![
+                "ide_open_file".to_string(),
+                "ide_edit".to_string(),
+                "ide_diagnostics".to_string(),
+                "ide_symbols".to_string(),
+                "ide_hover".to_string(),
+            ]
+        );
+    }
+
+    /// Backend-side errors must be surfaced as `is_error=true` MCP
+    /// results, not as `Err(ToolError)`. The LLM needs to see the
+    /// failure in-band so it can reason about it.
+    #[tokio::test]
+    async fn ide_dispatcher_errors_surface_as_in_band_mcp_error() {
+        let provider = IdeToolProvider::new(|name, _args| {
+            let name = name.to_string();
+            Box::pin(async move { Err(format!("ide-backend bailed on {name}")) })
+        });
+
+        let result = provider
+            .call_tool("ide_diagnostics", serde_json::json!({"path": "/x.rs"}))
+            .await
+            .expect("call returns Ok with is_error=true, never Err");
+        assert!(result.is_error);
+        match &result.content[0] {
+            super::super::provider::ContentBlock::Text { text } => {
+                assert!(
+                    text.contains("ide-backend bailed on ide_diagnostics"),
+                    "unexpected error text: {text}"
+                );
+            }
+        }
+    }
+
+    /// The dispatcher receives the raw `arguments` JSON object from
+    /// the MCP `tools/call` request and is expected to pull fields out
+    /// itself. This test verifies arguments survive the round-trip
+    /// for a representative tool.
+    #[tokio::test]
+    async fn ide_dispatcher_receives_arguments_verbatim() {
+        let provider = IdeToolProvider::new(|name, args| {
+            let name = name.to_string();
+            Box::pin(async move {
+                if name != "ide_edit" {
+                    return Err("wrong tool routed".into());
+                }
+                let path = args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .ok_or("missing path")?;
+                let text = args
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .ok_or("missing text")?;
+                Ok(format!("edit {path} -> {} bytes", text.len()))
+            })
+        });
+
+        let result = provider
+            .call_tool(
+                "ide_edit",
+                serde_json::json!({
+                    "path": "/src/lib.rs",
+                    "range": { "startLine": 0, "startCol": 0, "endLine": 0, "endCol": 0 },
+                    "text": "// header"
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        match &result.content[0] {
+            super::super::provider::ContentBlock::Text { text } => {
+                assert_eq!(text, "edit /src/lib.rs -> 9 bytes");
+            }
+        }
+    }
 }

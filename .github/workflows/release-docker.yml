@@ -118,24 +118,45 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull and test image
+      - name: Pull and test image (WEFT-550 health probe)
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.gate.outputs.version }}"
           docker pull "$IMAGE"
 
           # Start container
-          docker run --rm -d \
+          docker run -d \
             --name weft-release-smoke \
             -p 8080:8080 \
-            "$IMAGE" gateway 2>&1 || true
+            "$IMAGE" gateway
 
-          # Wait for stabilization
-          sleep 5
+          cleanup() {
+            docker stop weft-release-smoke 2>/dev/null || true
+            docker rm   weft-release-smoke 2>/dev/null || true
+          }
+          trap cleanup EXIT
 
-          if docker ps --filter "name=weft-release-smoke" --format "{{.Names}}" | grep -q weft-release-smoke; then
-            echo "Container is running."
-          else
-            echo "::warning::Container exited during smoke test"
+          # Fail fast if the container crashes during the first 3 seconds.
+          sleep 3
+          if ! docker ps --filter "name=weft-release-smoke" --format "{{.Names}}" \
+                 | grep -q weft-release-smoke; then
+            echo "::error::Released image exited within 3 seconds."
+            docker logs weft-release-smoke || true
+            exit 1
           fi
 
-          docker stop weft-release-smoke 2>/dev/null || true
+          # Bounded /api/health probe (30s budget).
+          deadline=$(( $(date +%s) + 30 ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            code=$(curl -s -o /tmp/health.body -w '%{http_code}' \
+                       --max-time 3 http://127.0.0.1:8080/api/health || echo "000")
+            if [ "$code" = "200" ]; then
+              echo "Released image /api/health returned 200."
+              cat /tmp/health.body; echo
+              exit 0
+            fi
+            echo "  /api/health returned ${code}, retrying..."
+            sleep 2
+          done
+          echo "::error::Released image /api/health never returned 200 within 30s."
+          docker logs weft-release-smoke || true
+          exit 1

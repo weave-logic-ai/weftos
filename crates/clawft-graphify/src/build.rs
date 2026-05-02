@@ -158,11 +158,10 @@ pub fn merge(
                 rel.target.clone(),
                 format!("{:?}", rel.relation_type),
             );
-            if existing_sigs.insert(sig) {
-                if existing.add_relationship(rel.clone()).is_some() {
+            if existing_sigs.insert(sig)
+                && existing.add_relationship(rel.clone()).is_some() {
                     stats.relationships_added += 1;
                 }
-            }
         }
     }
 

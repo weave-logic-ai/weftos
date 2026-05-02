@@ -23,10 +23,12 @@
 //! circuit_breaker_no_op_limit = 3
 //! ```
 
+use std::future::Future;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tracing::warn;
+use tokio::time::Instant;
+use tracing::{info, warn};
 
 /// Default maximum planning depth.
 const DEFAULT_MAX_DEPTH: u32 = 10;
@@ -141,6 +143,32 @@ pub struct PlanningStepResult {
     pub output: String,
 }
 
+/// A plan produced by the planner step in a Plan-and-Execute session.
+#[derive(Debug, Clone)]
+pub struct Plan {
+    /// Ordered list of step descriptions to execute.
+    pub steps: Vec<String>,
+    /// Cost of producing this plan (charged to the budget cap).
+    pub cost_usd: f64,
+}
+
+impl Plan {
+    /// Create a plan with the given steps and cost.
+    pub fn new(steps: Vec<String>, cost_usd: f64) -> Self {
+        Self { steps, cost_usd }
+    }
+
+    /// Number of steps in the plan.
+    pub fn len(&self) -> usize {
+        self.steps.len()
+    }
+
+    /// Whether the plan has no steps.
+    pub fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
+}
+
 /// Outcome of a planning session, including partial results.
 #[derive(Debug, Clone)]
 pub struct PlanningOutcome {
@@ -225,6 +253,224 @@ impl PlanningRouter {
         }
 
         None
+    }
+
+    /// Execute a Plan-and-Execute planning session.
+    ///
+    /// Generates a plan via `planner` (a single LLM-style call that
+    /// returns a list of step descriptions and an estimated cost),
+    /// then runs `step_executor` on each step in order, threading
+    /// guard rails (depth, budget, timeout, circuit breaker) the
+    /// whole way.
+    ///
+    /// # Arguments
+    ///
+    /// * `goal` - the task description passed to the planner.
+    /// * `planner` - async closure that turns a goal into a [`Plan`].
+    /// * `step_executor` - async closure that runs a single step and
+    ///   returns a [`PlanningStepResult`].
+    ///
+    /// # Returns
+    ///
+    /// A [`PlanningOutcome`] capturing every step that ran (including
+    /// the planning step), the termination reason, and a human
+    /// explanation. Partial results are always returned, never
+    /// dropped — even on guard-rail termination.
+    pub async fn execute_plan_and_execute<P, S, PFut, SFut>(
+        &self,
+        goal: &str,
+        planner: P,
+        step_executor: S,
+    ) -> PlanningOutcome
+    where
+        P: FnOnce(String) -> PFut,
+        PFut: Future<Output = std::result::Result<Plan, String>>,
+        S: Fn(u32, String) -> SFut,
+        SFut: Future<Output = std::result::Result<PlanningStepResult, String>>,
+    {
+        if self.strategy != PlanningStrategy::PlanAndExecute {
+            warn!(
+                got = ?self.strategy,
+                "execute_plan_and_execute called on a non-PlanAndExecute router; running anyway"
+            );
+        }
+
+        let total_start = Instant::now();
+        let mut step_results: Vec<PlanningStepResult> = Vec::new();
+        let mut total_cost: f64 = 0.0;
+        let mut consecutive_no_ops: u32 = 0;
+
+        // ── Step 0: planning ────────────────────────────────────────
+        let plan_start = Instant::now();
+        let plan = match planner(goal.to_string()).await {
+            Ok(p) => p,
+            Err(msg) => {
+                let dur = plan_start.elapsed();
+                let explanation = format!("Planning step failed: {msg}");
+                step_results.push(PlanningStepResult {
+                    step: 0,
+                    is_actionable: false,
+                    cost_usd: 0.0,
+                    duration: dur,
+                    output: msg,
+                });
+                return PlanningOutcome {
+                    strategy: self.strategy,
+                    termination_reason: TerminationReason::Cancelled,
+                    steps_executed: 1,
+                    total_cost_usd: total_cost,
+                    total_duration: total_start.elapsed(),
+                    step_results,
+                    explanation,
+                };
+            }
+        };
+
+        total_cost += plan.cost_usd;
+        step_results.push(PlanningStepResult {
+            step: 0,
+            is_actionable: !plan.steps.is_empty(),
+            cost_usd: plan.cost_usd,
+            duration: plan_start.elapsed(),
+            output: format!("Generated plan with {} step(s)", plan.steps.len()),
+        });
+
+        info!(
+            goal,
+            plan_steps = plan.steps.len(),
+            plan_cost = plan.cost_usd,
+            "plan-and-execute: plan generated"
+        );
+
+        // Check budget after planning step.
+        if let Some(reason) = self.check_guard_rails(0, total_cost, consecutive_no_ops) {
+            let explanation = self.explain_termination(&reason, 1, total_cost);
+            return PlanningOutcome {
+                strategy: self.strategy,
+                termination_reason: reason,
+                steps_executed: 1,
+                total_cost_usd: total_cost,
+                total_duration: total_start.elapsed(),
+                step_results,
+                explanation,
+            };
+        }
+
+        // ── Step 1..N: execute plan steps in order ──────────────────
+        for (idx, step_desc) in plan.steps.iter().enumerate() {
+            // 1-indexed for downstream display; idx+1 is the step
+            // number passed to the executor and recorded.
+            let step_num = (idx + 1) as u32;
+
+            // Guard rails before running the step.
+            if let Some(reason) =
+                self.check_guard_rails(step_num, total_cost, consecutive_no_ops)
+            {
+                let explanation = self.explain_termination(&reason, step_num, total_cost);
+                return PlanningOutcome {
+                    strategy: self.strategy,
+                    termination_reason: reason,
+                    steps_executed: step_num,
+                    total_cost_usd: total_cost,
+                    total_duration: total_start.elapsed(),
+                    step_results,
+                    explanation,
+                };
+            }
+
+            // Run step with per-step timeout from config.
+            let step_fut = step_executor(step_num, step_desc.clone());
+            let timeout = self.config.planning_step_timeout;
+            let res = tokio::time::timeout(timeout, step_fut).await;
+
+            match res {
+                Ok(Ok(mut result)) => {
+                    // Force step number from us (defensive) and
+                    // increment counters.
+                    result.step = step_num;
+                    total_cost += result.cost_usd;
+                    if result.is_actionable {
+                        consecutive_no_ops = 0;
+                    } else {
+                        consecutive_no_ops += 1;
+                    }
+                    step_results.push(result);
+                }
+                Ok(Err(msg)) => {
+                    // Step explicitly failed; record and continue
+                    // counting toward circuit breaker.
+                    consecutive_no_ops += 1;
+                    step_results.push(PlanningStepResult {
+                        step: step_num,
+                        is_actionable: false,
+                        cost_usd: 0.0,
+                        duration: Duration::ZERO,
+                        output: format!("step failed: {msg}"),
+                    });
+                }
+                Err(_elapsed) => {
+                    // Timeout: record + terminate.
+                    step_results.push(PlanningStepResult {
+                        step: step_num,
+                        is_actionable: false,
+                        cost_usd: 0.0,
+                        duration: timeout,
+                        output: "step timed out".into(),
+                    });
+                    let reason = TerminationReason::StepTimeout;
+                    let explanation = self.explain_termination(&reason, step_num, total_cost);
+                    return PlanningOutcome {
+                        strategy: self.strategy,
+                        termination_reason: reason,
+                        steps_executed: step_num,
+                        total_cost_usd: total_cost,
+                        total_duration: total_start.elapsed(),
+                        step_results,
+                        explanation,
+                    };
+                }
+            }
+        }
+
+        // ── Plan exhausted normally ─────────────────────────────────
+        let steps_executed = step_results.len() as u32;
+        let explanation =
+            self.explain_termination(&TerminationReason::Completed, steps_executed, total_cost);
+        PlanningOutcome {
+            strategy: self.strategy,
+            termination_reason: TerminationReason::Completed,
+            steps_executed,
+            total_cost_usd: total_cost,
+            total_duration: total_start.elapsed(),
+            step_results,
+            explanation,
+        }
+    }
+
+    /// Execute a ReAct (Reason+Act) planning session.
+    ///
+    /// **Not yet implemented.** Returns a [`PlanningOutcome`] with
+    /// [`TerminationReason::Cancelled`] and an explanation pointing
+    /// to the deferred work item.
+    ///
+    /// Tracked under `0.8.x` cycle; see the WEFT board for the live
+    /// item linking back to this stub.
+    #[allow(clippy::unused_async)]
+    pub async fn execute_react(&self, _goal: &str) -> PlanningOutcome {
+        let explanation =
+            "execute_react: not yet implemented (deferred to 0.8.x; \
+              use PlanAndExecute strategy for now)"
+                .to_string();
+        warn!("{explanation}");
+        PlanningOutcome {
+            strategy: self.strategy,
+            termination_reason: TerminationReason::Cancelled,
+            steps_executed: 0,
+            total_cost_usd: 0.0,
+            total_duration: Duration::ZERO,
+            step_results: Vec::new(),
+            explanation,
+        }
     }
 
     /// Build a partial results explanation for the given termination reason.
@@ -461,5 +707,168 @@ mod tests {
         let router = PlanningRouter::with_defaults(PlanningStrategy::PlanAndExecute);
         assert_eq!(router.strategy(), PlanningStrategy::PlanAndExecute);
         assert_eq!(router.config().max_planning_depth, 10);
+    }
+
+    // ── execute_plan_and_execute / execute_react tests (WEFT-183) ───────
+
+    #[tokio::test]
+    async fn plan_and_execute_runs_all_steps() {
+        let router = PlanningRouter::with_defaults(PlanningStrategy::PlanAndExecute);
+        let outcome = router
+            .execute_plan_and_execute(
+                "do thing",
+                |_goal: String| async {
+                    Ok(Plan::new(
+                        vec!["step a".into(), "step b".into(), "step c".into()],
+                        0.01,
+                    ))
+                },
+                |step, desc: String| async move {
+                    Ok(PlanningStepResult {
+                        step,
+                        is_actionable: true,
+                        cost_usd: 0.005,
+                        duration: Duration::from_millis(1),
+                        output: desc,
+                    })
+                },
+            )
+            .await;
+        assert_eq!(outcome.termination_reason, TerminationReason::Completed);
+        // 1 plan step + 3 execution steps.
+        assert_eq!(outcome.steps_executed, 4);
+        // Total cost = 0.01 (plan) + 3 * 0.005 = 0.025.
+        assert!((outcome.total_cost_usd - 0.025).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn plan_and_execute_planner_error_records_partial() {
+        let router = PlanningRouter::with_defaults(PlanningStrategy::PlanAndExecute);
+        let outcome = router
+            .execute_plan_and_execute(
+                "do thing",
+                |_goal: String| async { Err::<Plan, _>("planner exploded".to_string()) },
+                |_, _: String| async { Ok(PlanningStepResult {
+                    step: 0,
+                    is_actionable: true,
+                    cost_usd: 0.0,
+                    duration: Duration::ZERO,
+                    output: String::new(),
+                }) },
+            )
+            .await;
+        assert_eq!(outcome.termination_reason, TerminationReason::Cancelled);
+        assert_eq!(outcome.steps_executed, 1);
+        assert_eq!(outcome.step_results.len(), 1);
+        assert!(outcome.explanation.contains("planner exploded"));
+    }
+
+    #[tokio::test]
+    async fn plan_and_execute_circuit_breaker_on_no_ops() {
+        let router = PlanningRouter::new(
+            PlanningStrategy::PlanAndExecute,
+            PlanningConfig {
+                circuit_breaker_no_op_limit: 2,
+                ..Default::default()
+            },
+        );
+        let outcome = router
+            .execute_plan_and_execute(
+                "task",
+                |_: String| async {
+                    Ok(Plan::new(
+                        vec!["a".into(), "b".into(), "c".into(), "d".into()],
+                        0.0,
+                    ))
+                },
+                |step, _: String| async move {
+                    Ok(PlanningStepResult {
+                        step,
+                        is_actionable: false, // no-op
+                        cost_usd: 0.0,
+                        duration: Duration::from_millis(1),
+                        output: String::new(),
+                    })
+                },
+            )
+            .await;
+        assert_eq!(outcome.termination_reason, TerminationReason::CircuitBreaker);
+        // Plan step + 2 no-ops = 3 steps before breaker triggers on
+        // the 3rd. (consecutive_no_ops becomes 2 after step 2; the
+        // guard rail check runs before step 3 and trips.)
+        assert!(outcome.steps_executed <= 3);
+    }
+
+    #[tokio::test]
+    async fn plan_and_execute_budget_exceeded() {
+        let router = PlanningRouter::new(
+            PlanningStrategy::PlanAndExecute,
+            PlanningConfig {
+                max_planning_cost_usd: 0.05,
+                ..Default::default()
+            },
+        );
+        let outcome = router
+            .execute_plan_and_execute(
+                "task",
+                |_: String| async { Ok(Plan::new(vec!["a".into(), "b".into()], 0.10)) },
+                |step, _: String| async move {
+                    Ok(PlanningStepResult {
+                        step,
+                        is_actionable: true,
+                        cost_usd: 0.0,
+                        duration: Duration::ZERO,
+                        output: String::new(),
+                    })
+                },
+            )
+            .await;
+        // The planning step alone busts the budget.
+        assert_eq!(outcome.termination_reason, TerminationReason::BudgetExceeded);
+    }
+
+    #[tokio::test]
+    async fn plan_and_execute_step_timeout() {
+        let router = PlanningRouter::new(
+            PlanningStrategy::PlanAndExecute,
+            PlanningConfig {
+                planning_step_timeout: Duration::from_millis(50),
+                ..Default::default()
+            },
+        );
+        let outcome = router
+            .execute_plan_and_execute(
+                "task",
+                |_: String| async { Ok(Plan::new(vec!["slow".into()], 0.0)) },
+                |step, _: String| async move {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    Ok(PlanningStepResult {
+                        step,
+                        is_actionable: true,
+                        cost_usd: 0.0,
+                        duration: Duration::from_millis(200),
+                        output: String::new(),
+                    })
+                },
+            )
+            .await;
+        assert_eq!(outcome.termination_reason, TerminationReason::StepTimeout);
+    }
+
+    #[tokio::test]
+    async fn execute_react_returns_not_yet_implemented() {
+        let router = PlanningRouter::with_defaults(PlanningStrategy::React);
+        let outcome = router.execute_react("task").await;
+        assert_eq!(outcome.termination_reason, TerminationReason::Cancelled);
+        assert!(outcome.explanation.contains("not yet implemented"));
+        assert_eq!(outcome.steps_executed, 0);
+    }
+
+    #[test]
+    fn plan_struct() {
+        let p = Plan::new(vec!["a".into()], 0.1);
+        assert_eq!(p.len(), 1);
+        assert!(!p.is_empty());
+        assert!(Plan::new(vec![], 0.0).is_empty());
     }
 }

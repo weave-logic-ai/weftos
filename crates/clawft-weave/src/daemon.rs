@@ -5,19 +5,107 @@
 //! kernel itself is platform-agnostic and could be wrapped in
 //! WebSocket, TCP, or `postMessage` for other environments.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, UnixListener, UnixStream};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
+use crate::control::{ControlFlags, ControlIntent, ControlKind};
+
+/// Daemon-wide control state shared between the boot wiring (which
+/// registers flags as services come up) and the `control.*` RPC
+/// handlers (which read + flip them). Set once at daemon boot.
+struct DaemonControlState {
+    /// The daemon's own node-id, used as the authority that owns
+    /// every control intent published by this daemon.
+    daemon_node_id: String,
+    /// Per-target enable flags, shared with services that consult
+    /// them in their main loops.
+    flags: ControlFlags,
+}
+
+static DAEMON_CONTROL: OnceLock<Arc<DaemonControlState>> = OnceLock::new();
+
+fn daemon_control() -> Option<Arc<DaemonControlState>> {
+    DAEMON_CONTROL.get().cloned()
+}
+
+/// Daemon-wide handle to the LLM HTTP client. Set at boot if the
+/// service spawns successfully; `None` otherwise. The `llm.prompt`
+/// handler reads this and returns a clean error when unset rather
+/// than panicking.
+static DAEMON_LLM: OnceLock<Arc<clawft_service_llm::LlmClient>> = OnceLock::new();
+
+fn daemon_llm() -> Option<Arc<clawft_service_llm::LlmClient>> {
+    DAEMON_LLM.get().cloned()
+}
+
+/// Daemon-wide handle to the PTY-backed terminal manager. Set at boot;
+/// the four `terminal.*` handlers read this. We don't register a
+/// control flag for terminal — sessions are user-initiated (no
+/// background traffic to gate) and the GUI's "close session" button is
+/// the natural off-switch. If we ever grow auto-spawned sessions, the
+/// control flag lives here next to `DAEMON_LLM`.
+static DAEMON_TERMINAL: OnceLock<Arc<clawft_service_terminal::TerminalManager>> = OnceLock::new();
+
+fn daemon_terminal() -> Option<Arc<clawft_service_terminal::TerminalManager>> {
+    DAEMON_TERMINAL.get().cloned()
+}
+
+/// agent-core-v1 Phase D3 (the cutover): daemon-wide handle to the
+/// agent service (`clawft-service-agent::AgentService`). Set at boot
+/// when the LLM client succeeded — `None` if `DAEMON_LLM` couldn't be
+/// wired.
+///
+/// Every `agent.chat` request unconditionally dispatches through this
+/// handle. The C2 spike fallback was removed in D3 along with the
+/// inline `handle_agent_chat` body; if the service didn't wire the
+/// dispatch arm surfaces a typed "agent service not wired" error
+/// instead of falling back. The `agent-core-chat` Cargo feature
+/// survives so a single-commit revert can restore the spike if D3
+/// regresses a release-blocking flow.
+///
+/// Generic param matches the blanket
+/// `impl<P: Platform> AgentLoopHandle for AgentLoop<P>` so production
+/// uses `AgentLoop<NativePlatform>` directly.
+type DaemonAgentService = clawft_service_agent::AgentService<
+    clawft_core::agent::loop_core::AgentLoop<NativePlatform>,
+>;
+
+static DAEMON_AGENT: OnceLock<Arc<DaemonAgentService>> = OnceLock::new();
+
+fn daemon_agent() -> Option<Arc<DaemonAgentService>> {
+    DAEMON_AGENT.get().cloned()
+}
+
+/// agent-core-v1 Phase D2: daemon-wide handle to the concierge
+/// agent's kernel-issued `agent_id`.
+///
+/// Set at boot when the daemon registers a single concierge
+/// principal in `clawft-kernel::AgentRegistry::register` (right next
+/// to the existing node registration). Every `agent.chat` request in
+/// v1 dispatches through this id — chat is single-tenant by design;
+/// per-user agent ids are a future phase. The `AgentService` reads it
+/// via `daemon_concierge_agent_id()` to thread the id into
+/// `AgentLoop::with_daemon_agent_id` (then every `gate.check` call in
+/// `run_tool_loop` sees the concierge id rather than the
+/// `"{channel}:{sender_id}"` synthesis).
+static DAEMON_CONCIERGE_AGENT_ID: OnceLock<String> = OnceLock::new();
+
+#[allow(dead_code)] // Read by future RPCs (e.g. `agent.whoami`)
+fn daemon_concierge_agent_id() -> Option<String> {
+    DAEMON_CONCIERGE_AGENT_ID.get().cloned()
+}
+
 use clawft_kernel::{Kernel, KernelState};
 use clawft_platform::NativePlatform;
 use clawft_types::config::{Config, KernelConfig};
 
 use crate::protocol::{
-    self, AgentInspectResult, AgentSendParams, AgentSpawnParams, AgentSpawnResult, AgentStopParams,
+    self, AgentChatParams, AgentInspectResult,
+    AgentSendParams, AgentSpawnParams, AgentSpawnResult, AgentStopParams,
     AgentRestartParams, ClusterJoinParams, ClusterLeaveParams, ClusterNodeInfo,
     ClusterStatusResult, CronAddParams, CronJobInfo, CronRemoveParams, IpcPublishParams,
     IpcSubscribeParams, IpcTopicInfo, KernelStatusResult, LogEntry, LogsParams, ProcessInfo,
@@ -92,6 +180,106 @@ pub fn daemonize(config_override: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Build the v2 [`EmbeddingRouter`](clawft_core::agent::context_router::EmbeddingRouter),
+/// or `None` (with a `tracing::warn!`) when any prerequisite fails.
+///
+/// Phase E2 introduced this construction inline in the `"embedding"`
+/// arm; Phase E3 extracted it here so the new `"hybrid"` arm reuses
+/// the exact same skill-discovery + embedder-selection + index-build
+/// path. The helper:
+///
+/// 1. Discovers skills via the same workspace-walk + user-dir lookup
+///    the CLI's `weft agent` uses.
+/// 2. Selects [`ApiEmbedder::with_defaults`](clawft_core::embeddings::api_embedder::ApiEmbedder)
+///    when `OPENAI_API_KEY` is set, else
+///    [`ApiEmbedder::hash_only`](clawft_core::embeddings::api_embedder::ApiEmbedder)
+///    as the deterministic offline floor.
+/// 3. Builds the index. On any failure (empty registry, discover
+///    error, embedder/index build error) it emits a `warn!` and
+///    returns `None` so callers can fall back to the next router in
+///    their preference chain (NullRouter for `"embedding"`,
+///    LlmClassifierRouter for `"hybrid"`).
+async fn build_embedding_router_or_warn(
+    workspace: &std::path::Path,
+) -> Option<Arc<dyn clawft_core::agent::context_router::ContextRouter>> {
+    // Skill discovery: same paths the CLI uses (`weft agent`); see
+    // `clawft-cli/src/commands/agent.rs::discover_skill_dirs`.
+    let user_skill_dir = dirs::home_dir().map(|h| h.join(".clawft").join("skills"));
+    let ws_skill_dir = {
+        let mut dir = workspace;
+        let mut found: Option<std::path::PathBuf> = None;
+        loop {
+            let candidate = dir.join(".clawft").join("skills");
+            if candidate.is_dir() {
+                found = Some(candidate);
+                break;
+            }
+            match dir.parent() {
+                Some(parent) => dir = parent,
+                None => break,
+            }
+        }
+        found
+    };
+
+    let skills_result = clawft_core::agent::skills_v2::SkillRegistry::discover(
+        ws_skill_dir.as_deref(),
+        user_skill_dir.as_deref(),
+        Vec::new(),
+    )
+    .await;
+
+    let skills = match skills_result {
+        Ok(s) if s.is_empty() => {
+            warn!(
+                "agent-core: EmbeddingRouter requested but skill registry is empty; \
+                 returning None so caller can fall back"
+            );
+            return None;
+        }
+        Ok(s) => s,
+        Err(e) => {
+            warn!(
+                error = %e,
+                "agent-core: skill discovery failed; EmbeddingRouter unavailable"
+            );
+            return None;
+        }
+    };
+
+    // Pick ApiEmbedder when an API key is configured, else the hash
+    // floor. ApiEmbedder itself collapses to its SHA-256 fallback
+    // per-call when the API errors, so production stays robust.
+    let embedder: Arc<dyn clawft_core::embeddings::Embedder> = if std::env::var("OPENAI_API_KEY")
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+    {
+        info!("agent-core: EmbeddingRouter using ApiEmbedder (OpenAI-compat /embeddings)");
+        Arc::new(clawft_core::embeddings::api_embedder::ApiEmbedder::with_defaults())
+    } else {
+        info!(
+            "agent-core: EmbeddingRouter using ApiEmbedder hash-only fallback \
+             (no OPENAI_API_KEY set)"
+        );
+        Arc::new(clawft_core::embeddings::api_embedder::ApiEmbedder::hash_only(384))
+    };
+
+    match clawft_core::agent::context_router::EmbeddingRouter::new(embedder, &skills).await {
+        Ok(r) => {
+            info!(
+                router = "embedding",
+                skills = skills.len(),
+                "agent-core: ContextRouter v2 (EmbeddingRouter) built"
+            );
+            Some(Arc::new(r) as Arc<dyn clawft_core::agent::context_router::ContextRouter>)
+        }
+        Err(e) => {
+            warn!(error = %e, "agent-core: EmbeddingRouter build failed");
+            None
+        }
+    }
+}
+
 /// Run the kernel daemon in the foreground.
 ///
 /// Boots the kernel, binds to a Unix socket, and serves requests
@@ -121,14 +309,877 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         std::fs::create_dir_all(parent)?;
     }
 
+    // agent-core-v1 Phase E1: snapshot the ContextRouter selector
+    // before `config` moves into `Kernel::boot`. The agent-service
+    // wiring further below reads this to pick between v0 NullRouter
+    // and v1 LlmClassifierRouter. See `Config.routing.context_router`
+    // in `clawft-types::routing`.
+    let context_router_choice = config.routing.context_router.clone();
+
+    // Snapshot the loaded `RoutingConfig` before `config` moves into
+    // `Kernel::boot`. The agent service later threads this into
+    // `build_daemon_agent_loop` so the resolver's `channel_overrides`
+    // reflect the operator's loaded permissions instead of
+    // `Config::default()`'s empty defaults.
+    let agent_routing = config.routing.clone();
+
+    // WEFT-555 (M5-W): snapshot the voice-consumer section so it
+    // survives `Kernel::boot` taking ownership of `config`. The voice
+    // consumer wires further below, after the agent service is up.
+    let voice_consumer_cfg = config.voice.consumer.clone();
+
     // Boot kernel
     let platform = NativePlatform::new();
     let kernel = Kernel::boot(config, kernel_config, Arc::new(platform)).await?;
     let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
 
-    // Print boot banner
+    // Bootstrap daemon node identity. Loads `<runtime>/node.key`
+    // (generates on first run, persists with 0600). Registers the
+    // daemon's pubkey with the kernel's NodeRegistry so the substrate
+    // publish gate can verify signatures and enforce the
+    // `substrate/<node-id>/...` write prefix.
+    let runtime_dir = socket_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let daemon_identity = crate::node_identity::load_or_generate(&runtime_dir)
+        .map_err(|e| anyhow::anyhow!("daemon identity bootstrap: {e}"))?;
     {
         let k = kernel.read().await;
+        let pubkey: [u8; 32] = daemon_identity.signing_key.verifying_key().to_bytes();
+        k.node_registry().register(pubkey, Some("daemon".to_string()));
+        info!(node_id = %daemon_identity.node_id, "daemon node registered");
+        k.event_log().info(
+            "node",
+            format!("daemon node registered: {}", daemon_identity.node_id),
+        );
+
+        // Issue mesh-canonical write grants for every topic this
+        // daemon will produce. Per `.planning/sensors/PIPELINE-PRIMITIVE-JOURNAL.md`
+        // §R3.6 each `_derived/<topic>` subtree requires a separate
+        // grant — this is the seam where they're stamped. MVP: the
+        // daemon grants itself in-process; no signature, no
+        // revocation. Future federated grants will require an issuer
+        // signature checked at the RPC boundary.
+        //
+        // Topics included now (some are produced by services landing
+        // in parallel work):
+        // - `transcript`    — whisper STT output (this branch)
+        // - `classify`      — speech/silence/keyword classifier (parallel)
+        // - `terminal`      — terminal-output capture pipeline (parallel)
+        // - `chat`          — agent.chat per-turn JSONL + heartbeat
+        //                     (`derived/chat/<conv>/turns/<ulid>`,
+        //                      `derived/chat/<conv>/status`); plan
+        //                     `agent-core-v1.md` Phase A2.
+        // - `soul_journal`  — per-agent identity-drift observations
+        //                     destined for `.clawft/SOUL.journal.md`.
+        //                     The agent writes through the substrate,
+        //                     not direct to disk; F2's `weaver soul
+        //                     promote` reads back, diffs, and applies
+        //                     to SOUL.md on confirmation. Plan
+        //                     `agent-core-v1.md` Phase F1/F2.
+        //
+        // Stamping all five here means the parallel branches don't
+        // each need to touch this grant-issue path.
+        for topic in ["transcript", "classify", "terminal", "chat", "soul_journal"] {
+            match k.node_registry().issue_derived_grant(
+                daemon_identity.node_id.clone(),
+                topic,
+                clawft_kernel::GrantScope::TopicPrefix,
+            ) {
+                Ok(_) => {
+                    info!(
+                        node_id = %daemon_identity.node_id,
+                        topic = %topic,
+                        "derived-write grant issued"
+                    );
+                    k.event_log().info(
+                        "node",
+                        format!(
+                            "derived-write grant: node={} topic={}",
+                            daemon_identity.node_id, topic
+                        ),
+                    );
+                }
+                Err(e) => {
+                    // Topic strings above are constants so this can't
+                    // realistically fire — log + continue rather than
+                    // abort daemon boot.
+                    warn!(error = %e, topic = %topic, "derived-write grant issue failed");
+                }
+            }
+        }
+    }
+
+    // Stash daemon-wide control state. Set once; the `control.*`
+    // RPC handlers and the service-spawn path read it. Idempotent
+    // re-set is impossible (OnceLock) — this must run exactly once
+    // per daemon process.
+    let control_flags = ControlFlags::new();
+    {
+        let _ = DAEMON_CONTROL.set(Arc::new(DaemonControlState {
+            daemon_node_id: daemon_identity.node_id.clone(),
+            flags: control_flags.clone(),
+        }));
+    }
+
+    // Spawn the whisper STT service. Subscribes to the configured
+    // ESP32-side mic pcm_chunk path, transcribes via the local
+    // whisper.cpp HTTP service, publishes transcripts under the
+    // daemon's own node prefix.
+    //
+    // Pre-register control flags before spawn so the service holds
+    // shared `Arc<AtomicBool>` handles to flags the RPC handler can
+    // flip.
+    let source_node_id = std::env::var("WHISPER_INPUT_NODE_ID")
+        .unwrap_or_else(|_| "n-bfc4cd".to_string());
+    let pcm_chunk_target = format!("{source_node_id}/mic/pcm_chunk");
+    let rms_target = format!("{source_node_id}/mic/rms");
+    let whisper_service_flag =
+        control_flags.register(ControlKind::Service, "whisper", true);
+    let whisper_source_flag =
+        control_flags.register(ControlKind::Sensor, &pcm_chunk_target, true);
+    // RMS sensor isn't consumed by anything in-process today; the
+    // flag still lives here so toggling it from the GUI publishes
+    // the intent that the firmware will eventually subscribe to.
+    let _rms_sensor_flag = control_flags.register(ControlKind::Sensor, &rms_target, true);
+
+    // The classifier publishes one `Classification` per pcm_chunk
+    // under the daemon's prefix. We compute its path here so the
+    // whisper service can subscribe to it for its gate. Mesh-canonical
+    // `_derived/...` is the eventual home (R3.0 / R3.2); for now we
+    // single-tier under the daemon prefix and the mesh-gate agent
+    // will move all derived paths together at integration time.
+    let classify_output_path = format!(
+        "substrate/{daemon}/derived/classify/{source}/mic",
+        daemon = daemon_identity.node_id,
+        source = source_node_id,
+    );
+    let classify_service_flag =
+        control_flags.register(ControlKind::Service, "classify", true);
+
+    let _whisper_handle: Option<clawft_service_whisper::WhisperService> = {
+        let whisper_url = std::env::var(clawft_service_whisper::WHISPER_SERVICE_URL_ENV)
+            .unwrap_or_else(|_| "http://127.0.0.1:8123".to_string());
+        let input_path = format!(
+            "substrate/{source_node_id}/sensor/mic/pcm_chunk"
+        );
+        // Mesh-canonical transcript path (R3.2). Source node is part
+        // of the path so subscribers see one stable subtree across
+        // leader handoff. The daemon issued itself a `transcript`
+        // grant above; the gate consults the registry handed to the
+        // service via config.
+        let output_path_derived = format!(
+            "substrate/_derived/transcript/{source_node_id}/mic",
+        );
+        // REMOVE AFTER PHASE 4: dual-publish for migration.
+        // Old node-private path stays alive for one release so
+        // existing in-tree subscribers (the Explorer's substrate
+        // walk) keep working while consumers migrate to the
+        // canonical path.
+        let output_path_legacy = format!(
+            "substrate/{daemon}/derived/transcript/{source}/mic",
+            daemon = daemon_identity.node_id,
+            source = source_node_id,
+        );
+        let node_registry = {
+            let k = kernel.read().await;
+            k.node_registry().clone()
+        };
+        let cfg = clawft_service_whisper::WhisperServiceConfig {
+            window_ms: 2_000,
+            retry_backoff: std::time::Duration::from_millis(500),
+            node_id: daemon_identity.node_id.clone(),
+            input_path: input_path.clone(),
+            output_path_derived: output_path_derived.clone(),
+            output_path_legacy: Some(output_path_legacy.clone()),
+            service_enabled: Arc::clone(&whisper_service_flag),
+            source_enabled: Arc::clone(&whisper_source_flag),
+            node_registry,
+            // Gate whisper on the classifier's output. The classifier
+            // is spawned just below; we point the subscription at the
+            // path the classifier will publish to. If the classifier
+            // fails to spawn (or hasn't published yet), the gate
+            // stays closed and no chunks are transcribed — that's
+            // the safe default for a "speech detected" filter.
+            classifier_input: Some(classify_output_path.clone()),
+            gate_window_ms: 1_500,
+            // SC-9 audit row context. Until manifest verify is wired
+            // into daemon boot we log a fixed model identifier; once
+            // `verify_model_dir` runs at startup the report's
+            // `manifest.model_id` will replace this.
+            model_id: "whisper-cpp/unverified".to_string(),
+            source_node_hint: source_node_id.clone(),
+        };
+        let client_cfg = clawft_service_whisper::WhisperConfig {
+            base_url: whisper_url.clone(),
+            ..clawft_service_whisper::WhisperConfig::default()
+        };
+        let client = match clawft_service_whisper::WhisperClient::new(client_cfg) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "whisper client init failed (continuing without STT)"
+                );
+                return Err(anyhow::anyhow!("whisper client init: {e}"));
+            }
+        };
+        let substrate = {
+            let k = kernel.read().await;
+            k.substrate_service().clone()
+        };
+        match clawft_service_whisper::WhisperService::spawn(substrate, client, cfg) {
+            Ok(svc) => {
+                info!(
+                    input = %input_path,
+                    output = %output_path_derived,
+                    legacy_output = %output_path_legacy,
+                    whisper_url = %whisper_url,
+                    "whisper service spawned (dual-publish: canonical + legacy)"
+                );
+                Some(svc)
+            }
+            Err(e) => {
+                warn!(error = %e, "whisper service failed to spawn (continuing without STT)");
+                None
+            }
+        }
+    };
+
+    // Spawn the audio-classifier Stage. Subscribes to the same
+    // ESP32-side mic pcm_chunk path the whisper service consumes,
+    // runs each window through an `EnergyClassifier` (RMS-threshold
+    // VAD), and republishes a `Classification` value under the
+    // daemon's prefix at `classify_output_path`. The whisper service
+    // (configured above) subscribes to that path and uses it as a
+    // speech-vs-silence gate so inference only runs on speech.
+    //
+    // The `ClassifierBackend` trait is the seam for the future
+    // llama.cpp-hosted multi-class classifier (music / noise /
+    // speech / silence / ...) — swapping the backend doesn't change
+    // the wire shape, so neither the whisper gate nor any GUI
+    // subscriber needs a code change.
+    let _classify_handle: Option<clawft_service_classify::ClassifierService> = {
+        let input_path = format!(
+            "substrate/{source_node_id}/sensor/mic/pcm_chunk"
+        );
+        let cfg = clawft_service_classify::ClassifierServiceConfig {
+            node_id: daemon_identity.node_id.clone(),
+            source_node: source_node_id.clone(),
+            input_path: input_path.clone(),
+            output_path: classify_output_path.clone(),
+            service_enabled: Arc::clone(&classify_service_flag),
+            // Reuse the whisper-side source flag — the user's mental
+            // model is "the mic source"; toggling that off should
+            // disable both the classifier and the transcription path
+            // since they consume the same source.
+            source_enabled: Arc::clone(&whisper_source_flag),
+        };
+        let backend: Arc<dyn clawft_service_classify::ClassifierBackend> =
+            Arc::new(clawft_service_classify::EnergyClassifier::from_env());
+        let substrate = {
+            let k = kernel.read().await;
+            k.substrate_service().clone()
+        };
+        match clawft_service_classify::ClassifierService::spawn(substrate, backend, cfg) {
+            Ok(svc) => {
+                info!(
+                    input = %input_path,
+                    output = %classify_output_path,
+                    "classifier service spawned (energy VAD)"
+                );
+                Some(svc)
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "classifier service failed to spawn (whisper gate will \
+                     stay closed and transcription will not run until the \
+                     classifier publishes)"
+                );
+                None
+            }
+        }
+    };
+
+    // Spawn the LLM service handle. Unlike whisper this is a
+    // request/response client — there's no background tokio task to
+    // hold open, so we just construct the client (and one-shot
+    // health probe in the background so a cold cache logs cleanly
+    // without blocking boot).
+    //
+    // Pre-register the control flag so `control.set_enabled
+    // {kind:"service", target:"llm"}` works the first time the
+    // user toggles it from the GUI.
+    let _llm_service_flag =
+        control_flags.register(ControlKind::Service, "llm", true);
+    {
+        // OpenRouter takeover: when OPENROUTER_API_KEY is set we
+        // default the base URL + model to OpenRouter and attach
+        // bearer auth. Local-llama-server users see no behaviour
+        // change (api_key stays None, defaults match the prior code).
+        let api_key = std::env::var(clawft_service_llm::OPENROUTER_API_KEY_ENV)
+            .ok()
+            .filter(|s| !s.is_empty());
+        let (default_url, default_model) = if api_key.is_some() {
+            (
+                clawft_service_llm::DEFAULT_OPENROUTER_BASE_URL.to_string(),
+                clawft_service_llm::DEFAULT_OPENROUTER_MODEL.to_string(),
+            )
+        } else {
+            (
+                clawft_service_llm::DEFAULT_LLM_SERVICE_URL.to_string(),
+                clawft_service_llm::DEFAULT_LLM_MODEL.to_string(),
+            )
+        };
+        let llm_url = std::env::var(clawft_service_llm::LLM_SERVICE_URL_ENV)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(default_url);
+        let llm_model = std::env::var(clawft_service_llm::LLM_MODEL_ENV)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(default_model);
+        let using_openrouter = api_key.is_some();
+        let cfg = clawft_service_llm::LlmConfig {
+            base_url: llm_url.clone(),
+            model: llm_model.clone(),
+            api_key,
+            referer: using_openrouter.then(|| "https://github.com/clawft/clawft".to_string()),
+            app_title: using_openrouter.then(|| "WeftOS weaver".to_string()),
+            ..clawft_service_llm::LlmConfig::default()
+        };
+        match clawft_service_llm::LlmClient::new(cfg) {
+            Ok(client) => {
+                let arc = Arc::new(client);
+                // Background health probe — only meaningful for
+                // local llama-server; OpenRouter has no `/health`
+                // endpoint and would always fail the probe, so we
+                // skip it when an api_key is configured.
+                if !using_openrouter {
+                    let probe = Arc::clone(&arc);
+                    tokio::spawn(async move {
+                        if probe.wait_for_healthy().await {
+                            info!(
+                                url = %probe.config().base_url,
+                                "llm service: healthy"
+                            );
+                        } else {
+                            warn!(
+                                url = %probe.config().base_url,
+                                "llm service: health probe failed at boot \
+                                 (RPC will return a clean error per call)"
+                            );
+                        }
+                    });
+                }
+                let _ = DAEMON_LLM.set(arc);
+                info!(
+                    url = %llm_url,
+                    model = %llm_model,
+                    openrouter = using_openrouter,
+                    "llm service handle wired",
+                );
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "llm client init failed — llm.prompt RPC will \
+                     return 'service unavailable'"
+                );
+            }
+        }
+    }
+
+    // agent-core-v1 Phase C2 / D3: wire
+    // `clawft-service-agent::AgentService` into the daemon as a
+    // long-lived handle. Mirrors the whisper/llm/terminal pattern.
+    //
+    // After D3 the dispatch arm at `agent.chat` calls into this
+    // service unconditionally — the C2 spike fallback (`handle_agent_chat`)
+    // is gone. If the LLM client failed to init, `DAEMON_AGENT`
+    // stays `None` and the dispatch arm surfaces a typed error
+    // ("agent service not wired") instead of falling back.
+    //
+    // Pre-register the control flag so
+    // `control.set_enabled {kind:"service", target:"agent"}` works the
+    // first time the user toggles it.
+    let _agent_service_flag =
+        control_flags.register(ControlKind::Service, "agent", true);
+    if let Some(llm_for_agent) = DAEMON_LLM.get().cloned() {
+        // Workspace = daemon CWD. The C2 spike used the same
+        // resolution; a future config change will lift this into
+        // `agent.workspace_root`.
+        let workspace = match std::env::current_dir() {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(error = %e, "agent service: cwd unavailable, skipping wiring");
+                return Err(anyhow::anyhow!("agent service: cwd unavailable: {e}"));
+            }
+        };
+
+        let identity_loader = Arc::new(
+            clawft_core::agent::identity::IdentityLoader::new(&workspace),
+        );
+
+        let mut tool_registry = clawft_core::tools::registry::ToolRegistry::new();
+        clawft_tools::register_all(
+            &mut tool_registry,
+            Arc::new(NativePlatform::new()),
+            workspace.clone(),
+            clawft_tools::security_policy::CommandPolicy::safe_defaults(),
+            clawft_tools::url_safety::UrlPolicy::default(),
+            clawft_tools::web_search::WebSearchConfig::default(),
+        );
+        let tool_registry = Arc::new(tool_registry);
+
+        // agent-core-v1 Phase C3: wire the substrate-backed
+        // `ConversationSink` so per-turn JSONL lands at
+        // `substrate/_derived/chat/<conv>/turns/<ulid>` and the
+        // per-conv heartbeat publishes
+        // `substrate/_derived/chat/<conv>/status`. The `chat`
+        // derived-write grant issued at boot covers both paths.
+        let agent_sink: Arc<dyn clawft_core::agent::sink::ConversationSink> = {
+            let k = kernel.read().await;
+            let substrate = k.substrate_service().clone();
+            let node_registry = k.node_registry().clone();
+            Arc::new(clawft_service_agent::SubstrateConversationSink::new(
+                substrate,
+                node_registry,
+                daemon_identity.node_id.clone(),
+            ))
+        };
+
+        // agent-core-v1 Phase D1: wire a FileIdentityProvider so each
+        // turn's leading system message is built from
+        // `.clawft/SOUL.md` + `.clawft/IDENTITY.md` (with the
+        // docs/skills/clawft fallback). The provider caches the most
+        // recent successful load so cross-turn IO is cheap.
+        let identity_provider: Arc<dyn clawft_core::agent::identity::IdentityProvider> =
+            Arc::new(clawft_core::agent::identity::FileIdentityProvider::new(
+                &workspace,
+            ));
+
+        // agent-core-v1 Phase D2: register a single concierge
+        // principal in the kernel's AgentRegistry. v1 chat is
+        // single-tenant by design — every `agent.chat` request is
+        // first-party traffic from the same agent talking to a user
+        // — so one id covers the whole panel. Per-user agent ids
+        // ship in a future phase. The agent reuses the daemon's
+        // own pubkey (PoP is unnecessary for a self-registration
+        // happening before the listener is up).
+        let concierge_agent_id: String = {
+            let k = kernel.read().await;
+            let pubkey: [u8; 32] = daemon_identity.signing_key.verifying_key().to_bytes();
+            let entry = k.agent_registry().register("concierge-bot".into(), pubkey);
+            info!(
+                agent_id = %entry.agent_id,
+                name = %entry.name,
+                "agent-core: concierge principal registered"
+            );
+            k.event_log().info(
+                "agent",
+                format!("concierge principal registered: {}", entry.agent_id),
+            );
+            entry.agent_id
+        };
+        let _ = DAEMON_CONCIERGE_AGENT_ID.set(concierge_agent_id.clone());
+
+        // agent-core-v1 Phase D2: construct a GovernanceGate for the
+        // chat path and wrap it in the `EffectGate` adapter so every
+        // tool dispatch in `AgentLoop::run_tool_loop` produces an
+        // audited Permit/Defer/Deny decision. Risk threshold 0.8
+        // matches the daemon's existing per-spawn gate; chain logging
+        // is wired when the exochain feature is on so witness chain
+        // entries land alongside other governance events.
+        let chat_gate: Arc<dyn clawft_core::agent::gate::EffectGate> = {
+            use clawft_kernel::{
+                GateBackend, GovernanceBranch, GovernanceGate, GovernanceRule, RuleSeverity,
+            };
+            let mut g = GovernanceGate::new(0.8, false).add_rule(GovernanceRule {
+                id: "chat-tool-guard".into(),
+                description: "Block high-risk tool dispatches in agent.chat".into(),
+                branch: GovernanceBranch::Judicial,
+                severity: RuleSeverity::Blocking,
+                active: true,
+                reference_url: None,
+                sop_category: None,
+            });
+            #[cfg(feature = "exochain")]
+            {
+                let k = kernel.read().await;
+                if let Some(cm) = k.chain_manager() {
+                    g = g.with_chain(cm.clone());
+                }
+            }
+            let backend: Arc<dyn GateBackend> = Arc::new(g);
+            Arc::new(clawft_service_agent::KernelEffectGate::new(backend))
+        };
+
+        // agent-core-v1 Phase E1/E2: pick the ContextRouter implementation
+        // from `config.routing.context_router`. v0 `"null"` (the
+        // default) hands `None` to `build_daemon_agent_loop`, which
+        // keeps `AgentLoop`'s built-in `NullRouter` live so behaviour
+        // is bit-for-bit unchanged. v1 `"llm-classifier"` builds an
+        // `LlmClassifierRouter` over the same `LlmClient` the daemon
+        // already uses (so OpenRouter / local llama-server both keep
+        // working without a second connection). v2 `"embedding"`
+        // (Phase E2) builds an `EmbeddingRouter` over a
+        // `ruvector-diskann@2.1` index of the discovered skill
+        // descriptors. The embedder is `ApiEmbedder` (production —
+        // OpenAI-compat `/embeddings`) when `OPENAI_API_KEY` is set,
+        // else `HashEmbedder` as the deterministic offline floor.
+        //
+        // Per `docs/research/rvf-context-router.md`, the router NEVER
+        // picks a model and NEVER escalates a tier — `TieredRouter`
+        // owns the actual decision; the router only nudges
+        // `complexity_hint` and surfaces an `archetype` label.
+        let context_router: Option<
+            Arc<dyn clawft_core::agent::context_router::ContextRouter>,
+        > = match context_router_choice.as_str() {
+            "llm-classifier" => {
+                info!(
+                    router = "llm-classifier",
+                    "agent-core: ContextRouter v1 (LlmClassifierRouter) live"
+                );
+                Some(Arc::new(
+                    clawft_core::agent::context_router::LlmClassifierRouter::new(
+                        llm_for_agent.clone(),
+                    ),
+                ))
+            }
+            "embedding" => {
+                // E2: build the v2 router via the shared helper. On
+                // any prerequisite failure (empty registry, discover
+                // error, embedder/index build error) the helper logs
+                // a `warn!` and returns None; we propagate that so the
+                // daemon falls back to the built-in NullRouter rather
+                // than crashing the boot path.
+                match build_embedding_router_or_warn(workspace.as_path()).await {
+                    Some(r) => {
+                        info!(
+                            router = "embedding",
+                            "agent-core: ContextRouter v2 (EmbeddingRouter) live"
+                        );
+                        Some(r)
+                    }
+                    None => {
+                        warn!(
+                            "agent-core: EmbeddingRouter unavailable; falling back to NullRouter"
+                        );
+                        None
+                    }
+                }
+            }
+            "hybrid" => {
+                // E3: v2.5 plumbing. EmbeddingRouter (v2) primary,
+                // LlmClassifierRouter (v1) fallback on empty/low-
+                // confidence (the v2 router already collapses to
+                // ContextDecision::default() below its confidence
+                // threshold, so "empty primary" == "low-confidence
+                // primary" without any extra signaling).
+                //
+                // If the v2 primary fails to construct (no
+                // OPENAI_API_KEY *and* the hash floor still errors —
+                // unlikely but possible if skills discovery breaks),
+                // we degrade gracefully to the v1 classifier alone.
+                // If even the classifier can't be constructed (it
+                // can't fail today — `Arc::new(LlmClient.into())`),
+                // we fall through to NullRouter.
+                let v1: Arc<dyn clawft_core::agent::context_router::ContextRouter> =
+                    Arc::new(
+                        clawft_core::agent::context_router::LlmClassifierRouter::new(
+                            llm_for_agent.clone(),
+                        ),
+                    );
+                match build_embedding_router_or_warn(workspace.as_path()).await {
+                    Some(emb) => {
+                        info!(
+                            router = "hybrid",
+                            "agent-core: ContextRouter v2.5 (HybridRouter) live \
+                             — EmbeddingRouter primary, LlmClassifierRouter fallback"
+                        );
+                        Some(Arc::new(
+                            clawft_core::agent::context_router::HybridRouter::new(emb, v1),
+                        )
+                            as Arc<dyn clawft_core::agent::context_router::ContextRouter>)
+                    }
+                    None => {
+                        warn!(
+                            "hybrid router: embedding primary unavailable; \
+                             using LlmClassifierRouter alone"
+                        );
+                        Some(v1)
+                    }
+                }
+            }
+            "null" => {
+                info!(
+                    router = "null",
+                    "agent-core: ContextRouter v0 (NullRouter) live"
+                );
+                None
+            }
+            other => {
+                warn!(
+                    requested = %other,
+                    "agent-core: unknown context_router setting; falling back to NullRouter"
+                );
+                None
+            }
+        };
+
+        let agent_loop = clawft_core::bootstrap::build_daemon_agent_loop(
+            llm_for_agent,
+            tool_registry,
+            identity_loader,
+            &workspace,
+            Some(concierge_agent_id),
+            context_router,
+            Some(chat_gate),
+            Some(agent_sink),
+            Some(identity_provider),
+            // The loaded RoutingConfig — without this, the resolver's
+            // `channel_overrides` is empty and every chat principal
+            // hits the zero_trust fallback regardless of what the
+            // workspace/home `.clawft/config.json` says.
+            Some(&agent_routing),
+        )
+        .await;
+
+        let service = Arc::new(clawft_service_agent::AgentService::new(agent_loop));
+        let _ = DAEMON_AGENT.set(service);
+        info!("agent service wired (agent.chat dispatches through clawft-service-agent)");
+    } else {
+        warn!(
+            "agent service: DAEMON_LLM not set, skipping wiring \
+             (agent.chat will return 'agent service not wired' until the LLM client comes up)"
+        );
+    }
+
+    // Spawn the terminal manager. Empty registry — sessions appear on
+    // demand via `terminal.spawn`. Construction is infallible (a
+    // `DashMap::new()` under the hood); we still match on the result so
+    // future fallible variants land cleanly.
+    {
+        let mgr = Arc::new(clawft_service_terminal::TerminalManager::new());
+        let _ = DAEMON_TERMINAL.set(mgr);
+        info!("terminal service wired (PTY-backed sessions hosted in daemon)");
+    }
+
+    // WEFT-555 (M5-W): voice transcript consumer. Subscribes to the
+    // mesh-canonical transcript topic emitted by
+    // `clawft-service-whisper` and routes each transcript into either
+    // an `agent.chat` dispatch (default) or the daemon's RPC dispatch
+    // (when the transcript starts with `voice.consumer.command_prefix`).
+    //
+    // Disabled by default; voice routing is opt-in via the config flag
+    // until the 5 P0 voice security controls (WEFT-207..211) ship.
+    let _voice_router_handle: Option<crate::voice_router::VoiceRouter> = {
+        if !voice_consumer_cfg.enabled {
+            info!(
+                "voice consumer: disabled by config (voice.consumer.enabled=false)"
+            );
+            None
+        } else if DAEMON_AGENT.get().is_none() {
+            warn!(
+                "voice consumer: requested but agent service not wired; \
+                 transcripts would have nowhere to land — skipping spawn"
+            );
+            None
+        } else {
+            let substrate = {
+                let k = kernel.read().await;
+                k.substrate_service().clone()
+            };
+            let subscriber_id = daemon_identity.node_id.clone();
+            // SC-4: translate the config-side permission grid into the
+            // router's typed VoicePermissions table. Out-of-range raw
+            // levels (anything > 2) are clamped to Level 0 by
+            // VoicePermissions::from_raw — a defensive default so a bad
+            // YAML / TOML edit can never accidentally privilege a
+            // principal.
+            let perms_cfg = &voice_consumer_cfg.permissions;
+            let permissions = crate::voice_router::VoicePermissions::from_raw(
+                perms_cfg.default_level,
+                perms_cfg
+                    .principal_levels
+                    .iter()
+                    .map(|(k, v)| (k.clone(), *v)),
+                perms_cfg.safe_commands.iter().cloned(),
+            );
+            let router_cfg = crate::voice_router::VoiceRouterConfig {
+                transcript_topic: voice_consumer_cfg.transcript_topic.clone(),
+                chat_target_agent: voice_consumer_cfg.chat_target_agent.clone(),
+                conv_id: voice_consumer_cfg.conv_id.clone(),
+                command_prefix: voice_consumer_cfg.command_prefix.clone(),
+                subscriber_id: Some(subscriber_id.clone()),
+                permissions,
+            };
+            let chat_handler: Arc<dyn crate::voice_router::ChatHandler> =
+                Arc::new(DaemonAgentChatHandler);
+            let cmd_kernel = Arc::clone(&kernel);
+            let cmd_shutdown = control_flags.clone();
+            let cmd_handler: Arc<dyn crate::voice_router::CommandHandler> =
+                Arc::new(DaemonCommandHandler {
+                    kernel: cmd_kernel,
+                    // Voice-routed commands cannot trigger daemon
+                    // shutdown — the kernel.shutdown verb requires a
+                    // separate control intent. Hand the handler a
+                    // throwaway watch channel so its signature
+                    // matches the daemon's `dispatch` arity.
+                    shutdown_tx: watch::channel(false).0,
+                    _control: cmd_shutdown,
+                });
+            match crate::voice_router::VoiceRouter::spawn(
+                router_cfg,
+                |caller, path| {
+                    substrate
+                        .subscribe(caller, path)
+                        .map(|(_id, rx)| rx)
+                        .map_err(|e| format!("substrate subscribe: {e}"))
+                },
+                chat_handler,
+                cmd_handler,
+            ) {
+                Ok(svc) => {
+                    info!(
+                        topic = %voice_consumer_cfg.transcript_topic,
+                        chat_target = %voice_consumer_cfg.chat_target_agent,
+                        command_prefix = %voice_consumer_cfg.command_prefix,
+                        "voice consumer spawned"
+                    );
+                    Some(svc)
+                }
+                Err(e) => {
+                    warn!(error = %e, "voice consumer failed to spawn");
+                    None
+                }
+            }
+        }
+    };
+
+    // Publish the top-level UI sentinel for the terminal panel. Lives
+    // at `substrate/<daemon-node>/ui/terminal` — the egui Explorer's
+    // terminal viewer shape-matches on `{ "kind": "terminal" }`. By
+    // convention, every top-level surface (chat-window agent picks a
+    // sibling path) publishes its sentinel under
+    // `substrate/<daemon-node>/ui/<name>` so the Explorer tree
+    // surfaces them as siblings without further coordination.
+    {
+        let k = kernel.read().await;
+        let substrate = k.substrate_service();
+        let path = format!(
+            "substrate/{}/ui/terminal",
+            daemon_identity.node_id
+        );
+        let value = serde_json::json!({
+            "kind": "terminal",
+            "label": "Terminal",
+            "updated_at_ms": crate::control::now_ms(),
+        });
+        if let Err(e) = substrate.publish_gated(
+            Some(&daemon_identity.node_id),
+            &path,
+            value,
+        ) {
+            warn!(error = %e, path = %path, "terminal: ui sentinel publish failed");
+        } else {
+            debug!(path = %path, "terminal: ui sentinel published");
+        }
+    }
+
+    // Publish initial control intents now that the daemon node is
+    // registered and services are wired. The intents live under the
+    // daemon's own prefix so `publish_gated` accepts them.
+    {
+        let k = kernel.read().await;
+        let substrate = k.substrate_service();
+        let initial = [
+            (ControlKind::Service, "whisper".to_string(), "Whisper STT"),
+            (ControlKind::Service, "llm".to_string(), "Local LLM"),
+            (ControlKind::Service, "classify".to_string(), "Audio classifier"),
+            (ControlKind::Service, "agent".to_string(), "Agent service"),
+            (ControlKind::Sensor, pcm_chunk_target.clone(), "Mic PCM chunks"),
+            (ControlKind::Sensor, rms_target.clone(), "Mic RMS summary"),
+        ];
+        for (kind, target, label) in &initial {
+            let intent = ControlIntent {
+                enabled: control_flags
+                    .get(*kind, target)
+                    .map(|f| f.load(std::sync::atomic::Ordering::SeqCst))
+                    .unwrap_or(true),
+                kind: *kind,
+                target: target.clone(),
+                label: (*label).to_string(),
+                updated_at_ms: crate::control::now_ms(),
+            };
+            let path = crate::control::intent_path(
+                &daemon_identity.node_id,
+                *kind,
+                target,
+            );
+            if let Err(e) = substrate.publish_gated(
+                Some(&daemon_identity.node_id),
+                &path,
+                intent.to_value(),
+            ) {
+                warn!(error = %e, path = %path, "control: initial intent publish failed");
+            } else {
+                debug!(path = %path, "control: initial intent published");
+            }
+        }
+
+        // Publish the chat-window sentinel so the GUI Explorer's chat
+        // panel has a stable substrate mount point. Shape:
+        // `{ "kind": "chat", "model": "<llama-server model name>" }`.
+        // The model field is informational — the daemon's `llm.prompt`
+        // handler picks the actual model server-side; this just makes
+        // the choice visible in the Explorer's tree label and chat
+        // header.
+        let chat_path = format!(
+            "substrate/{}/ui/chat",
+            daemon_identity.node_id,
+        );
+        let model_name = daemon_llm()
+            .map(|c| c.config().model.clone())
+            .unwrap_or_else(|| {
+                clawft_service_llm::DEFAULT_LLM_MODEL.to_string()
+            });
+        let chat_sentinel = serde_json::json!({
+            "kind": "chat",
+            "model": model_name,
+        });
+        if let Err(e) = substrate.publish_gated(
+            Some(&daemon_identity.node_id),
+            &chat_path,
+            chat_sentinel,
+        ) {
+            warn!(error = %e, path = %chat_path, "ui: chat sentinel publish failed");
+        } else {
+            debug!(path = %chat_path, "ui: chat sentinel published");
+        }
+    }
+
+    // Print boot banner. Lead with the build-id so every run makes
+    // which binary is executing visible in the first stdout line —
+    // disambiguates "is this the freshly-rebuilt daemon?" without
+    // needing to grep `weaver --version` separately.
+    {
+        let k = kernel.read().await;
+        println!(
+            "weaver {} · git {} · built {}",
+            env!("CARGO_PKG_VERSION"),
+            env!("BUILD_GIT_HASH"),
+            env!("BUILD_TIMESTAMP"),
+        );
+        info!(
+            version = env!("CARGO_PKG_VERSION"),
+            git = env!("BUILD_GIT_HASH"),
+            built = env!("BUILD_TIMESTAMP"),
+            "weaver build identity"
+        );
         print!("{}", clawft_kernel::console::boot_banner());
         print!("{}", k.boot_log().format_all());
     }
@@ -154,8 +1205,8 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     #[cfg(feature = "exochain")]
     {
         let k = kernel.read().await;
-        if let Some(cfg) = k.kernel_config().anchor.as_ref() {
-            if cfg.enabled && !cfg.topics.is_empty() {
+        if let Some(cfg) = k.kernel_config().anchor.as_ref()
+            && cfg.enabled && !cfg.topics.is_empty() {
                 let window = std::time::Duration::from_secs(cfg.window_secs.max(1));
                 let a2a = k.a2a_router().clone();
                 let chain = k.chain_manager().cloned();
@@ -181,7 +1232,6 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
                     "stream-window anchors started"
                 );
             }
-        }
     }
 
     // Shutdown signal
@@ -454,61 +1504,122 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         k.kernel_config().ipc_tcp.clone()
     };
     if let Some(cfg) = ipc_tcp_cfg.filter(|c| c.enabled) {
-        match TcpListener::bind(&cfg.listen_addr).await {
-            Ok(tcp_listener) => {
-                info!(addr = %cfg.listen_addr, "ipc tcp relay listening");
-                println!("IPC TCP relay listening on {}", cfg.listen_addr);
-                let relay_socket_path = socket_path.clone();
-                let mut relay_shutdown_rx = shutdown_tx.subscribe();
-                tokio::spawn(async move {
-                    loop {
-                        tokio::select! {
-                            result = tcp_listener.accept() => {
-                                match result {
-                                    Ok((tcp_stream, peer)) => {
-                                        info!(peer = %peer, "ipc tcp relay: peer connected");
-                                        let sock = relay_socket_path.clone();
-                                        tokio::spawn(async move {
-                                            match UnixStream::connect(&sock).await {
-                                                Ok(mut unix_stream) => {
-                                                    let mut tcp_stream = tcp_stream;
-                                                    let (a, b) = match tokio::io::copy_bidirectional(
-                                                        &mut tcp_stream,
-                                                        &mut unix_stream,
-                                                    )
-                                                    .await
-                                                    {
-                                                        Ok(pair) => pair,
-                                                        Err(e) => {
-                                                            debug!(peer = %peer, "ipc tcp relay: copy ended: {e}");
-                                                            (0, 0)
-                                                        }
-                                                    };
-                                                    info!(peer = %peer, tx_bytes = a, rx_bytes = b, "ipc tcp relay: peer disconnected");
-                                                }
-                                                Err(e) => {
-                                                    warn!(peer = %peer, "ipc tcp relay: unix connect failed: {e}");
-                                                }
+        // WEFT-481: refuse to bind a non-loopback address without a
+        // bearer token. Anonymous broadcast on a routable interface
+        // would expose every RPC verb (kernel.shutdown,
+        // agent.spawn, ...) to the network. The operator must opt
+        // in to the broader interface AND provide auth.
+        if cfg.is_non_loopback() && cfg.bearer.is_none() {
+            warn!(
+                addr = %cfg.listen_addr,
+                "ipc tcp relay refusing to bind non-loopback address without bearer token (WEFT-481); set [kernel.ipc_tcp].bearer or restrict listen_addr to 127.0.0.1"
+            );
+        } else {
+            match TcpListener::bind(&cfg.listen_addr).await {
+                Ok(tcp_listener) => {
+                    info!(
+                        addr = %cfg.listen_addr,
+                        bearer = cfg.bearer.is_some(),
+                        "ipc tcp relay listening"
+                    );
+                    println!(
+                        "IPC TCP relay listening on {} (bearer={})",
+                        cfg.listen_addr,
+                        if cfg.bearer.is_some() { "required" } else { "none" }
+                    );
+                    let relay_socket_path = socket_path.clone();
+                    let mut relay_shutdown_rx = shutdown_tx.subscribe();
+                    let bearer = cfg.bearer.clone();
+                    tokio::spawn(async move {
+                        loop {
+                            tokio::select! {
+                                result = tcp_listener.accept() => {
+                                    match result {
+                                        Ok((tcp_stream, peer)) => {
+                                            // WEFT-481: defence in depth. Even
+                                            // when bound to 127.0.0.1, drop
+                                            // non-loopback peers (some kernels
+                                            // route 0.0.0.0 traffic to a
+                                            // 127.0.0.1 listener).
+                                            if !peer.ip().is_loopback() && bearer.is_none() {
+                                                warn!(peer = %peer, "ipc tcp relay: rejected non-loopback peer (no bearer set)");
+                                                continue;
                                             }
-                                        });
-                                    }
-                                    Err(e) => {
-                                        error!("ipc tcp accept error: {e}");
+                                            info!(peer = %peer, "ipc tcp relay: peer connected");
+                                            let sock = relay_socket_path.clone();
+                                            let bearer_for_conn = bearer.clone();
+                                            tokio::spawn(async move {
+                                                let mut tcp_stream = tcp_stream;
+                                                // WEFT-481: bearer handshake.
+                                                // The client must send
+                                                // `Bearer: <token>\n` as the
+                                                // first wire line. Mismatch
+                                                // closes the connection
+                                                // before any byte is
+                                                // forwarded to the unix
+                                                // socket, so the daemon never
+                                                // sees an unauthenticated
+                                                // RPC verb.
+                                                if let Some(expected) = bearer_for_conn.as_deref() {
+                                                    use tokio::io::AsyncBufReadExt;
+                                                    use tokio::io::BufReader;
+                                                    let mut reader = BufReader::new(&mut tcp_stream);
+                                                    let mut line = String::new();
+                                                    if reader.read_line(&mut line).await.is_err() {
+                                                        warn!(peer = %peer, "ipc tcp relay: bearer line read error");
+                                                        return;
+                                                    }
+                                                    let trimmed = line.trim_end_matches(['\r', '\n']);
+                                                    let presented = trimmed
+                                                        .strip_prefix("Bearer: ")
+                                                        .or_else(|| trimmed.strip_prefix("Bearer "))
+                                                        .unwrap_or("");
+                                                    if presented != expected {
+                                                        warn!(peer = %peer, "ipc tcp relay: bearer mismatch, closing");
+                                                        return;
+                                                    }
+                                                }
+
+                                                match UnixStream::connect(&sock).await {
+                                                    Ok(mut unix_stream) => {
+                                                        let (a, b) = match tokio::io::copy_bidirectional(
+                                                            &mut tcp_stream,
+                                                            &mut unix_stream,
+                                                        )
+                                                        .await
+                                                        {
+                                                            Ok(pair) => pair,
+                                                            Err(e) => {
+                                                                debug!(peer = %peer, "ipc tcp relay: copy ended: {e}");
+                                                                (0, 0)
+                                                            }
+                                                        };
+                                                        info!(peer = %peer, tx_bytes = a, rx_bytes = b, "ipc tcp relay: peer disconnected");
+                                                    }
+                                                    Err(e) => {
+                                                        warn!(peer = %peer, "ipc tcp relay: unix connect failed: {e}");
+                                                    }
+                                                }
+                                            });
+                                        }
+                                        Err(e) => {
+                                            error!("ipc tcp accept error: {e}");
+                                        }
                                     }
                                 }
-                            }
-                            _ = relay_shutdown_rx.changed() => {
-                                if *relay_shutdown_rx.borrow() {
-                                    debug!("ipc tcp relay shutting down");
-                                    break;
+                                _ = relay_shutdown_rx.changed() => {
+                                    if *relay_shutdown_rx.borrow() {
+                                        debug!("ipc tcp relay shutting down");
+                                        break;
+                                    }
                                 }
                             }
                         }
-                    }
-                });
-            }
-            Err(e) => {
-                warn!(addr = %cfg.listen_addr, "ipc tcp relay bind failed: {e}");
+                    });
+                }
+                Err(e) => {
+                    warn!(addr = %cfg.listen_addr, "ipc tcp relay bind failed: {e}");
+                }
             }
         }
     }
@@ -554,6 +1665,17 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         }
     }
 
+    // agent-core-v1 Phase C2 / D3: drain the agent service before the
+    // supervisor shutdown sweeps process-table entries. Cancels every
+    // in-flight `agent.chat` dispatch and waits up to 5s for the
+    // counter to hit zero. After D3 every dispatch flows through this
+    // service, so the drain is the single chokepoint for graceful
+    // chat shutdown.
+    if let Some(agent) = DAEMON_AGENT.get() {
+        let drained = agent.shutdown(std::time::Duration::from_secs(5)).await;
+        info!(drained, "agent service shutdown");
+    }
+
     // Gracefully shut down running agents before kernel shutdown
     {
         let k = kernel.read().await;
@@ -596,13 +1718,12 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     Ok(())
 }
 
-/// Handle a single client connection.
-///
-/// Detects the connection mode by reading the first 4 bytes:
-/// - `RVFS` → RVF-framed protocol (content-hash verified segments)
-/// - Anything else → legacy line-delimited JSON (bytes prepended to first line)
 /// Handle a single client connection — accepts both JSON line mode and
 /// (when the `rvf-rpc` feature is enabled) the RVF-framed protocol.
+///
+/// Detects the connection mode by reading the first 4 bytes:
+///   - `RVFS` → RVF-framed protocol (content-hash verified segments)
+///   - anything else → legacy line-delimited JSON (bytes prepended to first line)
 ///
 /// Exposed `pub` so integration tests can drive a preassembled kernel
 /// directly without the signal-handler plumbing in [`run`].
@@ -655,6 +1776,56 @@ enum DispatchOutcome {
 /// Dispatch a single JSON line and write the response.
 ///
 /// Returns the next [`DispatchOutcome`] for the connection loop.
+/// Resolve the effective [`crate::capability::CallerCapabilities`]
+/// for an RPC caller from the optional `auth` field on the request.
+///
+/// WEFT-479. Posture today:
+///
+/// - **Absent / empty**: anonymous (`{Read, Chat}`).
+/// - **Literal scope tokens**: a development convenience — the
+///   reserved literal strings `"admin"`, `"write"`, `"chat"`,
+///   `"read"` (or comma-separated combos like `"write,chat"`) are
+///   accepted as direct scope hints. This lets local automation and
+///   tests opt in to higher capability without round-tripping the
+///   kernel's [`AuthService`](clawft_kernel::AuthService) yet.
+/// - **Anything else**: looked up against the kernel's
+///   `AuthService`. **Currently stubbed**: until the AuthService
+///   service-registry plumbing lands, an unrecognised non-empty
+///   token resolves to [`crate::capability::CallerCapabilities::denied`]
+///   so a misconfigured client gets a hard error instead of silently
+///   downgrading to anonymous.
+///
+/// The full AuthService wiring is tracked as a 0.8.x followup.
+async fn resolve_caller_capabilities(
+    auth: Option<&str>,
+    _kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> crate::capability::CallerCapabilities {
+    let token = match auth {
+        None => return crate::capability::CallerCapabilities::anonymous(),
+        Some(t) if t.trim().is_empty() => {
+            return crate::capability::CallerCapabilities::anonymous();
+        }
+        Some(t) => t.trim().to_string(),
+    };
+
+    // Recognised literal scope tokens (development convenience).
+    let known = ["admin", "write", "chat", "read"];
+    let parts: Vec<&str> = token.split(',').map(str::trim).collect();
+    if parts.iter().all(|p| known.contains(p)) {
+        return crate::capability::CallerCapabilities::from_scopes(parts);
+    }
+
+    // Token doesn't match the literal-scope shortcut. The proper
+    // path is `kernel.read().await.auth_service().validate_auth_token(...)`,
+    // but that accessor doesn't exist on `Kernel<P>` yet. Until it
+    // lands, deny. This is the safer default — a typo'd token must
+    // never silently fall back to anonymous.
+    tracing::warn!(
+        "rpc auth: presented token did not match any recognised shape; denying"
+    );
+    crate::capability::CallerCapabilities::denied()
+}
+
 async fn dispatch_json_line(
     line: &str,
     kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
@@ -669,6 +1840,31 @@ async fn dispatch_json_line(
     let (response, stream_hookup) = match serde_json::from_str::<Request>(line) {
         Ok(req) => {
             let id = req.id.clone();
+
+            // WEFT-479: per-method capability gating. Build the
+            // caller's effective capability set from the optional
+            // `auth` token, then refuse to dispatch if the method
+            // requires a capability the caller doesn't hold.
+            //
+            // Default posture: anonymous = {Read, Chat}. A presented
+            // token is validated against the kernel's AuthService;
+            // unknown tokens map to the empty (denied) set so a
+            // typo'd token can't silently fall back to anonymous.
+            let caller_caps = resolve_caller_capabilities(req.auth.as_deref(), kernel).await;
+            if !caller_caps.allows_method(&req.method) {
+                let cap_required = crate::capability::required_capability(&req.method);
+                tracing::warn!(
+                    method = %req.method,
+                    required = ?cap_required,
+                    "rpc capability check failed; rejecting"
+                );
+                let resp = Response::error(format!(
+                    "permission denied: method '{}' requires capability {:?}",
+                    req.method, cap_required
+                ))
+                .with_id(id);
+                (resp, None)
+            } else
             // `*.subscribe_stream` methods take over the connection: the
             // daemon registers an external sink with the router and
             // returns a receiver the caller pipes into the socket.
@@ -809,7 +2005,7 @@ fn decode_bytes(s: &str) -> Result<Vec<u8>, String> {
     let trimmed = s.trim();
     // Try hex first (even-length, all hex digits)
     if !trimmed.is_empty()
-        && trimmed.len() % 2 == 0
+        && trimmed.len().is_multiple_of(2)
         && trimmed.chars().all(|c| c.is_ascii_hexdigit())
     {
         let mut out = Vec::with_capacity(trimmed.len() / 2);
@@ -851,6 +2047,41 @@ fn base64_decode_permissive(s: &str) -> Result<Vec<u8>, String> {
         }
     }
     Ok(out)
+}
+
+/// Verify an Ed25519 signature for a given node_id against the
+/// canonical signed payload. Returns Ok on valid, Err with a message
+/// otherwise. Always rejects if the node_id is not registered.
+///
+/// Mirrors [`verify_agent_signature`] but consults the
+/// [`clawft_kernel::NodeRegistry`] instead of the agent registry.
+fn verify_node_signature(
+    kernel: &Kernel<NativePlatform>,
+    node_id: &str,
+    signature_str: &str,
+    payload: &[u8],
+) -> Result<(), String> {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    let node = kernel
+        .node_registry()
+        .get(node_id)
+        .ok_or_else(|| format!("unknown node_id: {node_id}"))?;
+    let sig_bytes = decode_bytes(signature_str).map_err(|e| format!("signature: {e}"))?;
+    if sig_bytes.len() != 64 {
+        return Err(format!(
+            "signature must be 64 bytes, got {}",
+            sig_bytes.len()
+        ));
+    }
+    let mut sig_arr = [0u8; 64];
+    sig_arr.copy_from_slice(&sig_bytes);
+    let sig = Signature::from_bytes(&sig_arr);
+    let vk = VerifyingKey::from_bytes(&node.pubkey)
+        .map_err(|e| format!("stored pubkey invalid: {e}"))?;
+    vk.verify(payload, &sig)
+        .map_err(|e| format!("signature verify failed: {e}"))?;
+    Ok(())
 }
 
 /// Verify an Ed25519 signature for a given agent_id against the
@@ -973,6 +2204,111 @@ async fn handle_agent_register(
         serde_json::to_value(crate::protocol::AgentRegisterResult {
             agent_id: entry.agent_id,
             name: entry.name,
+        })
+        .unwrap(),
+    )
+}
+
+/// Handle `node.register`: verify proof-of-possession, insert the
+/// node into the registry, and chain-append a `node.registered`
+/// event. Returns the deterministic node-id derived from the pubkey.
+///
+/// Distinct from `agent.register`: a node is a *physical thing in
+/// the mesh* (ESP32, daemon, Pi), not an agent/program/user. Nodes
+/// sign substrate emissions; agents sign Actions. Both share the
+/// proof-of-possession shape but live in disjoint registries.
+async fn handle_node_register(
+    params: serde_json::Value,
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    let p: crate::protocol::NodeRegisterParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("invalid params: {e}")),
+    };
+
+    // Decode pubkey + proof.
+    let pubkey_bytes = match decode_bytes(&p.pubkey) {
+        Ok(b) => b,
+        Err(e) => return Response::error(format!("pubkey decode: {e}")),
+    };
+    if pubkey_bytes.len() != 32 {
+        return Response::error(format!(
+            "pubkey must be 32 bytes, got {}",
+            pubkey_bytes.len()
+        ));
+    }
+    let mut pubkey_arr = [0u8; 32];
+    pubkey_arr.copy_from_slice(&pubkey_bytes);
+
+    let proof_bytes = match decode_bytes(&p.proof) {
+        Ok(b) => b,
+        Err(e) => return Response::error(format!("proof decode: {e}")),
+    };
+    if proof_bytes.len() != 64 {
+        return Response::error(format!(
+            "proof must be 64 bytes, got {}",
+            proof_bytes.len()
+        ));
+    }
+    let mut proof_arr = [0u8; 64];
+    proof_arr.copy_from_slice(&proof_bytes);
+
+    // Verify proof-of-possession over the canonical payload.
+    let payload = clawft_kernel::node_registry::node_register_payload(
+        &pubkey_arr,
+        p.ts,
+        &p.label,
+    );
+    let vk = match VerifyingKey::from_bytes(&pubkey_arr) {
+        Ok(vk) => vk,
+        Err(e) => return Response::error(format!("invalid pubkey: {e}")),
+    };
+    let sig = Signature::from_bytes(&proof_arr);
+    if let Err(e) = vk.verify(&payload, &sig) {
+        return Response::error(format!("proof-of-possession verify failed: {e}"));
+    }
+
+    let k = kernel.read().await;
+    let label = if p.label.is_empty() {
+        None
+    } else {
+        Some(p.label.clone())
+    };
+    let entry = k.node_registry().register(pubkey_arr, label);
+
+    #[cfg(feature = "exochain")]
+    if let Some(cm) = k.chain_manager() {
+        cm.append(
+            "node",
+            "node.registered",
+            Some(serde_json::json!({
+                "node_id": entry.node_id,
+                "label": entry.label,
+                "pubkey_hex": hex_encode(&entry.pubkey),
+                "registered_at": entry.registered_at.to_rfc3339(),
+            })),
+        );
+    }
+
+    k.event_log().info(
+        "node",
+        format!(
+            "registered node {} (label={:?})",
+            entry.node_id, entry.label
+        ),
+    );
+    info!(
+        node_id = %entry.node_id,
+        label = ?entry.label,
+        "node.register: authorized"
+    );
+
+    Response::success(
+        serde_json::to_value(crate::protocol::NodeRegisterResult {
+            node_id: entry.node_id,
+            label: entry.label.unwrap_or_default(),
         })
         .unwrap(),
     )
@@ -1194,7 +2530,67 @@ async fn handle_substrate_read(
     }
 }
 
-/// Handle `substrate.publish`: Replace the path's value and fan out.
+/// Handle `substrate.list`: enumerate children of a prefix up to `depth`.
+///
+/// Wire shape (Phase 1 §3.1):
+///
+/// ```json
+/// // request
+/// { "prefix": "substrate/sensor", "depth": 1 }
+///
+/// // response
+/// {
+///   "children": [
+///     { "path": "substrate/sensor/mic", "has_value": true,  "child_count": 0 },
+///     { "path": "substrate/sensor/tof", "has_value": true,  "child_count": 0 }
+///   ],
+///   "tick": 42
+/// }
+/// ```
+///
+/// Same egress gating as `substrate.read` — the prefix itself is
+/// checked once, and capture-tier descendants are hidden from
+/// anonymous callers so path names don't leak.
+async fn handle_substrate_list(
+    params: serde_json::Value,
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    let p: crate::protocol::SubstrateListParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("invalid params: {e}")),
+    };
+    let k = kernel.read().await;
+    match k
+        .substrate_service()
+        .list(p.actor_id.as_deref(), &p.prefix, p.depth)
+    {
+        Ok(snap) => {
+            let result = crate::protocol::SubstrateListResult {
+                children: snap
+                    .children
+                    .into_iter()
+                    .map(|c| crate::protocol::SubstrateListChild {
+                        path: c.path,
+                        has_value: c.has_value,
+                        child_count: c.child_count,
+                    })
+                    .collect(),
+                tick: snap.tick,
+            };
+            Response::success(serde_json::to_value(result).unwrap())
+        }
+        Err(e) => Response::error(format!("unauthorized: {e}")),
+    }
+}
+
+/// Handle `substrate.publish`: verify node signature, enforce the
+/// `substrate/<node-id>/...` write prefix, Replace the path's value
+/// and fan out.
+///
+/// Every publish must be node-attributed and signed. Unsigned
+/// publishes are rejected — there is no anonymous-publish bypass.
+/// The actor-side fields (`actor_id` / `signature` / `ts`) are
+/// reserved for the Actions pipeline and ignored here.
 async fn handle_substrate_publish(
     params: serde_json::Value,
     kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
@@ -1203,51 +2599,561 @@ async fn handle_substrate_publish(
         Ok(p) => p,
         Err(e) => return Response::error(format!("invalid params: {e}")),
     };
+
+    // Hard requirement: every write is node-attributed.
+    let node_id = match p.node_id.as_ref() {
+        Some(n) => n.clone(),
+        None => {
+            return Response::error(
+                "substrate.publish: node_id required (every write must be node-attributed)"
+                    .to_string(),
+            );
+        }
+    };
+    let signature = match p.node_signature.as_ref() {
+        Some(s) => s.clone(),
+        None => {
+            return Response::error(
+                "substrate.publish: node_signature required when node_id is set".to_string(),
+            );
+        }
+    };
+    let node_ts = p.node_ts.unwrap_or(0);
+
     let k = kernel.read().await;
 
-    if let Some(actor_id) = p.actor_id.as_ref() {
-        let sig = match p.signature.as_ref() {
-            Some(s) => s,
-            None => {
-                return Response::error(
-                    "actor_id provided but signature missing".to_string(),
-                );
-            }
-        };
-        let ts = p.ts.unwrap_or(0);
-        // Sign over the serialized value bytes + path + ts + actor_id.
-        let value_bytes = serde_json::to_vec(&p.value).unwrap_or_default();
-        let value_str = String::from_utf8_lossy(&value_bytes);
-        let payload = clawft_kernel::publish_payload(&p.path, &value_str, ts, actor_id);
-        if let Err(e) = verify_agent_signature(&k, actor_id, sig, &payload) {
-            return Response::error(format!("unauthorized: {e}"));
-        }
+    // Verify the node signature over the canonical payload.
+    let value_bytes = serde_json::to_vec(&p.value).unwrap_or_default();
+    let value_str = String::from_utf8_lossy(&value_bytes);
+    let payload = clawft_kernel::node_publish_payload(&p.path, &value_str, node_ts, &node_id);
+    if let Err(e) = verify_node_signature(&k, &node_id, &signature, &payload) {
+        return Response::error(format!("unauthorized: {e}"));
     }
 
-    let tick = k
+    // Run the publish through the node-identity gate. Rejects writes
+    // outside `substrate/<node-id>/...` (node-private tier rule).
+    // Mesh-canonical writes (`substrate/_derived/...`) require a
+    // separate capability path that isn't wired yet — they will fall
+    // through this branch and get rejected, which is correct for
+    // this phase.
+    let tick = match k
         .substrate_service()
-        .publish(p.actor_id.as_deref(), &p.path, p.value);
+        .publish_gated(Some(&node_id), &p.path, p.value)
+    {
+        Ok(t) => t,
+        Err(e) => return Response::error(format!("gate denied: {e}")),
+    };
     k.event_log().info(
         "substrate",
-        format!("publish {} tick={} actor={:?}", p.path, tick, p.actor_id),
+        format!("publish {} tick={} node={}", p.path, tick, node_id),
     );
-    // Lifecycle visibility in `kernel.log`: only log the first window per
-    // path at INFO so live sensor streams don't flood. Subsequent writes
-    // stay at DEBUG for the same-path case.
     if tick == 1 {
         info!(
             path = %p.path,
-            actor = ?p.actor_id,
-            signed = p.signature.is_some(),
+            node = %node_id,
             "substrate.publish: stream started (first window on path)"
         );
     } else {
-        debug!(path = %p.path, tick, "substrate.publish");
+        debug!(path = %p.path, node = %node_id, tick, "substrate.publish");
     }
     Response::success(serde_json::json!({
         "path": p.path,
         "tick": tick,
     }))
+}
+
+/// Handle `node.identity`: report this daemon's own node-id +
+/// label + registration timestamp.
+///
+/// Lets a remote node (the ESP32 firmware) discover the daemon's
+/// node-id at runtime instead of hardcoding it. Used to build
+/// control-path prefixes:
+/// `substrate/<node_identity.node_id>/control/sensors/...`.
+async fn handle_node_identity(
+    _params: serde_json::Value,
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    let state = match daemon_control() {
+        Some(s) => s,
+        None => {
+            return Response::error("daemon control state not initialized".to_string());
+        }
+    };
+    // Look up the daemon's NodeRegistry entry to surface label +
+    // registered_at — these are the fields the firmware Claude
+    // requested in the dialog.
+    let k = kernel.read().await;
+    let entry = match k.node_registry().get(&state.daemon_node_id) {
+        Some(e) => e,
+        None => {
+            return Response::error(format!(
+                "daemon node {} not in registry (boot inconsistency)",
+                state.daemon_node_id
+            ));
+        }
+    };
+    Response::success(
+        serde_json::to_value(crate::protocol::NodeIdentityResult {
+            node_id: entry.node_id,
+            label: entry.label.unwrap_or_default(),
+            registered_at: entry.registered_at.to_rfc3339(),
+        })
+        .unwrap(),
+    )
+}
+
+/// Handle `llm.prompt`: synchronous chat completion against the local
+/// LLM service.
+///
+/// This is the V1 shape — one RPC, full completion in the response.
+/// Streaming is a deferred follow-up that lands as `llm.prompt_stream`
+/// using the same connection-takeover pattern as
+/// `substrate.subscribe`, not as a breaking change to this method.
+///
+/// Behaviour:
+/// 1. If the `llm` control flag is `false`, fast-fail with a clear
+///    error so the GUI's disable toggle has the same source-cuts
+///    semantic as for sensors.
+/// 2. If the daemon's LLM client wasn't wired at boot (init error or
+///    feature absent), return a clean "service unavailable" instead
+///    of panicking.
+/// 3. Build a [`ChatMessage`] vector from the params (`messages`
+///    wins over `prompt`; optional `system` is prepended only when
+///    `messages` doesn't already carry one).
+/// 4. Forward to [`LlmClient::complete`]; map errors back to RPC
+///    errors with the same string formatting `LlmError::Display`
+///    uses, so the wire surface stays diagnosable.
+async fn handle_llm_prompt(
+    params: serde_json::Value,
+    _kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    let p: crate::protocol::LlmPromptParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("invalid params: {e}")),
+    };
+
+    // Honor the `llm` control flag. Source-cuts: if disabled, we
+    // never even reach the HTTP client.
+    if let Some(state) = daemon_control()
+        && let Some(flag) = state.flags.get(ControlKind::Service, "llm")
+        && !flag.load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Response::error("llm service is disabled (toggle on via control.set_enabled)");
+    }
+
+    let client = match daemon_llm() {
+        Some(c) => c,
+        None => {
+            return Response::error(
+                "llm service not initialized (check daemon boot log for 'llm client init failed')",
+            );
+        }
+    };
+
+    let mut messages: Vec<clawft_service_llm::ChatMessage> = match (p.messages, p.prompt.clone()) {
+        (Some(msgs), _) => msgs
+            .into_iter()
+            .map(|m| clawft_service_llm::ChatMessage {
+                role: m.role,
+                content: m.content,
+                // The daemon's `llm.prompt` RPC predates tool-call
+                // support and accepts only role+content from clients;
+                // tool fields stay None until a future RPC schema bump
+                // exposes them.
+                tool_calls: None,
+                tool_call_id: None,
+            })
+            .collect(),
+        (None, Some(prompt)) => vec![clawft_service_llm::ChatMessage::user(prompt)],
+        (None, None) => {
+            return Response::error("invalid params: must supply `prompt` or `messages`");
+        }
+    };
+    if messages.is_empty() {
+        return Response::error("invalid params: messages was empty");
+    }
+    // Prepend a system prompt only when the caller didn't already
+    // provide one. Avoids stomping a deliberately-set conversation
+    // shape.
+    if let Some(sys) = p.system
+        && !sys.is_empty()
+        && !messages.first().map(|m| m.role == "system").unwrap_or(false)
+    {
+        messages.insert(0, clawft_service_llm::ChatMessage::system(sys));
+    }
+
+    match client.complete(messages, p.temperature, p.max_tokens).await {
+        Ok(resp) => {
+            let first = &resp.choices[0]; // complete() rejects empty choices upstream
+            let result = crate::protocol::LlmPromptResult {
+                completion: first.message.content.clone(),
+                finish_reason: first.finish_reason.clone(),
+                prompt_tokens: resp.usage.prompt_tokens,
+                completion_tokens: resp.usage.completion_tokens,
+                model: resp.model.clone(),
+            };
+            Response::success(serde_json::to_value(result).unwrap())
+        }
+        Err(e) => Response::error(format!("llm.prompt: {e}")),
+    }
+}
+
+// ── Terminal (PTY) RPC handlers ─────────────────────────────────────
+//
+// All four handlers share two preconditions:
+// 1. `DAEMON_TERMINAL` is set (boot wiring did its job).
+// 2. The supplied `session_id` resolves to a live session. Spawn is the
+//    exception — it allocates the id rather than receiving one.
+//
+// Output flows the other way: a tokio task started by `terminal.spawn`
+// drains the session's `mpsc::UnboundedReceiver<TerminalEvent>` and
+// publishes each chunk to
+// `substrate/<daemon-node>/derived/terminal/<session_id>` via
+// `publish_gated`. Surfaces poll that path through the existing
+// `substrate.read` cascade — no separate streaming RPC.
+
+/// Handle `terminal.spawn`: allocate a PTY, spawn a shell, start the
+/// substrate publish pump, and return the session id + resolved shell
+/// metadata.
+async fn handle_terminal_spawn(
+    params: serde_json::Value,
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    let p: crate::protocol::TerminalSpawnParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("invalid params: {e}")),
+    };
+    let mgr = match daemon_terminal() {
+        Some(m) => m,
+        None => return Response::error("terminal service not initialized".to_string()),
+    };
+    let id = match mgr.spawn(p.rows, p.cols, p.shell.clone(), p.cwd.clone()) {
+        Ok(id) => id,
+        Err(e) => return Response::error(format!("terminal.spawn: {e}")),
+    };
+    let session = match mgr.session(&id) {
+        Some(s) => s,
+        None => {
+            return Response::error(
+                "terminal.spawn: session disappeared between spawn and lookup".to_string(),
+            );
+        }
+    };
+
+    // Drain the session's output channel onto substrate. The reader
+    // pump runs on its own OS thread inside the service crate; this
+    // tokio task just forwards events.
+    //
+    // Authority: the daemon's own node-id, so `publish_gated` accepts
+    // the write under its node-private prefix.
+    let daemon_node_id = match daemon_control() {
+        Some(s) => s.daemon_node_id.clone(),
+        None => return Response::error("daemon control state not initialized".to_string()),
+    };
+    let output_path = format!(
+        "substrate/{}/derived/terminal/{}",
+        daemon_node_id, id
+    );
+    let resolved_shell = session.shell().to_string();
+    let resolved_cwd = session.cwd().to_string();
+
+    if let Some(mut events) = session.take_events() {
+        let substrate = {
+            let k = kernel.read().await;
+            k.substrate_service().clone()
+        };
+        let publish_path = output_path.clone();
+        let publish_node = daemon_node_id.clone();
+        let session_id_for_log = id.clone();
+        tokio::spawn(async move {
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD;
+            while let Some(ev) = events.recv().await {
+                let chunk = match ev {
+                    clawft_service_terminal::TerminalEvent::Output(bytes) => {
+                        crate::protocol::TerminalChunk {
+                            data: b64.encode(&bytes),
+                            ts_ms: crate::control::now_ms(),
+                            exit: false,
+                        }
+                    }
+                    clawft_service_terminal::TerminalEvent::Exit => {
+                        crate::protocol::TerminalChunk {
+                            data: String::new(),
+                            ts_ms: crate::control::now_ms(),
+                            exit: true,
+                        }
+                    }
+                };
+                let value = match serde_json::to_value(&chunk) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!(error = %e, "terminal: chunk serialize failed");
+                        continue;
+                    }
+                };
+                if let Err(e) = substrate.publish_gated(
+                    Some(&publish_node),
+                    &publish_path,
+                    value,
+                ) {
+                    warn!(error = %e, path = %publish_path, "terminal: publish_gated failed");
+                }
+                if chunk.exit {
+                    debug!(session_id = %session_id_for_log, "terminal: drain task exiting on Exit chunk");
+                    break;
+                }
+            }
+            debug!(session_id = %session_id_for_log, "terminal: drain task ended");
+        });
+    } else {
+        warn!(session_id = %id, "terminal: take_events returned None — output won't be published");
+    }
+
+    let result = crate::protocol::TerminalSpawnResult {
+        session_id: id.to_string(),
+        rows: if p.rows == 0 { clawft_service_terminal::DEFAULT_ROWS } else { p.rows },
+        cols: if p.cols == 0 { clawft_service_terminal::DEFAULT_COLS } else { p.cols },
+        shell: resolved_shell,
+        cwd: resolved_cwd,
+        output_path,
+    };
+    Response::success(serde_json::to_value(result).unwrap())
+}
+
+/// Handle `terminal.write`: forward base64-decoded bytes into the PTY.
+async fn handle_terminal_write(
+    params: serde_json::Value,
+    _kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    let p: crate::protocol::TerminalWriteParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("invalid params: {e}")),
+    };
+    let mgr = match daemon_terminal() {
+        Some(m) => m,
+        None => return Response::error("terminal service not initialized".to_string()),
+    };
+    use base64::Engine;
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(p.data.as_bytes()) {
+        Ok(b) => b,
+        Err(e) => return Response::error(format!("terminal.write: bad base64: {e}")),
+    };
+    match mgr.write(
+        &clawft_service_terminal::SessionId::from(p.session_id.as_str()),
+        &bytes,
+    ) {
+        Ok(()) => Response::success(
+            serde_json::to_value(crate::protocol::TerminalAck { ok: true }).unwrap(),
+        ),
+        Err(e) => Response::error(format!("terminal.write: {e}")),
+    }
+}
+
+/// Handle `terminal.resize`: reflow the PTY for an in-shell app.
+async fn handle_terminal_resize(
+    params: serde_json::Value,
+    _kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    let p: crate::protocol::TerminalResizeParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("invalid params: {e}")),
+    };
+    let mgr = match daemon_terminal() {
+        Some(m) => m,
+        None => return Response::error("terminal service not initialized".to_string()),
+    };
+    match mgr.resize(
+        &clawft_service_terminal::SessionId::from(p.session_id.as_str()),
+        p.rows,
+        p.cols,
+    ) {
+        Ok(()) => Response::success(
+            serde_json::to_value(crate::protocol::TerminalAck { ok: true }).unwrap(),
+        ),
+        Err(e) => Response::error(format!("terminal.resize: {e}")),
+    }
+}
+
+/// Handle `terminal.close`: kill the child shell, drop the PTY, forget
+/// the session. Idempotent — closing an unknown session is `ok`.
+async fn handle_terminal_close(
+    params: serde_json::Value,
+    _kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    let p: crate::protocol::TerminalCloseParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("invalid params: {e}")),
+    };
+    let mgr = match daemon_terminal() {
+        Some(m) => m,
+        None => return Response::error("terminal service not initialized".to_string()),
+    };
+    match mgr.close(&clawft_service_terminal::SessionId::from(p.session_id.as_str())) {
+        Ok(()) => Response::success(
+            serde_json::to_value(crate::protocol::TerminalAck { ok: true }).unwrap(),
+        ),
+        Err(e) => Response::error(format!("terminal.close: {e}")),
+    }
+}
+
+/// Handle `control.set_enabled`: flip a daemon-side enable flag and
+/// republish the substrate control intent under the daemon's own
+/// prefix.
+///
+/// Body: `{ kind: "service" | "sensor", target: <string>, enabled:
+/// <bool>, label?: <string> }`. The handler:
+///
+/// 1. Updates the in-memory `Arc<AtomicBool>` registered for the
+///    target. If no flag was registered (typo / unknown target)
+///    the call is rejected with `400`-flavored error.
+/// 2. Publishes a fresh `ControlIntent` value at
+///    `substrate/<daemon-node>/control/<kind>s/<target>` so
+///    subscribers (the GUI, future firmware) see the change.
+async fn handle_control_set_enabled(
+    params: serde_json::Value,
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    let p: crate::protocol::ControlSetEnabledParams =
+        match serde_json::from_value(params) {
+            Ok(p) => p,
+            Err(e) => return Response::error(format!("invalid params: {e}")),
+        };
+    let kind = match ControlKind::parse(&p.kind) {
+        Some(k) => k,
+        None => {
+            return Response::error(format!(
+                "unknown kind {:?} (want \"service\" or \"sensor\")",
+                p.kind
+            ));
+        }
+    };
+    let state = match daemon_control() {
+        Some(s) => s,
+        None => return Response::error("daemon control state not initialized".to_string()),
+    };
+    if state.flags.set(kind, &p.target, p.enabled).is_none() {
+        return Response::error(format!(
+            "no flag registered for kind={:?} target={:?}",
+            p.kind, p.target
+        ));
+    }
+
+    // Publish the new intent under the daemon's own prefix. Failure
+    // here doesn't roll back the in-memory flip — the in-memory
+    // flag IS the source of truth for daemon-side enforcement, and
+    // the substrate value is the eventual-consistency mirror.
+    let intent = ControlIntent {
+        enabled: p.enabled,
+        kind,
+        target: p.target.clone(),
+        label: p.label.clone().unwrap_or_default(),
+        updated_at_ms: crate::control::now_ms(),
+    };
+    let path = crate::control::intent_path(&state.daemon_node_id, kind, &p.target);
+    let publish_result = {
+        let k = kernel.read().await;
+        k.substrate_service()
+            .publish_gated(Some(&state.daemon_node_id), &path, intent.to_value())
+    };
+    if let Err(e) = publish_result {
+        warn!(
+            error = %e,
+            path = %path,
+            "control: substrate mirror publish failed (in-memory flag was still flipped)"
+        );
+    }
+    info!(
+        kind = ?kind,
+        target = %p.target,
+        enabled = p.enabled,
+        "control: flag set"
+    );
+
+    Response::success(
+        serde_json::to_value(crate::protocol::ControlSetEnabledResult {
+            path,
+            enabled: p.enabled,
+        })
+        .unwrap(),
+    )
+}
+
+/// Handle `control.list`: snapshot every registered control flag.
+/// Used by the Explorer to populate a "Controls" overview without
+/// walking substrate.
+async fn handle_control_list(
+    _params: serde_json::Value,
+    _kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    let state = match daemon_control() {
+        Some(s) => s,
+        None => return Response::error("daemon control state not initialized".to_string()),
+    };
+    let entries: Vec<_> = state
+        .flags
+        .list()
+        .into_iter()
+        .map(|(kind, target, enabled)| crate::protocol::ControlListEntry {
+            kind: match kind {
+                ControlKind::Service => "service".to_string(),
+                ControlKind::Sensor => "sensor".to_string(),
+            },
+            target,
+            enabled,
+        })
+        .collect();
+    Response::success(
+        serde_json::to_value(crate::protocol::ControlListResult { entries }).unwrap(),
+    )
+}
+
+/// Handle `substrate.canonical_publish_payload`: diagnostic — return
+/// the exact bytes the daemon would feed to the signature verifier
+/// for a hypothetical publish. No signature check, no actual write.
+///
+/// Lets remote nodes (the ESP32 firmware especially) sanity-check
+/// their canonical-payload buffer against what the daemon expects,
+/// so byte-drift bugs become a one-shot diff instead of a guessing
+/// game.
+async fn handle_substrate_canonical_publish_payload(
+    params: serde_json::Value,
+    _kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Response {
+    let p: crate::protocol::SubstrateCanonicalPublishPayloadParams =
+        match serde_json::from_value(params) {
+            Ok(p) => p,
+            Err(e) => return Response::error(format!("invalid params: {e}")),
+        };
+
+    // Same canonicalization the publish handler does: re-serialize
+    // the value through serde_json::Value, which alphabetizes object
+    // keys. This is the load-bearing step — the surface the firmware
+    // most often gets wrong.
+    let value_bytes = match serde_json::to_vec(&p.value) {
+        Ok(b) => b,
+        Err(e) => return Response::error(format!("value re-serialize: {e}")),
+    };
+    let canonical_value_json = String::from_utf8_lossy(&value_bytes).into_owned();
+
+    let payload = clawft_kernel::node_publish_payload(
+        &p.path,
+        &canonical_value_json,
+        p.node_ts,
+        &p.node_id,
+    );
+
+    let payload_hex = hex_encode(&payload);
+    let payload_len = payload.len();
+
+    Response::success(
+        serde_json::to_value(crate::protocol::SubstrateCanonicalPublishPayloadResult {
+            payload_hex,
+            payload_len,
+            canonical_value_json,
+        })
+        .unwrap(),
+    )
 }
 
 /// Handle `substrate.notify`: signal-only pulse, no payload change.
@@ -1909,9 +3815,69 @@ async fn dispatch(
             Response::error("exochain feature not enabled")
         }
         "agent.register" => handle_agent_register(params, kernel).await,
+        "node.register" => handle_node_register(params, kernel).await,
+        "node.identity" => handle_node_identity(params, kernel).await,
         "substrate.read" => handle_substrate_read(params, kernel).await,
+        "substrate.list" => handle_substrate_list(params, kernel).await,
         "substrate.publish" => handle_substrate_publish(params, kernel).await,
+        "substrate.canonical_publish_payload" => {
+            handle_substrate_canonical_publish_payload(params, kernel).await
+        }
         "substrate.notify" => handle_substrate_notify(params, kernel).await,
+        "control.set_enabled" => handle_control_set_enabled(params, kernel).await,
+        "control.list" => handle_control_list(params, kernel).await,
+        "llm.prompt" => handle_llm_prompt(params, kernel).await,
+        "agent.chat" => {
+            // agent-core-v1 Phase D3 (the cutover): every request goes
+            // through `clawft-service-agent::AgentService::dispatch`.
+            // The C2 spike fallback was removed in this commit along
+            // with `handle_agent_chat`; if the service didn't wire
+            // (LLM init failed at boot) we surface that as a clean
+            // typed error rather than panic. The `agent-core-chat`
+            // feature flag survives so a single-commit revert + flag
+            // flip restores the spike if D3 ever needs to roll back.
+            let Some(agent) = daemon_agent() else {
+                return Response::error(
+                    "agent.chat: agent service not wired \
+                     (LLM client init failed at boot — \
+                     check daemon log for 'llm client init failed')",
+                );
+            };
+            // Wire and service types are now both re-exports of
+            // `clawft_types::agent_chat::*` (WEFT-498), so dispatch is
+            // a direct hand-off — no `.into()` translator needed.
+            let params: AgentChatParams = match serde_json::from_value(params) {
+                Ok(p) => p,
+                Err(e) => return Response::error(format!("agent.chat: invalid params: {e}")),
+            };
+            match agent.dispatch(params).await {
+                Ok(result) => match serde_json::to_value(result) {
+                    Ok(v) => Response::success(v),
+                    Err(e) => Response::error(format!("agent.chat: {e}")),
+                },
+                Err(e) => Response::error(format!("agent.chat: {e}")),
+            }
+        }
+        "agent.chat.cancel" => {
+            // agent-core-v1 Phase C2: trip the per-conv cancel token
+            // in `AgentService`. Available unconditionally — when the
+            // service isn't wired (or the spike is on) calling cancel
+            // is a clean error rather than a build break.
+            let conv_id = match params.get("conv_id").and_then(|v| v.as_str()) {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => return Response::error("agent.chat.cancel requires conv_id"),
+            };
+            if let Some(agent) = daemon_agent() {
+                agent.cancel(&conv_id);
+                Response::success(serde_json::json!({"cancelled": conv_id}))
+            } else {
+                Response::error("agent service not wired")
+            }
+        }
+        "terminal.spawn" => handle_terminal_spawn(params, kernel).await,
+        "terminal.write" => handle_terminal_write(params, kernel).await,
+        "terminal.resize" => handle_terminal_resize(params, kernel).await,
+        "terminal.close" => handle_terminal_close(params, kernel).await,
         "agent.spawn" => {
             let spawn_params: AgentSpawnParams = match serde_json::from_value(params) {
                 Ok(p) => p,
@@ -2649,7 +4615,7 @@ async fn dispatch(
         "ecc.status" => {
             let k = kernel.read().await;
             let hnsw_count = k.ecc_hnsw().map(|h| h.len()).unwrap_or(0);
-            let tick_info = k.ecc_tick().map(|t| {
+            let tick_info = k.ecc_tick().map(|_t| {
                 serde_json::json!({
                     "interval_ms": 50,
                     "running": true,
@@ -3074,6 +5040,102 @@ async fn dispatch(
         }
 
         other => Response::error(format!("unknown method: {other}")),
+    }
+}
+
+// ── Voice consumer wiring (WEFT-555 / M5-W) ──────────────────────────
+//
+// Production handlers that bridge the substrate-side voice transcript
+// stream into the daemon's existing surfaces. The consumer trait
+// surface lives in `crate::voice_router`; these impls are the only
+// place that touches daemon-wide state (`DAEMON_AGENT`, `dispatch`).
+
+/// Routes a voice transcript into the daemon's wired agent service.
+/// Synthesizes a single-turn `agent.chat` request and feeds it through
+/// `clawft_service_agent::AgentService::dispatch`. Source attribution
+/// (`source: voice`, transcript_topic, confidence) lands as a
+/// `system`-role message prepended to the conversation so the loop's
+/// system prompt sees it without changing the wire shape.
+struct DaemonAgentChatHandler;
+
+#[async_trait::async_trait]
+impl crate::voice_router::ChatHandler for DaemonAgentChatHandler {
+    async fn dispatch_chat(
+        &self,
+        turn: crate::voice_router::VoiceChatTurn,
+    ) -> Result<(), String> {
+        let Some(agent) = daemon_agent() else {
+            return Err("agent service not wired (DAEMON_AGENT unset)".into());
+        };
+        let _ = turn.target_agent; // single-tenant concierge today (Phase D2 wiring)
+        let confidence_str = turn
+            .metadata
+            .confidence
+            .map(|c| format!("{c:.3}"))
+            .unwrap_or_else(|| "n/a".into());
+        let system_prefix = format!(
+            "[voice transcript — source={} topic={} confidence={}]",
+            turn.metadata.source, turn.metadata.transcript_topic, confidence_str,
+        );
+        let params = clawft_service_agent::AgentChatParams {
+            messages: vec![
+                clawft_service_agent::AgentChatMessage {
+                    role: "system".into(),
+                    content: system_prefix,
+                },
+                clawft_service_agent::AgentChatMessage {
+                    role: "user".into(),
+                    content: turn.text,
+                },
+            ],
+            temperature: None,
+            max_tokens: None,
+            conv_id: turn.conv_id,
+        };
+        agent
+            .dispatch(params)
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("agent.chat dispatch: {e}"))
+    }
+}
+
+/// Routes a parsed `weft <verb> <args>` transcript into the daemon's
+/// JSON-RPC `dispatch` function. Uses the same dispatch entry point
+/// the Unix-socket handler uses, so every method that works for the
+/// panel works for voice — subject to the placeholder permission gate
+/// in [`crate::voice_router`] (replaced by WEFT-208).
+struct DaemonCommandHandler {
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+    /// Throwaway shutdown channel — the consumer will not initiate a
+    /// daemon shutdown; verbs that try (`kernel.shutdown`) flip this
+    /// local channel rather than the real one.
+    shutdown_tx: watch::Sender<bool>,
+    /// Holds the daemon's control flag handle alive for the lifetime
+    /// of the handler. Read-only today; future per-verb intent
+    /// publication (WEFT-210 audit hook) reads it.
+    _control: ControlFlags,
+}
+
+#[async_trait::async_trait]
+impl crate::voice_router::CommandHandler for DaemonCommandHandler {
+    async fn dispatch_command(
+        &self,
+        method: String,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let resp = dispatch(
+            method,
+            params,
+            Arc::clone(&self.kernel),
+            self.shutdown_tx.clone(),
+        )
+        .await;
+        if resp.ok {
+            Ok(resp.result.unwrap_or(serde_json::Value::Null))
+        } else {
+            Err(resp.error.unwrap_or_else(|| "unknown error".into()))
+        }
     }
 }
 

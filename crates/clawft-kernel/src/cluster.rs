@@ -580,11 +580,10 @@ impl ClusterMembership {
         // Rate-limit peer additions.
         {
             let mut last = self.last_peer_add.lock().unwrap();
-            if let Some(ts) = *last {
-                if ts.elapsed() < self.min_peer_add_interval {
+            if let Some(ts) = *last
+                && ts.elapsed() < self.min_peer_add_interval {
                     return Err(ClusterError::RateLimited);
                 }
-            }
             *last = Some(Instant::now());
         }
 
@@ -894,7 +893,7 @@ impl PairingGate {
                 .collect(),
         };
         let json = serde_json::to_string_pretty(&file).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e)
+            std::io::Error::other(e)
         })?;
         if let Some(parent) = self.persist_path.parent() {
             std::fs::create_dir_all(parent)?;

@@ -69,11 +69,10 @@ pub fn validate_url(url: &str) -> Result<(), GraphifyError> {
         )));
     }
 
-    let after_scheme = if lower.starts_with("https://") {
-        &lower[8..]
-    } else {
-        &lower[7..]
-    };
+    let after_scheme = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+        .unwrap_or(&lower);
     let host = after_scheme
         .split('/')
         .next()
@@ -130,8 +129,7 @@ pub fn safe_filename(url: &str, suffix: &str) -> String {
 fn yaml_escape(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('"', "\\\"")
-        .replace('\n', " ")
-        .replace('\r', " ")
+        .replace(['\n', '\r'], " ")
 }
 
 // ---------------------------------------------------------------------------

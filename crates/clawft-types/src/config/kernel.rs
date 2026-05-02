@@ -218,12 +218,25 @@ impl Default for KernelConfig {
 /// protocol translation: clients speak the same line-delimited
 /// JSON-RPC as unix-socket clients.
 ///
+/// # Security (WEFT-481)
+///
+/// - `listen_addr` defaults to loopback (`127.0.0.1:9471`). Setting it
+///   to `0.0.0.0` exposes the daemon RPC on every interface; the
+///   daemon refuses to bind a non-loopback address unless `bearer`
+///   is set, so anonymous broadcast can never happen by accident.
+/// - `bearer`, when set, gates every TCP connection. The client must
+///   send a `Bearer: <token>\n` line as the first line on the wire
+///   before any JSON-RPC request. Mismatch closes the connection.
+/// - Connections from non-loopback peers are dropped immediately
+///   when `bearer` is unset, regardless of `listen_addr`.
+///
 /// # Example TOML
 ///
 /// ```toml
 /// [kernel.ipc_tcp]
 /// enabled = true
 /// listen_addr = "127.0.0.1:9471"
+/// bearer = "deadbeef..."     # required when listen_addr is non-loopback
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpcTcpConfig {
@@ -235,6 +248,13 @@ pub struct IpcTcpConfig {
     /// callers must explicitly opt into a broader interface.
     #[serde(default = "default_ipc_tcp_listen_addr", alias = "listenAddr")]
     pub listen_addr: String,
+
+    /// Optional shared bearer token. When set, every TCP connection
+    /// must send `Bearer: <token>\n` as the first wire line before
+    /// any JSON-RPC request, or the connection is closed. Required
+    /// when `listen_addr` is non-loopback. WEFT-481.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bearer: Option<String>,
 }
 
 impl Default for IpcTcpConfig {
@@ -242,12 +262,28 @@ impl Default for IpcTcpConfig {
         Self {
             enabled: false,
             listen_addr: default_ipc_tcp_listen_addr(),
+            bearer: None,
         }
     }
 }
 
 fn default_ipc_tcp_listen_addr() -> String {
     "127.0.0.1:9471".to_string()
+}
+
+impl IpcTcpConfig {
+    /// Returns true when `listen_addr` parses to a non-loopback
+    /// address (any-interface or routable). WEFT-481 uses this to
+    /// refuse to bind without a bearer token.
+    pub fn is_non_loopback(&self) -> bool {
+        use std::net::SocketAddr;
+        match self.listen_addr.parse::<SocketAddr>() {
+            Ok(addr) => !addr.ip().is_loopback(),
+            // If we can't parse it, treat as non-loopback so the
+            // daemon refuses to bind rather than guessing.
+            Err(_) => true,
+        }
+    }
 }
 
 // ── Stream-window anchor configuration ──────────────────────────────────
@@ -746,7 +782,7 @@ impl Default for VectorHybridConfig {
 /// hot_capacity = 50000
 /// promotion_threshold = 3
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VectorConfig {
     /// Which backend to use.
     #[serde(default)]
@@ -812,7 +848,7 @@ impl Default for LogQuantizedStubConfig {
 /// Full implementation lives in `clawft-kernel::vector_quantization`.
 ///
 /// Requires `ruvector-core` with PR #352 merged.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SimdDistanceStubConfig {
     /// Whether the unified SIMD distance kernel is enabled.
     #[serde(default)]
@@ -821,28 +857,6 @@ pub struct SimdDistanceStubConfig {
     /// See shaal's v4 caveat about memory overhead.
     #[serde(default)]
     pub pad_to_power_of_two: bool,
-}
-
-impl Default for SimdDistanceStubConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            pad_to_power_of_two: false,
-        }
-    }
-}
-
-impl Default for VectorConfig {
-    fn default() -> Self {
-        Self {
-            backend: VectorBackendKind::default(),
-            hnsw: None,
-            diskann: None,
-            hybrid: None,
-            log_quantized: None,
-            simd_distance: None,
-        }
-    }
 }
 
 #[cfg(test)]

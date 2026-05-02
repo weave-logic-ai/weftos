@@ -533,7 +533,7 @@ mod tests {
             assert!(
                 soul.source_path
                     .as_ref()
-                    .map_or(true, |p| !p.starts_with(&dir)),
+                    .is_none_or(|p| !p.starts_with(&dir)),
                 "should not find soul in workspace dir"
             );
         }

@@ -55,6 +55,9 @@ enum Commands {
     /// Resource tree management (tree, inspect, stats).
     Resource(commands::resource_cmd::ResourceArgs),
 
+    /// Identity-journal operator commands (promote, status).
+    Soul(commands::soul_cmd::SoulArgs),
+
     /// Cron job management (add, list, remove).
     Cron(commands::cron_cmd::CronArgs),
 
@@ -101,6 +104,13 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Best-effort load of `.env` from the current working directory,
+    // before any subcommand reads env vars. Lets `OPENROUTER_API_KEY`,
+    // `LLM_SERVICE_URL`, `LLM_MODEL`, etc. live in a project-local
+    // `.env` (which is gitignored) without forcing shell exports.
+    // Silently ignored if no file exists.
+    let _ = dotenvy::dotenv();
+
     let cli = Cli::parse();
 
     let default_filter = if cli.verbose { "debug" } else { "warn" };
@@ -122,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Chain(args) => commands::chain_cmd::run(args).await?,
         Commands::Custody(args) => commands::custody_cmd::run(args).await?,
         Commands::Resource(args) => commands::resource_cmd::run(args).await?,
+        Commands::Soul(args) => commands::soul_cmd::run(args).await?,
         Commands::Cron(args) => commands::cron_cmd::run(args).await?,
         Commands::Ipc(args) => commands::ipc_cmd::run(args).await?,
         #[cfg(unix)]
@@ -138,7 +149,12 @@ async fn main() -> anyhow::Result<()> {
         },
         Commands::Init(args) => commands::init_cmd::run(args).await?,
         Commands::Version => {
-            println!("weaver {} (WeftOS)", env!("CARGO_PKG_VERSION"));
+            println!(
+                "weaver {} (WeftOS) · git {} · built {}",
+                env!("CARGO_PKG_VERSION"),
+                env!("BUILD_GIT_HASH"),
+                env!("BUILD_TIMESTAMP"),
+            );
         }
     }
 

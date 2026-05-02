@@ -316,7 +316,7 @@ async fn run_benchmark(format: &str, iterations: u32, quick: bool, endurance: bo
         let scorer = super::bench_eml::BenchmarkScorerModel::load(
             &super::bench_eml::BenchmarkScorerModel::model_dir(),
         );
-        let eml_dims = scorer.score_dimensions(&raw_metrics);
+        let _eml_dims = scorer.score_dimensions(&raw_metrics);
         let composite = scorer.score(&raw_metrics);
         let mode = if scorer.is_composite_trained() {
             "EML (trained)"
@@ -423,9 +423,9 @@ async fn bench_agent_lifecycle(client: &mut DaemonClient, iterations: u32) -> Be
             serde_json::json!({"agent_id": agent_id, "agent_type": "worker"}),
         )).await;
 
-        if let Ok(ref r) = spawn_resp {
-            if r.ok {
-                if let Some(pid) = r.result.as_ref()
+        if let Ok(ref r) = spawn_resp
+            && r.ok
+                && let Some(pid) = r.result.as_ref()
                     .and_then(|v| v.get("pid"))
                     .and_then(|v| v.as_u64())
                 {
@@ -434,8 +434,6 @@ async fn bench_agent_lifecycle(client: &mut DaemonClient, iterations: u32) -> Be
                         serde_json::json!({"pid": pid}),
                     )).await;
                 }
-            }
-        }
 
         let elapsed = start.elapsed().as_micros() as f64;
         match spawn_resp {
@@ -483,9 +481,9 @@ async fn bench_cron_lifecycle(client: &mut DaemonClient, iterations: u32) -> Ben
             }),
         )).await;
 
-        if let Ok(ref r) = add_resp {
-            if r.ok {
-                if let Some(job_id) = r.result.as_ref()
+        if let Ok(ref r) = add_resp
+            && r.ok
+                && let Some(job_id) = r.result.as_ref()
                     .and_then(|v| v.get("job_id"))
                     .and_then(|v| v.as_str())
                 {
@@ -494,8 +492,6 @@ async fn bench_cron_lifecycle(client: &mut DaemonClient, iterations: u32) -> Ben
                         serde_json::json!({"id": job_id}),
                     )).await;
                 }
-            }
-        }
 
         let elapsed = start.elapsed().as_micros() as f64;
         match add_resp {
@@ -649,11 +645,10 @@ async fn run_stress_tests(client: &mut DaemonClient, iterations: u32) -> StressR
                 }),
             )).await;
             let elapsed = start.elapsed().as_micros() as f64;
-            if let Ok(r) = resp {
-                if r.ok {
+            if let Ok(r) = resp
+                && r.ok {
                     latencies.push(elapsed);
                 }
-            }
         }
         let avg = if latencies.is_empty() { 0.0 } else { latencies.iter().sum::<f64>() / latencies.len() as f64 };
         payload_strs.push(format!("{label}={avg:.0}us"));
@@ -694,12 +689,11 @@ async fn run_stress_tests(client: &mut DaemonClient, iterations: u32) -> StressR
         let resp = client.simple_call(method).await;
         let elapsed = req_start.elapsed().as_micros() as f64;
 
-        if let Ok(r) = resp {
-            if r.ok {
+        if let Ok(r) = resp
+            && r.ok {
                 sustained_latencies.push(elapsed);
                 window_latencies.push(elapsed);
             }
-        }
 
         // Every second, record window p99
         if window_start.elapsed() >= Duration::from_secs(1) {
@@ -772,11 +766,10 @@ async fn run_endurance(client: &mut DaemonClient) -> EnduranceResult {
         let resp = client.simple_call(method).await;
         let elapsed = req_start.elapsed().as_micros() as f64;
 
-        if let Ok(r) = resp {
-            if r.ok {
+        if let Ok(r) = resp
+            && r.ok {
                 second_latencies.push(elapsed);
             }
-        }
 
         // Sample every second
         if sample_start.elapsed() >= Duration::from_secs(1) {
@@ -789,7 +782,7 @@ async fn run_endurance(client: &mut DaemonClient) -> EnduranceResult {
 
             // Progress indicator every 10 seconds
             let elapsed_secs = start.elapsed().as_secs();
-            if elapsed_secs % 10 == 0 && elapsed_secs > 0 {
+            if elapsed_secs.is_multiple_of(10) && elapsed_secs > 0 {
                 print!("  {elapsed_secs}s...");
                 let _ = std::io::Write::flush(&mut std::io::stdout());
             }
@@ -1109,7 +1102,7 @@ fn grade_from_score(score: f64) -> &'static str {
 // Statistical helpers
 // ═══════════════════════════════════════════════════════════════════
 
-fn make_result(name: &str, phase: &str, iterations: u32, latencies: &mut Vec<f64>, errors: u32) -> BenchResult {
+fn make_result(name: &str, phase: &str, iterations: u32, latencies: &mut [f64], errors: u32) -> BenchResult {
     if latencies.is_empty() {
         return BenchResult {
             name: name.to_string(),

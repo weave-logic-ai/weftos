@@ -2,12 +2,17 @@
 //! expression sublanguage (ADR-016 §5, reduced subset).
 //!
 //! Supported:
-//! - Literals: numbers, double-quoted and single-quoted strings, bools.
+//! - Literals: integers (decimal `42` and hex `0xff` — WEFT-424),
+//!   floats (decimal `1.5` and scientific `1e5` / `1.5e-3` —
+//!   WEFT-424), double- and single-quoted strings, bools.
 //! - `$path/seg.field` — ontology path read; a subsequent `.field` is
-//!   parsed as a field access on the resolved JSON value.
+//!   parsed as a field access on the resolved JSON value. The
+//!   evaluator special-cases `.first` / `.last` on a list value so
+//!   they read as the first / last element (WEFT-422).
 //! - Function calls: `ident(arg, …)` — the evaluator permits `count`,
-//!   `filter`, `len`, `first`, `last`, `fmt_percent` / `fmt_pct`,
-//!   `fmt_number`, `fmt_count`, `fmt_duration`, `fmt_bytes`, `exists`.
+//!   `filter`, `sort` (WEFT-423), `len`, `first`, `last`,
+//!   `fmt_percent` / `fmt_pct`, `fmt_number`, `fmt_count`,
+//!   `fmt_duration`, `fmt_bytes`, `exists`.
 //! - Field access: `expr.field`.
 //! - Binops: `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||`, `+`, `-`,
 //!   `*`, `/` with precedence climbing.
@@ -542,13 +547,44 @@ impl<'a> Parser<'a> {
 
     fn parse_number(&mut self) -> Result<AttrValue, ParseError> {
         let start = self.offset;
+
+        // WEFT-424: hex integer literal `0x[0-9A-Fa-f]+`. Detect the
+        // `0x`/`0X` prefix before the decimal/scientific path so we
+        // never misread `0xff` as `0` followed by an `xff` ident.
+        if self.peek() == Some('0') {
+            let mut it = self.chars.clone();
+            it.next(); // '0'
+            if let Some(nx) = it.next()
+                && (nx == 'x' || nx == 'X')
+            {
+                self.bump(); // '0'
+                self.bump(); // 'x' / 'X'
+                let mut hex = String::new();
+                while let Some(c) = self.peek() {
+                    if c.is_ascii_hexdigit() {
+                        hex.push(c);
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+                if hex.is_empty() {
+                    return Err(ParseError::BadNumber(start));
+                }
+                return i64::from_str_radix(&hex, 16)
+                    .map(AttrValue::Int)
+                    .map_err(|_| ParseError::BadNumber(start));
+            }
+        }
+
         let mut s = String::new();
         let mut seen_dot = false;
+        let mut seen_exp = false;
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
                 s.push(c);
                 self.bump();
-            } else if c == '.' && !seen_dot {
+            } else if c == '.' && !seen_dot && !seen_exp {
                 // Peek one past to distinguish `1.5` from `1.foo` (field access on int).
                 let mut it = self.chars.clone();
                 it.next();
@@ -561,11 +597,44 @@ impl<'a> Parser<'a> {
                     continue;
                 }
                 break;
+            } else if (c == 'e' || c == 'E') && !seen_exp && !s.is_empty() {
+                // WEFT-424: scientific notation `1e5`, `1.5e-3`, `2E+10`.
+                // Lookahead must show an optional sign + at least one
+                // digit to avoid eating an identifier that happens to
+                // start with `e` (e.g. `1.elapsed`, hypothetical).
+                let mut it = self.chars.clone();
+                it.next(); // 'e' / 'E'
+                let after_e = it.next();
+                let after_sign = match after_e {
+                    Some('+') | Some('-') => it.next(),
+                    other => other,
+                };
+                if !matches!(after_sign, Some(d) if d.is_ascii_digit()) {
+                    break;
+                }
+                seen_exp = true;
+                s.push(c);
+                self.bump();
+                if let Some(sign) = self.peek()
+                    && (sign == '+' || sign == '-')
+                {
+                    s.push(sign);
+                    self.bump();
+                }
+                while let Some(d) = self.peek() {
+                    if d.is_ascii_digit() {
+                        s.push(d);
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+                break;
             } else {
                 break;
             }
         }
-        if seen_dot {
+        if seen_dot || seen_exp {
             s.parse::<f64>()
                 .map(AttrValue::Number)
                 .map_err(|_| ParseError::BadNumber(start))
@@ -602,7 +671,8 @@ fn binop_prec(op: BinOp) -> u8 {
 /// `eval_call` dispatcher.
 fn check_call_arity(name: &str, got: usize, at: usize) -> Result<(), ParseError> {
     let expected = match name {
-        "count" | "filter" | "fmt_number" => Some(2),
+        // WEFT-423: `sort(list, key)` — ordering combinator.
+        "count" | "filter" | "sort" | "fmt_number" => Some(2),
         "len" | "first" | "last" | "fmt_percent" | "fmt_pct" | "fmt_count" | "fmt_duration"
         | "fmt_bytes" | "exists" => Some(1),
         // Unknown function names are handled at eval time (the
@@ -747,6 +817,57 @@ mod tests {
     fn rejects_nested_lambda() {
         let err = parse("map($xs, x -> map($ys, y -> y))").unwrap_err();
         assert!(matches!(err, ParseError::NestedLambda(_)));
+    }
+
+    #[test]
+    fn parses_hex_int_literal() {
+        // WEFT-424: `0xff` lowers to 255.
+        let e = parse("0xff").unwrap();
+        assert!(matches!(e, Expr::Literal(AttrValue::Int(255))));
+        let e = parse("0X10").unwrap();
+        assert!(matches!(e, Expr::Literal(AttrValue::Int(16))));
+    }
+
+    #[test]
+    fn parses_scientific_number_literal() {
+        // WEFT-424: `1e5`, `1.5e-3`, `2E+2`.
+        let e = parse("1e5").unwrap();
+        if let Expr::Literal(AttrValue::Number(n)) = e {
+            assert!((n - 100_000.0).abs() < 1e-9);
+        } else {
+            panic!("expected Number(1e5), got {:?}", e);
+        }
+        let e = parse("1.5e-3").unwrap();
+        if let Expr::Literal(AttrValue::Number(n)) = e {
+            assert!((n - 0.0015).abs() < 1e-12);
+        } else {
+            panic!("expected Number(1.5e-3), got {:?}", e);
+        }
+        let e = parse("2E+2").unwrap();
+        if let Expr::Literal(AttrValue::Number(n)) = e {
+            assert!((n - 200.0).abs() < 1e-9);
+        } else {
+            panic!("expected Number(200.0), got {:?}", e);
+        }
+    }
+
+    #[test]
+    fn parses_sort_call_arity() {
+        // WEFT-423: `sort(list, key)` is a 2-arg combinator at parse time.
+        let e = parse("sort($xs, x -> x.weight)").unwrap();
+        if let Expr::Call(name, args) = e {
+            assert_eq!(name, "sort");
+            assert_eq!(args.len(), 2);
+            assert!(matches!(&args[1], Expr::Lambda(_, _)));
+        } else {
+            panic!("expected sort() call");
+        }
+        // One-arg form is rejected by the static arity table.
+        let err = parse("sort($xs)").unwrap_err();
+        assert!(matches!(
+            err,
+            ParseError::WrongArity { ref func, expected: 2, got: 1, .. } if func == "sort"
+        ));
     }
 
     #[test]

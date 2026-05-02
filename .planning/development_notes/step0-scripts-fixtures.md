@@ -3,9 +3,16 @@
 Date: 2026-02-24
 Branch: feature/three-workstream-implementation
 
-## What was created
+> **Update 2026-04-30 (WEFT-409):** `scripts/check-features.sh` was
+> never landed. The canonical feature-flag validation entrypoint is
+> now `scripts/build.sh gate`, which covers the same five gates plus
+> clippy, bundle-size, audit, and docs-regen checks (12 total). The
+> intent of the original A4 task is preserved; the implementation is
+> consolidated into `build.sh` rather than a parallel script.
 
-### scripts/check-features.sh (new file)
+## What was created (historical / superseded)
+
+### scripts/check-features.sh (PLANNED, NEVER CREATED — see WEFT-409)
 Feature validation script that runs five compilation gates before push:
 
 1. **Gate 1** - Native workspace compilation (`cargo check --workspace`)

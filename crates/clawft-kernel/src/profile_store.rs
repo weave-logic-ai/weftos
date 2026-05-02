@@ -358,8 +358,8 @@ impl ProfileStore {
 
         // Chain logging: profile.vector.insert
         #[cfg(feature = "exochain")]
-        if result.is_ok() {
-            if let Some(ref cm) = self.chain_manager {
+        if result.is_ok()
+            && let Some(ref cm) = self.chain_manager {
                 cm.append(
                     "profile_store",
                     crate::chain::EVENT_KIND_PROFILE_VECTOR_INSERT,
@@ -370,7 +370,6 @@ impl ProfileStore {
                     })),
                 );
             }
-        }
 
         result
     }

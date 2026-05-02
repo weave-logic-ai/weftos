@@ -294,12 +294,10 @@ impl A2ARouter {
                 if sinks
                     .iter()
                     .any(|(_, s)| matches!(s, SubscriberSink::ExternalStream(_)))
-                {
-                    if let Ok(mut bytes) = serde_json::to_vec(&msg) {
+                    && let Ok(mut bytes) = serde_json::to_vec(&msg) {
                         bytes.push(b'\n');
                         external_line = Some(bytes);
                     }
-                }
 
                 for (_id, sink) in &sinks {
                     match sink {
@@ -457,7 +455,7 @@ impl A2ARouter {
                 Ok(())
             }
             Err(mpsc::error::TrySendError::Full(msg)) => {
-                let rejected_msg = msg;
+                let _rejected_msg = msg;
                 warn!(pid, "inbox full, dead-lettering");
                 #[cfg(feature = "os-patterns")]
                 if let Some(dlq) = self.dead_letter_queue.get() {
@@ -469,7 +467,7 @@ impl A2ARouter {
                 Err(KernelError::Ipc(format!("inbox full for PID {pid}")))
             }
             Err(mpsc::error::TrySendError::Closed(msg)) => {
-                let rejected_msg = msg;
+                let _rejected_msg = msg;
                 warn!(pid, "inbox closed, removing and dead-lettering");
                 self.inboxes.remove(&pid);
                 #[cfg(feature = "os-patterns")]
@@ -1139,7 +1137,7 @@ mod tests {
             let msg = KernelMessage::text(
                 sender_pid,
                 MessageTarget::Process(target),
-                &format!("from-{sender_pid}"),
+                format!("from-{sender_pid}"),
             );
             handles.push(tokio::spawn(async move { r.send(msg).await }));
         }
@@ -1661,7 +1659,7 @@ mod tests {
             let msg = KernelMessage::text(
                 pids[0],
                 MessageTarget::Process(pids[1]),
-                &format!("msg-{i}"),
+                format!("msg-{i}"),
             );
             router.send(msg).await.unwrap();
         }

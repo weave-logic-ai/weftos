@@ -377,6 +377,322 @@ as a user interaction.
 
 ---
 
+## Substrate Voice Pipeline (M5-W)
+
+> Status: M5-W (0.7.0). Voice consumer ships disabled by default and is
+> the foundation that unblocks the 5 P0 voice security controls
+> (WEFT-207..211). Production deployments must wire those before
+> turning voice routing on outside a dev shell.
+
+The browser-side Web Speech pipeline above covers the WeftOS panel.
+WeftOS also runs a **substrate-side voice pipeline** for headless and
+sensor-driven deployments: ESP32-class mics push raw PCM, the
+`clawft-service-whisper` substrate service transcribes it, and the
+daemon's voice consumer routes the transcripts into either the
+agent's chat conversation or the daemon's command surface.
+
+### Pipeline
+
+```text
+   Sensor (ESP32 mic)            clawft-service-whisper           voice_router
+   ┌────────────────────┐        ┌──────────────────────┐         ┌──────────────────┐
+   │ pcm_chunk          │───────▶│ subscribe + window   │────────▶│ subscribe        │
+   │ (substrate write)  │        │ POST /inference      │         │ + classify       │
+   └────────────────────┘        │ publish transcript   │         │ + route          │
+   substrate/<src>/                                                │                  │
+   sensor/mic/pcm_chunk          substrate/_derived/transcript/    └────┬─────────┬───┘
+                                 <src>/mic                              │         │
+                                                                        ▼         ▼
+                                                            agent.chat       daemon.dispatch
+                                                            (concierge-bot)  (weft <verb> ...)
+```
+
+The consumer is intentionally decoupled from the STT backend. Per
+ADR-053 (`docs/adr/adr-053-voice-stt-canonical-path.md`) the
+substrate-side whisper service is the canonical STT path; swapping in
+sherpa-onnx, cloud Whisper, or an offline model means implementing a
+service that publishes to the same canonical transcript topic. No
+code in the consumer changes.
+
+### Configuration
+
+The consumer reads its configuration from `~/.clawft/config.json`
+under `voice.consumer`. Defaults are conservative: disabled, a stable
+single-conversation id, and the mesh-canonical transcript topic for
+the daemon's default ESP32 source node.
+
+```json
+{
+  "voice": {
+    "enabled": true,
+    "consumer": {
+      "enabled": true,
+      "transcriptTopic": "substrate/_derived/transcript/n-bfc4cd/mic",
+      "chatTargetAgent": "concierge-bot",
+      "convId": "voice-default",
+      "commandPrefix": "weft "
+    }
+  }
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `voice.consumer.enabled` | `false` | Master toggle. When false the daemon does not subscribe to the transcript topic. |
+| `voice.consumer.transcriptTopic` | `substrate/_derived/transcript/n-bfc4cd/mic` | Substrate path to subscribe to. Must match what your STT service publishes on. |
+| `voice.consumer.chatTargetAgent` | `concierge-bot` | Agent identifier whose chat conversation receives non-command transcripts. |
+| `voice.consumer.convId` | `voice-default` | Stable conversation id; per-conv mutex / sink / heartbeat anchor. |
+| `voice.consumer.commandPrefix` | `"weft "` | Prefix marking a transcript as a verb. Empty disables command routing. |
+
+#### Picking the transcript topic
+
+The whisper service publishes at
+`substrate/_derived/transcript/<source-node-id>/mic`. The source node
+id is the substrate node that owns the microphone -- on the daemon
+this is set by the `WHISPER_INPUT_NODE_ID` environment variable, with
+a fallback to `n-bfc4cd`. When the daemon spawns whisper at boot it
+constructs the path from that env var; the consumer needs the same
+path because it subscribes to whisper's output, not the sensor's
+input.
+
+If you are running multiple mic sources, run multiple consumer
+instances -- each pinned to one transcript topic -- rather than
+fanning out one consumer across topics. The consumer is single-topic
+by design so the routing seam stays simple.
+
+### Routing
+
+For every transcript that survives validation:
+
+1. **Command path.** If the transcript text starts with
+   `commandPrefix` (case-insensitive -- whisper sometimes capitalizes
+   the leading word), the prefix is stripped and the remainder is
+   whitespace-split into `<method> <args...>`. The verb dispatches
+   through the daemon's existing JSON-RPC `dispatch` function with
+   params `{ "args": [...] }`, exactly the same surface the
+   `weaver` CLI and the GUI panel use.
+2. **Chat path.** Otherwise the transcript becomes a one-turn
+   `agent.chat` call against `chatTargetAgent`. The daemon prepends a
+   `system`-role message tagging the source so the agent loop's
+   system prompt sees attribution:
+
+   ```text
+   [voice transcript -- source=voice topic=<substrate path> confidence=0.913]
+   ```
+
+   `confidence` is filled from whisper when its `response_format`
+   carries a per-segment confidence; otherwise it is `n/a`.
+
+Both paths share one invariant: a malformed or empty transcript
+short-circuits without touching either handler. The consumer never
+crashes the daemon over a bad transcript.
+
+### Adding a new sensor
+
+A new audio input must:
+
+1. Sign as a registered substrate node (use `weaver node register`
+   on first boot).
+2. Publish PCM chunks at `substrate/<your-node>/sensor/mic/pcm_chunk`
+   with the wire shape documented on
+   `clawft_service_whisper::SUBSTRATE_PCM_INPUT_PATH`:
+
+   ```json
+   { "data": "<base64 i16le>", "encoding": "base64", "format": "i16le",
+     "sample_rate": 16000, "channels": 1, "samples": 8000,
+     "start_ts_ms": 0 }
+   ```
+
+3. Be reachable from the substrate the daemon is connected to (mesh
+   participant, or co-located on the same daemon).
+
+The whisper service then picks it up automatically -- its input path
+is configured per source node -- and publishes transcripts at the
+canonical `_derived/transcript/<your-node>/mic`. Point your consumer
+at the same path.
+
+### Swapping STT backends
+
+The substrate path is the contract. To run a non-whisper STT engine:
+
+1. Implement an in-process service that subscribes to the same
+   `pcm_chunk` topic.
+2. Run the audio through your engine of choice (sherpa-onnx, cloud
+   Whisper API, on-device wav2vec2, ...).
+3. Publish transcripts to `substrate/_derived/transcript/<src>/mic`
+   with the wire shape produced by
+   `clawft_service_whisper::service::handle_inference_result`:
+
+   ```json
+   { "text": "...", "start_ms": 0, "end_ms": 2000,
+     "confidence": null, "lang": "en", "seq": 0 }
+   ```
+
+4. Hold the `transcript` derived-write grant for your daemon node
+   (the daemon issues its own grant at boot in
+   `crates/clawft-weave/src/daemon.rs`; federated grants are a
+   future phase).
+
+Today there is no formal `SttBackend` trait -- the seam is the
+substrate topic. A typed trait is on the roadmap for the multi-engine
+phase; until then the topic shape is the load-bearing contract.
+
+### Security: the 5 P0 controls
+
+The consumer ships with **placeholder gating only**. Voice routing
+must remain disabled in production until the following ship:
+
+| Plane item | Control | Where it slots in |
+| --- | --- | --- |
+| WEFT-207 | Sensor enrollment -- gate transcripts on the source node's enrollment status before the consumer accepts them. | Inside `VoiceRouter::handle_line` before `route_command` / `dispatch_chat`. |
+| WEFT-208 | Command authorization -- per-verb authz on the `weft <verb>` path. Replaces `permission_stub_allows`. | `voice_router::permission_stub_allows`. |
+| WEFT-209 | Rate limit / flood protection -- token-bucket on the dispatch path so a stuck mic cannot DoS the agent loop. | Wraps `ChatHandler` and `CommandHandler`. |
+| WEFT-210 | Audit log -- append every routed transcript to the substrate audit chain with source attribution. | After successful `dispatch_chat` / `dispatch_command`. |
+| WEFT-211 | Privacy / redaction -- pre-dispatch redaction pass on the transcript text. | Inside `handle_line` before either route. |
+
+Each control replaces a clearly-marked stub in
+`crates/clawft-weave/src/voice_router.rs`. The consumer's
+`enabled: false` default plus the daemon's "skip spawn when agent
+service not wired" guard mean a misconfigured deployment cannot
+accidentally surface voice without an operator opt-in.
+
+### Operating the consumer
+
+Daemon log lines worth knowing:
+
+- `voice consumer: subscribed to transcript topic` -- boot succeeded.
+- `voice consumer: disabled by config (voice.consumer.enabled=false)`
+  -- config flag is off; this is the default.
+- `voice consumer: requested but agent service not wired ...` --
+  voice was enabled but the LLM-backed agent service did not come up
+  at boot. Bring up the LLM service first.
+- `voice consumer: chat dispatch failed` -- agent service surfaced an
+  error mid-turn (rate limit, context overflow, ...). The
+  subscription stays alive; the next transcript is processed.
+- `voice consumer: command dispatched` / `command dispatch failed` --
+  info / warn breadcrumbs for the verb path.
+
+The consumer is **not** rate-limited today (WEFT-209). If you are
+testing with a chatty mic, plan to terminate the daemon if the agent
+loop falls behind -- there is no built-in backpressure between the
+consumer and `AgentService::dispatch`.
+
+### Testing
+
+Two layers ship in the M5-W landing:
+
+- Unit tests in `crates/clawft-weave/src/voice_router.rs` cover the
+  decode + routing logic with stub handlers (no substrate, no agent
+  service).
+- An integration smoke test in
+  `crates/clawft-weave/tests/voice_consumer_smoke.rs` boots a real
+  `SubstrateService`, spawns the consumer against it, publishes
+  synthetic transcripts, and asserts both routes within a 2-second
+  deadline.
+
+```bash
+scripts/build.sh check
+scripts/build.sh clippy
+cargo test -p clawft-weave --tests voice_consumer_smoke
+```
+
+The full daemon path (with `DAEMON_AGENT` wired) is covered by the
+`agent_chat_dispatch` integration test plus the unit tests in
+`clawft-service-agent`. The smoke test deliberately stops short of
+booting the LLM service -- that is integration-test territory once
+the voice security controls land.
+
+## Mic Privacy Indicator (WEFT-207 / SC-1)
+
+The sensor-side counterpart to the substrate STT consumer is the
+mic privacy indicator. Whenever a microphone capture stream opens
+(or closes), the capture path emits the indicator on **two
+surfaces** so subscribers can choose the one that matches their
+trust model:
+
+| Surface | Where | Payload | Consumer |
+| --- | --- | --- | --- |
+| Tracing event | `target = "voice.privacy.indicator"` | structured `tracing` fields (`state`, `device`, `sample_rate`, `channels`, `ts_unix_micros`, `topic`) | chain layer, syslog, `tracing-subscriber` filter |
+| Substrate topic | `weftos.voice.indicator.v1` | JSON `IndicatorPayload` | future GUI (`clawft-gui-egui`), web UI, third-party tray apps |
+
+Both surfaces fire from a single seam --
+`crates/clawft-plugin/src/voice/privacy_indicator.rs::emit_indicator`
+-- so they cannot drift. The capture handle (`AudioCapture`) wires
+its `start` / `stop` (and `Drop` failsafe) through that seam, which
+means the indicator already covers the in-tree stub *and* the
+0.8.x in-process `cpal::Stream::new` path that lands later.
+
+### Payload schema (v1)
+
+```json
+{
+  "state":          "capturing" | "idle",
+  "device":         "USB Mic" | null,        // null = system default
+  "sample_rate":    16000,                    // Hz the capture spec asked for
+  "channels":       1,                        // channel count
+  "ts_unix_micros": 1714435200000000          // wall-clock μs since epoch
+}
+```
+
+The `state` strings are stable; treat them as wire contract.
+
+### Subscribing from a UI
+
+```rust
+// Pseudo-code for a future GUI consumer.
+let mut sub = substrate.subscribe(
+    clawft_plugin::voice::privacy_indicator::INDICATOR_TOPIC,
+    /* caller_id = */ "gui-mic-indicator",
+)?;
+while let Some(line) = sub.next().await {
+    let payload: IndicatorPayload = serde_json::from_slice(&line.value)?;
+    match payload.state.as_str() {
+        "capturing" => render_red_dot(payload.device.as_deref()),
+        "idle"      => clear_red_dot(),
+        _           => {} // forward-compat
+    }
+}
+```
+
+The CLI / TUI today renders the indicator by subscribing to the
+tracing target via the existing chain-event layer; once the GUI
+ships it consumes the substrate topic instead, with zero changes
+on the capture side.
+
+### Wiring a substrate publisher
+
+`clawft-plugin` is intentionally substrate-free, so the capture
+layer publishes indicator events through the
+`IndicatorPublisher` trait. The default constructor wires
+`NoopIndicatorPublisher` (tracing-only); the daemon installs a
+substrate-aware publisher at boot:
+
+```rust
+let pub_ = Arc::new(SubstrateIndicatorPublisher::new(
+    substrate.clone(),
+    /* topic = */ INDICATOR_TOPIC,
+));
+let cap = AudioCapture::new_with_publisher(spec.into(), pub_);
+```
+
+Tests use `InMemoryIndicatorPublisher` to assert on the exact
+payload sequence without booting substrate.
+
+### Audit invariants
+
+- A `start` always emits exactly one `capturing` event; a
+  duplicate `start` is a no-op.
+- A `stop` (or `Drop` while active) always emits exactly one
+  `idle` event; a duplicate `stop` is a no-op.
+- A capture that is never started emits zero indicator events.
+
+These are enforced by the unit tests in
+`crates/clawft-plugin/src/voice/capture.rs` and
+`crates/clawft-plugin/src/voice/privacy_indicator.rs`. Treat
+them as acceptance criteria for any future capture backend.
+
+---
+
 ## Further Reading
 
 - [Configuration Guide](configuration.md) -- Full config file reference.

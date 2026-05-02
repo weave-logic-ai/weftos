@@ -99,16 +99,15 @@ impl Analyzer for DataSourceAnalyzer {
                 // Detect HTTP API base URLs in config-like files
                 // Look for patterns like BASE_URL, API_URL, ENDPOINT assigned to http(s)://
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                if matches!(
+                if (matches!(
                     ext,
                     "toml" | "yaml" | "yml" | "json" | "env" | "cfg" | "ini" | "conf" | "properties"
                 ) || path
                     .file_name()
                     .and_then(|n| n.to_str())
                     .map(|n| n.starts_with(".env"))
-                    .unwrap_or(false)
-                {
-                    if (lower.contains("base_url")
+                    .unwrap_or(false))
+                    && (lower.contains("base_url")
                         || lower.contains("api_url")
                         || lower.contains("endpoint")
                         || lower.contains("base-url")
@@ -123,7 +122,6 @@ impl Analyzer for DataSourceAnalyzer {
                             message: "HTTP API base URL reference detected".into(),
                         });
                     }
-                }
             }
         }
 

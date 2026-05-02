@@ -14,7 +14,8 @@ pub enum VadEvent {
 
 /// Voice Activity Detector wrapping Silero VAD model.
 ///
-/// Currently a stub -- real sherpa-rs integration after VP.
+/// Currently a stub -- real sherpa-rs integration is deferred to the
+/// 0.8.x in-process voice backend (see ADR-053).
 pub struct VoiceActivityDetector {
     threshold: f32,
     silence_timeout_ms: u32,

@@ -48,9 +48,24 @@ via the script above (or `watch` if you wire one up).
 
 ## Install (VSCode)
 
+`npm run package` calls `vsce package`. Two notes from the WEFT-289
+currency check (2026-04-30):
+
+- **Build the wasm bundle first** (step 1 of Build above). `vsce package`
+  globs `webview/wasm/` only if the artifacts are present on disk; an
+  empty bundle ships an extension that loads, throws on `init()`, and
+  surfaces the "Failed to load the wasm bundle" fallback card.
+- This package.json deliberately omits `repository`. Pass
+  `--allow-missing-repository` (or run via `npx`) so vsce doesn't
+  refuse to package.
+
 ```bash
-npm install -g @vscode/vsce
-npm run package      # produces vscode-weft-panel-0.0.1.vsix
+npm install -g @vscode/vsce       # one-time
+extensions/vscode-weft-panel/scripts/build-wasm.sh   # from repo root
+cd extensions/vscode-weft-panel
+vsce package --allow-missing-repository    # vscode-weft-panel-0.0.1.vsix
+# or, no-install:
+#   npx --yes @vscode/vsce package --allow-missing-repository
 code --install-extension vscode-weft-panel-0.0.1.vsix
 ```
 

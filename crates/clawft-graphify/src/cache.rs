@@ -124,15 +124,12 @@ impl ContentCache {
         if let Ok(entries) = fs::read_dir(&self.cache_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        if !live_hashes.contains(stem) {
-                            if fs::remove_file(&path).is_ok() {
+                if path.extension().and_then(|e| e.to_str()) == Some("json")
+                    && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                        && !live_hashes.contains(stem)
+                            && fs::remove_file(&path).is_ok() {
                                 removed += 1;
                             }
-                        }
-                    }
-                }
             }
         }
         removed

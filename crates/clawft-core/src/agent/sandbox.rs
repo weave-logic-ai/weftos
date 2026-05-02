@@ -316,17 +316,35 @@ mod tests {
         assert!(enforcer.check_network("evil.com").is_err());
     }
 
+    /// Build a policy whose readable + writable allowlists point at
+    /// real, existing tempdirs. The canonicalize-prefix sandbox check
+    /// (lifted into `clawft-plugin::sandbox` in agent-core-v1 A3)
+    /// requires both the target and the allowlist roots to canonicalize
+    /// successfully — i.e. to exist on disk — so hard-coded
+    /// `/workspace` paths no longer work in tests.
+    fn test_policy_with_dirs(read_dir: &std::path::Path, write_dir: &std::path::Path) -> SandboxPolicy {
+        let mut policy = test_policy();
+        policy.filesystem.readable_paths = vec![read_dir.to_path_buf()];
+        policy.filesystem.writable_paths = vec![write_dir.to_path_buf()];
+        policy
+    }
+
     #[test]
     fn enforcer_allows_readable_path() {
-        let enforcer = SandboxEnforcer::new(test_policy());
-        assert!(enforcer
-            .check_file_read(std::path::Path::new("/workspace/src/main.rs"))
-            .is_ok());
+        let read_dir = tempfile::tempdir().unwrap();
+        // Place a real file under the readable root so canonicalize succeeds.
+        let target = read_dir.path().join("main.rs");
+        std::fs::write(&target, b"fn main() {}").unwrap();
+        let enforcer =
+            SandboxEnforcer::new(test_policy_with_dirs(read_dir.path(), read_dir.path()));
+        assert!(enforcer.check_file_read(&target).is_ok());
     }
 
     #[test]
     fn enforcer_denies_unreadable_path() {
-        let enforcer = SandboxEnforcer::new(test_policy());
+        let read_dir = tempfile::tempdir().unwrap();
+        let enforcer =
+            SandboxEnforcer::new(test_policy_with_dirs(read_dir.path(), read_dir.path()));
         assert!(enforcer
             .check_file_read(std::path::Path::new("/etc/passwd"))
             .is_err());
@@ -334,15 +352,20 @@ mod tests {
 
     #[test]
     fn enforcer_allows_writable_path() {
-        let enforcer = SandboxEnforcer::new(test_policy());
-        assert!(enforcer
-            .check_file_write(std::path::Path::new("/tmp/output/result.json"))
-            .is_ok());
+        let write_dir = tempfile::tempdir().unwrap();
+        // Writable check tolerates not-yet-existing targets so long as
+        // the parent canonicalizes inside the allowlist.
+        let target = write_dir.path().join("result.json");
+        let enforcer =
+            SandboxEnforcer::new(test_policy_with_dirs(write_dir.path(), write_dir.path()));
+        assert!(enforcer.check_file_write(&target).is_ok());
     }
 
     #[test]
     fn enforcer_denies_unwritable_path() {
-        let enforcer = SandboxEnforcer::new(test_policy());
+        let write_dir = tempfile::tempdir().unwrap();
+        let enforcer =
+            SandboxEnforcer::new(test_policy_with_dirs(write_dir.path(), write_dir.path()));
         assert!(enforcer
             .check_file_write(std::path::Path::new("/etc/config"))
             .is_err());

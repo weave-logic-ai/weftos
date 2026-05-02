@@ -1,6 +1,7 @@
 [package]
 name = "clawft-surface"
 version.workspace = true
+publish = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -16,10 +17,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
-# egui is only needed because the eval module lives here and a handful
-# of `ui` helpers (like colored_label) used to sit in compose.rs.
-# Kept for now; can drop once eval.rs is fully UI-free.
-egui = "0.29"
 # Canonical Mode / Input / Permission enums (ADR-015) + OntologySnapshot
 # (ADR-017) are re-exported from these crates so the surface IR speaks
 # the same types as the manifest + substrate layers.
@@ -27,4 +24,4 @@ clawft-app = { workspace = true }
 clawft-substrate = { workspace = true }
 
 [dev-dependencies]
-# For headless render tests we run egui passes without wasm-specific glue.
+# Headless eval tests use only serde_json fixtures; no UI deps required.

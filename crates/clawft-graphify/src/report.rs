@@ -350,7 +350,7 @@ mod tests {
             target: EntityId::new(&DomainTag::Code, &EntityType::Function, tgt_name, tgt_file),
             relation_type: RelationType::Calls,
             confidence: conf,
-            weight: conf.to_weight() as f32,
+            weight: conf.to_weight(),
             source_file: None,
             source_location: None,
             metadata: serde_json::json!({}),

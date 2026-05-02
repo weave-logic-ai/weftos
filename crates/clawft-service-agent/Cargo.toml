@@ -1,0 +1,94 @@
+[package]
+name = "clawft-service-agent"
+version.workspace = true
+publish = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "WeftOS agent service — wraps clawft-core::agent::AgentLoop with per-conversation locking, cancellation, and a single dispatch entry point shaped for the agent.chat JSON-RPC handler."
+
+[dependencies]
+# Agent core — wraps `AgentLoop::handle_turn`. The native feature pulls
+# in tokio + reqwest etc.; the daemon is the intended host.
+clawft-core = { workspace = true, features = ["native"] }
+
+# Platform trait — `AgentLoop<P: Platform>` carries this bound, and
+# the blanket `impl AgentLoopHandle for AgentLoop<P>` repeats it.
+clawft-platform = { workspace = true, features = ["native"] }
+
+# Sibling LLM service — held in the broader plan for the runtime
+# `Arc<RwLock<LlmClient>>` swap (Phase C2 risk #2). Pinned here so the
+# `AgentService` layer is layered above the LLM client without weave
+# having to round-trip through both.
+clawft-service-llm = { workspace = true }
+
+# Kernel — substrate-backed ConversationSink lives in this crate per
+# agent-core-v1.md C3. Service crates have generally avoided a kernel
+# dep; this is the deliberate exception so the daemon can hand off a
+# `SubstrateService` + `NodeRegistry` handle to the sink without weave
+# having to know the sink's internals.
+#
+# We only directly use SubstrateService + NodeRegistry, but kernel's
+# internal cross-references (e.g. `control::scorer` →
+# `eml_kernel::GovernanceScorerModel` under `ecc`) break a standalone
+# build of this crate without the same kernel features the daemon
+# enables. Mirror clawft-weave's set so feature unification across the
+# workspace is identical.
+clawft-kernel = { workspace = true, features = ["native", "ecc", "exochain", "cluster", "mesh"] }
+
+# ULID generation for monotonic per-turn substrate keys
+# (`derived/chat/<conv>/turns/<ulid>`).
+ulid = { workspace = true }
+
+# Wire-format types live here; serde drives the JSON shape.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Async runtime — tokio 'full' matches the daemon, which is the
+# intended host. The `sync` feature is pulled in by `full`.
+tokio = { workspace = true }
+
+# Cancellation tokens for per-conv cancel.
+tokio-util = { workspace = true }
+
+# Per-conversation `DashMap<ConvId, ...>` for the lock + cancel maps.
+dashmap = { workspace = true }
+
+# Async-trait for the `AgentLoopHandle` test seam.
+async-trait = { workspace = true }
+
+# Structured logs — debug! traces around dispatch and shutdown.
+tracing = { workspace = true }
+
+# Error handling.
+thiserror = { workspace = true }
+
+# Inbound/outbound types — re-exported through `clawft-core`'s types
+# dep but pulled in directly so the adapter functions stay legible.
+clawft-types = { workspace = true, features = ["native"] }
+
+# Timestamps for InboundMessage::timestamp. clawft-types uses chrono
+# in its public type so we depend on it here too.
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+
+# The integration test in `tests/dispatch.rs` implements
+# `AgentLoopHandle` for a stub, which uses `#[async_trait]`.
+async-trait = { workspace = true }
+
+# The stub returns `OutboundMessage` directly, so the test depends
+# on the same shared types as the production code.
+clawft-types = { workspace = true, features = ["native"] }
+
+# F3 (`tests/witness_chain.rs`) drives a real `AgentLoop` end-to-end
+# against a real kernel `GovernanceGate` + `ChainManager`, with the
+# loop wired hermetically per `loop_core::tests::make_agent_loop`
+# (~30 lines reproduced inline). The test references `NativePlatform`
+# by name (already a transitive dep through `clawft-core`'s native
+# feature, but pinned explicitly so a future feature-flag flip
+# doesn't silently break the test build).
+clawft-platform = { workspace = true, features = ["native"] }

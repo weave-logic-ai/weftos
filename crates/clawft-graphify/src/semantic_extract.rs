@@ -1,8 +1,11 @@
 //! LLM-based semantic extraction for documents, PDFs, and non-code files.
 //!
-//! Feature-gated behind `semantic-extract`. Uses the `clawft-llm` provider
-//! trait to call Claude (or any configured provider) with a structured prompt
-//! that asks for JSON output containing entities and relationships.
+//! Feature-gated behind `semantic-extract`. Takes a caller-supplied
+//! `FnOnce(String) -> Future<Output = String>` callback that runs the
+//! prompt against whatever LLM the host wires in (`clawft-llm`, a stub
+//! for tests, a different provider, …). Keeping the provider out of the
+//! crate's dep graph is intentional — see `.planning/graphify-rs/phase45-notes.md`
+//! §3 (callback-based LLM invocation) and WEFT-383.
 
 #[cfg(feature = "semantic-extract")]
 use crate::entity::{DomainTag, EntityId, EntityType, FileType};

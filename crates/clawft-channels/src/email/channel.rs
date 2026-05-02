@@ -1,5 +1,21 @@
 //! Email channel adapter implementation.
 //!
+//! # WARNING: Planning stub -- does NOT transmit messages.
+//!
+//! This adapter is a compile-time placeholder so config schemas, factory
+//! wiring, and tests can run today. It is **not** production-ready:
+//!
+//! - `start()` never connects to IMAP. The poll loop logs a `debug!`
+//!   line ("polling for new emails (stub)") and waits for cancellation.
+//! - `send()` does not invoke SMTP. It fabricates a synthetic
+//!   `<{ts}-{target}@{host}>` Message-ID and returns it. Outbound
+//!   messages are silently dropped.
+//!
+//! The real IMAP/SMTP runtime (using the `imap` and `lettre` crates
+//! behind the `email` feature) is tracked as Task 4 in
+//! `.planning/reviews/0.7.0-release-gate/05-channels.md`. Do **not**
+//! enable the `email` feature in production until that task ships.
+//!
 //! Implements [`ChannelAdapter`] from `clawft-plugin` for IMAP/SMTP
 //! email communication. Polls an IMAP mailbox for new messages and
 //! delivers them to the agent pipeline via [`ChannelAdapterHost`].
@@ -131,6 +147,12 @@ impl ChannelAdapter for EmailChannelAdapter {
         _host: Arc<dyn ChannelAdapterHost>,
         cancel: CancellationToken,
     ) -> Result<(), PluginError> {
+        warn!(
+            "email channel adapter is a planning stub: poll loop and \
+             SMTP send are not implemented; outbound messages will be \
+             silently dropped. See \
+             .planning/reviews/0.7.0-release-gate/05-channels.md task 4."
+        );
         info!(
             imap_host = %self.config.imap_host,
             mailbox = %self.config.mailbox,

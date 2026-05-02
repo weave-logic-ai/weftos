@@ -253,11 +253,10 @@ async fn run_assessment_with_daemon(
             return Ok(());
         }
         // If daemon doesn't support the method yet, fall through.
-        if let Some(ref err) = resp.error {
-            if !err.contains("unknown method") {
+        if let Some(ref err) = resp.error
+            && !err.contains("unknown method") {
                 anyhow::bail!("{err}");
             }
-        }
     } else {
         eprintln!("{NO_DAEMON_WARNING}");
     }
@@ -288,11 +287,10 @@ async fn run_link_with_daemon(
             }
             return Ok(());
         }
-        if let Some(ref err) = resp.error {
-            if !err.contains("unknown method") {
+        if let Some(ref err) = resp.error
+            && !err.contains("unknown method") {
                 anyhow::bail!("{err}");
             }
-        }
     } else {
         eprintln!("{NO_DAEMON_WARNING}");
     }
@@ -321,11 +319,10 @@ async fn run_compare_with_daemon(
             }
             return Ok(());
         }
-        if let Some(ref err) = resp.error {
-            if !err.contains("unknown method") {
+        if let Some(ref err) = resp.error
+            && !err.contains("unknown method") {
                 anyhow::bail!("{err}");
             }
-        }
     } else {
         eprintln!("{NO_DAEMON_WARNING}");
     }
@@ -354,11 +351,10 @@ async fn run_review_with_daemon(
             }
             return Ok(());
         }
-        if let Some(ref err) = resp.error {
-            if !err.contains("unknown method") {
+        if let Some(ref err) = resp.error
+            && !err.contains("unknown method") {
                 anyhow::bail!("{err}");
             }
-        }
     } else {
         eprintln!("{NO_DAEMON_WARNING}");
     }
@@ -772,11 +768,10 @@ fn collect_files_recursive(dir: &Path, extensions: &[&str], out: &mut Vec<PathBu
             if !skip.contains(&name_str.as_ref()) {
                 collect_files_recursive(&path, extensions, out);
             }
-        } else if let Some(ext) = path.extension() {
-            if extensions.contains(&ext.to_string_lossy().as_ref()) {
+        } else if let Some(ext) = path.extension()
+            && extensions.contains(&ext.to_string_lossy().as_ref()) {
                 out.push(path);
             }
-        }
     }
 }
 
@@ -1027,13 +1022,11 @@ fn run_hooks(hook_type: &str, dir: Option<&str>, uninstall: bool) -> anyhow::Res
         return Ok(());
     }
 
-    let hook_script = format!(
-        r#"#!/bin/sh
+    let hook_script = r#"#!/bin/sh
 # WeftOS assessment hook — installed by `weft assess hooks`
 # Runs assessment scoped to the latest commit.
 weft assess run --scope commit 2>&1 || true
-"#
-    );
+"#.to_string();
 
     std::fs::write(&hook_path, hook_script)?;
 

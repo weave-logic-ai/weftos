@@ -52,17 +52,15 @@ pub fn to_vowl_json(
 
         if let Some(iri) = &entity.iri {
             attr["iri"] = serde_json::Value::String(iri.clone());
-        } else if let Some(c) = config {
-            if let Some(iri) = &c.iri {
+        } else if let Some(c) = config
+            && let Some(iri) = &c.iri {
                 attr["baseIri"] = serde_json::Value::String(iri.clone());
             }
-        }
 
-        if let Some(c) = config {
-            if let Some(name) = &c.display_name {
+        if let Some(c) = config
+            && let Some(name) = &c.display_name {
                 attr["comment"] = serde_json::json!({"en": name});
             }
-        }
 
         if let Some(desc) = entity.metadata.get("description").and_then(|v| v.as_str()) {
             attr["description"] = serde_json::Value::String(desc.to_string());
@@ -113,11 +111,10 @@ pub fn to_vowl_json(
             e.edge_type == rel_type_str.to_lowercase()
                 || e.edge_type == snake_case(&rel_type_str)
         });
-        if let Some(ec) = edge_config {
-            if let Some(iri) = &ec.iri {
+        if let Some(ec) = edge_config
+            && let Some(iri) = &ec.iri {
                 prop_attr["iri"] = serde_json::Value::String(iri.clone());
             }
-        }
 
         property_attrs.push(prop_attr);
     }

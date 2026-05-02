@@ -64,15 +64,12 @@ pub fn is_file_node(kg: &KnowledgeGraph, id: &EntityId) -> bool {
     }
 
     // File-level hub: label matches source filename
-    if let Some(ref source_file) = entity.source_file {
-        if !source_file.is_empty() {
-            if let Some(fname) = std::path::Path::new(source_file.as_str()).file_name() {
-                if label == fname.to_str().unwrap_or("") {
+    if let Some(ref source_file) = entity.source_file
+        && !source_file.is_empty()
+            && let Some(fname) = std::path::Path::new(source_file.as_str()).file_name()
+                && label == fname.to_str().unwrap_or("") {
                     return true;
                 }
-            }
-        }
-    }
 
     // Method stub: `.method_name()`
     if label.starts_with('.') && label.ends_with("()") {
@@ -212,6 +209,7 @@ pub fn surprising_connections_eml(
 ///
 /// `[confidence_ordinal, cross_file_type, cross_repo,
 ///   cross_community, is_semantic, min_degree, max_degree]`
+#[allow(clippy::too_many_arguments)] // feature extraction; each arg is a distinct graph context
 fn surprise_features(
     kg: &KnowledgeGraph,
     src_id: &EntityId,
@@ -270,6 +268,7 @@ fn surprise_features(
 ///
 /// When `eml_model` is `Some`, uses the trained model for scoring.
 /// Otherwise falls back to the original hardcoded heuristics.
+#[allow(clippy::too_many_arguments)] // scoring path; each arg is a graph context required by surprise_features
 fn surprise_score(
     kg: &KnowledgeGraph,
     src_id: &EntityId,
@@ -293,8 +292,8 @@ fn surprise_score(
     );
 
     // If a trained EML model is provided, use it for the score.
-    if let Some(model) = eml_model {
-        if model.is_trained() {
+    if let Some(model) = eml_model
+        && model.is_trained() {
             let eml_score = model.score(&features);
             // Still generate human-readable reasons from the feature vector.
             let reasons = surprise_reasons(
@@ -303,7 +302,6 @@ fn surprise_score(
             );
             return (eml_score as i32, reasons);
         }
-    }
 
     // Hardcoded fallback (original logic).
     let mut score: i32 = 0;
@@ -340,12 +338,11 @@ fn surprise_score(
     // 4. Cross-community bonus
     let cid_u = node_community.get(src_id);
     let cid_v = node_community.get(tgt_id);
-    if let (Some(cu), Some(cv)) = (cid_u, cid_v) {
-        if cu != cv {
+    if let (Some(cu), Some(cv)) = (cid_u, cid_v)
+        && cu != cv {
             score += 1;
             reasons.push("bridges separate communities".to_owned());
         }
-    }
 
     // 4b. Semantic similarity multiplier
     if relation == "semantically_similar_to" {
@@ -1092,7 +1089,7 @@ impl MctsExplorer {
 
         // Deterministic PRNG (xorshift64) for rollout -- avoids rand dep.
         let mut rng_state: u64 = 0xDEAD_BEEF_CAFE_1234;
-        let mut next_rng = |state: &mut u64| -> u64 {
+        let next_rng = |state: &mut u64| -> u64 {
             *state ^= *state << 13;
             *state ^= *state >> 7;
             *state ^= *state << 17;
@@ -1406,7 +1403,7 @@ mod tests {
             target: EntityId::new(&DomainTag::Code, &EntityType::Function, tgt_name, tgt_file),
             relation_type: relation,
             confidence,
-            weight: confidence.to_weight() as f32,
+            weight: confidence.to_weight(),
             source_file: None,
             source_location: None,
             metadata: serde_json::json!({}),

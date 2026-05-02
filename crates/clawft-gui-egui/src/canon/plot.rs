@@ -177,7 +177,7 @@ impl<'a> CanonWidget for Plot<'a> {
         let tooltip = self.tooltip.clone();
 
         let points: PlotPoints = self.points.iter().map(|&(x, y)| [x, y]).collect();
-        let line = Line::new(points).color(self.line_colour);
+        let line = Line::new("series", points).color(self.line_colour);
 
         let mut plot = EguiPlot::new(id)
             .allow_zoom(self.allow_zoom)

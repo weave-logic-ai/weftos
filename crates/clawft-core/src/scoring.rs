@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn noop_default_trait() {
-        let scorer = NoopScorer::default();
+        let scorer = NoopScorer;
         assert!((scorer.score("x", "y") - 0.5).abs() < f32::EPSILON);
     }
 

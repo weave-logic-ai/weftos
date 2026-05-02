@@ -1,6 +1,7 @@
 [package]
 name = "clawft-platform"
 version.workspace = true
+publish = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -43,3 +44,4 @@ getrandom = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+tempfile = { workspace = true }

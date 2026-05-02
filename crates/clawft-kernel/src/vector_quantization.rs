@@ -110,6 +110,7 @@ pub enum SimdDistanceMetric {
 ///
 /// Requires `ruvector-core` with PR #352 merged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct SimdDistanceConfig {
     /// Whether the unified SIMD distance kernel is enabled.
     ///
@@ -138,16 +139,6 @@ pub struct SimdDistanceConfig {
     pub lane_width: Option<u16>,
 }
 
-impl Default for SimdDistanceConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            pad_to_power_of_two: false,
-            metric: SimdDistanceMetric::default(),
-            lane_width: None,
-        }
-    }
-}
 
 impl SimdDistanceConfig {
     /// Returns `true` when the configuration requests activation AND

@@ -1,0 +1,620 @@
+[
+  {
+    "name": "ws05: Email channel — implement IMAP poll loop and SMTP outbound send",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "bug"],
+    "description_md": "## Source\n- audit: 05-channels.md (Stubbed runtime table; Task List #4)\n- code: crates/clawft-channels/src/email/channel.rs:166-217\n- prior planning: .planning/sparc/phase4/06-channel-enhancements/02-phase-EEnterprise-email-gchat-teams.md\n\n## Problem / gap\nThe Email `ChannelAdapter` ships with a passing test suite but the runtime is a stub. `start()` polls with `debug!(\"polling for new emails (stub)\")` and never opens an IMAP connection; `send()` fabricates a synthetic `<ts-target@host>` Message-ID without invoking SMTP. With `--features email`, the gateway will start cleanly, accept outbound `send()` calls, and silently drop every message. The Element-06 tracker reports this as complete; it is not.\n\n## Acceptance criteria\n- [ ] `start()` opens an IMAP connection (using `imap` crate behind the `email` feature), polls INBOX with IDLE or interval-based fetch, parses RFC822 messages, and emits real `InboundMessage`/`MessagePayload` events to the host\n- [ ] `send()` constructs a MIME message via `lettre` and submits to SMTP with TLS; the returned message id is the real Message-ID returned by the server\n- [ ] Auth supports both `password`/`password_env` and (at minimum) STARTTLS + implicit TLS\n- [ ] Reconnect-with-backoff on transport errors; cancellation respected\n- [ ] Unit + integration tests against a mock IMAP/SMTP harness (or an embedded test server)\n- [ ] `scripts/build.sh test` and `scripts/build.sh clippy --features email` pass\n- [ ] `04-element-06-tracker.md` updated to reflect real I/O landed (no longer \"stub IMAP/SMTP runtime\")\n\n## Dependencies\n- blocks: any production deployment of `--features email`\n- blocked-by: none\n\n## Notes\nE2 was tracked under E-Enterprise. The `imap` and `lettre` deps are not yet in `clawft-channels/Cargo.toml`. Channel-stub WARN headers and `tracing::warn!` on start() landed in this session (documentation half); this item is the real I/O implementation.\n"
+  },
+  {
+    "name": "ws05: Google Chat channel — implement Pub/Sub subscribe and chat.spaces.messages.create",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "bug"],
+    "description_md": "## Source\n- audit: 05-channels.md (Stubbed runtime table; Task List #6)\n- code: crates/clawft-channels/src/google_chat/channel.rs:78-125\n- prior planning: .planning/sparc/phase4/06-channel-enhancements/02-phase-EEnterprise-email-gchat-teams.md\n\n## Problem / gap\nGoogle Chat adapter is a skeleton: `start()` does not subscribe to Pub/Sub events; `send()` builds a synthetic `spaces/{target}/messages/gchat-{ts}` id without POSTing to the Google Chat REST API. The track was originally blocked on F6 (OAuth2); F6 has now landed in `clawft-plugin-oauth2`, removing the blocker.\n\n## Acceptance criteria\n- [ ] OAuth2 / service-account credentials wired through `clawft-plugin-oauth2`\n- [ ] Pub/Sub subscription receives space/message events and routes them to `MessagePayload` (or a polling fallback if Pub/Sub is not configured)\n- [ ] `send()` POSTs to `chat.spaces.messages.create` and returns the real `name` field from the response\n- [ ] Bot self-message suppression and basic rate-limit handling\n- [ ] `scripts/build.sh test --features google-chat` passes; integration test against a mocked Google API\n- [ ] Tracker entry updated to show real I/O landed\n\n## Dependencies\n- blocks: any production deployment of `--features google-chat`\n- blocked-by: F6 OAuth2 (already landed)\n\n## Notes\nE5a in the SPARC tracker. Channel-stub WARN headers landed in this session; this is the real implementation work.\n"
+  },
+  {
+    "name": "ws05: Microsoft Teams channel — implement Bot Framework auth and Graph message POST",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "bug"],
+    "description_md": "## Source\n- audit: 05-channels.md (Stubbed runtime table; Task List #7)\n- code: crates/clawft-channels/src/teams/channel.rs:88-135\n- prior planning: .planning/sparc/phase4/06-channel-enhancements/02-phase-EEnterprise-email-gchat-teams.md\n\n## Problem / gap\nTeams adapter does not register with the Bot Framework, never acquires an Azure AD client-credentials token, and `send()` does not POST to `/teams/{team-id}/channels/{channel-id}/messages` via Graph. With `--features teams`, the gateway will validate config and silently drop every outbound message.\n\n## Acceptance criteria\n- [ ] Azure AD client-credentials token acquisition with refresh-on-expiry\n- [ ] Bot Framework webhook receiver parses `Activity` JSON into `MessagePayload`\n- [ ] Outbound POST to Graph `/teams/{team-id}/channels/{channel-id}/messages` returns real message id\n- [ ] Reconnect/backoff on auth failures; secrets routed through `SecretRef`\n- [ ] `scripts/build.sh test --features teams` passes; integration test against a mocked Graph API\n- [ ] Tracker entry updated to show real I/O landed\n\n## Dependencies\n- blocks: any production deployment of `--features teams`\n- blocked-by: none\n\n## Notes\nE5b in the SPARC tracker. Bot Framework registration step needs an external bot registration; document that as part of channel onboarding.\n"
+  },
+  {
+    "name": "ws05: WhatsApp channel — implement Cloud API webhook receiver and outbound POST",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "security", "bug"],
+    "description_md": "## Source\n- audit: 05-channels.md (Stubbed runtime table; Task List #2)\n- code: crates/clawft-channels/src/whatsapp/channel.rs:74-105\n- prior planning: .planning/sparc/phase4/06-channel-enhancements/03-phase-EConsumer-whatsapp-signal-matrix.md\n\n## Problem / gap\nWhatsApp Cloud API webhook listener is missing; `send()` fabricates a `wamid.{ts}` id without POSTing to `/v18.0/{phone_number_id}/messages`. There is no `X-Hub-Signature-256` verification, and the E3 risk register's 429 backoff handler does not exist yet. Combination of silent-drop on send and no signature verification makes this a security-relevant gap.\n\n## Acceptance criteria\n- [ ] Webhook receiver verifies `X-Hub-Signature-256` HMAC against the app secret before processing any payload\n- [ ] Inbound webhook events parsed into `MessagePayload`\n- [ ] `send()` POSTs to `/v{api}/{phone_number_id}/messages` and returns the real `wamid.*` id from the response\n- [ ] 429 / rate-limit backoff respecting `Retry-After`\n- [ ] `scripts/build.sh test --features whatsapp` passes; integration test against a mocked Cloud API; signature-verify unit tests with positive + negative cases\n- [ ] Tracker entry updated\n\n## Dependencies\n- blocks: any production deployment of `--features whatsapp`\n- blocked-by: none\n\n## Notes\nE3 in the SPARC tracker. Signature verification MUST land before the receiver accepts any payload.\n"
+  },
+  {
+    "name": "ws05: Signal channel — spawn signal-cli daemon and wire JSON-RPC reader",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "bug"],
+    "description_md": "## Source\n- audit: 05-channels.md (Stubbed runtime table; Task List #3)\n- code: crates/clawft-channels/src/signal/channel.rs:90-148\n- prior planning: .planning/sparc/phase4/06-channel-enhancements/03-phase-EConsumer-whatsapp-signal-matrix.md\n\n## Problem / gap\nSignal adapter never spawns `signal-cli daemon` as a subprocess. `start()` does not establish a JSON-RPC channel; `send()` does not invoke `tokio::process::Command` even though argument sanitization runs. There is no PID tracking and no auto-restart on crash. With `--features signal`, the gateway accepts outbound calls and silently drops every message.\n\n## Acceptance criteria\n- [ ] `start()` spawns `signal-cli daemon` with sanitized args and an mpsc reader on stdout/stderr (JSON-RPC)\n- [ ] PID tracking with `Child::id()`; auto-restart on crash with exponential backoff and a kill-timeout for hung children\n- [ ] Inbound JSON-RPC notifications parsed into `MessagePayload`\n- [ ] `send()` issues a JSON-RPC `send` call to the daemon and returns the real `timestamp`/message id\n- [ ] Cancellation cleanly terminates the daemon (SIGTERM then SIGKILL after timeout)\n- [ ] `scripts/build.sh test --features signal` passes; integration test using a mock JSON-RPC peer\n- [ ] Tracker entry updated\n\n## Dependencies\n- blocks: any production deployment of `--features signal`\n- blocked-by: none\n\n## Notes\nE4 in the SPARC tracker. Argument sanitization already lands; this item is the spawn + lifecycle + I/O glue.\n"
+  },
+  {
+    "name": "ws05: Matrix channel — implement /sync long-poll, room auto-join, and m.room.message send",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "bug"],
+    "description_md": "## Source\n- audit: 05-channels.md (Stubbed runtime table; Task List #5)\n- code: crates/clawft-channels/src/matrix/channel.rs:82-128\n- prior planning: .planning/sparc/phase4/06-channel-enhancements/03-phase-EConsumer-whatsapp-signal-matrix.md\n\n## Problem / gap\nMatrix adapter does not perform `/sync` long-polling; room auto-join and `m.room.message` parsing are absent. `send()` returns `${ts}` without invoking `PUT /_matrix/client/v3/rooms/{room}/send/m.room.message/{txn}`.\n\n## Acceptance criteria\n- [ ] `/sync` long-poll loop with `since` token persistence and reconnect-with-backoff\n- [ ] Auto-join rooms in the configured allow-list; parse `m.room.message` events into `MessagePayload`\n- [ ] `send()` issues `PUT /_matrix/client/v3/rooms/{room}/send/m.room.message/{txn}` with idempotent transaction id and returns the real event id\n- [ ] Cancellation respected; `since` token persisted to disk for resume\n- [ ] `scripts/build.sh test --features matrix` passes; integration test against a mocked Matrix server\n- [ ] Tracker entry updated\n\n## Dependencies\n- blocks: any production deployment of `--features matrix`\n- blocked-by: none\n\n## Notes\nE5 in the SPARC tracker. `since`-token persistence avoids replaying the full timeline on every restart.\n"
+  },
+  {
+    "name": "ws05: IRC channel — implement TCP/TLS dial, CAP/NICK/USER, JOIN, and PRIVMSG read/write",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "bug"],
+    "description_md": "## Source\n- audit: 05-channels.md (Stubbed runtime table; Task List #1)\n- code: crates/clawft-channels/src/irc/channel.rs:82, 128 (TODO markers)\n- prior planning: .planning/sparc/phase4/06-channel-enhancements/03-phase-EConsumer-whatsapp-signal-matrix.md\n\n## Problem / gap\nIRC adapter is the only in-channels-crate file with explicit `// TODO` markers. The entire start loop is a log-only stub; `auth_method`, `reconnect_delay_secs`, channel JOINs, and PRIVMSG read/write are unimplemented. `send()` returns `irc-{target}-{ts}` without ever opening a socket. The `irc` crate is not yet a dependency.\n\n## Acceptance criteria\n- [ ] Choose and add an `irc` crate (e.g. `irc` or `tokio-irc`) under the `irc` feature\n- [ ] TCP + TLS dial; CAP/NICK/USER negotiation; SASL or NickServ auth via `auth_method`\n- [ ] JOIN configured channels; PRIVMSG reader emits `MessagePayload`; `send()` emits PRIVMSG and returns real message id (or sequence id when server echoes are unavailable)\n- [ ] Reconnect with `reconnect_delay_secs` backoff\n- [ ] `scripts/build.sh test --features irc` passes; integration test against a small embedded IRC server\n- [ ] Replace the two TODO markers; tracker entry updated\n\n## Dependencies\n- blocks: any production deployment of `--features irc`\n- blocked-by: none\n\n## Notes\nThis is the most explicit stub of the seven adapters; the `// TODO` markers themselves should be removed when the work lands.\n"
+  },
+  {
+    "name": "ws05: Discord — fix edit_message rate-limit handling to actually sleep",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "release-gate-blocker", "bug"],
+    "description_md": "## Source\n- audit: 05-channels.md (Open question 6; Task List #8)\n- code: crates/clawft-channels/src/discord/api.rs:153-161 (edit_message)\n\n## Problem / gap\n`DiscordApiClient::edit_message` reads rate-limit headers and emits a warning log but does not actually `tokio::time::sleep` before returning. This contrasts with `create_message`, which does sleep. Likely a copy-paste oversight; under sustained edit traffic the client will hammer Discord into 429s.\n\n## Acceptance criteria\n- [ ] `edit_message` honours `x-ratelimit-remaining` / `-reset-after` and sleeps before returning, identical to `create_message`\n- [ ] Unit test that asserts the sleep path fires when remaining=0\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nSmall fix; bundle with discord-chunker work if convenient.\n"
+  },
+  {
+    "name": "ws05: Permissions — emit allow_from_match metadata in Slack and Telegram channels",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "release-gate-blocker", "bug"],
+    "description_md": "## Source\n- audit: 05-channels.md (Open question 10; Task List #10)\n- code: Slack and Telegram channel factories / inbound builders\n\n## Problem / gap\nDiscord emits an `allow_from_match` metadata flag that `PermissionResolver` uses to promote an allowed sender out of the zero-trust tier. Slack and Telegram do not. A user listed in `slack.dm.allow_from` is passed through to the pipeline but stays at zero-trust. Behaviour asymmetry between channels is a footgun.\n\n## Acceptance criteria\n- [ ] Slack inbound emits `allow_from_match=true` on senders matching `dm.allow_from` / `group.allow_from`\n- [ ] Telegram inbound emits `allow_from_match=true` on senders matching `allowed_users`\n- [ ] Unit tests exercise both channels' promotion path through `PermissionResolver`\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nKeep the metadata key identical to Discord's so the resolver code does not need a per-channel branch.\n"
+  },
+  {
+    "name": "ws05: Web channel — gate is_allowed on D-7 auth middleware enablement",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "docs"],
+    "description_md": "## Source\n- audit: 05-channels.md (Open question 5; Task List #23)\n- code: crates/clawft-channels/src/web/channel.rs (`is_allowed`)\n- prior planning: .planning/development_notes/05-axum-api-layer/decisions.md (D-7)\n\n## Problem / gap\n`WebChannel::is_allowed` returns `true` unconditionally because \"auth is handled by the API middleware, not here.\" With D-7 (auth middleware) still off, *nothing* authenticates web-channel inbound. This is not documented as a known gap, and any non-localhost gateway deployment is silently open.\n\n## Acceptance criteria\n- [ ] Either: enable D-7 auth middleware before exposing web channel publicly, OR refuse to start web channel when auth middleware is not wired and `bind_addr` is non-loopback\n- [ ] `is_allowed` carries a doc comment explaining the dependency on auth middleware\n- [ ] `docs/guides/channels.md` (or equivalent) calls out the open-by-default behaviour and the D-7 dependency\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: any non-localhost gateway deployment with `web` channel\n- blocked-by: D-7 auth middleware enablement (separate item)\n\n## Notes\nDocs+behaviour gate is acceptable for 0.7.x; full D-7 enablement is a larger UI-dependent change.\n"
+  },
+  {
+    "name": "ws05: Voice channel — replace stub start/send with real capture+VAD+STT and TTS playback",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub"],
+    "description_md": "## Source\n- audit: 05-channels.md (Task List #21; cross-ref to ws10)\n- code: crates/clawft-plugin/src/voice/channel.rs\n- prior planning: .planning/development_notes/step3-vs1.3-voice-channel.md\n\n## Problem / gap\n`VoiceChannel` ships an `ChannelAdapter` impl but `start()` simply waits for cancellation, `send()` logs TTS text without playing it, and `deliver_inbound` from real transcriptions is deferred. CLI `weft voice talk` shows status only.\n\n## Acceptance criteria\n- [ ] `start()` runs a real capture + VAD + STT loop and calls `deliver_inbound` with real transcripts\n- [ ] `send()` synthesises TTS via the configured provider and plays the audio\n- [ ] Cancellation aborts both loops cleanly\n- [ ] `scripts/build.sh test --features voice,voice-stt,voice-tts` passes\n\n## Dependencies\n- blocks: any honest \"voice MVP\" claim for 0.7.x\n- blocked-by: ws10 STT/TTS canonical-path ADR; sherpa-rs/cpal Cargo deps\n\n## Notes\nThis adapter is in `clawft-plugin/voice/`, not `clawft-channels/`, but the audit places it in scope because it is an inbound surface. Coordinate with ws10 SC-1/SC-4 work.\n"
+  },
+  {
+    "name": "ws05: Gateway — wire Axum auth middleware (D-7) and gate non-public routes",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "gap"],
+    "description_md": "## Source\n- audit: 05-channels.md (Open question 2; Task List #13)\n- code: crates/clawft-services/src/api/{auth.rs,mod.rs} (TokenStore + auth_middleware exist; not wired)\n- prior planning: .planning/development_notes/05-axum-api-layer/decisions.md (D-7)\n\n## Problem / gap\n`TokenStore` and `auth_middleware` exist in the api crate but are intentionally not enabled in the router. Today every gateway deployment outside localhost is unauthenticated. This is the single largest 0.7.0 release-gate security exposure on the gateway side.\n\n## Acceptance criteria\n- [ ] `auth_middleware` wired into the router, gating every non-`/api/auth/token` and non-`/api/health` route\n- [ ] `TokenStore` with at-rest 0600 file persistence; bootstrap token-issue flow documented\n- [ ] Localhost / dev-mode bypass behind an explicit config flag, off by default\n- [ ] `scripts/build.sh test` passes; e2e test exercises a 401 on missing token and 200 on a valid one\n- [ ] `docs/guides/` updated; D-7 marked enabled in decisions.md\n\n## Dependencies\n- blocks: WebChannel hardening; rate limiting; CSP rollout\n- blocked-by: minimum UI login surface (or accept a CLI-issued token-only flow for 0.7.x)\n\n## Notes\nUI login page is a larger story; consider shipping CLI-token-only auth for 0.7.0 and deferring UI login.\n"
+  },
+  {
+    "name": "ws05: Gateway — add Content-Security-Policy via tower middleware",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security"],
+    "description_md": "## Source\n- audit: 05-channels.md (Open question 4; Task List #14)\n- code: crates/clawft-services/src/api/handlers.rs:130 (TODO)\n\n## Problem / gap\nNo Content-Security-Policy is emitted today. The web channel publishes user-generated content into a JS dashboard with no CSP.\n\n## Acceptance criteria\n- [ ] CSP middleware (via `tower_http::set_header` or equivalent) emitted on all dashboard routes\n- [ ] Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' (only if required by current CSS pipeline); img-src 'self' data:; connect-src 'self' ws: wss:\n- [ ] Document policy + rationale in `docs/guides/`\n- [ ] `scripts/build.sh test` passes; e2e test asserts CSP header present\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nThe handlers.rs TODO is explicit. Tighten 'unsafe-inline' over time once the UI CSS pipeline is audited.\n"
+  },
+  {
+    "name": "ws05: Gateway — add per-endpoint rate limiting on auth/delegation/monitoring",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security"],
+    "description_md": "## Source\n- audit: 05-channels.md (Open question 3; Task List #15)\n- code: crates/clawft-services/src/api/handlers.rs:133 (TODO)\n\n## Problem / gap\nThe handlers.rs TODO lists target rates per endpoint (auth/token 5 rpm, delegation 60 rpm, monitoring 30 rpm) but no rate limiter is implemented. Choose `tower-governor` vs `tower::limit::RateLimitLayer` vs custom token-bucket and ship.\n\n## Acceptance criteria\n- [ ] Decision recorded in decisions.md or an ADR (which crate, why)\n- [ ] Per-endpoint limits applied as documented\n- [ ] 429 responses include `Retry-After`\n- [ ] `scripts/build.sh test` passes; integration test asserts 429 on excess\n\n## Dependencies\n- blocks: none\n- blocked-by: D-7 auth-middleware enablement (per-token buckets need a token concept)\n\n## Notes\nFor 0.7.x a per-IP scheme is acceptable until D-7 lands.\n"
+  },
+  {
+    "name": "ws05: Gateway bridge — implement skill install/uninstall, memory delete, config persist",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "gap"],
+    "description_md": "## Source\n- audit: 05-channels.md (TODOs in api/bridge.rs; Task List #24)\n- code: crates/clawft-services/src/api/bridge.rs:282, 287, 395, 467\n\n## Problem / gap\nFour `TODO` markers in api/bridge.rs: skill install via ClawHub registry (282), skill uninstall (287), memory entry deletion (395), and config persistence — deserialize, validate, write to file (467). The dashboard/HTTP surface advertises operations that the bridge does not perform.\n\n## Acceptance criteria\n- [ ] Skill install/uninstall wired through to `clawft-skill` registry (or rejected with a clear 501 + docs note if deferred)\n- [ ] Memory entry deletion implemented end-to-end\n- [ ] Config persistence: deserialize incoming patch, validate against the canonical schema, atomically write to clawft.toml\n- [ ] Each TODO marker removed; replaced with code or an explicit docs-linked NotImplemented response\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: dashboard parity claims\n- blocked-by: ClawHub registry availability for skill install/uninstall\n\n## Notes\nIf any of these end up deferred, replace the TODO with a real `Err(NotImplemented)` and a tracking link, not silent acceptance.\n"
+  },
+  {
+    "name": "ws05: Discord chunker — preserve fenced code, balance markdown, support Nitro/embeds/file fallback",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n- audit: 05-channels.md (Deferred / orphaned items: Discord chunking improvements; Task List #9)\n- code: crates/clawft-channels/src/discord/channel.rs (chunk_message)\n\n## Problem / gap\nThe current chunker handles newline / space / hard-split at 2000 chars but does not: preserve fenced code blocks across splits (mid-block split renders as two malformed half-blocks); re-balance markdown emphasis tokens (`**bold**` opened in chunk 1 not auto-closed/reopened); detect Nitro/boost 4000-char limits; support embeds (6000-char total / 25-field limits); fall back to file upload past N chunks.\n\n## Acceptance criteria\n- [ ] Code-fence preservation: when split lands inside ```fence```, close and reopen the fence with the same language tag\n- [ ] Markdown emphasis re-balance for `*`, `_`, `**`, `__`\n- [ ] Nitro 4000-char detection (config or runtime via `User`)\n- [ ] Embed support (`content` + `embeds[]`) with field/title/total limits\n- [ ] File-upload fallback past configurable N chunks\n- [ ] Unit tests for each split scenario\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nCalled out in MEMORY.md project context. Defer to 0.8.x — current chunker is correct in raw byte terms; this is quality-of-output polish.\n"
+  },
+  {
+    "name": "ws05: PluginHost C7 unification — migrate Telegram/Discord/Slack to ChannelAdapter",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "tech-debt", "gap"],
+    "description_md": "## Source\n- audit: 05-channels.md (Deferred items: PluginHost C7 unification; Task List #11)\n- code: crates/clawft-channels/src/plugin_host.rs (ChannelAdapterShim, ChannelAdapterHostBridge)\n- prior planning: Element 04 / C7\n\n## Problem / gap\nThe trait shim (`ChannelAdapterShim`) exists, but Telegram, Discord, Slack still implement the legacy `Channel` trait directly. Migrating them to `ChannelAdapter` is the C7 deliverable; the migration changes the cancellation contract (poll-based plugin token vs `tokio_util::sync::CancellationToken`) and the inbound payload type.\n\n## Acceptance criteria\n- [ ] Telegram, Discord, Slack reimplemented on `ChannelAdapter`\n- [ ] Decision: keep or retire `ChannelAdapterShim` (with a deprecation note if retained for third-party plugins)\n- [ ] `register_command` migration plan resolved (see separate item)\n- [ ] All existing tests still pass; new tests cover the migrated cancellation path\n- [ ] `scripts/build.sh test` and `clippy` pass\n\n## Dependencies\n- blocks: full PluginHost simplification\n- blocked-by: slash-command surface decision\n\n## Notes\nAffects every plugin-host call site. 0.8.x because it is invasive but not a broken-claim issue.\n"
+  },
+  {
+    "name": "ws05: Slash-command surface — decide consumer for ChannelHost::register_command",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "orphan", "gap"],
+    "description_md": "## Source\n- audit: 05-channels.md (Deferred items: Slash-command registration; Task List #12)\n- code: crates/clawft-channels/src/host.rs (`register_command`)\n\n## Problem / gap\n`ChannelHost::register_command` is part of the trait surface and is exercised by mock hosts in tests, but no in-tree channel actually calls it. Discord slash-commands, Telegram BotFather commands, and Slack slash commands are all unimplemented despite the trait surface. No tracker entry covers this.\n\n## Acceptance criteria\n- [ ] Decision recorded: who calls `register_command`, where do registrations land, are they shared across channels?\n- [ ] At least one in-tree channel exercises the registration end-to-end\n- [ ] Or: surface is removed/deprecated if not adopted\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: PluginHost C7 migration (cancellation/registration contract)\n- blocked-by: none\n\n## Notes\nClassic orphan API; either commit to it or delete it.\n"
+  },
+  {
+    "name": "ws05: Telegram — document or remove redundant 1s poll-interval sleep",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "tech-debt", "docs"],
+    "description_md": "## Source\n- audit: 05-channels.md (Open question 7; Task List #16)\n- code: crates/clawft-channels/src/telegram/channel.rs\n\n## Problem / gap\nThe long-poll already blocks for `DEFAULT_POLL_TIMEOUT_SECS = 30` server-side, then the client yields another `DEFAULT_POLL_INTERVAL_SECS = 1`. Whether the extra sleep adds value or just delays inbound by 1 s is undocumented.\n\n## Acceptance criteria\n- [ ] Decision: remove the additional sleep, OR document the reason (smoothing, fairness, etc.) inline and in `docs/guides/channels.md`\n- [ ] If removed: regression test asserts inbound latency without the sleep\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nLow-effort cleanup.\n"
+  },
+  {
+    "name": "ws05: Discord — document intents bitmask default and cover privileged-intent rejection",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "docs", "tests"],
+    "description_md": "## Source\n- audit: 05-channels.md (Open question 8; Task List #17)\n- code: crates/clawft-channels/src/discord/factory.rs (default intents = 37377)\n\n## Problem / gap\nFactory default intents is `37377` (GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES + a few). No doc points at the chosen bits, no test covers `intents = 0` or privileged-intent rejection (MESSAGE_CONTENT, GUILD_MEMBERS).\n\n## Acceptance criteria\n- [ ] `docs/guides/channels.md` documents the bitmask and what each bit enables\n- [ ] Test: `intents = 0` produces a clear startup error or warning\n- [ ] Test: privileged-intent flag emits a documented warning when not negotiated with Discord\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nDocs + tests, no behaviour change required.\n"
+  },
+  {
+    "name": "ws05: Slack — add unknown_envelope counter for API drift detection",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n- audit: 05-channels.md (Open question 9; Task List #18)\n- code: crates/clawft-channels/src/slack/events.rs (envelope parser)\n\n## Problem / gap\nThe Slack envelope parser logs `non-envelope message` on parse failure and silently moves on. There is no metric or counter; a regression where every payload becomes \"non-envelope\" after a Slack API change would not be observable.\n\n## Acceptance criteria\n- [ ] `slack.unknown_envelope` counter exposed via the existing metrics surface\n- [ ] Smoke test: counter increments on a known-bad payload\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nObservability-only.\n"
+  },
+  {
+    "name": "ws05: iMessage scope — implement AppleScript bridge or formally drop from tracker",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "orphan", "governance"],
+    "description_md": "## Source\n- audit: 05-channels.md (Orphaned work: imessage; Task List #19)\n- prior planning: .planning/sparc/phase4/06-channel-enhancements/04-element-06-tracker.md (E4 paired with Signal)\n- prior planning: .planning/sparc/reviews/iteration-1-spec-05-06.md:259\n\n## Problem / gap\n`crates/clawft-channels/src/imessage/` is referenced in `00-orchestrator.md` and `04-element-06-tracker.md` E4 description as paired with Signal, but the directory does not exist. iteration-1 review flagged it as \"Not in orchestrator\". Either silently dropped or deferred.\n\n## Acceptance criteria\n- [ ] Decision: implement an AppleScript bridge (macOS-only) OR remove from the tracker with a recorded rationale\n- [ ] If implemented: `imessage` feature flag, channel module, factory, basic tests\n- [ ] If dropped: tracker entry updated; orphan callouts removed\n\n## Dependencies\n- blocks: none\n- blocked-by: macOS test capacity if implemented\n\n## Notes\nDefer to 0.9.x — long-horizon, macOS-only, low priority. Most likely outcome is formal drop.\n"
+  },
+  {
+    "name": "ws05: WeftOS white-label — add brand() accessor and remove hard-coded clawft strings",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- audit: 05-channels.md (Deferred items: WeftOS white-label; Task List #20)\n- prior planning: .planning/development_notes/feature-request-whitelabel.md\n\n## Problem / gap\nHard-coded \"WeftOS\" / \"clawft\" strings appear in Discord identify (`browser: \"clawft\"`, `device: \"clawft\"`), CLI help, web UI header. White-label is P1 for Valtech, P2 generally. No `brand()` accessor exists yet.\n\n## Acceptance criteria\n- [ ] `brand()` token added to kernel config with a sensible default\n- [ ] Discord identify, CLI help, and web UI header use the accessor\n- [ ] Tests assert configurability\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: Valtech P1 commitment if it lands in 0.8.x window\n- blocked-by: none\n\n## Notes\nDefer to 0.8.x — feature, not a broken claim.\n"
+  },
+  {
+    "name": "ws05: Channel failover chain — decide semantics and either implement or close as out-of-scope",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws05-channels", "audit-finding", "audit-0.7.0", "governance"],
+    "description_md": "## Source\n- audit: 05-channels.md (Deferred items: Channel failover chain; Task List #22)\n- prior planning: MEMORY.md project context\n\n## Problem / gap\nMEMORY.md mentions \"failover chain improvements\". The only failover machinery in tree is in `clawft-llm/src/failover.rs` (provider failover), not channel failover. The PluginHost treats each channel independently. Open product question: per-message? per-session? cross-channel quorum?\n\n## Acceptance criteria\n- [ ] Decision recorded in a design doc or ADR\n- [ ] If implemented: per-channel ordering, retry policy, and observability\n- [ ] If closed out-of-scope: tracker + MEMORY.md updated\n\n## Dependencies\n- blocks: none\n- blocked-by: cross-channel session correlation\n\n## Notes\nDefer to 0.9.x — research-heavy product question.\n"
+  },
+
+  {
+    "name": "ws07: AgentRouter — wire routing into MessageBus inbound dispatch",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "release-gate-blocker", "gap", "bug"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Status & Timeline L-Routing row; Deferred item #4; Task List)\n- code: crates/clawft-core/src/agent_routing.rs (router type + tests); crates/clawft-core/src/bootstrap.rs:89, 341-355 (router stored on AgentContext); crates/clawft-core/src/agent/loop_core.rs (no router consultation)\n- prior planning: .planning/sparc/phase4/09-multi-agent-routing/02-phase-LRouting-agents-swarming.md\n\n## Problem / gap\nThe element-09 tracker reports \"14/14 done\", but only the type-level scaffolding shipped. `AgentRouter` is constructed and stored on `AgentContext`, yet `MessageBus::consume_inbound` and `AgentLoop::run` never call `router.route(&msg)`. A single agent loop still processes every message; per-user agent routing is not observable end-to-end. The L1 deliverable is feature-flagged on but inert.\n\n## Acceptance criteria\n- [ ] `MessageBus::consume_inbound` (or `AgentLoop::run`) calls `AgentRouter::route` and either dispatches to a per-agent runtime or carries the routed `agent_id` through the pipeline\n- [ ] Default catch-all route preserved when no routes match\n- [ ] Integration test: two configured agents, two senders, asserts each lands on the routed agent loop / agent_id field\n- [ ] `scripts/build.sh test` passes\n- [ ] element-09 tracker updated to drop the false 14/14 claim or mark this row in-progress until the wiring lands\n\n## Dependencies\n- blocks: AgentRuntime (L2); AgentBus integration; per-agent MCP override\n- blocked-by: design decision on \"multiple AgentLoops per agent\" vs \"one loop, per-message agent runtime\" (open question in audit)\n\n## Notes\nThis is one of the audit's top-10 cross-cutting risks. Without it, the L-Routing track is type-only.\n"
+  },
+  {
+    "name": "ws07: FlowDelegator — implement delegation/flow.rs or formally retire the Flow target",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "gap", "governance"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Status M-Foundation row; Deferred items #1, #2; TODO table `delegation/mod.rs:185`)\n- code: crates/clawft-services/src/delegation/mod.rs:185-187 (\"Flow delegation removed -- treat as Claude fallback.\"); crates/clawft-services/src/delegation/flow.rs (does not exist)\n- prior planning: .planning/sparc/phase4/09-multi-agent-routing/01-phase-MFoundation-flow-delegator.md\n\n## Problem / gap\n`FlowDelegator` was specified in detail in the M-Foundation phase doc and the tracker reports it as Done. The file `clawft-services/src/delegation/flow.rs` does not exist. `flow_available` was removed from the engine; `resolve_availability` collapses `Flow` -> `Claude`. The `Flow` `DelegationTarget` variant and `claude_flow_enabled` config field still exist, unused. Users with `claude_flow_enabled = true` silently re-route to Claude.\n\n## Acceptance criteria\n- [ ] Decision recorded (ADR or decisions.md): keep FlowDelegator OR retire it\n- [ ] If keep: implement `delegation/flow.rs` per the M1 spec (subprocess spawn with `env_clear()`, `CLAWFT_DELEGATION_DEPTH` threading, timeout + `child.kill()`, `flow_available` runtime detection via `which::which(\"claude\")` cached on `AtomicBool`)\n- [ ] If retire: remove `Flow` variant, `claude_flow_enabled` field, related tests; document the migration path for users\n- [ ] `scripts/build.sh test` passes\n- [ ] phase-M-foundation/decisions.md backfilled with the rationale\n\n## Dependencies\n- blocks: dead-code cleanup of `claude_flow_enabled`, `DelegationResult::to_ipc_message`\n- blocked-by: none\n\n## Notes\nMost likely outcome (per audit): retire. Either way, the tracker must stop claiming Done.\n"
+  },
+  {
+    "name": "ws07: Recursive-delegation guard — thread depth via CLAWFT_DELEGATION_DEPTH and enforce MAX=3",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "bug"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Deferred item #3)\n- code: crates/clawft-services/src/mcp/bridge.rs (pseudocode `MAX_DELEGATION_DEPTH = 3` not landed); crates/clawft-services/src/delegation/claude.rs (no depth threading)\n- prior planning: .planning/sparc/phase4/09-multi-agent-routing/01-phase-MFoundation-flow-delegator.md\n\n## Problem / gap\nRecursive `delegate_task` -> Claude -> MCP-bridge -> `delegate_task` is currently unbounded. `CLAWFT_DELEGATION_DEPTH` is not threaded; `MAX_DELEGATION_DEPTH = 3` from the bridge pseudocode never landed. Cost and latency blow up under accidental recursion.\n\n## Acceptance criteria\n- [ ] Depth carried on each delegation attempt (env var on subprocess paths; tool-call metadata on in-process paths to keep WASM compatibility per audit open question)\n- [ ] Hard cap at 3 (configurable). Beyond cap: `DelegationError::FallbackExhausted` with a clear message\n- [ ] Tests exercising the cap and the increment path\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: McpBridge real connection (call_claude_tool_with_depth)\n- blocked-by: env-var vs metadata decision (open question in audit)\n\n## Notes\nMust land before any production deployment of the McpBridge real connection.\n"
+  },
+  {
+    "name": "ws07: McpServerManager — implement drain-and-swap on remove_server",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "bug"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (TODO table `mcp/discovery.rs:138-139`; Deferred item #9; Task List)\n- code: crates/clawft-services/src/mcp/discovery.rs:138-139 (self-documenting stub: \"in a full implementation, in-flight calls would be completed before disconnection\")\n\n## Problem / gap\n`remove_server` only marks the server `Draining` and removes it from the map. No `AtomicU32` in-flight counter, no `InFlightGuard`, no 30s wait, no transport drop, no `call_tool` routing through the manager. The current behaviour can sever an in-flight tool call mid-stream.\n\n## Acceptance criteria\n- [ ] `inflight: AtomicU32` on `ManagedMcpServer`; `InFlightGuard` increments/decrements around `call_tool`\n- [ ] `remove_server` sets state to `Draining`, waits up to 30s for `inflight == 0`, then drops the transport\n- [ ] `call_tool` routes through the manager and respects `Draining` (rejects new calls, completes in-flight)\n- [ ] Unit + integration tests: drain completes cleanly under no traffic; rejects new calls under `Draining`; force-drops after 30s if hung\n- [ ] `scripts/build.sh test` passes\n- [ ] Replace the inline \"in a full implementation\" comment with the real impl\n\n## Dependencies\n- blocks: hot-reload watcher; CLI `weft mcp remove`\n- blocked-by: none\n\n## Notes\nOne of the most explicit self-documenting stubs in the codebase.\n"
+  },
+  {
+    "name": "ws07: McpBridge — implement real Claude Code connection (spawn, handshake, tools/list, namespace)",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "gap"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (TODO table `mcp/bridge.rs:148-153`; Deferred item #13; Task List)\n- code: crates/clawft-services/src/mcp/bridge.rs:148-153 (\"Until then, this method sets up the configuration and marks the bridge as ready\")\n\n## Problem / gap\n`McpBridge::initialize` is a state-machine setter only. No subprocess spawn of `claude mcp serve`, no MCP handshake, no `tools/list`, no proxying. `set_inbound_connected()` and `set_outbound_connected()` are called only by tests. `call_claude_tool_with_depth` does not exist.\n\n## Acceptance criteria\n- [ ] `initialize()` spawns `claude mcp serve` (or configured command), performs MCP `initialize` handshake, fetches `tools/list`\n- [ ] Tools registered under `mcp:claude-code:*` namespace using the existing helper\n- [ ] `notifications/tools/list_changed` propagated\n- [ ] `call_claude_tool_with_depth` implemented; depth-cap enforced in concert with the recursion-guard work item\n- [ ] Integration test against a mocked `claude mcp serve` peer\n- [ ] `scripts/build.sh test` passes\n- [ ] Replace the \"Until then\" doc with real description\n\n## Dependencies\n- blocks: Bridge docs reaching parity with runtime\n- blocked-by: recursive-delegation guard\n\n## Notes\nDocs already reference `claude mcp serve` flow; runtime must catch up before docs are correct.\n"
+  },
+  {
+    "name": "ws07: PlanningRouter — implement execute_react and execute_plan_and_execute",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "gap"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (TODO table `clawft-core/src/planning.rs`; Deferred item #8; Task List)\n- code: crates/clawft-core/src/planning.rs (no execute(), no execute_react, no execute_plan_and_execute; M-Advanced 2.3.5 leaves `todo!(\"implementation requires LLM integration\")`)\n- prior planning: .planning/sparc/phase4/09-multi-agent-routing/03-phase-MAdvanced-mcp-planning.md\n\n## Problem / gap\n`PlanningRouter` has `check_guard_rails` and `explain_termination` but no execute loop. `[router.planning]` config parses but the planner never runs. No-op detection, per-step timeout, partial-result return, and D6 `sender_id` cost tracking are all missing.\n\n## Acceptance criteria\n- [ ] `execute_react` and `execute_plan_and_execute` implemented with no-op detection, `execute_step_with_timeout`, partial-result returned on every termination path\n- [ ] Cost-tracking events emitted per step keyed on `sender_id` (D6 contract)\n- [ ] Wired into agent loop OR added as `DelegationTarget::Plan` (decide and document; open question in audit)\n- [ ] Unit tests for guard-rail termination, no-op termination, per-step timeout\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: any honest L4 planning claim\n- blocked-by: \"in agent loop vs new DelegationTarget\" decision\n\n## Notes\nReplace the `todo!()` with a real impl path; do not silently ship a planner that never plans.\n"
+  },
+  {
+    "name": "ws07: AgentRuntime (L2) — per-agent SessionManager, ContextBuilder, ToolRegistry, AgentsConfig",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "release-gate-blocker", "gap"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Deferred items #5, #6; Task List)\n- prior planning: .planning/sparc/phase4/09-multi-agent-routing/02-phase-LRouting-agents-swarming.md\n\n## Problem / gap\n`AgentRuntime` (per-agent `SessionManager`, `ContextBuilder`, `ToolRegistry`, `AgentsConfig`, `workspace_path`) was specified but not created. Per-agent MCP override (Contract 3.2) likewise. Anonymous-agent permission tightening (`disable_write_tools()` + delegation disabled) is unimplemented; `route_anonymous` only routes to catch-all without runtime tightening.\n\n## Acceptance criteria\n- [ ] `AgentRuntime` struct with per-agent state\n- [ ] Lazy `WorkspaceManager::ensure_agent_workspace` on first message\n- [ ] Anonymous-agent runtime tightening: no write tools, no delegation, no MCP write\n- [ ] Per-agent MCP-server config override (merge global + per-agent; drop disabled servers from per-agent registry)\n- [ ] Unit + integration tests across two agents with different overrides\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: AgentBus integration; SwarmCoordinator demo\n- blocked-by: AgentRouter dispatch wiring; Element 08/H1 `WorkspaceManager::ensure_agent_workspace`\n\n## Notes\nWithout L2 runtimes there is nowhere to host a `worker_message_loop`.\n"
+  },
+  {
+    "name": "ws07: AgentBus + SwarmCoordinator — spawn worker loops and ship at least one demo",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "orphan", "gap"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Deferred item #7; Dead-code risk: `AgentBus::with_capacity` unused)\n- code: crates/clawft-core/src/agent_bus.rs (AgentBus, SwarmCoordinator)\n\n## Problem / gap\nTypes and tests are present, but no production path constructs an `AgentBus` or runs a `worker_message_loop`. `SwarmCoordinator::with_capacity` is unused. `dispatch_subtask` and `broadcast_task` are exercised only by unit tests.\n\n## Acceptance criteria\n- [ ] At least one production wiring constructs an `AgentBus` (likely via the routing config) and spawns worker loops backed by `AgentRuntime`s\n- [ ] One demo coordinator workflow exercising `SwarmCoordinator::dispatch_subtask` end-to-end\n- [ ] Tests / e2e\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: claims of multi-agent orchestration in 0.8.x docs\n- blocked-by: AgentRuntime (L2)\n\n## Notes\nDefer to 0.8.x — needs L2 first; not a broken-claim issue today because the doc surface does not advertise live swarming.\n"
+  },
+  {
+    "name": "ws07: McpServerManager — add transport factory and url/command/tempfile validators",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "gap"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Deferred item #10; Task List)\n- prior planning: M-Advanced 5.4 (security)\n\n## Problem / gap\nNo stdio-vs-http transport factory; no `validate_mcp_url` (SSRF guard); no `validate_command_path` (shell metachar guard); no `tempfile`-with-`0600` for MCP temp files. Anyone able to write to clawft.toml's `[tools.mcp_servers]` can today launch arbitrary commands or hit arbitrary URLs.\n\n## Acceptance criteria\n- [ ] Transport factory dispatching `stdio` vs `http` based on config\n- [ ] `validate_mcp_url` rejects loopback bypass tricks, file://, non-allowlisted hosts (configurable)\n- [ ] `validate_command_path` rejects shell metachars, relative paths outside an allow-listed directory\n- [ ] MCP temp files created with mode 0600 via `tempfile`\n- [ ] Unit tests with positive and negative cases for each validator\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: hot-reload watcher (must validate on diff)\n- blocked-by: none\n\n## Notes\nSecurity-relevant; do not ship hot-reload without these.\n"
+  },
+  {
+    "name": "ws07: Hot-reload watcher — wire notify on [tools.mcp_servers] with 500ms debounce",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Deferred item #11; Task List)\n- code: crates/clawft-services/src/mcp/discovery.rs (`apply_config_diff` exists; no caller on file change)\n\n## Problem / gap\n`apply_config_diff` exists and returns `(added, removed, changed)` counts but no caller invokes it on clawft.toml change. The `notify`-crate watcher with 500ms debounce specified in M-Advanced is not wired.\n\n## Acceptance criteria\n- [ ] `notify` watcher on the `[tools.mcp_servers]` section of clawft.toml; 500ms debounce\n- [ ] Reload triggers `apply_config_diff` and validation (must run after the validator-suite item)\n- [ ] Integration test: edit config file, observe added/removed/changed counts\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: smooth multi-agent ops without daemon restart\n- blocked-by: validator suite (validate_mcp_url, validate_command_path); drain-and-swap on remove_server\n\n## Notes\nDefer to 0.8.x; safe operation requires the security validators first.\n"
+  },
+  {
+    "name": "ws07: weft mcp CLI — add add/list/remove subcommands",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Deferred item #12; Task List)\n- code: crates/clawft-cli/src/commands/ (existing `mcp_server.rs` is the outbound shell, not the discovery CLI)\n\n## Problem / gap\n`commands/mcp_cmd.rs` for `weft mcp add/list/remove` was specified but not added. Today users edit clawft.toml by hand.\n\n## Acceptance criteria\n- [ ] `weft mcp add <name> --command/--url/--env ...`\n- [ ] `weft mcp list`\n- [ ] `weft mcp remove <name>`\n- [ ] Edits clawft.toml in-place atomically and triggers a reload (or surfaces a hint when daemon is not running)\n- [ ] CLI tests\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: usability of MCP discovery\n- blocked-by: validator suite; hot-reload watcher\n\n## Notes\nThin CLI over existing infrastructure once the underlying pieces are real.\n"
+  },
+  {
+    "name": "ws07: weft mcp-server — implement allowed_tools + CommandPolicy/UrlPolicy on tools/call (3H CRIT-01)",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "bug"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Deferred item #14; Task List CRIT-01)\n- prior planning: .planning/reviews/3h-review.md (CRIT-01)\n\n## Problem / gap\n`weft mcp-server` `tools/call` dispatches directly to `tool_registry.execute` with no `allowed_tools` allow-list, no `CommandPolicy`, no `UrlPolicy`. An external MCP client connecting to weft can invoke any registered tool, including shell and HTTP tools, with zero policy enforcement.\n\n## Acceptance criteria\n- [ ] `allowed_tools` config in clawft.toml (defaults to a conservative read-only set)\n- [ ] `CommandPolicy` (binary allow-list, arg pattern checks) enforced on shell-like tools\n- [ ] `UrlPolicy` (host allow-list, scheme allow-list) enforced on HTTP tools\n- [ ] `tools/call` rejects with -32601 / a clear error code when the requested tool is outside the allow-list or fails policy\n- [ ] Unit tests for each policy\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: any production exposure of `weft mcp-server`\n- blocked-by: none\n\n## Notes\n3H CRIT-01. The single highest-risk issue in the MCP server-mode surface.\n"
+  },
+  {
+    "name": "ws07: Tool-execution helper — extract execute_tool_with_guards and apply truncation (3H CRIT-02)",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tech-debt", "bug"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Deferred item #15; Task List CRIT-02)\n- code: crates/clawft-core/src/agent/loop_core.rs (run_tool_loop with guards); crates/clawft-services/src/delegation/claude.rs (no guards reused)\n- prior planning: .planning/reviews/3h-review.md (CRIT-02)\n\n## Problem / gap\n`agent/loop_core.rs::run_tool_loop` has truncation, error handling, and logging that are NOT shared with `ClaudeDelegator`'s loop. `MAX_TOOL_RESULT_BYTES` truncation is not applied to results sent back to Anthropic in the delegation path; oversized results can blow context windows and leak data.\n\n## Acceptance criteria\n- [ ] `execute_tool_with_guards` extracted into a single helper used by both the main loop and `ClaudeDelegator`\n- [ ] `MAX_TOOL_RESULT_BYTES` truncation applied in both paths\n- [ ] Unified error/log shape\n- [ ] Tests\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: clean delegation handling\n- blocked-by: none\n\n## Notes\n3H CRIT-02. Pair with the recursion-guard work item.\n"
+  },
+  {
+    "name": "ws07: McpSession — keepalive, reconnect, is_alive, graceful cancel (3H MAJ-03)",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "tech-debt", "gap"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Deferred item #18; Task List)\n- prior planning: .planning/reviews/3h-review.md (MAJ-03)\n\n## Problem / gap\nNo keepalive / ping, no reconnection, no `is_alive()` on `StdioTransport`, no graceful `notifications/cancelled` on shutdown. Long gateway sessions cannot recover from a crashed child server.\n\n## Acceptance criteria\n- [ ] `is_alive()` on `StdioTransport`\n- [ ] Reconnect-with-backoff in `McpSession`\n- [ ] Periodic ping/keepalive\n- [ ] Graceful `notifications/cancelled` on shutdown\n- [ ] Tests including child-crash recovery\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: long-running gateway durability\n- blocked-by: none\n\n## Notes\nDefer to 0.8.x — affects durability, not correctness in normal operation.\n"
+  },
+  {
+    "name": "ws07: weft mcp-server — JsonRpc id Value, init-state tracking, -32002 (3H MIN-01/03)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "tech-debt", "bug"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Deferred items #19; Task List MIN-01, MIN-03)\n- code: crates/clawft-services/src/mcp/server.rs (JsonRpcRequest.id typed as u64)\n\n## Problem / gap\n`JsonRpcRequest.id` and `JsonRpcResponse.id` are typed `u64`. String-id MCP clients cannot interop. Init state is not tracked; pre-handshake methods are not rejected with -32002.\n\n## Acceptance criteria\n- [ ] `id` typed as `serde_json::Value`\n- [ ] Init state tracked per session; pre-handshake methods other than `initialize` rejected with -32002\n- [ ] `TestTransport` in `clawft-cli/src/mcp_tools.rs` updated for any new `McpTransport` methods (3H MAJ-04)\n- [ ] Tests\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: interop with string-id clients\n- blocked-by: none\n\n## Notes\nLow-effort cleanup; defer to 0.8.x.\n"
+  },
+  {
+    "name": "ws07: IDE provider — replace IdeToolProvider::stub() with real implementation",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "stub"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (TODO table `mcp/ide.rs:203`)\n- code: crates/clawft-services/src/mcp/ide.rs:203\n\n## Problem / gap\n`IdeToolProvider::stub()` is the only constructor. Full IDE provider is not implemented. Adjacent to the multi-agent tool surface.\n\n## Acceptance criteria\n- [ ] Decision: implement OR remove the stub provider\n- [ ] If implemented: real provider with at least one driver (LSP, Cursor, etc.) and tests\n- [ ] If removed: stub deleted; references cleaned\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nLong-horizon; defer to 0.9.x.\n"
+  },
+  {
+    "name": "ws07: Hybrid context-router — wire MicroLoraRouter once agent-core-v1 phase E3+ is ready",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (TODO table)\n- code: crates/clawft-core/src/agent/context_router/hybrid.rs:44; crates/clawft-core/src/agent/context_router.rs:206 (TODO markers)\n\n## Problem / gap\n`// TODO(agent-core-v1 phase E3+): wire MicroLoraRouter (v3) once...` Micro-lora hybrid context-routing remains unwired.\n\n## Acceptance criteria\n- [ ] Wire `MicroLoraRouter` once agent-core-v1 phase E3+ lands\n- [ ] Tests; remove the two TODO markers\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: agent-core-v1 phase E3+ (cross-stream)\n\n## Notes\nOpus-low; defer.\n"
+  },
+  {
+    "name": "ws07: delegate_tool — drop hardcoded claude_available=true, query the delegator for liveness",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "tech-debt", "bug"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (TODO table `clawft-tools/src/delegate_tool.rs:103`)\n- code: crates/clawft-tools/src/delegate_tool.rs:103 (`let claude_available = true; // We have a delegator.`)\n\n## Problem / gap\nIf the delegator is later non-functional (auth lapse, network, etc.) the tool will continue to advertise availability and force-route to it.\n\n## Acceptance criteria\n- [ ] Query the delegator for live availability (cached with a short TTL or refresh on error)\n- [ ] Degrade gracefully when unavailable\n- [ ] Test with a faulted delegator\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nLow priority but easy to fix.\n"
+  },
+  {
+    "name": "ws07: weft delegate — add debug subcommand to surface routing decisions",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "tooling"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Deferred item #22)\n\n## Problem / gap\nNot in the SPARC plan but a common ask: a CLI subcommand that exercises the engine to show which target a free-text task would route to.\n\n## Acceptance criteria\n- [ ] `weft delegate \"<task>\"` prints the resolved target, the rule that matched, and the complexity score\n- [ ] CLI test\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nDeveloper UX win.\n"
+  },
+  {
+    "name": "ws07: weft doctor — add multi-agent checks (claude on PATH, auto-delegation, ≥1 route)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "tooling"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Task List `weft doctor` line)\n\n## Problem / gap\n`weft doctor` does not flag missing `claude` on PATH, auto-delegation enabled status, or whether at least one agent route is configured.\n\n## Acceptance criteria\n- [ ] `weft doctor` checks: `claude` binary on PATH; auto-delegation feature flag and config; at least one agent route configured (or notes catch-all only)\n- [ ] Tests\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nDiscoverability fix.\n"
+  },
+  {
+    "name": "ws07: claude-flow MCP server — decide whether to add by default to [tools.mcp_servers]",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "governance"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Task List final line)\n- code: crates/clawft-core/src/agent/skills.rs:702-728 (skill manifest references `claude-flow__swarm_*` / `claude-flow__agent_*` prefixes)\n\n## Problem / gap\nThe skill manifest references `claude-flow` MCP tool prefixes, but dynamic discovery is M4 and `claude-flow` is not added to `[tools.mcp_servers]` by default. End users get prefixed tools that resolve to nothing.\n\n## Acceptance criteria\n- [ ] Decision: add by default OR remove the prefixes from the skill manifest until dynamic discovery is wired\n- [ ] Documented in decisions.md\n- [ ] Tests / docs updated accordingly\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nBroken-claim shape; defer to 0.8.x.\n"
+  },
+  {
+    "name": "ws07: SwarmCoordinator topology — implement mesh/hierarchical/adaptive or document as prompt-only",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "governance", "docs"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Deferred item #23; Task List `mesh-/hierarchical-/adaptive-coordinator`)\n- code: CLAUDE.md (references); crates/clawft-core/src/agent_bus.rs (SwarmCoordinator is flat)\n\n## Problem / gap\n`CLAUDE.md` references `mesh-coordinator`, `hierarchical-coordinator`, `adaptive-coordinator` agents; in tree they exist only as claude-flow swarm prompts. `SwarmCoordinator` is a flat fan-out/collect with no topology axis.\n\n## Acceptance criteria\n- [ ] Decision: implement a topology axis on `SwarmCoordinator` OR document the references as claude-flow-prompt-only\n- [ ] CLAUDE.md updated to reflect the choice\n- [ ] Tests if implemented\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nResearch-heavy if implemented; defer to 0.9.x.\n"
+  },
+  {
+    "name": "ws07: notifications/tools/list_changed — handle inbound and advertise outbound",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Deferred item #17)\n\n## Problem / gap\nNot handled either direction today. The MCP bridge does not propagate `notifications/tools/list_changed` from external servers; `weft mcp-server` advertises `tools.listChanged: false`.\n\n## Acceptance criteria\n- [ ] Inbound: handle `notifications/tools/list_changed` by re-fetching `tools/list`\n- [ ] Outbound: advertise `tools.listChanged: true` and emit notifications when the registry changes\n- [ ] Tests\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: bridge real connection\n\n## Notes\nDefer to 0.8.x; pairs with the bridge real-connection work.\n"
+  },
+  {
+    "name": "ws07: Auto-delegation classifier — improve regex+keyword accuracy or document fragility (3H MIN-02)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Deferred item #16; 3H MIN-02)\n\n## Problem / gap\nThe regex + keyword classifier is fragile. No follow-up bead. False positives/negatives directly affect routing decisions.\n\n## Acceptance criteria\n- [ ] Either: replace with a small classifier (LoRA / embeddings) once available, OR document the limitations and add a corpus of regression tests\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: micro-lora hybrid context router (cross-stream)\n\n## Notes\nDefer to 0.8.x.\n"
+  },
+  {
+    "name": "ws07: Backfill phase-* decisions/notes for FlowDelegator skip and bridge stub rationale",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs", "governance"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (TODO table; Task List)\n- prior planning: .planning/development_notes/09-multi-agent-routing/phase-{M-foundation,L-routing,M-advanced}/{notes,blockers,decisions,difficult-tasks}.md (all empty placeholders)\n\n## Problem / gap\nAll twelve phase notes/decisions/blockers/difficult-tasks files are `_No notes recorded yet._`. The skip rationale for FlowDelegator and the bridge no-op is undocumented. The element-09 tracker says \"14/14, 100%\"; the audit shows otherwise. Governance debt.\n\n## Acceptance criteria\n- [ ] decisions.md backfilled in each phase: FlowDelegator skip rationale; AgentRouter non-integration rationale; bridge stub rationale\n- [ ] element-09 tracker updated to drop the 14/14 claim or to reflect the items still open per this audit\n- [ ] `scripts/build.sh check` (or markdown lint, if any) passes\n\n## Dependencies\n- blocks: any future audit accuracy\n- blocked-by: none\n\n## Notes\nGovernance / docs cleanup. Pair with the FlowDelegator decision item.\n"
+  },
+  {
+    "name": "ws07: delegation_config — reconcile claude_enabled defaults across serde-default vs Default::default",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "tech-debt", "docs"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Dead-code risk; Task List)\n- code: crates/clawft-types/src/delegation.rs:163-173 (`delegation_config_from_empty_json` asserts `claude_enabled == false`)\n\n## Problem / gap\n`delegation_config_from_empty_json` asserts `claude_enabled == false` for `{}` because `serde(default)` uses `bool::default()` (false) rather than `Default::default()` (true). The two tests are technically consistent but the divergence is a documented footgun.\n\n## Acceptance criteria\n- [ ] Either: change the serde default to derive from `Default::default()` (so `{}` produces `claude_enabled = true`), OR document the divergence in a doc comment + user-facing docs\n- [ ] Tests updated to match the chosen behaviour\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nUser-facing footgun; pick one and document it.\n"
+  },
+  {
+    "name": "ws07: Per-agent MCP-server config override (Contract 3.2) — implement merge logic",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws07-multi-agent", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- audit: 07-multi-agent-routing.md (Deferred item #20; Task List)\n\n## Problem / gap\nPer-agent MCP-server overrides (merge global + per-agent; drop disabled servers from per-agent registry) are not implemented; needs L2 runtime first.\n\n## Acceptance criteria\n- [ ] Merge logic landed; each agent runtime gets a per-agent MCP registry\n- [ ] Tests with global-only, override-only, and disabled-on-agent cases\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: AgentRuntime (L2)\n\n## Notes\nDefer to 0.8.x; depends on L2.\n"
+  },
+
+  {
+    "name": "ws10: Voice STT — record ADR choosing in-process sherpa-rs vs substrate clawft-service-whisper",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "release-gate-blocker", "governance", "gap"],
+    "description_md": "## Source\n- audit: 10-voice.md (Open questions: Two voice STT stacks coexist; P0 Task #1)\n- code: crates/clawft-plugin/src/voice/stt.rs (in-process sherpa-rs plan, all stubbed); crates/clawft-service-whisper/src/* (real working substrate pipeline)\n- prior planning: .planning/sparc/voice/00-orchestrator.md; .planning/sensors/PIPELINE-PRIMITIVE-SPIKE.md\n\n## Problem / gap\nTwo unrelated voice-STT stacks coexist with no ADR reconciling them. `clawft-plugin/voice/*` plans in-process sherpa-rs (all stubs). `clawft-service-whisper` is a real, working substrate-side whisper.cpp HTTP pipeline. The SPARC voice plan does not mention the substrate pipeline; the substrate journal explicitly chose HTTP over whisper-rs FFI. Which is the canonical Talk-Mode STT for 0.7.0+? Does `VoiceChannel` consume substrate transcript events, or own its own recognizer?\n\n## Acceptance criteria\n- [ ] ADR in `docs/adr/` decides the canonical voice-STT path and the relationship between the two surfaces\n- [ ] If unified: explicit deletion or rebrand of the losing path\n- [ ] If split: named contracts (e.g. `VoiceChannel` consumes substrate transcripts on `substrate/_derived/transcript/<src>/mic`)\n- [ ] Documented join key between `TranscriptLogger` JSONL session_key and substrate `<source-node-id>`\n- [ ] orchestrator-log.md and W-VOICE plan docs cross-reference the ADR\n\n## Dependencies\n- blocks: every other ws10 implementation item (cannot wire a path that has not been chosen)\n- blocked-by: none\n\n## Notes\nThis is the foundational decision for ws10 0.7.x work.\n"
+  },
+  {
+    "name": "ws10: VP gate — run validation prototype or formally cancel and remove deferral markers",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "release-gate-blocker", "governance", "tests"],
+    "description_md": "## Source\n- audit: 10-voice.md (VP row in Status & Timeline; P0 Task #2; doc-comment markers)\n- code: many \"after VP\" doc markers in clawft-plugin/src/voice/{capture,playback,vad,stt,tts,wake,wake_daemon,channel}.rs\n- prior planning: .planning/sparc/voice/04-voice-pre-implementation.md\n\n## Problem / gap\nVP1-VP5 gate (validate sherpa-rs + cpal + model hosting + AEC + platform audio) was specified as a Week-0 prerequisite and was skipped. All VS1.1 stub work proceeded without VP exit criteria. Doc comments scattered across the voice plugin defer real implementation \"after VP\".\n\n## Acceptance criteria\n- [ ] Decision recorded: run VP, OR cancel it and revise the plan\n- [ ] If run: `voice-proto/` directory with the VP1-VP5 prototypes; recorded results per the spec\n- [ ] If cancelled: every \"after VP\" doc comment replaced with a real status (e.g. \"deferred to ws10 STT/TTS implementation track\"); voice-pre-implementation.md marked Cancelled with rationale\n- [ ] orchestrator-log.md cross-reference\n\n## Dependencies\n- blocks: any honest \"voice MVP\" claim\n- blocked-by: STT/TTS canonical-path ADR (item above)\n\n## Notes\nMost likely outcome: cancel and rewrite the deferral markers.\n"
+  },
+  {
+    "name": "ws10: SC-1 mic privacy indicator — implement before any real cpal capture lands",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security"],
+    "description_md": "## Source\n- audit: 10-voice.md (Security controls SC-1; P0 Task #5)\n- prior planning: .planning/sparc/voice/06-voice-security-review.md (SC-1)\n\n## Problem / gap\nSC-1 (visual mic privacy indicator across platforms; OS-level permission prompts; hardware mic-mute respect) is unimplemented. Calling this an \"MVP\" today would be unsafe.\n\n## Acceptance criteria\n- [ ] At minimum: terminal badge + WS event `voice:capture_active` whenever capture is active, emitted before the first audio frame is read\n- [ ] OS-level permission prompts (macOS TCC `AVCaptureDevice.requestAccess`, Windows privacy settings hint, Linux portal where applicable)\n- [ ] Hardware mic-mute respected (cpal device state listener)\n- [ ] Tray / menu-bar / terminal badge visible whenever mic is active\n- [ ] Tests covering the WS event emission and the off-state\n- [ ] `scripts/build.sh test --features voice` passes\n\n## Dependencies\n- blocks: any real cpal capture; ws05 VoiceChannel hardening\n- blocked-by: cpal Cargo dep being added (separate item)\n\n## Notes\nRelease-gate blocker per audit. P0 security control.\n"
+  },
+  {
+    "name": "ws10: SC-4 voice permission flags — gate voice-triggered tool execution by Level 0/1/2",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security"],
+    "description_md": "## Source\n- audit: 10-voice.md (Security controls SC-4; P0 Task #6)\n- prior planning: .planning/sparc/voice/06-voice-security-review.md (SC-4)\n\n## Problem / gap\nVoice-specific permission flags (`voice_listen`, `voice_speak`, `wake_word`, `talk_mode`, `voice_exec_shell`, `voice_delegate`) are not implemented. Today, voice transcription would route to the agent loop with full Level-2 access. There is no destructive-action voice confirmation gate. `VoiceCommand.confirm: bool` is stored but never read.\n\n## Acceptance criteria\n- [ ] Permission enum extended with the six voice flags above\n- [ ] `PermissionResolver` consults voice flags when the inbound channel is `VoiceChannel`\n- [ ] Destructive actions (write tools, shell, delegation) are gated and require an explicit voice-confirmation prompt when the request originates from voice\n- [ ] `VoiceCommand.confirm` consumed by the registry to drive confirmation flow\n- [ ] Tests across each flag\n- [ ] `scripts/build.sh test --features voice` passes\n\n## Dependencies\n- blocks: any real voice-to-agent path; ws05 VoiceChannel real start/send\n- blocked-by: STT/TTS canonical-path ADR\n\n## Notes\nRelease-gate blocker per audit. P0 security control.\n"
+  },
+  {
+    "name": "ws10: SC-7 model integrity — replace placeholder SHA-256 and add Ed25519 manifest verify",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security"],
+    "description_md": "## Source\n- audit: 10-voice.md (TODOs in source: models.rs:54,66,78; Open questions: Model SHA-256 hashes are placeholders; P0 Task #3; SC-7)\n- code: crates/clawft-plugin/src/voice/models.rs:54,66,78 (`PLACEHOLDER_SHA256_*`)\n- prior planning: .planning/sparc/voice/06-voice-security-review.md (SC-7)\n\n## Problem / gap\nSHA-256 hashes for STT/TTS/VAD models in `models.rs` are `PLACEHOLDER_SHA256_*`. The download manager will silently accept tampered models because it only checks file existence. Ed25519 signed-manifest verification is not implemented. P0 security gap hiding behind a stub.\n\n## Acceptance criteria\n- [ ] Real SHA-256 hashes for the canonical model versions (or a build-time generator that produces them at release time)\n- [ ] `is_cached` refuses to load a model whose hash does not match (or whose hash is a placeholder)\n- [ ] Ed25519-signed model manifest verified before any model is loaded\n- [ ] Tests: tampered file rejected; missing manifest rejected; valid model accepted\n- [ ] `scripts/build.sh test --features voice` passes\n\n## Dependencies\n- blocks: any real model download path; `weft voice setup`\n- blocked-by: STT/TTS canonical-path ADR\n\n## Notes\nRelease-gate blocker per audit. P0 security control.\n"
+  },
+  {
+    "name": "ws10: SC-9 voice command audit logging — record permission-check trail per transcription",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security"],
+    "description_md": "## Source\n- audit: 10-voice.md (Security controls SC-9; P0 Task list)\n- prior planning: .planning/sparc/voice/06-voice-security-review.md (SC-9)\n\n## Problem / gap\nVoice command transcription audit logging with a permission-check trail is not implemented. Today there is no record that ties a voice utterance to the permission decisions that followed.\n\n## Acceptance criteria\n- [ ] Each voice transcription that reaches the pipeline produces an audit log entry: timestamp, session_key, transcribed_text, permission decisions, tool calls executed, result status\n- [ ] Logs go to `<workspace>/.clawft/audit/voice.jsonl` (or chosen audit sink) with append-only semantics\n- [ ] No raw audio retained unless `voice.audio_retention` is explicitly configured (SC-2 cross-ref)\n- [ ] Tests assert the audit entry shape\n- [ ] `scripts/build.sh test --features voice` passes\n\n## Dependencies\n- blocks: any real voice-to-agent path with destructive actions\n- blocked-by: SC-4 voice permission flags\n\n## Notes\nRelease-gate blocker per audit. P0 security control.\n"
+  },
+  {
+    "name": "ws10: SC-10 plugin voice capability — gate WASM plugins on voice capability + sub-perms",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security"],
+    "description_md": "## Source\n- audit: 10-voice.md (Security controls SC-10; P0 Task list)\n- prior planning: .planning/sparc/voice/06-voice-security-review.md (SC-10)\n\n## Problem / gap\nWASM plugins can today access voice surfaces with no capability gate. SC-10 requires plugin manifest `capabilities: [\"voice\"]` plus sub-permissions `voice.listen` / `voice.speak` / `voice.raw_audio`, and per-plugin `VoiceHandle` isolation.\n\n## Acceptance criteria\n- [ ] Plugin manifest schema extended with `capabilities` and voice sub-permissions\n- [ ] Loader rejects voice-using plugins that do not declare the capability\n- [ ] `VoiceHandle` per plugin enforces the sub-permissions at call time\n- [ ] Tests across each sub-permission\n- [ ] `scripts/build.sh test --features voice` passes\n\n## Dependencies\n- blocks: any third-party plugin shipping voice usage\n- blocked-by: SC-4 voice permission flags\n\n## Notes\nRelease-gate blocker per audit. P0 security control.\n"
+  },
+  {
+    "name": "ws10: voice umbrella feature — include voice-stt and voice-tts or rename to voice-stubs",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "release-gate-blocker", "bug", "docs"],
+    "description_md": "## Source\n- audit: 10-voice.md (Open questions: voice umbrella feature; P0 Task #4, #7)\n- code: crates/clawft-plugin/Cargo.toml:20 (`voice = [\"voice-vad\", \"voice-wake\", \"dep:tokio\"]`)\n\n## Problem / gap\n`--features voice` builds a pipeline with no STT and no TTS. The umbrella implies wake+VAD+tokio but not STT/TTS, contradicting the documented build line. Either include STT/TTS or rename the feature so consumers know they don't get audio I/O. Also: `sherpa-rs` and `cpal` are not in `clawft-plugin/Cargo.toml`.\n\n## Acceptance criteria\n- [ ] Decision recorded: include STT/TTS in the umbrella OR rename to `voice-stubs`\n- [ ] Cargo deps for `sherpa-rs` and `cpal` added (or explicitly deferred with a tracked item, with the umbrella renamed accordingly)\n- [ ] `scripts/build.sh native --features voice` documentation matches reality\n- [ ] `scripts/build.sh test` passes; `scripts/build.sh clippy` passes\n\n## Dependencies\n- blocks: every \"voice MVP\" claim\n- blocked-by: STT/TTS canonical-path ADR\n\n## Notes\nRelease-gate blocker per audit P0.\n"
+  },
+  {
+    "name": "ws10: AudioConfig / CaptureConfig / PlaybackConfig — collapse into one canonical type",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tech-debt"],
+    "description_md": "## Source\n- audit: 10-voice.md (Open questions: AudioConfig is duplicated; P0 Task #8)\n- code: crates/clawft-types/src/config/voice.rs::AudioConfig; crates/clawft-plugin/src/voice/capture.rs::CaptureConfig; crates/clawft-plugin/src/voice/playback.rs::PlaybackConfig\n\n## Problem / gap\nThree near-identical types: `AudioConfig` (sample_rate, chunk_size, channels, input_device, output_device); `CaptureConfig` (same minus output_device); `PlaybackConfig` (sample_rate, channels, device_name). Which is canonical?\n\n## Acceptance criteria\n- [ ] One canonical config type (likely `AudioConfig` in clawft-types) used by both capture and playback\n- [ ] Capture/playback take a view (`InputDeviceConfig` / `OutputDeviceConfig` newtype wrappers) rather than maintaining duplicate types\n- [ ] Tests updated\n- [ ] `scripts/build.sh test --features voice` passes\n\n## Dependencies\n- blocks: clean cpal integration\n- blocked-by: none\n\n## Notes\nP0 in audit task list because it foots-guns every implementation item that follows. Tagged release-gate-blocker.\n"
+  },
+  {
+    "name": "ws10: voice_listen / voice_speak tools — wire to real STT/TTS with cloud fallback",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n- audit: 10-voice.md (P1 Task #9; deferred items VS1)\n- code: crates/clawft-tools/src/{voice_listen,voice_speak}.rs (return `\"status\": \"stub_not_implemented\"`)\n\n## Problem / gap\n`voice_listen` and `voice_speak` tools are stubs returning a fixed status string. Without these wired, no agent-callable voice path exists.\n\n## Acceptance criteria\n- [ ] `voice_listen` invokes the canonical STT path and returns the transcript + confidence\n- [ ] `voice_speak` invokes the canonical TTS path with cloud fallback and returns playback status\n- [ ] Tests against both local and cloud paths\n- [ ] `scripts/build.sh test --features voice,voice-stt,voice-tts` passes\n\n## Dependencies\n- blocks: any agent-callable voice path\n- blocked-by: STT/TTS canonical-path ADR; SC-4 voice permission flags\n\n## Notes\nDefer to 0.8.x; needs canonical-path decision and permission flags first.\n"
+  },
+  {
+    "name": "ws10: weft voice setup — real model download with SHA-256 verify and progress UI",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "stub"],
+    "description_md": "## Source\n- audit: 10-voice.md (P1 Task #10; VS1 deferred items)\n- code: crates/clawft-cli/src/commands/voice.rs (`weft voice setup` prints stub)\n\n## Problem / gap\n`weft voice setup` prints a stub message; no real model fetch happens.\n\n## Acceptance criteria\n- [ ] Real HTTP fetch of canonical models with SHA-256 verify (depends on SC-7 work)\n- [ ] Progress reporting via stderr or a small TUI\n- [ ] Cached models reused (refuses placeholder hashes)\n- [ ] Tests against a fixture HTTP server\n- [ ] `scripts/build.sh test --features voice` passes\n\n## Dependencies\n- blocks: any user-facing setup flow\n- blocked-by: SC-7 model integrity\n\n## Notes\nDefer to 0.8.x; depends on SC-7.\n"
+  },
+  {
+    "name": "ws10: WakeWordDetector — wire rustpotter or document an alternative",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "stub"],
+    "description_md": "## Source\n- audit: 10-voice.md (P1 Task #11; VS2 deferred items)\n- code: crates/clawft-plugin/src/voice/wake.rs (process_frame returns false); crates/clawft-plugin/src/voice/wake_daemon.rs\n\n## Problem / gap\n`WakeWordDetector::process_frame` always returns `false`. No rustpotter dependency, no model file, no CPU enforcement, no \"hey weft\" model under `models/voice/wake/hey-weft.rpw`.\n\n## Acceptance criteria\n- [ ] Add rustpotter (or alternative) under `voice-wake` feature\n- [ ] Ship the canonical \"hey weft\" model with verified hash\n- [ ] Real `process_frame` returns true on detection\n- [ ] CPU budget auto-throttle (< 2 % wake daemon)\n- [ ] Tests using a recorded wake utterance\n- [ ] `scripts/build.sh test --features voice,voice-wake` passes\n\n## Dependencies\n- blocks: hands-free activation use cases\n- blocked-by: STT/TTS canonical-path ADR; SC-7 model integrity\n\n## Notes\nDefer to 0.8.x.\n"
+  },
+  {
+    "name": "ws10: EchoCanceller and NoiseSuppressor — replace deceptive passthroughs with real DSP",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "stub", "bug"],
+    "description_md": "## Source\n- audit: 10-voice.md (P1 Task #12; orphaned: EchoCanceller.feed_reference unused; NoiseSuppressor.noise_floor unused; doc-comment markers in echo.rs:88, noise.rs:68)\n- code: crates/clawft-plugin/src/voice/echo.rs; crates/clawft-plugin/src/voice/noise.rs\n\n## Problem / gap\nBoth modules are passthroughs. EchoCanceller has a circular reference buffer that `process()` ignores; NoiseSuppressor tracks RMS noise floor via EMA but does not filter. The presence of computed-but-unused state is misleading.\n\n## Acceptance criteria\n- [ ] EchoCanceller: NLMS or frequency-domain adaptive filter consuming the reference buffer\n- [ ] NoiseSuppressor: spectral subtraction or RNNoise consuming `noise_floor`\n- [ ] Either implementation, OR explicit removal of the dead reference state and a doc comment marking the modules as no-op-by-design\n- [ ] Tests against fixture audio with known noise/echo\n- [ ] `scripts/build.sh test --features voice` passes\n\n## Dependencies\n- blocks: real Talk Mode quality\n- blocked-by: cpal capture path\n\n## Notes\nDefer to 0.8.x.\n"
+  },
+  {
+    "name": "ws10: WS voice:status — connect a real backend broadcaster",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "orphan", "gap"],
+    "description_md": "## Source\n- audit: 10-voice.md (P1 Task #14; orphan: VoiceWsEvent emitted nowhere)\n- code: crates/clawft-plugin/src/voice/events.rs (VoiceWsEvent type defined)\n\n## Problem / gap\n`VoiceWsEvent` and the `voice:status` topic are defined; the UI subscribes; nothing emits. Half-orphan API.\n\n## Acceptance criteria\n- [ ] A real backend broadcaster publishes `VoiceWsEvent` to `voice:status` on capture/playback/talk-mode state changes\n- [ ] UI receives events end-to-end (replace MSW dependency for this topic)\n- [ ] Tests asserting event shape\n- [ ] `scripts/build.sh test --features voice` passes\n\n## Dependencies\n- blocks: real-time UI state\n- blocked-by: SC-1 mic privacy indicator (so the indicator events are wired in tandem)\n\n## Notes\nDefer to 0.8.x.\n"
+  },
+  {
+    "name": "ws10: /api/voice/* — replace MSW-only mocks with real handlers in clawft-services",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "stub", "gap"],
+    "description_md": "## Source\n- audit: 10-voice.md (P1 Task #15; orphan: mocks/handlers.ts has no Rust counterpart)\n- code: clawft-ui/src/mocks/handlers.ts (4 endpoints with no backend); crates/clawft-services/src/api/voice_api.rs (existing surface)\n\n## Problem / gap\n`/api/voice/{status,settings,test-mic,test-speaker}` are MSW-mocked only. UI works only against mocks; the daemon does not serve them.\n\n## Acceptance criteria\n- [ ] Real handlers for the four endpoints in `voice_api.rs`\n- [ ] UI talks to the daemon end-to-end without MSW\n- [ ] Integration test (browser → daemon round-trip)\n- [ ] `scripts/build.sh test` passes; `scripts/build.sh ui` (or equivalent) passes\n\n## Dependencies\n- blocks: real-daemon UI testing\n- blocked-by: voice canonical-path ADR\n\n## Notes\nDefer to 0.8.x.\n"
+  },
+  {
+    "name": "ws10: Windows install-service — automate schtasks or document manual route as final",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "gap", "docs"],
+    "description_md": "## Source\n- audit: 10-voice.md (P1 Task #16; Open questions: Windows install-service)\n\n## Problem / gap\n`weft voice install-service` on Windows prints manual Task Scheduler instructions. Unclear if that is the long-term plan.\n\n## Acceptance criteria\n- [ ] Decision: ship automated `schtasks` invocation OR formally document the manual route as final\n- [ ] If automated: implementation + Windows test\n- [ ] Docs reflect the choice\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: parity with Linux/macOS\n- blocked-by: none\n\n## Notes\nLow priority.\n"
+  },
+  {
+    "name": "ws10: Talk Mode interruption — abort TTS when VAD trips during playback",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- audit: 10-voice.md (P1 Task #17; VS1 deferred items)\n- code: crates/clawft-plugin/src/voice/talk_mode.rs; tts.rs (TtsAbortHandle exists; synthesize never checks it)\n\n## Problem / gap\n`TtsAbortHandle` is defined but `synthesize()` never checks it. `TalkModeController::run()` is a thin pass-through. There is no interruption detection (mic VAD trips while TTS speaking → abort handle).\n\n## Acceptance criteria\n- [ ] `synthesize()` checks the abort handle on every chunk\n- [ ] `TalkModeController` aborts in-flight TTS when VAD trips\n- [ ] Tests with a fixture TTS provider that yields chunks slowly\n- [ ] `scripts/build.sh test --features voice,voice-tts` passes\n\n## Dependencies\n- blocks: usable Talk Mode\n- blocked-by: STT/TTS canonical-path ADR\n\n## Notes\nDefer to 0.8.x.\n"
+  },
+  {
+    "name": "ws10: VoicePersonality — wire per-agent lookup in TTS dispatch",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- audit: 10-voice.md (P1 Task #18; orphan: VoicePersonality.greeting_prefix never consumed)\n- code: crates/clawft-types/src/config/personality.rs; crates/clawft-plugin/src/voice/tts.rs\n\n## Problem / gap\n`VoiceConfig.personalities` (`HashMap<String, VoicePersonality>`) is configured and validated but no TTS path consults it. `VoicePersonality.greeting_prefix` is never consumed.\n\n## Acceptance criteria\n- [ ] TTS dispatch resolves the per-agent voice (`voice_id`, speed, pitch) from the personalities map by `agent_id`\n- [ ] `greeting_prefix` consumed at session-start\n- [ ] Tests across two configured personalities\n- [ ] `scripts/build.sh test --features voice,voice-tts` passes\n\n## Dependencies\n- blocks: per-agent voice routing\n- blocked-by: ws07 AgentRouter dispatch wiring (so `agent_id` reaches the TTS path)\n\n## Notes\nDefer to 0.8.x.\n"
+  },
+  {
+    "name": "ws10: SC-2 audio buffer zeroization and voice.audio_retention config",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "security"],
+    "description_md": "## Source\n- audit: 10-voice.md (Security controls SC-2)\n- prior planning: .planning/sparc/voice/06-voice-security-review.md (SC-2)\n\n## Problem / gap\nNo `zeroize` of audio buffers after use; no `voice.audio_retention` config option (none/session/persist). Raw audio can persist in memory or on disk longer than necessary.\n\n## Acceptance criteria\n- [ ] `zeroize` crate added; capture and ring buffers zeroed on drop\n- [ ] `voice.audio_retention` config option in `clawft-types`; honoured by capture and transcript writer\n- [ ] Default: `none` (do not retain raw audio)\n- [ ] Tests\n- [ ] `scripts/build.sh test --features voice` passes\n\n## Dependencies\n- blocks: privacy claims\n- blocked-by: cpal capture\n\n## Notes\nDefer to 0.8.x; pairs with cpal work.\n"
+  },
+  {
+    "name": "ws10: SC-3 cloud-fallback transparency log line",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "security", "docs"],
+    "description_md": "## Source\n- audit: 10-voice.md (Security controls SC-3)\n\n## Problem / gap\nNo transparency log line (`Cloud fallback active: sending audio to ...`) when the fallback chain falls through to a cloud provider. Users cannot tell when their audio leaves the machine.\n\n## Acceptance criteria\n- [ ] Log line emitted at WARN level on every cloud fallback dispatch, including provider name and reason (error vs low-confidence)\n- [ ] Doc note in user-facing docs\n- [ ] Tests\n- [ ] `scripts/build.sh test --features voice` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nLow effort; defer to 0.8.x bundle with other SC items.\n"
+  },
+  {
+    "name": "ws10: SC-6 anti-replay nonce and transcription-echo confirmation",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "security"],
+    "description_md": "## Source\n- audit: 10-voice.md (Security controls SC-6)\n\n## Problem / gap\nDestructive voice actions need an anti-replay nonce (\"Say 'confirm delta' to proceed.\") and a transcription-echo confirmation pattern. Today neither exists.\n\n## Acceptance criteria\n- [ ] Confirmation flow with a per-action nonce string the user must speak back\n- [ ] Echo-confirmation pattern: TTS reads the proposed action; user confirms with a phrase that includes the nonce\n- [ ] `VoiceCommand.confirm` plumbed through this flow\n- [ ] Tests\n- [ ] `scripts/build.sh test --features voice` passes\n\n## Dependencies\n- blocks: destructive-action voice flows\n- blocked-by: SC-4 voice permission flags\n\n## Notes\nDefer to 0.8.x.\n"
+  },
+  {
+    "name": "ws10: SC-8 voice rate limiting (commands/min, wake/min, post-fail cooldown)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "security"],
+    "description_md": "## Source\n- audit: 10-voice.md (Security controls SC-8)\n\n## Problem / gap\nNo rate limiting on voice commands or wake activations. Spec calls for 10 commands/min, 5 wake activations/min, plus a post-fail cooldown.\n\n## Acceptance criteria\n- [ ] Token-bucket limits at the documented rates\n- [ ] Post-fail cooldown after N consecutive errors\n- [ ] Tests\n- [ ] `scripts/build.sh test --features voice` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nDefer to 0.8.x.\n"
+  },
+  {
+    "name": "ws10: Speaker diarization via sherpa-rs",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- audit: 10-voice.md (P2 Task #19; VS3.2 deferred items)\n\n## Problem / gap\nSpeaker diarization is not implemented. Multi-party sessions are unsupported.\n\n## Acceptance criteria\n- [ ] Diarization wired through sherpa-rs (or chosen alternative)\n- [ ] Per-speaker labels surfaced in transcripts\n- [ ] Tests against multi-speaker fixture audio\n\n## Dependencies\n- blocks: multi-party sessions\n- blocked-by: STT canonical-path ADR\n\n## Notes\nLong-horizon; defer to 0.9.x.\n"
+  },
+  {
+    "name": "ws10: Tauri-side native mic capture — replace browser-only getUserMedia path",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- audit: 10-voice.md (P2 Task #20)\n\n## Problem / gap\nThe browser side is the only \"real\" mic surface (`clawft-ui/src/lib/audio.ts` calls `getUserMedia`). Tauri-side native mic access does not exist.\n\n## Acceptance criteria\n- [ ] Tauri command bridges native cpal capture to the UI\n- [ ] Per-platform tests (Linux/macOS/Windows)\n\n## Dependencies\n- blocks: desktop-native voice UX\n- blocked-by: cpal Cargo dep; STT canonical-path ADR\n\n## Notes\nDefer to 0.9.x.\n"
+  },
+  {
+    "name": "ws10: Latency + WER + CPU benchmarks for voice pipeline",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "performance", "tests"],
+    "description_md": "## Source\n- audit: 10-voice.md (P2 Task #21, #22; VS3.3 deferred items)\n\n## Problem / gap\nNo latency benchmark suite (speech-end → first-response-byte), no WER benchmark against a standard English corpus, no CPU profiling harness with hard 2 % wake-budget enforcement.\n\n## Acceptance criteria\n- [ ] Benchmark harness in `crates/clawft-bench-voice/` (or chosen location)\n- [ ] Latency, WER, and CPU metrics recorded; thresholds enforced in CI\n- [ ] Docs documenting results\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: performance claims\n- blocked-by: real STT/TTS landed\n\n## Notes\nDefer to 0.9.x.\n"
+  },
+  {
+    "name": "ws10: Adaptive silence timeout learning",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- audit: 10-voice.md (P2 Task #23; VS2 deferred items)\n\n## Problem / gap\nSilence timeout is fixed at 1.5 s. Spec calls for adaptive learning of user speech patterns.\n\n## Acceptance criteria\n- [ ] Per-session silence-timeout estimator (rolling window)\n- [ ] Tests\n\n## Dependencies\n- blocks: usability polish\n- blocked-by: real VAD landed\n\n## Notes\nDefer to 0.9.x.\n"
+  },
+  {
+    "name": "ws10: UI partial-transcription streaming and TTS word highlighting",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- audit: 10-voice.md (P2 Task #24; VS3 deferred items)\n\n## Problem / gap\nNo partial-transcription stream over WS, no TTS word-highlighting during playback.\n\n## Acceptance criteria\n- [ ] Backend emits partial-transcript events on a dedicated WS topic\n- [ ] UI renders streaming partial transcripts in `talk-overlay.tsx`\n- [ ] TTS provider exposes word-timing markers consumed by the UI for highlighting\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: polished Talk Mode UX\n- blocked-by: real STT/TTS landed; voice:status broadcaster\n\n## Notes\nDefer to 0.8.x.\n"
+  },
+  {
+    "name": "ws10: Discord voice bridge — clawft-channels voice → STT → agent → TTS → VC audio",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- audit: 10-voice.md (P2 Task #25; VS2 deferred items)\n\n## Problem / gap\nDiscord voice channel bridge does not exist.\n\n## Acceptance criteria\n- [ ] Bridge between Discord VC audio and the canonical STT/TTS path\n- [ ] Tests against a mocked Discord voice gateway\n\n## Dependencies\n- blocks: Discord voice use cases\n- blocked-by: ws05 Discord channel work; STT/TTS canonical-path\n\n## Notes\nLong-horizon; defer to 0.9.x.\n"
+  },
+  {
+    "name": "ws10: audio_transcribe / audio_synthesize tools — real WAV/MP3/OGG/WebM codec support",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "stub"],
+    "description_md": "## Source\n- audit: 10-voice.md (P2 Task #26; orphan)\n- code: crates/clawft-tools/src/{audio_transcribe,audio_synthesize}.rs\n\n## Problem / gap\nFile extensions are validated (.wav/.mp3/.ogg/.webm in; .wav out) but no codec actually decodes/encodes. Tools advertise capability they do not have.\n\n## Acceptance criteria\n- [ ] Real WAV reader/writer\n- [ ] At minimum one of MP3/OGG/WebM via a chosen crate (e.g. `symphonia`)\n- [ ] Tests against fixture audio\n- [ ] `scripts/build.sh test --features voice` passes\n\n## Dependencies\n- blocks: agent-callable audio I/O\n- blocked-by: STT/TTS canonical-path\n\n## Notes\nDefer to 0.8.x.\n"
+  },
+  {
+    "name": "ws10: Cleanup orphan voice surfaces (events, statuses, voice-chat.ts, model_path types)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "orphan", "tech-debt"],
+    "description_md": "## Source\n- audit: 10-voice.md (Cleanup / orphans tasks 32, 33, 34, 35)\n- code: crates/clawft-plugin/src/voice/{events,wake}.rs; clawft-ui/src/lib/voice-chat.ts; crates/clawft-types/src/config/voice.rs (WakeConfig.model_path: Option<String>) vs crates/clawft-plugin/src/voice/wake.rs (WakeWordConfig.model_path: PathBuf)\n\n## Problem / gap\nMultiple orphan surfaces: `WakeWordEvent::Error` emitted nowhere; `VoiceStatus::Transcribing` defined but never reached; `voice-chat.ts::sendVoiceMessage` not invoked by any UI component; `WakeConfig.model_path: Option<String>` vs `WakeWordConfig.model_path: PathBuf` divergence with no bridge; `VoicePersonality.greeting_prefix` and `VoiceCommand.confirm` defined but not consumed (latter is covered separately by SC-4 / SC-6 work).\n\n## Acceptance criteria\n- [ ] Each item: either consume it OR delete it OR document it as forward-compat with a tracking link\n- [ ] If consumed: tests assert the new wiring\n- [ ] If deleted: callers cleaned up\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: code-clarity audit pass\n- blocked-by: SC-4 / SC-6 work (for `VoiceCommand.confirm`)\n\n## Notes\nDefer to 0.8.x; bundle as cleanup pass.\n"
+  },
+  {
+    "name": "ws10: clawft-service-classify — decide adoption (connect to W-VOICE, Explorer-only, or delete)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "orphan", "governance"],
+    "description_md": "## Source\n- audit: 10-voice.md (Cleanup / orphans task 37; orphaned-work section)\n- code: crates/clawft-service-classify/src/*\n\n## Problem / gap\n`clawft-service-classify` exists as an end-to-end working pipeline (RMS dBFS energy classifier, swappable backend) whose only consumer today is \"Explorer GUI subscribers\". Not connected to W-VOICE, agent loop, or any tool.\n\n## Acceptance criteria\n- [ ] Decision recorded: connect to W-VOICE OR keep Explorer-only OR delete\n- [ ] Documented in decisions.md / orchestrator-log.md\n- [ ] If connected: integration test\n- [ ] If deleted: callers cleaned up\n\n## Dependencies\n- blocks: code-clarity\n- blocked-by: STT canonical-path ADR\n\n## Notes\nDefer to 0.8.x; depends on the canonical-path decision.\n"
+  },
+  {
+    "name": "ws10: clawft-service-whisper — drop legacy dual-publish path post Phase-4 migration",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n- audit: 10-voice.md (TODOs in source: service.rs:80; Cleanup task 36)\n- code: crates/clawft-service-whisper/src/service.rs:80 (`// REMOVE AFTER PHASE 4: dual-publish for migration`)\n\n## Problem / gap\nThe whisper service publishes to two paths during a migration window. The TODO says remove after Phase 4.\n\n## Acceptance criteria\n- [ ] Drop the legacy publish path; remove the TODO\n- [ ] Tests cover only the canonical path\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: none\n- blocked-by: Phase-4 migration window confirmed closed\n\n## Notes\nDefer to 0.8.x; pure cleanup.\n"
+  },
+  {
+    "name": "ws10: clawft-service-whisper publish_wav example — keep or delete",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "orphan"],
+    "description_md": "## Source\n- audit: 10-voice.md (Orphaned work)\n- code: crates/clawft-service-whisper/examples/publish_wav.rs\n\n## Problem / gap\n`publish_wav.rs` is referenced from Cargo.toml but not part of any release surface and not executed by CI. Useful for hand-validating the substrate pipeline.\n\n## Acceptance criteria\n- [ ] Decision: keep with a doc-comment marking it as a manual validation tool, OR delete\n- [ ] If kept: ensure it builds in CI as an example\n- [ ] If deleted: Cargo.toml updated\n\n## Dependencies\n- blocks: none\n- blocked-by: none\n\n## Notes\nLow priority cleanup.\n"
+  },
+  {
+    "name": "ws10: VoiceConfig.tts.provider=\"browser\" — implement Web Speech dispatch or change default",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "bug", "docs"],
+    "description_md": "## Source\n- audit: 10-voice.md (Open questions: VoiceConfig.tts.provider defaults to \"browser\")\n- code: crates/clawft-types/src/config/voice.rs (default `tts.provider = \"browser\"`); crates/clawft-plugin/src/voice/tts.rs (no browser dispatch)\n\n## Problem / gap\nThe default TTS provider is `\"browser\"` (Web Speech API) but `tts.rs` has no browser dispatch. The only TTS providers wired are local-stub, OpenAI, and ElevenLabs. Default points at an unimplemented path.\n\n## Acceptance criteria\n- [ ] Either: implement browser-side Web Speech dispatch (UI side or Tauri command bridge) and wire it through, OR change the default to a real provider with a clear error if unconfigured\n- [ ] Docs reflect the choice\n- [ ] Tests assert the default produces a working pipeline (or a clear error)\n- [ ] `scripts/build.sh test --features voice,voice-tts` passes\n\n## Dependencies\n- blocks: any out-of-the-box TTS path\n- blocked-by: none\n\n## Notes\nBroken-claim shape; defer to 0.8.x but escalate if the shipped UI hits this.\n"
+  },
+  {
+    "name": "ws10: CloudFallbackConfig — config-string to provider router",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "gap"],
+    "description_md": "## Source\n- audit: 10-voice.md (Open questions: CloudFallbackConfig.stt_provider)\n- code: crates/clawft-types/src/config/voice.rs (`stt_provider` is a string); fallback chain takes `Box<dyn CloudSttProvider>` directly\n\n## Problem / gap\n`CloudFallbackConfig.stt_provider` is documented as `\"whisper\"` but no string-to-provider router exists. Config to provider instantiation happens nowhere.\n\n## Acceptance criteria\n- [ ] Router function maps `stt_provider` and `tts_provider` strings to concrete provider constructors\n- [ ] Unknown provider strings produce a clear error at startup\n- [ ] Tests across each known provider\n- [ ] `scripts/build.sh test --features voice` passes\n\n## Dependencies\n- blocks: usable CloudFallbackConfig\n- blocked-by: none\n\n## Notes\nDefer to 0.8.x.\n"
+  },
+  {
+    "name": "ws10: WakeConfig.sensitivity vs WakeWordConfig.threshold — unify the knob",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n- audit: 10-voice.md (Open questions: Wake word sensitivity vs threshold)\n- code: crates/clawft-types/src/config/voice.rs (WakeConfig.sensitivity); crates/clawft-plugin/src/voice/wake.rs (WakeWordConfig.threshold)\n\n## Problem / gap\nTwo names for the same knob with no shared mapping.\n\n## Acceptance criteria\n- [ ] Choose one name; the other becomes a documented alias or is removed\n- [ ] Documented mapping if a transformation is involved (e.g. sensitivity = 1 - threshold)\n- [ ] Tests\n- [ ] `scripts/build.sh test --features voice` passes\n\n## Dependencies\n- blocks: clean wake-word config\n- blocked-by: rustpotter wiring (so the chosen knob can be validated end-to-end)\n\n## Notes\nDefer to 0.8.x.\n"
+  },
+  {
+    "name": "ws10: Define join key between TranscriptLogger session_key and substrate source-node-id",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws10-voice", "audit-finding", "audit-0.7.0", "gap", "docs"],
+    "description_md": "## Source\n- audit: 10-voice.md (Open questions: Substrate paths and session correlation)\n\n## Problem / gap\n`TranscriptLogger` writes to `<workspace>/.clawft/transcripts/<session_key>.jsonl`. `clawft-service-whisper` publishes to `substrate/_derived/transcript/<source-node-id>/mic`. No documented join key.\n\n## Acceptance criteria\n- [ ] Documented mapping (session_key ↔ source-node-id) in docs/guides/ or an ADR\n- [ ] Either: emit the mapping automatically at session-start, OR document the manual correlation step\n- [ ] Tests if automatic\n- [ ] `scripts/build.sh test` passes\n\n## Dependencies\n- blocks: cross-pipeline observability\n- blocked-by: voice canonical-path ADR\n\n## Notes\nDefer to 0.8.x.\n"
+  }
+]

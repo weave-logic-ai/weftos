@@ -83,12 +83,12 @@ pub fn auto_link(content: &str, known_titles: &[String]) -> String {
         // Match the title as a whole word, case-insensitive, but only replace
         // the first occurrence outside of existing wikilinks and code blocks.
         let pattern = format!(r"(?i)\b({})\b", regex::escape(title));
-        if let Ok(re) = Regex::new(&pattern) {
-            if let Some(m) = re.find(&result) {
+        if let Ok(re) = Regex::new(&pattern)
+            && let Some(m) = re.find(&result) {
                 let matched_text = m.as_str();
                 // Don't link inside code fences or existing links.
                 let before = &result[..m.start()];
-                let in_code = before.matches("```").count() % 2 != 0;
+                let in_code = !before.matches("```").count().is_multiple_of(2);
                 let in_link = before.ends_with("[[");
                 if !in_code && !in_link {
                     let replacement = format!("[[{matched_text}]]");
@@ -100,7 +100,6 @@ pub fn auto_link(content: &str, known_titles: &[String]) -> String {
                     );
                 }
             }
-        }
     }
 
     result
@@ -108,16 +107,12 @@ pub fn auto_link(content: &str, known_titles: &[String]) -> String {
 
 /// Convert a label to a safe filename (no slashes, colons, etc.).
 pub fn safe_filename(name: &str) -> String {
-    name.replace('/', "-")
-        .replace('\\', "-")
+    name.replace(['/', '\\'], "-")
         .replace(' ', "_")
         .replace(':', "-")
-        .replace('<', "")
-        .replace('>', "")
-        .replace('"', "")
+        .replace(['<', '>', '"'], "")
         .replace('|', "-")
-        .replace('?', "")
-        .replace('*', "")
+        .replace(['?', '*'], "")
 }
 
 /// Generate a markdown "## Backlinks" section from a list of source files.

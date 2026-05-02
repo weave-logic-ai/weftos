@@ -200,7 +200,7 @@ pub fn run_calibration(
         1_000_000, // 1000ms —     1 Hz (minimal)
     ];
 
-    let p95_ms = p95 as f32 / 1000.0;
+    let _p95_ms = p95 as f32 / 1000.0;
     let required_us = (p95 as f64 / config.tick_budget_ratio as f64) as u64;
 
     // Find the smallest band that fits the required interval.

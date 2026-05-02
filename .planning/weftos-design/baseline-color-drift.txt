@@ -1,0 +1,249 @@
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/blocks/terminal.rs:24:        .fill(egui::Color32::from_rgb(8, 10, 14))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/blocks/terminal.rs:35:                            TerminalLineKind::Input => egui::Color32::from_rgb(120, 200, 255),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/blocks/terminal.rs:36:                            TerminalLineKind::Output => egui::Color32::from_rgb(210, 210, 210),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/blocks/terminal.rs:37:                            TerminalLineKind::Error => egui::Color32::from_rgb(240, 120, 120),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/blocks/overview.rs:24:                        .color(egui::Color32::from_rgb(110, 210, 140)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/blocks/overview.rs:53:                        .color(egui::Color32::from_rgb(240, 150, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/blocks/status.rs:67:        Kind::Ok => (egui::Color32::from_rgb(60, 160, 90), egui::Color32::from_rgb(110, 210, 140)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/blocks/status.rs:68:        Kind::Warn => (egui::Color32::from_rgb(220, 160, 40), egui::Color32::from_rgb(255, 205, 90)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/blocks/status.rs:69:        Kind::Crit => (egui::Color32::from_rgb(220, 70, 70), egui::Color32::from_rgb(255, 140, 140)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/blocks/oscilloscope.rs:33:    let line = Line::new("scope", points).color(egui::Color32::from_rgb(120, 220, 160));
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/blocks/tree.rs:44:                            "registered" | "healthy" | "ok" => egui::Color32::from_rgb(110, 210, 140),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/blocks/tree.rs:45:                            "warn" | "warning" => egui::Color32::from_rgb(255, 205, 90),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/blocks/tree.rs:46:                            "error" | "unhealthy" => egui::Color32::from_rgb(255, 140, 140),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/blocks/budget.rs:35:            egui::Color32::from_rgb(220, 70, 70)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/blocks/budget.rs:37:            egui::Color32::from_rgb(220, 160, 40)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/blocks/budget.rs:39:            egui::Color32::from_rgb(60, 160, 90)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon/gauge.rs:122:            egui::Color32::from_rgb(220, 70, 70)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon/gauge.rs:124:            egui::Color32::from_rgb(220, 160, 40)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon/gauge.rs:126:            egui::Color32::from_rgb(60, 160, 90)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon/gauge.rs:195:                    egui::Color32::from_rgba_unmultiplied(220, 160, 40, alpha),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon/chip.rs:59:                egui::Color32::from_rgb(20, 48, 30),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon/chip.rs:60:                egui::Color32::from_rgb(110, 210, 140),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon/chip.rs:63:                egui::Color32::from_rgb(52, 38, 10),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon/chip.rs:64:                egui::Color32::from_rgb(255, 205, 90),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon/chip.rs:67:                egui::Color32::from_rgb(52, 20, 20),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon/chip.rs:68:                egui::Color32::from_rgb(255, 140, 140),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon/chip.rs:71:                egui::Color32::from_rgb(18, 32, 50),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon/chip.rs:72:                egui::Color32::from_rgb(120, 200, 255),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon/plot.rs:83:            line_colour: egui::Color32::from_rgb(120, 220, 160),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon/stream_view.rs:176:            .fill(egui::Color32::from_rgb(8, 10, 14))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon/pressable.rs:99:                egui::Button::new(text.color(egui::Color32::from_rgb(220, 80, 80)))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon/pressable.rs:100:                    .fill(egui::Color32::from_rgb(50, 20, 20))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/bin/demo_lab.rs:113:                swatch(ui, egui::Color32::from_rgb(196, 162, 92), "accent");
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/bin/demo_lab.rs:114:                swatch(ui, egui::Color32::from_rgb(22, 22, 28), "surface");
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/bin/demo_lab.rs:115:                swatch(ui, egui::Color32::from_rgb(14, 14, 18), "panel");
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/bin/demo_lab.rs:128:        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 36)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon_demos.rs:300:                    egui::Color32::from_rgb(60, 80, 120),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon_demos.rs:308:                    egui::Color32::from_rgb(40, 60, 90),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/canon_demos.rs:316:                    egui::Color32::from_rgb(80, 60, 120),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/grid.rs:69:    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(4, 4, 6));
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/grid.rs:86:            egui::Color32::from_rgba_unmultiplied(80, 30, 48, 22),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/grid.rs:90:            egui::Color32::from_rgba_unmultiplied(55, 55, 72, 30),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/grid.rs:94:            egui::Color32::from_rgba_unmultiplied(34, 56, 96, 22),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/grid.rs:127:    let vignette = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 140);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/desktop.rs:413:                egui::Color32::from_rgb(170, 170, 180),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/desktop.rs:428:            egui::Color32::from_rgb(110, 210, 160),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/desktop.rs:432:            egui::Color32::from_rgb(240, 200, 110),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/desktop.rs:436:            egui::Color32::from_rgb(240, 150, 150),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/desktop.rs:494:            .color(egui::Color32::from_rgb(170, 170, 180)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/desktop.rs:502:                    .color(egui::Color32::from_rgb(220, 140, 140)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/desktop.rs:509:        .fill(egui::Color32::from_rgba_unmultiplied(18, 18, 24, 235))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/desktop.rs:512:            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 25),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/desktop.rs:657:            egui::Color32::from_rgb(220, 160, 60),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/desktop.rs:680:                egui::Color32::from_rgb(220, 180, 60),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/desktop.rs:686:                egui::Color32::from_rgb(240, 150, 150),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/tray.rs:66:            Ok::On => egui::Color32::from_rgb(110, 210, 160),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/tray.rs:67:            Ok::Warn => egui::Color32::from_rgb(255, 205, 90),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/tray.rs:68:            Ok::Off => egui::Color32::from_rgb(140, 140, 150),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/tray.rs:96:        egui::Color32::from_rgba_unmultiplied(14, 14, 20, 215),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/tray.rs:100:        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 20)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/tray.rs:122:                    .color(egui::Color32::from_rgba_unmultiplied(200, 200, 220, 180)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/tray.rs:130:                        .color(egui::Color32::from_rgba_unmultiplied(220, 220, 235, 200)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/tray.rs:158:        egui::Color32::from_rgba_unmultiplied(52, 52, 68, 220)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/tray.rs:160:        egui::Color32::from_rgba_unmultiplied(28, 28, 38, 180)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/tray.rs:174:                        .color(egui::Color32::from_rgba_unmultiplied(230, 230, 240, 220)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/boot.rs:39:        let halo_color = egui::Color32::from_rgba_unmultiplied(
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/boot.rs:53:            egui::Color32::from_rgba_unmultiplied(210, 195, 160, subtitle_alpha),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/shell/boot.rs:61:    let tint = egui::Color32::from_rgba_unmultiplied(255, 255, 255, (alpha * 255.0) as u8);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/surface_host/compose.rs:185:                    egui::Color32::from_rgb(220, 80, 80),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/surface_host/compose.rs:641:            .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/surface_host/compose.rs:706:    painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(18, 18, 24));
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/surface_host/compose.rs:714:            egui::Color32::from_rgb(130, 130, 140),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/surface_host/compose.rs:743:            egui::Stroke::new(1.5, egui::Color32::from_rgb(110, 200, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/surface_host/compose.rs:767:        return egui::Color32::from_rgb(64, 64, 72);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/surface_host/compose.rs:787:            return egui::Color32::from_rgb(r, g, b);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/surface_host/compose.rs:790:    egui::Color32::from_rgb(220, 70, 60)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/surface_host/compose.rs:1057:                        .color(egui::Color32::from_rgb(180, 160, 110)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/surface_host/compose.rs:1119:            ui.label(egui::RichText::new("[dock]").color(egui::Color32::from_rgb(180, 160, 110)));
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/surface_host/compose.rs:1123:                    .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/surface_host/compose.rs:1174:                .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/surface_host/compose.rs:1313:                    .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/surface_host/compose.rs:1342:        let pale = egui::Color32::from_rgb(34, 34, 40);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/surface_host/compose.rs:1343:        let dark = egui::Color32::from_rgb(24, 24, 28);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/surface_host/compose.rs:1371:        .color(egui::Color32::from_rgb(200, 160, 60))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/time_series.rs:78:    painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(18, 18, 24));
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/time_series.rs:113:        egui::Stroke::new(1.2, egui::Color32::from_rgb(110, 200, 240)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/time_series.rs:149:                .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/time_series.rs:158:                .color(egui::Color32::from_rgb(160, 200, 230))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/time_series.rs:168:        painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(18, 18, 24));
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/time_series.rs:176:                egui::Color32::from_rgb(130, 130, 140),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/time_series.rs:213:            egui::Stroke::new(1.5, egui::Color32::from_rgb(110, 200, 240)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/time_series.rs:223:            .color(egui::Color32::from_rgb(150, 150, 160)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/chain_tail.rs:56:                .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/chain_tail.rs:102:                .color(egui::Color32::from_rgb(150, 150, 160)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/chain_tail.rs:105:            egui::RichText::new(&ts).color(egui::Color32::from_rgb(170, 170, 200)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/chain_tail.rs:119:                        .color(egui::Color32::from_rgb(200, 200, 210)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/chain_tail.rs:135:                    .color(egui::Color32::from_rgb(200, 220, 200)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/chain_tail.rs:196:            egui::Color32::from_rgb(200, 90, 90)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/chain_tail.rs:198:        k if k.starts_with("warn") => egui::Color32::from_rgb(220, 180, 80),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/chain_tail.rs:200:            egui::Color32::from_rgb(110, 200, 150)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/chain_tail.rs:202:        _ => egui::Color32::from_rgb(160, 200, 230),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/connection_badge.rs:48:                .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/connection_badge.rs:90:        "connected" => egui::Color32::from_rgb(110, 200, 150),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/connection_badge.rs:91:        "connecting" | "idle" => egui::Color32::from_rgb(220, 180, 80),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/connection_badge.rs:92:        "disconnected" | "error" => egui::Color32::from_rgb(200, 90, 90),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/connection_badge.rs:93:        _ => egui::Color32::from_rgb(140, 140, 150),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/sensor.rs:58:                .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/sensor.rs:70:                        .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/sensor.rs:77:                            .color(egui::Color32::from_rgb(140, 175, 220)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/sensor.rs:104:                    .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/sensor.rs:137:                        .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/sensor.rs:160:                    .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/sensor.rs:201:            .color(egui::Color32::from_rgb(180, 200, 230)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/sensor.rs:220:                    .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/waveform.rs:72:            .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/waveform.rs:83:        painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(18, 18, 24));
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/waveform.rs:91:                egui::Color32::from_rgb(130, 130, 140),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/waveform.rs:138:                egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 72)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/waveform.rs:153:            egui::Stroke::new(1.5, egui::Color32::from_rgb(110, 200, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/waveform.rs:165:                egui::Color32::from_rgb(220, 180, 80),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/waveform.rs:176:                egui::Color32::from_rgb(200, 90, 90),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/waveform.rs:186:            .color(egui::Color32::from_rgb(150, 150, 160)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/health.rs:33:                .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/health.rs:54:                        .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/health.rs:61:                            .color(egui::Color32::from_rgb(140, 175, 220)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/health.rs:94:                                .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/health.rs:132:                    .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/health.rs:175:        ("excellent", egui::Color32::from_rgb(110, 200, 150))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/health.rs:177:        ("good", egui::Color32::from_rgb(170, 200, 110))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/health.rs:179:        ("fair", egui::Color32::from_rgb(220, 180, 80))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/health.rs:181:        ("poor", egui::Color32::from_rgb(200, 90, 90))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/audio_meter.rs:47:                .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/audio_meter.rs:60:                ("available", egui::Color32::from_rgb(110, 200, 150))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/audio_meter.rs:62:                ("unavailable", egui::Color32::from_rgb(220, 120, 120))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/audio_meter.rs:84:    painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(24, 24, 32));
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/audio_meter.rs:98:        egui::Color32::from_rgb(230, 230, 235),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/audio_meter.rs:104:        egui::Color32::from_rgb(110, 200, 150) // green
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/audio_meter.rs:106:        egui::Color32::from_rgb(220, 180, 80) // amber
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/audio_meter.rs:108:        egui::Color32::from_rgb(200, 90, 90) // red
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/depth_map.rs:71:                .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/depth_map.rs:82:                .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/depth_map.rs:142:                .color(egui::Color32::from_rgb(150, 150, 160)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/depth_map.rs:151:        return egui::Color32::from_rgb(64, 64, 72);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/depth_map.rs:171:            return egui::Color32::from_rgb(r, g, b);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/depth_map.rs:174:    egui::Color32::from_rgb(220, 70, 60)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/json_fallback.rs:104:                    .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/json_fallback.rs:290:const NULL_COLOR: egui::Color32 = egui::Color32::from_rgb(140, 140, 150);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/json_fallback.rs:291:const BOOL_COLOR: egui::Color32 = egui::Color32::from_rgb(220, 160, 100);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/json_fallback.rs:292:const NUM_COLOR: egui::Color32 = egui::Color32::from_rgb(110, 200, 240);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/json_fallback.rs:293:const STR_COLOR: egui::Color32 = egui::Color32::from_rgb(150, 210, 150);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/json_fallback.rs:294:const ARRAY_COLOR: egui::Color32 = egui::Color32::from_rgb(200, 170, 220);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/json_fallback.rs:295:const OBJECT_COLOR: egui::Color32 = egui::Color32::from_rgb(220, 190, 130);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/pcm_chunk.rs:159:                .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/pcm_chunk.rs:229:        painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(18, 18, 24));
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/pcm_chunk.rs:246:                    egui::Stroke::new(1.2, egui::Color32::from_rgb(110, 200, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/pcm_chunk.rs:255:                    egui::Color32::from_rgb(120, 120, 130),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/pcm_chunk.rs:265:                .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/process_table.rs:61:                .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/process_table.rs:127:            .color(egui::Color32::from_rgb(200, 200, 220))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/process_table.rs:175:        "running" | "ready" | "active" => egui::Color32::from_rgb(110, 200, 150),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/process_table.rs:176:        "sleeping" | "idle" | "waiting" => egui::Color32::from_rgb(160, 180, 220),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/process_table.rs:177:        "stopped" | "paused" => egui::Color32::from_rgb(220, 180, 80),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/process_table.rs:178:        "zombie" | "failed" | "error" | "crashed" => egui::Color32::from_rgb(200, 90, 90),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/process_table.rs:179:        _ => egui::Color32::from_rgb(150, 150, 160),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/graph.rs:106:            .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/graph.rs:114:                    .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/graph.rs:129:            egui::Color32::from_rgb(20, 20, 28),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/graph.rs:371:    let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(110, 120, 140));
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/graph.rs:395:        egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 200, 215)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/graph.rs:403:        egui::Color32::from_rgb(235, 235, 240),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/graph.rs:411:        None => egui::Color32::from_rgb(60, 70, 100),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/graph.rs:419:            egui::Color32::from_rgb(r, g, b)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:44:                .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:51:            counter(ui, "total", total, egui::Color32::from_rgb(160, 180, 220));
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:69:        painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(24, 24, 32));
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:80:                    .color(egui::Color32::from_rgb(150, 150, 160)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:148:                .color(egui::Color32::from_rgb(150, 150, 160)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:161:        return egui::Color32::from_rgb(140, 140, 150);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:165:        egui::Color32::from_rgb(110, 200, 150) // green
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:167:        egui::Color32::from_rgb(220, 180, 80) // amber
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:169:        egui::Color32::from_rgb(200, 90, 90) // red
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:175:        "healthy" | "online" | "up" | "connected" => egui::Color32::from_rgb(110, 200, 150),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:176:        "degraded" | "slow" | "lagging" => egui::Color32::from_rgb(220, 180, 80),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:177:        "down" | "offline" | "error" | "disconnected" => egui::Color32::from_rgb(200, 90, 90),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:178:        _ => egui::Color32::from_rgb(150, 150, 160),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:235:            egui::Color32::from_rgb(110, 200, 150)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:240:            egui::Color32::from_rgb(220, 180, 80)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:243:        assert_eq!(health_color(2, 10), egui::Color32::from_rgb(200, 90, 90));
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/viewers/mesh_nodes.rs:245:        assert_eq!(health_color(0, 0), egui::Color32::from_rgb(140, 140, 150));
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/terminal.rs:215:                    egui::Color32::from_rgb(220, 120, 120),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/terminal.rs:771:        let overlay = egui::Color32::from_rgba_unmultiplied(120, 160, 220, 80);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/terminal.rs:922:            Color::Spec(rgb) => egui::Color32::from_rgb(rgb.r, rgb.g, rgb.b),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/terminal.rs:970:            return egui::Color32::from_rgb(conv(r), conv(g), conv(b));
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/terminal.rs:974:        egui::Color32::from_rgb(v, v, v)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/terminal.rs:1000:        egui::Color32::from_rgb(r, g, b)
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/terminal.rs:1116:                            .color(egui::Color32::from_rgb(150, 170, 200)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/terminal.rs:1124:                            .color(egui::Color32::from_rgb(150, 170, 200)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/terminal.rs:1132:                            .color(egui::Color32::from_rgb(170, 170, 180)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/terminal.rs:1336:                egui::Color32::from_rgb(220, 180, 60),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/control_toggle.rs:77:            .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/control_toggle.rs:86:            ("● enabled", egui::Color32::from_rgb(110, 200, 150))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/control_toggle.rs:88:            ("○ disabled", egui::Color32::from_rgb(220, 120, 120))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/control_toggle.rs:122:            .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/control_toggle.rs:128:            .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/control_toggle.rs:135:                .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/mod.rs:603:                        .color(egui::Color32::from_rgb(170, 170, 180)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/mod.rs:675:                            .color(egui::Color32::from_rgb(170, 170, 180)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/mod.rs:757:                        .color(egui::Color32::from_rgb(140, 200, 160)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/mod.rs:804:            .color(egui::Color32::from_rgb(140, 175, 220));
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:384:            .color(egui::Color32::from_rgb(160, 160, 170))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:467:            .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:482:                .color(egui::Color32::from_rgb(160, 160, 170)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:511:            .color(egui::Color32::from_rgb(170, 170, 180)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:544:        .fill(egui::Color32::from_rgb(70, 50, 20))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:552:                        .color(egui::Color32::from_rgb(240, 200, 140)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:558:                        .color(egui::Color32::from_rgb(230, 220, 200)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:568:                .color(egui::Color32::from_rgb(220, 210, 190)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:616:        let dot_color = egui::Color32::from_rgb(80, pulse, 200);
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:624:                .color(egui::Color32::from_rgb(180, 200, 220)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:631:                    .color(egui::Color32::from_rgb(140, 150, 160)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:638:                .color(egui::Color32::from_rgb(150, 160, 170)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:669:                    .color(egui::Color32::from_rgb(150, 150, 160)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:678:                        .fill(egui::Color32::from_rgb(50, 60, 80))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:684:                                    .color(egui::Color32::from_rgb(225, 230, 240)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:696:                        .fill(egui::Color32::from_rgb(40, 50, 50))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:718:                        .fill(egui::Color32::from_rgb(70, 30, 30))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/chat.rs:725:                                    .color(egui::Color32::from_rgb(240, 170, 170)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/tree.rs:121:                            .color(egui::Color32::from_rgb(220, 170, 90)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/tree.rs:134:                            .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/tree.rs:163:                                .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/tree.rs:172:                            .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/tree.rs:252:            ("●", egui::Color32::from_rgb(110, 210, 160))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/tree.rs:254:            ("○", egui::Color32::from_rgb(90, 90, 100))
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/tree.rs:295:                        .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/tree.rs:332:                        .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/tree.rs:365:                .color(egui::Color32::from_rgb(140, 140, 150)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/workshop.rs:475:                    .color(egui::Color32::from_rgb(200, 170, 120)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/workshop.rs:663:                    .color(egui::Color32::from_rgb(160, 160, 170)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/workshop.rs:688:                            .color(egui::Color32::from_rgb(150, 150, 160)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/workshop.rs:711:                                    .color(egui::Color32::from_rgb(220, 170, 120)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/workshop.rs:721:                                                .color(egui::Color32::from_rgb(220, 120, 120)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/workshop.rs:742:                                                    .color(egui::Color32::from_rgb(160, 160, 170)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/workshop.rs:802:        .color(egui::Color32::from_rgb(200, 170, 120)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/workshop.rs:852:            .color(egui::Color32::from_rgb(150, 170, 200)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/workshop.rs:865:                .color(egui::Color32::from_rgb(220, 120, 120)),
+/home/aepod/dev/clawft/crates/clawft-gui-egui/src/explorer/workshop.rs:873:            .color(egui::Color32::from_rgb(220, 120, 120)),
+
+D-TK01: 246 color literal(s) outside theming.rs
+  see docs/DESIGN.md §2 — every color belongs in Tokens

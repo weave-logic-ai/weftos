@@ -121,13 +121,13 @@ impl EmlTree {
 
         // Level 0: affine combinations via softmax3
         let mut a = vec![0.0f64; width];
-        for i in 0..width {
+        for (i, slot) in a.iter_mut().enumerate() {
             let base = i * 3;
             let (alpha, beta, gamma) = softmax3(params[base], params[base + 1], params[base + 2]);
             // Pick two input features (cycling through available inputs)
             let j = (i * 2) % self.input_count;
             let k = (i * 2 + 1) % self.input_count;
-            a[i] = (alpha + beta * inputs[j] + gamma * inputs[k]).clamp(-10.0, 10.0);
+            *slot = (alpha + beta * inputs[j] + gamma * inputs[k]).clamp(-10.0, 10.0);
         }
 
         // Level 1: pair up with EML (no extra params)
@@ -141,7 +141,7 @@ impl EmlTree {
         for level in 2..self.depth {
             let is_last_mix = level == self.depth - 1;
             let params_per_node = if is_last_mix { 2 } else { 3 };
-            let next_width = (current.len() + 1) / 2;
+            let next_width = current.len().div_ceil(2);
             let mut next = Vec::with_capacity(next_width);
 
             for i in 0..next_width {

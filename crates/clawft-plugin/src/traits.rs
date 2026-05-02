@@ -6,7 +6,7 @@
 //! - [`PipelineStage`] -- pipeline processing stage
 //! - [`Skill`] -- skill definition with tool list
 //! - [`MemoryBackend`] -- memory storage interface
-//! - [`VoiceHandler`] -- placeholder for voice forward-compat
+//! - [`VoiceHandler`] -- forward-compat placeholder; no impl in 0.7.x (Workstream G)
 //! - [`KeyValueStore`] -- key-value storage for plugins
 //! - [`ToolContext`] -- execution context for tools
 //! - [`ChannelAdapterHost`] -- host services for channel adapters
@@ -295,12 +295,32 @@ pub trait MemoryBackend: Send + Sync {
 // VoiceHandler (placeholder for Workstream G)
 // ---------------------------------------------------------------------------
 
-/// Placeholder trait for voice/audio processing (Workstream G).
+/// **Forward-compat placeholder for voice/audio processing (Workstream G).**
 ///
-/// This trait is defined now to reserve the capability type and
-/// ensure forward-compatibility. Implementations will be added
-/// when Workstream G begins. The `voice` feature flag gates
-/// any voice-specific dependencies.
+/// > **Status (0.7.x):** Reserved API surface only — no production
+/// > implementations are shipped, no plugin loader path exercises this
+/// > trait, and no end-to-end audio pipeline is wired through it.
+/// > Treat any concrete impl you build against it as experimental.
+///
+/// The trait exists so the [`PluginCapability::Voice`] capability type
+/// and the [`VoiceCapability`] manifest grants have a stable shape for
+/// downstream crates to depend on. The full voice pipeline (VAD, STT,
+/// TTS, wake-word) lands in Workstream G; that work will fill in real
+/// implementations and may extend (additively) the method set on this
+/// trait.
+///
+/// The `voice` feature umbrella (and the `voice-vad` / `voice-stt` /
+/// `voice-tts` / `voice-wake` granular flags) gate the heavy
+/// dependencies; the trait itself is always compiled so `dyn
+/// VoiceHandler` references remain valid across feature combinations.
+///
+/// Decision (release-gate WEFT-77): keep `pub` for forward-compat with a
+/// banner doc comment. Do not `#[doc(hidden)]` — external integrators
+/// reading the public surface should see this trait *and* be told
+/// plainly that it is not load-bearing yet.
+///
+/// [`PluginCapability::Voice`]: crate::manifest::PluginCapability::Voice
+/// [`VoiceCapability`]: crate::manifest::VoiceCapability
 #[async_trait]
 pub trait VoiceHandler: Send + Sync {
     /// Process raw audio input and return a transcription or response.

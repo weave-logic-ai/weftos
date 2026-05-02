@@ -22,20 +22,30 @@ import type {
   VoiceSettingsData,
 } from "./types";
 
+import {
+  readStoredToken,
+  writeStoredToken,
+  clearStoredToken,
+} from "./use-auth.ts";
+
 const API_URL = import.meta.env.VITE_API_URL || "";
 
-let authToken: string | null = null;
-
+/**
+ * Persist a bearer token. Delegates to the shared use-auth storage so the
+ * `useAuth()` hook and any direct callers stay in sync (WEFT-309).
+ */
 export function setAuthToken(token: string) {
-  authToken = token;
-  localStorage.setItem("clawft-token", token);
+  writeStoredToken(token);
 }
 
+/** Read the current bearer token (or null) from the shared use-auth storage. */
 export function getAuthToken(): string | null {
-  if (!authToken) {
-    authToken = localStorage.getItem("clawft-token");
-  }
-  return authToken;
+  return readStoredToken();
+}
+
+/** Clear the bearer token and arm the per-tab logout latch. */
+export function clearAuthToken() {
+  clearStoredToken();
 }
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {

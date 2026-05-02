@@ -491,10 +491,10 @@ fn show_grid(ui: &mut egui::Ui) {
     Grid::new("demo.grid", 3, |ui| {
         for r in 0..3 {
             for c in 0..3 {
-                egui::Frame::none()
+                egui::Frame::new()
                     .fill(egui::Color32::from_gray(28))
-                    .rounding(3.0)
-                    .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+                    .corner_radius(3.0)
+                    .inner_margin(egui::Margin::symmetric(10, 6))
                     .show(ui, |ui| {
                         ui.set_min_size(egui::vec2(70.0, 32.0));
                         ui.label(egui::RichText::new(format!("{r},{c}")).monospace().small());
@@ -638,10 +638,10 @@ fn show_tabs(ui: &mut egui::Ui, state: &mut CanonDemoState) {
         LABELS,
         &mut state.tabs_idx,
         |ui: &mut egui::Ui, idx: usize| {
-            egui::Frame::none()
+            egui::Frame::new()
                 .fill(egui::Color32::from_gray(22))
-                .rounding(4.0)
-                .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+                .corner_radius(4.0)
+                .inner_margin(egui::Margin::symmetric(12, 10))
                 .show(ui, |ui| {
                     ui.label(BODIES[idx]);
                 });

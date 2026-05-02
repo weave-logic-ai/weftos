@@ -1,0 +1,268 @@
+[
+  {
+    "name": "ws14: docker — purge stale ghcr.io/clawft/clawft paths in compose, vps-deploy, docs/deployment",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs", "tooling"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #2; What's Left rows for `scripts/deploy/docker-compose.yml:11`, `vps-deploy.sh:23`, `docs/deployment/docker.md:15-18,21-27,55,84`, `docs/deployment/release.md:43,55,93,119`)\n- code: scripts/deploy/docker-compose.yml; scripts/deploy/vps-deploy.sh; docs/deployment/docker.md; docs/deployment/release.md\n\n## Problem / gap\n\nMultiple deployment artifacts still reference the old `ghcr.io/clawft/clawft` image path. The repo moved to `ghcr.io/weave-logic-ai/weftos` (CHANGELOG 0.4.1) and the Dockerfile + `release-docker.yml` already use the new path, but compose/vps-deploy/docs do not. Users following deploy docs hit pull failures.\n\n## Acceptance criteria\n\n- [ ] `scripts/deploy/docker-compose.yml` image line points at `ghcr.io/weave-logic-ai/weftos:${WEFT_VERSION:-latest}`.\n- [ ] `scripts/deploy/vps-deploy.sh` lines 23/26/30 updated to the new image path.\n- [ ] `docs/deployment/docker.md` and `docs/deployment/release.md` URLs (`github.com/weave-logic-ai/clawft` → `weftos`, `ghcr.io/clawft/clawft` → `ghcr.io/weave-logic-ai/weftos`) all corrected.\n- [ ] `grep -rn 'ghcr.io/clawft' docs/ scripts/ docker-compose*.yml` returns empty (or only intentional historical references).\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: 0.7.0 deploy docs being correct\n- blocked-by: none\n\n## Notes\n\n- Plain find/replace; pair with the docs-deployment rewrite item if scheduled together.\n"
+  },
+  {
+    "name": "ws14: install — decide canonical install path (~/.clawft vs ~/.weftos) and sweep callers",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs", "tooling", "governance"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #3; Open Questions row 'What is the canonical install path?')\n- code: scripts/install.sh; scripts/deploy/vps-deploy.sh; scripts/deploy/docker-compose.yml; scripts/weave-init.sh; CHANGELOG.md (cluster_peers.json note)\n\n## Problem / gap\n\n`install.sh` and `vps-deploy.sh` use `~/.clawft/`. CHANGELOG, kernel docs, and several runtime artifacts use `~/.weftos/` or `.weftos/runtime/`. The two layouts are mixed across install/deploy code with no documented canonical answer. Pre-release we need one path everywhere.\n\n## Acceptance criteria\n\n- [ ] Decision recorded (ADR amendment or release-engineering doc) on canonical install path.\n- [ ] All install/deploy scripts updated to the canonical path.\n- [ ] Migration note in CHANGELOG / docs for users on the deprecated layout (if any).\n- [ ] `grep -rn '~/.clawft\\|~/.weftos' scripts/ docs/` reflects the chosen single path.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: 0.7.0 install/deploy correctness\n- blocked-by: governance decision (one-line ADR or runbook entry)\n\n## Notes\n\n- Touches install.sh, vps-deploy.sh, docker-compose.yml, weave-init.sh; consider doing in one PR with the ghcr path sweep.\n"
+  },
+  {
+    "name": "ws14: docs — rewrite docs/deployment/docker.md (drop FROM scratch + cargo-chef appendix)",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (What's Left row 'docs/deployment/docker.md:15-18,21-27,55,84'; Deferred row 'docs/deployment/docker.md rewrite')\n- code: docs/deployment/docker.md (lines 15-18, 21-27, 55, 84, 171-279); Dockerfile (Alpine 3.21 prebuilt-binary download)\n\n## Problem / gap\n\n`docs/deployment/docker.md` describes the old `FROM scratch` ~5 MB image and contains a contradictory K2 multi-stage cargo-chef debian:bookworm-slim appendix (lines 171-279). The current Dockerfile is `FROM alpine:3.21` ~15 MB and downloads the prebuilt musl tarball. URLs are also stale (covered in the GHCR sweep item). The doc misleads any operator following it.\n\n## Acceptance criteria\n\n- [ ] `FROM scratch` references removed.\n- [ ] cargo-chef debian:bookworm-slim appendix (lines 171-279) removed or replaced with a 'historical' note.\n- [ ] New section documents the binary-prefetch flow used by the live Dockerfile.\n- [ ] Image size, base, and arch matrix updated to match current reality.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: 0.7.0 deploy docs accuracy\n- blocked-by: GHCR path sweep (cosmetic conflict if done in reverse)\n\n## Notes\n\n- Coordinate with Fumadocs link-drift item: if `docs/deployment/docker.md` should live in `docs/src/content/docs/`, move it as part of this rewrite.\n"
+  },
+  {
+    "name": "ws14: docs — rewrite docs/deployment/release.md to match cargo-dist + sub-releases",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (What's Left row 'docs/deployment/release.md:43,55,93,119'; Deferred row 'docs/deployment/release.md rewrite')\n- code: docs/deployment/release.md; .github/workflows/release.yml, release-wasi.yml, release-kb.yml, release-gate.yml\n\n## Problem / gap\n\n`docs/deployment/release.md` has stale URLs, references `FROM scratch ~5 MB image` that no longer exists, and asset names like `weft-linux-x86_64` that don't match cargo-dist's `weft-{version}-{target}.tar.gz`. It also predates the WASI / KB / browser-WASM sub-releases and the `release-gate.yml` prerelease-flagging behaviour.\n\n## Acceptance criteria\n\n- [ ] cargo-dist asset-name format documented accurately.\n- [ ] WASI, KB, and browser-WASM sub-release sections added.\n- [ ] `release-gate.yml` prerelease-flagging behaviour explained.\n- [ ] All URLs and image paths align with current namespace.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: 0.7.0 release-process documentation accuracy\n- blocked-by: none\n\n## Notes\n\n- Coordinate with the docs/deployment/docker.md rewrite to do both URL/structure passes in one PR.\n"
+  },
+  {
+    "name": "ws14: docs-site — auto-generate releases.mdx from CHANGELOG (currently 6 versions behind)",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs", "tooling"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #8; Deferred row 'docs/src/content/docs/weftos/vision/releases.mdx — last release documented is v0.6.13')\n- code: docs/src/content/docs/weftos/vision/releases.mdx; CHANGELOG.md\n\n## Problem / gap\n\nThe public docs site's Release Notes page tops out at v0.6.13 while CHANGELOG.md is current to v0.6.19 — six releases behind. This is the user-visible release history; cutting 0.7.0 with the page still six versions stale is embarrassing.\n\n## Acceptance criteria\n\n- [ ] Either: docs build auto-generates `releases.mdx` from `CHANGELOG.md`, OR a release-tag workflow opens a PR updating it.\n- [ ] `releases.mdx` content matches CHANGELOG entries for every released version (including the next 0.7.0 cut).\n- [ ] Process documented in release runbook so this doesn't drift again.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: 0.7.0 user-visible release notes correctness\n- blocked-by: none\n\n## Notes\n\n- A simple MDX-from-CHANGELOG transform script invoked from `next build` is the lower-friction option.\n"
+  },
+  {
+    "name": "ws14: changelog — backfill compare links 0.6.7..0.6.19 and add Unreleased heading",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs", "governance"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Tasks #9 and #10; What's Left rows 'CHANGELOG.md links section' and 'No Unreleased section in CHANGELOG.md')\n- code: CHANGELOG.md (lines 956-975)\n\n## Problem / gap\n\nKeep-a-Changelog compare-link footnotes only cover 0.1.0 through 0.6.6 — 13 releases (0.6.7 through 0.6.19) have no compare links. Additionally the file has no `## [Unreleased]` heading, so staged work between releases has no documented home. Cutting 0.7.0 with this still broken makes the changelog look unmaintained.\n\n## Acceptance criteria\n\n- [ ] Compare-link footnotes added for every released version 0.6.7 → 0.6.19 (and the 0.7.0 entry on cut).\n- [ ] Either: `## [Unreleased]` heading added with a note on the convention, OR a runbook entry explicitly documents that we deviate from Keep-a-Changelog.\n- [ ] Release script / runbook updated so future releases maintain the link block automatically.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: 0.7.0 changelog hygiene\n- blocked-by: none\n\n## Notes\n\n- Pure docs work; consider scripting the link-block backfill in `scripts/release/generate-changelog.sh`.\n"
+  },
+  {
+    "name": "ws14: ci — convert PR-gate browser-WASM check to hard gate",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tooling"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #4; What's Left row 'pr-gates.yml:171-201'; Deferred row 'Browser-WASM hard gate')\n- code: .github/workflows/pr-gates.yml lines 171-201; .github/workflows/wasm-browser.yml\n\n## Problem / gap\n\n`pr-gates.yml` `Browser WASM check` job is a `continue-on-warning` soft check left over from BW1 deferral. BW1 has shipped — `wasm-browser.yml` builds a real artifact every push to master — so the soft check is stale. Bad browser-WASM changes can land on master without a CI failure.\n\n## Acceptance criteria\n\n- [ ] `pr-gates.yml:171-201` removes the warning-swallow and fails the job on a real build error.\n- [ ] PR successfully exercising a known-broken browser-WASM diff turns red on the PR check.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: 0.7.0 CI hygiene for browser-WASM target\n- blocked-by: none\n\n## Notes\n\n- Voice feature soft-check (lines 209-236) is correctly soft (VS1.1 has not landed); leave for now.\n"
+  },
+  {
+    "name": "ws14: ci — replace smoke-test sleep+docker-ps with HTTP /health probe",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tooling", "tests"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #5; What's Left rows 'pr-gates.yml:346-386' and 'release-docker.yml:107-141'; Deferred row 'Smoke test as HTTP probe')\n- code: .github/workflows/pr-gates.yml lines 346-386; .github/workflows/release-docker.yml lines 107-141\n\n## Problem / gap\n\nBoth the PR-gate integration smoke test and the release-docker post-publish smoke test currently do `sleep 5 && docker ps`. Gateway has had `/health` since 0.3.0, so the smoke is far weaker than it should be — a container that boots, opens its port, then crashes still passes. Pre-0.7.0 we should have a real probe.\n\n## Acceptance criteria\n\n- [ ] Both jobs replace `sleep 5 + docker ps` with a port-bound `curl -fsSL localhost:8080/health` (or equivalent).\n- [ ] Probe retries with bounded timeout instead of a fixed sleep.\n- [ ] Demonstrated locally that a container that exits after 3s now fails the smoke.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: 0.7.0 release-pipeline confidence\n- blocked-by: confirm port-binding behaviour in the smoke harness (audit explicitly flags this)\n\n## Notes\n\n- Same fix applies to both workflows; do as one PR.\n"
+  },
+  {
+    "name": "ws14: ci — add docs-build job to pr-gates.yml so bad MDX cannot merge",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tooling", "docs"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #6; Open Question 'Can a bad MDX change land on master and break the docs site silently?')\n- code: .github/workflows/pr-gates.yml; docs/src/package.json\n\n## Problem / gap\n\nThere is no `npm run build` step for `docs/src/` in CI. Vercel catches MDX/build failures post-merge, but the contributor cannot see it on the PR — broken docs land on master invisibly. With 0.7.0 cutting and a docs-site-driven release-notes story, this is a release-gate concern.\n\n## Acceptance criteria\n\n- [ ] `pr-gates.yml` gains a `docs-build` job that runs `cd docs/src && npm install && npm run build` (with caching).\n- [ ] Job runs only when `docs/src/**` paths change (or always, if cheap enough).\n- [ ] An intentionally broken MDX PR turns red on the new gate.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: 0.7.0 docs-site reliability\n- blocked-by: none\n\n## Notes\n\n- Use Node version pinned to whatever Vercel uses for `weftos.weavelogic.ai`.\n"
+  },
+  {
+    "name": "ws14: scripts — decide fate of scripts/release/package*.sh (delete or relabel)",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tooling", "tech-debt"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #7; What's Left row 'scripts/release/package*.sh'; Deferred row 'Migrate or retire scripts/release/package*.sh')\n- code: scripts/release/package.sh; scripts/release/package-all.sh; ADR-002\n\n## Problem / gap\n\nThe `scripts/release/package*.sh` scripts are pre-cargo-dist hand-rolled packagers. ADR-002 explicitly said cargo-dist replaces them. They still hard-code `BINARY_NAME=\"weft\"` only — they wouldn't package `weaver` or `weftos`. Right now they look like a sanctioned release path but actually produce mismatched artifacts.\n\n## Acceptance criteria\n\n- [ ] Decision: either delete the scripts, or move under `scripts/release/local-rehearsal/` with a header comment that says 'NOT the release path; cargo-dist is.'\n- [ ] If kept: fix the `weft`-only assumption to handle weaver/weftos binaries.\n- [ ] ADR-002 status check: confirms cargo-dist is the canonical release path.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: 0.7.0 release-tooling clarity\n- blocked-by: none\n\n## Notes\n\n- Pair with the `scripts/build.sh release-dry-run` work if both land together.\n"
+  },
+  {
+    "name": "ws14: docker — fix scripts/build/docker-build.sh image name + arch drift",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tooling"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (What's Left rows 'scripts/build/docker-build.sh:91' and 'scripts/build/docker-build.sh:75')\n- code: scripts/build/docker-build.sh lines 75 and 91\n\n## Problem / gap\n\n`scripts/build/docker-build.sh` line 75 still tags `clawft:${IMAGE_TAG}` (should be `weftos:`). Line 91 only builds `x86_64-unknown-linux-musl` — there is no aarch64 path, so the local helper drifts from `release-docker.yml` (which uses `docker buildx` for multi-arch).\n\n## Acceptance criteria\n\n- [ ] Image name updated to `weftos:${IMAGE_TAG}` to match the published image namespace.\n- [ ] Either: aarch64 cross path added, OR a comment + early-exit clearly marks the script as 'host-arch only; release pipeline does multi-arch'.\n- [ ] `scripts/build.sh` (or equivalent) invocation produces a sensibly-named image.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: 0.7.0 deploy-tooling consistency\n- blocked-by: none\n\n## Notes\n\n- Keep simple; the multi-arch story belongs in 0.8.x if we want true cross-build parity locally.\n"
+  },
+  {
+    "name": "ws14: install — verify cargo-dist attestations in scripts/install.sh",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tooling", "security"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #13; Open Question 'Universal installer integrity')\n- code: scripts/install.sh; Cargo.toml line 254 (`github-attestations = true`)\n\n## Problem / gap\n\n`install.sh` is the public curl|sh entry point. It downloads binaries from GH Releases without checksum or attestation verification, even though cargo-dist has GitHub Attestations enabled. Anyone able to spoof the download chain can replace the binary undetected. For a 0.7.0 release-gate this is a supply-chain concern.\n\n## Acceptance criteria\n\n- [ ] `install.sh` runs `gh attestation verify` (or `cosign verify-attestation`) on the downloaded binary before `cp $bin $INSTALL_DIR`.\n- [ ] Verification failure aborts the install with a clear error.\n- [ ] Fallback path documented for users without `gh` installed (e.g. SHA256SUMS check).\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: 0.7.0 supply-chain integrity story\n- blocked-by: confirm what cargo-dist actually emits as the attestation surface\n\n## Notes\n\n- Pair with the SBOM job (separate item) for a coherent supply-chain story.\n- Audit also calls out verifying that `set -- clawft-cli clawft-weave weftos` matches actual emitted asset names; bundle that check into this PR.\n"
+  },
+  {
+    "name": "ws14: docs — re-title ADR-044 from wasip1 to wasip2",
+    "priority": "low",
+    "cycle": "0.7.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs", "governance"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #11; What's Left row 'docs/adr/adr-044-wasm-wasip1-target.md')\n- code: docs/adr/adr-044-wasm-wasip1-target.md\n\n## Problem / gap\n\nADR-044's title says `wasm-wasip1-target` but the body acknowledges the migration to wasip2 happened, and the build script + every release workflow now emit `wasm32-wasip2`. Title-vs-body drift for an ADR is a governance smell that 0.7.0 should fix.\n\n## Acceptance criteria\n\n- [ ] Either: ADR file renamed to `adr-044-wasm-wasip2-target.md` with the title bar updated, OR ADR-044 marked 'Superseded by ADR-NNN' and a new ADR captures the wasip2 decision.\n- [ ] Cross-references in other ADRs / docs updated.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: 0.7.0 ADR coherence\n- blocked-by: none\n\n## Notes\n\n- Purely cosmetic / governance; can land in a doc-sweep PR.\n"
+  },
+  {
+    "name": "ws14: ci — soft-check docs-site MDX builds locally via scripts/build.sh ui",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling", "docs"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Open Question 'Where does the docs site actually deploy from?')\n- code: scripts/build.sh; docs/src/package.json\n\n## Problem / gap\n\nDocs site deploys via Vercel Git integration on `docs/src/`. There is no in-repo workflow that runs `vercel deploy` and the trigger surface (which paths trigger redeploy vs. need manual) is not documented. Contributors don't know whether their change triggers a redeploy.\n\n## Acceptance criteria\n\n- [ ] Trigger surface documented in `docs/deployment/release.md` (or a new `docs-site.md`).\n- [ ] `scripts/build.sh ui` (or new subcommand) runs the same `npm run build` Vercel uses, so contributors can reproduce.\n- [ ] Decision recorded on whether to add a redundant in-repo deploy workflow (or stay Vercel-only).\n\n## Dependencies\n\n- blocks: nothing (post-0.7.0 quality)\n- blocked-by: ws14 pr-gates docs-build job (preferred to land first)\n\n## Notes\n\n- Distinct from the pr-gates docs-build hard gate: this is local-rehearsal + documentation.\n"
+  },
+  {
+    "name": "ws14: cdn — snapshot every cdn-assets upload by commit SHA for rollback",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #14; Deferred row 'CDN-assets retention'; Open Question 'No cdn-assets purge / lifecycle policy')\n- code: .github/workflows/docs-assets.yml\n\n## Problem / gap\n\n`cdn-assets` rolling release is updated with `--clobber`. There is no audit trail for which version of WASM the docs site is serving on any given day, and no rollback path if a bad WASM build clobbers a working one.\n\n## Acceptance criteria\n\n- [ ] Each upload also writes `clawft_wasm-{sha}.wasm` (and KB equivalent) alongside the rolling filename.\n- [ ] Lifecycle / cache-bust strategy documented (how does the docs site decide which SHA to load).\n- [ ] Either: `cdn-assets-history` companion release tagged per upload, OR rolling release retains the last N SHA-stamped artifacts.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0; quality-of-life for post-incident rollback\n- blocked-by: none\n\n## Notes\n\n- Worth pairing with a docs-site cache-bust / version-pin strategy.\n"
+  },
+  {
+    "name": "ws14: ci — add browser-WASM size budget to wasm-browser.yml",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling", "performance"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #15; Open Question 'Browser-WASM artifact size budget')\n- code: .github/workflows/wasm-browser.yml; .github/workflows/wasm-build.yml\n\n## Problem / gap\n\n`wasm-build.yml` (wasip2) has a size gate (300 KB raw / 120 KB gzip). `wasm-browser.yml` does not, even though it is the user-facing playground bundle. Without a budget the playground bundle can drift up silently.\n\n## Acceptance criteria\n\n- [ ] `wasm-browser.yml` adds raw + gzip + (optimized) size summary, mirroring `wasm-build.yml`.\n- [ ] Initial budget chosen and documented (informed by current size).\n- [ ] Job fails — not warns — if the budget is exceeded.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0\n- blocked-by: none\n\n## Notes\n\n- Tune budget conservatively first; ratchet down later.\n"
+  },
+  {
+    "name": "ws14: deploy — add health-probe rollback path to scripts/deploy/vps-deploy.sh",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #16; Open Question 'VPS deploy has no rollback path')\n- code: scripts/deploy/vps-deploy.sh\n\n## Problem / gap\n\n`vps-deploy.sh` stops + removes the existing container, then `docker run`s the new one. If the new container exits, the old one is gone — no rollback. For a self-hosted deploy story that ships in 0.7.0 docs, this is a foot-gun.\n\n## Acceptance criteria\n\n- [ ] Script keeps the prior container around until the new one passes a health probe.\n- [ ] On health-probe failure, the new container is removed and the prior container restored.\n- [ ] Behaviour exercised in a manual smoke (script README updated with reproducer).\n\n## Dependencies\n\n- blocks: nothing for 0.7.0 itself\n- blocked-by: smoke-test HTTP probe item (provides the probe shape)\n\n## Notes\n\n- Re-use the same `/health` probe shape we land in the smoke-test work.\n"
+  },
+  {
+    "name": "ws14: ci — add macOS + Windows test job to pr-gates.yml",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling", "tests"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #17; Open Question 'Per-target test matrix')\n- code: .github/workflows/pr-gates.yml\n\n## Problem / gap\n\nCI runs `cargo test --workspace` only on ubuntu-latest. macOS and Windows targets only get a `cargo build` via cargo-dist on tag push — platform-specific test failures are caught after release-cut, not in PR.\n\n## Acceptance criteria\n\n- [ ] `pr-gates.yml` test job runs on a matrix including ubuntu-latest, macos-latest, and windows-latest.\n- [ ] Sensible scope-down to keep CI time reasonable (e.g., subset of crates on Win/Mac).\n- [ ] Failure on any platform turns the PR red.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0 (Linux is shipping target)\n- blocked-by: none\n\n## Notes\n\n- Watch CI minute spend; consider running mac/win on `paths-filter` or a label trigger initially.\n"
+  },
+  {
+    "name": "ws14: ci — add cargo-audit / cargo-deny gate to pr-gates.yml",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling", "security"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #12)\n- code: .github/workflows/pr-gates.yml\n\n## Problem / gap\n\nNo CI gate runs `cargo audit` or `cargo deny`. A Dependabot alert + reactive cleanup is the only line of defence for known-vulnerable dependencies. For a publish-to-crates project this is a gap.\n\n## Acceptance criteria\n\n- [ ] `pr-gates.yml` runs `cargo audit` (or `cargo deny advisories`) on every PR.\n- [ ] Severity threshold defined (e.g., fail on Critical/High; warn on Medium).\n- [ ] Allowlist file checked in for known-acceptable advisories.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0 (security workstream may overlap)\n- blocked-by: confirm overlap with security workstream's planned tooling\n\n## Notes\n\n- Audit explicitly notes this is adjacent to the security workstream — coordinate to avoid duplicate gates.\n"
+  },
+  {
+    "name": "ws14: ci — add SBOM (CycloneDX) generation and attach to releases",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling", "security"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #26; Deferred row 'No SBOM / cargo-audit gate in CI')\n- code: Cargo.toml `[workspace.metadata.dist]`\n\n## Problem / gap\n\ncargo-dist supports CycloneDX SBOM generation, but `[workspace.metadata.dist]` does not enable it. No SBOM is attached to any release, which is a supply-chain story gap for downstream consumers.\n\n## Acceptance criteria\n\n- [ ] CycloneDX SBOM generated per release (cargo-dist option or `cargo cyclonedx` step).\n- [ ] SBOM attached to GH Release.\n- [ ] Documented in `docs/deployment/release.md` for downstream consumers.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0\n- blocked-by: cargo-dist version bump (some SBOM features require >0.31.0)\n\n## Notes\n\n- Bundle with the install.sh attestation work for a coherent supply-chain story.\n"
+  },
+  {
+    "name": "ws14: tooling — add scripts/build.sh release-dry-run subcommand",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #27; Deferred row 'scripts/build.sh does NOT have a release subcommand')\n- code: scripts/build.sh\n\n## Problem / gap\n\nEvery ADR / skill assumes `scripts/build.sh` covers all release ops, but the release flow today is `git tag vX.Y.Z; git push --tags`. There is no `scripts/build.sh release-dry-run` to rehearse the cargo-dist matrix locally for the host triple, so contributors discover release breakage only on tag push.\n\n## Acceptance criteria\n\n- [ ] `scripts/build.sh release-dry-run` runs the cargo-dist build for the host triple and verifies asset names + sizes.\n- [ ] Subcommand documented in `scripts/build.sh --help` and the release runbook.\n- [ ] Phase-gate `gate` subcommand optionally invokes `release-dry-run`.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0\n- blocked-by: none\n\n## Notes\n\n- Pair with the package*.sh fate decision so we don't duplicate release-rehearsal logic.\n"
+  },
+  {
+    "name": "ws14: build-kb — move tools/build-kb into the workspace (or document why not)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling", "tech-debt"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #24; Deferred row 'tools/build-kb'; Orphaned Work row 'tools/build-kb — outside the workspace')\n- code: tools/build-kb; .github/workflows/release-kb.yml; .github/workflows/docs-assets.yml\n\n## Problem / gap\n\n`tools/build-kb` is a build dep for two workflows (`release-kb.yml`, `docs-assets.yml`) but is not in the workspace `Cargo.toml`. It is invisible from the root workspace — no shared lockfile, no shared rustup toolchain, no `cargo check` coverage.\n\n## Acceptance criteria\n\n- [ ] Either: `tools/build-kb` moved into the workspace `Cargo.toml` `members` and added to the build matrix, OR a `tools/README.md` documents why it sits outside.\n- [ ] If kept outside: `Cargo.lock` for it committed, and the workflow caches it.\n- [ ] Decision recorded in release runbook.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0\n- blocked-by: none\n\n## Notes\n\n- Touches workspace topology; small but cross-cutting.\n"
+  },
+  {
+    "name": "ws14: cargo-dist — schedule v0.31 → v1.0+ bump and regenerate release.yml",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling", "tech-debt"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #18; Deferred row 'No cargo-dist regenerate cadence'; Open Question 'cargo-dist v1 / v0.32+ migration plan')\n- code: Cargo.toml line 230 (`cargo-dist-version = \"0.31.0\"`); .github/workflows/release.yml\n\n## Problem / gap\n\ncargo-dist is pinned at v0.31.0; v1.0 has shipped and adds wasip2 support, SBOM, and other features. `release.yml` is autogenerated and the regenerate cadence is not documented. We will fall further behind every quarter.\n\n## Acceptance criteria\n\n- [ ] cargo-dist version bumped to current latest (or current LTS).\n- [ ] `release.yml` regenerated and diff reviewed.\n- [ ] Release runbook documents 'how to bump cargo-dist' as a quarterly sweep.\n- [ ] Smoke release exercises any new behaviour.\n\n## Dependencies\n\n- blocks: SBOM enablement (which may need newer cargo-dist)\n- blocked-by: none\n\n## Notes\n\n- Plan after 0.7.0 cuts so a regen breakage doesn't block the gate.\n"
+  },
+  {
+    "name": "ws14: scripts — bump or delete scripts/09-gate.sh stale floor + paths",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling", "tech-debt"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #21; What's Left rows 'scripts/09-gate.sh:101-103' and 'scripts/09-gate.sh:67-71'; Status row 'scripts/09-gate.sh — drifting (gate counts)')\n- code: scripts/09-gate.sh lines 67-71, 101-103\n\n## Problem / gap\n\nGate asserts `>=1200` kernel tests pass; current count is well above 1200 (handoff cites 1218 in clawft-core alone). The script also references `.planning/sparc/weftos/0.1/09b-decision-resolution.md` and `phase-K0/decisions.md` paths that may have moved under `phase4/` after the planning reorg — script may be silently no-op'ing.\n\n## Acceptance criteria\n\n- [ ] Test-count floor either bumped to a meaningful threshold or deleted.\n- [ ] Path references confirmed against current planning tree (move or fix).\n- [ ] If the gate is no-op'd today, that's documented in the script header.\n- [ ] Script either fully wired into CI or marked 'developer rehearsal only'.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0\n- blocked-by: none\n\n## Notes\n\n- Pair with k6-gate.sh decision below for a single 'phase-gate scripts cleanup' PR.\n"
+  },
+  {
+    "name": "ws14: scripts — wire scripts/k6-gate.sh into CI or mark developer-rehearsal",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling", "orphan"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #22; Deferred row 'scripts/k6-gate.sh')\n- code: scripts/k6-gate.sh\n\n## Problem / gap\n\n`scripts/k6-gate.sh` runs phase-K3..K6 gates but is not invoked from CI. The CI phase-gate is `scripts/build.sh gate`. Status of k6-gate.sh is ambiguous — production gate, dev rehearsal, or dead.\n\n## Acceptance criteria\n\n- [ ] Either: a workflow invokes `scripts/k6-gate.sh` on the appropriate trigger, OR the script's header is updated to 'developer-rehearsal only'.\n- [ ] Status documented in scripts/README.md (or top of file).\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0\n- blocked-by: none\n\n## Notes\n\n- Pair with 09-gate.sh cleanup.\n"
+  },
+  {
+    "name": "ws14: scripts — audit and reorganize dead scripts (wake units, py helpers, weave-init.sh)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling", "tech-debt", "orphan"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #20; Deferred + Orphaned-work rows for `scripts/clawft-wake.service`, `scripts/com.clawft.wake.plist`, `scripts/build_vp_deck.py`, `scripts/dev_server.py`, `scripts/weave-init.sh`)\n- code: scripts/ (top-level)\n\n## Problem / gap\n\nSeveral top-level scripts may be orphaned: systemd + launchd unit files for the wake service aren't included in any release tarball; `build_vp_deck.py` and `dev_server.py` aren't part of any workflow; `weave-init.sh` may be superseded by `weaver init` (Rust binary).\n\n## Acceptance criteria\n\n- [ ] For each script: decision recorded — wire into a workflow, move to `scripts/dev/`, or delete.\n- [ ] If kept: included in the appropriate release artifact and documented.\n- [ ] If deleted: CHANGELOG entry mentions removal.\n- [ ] Audit rows marked closed with WEFT-N references.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0\n- blocked-by: confirm `weaver init` covers the `weave-init.sh` use case (audit notes CHANGELOG 0.6.14: 'weaver init rewritten — works in any directory, generates weave.toml').\n\n## Notes\n\n- Touches multiple unrelated scripts; consider a single 'scripts cleanup' PR.\n"
+  },
+  {
+    "name": "ws14: planning — populate or delete empty deployment-community phase-K stubs",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "docs", "orphan", "tech-debt"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #23; Orphaned-work row '.planning/development_notes/10-deployment-community/phase-K-{docker,security,community}/*.md')\n- code: .planning/development_notes/10-deployment-community/phase-K-docker/*.md; phase-K-security/*.md; phase-K-community/*.md\n\n## Problem / gap\n\nAll `notes.md`, `decisions.md`, `blockers.md`, `difficult-tasks.md` files under the three phase-K directories are empty stubs (`_No notes recorded yet._`). They give the appearance of structured planning history but contain nothing.\n\n## Acceptance criteria\n\n- [ ] Either: stubs retroactively populated from CHANGELOG/handoff, OR the empty scaffolding is deleted.\n- [ ] If kept: a top-level README explains the structure and how to backfill.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0\n- blocked-by: none\n\n## Notes\n\n- Probably fastest to delete; keeping empty scaffolding is itself a smell.\n"
+  },
+  {
+    "name": "ws14: docs — audit pass on docs/deployment/wasm.md for stale URLs and wasip1 references",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "docs"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #25; What's Left row 'docs/deployment/wasm.md')\n- code: docs/deployment/wasm.md\n\n## Problem / gap\n\n`docs/deployment/wasm.md` was not opened in the 0.7.0 audit pass. Given the wasip1 → wasip2 migration and the namespace move, it almost certainly contains stale URLs and target references.\n\n## Acceptance criteria\n\n- [ ] Doc reviewed and any wasip1 references migrated to wasip2.\n- [ ] All URLs (`github.com/...`, `ghcr.io/...`) reflect current namespace.\n- [ ] Browser-WASM vs wasip2 surfaces clearly distinguished.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0 directly\n- blocked-by: none\n\n## Notes\n\n- Bundle with the docs/deployment/{docker,release}.md rewrite work for a single docs/deployment sweep.\n"
+  },
+  {
+    "name": "ws14: docs — fix Fumadocs link drift for docs/deployment/*.md (move into docs/src or delete)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "docs", "governance", "orphan"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Deferred row 'Fumadocs site link drift'; ADR-014)\n- code: docs/deployment/docker.md; docs/deployment/release.md; docs/deployment/wasm.md; docs/src/content/docs/\n\n## Problem / gap\n\nADR-014 declares Fumadocs the single source of truth for docs, but `docs/deployment/*.md` lives outside `docs/src/content/docs/` and is invisible to the public site. Either we move them in or delete them.\n\n## Acceptance criteria\n\n- [ ] Decision recorded: move docs/deployment/*.md into Fumadocs (with route choice) OR delete and rely on Fumadocs deployment pages.\n- [ ] If moved: links + nav updated; old paths redirect or are deleted.\n- [ ] If deleted: CHANGELOG mentions removal.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0 directly\n- blocked-by: docs/deployment/{docker,release,wasm}.md content rewrites (so we move the corrected version, not the stale one)\n\n## Notes\n\n- Sequencing: rewrite first, then move.\n"
+  },
+  {
+    "name": "ws14: docker — verify or remove crates/clawft-kernel/Dockerfile.alpine",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling", "orphan", "tech-debt"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Orphaned Work row 'crates/clawft-kernel/Dockerfile.alpine — second Dockerfile beside the root one')\n- code: crates/clawft-kernel/Dockerfile.alpine; Dockerfile (root)\n\n## Problem / gap\n\nThere is a second Dockerfile at `crates/clawft-kernel/Dockerfile.alpine` beside the root Dockerfile. It's unclear whether it is built by anything; it may be an orphan from an earlier kernel-as-separate-image attempt.\n\n## Acceptance criteria\n\n- [ ] Verified whether anything (workflow, script, doc) references it.\n- [ ] Either: documented as a kernel-only image with build instructions, OR deleted.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0\n- blocked-by: none\n\n## Notes\n\n- Probably orphaned; if so, removal is one-liner.\n"
+  },
+  {
+    "name": "ws14: docs — fix stale 0.3.1 example block in ADR-037",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "docs"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (What's Left row 'docs/adr/adr-037-rust-edition-2024-msrv.md:18-22')\n- code: docs/adr/adr-037-rust-edition-2024-msrv.md lines 18-22\n\n## Problem / gap\n\nADR-037's example block still shows `version = \"0.3.1\"` while the workspace is on 0.6.19. Pure cosmetic but trips contributors who copy from ADRs.\n\n## Acceptance criteria\n\n- [ ] Example block updated to a generic placeholder (e.g., `0.X.Y`) or the current workspace version.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: nothing\n- blocked-by: none\n\n## Notes\n\n- Bundle with the ADR-044 retitle for a single ADR-cosmetics PR.\n"
+  },
+  {
+    "name": "ws14: governance — adopt release-plz/git-cliff or amend ADR-002 to record current flow",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "governance", "tooling"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Task #19; Deferred rows 'No release-plz' and 'No git-cliff')\n- code: docs/adr/adr-002-cargo-dist.md; scripts/release/generate-changelog.sh\n\n## Problem / gap\n\nADR-002 says cargo-dist will be 'complemented with release-plz' and `git-cliff` is also called out, but neither is adopted. Manual version bumps + tag + push is the current flow, with `scripts/release/generate-changelog.sh` as a home-rolled conventional-commit grouper. ADR-002 and reality have diverged.\n\n## Acceptance criteria\n\n- [ ] Decision: adopt release-plz and/or git-cliff, OR amend ADR-002 to record the home-rolled path as the canonical flow.\n- [ ] Decision propagated into release runbook.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0\n- blocked-by: none\n\n## Notes\n\n- Governance call; the cheapest path is amending the ADR.\n"
+  },
+  {
+    "name": "ws14: planning — reconcile Element 10 tracker (ClawHub features tangentially deployment)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "governance", "orphan"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Orphaned Work row '.planning/sparc/phase4/10-deployment-community/04-element-10-tracker.md')\n- code: .planning/sparc/phase4/10-deployment-community/04-element-10-tracker.md\n\n## Problem / gap\n\nElement 10 tracker is marked COMPLETE but references ClawHub features (`weft skills publish/install`, Ed25519 signing, vector search) that mostly belong to the security/community workstream rather than deployment. Ownership is ambiguous.\n\n## Acceptance criteria\n\n- [ ] Workstream ownership for ClawHub features clarified (deployment vs. security vs. community).\n- [ ] Tracker updated to reflect actual ownership and any remaining work.\n- [ ] De-duplication if any items also live in another workstream's tracker.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0\n- blocked-by: governance call on workstream boundaries\n\n## Notes\n\n- Cross-workstream; coordinate with security workstream owner.\n"
+  },
+  {
+    "name": "ws14: deps — add quarterly dependency-sweep cadence (post-wasmtime-v33)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling", "governance", "security"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Deferred row 'development_notes/sprint-16/wasmtime-upgrade.md')\n- code: .planning/development_notes/sprint-16/wasmtime-upgrade.md\n\n## Problem / gap\n\nThe wasmtime v33 upgrade closed 10 Dependabot alerts. There is no documented 'quarterly dependency sweep' cadence — we rely on Dependabot alone, and major-version bumps tend to land reactively when something breaks.\n\n## Acceptance criteria\n\n- [ ] Quarterly dependency-sweep cadence defined in the release runbook.\n- [ ] Process for staging major-version bumps documented.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0\n- blocked-by: none\n\n## Notes\n\n- Pair with the cargo-audit/cargo-deny gate work for a coherent dependency-hygiene story.\n"
+  },
+  {
+    "name": "ws14: deploy — confirm and document assess.weavelogic.ai deploy origin",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "docs", "governance"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Open Question 'Is assess.weavelogic.ai actually deployed?')\n- code: ADR-015\n\n## Problem / gap\n\nADR-015 names `assess.weavelogic.ai` as one of three properties. No CI workflow in this repo targets it. It likely lives in a sibling repo, but that's not documented anywhere visible from `clawft`.\n\n## Acceptance criteria\n\n- [ ] Status of `assess.weavelogic.ai` confirmed (deployed / not / from-where).\n- [ ] Origin documented in the release runbook or `docs/deployment/`.\n- [ ] If sibling repo: link added; if dead: ADR-015 amended.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0\n- blocked-by: external repo confirmation\n\n## Notes\n\n- Mostly a documentation pin-down.\n"
+  },
+  {
+    "name": "ws14: homebrew — decide bottle vs source-build formula for weft-cli",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling", "governance"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Open Question 'Should we publish a weft-cli Homebrew bottle (compiled binary) vs. the current source-build formula?')\n- code: weave-logic-ai/homebrew-tap (external)\n\n## Problem / gap\n\nThe current Homebrew formula rebuilds from source via cargo — slow on macOS, especially Intel. A bottle (compiled binary) would be much faster but requires bottle hosting and matching the cargo-dist macOS targets.\n\n## Acceptance criteria\n\n- [ ] Decision recorded: ship a bottle, stay source-build, or do both.\n- [ ] If bottle: bottle-publishing flow added to release pipeline (or cargo-dist option enabled).\n- [ ] User-visible install timing documented.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0\n- blocked-by: cargo-dist version bump (bottle support is in newer versions)\n\n## Notes\n\n- Cross-cuts with cargo-dist version-bump work.\n"
+  },
+  {
+    "name": "ws14: ci — add wasm32-wasip2 build to release.yml or cargo-dist when supported",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "tooling"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Open Question 'Should release.yml also build wasm32-wasip2?')\n- code: .github/workflows/release-wasi.yml; .github/workflows/release.yml\n\n## Problem / gap\n\n`release-wasi.yml` only fires on tag push and adds a 30-min wait. If/when cargo-dist supports `wasm32-wasip2` natively (currently HP-16 deferred per `release-wasi.yml` header), folding it into the main `release.yml` would simplify the pipeline.\n\n## Acceptance criteria\n\n- [ ] Track upstream cargo-dist wasip2 support; revisit when it lands.\n- [ ] When supported: wasip2 added to `[workspace.metadata.dist].targets` and `release-wasi.yml` retired or scoped down.\n- [ ] Pipeline-time savings documented.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0\n- blocked-by: upstream cargo-dist wasip2 support\n\n## Notes\n\n- Largely a watch-and-wait; ticket exists so we don't lose track when upstream ships.\n"
+  },
+  {
+    "name": "ws14: closure-sdk — re-check release-engineering implications when bridge work is proposed",
+    "priority": "low",
+    "cycle": "0.9.x",
+    "labels": ["ws14-deployment", "audit-finding", "audit-0.7.0", "governance"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/14-deployment-release.md (Deferred row 'Closure-sdk integration')\n- code: .planning/development_notes/closure-sdk-integration.md\n\n## Problem / gap\n\nClosure-sdk is currently 'defer / conceptual-only' due to AGPL-3.0. If `weftos-closure-bridge` work is ever proposed it would force a separate AGPL crate behind an IPC boundary — meaning a separate release-artifact lifecycle (separate crate, separate license bundle, possibly separate Docker image).\n\n## Acceptance criteria\n\n- [ ] Tracking ticket exists; periodically reviewed when closure-sdk bridge work surfaces.\n- [ ] When triggered: separate-crate release plan drafted (license, signing, image strategy).\n- [ ] Audit row marked closed with WEFT-N reference once a decision is made.\n\n## Dependencies\n\n- blocks: nothing for 0.7.0\n- blocked-by: closure-sdk bridge proposal landing\n\n## Notes\n\n- Pure tracking ticket today; do nothing until/unless bridge work starts.\n"
+  }
+]

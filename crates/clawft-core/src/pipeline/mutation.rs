@@ -155,7 +155,7 @@ fn remove_ineffective(prompt: &str, trajectories: &[TrajectoryHint]) -> String {
         .flat_map(|t| {
             // Extract short phrases from feedback that might appear in the prompt
             t.feedback
-                .split(|c: char| c == '.' || c == ',' || c == ';')
+                .split(['.', ',', ';'])
                 .map(|s| s.trim().to_lowercase())
                 .filter(|s| s.len() > 5 && s.len() < 60)
                 .collect::<Vec<_>>()

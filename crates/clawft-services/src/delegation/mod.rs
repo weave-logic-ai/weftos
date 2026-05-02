@@ -376,7 +376,7 @@ mod tests {
                     for the codebase";
         let score = DelegationEngine::complexity_estimate(task);
         assert!(
-            score >= 0.3 && score < 0.7,
+            (0.3..0.7).contains(&score),
             "expected 0.3..0.7, got {score}"
         );
         assert_eq!(engine.decide(task, true), DelegationTarget::Claude);

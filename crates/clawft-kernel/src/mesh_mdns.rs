@@ -103,26 +103,24 @@ impl MdnsDiscovery {
 
         let mut buf = [0u8; 4096];
         // Short timeout so poll never blocks the coordinator.
-        match tokio::time::timeout(std::time::Duration::from_millis(10), socket.recv_from(&mut buf))
-            .await
+        // Timeout or recv error → no peers this round; only the happy
+        // path does work.
+        if let Ok(Ok((len, _addr))) = tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            socket.recv_from(&mut buf),
+        )
+        .await
+            && let Ok(ann) = serde_json::from_slice::<MdnsAnnouncement>(&buf[..len])
+            && ann.node_id != self.local_announcement.node_id
+            && !self.known.contains(&ann.node_id)
         {
-            Ok(Ok((len, _addr))) => {
-                if let Ok(ann) = serde_json::from_slice::<MdnsAnnouncement>(&buf[..len]) {
-                    // Filter self and duplicates.
-                    if ann.node_id != self.local_announcement.node_id
-                        && !self.known.contains(&ann.node_id)
-                    {
-                        self.known.insert(ann.node_id.clone());
-                        peers.push(DiscoveredPeer {
-                            node_id: ann.node_id,
-                            address: format!("{}:{}", ann.address, ann.port),
-                            platform: ann.platform,
-                            source: DiscoverySource::Mdns,
-                        });
-                    }
-                }
-            }
-            _ => {} // timeout or error — no peers this round
+            self.known.insert(ann.node_id.clone());
+            peers.push(DiscoveredPeer {
+                node_id: ann.node_id,
+                address: format!("{}:{}", ann.address, ann.port),
+                platform: ann.platform,
+                source: DiscoverySource::Mdns,
+            });
         }
         peers
     }

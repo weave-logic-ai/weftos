@@ -145,11 +145,10 @@ fn build_snapshot(
         if !entry.file_type().is_file() || !is_watched(path) || should_ignore(path) {
             continue;
         }
-        if let Ok(meta) = std::fs::metadata(path) {
-            if let Ok(mtime) = meta.modified() {
+        if let Ok(meta) = std::fs::metadata(path)
+            && let Ok(mtime) = meta.modified() {
                 map.insert(path.to_path_buf(), mtime);
             }
-        }
     }
     Ok(map)
 }

@@ -12,6 +12,7 @@
 pub mod channels;
 pub mod kernel;
 pub mod personality;
+pub mod plugins;
 pub mod policies;
 pub mod voice;
 
@@ -19,6 +20,7 @@ pub mod voice;
 pub use channels::*;
 pub use kernel::*;
 pub use personality::*;
+pub use plugins::*;
 pub use policies::*;
 pub use voice::*;
 
@@ -82,6 +84,11 @@ pub struct Config {
     /// Pipeline stage selection (scorer, learner backends).
     #[serde(default)]
     pub pipeline: PipelineConfig,
+
+    /// Per-plugin runtime configuration including voice sub-permission
+    /// grants (WEFT-556 / SC-10).
+    #[serde(default)]
+    pub plugins: PluginsConfig,
 }
 
 // ── Pipeline ────────────────────────────────────────────────────────────
@@ -158,6 +165,66 @@ pub struct AgentsConfig {
     /// Default settings applied to all agents.
     #[serde(default)]
     pub defaults: AgentDefaults,
+
+    /// Per-conversation cost circuit-breaker (WEFT-322).
+    ///
+    /// Caps the cumulative spend for a single `conv_id` so a confused
+    /// agent loop on a permission prompt cannot burn the daily budget
+    /// in one turn. The agent loop checks this BEFORE issuing each
+    /// LLM call; on trip the conversation is marked `circuit_open` in
+    /// the budget store and all subsequent calls fail-fast until
+    /// reset via `agent.chat.reset_budget`.
+    #[serde(default, alias = "costBudget")]
+    pub cost_budget: CostBudgetConfig,
+}
+
+/// Per-conversation cost circuit-breaker config (WEFT-322).
+///
+/// The agent loop tracks cumulative tokens, USD spend, and iteration
+/// count for each `conv_id`. When any cap is exceeded the conversation
+/// is marked `circuit_open` and subsequent `agent.chat` calls return
+/// [`ClawftError::ConversationBudgetExceeded`](crate::error::ClawftError::ConversationBudgetExceeded)
+/// without invoking the LLM. The state survives daemon restarts via
+/// the substrate-backed budget store at
+/// `derived/chat/<conv_id>/budget.json`.
+///
+/// Defaults are sized for free-tier OpenRouter use:
+/// 200 000 tokens, $1.00, 30 iterations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CostBudgetConfig {
+    /// Max cumulative input+output tokens per conversation. Default `200_000`.
+    #[serde(default = "default_max_tokens_per_conv", alias = "maxTokensPerConv")]
+    pub max_tokens_per_conv: u64,
+
+    /// Max cumulative USD spend per conversation. Default `1.00`.
+    #[serde(default = "default_max_usd_per_conv", alias = "maxUsdPerConv")]
+    pub max_usd_per_conv: f64,
+
+    /// Max cumulative LLM iterations (round-trips) per conversation.
+    /// Default `30`. This counts every `pipeline.complete` call inside
+    /// `run_tool_loop`, summed across every `handle_turn` for the conv.
+    #[serde(default = "default_max_iterations_per_conv", alias = "maxIterationsPerConv")]
+    pub max_iterations_per_conv: u32,
+}
+
+fn default_max_tokens_per_conv() -> u64 {
+    200_000
+}
+fn default_max_usd_per_conv() -> f64 {
+    1.00
+}
+fn default_max_iterations_per_conv() -> u32 {
+    30
+}
+
+impl Default for CostBudgetConfig {
+    fn default() -> Self {
+        Self {
+            max_tokens_per_conv: default_max_tokens_per_conv(),
+            max_usd_per_conv: default_max_usd_per_conv(),
+            max_iterations_per_conv: default_max_iterations_per_conv(),
+        }
+    }
 }
 
 /// Default agent settings.
@@ -406,6 +473,19 @@ pub struct ToolsConfig {
     /// URL safety policy (SSRF protection).
     #[serde(default, alias = "urlPolicy")]
     pub url_policy: UrlPolicyConfig,
+
+    /// Tools allowed by `weft mcp-server` over the wire.
+    ///
+    /// Each entry is a glob pattern (`*`, `?`). When the list is empty
+    /// (default), all tools registered in the daemon are exposed —
+    /// preserves prior behavior for upgrades. When non-empty, only
+    /// matching tools are visible to MCP clients and other tools are
+    /// rejected with `PermissionDenied` before execution.
+    ///
+    /// Used by [`PermissionFilter::from_patterns`] in
+    /// `crates/clawft-services/src/mcp/middleware.rs` (WEFT-189).
+    #[serde(default, alias = "allowedTools")]
+    pub allowed_tools: Vec<String>,
 }
 
 /// Web tools configuration.

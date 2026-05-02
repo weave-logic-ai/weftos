@@ -40,7 +40,7 @@ Excluded tools: `exec_shell`, `spawn`, `message`.
 Using the unified build script:
 
 ```bash
-scripts/build.sh wasi      # WASI target (wasm32-wasip1, release-wasm profile)
+scripts/build.sh wasi      # WASI target (wasm32-wasip2, release-wasm profile)
 scripts/build.sh browser   # Browser target (wasm32-unknown-unknown)
 ```
 
@@ -152,7 +152,7 @@ cargo build
 
 ### wasmtime Integration
 
-The plugin host uses [wasmtime](https://wasmtime.dev/) 29 with the WIT
+The plugin host uses [wasmtime](https://wasmtime.dev/) 33 with the WIT
 (WebAssembly Interface Types) component model. Each plugin gets its own
 `wasmtime::Store` with isolated memory and an independent fuel budget.
 

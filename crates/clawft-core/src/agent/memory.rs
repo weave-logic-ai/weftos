@@ -78,9 +78,16 @@ impl<P: Platform> MemoryStore<P> {
         })
     }
 
-    /// Create a memory store with explicit paths (for testing).
-    #[cfg(test)]
-    pub(crate) fn with_paths(
+    /// Create a memory store with explicit `MEMORY.md` and `HISTORY.md`
+    /// paths.
+    ///
+    /// Skips the home-directory resolution that [`Self::new`] performs;
+    /// useful for hermetic tests (write into a temp dir) and for
+    /// embedded callers that want to pin the memory location instead
+    /// of inheriting the platform's default. Public so workspace-level
+    /// integration tests outside `clawft-core` can compose an isolated
+    /// `AgentLoop` without touching the user's `~/.clawft/workspace`.
+    pub fn with_paths(
         memory_path: PathBuf,
         history_path: PathBuf,
         platform: Arc<P>,
@@ -88,6 +95,33 @@ impl<P: Platform> MemoryStore<P> {
         Self {
             memory_path,
             history_path,
+            platform,
+        }
+    }
+
+    /// Create a memory store rooted at a workspace overlay.
+    ///
+    /// Resolves `MEMORY.md` / `HISTORY.md` under
+    /// `<workspace_root>/.clawft/memory/` so that a kernel running
+    /// inside a workspace persists into that workspace's `.clawft/`
+    /// rather than the user's global `~/.clawft/workspace/memory/`.
+    /// Mirrors the cwd-relative config overlay (Layer 3 in
+    /// `clawft_platform::config_loader::load_config_raw`) so memory
+    /// follows the same routing rules as policy.
+    ///
+    /// This constructor does not touch the home directory and never
+    /// fails — the parent dirs are created lazily on first write.
+    /// Pair with [`Self::new`] as a fallback when no workspace overlay
+    /// is present.
+    pub fn for_workspace(workspace_root: &std::path::Path, platform: Arc<P>) -> Self {
+        let memory_dir = workspace_root.join(".clawft").join("memory");
+        debug!(
+            path = %memory_dir.display(),
+            "using workspace-scoped memory path"
+        );
+        Self {
+            memory_path: memory_dir.join("MEMORY.md"),
+            history_path: memory_dir.join("HISTORY.md"),
             platform,
         }
     }
@@ -439,6 +473,54 @@ mod tests {
                 .file_name()
                 .is_some_and(|n| n == "HISTORY.md")
         );
+    }
+
+    #[tokio::test]
+    async fn for_workspace_routes_to_workspace_clawft_memory() {
+        // WEFT-79: when a workspace root is supplied, MemoryStore must
+        // resolve MEMORY.md/HISTORY.md under <workspace>/.clawft/memory/
+        // rather than the global ~/.clawft/workspace/memory/.
+        let dir = temp_dir("for_ws");
+        std::fs::create_dir_all(&dir).unwrap();
+        let platform = Arc::new(NativePlatform::new());
+        let store = MemoryStore::for_workspace(&dir, platform);
+
+        let expected_dir = dir.join(".clawft").join("memory");
+        assert_eq!(store.memory_path(), &expected_dir.join("MEMORY.md"));
+        assert_eq!(store.history_path(), &expected_dir.join("HISTORY.md"));
+
+        // First write must create the workspace .clawft/memory/ dir.
+        store.write_long_term("workspace fact").await.unwrap();
+        assert!(expected_dir.is_dir());
+        assert_eq!(
+            store.read_long_term().await.unwrap(),
+            "workspace fact"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn for_workspace_isolates_from_global_path() {
+        // Two stores rooted at different workspaces must not collide.
+        let dir_a = temp_dir("for_ws_iso_a");
+        let dir_b = temp_dir("for_ws_iso_b");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let platform = Arc::new(NativePlatform::new());
+
+        let store_a = MemoryStore::for_workspace(&dir_a, platform.clone());
+        let store_b = MemoryStore::for_workspace(&dir_b, platform);
+
+        store_a.write_long_term("alpha").await.unwrap();
+        store_b.write_long_term("beta").await.unwrap();
+
+        assert_eq!(store_a.read_long_term().await.unwrap(), "alpha");
+        assert_eq!(store_b.read_long_term().await.unwrap(), "beta");
+        assert_ne!(store_a.memory_path(), store_b.memory_path());
+
+        let _ = std::fs::remove_dir_all(&dir_a);
+        let _ = std::fs::remove_dir_all(&dir_b);
     }
 
     #[tokio::test]

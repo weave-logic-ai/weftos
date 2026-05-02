@@ -290,7 +290,7 @@ impl EmlModel {
             3 => {
                 // Level 2: 2 mixing nodes
                 let mut c = [0.0f64; 2];
-                for i in 0..2 {
+                for (i, slot) in c.iter_mut().enumerate() {
                     let base = 24 + i * 4;
                     let mix_left = params[base]
                         + params[base + 1] * b[0]
@@ -300,7 +300,7 @@ impl EmlModel {
                         + (1.0 - params[base + 2] - params[base + 3]) * b[3];
                     let ml = mix_left.clamp(-10.0, 10.0);
                     let mr = mix_right.clamp(0.01, 10.0);
-                    c[i] = eml_safe(ml, mr);
+                    *slot = eml_safe(ml, mr);
                 }
                 c.to_vec()
             }
@@ -396,7 +396,7 @@ impl EmlModel {
 
                 // Level 4: 2 mixing nodes
                 let mut f = [0.0f64; 2];
-                for i in 0..2 {
+                for (i, slot) in f.iter_mut().enumerate() {
                     let base = 48 + i * 4;
                     let li = i * 2;
                     let lj = i * 2 + 1;
@@ -410,7 +410,7 @@ impl EmlModel {
                         + params[base + 3] * e[ri]
                         + (1.0 - params[base + 2] - params[base + 3]) * e[rj])
                         .clamp(0.01, 10.0);
-                    f[i] = eml_safe(mix_left, mix_right);
+                    *slot = eml_safe(mix_left, mix_right);
                 }
                 f.to_vec()
             }
@@ -444,8 +444,8 @@ impl EmlModel {
     /// Generate feature pair indices for level 0 (cycling through inputs).
     fn feature_pairs(input_count: usize) -> [(usize, usize); 8] {
         let mut pairs = [(0usize, 0usize); 8];
-        for i in 0..8 {
-            pairs[i] = (
+        for (i, slot) in pairs.iter_mut().enumerate() {
+            *slot = (
                 (i * 2) % input_count,
                 (i * 2 + 1) % input_count,
             );

@@ -422,7 +422,7 @@ mod tests {
         ];
 
         let all = schema::openai_to_anthropic(&schemas);
-        let excluded = vec!["exec_shell".to_string()];
+        let excluded = ["exec_shell".to_string()];
         let filtered: Vec<Value> = all
             .into_iter()
             .filter(|tool| {

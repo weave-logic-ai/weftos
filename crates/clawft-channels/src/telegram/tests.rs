@@ -370,3 +370,84 @@ async fn process_update_message_without_from() {
     assert_eq!(msgs[0].sender_id, "");
     assert_eq!(msgs[0].content, "announcement");
 }
+
+// ── allow_from_match metadata (WEFT-162) ────────────────────────────────
+
+/// Sender matched in a non-empty allow-list → metadata has
+/// `allow_from_match: true`.
+#[tokio::test]
+async fn process_update_emits_allow_from_match_for_listed_user() {
+    let ch = TelegramChannel::new("tok".into(), vec!["100".into(), "200".into()]);
+    let mock_host = Arc::new(MockHost::new());
+    let host: Arc<dyn ChannelHost> = mock_host.clone();
+
+    let update = types::Update {
+        update_id: 10,
+        message: Some(types::Message {
+            message_id: 80,
+            from: Some(types::User {
+                id: 100,
+                is_bot: false,
+                first_name: "Alice".into(),
+                username: Some("alice".into()),
+            }),
+            chat: types::Chat {
+                id: 100,
+                chat_type: "private".into(),
+                title: None,
+                username: Some("alice".into()),
+            },
+            text: Some("hi".into()),
+            date: 1700000010,
+        }),
+    };
+
+    ch.process_update(&update, &host).await.unwrap();
+
+    let msgs = mock_host.messages.lock().await;
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(
+        msgs[0].metadata.get("allow_from_match"),
+        Some(&serde_json::Value::Bool(true)),
+        "matched allow-list user must emit allow_from_match=true"
+    );
+}
+
+/// Empty allow-list → message is delivered (everyone allowed) but no
+/// `allow_from_match` metadata is attached.
+#[tokio::test]
+async fn process_update_no_allow_from_match_when_list_empty() {
+    let ch = TelegramChannel::new("tok".into(), vec![]);
+    let mock_host = Arc::new(MockHost::new());
+    let host: Arc<dyn ChannelHost> = mock_host.clone();
+
+    let update = types::Update {
+        update_id: 11,
+        message: Some(types::Message {
+            message_id: 81,
+            from: Some(types::User {
+                id: 999,
+                is_bot: false,
+                first_name: "Anyone".into(),
+                username: None,
+            }),
+            chat: types::Chat {
+                id: 999,
+                chat_type: "private".into(),
+                title: None,
+                username: None,
+            },
+            text: Some("hello".into()),
+            date: 1700000011,
+        }),
+    };
+
+    ch.process_update(&update, &host).await.unwrap();
+
+    let msgs = mock_host.messages.lock().await;
+    assert_eq!(msgs.len(), 1);
+    assert!(
+        !msgs[0].metadata.contains_key("allow_from_match"),
+        "empty allow-list must not emit allow_from_match"
+    );
+}

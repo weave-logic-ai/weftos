@@ -252,9 +252,9 @@ fn extract_definitions_json(content: &str, rel_str: &str, findings: &mut Vec<Fin
         }
 
         // Bindings: look for source/destination
-        if section == "bindings" {
-            if let Some(src) = extract_json_string_field(trimmed, "source") {
-                if let Some(dst) = extract_json_string_field(trimmed, "destination") {
+        if section == "bindings"
+            && let Some(src) = extract_json_string_field(trimmed, "source")
+                && let Some(dst) = extract_json_string_field(trimmed, "destination") {
                     findings.push(Finding {
                         severity: "info".into(),
                         category: "messaging".into(),
@@ -263,8 +263,6 @@ fn extract_definitions_json(content: &str, rel_str: &str, findings: &mut Vec<Fin
                         message: format!("RabbitMQ binding: {src} -> {dst}"),
                     });
                 }
-            }
-        }
     }
 }
 
@@ -347,8 +345,7 @@ fn extract_compose_rabbitmq(content: &str, rel_str: &str, findings: &mut Vec<Fin
                     .trim_matches('\'');
                 if val.contains(':')
                     && val.chars().all(|c| c.is_ascii_digit() || c == ':')
-                {
-                    if let Some(ref svc) = current_service {
+                    && let Some(ref svc) = current_service {
                         findings.push(Finding {
                             severity: "info".into(),
                             category: "messaging".into(),
@@ -359,7 +356,6 @@ fn extract_compose_rabbitmq(content: &str, rel_str: &str, findings: &mut Vec<Fin
                             ),
                         });
                     }
-                }
             }
 
             // Environment section

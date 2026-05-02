@@ -374,11 +374,10 @@ impl KnowledgeGraph {
     pub fn source_files(&self) -> Vec<String> {
         let mut files: std::collections::HashSet<String> = std::collections::HashSet::new();
         for e in self.entities() {
-            if let Some(ref sf) = e.source_file {
-                if !sf.is_empty() {
+            if let Some(ref sf) = e.source_file
+                && !sf.is_empty() {
                     files.insert(sf.clone());
                 }
-            }
         }
         let mut v: Vec<String> = files.into_iter().collect();
         v.sort();

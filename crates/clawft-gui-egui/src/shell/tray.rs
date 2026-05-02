@@ -18,10 +18,9 @@ pub enum ChipId {
     Kernel,
     Mesh,
     ExoChain,
-    Wifi,
-    Bluetooth,
-    Audio,
-    Tof,
+    /// Ontology navigator — tree view of the whole substrate with
+    /// schema-matched value viewers. See `.planning/explorer/PROJECT-PLAN.md`.
+    Explorer,
 }
 
 impl ChipId {
@@ -31,10 +30,7 @@ impl ChipId {
             ChipId::Kernel => "Kernel",
             ChipId::Mesh => "Mesh",
             ChipId::ExoChain => "ExoChain",
-            ChipId::Wifi => "Wi-Fi",
-            ChipId::Bluetooth => "Bluetooth",
-            ChipId::Audio => "Audio",
-            ChipId::Tof => "ToF",
+            ChipId::Explorer => "Explorer",
         }
     }
 
@@ -45,27 +41,22 @@ impl ChipId {
             ChipId::Kernel => "substrate/kernel/status",
             ChipId::Mesh => "substrate/mesh/status",
             ChipId::ExoChain => "substrate/chain/status",
-            ChipId::Wifi => "substrate/network/wifi",
-            ChipId::Bluetooth => "substrate/bluetooth",
-            ChipId::Audio => "substrate/sensor/mic",
-            ChipId::Tof => "substrate/sensor/tof",
+            ChipId::Explorer => "substrate/",
         }
     }
 }
 
 /// Return the raw substrate value backing this chip, if present.
-pub fn chip_subtree<'a>(
+/// Explorer has no single backing value — it walks the tree itself.
+pub fn chip_subtree(
     chip: ChipId,
-    snap: &'a Snapshot,
-) -> Option<&'a serde_json::Value> {
+    snap: &Snapshot,
+) -> Option<&serde_json::Value> {
     match chip {
         ChipId::Kernel => snap.status.as_ref(),
         ChipId::Mesh => snap.mesh_status.as_ref(),
         ChipId::ExoChain => snap.chain_status.as_ref(),
-        ChipId::Wifi => snap.network_wifi.as_ref(),
-        ChipId::Bluetooth => snap.bluetooth.as_ref(),
-        ChipId::Audio => snap.audio_mic.as_ref(),
-        ChipId::Tof => snap.tof_depth.as_ref(),
+        ChipId::Explorer => None,
     }
 }
 
@@ -168,10 +159,10 @@ fn chip(
     } else {
         egui::Color32::from_rgba_unmultiplied(28, 28, 38, 180)
     };
-    let frame_resp = egui::Frame::none()
+    let frame_resp = egui::Frame::new()
         .fill(fill)
-        .rounding(8.0)
-        .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+        .corner_radius(8.0)
+        .inner_margin(egui::Margin::symmetric(8, 4))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 let (rect, _) =
@@ -198,20 +189,20 @@ fn chip(
 
 /// Determine service statuses from the live snapshot.
 ///
-/// As of M1.5.1 (α) every chip is backed by a real adapter or a real
-/// daemon read:
+/// Tray chips reflect subsystems that have a durable status surface:
 /// - **Kernel** ← `snap.connection` (daemon-socket reachability)
-/// - **Mesh** ← `substrate/mesh/status` (cluster.status RPC) via
-///   M1.5.1d MeshAdapter. Grey when daemon unreachable or no peers.
-/// - **ExoChain** ← `substrate/chain/status` (chain.status RPC) via
-///   M1.5.1d ChainAdapter. Grey when the daemon lacks the `exochain`
-///   feature or is unreachable.
-/// - **Wi-Fi** ← `substrate/network/wifi` via M1.5.1b NetworkAdapter.
-/// - **Bluetooth** ← `substrate/bluetooth` via M1.5.1c BluetoothAdapter.
+/// - **Mesh** ← `substrate/mesh/status` (cluster.status RPC)
+/// - **ExoChain** ← `substrate/chain/status` (chain.status RPC)
+/// - **Explorer** — ontology navigator; tracks daemon connection so
+///   you can tell at a glance whether walking the tree will work.
 ///
-/// The M1.5 placeholder **DeFi** chip has been removed — no DeFi
-/// subsystem exists in the workspace today. It comes back once an
-/// ADR-scoped DeFi module ships with its own adapter.
+/// Wi-Fi / Bluetooth / Audio / ToF chips were retired here — their
+/// substrate paths still flow into `Snapshot` (adapters intact) and
+/// will be viewed through the Explorer instead, avoiding bespoke
+/// chips that only duplicate a JSON field.
+///
+/// Order here determines visual order: the **last entry renders at
+/// the far right** (right-to-left layout reverses the iteration).
 fn services(snap: &Snapshot) -> Vec<(ChipId, &'static str, &'static str, Ok)> {
     let kernel = match snap.connection {
         Connection::Connected => Ok::On,
@@ -221,82 +212,16 @@ fn services(snap: &Snapshot) -> Vec<(ChipId, &'static str, &'static str, Ok)> {
 
     let mesh = mesh_state_to_ok(&snap.mesh_status);
     let exochain = chain_state_to_ok(&snap.chain_status);
-    let wifi = link_state_to_ok(&snap.network_wifi);
-    let bluetooth = bluetooth_state_to_ok(&snap.bluetooth);
-    let audio = audio_state_to_ok(&snap.audio_mic);
-    let tof = tof_state_to_ok(&snap.tof_depth);
+    // Explorer is a tool, not a data surface — green whenever the
+    // daemon is reachable, because that's when the tree is walkable.
+    let explorer = kernel;
 
     vec![
         (ChipId::Kernel, "Kernel", "◉ kernel", kernel),
         (ChipId::Mesh, "Mesh", "⌖ mesh", mesh),
         (ChipId::ExoChain, "ExoChain", "⛓ chain", exochain),
-        (ChipId::Wifi, "Wi-Fi", "≋ wifi", wifi),
-        (ChipId::Bluetooth, "Bluetooth", "∗ bt", bluetooth),
-        (ChipId::Audio, "Audio", "◊ mic", audio),
-        (ChipId::Tof, "ToF", "⊞ tof", tof),
+        (ChipId::Explorer, "Explorer", "⌸ explore", explorer),
     ]
-}
-
-/// Map a `substrate/sensor/tof` Replace value to a tray chip status.
-/// `available: false` → grey; any frame received → green.
-/// Schema: `{available, width, height, depths_mm: [u16; w*h], min_mm?, max_mm?, frame_count?}`.
-fn tof_state_to_ok(v: &Option<serde_json::Value>) -> Ok {
-    let Some(obj) = v.as_ref() else {
-        return Ok::Off;
-    };
-    if obj.get("available").and_then(|b| b.as_bool()) == Some(false) {
-        return Ok::Off;
-    }
-    // A real frame has a non-empty depths array with at least some
-    // non-0xFFFF values. If the whole frame is 0xFFFF ("no valid
-    // reading" on VL53L7CX/L5CX), chip stays amber to surface the
-    // misconfiguration.
-    let depths = obj.get("depths_mm").and_then(|v| v.as_array());
-    match depths {
-        Some(arr) if arr.is_empty() => Ok::Off,
-        Some(arr) => {
-            let all_invalid = arr
-                .iter()
-                .all(|v| v.as_u64().unwrap_or(0) == 65535);
-            if all_invalid {
-                Ok::Warn
-            } else {
-                Ok::On
-            }
-        }
-        None => Ok::Off,
-    }
-}
-
-/// Map a `substrate/network/{wifi,ethernet}` Replace value to a tray
-/// chip status. `absent` → grey (Off). `disconnected` → amber (Warn).
-/// `connected` → green (On). `None` (no adapter tick landed yet, or
-/// we're on wasm before the substrate-bridge ships) → grey.
-fn link_state_to_ok(v: &Option<serde_json::Value>) -> Ok {
-    let Some(state) = v.as_ref().and_then(|x| x.get("state")).and_then(|s| s.as_str()) else {
-        return Ok::Off;
-    };
-    match state {
-        "connected" => Ok::On,
-        "disconnected" => Ok::Warn,
-        _ => Ok::Off,
-    }
-}
-
-/// Map a `substrate/bluetooth` Replace value to a tray chip status.
-/// `enabled=true` → green. `present=true` but `enabled=false` (rfkill
-/// soft-blocked) → amber. Otherwise → grey.
-fn bluetooth_state_to_ok(v: &Option<serde_json::Value>) -> Ok {
-    let Some(obj) = v.as_ref() else {
-        return Ok::Off;
-    };
-    let enabled = obj.get("enabled").and_then(|b| b.as_bool()).unwrap_or(false);
-    let present = obj.get("present").and_then(|b| b.as_bool()).unwrap_or(false);
-    match (present, enabled) {
-        (_, true) => Ok::On,
-        (true, false) => Ok::Warn,
-        _ => Ok::Off,
-    }
 }
 
 /// Map a `substrate/mesh/status` Replace value to a tray chip status.
@@ -319,33 +244,6 @@ fn mesh_state_to_ok(v: &Option<serde_json::Value>) -> Ok {
         (0, _) => Ok::Off,
         (t, h) if h == t => Ok::On,
         _ => Ok::Warn,
-    }
-}
-
-/// Map a `substrate/sensor/mic` Replace value to a tray chip status.
-///
-/// - `available: false` (source missing, stream reset) → grey (Off).
-/// - `available: true` but `rms_db ≤ -90` (effectively silent) → grey.
-/// - `rms_db > -3` (on the brink of clipping) → amber (Warn).
-/// - otherwise → green (On).
-fn audio_state_to_ok(v: &Option<serde_json::Value>) -> Ok {
-    let Some(obj) = v.as_ref() else {
-        return Ok::Off;
-    };
-    if obj
-        .get("available")
-        .and_then(|b| b.as_bool())
-        == Some(false)
-    {
-        return Ok::Off;
-    }
-    let rms = obj.get("rms_db").and_then(|n| n.as_f64()).unwrap_or(-120.0);
-    if rms <= -90.0 {
-        Ok::Off
-    } else if rms > -3.0 {
-        Ok::Warn
-    } else {
-        Ok::On
     }
 }
 

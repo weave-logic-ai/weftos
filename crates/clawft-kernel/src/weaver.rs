@@ -652,14 +652,12 @@ impl FileWatcher {
 
         for path in entries {
             if let Ok(metadata) = std::fs::metadata(&path) {
-                if let Ok(mtime) = metadata.modified() {
-                    if let Some(last_mtime) = self.watched.get(&path) {
-                        if mtime > *last_mtime {
+                if let Ok(mtime) = metadata.modified()
+                    && let Some(last_mtime) = self.watched.get(&path)
+                        && mtime > *last_mtime {
                             changed.push(path.clone());
                             self.watched.insert(path, mtime);
                         }
-                    }
-                }
             } else {
                 // File deleted
                 changed.push(path.clone());
@@ -672,11 +670,10 @@ impl FileWatcher {
 
     /// Register a single file to watch.
     pub fn watch(&mut self, path: PathBuf) {
-        if let Ok(metadata) = std::fs::metadata(&path) {
-            if let Ok(mtime) = metadata.modified() {
+        if let Ok(metadata) = std::fs::metadata(&path)
+            && let Ok(mtime) = metadata.modified() {
                 self.watched.insert(path, mtime);
             }
-        }
     }
 
     /// Register all files matching patterns in the root directory (non-recursive).
@@ -2197,18 +2194,16 @@ impl WeaverEngine {
         };
 
         // 1. Check for new git commits (if git polling enabled).
-        if start.elapsed() < budget {
-            if let Some(new_commits) = self.poll_git() {
+        if start.elapsed() < budget
+            && let Some(new_commits) = self.poll_git() {
                 result.git_commits_found = new_commits;
             }
-        }
 
         // 2. Check for file changes (if file watcher enabled).
-        if start.elapsed() < budget {
-            if let Some(changed_files) = self.poll_file_changes() {
+        if start.elapsed() < budget
+            && let Some(changed_files) = self.poll_file_changes() {
                 result.files_changed = changed_files;
             }
-        }
 
         // 3. Process pending ingestion queue (delegate to existing tick()).
         if start.elapsed() < budget {
@@ -2546,8 +2541,8 @@ pub fn diff_models(a: &ExportedModel, b: &ExportedModel) -> ModelDiff {
     // Edge types by (from, to, type) composite key.
     let edge_key =
         |e: &EdgeTypeSpec| format!("{}->{}:{}", e.from_type, e.to_type, e.edge_type);
-    let a_edge_keys: HashSet<String> = a.edge_types.iter().map(|e| edge_key(e)).collect();
-    let b_edge_keys: HashSet<String> = b.edge_types.iter().map(|e| edge_key(e)).collect();
+    let a_edge_keys: HashSet<String> = a.edge_types.iter().map(&edge_key).collect();
+    let b_edge_keys: HashSet<String> = b.edge_types.iter().map(edge_key).collect();
 
     let edges_only_a: Vec<String> = a_edge_keys.difference(&b_edge_keys).cloned().collect();
     let edges_only_b: Vec<String> = b_edge_keys.difference(&a_edge_keys).cloned().collect();
@@ -2566,9 +2561,9 @@ pub fn diff_models(a: &ExportedModel, b: &ExportedModel) -> ModelDiff {
     let causal_edge_key =
         |e: &ExportedCausalEdge| format!("{}->{}", e.source_label, e.target_label);
     let a_causal_edge_keys: HashSet<String> =
-        a.causal_edges.iter().map(|e| causal_edge_key(e)).collect();
+        a.causal_edges.iter().map(&causal_edge_key).collect();
     let b_causal_edge_keys: HashSet<String> =
-        b.causal_edges.iter().map(|e| causal_edge_key(e)).collect();
+        b.causal_edges.iter().map(causal_edge_key).collect();
 
     let causal_edges_added = b_causal_edge_keys.difference(&a_causal_edge_keys).count();
     let causal_edges_removed = a_causal_edge_keys.difference(&b_causal_edge_keys).count();

@@ -14,12 +14,29 @@ export function CanvasPage() {
   const { addElement, updateElement, removeElement, reset, elements } =
     useCanvasStore();
 
-  // Subscribe to canvas commands from WebSocket
+  // Subscribe to canvas commands from the WebSocket broadcaster.
+  //
+  // WEFT-306: the gateway publishes validated CanvasCommands on the
+  // `canvas` topic. The WS handler envelopes them as
+  // `{type:"event", topic:"canvas", data:{type:"canvas_command",
+  // command, id, element, ...}}`, so we listen on the generic `event`
+  // channel and filter on topic + data.type — the same pattern
+  // voice-chat.ts uses for `sessions:*`.
   useEffect(() => {
     wsClient.subscribe("canvas");
 
-    const off = wsClient.on("canvas_command", (data: unknown) => {
-      const cmd = data as CanvasCommandData;
+    const off = wsClient.on("event", (raw: unknown) => {
+      const msg = raw as {
+        type?: string;
+        topic?: string;
+        data?: CanvasCommandData & { type?: string };
+      };
+
+      if (msg.topic !== "canvas" || msg.data?.type !== "canvas_command") {
+        return;
+      }
+
+      const cmd = msg.data;
 
       switch (cmd.command) {
         case "render":

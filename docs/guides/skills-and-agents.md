@@ -119,10 +119,16 @@ weft skills install /path/to/my-skill
 
 # Remove a user-installed skill
 weft skills remove my-skill
+
+# Generate an Ed25519 signing keypair for skill publishing
+weft skills keygen
 ```
 
 `weft skills list` prints a table with columns: NAME, SOURCE (workspace /
 user / builtin), FORMAT (SKILL.md / legacy), and DESCRIPTION.
+
+For publishing signed skills and the trust-root model, see
+[skill-signing.md](skill-signing.md).
 
 ### Hot-reload
 

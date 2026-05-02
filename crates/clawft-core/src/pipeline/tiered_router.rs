@@ -559,8 +559,52 @@ impl TieredRouter {
     }
 
     /// Build a RoutingDecision when no tiers are available at all.
-    fn no_tiers_available_decision(&self) -> RoutingDecision {
+    ///
+    /// WEFT-27: even on the no-tiers path, the global fallback model must
+    /// honour the caller's `max_tier`. Without this gate, a misconfigured
+    /// `routing.fallback_model: anthropic/claude-opus-4-5` would let
+    /// zero-trust users hit elite models — bypassing the entire
+    /// permission system. When permissions are not provided (legacy
+    /// callers), we fall back to permissive behaviour (no caller context
+    /// means no caller to authorise against).
+    fn no_tiers_available_decision(
+        &self,
+        permissions: Option<&UserPermissions>,
+    ) -> RoutingDecision {
         if let Some(ref fallback) = self.fallback_model {
+            // Apply the same tier check the regular fallback chain uses
+            // (FIX-06 / WEFT-27). If the fallback model lives in a tier
+            // above the caller's max_tier, deny rather than leak access.
+            if let Some(perms) = permissions {
+                let max_ordinal = self
+                    .tier_index
+                    .get(&perms.max_tier)
+                    .copied()
+                    .unwrap_or(0);
+                let fallback_tier_ordinal = self
+                    .tiers
+                    .iter()
+                    .find(|t| t.models.iter().any(|m| m == fallback))
+                    .map(|t| t.ordinal);
+
+                if let Some(ordinal) = fallback_tier_ordinal
+                    && ordinal > max_ordinal
+                {
+                    tracing::warn!(
+                        fallback_tier_ordinal = %ordinal,
+                        user_max_ordinal = %max_ordinal,
+                        "no_tiers_available: fallback model denied -- tier above user max_tier"
+                    );
+                    return RoutingDecision {
+                        provider: String::new(),
+                        model: String::new(),
+                        reason: "no tiers available: fallback model not permitted for user tier"
+                            .into(),
+                        ..Default::default()
+                    };
+                }
+            }
+
             let (provider, model) = split_provider_model(fallback);
             RoutingDecision {
                 provider,
@@ -612,6 +656,56 @@ impl ModelRouter for TieredRouter {
             "route: starting tiered routing decision"
         );
 
+        // ── WEFT-31: model_override audit ───────────────────────────
+        //
+        // When a request supplies an explicit `model` AND the caller's
+        // permissions grant `model_override`, the tier system is
+        // bypassed entirely — the request gets the model it asked for.
+        // This is the highest-blast-radius routing path: an admin
+        // (or any caller with `model_override: true`) can punch through
+        // tier filtering, escalation thresholds, and budget caps. To
+        // keep that path auditable we emit a `routing.audit` warn line
+        // every time it fires and a chain event for durable replay.
+        // The event must contain enough metadata for after-the-fact
+        // governance review (who, what, where) without being noisy on
+        // the normal routing path.
+        if let Some(ref override_model) = request.model
+            && permissions.model_override
+        {
+            let (provider, model) = split_provider_model(override_model);
+            tracing::warn!(
+                target: "routing.audit",
+                principal = %auth.sender_id,
+                channel = %auth.channel,
+                level = %permissions.level,
+                model = %override_model,
+                "model_override applied: tier filtering bypassed"
+            );
+            crate::chain_event!(
+                "routing",
+                "model_override_bypass",
+                {
+                    "principal": auth.sender_id,
+                    "channel": auth.channel,
+                    "level": permissions.level,
+                    "model": override_model,
+                }
+            );
+            return RoutingDecision {
+                provider,
+                model,
+                reason: format!(
+                    "model_override bypass: principal={}, channel={}, model={}",
+                    auth.sender_id, auth.channel, override_model
+                ),
+                tier: None,
+                cost_estimate_usd: None,
+                escalated: false,
+                budget_constrained: false,
+                sender_id: Some(auth.sender_id.clone()),
+            };
+        }
+
         // Step 3: Check rate limit
         if let Some(ref limiter) = self.rate_limiter
             && permissions.rate_limit > 0
@@ -625,7 +719,7 @@ impl ModelRouter for TieredRouter {
         let allowed_tiers = self.filter_tiers_by_permissions(permissions);
         if allowed_tiers.is_empty() {
             tracing::info!(sender = %auth.sender_id, "route: no tiers available");
-            return self.no_tiers_available_decision();
+            return self.no_tiers_available_decision(Some(permissions));
         }
 
         // Step 5: Select tier by complexity (with escalation)
@@ -662,7 +756,7 @@ impl ModelRouter for TieredRouter {
                             sender_id: Some(auth.sender_id.clone()),
                         };
                     }
-                    None => return self.no_tiers_available_decision(),
+                    None => return self.no_tiers_available_decision(Some(permissions)),
                 }
             }
         };
@@ -1611,6 +1705,276 @@ mod tests {
         let decision = router.route(&req, &make_profile(0.5)).await;
         assert!(decision.provider.is_empty());
         assert!(decision.reason.contains("no tiers"));
+    }
+
+    // ── WEFT-27: tier check on fallback model selection ─────────────
+    //
+    // Ensures that EVERY fallback selection branch — including the
+    // no-tiers-available terminal path — gates the configured
+    // `routing.fallback_model` against the caller's `max_tier`. A
+    // misconfigured fallback (e.g. `anthropic/claude-opus-4-5`) must
+    // never be served to a zero-trust caller just because their tier
+    // filter excluded the entire tier list. This is the missing
+    // half of FIX-06.
+
+    #[test]
+    fn weft27_no_tiers_available_denies_fallback_above_max_tier() {
+        // Tier list contains an elite tier; user has only `free` access.
+        // The configured fallback model lives in `elite`. If the user's
+        // permission filter empties the allowed list (e.g. workspace
+        // ceiling clamps everything away), the no-tiers path must NOT
+        // hand them the elite fallback.
+        let mut config = make_config(standard_tiers());
+        config.fallback_model = Some("anthropic/claude-opus-4".into());
+        let router = TieredRouter::new(config);
+
+        let perms = UserPermissions {
+            // `unknown_tier` is not in the tier_index → max_ordinal = 0.
+            // Combined with model_denylist of every tier's primary model,
+            // filter_tiers_by_permissions returns an empty list.
+            max_tier: "free".into(),
+            ..UserPermissions::default()
+        };
+        let decision = router.no_tiers_available_decision(Some(&perms));
+
+        // The fallback (claude-opus-4 / elite ordinal 3) must be denied
+        // because user max_tier is `free` (ordinal 0).
+        assert!(
+            decision.provider.is_empty(),
+            "fallback above max_tier must NOT be returned"
+        );
+        assert!(decision.reason.contains("not permitted"));
+    }
+
+    #[test]
+    fn weft27_no_tiers_available_allows_fallback_within_max_tier() {
+        // Same setup but the fallback model lives in the `free` tier
+        // (ordinal 0) — equal to the user's max_tier — so the gate
+        // must permit it.
+        let mut config = make_config(standard_tiers());
+        config.fallback_model = Some("groq/llama-3.1-8b".into());
+        let router = TieredRouter::new(config);
+
+        let perms = UserPermissions {
+            max_tier: "free".into(),
+            ..UserPermissions::default()
+        };
+        let decision = router.no_tiers_available_decision(Some(&perms));
+        assert_eq!(decision.provider, "groq");
+        assert_eq!(decision.model, "llama-3.1-8b");
+    }
+
+    #[test]
+    fn weft27_no_tiers_no_permissions_falls_back_permissively() {
+        // Legacy callers (no permissions argument) keep the previous
+        // behaviour — the fallback is returned unconditionally.
+        let mut config = make_config(standard_tiers());
+        config.fallback_model = Some("anthropic/claude-opus-4".into());
+        let router = TieredRouter::new(config);
+        let decision = router.no_tiers_available_decision(None);
+        assert_eq!(decision.provider, "anthropic");
+        assert_eq!(decision.model, "claude-opus-4");
+    }
+
+    // ── WEFT-31: model_override audit ───────────────────────────────
+
+    #[tokio::test]
+    async fn weft31_model_override_emits_audit_and_uses_override_model() {
+        // Drain any chain events left over from earlier tests in this
+        // process so the assertion below is deterministic.
+        let _ = crate::chain_event::drain_pending_chain_events();
+
+        let config = make_config(standard_tiers());
+        let router = TieredRouter::new(config);
+        let perms = UserPermissions {
+            level: 2,
+            max_tier: "elite".into(),
+            model_override: true,
+            ..admin_permissions()
+        };
+        let auth = make_auth("admin1", perms);
+        let mut req = make_request_with_auth(auth);
+        // Request explicitly asks for a model that is OUTSIDE any tier.
+        req.model = Some("custom-provider/exotic-model".into());
+
+        let decision = router.route(&req, &make_profile(0.5)).await;
+
+        // The override model is used verbatim.
+        assert_eq!(decision.provider, "custom-provider");
+        assert_eq!(decision.model, "exotic-model");
+        // No tier is attached — we bypassed the tier selector entirely.
+        assert!(decision.tier.is_none());
+        // Reason captures the bypass for operator-debug logging
+        // (it stays internal; redacted_reason() classifies it
+        // through the catch-all fallback category).
+        assert!(decision.reason.contains("model_override"));
+
+        // A chain event was pushed for governance review.
+        let events = crate::chain_event::drain_pending_chain_events();
+        let bypass_event = events
+            .iter()
+            .find(|e| e.kind == "model_override_bypass")
+            .expect("model_override_bypass event must be emitted");
+        assert_eq!(bypass_event.source, "routing");
+    }
+
+    #[tokio::test]
+    async fn weft31_model_override_off_does_not_bypass() {
+        // Same setup but `model_override: false` — the request's
+        // explicit `model` field MUST be ignored and normal tier
+        // routing must run.
+        let _ = crate::chain_event::drain_pending_chain_events();
+
+        let config = make_config(standard_tiers());
+        let router = TieredRouter::new(config);
+        let perms = UserPermissions {
+            model_override: false,
+            ..admin_permissions()
+        };
+        let auth = make_auth("admin2", perms);
+        let mut req = make_request_with_auth(auth);
+        req.model = Some("custom-provider/exotic-model".into());
+
+        let decision = router.route(&req, &make_profile(0.9)).await;
+
+        // Tier routing should pick `elite` — NOT the requested override.
+        assert_ne!(decision.model, "exotic-model");
+        assert!(decision.tier.is_some());
+
+        // No bypass audit event was emitted.
+        let events = crate::chain_event::drain_pending_chain_events();
+        assert!(
+            !events.iter().any(|e| e.kind == "model_override_bypass"),
+            "no audit event should fire when model_override=false"
+        );
+    }
+
+    // ── WEFT-52: admin user x restricted channel ────────────────────
+    //
+    // CONS-007 settled "channel overrides beat user overrides" as a
+    // general rule (test_channel_overrides_beat_user_overrides in
+    // permissions.rs). This test pins the specific edge case the
+    // 0.7.0 audit flagged: an admin (level 2) hitting a channel whose
+    // override clamps the level to `user`. The decision matrix says
+    // the channel override wins; this test makes that contract
+    // explicit at the integration level (router + resolver) so a
+    // future refactor can't quietly invert the priority.
+    #[tokio::test]
+    async fn weft52_admin_in_restricted_channel_is_clamped_to_channel_level() {
+        use crate::pipeline::permissions::PermissionResolver;
+        use clawft_types::routing::{
+            PermissionLevelConfig, PermissionsConfig, RoutingConfig,
+        };
+        use std::collections::HashMap;
+
+        // alice is configured as level=2 (admin) globally.
+        let mut users = HashMap::new();
+        users.insert(
+            "alice".into(),
+            PermissionLevelConfig {
+                level: Some(2),
+                ..PermissionLevelConfig::default()
+            },
+        );
+        // The #general channel is restricted to level=1 (user) and the
+        // free tier — model_override turned OFF + escalation off so the
+        // channel really is a hard tier ceiling (no upgrades, period).
+        let mut channels = HashMap::new();
+        channels.insert(
+            "general".into(),
+            PermissionLevelConfig {
+                level: Some(1),
+                max_tier: Some("free".into()),
+                model_override: Some(false),
+                escalation_allowed: Some(false),
+                ..PermissionLevelConfig::default()
+            },
+        );
+        let cfg = RoutingConfig {
+            permissions: PermissionsConfig {
+                users,
+                channels,
+                ..Default::default()
+            },
+            ..RoutingConfig::default()
+        };
+
+        // Resolve permissions for admin in restricted channel.
+        let resolver = PermissionResolver::new(&cfg, None);
+        let perms = resolver.resolve("alice", "general", false);
+
+        // Channel override wins: admin is clamped to user level + free
+        // tier and model_override is denied.
+        assert_eq!(perms.level, 1, "channel level override must beat user override");
+        assert_eq!(perms.max_tier, "free");
+        assert!(
+            !perms.model_override,
+            "channel override must beat user override on model_override too"
+        );
+
+        // Now route the request — even with `request.model` set, the
+        // bypass MUST NOT fire (because the resolved permissions have
+        // model_override=false from the channel clamp).
+        let _ = crate::chain_event::drain_pending_chain_events();
+        let router_cfg = make_config(standard_tiers());
+        let router = TieredRouter::new(router_cfg);
+        let auth = make_auth("alice", perms);
+        let mut req = make_request_with_auth(auth);
+        req.model = Some("anthropic/claude-opus-4".into()); // elite
+
+        // Use a complexity that maps cleanly into the `free` tier
+        // (`[0.0, 0.3]`) so the test depends only on the channel-tier
+        // clamp and the model_override gate, not on escalation
+        // tie-breaks.
+        let decision = router.route(&req, &make_profile(0.1)).await;
+
+        // The elite override MUST be denied — the routing must pick
+        // a tier within the channel-clamped max_tier (`free`).
+        assert_ne!(decision.model, "claude-opus-4");
+        assert_eq!(decision.tier.as_deref(), Some("free"));
+        // No bypass event because model_override was clamped off.
+        let events = crate::chain_event::drain_pending_chain_events();
+        assert!(!events.iter().any(|e| e.kind == "model_override_bypass"));
+    }
+
+    #[tokio::test]
+    async fn weft27_route_zero_trust_denied_dangerous_fallback() {
+        // End-to-end: route() with a zero-trust caller whose max_tier
+        // sits below the configured fallback model. The route must
+        // surface a deny rather than the high-tier model.
+        let mut config = make_config(standard_tiers());
+        // Strip free-tier models out of the user's allowlist so the
+        // primary model selection comes back empty and we descend into
+        // the fallback chain. Use a denylist on every non-fallback
+        // model in the free tier.
+        config.fallback_model = Some("anthropic/claude-opus-4".into());
+        let router = TieredRouter::new(config);
+
+        let perms = UserPermissions {
+            max_tier: "free".into(),
+            // Deny every model in every tier so select_model returns None
+            // and fallback_chain is invoked. After fallback_chain rejects
+            // the elite fallback, the route falls through to
+            // no_tiers_available_decision (or the chain's own deny path).
+            model_denylist: vec![
+                "groq/llama-3.1-8b".into(),
+                "anthropic/claude-haiku-3.5".into(),
+                "openai/gpt-4o-mini".into(),
+                "anthropic/claude-sonnet-4".into(),
+                "openai/gpt-4o".into(),
+                "anthropic/claude-opus-4".into(),
+            ],
+            ..UserPermissions::default()
+        };
+        let auth = make_auth("zt-user", perms);
+        let req = make_request_with_auth(auth);
+        let decision = router.route(&req, &make_profile(0.1)).await;
+
+        // The high-tier fallback model MUST NOT be returned.
+        assert_ne!(
+            decision.model, "claude-opus-4",
+            "tier check on fallback path is not firing"
+        );
     }
 
     #[test]

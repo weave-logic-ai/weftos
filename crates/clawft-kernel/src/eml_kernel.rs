@@ -277,8 +277,8 @@ impl HealthThresholdModel {
             recent_latency_ms / 1000.0, // normalize to seconds
         ];
         let heads = self.inner.predict(&inputs);
-        let degraded = (heads[0].max(1.0).min(20.0)).round() as u32;
-        let failed = (heads[1].max(1.0).min(20.0)).round() as u32;
+        let degraded = heads[0].clamp(1.0, 20.0).round() as u32;
+        let failed = heads[1].clamp(1.0, 20.0).round() as u32;
         // Ensure failed >= degraded
         (degraded, failed.max(degraded))
     }

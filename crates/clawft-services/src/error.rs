@@ -25,6 +25,19 @@ pub enum ServiceError {
     #[error("mcp protocol error: {0}")]
     McpProtocol(String),
 
+    /// MCP protocol-version mismatch — the server reported a
+    /// `protocolVersion` not in our accepted set. WEFT-489.
+    ///
+    /// The session is aborted before any tools/list / tools/call so
+    /// the daemon never speaks an unsupported dialect.
+    #[error("mcp protocol version mismatch: expected one of {ours:?}, got {theirs:?}")]
+    McpProtocolVersionMismatch {
+        /// Versions we accept on initialize handshake.
+        ours: Vec<String>,
+        /// Version reported by the remote server.
+        theirs: String,
+    },
+
     /// Underlying I/O error.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),

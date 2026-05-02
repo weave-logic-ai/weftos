@@ -25,6 +25,14 @@ export class WsClient {
       try {
         const data = JSON.parse(event.data);
         const type = data.type || 'message';
+        // WEFT-300: auto-reply to server-initiated heartbeat pings
+        // before fanning out to user handlers. The server evicts a
+        // socket that fails to send a pong within HEARTBEAT_TIMEOUT
+        // (60s in production); replying inline keeps long-lived
+        // dashboards alive without each handler having to know.
+        if (type === 'ping') {
+          this.send({ type: 'pong' });
+        }
         this.emit(type, data);
         this.emit('*', data);
       } catch {

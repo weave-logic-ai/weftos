@@ -32,6 +32,14 @@ pub fn render_headless(
 /// [`ComposeOutcome`] — responses + pending dispatches. Used by
 /// M1.5.1a tests that assert dispatch plumbing without opening a
 /// viewport.
+// `Context::run` is deprecated in egui 0.34 in favour of `run_ui`,
+// and `CentralPanel::show` is deprecated in favour of `show_inside`.
+// The test harness's whole point is to run a one-shot frame with no
+// real Ui in scope, which is exactly what the deprecated `run` was
+// for. Migrating to `run_ui` would require restructuring the test
+// harness around a Ui that doesn't exist outside a viewport. Allow
+// the deprecation here pending a deeper rewrite.
+#[allow(deprecated)]
 pub fn render_headless_full(
     tree: &SurfaceTree,
     snapshot: OntologySnapshot,

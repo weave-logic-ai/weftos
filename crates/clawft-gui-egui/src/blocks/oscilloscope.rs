@@ -30,7 +30,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut DemoState) {
         .iter()
         .map(|&(t, y)| [t, y])
         .collect();
-    let line = Line::new(points).color(egui::Color32::from_rgb(120, 220, 160));
+    let line = Line::new("scope", points).color(egui::Color32::from_rgb(120, 220, 160));
 
     Plot::new("oscilloscope")
         .allow_zoom(false)

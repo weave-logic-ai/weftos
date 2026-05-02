@@ -26,7 +26,16 @@ use super::client::TelegramClient;
 const DEFAULT_POLL_TIMEOUT_SECS: u64 = 30;
 
 /// Default delay between poll cycles in seconds.
-const DEFAULT_POLL_INTERVAL_SECS: u64 = 1;
+///
+/// `getUpdates` already blocks server-side for `DEFAULT_POLL_TIMEOUT_SECS`
+/// (30s) before returning, and `tokio::select!` yields cooperatively
+/// between iterations. The extra inter-poll sleep adds latency for
+/// inbound messages without buying additional fairness, so the default
+/// is `0` (no extra sleep). The field remains configurable for operators
+/// who want explicit back-pressure on tight error/retry loops; the
+/// `if self.poll_interval_secs > 0` guard skips the sleep entirely
+/// when set to `0`.
+const DEFAULT_POLL_INTERVAL_SECS: u64 = 0;
 
 /// Delay before retrying after an error, in seconds.
 const ERROR_RETRY_DELAY_SECS: u64 = 5;
@@ -139,6 +148,21 @@ impl TelegramChannel {
             }
         }
         metadata.insert("chat_type".into(), msg.chat.chat_type.clone().into());
+
+        // WEFT-162: signal that the sender passed an explicit allow_from
+        // check so the permission resolver can promote them from
+        // zero-trust to user level. Mirrors the Discord channel; only
+        // emitted when `allowed_users` is non-empty AND contains the
+        // sender (i.e. a real positive match, not "everyone allowed
+        // because the list is empty").
+        if !self.allowed_users.is_empty()
+            && self.allowed_users.iter().any(|id| id == &sender_id)
+        {
+            metadata.insert(
+                "allow_from_match".into(),
+                serde_json::Value::Bool(true),
+            );
+        }
 
         let inbound = InboundMessage {
             channel: "telegram".into(),

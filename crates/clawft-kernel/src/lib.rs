@@ -123,6 +123,8 @@ pub mod agency;
 #[cfg(feature = "native")]
 pub mod agent_registry;
 #[cfg(feature = "native")]
+pub mod node_registry;
+#[cfg(feature = "native")]
 pub mod substrate_service;
 #[cfg(all(feature = "native", feature = "exochain"))]
 pub mod stream_anchor;
@@ -238,8 +240,15 @@ pub use agent_registry::{
     publish_payload, register_payload, subscribe_payload, AgentRegistry, RegisteredAgent,
 };
 #[cfg(feature = "native")]
+pub use node_registry::{
+    node_id_from_pubkey, node_publish_payload, path_belongs_to, required_path_prefix,
+    DerivedGrantError, DerivedWriteGrant, GrantScope, NodeRegistry, RegisteredNode,
+    MESH_CANONICAL_PREFIX,
+};
+#[cfg(feature = "native")]
 pub use substrate_service::{
-    EgressDenied, Sensitivity as SubstrateSensitivity, SubstrateReadSnapshot, SubstrateService,
+    EgressDenied, GateDenied, Sensitivity as SubstrateSensitivity, SubstrateListEntry,
+    SubstrateListSnapshot, SubstrateReadSnapshot, SubstrateService,
 };
 #[cfg(all(feature = "native", feature = "exochain"))]
 pub use stream_anchor::{topic_matches, StreamWindowAnchor, TopicAnchor};

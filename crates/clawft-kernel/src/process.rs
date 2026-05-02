@@ -227,8 +227,8 @@ impl ProcessTable {
         let removed = self.entries.remove(&pid).map(|(_, e)| e);
 
         #[cfg(feature = "exochain")]
-        if let Some(ref entry) = removed {
-            if let Some(ref cm) = self.chain_manager {
+        if let Some(ref entry) = removed
+            && let Some(ref cm) = self.chain_manager {
                 cm.append(
                     "process",
                     crate::chain::EVENT_KIND_PROCESS_DEREGISTER,
@@ -238,7 +238,6 @@ impl ProcessTable {
                     })),
                 );
             }
-        }
 
         removed
     }

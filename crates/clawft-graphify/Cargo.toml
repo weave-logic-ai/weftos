@@ -1,6 +1,7 @@
 [package]
 name = "clawft-graphify"
 version.workspace = true
+publish = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -64,7 +65,12 @@ tree-sitter-c-sharp = { version = "0.23", optional = true }
 html-escape = { version = "0.2", optional = true }
 async-trait = { workspace = true, optional = true }
 clawft-kernel = { workspace = true, optional = true, features = ["ecc"] }
-clawft-llm = { workspace = true, optional = true }
+# Note: `clawft-llm` is intentionally NOT a dep here. The `semantic-extract`
+# and `vision-extract` features take an `FnOnce(String) -> Future` callback
+# instead of binding the provider, which keeps extraction logic testable
+# with fake LLM responses (see `.planning/graphify-rs/phase45-notes.md` §3).
+# The previously-declared optional `clawft-llm` dep was dead — no feature
+# gated it on, no source `use`d it. Removed in WEFT-383 (ws12 cleanup).
 notify = { workspace = true, optional = true }
 
 [dev-dependencies]

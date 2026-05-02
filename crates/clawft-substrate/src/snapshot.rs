@@ -25,6 +25,8 @@ use tokio::task::JoinHandle;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::adapter::{AdapterError, OntologyAdapter, SubId};
 use crate::delta::StateDelta;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::health::{build_event_delta, AdapterHealthEvent};
 
 /// Read-only snapshot of the substrate state tree at a point in time.
 ///
@@ -123,12 +125,15 @@ fn walk_json<'a>(v: &'a Value, path: &[&str]) -> Option<&'a Value> {
 /// An in-flight subscription tracked by the [`Substrate`].
 ///
 /// Owns the adapter handle + the drain task's join handle so
-/// [`Substrate::close_all`] can tombstone it cleanly on shutdown.
+/// [`Substrate::close_all`] can tombstone it cleanly on shutdown. Also
+/// carries the topic path so [`Substrate::close_all`] can include it in
+/// the `subscription-closed` adapter-health event.
 #[cfg(not(target_arch = "wasm32"))]
 struct TrackedSub {
     id: SubId,
     adapter: Arc<dyn OntologyAdapter>,
     drain: JoinHandle<()>,
+    topic: String,
 }
 
 /// Substrate state tree — aggregates deltas from all subscribed
@@ -229,6 +234,11 @@ impl Substrate {
     /// errors are ignored — close is idempotent per ADR-009 tombstone
     /// discipline) and aborts the drain task. Safe to call more than
     /// once.
+    ///
+    /// Emits a `subscription-closed` event on each adapter's
+    /// [`health`](crate::health) topic so subscribers can distinguish
+    /// "no data because nothing changed" from "no data because we tore
+    /// the stream down." (WEFT-417.)
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn close_all(&self) {
         let drained: Vec<TrackedSub> = {
@@ -236,6 +246,7 @@ impl Substrate {
             std::mem::take(&mut *guard)
         };
         for sub in drained {
+            let adapter_id = sub.adapter.id();
             // Tell the adapter first; if the adapter has its own
             // poller task keyed on this id, it will exit on its own.
             let _ = sub.adapter.close(sub.id).await;
@@ -244,6 +255,16 @@ impl Substrate {
             // exit), but abort covers the case where the adapter is
             // slow to tear down.
             sub.drain.abort();
+            // Surface the teardown on the adapter-health topic so a
+            // late subscriber can read "this adapter was closed at
+            // shutdown" rather than seeing a silent stale path.
+            self.apply(build_event_delta(
+                adapter_id,
+                AdapterHealthEvent::SubscriptionClosed,
+                &sub.topic,
+                Some(sub.id),
+                Some("substrate.close_all"),
+            ));
         }
     }
 
@@ -291,20 +312,64 @@ impl Substrate {
             self.set_max_len(topic, n);
         }
 
-        let sub = adapter.open(topic, args).await?;
+        let adapter_id = adapter.id();
+
+        let sub = match adapter.open(topic, args).await {
+            Ok(sub) => sub,
+            Err(e) => {
+                // Surface the failure on the adapter-health topic so
+                // subscribers don't have to scrape logs to learn the
+                // open() failed. (WEFT-415.)
+                let reason = e.to_string();
+                self.apply(build_event_delta(
+                    adapter_id,
+                    AdapterHealthEvent::Error,
+                    topic,
+                    None,
+                    Some(&reason),
+                ));
+                return Err(e);
+            }
+        };
         let id = sub.id;
+        // Emit `subscription-opened` immediately so the adapter-health
+        // topic carries an unambiguous live-ness signal as soon as the
+        // subscription exists. (WEFT-415.)
+        self.apply(build_event_delta(
+            adapter_id,
+            AdapterHealthEvent::SubscriptionOpened,
+            topic,
+            Some(id),
+            None,
+        ));
+
         let sink = Arc::clone(self);
         let mut rx = sub.rx;
+        let topic_owned = topic.to_string();
+        let topic_for_drain = topic_owned.clone();
+        let adapter_id_owned: &'static str = adapter_id;
         let drain = tokio::spawn(async move {
             while let Some(delta) = rx.recv().await {
                 sink.apply(delta);
             }
             // Sender closed — adapter terminated this subscription.
+            // Emit a `subscription-closed` event so subscribers can
+            // distinguish "stalled" from "dead." (WEFT-417.) Aborts
+            // from `close_all` skip this branch (the future is dropped
+            // mid-await), so `close_all` emits its own event.
+            sink.apply(build_event_delta(
+                adapter_id_owned,
+                AdapterHealthEvent::SubscriptionClosed,
+                &topic_for_drain,
+                Some(id),
+                Some("sender-closed"),
+            ));
         });
         self.subscriptions.lock().push(TrackedSub {
             id,
             adapter,
             drain,
+            topic: topic_owned,
         });
         Ok(id)
     }
@@ -555,6 +620,181 @@ mod tests {
         assert!(
             *adapter.closed.lock(),
             "adapter.close() should have been invoked"
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_emits_subscription_opened_health_event() {
+        // WEFT-415: the substrate auto-emits a `subscription-opened`
+        // event on the per-adapter health topic when a subscription
+        // succeeds.
+        let adapter = Arc::new(ForeverMock {
+            closed: parking_lot::Mutex::new(false),
+        });
+        let substrate = Arc::new(Substrate::new());
+        substrate
+            .subscribe_adapter(
+                adapter as Arc<dyn OntologyAdapter>,
+                "substrate/mock/items",
+                Value::Null,
+            )
+            .await
+            .expect("subscribe");
+
+        let health = substrate
+            .get("substrate/meta/adapter/forever-mock/health")
+            .expect("adapter-health path populated");
+        assert_eq!(health["event"], "subscription-opened");
+        assert_eq!(health["adapter"], "forever-mock");
+        assert_eq!(health["topic"], "substrate/mock/items");
+    }
+
+    #[tokio::test]
+    async fn close_all_emits_subscription_closed_health_event() {
+        // WEFT-417: tearing the subscription down via close_all
+        // surfaces a `subscription-closed` event so subscribers can
+        // distinguish "no data" from "dead stream."
+        let adapter = Arc::new(ForeverMock {
+            closed: parking_lot::Mutex::new(false),
+        });
+        let substrate = Arc::new(Substrate::new());
+        substrate
+            .subscribe_adapter(
+                adapter as Arc<dyn OntologyAdapter>,
+                "substrate/mock/items",
+                Value::Null,
+            )
+            .await
+            .expect("subscribe");
+
+        substrate.close_all().await;
+
+        let health = substrate
+            .get("substrate/meta/adapter/forever-mock/health")
+            .expect("adapter-health path populated");
+        assert_eq!(health["event"], "subscription-closed");
+        assert_eq!(health["topic"], "substrate/mock/items");
+        assert_eq!(health["reason"], "substrate.close_all");
+    }
+
+    // Adapter that closes its sender immediately on `open()` — exercises
+    // the drain-task exit path.
+    struct OneShotMock;
+    #[async_trait]
+    impl OntologyAdapter for OneShotMock {
+        fn id(&self) -> &'static str {
+            "oneshot-mock"
+        }
+        fn topics(&self) -> &'static [TopicDecl] {
+            CLOSE_MOCK_TOPICS
+        }
+        fn permissions(&self) -> &'static [PermissionReq] {
+            &[]
+        }
+        async fn open(
+            &self,
+            _topic: &str,
+            _args: Value,
+        ) -> Result<Subscription, crate::adapter::AdapterError> {
+            // Build the channel and drop the sender immediately so the
+            // drain task sees `recv() == None` on its first poll.
+            let (_tx, rx) = mpsc::channel(1);
+            Ok(Subscription { id: SubId(99), rx })
+        }
+        async fn close(&self, _sub_id: SubId) -> Result<(), crate::adapter::AdapterError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn drain_exit_emits_subscription_closed_health_event() {
+        // WEFT-417: when the adapter terminates the sender on its own,
+        // the drain task must surface that as a `subscription-closed`
+        // event with reason `sender-closed` (not `substrate.close_all`).
+        let adapter = Arc::new(OneShotMock);
+        let substrate = Arc::new(Substrate::new());
+        substrate
+            .subscribe_adapter(
+                adapter as Arc<dyn OntologyAdapter>,
+                "substrate/mock/items",
+                Value::Null,
+            )
+            .await
+            .expect("subscribe");
+
+        // Give the drain task a chance to wake on the closed sender.
+        for _ in 0..50 {
+            if substrate
+                .get("substrate/meta/adapter/oneshot-mock/health")
+                .map(|v| v["event"] == "subscription-closed")
+                .unwrap_or(false)
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let health = substrate
+            .get("substrate/meta/adapter/oneshot-mock/health")
+            .expect("adapter-health path populated");
+        assert_eq!(health["event"], "subscription-closed");
+        assert_eq!(health["reason"], "sender-closed");
+    }
+
+    // Adapter whose `open()` always fails — exercises the error path.
+    struct AlwaysFailMock;
+    #[async_trait]
+    impl OntologyAdapter for AlwaysFailMock {
+        fn id(&self) -> &'static str {
+            "fail-mock"
+        }
+        fn topics(&self) -> &'static [TopicDecl] {
+            CLOSE_MOCK_TOPICS
+        }
+        fn permissions(&self) -> &'static [PermissionReq] {
+            &[]
+        }
+        async fn open(
+            &self,
+            _topic: &str,
+            _args: Value,
+        ) -> Result<Subscription, crate::adapter::AdapterError> {
+            Err(crate::adapter::AdapterError::SourceUnavailable(
+                "test-rigged failure".into(),
+            ))
+        }
+        async fn close(&self, _sub_id: SubId) -> Result<(), crate::adapter::AdapterError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn open_failure_emits_error_health_event() {
+        // WEFT-415: a failed `open()` is itself a health event — surface
+        // it so callers don't have to scrape logs to know the adapter
+        // refused to start.
+        let adapter = Arc::new(AlwaysFailMock);
+        let substrate = Arc::new(Substrate::new());
+        let r = substrate
+            .subscribe_adapter(
+                adapter as Arc<dyn OntologyAdapter>,
+                "substrate/mock/items",
+                Value::Null,
+            )
+            .await;
+        assert!(r.is_err());
+
+        let health = substrate
+            .get("substrate/meta/adapter/fail-mock/health")
+            .expect("adapter-health path populated");
+        assert_eq!(health["event"], "error");
+        assert_eq!(health["topic"], "substrate/mock/items");
+        assert!(
+            health["reason"]
+                .as_str()
+                .map(|s| s.contains("test-rigged failure"))
+                .unwrap_or(false),
+            "reason should carry adapter error: {health:?}"
         );
     }
 

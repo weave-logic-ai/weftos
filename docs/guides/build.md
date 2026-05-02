@@ -42,6 +42,8 @@ scripts/build.sh native-debug    # Debug build (fast)
 scripts/build.sh wasi            # WASM for WASI (wasm32-wasip1)
 scripts/build.sh browser         # WASM for browser (wasm32-unknown-unknown)
 scripts/build.sh ui              # React frontend (tsc + vite)
+scripts/build.sh ui-docker       # Multi-stage clawft-ui Docker image (WEFT-317)
+scripts/build.sh ui-e2e          # Run the clawft-ui Playwright E2E suite (WEFT-314)
 scripts/build.sh all             # Build everything
 scripts/build.sh test            # cargo test --workspace
 scripts/build.sh check           # cargo check --workspace
@@ -58,6 +60,17 @@ scripts/build.sh native --features voice          # CLI with voice
 scripts/build.sh native --features voice,channels # CLI with voice + Discord
 scripts/build.sh native --dry-run                 # Preview commands
 scripts/build.sh gate                             # Run all 11 phase gate checks
+
+# Dashboard (clawft-ui) sub-commands
+scripts/build.sh ui-docker                        # Builds the multi-stage
+                                                  # clawft-ui Docker image
+                                                  # via clawft-ui/Dockerfile;
+                                                  # tag overridable via
+                                                  # CLAWFT_UI_DOCKER_TAG
+                                                  # (default: clawft-ui:dev).
+scripts/build.sh ui-e2e                           # Installs Playwright +
+                                                  # chromium and runs the
+                                                  # clawft-ui E2E suite.
 ```
 
 ## Quick Reference (raw cargo)
@@ -441,26 +454,16 @@ The image exposes `/root/.clawft` as a volume for persistent configuration and s
 
 ## Release Packaging
 
-The release packaging script creates distributable archives:
+Release archives are produced by [`cargo-dist`](https://opensource.axo.dev/cargo-dist/)
+inside the `Release` workflow (`.github/workflows/release.yml`). The
+target matrix and per-archive contents come from
+`[workspace.metadata.dist]` in the workspace `Cargo.toml`. The flow is
+documented end-to-end in [`docs/deployment/release.md`](../deployment/release.md).
 
-```bash
-./scripts/release/package.sh <version> <target> <binary-path>
-
-# Example
-./scripts/release/package.sh 0.1.0 x86_64-unknown-linux-musl target/x86_64-unknown-linux-musl/release/weft
-```
-
-Output in `dist/`:
-- `weft-0.1.0-x86_64-unknown-linux-musl.zip` -- Archive with binary + docs
-- `weft-0.1.0-x86_64-unknown-linux-musl.sha256` -- SHA-256 checksum
-
-The archive includes: binary, README.md, LICENSE, CHANGELOG.md, quickstart.md, configuration.md, and an internal checksums.txt.
-
-For all platforms at once:
-
-```bash
-bash scripts/release/package-all.sh 0.1.0
-```
+The legacy hand-rolled `scripts/release/package.sh` and
+`scripts/release/package-all.sh` were retired in WEFT-449 — cargo-dist
+now owns archive packaging, sigstore attestations, and the universal
+installer in lockstep.
 
 ## CI/CD
 

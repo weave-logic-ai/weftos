@@ -439,37 +439,17 @@ pub fn validate_file_size(
 
 // ── SEC-SKILL-08: MCP tool namespace isolation ──────────────────────
 
-/// Validate that an MCP tool name uses the `{server}__{tool}` format
-/// (double underscore separator).
+/// Validate that an MCP server tool name uses the required
+/// `{server}__{tool}` format.
 ///
-/// Non-MCP tools (those without any underscore) are allowed through.
-/// Only tools that appear to come from an MCP server (contain at least
-/// one underscore) are checked for the double-underscore convention.
+/// This is the canonical validator. The historical `validate_mcp_tool_name`
+/// variant -- which silently returned `Ok(())` for any input that did
+/// not look like an MCP tool -- has been removed (WEFT-16). Callers
+/// should not pre-classify tool names; if a name reaches this function,
+/// it is treated as an MCP tool and checked for the `__` separator.
+///
+/// Returns a `SecurityViolation` if the tool name does not contain `__`.
 pub fn validate_mcp_tool_name(tool_name: &str) -> Result<(), ClawftError> {
-    // If the tool name contains no underscores at all, it is a local tool.
-    if !tool_name.contains('_') {
-        return Ok(());
-    }
-    // If it contains a double underscore, it follows the convention.
-    if tool_name.contains("__") {
-        return Ok(());
-    }
-    // It contains single underscores but no double underscore.
-    // This could be a local tool with underscores in its name (e.g.
-    // "read_file"), which is fine. We only flag tools that look like
-    // they come from an MCP server but lack the `__` separator.
-    // Heuristic: if the first segment (before the first `_`) looks like
-    // a server name (lowercase, no digits), we flag it.
-    // For simplicity, we require validation to be called explicitly for
-    // MCP tools only.
-    Ok(())
-}
-
-/// Validate that an MCP server tool name uses the required `{server}__{tool}`
-/// format. This is the strict variant called during MCP tool registration.
-///
-/// Returns an error if the tool name does not contain `__`.
-pub fn validate_mcp_tool_name_strict(tool_name: &str) -> Result<(), ClawftError> {
     if !tool_name.contains("__") {
         return Err(ClawftError::SecurityViolation {
             reason: format!(
@@ -479,6 +459,144 @@ pub fn validate_mcp_tool_name_strict(tool_name: &str) -> Result<(), ClawftError>
             ),
         });
     }
+    Ok(())
+}
+
+/// Backwards-compatible alias retained for external call sites that
+/// still reference the `_strict` suffix. Both functions are now the
+/// same strict check (WEFT-16).
+#[doc(hidden)]
+pub fn validate_mcp_tool_name_strict(tool_name: &str) -> Result<(), ClawftError> {
+    validate_mcp_tool_name(tool_name)
+}
+
+/// MCP namespace prefixes considered sensitive. A wildcard-only allowlist
+/// (`["*"]`) MUST NOT cover these — the operator must opt in to each
+/// sensitive namespace explicitly (e.g. `["exec_*"]` or
+/// `["exec__shell"]`).
+///
+/// The list is intentionally short and conservative. Add a namespace
+/// here only when granting it via wildcard would constitute a security
+/// regression.
+pub const SENSITIVE_MCP_NAMESPACES: &[&str] = &[
+    "exec",      // shell / process exec
+    "shell",     // alternate shell namespace
+    "system",    // system control
+    "sudo",      // privilege escalation
+    "kernel",    // kernel surface
+    "subprocess",// process spawn
+    "process",   // process management
+    "fs_admin",  // privileged filesystem
+];
+
+/// Split an MCP tool name `{server}__{tool}` into `(server, tool)`.
+///
+/// Returns `None` for non-MCP tool names (no `__`).
+/// Multiple `__` use the FIRST as the split point so namespaces remain
+/// stable even if the tool name itself contains `__`.
+pub fn split_mcp_namespace(tool_name: &str) -> Option<(&str, &str)> {
+    tool_name
+        .find("__")
+        .map(|idx| (&tool_name[..idx], &tool_name[idx + 2..]))
+}
+
+/// WEFT-32: validate that a tool name is permitted by an allowlist.
+///
+/// Implements the wildcard-namespace guard requested by the 0.7.0
+/// release-gate audit (security review T-02): a tool named
+/// `exec__shell` (double-underscore namespace) must NOT be reachable
+/// through a `["*"]` allowlist. The operator has to opt in to every
+/// sensitive namespace by listing it explicitly (e.g. `["exec_*"]`,
+/// `["exec__shell"]`, `["exec__*"]`).
+///
+/// The function returns `Ok(())` when the tool name is permitted and a
+/// `SecurityViolation` error when the wildcard guard fires. Non-MCP
+/// tool names (no `__` separator) and tool names whose namespace prefix
+/// is not in [`SENSITIVE_MCP_NAMESPACES`] are always permitted as long
+/// as some allowlist entry matches them.
+///
+/// Arguments:
+/// - `tool_name`: the fully-qualified tool identifier (e.g. `"exec__shell"`).
+/// - `allowlist`: the caller's `tool_access` patterns. The empty list
+///   means "deny all" (zero-trust default). `["*"]` means "allow all
+///   non-sensitive". An entry like `["exec_*"]`, `["exec__*"]`, or
+///   `["exec__shell"]` opts in to the sensitive namespace explicitly.
+///
+/// Examples:
+/// ```ignore
+/// // Wildcard does NOT cover sensitive namespaces.
+/// validate_mcp_namespace_against_wildcard("exec__shell", &["*".into()])
+///     .unwrap_err();
+/// // Explicit namespace prefix opts in.
+/// validate_mcp_namespace_against_wildcard("exec__shell", &["exec_*".into()])
+///     .unwrap();
+/// // Non-sensitive namespace is fine under wildcard.
+/// validate_mcp_namespace_against_wildcard("fs__read_file", &["*".into()])
+///     .unwrap();
+/// ```
+pub fn validate_mcp_namespace_against_wildcard(
+    tool_name: &str,
+    allowlist: &[String],
+) -> Result<(), ClawftError> {
+    // Empty allowlist is handled by the caller (deny-all). We only
+    // enforce the wildcard-namespace guard.
+    if allowlist.is_empty() {
+        return Ok(());
+    }
+
+    // Reject a meta-wildcard prefix in the namespace position itself —
+    // an entry like `["*", ...]` paired with a tool name whose namespace
+    // is "*" is non-sensical and almost certainly a configuration bug.
+    if let Some((server, _tool)) = split_mcp_namespace(tool_name)
+        && server == "*"
+    {
+        return Err(ClawftError::SecurityViolation {
+            reason: format!(
+                "MCP tool '{tool_name}' uses wildcard '*' as namespace prefix"
+            ),
+        });
+    }
+
+    let Some((server, _tool)) = split_mcp_namespace(tool_name) else {
+        // Not an MCP tool — namespace guard does not apply.
+        return Ok(());
+    };
+
+    // Is the namespace flagged as sensitive?
+    if !SENSITIVE_MCP_NAMESPACES.contains(&server) {
+        return Ok(());
+    }
+
+    // Sensitive namespace — check whether the allowlist opts in
+    // explicitly. An entry opts in if it:
+    //   - exactly matches the tool name (e.g. `"exec__shell"`)
+    //   - starts with `"<server>_"` or `"<server>__"` and uses globs
+    //     (e.g. `"exec_*"`, `"exec__*"`).
+    //
+    // A bare wildcard `"*"` does NOT count as opt-in.
+    let prefix_under = format!("{server}_");
+    let prefix_dunder = format!("{server}__");
+    let opted_in = allowlist.iter().any(|entry| {
+        if entry == "*" {
+            return false;
+        }
+        if entry == tool_name {
+            return true;
+        }
+        entry.starts_with(&prefix_under) || entry.starts_with(&prefix_dunder)
+    });
+
+    if !opted_in {
+        return Err(ClawftError::SecurityViolation {
+            reason: format!(
+                "MCP tool '{tool_name}' lives in sensitive namespace \
+                 '{server}_*'; wildcard '*' allowlist does not cover \
+                 sensitive namespaces. Add an explicit entry like \
+                 '{server}_*' or '{tool_name}' to opt in."
+            ),
+        });
+    }
+
     Ok(())
 }
 
@@ -884,13 +1002,168 @@ mod tests {
         assert!(err.to_string().contains("namespace format"));
     }
 
+    // WEFT-16: the historical "lenient" `validate_mcp_tool_name` that
+    // returned Ok(()) for non-MCP-shaped names has been removed. Callers
+    // should not pre-classify; if a name is passed in, it is checked.
+
     #[test]
-    fn local_tool_no_underscore_passes_lenient() {
-        assert!(validate_mcp_tool_name("ReadFile").is_ok());
+    fn local_tool_no_underscore_now_rejected() {
+        // Post-WEFT-16: lenient pass-through is gone; bare names fail
+        // because they cannot satisfy the `{server}__{tool}` shape.
+        assert!(validate_mcp_tool_name("ReadFile").is_err());
     }
 
     #[test]
-    fn local_tool_with_underscore_passes_lenient() {
-        assert!(validate_mcp_tool_name("read_file").is_ok());
+    fn local_tool_with_single_underscore_now_rejected() {
+        // Single `_` was historically tolerated; now it must be `__`.
+        assert!(validate_mcp_tool_name("read_file").is_err());
+    }
+
+    #[test]
+    fn strict_alias_delegates_to_canonical() {
+        // The `_strict` suffix is a backwards-compat alias.
+        assert!(validate_mcp_tool_name_strict("server__tool").is_ok());
+        assert!(validate_mcp_tool_name_strict("server_tool").is_err());
+    }
+
+    // ── WEFT-32: MCP namespace guard against wildcard ['*'] ─────────
+
+    #[test]
+    fn weft32_split_mcp_namespace_extracts_server() {
+        assert_eq!(
+            split_mcp_namespace("exec__shell"),
+            Some(("exec", "shell"))
+        );
+        // Multiple `__` use the FIRST as split point.
+        assert_eq!(
+            split_mcp_namespace("exec__shell__nested"),
+            Some(("exec", "shell__nested"))
+        );
+        // Non-MCP names produce None.
+        assert_eq!(split_mcp_namespace("read_file"), None);
+        assert_eq!(split_mcp_namespace("simpletool"), None);
+    }
+
+    #[test]
+    fn weft32_wildcard_does_not_cover_exec_namespace() {
+        // The headline attack: `exec__shell` must be denied under `["*"]`.
+        let err = validate_mcp_namespace_against_wildcard(
+            "exec__shell",
+            &["*".into()],
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("sensitive namespace"));
+        assert!(msg.contains("exec"));
+    }
+
+    #[test]
+    fn weft32_explicit_namespace_prefix_opts_in() {
+        // `exec_*` opts the caller in to the sensitive `exec` namespace.
+        assert!(validate_mcp_namespace_against_wildcard(
+            "exec__shell",
+            &["exec_*".into()]
+        )
+        .is_ok());
+        // Double-underscore prefix also opts in.
+        assert!(validate_mcp_namespace_against_wildcard(
+            "exec__shell",
+            &["exec__*".into()]
+        )
+        .is_ok());
+        // Exact name opts in.
+        assert!(validate_mcp_namespace_against_wildcard(
+            "exec__shell",
+            &["exec__shell".into()]
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn weft32_non_sensitive_namespace_allowed_under_wildcard() {
+        // `fs__read_file` is fine under `["*"]` — `fs` is not sensitive.
+        assert!(validate_mcp_namespace_against_wildcard(
+            "fs__read_file",
+            &["*".into()]
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn weft32_non_mcp_tool_passes_under_wildcard() {
+        // Local tools without `__` aren't subject to the guard.
+        assert!(validate_mcp_namespace_against_wildcard(
+            "read_file",
+            &["*".into()]
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn weft32_wildcard_namespace_prefix_rejected() {
+        // The acceptance criterion's literal wildcard-as-namespace case:
+        // a tool name like `*__*` (server="*" in the namespace position).
+        let err = validate_mcp_namespace_against_wildcard(
+            "*__*",
+            &["*".into()],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("wildcard"));
+
+        let err2 = validate_mcp_namespace_against_wildcard(
+            "*__read_file",
+            &["*".into()],
+        )
+        .unwrap_err();
+        assert!(err2.to_string().contains("wildcard"));
+    }
+
+    #[test]
+    fn weft32_empty_allowlist_passes_namespace_guard() {
+        // The wildcard guard is orthogonal to the deny-all empty
+        // allowlist — caller code handles deny-all separately.
+        assert!(validate_mcp_namespace_against_wildcard("exec__shell", &[]).is_ok());
+    }
+
+    #[test]
+    fn weft32_other_sensitive_namespaces() {
+        // Spot-check a few of the other sensitive namespaces.
+        for ns in &["shell__cmd", "system__reboot", "sudo__run", "kernel__panic"] {
+            assert!(
+                validate_mcp_namespace_against_wildcard(ns, &["*".into()])
+                    .is_err(),
+                "namespace {ns} must be rejected under [*]"
+            );
+        }
+    }
+
+    #[test]
+    fn weft32_acceptance_criteria_examples() {
+        // From the WEFT-32 instructions:
+        //   ["*", "*"]          → Err
+        //   ["fs", "read_file"] → Ok (no sensitive namespace involved)
+        //   ["*", "read_file"]  → Err for "*"-prefixed tool name
+        let err1 = validate_mcp_namespace_against_wildcard(
+            "*__*",
+            &["*".into(), "*".into()],
+        )
+        .unwrap_err();
+        assert!(err1.to_string().contains("wildcard"));
+
+        // ["fs", "read_file"] — these are tool names in an allowlist
+        // for a benign tool. Asking whether `fs__read_file` is allowed
+        // should succeed.
+        assert!(validate_mcp_namespace_against_wildcard(
+            "fs__read_file",
+            &["fs".into(), "read_file".into()]
+        )
+        .is_ok());
+
+        let err3 = validate_mcp_namespace_against_wildcard(
+            "*__read_file",
+            &["*".into(), "read_file".into()],
+        )
+        .unwrap_err();
+        assert!(err3.to_string().contains("wildcard"));
     }
 }

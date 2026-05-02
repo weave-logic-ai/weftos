@@ -118,7 +118,7 @@ pub fn topic_help(topic: &str) -> String {
              \n\
                weft ui                        # Start with defaults\n\
                weft ui --port 9000            # Custom port\n\
-               weft ui --ui-dir ./ui/dist     # Serve built frontend\n\
+               weft ui --ui-dir ./clawft-ui/dist     # Serve built frontend\n\
                weft ui --no-open              # Skip browser auto-open"
             .into(),
         "config" => "Configuration is loaded from (in priority order):\n\

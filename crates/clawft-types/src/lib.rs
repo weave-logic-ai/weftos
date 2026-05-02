@@ -30,6 +30,7 @@
 //! Source: <https://github.com/weave-logic-ai/weftos>
 
 pub mod agent_bus;
+pub mod agent_chat;
 pub mod agent_routing;
 pub mod canvas;
 pub mod company;

@@ -581,7 +581,7 @@ impl GovernanceEngine {
         request: &GovernanceRequest,
         result: &GovernanceResult,
     ) {
-        use crate::chain::{ChainLoggable, GovernanceDecisionEvent};
+        use crate::chain::GovernanceDecisionEvent;
 
         let decision_str = match &result.decision {
             GovernanceDecision::Permit => "Permit".to_owned(),

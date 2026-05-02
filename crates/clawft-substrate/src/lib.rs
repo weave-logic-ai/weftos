@@ -19,16 +19,26 @@
 //!   as advisory and expects the app-manifest layer (M1.5-A, TODO) to
 //!   enforce it before calling `open`.
 //! - No dynamic-lib adapter registration (ADR-017 §3 path 2 — deferred).
-//! - No adapter-health topic (`substrate/meta/adapter/<id>/health`,
-//!   ADR-017 §7) — stub in kernel adapter, surfaces as TODO.
 //! - [`PermissionReq`] is a re-export of
 //!   [`clawft_app::manifest::Permission`] (unified in M1.5-D).
+//!
+//! # Adapter-health topic
+//!
+//! Each subscription emits lifecycle events on
+//! `substrate/meta/adapter/<id>/health` (see [`health`]) — `subscription-opened`
+//! immediately after a successful [`OntologyAdapter::open`], and
+//! `subscription-closed` when the drain task exits (graceful close or
+//! abort). Adapters that emit their own per-payload health snapshots
+//! (per [`healthcheck`]) write to `substrate/meta/adapter/<id>/healthcheck`
+//! independently. ADR-017 §7 obligation satisfied for in-tree adapters.
 
 #![deny(rust_2018_idioms)]
 #![warn(missing_docs)]
 
 pub mod adapter;
 pub mod delta;
+pub mod health;
+pub mod healthcheck;
 pub mod projection;
 pub mod snapshot;
 
@@ -83,9 +93,41 @@ pub mod physical;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mic;
 
+/// Rfkill enumerated-state sensor adapter. Reads `/sys/class/rfkill/*`
+/// and emits one of `unblocked | soft-blocked | hard-blocked | absent`
+/// per radio class (wifi, bluetooth, wwan). Native-only — sysfs is
+/// Linux-specific. The second [`physical::Characterization`] exemplar
+/// (after [`mic`]'s `Rate`) — exercises the `Enumerated` arm of the
+/// spectrometer-principle framework. WEFT-419 (M7b-1).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod rfkill;
+
+/// Presence reference sensor adapter — exemplar for the
+/// `Characterization::Presence` tier. Companion to [`mic`] (which
+/// exemplifies `Rate`). File-backed preview stub: reads one byte
+/// (0 / non-zero) from a configurable path and emits
+/// `{ present: bool, transitions: u64 }` on
+/// `substrate/sensor/presence`. Real GPIO / sysfs backing lands in
+/// a follow-up. WEFT-436 (M7b-4).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod presence;
+
 pub use adapter::{
     AdapterError, BufferPolicy, OntologyAdapter, PermissionReq, RefreshHint, Sensitivity, SubId,
     Subscription, TopicDecl,
 };
 pub use delta::StateDelta;
+pub use health::{health_topic_path, AdapterHealthEvent};
+// M7b-1 (WEFT-415/417/432): per-adapter healthcheck wire format used by
+// snapshot.rs + mic.rs. Topic path is `substrate/meta/adapter/<id>/healthcheck`.
+pub use healthcheck::{healthcheck_topic_path, SensorHealthReport, SensorStatus};
+// M7b-4 (WEFT-437): full HEALTHCHECK-CONTRACT.md typed shapes + classifier
+// + path helpers for the daemon-side aggregator at
+// `substrate/<node-id>/health/{sensor/<name> | node}`.
+pub use healthcheck::{
+    HealthGranularity, NodeHealth, RebootReason, SensorHealth, Status as HealthStatus,
+    classify_value as classify_health_value, node_health_derived_path, node_health_path,
+    node_health_raw_path, sensor_health_derived_path, sensor_health_path,
+    sensor_health_raw_path,
+};
 pub use snapshot::{OntologySnapshot, Substrate};

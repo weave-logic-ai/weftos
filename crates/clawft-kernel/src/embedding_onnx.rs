@@ -1661,7 +1661,7 @@ pub async fn process_batch(&self, items: Vec<Item>) -> Result<(), Error> {
         let ids = tok.wordpiece_split("tokens");
         // If "token" and "##s" are in the vocab, we should get 2 IDs (neither UNK).
         assert!(
-            ids.len() >= 1,
+            !ids.is_empty(),
             "should produce at least one subword token"
         );
     }

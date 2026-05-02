@@ -53,7 +53,7 @@ mod tests {
             ipc_tcp: None,
         };
         let ext = KernelConfigExt::from(base.clone());
-        assert_eq!(ext.base.enabled, true);
+        assert!(ext.base.enabled);
         assert_eq!(ext.base.max_processes, 128);
         assert!(ext.default_capabilities.is_none());
     }

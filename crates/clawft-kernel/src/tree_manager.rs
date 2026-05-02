@@ -1884,12 +1884,9 @@ mod tests {
         {
             let log = tm.mutation_log().lock().unwrap();
             for evt in log.events() {
-                match evt {
-                    MutationEvent::Create { signature, .. } => {
-                        assert!(signature.is_some(), "bootstrap Create should be signed");
-                        assert_eq!(signature.as_ref().unwrap().len(), 64);
-                    }
-                    _ => {}
+                if let MutationEvent::Create { signature, .. } = evt {
+                    assert!(signature.is_some(), "bootstrap Create should be signed");
+                    assert_eq!(signature.as_ref().unwrap().len(), 64);
                 }
             }
         }
@@ -1934,11 +1931,8 @@ mod tests {
         let log = tm.mutation_log().lock().unwrap();
         // All mutations should have signature = None when no key is set
         for evt in log.events() {
-            match evt {
-                MutationEvent::Create { signature, .. } => {
-                    assert!(signature.is_none(), "should be None without signing key");
-                }
-                _ => {}
+            if let MutationEvent::Create { signature, .. } = evt {
+                assert!(signature.is_none(), "should be None without signing key");
             }
         }
     }

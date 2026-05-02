@@ -135,9 +135,25 @@ pub async fn run(args: McpServerArgs) -> anyhow::Result<()> {
 
     // ── Build middleware pipeline ────────────────────────────────────
     let security_guard = build_security_guard(&config.tools);
+
+    // WEFT-189: gate tools/list and tools/call by `tools.allowed_tools`.
+    // Empty list = back-compat permissive behavior; populated list =
+    // glob-matched allowlist enforced both at filter_tools() and
+    // before_call().
+    let permission_filter = if config.tools.allowed_tools.is_empty() {
+        info!("tools.allowed_tools is empty; exposing all tools (back-compat)");
+        PermissionFilter::new(None)
+    } else {
+        info!(
+            patterns = ?config.tools.allowed_tools,
+            "tools.allowed_tools is configured; restricting MCP server surface",
+        );
+        PermissionFilter::from_patterns(config.tools.allowed_tools.clone())
+    };
+
     let middlewares: Vec<Box<dyn Middleware>> = vec![
         Box::new(security_guard),
-        Box::new(PermissionFilter::new(None)),
+        Box::new(permission_filter),
         Box::new(ResultGuard::default()),
         Box::new(AuditLog),
     ];
@@ -389,6 +405,88 @@ mod tests {
                 assert_eq!(parsed["output"], "hello");
             }
         }
+    }
+
+    // ── PermissionFilter wiring (WEFT-480) ─────────────────────────
+    //
+    // The `weft mcp-server` REPL/server invocation path used to call
+    // `PermissionFilter::new(None)` unconditionally, which exposed
+    // every registered tool. `run()` now selects the filter based on
+    // `config.tools.allowed_tools`:
+    //
+    //   - empty list → `PermissionFilter::new(None)` (back-compat
+    //     permissive — the server exposes all tools)
+    //   - non-empty list → `PermissionFilter::from_patterns(...)`
+    //     (the configured allowlist gates `tools/list` and
+    //     `tools/call`)
+    //
+    // These tests assert that the right filter shape comes out for
+    // each branch by exercising the middleware against a fixed list
+    // of tool names.
+
+    #[tokio::test]
+    async fn permission_filter_empty_allowed_tools_is_permissive() {
+        use clawft_services::mcp::ToolDefinition;
+        use clawft_services::mcp::middleware::{Middleware, PermissionFilter};
+
+        let allowed: Vec<String> = vec![];
+        // Reproduce the branch in `run()` for the empty case.
+        let filter = if allowed.is_empty() {
+            PermissionFilter::new(None)
+        } else {
+            PermissionFilter::from_patterns(allowed)
+        };
+
+        let tools = vec![
+            ToolDefinition {
+                name: "alpha".into(),
+                description: "".into(),
+                input_schema: serde_json::json!({}),
+            },
+            ToolDefinition {
+                name: "beta".into(),
+                description: "".into(),
+                input_schema: serde_json::json!({}),
+            },
+        ];
+        let filtered = filter.filter_tools(tools).await;
+        assert_eq!(filtered.len(), 2, "empty allowlist must expose all tools");
+    }
+
+    #[tokio::test]
+    async fn permission_filter_allowed_tools_restricts_surface() {
+        use clawft_services::mcp::ToolDefinition;
+        use clawft_services::mcp::middleware::{Middleware, PermissionFilter};
+
+        let allowed: Vec<String> = vec!["foo".into(), "bar.*".into()];
+        let filter = if allowed.is_empty() {
+            PermissionFilter::new(None)
+        } else {
+            PermissionFilter::from_patterns(allowed)
+        };
+
+        let tools = vec![
+            ToolDefinition {
+                name: "foo".into(),
+                description: "".into(),
+                input_schema: serde_json::json!({}),
+            },
+            ToolDefinition {
+                name: "bar.list".into(),
+                description: "".into(),
+                input_schema: serde_json::json!({}),
+            },
+            ToolDefinition {
+                name: "qux".into(),
+                description: "".into(),
+                input_schema: serde_json::json!({}),
+            },
+        ];
+        let filtered = filter.filter_tools(tools).await;
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"foo"));
+        assert!(names.contains(&"bar.list"));
+        assert!(!names.contains(&"qux"), "qux must not pass the filter");
     }
 
     #[tokio::test]

@@ -196,6 +196,23 @@ pub fn eval(
             // accept a `Var` primary — added below in a minimal patch
             // (see `parse::expr`). For now, honour the Var node here.
             let base = eval(inner, snap, bind)?;
+            // WEFT-422: `.first` / `.last` shorthand on list-shaped
+            // values is equivalent to the `first(xs)` / `last(xs)`
+            // function-call form. Falls back to ordinary field access
+            // for non-list bases (so `obj.first` on a struct with a
+            // `first` member still works).
+            if (field == "first" || field == "last")
+                && let Some(items) = base.as_list()
+            {
+                if items.is_empty() {
+                    return Ok(Value::Null);
+                }
+                return Ok(if field == "first" {
+                    items.first().cloned().unwrap()
+                } else {
+                    items.last().cloned().unwrap()
+                });
+            }
             Ok(base.field(field))
         }
         Expr::Call(name, args) => eval_call(name, args, snap, bind),
@@ -256,6 +273,45 @@ fn eval_call(
                 }
             }
             Ok(Value::Int(n))
+        }
+        "sort" => {
+            // WEFT-423: ordering combinator from ADR-016 §5.
+            // Signature: `sort(list, key)` — `key` is a single-arg
+            // lambda that returns the value to compare on. Stable
+            // ascending sort. Numeric values compare numerically;
+            // strings compare lexicographically; mixed / unorderable
+            // values fall back to display-string comparison so the
+            // sort is total (and total order is what the composer
+            // needs for stable rendering — never panic on a row).
+            if args.len() != 2 {
+                return Err(EvalError::WrongArity {
+                    name: name.into(),
+                    expected: 2,
+                    got: args.len(),
+                });
+            }
+            let list = eval(&args[0], snap, bind)?;
+            let list = list
+                .as_list()
+                .ok_or_else(|| EvalError::TypeMismatch("sort() on non-list".into()))?;
+            let (param, body) = expect_lambda(&args[1])?;
+            // Pre-compute keys so the comparator never re-evaluates
+            // the lambda (which would multiply expression cost by
+            // O(n log n) and surface its errors at unpredictable
+            // points in the sort).
+            let mut keyed: Vec<(Value, Value)> = Vec::with_capacity(list.len());
+            for item in list {
+                let b = LambdaBinding {
+                    name: param,
+                    value: item.clone(),
+                };
+                let key = eval(body, snap, Some(&b))?;
+                keyed.push((key, item));
+            }
+            keyed.sort_by(|(a, _), (b, _)| {
+                cmp(a, b).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            Ok(Value::List(keyed.into_iter().map(|(_, v)| v).collect()))
         }
         "filter" => {
             if args.len() != 2 {
@@ -581,6 +637,88 @@ mod tests {
         let e = parse("$a - 1").unwrap();
         let v = eval(&e, &snap, None).unwrap();
         assert_eq!(v.as_i64(), Some(4));
+    }
+
+    #[test]
+    fn first_last_field_shorthand() {
+        // WEFT-422: `.first` / `.last` on a list are equivalent to
+        // first(xs) / last(xs).
+        let snap = snap_with(
+            "substrate/services",
+            json!([
+                {"name": "a"},
+                {"name": "b"},
+                {"name": "c"},
+            ]),
+        );
+        let e = parse("$substrate/services.first").unwrap();
+        let v = eval(&e, &snap, None).unwrap();
+        assert_eq!(v.field("name").to_display_string(), "a");
+        let e = parse("$substrate/services.last").unwrap();
+        let v = eval(&e, &snap, None).unwrap();
+        assert_eq!(v.field("name").to_display_string(), "c");
+    }
+
+    #[test]
+    fn first_last_function_form_still_works() {
+        // Regression: the function-call form must continue to work
+        // after the shorthand lands.
+        let snap = snap_with("substrate/xs", json!([10, 20, 30]));
+        let e = parse("first($substrate/xs)").unwrap();
+        assert_eq!(eval(&e, &snap, None).unwrap().as_i64(), Some(10));
+        let e = parse("last($substrate/xs)").unwrap();
+        assert_eq!(eval(&e, &snap, None).unwrap().as_i64(), Some(30));
+    }
+
+    #[test]
+    fn first_last_empty_list_is_null() {
+        let snap = snap_with("substrate/xs", json!([]));
+        let e = parse("$substrate/xs.first").unwrap();
+        assert!(matches!(eval(&e, &snap, None).unwrap(), Value::Null));
+    }
+
+    #[test]
+    fn sort_by_field_ascending() {
+        // WEFT-423: `sort(list, key)` orders by the key lambda's
+        // returned value.
+        let snap = snap_with(
+            "substrate/services",
+            json!([
+                {"name": "c", "weight": 3},
+                {"name": "a", "weight": 1},
+                {"name": "b", "weight": 2},
+            ]),
+        );
+        let e = parse("sort($substrate/services, s -> s.weight)").unwrap();
+        let v = eval(&e, &snap, None).unwrap();
+        let xs = v.as_list().unwrap();
+        assert_eq!(xs.len(), 3);
+        assert_eq!(xs[0].field("name").to_display_string(), "a");
+        assert_eq!(xs[1].field("name").to_display_string(), "b");
+        assert_eq!(xs[2].field("name").to_display_string(), "c");
+    }
+
+    #[test]
+    fn sort_by_derived_value() {
+        // Sort by a computed expression (negation flips order).
+        let snap = snap_with("substrate/xs", json!([1, 3, 2]));
+        let e = parse("sort($substrate/xs, x -> -x)").unwrap();
+        let v = eval(&e, &snap, None).unwrap();
+        let xs = v.as_list().unwrap();
+        assert_eq!(xs.len(), 3);
+        assert_eq!(xs[0].as_i64(), Some(3));
+        assert_eq!(xs[1].as_i64(), Some(2));
+        assert_eq!(xs[2].as_i64(), Some(1));
+    }
+
+    #[test]
+    fn evaluates_hex_and_scientific_literals() {
+        // WEFT-424: literal-form coverage at eval time.
+        let snap = OntologySnapshot::empty();
+        let e = parse("0xff").unwrap();
+        assert_eq!(eval(&e, &snap, None).unwrap().as_i64(), Some(255));
+        let e = parse("1e3 + 5").unwrap();
+        assert_eq!(eval(&e, &snap, None).unwrap().as_f64(), Some(1005.0));
     }
 
     #[test]

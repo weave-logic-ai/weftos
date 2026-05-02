@@ -188,7 +188,8 @@ impl DemocritusLoop {
         }
         result.searches_performed = non_empty_queries.len();
 
-        let mut neighbors_per_event: Vec<(&Impulse, &Vec<f32>, Vec<(String, f32)>)> =
+        type NeighborTriple<'a> = (&'a Impulse, &'a Vec<f32>, Vec<(String, f32)>);
+        let mut neighbors_per_event: Vec<NeighborTriple<'_>> =
             Vec::with_capacity(embedded.len());
         for (i, (impulse, embedding)) in impulses.iter().zip(embedded.iter()).enumerate() {
             if self.budget_exceeded(start) {

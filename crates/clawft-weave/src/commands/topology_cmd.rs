@@ -125,7 +125,7 @@ pub async fn run(args: TopologyArgs) -> anyhow::Result<()> {
     }
 }
 
-fn load_graph(path: &PathBuf) -> anyhow::Result<clawft_graphify::KnowledgeGraph> {
+fn load_graph(path: &std::path::Path) -> anyhow::Result<clawft_graphify::KnowledgeGraph> {
     let data = std::fs::read_to_string(path)?;
     let json: serde_json::Value = serde_json::from_str(&data)?;
     let kg = clawft_graphify::build::build_from_json(&json)?;
@@ -150,9 +150,9 @@ fn load_schema(path: Option<&std::path::Path>) -> anyhow::Result<clawft_graphify
 }
 
 fn cmd_layout(
-    graph_path: &PathBuf,
+    graph_path: &std::path::Path,
     schema_path: Option<&std::path::Path>,
-    output_path: &PathBuf,
+    output_path: &std::path::Path,
     width: f64,
     height: f64,
 ) -> anyhow::Result<()> {
@@ -185,7 +185,7 @@ fn cmd_layout(
     Ok(())
 }
 
-fn cmd_validate(schema_path: &PathBuf) -> anyhow::Result<()> {
+fn cmd_validate(schema_path: &std::path::Path) -> anyhow::Result<()> {
     let yaml = std::fs::read_to_string(schema_path)?;
     let schema = clawft_graphify::topology::TopologySchema::from_yaml(&yaml)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -211,7 +211,7 @@ fn cmd_validate(schema_path: &PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_detect(graph_path: &PathBuf) -> anyhow::Result<()> {
+fn cmd_detect(graph_path: &std::path::Path) -> anyhow::Result<()> {
     let kg = load_graph(graph_path)?;
 
     println!(
@@ -272,7 +272,7 @@ fn cmd_detect(graph_path: &PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_infer(graph_path: &PathBuf, name: &str, output_path: &PathBuf) -> anyhow::Result<()> {
+fn cmd_infer(graph_path: &std::path::Path, name: &str, output_path: &std::path::Path) -> anyhow::Result<()> {
     let kg = load_graph(graph_path)?;
 
     println!(
@@ -305,7 +305,7 @@ fn cmd_infer(graph_path: &PathBuf, name: &str, output_path: &PathBuf) -> anyhow:
     Ok(())
 }
 
-fn cmd_diff(declared_path: &PathBuf, graph_path: &PathBuf) -> anyhow::Result<()> {
+fn cmd_diff(declared_path: &std::path::Path, graph_path: &std::path::Path) -> anyhow::Result<()> {
     let declared_yaml = std::fs::read_to_string(declared_path)?;
     let declared = clawft_graphify::topology::TopologySchema::from_yaml(&declared_yaml)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -364,8 +364,8 @@ fn cmd_diff(declared_path: &PathBuf, graph_path: &PathBuf) -> anyhow::Result<()>
 }
 
 fn cmd_extract(
-    path: &PathBuf,
-    output: &PathBuf,
+    path: &std::path::Path,
+    output: &std::path::Path,
     slices_dir: Option<&std::path::Path>,
     schema_path: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
@@ -459,9 +459,9 @@ fn export_graph_json(graph: &clawft_graphify::KnowledgeGraph) -> serde_json::Val
 }
 
 fn cmd_slice(
-    graph_path: &PathBuf,
+    graph_path: &std::path::Path,
     schema_path: Option<&std::path::Path>,
-    output_dir: &PathBuf,
+    output_dir: &std::path::Path,
     width: f64,
     height: f64,
 ) -> anyhow::Result<()> {
@@ -494,9 +494,9 @@ fn cmd_slice(
 }
 
 fn cmd_vowl(
-    graph_path: &PathBuf,
+    graph_path: &std::path::Path,
     schema_path: Option<&std::path::Path>,
-    output_path: &PathBuf,
+    output_path: &std::path::Path,
 ) -> anyhow::Result<()> {
     let kg = load_graph(graph_path)?;
     let schema = load_schema(schema_path)?;

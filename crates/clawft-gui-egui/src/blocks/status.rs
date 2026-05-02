@@ -68,11 +68,11 @@ fn card(ui: &mut egui::Ui, label: &str, value: &str, unit: &str, kind: Kind) {
         Kind::Warn => (egui::Color32::from_rgb(220, 160, 40), egui::Color32::from_rgb(255, 205, 90)),
         Kind::Crit => (egui::Color32::from_rgb(220, 70, 70), egui::Color32::from_rgb(255, 140, 140)),
     };
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(egui::Color32::from_gray(22))
         .stroke(egui::Stroke::new(1.0, border))
-        .rounding(6.0)
-        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin::symmetric(12, 8))
         .show(ui, |ui| {
             ui.set_min_width(140.0);
             ui.label(egui::RichText::new(label).small().weak());

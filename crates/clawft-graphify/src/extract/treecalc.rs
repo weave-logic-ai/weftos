@@ -88,6 +88,7 @@ struct ExtractedItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(dead_code)] // `Module` reserved for future nested-module extraction; kept for the to_entity_type map
 enum ItemKind {
     Function,
     Struct,
@@ -260,8 +261,8 @@ pub fn extract_rust(
         }
 
         // Impl → trait/struct relationships.
-        if item.kind == ItemKind::Impl {
-            if let Some(ref sig) = item.signature {
+        if item.kind == ItemKind::Impl
+            && let Some(ref sig) = item.signature {
                 // "impl TraitName for StructName" or "impl StructName"
                 if let Some(target_name) = parse_impl_target(sig) {
                     let target_id = EntityId::new(
@@ -286,7 +287,6 @@ pub fn extract_rust(
                     });
                 }
             }
-        }
     }
 
     // Extract call relationships from function bodies.
@@ -403,7 +403,7 @@ fn parse_items(source: &str) -> Vec<ExtractedItem> {
         let has_doc = line.starts_with("///") || line.starts_with("#[doc");
         if has_doc {
             // Skip doc comment lines to find the actual item.
-            let doc_start = i;
+            let _doc_start = i;
             while i < lines.len() {
                 let l = lines[i].trim();
                 if l.starts_with("///") || l.starts_with("#[") || l.is_empty() {
@@ -466,7 +466,7 @@ fn try_parse_item(
     } else if let Some(cap) = trait_re.captures(line) {
         (ItemKind::Trait, cap[1].to_string(), None)
     } else if let Some(cap) = impl_re.captures(line) {
-        let full_impl = format!("impl {}", &cap[1]);
+        let _full_impl = format!("impl {}", &cap[1]);
         // Get the rest of the line for "for X" detection.
         let sig_line = lines.get(line_num.saturating_sub(1))
             .map(|l| l.trim().to_string())
@@ -485,7 +485,7 @@ fn try_parse_item(
     };
 
     // Count lines until closing brace at same indentation.
-    let has_body = line.contains('{') || (line_num < lines.len() && lines.get(line_num).map_or(false, |l| l.trim() == "{"));
+    let has_body = line.contains('{') || (line_num < lines.len() && lines.get(line_num).is_some_and(|l| l.trim() == "{"));
     let line_count = if has_body {
         count_block_lines(lines, line_num.saturating_sub(1))
     } else {
@@ -576,11 +576,11 @@ fn extract_children(lines: &[&str], start: usize, parent_kind: &ItemKind) -> Vec
                 ItemKind::Enum => {
                     // Enum variants.
                     if !line.starts_with("//") && !line.is_empty() && !line.starts_with('#') && !line.starts_with('}') {
-                        let variant_name = line.split(|c: char| c == '(' || c == '{' || c == ',')
+                        let variant_name = line.split(['(', '{', ','])
                             .next()
                             .unwrap_or("")
                             .trim();
-                        if !variant_name.is_empty() && variant_name.chars().next().map_or(false, |c| c.is_uppercase()) {
+                        if !variant_name.is_empty() && variant_name.chars().next().is_some_and(|c| c.is_uppercase()) {
                             Some(ExtractedItem {
                                 name: variant_name.to_string(),
                                 kind: ItemKind::Constant,
@@ -603,7 +603,7 @@ fn extract_children(lines: &[&str], start: usize, parent_kind: &ItemKind) -> Vec
                     if !line.starts_with("//") && !line.is_empty() && !line.starts_with('#') && !line.starts_with('}') {
                         let field_name = line.split(':').next().unwrap_or("").trim();
                         let (fvis, fname) = parse_visibility(field_name);
-                        if !fname.is_empty() && fname.chars().next().map_or(false, |c| c.is_alphanumeric() || c == '_') {
+                        if !fname.is_empty() && fname.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_') {
                             Some(ExtractedItem {
                                 name: fname.to_string(),
                                 kind: ItemKind::Constant, // fields as atoms
@@ -671,15 +671,14 @@ fn extract_recursive(base: &Path, dir: &Path, results: &mut Vec<ExtractionResult
 
         if path.is_dir() {
             extract_recursive(base, &path, results);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-            if let Ok(source) = std::fs::read_to_string(&path) {
+        } else if path.extension().and_then(|e| e.to_str()) == Some("rs")
+            && let Ok(source) = std::fs::read_to_string(&path) {
                 let rel_path = path.strip_prefix(base)
                     .unwrap_or(&path)
                     .to_string_lossy()
                     .to_string();
                 results.push(extract_rust(&source, &rel_path));
             }
-        }
     }
 }
 

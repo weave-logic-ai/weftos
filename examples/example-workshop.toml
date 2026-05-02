@@ -1,0 +1,34 @@
+# example-workshop.toml
+#
+# Demonstration Workshop spec, consumable by the workshop-watcher
+# example. Edit any field, save the file, and the GUI's Workshop
+# detail pane will reconfigure within ~1s — no rebuild, no reload.
+#
+# Run with:
+#   cargo run --example workshop-watcher -- \
+#       --toml examples/example-workshop.toml \
+#       --workshop mic-diagnostic
+#
+# Then in the Explorer, select `substrate/ui/workshop/mic-diagnostic`.
+#
+# Schema mirrors crates/clawft-gui-egui/src/explorer/workshop.rs.
+# `title` and `layout` are optional; `panels` is required (empty is OK).
+
+title = "Mic diagnostic"
+layout = "rows"
+
+[[panels]]
+title = "Microphone stream"
+substrate_path = "substrate/sensor/mic"
+viewer_hint = "auto"
+min_height = 140
+
+[[panels]]
+title = "Kernel status"
+substrate_path = "substrate/kernel/status"
+viewer_hint = "auto"
+
+[[panels]]
+title = "Network — Wi-Fi"
+substrate_path = "substrate/network/wifi"
+viewer_hint = "auto"

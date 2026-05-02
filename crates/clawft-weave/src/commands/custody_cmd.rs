@@ -3,7 +3,7 @@
 use clap::{Args, Subcommand};
 
 use crate::client::DaemonClient;
-use crate::protocol::{CustodyAttestResult, Request};
+use crate::protocol::CustodyAttestResult;
 
 #[derive(Args)]
 pub struct CustodyArgs {

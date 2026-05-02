@@ -35,7 +35,13 @@ use super::traits::TransportRequest;
 ///
 /// Once `clawft-llm` fully exports its `Provider` trait, a blanket
 /// adapter will be provided.
-#[async_trait]
+///
+/// The `async_trait` `?Send` relaxation is applied for the `browser`
+/// feature so single-threaded WASM impls (whose underlying `reqwest`
+/// types are `!Send`) satisfy the trait. Native impls keep the strict
+/// `Send` bound for tokio multi-threaded runtimes.
+#[cfg_attr(not(feature = "browser"), async_trait)]
+#[cfg_attr(feature = "browser", async_trait(?Send))]
 pub trait LlmProvider: Send + Sync {
     /// Execute a chat completion call and return the raw JSON response.
     ///
@@ -145,7 +151,8 @@ impl Default for OpenAiCompatTransport {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(feature = "browser"), async_trait)]
+#[cfg_attr(feature = "browser", async_trait(?Send))]
 impl LlmTransport for OpenAiCompatTransport {
     async fn complete(&self, request: &TransportRequest) -> clawft_types::Result<LlmResponse> {
         let provider = self

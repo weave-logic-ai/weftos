@@ -179,7 +179,7 @@ async fn run_ingest(
         let client = ingest::StubHttpClient;
         match ingest::ingest(target, output, &client, contributor) {
             Ok(result) => {
-                println!("Saved {}: {}", format!("{:?}", result.url_type), result.path.display());
+                println!("Saved {:?}: {}", result.url_type, result.path.display());
             }
             Err(e) => {
                 eprintln!("Ingest failed: {e}");
@@ -335,6 +335,7 @@ async fn run_query(
     all_candidate_ids.extend(keyword_scores.keys().cloned());
     all_candidate_ids.extend(proximity_scores.keys().cloned());
 
+    #[allow(dead_code)] // `id` is carried for provenance even though display paths only use the label
     struct ScoredResult {
         id: clawft_graphify::EntityId,
         fused_score: f64,
@@ -880,7 +881,7 @@ fn build_extractions_from_detection(
                 label,
                 source_file: Some(file_path.clone()),
                 source_location: None,
-                file_type: file_type.clone(),
+                file_type: *file_type,
                 metadata: serde_json::json!({}),
                 iri: None,
                 legacy_id: Some(file_path.clone()),
@@ -900,7 +901,7 @@ fn build_extractions_from_detection(
 
     // Add co-location relationships: files in the same directory are related.
     // Only create edges within reasonably-sized directories to avoid noise.
-    for (_, entities) in &dir_entities {
+    for entities in dir_entities.values() {
         if entities.len() < 2 || entities.len() > 50 {
             continue;
         }

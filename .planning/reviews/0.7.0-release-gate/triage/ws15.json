@@ -1,0 +1,170 @@
+[
+  {
+    "name": "ws15: plane MCP — list_* endpoints return HTTP 404 (server URL bug)",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "release-gate-blocker", "bug", "tooling"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md\n- observed: this session's plane-workflow skill build (2026-04-28) hit 404 on every list_* MCP call\n\n## Problem / gap\n\nThe Plane MCP server (`uvx plane-mcp-server stdio`) returns HTTP 404 for `list_states`, `list_labels`, `list_cycles`, `list_work_items`, and `get_me`. The HTTP API itself works fine via curl — this is a URL-construction bug in the MCP server. `create_work_item` and `update_work_item` work, so the bug is scoped to listing endpoints. Without listing, agents can't discover state/cycle/label UUIDs to use in create calls — the wrapper script `.claude/skills/plane-workflow/scripts/plane.sh|.py` is the load-bearing path until this is fixed.\n\n## Acceptance criteria\n\n- [ ] Reproduce the 404 with a minimal example (one mcp__plane__list_states call).\n- [ ] Either patch the MCP server source or file an upstream issue with a minimal repro.\n- [ ] Confirm fix by calling mcp__plane__list_states from this Claude session and getting a 200.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocks: removing scripts/plane.{sh,py} as the load-bearing path\n- blocked-by: upstream plane-mcp-server fix or a fork\n\n## Notes\n\n- The wrapper at .claude/skills/plane-workflow/scripts/plane.py is the workaround.\n- See feedback memory `feedback_plane_api_gotchas.md` for more context.\n"
+  },
+  {
+    "name": "ws15: daemon RPC — no per-method capability gating on UDS callers",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "governance"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Deferred items, Open questions)\n- file: crates/clawft-weave/src/daemon.rs (~75-arm dispatch, no allowlist gate)\n- file: extensions/vscode-weft-panel/src/extension.ts:24-93 (comment claims daemon's 'own capability check is the real gate' — aspirational)\n\n## Problem / gap\n\nThe daemon JSON-RPC over UDS accepts ALL methods from any caller that can connect to the socket. The VSCode extension's `ALLOWED_METHODS` is a webview containment fence only — it stops a malicious webview script from reaching arbitrary RPC, but the daemon itself does no gating. With the optional `[kernel.ipc_tcp]` relay this becomes a network-exposed surface. The extension comment block carefully documents that the daemon's 'own capability check is the real gate' — but `grep -n allow.*method` on `daemon.rs` returns nothing useful. Either the comment is aspirational or gating happens at a layer the audit did not reach.\n\n## Acceptance criteria\n\n- [ ] Decide approach: per-method capability tags + caller identity, or daemon-side allowlist sourced from config.\n- [ ] Implement gating at daemon dispatch entry; reject unknown/unauthorized methods with explicit error.\n- [ ] Document which methods are exposed to which caller classes (webview, CLI, mcp-server, TCP relay).\n- [ ] Tests cover at least one denied-method case per caller class.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- relates-to: ws15 ipc_tcp security audit\n- relates-to: ws15 ALLOWED_METHODS shared canonical list\n\n## Notes\n\n- Audit task list item #2.\n- Once daemon-side gating lands, ALLOWED_METHODS becomes redundant or advisory.\n"
+  },
+  {
+    "name": "ws15: mcp-server — PermissionFilter::new(None) exposes every tool",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "bug"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Deferred items)\n- file: crates/clawft-cli/src/commands/mcp_server.rs:140 — `PermissionFilter::new(None)` at server boot\n\n## Problem / gap\n\n`weft mcp-server` boots its middleware pipeline with `PermissionFilter::new(None)` — meaning no allowlist is applied; every registered tool (built-in, skill-derived, MCP-proxied) is exposed to the connecting MCP client. The security boundary today is `SecurityGuard` (command + URL policy) + `ResultGuard` (output truncation) + audit logging, but per-tool gating per session is not enforced. External MCP clients (Claude Desktop, Cursor) connecting via stdio thus get the full surface.\n\n## Acceptance criteria\n\n- [ ] Replace `PermissionFilter::new(None)` with a real per-tool allowlist sourced from config (e.g. `tools.mcp_server.allowed_tools`).\n- [ ] Document the default policy (deny-by-default vs allow-by-default) in MCP server docs.\n- [ ] Add a unit test confirming a tool not on the allowlist is rejected with a clear error.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- relates-to: ws15 daemon-side capability gating\n\n## Notes\n\n- Audit task list item #7.\n"
+  },
+  {
+    "name": "ws15: ipc_tcp relay — security audit (auth + bind-address default)",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "release-gate-blocker", "security", "governance"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Status & Timeline, task list item #15)\n- config: `[kernel.ipc_tcp]` block wraps UDS in a byte-copy TCP relay\n\n## Problem / gap\n\nThe optional `[kernel.ipc_tcp]` relay exposes the same JSON wire format as the UDS socket over TCP. Combined with the lack of daemon-side per-method gating (separate item), this turns into a network-exposed RPC surface with no auth. Need explicit auth model + bind-address default of `127.0.0.1` only, plus documentation in the security review.\n\n## Acceptance criteria\n\n- [ ] Default bind address is `127.0.0.1` (loopback only) unless explicitly overridden.\n- [ ] Document auth model (token? mTLS? local-uid check?) and ship a default that fails closed.\n- [ ] Add startup warning if relay binds to non-loopback without auth configured.\n- [ ] Security review doc updated to cover the relay attack surface.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- relates-to: ws15 daemon-side capability gating\n\n## Notes\n\n- Audit task list item #15.\n"
+  },
+  {
+    "name": "ws15: VSCode extension ALLOWED_METHODS drift — codegen or runtime fetch",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tooling", "bug"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Open questions, Deferred items)\n- file: extensions/vscode-weft-panel/src/extension.ts:39-93\n- file: .planning/explorer/PROJECT-PLAN.md:14-26 (2026-04-23 incident postmortem)\n\n## Problem / gap\n\nThe VSCode extension's `ALLOWED_METHODS` allowlist is hand-maintained and drifts from the daemon dispatch table on a multi-day lag. The 2026-04-23 incident (chip icons grey because `substrate.read` was absent from the allowlist) was caused by exactly this gap. Every new daemon verb the WASM panel needs requires (a) a code edit in `extension.ts` and (b) re-running `npm run compile`. There is no automated extraction from `daemon.rs:dispatch()` and no shared canonical list.\n\nOptions:\n- (a) emit a JSON manifest from the daemon at boot and have the extension fetch it,\n- (b) generate a static `allowed_methods.ts` from a shared schema crate,\n- (c) move enforcement into the daemon (per-method capability tags + caller identity).\n\n## Acceptance criteria\n\n- [ ] Decision recorded (likely as ADR addendum) on which option to pursue.\n- [ ] Single source of truth lands; extension `ALLOWED_METHODS` either auto-syncs or becomes redundant.\n- [ ] CI gate fails when daemon verbs and extension allowlist drift.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- relates-to: ws15 daemon-side capability gating (option c)\n\n## Notes\n\n- Audit task list item #1.\n"
+  },
+  {
+    "name": "ws15: Windows transport stub — named-pipe impl or drop from 0.7.0 matrix",
+    "priority": "high",
+    "cycle": "0.7.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "release-gate-blocker", "stub", "governance"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Status & Timeline)\n- file: crates/clawft-rpc/src/client.rs:62 — comment promises 'Windows named-pipe transport is planned for v0.2'\n\n## Problem / gap\n\n`crates/clawft-rpc::client` non-Unix module unconditionally returns `None` from `connect()`. Every non-Unix `DaemonClient::connect()` returns `None`; every client method bails with 'daemon not available on this platform.' The 0.7.0 release gate must either ship a Windows named-pipe transport, or explicitly drop Windows from the v0.7.0 support matrix and update install/install-docs accordingly.\n\n## Acceptance criteria\n\n- [ ] Decision recorded: implement Windows named-pipe transport, OR drop Windows from 0.7.0 support matrix.\n- [ ] If implemented: parity tests with Unix transport; smoke test in CI.\n- [ ] If dropped: docs explicitly state the support matrix; install scripts refuse with a clear message on Windows.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- none\n\n## Notes\n\n- Audit task list item #8.\n"
+  },
+  {
+    "name": "ws15: WASM webview rebuild — promote into scripts/build.sh",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tooling", "tech-debt"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Deferred items, task list item #3)\n- file: extensions/vscode-weft-panel/scripts/build-wasm.sh\n- file: scripts/build.sh\n\n## Problem / gap\n\n`extensions/vscode-weft-panel/scripts/build-wasm.sh` is not invoked by any CI gate, and `scripts/build.sh` does not have a `webview-wasm` target. Memory `feedback_rebuild_webview_wasm.md` is the source of 'rebuild after every gui-egui change' guidance; in practice developers run it under `cargo watch` per the comment block in `extension.ts:202`. The project's mandatory `scripts/build.sh` flow (per CLAUDE.md) should cover this artifact.\n\n## Acceptance criteria\n\n- [ ] Add `scripts/build.sh webview` (or similar) calling `extensions/vscode-weft-panel/scripts/build-wasm.sh`.\n- [ ] Wire it into `scripts/build.sh all` and the phase gate.\n- [ ] CLAUDE.md / docs updated to reference the new target.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- relates-to: ws15 CI smoke for ts compile + wasm rebuild\n\n## Notes\n\n- Audit task list item #3.\n"
+  },
+  {
+    "name": "ws15: CI smoke — ts compile + wasm rebuild on PRs touching gui-egui",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tests", "tooling"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (task list item #4)\n\n## Problem / gap\n\nNo CI gate compiles `extension.ts` or rebuilds the wasm bundle on PRs touching `clawft-gui-egui` or `extension.ts`. Combined with the manual `ALLOWED_METHODS` curation, breakage is detected only when a developer launches the panel and notices grey chip icons. The 2026-04-23 incident proved the cost.\n\n## Acceptance criteria\n\n- [ ] CI workflow runs `npm run compile` for the extension on PRs touching `extensions/vscode-weft-panel/**` or `crates/clawft-gui-egui/**`.\n- [ ] CI workflow rebuilds the wasm bundle and fails on errors.\n- [ ] `cargo watch` recipe documented for local dev.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- relates-to: ws15 webview build promoted into scripts/build.sh\n\n## Notes\n\n- Audit task list item #4.\n"
+  },
+  {
+    "name": "ws15: VSCode extension end-to-end smoke (headless host + chip-icons assert)",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tests"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (task list item #16)\n\n## Problem / gap\n\nNo end-to-end smoke for the VSCode extension. The flow (build wasm -> compile ts -> install in headless VSCode test host -> open `WeftOS: Open Panel` -> assert chip icons go green) is currently exercised only by hand. Given the 2026-04-23 chip-icon regression, an automated smoke would have caught the allowlist drift immediately.\n\n## Acceptance criteria\n\n- [ ] Headless VSCode test host configured in CI.\n- [ ] Smoke test: build wasm, compile ts, install extension, open panel, assert chip icons.\n- [ ] Smoke runs on PRs touching extension or gui-egui.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- relates-to: ws15 webview build in scripts/build.sh\n- relates-to: ws15 CI smoke ts/wasm\n\n## Notes\n\n- Audit task list item #16.\n"
+  },
+  {
+    "name": "ws15: mcp-server CI smoke — round-trip tools/list + tools/call on builtin",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tests"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (task list item #13)\n\n## Problem / gap\n\nNo CI smoke that connects to a stdio MCP server (`weft mcp-server`) and round-trips `tools/list` plus a `tools/call` against a fixed builtin (e.g. echo). Today the mcp-server happy-path is only exercised by humans wiring it into Claude Desktop / Cursor. A regression in the middleware pipeline or the tool registry would not be caught until a user files a bug.\n\n## Acceptance criteria\n\n- [ ] CI smoke spawns `weft mcp-server`, sends `initialize` + `tools/list` + `tools/call` against a stable builtin.\n- [ ] Smoke fails on protocol-version mismatch, missing tool, or non-zero exit.\n- [ ] Smoke runs on PRs touching `crates/clawft-services/src/mcp/**` or `crates/clawft-cli/src/commands/mcp_server.rs`.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- none\n\n## Notes\n\n- Audit task list item #13.\n"
+  },
+  {
+    "name": "ws15: claude-flow integration — decide first-party vs user-installed; land or strip",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "release-gate-blocker", "governance", "tech-debt"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Open questions, Orphaned work, task list items #5 + #6)\n- file: crates/clawft-types/src/delegation.rs (`claude_flow_enabled: false`)\n- file: crates/clawft-types/src/security.rs (default allowlist `claude-flow`)\n\n## Problem / gap\n\nRepo-name and CLAUDE.md call this 'Claude Flow V3,' but no Rust crate spawns a claude-flow MCP session by default. Claude-flow is referenced (a) as the canonical example in skill `allowed-tools` patterns, (b) in the security allowlist, and (c) as a planned-but-disabled toggle in `DelegationConfig` (`claude_flow_enabled: false`). The 'claude_flow' path is half-wired: config field + serde default exist, but flipping it on does not appear to engage any concrete dispatcher.\n\nDecision: either\n- (a) ship the integration code (instantiate a claude-flow MCP session by default when enabled), and document `weft mcp add claude-flow npx -y @claude-flow/cli@latest`, or\n- (b) strip the half-wired `claude_flow_enabled` config field and treat claude-flow purely as a user-installed MCP server.\n\n## Acceptance criteria\n\n- [ ] Decision recorded (ADR addendum or planning doc).\n- [ ] If (a): wire-up commit lands; sample weave.toml shows the `tools.mcp_servers` entry; doc page added.\n- [ ] If (b): config field removed; security allowlist + skill examples updated to reflect 'user-installed only'.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- none\n\n## Notes\n\n- Audit task list items #5 and #6.\n"
+  },
+  {
+    "name": "ws15: MCP protocol-version mismatch — log/reject foreign protocolVersion",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "release-gate-blocker", "bug", "tech-debt"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Open questions, task list item #10)\n- file: crates/clawft-services/src/mcp/mod.rs:26\n- file: crates/clawft-services/src/mcp/server.rs:18\n\n## Problem / gap\n\nMCP protocol version is hard-coded to `2025-06-18` in `mcp/mod.rs:26` and `mcp/server.rs:18`. Server-side `initialize` advertises this verbatim; client side uses it as a fallback when the server omits `protocolVersion` in the response. There is no version-mismatch path — if a server returns a different version, we accept it silently. This will surface as confusing tool-call failures rather than a clean error when a user connects to an MCP server with a bumped protocol revision.\n\n## Acceptance criteria\n\n- [ ] `McpSession::connect` logs a warning if the server's `protocolVersion` differs from the negotiated default.\n- [ ] A configurable strict-mode rejects mismatched versions outright.\n- [ ] Unit test covers both 'matching' and 'mismatched' paths via `MockTransport`.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- none\n\n## Notes\n\n- Audit task list item #10.\n"
+  },
+  {
+    "name": "ws15: SkillToolProvider tools/call contract — document SKILL.md prompt-body return",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Deferred items, task list item #12)\n- file: crates/clawft-cli/src/commands/mcp_server.rs:115-124\n\n## Problem / gap\n\n`SkillToolProvider`'s dispatcher returns the raw `instructions` text on tool call. Skills are exposed as MCP tools whose output is 'the SKILL.md prompt body to inject into the calling agent's context.' This is the agreed contract but documented nowhere outside that closure — first-time MCP clients hitting these tools see surprising shapes (a markdown blob instead of a structured tool result).\n\n## Acceptance criteria\n\n- [ ] User-facing MCP docs explicitly call out the skill-tool return-shape contract.\n- [ ] At minimum one `examples/` snippet shows what a skill `tools/call` response looks like.\n- [ ] Tool description fields produced by `SkillToolProvider` include a one-liner about the contract.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- none\n\n## Notes\n\n- Audit task list item #12.\n"
+  },
+  {
+    "name": "ws15: IdeToolProvider — verify backend dispatch + integration tests",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "release-gate-blocker", "tests", "gap"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Open questions, task list item #9)\n- file: crates/clawft-services/src/mcp/ide.rs\n\n## Problem / gap\n\n`IdeToolProvider` declares 5 tools (`ide_open_file`, `ide_edit`, `ide_diagnostics`, `ide_symbols`, `ide_hover`) with detailed schemas, but the audit did not locate a backend that actually opens files / applies edits / fetches diagnostics from a connected IDE. The dispatcher closure's actual side effects need to be re-checked before claiming the tools are functional. Shipping a tool schema without a working backend is a footgun for first-contact MCP clients.\n\n## Acceptance criteria\n\n- [ ] Audit the dispatcher closure; confirm whether each declared tool has a real side effect.\n- [ ] If any tool is a stub: either land the backend or remove from `tools/list`.\n- [ ] Add integration tests covering at least `ide_open_file` and `ide_diagnostics`.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- none\n\n## Notes\n\n- Audit task list item #9.\n"
+  },
+  {
+    "name": "ws15: docs — `weft mcp add` install path for @claude-flow/cli + sample weave.toml",
+    "priority": "medium",
+    "cycle": "0.7.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "release-gate-blocker", "docs"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (task list item #5)\n- file: crates/clawft-services/src/mcp/discovery.rs:11\n\n## Problem / gap\n\nNo published doc explains how a user installs `@claude-flow/cli@latest` as an MCP server via `weft mcp add`. The discovery module's doc comment hints at it but the canonical config (`weave.toml` `[tools.mcp_servers]` block) has no sample. Combined with the `internal_only: true` default for `MCPServerConfig` (no test fixture or sample showing the non-default shape), users hitting this for the first time have to read source.\n\n## Acceptance criteria\n\n- [ ] docs/handoff or docs/guides page added with the `weft mcp add claude-flow npx -y @claude-flow/cli@latest` flow.\n- [ ] Sample `weave.toml` block under `tools.mcp_servers` (and explicit `internal_only` flag commentary) included.\n- [ ] At least one example fixture in tests pointing at the canonical shape.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- relates-to: ws15 claude-flow first-party vs user-installed decision\n\n## Notes\n\n- Audit task list item #5.\n"
+  },
+  {
+    "name": "ws15: McpServerManager hot-reload — wire file-watcher or remove affordances",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "orphan", "gap"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Orphaned work, task list item #14)\n- file: crates/clawft-services/src/mcp/discovery.rs\n\n## Problem / gap\n\n`McpServerManager` exposes a drain-and-swap hot-reload protocol (30s drain timeout, 500ms debounce). The audit did not find a callsite that invokes the full reload flow against a live config-file watcher. The watcher integration is implied by the doc but the wire-up is not visible from this workstream. Either the watcher hookup needs to land, or the public API's hot-reload affordances should be removed to avoid future debugging confusion.\n\n## Acceptance criteria\n\n- [ ] Decide: land the watcher or remove the hot-reload affordances.\n- [ ] If landed: integration test exercises a config-file edit and confirms drain-and-swap.\n- [ ] If removed: API surface trimmed; doc comments updated to reflect manual reload only.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- none\n\n## Notes\n\n- Audit task list item #14.\n"
+  },
+  {
+    "name": "ws15: `mcp.add`/`mcp.list`/`mcp.remove` daemon verbs — clarify CLI vs RPC ownership",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "gap", "governance"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Open questions)\n- file: crates/clawft-services/src/mcp/discovery.rs (doc comment 'CLI commands `weft mcp add/list/remove`')\n\n## Problem / gap\n\n`McpServerManager` is defined in `clawft-services/src/mcp/discovery.rs` and exposes add/remove/drain-and-swap. The daemon dispatch does not host `mcp.add` / `mcp.list` / `mcp.remove` verbs — the doc comment says 'CLI commands `weft mcp add/list/remove`' but the verbs route to a CLI helper, not RPC. The architectural question: are MCP servers managed per-process (one CLI invocation = one config edit) or through the daemon (shared registry, hot-reload)? Today the answer is implicit and depends on which crate the developer is reading.\n\n## Acceptance criteria\n\n- [ ] Decision recorded (probably as ADR addendum) on per-process vs daemon-managed MCP server registry.\n- [ ] If daemon-managed: `mcp.add`/`mcp.list`/`mcp.remove` verbs added to dispatch; CLI proxies to RPC.\n- [ ] If per-process: doc comment in `discovery.rs` updated; CLI helpers stay self-contained.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- relates-to: ws15 McpServerManager hot-reload integration\n\n## Notes\n\n- Audit Open question.\n"
+  },
+  {
+    "name": "ws15: WASM panel auth — token/capability model for webview proxy",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "security", "gap"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Open questions)\n\n## Problem / gap\n\nThe webview connects to the same UDS the local user owns; there is no token, capability, or per-panel identity on the proxy layer. Multi-user kernels (per ADR-042 modes) would need to add this. For single-user dev workstations this is acceptable; for the multi-user / multi-tenant operating modes contemplated in ADR-042 it is not.\n\n## Acceptance criteria\n\n- [ ] Design recorded for per-panel identity and capability scoping (probably token-based or per-panel UDS path).\n- [ ] Implementation gated behind the multi-user ADR-042 mode.\n- [ ] Tests cover at least one denied-by-identity case.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- relates-to: ADR-042 three operating modes\n- relates-to: ws15 daemon-side capability gating\n\n## Notes\n\n- 0.7.0 single-user dev mode is fine; this is a deferred multi-user concern.\n"
+  },
+  {
+    "name": "ws15: webview vs daemon allowlist — substrate.publish gating semantics",
+    "priority": "medium",
+    "cycle": "0.8.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "governance", "tech-debt"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Open questions)\n- file: extensions/vscode-weft-panel/src/extension.ts:55 — comment 'the webview is a viewer, not a writer'\n\n## Problem / gap\n\n`substrate.publish` is deliberately omitted from `ALLOWED_METHODS` because 'the webview is a viewer, not a writer.' But the `agent.chat` handler can call tools that mutate substrate via the daemon process. The audit cannot tell from this workstream whether the spike's tool surface (`read_file`, `list_directory`) is exhaustive of the spike-time gap, or whether D3 introduced more. The 'viewer-only' invariant needs to be re-verified now that agent.chat is in the dispatch path.\n\n## Acceptance criteria\n\n- [ ] Audit the agent.chat tool surface; enumerate every tool that mutates substrate.\n- [ ] Decide: tighten the agent.chat tool surface, or revise the 'viewer-only' invariant.\n- [ ] Comment block in extension.ts:55 updated to match reality.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- relates-to: ws15 daemon-side capability gating\n\n## Notes\n\n- Open question.\n"
+  },
+  {
+    "name": "ws15: agent-core-chat feature flag — schedule removal post-D3 soak",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "tech-debt", "orphan"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Deferred items, Orphaned work, task list item #11)\n- file: crates/clawft-weave/src/daemon.rs:3591-3621\n\n## Problem / gap\n\n`agent-core-chat` feature flag survives in `daemon.rs:3591-3621` so the D3 cutover can be reverted with one commit + flag flip. Removal is slated 'once D3 has burned in' but no scheduled removal commit exists. Will accumulate cruft if forgotten.\n\n## Acceptance criteria\n\n- [ ] Add a removal milestone to the next minor version (0.8.x).\n- [ ] Once D3 has soaked one minor, remove the spike pathway and the flag.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocked-by: D3 burn-in across one minor version\n\n## Notes\n\n- Audit task list item #11.\n"
+  },
+  {
+    "name": "ws15: AgentChatParams/Result wire types — relocate to clawft-types",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Deferred items, task list item #18)\n- file: crates/clawft-weave/src/daemon.rs:3592 (note about C2 spike)\n\n## Problem / gap\n\nThe protocol type `AgentChatParams` / `AgentChatResult` is still owned by `clawft-weave`, not by `clawft-service-agent` or `clawft-types`. A future commit needs to relocate or alias the wire types so `clawft-weave` does not have to import service crates just for serde. Standard fix is to host wire types in `clawft-types` so daemon and service crates both consume them.\n\n## Acceptance criteria\n\n- [ ] Move `AgentChatParams` / `AgentChatResult` to `clawft-types`.\n- [ ] Update `clawft-weave` and `clawft-service-agent` imports.\n- [ ] No behavior change; tests still pass.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- none\n\n## Notes\n\n- Audit task list item #18.\n"
+  },
+  {
+    "name": "ws15: weft-gui-egui native bin — promote to scripts/build.sh native --gui + release artifact",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "orphan", "tooling"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Orphaned work, task list item #17)\n- file: docs/handoff.md:258 (build instructions)\n- file: docs/handoff.md:263-266 (Cursor panel is daily driver)\n\n## Problem / gap\n\n`weft-gui-egui` native bin compiles and exists, but is not wired into `scripts/build.sh native`, not packaged for release. Per `docs/handoff.md:258`, building it requires `cargo build -p clawft-gui-egui --features native --bin weft-gui-egui` directly. The handoff explicitly defers promoting it to a first-class artifact ('user is staying with the Cursor panel for the chat demo'). Once the Cursor panel stops being the canonical daily-driver, this needs a real build/release path.\n\n## Acceptance criteria\n\n- [ ] Add `scripts/build.sh native --gui` flag building the egui binary.\n- [ ] Ship the `.deb`/`.dmg` artifact alongside `weft`/`weaver`.\n- [ ] Release notes mention the new artifact.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- blocked-by: decision that egui binary becomes a daily-driver target\n\n## Notes\n\n- Audit task list item #17. Deferred until the Cursor panel is no longer the canonical surface.\n"
+  },
+  {
+    "name": "ws15: MCP HTTP transport — verify against real HTTP server (not just mock)",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "tests", "tech-debt"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (Orphaned work)\n- file: crates/clawft-services/src/mcp/transport.rs\n\n## Problem / gap\n\n`mcp/transport.rs` exposes the trait and the audit did not exhaustively verify the HTTP transport implementation. If the HTTP path is tested only against `MockTransport`, real HTTP MCP servers may surface bugs at first contact. Real-server tests would catch issues like content-length handling, chunked transfer, TLS edge cases, and reconnect logic.\n\n## Acceptance criteria\n\n- [ ] Add an integration test against at least one real HTTP MCP server (could be a fixture spawn).\n- [ ] Cover happy path + error paths (timeout, bad protocol version).\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- none\n\n## Notes\n\n- Audit Orphaned work item.\n"
+  },
+  {
+    "name": "ws15: TODO(agent-core-v1.1) — replace soul_cmd direct call with chain.append RPC",
+    "priority": "low",
+    "cycle": "0.8.x",
+    "labels": ["ws15-mcp", "audit-finding", "audit-0.7.0", "tech-debt"],
+    "description_md": "## Source\n\n- audit: .planning/reviews/0.7.0-release-gate/15-mcp-integration.md (TODOs / FIXMEs in source)\n- file: crates/clawft-weave/src/commands/soul_cmd.rs:246\n\n## Problem / gap\n\nSingle inline TODO: `TODO(agent-core-v1.1)` in `clawft-weave/src/commands/soul_cmd.rs:246` says 'replace with `chain.append` RPC'. Currently the soul_cmd path does a direct call rather than going through the daemon dispatch. Tagged for the agent-core v1.1 cleanup.\n\n## Acceptance criteria\n\n- [ ] Replace direct call with `chain.append` RPC dispatch.\n- [ ] Confirm soul_cmd behavior unchanged via existing tests.\n- [ ] Remove the TODO marker.\n- [ ] Audit row marked closed with WEFT-N reference.\n\n## Dependencies\n\n- relates-to: agent-core v1.1 cleanup\n\n## Notes\n\n- Only inline TODO marker found in the workstream's code paths.\n"
+  }
+]

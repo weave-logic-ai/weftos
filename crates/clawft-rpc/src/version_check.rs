@@ -10,7 +10,7 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const REPO: &str = "weave-logic-ai/weftos";
 const CACHE_FILE: &str = "version-check.json";
@@ -61,23 +61,36 @@ fn write_cache(latest: &str) {
 }
 
 /// Fetch latest version from GitHub Releases API.
+///
+/// Uses `reqwest::blocking` so the call works inside the
+/// `std::thread::spawn` in `check_and_notify_sync` without needing a
+/// tokio runtime. Replaces the prior `curl` shell-out (which broke on
+/// hosts without curl — Windows, minimal Alpine containers).
 fn fetch_latest() -> Option<String> {
-    let output = std::process::Command::new("curl")
-        .args([
-            "-fsSL",
-            "--connect-timeout", "3",
-            "--max-time", "5",
-            "-H", "Accept: application/vnd.github.v3+json",
-            &format!("https://api.github.com/repos/{REPO}/releases/latest"),
-        ])
-        .output()
+    fetch_latest_from(&format!(
+        "https://api.github.com/repos/{REPO}/releases/latest"
+    ))
+}
+
+fn fetch_latest_from(url: &str) -> Option<String> {
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(3))
+        .timeout(std::time::Duration::from_secs(5))
+        .user_agent(concat!("weftos/", env!("CARGO_PKG_VERSION")))
+        .build()
         .ok()?;
 
-    if !output.status.success() {
+    let resp = client
+        .get(url)
+        .header("Accept", "application/vnd.github.v3+json")
+        .send()
+        .ok()?;
+
+    if !resp.status().is_success() {
         return None;
     }
 
-    let body: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let body: serde_json::Value = resp.json().ok()?;
     let tag = body["tag_name"].as_str()?;
     Some(tag.strip_prefix('v').unwrap_or(tag).to_string())
 }
@@ -159,5 +172,65 @@ mod tests {
     #[test]
     fn current_version_is_set() {
         assert!(!CURRENT_VERSION.is_empty());
+    }
+
+    #[test]
+    fn fetch_latest_parses_release_json() {
+        let mut server = mockito::Server::new();
+        let _m = server
+            .mock("GET", "/repos/x/y/releases/latest")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"tag_name": "v1.2.3"}"#)
+            .create();
+
+        let url = format!("{}/repos/x/y/releases/latest", server.url());
+        assert_eq!(fetch_latest_from(&url).as_deref(), Some("1.2.3"));
+    }
+
+    #[test]
+    fn fetch_latest_strips_v_prefix() {
+        let mut server = mockito::Server::new();
+        let _m = server
+            .mock("GET", "/r/latest")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"tag_name": "0.6.19"}"#)
+            .create();
+
+        let url = format!("{}/r/latest", server.url());
+        assert_eq!(fetch_latest_from(&url).as_deref(), Some("0.6.19"));
+    }
+
+    #[test]
+    fn fetch_latest_returns_none_on_404() {
+        let mut server = mockito::Server::new();
+        let _m = server
+            .mock("GET", "/missing")
+            .with_status(404)
+            .create();
+
+        let url = format!("{}/missing", server.url());
+        assert!(fetch_latest_from(&url).is_none());
+    }
+
+    #[test]
+    fn fetch_latest_returns_none_on_unparseable_body() {
+        let mut server = mockito::Server::new();
+        let _m = server
+            .mock("GET", "/garbage")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body("not json at all")
+            .create();
+
+        let url = format!("{}/garbage", server.url());
+        assert!(fetch_latest_from(&url).is_none());
+    }
+
+    #[test]
+    fn fetch_latest_returns_none_on_unreachable_host() {
+        // Unbound port; reqwest connect_timeout (3s) fails fast.
+        assert!(fetch_latest_from("http://127.0.0.1:1/x").is_none());
     }
 }

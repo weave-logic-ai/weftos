@@ -1,0 +1,38 @@
+{
+  "_comment": "Canonical label set for the WeftOS Plane project. ensure-labels reads this and creates any missing labels, then writes the resulting UUIDs back into ids.json.labels.",
+  "workstream": [
+    { "name": "ws01-core",            "color": "#1f77b4", "description": "Workstream 01 — Core platform" },
+    { "name": "ws02-kernel",          "color": "#ff7f0e", "description": "Workstream 02 — Kernel & governance" },
+    { "name": "ws03-pipeline",        "color": "#2ca02c", "description": "Workstream 03 — Pipeline & routing" },
+    { "name": "ws04-plugin-skills",   "color": "#d62728", "description": "Workstream 04 — Plugin & skills system" },
+    { "name": "ws05-channels",        "color": "#9467bd", "description": "Workstream 05 — Channels (Discord/Telegram/Slack/Gateway/etc.)" },
+    { "name": "ws06-memory",          "color": "#8c564b", "description": "Workstream 06 — Memory & workspace" },
+    { "name": "ws07-multi-agent",     "color": "#e377c2", "description": "Workstream 07 — Multi-agent routing & delegation" },
+    { "name": "ws08-weftos-gui",      "color": "#7f7f7f", "description": "Workstream 08 — WeftOS GUI (Explorer / clawft-gui-egui / VSCode panel)" },
+    { "name": "ws09-clawft-dashboard","color": "#bcbd22", "description": "Workstream 09 — clawft AGENT dashboard (React 19)" },
+    { "name": "ws10-voice",           "color": "#17becf", "description": "Workstream 10 — Voice (W-VOICE)" },
+    { "name": "ws11-agent-core-v1",   "color": "#393b79", "description": "Workstream 11 — Agent-core-v1 (chat agent E2E)" },
+    { "name": "ws12-knowledge-graph", "color": "#5254a3", "description": "Workstream 12 — Knowledge graph & graphify (Sprint 17)" },
+    { "name": "ws13-app-substrate",   "color": "#637939", "description": "Workstream 13 — App layer / substrate / surface (M1.5)" },
+    { "name": "ws14-deployment",      "color": "#8c6d31", "description": "Workstream 14 — Deployment & release engineering" },
+    { "name": "ws15-mcp",             "color": "#843c39", "description": "Workstream 15 — MCP integration & extension surface" },
+    { "name": "ws16-browser-wasm",    "color": "#7b4173", "description": "Workstream 16 — Browser WASM runtime (W-BROWSER)" },
+    { "name": "ws17-research",        "color": "#9c9ede", "description": "Workstream 17 — Research streams (JEPA/LeWM, Democritus, ECC, ExoChain, EML)" }
+  ],
+  "finding_type": [
+    { "name": "audit-finding",          "color": "#cc3333", "description": "Derived from .planning/reviews/0.7.0-release-gate/" },
+    { "name": "audit-0.7.0",            "color": "#ee5555", "description": "Source: 0.7.0 release-gate audit (cross-cutting filter)" },
+    { "name": "release-gate-blocker",   "color": "#990000", "description": "Must ship before 0.7.0 cuts" },
+    { "name": "bug",                    "color": "#ff5555", "description": "Observable defect (live or imminent)" },
+    { "name": "stub",                   "color": "#ff9933", "description": "Surface exists but I/O is fake / synthetic" },
+    { "name": "gap",                    "color": "#ffcc66", "description": "Missing functionality, not yet started" },
+    { "name": "orphan",                 "color": "#cc9966", "description": "Started, owner / momentum unclear" },
+    { "name": "governance",             "color": "#990066", "description": "Governance / gate / chain integrity" },
+    { "name": "tech-debt",              "color": "#666666", "description": "Working but should be reshaped" },
+    { "name": "docs",                   "color": "#0099cc", "description": "Documentation / handbook / doc-site" },
+    { "name": "tests",                  "color": "#33cc66", "description": "Test coverage / fixtures / test infra" },
+    { "name": "tooling",                "color": "#996633", "description": "scripts/, build, dev ergonomics" },
+    { "name": "security",               "color": "#cc0000", "description": "Security control / sandbox / authn / authz" },
+    { "name": "performance",            "color": "#ff6600", "description": "Latency, throughput, allocation, hot path" }
+  ]
+}

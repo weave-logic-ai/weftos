@@ -113,7 +113,7 @@ fn cmd_enrich(vault_path: &PathBuf, force: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_analyze(vault_path: &PathBuf, format: &str) -> anyhow::Result<()> {
+fn cmd_analyze(vault_path: &std::path::Path, format: &str) -> anyhow::Result<()> {
     use clawft_graphify::vault::analyze;
 
     let (_nodes, metrics) = analyze::analyze_vault(vault_path)?;
@@ -168,7 +168,7 @@ fn cmd_analyze(vault_path: &PathBuf, format: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_suggest(vault_path: &PathBuf, min_score: f64, max_per_file: usize) -> anyhow::Result<()> {
+fn cmd_suggest(vault_path: &std::path::Path, min_score: f64, max_per_file: usize) -> anyhow::Result<()> {
     use clawft_graphify::vault::{analyze, suggest};
 
     let (nodes, _metrics) = analyze::analyze_vault(vault_path)?;
@@ -214,11 +214,10 @@ fn cmd_auto_link(vault_path: &PathBuf, dry_run: bool) -> anyhow::Result<()> {
     for file_path in &files {
         let content = std::fs::read_to_string(file_path)?;
         let doc = frontmatter::parse(&content);
-        if let Some(title) = &doc.frontmatter.title {
-            if title.len() >= 3 {
+        if let Some(title) = &doc.frontmatter.title
+            && title.len() >= 3 {
                 titles.push(title.clone());
             }
-        }
         if let Some(stem) = file_path.file_stem().and_then(|s| s.to_str()) {
             let name = stem.replace(['-', '_'], " ");
             if name.len() >= 3 && !titles.contains(&name) {
@@ -265,7 +264,7 @@ fn cmd_backlinks(vault_path: &PathBuf, dry_run: bool) -> anyhow::Result<()> {
     let (nodes, _metrics) = analyze::analyze_vault(vault_path)?;
     let mut updated = 0usize;
 
-    for (key, node) in &nodes {
+    for node in nodes.values() {
         if node.incoming.is_empty() {
             continue;
         }

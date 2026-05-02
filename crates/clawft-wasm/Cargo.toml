@@ -1,7 +1,8 @@
 [package]
 name = "clawft-wasm"
 version.workspace = true
-publish = false
+# Publishable: WASM entrypoint library reused by browser / wasi consumers.
+publish = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -26,6 +27,7 @@ browser = [
     "dep:web-sys",
     "dep:js-sys",
     "dep:console_error_panic_hook",
+    "dep:chrono",
     "clawft-core/browser",
     "clawft-llm/browser",
     "clawft-tools/browser",
@@ -78,3 +80,12 @@ wat = "1"
 dlmalloc = { version = "0.2", features = ["global"] }
 talc = { version = "4.4", optional = true }
 lol_alloc = { version = "0.4", optional = true }
+
+# WEFT-388 (M5-A) — browser regression suite.
+# `wasm-bindgen-test` is wasm32-only by construction. Adding it under
+# `[target.'cfg(target_arch = "wasm32")'.dev-dependencies]` lets cargo
+# resolve the test target on native (where the file is a no-op via
+# `#![cfg(target_arch = "wasm32")]`) without dragging the harness into
+# native test runs.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"

@@ -79,6 +79,29 @@ pub enum ClawftError {
         /// What policy was violated.
         reason: String,
     },
+
+    /// The per-conversation cost circuit-breaker tripped (WEFT-322).
+    ///
+    /// Returned by [`AgentLoop::handle_turn`] when accumulated usage on
+    /// `conv_id` would exceed `dimension`'s configured cap (`limit`).
+    /// `used` is the value that caused the trip. The conversation is
+    /// marked `circuit_open` in the budget store; subsequent calls
+    /// fail-fast with this same error until reset via
+    /// `agent.chat.reset_budget`.
+    #[error(
+        "conversation budget exceeded for `{conv_id}`: \
+         {dimension} {used} >= limit {limit} (circuit_open until reset_budget)"
+    )]
+    ConversationBudgetExceeded {
+        /// Conversation identifier whose budget tripped.
+        conv_id: String,
+        /// One of `"tokens"`, `"usd"`, or `"iterations"`.
+        dimension: String,
+        /// Configured cap that was reached.
+        limit: f64,
+        /// Accumulated value at the moment of the trip.
+        used: f64,
+    },
 }
 
 /// Channel-specific error type.

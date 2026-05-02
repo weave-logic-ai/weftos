@@ -79,6 +79,23 @@ pub struct AppContext<P: Platform> {
 
     /// Optional auto-delegation router for pre-LLM routing.
     auto_delegation: Option<Arc<dyn AutoDelegation>>,
+
+    /// Optional inbound-message → agent router.
+    ///
+    /// Routes incoming [`InboundMessage`](clawft_types::event::InboundMessage)s
+    /// to a specific agent persona based on channel/user rules. Not
+    /// used by the single-agent CLI flow today; consumed by the
+    /// daemon's multi-agent dispatcher when set.
+    agent_router: Option<Arc<crate::agent_routing::AgentRouter>>,
+
+    /// Optional agent-to-agent message bus.
+    ///
+    /// Provides per-agent inboxes with TTL enforcement and
+    /// inbox-scoped delivery. The CLI runs a single agent so doesn't
+    /// need it, but multi-agent hosts (the daemon's spawn manager)
+    /// register each spawned agent and route IPC through the bus.
+    #[cfg(feature = "native")]
+    agent_bus: Option<Arc<crate::agent_bus::AgentBus>>,
 }
 
 impl<P: Platform> AppContext<P> {
@@ -110,15 +127,37 @@ impl<P: Platform> AppContext<P> {
         let sessions = SessionManager::new(platform.clone()).await?;
         debug!("session manager initialized");
 
-        // 3. Memory store
-        let memory = Arc::new(MemoryStore::new(platform.clone())?);
+        // 3. Memory store — WEFT-79: route through workspace overlay
+        //    when present (.clawft/ in cwd or ancestor) so kernel
+        //    persists into the workspace's `.clawft/memory/` instead
+        //    of the global `~/.clawft/workspace/memory/`. Mirrors the
+        //    cwd-relative config overlay (Layer 3).
+        let memory = match crate::workspace::discover_workspace() {
+            Some(ws_root) if ws_root.join(".clawft").is_dir() => {
+                debug!(
+                    workspace = %ws_root.display(),
+                    "routing memory through workspace overlay"
+                );
+                Arc::new(MemoryStore::for_workspace(&ws_root, platform.clone()))
+            }
+            _ => Arc::new(MemoryStore::new(platform.clone())?),
+        };
         debug!(
             memory_path = %memory.memory_path().display(),
             "memory store initialized"
         );
 
-        // 4. Skills loader
-        let mut skills_loader = SkillsLoader::new(platform.clone())?;
+        // 4. Skills loader — same workspace-overlay routing as memory.
+        let mut skills_loader = match crate::workspace::discover_workspace() {
+            Some(ws_root) if ws_root.join(".clawft").is_dir() => {
+                debug!(
+                    workspace = %ws_root.display(),
+                    "routing skills through workspace overlay"
+                );
+                SkillsLoader::for_workspace(&ws_root, platform.clone())
+            }
+            _ => SkillsLoader::new(platform.clone())?,
+        };
 
         // Also scan extra `skills/` directories if they exist:
         // - workspace/skills/  (from config workspace path)
@@ -167,6 +206,9 @@ impl<P: Platform> AppContext<P> {
             memory,
             skills,
             auto_delegation: None,
+            agent_router: None,
+            #[cfg(feature = "native")]
+            agent_bus: None,
         })
     }
 
@@ -250,6 +292,67 @@ impl<P: Platform> AppContext<P> {
         &self.skills
     }
 
+    /// Start a [`SkillWatcher`](crate::agent::skill_watcher::start_watching)
+    /// over the same directories the [`SkillsLoader`] scans.
+    ///
+    /// Returns a handle that the caller MUST keep alive for the
+    /// duration of the agent loop — dropping it stops the watcher.
+    /// Returns `None` when the underlying file-system watcher could
+    /// not be started (e.g. inotify quota exhausted); the agent loop
+    /// still runs, just without hot-reload.
+    ///
+    /// The watcher is opt-in: bootstrap does NOT start it
+    /// automatically because the agent loop's existing reads go
+    /// through `SkillsLoader` which is already responsive to disk
+    /// changes on the cold path. Hot-reload via this watcher reflects
+    /// changes into a parallel `SkillRegistry` (v2) that's
+    /// non-disruptively available for callers that want it.
+    ///
+    /// Native-only: the `notify` crate doesn't compile to wasm.
+    #[cfg(feature = "native")]
+    pub async fn start_skill_watcher(
+        &self,
+    ) -> Option<crate::agent::skill_watcher::SkillWatcherHandle> {
+        use std::sync::Arc as ArcAlias;
+        use tokio::sync::RwLock;
+
+        use crate::agent::skill_watcher::{start_watching, SkillWatcherConfig};
+        use crate::agent::skills_v2::SkillRegistry;
+
+        let workspace_dir = Some(self.skills.skills_dir().clone());
+        let registry = match SkillRegistry::discover(workspace_dir.as_deref(), None, vec![]).await
+        {
+            Ok(r) => ArcAlias::new(RwLock::new(r)),
+            Err(e) => {
+                tracing::warn!(error = %e, "skill watcher: initial discover failed; not starting");
+                return None;
+            }
+        };
+
+        let config = SkillWatcherConfig {
+            workspace_dir: workspace_dir.clone(),
+            user_dir: None,
+            extra_dirs: Vec::new(),
+            debounce: std::time::Duration::from_millis(500),
+            builtin_skills: Vec::new(),
+            trust_workspace: true,
+        };
+
+        match start_watching(config, registry) {
+            Ok(handle) => {
+                tracing::info!(
+                    skills_dir = %self.skills.skills_dir().display(),
+                    "skill hot-reload watcher started"
+                );
+                Some(handle)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to start skill watcher");
+                None
+            }
+        }
+    }
+
     /// Set an auto-delegation router for pre-LLM routing.
     ///
     /// When set, inbound messages are checked against delegation rules
@@ -257,6 +360,38 @@ impl<P: Platform> AppContext<P> {
     /// directly to `delegate_task`.
     pub fn set_auto_delegation(&mut self, delegation: Arc<dyn AutoDelegation>) {
         self.auto_delegation = Some(delegation);
+    }
+
+    /// Attach an [`AgentRouter`](crate::agent_routing::AgentRouter)
+    /// for inbound-message-to-agent routing. Multi-agent dispatchers
+    /// (e.g. the daemon) consume this; the single-agent CLI flow
+    /// ignores it.
+    pub fn set_agent_router(
+        &mut self,
+        router: Arc<crate::agent_routing::AgentRouter>,
+    ) {
+        self.agent_router = Some(router);
+    }
+
+    /// Borrow the optional agent router. `None` means there's no
+    /// multi-agent routing layer in front of the loop.
+    pub fn agent_router(&self) -> Option<&Arc<crate::agent_routing::AgentRouter>> {
+        self.agent_router.as_ref()
+    }
+
+    /// Attach a shared [`AgentBus`](crate::agent_bus::AgentBus). The
+    /// daemon's agent supervisor registers each spawned agent with
+    /// this bus so A2A messaging is inbox-scoped.
+    #[cfg(feature = "native")]
+    pub fn set_agent_bus(&mut self, bus: Arc<crate::agent_bus::AgentBus>) {
+        self.agent_bus = Some(bus);
+    }
+
+    /// Borrow the optional agent bus. `None` means A2A messaging is
+    /// disabled (single-agent process).
+    #[cfg(feature = "native")]
+    pub fn agent_bus(&self) -> Option<&Arc<crate::agent_bus::AgentBus>> {
+        self.agent_bus.as_ref()
     }
 
     /// Replace the pipeline registry with a custom one.
@@ -303,14 +438,26 @@ pub fn build_live_pipeline(config: &Config) -> PipelineRegistry {
 /// - `"static"` (default) -> [`StaticRouter`] from config defaults
 ///
 /// Other stages: [`KeywordClassifier`], [`TokenBudgetAssembler`],
-/// [`OpenAiCompatTransport`] (stub), [`NoopScorer`], [`NoopLearner`].
+/// [`OpenAiCompatTransport`] wired with [`ServiceLlmAdapter`] against
+/// the local llama-server resolved from
+/// [`LlmConfig::from_env`](clawft_service_llm::LlmConfig::from_env)
+/// (so the agent loop, the daemon's `llm.prompt` RPC, and the chat
+/// panel all share one model server), [`NoopScorer`], [`NoopLearner`].
+///
+/// On `LlmClient` construction failure (e.g. malformed env URL) the
+/// transport falls back to the no-provider stub so the rest of the
+/// pipeline still wires; the agent will surface a clear error on the
+/// first call.
+///
+/// Browser builds keep the original stubbed transport — service-llm
+/// pulls in `reqwest` and is native-only.
 fn build_default_pipeline(config: &Config) -> PipelineRegistry {
     let classifier = Arc::new(KeywordClassifier::new());
     let router: Arc<dyn ModelRouter> = build_router_from_config(config);
     let assembler = Arc::new(TokenBudgetAssembler::new(
         config.agents.defaults.max_tokens.max(1) as usize,
     ));
-    let transport = Arc::new(OpenAiCompatTransport::new());
+    let transport = build_default_transport();
     let scorer = crate::pipeline::build_scorer(&config.pipeline);
     let learner = crate::pipeline::build_learner(&config.pipeline);
 
@@ -324,6 +471,296 @@ fn build_default_pipeline(config: &Config) -> PipelineRegistry {
     };
 
     PipelineRegistry::new(pipeline)
+}
+
+/// Native: wrap a [`ServiceLlmAdapter`] over a freshly-constructed
+/// [`LlmClient`] from the env-resolved config. Falls back to the stub
+/// transport if the client cannot be built (e.g. invalid base URL).
+#[cfg(feature = "native")]
+fn build_default_transport() -> Arc<OpenAiCompatTransport> {
+    use clawft_service_llm::{LlmClient, LlmConfig};
+
+    use crate::pipeline::service_llm_adapter::ServiceLlmAdapter;
+    use crate::pipeline::transport::LlmProvider;
+
+    let llm_config = LlmConfig::from_env();
+    match LlmClient::new(llm_config) {
+        Ok(client) => {
+            let adapter: Arc<dyn LlmProvider> =
+                Arc::new(ServiceLlmAdapter::new(Arc::new(client)));
+            tracing::info!(
+                "pipeline: transport wired to clawft-service-llm (LlmClient over llama-server)"
+            );
+            Arc::new(OpenAiCompatTransport::with_provider(adapter))
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "pipeline: failed to construct LlmClient — falling back to stub transport"
+            );
+            Arc::new(OpenAiCompatTransport::new())
+        }
+    }
+}
+
+/// Browser: stub transport (service-llm pulls reqwest, native-only).
+#[cfg(not(feature = "native"))]
+fn build_default_transport() -> Arc<OpenAiCompatTransport> {
+    Arc::new(OpenAiCompatTransport::new())
+}
+
+/// Build a pipeline whose transport is wired to a [`BrowserLlmClient`]
+/// via [`BrowserLlmAdapter`](crate::pipeline::browser_llm_adapter::BrowserLlmAdapter).
+///
+/// All other stages (classifier, router, assembler, scorer, learner)
+/// match [`build_default_pipeline`] so the browser path runs through
+/// the same 6-stage shape as the native path. Used by the
+/// `clawft-wasm` browser entry to wire `AgentLoop<BrowserPlatform>`
+/// end-to-end through the pipeline (W-BROWSER P0.1).
+#[cfg(feature = "browser")]
+pub fn build_browser_pipeline(
+    config: &Config,
+    client: Arc<clawft_llm::browser_transport::BrowserLlmClient>,
+) -> PipelineRegistry {
+    use crate::pipeline::browser_llm_adapter::BrowserLlmAdapter;
+    use crate::pipeline::transport::LlmProvider;
+
+    let adapter: Arc<dyn LlmProvider> = Arc::new(BrowserLlmAdapter::new(client));
+    let transport = Arc::new(OpenAiCompatTransport::with_provider(adapter));
+    let classifier = Arc::new(KeywordClassifier::new());
+    let router: Arc<dyn ModelRouter> = build_router_from_config(config);
+    let assembler = Arc::new(TokenBudgetAssembler::new(
+        config.agents.defaults.max_tokens.max(1) as usize,
+    ));
+    let scorer = crate::pipeline::build_scorer(&config.pipeline);
+    let learner = crate::pipeline::build_learner(&config.pipeline);
+    PipelineRegistry::new(Pipeline {
+        classifier,
+        router,
+        assembler,
+        transport,
+        scorer,
+        learner,
+    })
+}
+
+/// Construct an [`AgentLoop`] suitable for daemon-side hosting via
+/// `clawft-service-agent::AgentService`.
+///
+/// This is a thin factory used by `clawft-weave::daemon` (Phase C2 of
+/// `docs/plans/agent-core-v1.md`). It accepts the handles the daemon
+/// already has on hand — an `LlmClient`, a populated `ToolRegistry`,
+/// an `IdentityLoader`, and a workspace path — and wires the rest
+/// (message bus, session manager, context builder, pipeline) with
+/// daemon-flavored defaults:
+///
+/// - `Config::default()` agents config (the daemon's chat path doesn't
+///   need the workspace `Config` — `agent.chat`'s temperature/max_tokens
+///   come from the wire params).
+/// - A pipeline registry whose transport is wired to the supplied
+///   [`LlmClient`] via [`ServiceLlmAdapter`](crate::pipeline::service_llm_adapter::ServiceLlmAdapter)
+///   so the agent loop, the daemon's `llm.prompt` RPC, and the chat
+///   panel all share one model server.
+/// - `NullRouter` default (Phase B1). Phase E1 swaps in
+///   `LlmClassifierRouter`.
+/// - `gate`: caller-supplied [`EffectGate`](crate::agent::gate::EffectGate).
+///   `None` falls back to [`NoopGate`](crate::agent::gate::NoopGate)
+///   (always-permit, Phase B2 default). Phase D2's daemon construction
+///   site passes `Some(KernelEffectGate)` so every tool dispatch in
+///   `agent.chat` gets audited via
+///   `clawft_kernel::GovernanceGate::check`. See `agent-core-v1.md`
+///   Phase D2.
+/// - `agent_id`: caller-supplied daemon agent id used by every
+///   `gate.check` call. `None` keeps the pre-D2 behaviour of
+///   synthesizing `"{channel}:{sender_id}"` from the inbound message.
+///   Phase D2's daemon construction site registers a single concierge
+///   principal in `clawft-kernel::AgentRegistry` at boot and threads
+///   the resulting id through here. v1 chat is single-tenant; per-user
+///   agent ids land in a future phase.
+/// - `sink`: caller-supplied [`ConversationSink`](crate::agent::sink::ConversationSink).
+///   `None` falls back to the in-memory sink (the C1/C2 default). The
+///   C3 daemon construction site passes `Some(SubstrateConversationSink)`
+///   so per-turn JSONL lands in substrate; CLI/test bootstrap callers
+///   pass `None`. See `agent-core-v1.md` Phase C3.
+/// - `identity_provider`: caller-supplied
+///   [`IdentityProvider`](crate::agent::identity::IdentityProvider).
+///   When `Some`, this factory wraps it in a
+///   [`SystemPromptBuilder`](crate::agent::system_prompt::SystemPromptBuilder)
+///   and attaches it to the loop so each turn emits an identity-aware
+///   leading system message (agent-core-v1 Phase D1). When `None`, the
+///   loop falls back to the legacy `ContextBuilder`-only system prompt
+///   so existing CLI / test callers see no behaviour change.
+/// - `context_router`: caller-supplied
+///   [`ContextRouter`](crate::agent::context_router::ContextRouter)
+///   (agent-core-v1 Phase E1). When `Some`, the loop consults it
+///   *before* the LLM call to nudge classification and surface an
+///   archetype label. When `None`, the loop falls back to its
+///   `NullRouter` default so v0 behaviour is preserved bit-for-bit.
+///   The daemon construction site picks between
+///   `Arc::new(NullRouter)` and
+///   `Arc::new(LlmClassifierRouter::new(llm))` based on
+///   `Config.routing.context_router`.
+///
+/// The legacy `_identity_loader` argument is retained but unused — the
+/// builder consumes `IdentityProvider` directly. Phase F1 will retire
+/// the loader entirely once `weaver init` seeds local `.clawft/`.
+///
+/// Native-only: `NativePlatform` and `LlmClient` are both native-gated.
+#[cfg(feature = "native")]
+#[allow(clippy::too_many_arguments)]
+pub async fn build_daemon_agent_loop(
+    llm: Arc<clawft_service_llm::LlmClient>,
+    tools: Arc<ToolRegistry>,
+    _identity_loader: Arc<crate::agent::identity::IdentityLoader>,
+    workspace: &std::path::Path,
+    agent_id: Option<String>,
+    context_router: Option<Arc<dyn crate::agent::context_router::ContextRouter>>,
+    gate: Option<Arc<dyn crate::agent::gate::EffectGate>>,
+    sink: Option<Arc<dyn crate::agent::sink::ConversationSink>>,
+    identity_provider: Option<Arc<dyn crate::agent::identity::IdentityProvider>>,
+    routing: Option<&clawft_types::routing::RoutingConfig>,
+) -> Arc<crate::agent::loop_core::AgentLoop<clawft_platform::NativePlatform>> {
+    use clawft_platform::NativePlatform;
+
+    use crate::pipeline::service_llm_adapter::ServiceLlmAdapter;
+    use crate::pipeline::transport::{LlmProvider, OpenAiCompatTransport};
+
+    // Daemon-side config: pull a Config::default() and stamp the
+    // workspace path. The agent.chat wire params override
+    // temperature/max_tokens per turn, so the defaults here only
+    // matter for fields the wire doesn't carry. The exception is
+    // `routing` — the resolver's `channel_overrides` MUST reflect the
+    // operator's loaded permissions, not Config::default() (which
+    // would force every non-CLI channel to zero_trust). Callers pass
+    // their loaded `RoutingConfig` via the `routing` parameter; if
+    // `None`, we fall back to defaults (test/dev path only).
+    let mut config = Config::default();
+    config.agents.defaults.workspace = workspace.display().to_string();
+    if let Some(r) = routing {
+        config.routing = r.clone();
+    }
+
+    let platform = Arc::new(NativePlatform::new());
+
+    // Build the supporting infrastructure inline (analogous to
+    // `AppContext::new` minus the parts the daemon doesn't need
+    // — skill watcher, agent router, agent bus). We allow this to
+    // be `expect(...)` because the daemon already validated the
+    // workspace earlier at boot; a failure here is a hard boot
+    // failure rather than a recoverable error.
+    let bus = Arc::new(MessageBus::new());
+
+    // SessionManager::new can still fail when the platform's home_dir
+    // resolution fails. The daemon already resolved the runtime dir
+    // earlier; we propagate via expect.
+    let sessions = SessionManager::new(platform.clone())
+        .await
+        .expect("daemon: SessionManager init failed");
+
+    // WEFT-79: route memory + skills through the workspace overlay
+    // the daemon already resolved. The daemon hands us the workspace
+    // root explicitly, so we never fall back to the global path here —
+    // a daemon without a workspace is a misconfiguration, not a soft
+    // fallback case.
+    let memory = Arc::new(crate::agent::memory::MemoryStore::for_workspace(
+        workspace,
+        platform.clone(),
+    ));
+    let skills_loader = crate::agent::skills::SkillsLoader::for_workspace(
+        workspace,
+        platform.clone(),
+    );
+    let skills = Arc::new(skills_loader);
+    let context = ContextBuilder::new(
+        config.agents.clone(),
+        memory,
+        skills,
+        platform.clone(),
+    );
+
+    // Pipeline transport: bridge the daemon's already-constructed
+    // LlmClient through the ServiceLlmAdapter so the agent loop
+    // shares the daemon's single LLM connection.
+    let adapter: Arc<dyn LlmProvider> = Arc::new(ServiceLlmAdapter::new(llm));
+    let transport = Arc::new(OpenAiCompatTransport::with_provider(adapter));
+    let classifier = Arc::new(KeywordClassifier::new());
+    let router: Arc<dyn ModelRouter> = build_router_from_config(&config);
+    let assembler = Arc::new(TokenBudgetAssembler::new(
+        config.agents.defaults.max_tokens.max(1) as usize,
+    ));
+    let scorer = crate::pipeline::build_scorer(&config.pipeline);
+    let learner = crate::pipeline::build_learner(&config.pipeline);
+    let pipeline = PipelineRegistry::new(Pipeline {
+        classifier,
+        router,
+        assembler,
+        transport,
+        scorer,
+        learner,
+    });
+
+    // TODO(v1.1): split workspace from global at the loader layer so
+    // we can pass them to `PermissionResolver::new(global, Some(workspace))`
+    // and let `enforce_workspace_ceiling` clamp workspace permissions
+    // against system-wide bounds. Today the workspace overlay is
+    // deep-merged into `config.routing` upstream in
+    // `config_loader::load_config_raw`, so workspace policy reaches
+    // the resolver but the security ceiling pattern is bypassed. Fine
+    // for single-user kernels; needed for multi-tenant.
+    let resolver = crate::pipeline::permissions::PermissionResolver::new(
+        &config.routing,
+        None,
+    );
+    let mut agent = crate::agent::loop_core::AgentLoop::new(
+        config.agents,
+        platform,
+        bus,
+        pipeline,
+        tools,
+        context,
+        Arc::new(sessions),
+        resolver,
+    );
+    // C3 attaches the caller's sink (substrate-backed at the daemon
+    // construction site; falls back to the in-memory default for CLI
+    // / non-substrate callers).
+    if let Some(s) = sink {
+        agent = agent.with_sink(s);
+    }
+    // D1 attaches the identity-aware system-prompt builder. The
+    // builder is wrapped in an Arc so every turn re-uses the same
+    // provider (and its cache, in the FileIdentityProvider case)
+    // without per-turn re-construction cost.
+    if let Some(provider) = identity_provider {
+        let builder = Arc::new(crate::agent::system_prompt::SystemPromptBuilder::new(
+            provider,
+            workspace.to_path_buf(),
+        ));
+        agent = agent.with_system_prompt_builder(builder);
+    }
+    // D2 attaches the kernel-backed gate. When `None`, AgentLoop's
+    // `NoopGate` default keeps behaviour identical to the pre-D2
+    // path so CLI / test callers see no change. The daemon
+    // construction site passes `Some(KernelEffectGate)` so every
+    // tool dispatch hits `GovernanceGate::check`.
+    if let Some(g) = gate {
+        agent = agent.with_gate(g);
+    }
+    // D2 also threads through the daemon-supplied concierge agent
+    // id used by every `gate.check`. Without this, the loop falls
+    // back to the per-message `"{channel}:{sender_id}"` synthesis
+    // (the CLI / test path).
+    if let Some(id) = agent_id {
+        agent = agent.with_daemon_agent_id(id);
+    }
+    // E1 attaches the daemon-supplied ContextRouter (LlmClassifierRouter
+    // when Config.routing.context_router == "llm-classifier", NullRouter
+    // otherwise — the latter is also AgentLoop's built-in default, so
+    // passing `None` keeps the pre-E1 wire byte-identical).
+    if let Some(r) = context_router {
+        agent = agent.with_context_router(r);
+    }
+    Arc::new(agent)
 }
 
 /// Build the appropriate router based on `config.routing.mode`.
@@ -364,6 +801,7 @@ mod tests {
                     max_tool_iterations: 10,
                     memory_window: 50,
                 },
+                ..AgentsConfig::default()
             },
             ..Config::default()
         }
@@ -604,37 +1042,23 @@ mod tests {
 
     // ── Integration: default pipeline uses stub (negative test) ─────
 
-    #[tokio::test]
-    async fn default_pipeline_transport_is_stub() {
-        // Verify the default pipeline's transport IS the stub, confirming
-        // that enable_live_llm / build_live_pipeline changes something.
-        use crate::pipeline::traits::{LlmMessage, TaskType, TransportRequest};
+    #[test]
+    fn default_pipeline_builds_with_service_llm_transport() {
+        // The default pipeline now wires a ServiceLlmAdapter over an
+        // LlmClient resolved from LlmConfig::from_env (instead of the
+        // earlier stubbed transport). We can't fire a request from a
+        // unit test — that would hit the network (or wait for a
+        // timeout) depending on whether llama-server happens to be
+        // running on the test host. Just confirm the build path
+        // succeeds; the wiremock-backed round-trip in
+        // `pipeline::service_llm_adapter::tests` covers the actual
+        // request path end-to-end.
+        use crate::pipeline::traits::TaskType;
 
         let config = test_config();
         let registry = build_default_pipeline(&config);
-        let pipeline = registry.get(&TaskType::Unknown);
-
-        let transport_req = TransportRequest {
-            provider: "test".into(),
-            model: "test".into(),
-            messages: vec![LlmMessage {
-                role: "user".into(),
-                content: "hello".into(),
-                tool_call_id: None,
-                tool_calls: None,
-            }],
-            tools: vec![],
-            max_tokens: None,
-            temperature: None,
-        };
-
-        let result = pipeline.transport.complete(&transport_req).await;
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("transport not configured"),
-            "default pipeline should use stub transport, got: {err_msg}"
-        );
+        // Smoke-check: pipeline is reachable for the default task type.
+        let _pipeline = registry.get(&TaskType::Unknown);
     }
 
     // ── Integration: build_live_pipeline creates a valid registry ────

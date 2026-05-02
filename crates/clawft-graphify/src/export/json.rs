@@ -60,7 +60,7 @@ pub fn to_json_value(kg: &KnowledgeGraph) -> serde_json::Value {
             let id_str = entity
                 .legacy_id
                 .as_deref()
-                .unwrap_or_else(|| "")
+                .unwrap_or("")
                 .to_string();
             let id_display = if id_str.is_empty() {
                 entity.id.to_hex()
@@ -94,12 +94,12 @@ pub fn to_json_value(kg: &KnowledgeGraph) -> serde_json::Value {
             let src_str = src
                 .legacy_id
                 .as_deref()
-                .unwrap_or_else(|| "")
+                .unwrap_or("")
                 .to_string();
             let tgt_str = tgt
                 .legacy_id
                 .as_deref()
-                .unwrap_or_else(|| "")
+                .unwrap_or("")
                 .to_string();
             let src_display = if src_str.is_empty() { src.id.to_hex() } else { src_str.clone() };
             let tgt_display = if tgt_str.is_empty() { tgt.id.to_hex() } else { tgt_str.clone() };

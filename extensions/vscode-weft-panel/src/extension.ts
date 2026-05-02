@@ -22,21 +22,29 @@ const VIEW_TYPE = "weft.panel";
 
 // Allowed RPC methods the extension will proxy from the webview.
 //
-// M1 added the four read methods the wasm `Live` polls.
-// M1.5.1a adds the two built-in admin-app write verbs that the
-// WeftOS Admin surface declares influence over (ADR-015); the
-// daemon's own capability check is the real gate — this allowlist
-// just keeps the webview from reaching arbitrary RPC surface.
-// M1.5.1d adds `cluster.status` / `chain.status` so the Mesh and
-// ExoChain chip panels can fetch their substrate projections from
-// the daemon even on the wasm path (native GUI already runs the
-// adapters in-process). `cluster.nodes` lets the Mesh panel list
-// peers; `chain.tail` gives the ExoChain panel recent events.
-// M1.5.2 reserves `sensor.mic.status` for the upcoming audio bridge
-// — the current MicrophoneAdapter is host-file-backed and native-
-// only, but once a capture sidecar emits over RPC the wasm panel's
-// Audio chip will read through here.
-const ALLOWED_METHODS = new Set<string>([
+// **WEFT-250**: This list used to drift every time the daemon added
+// an RPC. The proxy now auto-fetches the daemon's method list on
+// connect (`daemon.list_methods` / `kernel.list_methods` — the first
+// one the daemon answers wins) and merges the response into this
+// static seed. The static set is kept as a *fallback* for the
+// daemon-doesn't-yet-support-introspection case AND as the documented
+// minimum surface that the panel relies on. Methods returned by the
+// daemon are intersected with the runtime allowlist before being
+// proxied; so the daemon's authority gate is still the real
+// enforcement, the proxy just refuses to forward anything it has
+// never been told about.
+//
+// History:
+//   - M1: four read methods the wasm `Live` polls.
+//   - M1.5.1a: two built-in admin-app write verbs (ADR-015).
+//   - M1.5.1d: cluster.* + chain.* projections.
+//   - M1.5.2 reserved `sensor.mic.status` for the audio bridge.
+//   - M1.5.3: substrate.read / substrate.subscribe / substrate.list
+//     so the WASM Live loop drives Snapshot through these verbs.
+//   - control.set_enabled / control.list (Phase 3 control plane).
+//   - llm.prompt + agent.chat for the chat panel.
+//   - terminal.* for PTY-backed shell sessions.
+const STATIC_ALLOWED_METHODS = new Set<string>([
     "kernel.status",
     "kernel.ps",
     "kernel.services",
@@ -48,7 +56,115 @@ const ALLOWED_METHODS = new Set<string>([
     "chain.status",
     "chain.tail",
     "sensor.mic.status",
+    // Ontology Explorer Phase 0 (2026-04-23): the WASM `Live` loop inside
+    // the webview drives `Snapshot` through these two verbs — same code
+    // the native GUI runs. Without them the tray chip icons never go
+    // green and the mic gauge bound to $substrate/sensor/mic.rms_db
+    // never sees bridge-published values. `substrate.publish` stays
+    // blocked; the webview is a viewer, not a writer.
+    "substrate.read",
+    "substrate.subscribe",
+    // Ontology Explorer Phase 1: tree enumeration. Request is
+    // { prefix, depth }, response is { children: [...], tick }. The
+    // webview-hosted Explorer panel calls this on each tree-node
+    // expand to fetch immediate children from the daemon.
+    "substrate.list",
+    // Phase 3 control plane (commit a8bdc631): the Explorer's
+    // control-intent toggle viewer fires `control.set_enabled` to
+    // flip a sensor or service on/off; `control.list` is the read
+    // counterpart for the upcoming control-overview panel. The
+    // daemon's gate enforces authority — this allowlist just opens
+    // the proxy.
+    "control.set_enabled",
+    "control.list",
+    // LLM service: synchronous chat completion against the local
+    // llama.cpp endpoint. Wired in the daemon at boot via DAEMON_LLM;
+    // the chat window panel calls this for each user turn.
+    "llm.prompt",
+    // WeftOS Concierge: identity-aware tool-using chat. Wraps `llm.prompt`
+    // with a built-in tool surface (read_file, list_directory) that lets
+    // the assistant inspect the workspace before answering. Replaces
+    // `llm.prompt` as the chat panel's wire for user turns; same llama.cpp
+    // server underneath. Plan: docs/plans/chat-agent-v1.md §5.
+    "agent.chat",
+    // Terminal service: PTY-backed shell sessions hosted in the
+    // daemon, surfaced as an Explorer panel. Output is published
+    // to substrate (via the existing `substrate.read` proxy);
+    // these four verbs cover spawn / write / resize / close. The
+    // daemon's own per-session ownership check is the real gate —
+    // this allowlist just keeps the webview from reaching arbitrary
+    // RPC surface.
+    "terminal.spawn",
+    "terminal.write",
+    "terminal.resize",
+    "terminal.close",
 ]);
+
+/// Mutable runtime allowlist. Starts as a copy of `STATIC_ALLOWED_METHODS`
+/// and is refreshed on connect via `refreshAllowlist`.
+const ALLOWED_METHODS = new Set<string>(STATIC_ALLOWED_METHODS);
+
+/// Names the daemon might publish for its method-list introspection
+/// RPC. Tried in order on connect; the first one to return a list of
+/// strings wins. WEFT-250.
+const INTROSPECTION_RPCS: readonly string[] = [
+    "daemon.list_methods",
+    "kernel.list_methods",
+    "system.list_methods",
+];
+
+/// Refresh `ALLOWED_METHODS` against the daemon. Idempotent: every
+/// call rebuilds the runtime set from `STATIC_ALLOWED_METHODS` plus
+/// whatever the daemon advertises. Failures are logged + swallowed;
+/// the static fallback keeps the panel usable against an old daemon.
+async function refreshAllowlist(socketPath: string): Promise<void> {
+    for (const method of INTROSPECTION_RPCS) {
+        try {
+            const resp = await rpcCall(
+                socketPath,
+                { method, params: null, id: randomUUID() },
+                5_000,
+            );
+            const list = extractMethodList(resp.result);
+            if (list && list.length > 0) {
+                ALLOWED_METHODS.clear();
+                for (const m of STATIC_ALLOWED_METHODS) ALLOWED_METHODS.add(m);
+                for (const m of list) {
+                    if (typeof m === "string") ALLOWED_METHODS.add(m);
+                }
+                console.log(
+                    `weft: refreshed allowlist via ${method} — ` +
+                        `${ALLOWED_METHODS.size} methods (` +
+                        `${list.length} from daemon, ${STATIC_ALLOWED_METHODS.size} static)`,
+                );
+                return;
+            }
+        } catch (err) {
+            // Method not implemented or daemon unreachable — try
+            // the next candidate.
+            void err;
+        }
+    }
+    console.log(
+        "weft: daemon did not answer any introspection RPC; " +
+            `using static allowlist (${STATIC_ALLOWED_METHODS.size} methods)`,
+    );
+}
+
+/// Pull a list of method names out of an introspection response.
+/// Accepts either a bare `string[]` result or `{ methods: string[] }`.
+function extractMethodList(result: unknown): string[] | undefined {
+    if (Array.isArray(result)) {
+        return result.filter((x): x is string => typeof x === "string");
+    }
+    if (result && typeof result === "object" && "methods" in result) {
+        const m = (result as { methods: unknown }).methods;
+        if (Array.isArray(m)) {
+            return m.filter((x): x is string => typeof x === "string");
+        }
+    }
+    return undefined;
+}
 
 interface WasmRpcRequest {
     type: "rpc-request";
@@ -118,6 +234,13 @@ function wirePanel(context: vscode.ExtensionContext, panel: vscode.WebviewPanel)
 
     const cwd = getWorkspaceCwd();
     const socketPath = resolveSocketPath(cwd);
+
+    // WEFT-250: refresh the allowlist against the daemon on connect.
+    // This call races the panel's "ready" handshake — that's fine,
+    // since the wasm `Live` only starts firing RPCs after `ready`,
+    // and rpc-request handling reads the (live-mutated) ALLOWED_METHODS
+    // at dispatch time.
+    void refreshAllowlist(socketPath);
 
     panel.webview.onDidReceiveMessage(
         async (raw: unknown) => {
@@ -217,6 +340,19 @@ function installWasmHotReload(
     };
 }
 
+// Per-method RPC timeout. The default (`rpc.ts`'s 3000ms) is right for
+// the daemon-local control verbs that round-trip in milliseconds, but
+// `llm.prompt` proxies to a llama.cpp server doing CPU/GPU inference;
+// even a short completion against a 35B-A3B model takes 5–30 s, and
+// a longer one can run minutes. Anything that calls a model server
+// gets the long bucket; everything else keeps fast-fail semantics so
+// a stopped daemon surfaces immediately on the chips.
+const LLM_TIMEOUT_MS = 300_000;
+function timeoutForMethod(method: string): number | undefined {
+    if (method === "llm.prompt" || method === "agent.chat") return LLM_TIMEOUT_MS;
+    return undefined; // fall through to rpcCall's default
+}
+
 async function handleRpc(
     panel: vscode.WebviewPanel,
     socketPath: string,
@@ -233,11 +369,15 @@ async function handleRpc(
     }
 
     try {
-        const resp = await rpcCall(socketPath, {
-            method: req.method,
-            params: req.params ?? null,
-            id: randomUUID(),
-        });
+        const resp = await rpcCall(
+            socketPath,
+            {
+                method: req.method,
+                params: req.params ?? null,
+                id: randomUUID(),
+            },
+            timeoutForMethod(req.method),
+        );
         void panel.webview.postMessage({
             type: "rpc-response",
             id: req.id,

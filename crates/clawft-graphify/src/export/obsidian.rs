@@ -273,16 +273,12 @@ pub fn to_obsidian_canvas(
 
 /// Convert a label to a safe filename (no slashes, colons, etc.).
 fn safe_filename(name: &str) -> String {
-    name.replace('/', "-")
-        .replace('\\', "-")
+    name.replace(['/', '\\'], "-")
         .replace(' ', "_")
         .replace(':', "-")
-        .replace('<', "")
-        .replace('>', "")
-        .replace('"', "")
+        .replace(['<', '>', '"'], "")
         .replace('|', "-")
-        .replace('?', "")
-        .replace('*', "")
+        .replace(['?', '*'], "")
 }
 
 // ---------------------------------------------------------------------------

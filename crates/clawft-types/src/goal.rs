@@ -10,10 +10,11 @@ use serde::{Deserialize, Serialize};
 
 /// Status of a goal in its lifecycle.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GoalStatus {
     /// Goal has been defined but not yet started.
+    #[default]
     Pending,
     /// Goal is actively being pursued.
     Active,
@@ -21,12 +22,6 @@ pub enum GoalStatus {
     Complete,
     /// Goal was abandoned or could not be met.
     Failed,
-}
-
-impl Default for GoalStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 impl std::fmt::Display for GoalStatus {
