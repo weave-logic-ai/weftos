@@ -485,7 +485,15 @@ pub(crate) fn window_frame() -> egui::Frame {
         .inner_margin(egui::Margin::same(8))
 }
 
-#[allow(dead_code)] // wired up by `apps/launcher.rs` (WEFT-591) graduation
+/// Render the Blocks / Canon / Apps demo panel — the legacy floating
+/// "Blocks" window's body, lifted out by Phase A so the Apps launcher
+/// Developer tab (WEFT-591) can host it. Keeps a three-section
+/// toolbar at the top of a left rail, a per-section item list below,
+/// and the active demo on the right.
+///
+/// The legacy "Open Explorer" pressable that used to live in the left
+/// rail is gone — the canonical sidebar's Explorer entry (WEFT-590)
+/// owns that surface now.
 pub(crate) fn render_blocks_window(
     ui: &mut egui::Ui,
     desk: &mut Desktop,
@@ -516,17 +524,6 @@ pub(crate) fn render_blocks_window(
                     desk.section = PanelSection::Apps;
                 }
             });
-            ui.separator();
-            // Launcher-menu entry for the Ontology Explorer (plan §6 Q1
-            // default). Clicking opens the Explorer chip-detail window
-            // the same way the Explorer tray chip does.
-            if ui
-                .button(egui::RichText::new("⌸ Open Explorer").monospace())
-                .on_hover_text("Tree view of the substrate namespace")
-                .clicked()
-            {
-                desk.open_chip = Some(tray::ChipId::Explorer);
-            }
             ui.separator();
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
