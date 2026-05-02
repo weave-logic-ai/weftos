@@ -702,3 +702,66 @@ jobs:
       - name: Skip notice
         if: steps.filter.outputs.panel != 'true'
         run: echo "::notice::No panel-relevant paths touched — skipping wasm + tsc gate."
+
+  # -------------------------------------------------------------------
+  # weftos-design audit — ws08 0.8.0 desktop wave
+  #
+  # Two gates:
+  #   1. Theme drift ratchet — `Color32::from_rgb` outside theming.rs
+  #      can decrease but never increase past the recorded baseline.
+  #   2. Surface contract — every TOML in clawft-app/fixtures and
+  #      clawft-surface/fixtures audited against DESIGN.md §3 / §5
+  #      (D-NS01 unknown primitive, D-FG01 ui://foreign without
+  #      graduation TODO, D-EM01 missing empty/loading/offline states).
+  #
+  # Skip when the PR doesn't touch the GUI crate, fixtures, the skill,
+  # or DESIGN.md / tokens.md — these gates are useless on unrelated PRs.
+  # -------------------------------------------------------------------
+  weftos-design:
+    name: weftos-design audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect relevant changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            design:
+              - 'crates/clawft-gui-egui/src/**'
+              - 'crates/clawft-app/fixtures/**'
+              - 'crates/clawft-surface/fixtures/**'
+              - 'docs/DESIGN.md'
+              - '.claude/skills/weftos-design/**'
+              - '.planning/weftos-design/**'
+
+      - name: Audit theme (color drift ratchet)
+        if: steps.filter.outputs.design == 'true'
+        run: |
+          bash .claude/skills/weftos-design/scripts/audit-theme.sh \
+            --baseline .planning/weftos-design/baseline-color-drift.txt
+
+      - name: Audit fixtures (surface contract)
+        if: steps.filter.outputs.design == 'true'
+        run: |
+          fails=0
+          for f in crates/clawft-surface/fixtures/*.toml \
+                   crates/clawft-app/fixtures/*.toml; do
+            [ -f "$f" ] || continue
+            if ! bash .claude/skills/weftos-design/scripts/audit-surface.sh "$f"; then
+              fails=$((fails+1))
+            fi
+          done
+          # During Phase 3 the existing weftos-admin.toml carries 3
+          # known D-EM01 violations tracked under WEFT-589. Allow a
+          # fixed allowance until that ticket lands; tighten once the
+          # admin app graduates.
+          if [ "$fails" -gt 1 ]; then
+            echo "::error::weftos-design surface audit: $fails fixture(s) failed (allowance: 1)"
+            exit 1
+          fi
+
+      - name: Skip notice
+        if: steps.filter.outputs.design != 'true'
+        run: echo "::notice::No design-relevant paths touched — skipping audit."

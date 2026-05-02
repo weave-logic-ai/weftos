@@ -167,16 +167,13 @@ pub fn paint(
 
     // Region fill (DESIGN.md §2.1 + §5)
     painter.rect_filled(rect, 0.0, tokens.bg_sidebar);
-    // Right-edge separator stroke
+    // Right-edge separator stroke (`stroke_soft`)
     painter.line_segment(
         [
             egui::pos2(rect.right(), rect.top()),
             egui::pos2(rect.right(), rect.bottom()),
         ],
-        egui::Stroke::new(
-            1.0,
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 24),
-        ),
+        egui::Stroke::new(1.0, tokens.stroke_soft),
     );
 
     let mut action: Option<SidebarAction> = None;
@@ -252,16 +249,14 @@ fn paint_header(
     );
     paint_kernel_chip(ui, chip_rect, snap.connection, tokens, collapsed);
 
-    // Divider
+    // Divider — between hair and soft; reuse the closest existing
+    // token (`stroke_hair`) rather than introducing a new alpha.
     painter.line_segment(
         [
             egui::pos2(rect.left(), header_rect.bottom()),
             egui::pos2(rect.right(), header_rect.bottom()),
         ],
-        egui::Stroke::new(
-            1.0,
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 18),
-        ),
+        egui::Stroke::new(1.0, tokens.stroke_hair),
     );
 }
 
@@ -273,14 +268,11 @@ fn paint_kernel_chip(
     collapsed: bool,
 ) {
     let painter = ui.painter_at(rect);
-    // Chip outline
+    // Chip outline (`stroke_soft`)
     painter.rect_stroke(
         rect,
         egui::CornerRadius::same(4),
-        egui::Stroke::new(
-            1.0,
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 24),
-        ),
+        egui::Stroke::new(1.0, tokens.stroke_soft),
         egui::epaint::StrokeKind::Inside,
     );
 
@@ -564,16 +556,13 @@ fn paint_footer(
     collapsed: bool,
 ) -> Option<SidebarAction> {
     let painter = ui.painter_at(rect);
-    // 1px divider at top of footer.
+    // 1px divider at top of footer (`stroke_hair`)
     painter.line_segment(
         [
             egui::pos2(rect.left(), rect.top()),
             egui::pos2(rect.right(), rect.top()),
         ],
-        egui::Stroke::new(
-            1.0,
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 14),
-        ),
+        egui::Stroke::new(1.0, tokens.stroke_hair),
     );
 
     let response = ui.interact(
