@@ -326,11 +326,11 @@ fn paint_menu(
     // not covered and read as tofu boxes.
     let items: [MenuItem; 13] = [
         MenuItem::Leaf("Files", "⌘", SidebarTarget::Files),
-        MenuItem::Leaf("Processes", "⌬", SidebarTarget::Processes),
+        MenuItem::Leaf("Processes", "❖", SidebarTarget::Processes),
         MenuItem::Leaf("Services", "⚒", SidebarTarget::Services),
         MenuItem::Group(
             "Network",
-            "⛯",
+            "✦",
             "network",
             &[
                 ("Mesh", SidebarTarget::Network(NetworkTab::Mesh)),
@@ -340,7 +340,7 @@ fn paint_menu(
         ),
         MenuItem::Leaf("Settings", "⚙", SidebarTarget::Settings),
         MenuItem::Leaf("Scheduler", "⌚", SidebarTarget::Scheduler),
-        MenuItem::Leaf("Monitor", "⌗", SidebarTarget::Monitor),
+        MenuItem::Leaf("Monitor", "✪", SidebarTarget::Monitor),
         MenuItem::Group(
             "Logs",
             "⎘",
