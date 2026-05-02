@@ -1,3 +1,131 @@
+# Session handoff — 2026-05-01 (night) — WeftOS design system v0.1 + 0.8.0 desktop plan + 13 mockups
+
+Branch: `m7-08-sweep` → about to fork `weftos-design-0.8.0` for the
+0.8.x desktop work. Working tree carries the full design-system landing
+ahead of any code work. 0.7.0 ship state from the previous handoff is
+still authoritative — see entry below.
+
+## What landed this session (uncommitted, ready for Phase 0)
+
+The 0.8.x desktop direction is now fully specified, mockup'd, and has
+a concrete implementation plan. All artifacts live under `docs/` +
+`.claude/skills/`:
+
+- **`docs/DESIGN.md`** (v0.1, ~470 lines) — the WeftOS design contract.
+  Operating principles, palette tokens (incl. new `bg_sidebar = #2A2A30`
+  for the lifted-charcoal sidebar tier), type scale, spacing, motion
+  rules, the 23-primitive composer-usage decision flow, 5 surface
+  archetypes (`app-window` / `chip-detail` / `tile-grid` /
+  `list-detail` / `stream`), the empty/loading/offline contract,
+  affordance dispatch contract, a11y floor, the OOB-without-data
+  requirement, the 12-surface OOB stock-desktop manifest, **the frozen
+  canonical sidebar block** (220px width, identity strip, Kernel-chip
+  connection indicator, 13-item menu in fixed order, footer collapse
+  handle), and the no-tray / no-clock-in-chrome / no-decorative-color
+  rules.
+
+- **`.claude/skills/weftos-design/`** — operational skill that enforces
+  DESIGN.md. SKILL.md + four reference files (`tokens.md`,
+  `primitives.md`, `archetypes.md`, `oob-manifest.md`) + three scripts
+  (`scaffold-surface.sh` for archetype-based TOML stubs;
+  `audit-surface.sh` for D-NS01/D-FG01/D-EM01 lint — already
+  surfaces 3 violations on the existing `weftos-admin.toml`;
+  `audit-theme.sh` for catching `Color32::from_rgb` drift outside
+  `theming.rs`). Skill is registered in the available-skills list.
+
+- **`docs/plans/desktop-revision-0.8.0.md`** (~280 lines) — per-element
+  spec for the revised desktop. Base view ASCII layout, three persistent
+  layers (identity strip + sidebar + wallpaper region — no tray),
+  per-app description for all 12 stock surfaces with archetype +
+  substrate roots + composer primitives + empty/loading/offline copy +
+  effort estimate, 7 new RPC verbs (`ui.app.open`,
+  `kernel.{kill-process,start-service,stop-service,restart-service}`,
+  `config.set`, `logs.export`), 4 phase plan, risks.
+
+- **`docs/plans/desktop-implementation-0.8.0.md`** — the
+  implementation roadmap. Phase 0 (land contract) → Phase 1 (token
+  sync) → Phase 2 (sidebar module + desktop rewrite + state helper) →
+  Phase 3 (12-app swarm) → Phase 4 (CI audit gates) → Phase 5 (Plane
+  filing). 4-day total wall-clock with 12-agent fan-out on Phase 3.
+
+- **`docs/design/mockups/desktop-0.8.0.png`** — 1920x1080 base view
+  (offline state). Lifted-charcoal sidebar `#2A2A30` flush against
+  left edge full-height, identity strip + red Kernel chip
+  (`disconnected`) in the header, 13-item menu (Files / Processes /
+  Services / Network ▾ / Settings / Scheduler / Monitor / Logs ▾ /
+  Terminal / Chat / Admin / Explorer / Apps ▾), footer
+  `◀ collapse`, wallpaper region with warped grid + demo-mode caption.
+  Single red dot on Kernel chip is the only chromatic element.
+
+- **`docs/design/mockups/apps/*.png`** (13 files: files, processes,
+  services, network, settings, scheduler, monitor, logs, terminal,
+  chat, admin, explorer, apps) — per-app mockups of the connected
+  state. Each render uses the **byte-identical canonical sidebar**
+  from DESIGN.md §5 (active row highlighted, single green Kernel-chip
+  dot as the only chromatic element). App bodies render through the
+  existing `blocks/` library (table, tree, tabs, strip, plot, gauge,
+  stream, terminal, layout) plus the surface composer for fixture-
+  driven surfaces.
+
+- **`docs/handoff.md`** — this entry.
+
+## Validation
+
+- `git status -sb` — clean tree on `m7-08-sweep`. Only untracked are
+  the new artifacts above + the existing `node_modules/` + `ui/`
+  ignores from prior 0.7.0 work.
+- `scripts/build.sh check` — clean (no code changed).
+- `bash .claude/skills/weftos-design/scripts/audit-surface.sh
+  crates/clawft-app/fixtures/weftos-admin.toml` — already produces
+  signal: D-EM01 × 3 violations (existing admin app missing
+  `[surfaces.empty_state]`, `[surfaces.loading_state]`,
+  `[surfaces.offline_state]`). Tracked as Phase 3 work.
+- 13 mockup PNGs render with uniform sidebar layout per spec.
+  Minor Gemini hallucinations exist but don't violate the contract;
+  the egui implementation in Phase 2-3 will match DESIGN.md byte-for-
+  byte.
+
+## Next steps — Phase 0 + 1 starting now
+
+Per `docs/plans/desktop-implementation-0.8.0.md`:
+
+- **Phase 0** (this session): branch to `weftos-design-0.8.0`,
+  commit all the artifacts above as a docs-only commit, gate on
+  `scripts/build.sh check`.
+- **Phase 1** (this session): add `bg_sidebar` token to
+  `crates/clawft-gui-egui/src/theming.rs`, run `audit-theme.sh` to
+  record the current `Color32::from_rgb` baseline (~22 known
+  offenders in `shell/desktop.rs` + `shell/grid.rs` + `shell/tray.rs`),
+  add a token-consistency unit test, gate on `check + clippy + test`.
+
+After 0+1 land, the next swarm wave kicks off Phase 2 (sidebar module
++ desktop rewrite + state helper) and unblocks 12-agent parallel
+Phase 3 app implementation.
+
+# Branch state
+
+Working tree at this handoff (uncommitted):
+```
+docs/DESIGN.md
+docs/design/mockups/desktop-0.8.0.png
+docs/design/mockups/apps/{admin,apps,chat,explorer,files,logs,
+                          monitor,network,processes,scheduler,
+                          services,settings,terminal}.png
+docs/plans/desktop-revision-0.8.0.md
+docs/plans/desktop-implementation-0.8.0.md
+docs/handoff.md (this update)
+.claude/skills/weftos-design/SKILL.md
+.claude/skills/weftos-design/references/{tokens,primitives,
+                                          archetypes,oob-manifest}.md
+.claude/skills/weftos-design/scripts/{scaffold-surface,
+                                       audit-surface,audit-theme}.sh
+```
+
+`scripts/build.sh check` clean. About to fork
+`weftos-design-0.8.0` from `m7-08-sweep` for Phase 0 commit.
+
+---
+
 # Session handoff — 2026-05-01 (late) — full build, audit closure, security fixes, panel-in-Cursor verified
 
 `m7-08-sweep` is at HEAD `5fae5148` (70 commits since `7a8805ec`).
