@@ -5,6 +5,7 @@ pub mod audio;
 pub mod boot;
 pub mod desktop;
 pub mod grid;
+pub mod sidebar;
 pub mod tray;
 
 use web_time::Instant;

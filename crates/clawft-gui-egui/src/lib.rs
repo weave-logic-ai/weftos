@@ -8,6 +8,7 @@
 //!   pair from `extensions/vscode-weft-panel/webview/wasm/`.
 
 pub mod app;
+pub mod apps;
 pub mod blocks;
 pub mod canon;
 pub mod canon_demos;

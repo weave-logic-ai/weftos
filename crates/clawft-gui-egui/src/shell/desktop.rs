@@ -2,7 +2,7 @@
 
 use eframe::egui;
 
-use super::{grid, tray};
+use super::{grid, sidebar, tray};
 use crate::blocks;
 use crate::canon_demos::{self, CanonDemoState, CanonKind};
 use crate::explorer::Explorer;
@@ -83,6 +83,13 @@ pub struct Desktop {
     /// Ontology Explorer panel state — left-tree + right-detail. The
     /// Explorer tray chip opens this; see `.planning/explorer/PROJECT-PLAN.md`.
     pub explorer: Explorer,
+
+    /// Canonical desktop sidebar — DESIGN.md §5. Phase 2a (0.8.0) of
+    /// the desktop revision. Replaces the launcher window and the
+    /// tray chips as the primary launcher; the legacy chrome remains
+    /// alongside for now and is retired one app at a time during
+    /// Phase 3.
+    pub sidebar: sidebar::Sidebar,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -116,6 +123,61 @@ impl BlockKind {
         (BlockKind::Layout, "Layout"),
         (BlockKind::Oscilloscope, "Oscilloscope"),
     ];
+}
+
+impl Desktop {
+    /// Apply a sidebar click. Returns `Some(chip_id)` to open in the
+    /// legacy chip-detail floating window when the new app module
+    /// hasn't been written yet.
+    ///
+    /// During Phase 2a (0.8.0) every target translates to either an
+    /// `open_chip` action (legacy) or a no-op. As Phase 3 lands each
+    /// `apps/<id>.rs` module, the corresponding arm graduates from
+    /// the chip pathway to its first-class app render in `desktop.rs`.
+    pub fn apply_sidebar_action(
+        &mut self,
+        action: sidebar::SidebarAction,
+        _live: &std::sync::Arc<crate::live::Live>,
+    ) -> Option<tray::ChipId> {
+        match action {
+            sidebar::SidebarAction::Open(target) => {
+                self.sidebar.apply(sidebar::SidebarAction::Open(target));
+                match target {
+                    // Legacy chip pathway — kept until Phase 3 replaces.
+                    sidebar::SidebarTarget::Network(_)
+                    | sidebar::SidebarTarget::Logs(sidebar::LogsTab::WitnessChain) => {
+                        Some(tray::ChipId::Mesh)
+                    }
+                    sidebar::SidebarTarget::Explorer => Some(tray::ChipId::Explorer),
+                    sidebar::SidebarTarget::Admin => {
+                        // Admin app already lives behind `Apps` legacy
+                        // panel — flip the launcher open and select it.
+                        self.launcher_open = true;
+                        self.section = PanelSection::Apps;
+                        if self.selected_app.is_none() {
+                            self.selected_app = Some("app://weftos.admin".to_string());
+                        }
+                        None
+                    }
+                    sidebar::SidebarTarget::Apps(_) => {
+                        self.launcher_open = true;
+                        self.section = PanelSection::Apps;
+                        None
+                    }
+                    // Files / Processes / Services / Settings / Scheduler
+                    // / Monitor / Logs(System) / Terminal / Chat — Phase 3
+                    // will own these. No-op for now.
+                    _ => None,
+                }
+            }
+            sidebar::SidebarAction::ToggleGroup(_)
+            | sidebar::SidebarAction::ToggleCollapsed
+            | sidebar::SidebarAction::ToggleHidden => {
+                self.sidebar.apply(action);
+                None
+            }
+        }
+    }
 }
 
 impl Default for Desktop {
@@ -215,6 +277,7 @@ impl Default for Desktop {
             app_surfaces,
             chip_surfaces,
             explorer: Explorer::default(),
+            sidebar: sidebar::Sidebar::default(),
         }
     }
 }
@@ -225,13 +288,39 @@ pub fn show(
     live: &std::sync::Arc<crate::live::Live>,
     snap: &Snapshot,
 ) {
-    let rect = ui.max_rect();
+    let total = ui.max_rect();
 
-    // Wallpaper — warped grid.
+    // Sidebar reserves the left edge — DESIGN.md §5.
+    let sidebar_w = desk.sidebar.reserved_width();
+    let sidebar_rect = egui::Rect::from_min_max(
+        total.min,
+        egui::pos2(total.left() + sidebar_w, total.bottom()),
+    );
+    let rect = egui::Rect::from_min_max(
+        egui::pos2(total.left() + sidebar_w, total.top()),
+        total.max,
+    );
+
+    // Wallpaper — warped grid (right of the sidebar only).
     let t = desk.boot_started.elapsed().as_secs_f32();
     grid::paint(ui, rect, t);
 
+    // Sidebar paint + click handling. Phase 2a integration — clicks
+    // update the active sidebar target; the new `apps::dispatch` path
+    // renders the corresponding app body in the wallpaper region.
+    // Legacy chip-detail / launcher window remain alongside as a
+    // safety net until Phase 3 graduates the existing chip surfaces.
+    let sidebar_action = sidebar::paint(ui, sidebar_rect, &desk.sidebar, snap);
+    if let Some(action) = sidebar_action {
+        let _ = desk.apply_sidebar_action(action, live);
+    }
+
+    // Active app body — DESIGN.md §4.1 / §9. Phase 3 stubs; real
+    // implementations land per WEFT-579..591.
+    crate::apps::dispatch(ui, rect, desk.sidebar.active, snap);
+
     // Tray (also toggles the launcher window + tracks open chip detail).
+    // Lives in the wallpaper region only, never under the sidebar.
     tray::paint(
         ui,
         rect,
