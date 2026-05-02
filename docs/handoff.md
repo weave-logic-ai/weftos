@@ -1,3 +1,150 @@
+# Session handoff — 2026-05-01 (night, late) — Phases 0-5 of 0.8.0 desktop wave shipped
+
+Branch `weftos-design-0.8.0` (forked from `m7-08-sweep`) is at HEAD
+`28456329`, **5 commits** ahead of the m7 tip, **all gates green**:
+`scripts/build.sh check + clippy` clean, `cargo test -p clawft-gui-egui
+--lib` 337 / 337 pass, `audit-theme.sh --baseline` holds at 246
+offenders (the recorded floor). Working tree clean (only `node_modules/`
+and `ui/` untracked, both gitignored). Nothing pushed. **14 Plane items
+filed as WEFT-578..591** for the 0.8.0 follow-up work that the swarm
+will pick up.
+
+## What shipped this session
+
+Five logical commits, one per phase from `docs/plans/desktop-implementation-0.8.0.md`:
+
+- **`0adf1bca` — Phase 0: docs(design) v0.1 + skill + 13 mockups**.
+  `docs/DESIGN.md` (~470 lines), `docs/plans/desktop-{revision,
+  implementation}-0.8.0.md`, `.claude/skills/weftos-design/`
+  (SKILL.md + 4 references + 3 scripts), `docs/design/mockups/
+  desktop-0.8.0.png` + 13 app mockups.
+
+- **`c2268c04` — Phase 1: feat(theming) bg_sidebar + DESIGN.md
+  contract test**. New `bg_sidebar = #2A2A30` token wired into the
+  `Tokens` struct. Two new unit tests — `palette_matches_design_md`
+  and `shape_tokens_match_design_md` — assert the runtime matches
+  the spec byte-for-byte. Recorded `Color32::from_rgb` offender
+  baseline at `.planning/weftos-design/baseline-color-drift.txt`
+  (246 offenders, ratchet floor).
+
+- **`1d5dbdad` — Phase 2+3: feat(shell) sidebar + apps dispatch +
+  12 stubs**. `crates/clawft-gui-egui/src/shell/sidebar.rs` (528 LoC,
+  the frozen canonical block from DESIGN.md §5) + 7 unit tests.
+  `desktop.rs` rewrites `show()` to reserve the sidebar's width on
+  the left, paint wallpaper to the right, dispatch app rendering by
+  active `SidebarTarget`. `crates/clawft-gui-egui/src/apps/` (new
+  module) with 12 app stubs + the launcher + a shared
+  empty/loading/offline state helper. Existing tray + launcher
+  window remain alongside as a safety net during Phase 3 graduation.
+
+- **`28456329` — Phase 4: ci(weftos-design) audit ratchet + surface
+  contract gate**. `audit-theme.sh` gains `--baseline <path>` flag;
+  exits non-zero if `Color32::from_rgb` count exceeds the baseline.
+  `.github/workflows/pr-gates.yml` extends with a new
+  `weftos-design` job that runs both audits when the PR touches
+  GUI / fixtures / DESIGN.md / skill / baseline. Allowance of 1
+  failing fixture during Phase 3 (existing `weftos-admin.toml`
+  carries 3 D-EM01 violations tracked under WEFT-589).
+  Caught a real regression during dev: 4 raw `Color32` calls in the
+  new sidebar — fixed by routing through `Tokens.stroke_soft` /
+  `stroke_hair`. Ratchet still holds at 246.
+
+- **Phase 5 — Plane filing**. WEFT-578..591 (14 items) filed in the
+  `0.8.x` cycle, all `ws08-weftos-gui` labelled, `priority=high`:
+
+  | WEFT | Title |
+  |---|---|
+  | 578 | sidebar — canonical block per DESIGN.md §5 |
+  | 579 | Files app — list-detail |
+  | 580 | Processes app — table |
+  | 581 | Services app — tabs + table |
+  | 582 | Network app — chip TOMLs wrapped |
+  | 583 | Settings app — schema-driven form |
+  | 584 | Scheduler app — table+plot stub |
+  | 585 | Monitor app — tile-grid dashboard |
+  | 586 | Logs app — System + Witness chain stream |
+  | 587 | Terminal app — graduate from explorer/terminal.rs |
+  | 588 | Chat app — graduate from explorer/chat.rs |
+  | 589 | Admin app — composer surface + missing states |
+  | 590 | Explorer app — graduate from explorer/mod.rs |
+  | 591 | Apps launcher — tile-grid + Developer category |
+
+## Validation summary
+
+- `scripts/build.sh check`: clean.
+- `scripts/build.sh clippy`: clean (`-D warnings`).
+- `cargo test -p clawft-gui-egui --lib`: **337 / 337 pass** (+11 new
+  this session: 2 token contract + 7 sidebar + 4 state helper).
+- `audit-theme.sh --baseline`: holds at **246**.
+- `audit-surface.sh weftos-admin.toml`: 3 D-EM01 violations
+  (expected — tracked in WEFT-589).
+- `audit-surface.sh` chip TOMLs: clean.
+
+## Notable findings during execution
+
+1. **`.gitignore` allowlist**: `.claude/skills/*` was ignored except
+   `plane-workflow/`. Added `weftos-design/` to the allowlist in
+   Phase 0.
+2. **Token-contract test caught a real comparison bug**. egui stores
+   `Color32::from_rgba_unmultiplied` premultiplied. Initial test
+   compared raw bytes; fixed by constructing expected values via the
+   same constructor. Test now compares `Color32` directly.
+3. **Audit-theme baseline scope was 11× the original estimate**:
+   246 offenders, not the ~22 expected. `blocks/`, `explorer/`,
+   `canon/` carry the bulk. Ratchet starts at 246; the 12-app swarm
+   will only ratchet down as old chrome is graduated.
+4. **Ratchet caught a sidebar regression mid-session**: 4 raw color
+   literals in `sidebar.rs` for stroke colors. All routed back
+   through `Tokens.stroke_soft` / `stroke_hair`. Audit script worked
+   exactly as designed.
+5. **`scripts/plane.sh create-issue --description-md`** treats its
+   argument as a *file path*, not literal text. Use `--description`
+   (string) for inline body content, or write the body to a tempfile.
+   Recorded as a feedback note for future scripted filings.
+6. **Existing `weftos-admin.toml` already violates D-EM01**: 3 missing
+   state sections (empty/loading/offline). Phase 3 (WEFT-589) will
+   add them and tighten the allowance from 1 → 0.
+
+## Branch state
+
+```
+weftos-design-0.8.0  28456329 ci(weftos-design): audit ratchet + surface contract gate (Phase 4)
+                     1d5dbdad feat(shell): canonical sidebar + apps dispatch + 12 stub modules (Phase 2+3)
+                     c2268c04 feat(theming): add bg_sidebar token + DESIGN.md contract test (Phase 1)
+                     0adf1bca docs(design): WeftOS design system v0.1 + 0.8.0 desktop plan + skill
+m7-08-sweep          fe70c88b docs(handoff): ...   ← parent
+```
+
+5 commits ahead of `m7-08-sweep`, nothing pushed. Branch ready for
+PR review against `m7-08-sweep` whenever the swarm wants to
+graduate apps.
+
+## Next session
+
+The 0.8.0 base is in place. Two paths forward:
+
+1. **Push the branch + open the merge PR** (`git push -u origin
+   weftos-design-0.8.0` then PR against `m7-08-sweep` —
+   per CLAUDE.md, never against master). Reviewable as a
+   single-author batch.
+
+2. **Spawn the 12-app swarm against WEFT-579..591**. Each ticket is
+   independently buildable; the design contract + sidebar ground them.
+   Recommended topology per CLAUDE.md: hierarchical-mesh, 8 max-agents,
+   specialized strategy. Three buckets:
+   - **Quick wins** (M, ~0.5 day each): Processes, Services, Logs,
+     Terminal-graduate, Chat-graduate, Explorer-graduate.
+   - **Heavy hitters** (L, 1.5–2 day each): Files, Settings,
+     Monitor, Network, Apps-launcher.
+   - **Stub-and-defer**: Scheduler (kernel adapter is 0.9.x);
+     Admin (composer-driven, light).
+
+The audit ratchet will block any PR that adds new color literals
+without graduating equivalents — the swarm will need to consult
+DESIGN.md §2 tokens before reaching for raw `Color32::from_rgb`.
+
+---
+
 # Session handoff — 2026-05-01 (night) — WeftOS design system v0.1 + 0.8.0 desktop plan + 13 mockups
 
 Branch: `m7-08-sweep` → about to fork `weftos-design-0.8.0` for the
