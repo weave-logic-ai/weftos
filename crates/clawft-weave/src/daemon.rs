@@ -3227,25 +3227,31 @@ async fn dispatch(
             let k = kernel.read().await;
             let services = k.services().list();
             // For each registered service, run its health probe and
-            // map the result to a user-facing lifecycle state. Services
-            // that pass health are reported as `running`; degraded /
-            // unknown probes surface as `degraded`; outright failures
-            // become `failed`. The Services UI and any non-UI client
-            // (CLI, kernel_cmd) read off `state`.
+            // map the result to a user-facing lifecycle state. Match
+            // on the enum variant (NOT a substring of Debug output —
+            // "unhealthy" contains "healthy"). Healthy → running,
+            // Degraded → degraded, Unhealthy → failed, Unknown →
+            // unknown. The Services UI and any non-UI client read
+            // off `state`.
             let mut infos: Vec<ServiceInfo> = Vec::with_capacity(services.len());
             for (name, stype) in services {
                 let (state, health_label) = match k.services().get(&name) {
                     Some(svc) => {
                         let h = svc.health_check().await;
-                        let label = format!("{:?}", h).to_lowercase();
-                        let state = if label.contains("healthy") {
-                            "running"
-                        } else if label.contains("degraded") {
-                            "degraded"
-                        } else if label.contains("unhealthy") || label.contains("failed") {
-                            "failed"
-                        } else {
-                            "unknown"
+                        let (state, label) = match &h {
+                            clawft_kernel::HealthStatus::Healthy => {
+                                ("running", "healthy".to_string())
+                            }
+                            clawft_kernel::HealthStatus::Degraded(msg) => {
+                                ("degraded", format!("degraded: {msg}"))
+                            }
+                            clawft_kernel::HealthStatus::Unhealthy(msg) => {
+                                ("failed", format!("unhealthy: {msg}"))
+                            }
+                            clawft_kernel::HealthStatus::Unknown => {
+                                ("unknown", "unknown".to_string())
+                            }
+                            _ => ("unknown", "unknown".to_string()),
                         };
                         (state.to_string(), label)
                     }
@@ -3259,6 +3265,57 @@ async fn dispatch(
                 });
             }
             Response::success(serde_json::to_value(infos).unwrap())
+        }
+        // Service lifecycle RPCs — what the desktop Services panel and
+        // the `weft service` CLI submit when the user clicks
+        // [start] / [stop] / [restart]. Each looks the service up by
+        // name in the in-memory ServiceRegistry and calls the matching
+        // SystemService trait method. A missing service or a failing
+        // start/stop/restart returns Response::error so the next
+        // health-check tick reflects reality.
+        verb @ ("service.start" | "service.stop" | "service.restart") => {
+            let name = params
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let Some(name) = name else {
+                return Response::error(format!(
+                    "{verb} requires {{name: <string>}}"
+                ));
+            };
+            let k = kernel.read().await;
+            let Some(svc) = k.services().get(&name) else {
+                return Response::error(format!(
+                    "service not registered: {name}"
+                ));
+            };
+            let result = match verb {
+                "service.start" => svc.start().await,
+                "service.stop" => svc.stop().await,
+                "service.restart" => match svc.stop().await {
+                    // Restart = stop, then start. A failure to stop is
+                    // not fatal — many services have idempotent stop()
+                    // and proceeding to start anyway is the "reload"
+                    // semantics most users expect.
+                    Ok(()) => svc.start().await,
+                    Err(e) => {
+                        tracing::warn!(
+                            service = %name, error = %e,
+                            "stop failed during restart; trying start anyway"
+                        );
+                        svc.start().await
+                    }
+                },
+                _ => unreachable!(),
+            };
+            match result {
+                Ok(()) => Response::success(serde_json::json!({
+                    "name": name,
+                    "verb": verb,
+                    "ok": true,
+                })),
+                Err(e) => Response::error(format!("{verb}: {e}")),
+            }
         }
         "kernel.logs" => {
             let log_params: LogsParams = serde_json::from_value(params).unwrap_or(LogsParams {
