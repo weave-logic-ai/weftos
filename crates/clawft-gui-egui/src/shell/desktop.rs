@@ -116,6 +116,11 @@ pub struct Desktop {
     /// paints and tab switches; the Logs app reads/writes it through
     /// `&mut Desktop`.
     pub log_filter: crate::apps::logs::LogLevelFilter,
+
+    /// Filter tab on the Services app — All / Active / Inactive.
+    /// WEFT-581. Persisted across frames so the tab survives a
+    /// switch away and back to the Services sidebar entry.
+    pub services_tab: crate::apps::services::ServicesTab,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -268,6 +273,7 @@ impl Default for Desktop {
             // pins the same target — keep these in lockstep.
             prev_active: sidebar::SidebarTarget::Files,
             log_filter: crate::apps::logs::LogLevelFilter::default(),
+            services_tab: crate::apps::services::ServicesTab::default(),
         }
     }
 }
