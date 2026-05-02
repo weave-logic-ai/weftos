@@ -16,12 +16,16 @@
 //! Field names that aren't present fall back to "-" — the row still
 //! renders so a half-populated adapter doesn't yield a blank column.
 //!
-//! Per-row affordance: a `[restart]` button with inline confirm.
-//! Click once → arms (label flips to `confirm?`). Click again → submits
-//! `service.restart` through the [`Live`] bridge. Clicking any other
-//! row's button (or letting the panel re-render with a different
-//! services_tab) re-disarms; we keep the single armed name in egui's
-//! per-frame data store keyed by the panel id.
+//! Per-row affordances are contextual on the row's `state`:
+//!
+//! - **Running** rows show `[stop]` and `[restart]`.
+//! - **Inactive** rows (stopped / failed / unknown) show `[start]`.
+//!
+//! Each click submits the matching verb (`service.start`,
+//! `service.stop`, `service.restart`) through the [`Live`] bridge.
+//! No modal — the daemon is the source of truth, and the next
+//! snapshot tick reflects whatever happened. A failed RPC stays
+//! visible because the row's state simply doesn't change.
 
 use std::sync::Arc;
 
@@ -182,50 +186,47 @@ fn paint_row(ui: &mut egui::Ui, _idx: usize, row: &Value, live: &Arc<Live>) {
     ui.monospace(restarts);
     ui.monospace(uptime);
 
-    paint_restart_affordance(ui, name, live);
+    paint_action_affordances(ui, name, state, live);
     ui.end_row();
 }
 
-/// Inline-confirm restart button. First click arms the affordance for
-/// this row's name; second click submits `service.restart`. We persist
-/// the armed name in egui's per-context data store so the panel can be
-/// re-painted across frames without losing the arm — and only one row
-/// can be armed at a time, which matches the "no modal" rule from the
-/// brief.
-fn paint_restart_affordance(ui: &mut egui::Ui, name: &str, live: &Arc<Live>) {
+/// Render the row's contextual action buttons. Running rows expose
+/// stop/restart; non-running rows expose start. Each click submits
+/// the matching `service.*` verb directly — no inline-confirm step.
+/// Failed RPCs stay visible because the daemon's next snapshot tick
+/// is the source of truth on whether the action took.
+fn paint_action_affordances(
+    ui: &mut egui::Ui,
+    name: &str,
+    state: &str,
+    live: &Arc<Live>,
+) {
     if name == "-" {
         ui.label("");
         return;
     }
-    let arm_id = egui::Id::new("weft_services_armed_restart");
-    let armed: Option<String> = ui.ctx().data(|d| d.get_temp::<String>(arm_id));
-    let is_armed = armed.as_deref() == Some(name);
-
-    let label = if is_armed { "confirm?" } else { "[restart]" };
-    let mut text = egui::RichText::new(label).small().monospace();
-    if is_armed {
-        text = text.color(Tokens::default().warn).strong();
-    }
-    let resp = ui
-        .selectable_label(is_armed, text)
-        .on_hover_text(format!("service.restart {{name: \"{name}\"}}"));
-
-    if resp.clicked() {
-        if is_armed {
-            // Fire and disarm.
-            let _ = live.submit(Command::Raw {
-                method: "service.restart".to_string(),
-                params: json!({ "name": name }),
-                reply: None,
-            });
-            ui.ctx().data_mut(|d| d.remove::<String>(arm_id));
+    let is_running = matches!(state, "running" | "active" | "ready");
+    ui.horizontal(|ui| {
+        if is_running {
+            paint_action_btn(ui, name, "stop", live);
+            paint_action_btn(ui, name, "restart", live);
         } else {
-            // Arm this row, replacing whatever was previously armed.
-            ui.ctx().data_mut(|d| d.insert_temp(arm_id, name.to_string()));
+            paint_action_btn(ui, name, "start", live);
         }
-    } else if is_armed && resp.clicked_elsewhere() {
-        // Click anywhere else (including another row's button) disarms.
-        ui.ctx().data_mut(|d| d.remove::<String>(arm_id));
+    });
+}
+
+fn paint_action_btn(ui: &mut egui::Ui, name: &str, verb: &str, live: &Arc<Live>) {
+    let label = format!("[{verb}]");
+    let resp = ui
+        .selectable_label(false, egui::RichText::new(label).small().monospace())
+        .on_hover_text(format!("service.{verb} {{name: \"{name}\"}}"));
+    if resp.clicked() {
+        let _ = live.submit(Command::Raw {
+            method: format!("service.{verb}"),
+            params: json!({ "name": name }),
+            reply: None,
+        });
     }
 }
 

@@ -3226,14 +3226,38 @@ async fn dispatch(
         "kernel.services" => {
             let k = kernel.read().await;
             let services = k.services().list();
-            let infos: Vec<ServiceInfo> = services
-                .iter()
-                .map(|(name, stype)| ServiceInfo {
-                    name: name.clone(),
+            // For each registered service, run its health probe and
+            // map the result to a user-facing lifecycle state. Services
+            // that pass health are reported as `running`; degraded /
+            // unknown probes surface as `degraded`; outright failures
+            // become `failed`. The Services UI and any non-UI client
+            // (CLI, kernel_cmd) read off `state`.
+            let mut infos: Vec<ServiceInfo> = Vec::with_capacity(services.len());
+            for (name, stype) in services {
+                let (state, health_label) = match k.services().get(&name) {
+                    Some(svc) => {
+                        let h = svc.health_check().await;
+                        let label = format!("{:?}", h).to_lowercase();
+                        let state = if label.contains("healthy") {
+                            "running"
+                        } else if label.contains("degraded") {
+                            "degraded"
+                        } else if label.contains("unhealthy") || label.contains("failed") {
+                            "failed"
+                        } else {
+                            "unknown"
+                        };
+                        (state.to_string(), label)
+                    }
+                    None => ("unknown".to_string(), "registered".to_string()),
+                };
+                infos.push(ServiceInfo {
+                    name,
                     service_type: stype.to_string(),
-                    health: "registered".into(),
-                })
-                .collect();
+                    state,
+                    health: health_label,
+                });
+            }
             Response::success(serde_json::to_value(infos).unwrap())
         }
         "kernel.logs" => {

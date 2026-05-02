@@ -34,10 +34,16 @@ pub struct ProcessInfo {
 }
 
 /// A single service entry for `kernel.services`.
+///
+/// `state` is the user-facing lifecycle string ("running" / "stopped"
+/// / "failed" / etc.) derived from the service's [`SystemService::
+/// health_check`] return value. `health` is the raw health-probe
+/// label kept for backward compatibility with older clients.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceInfo {
     pub name: String,
     pub service_type: String,
+    pub state: String,
     pub health: String,
 }
 

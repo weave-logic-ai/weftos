@@ -126,6 +126,11 @@ pub struct Desktop {
     /// Survives across frames so an in-flight edit is not clobbered
     /// by the next snapshot tick. WEFT-583.
     pub settings_state: crate::apps::settings::SettingsState,
+
+    /// Tree expansion + selection state for the Files app substrate
+    /// browser. Survives sidebar navigation so the user comes back
+    /// to the same expanded folders. WEFT-579 follow-up.
+    pub files_state: crate::apps::files::FilesState,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -280,6 +285,7 @@ impl Default for Desktop {
             log_filter: crate::apps::logs::LogLevelFilter::default(),
             services_tab: crate::apps::services::ServicesTab::default(),
             settings_state: crate::apps::settings::SettingsState::default(),
+            files_state: crate::apps::files::FilesState::default(),
         }
     }
 }
