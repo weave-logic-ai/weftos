@@ -91,6 +91,13 @@ pub struct Desktop {
     /// no shared session.
     pub terminal: explorer::terminal::Terminal,
 
+    /// Standalone Chat sidebar app state (WEFT-588). Independent
+    /// instance from `explorer.chat_view` for the same reason as
+    /// `terminal` above — the sidebar Chat app is the concierge-bot
+    /// surface; the substrate-sentinel chat inside Explorer is
+    /// whatever the substrate topology decides to expose.
+    pub chat: explorer::chat::ChatView,
+
     /// Canonical desktop sidebar — DESIGN.md §5. Phase 2a (0.8.0) of
     /// the desktop revision. Replaces the launcher window and the
     /// tray chips as the primary launcher; the legacy chrome remains
@@ -241,6 +248,7 @@ impl Default for Desktop {
             chip_surfaces,
             explorer: Explorer::default(),
             terminal: explorer::terminal::Terminal::default(),
+            chat: explorer::chat::ChatView::default(),
             sidebar: sidebar::Sidebar::default(),
         }
     }
