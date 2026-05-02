@@ -90,6 +90,11 @@ pub struct Desktop {
     /// alongside for now and is retired one app at a time during
     /// Phase 3.
     pub sidebar: sidebar::Sidebar,
+
+    /// Filter tab on the Services app — All / Active / Inactive.
+    /// WEFT-581. Persisted across frames so the tab survives a
+    /// switch away and back to the Services sidebar entry.
+    pub services_tab: crate::apps::services::ServicesTab,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -234,6 +239,7 @@ impl Default for Desktop {
             chip_surfaces,
             explorer: Explorer::default(),
             sidebar: sidebar::Sidebar::default(),
+            services_tab: crate::apps::services::ServicesTab::default(),
         }
     }
 }
