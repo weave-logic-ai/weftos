@@ -104,6 +104,12 @@ pub struct Desktop {
     /// alongside for now and is retired one app at a time during
     /// Phase 3.
     pub sidebar: sidebar::Sidebar,
+
+    /// Sidebar target painted on the previous frame. Lets
+    /// [`crate::apps::dispatch`] notice "navigated AWAY from app X"
+    /// transitions and run lifecycle cleanup (e.g. drop Explorer
+    /// subscriptions when the user moves to another app). WEFT-590.
+    pub prev_active: sidebar::SidebarTarget,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -250,6 +256,11 @@ impl Default for Desktop {
             terminal: explorer::terminal::Terminal::default(),
             chat: explorer::chat::ChatView::default(),
             sidebar: sidebar::Sidebar::default(),
+            // Initialise to whatever the sidebar starts on (Files) so
+            // the first dispatch tick doesn't trigger a spurious
+            // "navigated away from Explorer" close. Sidebar::default
+            // pins the same target — keep these in lockstep.
+            prev_active: sidebar::SidebarTarget::Files,
         }
     }
 }
@@ -292,10 +303,16 @@ pub fn show(
     crate::apps::dispatch(ui, rect, desk, live, snap);
 }
 
-/// Render the Explorer panel body inside the chip-detail window.
-/// Splits header + two-pane layout; the Explorer itself draws the
-/// SidePanel / CentralPanel pair internally.
-#[allow(dead_code)] // wired up by `apps/explorer.rs` (WEFT-590) graduation
+/// Render the Explorer panel body inline. Used by
+/// `apps/explorer.rs::show` (WEFT-590) inside the body rect carved
+/// out under the canonical heading. Paints a small connection pill
+/// above the two-pane Explorer layout (`Explorer::show` draws the
+/// SidePanel / CentralPanel pair internally).
+///
+/// The canonical "Explorer · substrate/" heading is painted by
+/// `apps/explorer.rs::show` via `apps::paint_heading` — this helper
+/// only renders the connection pill so the user can see the
+/// daemon-link state inline with the tree.
 pub(crate) fn render_explorer(
     ui: &mut egui::Ui,
     desk: &mut Desktop,
@@ -303,10 +320,6 @@ pub(crate) fn render_explorer(
     snap: &Snapshot,
 ) {
     ui.horizontal(|ui| {
-        ui.heading("Explorer");
-        ui.separator();
-        ui.monospace("substrate/");
-        ui.separator();
         connection_pill(ui, snap.connection);
     });
     ui.separator();

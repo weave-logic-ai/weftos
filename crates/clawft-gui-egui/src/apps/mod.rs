@@ -41,6 +41,19 @@ use crate::shell::sidebar::SidebarTarget;
 /// Apps receive `&mut Desktop` so they can read/write their own state
 /// (Explorer expansion set, blocks demo state, app registry, etc.) and
 /// `&Arc<Live>` so they can submit RPC commands through the live bridge.
+///
+/// Lifecycle hygiene (WEFT-590): before dispatching the active app,
+/// the previous active target is compared against the current one.
+/// On a transition AWAY from an app that needs cleanup (today: only
+/// Explorer, which holds substrate.list / substrate.read polls), the
+/// per-app `close()` runs so background polls don't keep firing
+/// against a hidden panel. `prev_active` is then refreshed.
+///
+/// Terminal/Chat sidebar apps intentionally do NOT close on
+/// nav-away — the user might be mid-conversation or mid-shell-command
+/// and expects to come back to the running session. Their state
+/// survives across hides; only Explorer's RPC polls leak budget when
+/// nobody's watching.
 pub fn dispatch(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -49,6 +62,14 @@ pub fn dispatch(
     snap: &Snapshot,
 ) {
     let target = desk.sidebar.active;
+    if desk.prev_active != target {
+        // Transition: run lifecycle cleanup on the app we're leaving.
+        // Today only Explorer needs this.
+        if let SidebarTarget::Explorer = desk.prev_active {
+            desk.explorer.close(live);
+        }
+        desk.prev_active = target;
+    }
     match target {
         SidebarTarget::Files => files::show(ui, rect, desk, live, snap),
         SidebarTarget::Processes => processes::show(ui, rect, desk, live, snap),
