@@ -90,6 +90,12 @@ pub struct Desktop {
     /// alongside for now and is retired one app at a time during
     /// Phase 3.
     pub sidebar: sidebar::Sidebar,
+
+    /// Persistent severity filter for the System logs stream
+    /// (WEFT-586). Owned here so the user's choice survives across
+    /// paints and tab switches; the Logs app reads/writes it through
+    /// `&mut Desktop`.
+    pub log_filter: crate::apps::logs::LogLevelFilter,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -234,6 +240,7 @@ impl Default for Desktop {
             chip_surfaces,
             explorer: Explorer::default(),
             sidebar: sidebar::Sidebar::default(),
+            log_filter: crate::apps::logs::LogLevelFilter::default(),
         }
     }
 }
