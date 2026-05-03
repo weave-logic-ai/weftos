@@ -13,9 +13,45 @@ pub struct ClawftApp {
     live: Arc<Live>,
 }
 
+/// Subset of DejaVu Sans covering the canonical sidebar icon glyphs
+/// (Geometric Shapes / Math / Block Elements / Arrows blocks). egui's
+/// default proportional font (Ubuntu-Light + NotoEmoji) doesn't carry
+/// these blocks, so painting glyphs like ▢ ≣ ↯ ◯ ◷ ▥ ≡ ▌ ▦ rendered
+/// as tofu. Registering this font as a fallback in every family
+/// closes the gap. Built from
+/// `/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf` via
+/// `pyftsubset --unicodes=U+25A2,U+2263,...` so the bundled bytes
+/// are ~3 KB instead of the full 700 KB.
+const SYMBOLS_FONT: &[u8] = include_bytes!(
+    "../assets/fonts/DejaVuSans-WeftSymbols.ttf"
+);
+
+/// Append the symbol-font subset to every family's fallback list so
+/// painting an icon glyph that the primary font lacks falls through
+/// to a font that has it.
+fn install_symbol_font(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "weft-symbols".to_string(),
+        std::sync::Arc::new(egui::FontData::from_static(SYMBOLS_FONT)),
+    );
+    for family in [
+        egui::FontFamily::Proportional,
+        egui::FontFamily::Monospace,
+    ] {
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .push("weft-symbols".to_string());
+    }
+    ctx.set_fonts(fonts);
+}
+
 impl ClawftApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         crate::theming::apply(&cc.egui_ctx);
+        install_symbol_font(&cc.egui_ctx);
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
         // Preload the boot logo so the splash appears on frame 1 instead

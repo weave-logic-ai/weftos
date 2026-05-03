@@ -107,6 +107,31 @@ fn service_restart_counts(
         .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
+/// Read this process's resident set size in bytes from
+/// `/proc/self/status` (Linux). Returns 0 on read or parse failure.
+/// The kernel's in-process service registry doesn't track per-service
+/// memory because services share the daemon's address space — the
+/// daemon's RSS IS the aggregate kernel footprint, which is the
+/// number worth showing on the kernel root row.
+fn read_self_rss_bytes() -> u64 {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
+            for line in s.lines() {
+                if let Some(rest) = line.strip_prefix("VmRSS:") {
+                    let kb = rest
+                        .split_whitespace()
+                        .next()
+                        .and_then(|n| n.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    return kb.saturating_mul(1024);
+                }
+            }
+        }
+    }
+    0
+}
+
 #[allow(dead_code)] // Read by future RPCs (e.g. `agent.whoami`)
 fn daemon_concierge_agent_id() -> Option<String> {
     DAEMON_CONCIERGE_AGENT_ID.get().cloned()
@@ -3220,6 +3245,13 @@ async fn dispatch(
         }
         "kernel.ps" => {
             let k = kernel.read().await;
+            // Sample the daemon's own process memory once per request.
+            // The in-kernel process_table doesn't periodically poll RSS
+            // (zero-cost-by-default); reading it on demand here gives
+            // the Processes panel something real to show without
+            // adding a periodic sampler. Linux: /proc/self/status
+            // VmRSS is the resident set size in KB.
+            let daemon_rss_bytes = read_self_rss_bytes();
             let mut entries: Vec<ProcessInfo> = k
                 .process_table()
                 .list()
@@ -3228,11 +3260,28 @@ async fn dispatch(
                     pid: e.pid,
                     agent_id: e.agent_id.clone(),
                     state: e.state.to_string(),
+                    // process_table's resource_usage is normally zero
+                    // because no sampler updates it. Substitute the
+                    // daemon RSS for the root kernel entry (lowest
+                    // pid) so the user sees a real number on at
+                    // least one row; child rows fall back to the
+                    // tracked value (zero today).
                     memory_bytes: e.resource_usage.memory_bytes,
                     cpu_time_ms: e.resource_usage.cpu_time_ms,
                     parent_pid: e.parent_pid,
                 })
                 .collect();
+
+            // Attribute the daemon's RSS to the lowest-pid (root)
+            // entry. This is honest: services run inside the same
+            // address space as the kernel, so the daemon RSS IS the
+            // kernel's real memory footprint.
+            if let Some(min_pid) = entries.iter().map(|e| e.pid).min()
+                && let Some(row) = entries.iter_mut().find(|e| e.pid == min_pid)
+                && row.memory_bytes == 0
+            {
+                row.memory_bytes = daemon_rss_bytes;
+            }
 
             // Merge in registered kernel services as virtual processes.
             // They run in-process under the daemon and aren't tracked by
@@ -3260,6 +3309,9 @@ async fn dispatch(
                     pid: daemon_pid,
                     agent_id: name,
                     state: state.to_string(),
+                    // Per-service memory accounting isn't separable
+                    // when services share the daemon's address space.
+                    // The aggregate sits on the root kernel row above.
                     memory_bytes: 0,
                     cpu_time_ms: 0,
                     parent_pid: root_pid,

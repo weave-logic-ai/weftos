@@ -319,18 +319,18 @@ fn paint_menu(
     let mut action: Option<SidebarAction> = None;
 
     // Leaf rows (canonical order — DO NOT REORDER, see DESIGN.md §5).
-    // Icon glyphs are picked from Misc Symbols / Misc Technical /
-    // Dingbats / Misc Symbols-Pictographs — the same Unicode blocks
-    // as the four icons (⚙ ✱ ⛨ ⌖) that the egui default font
-    // already renders. Geometric Shapes / Math / Arrows blocks are
-    // not covered and read as tofu boxes.
+    // Canonical icon set per DESIGN.md §5. The Geometric Shapes /
+    // Math / Block Elements / Arrows glyphs (▢ ≣ ↯ ◯ ◷ ▥ ≡ ▌ ▦)
+    // are covered by the DejaVuSans subset registered as a fallback
+    // in `app::install_symbol_font`; the rest (⚙ ✱ ⛨ ⌖) come from
+    // egui's default Ubuntu-Light + NotoEmoji.
     let items: [MenuItem; 13] = [
-        MenuItem::Leaf("Files", "⌘", SidebarTarget::Files),
-        MenuItem::Leaf("Processes", "✸", SidebarTarget::Processes),
-        MenuItem::Leaf("Services", "⚒", SidebarTarget::Services),
+        MenuItem::Leaf("Files", "▢", SidebarTarget::Files),
+        MenuItem::Leaf("Processes", "≣", SidebarTarget::Processes),
+        MenuItem::Leaf("Services", "↯", SidebarTarget::Services),
         MenuItem::Group(
             "Network",
-            "✦",
+            "◯",
             "network",
             &[
                 ("Mesh", SidebarTarget::Network(NetworkTab::Mesh)),
@@ -339,24 +339,24 @@ fn paint_menu(
             ],
         ),
         MenuItem::Leaf("Settings", "⚙", SidebarTarget::Settings),
-        MenuItem::Leaf("Scheduler", "⌚", SidebarTarget::Scheduler),
-        MenuItem::Leaf("Monitor", "✪", SidebarTarget::Monitor),
+        MenuItem::Leaf("Scheduler", "◷", SidebarTarget::Scheduler),
+        MenuItem::Leaf("Monitor", "▥", SidebarTarget::Monitor),
         MenuItem::Group(
             "Logs",
-            "⎘",
+            "≡",
             "logs",
             &[
                 ("System", SidebarTarget::Logs(LogsTab::System)),
                 ("Witness chain", SidebarTarget::Logs(LogsTab::WitnessChain)),
             ],
         ),
-        MenuItem::Leaf("Terminal", "⌨", SidebarTarget::Terminal),
+        MenuItem::Leaf("Terminal", "▌", SidebarTarget::Terminal),
         MenuItem::Leaf("Chat", "✱", SidebarTarget::Chat),
         MenuItem::Leaf("Admin", "⛨", SidebarTarget::Admin),
         MenuItem::Leaf("Explorer", "⌖", SidebarTarget::Explorer),
         MenuItem::Group(
             "Apps",
-            "⛶",
+            "▦",
             "apps",
             &[
                 ("Built-in", SidebarTarget::Apps(AppsTab::BuiltIn)),
