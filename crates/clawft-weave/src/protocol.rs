@@ -39,12 +39,21 @@ pub struct ProcessInfo {
 /// / "failed" / etc.) derived from the service's [`SystemService::
 /// health_check`] return value. `health` is the raw health-probe
 /// label kept for backward compatibility with older clients.
+///
+/// `pid` is the OS process the service runs in; for in-process
+/// services (the default) that's the daemon's own PID. `restarts`
+/// counts `service.restart` invocations since the daemon booted.
+/// `uptime_ms` is approximate — measured from kernel boot time for
+/// services that boot with the kernel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceInfo {
     pub name: String,
     pub service_type: String,
     pub state: String,
     pub health: String,
+    pub pid: Option<u64>,
+    pub restarts: u64,
+    pub uptime_ms: u64,
 }
 
 /// A single log entry for `kernel.logs`.

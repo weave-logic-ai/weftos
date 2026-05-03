@@ -94,6 +94,19 @@ fn daemon_agent() -> Option<Arc<DaemonAgentService>> {
 /// `"{channel}:{sender_id}"` synthesis).
 static DAEMON_CONCIERGE_AGENT_ID: OnceLock<String> = OnceLock::new();
 
+/// Per-service restart counter. Bumped each time `service.restart`
+/// fires; read by `kernel.services` to populate the `restarts` field.
+/// Keyed by service name (`SystemService::name()`).
+static SERVICE_RESTART_COUNTS: OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, u64>>,
+> = OnceLock::new();
+
+fn service_restart_counts(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, u64>> {
+    SERVICE_RESTART_COUNTS
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
 #[allow(dead_code)] // Read by future RPCs (e.g. `agent.whoami`)
 fn daemon_concierge_agent_id() -> Option<String> {
     DAEMON_CONCIERGE_AGENT_ID.get().cloned()
@@ -3220,6 +3233,39 @@ async fn dispatch(
                     parent_pid: e.parent_pid,
                 })
                 .collect();
+
+            // Merge in registered kernel services as virtual processes.
+            // They run in-process under the daemon and aren't tracked by
+            // the OS process_table, but the user expects to see them in
+            // Processes alongside actual kernel-level entries. Synthesise
+            // a ProcessInfo per service with state derived from
+            // health_check; pid is the daemon's own pid (they live
+            // there); parent_pid points at the root kernel process so
+            // the table renders as a tree under it.
+            let services = k.services().list();
+            let daemon_pid = std::process::id() as u64;
+            let root_pid: Option<u64> = entries.iter().map(|e| e.pid).min();
+            for (name, _stype) in services {
+                let state = match k.services().get(&name) {
+                    Some(svc) => match svc.health_check().await {
+                        clawft_kernel::HealthStatus::Healthy => "running",
+                        clawft_kernel::HealthStatus::Degraded(_) => "degraded",
+                        clawft_kernel::HealthStatus::Unhealthy(_) => "failed",
+                        clawft_kernel::HealthStatus::Unknown => "unknown",
+                        _ => "unknown",
+                    },
+                    None => "unknown",
+                };
+                entries.push(ProcessInfo {
+                    pid: daemon_pid,
+                    agent_id: name,
+                    state: state.to_string(),
+                    memory_bytes: 0,
+                    cpu_time_ms: 0,
+                    parent_pid: root_pid,
+                });
+            }
+
             entries.sort_by_key(|e| e.pid);
             Response::success(serde_json::to_value(entries).unwrap())
         }
@@ -3233,6 +3279,21 @@ async fn dispatch(
             // Degraded → degraded, Unhealthy → failed, Unknown →
             // unknown. The Services UI and any non-UI client read
             // off `state`.
+            let daemon_pid = std::process::id() as u64;
+            // Approximate uptime: time since the kernel itself booted.
+            // The in-memory ServiceRegistry doesn't track per-service
+            // started_at today (registration happens at boot, before
+            // start_all). For services that boot with the kernel —
+            // cron, assessment, containers, ecc.cognitive_tick — the
+            // kernel-uptime approximation is correct to within the boot
+            // window. A future patch can add per-service started_at to
+            // the registry for services started post-boot.
+            let kernel_uptime_ms = k.uptime().as_millis() as u64;
+            let restart_counts = service_restart_counts();
+            let restart_snapshot: std::collections::HashMap<String, u64> = restart_counts
+                .lock()
+                .map(|m| m.clone())
+                .unwrap_or_default();
             let mut infos: Vec<ServiceInfo> = Vec::with_capacity(services.len());
             for (name, stype) in services {
                 let (state, health_label) = match k.services().get(&name) {
@@ -3257,11 +3318,16 @@ async fn dispatch(
                     }
                     None => ("unknown".to_string(), "registered".to_string()),
                 };
+                let restarts = restart_snapshot.get(&name).copied().unwrap_or(0);
+                let uptime_ms = if state == "running" { kernel_uptime_ms } else { 0 };
                 infos.push(ServiceInfo {
                     name,
                     service_type: stype.to_string(),
                     state,
                     health: health_label,
+                    pid: Some(daemon_pid),
+                    restarts,
+                    uptime_ms,
                 });
             }
             Response::success(serde_json::to_value(infos).unwrap())
@@ -3292,20 +3358,27 @@ async fn dispatch(
             let result = match verb {
                 "service.start" => svc.start().await,
                 "service.stop" => svc.stop().await,
-                "service.restart" => match svc.stop().await {
-                    // Restart = stop, then start. A failure to stop is
-                    // not fatal — many services have idempotent stop()
-                    // and proceeding to start anyway is the "reload"
-                    // semantics most users expect.
-                    Ok(()) => svc.start().await,
-                    Err(e) => {
-                        tracing::warn!(
-                            service = %name, error = %e,
-                            "stop failed during restart; trying start anyway"
-                        );
-                        svc.start().await
+                "service.restart" => {
+                    // Bump restart counter regardless of stop outcome —
+                    // the user requested a restart; that's the intent.
+                    if let Ok(mut m) = service_restart_counts().lock() {
+                        *m.entry(name.clone()).or_insert(0) += 1;
                     }
-                },
+                    match svc.stop().await {
+                        // Restart = stop, then start. A failure to stop
+                        // is not fatal — many services have idempotent
+                        // stop() and proceeding to start anyway is the
+                        // "reload" semantics most users expect.
+                        Ok(()) => svc.start().await,
+                        Err(e) => {
+                            tracing::warn!(
+                                service = %name, error = %e,
+                                "stop failed during restart; trying start anyway"
+                            );
+                            svc.start().await
+                        }
+                    }
+                }
                 _ => unreachable!(),
             };
             match result {
