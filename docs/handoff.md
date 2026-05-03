@@ -1,3 +1,195 @@
+# Session handoff — 2026-05-02 (evening) — graduation iteration + daemon-side service plumbing
+
+Iteration session against the 22-commit graduation wave from earlier
+the same day. The user opened the panel in Cursor, ran through every
+graduated app, and reported real defects; this session chases them
+down. **27 commits** ahead of `master` on
+`feat/weftos-579-591-graduations` now.
+
+## Defects the user surfaced and what landed for each
+
+1. **"Files does not work — wasm should be able to see its own files
+   (rvf etc), maybe a shared filesystem."** The Phase 3 Files stub
+   only painted the empty-state hint. The substrate IS the wasm-
+   visible filesystem (the daemon's topic tree under `substrate/`).
+   `1045f40b feat(apps,daemon): substrate-tree Files + service state
+   + contextual actions` rewrites Files into a list-detail substrate
+   browser: left pane is a collapsible folders/leaves tree built
+   from `live.substrate_snapshot().iter()`, right pane shows the
+   selected node's pretty-printed JSON value (or a child summary
+   for branches). Top toolbar adds Expand-all / Collapse-all + topic
+   count. New `FilesState` on `Desktop` survives sidebar moves.
+
+2. **"All services look inactive, but say restart (should be start)."**
+   Same commit (`1045f40b`) replaces the inline-confirm `[restart]`
+   button with contextual actions per row state: running rows show
+   `[stop]` and `[restart]`; non-running rows show `[start]`. Each
+   click submits the matching verb (`service.start` / `.stop` /
+   `.restart`) directly — no inline-confirm step.
+
+3. **"Why are all services not running?"** Root cause was in the
+   daemon: the `kernel.services` RPC handler in `clawft-weave/src/
+   daemon.rs` was emitting a hardcoded `health = "registered"` string
+   and no `state` field at all. The Services UI fell back to `-` for
+   every row. `1045f40b` (and refined in `59eea0cb fix(daemon): wire
+   service.{start,stop,restart} + correct health mapping`) calls
+   `health_check().await` per service and matches on the
+   `clawft_kernel::HealthStatus` enum (NOT a substring of Debug
+   output — `"unhealthy"` contains `"healthy"`, my first attempt had
+   that bug). The `ServiceInfo` struct grew a `state` field
+   alongside the legacy `health` label.
+
+4. **"Nothing happens when I click [start] / [stop] / [restart]."**
+   Two reasons:
+   - **No daemon handlers for `service.{start,stop,restart}`
+     existed.** `59eea0cb` added a single match arm covering all
+     three verbs that looks the service up by name, calls the
+     matching `SystemService::start/stop` method, returns
+     `Response::error` on missing service or failure. Restart =
+     stop, then start (warn-and-continue if stop fails).
+   - **The Cursor extension's `STATIC_ALLOWED_METHODS` blocked the
+     verbs.** `f54f36b6 fix: allow service.* through panel proxy +
+     replace tofu sidebar icons` adds the three to
+     `extensions/vscode-weft-panel/src/extension.ts`. Compiled the
+     extension via `npm run compile` — `out/extension.js` carries
+     the new allowlist.
+
+5. **"Processes only shows the kernel."** `kernel.ps` queried only
+   `process_table().list()`, so registered services never appeared.
+   `6aaff205 feat(daemon,sidebar): merge services into kernel.ps +
+   populate ServiceInfo metadata` appends a synthesised
+   `ProcessInfo` per registered service: pid = daemon's own pid,
+   state from `health_check`, parent_pid pointing at the lowest
+   existing pid so the table reads as a tree rooted at the kernel.
+
+6. **"Services panel doesn't show pid / restarts / uptime."**
+   `6aaff205` extends `ServiceInfo` with `pid: Option<u64>`,
+   `restarts: u64`, `uptime_ms: u64`. Populated:
+   - `pid` = daemon pid (services run in-process — that's the truth)
+   - `uptime_ms` = `kernel.uptime()` for running services, 0 otherwise
+   - `restarts` = process-local counter bumped each `service.restart`,
+     stored in a `OnceLock<Mutex<HashMap<String, u64>>>` keyed by
+     service name. Resets on daemon restart (intentional).
+
+7. **"Why does nothing take any memory size?"** `process_table`
+   tracks a `memory_bytes` field but no sampler updates it.
+   `bbc9083b fix: bundle DejaVuSans symbol-glyph fallback + real RSS
+   in kernel.ps` reads `/proc/self/status` VmRSS per request and
+   attributes it to the lowest-pid (root) entry. Other rows stay
+   zero because services share the daemon's address space — RSS
+   isn't separable per service, and faking a split would be a lie.
+
+8. **"Only Settings / Chat / Admin / Explorer have icons" → swapped a
+   round → "Processes / Network / Monitor still don't have icons" →
+   swapped again → still tofu.** Five iterations of guessing glyphs
+   (▢→⌘, ≣→⌬→❖→✸, ↯→⚒, ◯→⛯→✦, ◷→⌚, ▥→⌗→✪, ≡→⎘, ▌→⌨, ▦→⛶) while
+   chasing per-glyph coverage in egui's default font (Ubuntu-Light +
+   NotoEmoji) was whack-a-mole. `bbc9083b` ships the real fix:
+   bundle a **3 KB DejaVu Sans subset** at
+   `crates/clawft-gui-egui/assets/fonts/DejaVuSans-WeftSymbols.ttf`,
+   register it in `app::install_symbol_font` as a fallback in both
+   Proportional and Monospace families. With a fallback in place
+   the canonical DESIGN.md §5 icon set (`▢ ≣ ↯ ◯ ◷ ▥ ≡ ▌ ▦` +
+   `⚙ ✱ ⛨ ⌖`) renders as designed — reverted all the tofu-chasing
+   swaps. Subset built via
+   `pyftsubset DejaVuSans.ttf --unicodes=U+25A2,U+2263,...` so the
+   bundle grew by 12 KB raw / ~3 KB gz instead of the full 700 KB.
+
+## Operational gotcha — surfaced repeatedly
+
+The user's running `weaver` was at `~/.cargo/bin/weaver` from
+**2026-04-28** for the entire session. None of the daemon-side
+fixes (`service.*` handlers, real `state`, merged `kernel.ps`,
+populated `ServiceInfo`, RSS readout) reach the running process
+unless the binary is replaced. `target/release/weaver` rebuilds
+on each `scripts/build.sh native` but isn't auto-installed; `cp` is
+blocked while the daemon holds the binary.
+
+Restart cycle the user needs each iteration:
+
+```bash
+kill <weaver-pid>      # or Ctrl-C in the foreground terminal
+cp target/release/weaver  ~/.cargo/bin/weaver
+cp target/release/weft    ~/.cargo/bin/weft
+weaver kernel start --foreground
+```
+
+Then **Cmd/Ctrl-Shift-P → "Developer: Reload Window"** in Cursor so
+the extension JS picks up the new allowlist.
+
+A future-session ticket: write a `scripts/install-local.sh` that does
+the binary copy automatically post-build, and document the restart
+sequence in CLAUDE.md so future agents don't wedge their changes in
+target/ unnoticed.
+
+## Build state at HEAD
+
+| Gate | Result |
+|---|---|
+| `scripts/build.sh check` | clean |
+| `scripts/build.sh clippy` (`-D warnings`) | clean |
+| `cargo test -p clawft-gui-egui --lib` | 370 / 370 |
+| `cargo test -p clawft-weave --lib` | 81 / 81 |
+| `scripts/build.sh native` | weft 12.39 MB · weaver 14.01 MB |
+| `scripts/build.sh wasm-panel` | 7423 KB raw / 3449 KB gz, within 7600/3500 budget (font subset cost ~12 KB raw) |
+
+## What changed in the codebase
+
+- `crates/clawft-gui-egui/src/apps/files.rs` — substrate-tree browser
+  rewrite with `FilesState` (expanded set + selected path).
+- `crates/clawft-gui-egui/src/apps/services.rs` — contextual `[start]`
+  / `[stop]` / `[restart]` actions, no inline confirm.
+- `crates/clawft-gui-egui/src/shell/desktop.rs` — `files_state` field
+  on `Desktop`.
+- `crates/clawft-gui-egui/src/app.rs` — `install_symbol_font` adds
+  DejaVu subset to every family's fallback list.
+- `crates/clawft-gui-egui/src/shell/sidebar.rs` — reverted to canonical
+  DESIGN.md §5 icon set.
+- `crates/clawft-gui-egui/assets/fonts/DejaVuSans-WeftSymbols.ttf` —
+  3.1 KB pyftsubset of DejaVu covering 16 sidebar / fallback glyphs.
+- `crates/clawft-weave/src/protocol.rs` — `ServiceInfo` grew `state`,
+  `pid`, `restarts`, `uptime_ms`.
+- `crates/clawft-weave/src/daemon.rs`:
+  - new `service.{start,stop,restart}` dispatch arm
+  - `kernel.services` runs per-service `health_check`, populates
+    enriched `ServiceInfo`
+  - `kernel.ps` merges in registered services + reads daemon RSS
+    from `/proc/self/status` for the kernel root row
+  - `read_self_rss_bytes()` helper
+  - `service_restart_counts()` static mutex map
+- `extensions/vscode-weft-panel/src/extension.ts` — `service.start`,
+  `service.stop`, `service.restart` added to
+  `STATIC_ALLOWED_METHODS`. Recompiled to
+  `out/extension.js`.
+
+## Known followups (not in this session)
+
+1. **Whisper + concierge-bot SystemService shims.** `crates/
+   clawft-service-whisper/` and `crates/clawft-service-agent/`
+   exist but aren't registered with the kernel `ServiceRegistry`.
+   ~30 lines in `boot.rs` to instantiate each and call
+   `service_registry.register(...)` alongside cron / assessment /
+   containers. Would make them visible in Services + Processes.
+2. **Per-service `started_at` on `ServiceRegistry`.** Today
+   `uptime_ms` uses kernel uptime as a proxy, accurate for boot-
+   time services. Services started via the new `service.start`
+   handler post-boot will show inflated uptime until this is
+   added.
+3. **Cluster service start failure at boot.** User log shows
+   `service failed to start service=cluster error=Invalid
+   configuration: No nodes available for shard assignment`. Not
+   blocking but worth investigation.
+4. **Process memory sampler.** `process_table.resource_usage` is
+   wired but never populated. The kernel's child processes show 0
+   memory; only the daemon root row has a real number from the
+   `/proc/self/status` workaround. Real per-process sampling would
+   need a periodic task.
+5. **`scripts/install-local.sh`** — automate the copy from
+   `target/release/` to `~/.cargo/bin/` post-`build.sh native` so
+   the iteration loop doesn't keep wedging on a stale daemon.
+
+---
+
 # Session handoff — 2026-05-02 (mid-day) — WEFT-579..591 graduation wave + tray retirement
 
 The 0.7.0 release-blocker. The user opened the panel in Cursor, saw
