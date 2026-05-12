@@ -1,0 +1,19 @@
+{
+  "name": "weftos",
+  "description": "WeftOS marketplace — install the weftos plugin (kernel, graphify, ECC, agents, skills) into Claude Code.",
+  "owner": {
+    "name": "Weave Logic AI",
+    "url": "https://github.com/weave-logic-ai"
+  },
+  "plugins": [
+    {
+      "name": "weftos",
+      "source": "./",
+      "description": "Drive the WeftOS kernel, knowledge graph, and ECC substrate from Claude Code via `weft mcp-server`. Ships agents, skills, slash commands.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Weave Logic AI"
+      }
+    }
+  ]
+}

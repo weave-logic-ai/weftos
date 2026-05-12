@@ -1,5 +1,9 @@
 {
   "mcpServers": {
+    "weftos": {
+      "command": "weft",
+      "args": ["mcp-server"]
+    },
     "claude-flow": {
       "command": "npx",
       "args": [
