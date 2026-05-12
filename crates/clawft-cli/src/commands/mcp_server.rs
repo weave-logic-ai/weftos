@@ -28,7 +28,7 @@ use clap::Args;
 use tracing::info;
 
 use clawft_core::agent::skills_v2::SkillRegistry;
-use clawft_core::tools::registry::ToolRegistry;
+use clawft_core::tools::registry::{Tool, ToolError as CoreToolError, ToolRegistry};
 use clawft_platform::NativePlatform;
 use clawft_services::mcp::BuiltinToolProvider;
 use clawft_services::mcp::SkillToolProvider;
@@ -64,6 +64,15 @@ pub async fn run(args: McpServerArgs) -> anyhow::Result<()> {
     // ── Build tool registry (shared core tools) ────────────────────
     let mut registry = ToolRegistry::new();
     super::register_core_tools(&mut registry, &config, platform.clone()).await;
+
+    // ── Register the open_panel stub ───────────────────────────────
+    // Surfaces the WeftOS web dashboard URL so an MCP-aware host
+    // (e.g. Claude Code's Preview pane) can render it. The dashboard
+    // itself must be running separately via `weft ui --no-open`.
+    registry.register(Arc::new(OpenPanelTool::new(
+        config.gateway.host.clone(),
+        config.gateway.api_port,
+    )));
 
     let tool_count = registry.len();
     let tool_names = registry.list();
@@ -268,6 +277,64 @@ fn discover_skill_dirs() -> (Option<PathBuf>, Option<PathBuf>) {
     (ws_dir, user_dir)
 }
 
+// ---------------------------------------------------------------------------
+// OpenPanelTool
+// ---------------------------------------------------------------------------
+
+/// MCP tool that returns the URL of the WeftOS web dashboard.
+///
+/// The tool is read-only — it does **not** start the dashboard. The user
+/// (or a follow-up tool call) must run `weft ui --no-open` separately so
+/// that the URL is reachable. The intended consumer is an MCP-aware host
+/// such as Claude Code Desktop's Preview pane, which can take the returned
+/// URL and render it as an embedded view.
+pub struct OpenPanelTool {
+    url: String,
+}
+
+impl OpenPanelTool {
+    /// Build the tool with the host/port pair the dashboard binds to.
+    pub fn new(host: String, port: u16) -> Self {
+        let url = format!("http://{host}:{port}/");
+        Self { url }
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for OpenPanelTool {
+    fn name(&self) -> &str {
+        "weft_open_panel"
+    }
+
+    fn description(&self) -> &str {
+        "Return the URL of the WeftOS web dashboard so an MCP host \
+         (e.g. Claude Code's Preview pane) can render it. \
+         Run `weft ui --no-open` first to make the URL reachable. \
+         The response is JSON: { url, preview_hint, ui_command }."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        })
+    }
+
+    async fn execute(
+        &self,
+        _args: serde_json::Value,
+    ) -> Result<serde_json::Value, CoreToolError> {
+        Ok(serde_json::json!({
+            "url": self.url,
+            "preview_hint": "Pass `url` to a Preview MCP tool (e.g. \
+                             mcp__Claude_Preview__preview_start / preview_navigate) \
+                             to render the dashboard inline.",
+            "ui_command": "weft ui --no-open"
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,6 +456,17 @@ mod tests {
                 assert_eq!(parsed["output"], "hello");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn open_panel_tool_returns_configured_url() {
+        let tool = OpenPanelTool::new("127.0.0.1".to_string(), 18789);
+        assert_eq!(tool.name(), "weft_open_panel");
+
+        let result = tool.execute(serde_json::json!({})).await.unwrap();
+        assert_eq!(result["url"], "http://127.0.0.1:18789/");
+        assert!(result["preview_hint"].is_string());
+        assert_eq!(result["ui_command"], "weft ui --no-open");
     }
 
     #[tokio::test]

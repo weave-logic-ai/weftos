@@ -1,0 +1,22 @@
+{
+  "name": "weftos",
+  "description": "WeftOS in Claude Code — kernel control (boot/status/services), knowledge graph (graphify), ECC cognitive substrate (search/calibrate), agent fleet (clawft, weftos-kernel, weftos-mesh, weftos-ecc), and 9 first-class skills. Backed by `weft mcp-server` so the entire weft CLI surface is callable as MCP tools.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Weave Logic AI",
+    "url": "https://github.com/weave-logic-ai"
+  },
+  "homepage": "https://weftos.weavelogic.ai",
+  "license": "Apache-2.0",
+  "keywords": [
+    "weftos",
+    "clawft",
+    "kernel",
+    "mcp",
+    "knowledge-graph",
+    "ecc",
+    "graphify",
+    "mesh",
+    "agents"
+  ]
+}
