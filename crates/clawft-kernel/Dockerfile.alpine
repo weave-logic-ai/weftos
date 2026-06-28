@@ -16,7 +16,12 @@
 # compilation, multi-arch via cargo-dist).
 
 FROM rust:1.93-alpine AS builder
-RUN apk add --no-cache musl-dev
+# musl-dev for the static C runtime; openssl-dev + pkgconf so the
+# `openssl-sys` build script can locate OpenSSL (the `--features native`
+# graph pulls it in). Without these the from-source build fails with
+# "pkg-config command could not be found" / "Could not find openssl".
+RUN apk add --no-cache musl-dev openssl-dev pkgconf
+ENV OPENSSL_DIR=/usr
 WORKDIR /build
 COPY . .
 RUN cargo build --release --bin weaver --features native
