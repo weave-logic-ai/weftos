@@ -102,8 +102,12 @@ toml = "0.8"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
-# HTTP
-reqwest = { version = "0.12", features = ["json", "default-tls"], default-features = false }
+# HTTP. rustls-tls (not default-tls / native-tls) so the static musl
+# release targets build — native-tls pulls openssl-sys, which fails on
+# musl ("Could not find openssl"). The service-llm / service-whisper
+# crates and tokio-tungstenite already use rustls; this aligns the
+# workspace default. webpki-roots ship the CA bundle (no system trust).
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
