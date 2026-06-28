@@ -330,20 +330,26 @@ mod tests {
         assert_eq!(back.samples, cls.samples);
     }
 
+    /// Covers both the default (var unset) and override (var set) paths
+    /// of [`EnergyClassifier::from_env`]. These were two separate tests,
+    /// but cargo's runner executes a binary's tests in parallel and both
+    /// mutate the same process-global env var — one's `remove_var`
+    /// clobbered the other's `set_var`, flaking the override case under
+    /// load. Merged into one test so access to the var is serial. (Tests
+    /// in *other* binaries run as separate processes, so a single test
+    /// here is sufficient — no cross-binary env race exists.)
     #[test]
-    fn from_env_uses_default_when_var_unset() {
+    fn from_env_reads_default_then_override() {
         // SAFETY: set/remove_var are unsafe on Rust 2024 (race with
-        // reader threads); test is single-threaded.
+        // reader threads). Sole mutator of this var in this binary.
         unsafe { std::env::remove_var(VAD_RMS_THRESHOLD_DB_ENV) };
         let cls = EnergyClassifier::from_env();
         assert!((cls.threshold_db - DEFAULT_VAD_RMS_THRESHOLD_DB).abs() < f32::EPSILON);
-    }
 
-    #[test]
-    fn from_env_parses_override() {
         unsafe { std::env::set_var(VAD_RMS_THRESHOLD_DB_ENV, "-30.0") };
         let cls = EnergyClassifier::from_env();
         assert!((cls.threshold_db - (-30.0)).abs() < f32::EPSILON);
+
         unsafe { std::env::remove_var(VAD_RMS_THRESHOLD_DB_ENV) };
     }
 }
