@@ -324,14 +324,33 @@ cmd_all() {
     fi
 }
 
+# Run the workspace test suite. Prefers cargo-nextest: it runs each test in
+# its own process, which eliminates the parallel-test-isolation flake class
+# (tests sharing process-global env vars, statics, or the global tracing
+# subscriber) and is faster than libtest across the whole workspace. nextest
+# does not run doctests, so those get a separate `cargo test --doc` pass.
+# Falls back to plain `cargo test` when cargo-nextest isn't installed
+# (install: `curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C ~/.cargo/bin`).
+workspace_test() {
+    if command -v cargo-nextest >/dev/null 2>&1; then
+        cargo nextest run --workspace && cargo test --workspace --doc
+    else
+        cargo test --workspace
+    fi
+}
+
 cmd_test() {
-    header "Running cargo test --workspace"
+    if command -v cargo-nextest >/dev/null 2>&1; then
+        header "Running cargo nextest run --workspace (+ doctests)"
+    else
+        header "Running cargo test --workspace (cargo-nextest not installed)"
+    fi
     timer_start
     if [ "$DRY_RUN" = true ]; then
-        printf "  ${YELLOW}DRY${NC}   cargo test --workspace\n"
+        printf "  ${YELLOW}DRY${NC}   workspace test (nextest if available, else cargo test)\n"
     else
         # Always show full output — tail -5 hides test results
-        cargo test --workspace 2>&1
+        workspace_test 2>&1
     fi
     timer_end
 }
@@ -653,9 +672,10 @@ cmd_gate() {
         timer_end
     }
 
-    # 1. Workspace tests
-    run_gate_check 1 "cargo test --workspace" \
-        cargo test --workspace
+    # 1. Workspace tests — nextest (per-test process isolation, kills the
+    #    parallel-isolation flake class) + doctests when available, else cargo test
+    run_gate_check 1 "workspace tests (nextest + doctests)" \
+        workspace_test
 
     # 2. Release binaries (weft + weave)
     run_gate_check 2 "cargo build --release --bin weft --bin weaver" \
