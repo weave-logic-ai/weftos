@@ -906,7 +906,7 @@ impl PairingGate {
                 })
                 .collect(),
         };
-        let json = serde_json::to_string_pretty(&file).map_err(|e| std::io::Error::other(e))?;
+        let json = serde_json::to_string_pretty(&file).map_err(std::io::Error::other)?;
         if let Some(parent) = self.persist_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
