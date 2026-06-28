@@ -11,7 +11,7 @@
 
 FROM alpine:3.21
 
-ARG VERSION=0.4.2
+ARG VERSION=0.6.20
 ARG TARGETARCH
 
 RUN apk add --no-cache ca-certificates tzdata \
