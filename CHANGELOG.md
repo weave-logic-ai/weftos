@@ -13,6 +13,89 @@ time, then add a matching `[X.Y.Z]: ...compare/...` link to the
 footnote block at the bottom of the file. The release runbook documents
 the cut-over (`docs/deployment/release.md`).
 
+## [0.6.20] - 2026-06-28
+
+Large rollup checkpoint on the 0.6 line. Folds in everything that landed
+between the `v0.6.19` tag (2026-04-22) and this cut without its own
+release tag — the M4–M7 sweeps, agent-core-v1, the 0.8.0 desktop-GUI wave
+and app graduations, an experimental vector-first leaf-display pipeline,
+and a toolchain/test-hardening pass that brought the full build gate to
+green on a fresh machine for the first time. Pre-beta; **no crates.io
+publish** this cut — binaries (cargo-dist / Homebrew), WASM, and Docker
+artifacts only.
+
+### Added
+
+#### Desktop GUI (egui) — 0.8.0 wave + app graduations
+- WeftOS design system v0.1: `bg_sidebar` token, `DESIGN.md` contract
+  test, CI audit ratchet + surface-contract gate.
+- Canonical left sidebar + apps dispatch; bottom tray and floating
+  chip/launcher windows retired.
+- Thirteen graduated apps (WEFT-579..591): Files, Processes, Services,
+  Network, Logs, Settings, Scheduler, Monitor, Terminal, Chat, Admin,
+  Explorer, and the Apps launcher.
+- Explorer intelligence band (ECC / vector-DB KPI tiles), a functional
+  Scheduler cron table, and a witness-chain tail panel.
+
+#### Web dashboard (clawft-ui)
+- Cmd+K command palette with fuzzy search + recents (WEFT-308); PWA
+  manifest + service worker + offline shell (WEFT-311); Tauri 2.0
+  desktop shell scaffold (WEFT-313); Playwright E2E suite (WEFT-314);
+  jsx-a11y + JS bundle-size CI gates (WEFT-315); multi-stage Dockerfile
+  (WEFT-317); `render_ui` → canvas WebSocket broadcaster (WEFT-306).
+
+#### Agent core, multi-agent, voice, channels
+- agent-core-v1 routers: HybridRouter v2.5, EmbeddingRouter v2,
+  LlmClassifierRouter v1; `weaver soul promote`.
+- AgentRouter + per-agent runtime + delegation-depth guard; real Claude
+  Code spawn + MCP allowed-tools allowlist; per-conversation cost
+  circuit-breaker.
+- Voice Level 0/1/2 permission gate, mic privacy indicator, substrate
+  STT→agent transcript path; real channel I/O for Email / WhatsApp /
+  Google Chat / Teams / Signal / IRC.
+
+#### Daemon / kernel plumbing
+- `[kernel.llm]` / `[kernel.agent]` config; LLM registered as a
+  first-class kernel service (`LlmSystemService`); per-chat-turn
+  TurnAnchor (chain / HNSW / causal); mesh peer-reconnect channel refresh.
+
+#### Vector-first leaf display (experimental / preview)
+- New crates `weftos-leaf-scene` / `-renderer` / `-sim` / `-canvas`,
+  `weftos-scene-builder`, `weftos-leaf-touch-gt911`, and `lgfx-bus-rgb-rs`:
+  retained-mode scene graph, CBOR `SceneEnvelope` leaf-push wire,
+  damage-rect rendering, GT911 touch. ESP32-S3 CrowPanel firmware
+  (`clawft-edge-pad` / `-idf`). Not published to crates.io; one known
+  residual display bug (double-buffer presentation) is tracked.
+- ADR-056 (BVH-on-RVF spatial index) and ADR-057 (substrate per-path
+  read ACLs) accepted.
+
+### Changed
+- Workspace-wide `cargo fmt` + `cargo clippy --fix` hygiene pass.
+- Workspace tests now run under `cargo-nextest` (per-test process
+  isolation) in `scripts/build.sh`, eliminating a pre-existing
+  parallel-test-isolation flake class; doctests run as a separate pass.
+- LLM endpoint resolution logs its winning source and warns when an env
+  var (including one loaded from `.env`) shadows `[kernel.llm]`.
+
+### Fixed
+- `clawft-surface` builder gained a `modal()` constructor — the admin
+  surface builder could not previously mirror its TOML fixture's
+  restart-modal (latent since WEFT-589).
+- Kernel: `mesh.subscribe` intercepted before the local-router check;
+  zero-duration timeout / key-rotation boundaries (`>=` not `>`); clippy
+  `redundant_closure`; boot banner reads `CARGO_PKG_VERSION`.
+- Test determinism: per-call wordpiece temp-vocab path, env-var test
+  isolation, and monotonic (counter-prefixed) turn ids.
+
+### Security
+- Patched quinn-proto 0.11.15 (RUSTSEC-2026-0185 — remote memory
+  exhaustion, HIGH), memmap2 0.9.11, and rkyv 0.8.16; deferred the
+  wasmtime 33.0.2 advisories (need the 34+ bump) in the tracked
+  `cargo audit` ignore list.
+- Earlier in the cycle: per-method capability gate + `ipc_tcp` auth,
+  sigstore attestation verification, MAESTRO prompt-injection
+  sanitization, MCP PermissionFilter, and three dashboard auth fixes.
+
 ## [0.6.19] - 2026-04-22
 
 Rollup of the `development-0.7.0` work stream onto the 0.6 release line. Ships the M1.5 app-layer trilogy, the 21-item canon UI primitive system, the built-in system components, a sensor framework, ExoChain stream-anchor auditing, eight EML-swap learnable-model wirings, and two late kernel-plumbing fixes (cluster peer persistence + optional TCP IPC relay). Also merges forward the v0.6.18 graphify fix (originally cut on an orphan commit that never reached `master`).
@@ -961,7 +1044,8 @@ data structure as an interactive, drillable topology graph.
 - Release profile with LTO, strip, single codegen unit, and abort-on-panic
 - 1,029 tests across the workspace
 
-[Unreleased]: https://github.com/weave-logic-ai/weftos/compare/v0.6.19...HEAD
+[Unreleased]: https://github.com/weave-logic-ai/weftos/compare/v0.6.20...HEAD
+[0.6.20]: https://github.com/weave-logic-ai/weftos/compare/v0.6.19...v0.6.20
 [0.6.19]: https://github.com/weave-logic-ai/weftos/compare/v0.6.18...v0.6.19
 [0.6.18]: https://github.com/weave-logic-ai/weftos/compare/v0.6.17...v0.6.18
 [0.6.17]: https://github.com/weave-logic-ai/weftos/compare/v0.6.16...v0.6.17
