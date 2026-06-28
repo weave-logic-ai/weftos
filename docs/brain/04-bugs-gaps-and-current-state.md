@@ -3,6 +3,27 @@
 > Known defects and live working-tree state. Source-of-truth: `.planning/reviews/`,
 > `.planning/sonobuoy/GAPS.md`, `docs/handoff.md`, `git status`. Compiled 2026-06-28.
 
+## 0. Reconciliation update — 2026-06-28
+
+The sections below were first compiled from the (stale) 2026-04-28 audit. After
+landing the working tree (7 commits, tree now clean) the bug list was
+reconciled against code:
+
+- **BUG-7 (auth governance gate) — ALREADY FIXED** in `1b02f822` (WEFT-98/102),
+  before this brain was written. `auth_service.rs` gates all five mutating ops
+  (`register_credential`, `rotate_credential`, `request_token`, `revoke_token`,
+  `register_hashed_credential`) on governance with a passing test. Section 1's
+  BUG-7 entry is **historical** — no action.
+- **The `.env`-shadows-`[kernel.llm]` trap (BUG-8) — ADDRESSED** in `a9ed9179`:
+  `daemon.rs` now logs `"llm endpoint resolved"` with `url_source`/`model_source`
+  and warns when env shadows config. Precedence unchanged (observability only).
+- **Still open**: BUG-1 (leaf-display double-buffer), BUG-3 (daemon chain
+  bridge), and ADR-057 (substrate read ACLs, unimplemented release-blocker).
+- **Working tree is clean** — the §4 "uncommitted-work hazard" is resolved.
+
+**Lesson encoded in memory**: audit-era bug lists go stale; verify against
+current code before fixing (we nearly "re-fixed" already-correct auth gates).
+
 ## 1. Known bugs / defects
 
 | ID | Severity | Summary | Status |

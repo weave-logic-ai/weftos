@@ -44,16 +44,25 @@ Weaver modeler) whose memory is stored in **RVF** files. Kernel layers K0–K6 a
 complete; K8 (GUI) is in flight. The most recent work is an uncommitted
 vector-first leaf-display pivot for ESP32-S3 hardware.
 
-## ⚠️ Live hazards (read before touching the working tree)
+## Status — 2026-06-28 (working tree clean)
 
-1. **Uncommitted vector-display subsystem** — ~8 new crates (`weftos-leaf-*`,
-   `lgfx-bus-rgb-rs`, `weftos-scene-builder`), ~300 tests, 2 ADRs, 1 design doc
-   have **zero git history**. `git diff --stat HEAD` ≈ 588 files / +19.5K / −14.4K.
-   One `git checkout` from loss. Commit a focused diff before anything else.
-2. **Daemon binary swap** — `cp weaver ~/.cargo/bin/` while the daemon runs →
+The previously-uncommitted leaf-display session was landed in 7 commits
+(`05ff2076`..`a9ed9179`); the tree is clean. Two audit-era items were
+reconciled against code: **BUG-7 (auth governance gate) was already fixed**
+(`1b02f822`, WEFT-98/102 — all five mutating ops gate on governance), and the
+**`.env`-shadows-`[kernel.llm]` trap is now observable** (`a9ed9179` logs the
+winning source + warns on shadow). Build/test still need a `scripts/build.sh
+gate` run — the Rust toolchain isn't reachable from the agent shell on this Mac.
+
+## ⚠️ Live hazards (still open)
+
+1. **Daemon binary swap** — `cp weaver ~/.cargo/bin/` while the daemon runs →
    "Text file busy"; use atomic `mv` + restart. A running daemon keeps the old
    inode and hides new features until restarted.
-3. **`.env` shadows `[kernel.llm]`** — `dotenvy` loads `LLM_SERVICE_URL`/
-   `LLM_MODEL` before `weave.toml`; stale `.env` values silently win.
-4. **Open CRITICAL governance gate gap** — `auth_service.rs` `rotate_credential`
-   (L325) and `request_token` (L354) chain-log but do not gate on governance.
+2. **BUG-1 leaf-display (HIGH)** — correct wire coords but the panel doesn't
+   visibly move; prime suspect is the `lgfx-bus-rgb-rs` double-buffer swap.
+   Single-buffer disambiguation queued, not yet run.
+3. **BUG-3 daemon chain bridge (HIGH)** — ~12 ExoChain events from non-kernel
+   crates emit to stdout and never reach `ChainManager` (`clawft-weave/main.rs`).
+4. **ADR-057 unimplemented** — substrate per-path read ACLs are Accepted and a
+   MUST-HAVE 0.8.x release-blocker, but the 9 acceptance criteria aren't built.
