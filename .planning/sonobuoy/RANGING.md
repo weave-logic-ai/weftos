@@ -500,6 +500,34 @@ emit also serve as SAS illumination?
   ping. Doppler-aided ranging (§2, Lu-2018) supplies this.
 - **Stealth**: a SAS illumination is 10-30 dB louder than a ranging
   ping; tactical modes cannot do this.
+- **Band-dependent coherence budget (added 2026-05-11)**: CSAC
+  short-term Allan deviation is ~10⁻¹¹ at 1 s, ~10⁻¹² at 100 s.
+  This translates to ~10 ps timing uncertainty over 1 s,
+  ~60 ns over 1 minute, ~600 ns over 10 minutes. The coherent
+  integration window must keep timing drift below ~T/8 where T is
+  the carrier period:
+  - At **1.8 kHz** (T = 555 µs): T/8 = 69 µs → CSAC supports
+    multi-hour coherent integration. Comfortable.
+  - At **40 kHz** (T = 25 µs): T/8 = 3.1 µs → CSAC supports
+    ~5+ hour coherent integration.
+  - At **200 kHz** (T = 5 µs): T/8 = 625 ns → CSAC supports
+    ~10 minute coherent integration windows. Bounded but
+    workable for ping-rate-scale apertures.
+  - At **235 kHz** (T = 4.25 µs): T/8 = 532 ns → CSAC supports
+    ~8-9 minute windows. Tight; revalidate per-deployment.
+  - At **500 kHz+** (Phase 7): coherence budget approaches the
+    CSAC short-term floor. Requires either tighter clocks
+    (rubidium / OCXO disciplined) or smaller coherent integration
+    windows.
+
+  The ADR-065 multistatic-with-stationary-sonobuoy plan is
+  honestly coherent at 1.8 kHz (the only band actually used by
+  RANGING.md's protocol stack today). Coherent multistatic at the
+  imaging-tier bands (50 / 200 / 235 kHz, per `build/build-buoy-
+  p79.md`) **is in budget but tight** — Phase 5d gimbal work
+  should validate the coherent budget empirically, and the
+  fallback to incoherent (envelope-only) multistatic reconstruction
+  must be the default until coherence is measured.
 
 ### 6.3 Recommendation
 

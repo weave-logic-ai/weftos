@@ -105,7 +105,7 @@ Seven gaps were identified in the round-1+round-2 synthesis. G1 is being closed 
 - **Stage 2**: Zhang-Achim 2022 alternating minimization on Kiang 2022's N-buoy extended non-stop-and-go forward operator `C(V)`. Alternate HOTV-regularized image updates (Scarnati-Gelb 2018 ADMM with Kuramoto-style 2-D phase sync) and per-buoy Levenberg-Marquardt velocity updates warm-started by Stage 1.
 - **Cross-cut with G1**: Bayesian soft prior precision-weights G1 ranging-derived velocities as a convex-neighborhood stabilizer, *not* a hard constraint — preserving the joint loop's ability to refine velocities from target-aware image sharpness.
 **Target**: ≤ 3 dB PSNR degradation at 0.1 m/s uncertainty (met). ≤ 5% target-velocity error vs Kiang baseline 3%.
-**ADR**: ADR-081 "Joint velocity-and-image reconstruction for N-buoy multistatic SAS"
+**ADR**: ADR-079b "Joint velocity-and-image reconstruction for N-buoy multistatic SAS" (re-numbered 2026-05-11 by Deliverable 2 §4; the original ADR-081 slot was claimed by the sonobuoy symposium for "Adopt the WeftOS sensor framework for the sonobuoy wire format", see `.planning/symposiums/sonobuoy/adrs/ADR-081-sensor-framework-adoption.md`. This research-track ADR is parked under ADR-079b pending a v2 SAS-reconstruction crate; it has not yet been promoted to an ADR file).
 **Severity**: P1 (blocks v4 quantum-SAS integration)
 **Origin**: `SYNTHESIS.md` §2.4, §10; analysis in `papers/analysis/multistatic-sas.md`.
 
@@ -134,7 +134,7 @@ Seven gaps were identified in the round-1+round-2 synthesis. G1 is being closed 
 **Status**: 🟢 **CLOSED** (2026-04-15) — see `gaps/G5-sub-kbps-fl.md`
 **Closing approach**: 5-layer compounding codec — (1) event-triggered participation gate, (2) HierFAVG two-tier (Liu 2020) with κ₁=10 local + κ₂=100 edge at Raft cluster leader, (3) DGC Top-k(s=0.001) with flash-backed residual, (4) error-feedback signSGD 1-bit (Bernstein 2018 + Karimireddy 2019 EF fix) or FetchSGD Count Sketch r=2 c=200 fallback (Rothchild 2020), (5) delta-varint + RLE + Ed25519 wire encoding via rvf-crypto. FedMD (Li & Wang 2019) runs parallel for heterogeneous hardware fleets via logit distillation on a firmware-baked 10k alignment set.
 **Result**: **~210 B per buoy per cloud round** — fits single 340 B Iridium SBD MO packet; convergence in ≤10 cloud rounds.
-**ADR**: ADR-082 "Sub-kbps federated learning protocol stack for sonobuoy network"
+**ADR**: ADR-080b "Sub-kbps federated learning protocol stack for sonobuoy network" (re-numbered 2026-05-11 by Deliverable 2 §4; the original ADR-082 slot was claimed by the sonobuoy symposium for "Three-class buoy architecture (A/B/C)", see `.planning/symposiums/sonobuoy/adrs/ADR-082-three-class-buoy-architecture.md`. This research-track ADR is parked under ADR-080b pending a v3 federated-learning crate; it has not yet been promoted to an ADR file. ADR-090 (`.planning/symposiums/sonobuoy/adrs/ADR-090-fl-gradient-compression.md`) operationalizes the closing decision and is the load-bearing reference for build-side work).
 **Severity**: P1 (blocks v3 federated training across sonobuoys)
 **Origin**: `SYNTHESIS.md` §4.1, §10; analyses in `papers/analysis/{fedavg-foundations,deep-gradient-compression,byzantine-robust-krum,split-learning}.md`.
 
@@ -208,8 +208,8 @@ No research agent required.
 | G1 | P0 | 🟢 CLOSED | RANGING.md + ADR-078; cross-cuts into G4 (velocity) and G2/G3 (SSP) |
 | G2 | P1 | 🟢 CLOSED | Two-path (XPINN+features online, PINO fleet-amortized); ADR-079 |
 | G3 | P1 | 🟢 CLOSED | ThermoFno hybrid (U-NO + MWT + GINO-SDF + PINO); ADR-080 |
-| G4 | P1 | 🟢 CLOSED | Two-stage VAE-prior + Zhang-Achim alt-min; G1 ranging as Bayesian soft stabilizer; ADR-081 |
-| G5 | P1 | 🟢 CLOSED | 5-layer codec 210 B/round fits Iridium SBD; ADR-082 |
+| G4 | P1 | 🟢 CLOSED | Two-stage VAE-prior + Zhang-Achim alt-min; G1 ranging as Bayesian soft stabilizer; ADR-079b (parked, see G4 above) |
+| G5 | P1 | 🟢 CLOSED | 5-layer codec 210 B/round fits Iridium SBD; ADR-080b (parked) + ADR-090 (build-side operationalization) |
 | G6 | P2 | ⚪ | Monitor Perch 2.0 release |
 | G7 | P3 | ⚪ | Monitor external-repo relicensing |
 

@@ -6,6 +6,47 @@
 
 ---
 
+## 0.5. Hardware / build companion (added 2026-05-11)
+
+A complementary **build / hardware / mechanical / cost** corpus lives
+at `./build/` (moved here on 2026-05-11 from `docs/plans/sonar/`).
+That corpus grounds the architecture and ADRs in this document in
+physical buoy designs:
+
+- **`build/requirements.md`** + **`build/architecture.md`** — base
+  2"-PVC vertical buoy, ESP32-S2 (TX) + ESP32-S3 (RX) MCU split,
+  1.8 kHz audio-band piezo, vented ballast. **Tier-2 / tier-3 of
+  the §3 power hierarchy in physical form.**
+- **`build/build-hydrophone-*.md`** — three packaging variants for
+  the v1 hydrophone: bare PVC-wall window (simple), epoxy-potted
+  JFET puck (Aquarian H1a clone), oil-filled M8-connected sidecar
+  (recommended; sensor-mesh-compatible).
+- **`build/build-buoy-p79.md`** — Phase 5 imaging-tier prototype:
+  Airmar P79 (50 / 200 kHz) + Airmar D 235 kHz (P/N 44-053-1-02),
+  shared 3-band pulser + LNA + ADC daughterboard, bistatic mode E.
+  **Hardware grounding for ADRs 063 (SAS 5th branch), 064 (deep
+  autofocus), 065 (Kiang multistatic with stationary sonobuoy —
+  these buoys are the C-nodes in Kiang's geometry).** Phase 5d
+  adds a fully-submerged BLDC gimbal in oil; Phase 5e adds a
+  cast-urethane acoustic dome.
+- **`build/commercial-comparison.md`** — taxonomy of commercial
+  sonar classes, gap analysis, visualization surfaces (chart-style
+  PPI, 3D water column, AR fly-through, ML-classifier overlay,
+  bathymetric mosaic, temporal change detection).
+- **`build/phase-economics.md`** — per-phase cost (~$45 → ~$11k for
+  10-buoy fleet with two high-band nodes), capability ladder, and
+  the **vector-DB-native data-plane advantage** that distinguishes
+  clawft from commercial sonar at the system level. References
+  §3 (4-tier power), §4 (FL stack), §5.4 (HNSW namespaces) and the
+  v1/v2/v3/v4 plan in §8 of this document.
+- **`build/roadmap.md`** — Phases 1 / 1b / 2 / 3 / 4 / 5a-f / 6 / 7
+  must stay aligned with this document's v1/v2/v3/v4 ladder in §8.
+
+The build corpus is the practical implementation surface on which
+the K-STEMIT-extended architecture in this document will run.
+
+---
+
 ## 0. Executive summary
 
 - **42 papers analyzed across 12 categories in two rounds.** Round 1 (18 papers) was compiled from LLM memory and 14/18 citations were fabricated; round-2 was verification-first and all 24 new citations were confirmed via arXiv/DOI/publisher/DTIC. ADR-062 formalizes the verification mandate.
