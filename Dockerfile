@@ -36,11 +36,19 @@ EOF
 RUN sh /tmp/install.sh && rm /tmp/install.sh
 
 # Pre-create the data dir owned by the weft user BEFORE declaring the
-# VOLUME. Docker creates an unmounted VOLUME's mountpoint as root, so
-# without this `weft gateway` (uid 1000) dies bootstrapping its app
-# context: "Permission denied" creating ~/.clawft/workspace/sessions.
-# Creating it weft-owned here makes the anonymous volume inherit that.
-RUN mkdir -p /home/weft/.clawft && chown -R weft:weft /home/weft/.clawft
+# VOLUME (Docker creates an unmounted VOLUME mountpoint root-owned, so
+# `weft gateway` as uid 1000 would otherwise die at "bootstrap app
+# context: Permission denied" creating ~/.clawft/workspace/sessions),
+# and ship a default config that turns the REST/WS API on at the exposed
+# port 8080. `weft gateway` refuses to start with no channel and the API
+# off; enabling the API makes the image usable out-of-the-box and lets
+# the EXPOSE 8080 / HEALTHCHECK / `/api/health` probe work. The API is
+# auth-gated (Bearer token via TokenStore); only /api/health and the
+# token-bootstrap path are public.
+RUN mkdir -p /home/weft/.clawft \
+    && printf '{"gateway":{"api_enabled":true,"api_port":8080}}\n' \
+       > /home/weft/.clawft/config.json \
+    && chown -R weft:weft /home/weft/.clawft
 
 USER weft
 WORKDIR /home/weft
