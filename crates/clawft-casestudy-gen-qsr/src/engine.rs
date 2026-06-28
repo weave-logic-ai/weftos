@@ -39,7 +39,11 @@ pub struct ScenarioEngine<'a> {
 
 impl<'a> ScenarioEngine<'a> {
     pub fn new(graph: &'a CaseGraph, dims: &'a Dimensions) -> Self {
-        Self { graph, dims, eml: None }
+        Self {
+            graph,
+            dims,
+            eml: None,
+        }
     }
 
     pub fn with_eml(mut self, eml: &'a EmlModel) -> Self {
@@ -69,7 +73,8 @@ impl<'a> ScenarioEngine<'a> {
 
         // For promo_pull: tighten the intervention day window to the promo's
         // actual active range, even if the YAML left it open.
-        let (promo_active_start, promo_active_end) = match (&spec.template, &spec.promo_id_to_pull) {
+        let (promo_active_start, promo_active_end) = match (&spec.template, &spec.promo_id_to_pull)
+        {
             (t, Some(pid)) if t == "promo_pull" => self
                 .dims
                 .promotions
@@ -139,7 +144,12 @@ impl<'a> ScenarioEngine<'a> {
     }
 
     /// Predict the full scenario outcome: analytical + EML + Monte-Carlo.
-    pub fn predict(&self, spec: &ScenarioSpec, mc_samples: usize, mc_seed: u64) -> ScenarioPrediction {
+    pub fn predict(
+        &self,
+        spec: &ScenarioSpec,
+        mc_samples: usize,
+        mc_seed: u64,
+    ) -> ScenarioPrediction {
         let plan = self.plan(spec);
 
         let scope_size = plan.scope_daily_ids.len() as f64;

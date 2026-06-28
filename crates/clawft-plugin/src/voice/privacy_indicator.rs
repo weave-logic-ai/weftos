@@ -154,7 +154,10 @@ impl InMemoryIndicatorPublisher {
 
     /// Snapshot the published payloads in order.
     pub fn snapshot(&self) -> Vec<IndicatorPayload> {
-        self.inner.lock().expect("indicator buffer poisoned").clone()
+        self.inner
+            .lock()
+            .expect("indicator buffer poisoned")
+            .clone()
     }
 
     /// Number of published payloads.
@@ -219,12 +222,7 @@ mod tests {
     fn payload_round_trips_through_json() {
         // Substrate topics carry JSON; assert the schema survives a
         // round trip so the GUI can decode without a custom parser.
-        let p = IndicatorPayload::new(
-            IndicatorState::Capturing,
-            Some("USB Mic".into()),
-            16_000,
-            1,
-        );
+        let p = IndicatorPayload::new(IndicatorState::Capturing, Some("USB Mic".into()), 16_000, 1);
         let s = serde_json::to_string(&p).unwrap();
         let back: IndicatorPayload = serde_json::from_str(&s).unwrap();
         assert_eq!(back.state, "capturing");

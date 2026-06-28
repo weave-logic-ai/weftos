@@ -41,7 +41,7 @@ use clawft_platform::NativePlatform;
 use clawft_types::event::InboundMessage;
 
 use super::load_config;
-use crate::interactive::builtins::{register_builtins, register_skill_commands, QUIT_SENTINEL};
+use crate::interactive::builtins::{QUIT_SENTINEL, register_builtins, register_skill_commands};
 use crate::interactive::registry::{InteractiveContext, SlashCommandRegistry};
 
 /// Arguments for the `weft agent` subcommand.
@@ -600,7 +600,9 @@ mod tests {
 
             // "swarm" matches → should delegate
             assert!(
-                router.should_delegate("run a swarm security review").is_some(),
+                router
+                    .should_delegate("run a swarm security review")
+                    .is_some(),
                 "swarm should trigger delegation"
             );
 

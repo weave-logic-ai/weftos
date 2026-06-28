@@ -162,8 +162,12 @@ fn scale_to_constraints(
         .collect();
 
     // Check extent.
-    let (mut xmin, mut xmax, mut ymin, mut ymax) =
-        (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
+    let (mut xmin, mut xmax, mut ymin, mut ymax) = (
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    );
     for p in &scaled {
         xmin = xmin.min(p[0]);
         xmax = xmax.max(p[0]);
@@ -247,11 +251,7 @@ mod tests {
 
     #[test]
     fn layout_is_deterministic() {
-        let adj = vec![
-            vec![(1, 1.0)],
-            vec![(0, 1.0), (2, 1.0)],
-            vec![(1, 1.0)],
-        ];
+        let adj = vec![vec![(1, 1.0)], vec![(0, 1.0), (2, 1.0)], vec![(1, 1.0)]];
         let c = RegisterConstraints::neutral_atom_default();
         let r1 = build_register(&adj, c).unwrap();
         let r2 = build_register(&adj, c).unwrap();

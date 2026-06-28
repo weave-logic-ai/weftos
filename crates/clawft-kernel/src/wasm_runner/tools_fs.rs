@@ -78,8 +78,8 @@ impl BuiltinTool for FsReadFileTool {
             return Err(ToolError::FileNotFound(path.display().to_string()));
         }
 
-        let metadata = std::fs::metadata(path)
-            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+        let metadata =
+            std::fs::metadata(path).map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
         if metadata.len() > MAX_READ_SIZE {
             return Err(ToolError::FileTooLarge {
@@ -88,17 +88,13 @@ impl BuiltinTool for FsReadFileTool {
             });
         }
 
-        let offset = args
-            .get("offset")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+        let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let limit = args
             .get("limit")
             .and_then(|v| v.as_u64())
             .map(|v| v as usize);
 
-        let bytes = std::fs::read(path)
-            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+        let bytes = std::fs::read(path).map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
         let end = match limit {
             Some(l) => std::cmp::min(offset + l, bytes.len()),
@@ -133,33 +129,60 @@ pub struct FsWriteFileTool {
 
 impl FsWriteFileTool {
     pub fn new() -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "fs.write_file").unwrap();
-        Self { spec, sandbox: SandboxConfig::default() }
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "fs.write_file")
+            .unwrap();
+        Self {
+            spec,
+            sandbox: SandboxConfig::default(),
+        }
     }
     pub fn with_sandbox(sandbox: SandboxConfig) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "fs.write_file").unwrap();
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "fs.write_file")
+            .unwrap();
         Self { spec, sandbox }
     }
 }
 
 impl BuiltinTool for FsWriteFileTool {
-    fn name(&self) -> &str { "fs.write_file" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "fs.write_file"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let path_str = args.get("path").and_then(|v| v.as_str())
+        let path_str = args
+            .get("path")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'path'".into()))?;
-        let content = args.get("content").and_then(|v| v.as_str())
+        let content = args
+            .get("content")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'content'".into()))?;
-        let append = args.get("append").and_then(|v| v.as_bool()).unwrap_or(false);
+        let append = args
+            .get("append")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let path = std::path::Path::new(path_str);
         if !self.sandbox.is_path_allowed(path) {
-            return Err(ToolError::PermissionDenied(format!("path outside sandbox: {}", path.display())));
+            return Err(ToolError::PermissionDenied(format!(
+                "path outside sandbox: {}",
+                path.display()
+            )));
         }
         if append {
             use std::io::Write;
-            let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
                 .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
-            f.write_all(content.as_bytes()).map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+            f.write_all(content.as_bytes())
+                .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         } else {
             std::fs::write(path, content).map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         }
@@ -169,7 +192,9 @@ impl BuiltinTool for FsWriteFileTool {
         clawft_core::chain_event::push_chain_event(
             "wasm_fs",
             "wasm.fs.write",
-            Some(serde_json::json!({"path": path_str, "bytes_written": content.len(), "append": append})),
+            Some(
+                serde_json::json!({"path": path_str, "bytes_written": content.len(), "append": append}),
+            ),
         );
 
         Ok(serde_json::json!({"written": content.len(), "path": path_str}))
@@ -184,24 +209,42 @@ pub struct FsReadDirTool {
 
 impl FsReadDirTool {
     pub fn new() -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "fs.read_dir").unwrap();
-        Self { spec, sandbox: SandboxConfig::default() }
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "fs.read_dir")
+            .unwrap();
+        Self {
+            spec,
+            sandbox: SandboxConfig::default(),
+        }
     }
     pub fn with_sandbox(sandbox: SandboxConfig) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "fs.read_dir").unwrap();
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "fs.read_dir")
+            .unwrap();
         Self { spec, sandbox }
     }
 }
 
 impl BuiltinTool for FsReadDirTool {
-    fn name(&self) -> &str { "fs.read_dir" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "fs.read_dir"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let path_str = args.get("path").and_then(|v| v.as_str())
+        let path_str = args
+            .get("path")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'path'".into()))?;
         let path = std::path::Path::new(path_str);
         if !self.sandbox.is_path_allowed(path) {
-            return Err(ToolError::PermissionDenied(format!("path outside sandbox: {}", path.display())));
+            return Err(ToolError::PermissionDenied(format!(
+                "path outside sandbox: {}",
+                path.display()
+            )));
         }
         if !path.exists() {
             return Err(ToolError::FileNotFound(path.display().to_string()));
@@ -230,22 +273,40 @@ pub struct FsCreateDirTool {
 
 impl FsCreateDirTool {
     pub fn new() -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "fs.create_dir").unwrap();
-        Self { spec, sandbox: SandboxConfig::default() }
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "fs.create_dir")
+            .unwrap();
+        Self {
+            spec,
+            sandbox: SandboxConfig::default(),
+        }
     }
 }
 
 impl BuiltinTool for FsCreateDirTool {
-    fn name(&self) -> &str { "fs.create_dir" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "fs.create_dir"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let path_str = args.get("path").and_then(|v| v.as_str())
+        let path_str = args
+            .get("path")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'path'".into()))?;
         let path = std::path::Path::new(path_str);
         if !self.sandbox.is_path_allowed(path) {
-            return Err(ToolError::PermissionDenied(format!("path outside sandbox: {}", path.display())));
+            return Err(ToolError::PermissionDenied(format!(
+                "path outside sandbox: {}",
+                path.display()
+            )));
         }
-        let recursive = args.get("recursive").and_then(|v| v.as_bool()).unwrap_or(true);
+        let recursive = args
+            .get("recursive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
         if recursive {
             std::fs::create_dir_all(path).map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         } else {
@@ -272,28 +333,47 @@ pub struct FsRemoveTool {
 
 impl FsRemoveTool {
     pub fn new() -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "fs.remove").unwrap();
-        Self { spec, sandbox: SandboxConfig::default() }
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "fs.remove")
+            .unwrap();
+        Self {
+            spec,
+            sandbox: SandboxConfig::default(),
+        }
     }
 }
 
 impl BuiltinTool for FsRemoveTool {
-    fn name(&self) -> &str { "fs.remove" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "fs.remove"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let path_str = args.get("path").and_then(|v| v.as_str())
+        let path_str = args
+            .get("path")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'path'".into()))?;
         let path = std::path::Path::new(path_str);
         if !self.sandbox.is_path_allowed(path) {
-            return Err(ToolError::PermissionDenied(format!("path outside sandbox: {}", path.display())));
+            return Err(ToolError::PermissionDenied(format!(
+                "path outside sandbox: {}",
+                path.display()
+            )));
         }
         if !path.exists() {
             return Err(ToolError::FileNotFound(path.display().to_string()));
         }
-        let recursive = args.get("recursive").and_then(|v| v.as_bool()).unwrap_or(false);
+        let recursive = args
+            .get("recursive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if path.is_dir() {
             if recursive {
-                std::fs::remove_dir_all(path).map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+                std::fs::remove_dir_all(path)
+                    .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
             } else {
                 std::fs::remove_dir(path).map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
             }
@@ -321,18 +401,32 @@ pub struct FsCopyTool {
 
 impl FsCopyTool {
     pub fn new() -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "fs.copy").unwrap();
-        Self { spec, sandbox: SandboxConfig::default() }
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "fs.copy")
+            .unwrap();
+        Self {
+            spec,
+            sandbox: SandboxConfig::default(),
+        }
     }
 }
 
 impl BuiltinTool for FsCopyTool {
-    fn name(&self) -> &str { "fs.copy" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "fs.copy"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let src_str = args.get("src").and_then(|v| v.as_str())
+        let src_str = args
+            .get("src")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'src'".into()))?;
-        let dst_str = args.get("dst").and_then(|v| v.as_str())
+        let dst_str = args
+            .get("dst")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'dst'".into()))?;
         let src = std::path::Path::new(src_str);
         let dst = std::path::Path::new(dst_str);
@@ -342,7 +436,8 @@ impl BuiltinTool for FsCopyTool {
         if !src.exists() {
             return Err(ToolError::FileNotFound(src.display().to_string()));
         }
-        let bytes = std::fs::copy(src, dst).map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+        let bytes =
+            std::fs::copy(src, dst).map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
         // Chain event: log filesystem copy
         #[cfg(feature = "exochain")]
@@ -364,18 +459,32 @@ pub struct FsMoveTool {
 
 impl FsMoveTool {
     pub fn new() -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "fs.move").unwrap();
-        Self { spec, sandbox: SandboxConfig::default() }
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "fs.move")
+            .unwrap();
+        Self {
+            spec,
+            sandbox: SandboxConfig::default(),
+        }
     }
 }
 
 impl BuiltinTool for FsMoveTool {
-    fn name(&self) -> &str { "fs.move" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "fs.move"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let src_str = args.get("src").and_then(|v| v.as_str())
+        let src_str = args
+            .get("src")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'src'".into()))?;
-        let dst_str = args.get("dst").and_then(|v| v.as_str())
+        let dst_str = args
+            .get("dst")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'dst'".into()))?;
         let src = std::path::Path::new(src_str);
         let dst = std::path::Path::new(dst_str);
@@ -407,27 +516,46 @@ pub struct FsStatTool {
 
 impl FsStatTool {
     pub fn new() -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "fs.stat").unwrap();
-        Self { spec, sandbox: SandboxConfig::default() }
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "fs.stat")
+            .unwrap();
+        Self {
+            spec,
+            sandbox: SandboxConfig::default(),
+        }
     }
 }
 
 impl BuiltinTool for FsStatTool {
-    fn name(&self) -> &str { "fs.stat" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "fs.stat"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let path_str = args.get("path").and_then(|v| v.as_str())
+        let path_str = args
+            .get("path")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'path'".into()))?;
         let path = std::path::Path::new(path_str);
         if !self.sandbox.is_path_allowed(path) {
-            return Err(ToolError::PermissionDenied(format!("path outside sandbox: {}", path.display())));
+            return Err(ToolError::PermissionDenied(format!(
+                "path outside sandbox: {}",
+                path.display()
+            )));
         }
-        let meta = std::fs::metadata(path)
-            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
-        let modified = meta.modified().ok().map(|t| {
-            let dt: DateTime<Utc> = t.into();
-            dt.to_rfc3339()
-        }).unwrap_or_default();
+        let meta =
+            std::fs::metadata(path).map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+        let modified = meta
+            .modified()
+            .ok()
+            .map(|t| {
+                let dt: DateTime<Utc> = t.into();
+                dt.to_rfc3339()
+            })
+            .unwrap_or_default();
         Ok(serde_json::json!({
             "size": meta.len(),
             "is_file": meta.is_file(),
@@ -445,16 +573,25 @@ pub struct FsExistsTool {
 
 impl FsExistsTool {
     pub fn new() -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "fs.exists").unwrap();
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "fs.exists")
+            .unwrap();
         Self { spec }
     }
 }
 
 impl BuiltinTool for FsExistsTool {
-    fn name(&self) -> &str { "fs.exists" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "fs.exists"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let path_str = args.get("path").and_then(|v| v.as_str())
+        let path_str = args
+            .get("path")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'path'".into()))?;
         let path = std::path::Path::new(path_str);
         let exists = path.exists();
@@ -472,21 +609,35 @@ pub struct FsGlobTool {
 
 impl FsGlobTool {
     pub fn new() -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "fs.glob").unwrap();
-        Self { spec, sandbox: SandboxConfig::default() }
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "fs.glob")
+            .unwrap();
+        Self {
+            spec,
+            sandbox: SandboxConfig::default(),
+        }
     }
 }
 
 impl BuiltinTool for FsGlobTool {
-    fn name(&self) -> &str { "fs.glob" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "fs.glob"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let pattern = args.get("pattern").and_then(|v| v.as_str())
+        let pattern = args
+            .get("pattern")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'pattern'".into()))?;
         let base_dir = args.get("base_dir").and_then(|v| v.as_str()).unwrap_or(".");
         let base = std::path::Path::new(base_dir);
         if !self.sandbox.is_path_allowed(base) {
-            return Err(ToolError::PermissionDenied("base_dir outside sandbox".into()));
+            return Err(ToolError::PermissionDenied(
+                "base_dir outside sandbox".into(),
+            ));
         }
         // Simple recursive walk with pattern matching
         let mut matches = Vec::new();
@@ -494,7 +645,10 @@ impl BuiltinTool for FsGlobTool {
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
                     if simple_glob_match(pattern, &name) {
                         matches.push(path.display().to_string());
                     }

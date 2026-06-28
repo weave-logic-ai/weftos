@@ -155,7 +155,7 @@ impl AgentCapabilities {
             ipc_scope: IpcScope::Restricted(vec![]),
             resource_limits: ResourceLimits {
                 max_memory_bytes: 64 * 1024 * 1024, // 64 MiB
-                max_cpu_time_ms: 60_000,             // 1 minute
+                max_cpu_time_ms: 60_000,            // 1 minute
                 max_tool_calls: 200,
                 max_messages: 500,
                 #[cfg(feature = "os-patterns")]
@@ -536,13 +536,9 @@ pub struct CapabilityElevationRequest {
 #[derive(Debug, Clone)]
 pub enum ElevationResult {
     /// Elevation granted.
-    Granted {
-        new_capabilities: AgentCapabilities,
-    },
+    Granted { new_capabilities: AgentCapabilities },
     /// Elevation denied by governance gate.
-    Denied {
-        reason: String,
-    },
+    Denied { reason: String },
 }
 
 impl AgentCapabilities {

@@ -155,13 +155,8 @@ impl TelegramChannel {
         // emitted when `allowed_users` is non-empty AND contains the
         // sender (i.e. a real positive match, not "everyone allowed
         // because the list is empty").
-        if !self.allowed_users.is_empty()
-            && self.allowed_users.iter().any(|id| id == &sender_id)
-        {
-            metadata.insert(
-                "allow_from_match".into(),
-                serde_json::Value::Bool(true),
-            );
+        if !self.allowed_users.is_empty() && self.allowed_users.iter().any(|id| id == &sender_id) {
+            metadata.insert("allow_from_match".into(), serde_json::Value::Bool(true));
         }
 
         let inbound = InboundMessage {

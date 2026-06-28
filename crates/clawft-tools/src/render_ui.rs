@@ -126,9 +126,8 @@ impl Tool for RenderUiTool {
 
     async fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         // Parse the input as a CanvasCommand.
-        let command: CanvasCommand = serde_json::from_value(args.clone()).map_err(|e| {
-            ToolError::InvalidArgs(format!("invalid canvas command: {e}"))
-        })?;
+        let command: CanvasCommand = serde_json::from_value(args.clone())
+            .map_err(|e| ToolError::InvalidArgs(format!("invalid canvas command: {e}")))?;
 
         // Extract the element ID for the response (if applicable).
         // CanvasCommand is non_exhaustive, so we keep a catch-all arm

@@ -109,8 +109,7 @@ pub enum SimdDistanceMetric {
 /// configuration controls alignment and metric selection.
 ///
 /// Requires `ruvector-core` with PR #352 merged.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SimdDistanceConfig {
     /// Whether the unified SIMD distance kernel is enabled.
     ///
@@ -138,7 +137,6 @@ pub struct SimdDistanceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lane_width: Option<u16>,
 }
-
 
 impl SimdDistanceConfig {
     /// Returns `true` when the configuration requests activation AND

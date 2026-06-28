@@ -19,8 +19,7 @@ const NODE_ID_KEYS: &[&str] = &["node_id", "peer_id", "pubkey"];
 
 /// Per-node sub-tree keys. The classifier wants at least one to avoid
 /// promoting a bare `{pubkey}` chat envelope into a Node.
-const NODE_SECTION_KEYS: &[&str] =
-    &["health", "sensor", "meta", "kernel", "agent"];
+const NODE_SECTION_KEYS: &[&str] = &["health", "sensor", "meta", "kernel", "agent"];
 
 /// Typed Object for a substrate node root.
 pub struct Node;

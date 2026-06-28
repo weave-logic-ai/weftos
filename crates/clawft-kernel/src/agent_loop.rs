@@ -300,11 +300,9 @@ fn extract_cmd(msg: &KernelMessage) -> Option<String> {
 fn extract_tool_name(msg: &KernelMessage) -> Option<String> {
     match &msg.payload {
         MessagePayload::Json(v) => v.get("tool").and_then(|t| t.as_str()).map(String::from),
-        MessagePayload::Text(text) => {
-            serde_json::from_str::<serde_json::Value>(text)
-                .ok()
-                .and_then(|v| v.get("tool").and_then(|t| t.as_str()).map(String::from))
-        }
+        MessagePayload::Text(text) => serde_json::from_str::<serde_json::Value>(text)
+            .ok()
+            .and_then(|v| v.get("tool").and_then(|t| t.as_str()).map(String::from)),
         _ => None,
     }
 }
@@ -431,7 +429,12 @@ async fn handle_message(
             // Decode RVF-typed payloads:
             //   0x40 (ExochainEvent) — treat inner CBOR/JSON as command
             //   Other — wrap as a typed envelope for the agent
-            debug!(pid, segment_type, data_len = data.len(), "received RVF payload");
+            debug!(
+                pid,
+                segment_type,
+                data_len = data.len(),
+                "received RVF payload"
+            );
 
             // With exochain: try CBOR decode first (rvf-wire format), then JSON
             #[cfg(feature = "exochain")]
@@ -505,9 +508,7 @@ async fn handle_message(
                 .and_then(|v| v.as_str())
                 .unwrap_or("ping")
                 .to_string();
-            let target_pid = cmd_value
-                .get("target_pid")
-                .and_then(|v| v.as_u64());
+            let target_pid = cmd_value.get("target_pid").and_then(|v| v.as_u64());
 
             match cron.add_job(name, interval_secs, command, target_pid) {
                 Ok(job) => serde_json::to_value(&job).unwrap_or_default(),
@@ -519,10 +520,7 @@ async fn handle_message(
             serde_json::to_value(&jobs).unwrap_or_default()
         }
         "cron.remove" => {
-            let id = cmd_value
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let id = cmd_value.get("id").and_then(|v| v.as_str()).unwrap_or("");
             match cron.remove_job(id) {
                 Ok(Some(job)) => {
                     #[cfg(feature = "exochain")]
@@ -545,10 +543,7 @@ async fn handle_message(
         }
         "exec" => {
             // K3 tool dispatch via ToolRegistry
-            let tool_name = cmd_value
-                .get("tool")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let tool_name = cmd_value.get("tool").and_then(|v| v.as_str()).unwrap_or("");
             let args = cmd_value
                 .get("args")
                 .cloned()
@@ -617,10 +612,7 @@ async fn handle_message(
             }
         }
         "echo" => {
-            let text = cmd_value
-                .get("text")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let text = cmd_value.get("text").and_then(|v| v.as_str()).unwrap_or("");
             serde_json::json!({"echo": text, "pid": pid})
         }
         "rvf.recv" => {
@@ -764,13 +756,10 @@ mod tests {
         a2a.send(msg).await.unwrap();
 
         // Wait for reply
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert_eq!(v["status"], "ok");
@@ -800,13 +789,10 @@ mod tests {
         );
         a2a.send(msg).await.unwrap();
 
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert!(v["error"].as_str().unwrap().contains("unknown command"));
@@ -825,7 +811,14 @@ mod tests {
         let mut kernel_inbox = a2a.create_inbox(0);
 
         let cancel = CancellationToken::new();
-        let handle = spawn_loop(agent_pid, cancel.clone(), inbox, a2a.clone(), cron.clone(), pt);
+        let handle = spawn_loop(
+            agent_pid,
+            cancel.clone(),
+            inbox,
+            a2a.clone(),
+            cron.clone(),
+            pt,
+        );
 
         let msg = KernelMessage::new(
             0,
@@ -839,13 +832,10 @@ mod tests {
         );
         a2a.send(msg).await.unwrap();
 
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert_eq!(v["name"], "test-job");
@@ -895,13 +885,10 @@ mod tests {
         );
         a2a.send(msg).await.unwrap();
 
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert_eq!(v["status"], "ok");
@@ -934,13 +921,10 @@ mod tests {
         );
         a2a.send(msg).await.unwrap();
 
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert_eq!(v["cmd"], "rvf.recv");
@@ -961,7 +945,14 @@ mod tests {
         let mut kernel_inbox = a2a.create_inbox(0);
 
         let cancel = CancellationToken::new();
-        let handle = spawn_loop(agent_pid, cancel.clone(), inbox, a2a.clone(), cron, pt.clone());
+        let handle = spawn_loop(
+            agent_pid,
+            cancel.clone(),
+            inbox,
+            a2a.clone(),
+            cron,
+            pt.clone(),
+        );
 
         // Send a ping
         let msg = KernelMessage::new(
@@ -972,13 +963,10 @@ mod tests {
         a2a.send(msg).await.unwrap();
 
         // Wait for reply
-        let _reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let _reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         // Cancel and wait for the loop to exit (which triggers final resource update)
         cancel.cancel();
@@ -986,7 +974,10 @@ mod tests {
 
         // Check resource usage was updated
         let entry = pt.get(agent_pid).unwrap();
-        assert!(entry.resource_usage.messages_sent >= 1, "messages_sent should be at least 1");
+        assert!(
+            entry.resource_usage.messages_sent >= 1,
+            "messages_sent should be at least 1"
+        );
     }
 
     #[tokio::test]
@@ -996,7 +987,14 @@ mod tests {
         let mut kernel_inbox = a2a.create_inbox(0);
 
         let cancel = CancellationToken::new();
-        let handle = spawn_loop(agent_pid, cancel.clone(), inbox, a2a.clone(), cron, pt.clone());
+        let handle = spawn_loop(
+            agent_pid,
+            cancel.clone(),
+            inbox,
+            a2a.clone(),
+            cron,
+            pt.clone(),
+        );
 
         // Send suspend
         let msg = KernelMessage::new(
@@ -1007,13 +1005,10 @@ mod tests {
         a2a.send(msg).await.unwrap();
 
         // Wait for suspended acknowledgement
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert_eq!(v["status"], "suspended");
@@ -1033,13 +1028,10 @@ mod tests {
         );
         a2a.send(msg).await.unwrap();
 
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert_eq!(v["error"], "agent suspended");
@@ -1055,13 +1047,10 @@ mod tests {
         );
         a2a.send(msg).await.unwrap();
 
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert_eq!(v["status"], "resumed");
@@ -1081,13 +1070,10 @@ mod tests {
         );
         a2a.send(msg).await.unwrap();
 
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert_eq!(v["status"], "ok");
@@ -1152,13 +1138,10 @@ mod tests {
         );
         a2a.send(msg).await.unwrap();
 
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert_eq!(v["denied"], true);
@@ -1221,13 +1204,10 @@ mod tests {
         );
         a2a.send(msg).await.unwrap();
 
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert_eq!(v["status"], "ok");
@@ -1279,13 +1259,10 @@ mod tests {
         a2a.send(msg).await.unwrap();
 
         // Wait for reply
-        let _reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let _reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         cancel.cancel();
         handle.await.unwrap();
@@ -1350,13 +1327,10 @@ mod tests {
         a2a.send(suspend_msg).await.unwrap();
 
         // Wait for suspended ack
-        let _reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let _reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         // Send resume
         let resume_msg = KernelMessage::new(
@@ -1368,13 +1342,10 @@ mod tests {
         a2a.send(resume_msg).await.unwrap();
 
         // Wait for resumed ack
-        let _reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let _reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         cancel.cancel();
         handle.await.unwrap();
@@ -1384,7 +1355,10 @@ mod tests {
         let suspend_evt = events.iter().find(|e| e.kind == "agent.suspend");
         let resume_evt = events.iter().find(|e| e.kind == "agent.resume");
 
-        assert!(suspend_evt.is_some(), "expected agent.suspend event on chain");
+        assert!(
+            suspend_evt.is_some(),
+            "expected agent.suspend event on chain"
+        );
         assert!(resume_evt.is_some(), "expected agent.resume event on chain");
 
         let sp = suspend_evt.unwrap().payload.as_ref().unwrap();
@@ -1416,13 +1390,10 @@ mod tests {
         );
         a2a.send(msg).await.unwrap();
 
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert_eq!(v["echo"], "hello world");
@@ -1452,13 +1423,10 @@ mod tests {
         );
         a2a.send(msg).await.unwrap();
 
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert_eq!(v["status"], "ok");
@@ -1487,13 +1455,10 @@ mod tests {
         );
         a2a.send(msg).await.unwrap();
 
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             // Plain text becomes {"cmd": "echo", "text": "just plain text"}
@@ -1546,13 +1511,10 @@ mod tests {
         // Drop the sender to close the inbox
         drop(tx);
 
-        let code = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            handle,
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let code = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .unwrap()
+            .unwrap();
 
         assert_eq!(code, 0, "should exit cleanly when inbox closes");
     }
@@ -1573,13 +1535,10 @@ mod tests {
         );
         a2a.send(msg).await.unwrap();
 
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert!(v.is_array(), "cron.list should return array");
@@ -1608,13 +1567,10 @@ mod tests {
         );
         a2a.send(msg).await.unwrap();
 
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert_eq!(v["removed"], false);
@@ -1644,13 +1600,10 @@ mod tests {
         );
         a2a.send(msg).await.unwrap();
 
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert_eq!(v["status"], "ok");
@@ -1680,17 +1633,17 @@ mod tests {
         );
         a2a.send(msg).await.unwrap();
 
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         if let MessagePayload::Json(v) = &reply.payload {
             assert!(
-                v["error"].as_str().unwrap().contains("tool registry not available"),
+                v["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("tool registry not available"),
                 "should report tool registry unavailable"
             );
         } else {
@@ -1708,7 +1661,14 @@ mod tests {
         let mut kernel_inbox = a2a.create_inbox(0);
 
         let cancel = CancellationToken::new();
-        let handle = spawn_loop(agent_pid, cancel.clone(), inbox, a2a.clone(), cron, pt.clone());
+        let handle = spawn_loop(
+            agent_pid,
+            cancel.clone(),
+            inbox,
+            a2a.clone(),
+            cron,
+            pt.clone(),
+        );
 
         // Send 3 pings
         for _ in 0..3 {
@@ -1718,13 +1678,11 @@ mod tests {
                 MessagePayload::Json(serde_json::json!({"cmd": "ping"})),
             );
             a2a.send(msg).await.unwrap();
-            let _reply = tokio::time::timeout(
-                std::time::Duration::from_secs(1),
-                kernel_inbox.recv(),
-            )
-            .await
-            .unwrap()
-            .unwrap();
+            let _reply =
+                tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
         }
 
         cancel.cancel();
@@ -1756,23 +1714,17 @@ mod tests {
         a2a.send(msg).await.unwrap();
 
         // Wait for suspended ack
-        let _reply = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            kernel_inbox.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let _reply = tokio::time::timeout(std::time::Duration::from_secs(1), kernel_inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         // Cancel while suspended
         cancel.cancel();
-        let code = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            handle,
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let code = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .unwrap()
+            .unwrap();
 
         assert_eq!(code, 0, "should exit cleanly when cancelled during suspend");
     }

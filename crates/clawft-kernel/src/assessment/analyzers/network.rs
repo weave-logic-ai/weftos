@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::assessment::analyzer::{AnalysisContext, Analyzer};
 use crate::assessment::Finding;
+use crate::assessment::analyzer::{AnalysisContext, Analyzer};
 
 /// Analyzer that scans for network endpoint references in config and source files.
 pub struct NetworkAnalyzer;
@@ -196,7 +196,15 @@ fn extract_urls(line: &str) -> Vec<String> {
         let rest = &search[start..];
         // URL ends at whitespace or quote/backtick delimiter
         let end = rest
-            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '`' || c == '>' || c == ')' || c == ']')
+            .find(|c: char| {
+                c.is_whitespace()
+                    || c == '"'
+                    || c == '\''
+                    || c == '`'
+                    || c == '>'
+                    || c == ')'
+                    || c == ']'
+            })
             .unwrap_or(rest.len());
         let url = &rest[..end];
         if url.len() > 8 {

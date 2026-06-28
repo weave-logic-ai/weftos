@@ -7,8 +7,8 @@
 //! This module is compiled only when the `ecc` feature is enabled.
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -20,11 +20,11 @@ use crate::hnsw_eml::{HnswEmlConfig, HnswEmlManager};
 use crate::service::{ServiceType, SystemService};
 
 #[cfg(feature = "exochain")]
-use std::sync::Arc;
-#[cfg(feature = "exochain")]
 use crate::chain::ChainManager;
 #[cfg(feature = "exochain")]
 use crate::governance::{EffectVector, GovernanceDecision, GovernanceEngine, GovernanceRequest};
+#[cfg(feature = "exochain")]
+use std::sync::Arc;
 
 // ── Configuration ────────────────────────────────────────────────────────
 
@@ -223,11 +223,7 @@ impl HnswService {
         // EML: adaptive rebuild — trigger early when recall is predicted
         // to have degraded, even if the mutation count hasn't hit the
         // static threshold.
-        let rebuild_pred = eml.predict_rebuild(
-            store_size,
-            store.inserts_since_rebuild(),
-            0,
-        );
+        let rebuild_pred = eml.predict_rebuild(store_size, store.inserts_since_rebuild(), 0);
         if rebuild_pred.is_learned && rebuild_pred.should_rebuild {
             store.force_rebuild();
         }
@@ -282,22 +278,14 @@ impl HnswService {
     }
 
     /// Measure recall against brute-force and feed the EML rebuild model.
-    pub fn measure_recall(
-        &self,
-        queries: &[Vec<f32>],
-        top_k: usize,
-    ) -> f64 {
+    pub fn measure_recall(&self, queries: &[Vec<f32>], top_k: usize) -> f64 {
         let mut store = self.store.lock().expect("HnswStore lock poisoned");
         let mut eml = self.eml.lock().expect("EML lock poisoned");
 
         let mut hnsw_ids = Vec::with_capacity(queries.len());
         let mut exact_ids = Vec::with_capacity(queries.len());
         for q in queries {
-            let hnsw: Vec<String> = store
-                .query(q, top_k)
-                .into_iter()
-                .map(|r| r.id)
-                .collect();
+            let hnsw: Vec<String> = store.query(q, top_k).into_iter().map(|r| r.id).collect();
             let exact = store.brute_force_topk(q, top_k);
             hnsw_ids.push(hnsw);
             exact_ids.push(exact);
@@ -362,11 +350,7 @@ impl HnswService {
     ///
     /// This avoids per-query mutex acquisition overhead when processing
     /// multiple embeddings in a single tick (e.g., DEMOCRITUS loop).
-    pub fn search_batch(
-        &self,
-        queries: &[&[f32]],
-        top_k: usize,
-    ) -> Vec<Vec<HnswSearchResult>> {
+    pub fn search_batch(&self, queries: &[&[f32]], top_k: usize) -> Vec<Vec<HnswSearchResult>> {
         let mut store = self.store.lock().expect("HnswStore lock poisoned");
         self.search_count
             .fetch_add(queries.len() as u64, Ordering::Relaxed);
@@ -422,11 +406,10 @@ impl HnswService {
         let mut results = Vec::with_capacity(top_k);
 
         for r in raw {
-            let primary_id = r
-                .id
-                .find("::")
-                .map(|pos| r.id[..pos].to_string())
-                .unwrap_or_else(|| r.id.clone());
+            let primary_id =
+                r.id.find("::")
+                    .map(|pos| r.id[..pos].to_string())
+                    .unwrap_or_else(|| r.id.clone());
 
             if seen.insert(primary_id.clone()) {
                 results.push(HnswSearchResult {
@@ -474,8 +457,10 @@ impl HnswService {
         // Governance gate: bulk destruction (hnsw clear).
         #[cfg(feature = "exochain")]
         if let Some(ref engine) = self.governance_engine {
-            let req = GovernanceRequest::new("system", "hnsw.clear")
-                .with_effect(EffectVector { risk: 0.8, ..Default::default() });
+            let req = GovernanceRequest::new("system", "hnsw.clear").with_effect(EffectVector {
+                risk: 0.8,
+                ..Default::default()
+            });
             let result = engine.evaluate(&req);
             match &result.decision {
                 GovernanceDecision::Deny(reason) | GovernanceDecision::EscalateToHuman(reason) => {
@@ -523,15 +508,16 @@ impl HnswService {
         // Chain logging: hnsw.save
         #[cfg(feature = "exochain")]
         if result.is_ok()
-            && let Some(ref cm) = self.chain_manager {
-                cm.append(
-                    "hnsw_service",
-                    crate::chain::EVENT_KIND_HNSW_SAVE,
-                    Some(serde_json::json!({
-                        "path": path.display().to_string(),
-                    })),
-                );
-            }
+            && let Some(ref cm) = self.chain_manager
+        {
+            cm.append(
+                "hnsw_service",
+                crate::chain::EVENT_KIND_HNSW_SAVE,
+                Some(serde_json::json!({
+                    "path": path.display().to_string(),
+                })),
+            );
+        }
 
         result
     }
@@ -547,7 +533,7 @@ impl HnswService {
     pub fn load_from_file(path: &std::path::Path) -> Result<Self, std::io::Error> {
         let store = HnswStore::load(path)?;
         let config = HnswServiceConfig {
-            ef_search: 100,  // store doesn't expose params after load; use defaults
+            ef_search: 100, // store doesn't expose params after load; use defaults
             ef_construction: 200,
             default_dimensions: 384,
         };
@@ -658,10 +644,7 @@ pub fn entity_search_keys(
 
     // Add source-file context key.
     if let Some(src) = source_file {
-        keys.push((
-            "context".to_string(),
-            format!("{} in {}", label, src),
-        ));
+        keys.push(("context".to_string(), format!("{} in {}", label, src)));
     }
 
     // Add description key from metadata, if present.
@@ -756,7 +739,8 @@ mod tests {
         svc.insert("b".into(), vec![0.0], serde_json::json!({}));
         assert_eq!(svc.len(), 2);
 
-        svc.clear().expect("clear should succeed without governance engine");
+        svc.clear()
+            .expect("clear should succeed without governance engine");
         assert!(svc.is_empty());
         assert_eq!(svc.len(), 0);
         // Counters are preserved after clear.
@@ -819,9 +803,21 @@ mod tests {
     #[test]
     fn persist_index_with_vectors_search_matches() {
         let svc = make_service();
-        svc.insert("a".into(), vec![1.0, 0.0, 0.0], serde_json::json!({"tag": "first"}));
-        svc.insert("b".into(), vec![0.0, 1.0, 0.0], serde_json::json!({"tag": "second"}));
-        svc.insert("c".into(), vec![0.0, 0.0, 1.0], serde_json::json!({"tag": "third"}));
+        svc.insert(
+            "a".into(),
+            vec![1.0, 0.0, 0.0],
+            serde_json::json!({"tag": "first"}),
+        );
+        svc.insert(
+            "b".into(),
+            vec![0.0, 1.0, 0.0],
+            serde_json::json!({"tag": "second"}),
+        );
+        svc.insert(
+            "c".into(),
+            vec![0.0, 0.0, 1.0],
+            serde_json::json!({"tag": "third"}),
+        );
 
         let path = tmp_path("vectors");
         svc.save_to_file(&path).unwrap();
@@ -882,9 +878,18 @@ mod tests {
     fn insert_multi_key_respects_max_keys() {
         let svc = make_service();
         let keys = vec![
-            MultiKey { key_type: "name".into(), embedding: vec![1.0, 0.0] },
-            MultiKey { key_type: "context".into(), embedding: vec![0.0, 1.0] },
-            MultiKey { key_type: "description".into(), embedding: vec![0.5, 0.5] },
+            MultiKey {
+                key_type: "name".into(),
+                embedding: vec![1.0, 0.0],
+            },
+            MultiKey {
+                key_type: "context".into(),
+                embedding: vec![0.0, 1.0],
+            },
+            MultiKey {
+                key_type: "description".into(),
+                embedding: vec![0.5, 0.5],
+            },
         ];
 
         svc.insert_multi_key("e1".into(), &keys, serde_json::json!({}), 2);
@@ -916,7 +921,11 @@ mod tests {
         );
 
         // Insert entity_b with one key.
-        svc.insert("entity_b".into(), vec![0.0, 1.0, 0.0], serde_json::json!({"label": "B"}));
+        svc.insert(
+            "entity_b".into(),
+            vec![0.0, 1.0, 0.0],
+            serde_json::json!({"label": "B"}),
+        );
 
         // Query near entity_a's embeddings.
         let results = svc.search_dedup(&[1.0, 0.0, 0.0], 2);
@@ -958,12 +967,7 @@ mod tests {
                     embedding: vec![1.0 - (i as f32 * 0.2), i as f32 * 0.2, 0.1],
                 },
             ];
-            svc.insert_multi_key(
-                format!("e{i}"),
-                &keys,
-                serde_json::json!({}),
-                4,
-            );
+            svc.insert_multi_key(format!("e{i}"), &keys, serde_json::json!({}), 4);
         }
 
         let results = svc.search_dedup(&[1.0, 0.0, 0.0], 2);
@@ -986,11 +990,7 @@ mod tests {
 
     #[test]
     fn entity_search_keys_with_source_file() {
-        let keys = entity_search_keys(
-            "MyFunc",
-            Some("src/lib.rs"),
-            &serde_json::json!({}),
-        );
+        let keys = entity_search_keys("MyFunc", Some("src/lib.rs"), &serde_json::json!({}));
         assert_eq!(keys.len(), 2);
         assert_eq!(keys[1].0, "context");
         assert_eq!(keys[1].1, "MyFunc in src/lib.rs");

@@ -15,7 +15,7 @@
 use thiserror::Error;
 use toml::Value as Toml;
 
-use super::expr::{parse as parse_expr, ParseError as ExprError};
+use super::expr::{ParseError as ExprError, parse as parse_expr};
 use crate::tree::{
     AffordanceDecl, AttrValue, Binding, IdentityIri, Input, InputExt, Invocation, Mode, ModeExt,
     SurfaceNode, SurfaceTree,
@@ -88,10 +88,7 @@ fn parse_variant(index: usize, t: Toml) -> Result<SurfaceTree, ParseError> {
     let id = tbl
         .get("id")
         .and_then(Toml::as_str)
-        .ok_or(ParseError::MissingField {
-            index,
-            field: "id",
-        })?
+        .ok_or(ParseError::MissingField { index, field: "id" })?
         .to_string();
 
     let modes = tbl
@@ -118,10 +115,7 @@ fn parse_variant(index: usize, t: Toml) -> Result<SurfaceTree, ParseError> {
         .transpose()?
         .unwrap_or_default();
 
-    let title = tbl
-        .get("title")
-        .and_then(Toml::as_str)
-        .map(str::to_string);
+    let title = tbl.get("title").and_then(Toml::as_str).map(str::to_string);
 
     let subscriptions = tbl
         .get("subscriptions")
@@ -150,9 +144,9 @@ fn parse_variant(index: usize, t: Toml) -> Result<SurfaceTree, ParseError> {
 }
 
 fn parse_node(t: Toml) -> Result<SurfaceNode, ParseError> {
-    let tbl = t.as_table().ok_or(ParseError::BadAffordance(
-        "node must be a table",
-    ))?;
+    let tbl = t
+        .as_table()
+        .ok_or(ParseError::BadAffordance("node must be a table"))?;
 
     let iri = tbl
         .get("type")
@@ -161,8 +155,7 @@ fn parse_node(t: Toml) -> Result<SurfaceNode, ParseError> {
             index: 0,
             field: "type",
         })?;
-    let kind =
-        IdentityIri::parse(iri).ok_or_else(|| ParseError::UnknownIri(iri.to_string()))?;
+    let kind = IdentityIri::parse(iri).ok_or_else(|| ParseError::UnknownIri(iri.to_string()))?;
 
     let path = tbl
         .get("id")
@@ -223,18 +216,17 @@ fn parse_node(t: Toml) -> Result<SurfaceNode, ParseError> {
 }
 
 fn parse_binding(src: &str, key: &str) -> Result<Binding, ParseError> {
-    let expr =
-        parse_expr(src).map_err(|source| ParseError::BadExpr {
-            key: key.to_string(),
-            source,
-        })?;
+    let expr = parse_expr(src).map_err(|source| ParseError::BadExpr {
+        key: key.to_string(),
+        source,
+    })?;
     Ok(Binding::Expr(expr))
 }
 
 fn parse_affordance(t: Toml) -> Result<AffordanceDecl, ParseError> {
-    let tbl = t.as_table().ok_or(ParseError::BadAffordance(
-        "affordance must be a table",
-    ))?;
+    let tbl = t
+        .as_table()
+        .ok_or(ParseError::BadAffordance("affordance must be a table"))?;
     let name = tbl
         .get("name")
         .and_then(Toml::as_str)
@@ -252,8 +244,7 @@ fn parse_affordance(t: Toml) -> Result<AffordanceDecl, ParseError> {
             arr.iter()
                 .filter_map(Toml::as_str)
                 .map(|s| {
-                    Invocation::parse(s)
-                        .ok_or_else(|| ParseError::UnknownInvocation(s.into()))
+                    Invocation::parse(s).ok_or_else(|| ParseError::UnknownInvocation(s.into()))
                 })
                 .collect::<Result<Vec<_>, _>>()
         })
@@ -278,8 +269,7 @@ fn toml_to_attr(v: &Toml) -> Option<AttrValue> {
         Toml::Float(f) => AttrValue::Number(*f),
         Toml::String(s) => AttrValue::Str(s.clone()),
         Toml::Array(arr) => {
-            let items: Vec<AttrValue> =
-                arr.iter().filter_map(toml_to_attr).collect();
+            let items: Vec<AttrValue> = arr.iter().filter_map(toml_to_attr).collect();
             AttrValue::Array(items)
         }
         // Nested tables inside attrs aren't supported in M1.5 — we
@@ -289,4 +279,3 @@ fn toml_to_attr(v: &Toml) -> Option<AttrValue> {
         _ => return None,
     })
 }
-

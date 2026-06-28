@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::assessment::analyzer::{AnalysisContext, Analyzer};
 use crate::assessment::Finding;
+use crate::assessment::analyzer::{AnalysisContext, Analyzer};
 
 /// Analyzer that identifies Terraform configuration, resources, providers, and state files.
 pub struct TerraformAnalyzer;
@@ -32,10 +32,7 @@ impl Analyzer for TerraformAnalyzer {
         for path in files {
             let rel = path.strip_prefix(project).unwrap_or(path);
             let rel_str = rel.display().to_string();
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
             // terraform.tfstate — committed state file is a security risk
@@ -188,16 +185,18 @@ fn extract_tf_blocks(content: &str, rel_str: &str, findings: &mut Vec<Finding>) 
         }
 
         // version constraint inside provider/required_providers block
-        if trimmed.starts_with("version") && trimmed.contains('=')
-            && let Some(v) = extract_version_value(trimmed) {
-                findings.push(Finding {
-                    severity: "info".into(),
-                    category: "infrastructure".into(),
-                    file: rel_str.to_string(),
-                    line: Some(i + 1),
-                    message: format!("Terraform version constraint: {v}"),
-                });
-            }
+        if trimmed.starts_with("version")
+            && trimmed.contains('=')
+            && let Some(v) = extract_version_value(trimmed)
+        {
+            findings.push(Finding {
+                severity: "info".into(),
+                category: "infrastructure".into(),
+                file: rel_str.to_string(),
+                line: Some(i + 1),
+                message: format!("Terraform version constraint: {v}"),
+            });
+        }
     }
 }
 
@@ -249,7 +248,10 @@ fn extract_tfvars(content: &str, rel_str: &str, findings: &mut Vec<Finding>) {
         // Simple pattern: key = value
         if let Some(eq_pos) = trimmed.find('=') {
             let key = trimmed[..eq_pos].trim();
-            if !key.is_empty() && key.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            if !key.is_empty()
+                && key
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
             {
                 findings.push(Finding {
                     severity: "info".into(),
@@ -286,17 +288,19 @@ fn extract_lock_providers(content: &str, rel_str: &str, findings: &mut Vec<Findi
             continue;
         }
 
-        if trimmed.starts_with("version") && trimmed.contains('=')
+        if trimmed.starts_with("version")
+            && trimmed.contains('=')
             && let Some(v) = extract_version_value(trimmed)
-                && let Some(ref prov) = current_provider {
-                    findings.push(Finding {
-                        severity: "info".into(),
-                        category: "infrastructure".into(),
-                        file: rel_str.to_string(),
-                        line: Some(i + 1),
-                        message: format!("Terraform locked provider version: {prov} = {v}"),
-                    });
-                }
+            && let Some(ref prov) = current_provider
+        {
+            findings.push(Finding {
+                severity: "info".into(),
+                category: "infrastructure".into(),
+                file: rel_str.to_string(),
+                line: Some(i + 1),
+                message: format!("Terraform locked provider version: {prov} = {v}"),
+            });
+        }
 
         if trimmed == "}" {
             current_provider = None;

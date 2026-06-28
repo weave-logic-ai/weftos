@@ -243,12 +243,7 @@ impl HttpApiHandler {
 /// Looks for keys `"risk"`, `"fairness"`, `"privacy"`, `"novelty"`,
 /// `"security"` and parses their values as f64.
 fn extract_effect_vector(context: &HashMap<String, serde_json::Value>) -> EffectVector {
-    let f = |key: &str| -> f64 {
-        context
-            .get(key)
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0)
-    };
+    let f = |key: &str| -> f64 { context.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0) };
     EffectVector {
         risk: f("risk"),
         fairness: f("fairness"),
@@ -288,11 +283,7 @@ pub fn match_route(method: &str, path: &str) -> Route {
 ///
 /// This is a convenience function for embedding in a minimal HTTP
 /// server without pulling in a framework dependency.
-pub fn dispatch(
-    handler: &HttpApiHandler,
-    route: &Route,
-    body: &[u8],
-) -> Result<Vec<u8>, Vec<u8>> {
+pub fn dispatch(handler: &HttpApiHandler, route: &Route, body: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
     match route {
         Route::Execute => {
             let req: ExecuteRequest = serde_json::from_slice(body).map_err(|e| {

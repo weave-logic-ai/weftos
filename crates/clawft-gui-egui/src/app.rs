@@ -5,7 +5,7 @@ use std::sync::Arc;
 use eframe::egui;
 
 use crate::live::Live;
-use crate::shell::{self, desktop::Desktop, Phase};
+use crate::shell::{self, Phase, desktop::Desktop};
 
 pub struct ClawftApp {
     phase: Phase,
@@ -22,9 +22,7 @@ pub struct ClawftApp {
 /// `/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf` via
 /// `pyftsubset --unicodes=U+25A2,U+2263,...` so the bundled bytes
 /// are ~3 KB instead of the full 700 KB.
-const SYMBOLS_FONT: &[u8] = include_bytes!(
-    "../assets/fonts/DejaVuSans-WeftSymbols.ttf"
-);
+const SYMBOLS_FONT: &[u8] = include_bytes!("../assets/fonts/DejaVuSans-WeftSymbols.ttf");
 
 /// Append the symbol-font subset to every family's fallback list so
 /// painting an icon glyph that the primary font lacks falls through
@@ -35,10 +33,7 @@ fn install_symbol_font(ctx: &egui::Context) {
         "weft-symbols".to_string(),
         std::sync::Arc::new(egui::FontData::from_static(SYMBOLS_FONT)),
     );
-    for family in [
-        egui::FontFamily::Proportional,
-        egui::FontFamily::Monospace,
-    ] {
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
         fonts
             .families
             .entry(family)
@@ -56,10 +51,8 @@ impl ClawftApp {
 
         // Preload the boot logo so the splash appears on frame 1 instead
         // of flashing in once the async image loader catches up.
-        cc.egui_ctx.include_bytes(
-            "bytes://weftos-gold.png",
-            crate::shell::boot::LOGO_PNG,
-        );
+        cc.egui_ctx
+            .include_bytes("bytes://weftos-gold.png", crate::shell::boot::LOGO_PNG);
 
         Self {
             phase: Phase::boot(),
@@ -106,4 +99,3 @@ impl eframe::App for ClawftApp {
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }
 }
-

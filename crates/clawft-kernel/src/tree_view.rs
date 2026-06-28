@@ -94,16 +94,12 @@ impl AgentTreeView {
         match &self.scope {
             TreeScope::Full => true,
             TreeScope::Restricted { agent_path } => {
-                path.starts_with(agent_path)
-                    || path.starts_with("/kernel/config/") // read-only config access
+                path.starts_with(agent_path) || path.starts_with("/kernel/config/") // read-only config access
             }
             TreeScope::Namespace {
                 agent_path,
                 namespaces,
-            } => {
-                path.starts_with(agent_path)
-                    || namespaces.iter().any(|ns| path.starts_with(ns))
-            }
+            } => path.starts_with(agent_path) || namespaces.iter().any(|ns| path.starts_with(ns)),
             TreeScope::None => false,
         }
     }
@@ -119,10 +115,7 @@ impl AgentTreeView {
             TreeScope::Namespace {
                 agent_path,
                 namespaces,
-            } => {
-                path.starts_with(agent_path)
-                    || namespaces.iter().any(|ns| path.starts_with(ns))
-            }
+            } => path.starts_with(agent_path) || namespaces.iter().any(|ns| path.starts_with(ns)),
             TreeScope::None => false,
         }
     }
@@ -135,10 +128,7 @@ impl AgentTreeView {
             Err(KernelError::CapabilityDenied {
                 pid: self.pid,
                 action: format!("read path '{path}'"),
-                reason: format!(
-                    "agent '{}' not authorized for path '{path}'",
-                    self.agent_id
-                ),
+                reason: format!("agent '{}' not authorized for path '{path}'", self.agent_id),
             })
         }
     }

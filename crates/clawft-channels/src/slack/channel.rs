@@ -202,10 +202,7 @@ impl SlackChannel {
                     .any(|id| id == sender_id)
         };
         if allow_match {
-            metadata.insert(
-                "allow_from_match".into(),
-                serde_json::Value::Bool(true),
-            );
+            metadata.insert("allow_from_match".into(), serde_json::Value::Bool(true));
         }
 
         let inbound = InboundMessage {

@@ -125,7 +125,9 @@ impl CanonResponse {
         let first_seen_ms = {
             let key = egui::Id::new(("canon.first_seen", id));
             ctx.memory_mut(|m| {
-                let v = m.data.get_persisted_mut_or_insert_with::<f64>(key, || now_ms);
+                let v = m
+                    .data
+                    .get_persisted_mut_or_insert_with::<f64>(key, || now_ms);
                 *v
             })
         };

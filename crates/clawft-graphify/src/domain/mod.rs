@@ -84,7 +84,10 @@ impl DomainRegistry {
 
     /// Look up a domain by tag.
     pub fn get(&self, tag: &str) -> Option<&dyn Domain> {
-        self.domains.iter().find(|d| d.domain_tag() == tag).map(|d| d.as_ref())
+        self.domains
+            .iter()
+            .find(|d| d.domain_tag() == tag)
+            .map(|d| d.as_ref())
     }
 
     /// Return the tags of all registered domains.

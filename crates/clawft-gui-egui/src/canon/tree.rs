@@ -8,9 +8,9 @@ use std::collections::HashSet;
 
 use eframe::egui;
 
+use super::CanonWidget;
 use super::response::CanonResponse;
 use super::types::{Affordance, Confidence, IdentityUri, MutationAxis, Tooltip, VariantId};
-use super::CanonWidget;
 
 const IDENTITY: &str = "ui://tree";
 
@@ -171,7 +171,9 @@ impl<'a> Tree<'a> {
 
         // Flush the updated open-set back into memory.
         ui.ctx().memory_mut(|m| {
-            let slot = m.data.get_persisted_mut_or_default::<HashSet<String>>(open_key);
+            let slot = m
+                .data
+                .get_persisted_mut_or_default::<HashSet<String>>(open_key);
             *slot = next_open;
         });
 
@@ -190,8 +192,8 @@ impl<'a> Tree<'a> {
             None
         };
 
-        let canon =
-            CanonResponse::from_egui(resp, Cow::Borrowed(IDENTITY), variant, chosen).with_id_hint(id);
+        let canon = CanonResponse::from_egui(resp, Cow::Borrowed(IDENTITY), variant, chosen)
+            .with_id_hint(id);
         (canon, outcome)
     }
 }

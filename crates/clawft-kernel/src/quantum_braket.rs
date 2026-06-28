@@ -30,9 +30,7 @@ pub enum BraketDevice {
 impl BraketDevice {
     pub fn arn(self) -> &'static str {
         match self {
-            BraketDevice::QueraAquila => {
-                "arn:aws:braket:us-east-1::device/qpu/quera/Aquila"
-            }
+            BraketDevice::QueraAquila => "arn:aws:braket:us-east-1::device/qpu/quera/Aquila",
             BraketDevice::LocalSimulator => "local:braket/braket_ahs_sim",
         }
     }

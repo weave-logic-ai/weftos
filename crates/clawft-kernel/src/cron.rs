@@ -5,8 +5,8 @@
 //! target agents via the A2ARouter.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -341,8 +341,12 @@ mod tests {
     #[test]
     fn add_and_list_jobs() {
         let svc = CronService::new();
-        let j1 = svc.add_job("heartbeat".into(), 10, "ping".into(), Some(1)).unwrap();
-        let j2 = svc.add_job("cleanup".into(), 60, "gc".into(), None).unwrap();
+        let j1 = svc
+            .add_job("heartbeat".into(), 10, "ping".into(), Some(1))
+            .unwrap();
+        let j2 = svc
+            .add_job("cleanup".into(), 60, "gc".into(), None)
+            .unwrap();
 
         let jobs = svc.list_jobs();
         assert_eq!(jobs.len(), 2);
@@ -388,7 +392,9 @@ mod tests {
     #[test]
     fn tick_respects_interval() {
         let svc = CronService::new();
-        let _job = svc.add_job("slow".into(), 3600, "check".into(), None).unwrap();
+        let _job = svc
+            .add_job("slow".into(), 3600, "check".into(), None)
+            .unwrap();
 
         // First tick fires (never fired before)
         let result = svc.tick();
@@ -402,7 +408,9 @@ mod tests {
     #[test]
     fn tick_skips_disabled_jobs() {
         let svc = CronService::new();
-        let job = svc.add_job("disabled".into(), 1, "noop".into(), None).unwrap();
+        let job = svc
+            .add_job("disabled".into(), 1, "noop".into(), None)
+            .unwrap();
 
         // Disable the job
         {

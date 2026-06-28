@@ -18,11 +18,11 @@ use std::borrow::Cow;
 
 use eframe::egui;
 
+use super::CanonWidget;
 use super::response::CanonResponse;
 use super::types::{
     Affordance, Confidence, IdentityUri, Modality, MutationAxis, Tooltip, VariantId,
 };
-use super::CanonWidget;
 
 const IDENTITY: &str = "ui://modal";
 
@@ -52,10 +52,8 @@ static AFFORDANCES_DISMISSABLE: &[Affordance] = &[Affordance {
 
 /// Non-safety modalities expose style / placement. `Modal`'s axes are
 /// frozen (see `mutation_axes` dispatch below).
-static MUTATION_AXES_NON_SAFETY: &[MutationAxis] = &[
-    MutationAxis::new("style"),
-    MutationAxis::new("placement"),
-];
+static MUTATION_AXES_NON_SAFETY: &[MutationAxis] =
+    &[MutationAxis::new("style"), MutationAxis::new("placement")];
 static MUTATION_AXES_FROZEN: &[MutationAxis] = &[];
 
 /// Floating-surface primitive with typed modality.
@@ -214,11 +212,7 @@ where
     let screen = ctx.content_rect();
     let scrim_layer = egui::LayerId::new(egui::Order::Background, id.with("scrim"));
     let scrim_painter = egui::Painter::new(ctx.clone(), scrim_layer, screen);
-    scrim_painter.rect_filled(
-        screen,
-        0.0,
-        egui::Color32::from_black_alpha(140),
-    );
+    scrim_painter.rect_filled(screen, 0.0, egui::Color32::from_black_alpha(140));
 
     let mut held_open = true;
     let window = egui::Window::new(title)
@@ -269,12 +263,7 @@ where
         .unwrap_or_else(|| ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover()))
 }
 
-fn show_toast<F>(
-    ui: &mut egui::Ui,
-    id: egui::Id,
-    duration_ms: u64,
-    body: F,
-) -> egui::Response
+fn show_toast<F>(ui: &mut egui::Ui, id: egui::Id, duration_ms: u64, body: F) -> egui::Response
 where
     F: FnOnce(&mut egui::Ui),
 {

@@ -4,8 +4,8 @@
 //! for supported languages. Each function takes source code and a
 //! tree-sitter `Language` grammar, operating purely on in-memory data.
 
-use tree_sitter::{Node, Parser, Tree};
 use tracing::debug;
+use tree_sitter::{Node, Parser, Tree};
 
 use crate::types::{AstNode, ComplexityMetrics, FunctionComplexity, Language, Symbol};
 
@@ -162,11 +162,7 @@ fn symbol_kind(node: &Node, language: Language) -> String {
 ///
 /// Cyclomatic complexity starts at 1 per function, with +1 for each
 /// branching construct (if, while, for, match arm, &&, ||, etc.).
-pub fn calculate_complexity(
-    tree: &Tree,
-    source: &str,
-    language: Language,
-) -> ComplexityMetrics {
+pub fn calculate_complexity(tree: &Tree, source: &str, language: Language) -> ComplexityMetrics {
     let root = tree.root_node();
     let mut functions = Vec::new();
 
@@ -177,8 +173,7 @@ pub fn calculate_complexity(
 
     debug!(
         total_complexity,
-        function_count,
-        "calculated complexity metrics"
+        function_count, "calculated complexity metrics"
     );
 
     ComplexityMetrics {
@@ -207,8 +202,8 @@ fn collect_function_complexity(
     };
 
     if is_function {
-        let name = find_name_child(&node, source, language)
-            .unwrap_or_else(|| "<anonymous>".to_string());
+        let name =
+            find_name_child(&node, source, language).unwrap_or_else(|| "<anonymous>".to_string());
         let complexity = count_branches(node, language) + 1;
 
         out.push(FunctionComplexity {
@@ -292,9 +287,7 @@ fn count_branches(node: Node, language: Language) -> usize {
 }
 
 /// Get the tree-sitter language grammar for a supported language.
-fn get_tree_sitter_language(
-    language: Language,
-) -> Result<tree_sitter::Language, String> {
+fn get_tree_sitter_language(language: Language) -> Result<tree_sitter::Language, String> {
     match language {
         #[cfg(feature = "rust")]
         Language::Rust => Ok(tree_sitter_rust::LANGUAGE.into()),
@@ -421,18 +414,14 @@ enum MyEnum {
                 names.contains(&"branching"),
                 "missing 'branching': {names:?}"
             );
-            assert!(
-                names.contains(&"MyStruct"),
-                "missing 'MyStruct': {names:?}"
-            );
+            assert!(names.contains(&"MyStruct"), "missing 'MyStruct': {names:?}");
             assert!(names.contains(&"MyEnum"), "missing 'MyEnum': {names:?}");
         }
 
         #[test]
         fn rust_complexity_simple() {
             let tree = parse_source(RUST_SOURCE, Language::Rust).unwrap();
-            let metrics =
-                calculate_complexity(&tree, RUST_SOURCE, Language::Rust);
+            let metrics = calculate_complexity(&tree, RUST_SOURCE, Language::Rust);
             assert_eq!(metrics.function_count, 2);
 
             let simple = metrics.functions.iter().find(|f| f.name == "simple");

@@ -69,10 +69,7 @@ pub fn show(
     };
     super::paint_heading(ui, rect, &format!("Logs · {}", tab_name));
 
-    let body = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.top() + 64.0),
-        rect.max,
-    );
+    let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + 64.0), rect.max);
 
     let has_data = match tab {
         LogsTab::System => snap.logs.as_ref().map(|v| !v.is_empty()).unwrap_or(false),
@@ -111,20 +108,13 @@ pub fn show(
 }
 
 /// Render the System logs tab — filter strip + stream view.
-fn render_system(
-    ui: &mut egui::Ui,
-    filter: &mut LogLevelFilter,
-    snap: &Snapshot,
-) {
+fn render_system(ui: &mut egui::Ui, filter: &mut LogLevelFilter, snap: &Snapshot) {
     let tokens = Tokens::default();
 
     // ── Filter strip ────────────────────────────────────────────────
     ui.horizontal(|ui| {
         for (variant, label) in LogLevelFilter::STRIP {
-            if ui
-                .selectable_label(*filter == variant, label)
-                .clicked()
-            {
+            if ui.selectable_label(*filter == variant, label).clicked() {
                 *filter = variant;
             }
         }
@@ -235,7 +225,10 @@ mod tests {
     #[test]
     fn filter_error_covers_aliases() {
         for lvl in ["error", "err", "crit", "fatal"] {
-            assert!(LogLevelFilter::Error.accepts(lvl), "Error should accept {lvl}");
+            assert!(
+                LogLevelFilter::Error.accepts(lvl),
+                "Error should accept {lvl}"
+            );
         }
         assert!(!LogLevelFilter::Error.accepts("warn"));
     }

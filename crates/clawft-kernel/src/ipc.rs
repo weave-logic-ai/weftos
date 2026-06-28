@@ -4,8 +4,8 @@
 //! adding typed [`KernelMessage`] envelopes and PID-based routing.
 //! The underlying message bus channels are reused (no new channels).
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -546,11 +546,7 @@ mod tests {
         // numbers) the serialized envelope clears the 16 MiB cap by
         // a wide margin.
         let huge = vec![0u8; KERNEL_IPC_MAX_MESSAGE_BYTES + 1];
-        let msg = KernelMessage::new(
-            0,
-            MessageTarget::Process(1),
-            MessagePayload::Binary(huge),
-        );
+        let msg = KernelMessage::new(0, MessageTarget::Process(1), MessagePayload::Binary(huge));
 
         let err = ipc.send(&msg).unwrap_err();
         match err {
@@ -877,8 +873,8 @@ mod tests {
 
     #[test]
     fn trace_id_set_builder() {
-        let msg = KernelMessage::text(1, MessageTarget::Process(2), "hello")
-            .set_trace_id("my-trace");
+        let msg =
+            KernelMessage::text(1, MessageTarget::Process(2), "hello").set_trace_id("my-trace");
         assert_eq!(msg.trace_id, Some("my-trace".into()));
     }
 

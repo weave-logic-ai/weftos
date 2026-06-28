@@ -9,7 +9,7 @@ use crate::audit::{AuditKind, HashChainAuditor};
 use crate::dimensions::Dimensions;
 use crate::events::DailyRollup;
 use crate::governance::{Governance, Severity};
-use crate::graph::{build as build_graph, CaseGraph, EdgeType, Node, NodeType};
+use crate::graph::{CaseGraph, EdgeType, Node, NodeType, build as build_graph};
 use crate::impulse::{Impulse, ImpulseQueue};
 use crate::shard::{ShardRouter, ShardSet, StoredRollup};
 use serde::{Deserialize, Serialize};
@@ -76,7 +76,9 @@ impl IngestDriver {
     /// Build an impulse for a rollup using the pre-indexed store context.
     pub fn impulse_for(&self, ev: &DailyRollup) -> Option<Impulse> {
         let (brand, region, metro) = self.store_ctx.get(&ev.store_ref)?.clone();
-        Some(Impulse::from_rollup_with_context(ev, &brand, &region, &metro))
+        Some(Impulse::from_rollup_with_context(
+            ev, &brand, &region, &metro,
+        ))
     }
 
     /// Emit all given rollups as impulses (feeds the stream).
@@ -207,7 +209,9 @@ impl IngestDriver {
         // Wire Causes edges from active promotions for this brand.
         let promo_labels: Vec<String> = impulse.promo_codes_active.to_vec();
         for plabel in promo_labels {
-            let Some(&promo_id) = self.graph.label_index.get(&plabel) else { continue };
+            let Some(&promo_id) = self.graph.label_index.get(&plabel) else {
+                continue;
+            };
             let weight = self.graph.nodes[promo_id as usize].metric.unwrap_or(0.0);
             let edge_idx = self.graph.edges.len();
             self.graph.edges.push(crate::graph::Edge {
@@ -228,11 +232,7 @@ impl Impulse {
         // Same scheme as events.rs, so the graph is comparable between batch
         // and stream paths.
         // store_ref format: "store:<brand>:<metro>_<num>"
-        let store_num = self
-            .store_ref
-            .rsplit('_')
-            .next()
-            .unwrap_or(&self.store_ref);
+        let store_num = self.store_ref.rsplit('_').next().unwrap_or(&self.store_ref);
         format!("day:{}:{}:{}", self.brand, store_num, self.business_date)
     }
 }

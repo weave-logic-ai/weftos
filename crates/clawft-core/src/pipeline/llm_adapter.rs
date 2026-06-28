@@ -25,8 +25,8 @@ use tokio::sync::mpsc;
 use tracing::debug;
 
 use clawft_llm::{
-    ChatMessage, ChatRequest as LlmChatRequest, ChatResponse, OpenAiCompatProvider,
-    LlmProviderConfig, ProviderRouter,
+    ChatMessage, ChatRequest as LlmChatRequest, ChatResponse, LlmProviderConfig,
+    OpenAiCompatProvider, ProviderRouter,
 };
 use clawft_types::config::Config;
 
@@ -222,10 +222,12 @@ fn convert_value_to_message(value: &serde_json::Value) -> ChatMessage {
         .get("tool_calls")
         .filter(|v| !v.is_null())
         .and_then(|v| {
-            serde_json::from_value(v.clone()).map_err(|e| {
-                debug!("failed to deserialize tool_calls: {e}");
-                e
-            }).ok()
+            serde_json::from_value(v.clone())
+                .map_err(|e| {
+                    debug!("failed to deserialize tool_calls: {e}");
+                    e
+                })
+                .ok()
         });
 
     // Use None for content when it's empty/missing and tool_calls are present,
@@ -381,10 +383,7 @@ fn apply_config_overrides(
 /// Looks up the provider in `clawft_llm::config::builtin_providers()`,
 /// applies overrides from the application config (base URL, headers, API key),
 /// and returns the wrapped adapter.
-fn create_adapter_for_provider(
-    provider_name: &str,
-    config: &Config,
-) -> Arc<dyn LlmProvider> {
+fn create_adapter_for_provider(provider_name: &str, config: &Config) -> Arc<dyn LlmProvider> {
     let builtins = clawft_llm::config::builtin_providers();
 
     let mut provider_config = builtins
@@ -428,7 +427,11 @@ fn resolve_app_api_key(provider_name: &str, config: &Config) -> Option<String> {
         "xai" => &config.providers.xai.api_key,
         _ => return None,
     };
-    if key.is_empty() { None } else { Some(key.expose().to_string()) }
+    if key.is_empty() {
+        None
+    } else {
+        Some(key.expose().to_string())
+    }
 }
 
 /// Create adapters for all providers referenced in the routing tiers,
@@ -534,15 +537,11 @@ fn build_router(config: &Config) -> Arc<dyn ModelRouter> {
     if config.routing.mode == "tiered" {
         let routing = config.routing.clone();
 
-        let cost_tracker = Arc::new(
-            CostTracker::new(routing.cost_budgets.reset_hour_utc),
-        );
-        let rate_limiter = Arc::new(
-            RateLimiter::new(
-                routing.rate_limiting.window_seconds,
-                routing.rate_limiting.global_rate_limit_rpm,
-            ),
-        );
+        let cost_tracker = Arc::new(CostTracker::new(routing.cost_budgets.reset_hour_utc));
+        let rate_limiter = Arc::new(RateLimiter::new(
+            routing.rate_limiting.window_seconds,
+            routing.rate_limiting.global_rate_limit_rpm,
+        ));
 
         let router = TieredRouter::new(routing)
             .with_cost_tracker(cost_tracker)

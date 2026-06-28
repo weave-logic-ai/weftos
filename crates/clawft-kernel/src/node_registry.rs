@@ -310,10 +310,7 @@ pub fn node_id_from_pubkey(pubkey: &[u8; 32]) -> String {
     let h = blake3::hash(pubkey);
     let bytes = h.as_bytes();
     // 3 bytes -> 6 hex chars.
-    format!(
-        "n-{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2]
-    )
+    format!("n-{:02x}{:02x}{:02x}", bytes[0], bytes[1], bytes[2])
 }
 
 /// Compose the canonical byte payload a node must sign as the
@@ -347,9 +344,8 @@ pub fn node_register_payload(pubkey: &[u8; 32], ts: u64, label: &str) -> Vec<u8>
 /// a node signature over a substrate.publish — the domain-separation
 /// prefix differs.
 pub fn node_publish_payload(path: &str, message: &str, ts: u64, node_id: &str) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(
-        22 + path.len() + 1 + message.len() + 1 + 8 + 1 + node_id.len(),
-    );
+    let mut buf =
+        Vec::with_capacity(22 + path.len() + 1 + message.len() + 1 + 8 + 1 + node_id.len());
     buf.extend_from_slice(b"substrate.publish.node\0");
     buf.extend_from_slice(path.as_bytes());
     buf.push(0);
@@ -536,14 +532,8 @@ mod tests {
         let reg = NodeRegistry::new();
         reg.issue_derived_grant("n-daemon", "transcript", GrantScope::TopicPrefix)
             .unwrap();
-        assert!(reg.has_derived_grant(
-            "n-daemon",
-            "substrate/_derived/transcript/n-foo/mic"
-        ));
-        assert!(reg.has_derived_grant(
-            "n-daemon",
-            "substrate/_derived/transcript/n-bar/cam"
-        ));
+        assert!(reg.has_derived_grant("n-daemon", "substrate/_derived/transcript/n-foo/mic"));
+        assert!(reg.has_derived_grant("n-daemon", "substrate/_derived/transcript/n-bar/cam"));
         // Bare-topic write under a TopicPrefix grant is rejected;
         // pipelines own attribution subtrees, not the topic root.
         assert!(!reg.has_derived_grant("n-daemon", "substrate/_derived/transcript"));
@@ -565,10 +555,7 @@ mod tests {
     fn has_grant_returns_false_when_grant_absent() {
         let reg = NodeRegistry::new();
         // No grants issued.
-        assert!(!reg.has_derived_grant(
-            "n-daemon",
-            "substrate/_derived/transcript/n-foo/mic"
-        ));
+        assert!(!reg.has_derived_grant("n-daemon", "substrate/_derived/transcript/n-foo/mic"));
     }
 
     #[test]
@@ -576,10 +563,7 @@ mod tests {
         let reg = NodeRegistry::new();
         reg.issue_derived_grant("n-daemon", "transcript", GrantScope::TopicPrefix)
             .unwrap();
-        assert!(!reg.has_derived_grant(
-            "n-other",
-            "substrate/_derived/transcript/n-foo/mic"
-        ));
+        assert!(!reg.has_derived_grant("n-other", "substrate/_derived/transcript/n-foo/mic"));
     }
 
     #[test]
@@ -588,10 +572,7 @@ mod tests {
         reg.issue_derived_grant("n-daemon", "transcript", GrantScope::TopicPrefix)
             .unwrap();
         // Same grantee, different topic.
-        assert!(!reg.has_derived_grant(
-            "n-daemon",
-            "substrate/_derived/classify/n-foo/mic"
-        ));
+        assert!(!reg.has_derived_grant("n-daemon", "substrate/_derived/classify/n-foo/mic"));
     }
 
     #[test]
@@ -621,9 +602,6 @@ mod tests {
         assert_eq!(reg.list_derived_grants().len(), 1);
         // After the overwrite the path with subtree no longer matches
         // (scope flipped to ExactTopic).
-        assert!(!reg.has_derived_grant(
-            "n-daemon",
-            "substrate/_derived/transcript/n-foo/mic"
-        ));
+        assert!(!reg.has_derived_grant("n-daemon", "substrate/_derived/transcript/n-foo/mic"));
     }
 }

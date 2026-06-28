@@ -31,7 +31,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 
 // `clawft_wasm::*` reexports the `browser_entry` symbols (init, send_message,
 // boot_info, analyze_files, set_env) when the `browser` feature is on.
-use clawft_wasm::{analyze_files, boot_info, send_message, set_env, VERSION};
+use clawft_wasm::{VERSION, analyze_files, boot_info, send_message, set_env};
 
 // ---------------------------------------------------------------------------
 // Test 1 — boot_info() returns the expected 5-phase trace.
@@ -96,16 +96,21 @@ fn analyze_files_emits_summary_and_findings() {
             .unwrap_or(0)
             >= 3
     );
-    assert!(summary.get("languages").and_then(|l| l.as_array()).is_some());
+    assert!(
+        summary
+            .get("languages")
+            .and_then(|l| l.as_array())
+            .is_some()
+    );
 
     // Findings: must include a TODO (info) and a security error for `.env`.
     let findings = v
         .get("findings")
         .and_then(|f| f.as_array())
         .expect("findings array");
-    let has_todo = findings.iter().any(|f| {
-        f.get("category").and_then(|c| c.as_str()) == Some("todo")
-    });
+    let has_todo = findings
+        .iter()
+        .any(|f| f.get("category").and_then(|c| c.as_str()) == Some("todo"));
     let has_env_error = findings.iter().any(|f| {
         f.get("category").and_then(|c| c.as_str()) == Some("security")
             && f.get("severity").and_then(|s| s.as_str()) == Some("error")
@@ -120,8 +125,7 @@ fn analyze_files_emits_summary_and_findings() {
 #[wasm_bindgen_test]
 fn analyze_files_rejects_malformed_input() {
     let out = analyze_files("not-json");
-    let v: serde_json::Value =
-        serde_json::from_str(&out).expect("error path still emits JSON");
+    let v: serde_json::Value = serde_json::from_str(&out).expect("error path still emits JSON");
     assert!(
         v.get("error").is_some(),
         "expected an `error` field for malformed input, got {v}"
@@ -175,7 +179,10 @@ async fn send_message_before_init_errors_cleanly() {
 // ---------------------------------------------------------------------------
 #[wasm_bindgen_test]
 fn version_constant_is_set() {
-    assert!(!VERSION.is_empty(), "VERSION must be the non-empty crate version");
+    assert!(
+        !VERSION.is_empty(),
+        "VERSION must be the non-empty crate version"
+    );
     assert!(
         VERSION.chars().any(|c| c.is_ascii_digit()),
         "VERSION must contain a digit (got `{VERSION}`)"

@@ -44,7 +44,9 @@ pub struct BrokenLink {
 }
 
 /// Scan a directory of markdown files and compute link graph metrics.
-pub fn analyze_vault(vault_path: &Path) -> Result<(HashMap<String, VaultNode>, VaultMetrics), crate::GraphifyError> {
+pub fn analyze_vault(
+    vault_path: &Path,
+) -> Result<(HashMap<String, VaultNode>, VaultMetrics), crate::GraphifyError> {
     let md_files = discover_markdown(vault_path)?;
     let mut nodes: HashMap<String, VaultNode> = HashMap::new();
 
@@ -52,8 +54,9 @@ pub fn analyze_vault(vault_path: &Path) -> Result<(HashMap<String, VaultNode>, V
     for path in &md_files {
         let rel = path.strip_prefix(vault_path).unwrap_or(path);
         let key = rel.to_string_lossy().to_string();
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| crate::GraphifyError::CacheError(format!("read {}: {e}", path.display())))?;
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            crate::GraphifyError::CacheError(format!("read {}: {e}", path.display()))
+        })?;
 
         let doc = frontmatter::parse(&content);
         let wikilinks = links::extract_wikilinks(&content);
@@ -67,14 +70,17 @@ pub fn analyze_vault(vault_path: &Path) -> Result<(HashMap<String, VaultNode>, V
 
         let word_count = content.split_whitespace().count();
 
-        nodes.insert(key, VaultNode {
-            path: path.clone(),
-            title: doc.frontmatter.title,
-            tags: doc.frontmatter.tags,
-            outgoing,
-            incoming: Vec::new(),
-            word_count,
-        });
+        nodes.insert(
+            key,
+            VaultNode {
+                path: path.clone(),
+                title: doc.frontmatter.title,
+                tags: doc.frontmatter.tags,
+                outgoing,
+                incoming: Vec::new(),
+                word_count,
+            },
+        );
     }
 
     // Pass 2: resolve links and populate incoming edges.
@@ -98,13 +104,18 @@ pub fn analyze_vault(vault_path: &Path) -> Result<(HashMap<String, VaultNode>, V
         let mut resolved = Vec::new();
         for target in &node.outgoing {
             let target_lower = target.to_lowercase();
-            let target_key = key_basenames.get(&target_lower).cloned()
+            let target_key = key_basenames
+                .get(&target_lower)
+                .cloned()
                 .or_else(|| {
                     let with_md = format!("{target_lower}.md");
                     key_basenames.get(&with_md.replace(".md", "")).cloned()
                 })
                 .or_else(|| {
-                    all_keys.iter().find(|k| k.to_lowercase().ends_with(&format!("/{target_lower}.md"))).cloned()
+                    all_keys
+                        .iter()
+                        .find(|k| k.to_lowercase().ends_with(&format!("/{target_lower}.md")))
+                        .cloned()
                 });
 
             match target_key {
@@ -160,9 +171,21 @@ pub fn analyze_vault(vault_path: &Path) -> Result<(HashMap<String, VaultNode>, V
     }
 
     let clusters = count_clusters(&nodes);
-    let orphan_rate = if total_files > 0 { orphans.len() as f64 / total_files as f64 } else { 0.0 };
-    let link_density = if total_files > 0 { total_links as f64 / total_files as f64 } else { 0.0 };
-    let avg_links = if total_files > 0 { total_links as f64 / total_files as f64 } else { 0.0 };
+    let orphan_rate = if total_files > 0 {
+        orphans.len() as f64 / total_files as f64
+    } else {
+        0.0
+    };
+    let link_density = if total_files > 0 {
+        total_links as f64 / total_files as f64
+    } else {
+        0.0
+    };
+    let avg_links = if total_files > 0 {
+        total_links as f64 / total_files as f64
+    } else {
+        0.0
+    };
 
     orphans.sort();
 
@@ -193,8 +216,9 @@ fn discover_markdown(dir: &Path) -> Result<Vec<PathBuf>, crate::GraphifyError> {
 }
 
 fn discover_recursive(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), crate::GraphifyError> {
-    let entries = std::fs::read_dir(dir)
-        .map_err(|e| crate::GraphifyError::CacheError(format!("read dir {}: {e}", dir.display())))?;
+    let entries = std::fs::read_dir(dir).map_err(|e| {
+        crate::GraphifyError::CacheError(format!("read dir {}: {e}", dir.display()))
+    })?;
 
     for entry in entries {
         let entry = entry.map_err(|e| crate::GraphifyError::CacheError(e.to_string()))?;
@@ -202,7 +226,11 @@ fn discover_recursive(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), crate::G
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
-        if name_str.starts_with('.') || name_str == "node_modules" || name_str == "dist" || name_str == "target" {
+        if name_str.starts_with('.')
+            || name_str == "node_modules"
+            || name_str == "dist"
+            || name_str == "target"
+        {
             continue;
         }
 
@@ -237,7 +265,9 @@ fn count_clusters(nodes: &HashMap<String, VaultNode>) -> usize {
     fn union(parent: &mut [usize], rank: &mut [usize], a: usize, b: usize) {
         let ra = find(parent, a);
         let rb = find(parent, b);
-        if ra == rb { return; }
+        if ra == rb {
+            return;
+        }
         if rank[ra] < rank[rb] {
             parent[ra] = rb;
         } else if rank[ra] > rank[rb] {
@@ -272,30 +302,39 @@ mod tests {
     #[test]
     fn cluster_counting() {
         let mut nodes = HashMap::new();
-        nodes.insert("a.md".to_string(), VaultNode {
-            path: PathBuf::from("a.md"),
-            title: None,
-            tags: vec![],
-            outgoing: vec!["b.md".to_string()],
-            incoming: vec![],
-            word_count: 10,
-        });
-        nodes.insert("b.md".to_string(), VaultNode {
-            path: PathBuf::from("b.md"),
-            title: None,
-            tags: vec![],
-            outgoing: vec![],
-            incoming: vec!["a.md".to_string()],
-            word_count: 10,
-        });
-        nodes.insert("c.md".to_string(), VaultNode {
-            path: PathBuf::from("c.md"),
-            title: None,
-            tags: vec![],
-            outgoing: vec![],
-            incoming: vec![],
-            word_count: 10,
-        });
+        nodes.insert(
+            "a.md".to_string(),
+            VaultNode {
+                path: PathBuf::from("a.md"),
+                title: None,
+                tags: vec![],
+                outgoing: vec!["b.md".to_string()],
+                incoming: vec![],
+                word_count: 10,
+            },
+        );
+        nodes.insert(
+            "b.md".to_string(),
+            VaultNode {
+                path: PathBuf::from("b.md"),
+                title: None,
+                tags: vec![],
+                outgoing: vec![],
+                incoming: vec!["a.md".to_string()],
+                word_count: 10,
+            },
+        );
+        nodes.insert(
+            "c.md".to_string(),
+            VaultNode {
+                path: PathBuf::from("c.md"),
+                title: None,
+                tags: vec![],
+                outgoing: vec![],
+                incoming: vec![],
+                word_count: 10,
+            },
+        );
 
         let clusters = count_clusters(&nodes);
         assert_eq!(clusters, 2); // {a,b} and {c}

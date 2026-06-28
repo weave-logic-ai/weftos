@@ -47,9 +47,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::debug;
 
-use clawft_service_llm::{
-    ChatMessage, ChatResponse, LlmClient, Tool, ToolCall, ToolCallFunction,
-};
+use clawft_service_llm::{ChatMessage, ChatResponse, LlmClient, Tool, ToolCall, ToolCallFunction};
 
 use super::transport::LlmProvider;
 
@@ -95,8 +93,7 @@ impl LlmProvider for ServiceLlmAdapter {
         max_tokens: Option<i32>,
         temperature: Option<f64>,
     ) -> Result<serde_json::Value, String> {
-        let chat_messages: Vec<ChatMessage> =
-            messages.iter().map(value_to_message).collect();
+        let chat_messages: Vec<ChatMessage> = messages.iter().map(value_to_message).collect();
         let parsed_tools: Vec<Tool> = tools
             .iter()
             .filter_map(|t| match serde_json::from_value::<Tool>(t.clone()) {

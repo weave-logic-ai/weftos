@@ -62,8 +62,8 @@ impl MeshIpcEnvelope {
                 max: MAX_IPC_MESSAGE_SIZE,
             });
         }
-        let envelope: Self =
-            serde_json::from_slice(data).map_err(|e| MeshIpcError::Deserialization(e.to_string()))?;
+        let envelope: Self = serde_json::from_slice(data)
+            .map_err(|e| MeshIpcError::Deserialization(e.to_string()))?;
 
         // Validate required fields at mesh boundary
         if envelope.envelope_id.is_empty() {
@@ -366,11 +366,7 @@ mod tests {
         );
 
         // Create envelope with DID-based source and dest
-        let envelope = MeshIpcEnvelope::new(
-            node_a_did.to_string(),
-            node_b_did.to_string(),
-            msg,
-        );
+        let envelope = MeshIpcEnvelope::new(node_a_did.to_string(), node_b_did.to_string(), msg);
 
         // Roundtrip serialization preserves DID addressing
         let bytes = envelope.to_bytes().unwrap();
@@ -379,7 +375,10 @@ mod tests {
         assert_eq!(restored.source_node, node_a_did);
 
         // Inner target unwraps to the addressed process
-        assert!(matches!(restored.inner_target(), MessageTarget::Process(42)));
+        assert!(matches!(
+            restored.inner_target(),
+            MessageTarget::Process(42)
+        ));
     }
 
     #[test]
@@ -456,9 +455,6 @@ mod tests {
         let env = MeshIpcEnvelope::new("n1".into(), "n2".into(), msg);
         let bytes = env.to_bytes().unwrap();
         let restored = MeshIpcEnvelope::from_bytes(&bytes).unwrap();
-        assert_eq!(
-            restored.message.correlation_id,
-            Some("corr-99".into())
-        );
+        assert_eq!(restored.message.correlation_id, Some("corr-99".into()));
     }
 }

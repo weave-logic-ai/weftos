@@ -131,15 +131,17 @@ impl TopicRouter {
         // For PidInbox, preserve the previous idempotent behaviour so
         // repeated kernel-side subscribe calls do not duplicate inboxes.
         if let SubscriberSink::PidInbox(pid) = &sink
-            && let Some(subs) = self.subscriptions.get(topic) {
-                for (existing_id, existing) in subs.iter() {
-                    if let SubscriberSink::PidInbox(p) = existing
-                        && p == pid {
-                            debug!(pid = *pid, topic, "already subscribed");
-                            return *existing_id;
-                        }
+            && let Some(subs) = self.subscriptions.get(topic)
+        {
+            for (existing_id, existing) in subs.iter() {
+                if let SubscriberSink::PidInbox(p) = existing
+                    && p == pid
+                {
+                    debug!(pid = *pid, topic, "already subscribed");
+                    return *existing_id;
                 }
             }
+        }
 
         let id = SubscriberId::next();
         debug!(?sink, topic, id = id.0, "subscribing to topic");

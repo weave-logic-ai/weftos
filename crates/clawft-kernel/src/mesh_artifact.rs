@@ -152,12 +152,7 @@ impl ArtifactExchange {
     }
 
     /// Create a response frame (as server).
-    pub fn create_response(
-        &self,
-        hash: &str,
-        found: bool,
-        data: Vec<u8>,
-    ) -> ArtifactResponse {
+    pub fn create_response(&self, hash: &str, found: bool, data: Vec<u8>) -> ArtifactResponse {
         ArtifactResponse {
             hash: hash.to_string(),
             found,

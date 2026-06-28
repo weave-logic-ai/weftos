@@ -20,8 +20,8 @@ impl Hlc {
     pub fn from_business_date(date: &str, day_index: u32) -> Self {
         // Anchor HLC physical_ms on the business date's Unix ms, with logical =
         // day_index so events within a day keep a stable ordering.
-        let date =
-            chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap_or_else(|_| chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
+        let date = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .unwrap_or_else(|_| chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
         let dt = date.and_hms_opt(0, 0, 0).unwrap().and_utc();
         Hlc {
             physical_ms: dt.timestamp_millis() as u64,
@@ -98,7 +98,7 @@ pub struct ImpulseQueue {
     dropped_duplicates: u64,
     late_arrivals: u64,
     watermark: HashMap<String, Hlc>, // per-store max-hlc seen
-    late_watermark_ms: u64,           // how far back "late" is still acceptable
+    late_watermark_ms: u64,          // how far back "late" is still acceptable
 }
 
 impl ImpulseQueue {
@@ -139,7 +139,8 @@ impl ImpulseQueue {
             self.late_arrivals += 1;
         }
 
-        self.seen.insert(impulse.idempotency_key.clone(), impulse.hlc);
+        self.seen
+            .insert(impulse.idempotency_key.clone(), impulse.hlc);
         self.watermark
             .entry(impulse.store_ref.clone())
             .and_modify(|w| {
@@ -175,12 +176,19 @@ impl ImpulseQueue {
     pub fn detect_missing_windows(&self, store_refs: &[String]) -> Vec<MissingWindow> {
         let mut per_store: HashMap<&str, Vec<u32>> = HashMap::new();
         for imp in &self.queue {
-            per_store.entry(imp.store_ref.as_str()).or_default().push(imp.day_index);
+            per_store
+                .entry(imp.store_ref.as_str())
+                .or_default()
+                .push(imp.day_index);
         }
         let mut out = Vec::new();
         for store in store_refs {
-            let seen: HashSet<u32> =
-                per_store.get(store.as_str()).cloned().unwrap_or_default().into_iter().collect();
+            let seen: HashSet<u32> = per_store
+                .get(store.as_str())
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
             if seen.is_empty() {
                 continue;
             }
@@ -188,7 +196,10 @@ impl ImpulseQueue {
             let max = *seen.iter().max().unwrap();
             for d in min..=max {
                 if !seen.contains(&d) {
-                    out.push(MissingWindow { store_ref: store.clone(), day_index: d });
+                    out.push(MissingWindow {
+                        store_ref: store.clone(),
+                        day_index: d,
+                    });
                 }
             }
         }

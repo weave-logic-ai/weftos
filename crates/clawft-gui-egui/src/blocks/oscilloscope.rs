@@ -25,11 +25,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut DemoState) {
         state.scope_samples.pop_front();
     }
 
-    let points: PlotPoints = state
-        .scope_samples
-        .iter()
-        .map(|&(t, y)| [t, y])
-        .collect();
+    let points: PlotPoints = state.scope_samples.iter().map(|&(t, y)| [t, y]).collect();
     let line = Line::new("scope", points).color(egui::Color32::from_rgb(120, 220, 160));
 
     Plot::new("oscilloscope")

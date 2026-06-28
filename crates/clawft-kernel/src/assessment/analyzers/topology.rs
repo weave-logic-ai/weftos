@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::assessment::{analyzer::AnalysisContext, Finding};
 use crate::assessment::analyzer::Analyzer;
+use crate::assessment::{Finding, analyzer::AnalysisContext};
 
 /// Analyzer that identifies infrastructure topology files and extracts metadata.
 pub struct TopologyAnalyzer;
@@ -21,19 +21,23 @@ impl Analyzer for TopologyAnalyzer {
         &["topology"]
     }
 
-    fn analyze(&self, project: &Path, files: &[PathBuf], _context: &AnalysisContext) -> Vec<Finding> {
+    fn analyze(
+        &self,
+        project: &Path,
+        files: &[PathBuf],
+        _context: &AnalysisContext,
+    ) -> Vec<Finding> {
         let mut findings = Vec::new();
 
         for path in files {
             let rel = path.strip_prefix(project).unwrap_or(path);
             let rel_str = rel.display().to_string();
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
             // docker-compose files
-            if name.starts_with("docker-compose") && (name.ends_with(".yml") || name.ends_with(".yaml")) {
+            if name.starts_with("docker-compose")
+                && (name.ends_with(".yml") || name.ends_with(".yaml"))
+            {
                 let content = match std::fs::read_to_string(path) {
                     Ok(c) => c,
                     Err(_) => continue,
@@ -173,21 +177,26 @@ fn extract_compose_services(content: &str, rel_str: &str, findings: &mut Vec<Fin
             }
 
             // Port mappings (e.g. - "8080:80")
-            if stripped.starts_with("- \"") || stripped.starts_with("- '") || stripped.starts_with("- ") {
+            if stripped.starts_with("- \"")
+                || stripped.starts_with("- '")
+                || stripped.starts_with("- ")
+            {
                 let val = stripped
                     .trim_start_matches("- ")
                     .trim_matches('"')
                     .trim_matches('\'');
-                if val.contains(':') && val.chars().all(|c| c.is_ascii_digit() || c == ':')
-                    && let Some(ref svc) = current_service {
-                        findings.push(Finding {
-                            severity: "info".into(),
-                            category: "topology".into(),
-                            file: rel_str.to_string(),
-                            line: None,
-                            message: format!("Service '{svc}' port mapping: {val}"),
-                        });
-                    }
+                if val.contains(':')
+                    && val.chars().all(|c| c.is_ascii_digit() || c == ':')
+                    && let Some(ref svc) = current_service
+                {
+                    findings.push(Finding {
+                        severity: "info".into(),
+                        category: "topology".into(),
+                        file: rel_str.to_string(),
+                        line: None,
+                        message: format!("Service '{svc}' port mapping: {val}"),
+                    });
+                }
             }
         }
     }

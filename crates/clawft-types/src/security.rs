@@ -81,19 +81,62 @@ pub struct CommandPolicy {
 /// development tools commonly needed by AI agent workflows.
 pub const DEFAULT_COMMAND_ALLOWLIST: &[&str] = &[
     // Read-only / informational
-    "echo", "cat", "ls", "pwd", "head", "tail", "wc", "grep", "find", "sort", "uniq", "diff",
-    "date", "env", "true", "false", "test", "which", "basename", "dirname", "stat", "file",
+    "echo",
+    "cat",
+    "ls",
+    "pwd",
+    "head",
+    "tail",
+    "wc",
+    "grep",
+    "find",
+    "sort",
+    "uniq",
+    "diff",
+    "date",
+    "env",
+    "true",
+    "false",
+    "test",
+    "which",
+    "basename",
+    "dirname",
+    "stat",
+    "file",
     "readlink",
     // Text processing
-    "sed", "awk", "cut", "tr", "tee", "xargs",
+    "sed",
+    "awk",
+    "cut",
+    "tr",
+    "tee",
+    "xargs",
     // File operations (dangerous patterns still block e.g. rm -rf /)
-    "mkdir", "cp", "mv", "touch", "rm", "ln", "chmod",
+    "mkdir",
+    "cp",
+    "mv",
+    "touch",
+    "rm",
+    "ln",
+    "chmod",
     // Shell builtins
-    "cd", "export", "source", "type", "command",
+    "cd",
+    "export",
+    "source",
+    "type",
+    "command",
     // Development tools
-    "git", "cargo", "rustc", "npm", "npx", "node", "python", "python3",
+    "git",
+    "cargo",
+    "rustc",
+    "npm",
+    "npx",
+    "node",
+    "python",
+    "python3",
     // ClawFT ecosystem
-    "weft", "claude-flow",
+    "weft",
+    "claude-flow",
 ];
 
 /// The default set of dangerous patterns.
@@ -533,14 +576,20 @@ mod tests {
     fn allowlist_permits_compound_when_all_allowed() {
         let policy = CommandPolicy::safe_defaults();
         // Both `cd` and `claude-flow` are now in the default allowlist.
-        assert!(policy.validate("cd clawft && claude-flow mcp status").is_ok());
+        assert!(
+            policy
+                .validate("cd clawft && claude-flow mcp status")
+                .is_ok()
+        );
     }
 
     #[test]
     fn allowlist_rejects_compound_when_any_disallowed() {
         let policy = CommandPolicy::safe_defaults();
         // `curl` is still not on the allowlist.
-        let err = policy.validate("echo hi && curl http://evil.com").unwrap_err();
+        let err = policy
+            .validate("echo hi && curl http://evil.com")
+            .unwrap_err();
         assert!(matches!(err, CommandPolicyError::NotAllowed { .. }));
     }
 

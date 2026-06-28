@@ -167,7 +167,6 @@ impl Default for ServiceResolutionCache {
     }
 }
 
-
 /// RegistryQueryService exposes local service resolution via ServiceApi pattern.
 /// Registered as "registry" service, queryable by remote nodes.
 pub struct RegistryQueryService {
@@ -232,10 +231,7 @@ impl Default for RegistryQueryService {
 #[derive(Debug, Clone)]
 pub enum CircuitState {
     /// Normal operation -- requests flow through.
-    Closed {
-        error_count: u32,
-        threshold: u32,
-    },
+    Closed { error_count: u32, threshold: u32 },
     /// Too many failures -- requests blocked for cooldown.
     Open {
         opened_at: std::time::Instant,
@@ -243,9 +239,7 @@ pub enum CircuitState {
         threshold: u32,
     },
     /// Testing if service has recovered (one probe allowed).
-    HalfOpen {
-        threshold: u32,
-    },
+    HalfOpen { threshold: u32 },
 }
 
 impl CircuitState {
@@ -524,7 +518,13 @@ mod tests {
     #[test]
     fn circuit_starts_closed() {
         let cb = CircuitState::new(3);
-        assert!(matches!(cb, CircuitState::Closed { error_count: 0, threshold: 3 }));
+        assert!(matches!(
+            cb,
+            CircuitState::Closed {
+                error_count: 0,
+                threshold: 3
+            }
+        ));
     }
 
     #[test]
@@ -540,7 +540,7 @@ mod tests {
         let mut cb = CircuitState::new(3);
         assert!(!cb.record_failure()); // 1
         assert!(!cb.record_failure()); // 2
-        assert!(cb.record_failure());  // 3 -> opens
+        assert!(cb.record_failure()); // 3 -> opens
         assert!(matches!(cb, CircuitState::Open { .. }));
         assert!(!cb.is_allowed()); // cooldown not elapsed
     }

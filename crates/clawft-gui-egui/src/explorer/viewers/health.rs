@@ -62,10 +62,7 @@ impl SubstrateViewer for HealthViewer {
                     )
                     .on_hover_text("Navigate to the publishing node.");
                 if link.clicked() {
-                    crate::explorer::request_navigation(
-                        ui.ctx(),
-                        node_path.to_string(),
-                    );
+                    crate::explorer::request_navigation(ui.ctx(), node_path.to_string());
                 }
             });
             ui.add_space(4.0);
@@ -110,11 +107,7 @@ impl SubstrateViewer for HealthViewer {
             {
                 let child_path = format!("{path}/{k}");
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(k)
-                            .small()
-                            .weak(),
-                    );
+                    ui.label(egui::RichText::new(k).small().weak());
                     super::time_series::embed_sparkline(ui, &child_path, v, 28.0);
                 });
             }
@@ -132,11 +125,7 @@ impl SubstrateViewer for HealthViewer {
                     .color(egui::Color32::from_rgb(140, 140, 150)),
             );
             for a in caps.applicable_actions {
-                ui.label(
-                    egui::RichText::new(format!("  • {a}"))
-                        .monospace()
-                        .small(),
-                );
+                ui.label(egui::RichText::new(format!("  • {a}")).monospace().small());
             }
         }
     }

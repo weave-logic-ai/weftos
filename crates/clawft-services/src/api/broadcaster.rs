@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 
 /// Manages topic-based message broadcasting for WebSocket clients.
 ///
@@ -99,11 +99,8 @@ mod tests {
     async fn publish_to_missing_topic_is_noop() {
         let bc = TopicBroadcaster::new();
         // Should not panic or error.
-        bc.publish(
-            "nonexistent",
-            serde_json::json!({"type": "test"}),
-        )
-        .await;
+        bc.publish("nonexistent", serde_json::json!({"type": "test"}))
+            .await;
     }
 
     #[tokio::test]

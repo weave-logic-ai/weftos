@@ -31,11 +31,7 @@ pub enum MatchType {
 /// Keyword-based search over skill entries.
 ///
 /// Used as fallback when vector search (H2) is unavailable.
-pub fn keyword_search(
-    skills: &[SkillEntry],
-    query: &str,
-    limit: usize,
-) -> Vec<SkillSearchResult> {
+pub fn keyword_search(skills: &[SkillEntry], query: &str, limit: usize) -> Vec<SkillSearchResult> {
     let query_lower = query.to_lowercase();
     let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
 

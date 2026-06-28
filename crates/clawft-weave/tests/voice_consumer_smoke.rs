@@ -31,7 +31,7 @@ use clawft_weave::voice_router::{
     ChatHandler, CommandHandler, VoiceChatTurn, VoiceLevel, VoicePermissions, VoiceRouter,
     VoiceRouterConfig,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::time::timeout;
 
 const TOPIC: &str = "substrate/_derived/transcript/n-test/mic";
@@ -56,11 +56,7 @@ struct RecordingCommands {
 
 #[async_trait]
 impl CommandHandler for RecordingCommands {
-    async fn dispatch_command(
-        &self,
-        method: String,
-        params: Value,
-    ) -> Result<Value, String> {
+    async fn dispatch_command(&self, method: String, params: Value) -> Result<Value, String> {
         self.calls.lock().unwrap().push((method, params));
         Ok(json!({"ok": true}))
     }

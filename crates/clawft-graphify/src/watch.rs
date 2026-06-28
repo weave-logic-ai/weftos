@@ -11,16 +11,15 @@ use crate::GraphifyError;
 
 /// Extensions monitored by the file watcher.
 pub const WATCHED_EXTENSIONS: &[&str] = &[
-    "py", "ts", "js", "go", "rs", "java", "cpp", "c", "rb", "swift", "kt",
-    "cs", "scala", "php", "cc", "cxx", "hpp", "h", "kts",
-    "md", "txt", "rst", "pdf",
-    "png", "jpg", "jpeg", "webp", "gif", "svg",
+    "py", "ts", "js", "go", "rs", "java", "cpp", "c", "rb", "swift", "kt", "cs", "scala", "php",
+    "cc", "cxx", "hpp", "h", "kts", "md", "txt", "rst", "pdf", "png", "jpg", "jpeg", "webp", "gif",
+    "svg",
 ];
 
 /// Code-only extensions (changes rebuild without LLM).
 pub const CODE_EXTENSIONS: &[&str] = &[
-    "py", "ts", "js", "go", "rs", "java", "cpp", "c", "rb", "swift", "kt",
-    "cs", "scala", "php", "cc", "cxx", "hpp", "h", "kts",
+    "py", "ts", "js", "go", "rs", "java", "cpp", "c", "rb", "swift", "kt", "cs", "scala", "php",
+    "cc", "cxx", "hpp", "h", "kts",
 ];
 
 /// Check if a path has a watched extension.
@@ -43,8 +42,10 @@ fn should_ignore(path: &Path) -> bool {
     for component in path.components() {
         if let std::path::Component::Normal(s) = component {
             let name = s.to_string_lossy();
-            if name.starts_with('.') || name == "graphify-out"
-                || name == "__pycache__" || name == "node_modules"
+            if name.starts_with('.')
+                || name == "graphify-out"
+                || name == "__pycache__"
+                || name == "node_modules"
             {
                 return true;
             }
@@ -69,7 +70,10 @@ pub struct WatchConfig {
 
 impl Default for WatchConfig {
     fn default() -> Self {
-        Self { root: PathBuf::from("."), debounce_secs: 2.0 }
+        Self {
+            root: PathBuf::from("."),
+            debounce_secs: 2.0,
+        }
     }
 }
 
@@ -85,7 +89,8 @@ where
 
     eprintln!(
         "[graphify watch] Watching {} (polling, debounce {:.1}s) -- Ctrl+C to stop",
-        config.root.display(), config.debounce_secs,
+        config.root.display(),
+        config.debounce_secs,
     );
 
     loop {
@@ -122,7 +127,10 @@ where
         if !pending.is_empty() && last_change.elapsed() >= debounce {
             let changed: Vec<PathBuf> = pending.drain().collect();
             let has_non_code = changed.iter().any(|p| !is_code(p));
-            callback(WatchEvent { changed, has_non_code });
+            callback(WatchEvent {
+                changed,
+                has_non_code,
+            });
         }
     }
 }
@@ -136,8 +144,10 @@ fn build_snapshot(
         .into_iter()
         .filter_entry(|e| {
             let name = e.file_name().to_string_lossy();
-            !name.starts_with('.') && name != "graphify-out"
-                && name != "__pycache__" && name != "node_modules"
+            !name.starts_with('.')
+                && name != "graphify-out"
+                && name != "__pycache__"
+                && name != "node_modules"
         });
 
     for entry in walker.filter_map(|e| e.ok()) {
@@ -146,9 +156,10 @@ fn build_snapshot(
             continue;
         }
         if let Ok(meta) = std::fs::metadata(path)
-            && let Ok(mtime) = meta.modified() {
-                map.insert(path.to_path_buf(), mtime);
-            }
+            && let Ok(mtime) = meta.modified()
+        {
+            map.insert(path.to_path_buf(), mtime);
+        }
     }
     Ok(map)
 }

@@ -101,7 +101,11 @@ pub async fn run(args: McpServerArgs) -> anyhow::Result<()> {
     let skill_count = skill_registry.len();
     if skill_count > 0 {
         let skill_defs = skills_to_tool_definitions(
-            &skill_registry.list().into_iter().cloned().collect::<Vec<_>>(),
+            &skill_registry
+                .list()
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>(),
         );
 
         // Build a lookup from skill name -> instructions for the dispatcher.

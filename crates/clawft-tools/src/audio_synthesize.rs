@@ -7,7 +7,7 @@
 
 use async_trait::async_trait;
 use clawft_core::tools::registry::{Tool, ToolError};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Tool for synthesizing text to an audio file.
 ///
@@ -78,9 +78,7 @@ impl Tool for AudioSynthesizeTool {
         let speed = args["speed"].as_f64().unwrap_or(1.0) as f32;
 
         if text.is_empty() {
-            return Err(ToolError::InvalidArgs(
-                "text must be non-empty".into(),
-            ));
+            return Err(ToolError::InvalidArgs("text must be non-empty".into()));
         }
 
         // Validate output directory exists

@@ -41,7 +41,10 @@ impl SubstrateViewer for DepthMapViewer {
         if arr.is_empty() {
             return 0;
         }
-        if !arr.iter().all(|v| v.as_u64().is_some() || v.as_f64().is_some()) {
+        if !arr
+            .iter()
+            .all(|v| v.as_u64().is_some() || v.as_f64().is_some())
+        {
             return 0;
         }
         10
@@ -114,8 +117,7 @@ impl SubstrateViewer for DepthMapViewer {
         // Fit the grid into the available width, with sane upper bound.
         let avail = ui.available_width().clamp(120.0, 360.0);
         let gap: f32 = 2.0;
-        let cell = ((avail - gap * (width as f32 - 1.0)) / width as f32)
-            .clamp(8.0, 32.0);
+        let cell = ((avail - gap * (width as f32 - 1.0)) / width as f32).clamp(8.0, 32.0);
         let total_w = width as f32 * cell + (width as f32 - 1.0) * gap;
         let total_h = height as f32 * cell + (height as f32 - 1.0) * gap;
         let (rect, _resp) =

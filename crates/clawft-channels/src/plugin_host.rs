@@ -98,7 +98,8 @@ impl ChannelAdapter for ChannelAdapterShim {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
         });
-        let result = self.channel
+        let result = self
+            .channel
             .start(self.bridge_host.clone(), tokio_cancel)
             .await
             .map_err(|e| PluginError::ExecutionFailed(format!("channel start: {e}")));
@@ -106,22 +107,23 @@ impl ChannelAdapter for ChannelAdapterShim {
         result
     }
 
-    async fn send(
-        &self,
-        target: &str,
-        payload: &MessagePayload,
-    ) -> Result<String, PluginError> {
+    async fn send(&self, target: &str, payload: &MessagePayload) -> Result<String, PluginError> {
         let content = match payload {
             MessagePayload::Text { content } => content.clone(),
-            MessagePayload::Structured { data } => serde_json::to_string(data)
-                .unwrap_or_else(|_| data.to_string()),
+            MessagePayload::Structured { data } => {
+                serde_json::to_string(data).unwrap_or_else(|_| data.to_string())
+            }
             MessagePayload::Binary { mime_type, data } => {
                 return Err(PluginError::NotImplemented(format!(
                     "binary payload ({mime_type}, {} bytes) not supported by legacy channel shim",
                     data.len()
                 )));
             }
-            _ => return Err(PluginError::NotImplemented("unknown payload variant".into())),
+            _ => {
+                return Err(PluginError::NotImplemented(
+                    "unknown payload variant".into(),
+                ));
+            }
         };
 
         let msg = OutboundMessage {
@@ -280,8 +282,9 @@ impl ChannelAdapterHost for ChannelAdapterHostBridge {
     ) -> Result<(), PluginError> {
         let content = match payload {
             MessagePayload::Text { content } => content,
-            MessagePayload::Structured { data } => serde_json::to_string(&data)
-                .unwrap_or_else(|_| data.to_string()),
+            MessagePayload::Structured { data } => {
+                serde_json::to_string(&data).unwrap_or_else(|_| data.to_string())
+            }
             MessagePayload::Binary { mime_type, data } => {
                 warn!(
                     channel = channel,
@@ -382,10 +385,7 @@ mod tests {
             Ok(())
         }
 
-        async fn register_command(
-            &self,
-            _cmd: crate::traits::Command,
-        ) -> Result<(), ChannelError> {
+        async fn register_command(&self, _cmd: crate::traits::Command) -> Result<(), ChannelError> {
             Ok(())
         }
 

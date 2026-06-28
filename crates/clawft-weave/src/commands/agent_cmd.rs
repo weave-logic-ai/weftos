@@ -76,8 +76,7 @@ pub async fn run(args: AgentArgs) -> anyhow::Result<()> {
             if !resp.ok {
                 anyhow::bail!("{}", resp.error.unwrap_or_default());
             }
-            let result: AgentSpawnResult =
-                serde_json::from_value(resp.result.unwrap_or_default())?;
+            let result: AgentSpawnResult = serde_json::from_value(resp.result.unwrap_or_default())?;
             println!("Agent spawned");
             println!("  PID:      {}", result.pid);
             println!("  Agent ID: {}", result.agent_id);
@@ -107,8 +106,7 @@ pub async fn run(args: AgentArgs) -> anyhow::Result<()> {
             if !resp.ok {
                 anyhow::bail!("{}", resp.error.unwrap_or_default());
             }
-            let result: AgentSpawnResult =
-                serde_json::from_value(resp.result.unwrap_or_default())?;
+            let result: AgentSpawnResult = serde_json::from_value(resp.result.unwrap_or_default())?;
             println!("Agent restarted");
             println!("  Old PID:  {pid}");
             println!("  New PID:  {}", result.pid);
@@ -122,13 +120,15 @@ pub async fn run(args: AgentArgs) -> anyhow::Result<()> {
             if !resp.ok {
                 anyhow::bail!("{}", resp.error.unwrap_or_default());
             }
-            let info: AgentInspectResult =
-                serde_json::from_value(resp.result.unwrap_or_default())?;
+            let info: AgentInspectResult = serde_json::from_value(resp.result.unwrap_or_default())?;
 
             println!("Agent {}", info.pid);
             println!("  Agent ID:      {}", info.agent_id);
             println!("  State:         {}", info.state);
-            println!("  Parent PID:    {}", info.parent_pid.map_or("none".into(), |p| p.to_string()));
+            println!(
+                "  Parent PID:    {}",
+                info.parent_pid.map_or("none".into(), |p| p.to_string())
+            );
             println!("  Resource Usage:");
             println!("    Memory:        {} bytes", info.memory_bytes);
             println!("    CPU time:      {} ms", info.cpu_time_ms);
@@ -140,16 +140,17 @@ pub async fn run(args: AgentArgs) -> anyhow::Result<()> {
                 println!("  Topics:        {}", info.topics.join(", "));
             }
             println!("  Capabilities:");
-            println!("    spawn: {}  ipc: {}  tools: {}  network: {}",
-                info.can_spawn, info.can_ipc, info.can_exec_tools, info.can_network);
+            println!(
+                "    spawn: {}  ipc: {}  tools: {}  network: {}",
+                info.can_spawn, info.can_ipc, info.can_exec_tools, info.can_network
+            );
         }
         AgentCommand::List => {
             let resp = client.simple_call("agent.list").await?;
             if !resp.ok {
                 anyhow::bail!("{}", resp.error.unwrap_or_default());
             }
-            let agents: Vec<ProcessInfo> =
-                serde_json::from_value(resp.result.unwrap_or_default())?;
+            let agents: Vec<ProcessInfo> = serde_json::from_value(resp.result.unwrap_or_default())?;
 
             if agents.is_empty() {
                 println!("No agents running.");
@@ -157,7 +158,9 @@ pub async fn run(args: AgentArgs) -> anyhow::Result<()> {
             }
 
             let mut table = Table::new();
-            table.set_header(vec!["PID", "Agent ID", "State", "Parent", "Memory", "CPU (ms)"]);
+            table.set_header(vec![
+                "PID", "Agent ID", "State", "Parent", "Memory", "CPU (ms)",
+            ]);
             for a in &agents {
                 table.add_row(vec![
                     Cell::new(a.pid),

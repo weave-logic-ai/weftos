@@ -13,8 +13,8 @@ use thiserror::Error;
 
 // Re-export the canonical types from clawft-types.
 pub use clawft_types::security::{
-    CommandPolicy, CommandPolicyError, PolicyMode, DEFAULT_COMMAND_ALLOWLIST,
-    DEFAULT_DANGEROUS_PATTERNS, extract_first_token,
+    CommandPolicy, CommandPolicyError, DEFAULT_COMMAND_ALLOWLIST, DEFAULT_DANGEROUS_PATTERNS,
+    PolicyMode, extract_first_token,
 };
 
 /// Errors returned when a command fails policy validation.
@@ -46,7 +46,9 @@ impl From<CommandPolicyError> for PolicyError {
             CommandPolicyError::DangerousPattern { command, pattern } => {
                 PolicyError::DangerousPattern { command, pattern }
             }
-            _ => PolicyError::NotAllowed { command: format!("{err}") },
+            _ => PolicyError::NotAllowed {
+                command: format!("{err}"),
+            },
         }
     }
 }

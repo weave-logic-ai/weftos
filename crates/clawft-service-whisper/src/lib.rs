@@ -52,11 +52,11 @@ pub mod service;
 pub mod wav;
 pub mod windower;
 
-pub use audit::{TranscriptAuditEvent, AUDIT_TARGET};
+pub use audit::{AUDIT_TARGET, TranscriptAuditEvent};
 pub use client::{InferenceResponse, TranscribeError, WhisperClient, WhisperConfig};
 pub use manifest::{
-    verify_model_dir, verify_model_dir_soft, ManifestFile, ModelIntegrityError,
-    ModelIntegrityReport, ModelManifest, MANIFEST_FILENAME, MANIFEST_SIG_FILENAME,
+    MANIFEST_FILENAME, MANIFEST_SIG_FILENAME, ManifestFile, ModelIntegrityError,
+    ModelIntegrityReport, ModelManifest, verify_model_dir, verify_model_dir_soft,
 };
 pub use service::{WhisperService, WhisperServiceConfig};
 pub use windower::{PcmChunk, PcmWindow, Windower};

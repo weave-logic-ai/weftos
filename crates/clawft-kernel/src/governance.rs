@@ -52,8 +52,14 @@ pub struct GovernanceRule {
 
 impl GovernanceRule {
     /// Get rules by SOP category from a slice of rules.
-    pub fn filter_by_category<'a>(rules: &'a [GovernanceRule], category: &str) -> Vec<&'a GovernanceRule> {
-        rules.iter().filter(|r| r.sop_category.as_deref() == Some(category)).collect()
+    pub fn filter_by_category<'a>(
+        rules: &'a [GovernanceRule],
+        category: &str,
+    ) -> Vec<&'a GovernanceRule> {
+        rules
+            .iter()
+            .filter(|r| r.sop_category.as_deref() == Some(category))
+            .collect()
     }
 }
 
@@ -161,10 +167,7 @@ impl EffectVector {
     /// dimensions into a learned scalar.
     ///
     /// NOTE(eml-swap): wired — Finding #5 (GovernanceScorerModel).
-    pub fn score(
-        &self,
-        model: Option<&crate::eml_kernel::GovernanceScorerModel>,
-    ) -> f64 {
+    pub fn score(&self, model: Option<&crate::eml_kernel::GovernanceScorerModel>) -> f64 {
         match model {
             Some(m) => m.predict(
                 self.risk,
@@ -293,18 +296,15 @@ impl GovernanceRequest {
         pid: u64,
     ) -> Self {
         self.context.insert("tool".into(), tool_name.into());
-        self.context.insert("gate_action".into(), gate_action.into());
+        self.context
+            .insert("gate_action".into(), gate_action.into());
         self.context.insert("pid".into(), pid.to_string());
         self.effect = effect;
         self
     }
 
     /// Add a single key-value pair to the context map.
-    pub fn with_context_entry(
-        mut self,
-        key: impl Into<String>,
-        value: impl Into<String>,
-    ) -> Self {
+    pub fn with_context_entry(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.context.insert(key.into(), value.into());
         self
     }
@@ -371,10 +371,7 @@ impl GovernanceEngine {
     /// trained and falls back to the L2 magnitude otherwise. The
     /// fallback path is bit-for-bit identical to the pre-EML
     /// behaviour.
-    pub fn with_scorer(
-        mut self,
-        scorer: crate::eml_kernel::GovernanceScorerModel,
-    ) -> Self {
+    pub fn with_scorer(mut self, scorer: crate::eml_kernel::GovernanceScorerModel) -> Self {
         self.scorer = Some(scorer);
         self
     }
@@ -1212,7 +1209,10 @@ mod tests {
     fn governance_request_with_node_id() {
         let request = GovernanceRequest::new("agent-1", "deploy")
             .with_node_id("node-42")
-            .with_effect(EffectVector { risk: 0.1, ..Default::default() });
+            .with_effect(EffectVector {
+                risk: 0.1,
+                ..Default::default()
+            });
 
         assert_eq!(request.node_id.as_deref(), Some("node-42"));
         assert_eq!(request.agent_id, "agent-1");
@@ -1312,7 +1312,10 @@ mod tests {
         assert!(json.contains("reference_url"));
         assert!(json.contains("sop_category"));
         let restored: GovernanceRule = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.reference_url, Some("https://example.com/sop".into()));
+        assert_eq!(
+            restored.reference_url,
+            Some("https://example.com/sop".into())
+        );
     }
 
     #[test]
@@ -1351,39 +1354,149 @@ mod tests {
 
         // ── Core constitutional rules (GOV-001 .. GOV-007) ──────
         // Judicial blocking
-        engine.add_rule(make_sop_rule("GOV-001", RuleSeverity::Blocking, GovernanceBranch::Judicial, None));
-        engine.add_rule(make_sop_rule("GOV-002", RuleSeverity::Blocking, GovernanceBranch::Judicial, None));
+        engine.add_rule(make_sop_rule(
+            "GOV-001",
+            RuleSeverity::Blocking,
+            GovernanceBranch::Judicial,
+            None,
+        ));
+        engine.add_rule(make_sop_rule(
+            "GOV-002",
+            RuleSeverity::Blocking,
+            GovernanceBranch::Judicial,
+            None,
+        ));
         // Legislative warning
-        engine.add_rule(make_sop_rule("GOV-003", RuleSeverity::Warning, GovernanceBranch::Legislative, None));
+        engine.add_rule(make_sop_rule(
+            "GOV-003",
+            RuleSeverity::Warning,
+            GovernanceBranch::Legislative,
+            None,
+        ));
         // Executive advisory
-        engine.add_rule(make_sop_rule("GOV-004", RuleSeverity::Advisory, GovernanceBranch::Executive, None));
+        engine.add_rule(make_sop_rule(
+            "GOV-004",
+            RuleSeverity::Advisory,
+            GovernanceBranch::Executive,
+            None,
+        ));
         // Legislative warning
-        engine.add_rule(make_sop_rule("GOV-005", RuleSeverity::Warning, GovernanceBranch::Legislative, None));
+        engine.add_rule(make_sop_rule(
+            "GOV-005",
+            RuleSeverity::Warning,
+            GovernanceBranch::Legislative,
+            None,
+        ));
         // Executive blocking
-        engine.add_rule(make_sop_rule("GOV-006", RuleSeverity::Blocking, GovernanceBranch::Executive, None));
+        engine.add_rule(make_sop_rule(
+            "GOV-006",
+            RuleSeverity::Blocking,
+            GovernanceBranch::Executive,
+            None,
+        ));
         // Judicial advisory
-        engine.add_rule(make_sop_rule("GOV-007", RuleSeverity::Advisory, GovernanceBranch::Judicial, None));
+        engine.add_rule(make_sop_rule(
+            "GOV-007",
+            RuleSeverity::Advisory,
+            GovernanceBranch::Judicial,
+            None,
+        ));
 
         // ── AI-SDLC SOP rules: Legislative (6) ──────────────────
-        engine.add_rule(make_sop_rule("SOP-L001", RuleSeverity::Blocking, GovernanceBranch::Legislative, Some("governance")));
-        engine.add_rule(make_sop_rule("SOP-L002", RuleSeverity::Warning, GovernanceBranch::Legislative, Some("governance")));
-        engine.add_rule(make_sop_rule("SOP-L003", RuleSeverity::Warning, GovernanceBranch::Legislative, Some("engineering")));
-        engine.add_rule(make_sop_rule("SOP-L004", RuleSeverity::Advisory, GovernanceBranch::Legislative, Some("lifecycle")));
-        engine.add_rule(make_sop_rule("SOP-L005", RuleSeverity::Blocking, GovernanceBranch::Legislative, Some("ethics")));
-        engine.add_rule(make_sop_rule("SOP-L006", RuleSeverity::Warning, GovernanceBranch::Legislative, Some("governance")));
+        engine.add_rule(make_sop_rule(
+            "SOP-L001",
+            RuleSeverity::Blocking,
+            GovernanceBranch::Legislative,
+            Some("governance"),
+        ));
+        engine.add_rule(make_sop_rule(
+            "SOP-L002",
+            RuleSeverity::Warning,
+            GovernanceBranch::Legislative,
+            Some("governance"),
+        ));
+        engine.add_rule(make_sop_rule(
+            "SOP-L003",
+            RuleSeverity::Warning,
+            GovernanceBranch::Legislative,
+            Some("engineering"),
+        ));
+        engine.add_rule(make_sop_rule(
+            "SOP-L004",
+            RuleSeverity::Advisory,
+            GovernanceBranch::Legislative,
+            Some("lifecycle"),
+        ));
+        engine.add_rule(make_sop_rule(
+            "SOP-L005",
+            RuleSeverity::Blocking,
+            GovernanceBranch::Legislative,
+            Some("ethics"),
+        ));
+        engine.add_rule(make_sop_rule(
+            "SOP-L006",
+            RuleSeverity::Warning,
+            GovernanceBranch::Legislative,
+            Some("governance"),
+        ));
 
         // ── AI-SDLC SOP rules: Executive (5) ────────────────────
-        engine.add_rule(make_sop_rule("SOP-E001", RuleSeverity::Warning, GovernanceBranch::Executive, Some("engineering")));
-        engine.add_rule(make_sop_rule("SOP-E002", RuleSeverity::Blocking, GovernanceBranch::Executive, Some("lifecycle")));
-        engine.add_rule(make_sop_rule("SOP-E003", RuleSeverity::Warning, GovernanceBranch::Executive, Some("security")));
-        engine.add_rule(make_sop_rule("SOP-E004", RuleSeverity::Advisory, GovernanceBranch::Executive, Some("lifecycle")));
-        engine.add_rule(make_sop_rule("SOP-E005", RuleSeverity::Advisory, GovernanceBranch::Executive, Some("governance")));
+        engine.add_rule(make_sop_rule(
+            "SOP-E001",
+            RuleSeverity::Warning,
+            GovernanceBranch::Executive,
+            Some("engineering"),
+        ));
+        engine.add_rule(make_sop_rule(
+            "SOP-E002",
+            RuleSeverity::Blocking,
+            GovernanceBranch::Executive,
+            Some("lifecycle"),
+        ));
+        engine.add_rule(make_sop_rule(
+            "SOP-E003",
+            RuleSeverity::Warning,
+            GovernanceBranch::Executive,
+            Some("security"),
+        ));
+        engine.add_rule(make_sop_rule(
+            "SOP-E004",
+            RuleSeverity::Advisory,
+            GovernanceBranch::Executive,
+            Some("lifecycle"),
+        ));
+        engine.add_rule(make_sop_rule(
+            "SOP-E005",
+            RuleSeverity::Advisory,
+            GovernanceBranch::Executive,
+            Some("governance"),
+        ));
 
         // ── AI-SDLC SOP rules: Judicial (4) ─────────────────────
-        engine.add_rule(make_sop_rule("SOP-J001", RuleSeverity::Blocking, GovernanceBranch::Judicial, Some("ethics")));
-        engine.add_rule(make_sop_rule("SOP-J002", RuleSeverity::Warning, GovernanceBranch::Judicial, Some("ethics")));
-        engine.add_rule(make_sop_rule("SOP-J003", RuleSeverity::Warning, GovernanceBranch::Judicial, Some("lifecycle")));
-        engine.add_rule(make_sop_rule("SOP-J004", RuleSeverity::Advisory, GovernanceBranch::Judicial, Some("quality")));
+        engine.add_rule(make_sop_rule(
+            "SOP-J001",
+            RuleSeverity::Blocking,
+            GovernanceBranch::Judicial,
+            Some("ethics"),
+        ));
+        engine.add_rule(make_sop_rule(
+            "SOP-J002",
+            RuleSeverity::Warning,
+            GovernanceBranch::Judicial,
+            Some("ethics"),
+        ));
+        engine.add_rule(make_sop_rule(
+            "SOP-J003",
+            RuleSeverity::Warning,
+            GovernanceBranch::Judicial,
+            Some("lifecycle"),
+        ));
+        engine.add_rule(make_sop_rule(
+            "SOP-J004",
+            RuleSeverity::Advisory,
+            GovernanceBranch::Judicial,
+            Some("quality"),
+        ));
 
         engine
     }
@@ -1400,14 +1513,18 @@ mod tests {
         let request = GovernanceRequest {
             agent_id: "agent-1".into(),
             action: "deploy-to-prod".into(),
-            effect: EffectVector { risk: 0.9, ..Default::default() },
+            effect: EffectVector {
+                risk: 0.9,
+                ..Default::default()
+            },
             context: Default::default(),
             node_id: None,
         };
         let result = engine.evaluate(&request);
         assert!(
             matches!(result.decision, GovernanceDecision::Deny(_)),
-            "high-risk operation should be denied, got {:?}", result.decision,
+            "high-risk operation should be denied, got {:?}",
+            result.decision,
         );
         assert!(result.threshold_exceeded);
     }
@@ -1418,7 +1535,10 @@ mod tests {
         let request = GovernanceRequest {
             agent_id: "agent-1".into(),
             action: "read-file".into(),
-            effect: EffectVector { risk: 0.1, ..Default::default() },
+            effect: EffectVector {
+                risk: 0.1,
+                ..Default::default()
+            },
             context: Default::default(),
             node_id: None,
         };
@@ -1433,15 +1553,22 @@ mod tests {
         let request = GovernanceRequest {
             agent_id: "agent-1".into(),
             action: "access-user-data".into(),
-            effect: EffectVector { privacy: 0.8, ..Default::default() },
+            effect: EffectVector {
+                privacy: 0.8,
+                ..Default::default()
+            },
             context: Default::default(),
             node_id: None,
         };
         let result = engine.evaluate(&request);
         // magnitude = 0.8 > 0.7 threshold; blocking rules exist -> Deny
         assert!(
-            matches!(result.decision, GovernanceDecision::Deny(_) | GovernanceDecision::PermitWithWarning(_)),
-            "privacy violation should trigger warning or deny, got {:?}", result.decision,
+            matches!(
+                result.decision,
+                GovernanceDecision::Deny(_) | GovernanceDecision::PermitWithWarning(_)
+            ),
+            "privacy violation should trigger warning or deny, got {:?}",
+            result.decision,
         );
         assert!(result.threshold_exceeded);
     }
@@ -1453,7 +1580,11 @@ mod tests {
         let request = GovernanceRequest {
             agent_id: "agent-1".into(),
             action: "modify-firewall".into(),
-            effect: EffectVector { security: 0.9, risk: 0.5, ..Default::default() },
+            effect: EffectVector {
+                security: 0.9,
+                risk: 0.5,
+                ..Default::default()
+            },
             context: Default::default(),
             node_id: None,
         };
@@ -1469,14 +1600,18 @@ mod tests {
         let request = GovernanceRequest {
             agent_id: "ml-agent".into(),
             action: "evaluate-candidate".into(),
-            effect: EffectVector { fairness: 0.9, ..Default::default() },
+            effect: EffectVector {
+                fairness: 0.9,
+                ..Default::default()
+            },
             context: Default::default(),
             node_id: None,
         };
         let result = engine.evaluate(&request);
         assert!(
             matches!(result.decision, GovernanceDecision::Deny(_)),
-            "fairness violation should be blocked by SOP-J001, got {:?}", result.decision,
+            "fairness violation should be blocked by SOP-J001, got {:?}",
+            result.decision,
         );
     }
 
@@ -1487,7 +1622,11 @@ mod tests {
         let request = GovernanceRequest {
             agent_id: "orchestrator".into(),
             action: "agent.spawn".into(),
-            effect: EffectVector { risk: 0.8, novelty: 0.5, ..Default::default() },
+            effect: EffectVector {
+                risk: 0.8,
+                novelty: 0.5,
+                ..Default::default()
+            },
             context: Default::default(),
             node_id: None,
         };
@@ -1503,7 +1642,10 @@ mod tests {
         let request = GovernanceRequest {
             agent_id: "orchestrator".into(),
             action: "agent.spawn".into(),
-            effect: EffectVector { risk: 0.1, ..Default::default() },
+            effect: EffectVector {
+                risk: 0.1,
+                ..Default::default()
+            },
             context: Default::default(),
             node_id: None,
         };
@@ -1518,7 +1660,11 @@ mod tests {
         let request = GovernanceRequest {
             agent_id: "data-agent".into(),
             action: "export-pii".into(),
-            effect: EffectVector { privacy: 0.9, risk: 0.3, ..Default::default() },
+            effect: EffectVector {
+                privacy: 0.9,
+                risk: 0.3,
+                ..Default::default()
+            },
             context: Default::default(),
             node_id: None,
         };
@@ -1531,19 +1677,28 @@ mod tests {
     fn genesis_with_human_approval_escalates() {
         // Same rules but with human_approval_required = true
         let mut engine = GovernanceEngine::new(0.7, true);
-        engine.add_rule(make_sop_rule("GOV-001", RuleSeverity::Blocking, GovernanceBranch::Judicial, None));
+        engine.add_rule(make_sop_rule(
+            "GOV-001",
+            RuleSeverity::Blocking,
+            GovernanceBranch::Judicial,
+            None,
+        ));
 
         let request = GovernanceRequest {
             agent_id: "agent-1".into(),
             action: "high-risk-op".into(),
-            effect: EffectVector { risk: 0.9, ..Default::default() },
+            effect: EffectVector {
+                risk: 0.9,
+                ..Default::default()
+            },
             context: Default::default(),
             node_id: None,
         };
         let result = engine.evaluate(&request);
         assert!(
             matches!(result.decision, GovernanceDecision::EscalateToHuman(_)),
-            "with human_approval, blocking should escalate, got {:?}", result.decision,
+            "with human_approval, blocking should escalate, got {:?}",
+            result.decision,
         );
     }
 
@@ -1555,17 +1710,34 @@ mod tests {
         let judicial = engine.rules_by_branch(&GovernanceBranch::Judicial);
 
         // Legislative: GOV-003, GOV-005, SOP-L001..L006 = 8
-        assert_eq!(legislative.len(), 8, "legislative should have 8 rules, got {}", legislative.len());
+        assert_eq!(
+            legislative.len(),
+            8,
+            "legislative should have 8 rules, got {}",
+            legislative.len()
+        );
         // Executive: GOV-004, GOV-006, SOP-E001..E005 = 7
-        assert_eq!(executive.len(), 7, "executive should have 7 rules, got {}", executive.len());
+        assert_eq!(
+            executive.len(),
+            7,
+            "executive should have 7 rules, got {}",
+            executive.len()
+        );
         // Judicial: GOV-001, GOV-002, GOV-007, SOP-J001..J004 = 7
-        assert_eq!(judicial.len(), 7, "judicial should have 7 rules, got {}", judicial.len());
+        assert_eq!(
+            judicial.len(),
+            7,
+            "judicial should have 7 rules, got {}",
+            judicial.len()
+        );
     }
 
     #[test]
     fn genesis_blocking_rules_count() {
         let engine = genesis_engine();
-        let blocking_count = engine.active_rules().iter()
+        let blocking_count = engine
+            .active_rules()
+            .iter()
             .filter(|r| matches!(r.severity, RuleSeverity::Blocking | RuleSeverity::Critical))
             .count();
         // GOV-001, GOV-002, GOV-006, SOP-L001, SOP-L005, SOP-E002, SOP-J001 = 7
@@ -1575,7 +1747,9 @@ mod tests {
     #[test]
     fn genesis_warning_rules_count() {
         let engine = genesis_engine();
-        let warning_count = engine.active_rules().iter()
+        let warning_count = engine
+            .active_rules()
+            .iter()
             .filter(|r| matches!(r.severity, RuleSeverity::Warning))
             .count();
         // GOV-003, GOV-005, SOP-L002, SOP-L003, SOP-L006,
@@ -1586,7 +1760,9 @@ mod tests {
     #[test]
     fn genesis_advisory_rules_count() {
         let engine = genesis_engine();
-        let advisory_count = engine.active_rules().iter()
+        let advisory_count = engine
+            .active_rules()
+            .iter()
             .filter(|r| matches!(r.severity, RuleSeverity::Advisory))
             .count();
         // GOV-004, GOV-007, SOP-L004, SOP-E004, SOP-E005, SOP-J004 = 6
@@ -1597,13 +1773,27 @@ mod tests {
     fn genesis_moderate_risk_with_only_warnings_permits_with_warning() {
         // Only warning-severity rules, no blocking: should PermitWithWarning
         let mut engine = GovernanceEngine::new(0.7, false);
-        engine.add_rule(make_sop_rule("SOP-L002", RuleSeverity::Warning, GovernanceBranch::Legislative, Some("governance")));
-        engine.add_rule(make_sop_rule("SOP-E001", RuleSeverity::Warning, GovernanceBranch::Executive, Some("engineering")));
+        engine.add_rule(make_sop_rule(
+            "SOP-L002",
+            RuleSeverity::Warning,
+            GovernanceBranch::Legislative,
+            Some("governance"),
+        ));
+        engine.add_rule(make_sop_rule(
+            "SOP-E001",
+            RuleSeverity::Warning,
+            GovernanceBranch::Executive,
+            Some("engineering"),
+        ));
 
         let request = GovernanceRequest {
             agent_id: "dev-agent".into(),
             action: "write-code".into(),
-            effect: EffectVector { risk: 0.5, novelty: 0.5, ..Default::default() },
+            effect: EffectVector {
+                risk: 0.5,
+                novelty: 0.5,
+                ..Default::default()
+            },
             context: Default::default(),
             node_id: None,
         };
@@ -1611,7 +1801,8 @@ mod tests {
         // magnitude ~ 0.71 > 0.7, only warnings -> PermitWithWarning
         assert!(
             matches!(result.decision, GovernanceDecision::PermitWithWarning(_)),
-            "warning-only rules above threshold should PermitWithWarning, got {:?}", result.decision,
+            "warning-only rules above threshold should PermitWithWarning, got {:?}",
+            result.decision,
         );
     }
 
@@ -1619,19 +1810,36 @@ mod tests {
     fn genesis_advisory_only_permits_above_threshold() {
         // Advisory rules alone never block or warn -- action is permitted
         let mut engine = GovernanceEngine::new(0.7, false);
-        engine.add_rule(make_sop_rule("GOV-004", RuleSeverity::Advisory, GovernanceBranch::Executive, None));
-        engine.add_rule(make_sop_rule("GOV-007", RuleSeverity::Advisory, GovernanceBranch::Judicial, None));
+        engine.add_rule(make_sop_rule(
+            "GOV-004",
+            RuleSeverity::Advisory,
+            GovernanceBranch::Executive,
+            None,
+        ));
+        engine.add_rule(make_sop_rule(
+            "GOV-007",
+            RuleSeverity::Advisory,
+            GovernanceBranch::Judicial,
+            None,
+        ));
 
         let request = GovernanceRequest {
             agent_id: "agent-1".into(),
             action: "novel-action".into(),
-            effect: EffectVector { novelty: 0.9, ..Default::default() },
+            effect: EffectVector {
+                novelty: 0.9,
+                ..Default::default()
+            },
             context: Default::default(),
             node_id: None,
         };
         let result = engine.evaluate(&request);
-        assert_eq!(result.decision, GovernanceDecision::Permit,
-            "advisory-only rules should still permit, got {:?}", result.decision);
+        assert_eq!(
+            result.decision,
+            GovernanceDecision::Permit,
+            "advisory-only rules should still permit, got {:?}",
+            result.decision
+        );
         assert!(result.threshold_exceeded);
     }
 
@@ -1641,14 +1849,19 @@ mod tests {
         let request = GovernanceRequest {
             agent_id: "agent-1".into(),
             action: "any-action".into(),
-            effect: EffectVector { risk: 0.9, ..Default::default() },
+            effect: EffectVector {
+                risk: 0.9,
+                ..Default::default()
+            },
             context: Default::default(),
             node_id: None,
         };
         let result = engine.evaluate(&request);
         assert_eq!(
-            result.evaluated_rules.len(), 22,
-            "all 22 rules should be evaluated, got {}", result.evaluated_rules.len(),
+            result.evaluated_rules.len(),
+            22,
+            "all 22 rules should be evaluated, got {}",
+            result.evaluated_rules.len(),
         );
     }
 
@@ -1656,13 +1869,15 @@ mod tests {
     fn genesis_sop_categories_present() {
         let engine = genesis_engine();
         let all_rules = engine.active_rules();
-        let categorized: Vec<_> = all_rules.iter()
+        let categorized: Vec<_> = all_rules
+            .iter()
             .filter(|r| r.sop_category.is_some())
             .collect();
         // 15 SOP rules have categories, 7 GOV rules do not
         assert_eq!(categorized.len(), 15, "15 SOP rules should have categories");
 
-        let categories: std::collections::HashSet<_> = categorized.iter()
+        let categories: std::collections::HashSet<_> = categorized
+            .iter()
             .map(|r| r.sop_category.as_deref().unwrap())
             .collect();
         assert!(categories.contains("governance"));
@@ -1702,7 +1917,10 @@ mod tests {
 
     // ── Environment-scoped governance tests ─────────────────────
 
-    fn make_env(class: crate::environment::EnvironmentClass, risk_threshold: f64) -> crate::environment::Environment {
+    fn make_env(
+        class: crate::environment::EnvironmentClass,
+        risk_threshold: f64,
+    ) -> crate::environment::Environment {
         crate::environment::Environment {
             id: format!("{class}"),
             name: format!("{class}"),
@@ -1727,8 +1945,10 @@ mod tests {
         let dev_env = make_env(EnvironmentClass::Development, 0.9);
 
         // High-risk request: magnitude 0.8
-        let request = GovernanceRequest::new("agent-1", "deploy")
-            .with_effect(EffectVector { risk: 0.8, ..Default::default() });
+        let request = GovernanceRequest::new("agent-1", "deploy").with_effect(EffectVector {
+            risk: 0.8,
+            ..Default::default()
+        });
 
         let result = engine.evaluate_in_environment(&request, &dev_env);
         // 0.8 < 0.9 (dev threshold) => should be permitted.
@@ -1755,8 +1975,10 @@ mod tests {
         let prod_env = make_env(EnvironmentClass::Production, 0.6);
 
         // Moderate request: magnitude 0.4
-        let request = GovernanceRequest::new("agent-1", "deploy")
-            .with_effect(EffectVector { risk: 0.4, ..Default::default() });
+        let request = GovernanceRequest::new("agent-1", "deploy").with_effect(EffectVector {
+            risk: 0.4,
+            ..Default::default()
+        });
 
         let result = engine.evaluate_in_environment(&request, &prod_env);
         // 0.4 > 0.3 (prod adjusted = 0.6 * 0.5) => denied.
@@ -1782,8 +2004,10 @@ mod tests {
         let staging_env = make_env(EnvironmentClass::Staging, 0.6);
 
         // Moderate request: magnitude 0.5
-        let request = GovernanceRequest::new("agent-1", "test-deploy")
-            .with_effect(EffectVector { risk: 0.5, ..Default::default() });
+        let request = GovernanceRequest::new("agent-1", "test-deploy").with_effect(EffectVector {
+            risk: 0.5,
+            ..Default::default()
+        });
 
         let result = engine.evaluate_in_environment(&request, &staging_env);
         // 0.5 < 0.6 => permitted.
@@ -1795,8 +2019,10 @@ mod tests {
         );
 
         // Higher request: magnitude 0.7
-        let request2 = GovernanceRequest::new("agent-1", "test-deploy")
-            .with_effect(EffectVector { risk: 0.7, ..Default::default() });
+        let request2 = GovernanceRequest::new("agent-1", "test-deploy").with_effect(EffectVector {
+            risk: 0.7,
+            ..Default::default()
+        });
         let result2 = engine.evaluate_in_environment(&request2, &staging_env);
         // 0.7 > 0.6 => denied.
         assert!(
@@ -1816,8 +2042,10 @@ mod tests {
         let prod = make_env(EnvironmentClass::Production, 0.6);
 
         // magnitude = 0.5
-        let request = GovernanceRequest::new("agent-1", "write-file")
-            .with_effect(EffectVector { risk: 0.5, ..Default::default() });
+        let request = GovernanceRequest::new("agent-1", "write-file").with_effect(EffectVector {
+            risk: 0.5,
+            ..Default::default()
+        });
 
         let dev_result = engine.evaluate_in_environment(&request, &dev);
         let prod_result = engine.evaluate_in_environment(&request, &prod);
@@ -2049,7 +2277,10 @@ mod tests {
         };
         let json = serde_json::to_string(&rule).unwrap();
         let restored: GovernanceRule = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.reference_url.unwrap(), "https://sops.example.com/001");
+        assert_eq!(
+            restored.reference_url.unwrap(),
+            "https://sops.example.com/001"
+        );
         assert_eq!(restored.sop_category.unwrap(), "data-access");
     }
 
@@ -2149,7 +2380,10 @@ mod tests {
                 effect: EffectVector::default(),
                 threshold_exceeded: false,
             };
-            assert_eq!(permit_result.to_rvf_task_outcome() as u8, TaskOutcome::Solved as u8);
+            assert_eq!(
+                permit_result.to_rvf_task_outcome() as u8,
+                TaskOutcome::Solved as u8
+            );
 
             let deny_result = GovernanceResult {
                 decision: GovernanceDecision::Deny("blocked".into()),
@@ -2157,7 +2391,10 @@ mod tests {
                 effect: EffectVector::default(),
                 threshold_exceeded: true,
             };
-            assert_eq!(deny_result.to_rvf_task_outcome() as u8, TaskOutcome::Failed as u8);
+            assert_eq!(
+                deny_result.to_rvf_task_outcome() as u8,
+                TaskOutcome::Failed as u8
+            );
 
             let escalate_result = GovernanceResult {
                 decision: GovernanceDecision::EscalateToHuman("review".into()),
@@ -2165,7 +2402,10 @@ mod tests {
                 effect: EffectVector::default(),
                 threshold_exceeded: true,
             };
-            assert_eq!(escalate_result.to_rvf_task_outcome() as u8, TaskOutcome::Skipped as u8);
+            assert_eq!(
+                escalate_result.to_rvf_task_outcome() as u8,
+                TaskOutcome::Skipped as u8
+            );
         }
     }
 
@@ -2195,7 +2435,10 @@ mod tests {
             let request = GovernanceRequest {
                 agent_id: "agent-1".into(),
                 action: "tool.read".into(),
-                effect: EffectVector { risk: 0.1, ..Default::default() },
+                effect: EffectVector {
+                    risk: 0.1,
+                    ..Default::default()
+                },
                 context: Default::default(),
                 node_id: None,
             };
@@ -2227,7 +2470,10 @@ mod tests {
             let request = GovernanceRequest {
                 agent_id: "agent-1".into(),
                 action: "tool.exec".into(),
-                effect: EffectVector { risk: 0.9, ..Default::default() },
+                effect: EffectVector {
+                    risk: 0.9,
+                    ..Default::default()
+                },
                 context: Default::default(),
                 node_id: None,
             };
@@ -2277,7 +2523,10 @@ mod tests {
             let request = GovernanceRequest {
                 agent_id: "agent-1".into(),
                 action: "tool.exec".into(),
-                effect: EffectVector { risk: 0.8, ..Default::default() },
+                effect: EffectVector {
+                    risk: 0.8,
+                    ..Default::default()
+                },
                 context: Default::default(),
                 node_id: None,
             };

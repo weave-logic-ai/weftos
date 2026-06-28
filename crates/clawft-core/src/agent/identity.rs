@@ -41,10 +41,10 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::runtime::RwLock;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use crate::runtime::RwLock;
 use tracing::{debug, warn};
 
 /// Distinctive paragraph from the canonical `SOUL.md` used as the

@@ -226,9 +226,24 @@ fn emphasize(prompt: &str) -> String {
 fn looks_like_instruction(line: &str) -> bool {
     let lower = line.to_lowercase();
     let instruction_verbs = [
-        "use ", "execute ", "run ", "create ", "write ", "read ",
-        "check ", "ensure ", "verify ", "always ", "never ", "do ",
-        "avoid ", "make ", "set ", "apply ", "follow ", "implement ",
+        "use ",
+        "execute ",
+        "run ",
+        "create ",
+        "write ",
+        "read ",
+        "check ",
+        "ensure ",
+        "verify ",
+        "always ",
+        "never ",
+        "do ",
+        "avoid ",
+        "make ",
+        "set ",
+        "apply ",
+        "follow ",
+        "implement ",
     ];
     instruction_verbs.iter().any(|v| lower.starts_with(v))
 }
@@ -344,9 +359,21 @@ mod tests {
     #[test]
     fn auto_select_with_many_poor_trajectories() {
         let trajectories = vec![
-            TrajectoryHint { request_content: "a".into(), quality_score: 0.2, feedback: "bad".into() },
-            TrajectoryHint { request_content: "b".into(), quality_score: 0.3, feedback: "bad".into() },
-            TrajectoryHint { request_content: "c".into(), quality_score: 0.4, feedback: "bad".into() },
+            TrajectoryHint {
+                request_content: "a".into(),
+                quality_score: 0.2,
+                feedback: "bad".into(),
+            },
+            TrajectoryHint {
+                request_content: "b".into(),
+                quality_score: 0.3,
+                feedback: "bad".into(),
+            },
+            TrajectoryHint {
+                request_content: "c".into(),
+                quality_score: 0.4,
+                feedback: "bad".into(),
+            },
         ];
         let strategy = auto_select_strategy(&trajectories);
         assert_eq!(strategy, MutationStrategy::RemoveIneffective);
@@ -355,8 +382,16 @@ mod tests {
     #[test]
     fn auto_select_with_good_examples() {
         let trajectories = vec![
-            TrajectoryHint { request_content: "a".into(), quality_score: 0.9, feedback: "good".into() },
-            TrajectoryHint { request_content: "b".into(), quality_score: 0.85, feedback: "good".into() },
+            TrajectoryHint {
+                request_content: "a".into(),
+                quality_score: 0.9,
+                feedback: "good".into(),
+            },
+            TrajectoryHint {
+                request_content: "b".into(),
+                quality_score: 0.85,
+                feedback: "good".into(),
+            },
         ];
         let strategy = auto_select_strategy(&trajectories);
         assert_eq!(strategy, MutationStrategy::AddExamples);
@@ -364,9 +399,11 @@ mod tests {
 
     #[test]
     fn auto_select_defaults_to_rephrase() {
-        let trajectories = vec![
-            TrajectoryHint { request_content: "a".into(), quality_score: 0.7, feedback: "ok".into() },
-        ];
+        let trajectories = vec![TrajectoryHint {
+            request_content: "a".into(),
+            quality_score: 0.7,
+            feedback: "ok".into(),
+        }];
         let strategy = auto_select_strategy(&trajectories);
         assert_eq!(strategy, MutationStrategy::Rephrase);
     }
@@ -379,7 +416,8 @@ mod tests {
 
     #[test]
     fn mutate_prompt_roundtrip_all_strategies() {
-        let prompt = "Use the search tool to find relevant docs\nEnsure accuracy\nSome context info";
+        let prompt =
+            "Use the search tool to find relevant docs\nEnsure accuracy\nSome context info";
         let trajectories = sample_trajectories();
 
         for strategy in [

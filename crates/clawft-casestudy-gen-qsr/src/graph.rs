@@ -125,7 +125,12 @@ pub fn build(dims: &Dimensions, events: &[DailyRollup]) -> CaseGraph {
     let mut b = Builder::default();
 
     // --- Structural nodes: Brand / Region / Metro -----------------------------
-    for brand in dims.stores.iter().map(|s| &s.brand).collect::<std::collections::BTreeSet<_>>() {
+    for brand in dims
+        .stores
+        .iter()
+        .map(|s| &s.brand)
+        .collect::<std::collections::BTreeSet<_>>()
+    {
         b.push_node(Node {
             id: 0,
             label: format!("brand:{}", brand),
@@ -139,7 +144,12 @@ pub fn build(dims: &Dimensions, events: &[DailyRollup]) -> CaseGraph {
             store_ref: None,
         });
     }
-    for region in dims.stores.iter().map(|s| &s.region_code).collect::<std::collections::BTreeSet<_>>() {
+    for region in dims
+        .stores
+        .iter()
+        .map(|s| &s.region_code)
+        .collect::<std::collections::BTreeSet<_>>()
+    {
         b.push_node(Node {
             id: 0,
             label: format!("region:{}", region),
@@ -153,7 +163,12 @@ pub fn build(dims: &Dimensions, events: &[DailyRollup]) -> CaseGraph {
             store_ref: None,
         });
     }
-    for metro in dims.stores.iter().map(|s| &s.metro_code).collect::<std::collections::BTreeSet<_>>() {
+    for metro in dims
+        .stores
+        .iter()
+        .map(|s| &s.metro_code)
+        .collect::<std::collections::BTreeSet<_>>()
+    {
         b.push_node(Node {
             id: 0,
             label: format!("metro:{}", metro),
@@ -185,9 +200,27 @@ pub fn build(dims: &Dimensions, events: &[DailyRollup]) -> CaseGraph {
         let brand_id = b.label_index[&format!("brand:{}", store.brand)];
         let region_id = b.label_index[&format!("region:{}", store.region_code)];
         let metro_id = b.label_index[&format!("metro:{}", store.metro_code)];
-        b.push_edge(Edge { source: store_id, target: brand_id,  edge_type: EdgeType::BrandOf,   weight: 1.0, provenance: Provenance::Structural });
-        b.push_edge(Edge { source: store_id, target: region_id, edge_type: EdgeType::OperatesIn, weight: 1.0, provenance: Provenance::Structural });
-        b.push_edge(Edge { source: store_id, target: metro_id,  edge_type: EdgeType::LocatedIn, weight: 1.0, provenance: Provenance::Structural });
+        b.push_edge(Edge {
+            source: store_id,
+            target: brand_id,
+            edge_type: EdgeType::BrandOf,
+            weight: 1.0,
+            provenance: Provenance::Structural,
+        });
+        b.push_edge(Edge {
+            source: store_id,
+            target: region_id,
+            edge_type: EdgeType::OperatesIn,
+            weight: 1.0,
+            provenance: Provenance::Structural,
+        });
+        b.push_edge(Edge {
+            source: store_id,
+            target: metro_id,
+            edge_type: EdgeType::LocatedIn,
+            weight: 1.0,
+            provenance: Provenance::Structural,
+        });
     }
 
     // --- Promotion nodes ------------------------------------------------------
@@ -223,13 +256,25 @@ pub fn build(dims: &Dimensions, events: &[DailyRollup]) -> CaseGraph {
             week_index: Some(week_index),
             store_ref: Some(ev.store_ref.clone()),
         });
-        b.push_edge(Edge { source: store_id, target: daily_id, edge_type: EdgeType::ClosedDay, weight: 1.0, provenance: Provenance::Structural });
+        b.push_edge(Edge {
+            source: store_id,
+            target: daily_id,
+            edge_type: EdgeType::ClosedDay,
+            weight: 1.0,
+            provenance: Provenance::Structural,
+        });
 
         // Attach Causes edge from each active promotion whose brand and day window match.
         for promo in &dims.promotions {
-            if promo.brand != store.brand.clone().unwrap_or_default() { continue; }
-            if ev.day_index < promo.start_day || ev.day_index >= promo.end_day { continue; }
-            let Some(&promo_id) = b.label_index.get(&promo.label) else { continue; };
+            if promo.brand != store.brand.clone().unwrap_or_default() {
+                continue;
+            }
+            if ev.day_index < promo.start_day || ev.day_index >= promo.end_day {
+                continue;
+            }
+            let Some(&promo_id) = b.label_index.get(&promo.label) else {
+                continue;
+            };
             b.push_edge(Edge {
                 source: promo_id,
                 target: daily_id,

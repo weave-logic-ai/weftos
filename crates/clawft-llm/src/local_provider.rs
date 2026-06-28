@@ -103,9 +103,7 @@ impl LocalProvider {
     /// variable is not set, requests will be sent without an `Authorization`
     /// header.
     pub fn from_config(config: LlmProviderConfig, api_key: Option<String>) -> Self {
-        let timeout_secs = config
-            .timeout_secs
-            .unwrap_or(DEFAULT_LOCAL_TIMEOUT_SECS);
+        let timeout_secs = config.timeout_secs.unwrap_or(DEFAULT_LOCAL_TIMEOUT_SECS);
         Self {
             http: reqwest::ClientBuilder::new()
                 .timeout(Duration::from_secs(timeout_secs))
@@ -127,11 +125,7 @@ impl LocalProvider {
 
     /// Create a provider pre-configured for vLLM on the default port.
     pub fn vllm(model: String) -> Self {
-        let mut provider = Self::new(
-            VLLM_DEFAULT_BASE_URL.into(),
-            model,
-            None,
-        );
+        let mut provider = Self::new(VLLM_DEFAULT_BASE_URL.into(), model, None);
         provider.config.name = "vllm".into();
         provider
     }
@@ -149,11 +143,7 @@ impl LocalProvider {
 
     /// Create a provider pre-configured for LM Studio on the default port.
     pub fn lmstudio(model: String) -> Self {
-        let mut provider = Self::new(
-            LMSTUDIO_DEFAULT_BASE_URL.into(),
-            model,
-            None,
-        );
+        let mut provider = Self::new(LMSTUDIO_DEFAULT_BASE_URL.into(), model, None);
         provider.config.name = "lmstudio".into();
         provider
     }
@@ -313,10 +303,7 @@ impl Provider for LocalProvider {
 
             let code = status.as_u16();
             if (500..=599).contains(&code) {
-                return Err(ProviderError::ServerError {
-                    status: code,
-                    body,
-                });
+                return Err(ProviderError::ServerError { status: code, body });
             }
 
             return Err(ProviderError::RequestFailed(format!(
@@ -387,10 +374,7 @@ impl Provider for LocalProvider {
             }
             let code = status.as_u16();
             if (500..=599).contains(&code) {
-                return Err(ProviderError::ServerError {
-                    status: code,
-                    body,
-                });
+                return Err(ProviderError::ServerError { status: code, body });
             }
             return Err(ProviderError::RequestFailed(format!(
                 "HTTP {status}: {body}"
@@ -520,10 +504,7 @@ mod tests {
         let provider = LocalProvider::lmstudio("phi-3".into());
         assert_eq!(provider.name(), "lmstudio");
         assert_eq!(provider.config().base_url, LMSTUDIO_DEFAULT_BASE_URL);
-        assert_eq!(
-            provider.config().default_model.as_deref(),
-            Some("phi-3")
-        );
+        assert_eq!(provider.config().default_model.as_deref(), Some("phi-3"));
     }
 
     #[test]
@@ -554,11 +535,7 @@ mod tests {
 
     #[test]
     fn completions_url_strips_trailing_slash() {
-        let provider = LocalProvider::new(
-            "http://localhost:11434/v1/".into(),
-            "test".into(),
-            None,
-        );
+        let provider = LocalProvider::new("http://localhost:11434/v1/".into(), "test".into(), None);
         assert_eq!(
             provider.completions_url(),
             "http://localhost:11434/v1/chat/completions"
@@ -568,10 +545,7 @@ mod tests {
     #[test]
     fn models_url_construction() {
         let provider = LocalProvider::ollama();
-        assert_eq!(
-            provider.models_url(),
-            "http://localhost:11434/v1/models"
-        );
+        assert_eq!(provider.models_url(), "http://localhost:11434/v1/models");
     }
 
     // ── API key resolution ──────────────────────────────────────────
@@ -621,10 +595,7 @@ mod tests {
 
     #[test]
     fn request_body_with_stream() {
-        let mut request = ChatRequest::new(
-            "llama3.2",
-            vec![ChatMessage::user("Hello")],
-        );
+        let mut request = ChatRequest::new("llama3.2", vec![ChatMessage::user("Hello")]);
         request.stream = Some(true);
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["stream"], true);
@@ -678,10 +649,7 @@ mod tests {
             response.choices[0].message.content.as_deref(),
             Some("Rust is a systems programming language.")
         );
-        assert_eq!(
-            response.choices[0].finish_reason.as_deref(),
-            Some("stop")
-        );
+        assert_eq!(response.choices[0].finish_reason.as_deref(), Some("stop"));
         let usage = response.usage.unwrap();
         assert_eq!(usage.input_tokens, 12);
         assert_eq!(usage.output_tokens, 8);
@@ -738,10 +706,7 @@ mod tests {
 
         let response: ChatResponse = serde_json::from_str(json).unwrap();
         assert!(response.usage.is_none());
-        assert_eq!(
-            response.choices[0].message.content.as_deref(),
-            Some("Hi!")
-        );
+        assert_eq!(response.choices[0].message.content.as_deref(), Some("Hi!"));
     }
 
     #[test]
@@ -893,10 +858,7 @@ mod tests {
 
     #[test]
     fn stream_request_sets_stream_true() {
-        let mut request = ChatRequest::new(
-            "llama3.2",
-            vec![ChatMessage::user("Hi")],
-        );
+        let mut request = ChatRequest::new("llama3.2", vec![ChatMessage::user("Hi")]);
         request.stream = Some(true);
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["stream"], true);

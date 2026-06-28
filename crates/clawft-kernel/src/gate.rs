@@ -62,12 +62,7 @@ pub trait GateBackend: Send + Sync {
     ///   "ipc.send", "service.access").
     /// * `context` - Additional context for the decision (tool args,
     ///   target PID, etc.).
-    fn check(
-        &self,
-        agent_id: &str,
-        action: &str,
-        context: &serde_json::Value,
-    ) -> GateDecision;
+    fn check(&self, agent_id: &str, action: &str, context: &serde_json::Value) -> GateDecision;
 }
 
 /// Gate backend wrapping the existing `CapabilityChecker`.
@@ -86,21 +81,12 @@ impl CapabilityGate {
 }
 
 impl GateBackend for CapabilityGate {
-    fn check(
-        &self,
-        _agent_id: &str,
-        action: &str,
-        context: &serde_json::Value,
-    ) -> GateDecision {
+    fn check(&self, _agent_id: &str, action: &str, context: &serde_json::Value) -> GateDecision {
         // Extract PID from context if available
-        let pid = context
-            .get("pid")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
+        let pid = context.get("pid").and_then(|v| v.as_u64()).unwrap_or(0);
 
-        let checker = crate::capability::CapabilityChecker::new(
-            std::sync::Arc::clone(&self.process_table),
-        );
+        let checker =
+            crate::capability::CapabilityChecker::new(std::sync::Arc::clone(&self.process_table));
 
         // Route to appropriate checker based on action prefix
         let result = if action.starts_with("tool.") {
@@ -143,8 +129,7 @@ mod tilezero_gate {
     use std::sync::Arc;
 
     use cognitum_gate_tilezero::{
-        ActionContext, ActionMetadata, ActionTarget,
-        GateDecision as TzDecision, TileZero,
+        ActionContext, ActionMetadata, ActionTarget, GateDecision as TzDecision, TileZero,
     };
 
     /// Gate backend wrapping [`cognitum_gate_tilezero::TileZero`].
@@ -217,19 +202,13 @@ mod tilezero_gate {
     }
 
     impl GateBackend for TileZeroGate {
-        fn check(
-            &self,
-            agent_id: &str,
-            action: &str,
-            context: &serde_json::Value,
-        ) -> GateDecision {
+        fn check(&self, agent_id: &str, action: &str, context: &serde_json::Value) -> GateDecision {
             let action_ctx = Self::build_action_context(agent_id, action, context);
 
             // TileZero::decide() is async. We use block_in_place since
             // the kernel always runs inside a multi-threaded tokio runtime.
             let token = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current()
-                    .block_on(self.tilezero.decide(&action_ctx))
+                tokio::runtime::Handle::current().block_on(self.tilezero.decide(&action_ctx))
             });
 
             // Serialize the signed PermitToken for the opaque bytes field.
@@ -237,9 +216,7 @@ mod tilezero_gate {
 
             // Map TileZero's three-way decision to our GateDecision.
             let decision = match token.decision {
-                TzDecision::Permit => GateDecision::Permit {
-                    token: token_bytes,
-                },
+                TzDecision::Permit => GateDecision::Permit { token: token_bytes },
                 TzDecision::Defer => GateDecision::Defer {
                     reason: format!(
                         "TileZero deferred: coherence uncertain (seq={})",
@@ -378,12 +355,7 @@ impl GovernanceGate {
 }
 
 impl GateBackend for GovernanceGate {
-    fn check(
-        &self,
-        agent_id: &str,
-        action: &str,
-        context: &serde_json::Value,
-    ) -> GateDecision {
+    fn check(&self, agent_id: &str, action: &str, context: &serde_json::Value) -> GateDecision {
         let effect = Self::extract_effect(context);
         let ctx_map = Self::extract_context(context);
 
@@ -402,11 +374,9 @@ impl GateBackend for GovernanceGate {
             crate::governance::GovernanceDecision::PermitWithWarning(_) => {
                 GateDecision::Permit { token: None }
             }
-            crate::governance::GovernanceDecision::EscalateToHuman(reason) => {
-                GateDecision::Defer {
-                    reason: reason.clone(),
-                }
-            }
+            crate::governance::GovernanceDecision::EscalateToHuman(reason) => GateDecision::Defer {
+                reason: reason.clone(),
+            },
             crate::governance::GovernanceDecision::Deny(reason) => GateDecision::Deny {
                 reason: reason.clone(),
                 receipt: None,
@@ -525,9 +495,16 @@ mod tests {
     #[test]
     fn gate_decision_serde_roundtrip() {
         let decisions = vec![
-            GateDecision::Permit { token: Some(vec![1, 2, 3]) },
-            GateDecision::Defer { reason: "need review".into() },
-            GateDecision::Deny { reason: "denied".into(), receipt: None },
+            GateDecision::Permit {
+                token: Some(vec![1, 2, 3]),
+            },
+            GateDecision::Defer {
+                reason: "need review".into(),
+            },
+            GateDecision::Deny {
+                reason: "denied".into(),
+                receipt: None,
+            },
         ];
         for d in decisions {
             let json = serde_json::to_string(&d).unwrap();
@@ -983,7 +960,6 @@ mod tests {
         let decision = gate.check("agent-1", "tool.exec", &ctx);
         assert!(decision.is_deny());
     }
-
 }
 
 #[cfg(all(test, feature = "tilezero"))]

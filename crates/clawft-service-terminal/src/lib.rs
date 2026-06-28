@@ -50,7 +50,7 @@
 pub mod session;
 
 pub use session::{
-    SessionId, TerminalError, TerminalEvent, TerminalSession, DEFAULT_COLS, DEFAULT_ROWS,
+    DEFAULT_COLS, DEFAULT_ROWS, SessionId, TerminalError, TerminalEvent, TerminalSession,
 };
 
 use std::sync::Arc;

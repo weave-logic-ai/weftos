@@ -177,11 +177,7 @@ pub trait OntologyAdapter: Send + Sync {
     /// Open a subscription on a topic. `args` carries topic-specific
     /// configuration (e.g. the root path for an `fs` watcher, the
     /// desired log-tail length for `substrate/kernel/logs`).
-    async fn open(
-        &self,
-        topic: &str,
-        args: Value,
-    ) -> Result<Subscription, AdapterError>;
+    async fn open(&self, topic: &str, args: Value) -> Result<Subscription, AdapterError>;
 
     /// Tombstone a subscription. MUST be idempotent — calling `close`
     /// for an unknown id is not an error.

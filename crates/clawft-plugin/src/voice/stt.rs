@@ -23,7 +23,10 @@ pub struct SpeechToText {
 
 impl SpeechToText {
     pub fn new(model_path: std::path::PathBuf, language: String) -> Self {
-        Self { model_path, language }
+        Self {
+            model_path,
+            language,
+        }
     }
 
     /// Process audio samples and return transcription results.

@@ -491,7 +491,9 @@ async fn main() -> anyhow::Result<()> {
                 Ok(s) if s.success() => {}
                 _ => {
                     println!("weaver not found — install manually:");
-                    println!("  curl -fsSL https://github.com/weave-logic-ai/weftos/releases/latest/download/clawft-cli-installer.sh | sh");
+                    println!(
+                        "  curl -fsSL https://github.com/weave-logic-ai/weftos/releases/latest/download/clawft-cli-installer.sh | sh"
+                    );
                 }
             }
         }
@@ -589,8 +591,7 @@ mod tests {
 
     #[test]
     fn cli_skills_search_with_limit_parses() {
-        let result =
-            Cli::try_parse_from(["weft", "skills", "search", "coding", "--limit", "5"]);
+        let result = Cli::try_parse_from(["weft", "skills", "search", "coding", "--limit", "5"]);
         assert!(result.is_ok());
     }
 
@@ -676,8 +677,7 @@ mod tests {
 
     #[test]
     fn cli_tools_list_with_config_parses() {
-        let result =
-            Cli::try_parse_from(["weft", "tools", "list", "--config", "/tmp/config.json"]);
+        let result = Cli::try_parse_from(["weft", "tools", "list", "--config", "/tmp/config.json"]);
         assert!(result.is_ok());
     }
 

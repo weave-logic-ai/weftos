@@ -23,7 +23,8 @@ impl TtsAbortHandle {
     }
 
     pub fn cancel(&self) {
-        self.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -49,7 +50,11 @@ pub struct TextToSpeech {
 
 impl TextToSpeech {
     pub fn new(model_path: std::path::PathBuf, voice: String, speed: f32) -> Self {
-        Self { model_path, voice, speed }
+        Self {
+            model_path,
+            voice,
+            speed,
+        }
     }
 
     /// Synthesize text to audio samples.

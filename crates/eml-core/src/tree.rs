@@ -154,8 +154,8 @@ impl EmlTree {
                         params[param_offset + 1],
                         params[param_offset + 2],
                     );
-                    let mixed = (alpha + beta * current[li] + gamma * current[ri])
-                        .clamp(-10.0, 10.0);
+                    let mixed =
+                        (alpha + beta * current[li] + gamma * current[ri]).clamp(-10.0, 10.0);
                     // Use shifted softmax for the right side
                     let (ar, br, gr) = softmax3(
                         params[param_offset] + 0.5,

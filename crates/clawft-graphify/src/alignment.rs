@@ -211,8 +211,8 @@ pub fn align_entities_with_config(
             let structural_sim = jaccard(&neighbors_a, &neighbors_b);
 
             // Step 3: combined score.
-            let combined = config.label_weight * label_sim
-                + config.structural_weight * structural_sim;
+            let combined =
+                config.label_weight * label_sim + config.structural_weight * structural_sim;
 
             if combined >= threshold {
                 let method = if *label_sim >= 0.8 && structural_sim >= 0.3 {

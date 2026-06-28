@@ -43,11 +43,7 @@ pub trait CloudTtsProvider: Send + Sync {
     ///
     /// * `text` - The text to synthesize.
     /// * `voice_id` - Provider-specific voice identifier.
-    async fn synthesize(
-        &self,
-        text: &str,
-        voice_id: &str,
-    ) -> Result<CloudTtsResult, PluginError>;
+    async fn synthesize(&self, text: &str, voice_id: &str) -> Result<CloudTtsResult, PluginError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -98,11 +94,7 @@ impl CloudTtsProvider for OpenAiTtsProvider {
             .collect()
     }
 
-    async fn synthesize(
-        &self,
-        text: &str,
-        voice_id: &str,
-    ) -> Result<CloudTtsResult, PluginError> {
+    async fn synthesize(&self, text: &str, voice_id: &str) -> Result<CloudTtsResult, PluginError> {
         let body = serde_json::json!({
             "model": self.model,
             "input": text,
@@ -117,9 +109,7 @@ impl CloudTtsProvider for OpenAiTtsProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                PluginError::ExecutionFailed(format!("OpenAI TTS request failed: {e}"))
-            })?;
+            .map_err(|e| PluginError::ExecutionFailed(format!("OpenAI TTS request failed: {e}")))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -197,11 +187,7 @@ impl CloudTtsProvider for ElevenLabsTtsProvider {
         ]
     }
 
-    async fn synthesize(
-        &self,
-        text: &str,
-        voice_id: &str,
-    ) -> Result<CloudTtsResult, PluginError> {
+    async fn synthesize(&self, text: &str, voice_id: &str) -> Result<CloudTtsResult, PluginError> {
         let url = format!("https://api.elevenlabs.io/v1/text-to-speech/{voice_id}");
         let body = serde_json::json!({
             "text": text,
@@ -221,9 +207,7 @@ impl CloudTtsProvider for ElevenLabsTtsProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                PluginError::ExecutionFailed(format!("ElevenLabs request failed: {e}"))
-            })?;
+            .map_err(|e| PluginError::ExecutionFailed(format!("ElevenLabs request failed: {e}")))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -236,9 +220,7 @@ impl CloudTtsProvider for ElevenLabsTtsProvider {
         let audio_data = resp
             .bytes()
             .await
-            .map_err(|e| {
-                PluginError::ExecutionFailed(format!("ElevenLabs read error: {e}"))
-            })?
+            .map_err(|e| PluginError::ExecutionFailed(format!("ElevenLabs read error: {e}")))?
             .to_vec();
 
         Ok(CloudTtsResult {

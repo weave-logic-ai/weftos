@@ -42,11 +42,11 @@ pub mod fallback;
 pub mod transcript_log;
 
 // Re-export key types
-pub use config::{VoiceAudioConfig, VoiceCaptureSpec, VoicePipelineConfig, VoicePlaybackSpec};
-pub use models::ModelDownloadManager;
 pub use channel::{VoiceChannel, VoiceStatus};
+pub use config::{VoiceAudioConfig, VoiceCaptureSpec, VoicePipelineConfig, VoicePlaybackSpec};
 pub use echo::{EchoCanceller, EchoCancellerConfig};
 pub use events::VoiceWsEvent;
+pub use models::ModelDownloadManager;
 pub use noise::{NoiseSuppressor, NoiseSuppressorConfig};
 pub use quality::{AudioMetrics, analyze_frame};
 pub use talk_mode::TalkModeController;

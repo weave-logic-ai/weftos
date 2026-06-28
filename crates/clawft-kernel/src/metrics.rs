@@ -63,10 +63,7 @@ impl Histogram {
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         sorted.dedup();
 
-        let buckets = sorted
-            .into_iter()
-            .map(|b| (b, AtomicU64::new(0)))
-            .collect();
+        let buckets = sorted.into_iter().map(|b| (b, AtomicU64::new(0))).collect();
 
         Self {
             buckets,
@@ -228,7 +225,9 @@ impl MetricsRegistry {
             METRIC_AGENT_CRASHES,
             METRIC_TOOL_EXECUTIONS,
         ] {
-            registry.counters.insert(name.to_string(), AtomicU64::new(0));
+            registry
+                .counters
+                .insert(name.to_string(), AtomicU64::new(0));
         }
 
         // Gauges
@@ -303,8 +302,7 @@ impl MetricsRegistry {
                 gauge.fetch_add(delta, Ordering::Relaxed);
             }
             None => {
-                self.gauges
-                    .insert(name.to_string(), AtomicI64::new(delta));
+                self.gauges.insert(name.to_string(), AtomicI64::new(delta));
             }
         }
     }
@@ -476,15 +474,21 @@ mod tests {
         // 150.0 should be in bucket 250.0 and above
 
         // Bucket 5.0: count of values <= 5 = 1
-        let b5 = buckets.iter().find(|(b, _)| (*b - 5.0).abs() < f64::EPSILON);
+        let b5 = buckets
+            .iter()
+            .find(|(b, _)| (*b - 5.0).abs() < f64::EPSILON);
         assert_eq!(b5.unwrap().1, 1);
 
         // Bucket 25.0: count of values <= 25 = 2
-        let b25 = buckets.iter().find(|(b, _)| (*b - 25.0).abs() < f64::EPSILON);
+        let b25 = buckets
+            .iter()
+            .find(|(b, _)| (*b - 25.0).abs() < f64::EPSILON);
         assert_eq!(b25.unwrap().1, 2);
 
         // Bucket 250.0: count of values <= 250 = 3
-        let b250 = buckets.iter().find(|(b, _)| (*b - 250.0).abs() < f64::EPSILON);
+        let b250 = buckets
+            .iter()
+            .find(|(b, _)| (*b - 250.0).abs() < f64::EPSILON);
         assert_eq!(b250.unwrap().1, 3);
     }
 
@@ -562,9 +566,15 @@ mod tests {
         let snap = registry.snapshot_all();
         assert_eq!(snap.len(), 3);
 
-        let has_counter = snap.iter().any(|s| matches!(s, MetricSnapshot::Counter { name, .. } if name == "c1"));
-        let has_gauge = snap.iter().any(|s| matches!(s, MetricSnapshot::Gauge { name, value } if name == "g1" && *value == 42));
-        let has_hist = snap.iter().any(|s| matches!(s, MetricSnapshot::Histogram { name, .. } if name == "h1"));
+        let has_counter = snap
+            .iter()
+            .any(|s| matches!(s, MetricSnapshot::Counter { name, .. } if name == "c1"));
+        let has_gauge = snap.iter().any(
+            |s| matches!(s, MetricSnapshot::Gauge { name, value } if name == "g1" && *value == 42),
+        );
+        let has_hist = snap
+            .iter()
+            .any(|s| matches!(s, MetricSnapshot::Histogram { name, .. } if name == "h1"));
 
         assert!(has_counter);
         assert!(has_gauge);

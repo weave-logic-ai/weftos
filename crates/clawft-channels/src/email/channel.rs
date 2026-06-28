@@ -73,23 +73,14 @@ impl EmailChannelAdapter {
     /// Build an inbound metadata map from a parsed email.
     pub fn build_metadata(email: &ParsedEmail) -> HashMap<String, serde_json::Value> {
         let mut metadata = HashMap::new();
-        metadata.insert(
-            "subject".to_string(),
-            serde_json::json!(email.subject),
-        );
+        metadata.insert("subject".to_string(), serde_json::json!(email.subject));
         metadata.insert(
             "message_id".to_string(),
             serde_json::json!(email.message_id),
         );
-        metadata.insert(
-            "to".to_string(),
-            serde_json::json!(email.to),
-        );
+        metadata.insert("to".to_string(), serde_json::json!(email.to));
         if let Some(ref reply_to) = email.in_reply_to {
-            metadata.insert(
-                "in_reply_to".to_string(),
-                serde_json::json!(reply_to),
-            );
+            metadata.insert("in_reply_to".to_string(), serde_json::json!(reply_to));
         }
         metadata
     }
@@ -110,7 +101,11 @@ impl EmailChannelAdapter {
 
         // Truncate body to max_body_chars.
         let body = if email.body.len() > self.config.max_body_chars {
-            let truncated: String = email.body.chars().take(self.config.max_body_chars).collect();
+            let truncated: String = email
+                .body
+                .chars()
+                .take(self.config.max_body_chars)
+                .collect();
             format!("{truncated}\n\n[truncated]")
         } else {
             email.body.clone()
@@ -119,8 +114,14 @@ impl EmailChannelAdapter {
         let content = format!("Subject: {}\n\n{}", email.subject, body);
         let metadata = Self::build_metadata(email);
 
-        host.deliver_inbound("email", &email.from, &email.from, MessagePayload::text(content), metadata)
-            .await
+        host.deliver_inbound(
+            "email",
+            &email.from,
+            &email.from,
+            MessagePayload::text(content),
+            metadata,
+        )
+        .await
     }
 }
 
@@ -172,8 +173,7 @@ impl ChannelAdapter for EmailChannelAdapter {
             ));
         }
 
-        let poll_interval =
-            std::time::Duration::from_secs(self.config.poll_interval_secs);
+        let poll_interval = std::time::Duration::from_secs(self.config.poll_interval_secs);
         let mut interval = tokio::time::interval(poll_interval);
         // Skip the immediate first tick.
         interval.tick().await;
@@ -198,11 +198,7 @@ impl ChannelAdapter for EmailChannelAdapter {
         }
     }
 
-    async fn send(
-        &self,
-        target: &str,
-        payload: &MessagePayload,
-    ) -> Result<String, PluginError> {
+    async fn send(&self, target: &str, payload: &MessagePayload) -> Result<String, PluginError> {
         let content = match payload.as_text() {
             Some(text) => text,
             None => {
@@ -428,7 +424,10 @@ mod tests {
 
         let metadata = EmailChannelAdapter::build_metadata(&email);
         assert_eq!(metadata["subject"], serde_json::json!("Test subject"));
-        assert_eq!(metadata["message_id"], serde_json::json!("<msg-001@test.com>"));
+        assert_eq!(
+            metadata["message_id"],
+            serde_json::json!("<msg-001@test.com>")
+        );
         assert_eq!(metadata["to"], serde_json::json!("bot@test.com"));
         assert!(!metadata.contains_key("in_reply_to"));
     }
@@ -520,9 +519,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
 
-        let handle = tokio::spawn(async move {
-            adapter.start(host, cancel_clone).await
-        });
+        let handle = tokio::spawn(async move { adapter.start(host, cancel_clone).await });
 
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         cancel.cancel();

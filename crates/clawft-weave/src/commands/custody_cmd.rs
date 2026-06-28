@@ -28,18 +28,26 @@ pub async fn run(args: CustodyArgs) -> anyhow::Result<()> {
             if !resp.ok {
                 anyhow::bail!("{}", resp.error.unwrap_or_default());
             }
-            let att: CustodyAttestResult =
-                serde_json::from_value(resp.result.unwrap_or_default())?;
+            let att: CustodyAttestResult = serde_json::from_value(resp.result.unwrap_or_default())?;
 
             println!("Custody Attestation");
             println!("  Device ID:     {}", att.device_id);
             println!("  Epoch:         {}", att.epoch);
-            println!("  Chain Head:    {}...", &att.chain_head[..16.min(att.chain_head.len())]);
+            println!(
+                "  Chain Head:    {}...",
+                &att.chain_head[..16.min(att.chain_head.len())]
+            );
             println!("  Chain Depth:   {}", att.chain_depth);
             println!("  Vector Count:  {}", att.vector_count);
-            println!("  Content Hash:  {}...", &att.content_hash[..16.min(att.content_hash.len())]);
+            println!(
+                "  Content Hash:  {}...",
+                &att.content_hash[..16.min(att.content_hash.len())]
+            );
             println!("  Timestamp:     {}", att.timestamp);
-            println!("  Signature:     {}...", &att.signature[..32.min(att.signature.len())]);
+            println!(
+                "  Signature:     {}...",
+                &att.signature[..32.min(att.signature.len())]
+            );
 
             // Also print raw JSON for machine consumption
             println!();

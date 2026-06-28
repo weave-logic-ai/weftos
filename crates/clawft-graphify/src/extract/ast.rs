@@ -10,10 +10,10 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::GraphifyError;
 use crate::entity::{EntityId, EntityType};
 use crate::model::{Entity, ExtractionResult};
 use crate::relationship::{Confidence, RelationType, Relationship};
-use crate::GraphifyError;
 
 use super::lang::LanguageId;
 

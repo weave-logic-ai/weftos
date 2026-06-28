@@ -363,9 +363,7 @@ impl PlanningRouter {
             let step_num = (idx + 1) as u32;
 
             // Guard rails before running the step.
-            if let Some(reason) =
-                self.check_guard_rails(step_num, total_cost, consecutive_no_ops)
-            {
+            if let Some(reason) = self.check_guard_rails(step_num, total_cost, consecutive_no_ops) {
                 let explanation = self.explain_termination(&reason, step_num, total_cost);
                 return PlanningOutcome {
                     strategy: self.strategy,
@@ -457,10 +455,9 @@ impl PlanningRouter {
     /// item linking back to this stub.
     #[allow(clippy::unused_async)]
     pub async fn execute_react(&self, _goal: &str) -> PlanningOutcome {
-        let explanation =
-            "execute_react: not yet implemented (deferred to 0.8.x; \
+        let explanation = "execute_react: not yet implemented (deferred to 0.8.x; \
               use PlanAndExecute strategy for now)"
-                .to_string();
+            .to_string();
         warn!("{explanation}");
         PlanningOutcome {
             strategy: self.strategy,
@@ -474,12 +471,7 @@ impl PlanningRouter {
     }
 
     /// Build a partial results explanation for the given termination reason.
-    pub fn explain_termination(
-        &self,
-        reason: &TerminationReason,
-        steps: u32,
-        cost: f64,
-    ) -> String {
+    pub fn explain_termination(&self, reason: &TerminationReason, steps: u32, cost: f64) -> String {
         match reason {
             TerminationReason::Completed => {
                 format!("Planning completed successfully after {steps} steps (${cost:.4} spent).")
@@ -638,41 +630,21 @@ mod tests {
         assert!(msg.contains("successfully"));
         assert!(msg.contains("5 steps"));
 
-        let msg = router.explain_termination(
-            &TerminationReason::MaxDepthReached,
-            10,
-            0.8,
-        );
+        let msg = router.explain_termination(&TerminationReason::MaxDepthReached, 10, 0.8);
         assert!(msg.contains("maximum depth"));
         assert!(msg.contains("Partial results"));
 
-        let msg = router.explain_termination(
-            &TerminationReason::BudgetExceeded,
-            7,
-            1.2,
-        );
+        let msg = router.explain_termination(&TerminationReason::BudgetExceeded, 7, 1.2);
         assert!(msg.contains("budget cap"));
 
-        let msg = router.explain_termination(
-            &TerminationReason::CircuitBreaker,
-            4,
-            0.1,
-        );
+        let msg = router.explain_termination(&TerminationReason::CircuitBreaker, 4, 0.1);
         assert!(msg.contains("no-op steps"));
         assert!(msg.contains("circuit breaker"));
 
-        let msg = router.explain_termination(
-            &TerminationReason::StepTimeout,
-            3,
-            0.2,
-        );
+        let msg = router.explain_termination(&TerminationReason::StepTimeout, 3, 0.2);
         assert!(msg.contains("step timeout"));
 
-        let msg = router.explain_termination(
-            &TerminationReason::Cancelled,
-            2,
-            0.05,
-        );
+        let msg = router.explain_termination(&TerminationReason::Cancelled, 2, 0.05);
         assert!(msg.contains("cancelled"));
     }
 
@@ -684,12 +656,10 @@ mod tests {
         let json = serde_json::to_string(&PlanningStrategy::PlanAndExecute).unwrap();
         assert_eq!(json, "\"plan_and_execute\"");
 
-        let restored: PlanningStrategy =
-            serde_json::from_str("\"react\"").unwrap();
+        let restored: PlanningStrategy = serde_json::from_str("\"react\"").unwrap();
         assert_eq!(restored, PlanningStrategy::React);
 
-        let restored: PlanningStrategy =
-            serde_json::from_str("\"plan_and_execute\"").unwrap();
+        let restored: PlanningStrategy = serde_json::from_str("\"plan_and_execute\"").unwrap();
         assert_eq!(restored, PlanningStrategy::PlanAndExecute);
     }
 
@@ -748,13 +718,15 @@ mod tests {
             .execute_plan_and_execute(
                 "do thing",
                 |_goal: String| async { Err::<Plan, _>("planner exploded".to_string()) },
-                |_, _: String| async { Ok(PlanningStepResult {
-                    step: 0,
-                    is_actionable: true,
-                    cost_usd: 0.0,
-                    duration: Duration::ZERO,
-                    output: String::new(),
-                }) },
+                |_, _: String| async {
+                    Ok(PlanningStepResult {
+                        step: 0,
+                        is_actionable: true,
+                        cost_usd: 0.0,
+                        duration: Duration::ZERO,
+                        output: String::new(),
+                    })
+                },
             )
             .await;
         assert_eq!(outcome.termination_reason, TerminationReason::Cancelled);
@@ -792,7 +764,10 @@ mod tests {
                 },
             )
             .await;
-        assert_eq!(outcome.termination_reason, TerminationReason::CircuitBreaker);
+        assert_eq!(
+            outcome.termination_reason,
+            TerminationReason::CircuitBreaker
+        );
         // Plan step + 2 no-ops = 3 steps before breaker triggers on
         // the 3rd. (consecutive_no_ops becomes 2 after step 2; the
         // guard rail check runs before step 3 and trips.)
@@ -824,7 +799,10 @@ mod tests {
             )
             .await;
         // The planning step alone busts the budget.
-        assert_eq!(outcome.termination_reason, TerminationReason::BudgetExceeded);
+        assert_eq!(
+            outcome.termination_reason,
+            TerminationReason::BudgetExceeded
+        );
     }
 
     #[tokio::test]

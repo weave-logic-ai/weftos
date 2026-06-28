@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::assessment::{analyzer::AnalysisContext, Finding};
 use crate::assessment::analyzer::Analyzer;
+use crate::assessment::{Finding, analyzer::AnalysisContext};
 
 /// Analyzer that detects common security anti-patterns.
 pub struct SecurityAnalyzer;
@@ -39,16 +39,18 @@ impl Analyzer for SecurityAnalyzer {
         &["security"]
     }
 
-    fn analyze(&self, project: &Path, files: &[PathBuf], _context: &AnalysisContext) -> Vec<Finding> {
+    fn analyze(
+        &self,
+        project: &Path,
+        files: &[PathBuf],
+        _context: &AnalysisContext,
+    ) -> Vec<Finding> {
         let mut findings = Vec::new();
 
         for path in files {
             let rel = path.strip_prefix(project).unwrap_or(path);
             let rel_str = rel.display().to_string();
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
             // Detect committed .env files
             if name == ".env" || name.starts_with(".env.") {
@@ -57,8 +59,7 @@ impl Analyzer for SecurityAnalyzer {
                     category: "security".into(),
                     file: rel_str.clone(),
                     line: None,
-                    message: "Environment file should not be committed to version control"
-                        .into(),
+                    message: "Environment file should not be committed to version control".into(),
                 });
                 continue;
             }
@@ -125,7 +126,10 @@ impl Analyzer for SecurityAnalyzer {
             if ext == "rs" {
                 for (i, line) in content.lines().enumerate() {
                     let trimmed = line.trim();
-                    if trimmed.contains("unsafe {") || trimmed.contains("unsafe{") || trimmed == "unsafe {" {
+                    if trimmed.contains("unsafe {")
+                        || trimmed.contains("unsafe{")
+                        || trimmed == "unsafe {"
+                    {
                         findings.push(Finding {
                             severity: "warning".into(),
                             category: "security".into(),

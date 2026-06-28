@@ -14,9 +14,7 @@ use clawft_surface::parse::parse_surface_toml;
 use clawft_surface::substrate::OntologySnapshot;
 use serde_json::json;
 
-const FIXTURE: &str = include_str!(
-    "../../clawft-surface/fixtures/weftos-admin-desktop.toml"
-);
+const FIXTURE: &str = include_str!("../../clawft-surface/fixtures/weftos-admin-desktop.toml");
 
 fn healthy_snapshot() -> OntologySnapshot {
     let mut s = OntologySnapshot::empty();
@@ -88,7 +86,7 @@ fn affordance_kill_is_declared_on_process_table() {
 /// only the parent stack + the one visible chip show up.
 #[test]
 fn when_false_child_is_skipped_by_composer() {
-    use clawft_surface::builder::{chip, stack, Surface};
+    use clawft_surface::builder::{Surface, chip, stack};
     use clawft_surface::tree::{AttrValue, Mode};
 
     let tree = Surface::new("test/when-skip")
@@ -97,8 +95,7 @@ fn when_false_child_is_skipped_by_composer() {
             stack("/root")
                 .attr("axis", AttrValue::Str("horizontal".into()))
                 .child(
-                    chip("/root/visible")
-                        .bind_literal("label", AttrValue::Str("visible".into())),
+                    chip("/root/visible").bind_literal("label", AttrValue::Str("visible".into())),
                 )
                 .child(
                     chip("/root/hidden")
@@ -114,8 +111,14 @@ fn when_false_child_is_skipped_by_composer() {
 
     let responses = render_headless(&tree, snap);
 
-    let chips = responses.iter().filter(|r| r.identity == "ui://chip").count();
-    let stacks = responses.iter().filter(|r| r.identity == "ui://stack").count();
+    let chips = responses
+        .iter()
+        .filter(|r| r.identity == "ui://chip")
+        .count();
+    let stacks = responses
+        .iter()
+        .filter(|r| r.identity == "ui://stack")
+        .count();
     assert_eq!(
         chips, 1,
         "hidden chip must be skipped; expected 1 chip response, got {chips}"

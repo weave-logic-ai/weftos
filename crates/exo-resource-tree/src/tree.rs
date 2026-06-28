@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use sha3::{
-    digest::{ExtendableOutput, Update, XofReader},
     Shake256,
+    digest::{ExtendableOutput, Update, XofReader},
 };
 
 /// Compute 256-bit (32-byte) SHAKE-256 hash.
@@ -61,9 +61,7 @@ impl ResourceTree {
 
         // Verify parent exists
         if !self.nodes.contains_key(&parent_id) {
-            return Err(TreeError::ParentNotFound {
-                parent_id,
-            });
+            return Err(TreeError::ParentNotFound { parent_id });
         }
 
         // Create the node
@@ -95,10 +93,7 @@ impl ResourceTree {
             .len();
 
         if child_count > 0 {
-            return Err(TreeError::NotEmpty {
-                id,
-                child_count,
-            });
+            return Err(TreeError::NotEmpty { id, child_count });
         }
 
         // Remove from parent's children list
@@ -185,8 +180,7 @@ impl ResourceTree {
         };
 
         // Compute SHAKE-256 hash: child_hashes || scoring || metadata
-        let mut buf =
-            Vec::with_capacity(child_hashes.len() * 32 + 24 + meta_bytes.len());
+        let mut buf = Vec::with_capacity(child_hashes.len() * 32 + 24 + meta_bytes.len());
         for h in &child_hashes {
             buf.extend_from_slice(h);
         }
@@ -252,11 +246,7 @@ impl ResourceTree {
     /// Set the scoring vector for a node and recompute its Merkle hash.
     ///
     /// Returns the old scoring, or `None` if the node was not found.
-    pub fn update_scoring(
-        &mut self,
-        id: &ResourceId,
-        scoring: NodeScoring,
-    ) -> Option<NodeScoring> {
+    pub fn update_scoring(&mut self, id: &ResourceId, scoring: NodeScoring) -> Option<NodeScoring> {
         let old = {
             let node = self.nodes.get_mut(id)?;
             let old = node.scoring;
@@ -454,9 +444,7 @@ mod tests {
     #[test]
     fn remove_nonexistent_fails() {
         let mut tree = ResourceTree::new();
-        let err = tree
-            .remove(ResourceId::new("/nonexistent"))
-            .unwrap_err();
+        let err = tree.remove(ResourceId::new("/nonexistent")).unwrap_err();
         assert!(matches!(err, TreeError::NotFound { .. }));
     }
 
@@ -655,12 +643,10 @@ mod tests {
         .unwrap();
 
         // Set child scorings with equal reward so uniform weighting
-        tree.get_mut(&ResourceId::new("/parent/a"))
-            .unwrap()
-            .scoring = NodeScoring::new(1.0, 0.0, 0.5, 0.5, 0.5, 0.5);
-        tree.get_mut(&ResourceId::new("/parent/b"))
-            .unwrap()
-            .scoring = NodeScoring::new(0.0, 1.0, 0.5, 0.5, 0.5, 0.5);
+        tree.get_mut(&ResourceId::new("/parent/a")).unwrap().scoring =
+            NodeScoring::new(1.0, 0.0, 0.5, 0.5, 0.5, 0.5);
+        tree.get_mut(&ResourceId::new("/parent/b")).unwrap().scoring =
+            NodeScoring::new(0.0, 1.0, 0.5, 0.5, 0.5, 0.5);
 
         tree.recompute_all();
 

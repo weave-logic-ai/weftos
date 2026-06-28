@@ -117,17 +117,16 @@ pub use adapter::{
     Subscription, TopicDecl,
 };
 pub use delta::StateDelta;
-pub use health::{health_topic_path, AdapterHealthEvent};
+pub use health::{AdapterHealthEvent, health_topic_path};
 // M7b-1 (WEFT-415/417/432): per-adapter healthcheck wire format used by
 // snapshot.rs + mic.rs. Topic path is `substrate/meta/adapter/<id>/healthcheck`.
-pub use healthcheck::{healthcheck_topic_path, SensorHealthReport, SensorStatus};
+pub use healthcheck::{SensorHealthReport, SensorStatus, healthcheck_topic_path};
 // M7b-4 (WEFT-437): full HEALTHCHECK-CONTRACT.md typed shapes + classifier
 // + path helpers for the daemon-side aggregator at
 // `substrate/<node-id>/health/{sensor/<name> | node}`.
 pub use healthcheck::{
     HealthGranularity, NodeHealth, RebootReason, SensorHealth, Status as HealthStatus,
     classify_value as classify_health_value, node_health_derived_path, node_health_path,
-    node_health_raw_path, sensor_health_derived_path, sensor_health_path,
-    sensor_health_raw_path,
+    node_health_raw_path, sensor_health_derived_path, sensor_health_path, sensor_health_raw_path,
 };
 pub use snapshot::{OntologySnapshot, Substrate};

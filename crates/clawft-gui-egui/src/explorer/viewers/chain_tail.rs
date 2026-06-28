@@ -101,22 +101,15 @@ fn paint_row(ui: &mut egui::Ui, path: &str, entry: &Value) {
             egui::RichText::new(format!("[{seq:>6}]"))
                 .color(egui::Color32::from_rgb(150, 150, 160)),
         );
-        ui.monospace(
-            egui::RichText::new(&ts).color(egui::Color32::from_rgb(170, 170, 200)),
-        );
-        ui.monospace(
-            egui::RichText::new(kind)
-                .color(kind_color(kind))
-                .strong(),
-        );
+        ui.monospace(egui::RichText::new(&ts).color(egui::Color32::from_rgb(170, 170, 200)));
+        ui.monospace(egui::RichText::new(kind).color(kind_color(kind)).strong());
         let summary = payload
             .map(|p| payload_summary(p, PAYLOAD_SUMMARY_LEN))
             .unwrap_or_default();
         if !summary.is_empty() {
             let label = ui
                 .monospace(
-                    egui::RichText::new(&summary)
-                        .color(egui::Color32::from_rgb(200, 200, 210)),
+                    egui::RichText::new(&summary).color(egui::Color32::from_rgb(200, 200, 210)),
                 )
                 .on_hover_text("click to toggle full payload");
             if label.clicked() {
@@ -126,8 +119,7 @@ fn paint_row(ui: &mut egui::Ui, path: &str, entry: &Value) {
     });
 
     if expanded && let Some(p) = payload {
-        let pretty = serde_json::to_string_pretty(p)
-            .unwrap_or_else(|_| p.to_string());
+        let pretty = serde_json::to_string_pretty(p).unwrap_or_else(|_| p.to_string());
         ui.add(
             egui::Label::new(
                 egui::RichText::new(pretty)
@@ -280,10 +272,7 @@ mod tests {
 
     #[test]
     fn payload_summary_large_object() {
-        let s = payload_summary(
-            &json!({"a":1,"b":2,"c":3,"d":4,"e":5,"f":6}),
-            200,
-        );
+        let s = payload_summary(&json!({"a":1,"b":2,"c":3,"d":4,"e":5,"f":6}), 200);
         assert_eq!(s, "{6 keys}");
     }
 

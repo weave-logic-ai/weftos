@@ -342,10 +342,7 @@ mod tests {
             |name, args| {
                 let name = name.to_string();
                 Box::pin(async move {
-                    let topic = args
-                        .get("topic")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
+                    let topic = args.get("topic").and_then(|v| v.as_str()).unwrap_or("?");
                     Ok(format!("skill:{name} topic={topic}"))
                 })
             },

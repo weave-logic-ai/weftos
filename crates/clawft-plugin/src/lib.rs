@@ -70,15 +70,15 @@ pub mod voice;
 // Re-export core types at crate root for convenience.
 pub use error::{PluginError, SkillLoadError, WasmHostError};
 pub use manifest::{
-    validate_voice_capability, PermissionDiff, PluginCapability, PluginManifest,
-    PluginPermissions, PluginResourceConfig, VoiceCapability, VoiceGrants,
+    PermissionDiff, PluginCapability, PluginManifest, PluginPermissions, PluginResourceConfig,
+    VoiceCapability, VoiceGrants, validate_voice_capability,
 };
-pub use skill_grants::validate_allowed_tools;
 pub use message::MessagePayload;
 pub use sandbox::{
-    SandboxAuditEntry, SandboxPolicy, SandboxType,
-    NetworkPolicy, FilesystemPolicy, ProcessPolicy, EnvPolicy,
+    EnvPolicy, FilesystemPolicy, NetworkPolicy, ProcessPolicy, SandboxAuditEntry, SandboxPolicy,
+    SandboxType,
 };
+pub use skill_grants::validate_allowed_tools;
 pub use traits::{
     CancellationToken, ChannelAdapter, ChannelAdapterHost, KeyValueStore, MemoryBackend,
     PipelineStage, PipelineStageType, Skill, Tool, ToolContext, VoiceHandler,

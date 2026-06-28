@@ -98,8 +98,7 @@ fn chat_panel_replies_about_workspace() {
     // these tokens should appear in any sensible answer. We're
     // checking that the LLM actually saw the workspace; an empty
     // reply (or a generic "I don't know") would be a regression.
-    let expected_tokens =
-        ["weftos", "project", "clawft", "agent", "rust"];
+    let expected_tokens = ["weftos", "project", "clawft", "agent", "rust"];
     let hit = expected_tokens.iter().any(|t| lower.contains(t));
     assert!(
         hit,

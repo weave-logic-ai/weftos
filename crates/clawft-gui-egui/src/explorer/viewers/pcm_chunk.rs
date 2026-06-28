@@ -54,8 +54,8 @@
 //! re-creates without us needing a `&mut Self`.
 
 use super::SubstrateViewer;
-use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
 use serde_json::Value;
 use std::time::Instant;
 
@@ -189,17 +189,14 @@ impl SubstrateViewer for PcmChunkViewer {
         // is the path — different PcmChunk panels at different paths
         // do not share cache state.
         let cache_id = ui.make_persistent_id(("pcm_chunk_decode", path));
-        let cached = ui
-            .memory(|m| m.data.get_temp::<DecodeCache>(cache_id));
+        let cached = ui.memory(|m| m.data.get_temp::<DecodeCache>(cache_id));
 
         let now = Instant::now();
         let needs_decode = match &cached {
             None => true,
             Some(c) => {
                 c.key_ts_ms != start_ts_ms
-                    && now
-                        .saturating_duration_since(c.last_decode_at)
-                        .as_millis() as u64
+                    && now.saturating_duration_since(c.last_decode_at).as_millis() as u64
                         >= MIN_DECODE_INTERVAL_MS
             }
         };
@@ -495,11 +492,7 @@ mod tests {
         // The cache decision lives in `paint`'s `needs_decode`
         // expression; the helper below mirrors that check so we can
         // assert the contract without spinning up egui memory.
-        fn would_decode(
-            cached_ts: Option<u64>,
-            current_ts: u64,
-            elapsed_ms: u64,
-        ) -> bool {
+        fn would_decode(cached_ts: Option<u64>, current_ts: u64, elapsed_ms: u64) -> bool {
             match cached_ts {
                 None => true,
                 Some(c) => c != current_ts && elapsed_ms >= MIN_DECODE_INTERVAL_MS,

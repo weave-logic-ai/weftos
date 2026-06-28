@@ -7,9 +7,11 @@
 //! opaque (it embeds a parsed expression AST), so we compare the two
 //! trees via a stable structural fingerprint rather than `PartialEq`.
 
-use clawft_surface::builder::{chip, gauge, grid, stack, stream_view, table, Surface};
+use clawft_surface::builder::{Surface, chip, gauge, grid, stack, stream_view, table};
 use clawft_surface::parse::parse_surface_toml;
-use clawft_surface::tree::{AttrValue, IdentityIri, Input, Invocation, Mode, SurfaceNode, SurfaceTree};
+use clawft_surface::tree::{
+    AttrValue, IdentityIri, Input, Invocation, Mode, SurfaceNode, SurfaceTree,
+};
 
 const FIXTURE: &str = include_str!("../fixtures/weftos-admin-desktop.toml");
 
@@ -40,12 +42,10 @@ fn build_admin_surface_via_rust() -> SurfaceTree {
                                 .bind("label", "$substrate/kernel/status.state")
                                 .bind("tone", "$substrate/kernel/status.state"),
                         )
-                        .child(
-                            chip("/root/overview/services-healthy").bind(
-                                "label",
-                                "count($substrate/kernel/services, s -> s.status == \"healthy\")",
-                            ),
-                        ),
+                        .child(chip("/root/overview/services-healthy").bind(
+                            "label",
+                            "count($substrate/kernel/services, s -> s.status == \"healthy\")",
+                        )),
                 )
                 // Quadrant 2: process table with kill affordance
                 .child(
@@ -76,10 +76,7 @@ fn build_admin_surface_via_rust() -> SurfaceTree {
                                     "value",
                                     "$substrate/kernel/services/mesh-listener/cpu_percent",
                                 )
-                                .bind(
-                                    "label",
-                                    "$substrate/kernel/services/mesh-listener/status",
-                                )
+                                .bind("label", "$substrate/kernel/services/mesh-listener/status")
                                 .attr("min", AttrValue::Number(0.0))
                                 .attr("max", AttrValue::Number(100.0))
                                 .affordance_with_schema(
@@ -142,8 +139,7 @@ fn fingerprint_node(n: &SurfaceNode, depth: usize, out: &mut String) {
     }
     // Affordances — verb name + invocations, deterministic order.
     for a in &n.affordances {
-        let mut invs: Vec<String> =
-            a.invocations.iter().map(|i| format!("{i:?}")).collect();
+        let mut invs: Vec<String> = a.invocations.iter().map(|i| format!("{i:?}")).collect();
         invs.sort();
         out.push_str(&format!(
             "{indent}  aff {name} -> {verb} ({invs}) schema={schema:?}\n",

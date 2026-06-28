@@ -213,8 +213,7 @@ impl PqCodebook {
 
         for s in 0..self.num_subvectors {
             let start = s * self.subvector_dim + s.min(remainder);
-            let actual_sub_dim = self.subvector_dim
-                + if s < remainder { 1 } else { 0 };
+            let actual_sub_dim = self.subvector_dim + if s < remainder { 1 } else { 0 };
             let end = (start + actual_sub_dim).min(dim);
 
             let sub = &vector[start..end];
@@ -278,9 +277,7 @@ impl QuantizedVector {
     pub fn decompress(&self, codebook: Option<&PqCodebook>) -> Vec<f32> {
         match self {
             QuantizedVector::Hot(v) => v.clone(),
-            QuantizedVector::Warm(fp16s) => {
-                fp16s.iter().map(|&h| fp16_to_f32(h)).collect()
-            }
+            QuantizedVector::Warm(fp16s) => fp16s.iter().map(|&h| fp16_to_f32(h)).collect(),
             QuantizedVector::Cold(pq) => {
                 if let Some(cb) = codebook {
                     cb.decode(pq)
@@ -302,16 +299,11 @@ impl QuantizedVector {
     }
 
     /// Compress a full-precision vector to the specified tier.
-    pub fn compress(
-        vector: &[f32],
-        tier: Temperature,
-        codebook: Option<&PqCodebook>,
-    ) -> Self {
+    pub fn compress(vector: &[f32], tier: Temperature, codebook: Option<&PqCodebook>) -> Self {
         match tier {
             Temperature::Hot => QuantizedVector::Hot(vector.to_vec()),
             Temperature::Warm => {
-                let fp16s: Vec<u16> =
-                    vector.iter().map(|&v| f32_to_fp16(v)).collect();
+                let fp16s: Vec<u16> = vector.iter().map(|&v| f32_to_fp16(v)).collect();
                 QuantizedVector::Warm(fp16s)
             }
             Temperature::Cold => {
@@ -319,8 +311,7 @@ impl QuantizedVector {
                     QuantizedVector::Cold(cb.encode(vector))
                 } else {
                     // Fall back to warm if no codebook.
-                    let fp16s: Vec<u16> =
-                        vector.iter().map(|&v| f32_to_fp16(v)).collect();
+                    let fp16s: Vec<u16> = vector.iter().map(|&v| f32_to_fp16(v)).collect();
                     QuantizedVector::Warm(fp16s)
                 }
             }
@@ -466,11 +457,7 @@ mod tests {
         ];
         let codebook = PqCodebook::build(&vectors, 8);
 
-        let qv = QuantizedVector::compress(
-            &vectors[0],
-            Temperature::Cold,
-            Some(&codebook),
-        );
+        let qv = QuantizedVector::compress(&vectors[0], Temperature::Cold, Some(&codebook));
         assert_eq!(qv.temperature(), Temperature::Cold);
 
         let decompressed = qv.decompress(Some(&codebook));

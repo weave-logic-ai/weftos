@@ -25,8 +25,8 @@ use std::time::{Duration, Instant};
 
 use crate::audit::AuditLog;
 use crate::sandbox::{
-    PluginSandbox, validate_env_access, validate_file_access, validate_http_request,
-    validate_log_message, validate_wasm_size, MAX_WRITE_SIZE,
+    MAX_WRITE_SIZE, PluginSandbox, validate_env_access, validate_file_access,
+    validate_http_request, validate_log_message, validate_wasm_size,
 };
 use clawft_plugin::{PluginError, PluginManifest, PluginResourceConfig};
 
@@ -241,12 +241,8 @@ impl WasmPluginEngine {
                     };
 
                     let dispatcher = caller.data().dispatcher.clone();
-                    let _result = dispatcher.handle_http_request(
-                        &method,
-                        &url,
-                        &[],
-                        body.as_deref(),
-                    );
+                    let _result =
+                        dispatcher.handle_http_request(&method, &url, &[], body.as_deref());
                     0
                 },
             )
@@ -425,10 +421,7 @@ impl WasmPluginEngine {
         let func = instance
             .get_typed_func::<(i32, i32, i32, i32), i32>(&mut store, "execute-tool")
             .or_else(|_| {
-                instance.get_typed_func::<(i32, i32, i32, i32), i32>(
-                    &mut store,
-                    "execute_tool",
-                )
+                instance.get_typed_func::<(i32, i32, i32, i32), i32>(&mut store, "execute_tool")
             });
 
         let result = match func {
@@ -505,9 +498,7 @@ impl WasmPluginEngine {
     }
 
     /// Check remaining fuel in a store.
-    pub fn remaining_fuel(
-        store: &wasmtime::Store<HostState>,
-    ) -> Result<u64, PluginError> {
+    pub fn remaining_fuel(store: &wasmtime::Store<HostState>) -> Result<u64, PluginError> {
         store
             .get_fuel()
             .map_err(|e| PluginError::ExecutionFailed(format!("get fuel: {e}")))
@@ -562,14 +553,16 @@ impl HostFunctionDispatcher {
                 // here using reqwest or similar. For now, we record the
                 // validation success and return a placeholder.
                 let duration = start.elapsed().as_millis() as u64;
-                self.audit.record_success("http-request", &summary, duration);
+                self.audit
+                    .record_success("http-request", &summary, duration);
 
                 // Actual HTTP execution would happen here.
                 // For now, return a validation-passed marker.
                 Err("HTTP execution not yet wired (validation passed)".into())
             }
             Err(e) => {
-                self.audit.record_denied("http-request", &summary, &e.to_string());
+                self.audit
+                    .record_denied("http-request", &summary, &e.to_string());
                 Err(e.to_string())
             }
         }
@@ -590,7 +583,8 @@ impl HostFunctionDispatcher {
                 Err(e) => {
                     let duration = start.elapsed().as_millis() as u64;
                     let err_msg = format!("read error: {e}");
-                    self.audit.record_error("read-file", path, &err_msg, duration);
+                    self.audit
+                        .record_error("read-file", path, &err_msg, duration);
                     Err(err_msg)
                 }
             },
@@ -627,7 +621,8 @@ impl HostFunctionDispatcher {
                 Err(e) => {
                     let duration = start.elapsed().as_millis() as u64;
                     let err_msg = format!("write error: {e}");
-                    self.audit.record_error("write-file", path, &err_msg, duration);
+                    self.audit
+                        .record_error("write-file", path, &err_msg, duration);
                     Err(err_msg)
                 }
             },
@@ -643,7 +638,9 @@ impl HostFunctionDispatcher {
         let result = validate_env_access(&self.sandbox, name);
         match &result {
             Some(_) => self.audit.record_success("get-env", name, 0),
-            None => self.audit.record_denied("get-env", name, "not permitted or not set"),
+            None => self
+                .audit
+                .record_denied("get-env", name, "not permitted or not set"),
         }
         result
     }
@@ -682,7 +679,10 @@ impl HostFunctionDispatcher {
             }
         }
 
-        let summary = format!("{level_str}: {}", &processed_msg[..processed_msg.len().min(80)]);
+        let summary = format!(
+            "{level_str}: {}",
+            &processed_msg[..processed_msg.len().min(80)]
+        );
         self.audit.record_success("log", &summary, 0);
     }
 
@@ -759,8 +759,8 @@ mod tests {
             capabilities: vec![clawft_plugin::PluginCapability::Tool],
             permissions: PluginPermissions::default(),
             resources: PluginResourceConfig {
-                max_fuel: 999_999_999_999, // Over hard limit
-                max_memory_mb: 512,        // Over hard limit
+                max_fuel: 999_999_999_999,   // Over hard limit
+                max_memory_mb: 512,          // Over hard limit
                 max_table_elements: 999_999, // Over hard limit
                 ..PluginResourceConfig::default()
             },
@@ -896,11 +896,17 @@ mod tests {
             .unwrap();
 
         let result = func.call(&mut store, ());
-        assert!(result.is_err(), "infinite loop should trap due to fuel exhaustion");
+        assert!(
+            result.is_err(),
+            "infinite loop should trap due to fuel exhaustion"
+        );
 
         // Verify fuel is exhausted (or near-zero)
         let remaining = store.get_fuel().unwrap_or(0);
-        assert!(remaining < 10, "fuel should be exhausted, remaining: {remaining}");
+        assert!(
+            remaining < 10,
+            "fuel should be exhausted, remaining: {remaining}"
+        );
     }
 
     /// T29: Memory limit exceeded.
@@ -995,10 +1001,7 @@ mod tests {
             .unwrap();
 
         let result = func.call(&mut store, ());
-        assert!(
-            result.is_err(),
-            "loop should trap with low fuel budget"
-        );
+        assert!(result.is_err(), "loop should trap with low fuel budget");
     }
 
     /// T32: Custom memory limit (lower threshold) exceeded.
@@ -1081,7 +1084,11 @@ mod tests {
         d.handle_log(2, "audit test message");
 
         // Verify all 5 produced audit entries
-        assert_eq!(d.audit_log().len(), 5, "all 5 host functions should produce entries");
+        assert_eq!(
+            d.audit_log().len(),
+            5,
+            "all 5 host functions should produce entries"
+        );
         assert_eq!(d.audit_log().count_by_function("http-request"), 1);
         assert_eq!(d.audit_log().count_by_function("read-file"), 1);
         assert_eq!(d.audit_log().count_by_function("write-file"), 1);
@@ -1165,11 +1172,7 @@ mod tests {
     #[test]
     fn t40_multi_plugin_isolation() {
         // Plugin A: network access only
-        let sandbox_a = test_sandbox(
-            vec!["a.example.com".into()],
-            vec![],
-            vec![],
-        );
+        let sandbox_a = test_sandbox(vec!["a.example.com".into()], vec![], vec![]);
         let audit_a = Arc::new(AuditLog::new("plugin-a".into()));
         let d_a = HostFunctionDispatcher::new(sandbox_a, audit_a);
 
@@ -1179,11 +1182,7 @@ mod tests {
         let file = dir.join("b_file.txt");
         std::fs::write(&file, "b content").unwrap();
 
-        let sandbox_b = test_sandbox(
-            vec![],
-            vec![dir.to_string_lossy().to_string()],
-            vec![],
-        );
+        let sandbox_b = test_sandbox(vec![], vec![dir.to_string_lossy().to_string()], vec![]);
         let audit_b = Arc::new(AuditLog::new("plugin-b".into()));
         let d_b = HostFunctionDispatcher::new(sandbox_b, audit_b);
 
@@ -1213,19 +1212,11 @@ mod tests {
     #[test]
     fn t43_separate_sandboxes_isolated() {
         // Each plugin gets its own sandbox and audit log -- no shared state
-        let sandbox_a = test_sandbox(
-            vec!["a.example.com".into()],
-            vec![],
-            vec!["VAR_A".into()],
-        );
+        let sandbox_a = test_sandbox(vec!["a.example.com".into()], vec![], vec!["VAR_A".into()]);
         let audit_a = Arc::new(AuditLog::new("plugin-a".into()));
         let d_a = HostFunctionDispatcher::new(sandbox_a, audit_a);
 
-        let sandbox_b = test_sandbox(
-            vec!["b.example.com".into()],
-            vec![],
-            vec!["VAR_B".into()],
-        );
+        let sandbox_b = test_sandbox(vec!["b.example.com".into()], vec![], vec!["VAR_B".into()]);
         let audit_b = Arc::new(AuditLog::new("plugin-b".into()));
         let d_b = HostFunctionDispatcher::new(sandbox_b, audit_b);
 
@@ -1635,10 +1626,8 @@ mod tests {
 
         // 3. Call write-file (permitted)
         let write_file = dir.join("written.txt");
-        let write_result = dispatcher.handle_write_file(
-            write_file.to_str().unwrap(),
-            "t42 written content",
-        );
+        let write_result =
+            dispatcher.handle_write_file(write_file.to_str().unwrap(), "t42 written content");
         assert!(write_result.is_ok(), "write-file should succeed");
 
         // 4. Call get-env (permitted)
@@ -1704,8 +1693,7 @@ mod tests {
             entries[3].params_summary
         );
         assert!(
-            entries[4].params_summary.contains("info")
-                || entries[4].params_summary.contains("t42"),
+            entries[4].params_summary.contains("info") || entries[4].params_summary.contains("t42"),
             "log summary should contain level or message, got: {}",
             entries[4].params_summary
         );
@@ -1735,12 +1723,7 @@ mod tests {
         // ------ Verify denied operations also produce entries ------
 
         // Try a denied HTTP request (different domain)
-        let _ = dispatcher.handle_http_request(
-            "GET",
-            "https://evil.example.com/steal",
-            &[],
-            None,
-        );
+        let _ = dispatcher.handle_http_request("GET", "https://evil.example.com/steal", &[], None);
 
         // Try a denied file read (outside sandbox)
         let _ = dispatcher.handle_read_file("/etc/shadow");
@@ -1756,9 +1739,18 @@ mod tests {
         );
 
         // Verify the 3 new entries are denied
-        assert!(!all_entries[5].permitted, "denied http should be marked denied");
-        assert!(!all_entries[6].permitted, "denied file should be marked denied");
-        assert!(!all_entries[7].permitted, "denied env should be marked denied");
+        assert!(
+            !all_entries[5].permitted,
+            "denied http should be marked denied"
+        );
+        assert!(
+            !all_entries[6].permitted,
+            "denied file should be marked denied"
+        );
+        assert!(
+            !all_entries[7].permitted,
+            "denied env should be marked denied"
+        );
 
         // Verify denied entries have error messages
         for entry in &all_entries[5..] {

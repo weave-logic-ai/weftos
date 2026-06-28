@@ -41,12 +41,12 @@ pub mod error;
 pub mod event;
 pub mod goal;
 pub mod provider;
+pub mod registry;
 pub mod routing;
 pub mod secret;
 pub mod security;
 pub mod session;
 pub mod skill;
-pub mod registry;
 pub mod workspace;
 
 pub use error::{ChannelError, ClawftError, Result};

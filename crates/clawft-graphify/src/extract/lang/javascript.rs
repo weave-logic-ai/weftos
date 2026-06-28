@@ -6,11 +6,11 @@
 
 use std::path::Path;
 
-use crate::model::ExtractionResult;
 use crate::GraphifyError;
+use crate::model::ExtractionResult;
 
 #[cfg(any(feature = "lang-javascript", feature = "lang-typescript"))]
-use crate::extract::ast::{make_id, ExtractionContext, LanguageConfig};
+use crate::extract::ast::{ExtractionContext, LanguageConfig, make_id};
 
 /// JavaScript language configuration.
 #[cfg(any(feature = "lang-javascript", feature = "lang-typescript"))]
@@ -26,7 +26,11 @@ pub static JS_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "function",
     call_accessor_node_types: &["member_expression"],
     call_accessor_field: "property",
-    function_boundary_types: &["function_declaration", "arrow_function", "method_definition"],
+    function_boundary_types: &[
+        "function_declaration",
+        "arrow_function",
+        "method_definition",
+    ],
     function_label_parens: true,
 };
 
@@ -44,7 +48,11 @@ pub static TS_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "function",
     call_accessor_node_types: &["member_expression"],
     call_accessor_field: "property",
-    function_boundary_types: &["function_declaration", "arrow_function", "method_definition"],
+    function_boundary_types: &[
+        "function_declaration",
+        "arrow_function",
+        "method_definition",
+    ],
     function_label_parens: true,
 };
 
@@ -53,10 +61,7 @@ pub static TS_CONFIG: LanguageConfig = LanguageConfig {
 pub fn extract_js(path: &Path) -> Result<ExtractionResult, GraphifyError> {
     use tree_sitter::{Language, Parser};
 
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("js");
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("js");
     let is_ts = ext == "ts" || ext == "tsx";
 
     let config = if is_ts { &TS_CONFIG } else { &JS_CONFIG };
@@ -90,20 +95,20 @@ pub fn extract_js(path: &Path) -> Result<ExtractionResult, GraphifyError> {
     };
 
     let mut parser = Parser::new();
-    parser.set_language(&language).map_err(|e| {
-        GraphifyError::ExtractionFailed {
+    parser
+        .set_language(&language)
+        .map_err(|e| GraphifyError::ExtractionFailed {
             path: path.display().to_string(),
             reason: e.to_string(),
-        }
-    })?;
+        })?;
 
     let source = std::fs::read(path)?;
-    let tree = parser.parse(&source, None).ok_or_else(|| {
-        GraphifyError::ExtractionFailed {
+    let tree = parser
+        .parse(&source, None)
+        .ok_or_else(|| GraphifyError::ExtractionFailed {
             path: path.display().to_string(),
             reason: "parse returned None".into(),
-        }
-    })?;
+        })?;
 
     let mut ctx = ExtractionContext::new(path);
     walk_js(&tree.root_node(), &source, &mut ctx, None, config);
@@ -175,14 +180,22 @@ fn walk_js(
                 ctx.add_node(&func_nid, &format!(".{func_name}()"), line);
                 ctx.add_extracted_edge(parent_nid, &func_nid, "method", line);
                 if let Some(body) = node.child_by_field_name("body") {
-                    ctx.function_bodies_indices.push((func_nid, body.start_byte(), body.end_byte()));
+                    ctx.function_bodies_indices.push((
+                        func_nid,
+                        body.start_byte(),
+                        body.end_byte(),
+                    ));
                 }
             } else {
                 let func_nid = make_id(&[&ctx.stem, &func_name]);
                 ctx.add_node(&func_nid, &format!("{func_name}()"), line);
                 ctx.add_extracted_edge(&ctx.file_nid.clone(), &func_nid, "contains", line);
                 if let Some(body) = node.child_by_field_name("body") {
-                    ctx.function_bodies_indices.push((func_nid, body.start_byte(), body.end_byte()));
+                    ctx.function_bodies_indices.push((
+                        func_nid,
+                        body.start_byte(),
+                        body.end_byte(),
+                    ));
                 }
             }
         }
@@ -234,11 +247,7 @@ fn walk_js(
 }
 
 #[cfg(any(feature = "lang-javascript", feature = "lang-typescript"))]
-fn handle_js_import(
-    node: &tree_sitter::Node,
-    source: &[u8],
-    ctx: &mut ExtractionContext,
-) {
+fn handle_js_import(node: &tree_sitter::Node, source: &[u8], ctx: &mut ExtractionContext) {
     let line = node.start_position().row + 1;
     let file_nid = ctx.file_nid.clone();
     let count = node.child_count();
@@ -248,7 +257,11 @@ fn handle_js_import(
             if child.kind() == "string" {
                 let raw = read_text(&child, source);
                 let raw = raw.trim_matches(|c: char| c == '\'' || c == '"' || c == '`' || c == ' ');
-                let module_name = raw.trim_start_matches("./").rsplit('/').next().unwrap_or("");
+                let module_name = raw
+                    .trim_start_matches("./")
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("");
                 if !module_name.is_empty() {
                     let tgt_nid = make_id(&[module_name]);
                     ctx.add_edge(&file_nid, &tgt_nid, "imports_from", line, "EXTRACTED", 1.0);
@@ -338,7 +351,14 @@ fn walk_calls_js(
     for i in 0..count {
         if let Some(child) = node.child(i) {
             walk_calls_js(
-                &child, source, ctx, caller_nid, body_start, body_end, config, label_to_nid,
+                &child,
+                source,
+                ctx,
+                caller_nid,
+                body_start,
+                body_end,
+                config,
+                label_to_nid,
                 seen_call_pairs,
             );
         }

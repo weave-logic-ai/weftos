@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use comfy_table::{presets, Table};
+use comfy_table::{Table, presets};
 
 use clawft_kernel::{Kernel, KernelState};
 use clawft_platform::NativePlatform;
@@ -222,19 +222,17 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
             }
         }
         KernelAction::Attach { tail, level } => {
-            let mut client = DaemonClient::connect()
-                .await
-                .ok_or_else(|| anyhow::anyhow!("no daemon running (use 'weaver kernel start' first)"))?;
+            let mut client = DaemonClient::connect().await.ok_or_else(|| {
+                anyhow::anyhow!("no daemon running (use 'weaver kernel start' first)")
+            })?;
 
             // Get the total event count to seed our cursor, then show recent tail
             let all_params = protocol::LogsParams {
                 count: 0, // 0 = all
                 level: level.clone(),
             };
-            let all_req = protocol::Request::with_params(
-                "kernel.logs",
-                serde_json::to_value(&all_params)?,
-            );
+            let all_req =
+                protocol::Request::with_params("kernel.logs", serde_json::to_value(&all_params)?);
             let all_resp = client.call(all_req).await?;
             let total_events = if all_resp.ok {
                 let entries: Vec<protocol::LogEntry> =
@@ -244,7 +242,11 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
                 let show_from = total.saturating_sub(tail);
                 let shown = &entries[show_from..];
                 if !shown.is_empty() {
-                    println!("--- Recent kernel logs ({} of {} entries) ---", shown.len(), total);
+                    println!(
+                        "--- Recent kernel logs ({} of {} entries) ---",
+                        shown.len(),
+                        total
+                    );
                     print_daemon_logs(shown);
                     println!("--- Streaming (Ctrl+C to detach) ---");
                 } else {
@@ -275,10 +277,8 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
                     count: 0, // all
                     level: level.clone(),
                 };
-                let req = protocol::Request::with_params(
-                    "kernel.logs",
-                    serde_json::to_value(&params)?,
-                );
+                let req =
+                    protocol::Request::with_params("kernel.logs", serde_json::to_value(&params)?);
                 match poll_client.call(req).await {
                     Ok(resp) if resp.ok => {
                         let entries: Vec<protocol::LogEntry> =
@@ -313,10 +313,8 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
                     count,
                     level: level.clone(),
                 };
-                let req = protocol::Request::with_params(
-                    "kernel.logs",
-                    serde_json::to_value(params)?,
-                );
+                let req =
+                    protocol::Request::with_params("kernel.logs", serde_json::to_value(params)?);
                 let resp = client.call(req).await?;
                 if resp.ok {
                     let entries: Vec<protocol::LogEntry> =
@@ -364,8 +362,7 @@ fn print_daemon_status(result: &protocol::KernelStatusResult, pid: Option<u32>) 
 }
 
 /// Fetch and print cluster info from daemon (appended to status output).
-async fn print_cluster_summary(client: &mut DaemonClient)
-{
+async fn print_cluster_summary(client: &mut DaemonClient) {
     let resp = match client.simple_call("cluster.nodes").await {
         Ok(r) => r,
         Err(_) => return,
@@ -488,10 +485,7 @@ fn print_status<P: clawft_platform::Platform>(kernel: &Kernel<P>) {
     println!("Uptime:     {uptime_str}");
     println!("Processes:  {}", kernel.process_table().len());
     println!("Services:   {}", kernel.services().len());
-    println!(
-        "Max procs:  {}",
-        kernel.kernel_config().max_processes
-    );
+    println!("Max procs:  {}", kernel.kernel_config().max_processes);
     println!(
         "Health chk: {}s",
         kernel.kernel_config().health_check_interval_secs
@@ -550,10 +544,7 @@ fn print_ps<P: clawft_platform::Platform>(kernel: &Kernel<P>) {
 
     for entry in &entries {
         let mem = format_bytes(entry.resource_usage.memory_bytes);
-        let cpu = format!(
-            "{:.1}s",
-            entry.resource_usage.cpu_time_ms as f64 / 1000.0
-        );
+        let cpu = format!("{:.1}s", entry.resource_usage.cpu_time_ms as f64 / 1000.0);
         let parent = entry
             .parent_pid
             .map(|p| p.to_string())
@@ -610,7 +601,6 @@ fn print_event_log<P: clawft_platform::Platform>(
     }
     println!("({} entries)", events.len());
 }
-
 
 // ── Signal / PID helpers (Unix only) ────────────────────────────
 

@@ -8,13 +8,13 @@
 //! §3 (callback-based LLM invocation) and WEFT-383.
 
 #[cfg(feature = "semantic-extract")]
+use crate::GraphifyError;
+#[cfg(feature = "semantic-extract")]
 use crate::entity::{DomainTag, EntityId, EntityType, FileType};
 #[cfg(feature = "semantic-extract")]
 use crate::model::{Entity, ExtractionResult};
 #[cfg(feature = "semantic-extract")]
 use crate::relationship::{Confidence, RelationType, Relationship};
-#[cfg(feature = "semantic-extract")]
-use crate::GraphifyError;
 
 /// The structured prompt sent to the LLM for entity/relationship extraction.
 #[cfg(feature = "semantic-extract")]
@@ -175,8 +175,8 @@ where
         };
 
         let relation_type = parse_relation_type(&llm_rel.relation);
-        let confidence = Confidence::from_str_loose(&llm_rel.confidence)
-            .unwrap_or(Confidence::Inferred);
+        let confidence =
+            Confidence::from_str_loose(&llm_rel.confidence).unwrap_or(Confidence::Inferred);
 
         relationships.push(Relationship {
             source: source_id.clone(),

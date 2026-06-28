@@ -40,11 +40,7 @@ pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 /// Order is informational; we use set semantics. The current value
 /// includes the previous published versions plus our negotiated
 /// version so a server that lags one revision still attaches.
-pub const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
-    "2024-11-05",
-    "2025-03-26",
-    "2025-06-18",
-];
+pub const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18"];
 
 /// Returns true if `version` is in our supported set.
 ///

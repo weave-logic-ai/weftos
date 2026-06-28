@@ -554,11 +554,9 @@ impl HnswEmlManager {
                     // Approximate: recall scales with log(ef), model gives
                     // a baseline prediction we shift proportionally.
                     let ef_ratio = (candidate_ef / raw_ef.max(1.0)).ln().max(0.0);
-                    let est_recall =
-                        (predicted_recall + ef_ratio * 0.15).clamp(0.0, 1.0);
+                    let est_recall = (predicted_recall + ef_ratio * 0.15).clamp(0.0, 1.0);
                     let cost = frac; // normalized latency proxy
-                    let score =
-                        est_recall - self.config.latency_weight * cost;
+                    let score = est_recall - self.config.latency_weight * cost;
                     if score > best_score {
                         best_score = score;
                         best_ef = candidate_ef;
@@ -871,7 +869,10 @@ impl std::fmt::Debug for HnswEmlManager {
 
 /// Compute the L2 norm of a vector.
 fn vector_norm(v: &[f32]) -> f64 {
-    v.iter().map(|x| (*x as f64) * (*x as f64)).sum::<f64>().sqrt()
+    v.iter()
+        .map(|x| (*x as f64) * (*x as f64))
+        .sum::<f64>()
+        .sqrt()
 }
 
 /// Compute the variance of a vector's elements.
@@ -895,10 +896,7 @@ fn compute_recall(hnsw_ids: &[String], exact_ids: &[String]) -> f64 {
     if exact_ids.is_empty() {
         return 1.0;
     }
-    let found = exact_ids
-        .iter()
-        .filter(|id| hnsw_ids.contains(id))
-        .count();
+    let found = exact_ids.iter().filter(|id| hnsw_ids.contains(id)).count();
     found as f64 / exact_ids.len() as f64
 }
 
@@ -947,11 +945,7 @@ pub struct ProbeReport {
 ///
 /// This is the "oracle" call — run it at index build time or when the
 /// corpus distribution shifts significantly.
-pub fn probe_corpus(
-    corpus: &[Vec<f32>],
-    dims: usize,
-    top_k: usize,
-) -> ProbeReport {
+pub fn probe_corpus(corpus: &[Vec<f32>], dims: usize, top_k: usize) -> ProbeReport {
     let sample_n = corpus.len().min(500);
     if sample_n < 10 || dims < 4 {
         return ProbeReport {
@@ -997,9 +991,20 @@ pub fn probe_corpus(
     let total_var: f64 = dim_variances.iter().sum();
     let q1 = dims / 4;
     let top_q_var: f64 = order[..q1.max(1)].iter().map(|&d| dim_variances[d]).sum();
-    let bot_q_var: f64 = order[dims - q1.max(1)..].iter().map(|&d| dim_variances[d]).sum();
-    let steepness = if bot_q_var > 1e-12 { top_q_var / bot_q_var } else { 100.0 };
-    let top_quartile_fraction = if total_var > 1e-12 { top_q_var / total_var } else { 0.25 };
+    let bot_q_var: f64 = order[dims - q1.max(1)..]
+        .iter()
+        .map(|&d| dim_variances[d])
+        .sum();
+    let steepness = if bot_q_var > 1e-12 {
+        top_q_var / bot_q_var
+    } else {
+        100.0
+    };
+    let top_quartile_fraction = if total_var > 1e-12 {
+        top_q_var / total_var
+    } else {
+        0.25
+    };
 
     // Decision logic.
     let strategy = if steepness < 1.5 || dims < 16 || corpus.len() < 100 {
@@ -1187,7 +1192,8 @@ pub fn triage_strategy(probe: &ProbeReport) -> TriageRecord {
 
     // Find the knee: first dim index where cumulative variance ≥ 80%.
     let total_var: f64 = probe.dim_variances.iter().sum();
-    let mut sorted_vars: Vec<(usize, f64)> = probe.dim_variances.iter().copied().enumerate().collect();
+    let mut sorted_vars: Vec<(usize, f64)> =
+        probe.dim_variances.iter().copied().enumerate().collect();
     sorted_vars.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     let target = total_var * 0.80;
     let mut cum = 0.0;
@@ -1369,11 +1375,7 @@ fn gen_structured_queries(
     gen_structured_corpus(state, n, dims, n_clusters)
 }
 
-fn measure_recall_direct(
-    store: &mut HnswStore,
-    queries: &[Vec<f32>],
-    top_k: usize,
-) -> f64 {
+fn measure_recall_direct(store: &mut HnswStore, queries: &[Vec<f32>], top_k: usize) -> f64 {
     let mut total = 0.0;
     let n = queries.len();
     for q in queries {
@@ -1409,7 +1411,11 @@ fn measure_latency(store: &mut HnswStore, qs: &[Vec<f32>], top_k: usize) -> ArmM
     lats.sort_unstable();
     let mean = lats.iter().sum::<u128>() / lats.len().max(1) as u128;
     let p99 = lats[(lats.len() * 99) / 100];
-    ArmMetrics { recall, mean_ns: mean, p99_ns: p99 }
+    ArmMetrics {
+        recall,
+        mean_ns: mean,
+        p99_ns: p99,
+    }
 }
 
 /// Run the 4-phase HNSW-EML benchmark with three-arm A/B.
@@ -1420,11 +1426,7 @@ fn measure_latency(store: &mut HnswStore, qs: &[Vec<f32>], top_k: usize) -> ArmM
 /// **Adaptive**: EML fully enabled, predictions applied to ef.
 ///
 /// All three arms use identical data and query sequences.
-pub fn run_hnsw_benchmark(
-    store_size: usize,
-    dims: usize,
-    top_k: usize,
-) -> HnswEmlBenchmark {
+pub fn run_hnsw_benchmark(store_size: usize, dims: usize, top_k: usize) -> HnswEmlBenchmark {
     let mut rng = 0xDEAD_BEEF_u64;
 
     // Structured embeddings: 20 clusters, early dims = high variance
@@ -1467,8 +1469,7 @@ pub fn run_hnsw_benchmark(
     let mut store_adaptive = build_store(&corpus, static_ef);
     let mut eml = HnswEmlManager::new(eml_config);
 
-    let phase2_pre_train_recall =
-        measure_recall_direct(&mut store_adaptive, &queries[..16], top_k);
+    let phase2_pre_train_recall = measure_recall_direct(&mut store_adaptive, &queries[..16], top_k);
 
     // 20 passes × 128 queries = 2560. Recall checkpoints every 50.
     let mut phase2_queries_run = 0usize;
@@ -1491,7 +1492,13 @@ pub fn run_hnsw_benchmark(
             if (pass * queries.len() + qi) % 50 == 49 {
                 let hnsw_ids: Vec<Vec<String>> = queries[..8]
                     .iter()
-                    .map(|qq| store_adaptive.query(qq, top_k).into_iter().map(|r| r.id).collect())
+                    .map(|qq| {
+                        store_adaptive
+                            .query(qq, top_k)
+                            .into_iter()
+                            .map(|r| r.id)
+                            .collect()
+                    })
                     .collect();
                 let exact_ids: Vec<Vec<String>> = queries[..8]
                     .iter()
@@ -1555,18 +1562,20 @@ pub fn run_hnsw_benchmark(
         .map(|(i, v)| (format!("v{i}"), v.clone(), serde_json::json!({})))
         .collect();
     let mut tiered = match &triage.strategy {
-        SearchStrategy::Tiered { dim_order, coarse_dims, medium_dims, ef, .. } => {
-            TieredSearch::build(
-                &entries,
-                dim_order[..*coarse_dims].to_vec(),
-                dim_order[..*medium_dims].to_vec(),
-                top_k,
-                *ef,
-            )
-        }
-        SearchStrategy::Flat { ef } => {
-            TieredSearch::build_default(&entries, dims, top_k, *ef)
-        }
+        SearchStrategy::Tiered {
+            dim_order,
+            coarse_dims,
+            medium_dims,
+            ef,
+            ..
+        } => TieredSearch::build(
+            &entries,
+            dim_order[..*coarse_dims].to_vec(),
+            dim_order[..*medium_dims].to_vec(),
+            top_k,
+            *ef,
+        ),
+        SearchStrategy::Flat { ef } => TieredSearch::build_default(&entries, dims, top_k, *ef),
     };
     let phase3_tiered = {
         let mut lats = Vec::with_capacity(queries.len() * 4);
@@ -1584,15 +1593,22 @@ pub fn run_hnsw_benchmark(
             let q16 = &queries[..queries.len().min(16)];
             let mut total = 0.0;
             for q in q16 {
-                let tiered_ids: Vec<String> = tiered.search(q, top_k)
-                    .into_iter().map(|r| r.id).collect();
+                let tiered_ids: Vec<String> =
+                    tiered.search(q, top_k).into_iter().map(|r| r.id).collect();
                 let exact_ids = tiered.brute_force_topk(q, top_k);
-                let found = exact_ids.iter().filter(|id| tiered_ids.contains(id)).count();
+                let found = exact_ids
+                    .iter()
+                    .filter(|id| tiered_ids.contains(id))
+                    .count();
                 total += found as f64 / exact_ids.len().max(1) as f64;
             }
             total / q16.len() as f64
         };
-        ArmMetrics { recall, mean_ns: mean, p99_ns: p99 }
+        ArmMetrics {
+            recall,
+            mean_ns: mean,
+            p99_ns: p99,
+        }
     };
 
     // ── Phase 4 (Scalability) ───────────────────────────────────────────
@@ -1764,11 +1780,7 @@ mod tests {
     #[test]
     fn record_distance_pair_stores_data() {
         let mut m = make_manager();
-        m.record_distance_pair(
-            &[1.0, 0.0, 0.0],
-            &[0.9, 0.1, 0.0],
-            &[1.0, 0.0, 0.0],
-        );
+        m.record_distance_pair(&[1.0, 0.0, 0.0], &[0.9, 0.1, 0.0], &[1.0, 0.0, 0.0]);
         assert_eq!(m.distance_training.len(), 1);
     }
 
@@ -1807,14 +1819,7 @@ mod tests {
         let mut m = make_manager();
         // Add fewer samples than min_training_samples
         for i in 0..10 {
-            m.record_search(
-                &[i as f32 / 10.0, 0.5, 0.5],
-                2,
-                0.8,
-                100,
-                500,
-                100,
-            );
+            m.record_search(&[i as f32 / 10.0, 0.5, 0.5], 2, 0.8, 100, 500, 100);
         }
         let result = m.train_all();
         assert!(!result);
@@ -1849,14 +1854,7 @@ mod tests {
     fn reset_clears_everything() {
         let mut m = make_manager();
         for i in 0..5 {
-            m.record_search(
-                &[i as f32, 0.0, 1.0],
-                1,
-                0.5,
-                100,
-                100,
-                50,
-            );
+            m.record_search(&[i as f32, 0.0, 1.0], 1, 0.5, 100, 100, 50);
         }
         m.last_recall = Some(0.95);
         m.train_cycles = 3;
@@ -2000,14 +1998,7 @@ mod tests {
         });
 
         for i in 0..5 {
-            m.record_search(
-                &[i as f32, 0.0, 1.0],
-                1,
-                0.5,
-                100,
-                100,
-                50,
-            );
+            m.record_search(&[i as f32, 0.0, 1.0], 1, 0.5, 100, 100, 50);
         }
         // After 5 searches (== train_every_n), searches_since_train resets.
         assert_eq!(m.searches_since_train, 0);
@@ -2035,11 +2026,7 @@ mod tests {
 
         // Record distance pairs
         for _ in 0..15 {
-            m.record_distance_pair(
-                &[1.0, 0.0, 0.0],
-                &[0.9, 0.1, 0.0],
-                &[1.0, 0.0, 0.0],
-            );
+            m.record_distance_pair(&[1.0, 0.0, 0.0], &[0.9, 0.1, 0.0], &[1.0, 0.0, 0.0]);
         }
 
         // Measure recall
@@ -2104,57 +2091,110 @@ mod tests {
         let t = &bench.phase3_tiered;
         let overhead_pct = if c.mean_ns > 0 {
             ((o.mean_ns as f64 / c.mean_ns as f64) - 1.0) * 100.0
-        } else { 0.0 };
+        } else {
+            0.0
+        };
         let tiered_speedup = if c.mean_ns > 0 {
             c.mean_ns as f64 / t.mean_ns as f64
-        } else { 1.0 };
+        } else {
+            1.0
+        };
 
         eprintln!("\n══════════════════════════════════════════════════════════════════");
         eprintln!("  HNSW-EML 4-Phase A/B Benchmark");
-        eprintln!("  {} vecs, {} dims, k={}, static ef={}",
-            bench.store_size, bench.dimensions, bench.top_k, bench.static_ef);
+        eprintln!(
+            "  {} vecs, {} dims, k={}, static ef={}",
+            bench.store_size, bench.dimensions, bench.top_k, bench.static_ef
+        );
         eprintln!("══════════════════════════════════════════════════════════════════");
         eprintln!("Phase 1 — Warmup");
-        eprintln!("  Build time:          {:>10} µs", bench.phase1_build_ns / 1000);
-        eprintln!("  Warmup query:        {:>10} µs", bench.phase1_warmup_query_ns / 1000);
-        eprintln!("  Baseline recall@10:  {:>10.4}", bench.phase1_baseline_recall);
+        eprintln!(
+            "  Build time:          {:>10} µs",
+            bench.phase1_build_ns / 1000
+        );
+        eprintln!(
+            "  Warmup query:        {:>10} µs",
+            bench.phase1_warmup_query_ns / 1000
+        );
+        eprintln!(
+            "  Baseline recall@10:  {:>10.4}",
+            bench.phase1_baseline_recall
+        );
         eprintln!("──────────────────────────────────────────────────────────────────");
         eprintln!("Phase 2 — Learning (Score strategy, λ=0.3)");
         eprintln!("  Queries run:         {:>10}", bench.phase2_queries_run);
-        eprintln!("  EML train cycles:    {:>10}", bench.phase2_eml_train_cycles);
-        eprintln!("  Pre-train recall:    {:>10.4}", bench.phase2_pre_train_recall);
-        eprintln!("  Post-train recall:   {:>10.4}", bench.phase2_post_train_recall);
-        eprintln!("  Recall delta:        {:>+10.4}", bench.phase2_recall_delta);
+        eprintln!(
+            "  EML train cycles:    {:>10}",
+            bench.phase2_eml_train_cycles
+        );
+        eprintln!(
+            "  Pre-train recall:    {:>10.4}",
+            bench.phase2_pre_train_recall
+        );
+        eprintln!(
+            "  Post-train recall:   {:>10.4}",
+            bench.phase2_post_train_recall
+        );
+        eprintln!(
+            "  Recall delta:        {:>+10.4}",
+            bench.phase2_recall_delta
+        );
         eprintln!("──────────────────────────────────────────────────────────────────");
         let probe = probe_corpus(
             &gen_structured_corpus(&mut 0xDEAD_BEEF_u64, bench.store_size, bench.dimensions, 20),
-            bench.dimensions, bench.top_k,
+            bench.dimensions,
+            bench.top_k,
         );
         let triage = triage_strategy(&probe);
         eprintln!("Triage — tree calculus + EML");
         eprintln!("  Form:                {:?}", triage.form);
         eprintln!("  Steepness:           {:>10.2}", triage.steepness);
-        eprintln!("  Concentration:       {:>10.1}%", triage.concentration * 100.0);
+        eprintln!(
+            "  Concentration:       {:>10.1}%",
+            triage.concentration * 100.0
+        );
         eprintln!("  Knee (80% var):      {:>10} dims", triage.knee);
         match &triage.strategy {
-            SearchStrategy::Flat { ef } =>
-                eprintln!("  → Strategy:          Flat (ef={})", ef),
-            SearchStrategy::Tiered { coarse_dims, coarse_keep, medium_dims, medium_keep, ef, .. } =>
-                eprintln!("  → Strategy:          Tiered (coarse={}d keep={}, medium={}d keep={}, ef={})",
-                    coarse_dims, coarse_keep, medium_dims, medium_keep, ef),
+            SearchStrategy::Flat { ef } => eprintln!("  → Strategy:          Flat (ef={})", ef),
+            SearchStrategy::Tiered {
+                coarse_dims,
+                coarse_keep,
+                medium_dims,
+                medium_keep,
+                ef,
+                ..
+            } => eprintln!(
+                "  → Strategy:          Tiered (coarse={}d keep={}, medium={}d keep={}, ef={})",
+                coarse_dims, coarse_keep, medium_dims, medium_keep, ef
+            ),
         }
         eprintln!("──────────────────────────────────────────────────────────────────");
         eprintln!("Phase 3 — Compute (4-arm A/B)");
         eprintln!();
         eprintln!("                          recall@10    mean (ns)    p99 (ns)");
-        eprintln!("  Control (flat HNSW):     {:.4}    {:>10}    {:>10}", c.recall, c.mean_ns, c.p99_ns);
-        eprintln!("  Overhead (EML nop):      {:.4}    {:>10}    {:>10}", o.recall, o.mean_ns, o.p99_ns);
-        eprintln!("  Adaptive ef (EML):       {:.4}    {:>10}    {:>10}", a.recall, a.mean_ns, a.p99_ns);
-        eprintln!("  Tiered (coarse→fine):    {:.4}    {:>10}    {:>10}", t.recall, t.mean_ns, t.p99_ns);
+        eprintln!(
+            "  Control (flat HNSW):     {:.4}    {:>10}    {:>10}",
+            c.recall, c.mean_ns, c.p99_ns
+        );
+        eprintln!(
+            "  Overhead (EML nop):      {:.4}    {:>10}    {:>10}",
+            o.recall, o.mean_ns, o.p99_ns
+        );
+        eprintln!(
+            "  Adaptive ef (EML):       {:.4}    {:>10}    {:>10}",
+            a.recall, a.mean_ns, a.p99_ns
+        );
+        eprintln!(
+            "  Tiered (coarse→fine):    {:.4}    {:>10}    {:>10}",
+            t.recall, t.mean_ns, t.p99_ns
+        );
         eprintln!();
         eprintln!("  EML overhead:        {:>+.1}% mean latency", overhead_pct);
-        eprintln!("  Tiered vs control:   {:>.2}× speed, {:>+.4} recall",
-            tiered_speedup, t.recall - c.recall);
+        eprintln!(
+            "  Tiered vs control:   {:>.2}× speed, {:>+.4} recall",
+            tiered_speedup,
+            t.recall - c.recall
+        );
         eprintln!("──────────────────────────────────────────────────────────────────");
         eprintln!("Phase 4 — Scalability");
         eprintln!();
@@ -2163,8 +2203,11 @@ mod tests {
         for pt in &bench.phase4_scaling {
             eprintln!(
                 "  {:<5}    {:.4}   {:>9}    {:.4}   {:>9}",
-                pt.store_size, pt.control_recall, pt.control_mean_ns,
-                pt.adaptive_recall, pt.adaptive_mean_ns,
+                pt.store_size,
+                pt.control_recall,
+                pt.control_mean_ns,
+                pt.adaptive_recall,
+                pt.adaptive_mean_ns,
             );
         }
         eprintln!("══════════════════════════════════════════════════════════════════\n");

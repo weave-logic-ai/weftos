@@ -149,10 +149,7 @@ mod tests {
         let mut s = 0xDEAD_BEEF_u64;
         let params = random_params(&mut s, 100);
         for &p in &params {
-            assert!(
-                p >= -1.0 && p <= 1.0,
-                "param {p} out of [-1, 1] range"
-            );
+            assert!(p >= -1.0 && p <= 1.0, "param {p} out of [-1, 1] range");
         }
     }
 }

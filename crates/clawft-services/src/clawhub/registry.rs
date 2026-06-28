@@ -191,10 +191,7 @@ impl ClawHubClient {
     }
 
     /// Build a request with optional auth header.
-    fn auth_header(
-        &self,
-        builder: reqwest::RequestBuilder,
-    ) -> reqwest::RequestBuilder {
+    fn auth_header(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if let Some(ref token) = self.config.api_token {
             builder.header("Authorization", format!("Bearer {token}"))
         } else {
@@ -320,10 +317,7 @@ impl ClawHubClient {
     /// Download skill content from the registry.
     ///
     /// Returns the raw bytes of the skill archive.
-    pub async fn download(
-        &self,
-        skill_id: &str,
-    ) -> Result<Vec<u8>, ClawHubError> {
+    pub async fn download(&self, skill_id: &str) -> Result<Vec<u8>, ClawHubError> {
         let url = format!(
             "{}/skills/{}/download",
             self.config.api_url,

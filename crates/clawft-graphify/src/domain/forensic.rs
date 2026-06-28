@@ -104,10 +104,7 @@ pub enum Gap {
         degree: usize,
     },
     /// Event nodes without temporal edges (Precedes relationships).
-    TimelineDiscontinuity {
-        event_id: EntityId,
-        label: String,
-    },
+    TimelineDiscontinuity { event_id: EntityId, label: String },
     /// Edges with `Confidence::Ambiguous` that have not been verified.
     UnverifiedClaim {
         source_id: EntityId,
@@ -115,10 +112,7 @@ pub enum Gap {
         relation_type: RelationType,
     },
     /// Person entities mentioned but not linked to any Event.
-    MissingConnection {
-        person_id: EntityId,
-        label: String,
-    },
+    MissingConnection { person_id: EntityId, label: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -242,10 +236,7 @@ pub fn coherence_score(kg: &KnowledgeGraph) -> f64 {
 ///
 /// When `eml_model` is `Some` and trained, uses the learned function.
 /// Otherwise falls back to the original `density * avg_confidence` formula.
-pub fn coherence_score_eml(
-    kg: &KnowledgeGraph,
-    eml_model: Option<&ForensicCoherenceModel>,
-) -> f64 {
+pub fn coherence_score_eml(kg: &KnowledgeGraph, eml_model: Option<&ForensicCoherenceModel>) -> f64 {
     let n = kg.entity_count();
     if n < 2 {
         return if n == 1 { 1.0 } else { 0.0 };
@@ -267,12 +258,7 @@ pub fn coherence_score_eml(
 
     match eml_model {
         Some(model) if model.is_trained() => {
-            model.predict(
-                density,
-                avg_confidence,
-                n as f64,
-                actual_edges as f64,
-            )
+            model.predict(density, avg_confidence, n as f64, actual_edges as f64)
         }
         _ => density * avg_confidence,
     }
@@ -346,9 +332,7 @@ pub fn counterfactual_delta_eml(
     let new_avg = new_total / new_m;
 
     let predicted = match eml_model {
-        Some(model) if model.is_trained() => {
-            model.predict(new_density, new_avg, n as f64, new_m)
-        }
+        Some(model) if model.is_trained() => model.predict(new_density, new_avg, n as f64, new_m),
         _ => new_density * new_avg,
     };
 
@@ -433,7 +417,10 @@ mod tests {
         kg.add_entity(evidence.clone());
         // Evidence with degree 0 should be flagged.
         let gaps = gap_analysis(&kg);
-        assert!(gaps.iter().any(|g| matches!(g, Gap::UnlinkedEvidence { degree: 0, .. })));
+        assert!(
+            gaps.iter()
+                .any(|g| matches!(g, Gap::UnlinkedEvidence { degree: 0, .. }))
+        );
     }
 
     #[test]
@@ -443,7 +430,10 @@ mod tests {
         kg.add_entity(event.clone());
         // Event without Precedes edges.
         let gaps = gap_analysis(&kg);
-        assert!(gaps.iter().any(|g| matches!(g, Gap::TimelineDiscontinuity { .. })));
+        assert!(
+            gaps.iter()
+                .any(|g| matches!(g, Gap::TimelineDiscontinuity { .. }))
+        );
     }
 
     #[test]
@@ -460,7 +450,10 @@ mod tests {
             Confidence::Ambiguous,
         ));
         let gaps = gap_analysis(&kg);
-        assert!(gaps.iter().any(|g| matches!(g, Gap::UnverifiedClaim { .. })));
+        assert!(
+            gaps.iter()
+                .any(|g| matches!(g, Gap::UnverifiedClaim { .. }))
+        );
     }
 
     #[test]
@@ -480,7 +473,10 @@ mod tests {
             Confidence::Extracted,
         ));
         let gaps = gap_analysis(&kg);
-        assert!(gaps.iter().any(|g| matches!(g, Gap::MissingConnection { .. })));
+        assert!(
+            gaps.iter()
+                .any(|g| matches!(g, Gap::MissingConnection { .. }))
+        );
     }
 
     #[test]
@@ -530,12 +526,7 @@ mod tests {
             Confidence::Extracted,
         ));
 
-        let hypothetical = make_forensic_rel(
-            &c,
-            &b,
-            RelationType::FoundAt,
-            Confidence::Extracted,
-        );
+        let hypothetical = make_forensic_rel(&c, &b, RelationType::FoundAt, Confidence::Extracted);
         let delta = counterfactual_delta(&kg, &hypothetical);
         assert!(delta > 0.0, "Adding an edge should improve coherence");
     }

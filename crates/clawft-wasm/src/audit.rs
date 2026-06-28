@@ -63,22 +63,12 @@ impl AuditLog {
     }
 
     /// Record a successful host function call.
-    pub fn record_success(
-        &self,
-        function: &str,
-        params_summary: &str,
-        duration_ms: u64,
-    ) {
+    pub fn record_success(&self, function: &str, params_summary: &str, duration_ms: u64) {
         self.record(function, params_summary, true, None, duration_ms);
     }
 
     /// Record a denied host function call.
-    pub fn record_denied(
-        &self,
-        function: &str,
-        params_summary: &str,
-        error: &str,
-    ) {
+    pub fn record_denied(&self, function: &str, params_summary: &str, error: &str) {
         self.record(function, params_summary, false, Some(error), 0);
     }
 
@@ -203,13 +193,21 @@ mod tests {
         assert_eq!(log.len(), 1);
         let entries = log.entries();
         assert!(!entries[0].permitted);
-        assert_eq!(entries[0].error.as_deref(), Some("filesystem access denied"));
+        assert_eq!(
+            entries[0].error.as_deref(),
+            Some("filesystem access denied")
+        );
     }
 
     #[test]
     fn record_error() {
         let log = AuditLog::new("test-plugin".into());
-        log.record_error("http-request", "GET https://api.example.com/", "timeout", 5000);
+        log.record_error(
+            "http-request",
+            "GET https://api.example.com/",
+            "timeout",
+            5000,
+        );
 
         assert_eq!(log.len(), 1);
         let entries = log.entries();

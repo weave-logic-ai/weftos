@@ -56,7 +56,11 @@ pub fn suggest_links(
             continue;
         }
 
-        let existing: HashSet<&String> = source.outgoing.iter().chain(source.incoming.iter()).collect();
+        let existing: HashSet<&String> = source
+            .outgoing
+            .iter()
+            .chain(source.incoming.iter())
+            .collect();
         let mut file_suggestions: Vec<Suggestion> = Vec::new();
 
         for target_key in &keys {
@@ -74,7 +78,8 @@ pub fn suggest_links(
             processed.insert(pair_key);
 
             let target = &nodes[*target_key];
-            let (score, reason, shared_tags) = score_pair(source, target, source_key, target_key, &orphans);
+            let (score, reason, shared_tags) =
+                score_pair(source, target, source_key, target_key, &orphans);
 
             if score >= config.min_score {
                 let bidirectional = score >= 7.0 || shared_tags.len() >= 2;
@@ -89,12 +94,20 @@ pub fn suggest_links(
             }
         }
 
-        file_suggestions.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        file_suggestions.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         file_suggestions.truncate(config.max_per_file);
         suggestions.extend(file_suggestions);
     }
 
-    suggestions.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    suggestions.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     suggestions
 }
 
@@ -170,7 +183,11 @@ fn path_similarity(a: &str, b: &str) -> f64 {
     if max_len <= 1 {
         return 1.0;
     }
-    let shared = a_parts.iter().zip(b_parts.iter()).take_while(|(x, y)| x == y).count();
+    let shared = a_parts
+        .iter()
+        .zip(b_parts.iter())
+        .take_while(|(x, y)| x == y)
+        .count();
     shared as f64 / (max_len - 1) as f64 // -1 to exclude filename
 }
 
@@ -219,7 +236,10 @@ mod tests {
     fn shared_tags_boost_score() {
         let mut nodes = HashMap::new();
         nodes.insert("a.md".into(), node("a.md", &["rust", "api"], &[]));
-        nodes.insert("b.md".into(), node("b.md", &["rust", "api", "backend"], &[]));
+        nodes.insert(
+            "b.md".into(),
+            node("b.md", &["rust", "api", "backend"], &[]),
+        );
         nodes.insert("c.md".into(), node("c.md", &["design"], &[]));
 
         let suggestions = suggest_links(&nodes, &SuggestConfig::default());

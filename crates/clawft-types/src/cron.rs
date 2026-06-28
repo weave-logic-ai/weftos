@@ -177,11 +177,17 @@ pub struct CronJob {
     pub state: CronJobState,
 
     /// Creation timestamp (UTC).
-    #[serde(default = "default_epoch", deserialize_with = "deserialize_datetime_or_ms")]
+    #[serde(
+        default = "default_epoch",
+        deserialize_with = "deserialize_datetime_or_ms"
+    )]
     pub created_at: DateTime<Utc>,
 
     /// Last update timestamp (UTC).
-    #[serde(default = "default_epoch", deserialize_with = "deserialize_datetime_or_ms")]
+    #[serde(
+        default = "default_epoch",
+        deserialize_with = "deserialize_datetime_or_ms"
+    )]
     pub updated_at: DateTime<Utc>,
 
     /// If true, delete the job after its next successful run.
@@ -210,7 +216,9 @@ where
             .or_else(|_| s.parse::<DateTime<Utc>>())
             .map_err(de::Error::custom),
         serde_json::Value::Number(n) => {
-            let ms = n.as_i64().ok_or_else(|| de::Error::custom("expected i64"))?;
+            let ms = n
+                .as_i64()
+                .ok_or_else(|| de::Error::custom("expected i64"))?;
             Utc.timestamp_millis_opt(ms)
                 .single()
                 .ok_or_else(|| de::Error::custom(format!("invalid ms timestamp: {ms}")))
@@ -240,7 +248,9 @@ where
             .or_else(|_| s.parse::<DateTime<Utc>>().map(Some))
             .map_err(de::Error::custom),
         Some(serde_json::Value::Number(n)) => {
-            let ms = n.as_i64().ok_or_else(|| de::Error::custom("expected i64"))?;
+            let ms = n
+                .as_i64()
+                .ok_or_else(|| de::Error::custom("expected i64"))?;
             Ok(Utc.timestamp_millis_opt(ms).single())
         }
         _ => Err(de::Error::custom("expected string, integer, or null")),
@@ -445,6 +455,9 @@ mod tests {
             "updated_at": "2026-01-01T00:00:00Z"
         }"#;
         let job: CronJob = serde_json::from_str(json).unwrap();
-        assert_eq!(job.created_at, Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
+        assert_eq!(
+            job.created_at,
+            Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap()
+        );
     }
 }

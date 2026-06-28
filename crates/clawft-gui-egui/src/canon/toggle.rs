@@ -8,9 +8,9 @@ use std::borrow::Cow;
 
 use eframe::egui;
 
+use super::CanonWidget;
 use super::response::CanonResponse;
 use super::types::{Affordance, Confidence, IdentityUri, MutationAxis, Tooltip, VariantId};
-use super::CanonWidget;
 
 const IDENTITY: &str = "ui://toggle";
 
@@ -23,10 +23,8 @@ static AFFORDANCES_ACTIVE: &[Affordance] = &[Affordance {
 }];
 static AFFORDANCES_DISABLED: &[Affordance] = &[];
 
-static MUTATION_AXES: &[MutationAxis] = &[
-    MutationAxis::new("label-copy"),
-    MutationAxis::new("style"),
-];
+static MUTATION_AXES: &[MutationAxis] =
+    &[MutationAxis::new("label-copy"), MutationAxis::new("style")];
 
 /// Presentation variant. `Switch` uses `ui.toggle_value`'s default
 /// pressable-label rendering; `Checkbox` uses `egui::Checkbox`.

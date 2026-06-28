@@ -84,42 +84,41 @@ pub async fn load_config_raw(
     env: &dyn super::env::Environment,
 ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
     // Layer 1: weave.toml from project root (current directory).
-    let mut merged = load_weave_toml(fs).await.unwrap_or_else(|_| {
-        Value::Object(serde_json::Map::new())
-    });
+    let mut merged = load_weave_toml(fs)
+        .await
+        .unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
 
     // Layer 2: JSON config from discovery chain (overrides weave.toml).
     let home = fs.home_dir();
     let json_path = discover_config_path(env, home);
 
     if let Some(path) = json_path
-        && fs.exists(&path).await {
-            tracing::debug!(path = %path.display(), "loading JSON config");
-            match fs.read_to_string(&path).await {
-                Ok(contents) => {
-                    match serde_json::from_str::<Value>(&contents) {
-                        Ok(json_value) => {
-                            let normalized = normalize_keys(json_value);
-                            deep_merge(&mut merged, &normalized);
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                path = %path.display(),
-                                error = %e,
-                                "failed to parse JSON config, using weave.toml only"
-                            );
-                        }
-                    }
+        && fs.exists(&path).await
+    {
+        tracing::debug!(path = %path.display(), "loading JSON config");
+        match fs.read_to_string(&path).await {
+            Ok(contents) => match serde_json::from_str::<Value>(&contents) {
+                Ok(json_value) => {
+                    let normalized = normalize_keys(json_value);
+                    deep_merge(&mut merged, &normalized);
                 }
                 Err(e) => {
                     tracing::warn!(
                         path = %path.display(),
                         error = %e,
-                        "failed to read JSON config"
+                        "failed to parse JSON config, using weave.toml only"
                     );
                 }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "failed to read JSON config"
+                );
             }
         }
+    }
 
     // Layer 3: workspace JSON overlay from cwd `.clawft/config.json`.
     // Most-specific wins — when a kernel runs inside a workspace, the
@@ -179,7 +178,8 @@ async fn load_weave_toml(
         .await
         .map_err(|e| format!("failed to read weave.toml: {e}"))?;
 
-    let toml_value: toml::Value = contents.parse()
+    let toml_value: toml::Value = contents
+        .parse()
         .map_err(|e| format!("failed to parse weave.toml: {e}"))?;
 
     // Convert TOML Value to serde_json Value for uniform handling.
@@ -571,7 +571,10 @@ mod tests {
             .with_file(workspace_config_path(), "{ this is not json");
         let env = MockEnv::new();
         let merged = load_config_raw(&fs, &env).await.unwrap();
-        assert!(merged.is_object(), "loader returns ok despite parse failure");
+        assert!(
+            merged.is_object(),
+            "loader returns ok despite parse failure"
+        );
     }
 
     #[tokio::test]

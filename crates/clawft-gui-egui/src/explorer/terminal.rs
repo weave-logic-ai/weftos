@@ -222,17 +222,12 @@ mod imp {
             //    via Painter, so we allocate once and own a Rect.
             let avail = ui.available_size_before_wrap();
             let (cell_w, cell_h) = cell_metrics(ui);
-            let (rect, response) = ui.allocate_exact_size(
-                avail,
-                egui::Sense::click_and_drag(),
-            );
+            let (rect, response) = ui.allocate_exact_size(avail, egui::Sense::click_and_drag());
 
             // Persistent widget id so memory/focus survives re-paints.
             let widget_id = *self
                 .widget_id
-                .get_or_insert_with(|| {
-                    egui::Id::new(("weft-terminal", self.instance_seq))
-                });
+                .get_or_insert_with(|| egui::Id::new(("weft-terminal", self.instance_seq)));
 
             // Click → request focus so subsequent keys go here.
             if response.clicked() {
@@ -316,7 +311,8 @@ mod imp {
             // pings). We already poll output every 50ms, but the
             // animation needs frame ticks too.
             if response.has_focus() {
-                ui.ctx().request_repaint_after(std::time::Duration::from_millis(120));
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(120));
             }
 
             // 9. Schedule next output poll.
@@ -346,8 +342,7 @@ mod imp {
                 && let Some(pos) = ui.ctx().pointer_interact_pos()
                 && let Some((point, side)) = pixel_to_point(&self.term, rect, cell_w, cell_h, pos)
             {
-                self.term.selection =
-                    Some(Selection::new(SelectionType::Simple, point, side));
+                self.term.selection = Some(Selection::new(SelectionType::Simple, point, side));
                 self.dragging_selection = true;
             }
             // Drag → extend the selection's end anchor.
@@ -362,9 +357,7 @@ mod imp {
             // Release → leave the selection in place; clipboard read is
             // an explicit Ctrl/Cmd-C below. Drop empty selections so
             // `selection_to_string` doesn't return Some("").
-            if self.dragging_selection
-                && response.drag_stopped_by(egui::PointerButton::Primary)
-            {
+            if self.dragging_selection && response.drag_stopped_by(egui::PointerButton::Primary) {
                 self.dragging_selection = false;
                 if let Some(sel) = self.term.selection.as_ref()
                     && sel.is_empty()
@@ -411,8 +404,7 @@ mod imp {
                 && !text.is_empty()
             {
                 ui.ctx().output_mut(|o| {
-                    o.commands
-                        .push(egui::OutputCommand::CopyText(text));
+                    o.commands.push(egui::OutputCommand::CopyText(text));
                 });
             }
             if let Some(text) = paste_text
@@ -454,9 +446,8 @@ mod imp {
                         .and_then(Value::as_str)
                         .map(str::to_string);
                     if session_id.is_none() || output_path.is_none() {
-                        self.last_error = Some(
-                            "terminal.spawn reply missing session_id / output_path".into(),
-                        );
+                        self.last_error =
+                            Some("terminal.spawn reply missing session_id / output_path".into());
                         return;
                     }
                     self.session_id = session_id;
@@ -532,8 +523,7 @@ mod imp {
             let exit = obj.get("exit").and_then(Value::as_bool).unwrap_or(false);
             if !data_b64.is_empty() {
                 use base64::Engine;
-                match base64::engine::general_purpose::STANDARD.decode(data_b64.as_bytes())
-                {
+                match base64::engine::general_purpose::STANDARD.decode(data_b64.as_bytes()) {
                     Ok(bytes) => {
                         self.processor.advance(&mut self.term, &bytes);
                     }
@@ -609,12 +599,18 @@ mod imp {
     fn cell_metrics(ui: &egui::Ui) -> (f32, f32) {
         let style = ui.style().clone();
         let font_id = egui::TextStyle::Monospace.resolve(&style);
-        let cell_w = ui
-            .ctx()
-            .fonts_mut(|f| f.glyph_width(&font_id, 'M'));
+        let cell_w = ui.ctx().fonts_mut(|f| f.glyph_width(&font_id, 'M'));
         let cell_h = ui.text_style_height(&egui::TextStyle::Monospace);
-        let cell_w = if cell_w > 0.0 { cell_w } else { FALLBACK_CELL_W };
-        let cell_h = if cell_h > 0.0 { cell_h } else { FALLBACK_CELL_H };
+        let cell_w = if cell_w > 0.0 {
+            cell_w
+        } else {
+            FALLBACK_CELL_W
+        };
+        let cell_h = if cell_h > 0.0 {
+            cell_h
+        } else {
+            FALLBACK_CELL_H
+        };
         (cell_w, cell_h)
     }
 
@@ -627,8 +623,7 @@ mod imp {
     ) {
         let display_offset = term.grid().display_offset() as i32;
         let global_bg = color_for(&Color::Named(NamedColor::Background));
-        let font_id =
-            egui::FontId::new(cell_h * 0.85, egui::FontFamily::Monospace);
+        let font_id = egui::FontId::new(cell_h * 0.85, egui::FontFamily::Monospace);
 
         for indexed in term.grid().display_iter() {
             let cell = indexed.cell;
@@ -645,15 +640,16 @@ mod imp {
             if cell.flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
             }
-            let dim = cell
-                .flags
-                .intersects(Flags::DIM | Flags::DIM_BOLD);
+            let dim = cell.flags.intersects(Flags::DIM | Flags::DIM_BOLD);
             if dim {
                 fg = fg.linear_multiply(0.7);
             }
 
-            let cell_width =
-                if cell.flags.contains(Flags::WIDE_CHAR) { cell_w * 2.0 } else { cell_w };
+            let cell_width = if cell.flags.contains(Flags::WIDE_CHAR) {
+                cell_w * 2.0
+            } else {
+                cell_w
+            };
 
             // Background fill (skip when matches global so we save shapes).
             if bg != global_bg {
@@ -669,9 +665,7 @@ mod imp {
                 let bold = cell
                     .flags
                     .intersects(Flags::BOLD | Flags::BOLD_ITALIC | Flags::DIM_BOLD);
-                let italic = cell
-                    .flags
-                    .intersects(Flags::ITALIC | Flags::BOLD_ITALIC);
+                let italic = cell.flags.intersects(Flags::ITALIC | Flags::BOLD_ITALIC);
                 paint_glyph(
                     painter,
                     egui::pos2(x + cell_width * 0.5, y + cell_h * 0.5),
@@ -723,7 +717,13 @@ mod imp {
         const ITALIC_ANGLE: f32 = 0.165;
 
         if !italic {
-            painter.text(center, egui::Align2::CENTER_CENTER, c, font_id.clone(), color);
+            painter.text(
+                center,
+                egui::Align2::CENTER_CENTER,
+                c,
+                font_id.clone(),
+                color,
+            );
             if bold {
                 // Synthetic bold: re-paint with a 0.5 px x-shift so AA
                 // fills the gap rather than producing a hard double-stroke.
@@ -852,15 +852,11 @@ mod imp {
         cell_h: f32,
     ) {
         if let Some((x, y)) = cursor_screen_xy(term, rect, cell_w, cell_h) {
-            let r = egui::Rect::from_min_size(
-                egui::pos2(x, y),
-                egui::vec2(cell_w, cell_h),
-            );
+            let r = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(cell_w, cell_h));
             painter.rect_filled(
                 r,
                 0.0,
-                color_for(&Color::Named(NamedColor::Foreground))
-                    .linear_multiply(0.65),
+                color_for(&Color::Named(NamedColor::Foreground)).linear_multiply(0.65),
             );
         }
     }
@@ -873,17 +869,13 @@ mod imp {
         cell_h: f32,
     ) {
         if let Some((x, y)) = cursor_screen_xy(term, rect, cell_w, cell_h) {
-            let r = egui::Rect::from_min_size(
-                egui::pos2(x, y),
-                egui::vec2(cell_w, cell_h),
-            );
+            let r = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(cell_w, cell_h));
             painter.rect_stroke(
                 r,
                 0.0,
                 egui::Stroke::new(
                     1.0,
-                    color_for(&Color::Named(NamedColor::Foreground))
-                        .linear_multiply(0.45),
+                    color_for(&Color::Named(NamedColor::Foreground)).linear_multiply(0.45),
                 ),
                 egui::StrokeKind::Inside,
             );
@@ -964,9 +956,7 @@ mod imp {
             let r = i / 36;
             let g = (i / 6) % 6;
             let b = i % 6;
-            let conv = |v: u8| -> u8 {
-                if v == 0 { 0 } else { 55 + v * 40 }
-            };
+            let conv = |v: u8| -> u8 { if v == 0 { 0 } else { 55 + v * 40 } };
             return egui::Color32::from_rgb(conv(r), conv(g), conv(b));
         }
         // 232-255: grayscale ramp
@@ -1099,11 +1089,7 @@ mod imp {
         }
     }
 
-    fn paint_header(
-        ui: &mut egui::Ui,
-        shell: &Option<String>,
-        session_id: &Option<String>,
-    ) {
+    fn paint_header(ui: &mut egui::Ui, shell: &Option<String>, session_id: &Option<String>) {
         ui.horizontal(|ui| {
             ui.heading("Terminal");
             ui.separator();
@@ -1223,8 +1209,7 @@ mod imp {
             // alacritty's default is 10_000; we pin it explicitly.
             let t = Terminal::default();
             assert!(
-                t.term.history_size() == 0
-                    || t.term.history_size() <= SCROLLBACK_LINES,
+                t.term.history_size() == 0 || t.term.history_size() <= SCROLLBACK_LINES,
                 "history_size grows lazily; bound is what matters"
             );
             // The bound itself is encoded in our SCROLLBACK_LINES const,
@@ -1269,9 +1254,8 @@ mod imp {
                 egui::pos2(0.0, 0.0),
                 egui::vec2(cell_w * 80.0, cell_h * 24.0),
             );
-            let (point, side) =
-                pixel_to_point(&t.term, rect, cell_w, cell_h, egui::pos2(1.0, 1.0))
-                    .expect("origin must map");
+            let (point, side) = pixel_to_point(&t.term, rect, cell_w, cell_h, egui::pos2(1.0, 1.0))
+                .expect("origin must map");
             assert_eq!(point.line.0, 0);
             assert_eq!(point.column.0, 0);
             assert_eq!(side, Side::Left);

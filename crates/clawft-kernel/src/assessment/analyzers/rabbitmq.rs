@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::assessment::analyzer::{AnalysisContext, Analyzer};
 use crate::assessment::Finding;
+use crate::assessment::analyzer::{AnalysisContext, Analyzer};
 
 /// Analyzer that identifies RabbitMQ configuration, AMQP connections, and messaging topology.
 pub struct RabbitMQAnalyzer;
@@ -32,10 +32,7 @@ impl Analyzer for RabbitMQAnalyzer {
         for path in files {
             let rel = path.strip_prefix(project).unwrap_or(path);
             let rel_str = rel.display().to_string();
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
             // rabbitmq.conf
             if name == "rabbitmq.conf" {
@@ -242,8 +239,7 @@ fn extract_definitions_json(content: &str, rel_str: &str, findings: &mut Vec<Fin
                             category: "messaging".into(),
                             file: rel_str.to_string(),
                             line: None,
-                            message: "RabbitMQ guest user present (default credentials)"
-                                .into(),
+                            message: "RabbitMQ guest user present (default credentials)".into(),
                         });
                     }
                 }
@@ -254,15 +250,16 @@ fn extract_definitions_json(content: &str, rel_str: &str, findings: &mut Vec<Fin
         // Bindings: look for source/destination
         if section == "bindings"
             && let Some(src) = extract_json_string_field(trimmed, "source")
-                && let Some(dst) = extract_json_string_field(trimmed, "destination") {
-                    findings.push(Finding {
-                        severity: "info".into(),
-                        category: "messaging".into(),
-                        file: rel_str.to_string(),
-                        line: None,
-                        message: format!("RabbitMQ binding: {src} -> {dst}"),
-                    });
-                }
+            && let Some(dst) = extract_json_string_field(trimmed, "destination")
+        {
+            findings.push(Finding {
+                severity: "info".into(),
+                category: "messaging".into(),
+                file: rel_str.to_string(),
+                line: None,
+                message: format!("RabbitMQ binding: {src} -> {dst}"),
+            });
+        }
     }
 }
 
@@ -325,9 +322,7 @@ fn extract_compose_rabbitmq(content: &str, rel_str: &str, findings: &mut Vec<Fin
                             category: "messaging".into(),
                             file: rel_str.to_string(),
                             line: None,
-                            message: format!(
-                                "RabbitMQ Docker service '{svc}' image: {image}"
-                            ),
+                            message: format!("RabbitMQ Docker service '{svc}' image: {image}"),
                         });
                     }
                 }
@@ -345,17 +340,16 @@ fn extract_compose_rabbitmq(content: &str, rel_str: &str, findings: &mut Vec<Fin
                     .trim_matches('\'');
                 if val.contains(':')
                     && val.chars().all(|c| c.is_ascii_digit() || c == ':')
-                    && let Some(ref svc) = current_service {
-                        findings.push(Finding {
-                            severity: "info".into(),
-                            category: "messaging".into(),
-                            file: rel_str.to_string(),
-                            line: None,
-                            message: format!(
-                                "RabbitMQ service '{svc}' port mapping: {val}"
-                            ),
-                        });
-                    }
+                    && let Some(ref svc) = current_service
+                {
+                    findings.push(Finding {
+                        severity: "info".into(),
+                        category: "messaging".into(),
+                        file: rel_str.to_string(),
+                        line: None,
+                        message: format!("RabbitMQ service '{svc}' port mapping: {val}"),
+                    });
+                }
             }
 
             // Environment section
@@ -421,11 +415,7 @@ fn scan_file_content(content: &str, rel_str: &str, findings: &mut Vec<Finding>) 
         }
 
         // Environment variable references
-        for var in &[
-            "RABBITMQ_HOST",
-            "RABBITMQ_PORT",
-            "AMQP_URL",
-        ] {
+        for var in &["RABBITMQ_HOST", "RABBITMQ_PORT", "AMQP_URL"] {
             if line.contains(var) {
                 findings.push(Finding {
                     severity: "info".into(),

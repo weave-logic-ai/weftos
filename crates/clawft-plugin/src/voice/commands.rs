@@ -175,7 +175,9 @@ mod tests {
     #[test]
     fn exact_match_list_files_with_suffix() {
         let registry = test_registry();
-        let cmd = registry.match_command("list files in the current directory").unwrap();
+        let cmd = registry
+            .match_command("list files in the current directory")
+            .unwrap();
         assert_eq!(cmd.tool, "list_directory");
     }
 

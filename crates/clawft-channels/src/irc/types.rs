@@ -129,8 +129,7 @@ pub fn validate_config(config: &IrcAdapterConfig) -> Result<(), String> {
                 ch
             ));
         }
-        sanitize_channel_name(ch)
-            .map_err(|e| format!("irc adapter: invalid channel name: {e}"))?;
+        sanitize_channel_name(ch).map_err(|e| format!("irc adapter: invalid channel name: {e}"))?;
     }
 
     Ok(())
@@ -149,8 +148,7 @@ pub fn sanitize_channel_name(name: &str) -> Result<&str, String> {
     // Characters banned in the body of a channel name.
     // Note: `#` and `&` are allowed as the leading prefix only.
     const BANNED_CHARS: &[char] = &[
-        ';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '!',
-        '\n', '\r', '\0', ' ', ',',
+        ';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '!', '\n', '\r', '\0', ' ', ',',
     ];
 
     // Check all characters after the first (prefix) character.
@@ -180,16 +178,12 @@ pub fn sanitize_irc_argument(arg: &str) -> Result<&str, String> {
 
     // IRC protocol injection characters + shell metacharacters.
     const BANNED_CHARS: &[char] = &[
-        ';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '!',
-        '\n', '\r', '\0',
+        ';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '!', '\n', '\r', '\0',
     ];
 
     for ch in BANNED_CHARS {
         if arg.contains(*ch) {
-            return Err(format!(
-                "argument contains forbidden character: {:?}",
-                ch
-            ));
+            return Err(format!("argument contains forbidden character: {:?}", ch));
         }
     }
 

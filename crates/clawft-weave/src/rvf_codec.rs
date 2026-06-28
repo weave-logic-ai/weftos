@@ -18,7 +18,7 @@
 // Public API used by daemon, client, and tests.
 #![allow(dead_code)]
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 
 /// A parsed RVF frame: segment header + owned payload.
@@ -145,9 +145,7 @@ mod tests {
     ///
     /// Uses `tokio::io::duplex` which creates a bidirectional in-memory
     /// stream pair. Data written to `tx` can be read from `rx`.
-    async fn round_trip_frames(
-        frames: &[(u8, Vec<u8>, SegmentFlags, u64)],
-    ) -> Vec<RvfFrame> {
+    async fn round_trip_frames(frames: &[(u8, Vec<u8>, SegmentFlags, u64)]) -> Vec<RvfFrame> {
         let (tx, rx) = tokio::io::duplex(64 * 1024);
 
         // Writer task: send all frames then drop the writer to signal EOF.
@@ -167,11 +165,7 @@ mod tests {
         let read_handle = tokio::spawn(async move {
             let mut reader = RvfFrameReader::new(rx);
             let mut result = Vec::new();
-            while let Some(frame) = reader
-                .read_frame()
-                .await
-                .expect("read_frame failed")
-            {
+            while let Some(frame) = reader.read_frame().await.expect("read_frame failed") {
                 result.push(frame);
             }
             result
@@ -244,14 +238,24 @@ mod tests {
     #[tokio::test]
     async fn multiple_frames() {
         let frames_in: Vec<(u8, Vec<u8>, SegmentFlags, u64)> = vec![
-            (SegmentType::Meta as u8, b"first".to_vec(), SegmentFlags::empty(), 1),
+            (
+                SegmentType::Meta as u8,
+                b"first".to_vec(),
+                SegmentFlags::empty(),
+                1,
+            ),
             (
                 SegmentType::Meta as u8,
                 b"second".to_vec(),
                 SegmentFlags::empty().with(SegmentFlags::SEALED),
                 2,
             ),
-            (SegmentType::Meta as u8, b"third".to_vec(), SegmentFlags::empty(), 3),
+            (
+                SegmentType::Meta as u8,
+                b"third".to_vec(),
+                SegmentFlags::empty(),
+                3,
+            ),
         ];
 
         let frames_out = round_trip_frames(&frames_in).await;

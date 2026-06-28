@@ -41,8 +41,7 @@ pub fn validate_allowed_tools(
     if declared.is_empty() {
         return Ok(());
     }
-    let granted_set: BTreeSet<&str> =
-        granted.iter().map(String::as_str).collect();
+    let granted_set: BTreeSet<&str> = granted.iter().map(String::as_str).collect();
 
     let mut denied: BTreeSet<String> = BTreeSet::new();
     for tool in declared {
@@ -76,7 +75,11 @@ mod tests {
     #[test]
     fn all_granted_succeeds() {
         let declared = vec!["Read".to_string(), "Edit".to_string()];
-        let granted = vec!["Read".to_string(), "Edit".to_string(), "WebSearch".to_string()];
+        let granted = vec![
+            "Read".to_string(),
+            "Edit".to_string(),
+            "WebSearch".to_string(),
+        ];
         let r = validate_allowed_tools("safe_skill", &declared, &granted);
         assert!(r.is_ok());
     }

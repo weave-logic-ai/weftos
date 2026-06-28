@@ -205,8 +205,7 @@ impl ProbeConfig {
     ) -> Self {
         match model {
             Some(m) if m.is_trained() => {
-                let (degraded, failed) =
-                    m.predict(service_type, history_depth, recent_latency_ms);
+                let (degraded, failed) = m.predict(service_type, history_depth, recent_latency_ms);
                 Self {
                     failure_threshold: failed,
                     success_threshold: degraded.max(1),
@@ -460,14 +459,8 @@ mod tests {
 
             assert_eq!(from_none.failure_threshold, defaults.failure_threshold);
             assert_eq!(from_none.success_threshold, defaults.success_threshold);
-            assert_eq!(
-                from_untrained.failure_threshold,
-                defaults.failure_threshold
-            );
-            assert_eq!(
-                from_untrained.success_threshold,
-                defaults.success_threshold
-            );
+            assert_eq!(from_untrained.failure_threshold, defaults.failure_threshold);
+            assert_eq!(from_untrained.success_threshold, defaults.success_threshold);
         }
 
         #[test]
@@ -509,9 +502,13 @@ mod tests {
         fn probe_result_serde_roundtrip() {
             let results = vec![
                 ProbeResult::Live,
-                ProbeResult::NotLive { reason: "oom".into() },
+                ProbeResult::NotLive {
+                    reason: "oom".into(),
+                },
                 ProbeResult::Ready,
-                ProbeResult::NotReady { reason: "init".into() },
+                ProbeResult::NotReady {
+                    reason: "init".into(),
+                },
             ];
             for result in results {
                 let json = serde_json::to_string(&result).unwrap();
@@ -553,12 +550,27 @@ mod tests {
             let mut state = ProbeState::default();
 
             // 2 failures: no restart
-            assert!(!state.record_liveness(&ProbeResult::NotLive { reason: "hang".into() }, &config));
-            assert!(!state.record_liveness(&ProbeResult::NotLive { reason: "hang".into() }, &config));
+            assert!(!state.record_liveness(
+                &ProbeResult::NotLive {
+                    reason: "hang".into()
+                },
+                &config
+            ));
+            assert!(!state.record_liveness(
+                &ProbeResult::NotLive {
+                    reason: "hang".into()
+                },
+                &config
+            ));
             assert!(state.is_live);
 
             // 3rd failure: restart
-            assert!(state.record_liveness(&ProbeResult::NotLive { reason: "hang".into() }, &config));
+            assert!(state.record_liveness(
+                &ProbeResult::NotLive {
+                    reason: "hang".into()
+                },
+                &config
+            ));
             assert!(!state.is_live);
         }
 
@@ -570,8 +582,22 @@ mod tests {
             };
             let mut state = ProbeState::default();
 
-            assert!(state.record_readiness(&ProbeResult::NotReady { reason: "init".into() }, &config).is_none());
-            let change = state.record_readiness(&ProbeResult::NotReady { reason: "init".into() }, &config);
+            assert!(
+                state
+                    .record_readiness(
+                        &ProbeResult::NotReady {
+                            reason: "init".into()
+                        },
+                        &config
+                    )
+                    .is_none()
+            );
+            let change = state.record_readiness(
+                &ProbeResult::NotReady {
+                    reason: "init".into(),
+                },
+                &config,
+            );
             assert_eq!(change, Some(false)); // should be removed
             assert!(!state.is_ready);
         }
@@ -586,7 +612,12 @@ mod tests {
             let mut state = ProbeState::default();
 
             // Make it unready
-            state.record_readiness(&ProbeResult::NotReady { reason: "init".into() }, &config);
+            state.record_readiness(
+                &ProbeResult::NotReady {
+                    reason: "init".into(),
+                },
+                &config,
+            );
             assert!(!state.is_ready);
 
             // Recover
@@ -605,11 +636,19 @@ mod tests {
             let mut state = ProbeState::default();
 
             // One failure shouldn't change anything
-            assert!(state.record_readiness(&ProbeResult::NotReady { reason: "x".into() }, &config).is_none());
+            assert!(
+                state
+                    .record_readiness(&ProbeResult::NotReady { reason: "x".into() }, &config)
+                    .is_none()
+            );
             assert!(state.is_ready);
 
             // One success resets failures
-            assert!(state.record_readiness(&ProbeResult::Ready, &config).is_none());
+            assert!(
+                state
+                    .record_readiness(&ProbeResult::Ready, &config)
+                    .is_none()
+            );
             assert!(state.is_ready);
         }
 

@@ -16,13 +16,15 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
 use clawft_kernel::causal::{CausalEdgeType, CausalGraph, NodeId as CausalNodeId};
-use clawft_kernel::crossref::{CrossRef, CrossRefStore, CrossRefType, StructureTag, UniversalNodeId};
+use clawft_kernel::crossref::{
+    CrossRef, CrossRefStore, CrossRefType, StructureTag, UniversalNodeId,
+};
 use clawft_kernel::hnsw_service::HnswService;
 
+use crate::GraphifyError;
 use crate::entity::EntityId;
 use crate::model::{Entity, GodNode, KnowledgeGraph};
 use crate::relationship::{Confidence, RelationType, Relationship};
-use crate::GraphifyError;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -252,11 +254,8 @@ impl GraphifyBridge {
             "label": entity.label,
             "source_file": entity.source_file,
         });
-        self.hnsw.insert(
-            entity.id.to_hex(),
-            embedding,
-            hnsw_metadata,
-        );
+        self.hnsw
+            .insert(entity.id.to_hex(), embedding, hnsw_metadata);
 
         // 3. Register CrossRef (entity -> graphify namespace).
         let uni_id = entity_to_universal_node_id(&entity.id, hlc_timestamp);
@@ -285,10 +284,7 @@ impl GraphifyBridge {
             .get(&rel.source)
             .map(|r| *r.value())
             .ok_or_else(|| {
-                GraphifyError::BridgeError(format!(
-                    "source entity {} not ingested",
-                    rel.source,
-                ))
+                GraphifyError::BridgeError(format!("source entity {} not ingested", rel.source,))
             })?;
 
         let tgt_causal = self
@@ -296,10 +292,7 @@ impl GraphifyBridge {
             .get(&rel.target)
             .map(|r| *r.value())
             .ok_or_else(|| {
-                GraphifyError::BridgeError(format!(
-                    "target entity {} not ingested",
-                    rel.target,
-                ))
+                GraphifyError::BridgeError(format!("target entity {} not ingested", rel.target,))
             })?;
 
         let edge_type = relation_to_causal_edge_type(&rel.relation_type);
@@ -491,8 +484,8 @@ impl std::fmt::Debug for GraphifyBridge {
 // GraphifyAnalyzer (9th assessment analyzer)
 // ---------------------------------------------------------------------------
 
-use clawft_kernel::assessment::analyzer::{AnalysisContext, Analyzer};
 use clawft_kernel::assessment::Finding;
+use clawft_kernel::assessment::analyzer::{AnalysisContext, Analyzer};
 
 /// The 9th analyzer in the WeftOS assessment pipeline.
 ///
@@ -523,7 +516,12 @@ impl Analyzer for GraphifyAnalyzer {
     }
 
     fn categories(&self) -> &[&str] {
-        &["architecture", "dependencies", "complexity", "knowledge-gaps"]
+        &[
+            "architecture",
+            "dependencies",
+            "complexity",
+            "knowledge-gaps",
+        ]
     }
 
     fn analyze(
@@ -570,11 +568,7 @@ pub fn analyze_kg_to_findings(kg: &KnowledgeGraph) -> Vec<Finding> {
 
     // God nodes -> "high complexity" findings.
     for gn in kg.god_nodes(10) {
-        let severity = if gn.degree > 20 {
-            "warning"
-        } else {
-            "info"
-        };
+        let severity = if gn.degree > 20 { "warning" } else { "info" };
         findings.push(Finding {
             severity: severity.into(),
             category: "complexity".into(),
@@ -596,8 +590,7 @@ pub fn analyze_kg_to_findings(kg: &KnowledgeGraph) -> Vec<Finding> {
             line: None,
             message: format!(
                 "Unexpected dependency: '{}' (community {:?}) -> '{}' (community {:?}).",
-                sc.source_label, sc.source_community,
-                sc.target_label, sc.target_community,
+                sc.source_label, sc.source_community, sc.target_label, sc.target_community,
             ),
         });
     }
@@ -653,8 +646,8 @@ impl KnowledgeGraph {
 
     /// Find cross-community connections (surprising dependencies).
     pub fn surprising_connections(&self, top_n: usize) -> Vec<crate::model::SurprisingConnection> {
-        use std::collections::HashMap as HM;
         use crate::model::SurprisingConnection;
+        use std::collections::HashMap as HM;
 
         let communities = match &self.communities {
             Some(c) => c,
@@ -906,8 +899,9 @@ mod tests {
 
         let findings = analyze_kg_to_findings(&kg);
         assert!(
-            findings.iter().any(|f| f.category == "complexity"
-                && f.message.contains("hub")),
+            findings
+                .iter()
+                .any(|f| f.category == "complexity" && f.message.contains("hub")),
             "Expected a god-node finding for 'hub'",
         );
     }

@@ -87,11 +87,7 @@ impl<P: Platform> MemoryStore<P> {
     /// of inheriting the platform's default. Public so workspace-level
     /// integration tests outside `clawft-core` can compose an isolated
     /// `AgentLoop` without touching the user's `~/.clawft/workspace`.
-    pub fn with_paths(
-        memory_path: PathBuf,
-        history_path: PathBuf,
-        platform: Arc<P>,
-    ) -> Self {
+    pub fn with_paths(memory_path: PathBuf, history_path: PathBuf, platform: Arc<P>) -> Self {
         Self {
             memory_path,
             history_path,
@@ -492,10 +488,7 @@ mod tests {
         // First write must create the workspace .clawft/memory/ dir.
         store.write_long_term("workspace fact").await.unwrap();
         assert!(expected_dir.is_dir());
-        assert_eq!(
-            store.read_long_term().await.unwrap(),
-            "workspace fact"
-        );
+        assert_eq!(store.read_long_term().await.unwrap(), "workspace fact");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

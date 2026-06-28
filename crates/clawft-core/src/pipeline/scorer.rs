@@ -216,9 +216,10 @@ impl FitnessScorer {
     /// and whether the response contains tool results.
     fn score_tool_accuracy(&self, request: &ChatRequest, response: &LlmResponse) -> f32 {
         let has_tools = !request.tools.is_empty();
-        let has_tool_use = response.content.iter().any(|b| {
-            matches!(b, ContentBlock::ToolUse { .. })
-        });
+        let has_tool_use = response
+            .content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolUse { .. }));
 
         if !has_tools {
             // No tools defined -- full marks (not applicable)
@@ -267,7 +268,10 @@ impl FitnessScorer {
         if sentences.len() > 3 {
             let unique_count = {
                 let mut seen = std::collections::HashSet::new();
-                sentences.iter().filter(|s| seen.insert(s.to_lowercase())).count()
+                sentences
+                    .iter()
+                    .filter(|s| seen.insert(s.to_lowercase()))
+                    .count()
             };
             let uniqueness = unique_count as f32 / sentences.len() as f32;
             if uniqueness < 0.5 {
@@ -329,17 +333,14 @@ fn extract_text(response: &LlmResponse) -> String {
 /// relevance checking.
 fn extract_request_keywords(request: &ChatRequest) -> Vec<String> {
     let stop_words: &[&str] = &[
-        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "will", "would", "could",
-        "should", "may", "might", "can", "shall", "to", "of", "in", "for",
-        "on", "with", "at", "by", "from", "as", "into", "through", "during",
-        "before", "after", "above", "below", "and", "but", "or", "nor", "not",
-        "so", "yet", "both", "either", "neither", "each", "every", "all",
-        "any", "few", "more", "most", "other", "some", "such", "no", "only",
-        "own", "same", "than", "too", "very", "just", "because", "if", "when",
-        "i", "me", "my", "you", "your", "it", "its", "we", "us", "they",
-        "them", "this", "that", "these", "those", "what", "which", "who",
-        "how", "please", "help",
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+        "do", "does", "did", "will", "would", "could", "should", "may", "might", "can", "shall",
+        "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "through",
+        "during", "before", "after", "above", "below", "and", "but", "or", "nor", "not", "so",
+        "yet", "both", "either", "neither", "each", "every", "all", "any", "few", "more", "most",
+        "other", "some", "such", "no", "only", "own", "same", "than", "too", "very", "just",
+        "because", "if", "when", "i", "me", "my", "you", "your", "it", "its", "we", "us", "they",
+        "them", "this", "that", "these", "those", "what", "which", "who", "how", "please", "help",
     ];
 
     request
@@ -349,7 +350,10 @@ fn extract_request_keywords(request: &ChatRequest) -> Vec<String> {
         .flat_map(|m| {
             m.content
                 .split_whitespace()
-                .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+                .map(|w| {
+                    w.trim_matches(|c: char| !c.is_alphanumeric())
+                        .to_lowercase()
+                })
                 .filter(|w| w.len() > 2 && !stop_words.contains(&w.as_str()))
                 .collect::<Vec<_>>()
         })
@@ -530,7 +534,11 @@ mod tests {
         let scorer = FitnessScorer::new();
         let score = scorer.score(&make_request(), &make_response());
 
-        assert!(score.overall > 0.5, "good response should score > 0.5, got {}", score.overall);
+        assert!(
+            score.overall > 0.5,
+            "good response should score > 0.5, got {}",
+            score.overall
+        );
         assert!(score.relevance > 0.5);
         assert!(score.coherence > 0.5);
     }
@@ -541,7 +549,11 @@ mod tests {
         let score = scorer.score(&make_request(), &make_empty_response());
 
         // Empty response: task_completion=0, coherence=0
-        assert!(score.overall < 0.5, "empty response should score < 0.5, got {}", score.overall);
+        assert!(
+            score.overall < 0.5,
+            "empty response should score < 0.5, got {}",
+            score.overall
+        );
     }
 
     #[test]
@@ -553,7 +565,8 @@ mod tests {
         assert!(
             score.overall < good_score.overall,
             "error response ({}) should score lower than good response ({})",
-            score.overall, good_score.overall
+            score.overall,
+            good_score.overall
         );
     }
 
@@ -566,7 +579,8 @@ mod tests {
         assert!(
             score.overall < good_score.overall,
             "truncated response ({}) should score lower than good response ({})",
-            score.overall, good_score.overall
+            score.overall,
+            good_score.overall
         );
     }
 
@@ -614,7 +628,11 @@ mod tests {
             metadata: HashMap::new(),
         };
         let efficiency = scorer.score_efficiency(&resp);
-        assert!(efficiency < 0.5, "suspiciously short should score low, got {}", efficiency);
+        assert!(
+            efficiency < 0.5,
+            "suspiciously short should score low, got {}",
+            efficiency
+        );
     }
 
     #[test]
@@ -635,7 +653,8 @@ mod tests {
         assert!(
             (score.overall - score.relevance).abs() < 0.01,
             "overall ({}) should match relevance ({}) with task_completion-only weights",
-            score.overall, score.relevance
+            score.overall,
+            score.relevance
         );
     }
 
@@ -687,7 +706,11 @@ mod tests {
             metadata: HashMap::new(),
         };
         let coherence = scorer.score_coherence(&resp);
-        assert!(coherence < 1.0, "wall of text should reduce coherence, got {}", coherence);
+        assert!(
+            coherence < 1.0,
+            "wall of text should reduce coherence, got {}",
+            coherence
+        );
     }
 
     #[test]
@@ -708,6 +731,10 @@ mod tests {
             metadata: HashMap::new(),
         };
         let coherence = scorer.score_coherence(&resp);
-        assert!(coherence >= 1.0, "structured response should score high, got {}", coherence);
+        assert!(
+            coherence >= 1.0,
+            "structured response should score high, got {}",
+            coherence
+        );
     }
 }

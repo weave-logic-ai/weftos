@@ -3,8 +3,8 @@
 //! Produces aesthetically optimal top-down tree layouts in O(n) time.
 //! Each node is centered over its children with minimum sibling spacing.
 
-use std::collections::HashMap;
 use crate::entity::EntityId;
+use std::collections::HashMap;
 
 /// A positioned tree node.
 #[derive(Debug, Clone)]
@@ -81,10 +81,7 @@ pub fn layout(
             modifier: 0.0,
         });
 
-        let child_ids: Vec<EntityId> = children_map
-            .get(id)
-            .cloned()
-            .unwrap_or_default();
+        let child_ids: Vec<EntityId> = children_map.get(id).cloned().unwrap_or_default();
 
         let mut child_indices = Vec::new();
         for (i, child_id) in child_ids.iter().enumerate() {
@@ -144,7 +141,13 @@ fn first_walk(nodes: &mut Vec<TreeNode>, v: usize, config: &TreeConfig) {
     }
 }
 
-fn second_walk(nodes: &mut Vec<TreeNode>, v: usize, modifier: f64, depth: usize, config: &TreeConfig) {
+fn second_walk(
+    nodes: &mut Vec<TreeNode>,
+    v: usize,
+    modifier: f64,
+    depth: usize,
+    config: &TreeConfig,
+) {
     nodes[v].x = nodes[v].prelim + modifier;
     nodes[v].y = depth as f64 * config.level_spacing;
 

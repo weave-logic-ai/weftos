@@ -8,18 +8,16 @@ use std::borrow::Cow;
 
 use eframe::egui;
 
+use super::CanonWidget;
 use super::response::CanonResponse;
 use super::types::{Affordance, Confidence, IdentityUri, MutationAxis, Tooltip, VariantId};
-use super::CanonWidget;
 
 const IDENTITY: &str = "ui://grid";
 
 static AFFORDANCES_NONE: &[Affordance] = &[];
 
-static MUTATION_AXES: &[MutationAxis] = &[
-    MutationAxis::new("num-columns"),
-    MutationAxis::new("gap"),
-];
+static MUTATION_AXES: &[MutationAxis] =
+    &[MutationAxis::new("num-columns"), MutationAxis::new("gap")];
 
 /// Two-axis regular layout. Takes a child-builder closure that is
 /// invoked inside `egui::Grid::new(id).show(...)`. The closure is the

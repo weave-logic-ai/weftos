@@ -3,9 +3,9 @@
 //! Provides endpoints for reading and writing the application configuration.
 
 use axum::{
+    Json, Router,
     extract::State,
     routing::{get, put},
-    Json, Router,
 };
 
 use super::ApiState;

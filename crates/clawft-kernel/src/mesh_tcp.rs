@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::mesh::{MeshError, MeshStream, MeshTransport, TransportListener, MAX_MESSAGE_SIZE};
+use crate::mesh::{MAX_MESSAGE_SIZE, MeshError, MeshStream, MeshTransport, TransportListener};
 
 // ── TcpMeshStream ───────────────────────────────────────────────
 

@@ -8,7 +8,9 @@ pub fn show(ui: &mut egui::Ui, snap: &Snapshot) {
     ui.separator();
 
     let text = match &snap.status {
-        Some(v) => serde_json::to_string_pretty(v).unwrap_or_else(|e| format!("// serialize error: {e}")),
+        Some(v) => {
+            serde_json::to_string_pretty(v).unwrap_or_else(|e| format!("// serialize error: {e}"))
+        }
         None => "// daemon offline — no status yet".to_string(),
     };
 

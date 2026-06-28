@@ -203,7 +203,10 @@ pub struct CostBudgetConfig {
     /// Max cumulative LLM iterations (round-trips) per conversation.
     /// Default `30`. This counts every `pipeline.complete` call inside
     /// `run_tool_loop`, summed across every `handle_turn` for the conv.
-    #[serde(default = "default_max_iterations_per_conv", alias = "maxIterationsPerConv")]
+    #[serde(
+        default = "default_max_iterations_per_conv",
+        alias = "maxIterationsPerConv"
+    )]
     pub max_iterations_per_conv: u32,
 }
 

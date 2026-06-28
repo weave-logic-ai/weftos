@@ -10,7 +10,7 @@
 use eframe::egui;
 use serde_json::Value;
 
-use super::{Explorer, TreeNode, ACTIVITY_WINDOW};
+use super::{ACTIVITY_WINDOW, Explorer, TreeNode};
 
 /// The substrate root — children at depth-1 below this are
 /// **node-ids** (`n-<6-hex>` BLAKE3 prefixes per the node-identity
@@ -233,8 +233,8 @@ fn render_node(
             // Expand/collapse arrow. Clicking fires a list request if
             // we haven't cached children for this prefix yet.
             let arrow = if is_expanded { "▾" } else { "▸" };
-            let arrow_resp = ui
-                .add(egui::Button::new(egui::RichText::new(arrow).monospace()).frame(false));
+            let arrow_resp =
+                ui.add(egui::Button::new(egui::RichText::new(arrow).monospace()).frame(false));
             if arrow_resp.clicked() {
                 if is_expanded {
                     ex.expanded.remove(prefix);
@@ -424,10 +424,7 @@ pub fn parse_list_response(v: &Value) -> Vec<TreeNode> {
                 .get("has_value")
                 .and_then(|b| b.as_bool())
                 .unwrap_or(false);
-            let child_count = c
-                .get("child_count")
-                .and_then(|n| n.as_u64())
-                .unwrap_or(0);
+            let child_count = c.get("child_count").and_then(|n| n.as_u64()).unwrap_or(0);
             Some(TreeNode {
                 path,
                 has_value,

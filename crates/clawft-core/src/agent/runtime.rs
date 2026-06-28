@@ -100,16 +100,8 @@ impl<P: Platform> AgentRuntime<P> {
     ) -> Self {
         let agent_id = agent_id.into();
         let sessions_dir = workspace.join("sessions").join(&agent_id);
-        let sessions = Arc::new(SessionManager::with_dir(
-            platform.clone(),
-            sessions_dir,
-        ));
-        let context = ContextBuilder::new(
-            config.clone(),
-            memory,
-            skills,
-            platform,
-        );
+        let sessions = Arc::new(SessionManager::with_dir(platform.clone(), sessions_dir));
+        let context = ContextBuilder::new(config.clone(), memory, skills, platform);
         let tools = Arc::new(ToolRegistry::new());
         Self {
             agent_id,
@@ -173,8 +165,7 @@ impl<P: Platform> AgentRuntime<P> {
     /// other clones of the inner `Arc` exist; call BEFORE constructing
     /// dependent components.
     pub fn tools_mut(&mut self) -> &mut ToolRegistry {
-        Arc::get_mut(&mut self.tools)
-            .expect("AgentRuntime::tools_mut: registry already shared")
+        Arc::get_mut(&mut self.tools).expect("AgentRuntime::tools_mut: registry already shared")
     }
 
     /// Per-agent agents config (model, max_tokens, workspace).
@@ -221,8 +212,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let root = std::env::temp_dir()
-            .join(format!("clawft-runtime-iso-{pid}-{nanos}"));
+        let root = std::env::temp_dir().join(format!("clawft-runtime-iso-{pid}-{nanos}"));
         let ws_a = root.join("agent-a");
         let ws_b = root.join("agent-b");
         std::fs::create_dir_all(ws_a.join("sessions").join("agent-a")).unwrap();
@@ -252,19 +242,11 @@ mod tests {
         assert!(!Arc::ptr_eq(rt_a.tools(), rt_b.tools()));
 
         // Write a session under agent-a; agent-b never sees it.
-        let mut session_a = rt_a
-            .sessions()
-            .get_or_create("test:chat-a")
-            .await
-            .unwrap();
+        let mut session_a = rt_a.sessions().get_or_create("test:chat-a").await.unwrap();
         session_a.add_message("user", "hello from a", None);
         rt_a.sessions().save_session(&session_a).await.unwrap();
 
-        let mut session_b = rt_b
-            .sessions()
-            .get_or_create("test:chat-b")
-            .await
-            .unwrap();
+        let mut session_b = rt_b.sessions().get_or_create("test:chat-b").await.unwrap();
         session_b.add_message("user", "hello from b", None);
         rt_b.sessions().save_session(&session_b).await.unwrap();
 
@@ -292,21 +274,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let sessions = Arc::new(SessionManager::with_dir(platform.clone(), dir.clone()));
         let cfg = test_config("custom");
-        let context = ContextBuilder::new(
-            cfg.clone(),
-            memory,
-            skills,
-            platform,
-        );
+        let context = ContextBuilder::new(cfg.clone(), memory, skills, platform);
         let tools = Arc::new(ToolRegistry::new());
 
-        let rt = AgentRuntime::with_components(
-            "custom",
-            sessions,
-            context,
-            tools,
-            cfg,
-        );
+        let rt = AgentRuntime::with_components("custom", sessions, context, tools, cfg);
         assert_eq!(rt.agent_id(), "custom");
         assert_eq!(rt.config().defaults.model, "test-model");
 
@@ -323,14 +294,8 @@ mod tests {
         let ws = std::env::temp_dir().join(format!("clawft-rt-tools-{pid}"));
         std::fs::create_dir_all(ws.join("sessions").join("ag")).unwrap();
 
-        let mut rt = AgentRuntime::for_agent(
-            "ag",
-            &ws,
-            platform,
-            memory,
-            skills,
-            test_config("ag"),
-        );
+        let mut rt =
+            AgentRuntime::for_agent("ag", &ws, platform, memory, skills, test_config("ag"));
 
         // Tool registry starts empty.
         assert_eq!(rt.tools().len(), 0);
@@ -342,8 +307,12 @@ mod tests {
         struct DummyTool;
         #[async_trait]
         impl Tool for DummyTool {
-            fn name(&self) -> &str { "dummy" }
-            fn description(&self) -> &str { "test" }
+            fn name(&self) -> &str {
+                "dummy"
+            }
+            fn description(&self) -> &str {
+                "test"
+            }
             fn parameters(&self) -> serde_json::Value {
                 serde_json::json!({"type": "object"})
             }

@@ -322,7 +322,10 @@ mod tests {
     /// requires both the target and the allowlist roots to canonicalize
     /// successfully — i.e. to exist on disk — so hard-coded
     /// `/workspace` paths no longer work in tests.
-    fn test_policy_with_dirs(read_dir: &std::path::Path, write_dir: &std::path::Path) -> SandboxPolicy {
+    fn test_policy_with_dirs(
+        read_dir: &std::path::Path,
+        write_dir: &std::path::Path,
+    ) -> SandboxPolicy {
         let mut policy = test_policy();
         policy.filesystem.readable_paths = vec![read_dir.to_path_buf()];
         policy.filesystem.writable_paths = vec![write_dir.to_path_buf()];
@@ -345,9 +348,11 @@ mod tests {
         let read_dir = tempfile::tempdir().unwrap();
         let enforcer =
             SandboxEnforcer::new(test_policy_with_dirs(read_dir.path(), read_dir.path()));
-        assert!(enforcer
-            .check_file_read(std::path::Path::new("/etc/passwd"))
-            .is_err());
+        assert!(
+            enforcer
+                .check_file_read(std::path::Path::new("/etc/passwd"))
+                .is_err()
+        );
     }
 
     #[test]
@@ -366,9 +371,11 @@ mod tests {
         let write_dir = tempfile::tempdir().unwrap();
         let enforcer =
             SandboxEnforcer::new(test_policy_with_dirs(write_dir.path(), write_dir.path()));
-        assert!(enforcer
-            .check_file_write(std::path::Path::new("/etc/config"))
-            .is_err());
+        assert!(
+            enforcer
+                .check_file_write(std::path::Path::new("/etc/config"))
+                .is_err()
+        );
     }
 
     #[test]

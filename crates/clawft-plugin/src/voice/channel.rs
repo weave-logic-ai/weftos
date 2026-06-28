@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, info, warn};
 
 use crate::error::PluginError;
@@ -146,11 +146,7 @@ impl ChannelAdapter for VoiceChannel {
     /// In the real implementation this would synthesize the text
     /// via TTS and play it through the speaker. The stub logs the
     /// text and transitions status: Speaking -> Listening.
-    async fn send(
-        &self,
-        _target: &str,
-        payload: &MessagePayload,
-    ) -> Result<String, PluginError> {
+    async fn send(&self, _target: &str, payload: &MessagePayload) -> Result<String, PluginError> {
         let text = match payload.as_text() {
             Some(t) => t,
             None => {

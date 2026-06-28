@@ -26,7 +26,7 @@ use tracing::{debug, info, warn};
 
 use crate::eml_coherence::EmlCoherenceModel;
 use crate::eml_kernel::{
-    ComplexityModel, DeadLetterModel, GovernanceScorerModel, GossipTimingModel,
+    ComplexityModel, DeadLetterModel, GossipTimingModel, GovernanceScorerModel,
     HealthThresholdModel, RestartStrategyModel,
 };
 
@@ -61,7 +61,6 @@ pub struct KernelEmlModels {
     pub gossip_timing: GossipTimingModel,
     pub complexity: ComplexityModel,
 }
-
 
 // ---------------------------------------------------------------------------
 // Save/Load helpers

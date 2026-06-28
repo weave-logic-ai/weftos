@@ -71,8 +71,7 @@ impl HttpClient for BrowserHttpClient {
         }
 
         // Dispatch fetch. Try WorkerGlobalScope first, then Window.
-        let promise = if let Some(worker) =
-            js_sys::global().dyn_ref::<web_sys::WorkerGlobalScope>()
+        let promise = if let Some(worker) = js_sys::global().dyn_ref::<web_sys::WorkerGlobalScope>()
         {
             worker.fetch_with_request(&request)
         } else if let Some(window) = web_sys::window() {

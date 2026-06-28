@@ -118,8 +118,7 @@ pub enum SkillsAction {
 }
 
 /// Warning printed when falling back to local execution without daemon.
-const DAEMON_FALLBACK_WARNING: &str =
-    "Warning: running without kernel daemon — results may not reflect live kernel state. \
+const DAEMON_FALLBACK_WARNING: &str = "Warning: running without kernel daemon — results may not reflect live kernel state. \
      Start daemon with: weaver kernel start";
 
 /// Try to send an RPC to the daemon. Returns `Some(result_json)` on success,
@@ -209,9 +208,7 @@ pub async fn run(args: SkillsArgs) -> anyhow::Result<()> {
             }
             with_fallback_warning(|| skills_install(&path, user_dir.as_deref(), yes))
         }
-        SkillsAction::Pending => {
-            with_fallback_warning(|| skills_pending(user_dir.as_deref()))
-        }
+        SkillsAction::Pending => with_fallback_warning(|| skills_pending(user_dir.as_deref())),
         SkillsAction::Approve { name } => {
             with_fallback_warning(|| skills_approve(&name, user_dir.as_deref()))
         }
@@ -441,11 +438,7 @@ fn skills_show(registry: &SkillRegistry, name: &str) -> anyhow::Result<()> {
 /// - `yes = true`         → silently approve.
 /// - stdin is a TTY       → prompt; default-rejected if input is empty.
 /// - stdin is not a TTY   → reject (CI-safe).
-fn skills_install(
-    source_path: &str,
-    user_dir: Option<&Path>,
-    yes: bool,
-) -> anyhow::Result<()> {
+fn skills_install(source_path: &str, user_dir: Option<&Path>, yes: bool) -> anyhow::Result<()> {
     let user_dir = user_dir.ok_or_else(|| {
         anyhow::anyhow!(
             "cannot determine user skills directory (no home directory). \
@@ -470,9 +463,7 @@ fn skills_install(
     if skill_md_path.is_file() {
         match std::fs::read_to_string(&skill_md_path) {
             Ok(content) => {
-                if requires_shell_access(&content)
-                    && !approve_shell_access(skill_name, yes)?
-                {
+                if requires_shell_access(&content) && !approve_shell_access(skill_name, yes)? {
                     anyhow::bail!(
                         "shell access not approved for skill '{skill_name}'; \
                          install aborted. Re-run with --yes to skip the prompt."
@@ -658,7 +649,10 @@ fn skills_pending(user_dir: Option<&Path>) -> anyhow::Result<()> {
     })?;
 
     if !user_dir.exists() {
-        println!("No user skills directory at {} (no pending skills).", user_dir.display());
+        println!(
+            "No user skills directory at {} (no pending skills).",
+            user_dir.display()
+        );
         return Ok(());
     }
 
@@ -886,7 +880,14 @@ async fn skills_search(query: &str, limit: usize) -> anyhow::Result<()> {
 
             let mut table = Table::new();
             table.load_preset(presets::UTF8_FULL_CONDENSED);
-            table.set_header(["NAME", "VERSION", "AUTHOR", "STARS", "SIGNED", "DESCRIPTION"]);
+            table.set_header([
+                "NAME",
+                "VERSION",
+                "AUTHOR",
+                "STARS",
+                "SIGNED",
+                "DESCRIPTION",
+            ]);
 
             for skill in &skills {
                 let signed = if skill.signed { "yes" } else { "no" };
@@ -924,7 +925,9 @@ async fn skills_search(query: &str, limit: usize) -> anyhow::Result<()> {
 
 #[cfg(not(feature = "services"))]
 async fn skills_search(_query: &str, _limit: usize) -> anyhow::Result<()> {
-    anyhow::bail!("ClawHub search requires the 'services' feature. Rebuild with --features services.");
+    anyhow::bail!(
+        "ClawHub search requires the 'services' feature. Rebuild with --features services."
+    );
 }
 
 // ── Publish (ClawHub) ────────────────────────────────────────────────
@@ -988,7 +991,10 @@ async fn skills_publish(path: &str, allow_unsigned: bool) -> anyhow::Result<()> 
         Ok(response) => {
             if response.ok {
                 if let Some(entry) = response.data {
-                    println!("Published '{name}' as {} (hash: {})", entry.id, entry.content_hash);
+                    println!(
+                        "Published '{name}' as {} (hash: {})",
+                        entry.id, entry.content_hash
+                    );
                 } else {
                     println!("Published '{name}' successfully.");
                 }
@@ -1009,7 +1015,9 @@ async fn skills_publish(path: &str, allow_unsigned: bool) -> anyhow::Result<()> 
 
 #[cfg(not(feature = "services"))]
 async fn skills_publish(_path: &str, _allow_unsigned: bool) -> anyhow::Result<()> {
-    anyhow::bail!("ClawHub publish requires the 'services' feature. Rebuild with --features services.");
+    anyhow::bail!(
+        "ClawHub publish requires the 'services' feature. Rebuild with --features services."
+    );
 }
 
 // ── Remote Install (ClawHub) ─────────────────────────────────────────
@@ -1037,9 +1045,10 @@ async fn skills_remote_install(
     println!("Searching ClawHub for '{name}'...");
 
     // Search for the skill first.
-    let search_result = client.search(name, 1, 0).await.map_err(|e| {
-        anyhow::anyhow!("failed to search ClawHub: {e}")
-    })?;
+    let search_result = client
+        .search(name, 1, 0)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to search ClawHub: {e}"))?;
 
     let skills = search_result.data.unwrap_or_default();
     let skill = skills.first().ok_or_else(|| {
@@ -1080,9 +1089,10 @@ async fn skills_remote_install(
     println!("Downloading...");
 
     // Download the skill content.
-    let content = client.download(&skill.id).await.map_err(|e| {
-        anyhow::anyhow!("failed to download skill: {e}")
-    })?;
+    let content = client
+        .download(&skill.id)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to download skill: {e}"))?;
 
     // Install to user skills directory.
     let skill_dest = user_dir.join(&skill.name);
@@ -1112,7 +1122,9 @@ async fn skills_remote_install(
     _allow_unsigned: bool,
     _user_dir: Option<&Path>,
 ) -> anyhow::Result<()> {
-    anyhow::bail!("ClawHub install requires the 'services' feature. Rebuild with --features services.");
+    anyhow::bail!(
+        "ClawHub install requires the 'services' feature. Rebuild with --features services."
+    );
 }
 
 // ── Keygen ───────────────────────────────────────────────────────────
@@ -1143,8 +1155,14 @@ fn skills_keygen() -> anyhow::Result<()> {
     generate_keypair_standalone(&keys_dir)?;
 
     println!("Generated signing key pair:");
-    println!("  Private key: {}", keys_dir.join("skill-signing.key").display());
-    println!("  Public key:  {}", keys_dir.join("skill-signing.pub").display());
+    println!(
+        "  Private key: {}",
+        keys_dir.join("skill-signing.key").display()
+    );
+    println!(
+        "  Public key:  {}",
+        keys_dir.join("skill-signing.pub").display()
+    );
     println!();
     println!("Keep your private key safe! It is used to sign skills for publication.");
 
@@ -1158,8 +1176,8 @@ fn skills_keygen() -> anyhow::Result<()> {
 /// "(derived on first sign)" placeholder (WEFT-23).
 fn generate_keypair_standalone(output_dir: &Path) -> anyhow::Result<()> {
     use ed25519_dalek::SigningKey;
-    use rand::rngs::OsRng;
     use rand::RngCore;
+    use rand::rngs::OsRng;
 
     std::fs::create_dir_all(output_dir)?;
 
@@ -1469,8 +1487,8 @@ fn try_sign_content(
             priv_hex.len()
         );
     }
-    let priv_bytes = hex_decode(priv_hex)
-        .map_err(|e| anyhow::anyhow!("invalid signing key hex: {e}"))?;
+    let priv_bytes =
+        hex_decode(priv_hex).map_err(|e| anyhow::anyhow!("invalid signing key hex: {e}"))?;
     let seed: [u8; 32] = priv_bytes
         .try_into()
         .map_err(|_| anyhow::anyhow!("signing key must decode to exactly 32 bytes"))?;
@@ -1502,8 +1520,7 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
 
 /// Simple base64 encoding (no external dep needed).
 fn base64_encode(data: &[u8]) -> String {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
 
@@ -1690,11 +1707,7 @@ mod tests {
         create_skill_md(&src, "dupe", "Original");
         create_skill_md(&user_dir, "dupe", "Existing");
 
-        let result = skills_install(
-            src.join("dupe").to_str().unwrap(),
-            Some(&user_dir),
-            false,
-        );
+        let result = skills_install(src.join("dupe").to_str().unwrap(), Some(&user_dir), false);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("already exists"));
@@ -1731,13 +1744,15 @@ mod tests {
 
     #[test]
     fn requires_shell_true_with_shell_exec_tool() {
-        let content = "---\nname: x\ndescription: y\nallowed-tools:\n  - shell.exec\n  - Read\n---\nBody";
+        let content =
+            "---\nname: x\ndescription: y\nallowed-tools:\n  - shell.exec\n  - Read\n---\nBody";
         assert!(requires_shell_access(content));
     }
 
     #[test]
     fn requires_shell_true_with_category_shell_tool() {
-        let content = "---\nname: x\ndescription: y\ntools:\n  - name: bash\n    category: shell\n---\nBody";
+        let content =
+            "---\nname: x\ndescription: y\ntools:\n  - name: bash\n    category: shell\n---\nBody";
         assert!(requires_shell_access(content));
     }
 
@@ -1758,10 +1773,7 @@ mod tests {
         );
         assert!(result.is_err(), "expected refusal without --yes / TTY");
         let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("shell access not approved"),
-            "got: {msg}"
-        );
+        assert!(msg.contains("shell access not approved"), "got: {msg}");
 
         let _ = std::fs::remove_dir_all(&src);
         let _ = std::fs::remove_dir_all(&user_dir);
@@ -1984,7 +1996,10 @@ mod tests {
 
     #[test]
     fn hex_decode_basic() {
-        assert_eq!(hex_decode("deadbeef").unwrap(), vec![0xDE, 0xAD, 0xBE, 0xEF]);
+        assert_eq!(
+            hex_decode("deadbeef").unwrap(),
+            vec![0xDE, 0xAD, 0xBE, 0xEF]
+        );
     }
 
     #[test]

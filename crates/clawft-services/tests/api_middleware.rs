@@ -10,13 +10,13 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::http::{header, Method, Request, StatusCode};
+use axum::http::{Method, Request, StatusCode, header};
 use clawft_services::api::{
-    auth::TokenStore, broadcaster::TopicBroadcaster, build_router, AgentAccess, AgentInfo,
-    ApiState, BusAccess, ChannelAccess, ChannelStatusInfo, ConfigAccess, MemoryAccess,
-    MemoryEntryInfo, SessionAccess, SessionDetail, SessionInfo, SkillAccess, SkillInfo,
-    ToolInfo, ToolRegistryAccess, TtsProviderInfo, VoiceAccess, VoiceSettingsInfo,
-    VoiceSettingsUpdate, VoiceStatusInfo,
+    AgentAccess, AgentInfo, ApiState, BusAccess, ChannelAccess, ChannelStatusInfo, ConfigAccess,
+    MemoryAccess, MemoryEntryInfo, SessionAccess, SessionDetail, SessionInfo, SkillAccess,
+    SkillInfo, ToolInfo, ToolRegistryAccess, TtsProviderInfo, VoiceAccess, VoiceSettingsInfo,
+    VoiceSettingsUpdate, VoiceStatusInfo, auth::TokenStore, broadcaster::TopicBroadcaster,
+    build_router,
 };
 use tower::ServiceExt;
 
@@ -81,13 +81,7 @@ impl MemoryAccess for StubMemory {
     fn search(&self, _: &str, _: usize) -> Vec<MemoryEntryInfo> {
         vec![]
     }
-    fn store(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: &[String],
-    ) -> Result<MemoryEntryInfo, String> {
+    fn store(&self, _: &str, _: &str, _: &str, _: &[String]) -> Result<MemoryEntryInfo, String> {
         Err("stub".into())
     }
     fn delete(&self, _: &str) -> bool {
@@ -342,10 +336,11 @@ async fn cors_denies_unconfigured_origin() {
 
     // CORS layer should refuse to add Access-Control-Allow-Origin
     // for an unallowed origin.
-    assert!(resp
-        .headers()
-        .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
-        .is_none());
+    assert!(
+        resp.headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -456,6 +451,8 @@ async fn csp_header_present_on_unauthorized() {
         .unwrap();
 
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    assert!(resp.headers().get("content-security-policy").is_some(),
-        "CSP header must accompany 401 responses too");
+    assert!(
+        resp.headers().get("content-security-policy").is_some(),
+        "CSP header must accompany 401 responses too"
+    );
 }

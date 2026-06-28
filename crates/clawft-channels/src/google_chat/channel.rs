@@ -325,9 +325,7 @@ impl GoogleChatChannelAdapter {
             .send()
             .await
             .map_err(|e| {
-                PluginError::ExecutionFailed(format!(
-                    "google_chat: pubsub ack request failed: {e}"
-                ))
+                PluginError::ExecutionFailed(format!("google_chat: pubsub ack request failed: {e}"))
             })?;
         if !resp.status().is_success() {
             let status = resp.status();
@@ -344,18 +342,12 @@ impl GoogleChatChannelAdapter {
     fn decode_event(data: &str) -> Result<ChatEvent, PluginError> {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(data)
-            .or_else(|_| {
-                base64::engine::general_purpose::URL_SAFE.decode(data)
-            })
+            .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(data))
             .map_err(|e| {
-                PluginError::ExecutionFailed(format!(
-                    "google_chat: pubsub data is not base64: {e}"
-                ))
+                PluginError::ExecutionFailed(format!("google_chat: pubsub data is not base64: {e}"))
             })?;
         serde_json::from_slice::<ChatEvent>(&bytes).map_err(|e| {
-            PluginError::ExecutionFailed(format!(
-                "google_chat: chat event JSON decode failed: {e}"
-            ))
+            PluginError::ExecutionFailed(format!("google_chat: chat event JSON decode failed: {e}"))
         })
     }
 
@@ -421,13 +413,10 @@ impl GoogleChatChannelAdapter {
             .as_ref()
             .and_then(|s| s.name.clone())
             .or_else(|| {
-                message.name.as_ref().and_then(|n| {
-                    n.split('/')
-                        .take(2)
-                        .collect::<Vec<_>>()
-                        .join("/")
-                        .into()
-                })
+                message
+                    .name
+                    .as_ref()
+                    .and_then(|n| n.split('/').take(2).collect::<Vec<_>>().join("/").into())
             })
             .unwrap_or_else(|| "spaces/unknown".to_string());
 
@@ -565,15 +554,9 @@ impl ChannelAdapter for GoogleChatChannelAdapter {
         }
     }
 
-    async fn send(
-        &self,
-        target: &str,
-        payload: &MessagePayload,
-    ) -> Result<String, PluginError> {
+    async fn send(&self, target: &str, payload: &MessagePayload) -> Result<String, PluginError> {
         let content = payload.as_text().ok_or_else(|| {
-            PluginError::ExecutionFailed(
-                "google_chat: only text payloads supported".into(),
-            )
+            PluginError::ExecutionFailed("google_chat: only text payloads supported".into())
         })?;
 
         // Resolve target space: caller-supplied wins, fall back to
@@ -609,9 +592,7 @@ impl ChannelAdapter for GoogleChatChannelAdapter {
             .send()
             .await
             .map_err(|e| {
-                PluginError::ExecutionFailed(format!(
-                    "google_chat: send request failed: {e}"
-                ))
+                PluginError::ExecutionFailed(format!("google_chat: send request failed: {e}"))
             })?;
         if !resp.status().is_success() {
             let status = resp.status();
@@ -621,9 +602,7 @@ impl ChannelAdapter for GoogleChatChannelAdapter {
             )));
         }
         let parsed: CreateMessageResponse = resp.json().await.map_err(|e| {
-            PluginError::ExecutionFailed(format!(
-                "google_chat: send response decode failed: {e}"
-            ))
+            PluginError::ExecutionFailed(format!("google_chat: send response decode failed: {e}"))
         })?;
         Ok(parsed.name)
     }
@@ -697,11 +676,8 @@ mod tests {
         }
     }
 
-    fn build_adapter(
-        config: GoogleChatAdapterConfig,
-    ) -> GoogleChatChannelAdapter {
-        let tokens: Arc<dyn TokenSource> =
-            Arc::new(StaticToken("test-token".to_string()));
+    fn build_adapter(config: GoogleChatAdapterConfig) -> GoogleChatChannelAdapter {
+        let tokens: Arc<dyn TokenSource> = Arc::new(StaticToken("test-token".to_string()));
         GoogleChatChannelAdapter::with_token_source(config, tokens)
     }
 
@@ -760,8 +736,7 @@ mod tests {
 
     #[test]
     fn decode_event_rejects_garbage() {
-        let err = GoogleChatChannelAdapter::decode_event("$$$not-base64$$$")
-            .unwrap_err();
+        let err = GoogleChatChannelAdapter::decode_event("$$$not-base64$$$").unwrap_err();
         assert!(err.to_string().contains("base64"));
     }
 
@@ -787,9 +762,7 @@ mod tests {
         let host: Arc<dyn ChannelAdapterHost> = Arc::new(MockHost::new());
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
-        let handle = tokio::spawn(async move {
-            adapter.start(host, cancel_clone).await
-        });
+        let handle = tokio::spawn(async move { adapter.start(host, cancel_clone).await });
         tokio::time::sleep(Duration::from_millis(20)).await;
         cancel.cancel();
         let result = handle.await.unwrap();
@@ -836,7 +809,10 @@ mod tests {
         let adapter = build_adapter(config);
 
         // Caller passes a bare id ("BBBB") -- adapter prepends "spaces/".
-        let id = adapter.send("BBBB", &MessagePayload::text("hi")).await.unwrap();
+        let id = adapter
+            .send("BBBB", &MessagePayload::text("hi"))
+            .await
+            .unwrap();
         assert_eq!(id, "spaces/BBBB/messages/Z.Z");
     }
 
@@ -855,7 +831,10 @@ mod tests {
         config.chat_base_url = Some(server.uri());
         let adapter = build_adapter(config);
 
-        let id = adapter.send("", &MessagePayload::text("default")).await.unwrap();
+        let id = adapter
+            .send("", &MessagePayload::text("default"))
+            .await
+            .unwrap();
         assert_eq!(id, "spaces/AAAA/messages/D.D");
     }
 
@@ -962,9 +941,7 @@ mod tests {
         let host: Arc<dyn ChannelAdapterHost> = mock_host.clone();
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
-        let handle = tokio::spawn(async move {
-            adapter.start(host, cancel_clone).await
-        });
+        let handle = tokio::spawn(async move { adapter.start(host, cancel_clone).await });
 
         // Give the loop time to pull once + ack.
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1037,9 +1014,7 @@ mod tests {
         let host: Arc<dyn ChannelAdapterHost> = mock_host.clone();
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
-        let handle = tokio::spawn(async move {
-            adapter.start(host, cancel_clone).await
-        });
+        let handle = tokio::spawn(async move { adapter.start(host, cancel_clone).await });
         tokio::time::sleep(Duration::from_millis(200)).await;
         cancel.cancel();
         handle.await.unwrap().unwrap();
@@ -1056,16 +1031,22 @@ mod tests {
         // SAFETY: process-wide env. We use a unique name so concurrent
         // tests don't collide.
         let var = "GOOGLE_CHAT_TEST_TOKEN_ABCDEF";
-        unsafe { std::env::set_var(var, "live-token"); }
+        unsafe {
+            std::env::set_var(var, "live-token");
+        }
         let src = EnvTokenSource::new(var);
         assert_eq!(src.token().await.unwrap(), "live-token");
-        unsafe { std::env::remove_var(var); }
+        unsafe {
+            std::env::remove_var(var);
+        }
     }
 
     #[tokio::test]
     async fn env_token_source_missing_var_errors() {
         let var = "GOOGLE_CHAT_TEST_TOKEN_NEVER_SET_QWERTY";
-        unsafe { std::env::remove_var(var); }
+        unsafe {
+            std::env::remove_var(var);
+        }
         let src = EnvTokenSource::new(var);
         let err = src.token().await.unwrap_err().to_string();
         assert!(err.contains("unset"));

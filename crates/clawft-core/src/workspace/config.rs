@@ -30,8 +30,7 @@ fn load_config_file(path: &Path) -> Option<serde_json::Value> {
 /// 4. Deserialize the merged JSON back into [`Config`].
 pub fn load_merged_config(workspace_path: Option<&Path>) -> Result<Config> {
     #[cfg(feature = "native")]
-    let global_config =
-        dirs::home_dir().map(|h| h.join(".clawft").join("config.json"));
+    let global_config = dirs::home_dir().map(|h| h.join(".clawft").join("config.json"));
     #[cfg(not(feature = "native"))]
     let global_config: Option<std::path::PathBuf> = None;
     load_merged_config_from(global_config.as_deref(), workspace_path)
@@ -46,10 +45,9 @@ pub fn load_merged_config_from(
     workspace_path: Option<&Path>,
 ) -> Result<Config> {
     let defaults = Config::default();
-    let mut merged =
-        serde_json::to_value(&defaults).map_err(|e| ClawftError::ConfigInvalid {
-            reason: format!("failed to serialize defaults: {e}"),
-        })?;
+    let mut merged = serde_json::to_value(&defaults).map_err(|e| ClawftError::ConfigInvalid {
+        reason: format!("failed to serialize defaults: {e}"),
+    })?;
 
     // Global config
     if let Some(gp) = global_config_path
@@ -61,8 +59,7 @@ pub fn load_merged_config_from(
 
     // Workspace config: <workspace>/.clawft/config.json
     if let Some(ws_path) = workspace_path
-        && let Some(mut ws_config) =
-            load_config_file(&ws_path.join(".clawft").join("config.json"))
+        && let Some(mut ws_config) = load_config_file(&ws_path.join(".clawft").join("config.json"))
     {
         normalize_keys(&mut ws_config);
         deep_merge(&mut merged, &ws_config);
@@ -100,22 +97,17 @@ mod tests {
     #[test]
     fn load_merged_config_workspace_overrides() {
         let n = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir()
-            .join(format!("clawft-test-merge-ws-{n}"));
+        let dir = std::env::temp_dir().join(format!("clawft-test-merge-ws-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
         let dot_clawft = dir.join(".clawft");
         std::fs::create_dir_all(&dot_clawft).unwrap();
 
-        let ws_config =
-            r#"{"agents": {"defaults": {"max_tokens": 4096}}}"#;
+        let ws_config = r#"{"agents": {"defaults": {"max_tokens": 4096}}}"#;
         std::fs::write(dot_clawft.join("config.json"), ws_config).unwrap();
 
         let config = load_merged_config_from(None, Some(&dir)).unwrap();
         assert_eq!(config.agents.defaults.max_tokens, 4096);
-        assert_eq!(
-            config.agents.defaults.model,
-            "deepseek/deepseek-chat"
-        );
+        assert_eq!(config.agents.defaults.model, "deepseek/deepseek-chat");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -123,18 +115,15 @@ mod tests {
     #[test]
     fn load_merged_config_global_overrides() {
         let n = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir()
-            .join(format!("clawft-test-merge-global-{n}"));
+        let dir = std::env::temp_dir().join(format!("clawft-test-merge-global-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let global_config =
-            r#"{"agents": {"defaults": {"model": "custom/model"}}}"#;
+        let global_config = r#"{"agents": {"defaults": {"model": "custom/model"}}}"#;
         let global_path = dir.join("global-config.json");
         std::fs::write(&global_path, global_config).unwrap();
 
-        let config =
-            load_merged_config_from(Some(&global_path), None).unwrap();
+        let config = load_merged_config_from(Some(&global_path), None).unwrap();
         assert_eq!(config.agents.defaults.model, "custom/model");
         assert_eq!(config.agents.defaults.max_tokens, 8192);
 
@@ -144,27 +133,22 @@ mod tests {
     #[test]
     fn load_merged_config_workspace_over_global() {
         let n = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir()
-            .join(format!("clawft-test-merge-both-{n}"));
+        let dir = std::env::temp_dir().join(format!("clawft-test-merge-both-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let global_config = r#"{"agents": {"defaults": {"model": "global/model", "max_tokens": 2048}}}"#;
+        let global_config =
+            r#"{"agents": {"defaults": {"model": "global/model", "max_tokens": 2048}}}"#;
         let global_path = dir.join("global-config.json");
         std::fs::write(&global_path, global_config).unwrap();
 
         let ws_dir = dir.join("workspace");
         let dot_clawft = ws_dir.join(".clawft");
         std::fs::create_dir_all(&dot_clawft).unwrap();
-        let ws_config =
-            r#"{"agents": {"defaults": {"max_tokens": 4096}}}"#;
+        let ws_config = r#"{"agents": {"defaults": {"max_tokens": 4096}}}"#;
         std::fs::write(dot_clawft.join("config.json"), ws_config).unwrap();
 
-        let config = load_merged_config_from(
-            Some(&global_path),
-            Some(&ws_dir),
-        )
-        .unwrap();
+        let config = load_merged_config_from(Some(&global_path), Some(&ws_dir)).unwrap();
         assert_eq!(config.agents.defaults.model, "global/model");
         assert_eq!(config.agents.defaults.max_tokens, 4096);
 
@@ -174,13 +158,11 @@ mod tests {
     #[test]
     fn load_merged_config_missing_workspace_config() {
         let n = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir()
-            .join(format!("clawft-test-merge-missing-{n}"));
+        let dir = std::env::temp_dir().join(format!("clawft-test-merge-missing-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let config =
-            load_merged_config_from(None, Some(&dir)).unwrap();
+        let config = load_merged_config_from(None, Some(&dir)).unwrap();
         assert_eq!(config.agents.defaults.max_tokens, 8192);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -189,28 +171,21 @@ mod tests {
     #[test]
     fn load_merged_config_normalizes_keys() {
         let n = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir()
-            .join(format!("clawft-test-merge-normalize-{n}"));
+        let dir = std::env::temp_dir().join(format!("clawft-test-merge-normalize-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let global_config =
-            r#"{"agents": {"defaults": {"max_tokens": 1000}}}"#;
+        let global_config = r#"{"agents": {"defaults": {"max_tokens": 1000}}}"#;
         let global_path = dir.join("global-config.json");
         std::fs::write(&global_path, global_config).unwrap();
 
         let ws_dir = dir.join("workspace");
         let dot_clawft = ws_dir.join(".clawft");
         std::fs::create_dir_all(&dot_clawft).unwrap();
-        let ws_config =
-            r#"{"agents": {"defaults": {"maxTokens": 2000}}}"#;
+        let ws_config = r#"{"agents": {"defaults": {"maxTokens": 2000}}}"#;
         std::fs::write(dot_clawft.join("config.json"), ws_config).unwrap();
 
-        let config = load_merged_config_from(
-            Some(&global_path),
-            Some(&ws_dir),
-        )
-        .unwrap();
+        let config = load_merged_config_from(Some(&global_path), Some(&ws_dir)).unwrap();
         assert_eq!(config.agents.defaults.max_tokens, 2000);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -219,8 +194,7 @@ mod tests {
     #[test]
     fn load_merged_config_mcp_servers() {
         let n = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir()
-            .join(format!("clawft-test-merge-mcp-{n}"));
+        let dir = std::env::temp_dir().join(format!("clawft-test-merge-mcp-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -248,11 +222,7 @@ mod tests {
         }"#;
         std::fs::write(dot_clawft.join("config.json"), ws_config).unwrap();
 
-        let config = load_merged_config_from(
-            Some(&global_path),
-            Some(&ws_dir),
-        )
-        .unwrap();
+        let config = load_merged_config_from(Some(&global_path), Some(&ws_dir)).unwrap();
 
         assert!(
             config.tools.mcp_servers.contains_key("github"),

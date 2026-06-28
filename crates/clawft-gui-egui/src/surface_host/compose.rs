@@ -37,14 +37,14 @@
 //! real implementation and the composer stops dispatching verbs the
 //! gate would have denied.
 
-use clawft_surface::eval::{eval_binding, Value};
+use clawft_surface::eval::{Value, eval_binding};
 use clawft_surface::substrate::OntologySnapshot;
 use clawft_surface::tree::{AffordanceDecl, AttrValue, IdentityIri, SurfaceNode, SurfaceTree};
 
 use crate::canon::{
-    pressable::PressableStyle, Canvas, CanonResponse, CanonWidget, CellSize, Chip, ChipTone, Field,
-    FieldKind, FieldValue, Gauge, Grid, Media, MediaFit, Pressable, Sheet, Slider, Stack, StackAxis,
-    StreamView, Strip, StripAxis, Table, TableColumn, Tabs, Toggle,
+    CanonResponse, CanonWidget, Canvas, CellSize, Chip, ChipTone, Field, FieldKind, FieldValue,
+    Gauge, Grid, Media, MediaFit, Pressable, Sheet, Slider, Stack, StackAxis, StreamView, Strip,
+    StripAxis, Table, TableColumn, Tabs, Toggle, pressable::PressableStyle,
 };
 
 /// A verb activation picked up by the composer during a frame. The
@@ -263,8 +263,10 @@ fn render_stack(
     // re-entrant access to the parent frame's buffers.
     let mut child = ComposeOutcome::default();
 
-    let stack = Stack::new(&node.path).axis(axis).wrap(wrap).body(
-        |ui: &mut egui::Ui| {
+    let stack = Stack::new(&node.path)
+        .axis(axis)
+        .wrap(wrap)
+        .body(|ui: &mut egui::Ui| {
             let mut child_frame = Frame {
                 responses: &mut child.responses,
                 dispatches: &mut child.dispatches,
@@ -272,8 +274,7 @@ fn render_stack(
             for c in children {
                 render_node(c, snap, ui, &mut child_frame);
             }
-        },
-    );
+        });
     let resp = stack.show(ui);
     frame.merge(child);
     frame.push_response(resp);
@@ -293,7 +294,9 @@ fn render_strip(
         })
         .unwrap_or(StripAxis::Horizontal);
 
-    let cells: Vec<CellSize> = (0..node.children.len()).map(|_| CellSize::Remainder).collect();
+    let cells: Vec<CellSize> = (0..node.children.len())
+        .map(|_| CellSize::Remainder)
+        .collect();
     let children = &node.children;
 
     let mut child = ComposeOutcome::default();
@@ -395,7 +398,10 @@ fn render_pressable(
         .unwrap_or(PressableStyle::Primary);
     let enabled = attr_bool(node, "enabled").unwrap_or(true);
 
-    let p = Pressable::new(&node.path, label).style(style).enabled(enabled).variant(0);
+    let p = Pressable::new(&node.path, label)
+        .style(style)
+        .enabled(enabled)
+        .variant(0);
     let resp = p.show(ui);
     if resp.inner.clicked()
         && let Some(dispatch) = build_dispatch(node, None)
@@ -411,7 +417,9 @@ fn render_gauge(
     ui: &mut egui::Ui,
     frame: &mut Frame<'_>,
 ) {
-    let value = bound_value(node, "value", snap).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let value = bound_value(node, "value", snap)
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
     let lo = attr_number(node, "min").unwrap_or(0.0);
     let hi = attr_number(node, "max").unwrap_or(1.0);
     let label = bound_string(node, "label", snap);
@@ -486,7 +494,9 @@ fn render_table(
         })
         .unwrap_or_default();
 
-    let rows: Vec<Value> = bound_value(node, "rows", snap).and_then(|v| v.as_list()).unwrap_or_default();
+    let rows: Vec<Value> = bound_value(node, "rows", snap)
+        .and_then(|v| v.as_list())
+        .unwrap_or_default();
     let row_count = rows.len();
 
     let col_keys: Vec<String> = columns.iter().map(|c| c.name.to_string()).collect();
@@ -654,10 +664,20 @@ fn render_heatmap(
                 if *d == 65535 {
                     continue;
                 }
-                if *d < min { min = *d; }
-                if *d > max { max = *d; }
+                if *d < min {
+                    min = *d;
+                }
+                if *d > max {
+                    max = *d;
+                }
             }
-            if min == u16::MAX { (0, 1) } else if min == max { (min, min + 1) } else { (min, max) }
+            if min == u16::MAX {
+                (0, 1)
+            } else if min == max {
+                (min, min + 1)
+            } else {
+                (min, max)
+            }
         }
     };
 
@@ -665,8 +685,7 @@ fn render_heatmap(
     let gap: f32 = 2.0;
     let total_w = width as f32 * cell + (width as f32 - 1.0) * gap;
     let total_h = height as f32 * cell + (height as f32 - 1.0) * gap;
-    let (rect, _resp) =
-        ui.allocate_exact_size(egui::vec2(total_w, total_h), egui::Sense::hover());
+    let (rect, _resp) = ui.allocate_exact_size(egui::vec2(total_w, total_h), egui::Sense::hover());
     let painter = ui.painter_at(rect);
 
     for row in 0..height {
@@ -676,8 +695,7 @@ fn render_heatmap(
             let color = heatmap_color(raw_px, lo, hi);
             let x0 = rect.left() + col as f32 * (cell + gap);
             let y0 = rect.top() + row as f32 * (cell + gap);
-            let cell_rect =
-                egui::Rect::from_min_size(egui::pos2(x0, y0), egui::vec2(cell, cell));
+            let cell_rect = egui::Rect::from_min_size(egui::pos2(x0, y0), egui::vec2(cell, cell));
             painter.rect_filled(cell_rect, 2.0, color);
         }
     }
@@ -719,8 +737,12 @@ fn render_waveform(
             let mut mx = f64::NEG_INFINITY;
             for s in &samples {
                 if s.is_finite() {
-                    if *s < mn { mn = *s; }
-                    if *s > mx { mx = *s; }
+                    if *s < mn {
+                        mn = *s;
+                    }
+                    if *s > mx {
+                        mx = *s;
+                    }
                 }
             }
             if !mn.is_finite() || !mx.is_finite() || (mx - mn).abs() < f64::EPSILON {
@@ -871,16 +893,16 @@ fn render_field(
     });
 
     let enabled = attr_bool(node, "enabled").unwrap_or(true);
-    let f = Field::new(&node.path, kind, &mut value).enabled(enabled).variant(0);
+    let f = Field::new(&node.path, kind, &mut value)
+        .enabled(enabled)
+        .variant(0);
     let resp = f.show(ui);
     let changed = resp.inner.changed();
     // Persist the (possibly mutated) value back into egui memory.
     ui.ctx().memory_mut(|m| {
         m.data.insert_temp(key, value);
     });
-    if changed
-        && let Some(dispatch) = build_dispatch(node, None)
-    {
+    if changed && let Some(dispatch) = build_dispatch(node, None) {
         frame.push_dispatch(dispatch);
     }
     frame.push_response(resp);
@@ -896,14 +918,17 @@ fn render_toggle(
     // Initial value comes from the binding; subsequent flips are
     // egui-memory-keyed so a click doesn't bounce back on the next
     // frame before the substrate write round-trips.
-    let initial =
-        bound_value(node, "value", snap).and_then(|v| v.as_bool()).unwrap_or(false);
+    let initial = bound_value(node, "value", snap)
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let key = egui::Id::new(("compose.toggle.value", &node.path));
-    let mut value = ui.ctx().memory_mut(|m| {
-        *m.data.get_temp_mut_or_insert_with::<bool>(key, || initial)
-    });
+    let mut value = ui
+        .ctx()
+        .memory_mut(|m| *m.data.get_temp_mut_or_insert_with::<bool>(key, || initial));
     let enabled = attr_bool(node, "enabled").unwrap_or(true);
-    let t = Toggle::new(&node.path, label, &mut value).enabled(enabled).variant(0);
+    let t = Toggle::new(&node.path, label, &mut value)
+        .enabled(enabled)
+        .variant(0);
     let resp = t.show(ui);
     ui.ctx().memory_mut(|m| m.data.insert_temp(key, value));
     if resp.inner.changed()
@@ -930,7 +955,11 @@ fn render_select(
         .attrs
         .get("options")
         .and_then(|a| a.as_array())
-        .map(|arr| arr.iter().filter_map(|a| a.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| a.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let initial = binding_to_string(node, "value", snap);
@@ -958,9 +987,7 @@ fn render_select(
     let changed = current != prev;
     ui.ctx().memory_mut(|m| m.data.insert_temp(key, current));
     let synth = CanonResponse::from_egui(resp, std::borrow::Cow::Borrowed("ui://select"), 0, None);
-    if changed
-        && let Some(dispatch) = build_dispatch(node, None)
-    {
+    if changed && let Some(dispatch) = build_dispatch(node, None) {
         frame.push_dispatch(dispatch);
     }
     frame.push_response(synth);
@@ -976,12 +1003,13 @@ fn render_slider(
     let lo = attr_number(node, "min").unwrap_or(0.0);
     let hi = attr_number(node, "max").unwrap_or(1.0);
     let step = attr_number(node, "step");
-    let initial =
-        bound_value(node, "value", snap).and_then(|v| v.as_f64()).unwrap_or(lo);
+    let initial = bound_value(node, "value", snap)
+        .and_then(|v| v.as_f64())
+        .unwrap_or(lo);
     let key = egui::Id::new(("compose.slider.value", &node.path));
-    let mut value = ui.ctx().memory_mut(|m| {
-        *m.data.get_temp_mut_or_insert_with::<f64>(key, || initial)
-    });
+    let mut value = ui
+        .ctx()
+        .memory_mut(|m| *m.data.get_temp_mut_or_insert_with::<f64>(key, || initial));
     let enabled = attr_bool(node, "enabled").unwrap_or(true);
     let mut s = Slider::new(&node.path, label, &mut value, lo, hi)
         .enabled(enabled)
@@ -1053,8 +1081,7 @@ fn render_modal(
         .group(|ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new("[modal]")
-                        .color(egui::Color32::from_rgb(180, 160, 110)),
+                    egui::RichText::new("[modal]").color(egui::Color32::from_rgb(180, 160, 110)),
                 );
                 ui.label(egui::RichText::new(title).strong());
             });
@@ -1148,21 +1175,15 @@ fn render_tabs(
                 .get("label")
                 .and_then(AttrValue::as_str)
                 .map(String::from)
-                .unwrap_or_else(|| {
-                    c.path
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(&c.path)
-                        .to_string()
-                })
+                .unwrap_or_else(|| c.path.rsplit('/').next().unwrap_or(&c.path).to_string())
         })
         .collect();
     let labels: Vec<&str> = labels_owned.iter().map(|s| s.as_str()).collect();
 
     let key = egui::Id::new(("compose.tabs.selected", &node.path));
-    let mut selected = ui.ctx().memory_mut(|m| {
-        *m.data.get_temp_mut_or_insert_with::<usize>(key, || 0)
-    });
+    let mut selected = ui
+        .ctx()
+        .memory_mut(|m| *m.data.get_temp_mut_or_insert_with::<usize>(key, || 0));
     if selected >= node.children.len() {
         selected = 0;
     }
@@ -1256,7 +1277,9 @@ fn render_plot(
                 .collect()
         })
         .unwrap_or_default();
-    let p = crate::canon::Plot::new(&node.path).points(&series).variant(0);
+    let p = crate::canon::Plot::new(&node.path)
+        .points(&series)
+        .variant(0);
     let resp = p.show(ui);
     frame.push_response(resp);
 }
@@ -1345,11 +1368,9 @@ fn render_canvas(
             for c in 0..cols {
                 let x0 = rect.left() + c as f32 * cell;
                 let y0 = rect.top() + r as f32 * cell;
-                let cell_rect = egui::Rect::from_min_size(
-                    egui::pos2(x0, y0),
-                    egui::vec2(cell, cell),
-                )
-                .intersect(rect);
+                let cell_rect =
+                    egui::Rect::from_min_size(egui::pos2(x0, y0), egui::vec2(cell, cell))
+                        .intersect(rect);
                 let color = if (r + c) % 2 == 0 { dark } else { pale };
                 painter.rect_filled(cell_rect, 0.0, color);
             }
@@ -1446,7 +1467,9 @@ fn prettify(s: &str) -> String {
 // ── Binding / attribute helpers ────────────────────────────────────
 
 fn bound_value(node: &SurfaceNode, slot: &str, snap: &OntologySnapshot) -> Option<Value> {
-    node.bindings.get(slot).and_then(|b| eval_binding(b, snap).ok())
+    node.bindings
+        .get(slot)
+        .and_then(|b| eval_binding(b, snap).ok())
 }
 
 fn bound_string(node: &SurfaceNode, slot: &str, snap: &OntologySnapshot) -> Option<String> {

@@ -8,13 +8,13 @@
 use std::path::Path;
 
 #[cfg(feature = "vision-extract")]
+use crate::GraphifyError;
+#[cfg(feature = "vision-extract")]
 use crate::entity::{DomainTag, EntityId, EntityType, FileType};
 #[cfg(feature = "vision-extract")]
 use crate::model::{Entity, ExtractionResult};
 #[cfg(feature = "vision-extract")]
 use crate::relationship::{Confidence, Relationship};
-#[cfg(feature = "vision-extract")]
-use crate::GraphifyError;
 
 /// The structured prompt sent alongside the image.
 #[cfg(feature = "vision-extract")]
@@ -40,9 +40,7 @@ Return ONLY valid JSON in this exact format (no markdown fences):
 
 /// Supported image extensions for vision extraction.
 #[cfg(feature = "vision-extract")]
-pub const IMAGE_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "webp", "gif", "svg", "bmp", "tiff",
-];
+pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp", "tiff"];
 
 /// Check if a file path has a supported image extension.
 #[cfg(feature = "vision-extract")]
@@ -108,9 +106,8 @@ where
     // Re-use the semantic extraction JSON parser.
     let json_str = extract_json_from_response(&response);
 
-    let parsed: VisionOutput = serde_json::from_str(json_str).map_err(|e| {
-        GraphifyError::LlmError(format!("failed to parse vision response: {e}"))
-    })?;
+    let parsed: VisionOutput = serde_json::from_str(json_str)
+        .map_err(|e| GraphifyError::LlmError(format!("failed to parse vision response: {e}")))?;
 
     let mut name_to_id = std::collections::HashMap::new();
     let mut entities = Vec::new();

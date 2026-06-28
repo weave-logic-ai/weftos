@@ -138,9 +138,8 @@ impl<P: Platform + 'static> SessionAccess for SessionBridge<P> {
         let mgr = self.manager.clone();
         let key = key.to_string();
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                mgr.delete_session(&key).await.is_ok()
-            })
+            tokio::runtime::Handle::current()
+                .block_on(async { mgr.delete_session(&key).await.is_ok() })
         })
     }
 }
@@ -288,11 +287,9 @@ impl<P: Platform + 'static> SkillAccess for SkillBridge<P> {
     /// guidance. See `docs/handoff.md` for the deferred-work tracking
     /// list and the WEFT items that will land it.
     fn install_skill(&self, _id: &str) -> Result<(), String> {
-        Err(
-            "skill install is not implemented in 0.7.x — ClawHub skill \
+        Err("skill install is not implemented in 0.7.x — ClawHub skill \
              registry is deferred (see docs/handoff.md)"
-                .into(),
-        )
+            .into())
     }
 
     /// Uninstall a skill by name.
@@ -584,18 +581,15 @@ impl ConfigAccess for ConfigBridge {
         let path = match &self.save_path {
             Some(p) => p,
             None => {
-                return Err(
-                    "config saving is disabled: no canonical config path \
+                return Err("config saving is disabled: no canonical config path \
                      was discovered at boot"
-                        .into(),
-                );
+                    .into());
             }
         };
 
         // Validate against the canonical schema.
-        let _validated: clawft_types::config::Config =
-            serde_json::from_value(config.clone())
-                .map_err(|e| format!("config validation failed: {e}"))?;
+        let _validated: clawft_types::config::Config = serde_json::from_value(config.clone())
+            .map_err(|e| format!("config validation failed: {e}"))?;
 
         // Pretty-print the validated payload.
         let serialized = serde_json::to_string_pretty(&config)
@@ -807,17 +801,11 @@ impl VoiceAccess for VoiceBridge {
         // Resolve API key: config value > env var fallback.
         let (api_key, api_base) = match provider.as_str() {
             "openai" => {
-                let key = resolve_secret(
-                    &self.providers.openai.api_key,
-                    "OPENAI_API_KEY",
-                );
+                let key = resolve_secret(&self.providers.openai.api_key, "OPENAI_API_KEY");
                 (key, self.providers.openai.api_base.clone())
             }
             "elevenlabs" => {
-                let key = resolve_secret(
-                    &self.providers.elevenlabs.api_key,
-                    "ELEVENLABS_API_KEY",
-                );
+                let key = resolve_secret(&self.providers.elevenlabs.api_key, "ELEVENLABS_API_KEY");
                 let base = self
                     .providers
                     .elevenlabs
@@ -833,12 +821,28 @@ impl VoiceAccess for VoiceBridge {
         let default_model = cfg.tts.model == "vits-piper-en_US-amy-medium";
         let (model, voice) = match provider.as_str() {
             "openai" => (
-                if default_model { "tts-1".to_string() } else { cfg.tts.model.clone() },
-                if cfg.tts.voice.is_empty() { "alloy".to_string() } else { cfg.tts.voice.clone() },
+                if default_model {
+                    "tts-1".to_string()
+                } else {
+                    cfg.tts.model.clone()
+                },
+                if cfg.tts.voice.is_empty() {
+                    "alloy".to_string()
+                } else {
+                    cfg.tts.voice.clone()
+                },
             ),
             "elevenlabs" => (
-                if default_model { "eleven_multilingual_v2".to_string() } else { cfg.tts.model.clone() },
-                if cfg.tts.voice.is_empty() { "Rachel".to_string() } else { cfg.tts.voice.clone() },
+                if default_model {
+                    "eleven_multilingual_v2".to_string()
+                } else {
+                    cfg.tts.model.clone()
+                },
+                if cfg.tts.voice.is_empty() {
+                    "Rachel".to_string()
+                } else {
+                    cfg.tts.voice.clone()
+                },
             ),
             _ => (cfg.tts.model.clone(), cfg.tts.voice.clone()),
         };
@@ -855,10 +859,7 @@ impl VoiceAccess for VoiceBridge {
 }
 
 /// Resolve a secret: use the config value if non-empty, else try an env var.
-fn resolve_secret(
-    secret: &clawft_types::secret::SecretString,
-    env_var: &str,
-) -> String {
+fn resolve_secret(secret: &clawft_types::secret::SecretString, env_var: &str) -> String {
     if !secret.is_empty() {
         return secret.expose().to_string();
     }
@@ -1001,8 +1002,8 @@ mod bridge_weft_168_tests {
 
         // Verify the file was written and round-trips back into a Config.
         let written = std::fs::read_to_string(&save_path).unwrap();
-        let parsed: clawft_types::config::Config = serde_json::from_str(&written)
-            .expect("written config must round-trip through Config");
+        let parsed: clawft_types::config::Config =
+            serde_json::from_str(&written).expect("written config must round-trip through Config");
         // Spot-check a default field to prove we wrote real content,
         // not an empty stub.
         assert_eq!(

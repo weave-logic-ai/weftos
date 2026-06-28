@@ -9,9 +9,9 @@ use std::borrow::Cow;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 
+use super::CanonWidget;
 use super::response::CanonResponse;
 use super::types::{Affordance, Confidence, IdentityUri, MutationAxis, Tooltip, VariantId};
-use super::CanonWidget;
 
 const IDENTITY: &str = "ui://table";
 
@@ -211,12 +211,9 @@ where
                             let mut label = egui::RichText::new(col.name.as_ref()).strong();
                             if sort_col == Some(i) {
                                 let arrow = if sort_asc { " ▲" } else { " ▼" };
-                                label = egui::RichText::new(format!(
-                                    "{}{}",
-                                    col.name.as_ref(),
-                                    arrow
-                                ))
-                                .strong();
+                                label =
+                                    egui::RichText::new(format!("{}{}", col.name.as_ref(), arrow))
+                                        .strong();
                             }
                             if ui.button(label).clicked() {
                                 outcome.sort_clicked = Some(i);
@@ -250,8 +247,8 @@ where
             None
         };
 
-        let canon =
-            CanonResponse::from_egui(resp, Cow::Borrowed(IDENTITY), variant, chosen).with_id_hint(id);
+        let canon = CanonResponse::from_egui(resp, Cow::Borrowed(IDENTITY), variant, chosen)
+            .with_id_hint(id);
         (canon, outcome)
     }
 }

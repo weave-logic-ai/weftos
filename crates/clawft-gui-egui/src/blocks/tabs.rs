@@ -3,10 +3,22 @@ use eframe::egui;
 use super::DemoState;
 
 const TABS: &[(&str, &str)] = &[
-    ("Overview", "Summary of the running kernel. 3 peers, 12 topics, uptime 4h13m."),
-    ("Processes", "Mock process list — pid 0 (kernel), pid 1 (daemon), pid 42 (coder-agent)."),
-    ("Topics", "a2a.broadcast, mesh.leaf.abc.push, kernel.heartbeat, gate.decisions…"),
-    ("Logs", "[INFO] mesh listener on 0.0.0.0:9470\n[INFO] peer connected: leaf-abc"),
+    (
+        "Overview",
+        "Summary of the running kernel. 3 peers, 12 topics, uptime 4h13m.",
+    ),
+    (
+        "Processes",
+        "Mock process list — pid 0 (kernel), pid 1 (daemon), pid 42 (coder-agent).",
+    ),
+    (
+        "Topics",
+        "a2a.broadcast, mesh.leaf.abc.push, kernel.heartbeat, gate.decisions…",
+    ),
+    (
+        "Logs",
+        "[INFO] mesh listener on 0.0.0.0:9470\n[INFO] peer connected: leaf-abc",
+    ),
 ];
 
 pub fn show(ui: &mut egui::Ui, state: &mut DemoState) {

@@ -313,7 +313,7 @@ pub async fn run_democritus_loop_with_chain(
     eml: std::sync::Arc<Mutex<crate::eml_coherence::EmlCoherenceModel>>,
     chain_manager: Option<std::sync::Arc<crate::chain::ChainManager>>,
 ) {
-    use crate::causal_predict::{detect_conversation_cycle, ConversationState};
+    use crate::causal_predict::{ConversationState, detect_conversation_cycle};
     use crate::eml_coherence::GraphFeatures;
     use std::collections::VecDeque;
     use std::time::Instant;
@@ -490,21 +490,16 @@ pub async fn run_democritus_loop_with_chain(
                 && coherence_history.len() >= cycle_window
                 && exact_tick_count.is_multiple_of(cycle_window as u64)
             {
-                let history_slice: Vec<f64> =
-                    coherence_history.iter().copied().collect();
+                let history_slice: Vec<f64> = coherence_history.iter().copied().collect();
                 let state = detect_conversation_cycle(&history_slice, cycle_window, 0.01);
                 let is_stuck = matches!(
                     state,
-                    ConversationState::Stuck { .. }
-                        | ConversationState::Oscillating { .. }
+                    ConversationState::Stuck { .. } | ConversationState::Oscillating { .. }
                 );
 
                 match (in_stuck_phase, is_stuck) {
                     (false, true) => {
-                        tracing::warn!(
-                            "DEMOCRITUS: conversation entered stuck phase: {:?}",
-                            state
-                        );
+                        tracing::warn!("DEMOCRITUS: conversation entered stuck phase: {:?}", state);
                         in_stuck_phase = true;
                         stuck_checks_since_log = 0;
                         next_log_at = 1;
@@ -518,15 +513,11 @@ pub async fn run_democritus_loop_with_chain(
                                 state
                             );
                             stuck_checks_since_log = 0;
-                            next_log_at = (next_log_at.saturating_mul(2))
-                                .min(stuck_suppress_cap);
+                            next_log_at = (next_log_at.saturating_mul(2)).min(stuck_suppress_cap);
                         }
                     }
                     (true, false) => {
-                        tracing::info!(
-                            "DEMOCRITUS: conversation left stuck phase: {:?}",
-                            state
-                        );
+                        tracing::info!("DEMOCRITUS: conversation left stuck phase: {:?}", state);
                         in_stuck_phase = false;
                         stuck_checks_since_log = 0;
                         next_log_at = 1;
@@ -542,9 +533,7 @@ pub async fn run_democritus_loop_with_chain(
 
                     // Retrain periodically once we have enough samples.
                     let sample_count = model.training_sample_count();
-                    if sample_count >= 50
-                        && sample_count % train_every_n == 0
-                    {
+                    if sample_count >= 50 && sample_count % train_every_n == 0 {
                         let converged = model.train();
                         tracing::info!(
                             sample_count = sample_count,
@@ -565,15 +554,16 @@ pub async fn run_democritus_loop_with_chain(
         // ── LOG (ExoChain) ─────────────────────────────────────────────
         // Drain EML lifecycle events and append to the chain.
         if let Some(ref cm) = chain_manager
-            && let Ok(mut model) = eml.lock() {
-                for event in model.drain_events() {
-                    cm.append(
-                        "eml",
-                        event.event_type(),
-                        Some(serde_json::to_value(&event).unwrap_or_default()),
-                    );
-                }
+            && let Ok(mut model) = eml.lock()
+        {
+            for event in model.drain_events() {
+                cm.append(
+                    "eml",
+                    event.event_type(),
+                    Some(serde_json::to_value(&event).unwrap_or_default()),
+                );
             }
+        }
 
         // ── COMMIT ─────────────────────────────────────────────────────
         // Record timing in the adaptive tick system.

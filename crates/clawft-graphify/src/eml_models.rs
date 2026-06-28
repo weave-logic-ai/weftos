@@ -160,7 +160,12 @@ impl ClusterThresholdModel {
     /// Predict thresholds for the given graph topology.
     ///
     /// Returns `(max_community_fraction, min_split_size, cohesion_threshold)`.
-    pub fn predict(&self, node_count: f64, edge_density: f64, community_count: f64) -> (f64, f64, f64) {
+    pub fn predict(
+        &self,
+        node_count: f64,
+        edge_density: f64,
+        community_count: f64,
+    ) -> (f64, f64, f64) {
         if !self.trained {
             return self.fallback();
         }

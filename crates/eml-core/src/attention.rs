@@ -73,12 +73,24 @@ impl SafeTree {
         }
     }
 
-    pub fn depth(&self) -> usize { self.depth }
-    pub fn inputs(&self) -> usize { self.inputs }
-    pub fn heads(&self) -> usize { self.heads }
-    pub fn param_count(&self) -> usize { self.params.len() }
-    pub fn params_slice(&self) -> &[f64] { &self.params }
-    pub fn params_slice_mut(&mut self) -> &mut [f64] { &mut self.params }
+    pub fn depth(&self) -> usize {
+        self.depth
+    }
+    pub fn inputs(&self) -> usize {
+        self.inputs
+    }
+    pub fn heads(&self) -> usize {
+        self.heads
+    }
+    pub fn param_count(&self) -> usize {
+        self.params.len()
+    }
+    pub fn params_slice(&self) -> &[f64] {
+        &self.params
+    }
+    pub fn params_slice_mut(&mut self) -> &mut [f64] {
+        &mut self.params
+    }
 
     /// Per-head forward pass. Output length == `heads`.
     pub fn predict(&self, x: &[f64]) -> Vec<f64> {
@@ -384,9 +396,7 @@ impl ToyEmlAttention {
         }
         let eval_subset: Vec<(Vec<f64>, Vec<f64>)> = samples
             .iter()
-            .step_by(
-                (samples.len() / cfg.eval_subset.min(samples.len())).max(1),
-            )
+            .step_by((samples.len() / cfg.eval_subset.min(samples.len())).max(1))
             .take(cfg.eval_subset)
             .cloned()
             .collect();
@@ -404,8 +414,7 @@ impl ToyEmlAttention {
         let mut accepts: u32 = 0;
         for trial in 0..cfg.trials {
             let frac = trial as f64 / cfg.trials.max(1) as f64;
-            let step = cfg.step_init
-                * (cfg.step_final / cfg.step_init).powf(frac);
+            let step = cfg.step_init * (cfg.step_final / cfg.step_init).powf(frac);
 
             let u = next_lcg_unit(&mut rng_state);
             let pidx = ((u * total_params as f64) as usize).min(total_params - 1);
@@ -500,8 +509,7 @@ impl ToyEmlAttention {
     }
 
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self)
-            .expect("ToyEmlAttention serialization should not fail")
+        serde_json::to_string(self).expect("ToyEmlAttention serialization should not fail")
     }
 
     pub fn from_json(json: &str) -> Option<Self> {
@@ -512,10 +520,7 @@ impl ToyEmlAttention {
 /// Numerically stable softmax — used as the reference for training and the
 /// fallback when the learned softmax model is untrained or drifts.
 fn numerical_softmax(row: &[f64]) -> Vec<f64> {
-    let max = row
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, f64::max);
+    let max = row.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let exp: Vec<f64> = row.iter().map(|v| (v - max).exp()).collect();
     let sum: f64 = exp.iter().sum();
     if sum > 0.0 {
@@ -596,16 +601,12 @@ impl std::fmt::Display for AttentionError {
             AttentionError::InvalidDepth(d) => {
                 write!(f, "EmlModel depth must be in 3..=5, got {}", d)
             }
-            AttentionError::SeqLenOutOfRange(n) => write!(
-                f,
-                "seq_len must be in 1..={}, got {}",
-                MAX_TOY_SEQ_LEN, n
-            ),
-            AttentionError::DModelOutOfRange(n) => write!(
-                f,
-                "d_model must be in 1..={}, got {}",
-                MAX_TOY_D_MODEL, n
-            ),
+            AttentionError::SeqLenOutOfRange(n) => {
+                write!(f, "seq_len must be in 1..={}, got {}", MAX_TOY_SEQ_LEN, n)
+            }
+            AttentionError::DModelOutOfRange(n) => {
+                write!(f, "d_model must be in 1..={}, got {}", MAX_TOY_D_MODEL, n)
+            }
             AttentionError::DKOutOfRange(n) => {
                 write!(f, "d_k must be in 1..=d_model, got {}", n)
             }
@@ -780,18 +781,12 @@ pub fn run_benchmark_with_trials(
         latencies.push(t.elapsed().as_nanos());
     }
     latencies.sort_unstable();
-    let phase3_inference_ns_mean =
-        latencies.iter().sum::<u128>() / (latencies.len() as u128);
+    let phase3_inference_ns_mean = latencies.iter().sum::<u128>() / (latencies.len() as u128);
     let phase3_inference_ns_p99 = latencies[(latencies.len() * 99) / 100];
 
     // Phase 4 -------------------------------------------------------------
     let mut phase4_scaling = Vec::new();
-    let shapes = [
-        (4, 8),
-        (4, 16),
-        (8, 8),
-        (8, 16),
-    ];
+    let shapes = [(4, 8), (4, 16), (8, 8), (8, 16)];
     for &(sl, dm) in &shapes {
         if sl > seq_len || dm > d_model {
             continue;
@@ -932,7 +927,10 @@ mod tests {
             let s = gen_sample(&mut rng, 32);
             a.record(s.clone(), s).unwrap();
         }
-        let cfg = EndToEndTrainConfig { trials: 50, ..Default::default() };
+        let cfg = EndToEndTrainConfig {
+            trials: 50,
+            ..Default::default()
+        };
         let _ = a.train_end_to_end(cfg);
         assert_eq!(a.training_rounds(), 1);
         assert!(a.buffer_len() > 0);

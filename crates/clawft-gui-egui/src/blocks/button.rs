@@ -17,10 +17,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut DemoState) {
         {
             state.counter += 1;
         }
-        if ui
-            .add(egui::Button::new("Ghost").frame(false))
-            .clicked()
-        {
+        if ui.add(egui::Button::new("Ghost").frame(false)).clicked() {
             state.counter += 1;
         }
         ui.add_enabled(false, egui::Button::new("Disabled"));

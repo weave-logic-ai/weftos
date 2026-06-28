@@ -337,9 +337,11 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(results.len(), 2);
-        assert!(results
-            .iter()
-            .all(|e| matches!(e.level, LogLevel::Warn | LogLevel::Error)));
+        assert!(
+            results
+                .iter()
+                .all(|e| matches!(e.level, LogLevel::Warn | LogLevel::Error))
+        );
     }
 
     #[test]
@@ -460,7 +462,10 @@ mod tests {
         assert_eq!(entry.source_pid, Some(5));
         assert_eq!(entry.source_service.as_deref(), Some("auth"));
         assert_eq!(entry.trace_id.as_deref(), Some("t-123"));
-        assert_eq!(entry.fields.get("key").unwrap(), &serde_json::json!("value"));
+        assert_eq!(
+            entry.fields.get("key").unwrap(),
+            &serde_json::json!("value")
+        );
     }
 
     #[test]

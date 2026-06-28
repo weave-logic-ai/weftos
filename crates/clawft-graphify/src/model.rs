@@ -3,9 +3,9 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use petgraph::Direction;
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
-use petgraph::Direction;
 use serde::{Deserialize, Serialize};
 
 use crate::entity::{EntityId, EntityType, FileType};
@@ -375,9 +375,10 @@ impl KnowledgeGraph {
         let mut files: std::collections::HashSet<String> = std::collections::HashSet::new();
         for e in self.entities() {
             if let Some(ref sf) = e.source_file
-                && !sf.is_empty() {
-                    files.insert(sf.clone());
-                }
+                && !sf.is_empty()
+            {
+                files.insert(sf.clone());
+            }
         }
         let mut v: Vec<String> = files.into_iter().collect();
         v.sort();
@@ -442,13 +443,7 @@ pub struct DataFlowStep {
 }
 
 /// Edge types that represent data/control flow.
-const FLOW_EDGE_TYPES: &[&str] = &[
-    "calls",
-    "imports",
-    "imports_from",
-    "depends_on",
-    "uses",
-];
+const FLOW_EDGE_TYPES: &[&str] = &["calls", "imports", "imports_from", "depends_on", "uses"];
 
 impl KnowledgeGraph {
     /// Trace data flow through call/import dependencies using BFS.
@@ -557,9 +552,7 @@ fn normalized_edit_distance(a: &str, b: &str) -> f64 {
             } else {
                 1
             };
-            curr[j] = (prev[j] + 1)
-                .min(curr[j - 1] + 1)
-                .min(prev[j - 1] + cost);
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
         }
         std::mem::swap(&mut prev, &mut curr);
     }
@@ -719,7 +712,17 @@ mod tests {
         let idx2 = kg.add_entity(e);
         assert_eq!(idx1, idx2);
         assert_eq!(kg.entity_count(), 1);
-        assert_eq!(kg.entity(&EntityId::new(&DomainTag::Code, &EntityType::Module, "auth", "test.py")).unwrap().label, "auth_updated");
+        assert_eq!(
+            kg.entity(&EntityId::new(
+                &DomainTag::Code,
+                &EntityType::Module,
+                "auth",
+                "test.py"
+            ))
+            .unwrap()
+            .label,
+            "auth_updated"
+        );
     }
 
     #[test]
@@ -818,18 +821,21 @@ mod tests {
     fn scale_test_1000_entities() {
         let mut kg = KnowledgeGraph::new();
         let entities: Vec<Entity> = (0..1000)
-            .map(|i| {
-                Entity {
-                    id: EntityId::new(&DomainTag::Code, &EntityType::Function, &format!("fn_{i}"), "big.py"),
-                    entity_type: EntityType::Function,
-                    label: format!("fn_{i}"),
-                    source_file: Some("big.py".into()),
-                    source_location: None,
-                    file_type: FileType::Code,
-                    metadata: serde_json::json!({}),
-                    legacy_id: None,
-                    iri: None,
-                }
+            .map(|i| Entity {
+                id: EntityId::new(
+                    &DomainTag::Code,
+                    &EntityType::Function,
+                    &format!("fn_{i}"),
+                    "big.py",
+                ),
+                entity_type: EntityType::Function,
+                label: format!("fn_{i}"),
+                source_file: Some("big.py".into()),
+                source_location: None,
+                file_type: FileType::Code,
+                metadata: serde_json::json!({}),
+                legacy_id: None,
+                iri: None,
             })
             .collect();
 
@@ -978,7 +984,10 @@ mod tests {
         });
 
         let steps = kg.trace_data_flow(&a.id, FlowDirection::Forward, 3);
-        assert!(steps.is_empty(), "Contains edges should not be followed in data flow");
+        assert!(
+            steps.is_empty(),
+            "Contains edges should not be followed in data flow"
+        );
     }
 
     #[test]
@@ -1012,7 +1021,12 @@ mod tests {
     fn find_duplicates_by_label_similarity() {
         let mut kg = KnowledgeGraph::new();
         let e1 = Entity {
-            id: EntityId::new(&DomainTag::Code, &EntityType::Function, "auth_service", "a.py"),
+            id: EntityId::new(
+                &DomainTag::Code,
+                &EntityType::Function,
+                "auth_service",
+                "a.py",
+            ),
             entity_type: EntityType::Function,
             label: "AuthService".to_string(),
             source_file: Some("a.py".into()),
@@ -1023,7 +1037,12 @@ mod tests {
             iri: None,
         };
         let e2 = Entity {
-            id: EntityId::new(&DomainTag::Code, &EntityType::Function, "authservice", "b.py"),
+            id: EntityId::new(
+                &DomainTag::Code,
+                &EntityType::Function,
+                "authservice",
+                "b.py",
+            ),
             entity_type: EntityType::Function,
             label: "authservice".to_string(),
             source_file: Some("b.py".into()),
@@ -1070,14 +1089,22 @@ mod tests {
         kg.add_entity(e2);
 
         let pairs = find_duplicates(&kg, 0.9);
-        assert!(pairs.is_empty(), "Different entity types should not be matched");
+        assert!(
+            pairs.is_empty(),
+            "Different entity types should not be matched"
+        );
     }
 
     #[test]
     fn dedup_merges_and_redirects_edges() {
         let mut kg = KnowledgeGraph::new();
         let e1 = Entity {
-            id: EntityId::new(&DomainTag::Code, &EntityType::Function, "auth_service", "a.py"),
+            id: EntityId::new(
+                &DomainTag::Code,
+                &EntityType::Function,
+                "auth_service",
+                "a.py",
+            ),
             entity_type: EntityType::Function,
             label: "AuthService".to_string(),
             source_file: Some("a.py".into()),
@@ -1088,7 +1115,12 @@ mod tests {
             iri: None,
         };
         let e2 = Entity {
-            id: EntityId::new(&DomainTag::Code, &EntityType::Function, "authservice", "b.py"),
+            id: EntityId::new(
+                &DomainTag::Code,
+                &EntityType::Function,
+                "authservice",
+                "b.py",
+            ),
             entity_type: EntityType::Function,
             label: "authservice".to_string(),
             source_file: Some("b.py".into()),

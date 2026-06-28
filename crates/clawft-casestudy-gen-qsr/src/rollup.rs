@@ -61,12 +61,7 @@ pub fn roll_up_to_week(events: &[DailyRollup]) -> Vec<WeeklyRollup> {
             };
             // Brand is stable per store — pull from the first daily's label
             // convention "day:<brand>:<store_num>:<date>".
-            let brand = dailies[0]
-                .label
-                .split(':')
-                .nth(1)
-                .unwrap_or("")
-                .to_string();
+            let brand = dailies[0].label.split(':').nth(1).unwrap_or("").to_string();
             let mut promo_union: std::collections::BTreeSet<String> =
                 std::collections::BTreeSet::new();
             for d in &dailies {
@@ -80,7 +75,12 @@ pub fn roll_up_to_week(events: &[DailyRollup]) -> Vec<WeeklyRollup> {
                 .min()
                 .unwrap_or_default();
             WeeklyRollup {
-                label: format!("week:{}:{}:{:03}", brand, store_num_from(&store_ref), week_index),
+                label: format!(
+                    "week:{}:{}:{:03}",
+                    brand,
+                    store_num_from(&store_ref),
+                    week_index
+                ),
                 store_ref,
                 brand,
                 week_start_date,
@@ -103,11 +103,7 @@ pub fn roll_up_to_week(events: &[DailyRollup]) -> Vec<WeeklyRollup> {
 
 fn store_num_from(store_ref: &str) -> String {
     // "store:<brand>:<metro>_<num>" → <num>
-    store_ref
-        .rsplit('_')
-        .next()
-        .unwrap_or("")
-        .to_string()
+    store_ref.rsplit('_').next().unwrap_or("").to_string()
 }
 
 fn round2(x: f64) -> f64 {
@@ -173,12 +169,7 @@ pub fn roll_up_to_month(events: &[DailyRollup]) -> Vec<MonthlyRollup> {
             } else {
                 0.0
             };
-            let brand = dailies[0]
-                .label
-                .split(':')
-                .nth(1)
-                .unwrap_or("")
-                .to_string();
+            let brand = dailies[0].label.split(':').nth(1).unwrap_or("").to_string();
             let mut promo_union: std::collections::BTreeSet<String> =
                 std::collections::BTreeSet::new();
             for d in &dailies {

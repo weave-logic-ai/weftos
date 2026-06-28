@@ -4,9 +4,9 @@
 //! memory entries.
 
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     routing::{delete, get, post},
-    Json, Router,
 };
 use serde::Deserialize;
 
@@ -49,10 +49,12 @@ async fn create_memory(
     State(state): State<ApiState>,
     Json(payload): Json<CreateMemoryRequest>,
 ) -> Json<serde_json::Value> {
-    match state
-        .memory
-        .store(&payload.key, &payload.value, &payload.namespace, &payload.tags)
-    {
+    match state.memory.store(
+        &payload.key,
+        &payload.value,
+        &payload.namespace,
+        &payload.tags,
+    ) {
         Ok(entry) => Json(serde_json::to_value(entry).unwrap_or_default()),
         Err(e) => Json(serde_json::json!({ "error": e })),
     }

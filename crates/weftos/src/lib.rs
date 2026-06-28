@@ -53,72 +53,100 @@ pub use clawft_kernel as kernel;
 
 // Re-export key types at the top level for ergonomic API
 pub use clawft_kernel::{
-    Kernel, KernelState,
-    // Process management
-    Pid, ProcessEntry, ProcessState, ProcessTable,
-    // Agent supervision
-    AgentSupervisor, SpawnBackend, SpawnRequest, SpawnResult,
     // Capabilities
-    AgentCapabilities, CapabilityChecker, IpcScope, ResourceLimits,
-    // IPC
-    KernelIpc, KernelMessage, KernelSignal, MessagePayload, MessageTarget,
-    GlobalPid,
-    // Services
-    ServiceRegistry, ServiceEntry, SystemService,
-    // Health
-    HealthSystem, HealthStatus, OverallHealth,
-    // Governance
-    GovernanceEngine, GovernanceRule, GovernanceRequest, GovernanceDecision,
-    EffectVector,
-    // Topics
-    TopicRouter, Subscription,
-    // Cluster
-    ClusterConfig, ClusterMembership, NodeState, PeerNode,
-    // Config
-    KernelConfigExt,
+    AgentCapabilities,
+    // Agent supervision
+    AgentSupervisor,
+    // Apps
+    AppManager,
+    AppManifest,
+    AppState,
     // Console
-    BootEvent, BootPhase, BootLog,
-    // Error
-    KernelError, KernelResult,
+    BootEvent,
+    BootLog,
+    BootPhase,
+    CapabilityChecker,
+    // Cluster
+    ClusterConfig,
+    ClusterMembership,
+    ContainerConfig,
+    // Containers
+    ContainerManager,
+    ContainerState,
     // Cron
     CronService,
-    // Apps
-    AppManager, AppManifest, InstalledApp, AppState,
-    // Containers
-    ContainerManager, ContainerConfig, ContainerState,
+    EffectVector,
+    GlobalPid,
+    GovernanceDecision,
+    // Governance
+    GovernanceEngine,
+    GovernanceRequest,
+    GovernanceRule,
+    HealthStatus,
+    // Health
+    HealthSystem,
+    InstalledApp,
+    IpcScope,
+    Kernel,
+    // Config
+    KernelConfigExt,
+    // Error
+    KernelError,
+    // IPC
+    KernelIpc,
+    KernelMessage,
+    KernelResult,
+    KernelSignal,
+    KernelState,
+    MessagePayload,
+    MessageTarget,
+    NodeState,
+    OverallHealth,
+    PeerNode,
+    // Process management
+    Pid,
+    ProcessEntry,
+    ProcessState,
+    ProcessTable,
+    ResourceLimits,
+    ServiceEntry,
+    // Services
+    ServiceRegistry,
+    SpawnBackend,
+    SpawnRequest,
+    SpawnResult,
+    Subscription,
+    SystemService,
+    // Topics
+    TopicRouter,
 };
 
 // Conditional re-exports
 #[cfg(feature = "exochain")]
 pub use clawft_kernel::{
-    ChainManager, ChainEvent, TreeManager, TreeStats,
-    GateBackend, GateDecision, GovernanceGate, CapabilityGate,
+    CapabilityGate, ChainEvent, ChainManager, GateBackend, GateDecision, GovernanceGate,
+    TreeManager, TreeStats,
 };
 
 #[cfg(feature = "ecc")]
 pub use clawft_kernel::{
-    CausalGraph, CausalEdgeType, CognitiveTick, CognitiveTickConfig,
-    CrossRef, CrossRefStore, CrossRefType, UniversalNodeId,
-    HnswService, HnswServiceConfig, HnswSearchResult,
-    ImpulseQueue, ImpulseType,
-    EccCalibration,
+    CausalEdgeType, CausalGraph, CognitiveTick, CognitiveTickConfig, CrossRef, CrossRefStore,
+    CrossRefType, EccCalibration, HnswSearchResult, HnswService, HnswServiceConfig, ImpulseQueue,
+    ImpulseType, UniversalNodeId,
 };
 
 #[cfg(feature = "mesh")]
 pub use clawft_kernel::{
-    MeshError, MeshPeer, MeshStream, MeshTransport, TransportListener,
-    WeftHandshake, MeshConnectionPool, TcpTransport,
-    DiscoveryCoordinator, BootstrapDiscovery,
-    MeshIpcEnvelope, DedupFilter,
-    HeartbeatTracker, HeartbeatConfig, HeartbeatState,
-    DistributedProcessTable, ClusterServiceRegistry,
+    BootstrapDiscovery, ClusterServiceRegistry, DedupFilter, DiscoveryCoordinator,
+    DistributedProcessTable, HeartbeatConfig, HeartbeatState, HeartbeatTracker, MeshConnectionPool,
+    MeshError, MeshIpcEnvelope, MeshPeer, MeshStream, MeshTransport, TcpTransport,
+    TransportListener, WeftHandshake,
 };
 
 #[cfg(feature = "os-patterns")]
 pub use clawft_kernel::{
-    MetricsRegistry, LogService, TimerService,
-    DeadLetterQueue, ReliableQueue, NamedPipeRegistry,
-    ReconciliationController,
+    DeadLetterQueue, LogService, MetricsRegistry, NamedPipeRegistry, ReconciliationController,
+    ReliableQueue, TimerService,
 };
 
 use std::path::Path;
@@ -152,7 +180,10 @@ impl WeftOs {
 
         let kernel = Kernel::boot(config, kernel_config, platform).await?;
 
-        Ok(Self { kernel, project_root })
+        Ok(Self {
+            kernel,
+            project_root,
+        })
     }
 
     /// Boot WeftOS with custom configuration.
@@ -164,7 +195,10 @@ impl WeftOs {
         let project_root = project_root.into();
         let platform = Arc::new(NativePlatform::new());
         let kernel = Kernel::boot(config, kernel_config, platform).await?;
-        Ok(Self { kernel, project_root })
+        Ok(Self {
+            kernel,
+            project_root,
+        })
     }
 
     /// Get the project root directory.
@@ -209,8 +243,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Check if WeftOS is initialized in the given directory.
 pub fn is_initialized(path: impl AsRef<Path>) -> bool {
-    path.as_ref().join(".weftos").exists()
-        || path.as_ref().join("weave.toml").exists()
+    path.as_ref().join(".weftos").exists() || path.as_ref().join("weave.toml").exists()
 }
 
 #[cfg(test)]

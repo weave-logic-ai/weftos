@@ -1,7 +1,9 @@
 //! Phase 2 — scenario engine, EML residual model, Monte-Carlo uncertainty.
 
 use clawft_casestudy_gen_qsr::{
-    config::GeneratorConfig, eml::{EmlModel, EmlSample}, engine::{self, ScenarioEngine},
+    config::GeneratorConfig,
+    eml::{EmlModel, EmlSample},
+    engine::{self, ScenarioEngine},
     generate, graph, scenarios, scoring, truth,
 };
 use std::path::{Path, PathBuf};
@@ -181,7 +183,10 @@ fn eml_trained_from_corpus_applies_correction() {
     let pred_with = engine.with_eml(&model).predict(&spec, 128, 11);
     let truth_cf = truth::compute_counterfactual(&spec, &corpus.events, &corpus.dims);
     let score = scoring::score(&pred_with, &truth_cf);
-    assert!(score.directional_accuracy, "EML prediction must preserve direction");
+    assert!(
+        score.directional_accuracy,
+        "EML prediction must preserve direction"
+    );
 }
 
 #[test]
@@ -229,7 +234,10 @@ fn small_tier_scenario_latency() {
     let config = GeneratorConfig::default_for_tier(42, ScaleTier::Small);
     let t_gen = std::time::Instant::now();
     let corpus = generate(&config, tmp.path()).unwrap();
-    eprintln!("generated small tier in {:.2}s", t_gen.elapsed().as_secs_f64());
+    eprintln!(
+        "generated small tier in {:.2}s",
+        t_gen.elapsed().as_secs_f64()
+    );
 
     let t_graph = std::time::Instant::now();
     let graph = graph::build(&corpus.dims, &corpus.events);
@@ -242,7 +250,12 @@ fn small_tier_scenario_latency() {
         let _prediction = engine.predict(&spec, 256, 7);
         let el = t0.elapsed().as_secs_f64();
         eprintln!("{}: {:.3}s", spec.id, el);
-        assert!(el < 10.0, "scenario {} took {:.3}s (>10s target)", spec.id, el);
+        assert!(
+            el < 10.0,
+            "scenario {} took {:.3}s (>10s target)",
+            spec.id,
+            el
+        );
     }
 }
 
@@ -265,7 +278,10 @@ fn stream_built_graph_yields_same_plan_as_batch() {
 
     assert!((batch_plan.baseline_sum - stream_plan.baseline_sum).abs() < 0.01);
     assert!((batch_plan.analytical_delta - stream_plan.analytical_delta).abs() < 0.01);
-    assert_eq!(batch_plan.scope_store_ids.len(), stream_plan.scope_store_ids.len());
+    assert_eq!(
+        batch_plan.scope_store_ids.len(),
+        stream_plan.scope_store_ids.len()
+    );
 }
 
 // Silence Path import when unused.

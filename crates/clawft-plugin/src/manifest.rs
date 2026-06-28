@@ -324,9 +324,7 @@ impl PluginManifest {
     /// validation failure, or `Ok(())` if the manifest is valid.
     pub fn validate(&self) -> Result<(), PluginError> {
         if self.id.is_empty() {
-            return Err(PluginError::LoadFailed(
-                "manifest: id is required".into(),
-            ));
+            return Err(PluginError::LoadFailed("manifest: id is required".into()));
         }
         if self.id.len() > 128 {
             return Err(PluginError::LoadFailed(
@@ -343,9 +341,7 @@ impl PluginManifest {
             ));
         }
         if self.name.is_empty() {
-            return Err(PluginError::LoadFailed(
-                "manifest: name is required".into(),
-            ));
+            return Err(PluginError::LoadFailed("manifest: name is required".into()));
         }
         // Validate semver
         if semver::Version::parse(&self.version).is_err() {
@@ -431,27 +427,21 @@ impl PluginManifest {
         let parsed = parse_legacy_toml(toml_str)
             .map_err(|e| PluginError::LoadFailed(format!("legacy TOML parse: {e}")))?;
 
-        let plugin = parsed.get("plugin").ok_or_else(|| {
-            PluginError::LoadFailed(
-                "legacy TOML: missing [plugin] table".into(),
-            )
-        })?;
+        let plugin = parsed
+            .get("plugin")
+            .ok_or_else(|| PluginError::LoadFailed("legacy TOML: missing [plugin] table".into()))?;
 
-        let name = plugin.get("name").cloned().ok_or_else(|| {
-            PluginError::LoadFailed(
-                "legacy TOML: missing [plugin].name".into(),
-            )
-        })?;
+        let name = plugin
+            .get("name")
+            .cloned()
+            .ok_or_else(|| PluginError::LoadFailed("legacy TOML: missing [plugin].name".into()))?;
 
         let version = plugin
             .get("version")
             .cloned()
             .unwrap_or_else(|| "0.1.0".to_string());
 
-        let plugin_type = plugin
-            .get("type")
-            .map(|s| s.as_str())
-            .unwrap_or("tool");
+        let plugin_type = plugin.get("type").map(|s| s.as_str()).unwrap_or("tool");
         let capability = match plugin_type {
             "tool" => PluginCapability::Tool,
             "channel" => PluginCapability::Channel,
@@ -602,8 +592,10 @@ fn collect_requested_perms(req: &VoiceCapability) -> Vec<String> {
 /// skipped. Unquoted values are treated as strings up to end-of-line.
 fn parse_legacy_toml(
     s: &str,
-) -> std::result::Result<std::collections::HashMap<String, std::collections::HashMap<String, String>>, String>
-{
+) -> std::result::Result<
+    std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    String,
+> {
     use std::collections::HashMap;
 
     let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
@@ -624,9 +616,9 @@ fn parse_legacy_toml(
             continue;
         }
 
-        let section = current_section.as_ref().ok_or_else(|| {
-            format!("line {}: key=value outside any [section]", lineno + 1)
-        })?;
+        let section = current_section
+            .as_ref()
+            .ok_or_else(|| format!("line {}: key=value outside any [section]", lineno + 1))?;
 
         let eq = line
             .find('=')
@@ -651,9 +643,7 @@ fn parse_legacy_toml(
             }
         }
 
-        out.entry(section.clone())
-            .or_default()
-            .insert(key, value);
+        out.entry(section.clone()).or_default().insert(key, value);
     }
 
     Ok(out)
@@ -766,10 +756,7 @@ mod tests {
         .to_string();
         let err = PluginManifest::from_json(&json).unwrap_err();
         let msg = err.to_string();
-        assert!(
-            msg.contains("at least one capability"),
-            "got: {msg}"
-        );
+        assert!(msg.contains("at least one capability"), "got: {msg}");
     }
 
     #[test]
@@ -1104,10 +1091,7 @@ type = "analyzer"
 version = "0.1.0"
 "#;
         let manifest = PluginManifest::from_legacy_toml(toml).unwrap();
-        assert_eq!(
-            manifest.capabilities,
-            vec![PluginCapability::PipelineStage]
-        );
+        assert_eq!(manifest.capabilities, vec![PluginCapability::PipelineStage]);
     }
 
     #[test]
@@ -1197,10 +1181,7 @@ version = "1.0.0"
         assert!(voice.read_transcripts);
         assert!(!voice.dispatch_commands);
         assert!(voice.synthesize_audio);
-        assert_eq!(
-            voice.transcript_topics,
-            vec!["weftos.voice.transcripts.v1"]
-        );
+        assert_eq!(voice.transcript_topics, vec!["weftos.voice.transcripts.v1"]);
     }
 
     #[test]
@@ -1276,13 +1257,9 @@ version = "1.0.0"
             read_transcripts: true,
             ..Default::default()
         };
-        let err = validate_voice_capability(
-            "p",
-            &[PluginCapability::Tool],
-            Some(&req),
-            Some(&grants),
-        )
-        .expect_err("must reject");
+        let err =
+            validate_voice_capability("p", &[PluginCapability::Tool], Some(&req), Some(&grants))
+                .expect_err("must reject");
         match err {
             SkillLoadError::VoiceCapabilityNotGranted { plugin, denied } => {
                 assert_eq!(plugin, "p");
@@ -1351,8 +1328,7 @@ version = "1.0.0"
             synthesize_audio: true,
             transcript_topics: vec!["t.a".into(), "t.b".into(), "t.c".into()],
         };
-        let r =
-            validate_voice_capability("p", &cap_voice(), Some(&req), Some(&grants));
+        let r = validate_voice_capability("p", &cap_voice(), Some(&req), Some(&grants));
         assert!(r.is_ok(), "got: {r:?}");
     }
 
@@ -1374,9 +1350,11 @@ version = "1.0.0"
             .expect_err("must reject topic");
         match err {
             SkillLoadError::VoiceCapabilityNotGranted { denied, .. } => {
-                assert!(denied
-                    .iter()
-                    .any(|d| d == "voice.transcript_topic:weftos.voice.transcripts.v1"));
+                assert!(
+                    denied
+                        .iter()
+                        .any(|d| d == "voice.transcript_topic:weftos.voice.transcripts.v1")
+                );
             }
             other => panic!("wrong variant: {other:?}"),
         }
@@ -1396,8 +1374,7 @@ version = "1.0.0"
             transcript_topics: Vec::new(),
             ..Default::default()
         };
-        let r =
-            validate_voice_capability("p", &cap_voice(), Some(&req), Some(&grants));
+        let r = validate_voice_capability("p", &cap_voice(), Some(&req), Some(&grants));
         assert!(r.is_ok());
     }
 

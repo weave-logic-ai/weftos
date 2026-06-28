@@ -303,6 +303,9 @@ fn fuzz_config_deeply_nested_no_panic() {
 #[test]
 fn fuzz_config_large_arrays_no_panic() {
     // Large array in a field that expects an object.
-    let large_array = format!("{{\"tiers\": [{}]}}", "null,".repeat(1000).trim_end_matches(','));
+    let large_array = format!(
+        "{{\"tiers\": [{}]}}",
+        "null,".repeat(1000).trim_end_matches(',')
+    );
     let _result: Result<RoutingConfig, _> = serde_json::from_str(&large_array);
 }

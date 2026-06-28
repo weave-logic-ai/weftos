@@ -160,8 +160,7 @@ pub fn verify_model_dir(
         return Err(ModelIntegrityError::SignatureMissing(sig_path));
     }
 
-    let manifest_bytes =
-        fs::read(&manifest_path).map_err(ModelIntegrityError::io)?;
+    let manifest_bytes = fs::read(&manifest_path).map_err(ModelIntegrityError::io)?;
     let sig_bytes = fs::read(&sig_path).map_err(ModelIntegrityError::io)?;
 
     let manifest: ModelManifest = serde_json::from_slice(&manifest_bytes)
@@ -175,29 +174,23 @@ pub fn verify_model_dir(
         });
     }
     let key_bytes = fs::read(&key_path).map_err(ModelIntegrityError::io)?;
-    let key_array: [u8; 32] = key_bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| {
-            ModelIntegrityError::SignatureInvalid(format!(
-                "trust root key {} is not 32 bytes (got {})",
-                key_path.display(),
-                key_bytes.len()
-            ))
-        })?;
+    let key_array: [u8; 32] = key_bytes.as_slice().try_into().map_err(|_| {
+        ModelIntegrityError::SignatureInvalid(format!(
+            "trust root key {} is not 32 bytes (got {})",
+            key_path.display(),
+            key_bytes.len()
+        ))
+    })?;
     let verifying_key = VerifyingKey::from_bytes(&key_array)
         .map_err(|e| ModelIntegrityError::SignatureInvalid(e.to_string()))?;
 
-    let sig_array: [u8; 64] = sig_bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| {
-            ModelIntegrityError::SignatureInvalid(format!(
-                "signature file {} is not 64 bytes (got {})",
-                sig_path.display(),
-                sig_bytes.len()
-            ))
-        })?;
+    let sig_array: [u8; 64] = sig_bytes.as_slice().try_into().map_err(|_| {
+        ModelIntegrityError::SignatureInvalid(format!(
+            "signature file {} is not 64 bytes (got {})",
+            sig_path.display(),
+            sig_bytes.len()
+        ))
+    })?;
     let signature = Signature::from_bytes(&sig_array);
 
     verifying_key
@@ -236,8 +229,7 @@ pub fn verify_model_dir(
 
 /// Convenience: resolve `trust_root` to `$HOME/.clawft/trust-roots/voice`.
 pub fn default_trust_root() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(|h| PathBuf::from(h).join(DEFAULT_TRUST_ROOT_REL))
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(DEFAULT_TRUST_ROOT_REL))
 }
 
 /// Compute the lower-hex SHA-256 of a file's contents, streaming the
@@ -340,10 +332,7 @@ mod tests {
         );
 
         // Place trust root key.
-        write_file(
-            &trust_root.path().join(format!("{key_id}.pub")),
-            &verifying,
-        );
+        write_file(&trust_root.path().join(format!("{key_id}.pub")), &verifying);
 
         (model_dir, trust_root, manifest)
     }
@@ -351,8 +340,7 @@ mod tests {
     #[test]
     fn valid_manifest_verifies() {
         let (model_dir, trust_root, _m) = fixture_valid();
-        let report =
-            verify_model_dir(model_dir.path(), trust_root.path()).expect("ok");
+        let report = verify_model_dir(model_dir.path(), trust_root.path()).expect("ok");
         assert_eq!(report.files_checked, 1);
         assert_eq!(report.manifest.model_id, "ggml-test");
     }
@@ -362,8 +350,7 @@ mod tests {
         let (model_dir, trust_root, _m) = fixture_valid();
         // Tamper with the model file *without* re-signing.
         write_file(&model_dir.path().join("model.bin"), b"corrupted!");
-        let err = verify_model_dir(model_dir.path(), trust_root.path())
-            .expect_err("must fail");
+        let err = verify_model_dir(model_dir.path(), trust_root.path()).expect_err("must fail");
         match err {
             ModelIntegrityError::HashMismatch { .. } => {}
             other => panic!("unexpected: {other:?}"),
@@ -374,8 +361,7 @@ mod tests {
     fn missing_signature_refuses_load() {
         let (model_dir, trust_root, _m) = fixture_valid();
         fs::remove_file(model_dir.path().join(MANIFEST_SIG_FILENAME)).unwrap();
-        let err = verify_model_dir(model_dir.path(), trust_root.path())
-            .expect_err("must fail");
+        let err = verify_model_dir(model_dir.path(), trust_root.path()).expect_err("must fail");
         match err {
             ModelIntegrityError::SignatureMissing(_) => {}
             other => panic!("unexpected: {other:?}"),
@@ -386,8 +372,7 @@ mod tests {
     fn missing_manifest_hard_fails_strict() {
         let (model_dir, trust_root, _m) = fixture_valid();
         fs::remove_file(model_dir.path().join(MANIFEST_FILENAME)).unwrap();
-        let err = verify_model_dir(model_dir.path(), trust_root.path())
-            .expect_err("must fail");
+        let err = verify_model_dir(model_dir.path(), trust_root.path()).expect_err("must fail");
         match err {
             ModelIntegrityError::ManifestMissing(_) => {}
             other => panic!("unexpected: {other:?}"),
@@ -411,8 +396,7 @@ mod tests {
         for entry in fs::read_dir(trust_root.path()).unwrap().flatten() {
             fs::remove_file(entry.path()).unwrap();
         }
-        let err = verify_model_dir(model_dir.path(), trust_root.path())
-            .expect_err("must fail");
+        let err = verify_model_dir(model_dir.path(), trust_root.path()).expect_err("must fail");
         match err {
             ModelIntegrityError::UnknownKeyId { .. } => {}
             other => panic!("unexpected: {other:?}"),
@@ -433,8 +417,7 @@ mod tests {
             &model_dir.path().join(MANIFEST_SIG_FILENAME),
             &bad_sig.to_bytes(),
         );
-        let err = verify_model_dir(model_dir.path(), trust_root.path())
-            .expect_err("must fail");
+        let err = verify_model_dir(model_dir.path(), trust_root.path()).expect_err("must fail");
         match err {
             ModelIntegrityError::SignatureInvalid(_) => {}
             other => panic!("unexpected: {other:?}"),
@@ -445,8 +428,7 @@ mod tests {
     fn file_missing_fails() {
         let (model_dir, trust_root, _m) = fixture_valid();
         fs::remove_file(model_dir.path().join("model.bin")).unwrap();
-        let err = verify_model_dir(model_dir.path(), trust_root.path())
-            .expect_err("must fail");
+        let err = verify_model_dir(model_dir.path(), trust_root.path()).expect_err("must fail");
         match err {
             ModelIntegrityError::FileMissing(_) => {}
             other => panic!("unexpected: {other:?}"),

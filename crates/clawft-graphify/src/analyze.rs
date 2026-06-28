@@ -7,9 +7,9 @@ use crate::eml_models::SurpriseScorerModel;
 use crate::entity::EntityId;
 use crate::model::KnowledgeGraph;
 use crate::relationship::Confidence;
+use petgraph::Direction;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
-use petgraph::Direction;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -18,8 +18,7 @@ use std::collections::{HashMap, HashSet};
 // ---------------------------------------------------------------------------
 
 const CODE_EXTENSIONS: &[&str] = &[
-    "py", "ts", "tsx", "js", "go", "rs", "java", "rb", "cpp", "c", "h", "cs", "kt", "scala",
-    "php",
+    "py", "ts", "tsx", "js", "go", "rs", "java", "rb", "cpp", "c", "h", "cs", "kt", "scala", "php",
 ];
 #[allow(dead_code)]
 const DOC_EXTENSIONS: &[&str] = &["md", "txt", "rst"];
@@ -27,11 +26,7 @@ const PAPER_EXTENSIONS: &[&str] = &["pdf"];
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "svg"];
 
 fn file_category(path: &str) -> &'static str {
-    let ext = path
-        .rsplit('.')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
     let ext = ext.as_str();
     if CODE_EXTENSIONS.contains(&ext) {
         "code"
@@ -66,10 +61,11 @@ pub fn is_file_node(kg: &KnowledgeGraph, id: &EntityId) -> bool {
     // File-level hub: label matches source filename
     if let Some(ref source_file) = entity.source_file
         && !source_file.is_empty()
-            && let Some(fname) = std::path::Path::new(source_file.as_str()).file_name()
-                && label == fname.to_str().unwrap_or("") {
-                    return true;
-                }
+        && let Some(fname) = std::path::Path::new(source_file.as_str()).file_name()
+        && label == fname.to_str().unwrap_or("")
+    {
+        return true;
+    }
 
     // Method stub: `.method_name()`
     if label.starts_with('.') && label.ends_with("()") {
@@ -133,7 +129,7 @@ pub fn god_nodes(kg: &KnowledgeGraph, top_n: usize) -> Vec<GodNode> {
         .map(|id| (id.clone(), kg.degree(id)))
         .collect();
 
-    degrees.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0 .0.cmp(&b.0 .0)));
+    degrees.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.0.cmp(&b.0.0)));
 
     let mut result = Vec::with_capacity(top_n);
     for (id, deg) in degrees {
@@ -293,15 +289,15 @@ fn surprise_score(
 
     // If a trained EML model is provided, use it for the score.
     if let Some(model) = eml_model
-        && model.is_trained() {
-            let eml_score = model.score(&features);
-            // Still generate human-readable reasons from the feature vector.
-            let reasons = surprise_reasons(
-                &features,
-                kg, src_id, tgt_id, src_source, tgt_source, confidence,
-            );
-            return (eml_score as i32, reasons);
-        }
+        && model.is_trained()
+    {
+        let eml_score = model.score(&features);
+        // Still generate human-readable reasons from the feature vector.
+        let reasons = surprise_reasons(
+            &features, kg, src_id, tgt_id, src_source, tgt_source, confidence,
+        );
+        return (eml_score as i32, reasons);
+    }
 
     // Hardcoded fallback (original logic).
     let mut score: i32 = 0;
@@ -339,10 +335,11 @@ fn surprise_score(
     let cid_u = node_community.get(src_id);
     let cid_v = node_community.get(tgt_id);
     if let (Some(cu), Some(cv)) = (cid_u, cid_v)
-        && cu != cv {
-            score += 1;
-            reasons.push("bridges separate communities".to_owned());
-        }
+        && cu != cv
+    {
+        score += 1;
+        reasons.push("bridges separate communities".to_owned());
+    }
 
     // 4b. Semantic similarity multiplier
     if relation == "semantically_similar_to" {
@@ -354,8 +351,14 @@ fn surprise_score(
     let deg_u = kg.degree(src_id);
     let deg_v = kg.degree(tgt_id);
     if deg_u.min(deg_v) <= 2 && deg_u.max(deg_v) >= 5 {
-        let src_label_str = kg.entity(src_id).map(|e| e.label.clone()).unwrap_or_else(|| src_id.to_hex());
-        let tgt_label_str = kg.entity(tgt_id).map(|e| e.label.clone()).unwrap_or_else(|| tgt_id.to_hex());
+        let src_label_str = kg
+            .entity(src_id)
+            .map(|e| e.label.clone())
+            .unwrap_or_else(|| src_id.to_hex());
+        let tgt_label_str = kg
+            .entity(tgt_id)
+            .map(|e| e.label.clone())
+            .unwrap_or_else(|| tgt_id.to_hex());
         let (peripheral, hub) = if deg_u <= 2 {
             (src_label_str.as_str(), tgt_label_str.as_str())
         } else {
@@ -500,11 +503,7 @@ fn cross_file_surprises(
         return cross_community_surprises(kg, communities, top_n);
     }
 
-    candidates
-        .into_iter()
-        .take(top_n)
-        .map(|c| c.conn)
-        .collect()
+    candidates.into_iter().take(top_n).map(|c| c.conn).collect()
 }
 
 fn cross_community_surprises(
@@ -518,8 +517,11 @@ fn cross_community_surprises(
         if kg.edge_count() == 0 {
             return vec![];
         }
-        let mut edges: Vec<(&crate::model::Entity, &crate::model::Entity, &crate::relationship::Relationship)> =
-            kg.edges().collect();
+        let mut edges: Vec<(
+            &crate::model::Entity,
+            &crate::model::Entity,
+            &crate::relationship::Relationship,
+        )> = kg.edges().collect();
         // Sort by confidence (ambiguous first) then by product of inverse degrees
         edges.sort_by(|a, b| {
             let conf_order = |c: Confidence| match c {
@@ -530,28 +532,30 @@ fn cross_community_surprises(
             conf_order(a.2.confidence)
                 .cmp(&conf_order(b.2.confidence))
                 .then_with(|| {
-                    let score_a = 1.0 / (kg.degree(&a.0.id) as f64 * kg.degree(&a.1.id) as f64).max(1.0);
-                    let score_b = 1.0 / (kg.degree(&b.0.id) as f64 * kg.degree(&b.1.id) as f64).max(1.0);
-                    score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+                    let score_a =
+                        1.0 / (kg.degree(&a.0.id) as f64 * kg.degree(&a.1.id) as f64).max(1.0);
+                    let score_b =
+                        1.0 / (kg.degree(&b.0.id) as f64 * kg.degree(&b.1.id) as f64).max(1.0);
+                    score_b
+                        .partial_cmp(&score_a)
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 })
         });
 
         return edges
             .into_iter()
             .take(top_n)
-            .map(|(src, tgt, rel)| {
-                SurprisingConnection {
-                    source: src.label.clone(),
-                    target: tgt.label.clone(),
-                    source_files: vec![
-                        src.source_file.clone().unwrap_or_default(),
-                        tgt.source_file.clone().unwrap_or_default(),
-                    ],
-                    confidence: rel.confidence,
-                    relation: rel.relation_type_str(),
-                    why: String::new(),
-                    note: Some("Bridges graph structure".to_owned()),
-                }
+            .map(|(src, tgt, rel)| SurprisingConnection {
+                source: src.label.clone(),
+                target: tgt.label.clone(),
+                source_files: vec![
+                    src.source_file.clone().unwrap_or_default(),
+                    tgt.source_file.clone().unwrap_or_default(),
+                ],
+                confidence: rel.confidence,
+                relation: rel.relation_type_str(),
+                why: String::new(),
+                note: Some("Bridges graph structure".to_owned()),
             })
             .collect();
     }
@@ -936,7 +940,9 @@ pub fn graph_diff(old: &KnowledgeGraph, new: &KnowledgeGraph) -> GraphDiff {
 
     let new_edges: Vec<DiffEdge> = new
         .edges()
-        .filter(|(src, tgt, rel)| added_edge_keys.contains(&edge_key(&src.id, &tgt.id, &rel.relation_type_str())))
+        .filter(|(src, tgt, rel)| {
+            added_edge_keys.contains(&edge_key(&src.id, &tgt.id, &rel.relation_type_str()))
+        })
         .map(|(src, tgt, rel)| DiffEdge {
             source: src.id.clone(),
             target: tgt.id.clone(),
@@ -947,7 +953,9 @@ pub fn graph_diff(old: &KnowledgeGraph, new: &KnowledgeGraph) -> GraphDiff {
 
     let removed_edges: Vec<DiffEdge> = old
         .edges()
-        .filter(|(src, tgt, rel)| removed_edge_keys.contains(&edge_key(&src.id, &tgt.id, &rel.relation_type_str())))
+        .filter(|(src, tgt, rel)| {
+            removed_edge_keys.contains(&edge_key(&src.id, &tgt.id, &rel.relation_type_str()))
+        })
         .map(|(src, tgt, rel)| DiffEdge {
             source: src.id.clone(),
             target: tgt.id.clone(),
@@ -967,17 +975,11 @@ pub fn graph_diff(old: &KnowledgeGraph, new: &KnowledgeGraph) -> GraphDiff {
     }
     if !removed_nodes.is_empty() {
         let n = removed_nodes.len();
-        parts.push(format!(
-            "{n} node{} removed",
-            if n != 1 { "s" } else { "" }
-        ));
+        parts.push(format!("{n} node{} removed", if n != 1 { "s" } else { "" }));
     }
     if !removed_edges.is_empty() {
         let n = removed_edges.len();
-        parts.push(format!(
-            "{n} edge{} removed",
-            if n != 1 { "s" } else { "" }
-        ));
+        parts.push(format!("{n} edge{} removed", if n != 1 { "s" } else { "" }));
     }
     let summary = if parts.is_empty() {
         "no changes".to_owned()
@@ -1112,15 +1114,13 @@ impl MctsExplorer {
             {
                 let parent_visits = arena[current].visit_count as f64;
                 let c = self.exploration_constant;
-                let best_child = arena[current]
-                    .children
-                    .iter()
-                    .copied()
-                    .max_by(|&a, &b| {
-                        let ucb_a = Self::ucb1_score(&arena[a], parent_visits, c);
-                        let ucb_b = Self::ucb1_score(&arena[b], parent_visits, c);
-                        ucb_a.partial_cmp(&ucb_b).unwrap_or(std::cmp::Ordering::Equal)
-                    });
+                let best_child = arena[current].children.iter().copied().max_by(|&a, &b| {
+                    let ucb_a = Self::ucb1_score(&arena[a], parent_visits, c);
+                    let ucb_b = Self::ucb1_score(&arena[b], parent_visits, c);
+                    ucb_a
+                        .partial_cmp(&ucb_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
                 match best_child {
                     Some(ci) => {
                         current = ci;
@@ -1176,9 +1176,14 @@ impl MctsExplorer {
                 }
                 rollout_steps += 1;
                 let nbrs = kg.neighbors(&rollout_id);
-                let unvis: Vec<&EntityId> = nbrs.iter().map(|e| &e.id)
-                    .filter(|id| !rollout_visited.contains(id)).collect();
-                if unvis.is_empty() { break; }
+                let unvis: Vec<&EntityId> = nbrs
+                    .iter()
+                    .map(|e| &e.id)
+                    .filter(|id| !rollout_visited.contains(id))
+                    .collect();
+                if unvis.is_empty() {
+                    break;
+                }
                 let pick = next_rng(&mut rng_state) as usize % unvis.len();
                 let next = unvis[pick].clone();
                 rollout_visited.insert(next.clone());
@@ -1187,26 +1192,34 @@ impl MctsExplorer {
 
             let normalized_reward = if rollout_steps > 0 {
                 rollout_reward / rollout_steps as f64
-            } else { 0.0 };
+            } else {
+                0.0
+            };
 
             // Backpropagation.
             let mut bp = current;
             loop {
                 arena[bp].visit_count += 1;
                 arena[bp].total_reward += normalized_reward;
-                match arena[bp].parent { Some(p) => bp = p, None => break }
+                match arena[bp].parent {
+                    Some(p) => bp = p,
+                    None => break,
+                }
             }
 
-            let path_score: f64 = path_ids.iter()
-                .filter_map(|id| kg.entity(id)).map(&relevance_fn).sum();
+            let path_score: f64 = path_ids
+                .iter()
+                .filter_map(|id| kg.entity(id))
+                .map(&relevance_fn)
+                .sum();
             if path_score > best_score {
                 best_score = path_score;
                 best_path = path_ids;
             }
 
-            if actual_iterations > 10
-                && arena.iter().all(|n| n.expanded || n.children.is_empty())
-            { break; }
+            if actual_iterations > 10 && arena.iter().all(|n| n.expanded || n.children.is_empty()) {
+                break;
+            }
         }
 
         MctsResult {
@@ -1218,7 +1231,9 @@ impl MctsExplorer {
     }
 
     fn ucb1_score(node: &MctsNode, parent_visits: f64, c: f64) -> f64 {
-        if node.visit_count == 0 { return f64::INFINITY; }
+        if node.visit_count == 0 {
+            return f64::INFINITY;
+        }
         let exploitation = node.total_reward / node.visit_count as f64;
         let exploration = c * (parent_visits.ln() / node.visit_count as f64).sqrt();
         exploitation + exploration
@@ -1279,7 +1294,8 @@ pub fn beam_search(
     let default_weight = 0.1;
 
     // Each beam entry: (path_nodes as NodeIndex vec, edge_types, cumulative score)
-    let mut beam: Vec<(Vec<NodeIndex>, Vec<String>, f64)> = vec![(vec![start_idx], Vec::new(), 0.0)];
+    let mut beam: Vec<(Vec<NodeIndex>, Vec<String>, f64)> =
+        vec![(vec![start_idx], Vec::new(), 0.0)];
     let mut completed: Vec<TraversalPath> = Vec::new();
 
     for _depth in 0..max_depth {
@@ -1305,10 +1321,7 @@ pub fn beam_search(
 
                     let rel = edge_ref.weight();
                     let rel_str = rel.relation_type_str();
-                    let weight = edge_prior
-                        .get(&rel_str)
-                        .copied()
-                        .unwrap_or(default_weight);
+                    let weight = edge_prior.get(&rel_str).copied().unwrap_or(default_weight);
 
                     let new_score = score + weight;
                     let mut new_path = path.clone();
@@ -1323,10 +1336,7 @@ pub fn beam_search(
 
             // If this path has no further expansions, record it as completed.
             if !has_expansion && path.len() > 1 {
-                let nodes = path
-                    .iter()
-                    .map(|&idx| graph[idx].id.clone())
-                    .collect();
+                let nodes = path.iter().map(|&idx| graph[idx].id.clone()).collect();
                 completed.push(TraversalPath {
                     nodes,
                     edges: edges.clone(),
@@ -1340,9 +1350,7 @@ pub fn beam_search(
         }
 
         // Keep only top beam_width candidates by score.
-        candidates.sort_by(|a, b| {
-            b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        candidates.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
         candidates.truncate(beam_width);
         beam = candidates;
     }
@@ -1350,10 +1358,7 @@ pub fn beam_search(
     // Convert remaining beam entries to completed paths.
     for (path, edges, score) in beam {
         if path.len() > 1 {
-            let nodes = path
-                .iter()
-                .map(|&idx| graph[idx].id.clone())
-                .collect();
+            let nodes = path.iter().map(|&idx| graph[idx].id.clone()).collect();
             completed.push(TraversalPath {
                 nodes,
                 edges,
@@ -1397,7 +1402,14 @@ mod tests {
         }
     }
 
-    fn rel(src_name: &str, src_file: &str, tgt_name: &str, tgt_file: &str, relation: RelationType, confidence: Confidence) -> Relationship {
+    fn rel(
+        src_name: &str,
+        src_file: &str,
+        tgt_name: &str,
+        tgt_file: &str,
+        relation: RelationType,
+        confidence: Confidence,
+    ) -> Relationship {
         Relationship {
             source: EntityId::new(&DomainTag::Code, &EntityType::Function, src_name, src_file),
             target: EntityId::new(&DomainTag::Code, &EntityType::Function, tgt_name, tgt_file),
@@ -1419,11 +1431,46 @@ mod tests {
             entity("user", "UserModel", "src/models.py"),
         ];
         let rels = vec![
-            rel("auth", "src/auth.py", "db", "src/db.py", RelationType::Calls, Confidence::Extracted),
-            rel("auth", "src/auth.py", "api", "src/api.py", RelationType::Calls, Confidence::Extracted),
-            rel("auth", "src/auth.py", "cache", "src/cache.py", RelationType::Custom("uses".into()), Confidence::Inferred),
-            rel("db", "src/db.py", "user", "src/models.py", RelationType::Contains, Confidence::Extracted),
-            rel("api", "src/api.py", "cache", "src/cache.py", RelationType::DependsOn, Confidence::Ambiguous),
+            rel(
+                "auth",
+                "src/auth.py",
+                "db",
+                "src/db.py",
+                RelationType::Calls,
+                Confidence::Extracted,
+            ),
+            rel(
+                "auth",
+                "src/auth.py",
+                "api",
+                "src/api.py",
+                RelationType::Calls,
+                Confidence::Extracted,
+            ),
+            rel(
+                "auth",
+                "src/auth.py",
+                "cache",
+                "src/cache.py",
+                RelationType::Custom("uses".into()),
+                Confidence::Inferred,
+            ),
+            rel(
+                "db",
+                "src/db.py",
+                "user",
+                "src/models.py",
+                RelationType::Contains,
+                Confidence::Extracted,
+            ),
+            rel(
+                "api",
+                "src/api.py",
+                "cache",
+                "src/cache.py",
+                RelationType::DependsOn,
+                Confidence::Ambiguous,
+            ),
         ];
         KnowledgeGraph::from_parts(entities, rels, vec![])
     }
@@ -1445,9 +1492,14 @@ mod tests {
             entity("auth.py", "auth.py", "auth.py"), // file node: label == filename
             entity("auth", "AuthService", "auth.py"),
         ];
-        let rels = vec![
-            rel("auth.py", "auth.py", "auth", "auth.py", RelationType::Contains, Confidence::Extracted),
-        ];
+        let rels = vec![rel(
+            "auth.py",
+            "auth.py",
+            "auth",
+            "auth.py",
+            RelationType::Contains,
+            Confidence::Extracted,
+        )];
         let kg = KnowledgeGraph::from_parts(entities, rels, vec![]);
         let gn = god_nodes(&kg, 10);
         // Should not contain the file node
@@ -1482,8 +1534,22 @@ mod tests {
             entity("d", "D", "src/d.py"),
         ];
         let rels = vec![
-            rel("a", "src/a.py", "b", "src/b.py", RelationType::Calls, Confidence::Ambiguous),
-            rel("c", "src/c.py", "d", "src/d.py", RelationType::Calls, Confidence::Extracted),
+            rel(
+                "a",
+                "src/a.py",
+                "b",
+                "src/b.py",
+                RelationType::Calls,
+                Confidence::Ambiguous,
+            ),
+            rel(
+                "c",
+                "src/c.py",
+                "d",
+                "src/d.py",
+                RelationType::Calls,
+                Confidence::Extracted,
+            ),
         ];
         let kg = KnowledgeGraph::from_parts(entities, rels, vec![]);
         let node_community: HashMap<EntityId, usize> = HashMap::new();
@@ -1494,12 +1560,26 @@ mod tests {
         let id_d = EntityId::new(&DomainTag::Code, &EntityType::Function, "d", "src/d.py");
 
         let (score_amb, _) = surprise_score(
-            &kg, &id_a, &id_b, "calls", Confidence::Ambiguous,
-            &node_community, "src/a.py", "src/b.py", None,
+            &kg,
+            &id_a,
+            &id_b,
+            "calls",
+            Confidence::Ambiguous,
+            &node_community,
+            "src/a.py",
+            "src/b.py",
+            None,
         );
         let (score_ext, _) = surprise_score(
-            &kg, &id_c, &id_d, "calls", Confidence::Extracted,
-            &node_community, "src/c.py", "src/d.py", None,
+            &kg,
+            &id_c,
+            &id_d,
+            "calls",
+            Confidence::Extracted,
+            &node_community,
+            "src/c.py",
+            "src/d.py",
+            None,
         );
         assert!(score_amb > score_ext);
     }
@@ -1521,12 +1601,26 @@ mod tests {
         let id_d = EntityId::new(&DomainTag::Code, &EntityType::Function, "d", "src/d.py");
 
         let (score_cross, reasons) = surprise_score(
-            &kg, &id_a, &id_b, "references", Confidence::Extracted,
-            &node_community, "src/a.py", "docs/b.pdf", None,
+            &kg,
+            &id_a,
+            &id_b,
+            "references",
+            Confidence::Extracted,
+            &node_community,
+            "src/a.py",
+            "docs/b.pdf",
+            None,
         );
         let (score_same, _) = surprise_score(
-            &kg, &id_c, &id_d, "references", Confidence::Extracted,
-            &node_community, "src/c.py", "src/d.py", None,
+            &kg,
+            &id_c,
+            &id_d,
+            "references",
+            Confidence::Extracted,
+            &node_community,
+            "src/c.py",
+            "src/d.py",
+            None,
         );
         assert!(score_cross > score_same);
         assert!(reasons.iter().any(|r| r.contains("file types")));
@@ -1545,11 +1639,7 @@ mod tests {
 
     #[test]
     fn graph_diff_detects_added_node() {
-        let old = KnowledgeGraph::from_parts(
-            vec![entity("a", "A", "a.py")],
-            vec![],
-            vec![],
-        );
+        let old = KnowledgeGraph::from_parts(vec![entity("a", "A", "a.py")], vec![], vec![]);
         let new_kg = KnowledgeGraph::from_parts(
             vec![entity("a", "A", "a.py"), entity("b", "B", "b.py")],
             vec![],
@@ -1564,7 +1654,14 @@ mod tests {
         let entities = vec![entity("a", "A", "a.py"), entity("b", "B", "b.py")];
         let old = KnowledgeGraph::from_parts(
             entities.clone(),
-            vec![rel("a", "a.py", "b", "b.py", RelationType::Calls, Confidence::Extracted)],
+            vec![rel(
+                "a",
+                "a.py",
+                "b",
+                "b.py",
+                RelationType::Calls,
+                Confidence::Extracted,
+            )],
             vec![],
         );
         let new_kg = KnowledgeGraph::from_parts(entities, vec![], vec![]);
@@ -1576,7 +1673,14 @@ mod tests {
     #[test]
     fn suggest_questions_returns_no_signal_for_trivial_graph() {
         let entities = vec![entity("a", "A", "a.py"), entity("b", "B", "a.py")];
-        let rels = vec![rel("a", "a.py", "b", "a.py", RelationType::Calls, Confidence::Extracted)];
+        let rels = vec![rel(
+            "a",
+            "a.py",
+            "b",
+            "a.py",
+            RelationType::Calls,
+            Confidence::Extracted,
+        )];
         let kg = KnowledgeGraph::from_parts(entities, rels, vec![]);
         let communities = crate::cluster::cluster(&kg);
         let labels: HashMap<usize, String> = communities
@@ -1590,12 +1694,22 @@ mod tests {
     #[test]
     fn suggest_questions_finds_ambiguous_edges() {
         let entities = vec![entity("a", "A", "a.py"), entity("b", "B", "a.py")];
-        let rels = vec![rel("a", "a.py", "b", "a.py", RelationType::Custom("maybe_calls".into()), Confidence::Ambiguous)];
+        let rels = vec![rel(
+            "a",
+            "a.py",
+            "b",
+            "a.py",
+            RelationType::Custom("maybe_calls".into()),
+            Confidence::Ambiguous,
+        )];
         let kg = KnowledgeGraph::from_parts(entities, rels, vec![]);
         let communities = crate::cluster::cluster(&kg);
         let labels = HashMap::new();
         let qs = suggest_questions(&kg, &communities, &labels, 7);
-        assert!(qs.iter().any(|q| q.question_type == QuestionType::AmbiguousEdge));
+        assert!(
+            qs.iter()
+                .any(|q| q.question_type == QuestionType::AmbiguousEdge)
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1606,13 +1720,24 @@ mod tests {
     fn beam_search_basic_traversal() {
         let kg = sample_kg();
         let priors = default_edge_priors();
-        let auth_id = EntityId::new(&DomainTag::Code, &EntityType::Function, "auth", "src/auth.py");
+        let auth_id = EntityId::new(
+            &DomainTag::Code,
+            &EntityType::Function,
+            "auth",
+            "src/auth.py",
+        );
 
         let paths = beam_search(&kg, &auth_id, 5, 3, &priors);
-        assert!(!paths.is_empty(), "Beam search should find at least one path");
+        assert!(
+            !paths.is_empty(),
+            "Beam search should find at least one path"
+        );
 
         for path in &paths {
-            assert!(path.nodes.len() >= 2, "Each path should have at least 2 nodes");
+            assert!(
+                path.nodes.len() >= 2,
+                "Each path should have at least 2 nodes"
+            );
             assert_eq!(path.edges.len(), path.nodes.len() - 1);
             assert!(path.total_score > 0.0);
         }
@@ -1628,8 +1753,10 @@ mod tests {
             let file = format!("src/leaf_{i}.py");
             entities.push(entity(&name, &name, &file));
             rels.push(rel(
-                "hub", "src/hub.py",
-                &name, &file,
+                "hub",
+                "src/hub.py",
+                &name,
+                &file,
                 RelationType::Calls,
                 Confidence::Extracted,
             ));
@@ -1656,7 +1783,12 @@ mod tests {
     fn beam_search_sorted_by_score_desc() {
         let kg = sample_kg();
         let priors = default_edge_priors();
-        let auth_id = EntityId::new(&DomainTag::Code, &EntityType::Function, "auth", "src/auth.py");
+        let auth_id = EntityId::new(
+            &DomainTag::Code,
+            &EntityType::Function,
+            "auth",
+            "src/auth.py",
+        );
 
         let paths = beam_search(&kg, &auth_id, 10, 3, &priors);
         for w in paths.windows(2) {
@@ -1676,7 +1808,12 @@ mod tests {
         priors.insert("depends_on".to_owned(), 0.0);
         priors.insert("contains".to_owned(), 0.0);
 
-        let auth_id = EntityId::new(&DomainTag::Code, &EntityType::Function, "auth", "src/auth.py");
+        let auth_id = EntityId::new(
+            &DomainTag::Code,
+            &EntityType::Function,
+            "auth",
+            "src/auth.py",
+        );
         let paths = beam_search(&kg, &auth_id, 10, 3, &priors);
 
         // All edges in top-scoring paths should prefer "calls".
@@ -1713,11 +1850,7 @@ mod tests {
 
     #[test]
     fn mcts_explores_single_node() {
-        let kg = KnowledgeGraph::from_parts(
-            vec![entity("a", "A", "a.py")],
-            vec![],
-            vec![],
-        );
+        let kg = KnowledgeGraph::from_parts(vec![entity("a", "A", "a.py")], vec![], vec![]);
         let start = EntityId::new(&DomainTag::Code, &EntityType::Function, "a", "a.py");
         let explorer = MctsExplorer::new(std::f64::consts::SQRT_2, 50, 5);
         let result = explorer.explore(&kg, &start, |_| 1.0);
@@ -1737,16 +1870,41 @@ mod tests {
             entity("d", "D", "d.py"),
         ];
         let rels = vec![
-            rel("a", "a.py", "b", "b.py", RelationType::Calls, Confidence::Extracted),
-            rel("b", "b.py", "c", "c.py", RelationType::Calls, Confidence::Extracted),
-            rel("c", "c.py", "d", "d.py", RelationType::Calls, Confidence::Extracted),
+            rel(
+                "a",
+                "a.py",
+                "b",
+                "b.py",
+                RelationType::Calls,
+                Confidence::Extracted,
+            ),
+            rel(
+                "b",
+                "b.py",
+                "c",
+                "c.py",
+                RelationType::Calls,
+                Confidence::Extracted,
+            ),
+            rel(
+                "c",
+                "c.py",
+                "d",
+                "d.py",
+                RelationType::Calls,
+                Confidence::Extracted,
+            ),
         ];
         let kg = KnowledgeGraph::from_parts(entities, rels, vec![]);
         let start = EntityId::new(&DomainTag::Code, &EntityType::Function, "a", "a.py");
         let explorer = MctsExplorer::new(std::f64::consts::SQRT_2, 200, 10);
         // Relevance by label: A=1, B=2, C=3, D=4
         let result = explorer.explore(&kg, &start, |e| match e.label.as_str() {
-            "A" => 1.0, "B" => 2.0, "C" => 3.0, "D" => 4.0, _ => 0.0,
+            "A" => 1.0,
+            "B" => 2.0,
+            "C" => 3.0,
+            "D" => 4.0,
+            _ => 0.0,
         });
         assert!(result.best_path.len() >= 2, "should find multi-node path");
         assert!(result.score > 1.0, "score should exceed single-node");
@@ -1762,28 +1920,53 @@ mod tests {
             entity("c", "LowRelevance", "c.py"),
         ];
         let rels = vec![
-            rel("a", "a.py", "b", "b.py", RelationType::Calls, Confidence::Extracted),
-            rel("a", "a.py", "c", "c.py", RelationType::Calls, Confidence::Extracted),
+            rel(
+                "a",
+                "a.py",
+                "b",
+                "b.py",
+                RelationType::Calls,
+                Confidence::Extracted,
+            ),
+            rel(
+                "a",
+                "a.py",
+                "c",
+                "c.py",
+                RelationType::Calls,
+                Confidence::Extracted,
+            ),
         ];
         let kg = KnowledgeGraph::from_parts(entities, rels, vec![]);
         let start = EntityId::new(&DomainTag::Code, &EntityType::Function, "a", "a.py");
         let explorer = MctsExplorer::new(std::f64::consts::SQRT_2, 100, 5);
         let result = explorer.explore(&kg, &start, |e| {
-            if e.label == "HighRelevance" { 10.0 }
-            else if e.label == "LowRelevance" { 0.1 }
-            else { 1.0 }
+            if e.label == "HighRelevance" {
+                10.0
+            } else if e.label == "LowRelevance" {
+                0.1
+            } else {
+                1.0
+            }
         });
         // The best path should include the high-relevance node.
         let high_id = EntityId::new(&DomainTag::Code, &EntityType::Function, "b", "b.py");
-        assert!(result.best_path.contains(&high_id),
-            "MCTS should find the high-relevance branch");
+        assert!(
+            result.best_path.contains(&high_id),
+            "MCTS should find the high-relevance branch"
+        );
         assert!(result.score >= 11.0);
     }
 
     #[test]
     fn mcts_iterations_and_nodes_populated() {
         let kg = sample_kg();
-        let start = EntityId::new(&DomainTag::Code, &EntityType::Function, "auth", "src/auth.py");
+        let start = EntityId::new(
+            &DomainTag::Code,
+            &EntityType::Function,
+            "auth",
+            "src/auth.py",
+        );
         let explorer = MctsExplorer::new(1.0, 50, 5);
         let result = explorer.explore(&kg, &start, |_| 1.0);
         assert!(result.iterations_used > 0);

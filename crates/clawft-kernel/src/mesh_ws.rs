@@ -9,10 +9,10 @@ use std::net::SocketAddr;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::MaybeTlsStream;
+use tokio_tungstenite::tungstenite::Message;
 
-use crate::mesh::{MeshError, MeshStream, MeshTransport, TransportListener, MAX_MESSAGE_SIZE};
+use crate::mesh::{MAX_MESSAGE_SIZE, MeshError, MeshStream, MeshTransport, TransportListener};
 
 // ── Wire helpers ──────────────────────────────────────────────
 

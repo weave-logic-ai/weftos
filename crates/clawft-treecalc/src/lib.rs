@@ -189,10 +189,7 @@ mod tests {
 
     #[test]
     fn trajectory_oscillating_is_branch() {
-        assert_eq!(
-            triage_trajectory(&[0.1, 0.9, 0.1, 0.9], 0.01),
-            Form::Branch
-        );
+        assert_eq!(triage_trajectory(&[0.1, 0.9, 0.1, 0.9], 0.01), Form::Branch);
     }
 
     #[test]

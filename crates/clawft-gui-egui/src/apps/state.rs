@@ -58,10 +58,8 @@ pub fn render_offline(
     // Crit chip
     let chip_w = 280.0;
     let chip_h = 28.0;
-    let chip_rect = egui::Rect::from_center_size(
-        egui::pos2(rect.center().x, cy),
-        egui::vec2(chip_w, chip_h),
-    );
+    let chip_rect =
+        egui::Rect::from_center_size(egui::pos2(rect.center().x, cy), egui::vec2(chip_w, chip_h));
     painter.rect_stroke(
         chip_rect,
         egui::CornerRadius::same(4),
@@ -101,12 +99,7 @@ pub fn render_offline(
 }
 
 /// Render the loading state — first poll in flight.
-pub fn render_loading(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    tokens: &Tokens,
-    what: &str,
-) {
+pub fn render_loading(ui: &mut egui::Ui, rect: egui::Rect, tokens: &Tokens, what: &str) {
     let painter = ui.painter_at(rect);
     painter.text(
         rect.center(),
@@ -189,7 +182,8 @@ mod tests {
         ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let rect = ui.max_rect();
-                let painted = render_if_needed(ui, rect, &snap, false, "files", Some("install fs adapter"));
+                let painted =
+                    render_if_needed(ui, rect, &snap, false, "files", Some("install fs adapter"));
                 assert!(painted);
             });
         });

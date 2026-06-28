@@ -81,16 +81,12 @@ pub fn sanitize_argument(arg: &str) -> Result<&str, String> {
 
     // Reject shell metacharacters.
     const BANNED_CHARS: &[char] = &[
-        ';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '!',
-        '\n', '\r', '\0',
+        ';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '!', '\n', '\r', '\0',
     ];
 
     for ch in BANNED_CHARS {
         if arg.contains(*ch) {
-            return Err(format!(
-                "argument contains forbidden character: {:?}",
-                ch
-            ));
+            return Err(format!("argument contains forbidden character: {:?}", ch));
         }
     }
 
@@ -106,8 +102,8 @@ mod tests {
         // SIGNAL_CLI_PATH may be set in the environment of CI runners;
         // tolerate either the env-supplied value or the literal default.
         let cfg = SignalAdapterConfig::default();
-        let expected_path = std::env::var("SIGNAL_CLI_PATH")
-            .unwrap_or_else(|_| "signal-cli".into());
+        let expected_path =
+            std::env::var("SIGNAL_CLI_PATH").unwrap_or_else(|_| "signal-cli".into());
         assert_eq!(cfg.signal_cli_path, expected_path);
         assert_eq!(cfg.daemon_bind_addr, "127.0.0.1:7583");
         assert!(cfg.data_dir.is_none());

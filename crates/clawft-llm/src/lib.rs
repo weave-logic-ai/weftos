@@ -73,7 +73,10 @@ pub mod browser_transport;
 
 pub use config::LlmProviderConfig;
 /// Backward-compatible alias for [`LlmProviderConfig`].
-#[deprecated(since = "0.2.0", note = "renamed to LlmProviderConfig to avoid collision")]
+#[deprecated(
+    since = "0.2.0",
+    note = "renamed to LlmProviderConfig to avoid collision"
+)]
 pub type ProviderConfig = LlmProviderConfig;
 pub use error::{ProviderError, Result};
 pub use sse::parse_sse_line;

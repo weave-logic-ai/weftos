@@ -76,8 +76,7 @@ impl SubstrateViewer for WaveformViewer {
 
         let height = 120.0_f32;
         let width = ui.available_width().clamp(200.0, 480.0);
-        let (rect, _resp) =
-            ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+        let (rect, _resp) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
         let painter = ui.painter_at(rect);
 
         painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(18, 18, 24));
@@ -159,22 +158,14 @@ impl SubstrateViewer for WaveformViewer {
             let x = rect.left() + t * rect.width();
             let n = ((peak_val - lo) / span).clamp(0.0, 1.0) as f32;
             let y = rect.bottom() - n * rect.height();
-            painter.circle_filled(
-                egui::pos2(x, y),
-                3.0,
-                egui::Color32::from_rgb(220, 180, 80),
-            );
+            painter.circle_filled(egui::pos2(x, y), 3.0, egui::Color32::from_rgb(220, 180, 80));
         }
         if trough_val.is_finite() {
             let t = trough_idx as f32 / denom;
             let x = rect.left() + t * rect.width();
             let n = ((trough_val - lo) / span).clamp(0.0, 1.0) as f32;
             let y = rect.bottom() - n * rect.height();
-            painter.circle_filled(
-                egui::pos2(x, y),
-                3.0,
-                egui::Color32::from_rgb(200, 90, 90),
-            );
+            painter.circle_filled(egui::pos2(x, y), 3.0, egui::Color32::from_rgb(200, 90, 90));
         }
 
         ui.add_space(4.0);

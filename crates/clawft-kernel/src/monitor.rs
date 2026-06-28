@@ -142,7 +142,11 @@ impl MonitorRegistry {
     /// Called when a process exits. Returns the set of signals to deliver:
     /// - `(linked_pid, ExitReason)` for each linked process
     /// - `ProcessDown` for each monitoring process
-    pub fn process_exited(&self, pid: Pid, reason: &ExitReason) -> (Vec<(Pid, ExitReason)>, Vec<ProcessDown>) {
+    pub fn process_exited(
+        &self,
+        pid: Pid,
+        reason: &ExitReason,
+    ) -> (Vec<(Pid, ExitReason)>, Vec<ProcessDown>) {
         let mut link_signals = Vec::new();
         let mut down_signals = Vec::new();
 

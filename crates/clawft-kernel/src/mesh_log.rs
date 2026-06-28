@@ -92,13 +92,7 @@ impl LogAggregator {
 
     /// Add a local log entry.
     pub fn log_local(&self, level: &str, message: &str, source: &str) {
-        let entry = RemoteLogEntry::new(
-            &self.local_node_id,
-            level,
-            message,
-            source,
-            Utc::now(),
-        );
+        let entry = RemoteLogEntry::new(&self.local_node_id, level, message, source, Utc::now());
         self.entries
             .entry(self.local_node_id.clone())
             .or_default()
@@ -129,16 +123,26 @@ impl LogAggregator {
             let entries = entry_ref.value();
 
             // Filter by node_id.
-            if query.node_id.as_ref().is_some_and(|n| node_id != n) { continue; }
+            if query.node_id.as_ref().is_some_and(|n| node_id != n) {
+                continue;
+            }
 
             for e in entries {
                 // Filter by level.
-                if query.level.as_ref().is_some_and(|l| e.level != *l) { continue; }
+                if query.level.as_ref().is_some_and(|l| e.level != *l) {
+                    continue;
+                }
                 // Filter by source.
-                if query.source.as_ref().is_some_and(|s| e.source != *s) { continue; }
+                if query.source.as_ref().is_some_and(|s| e.source != *s) {
+                    continue;
+                }
                 // Filter by time range.
-                if query.since.is_some_and(|since| e.timestamp < since) { continue; }
-                if query.until.is_some_and(|until| e.timestamp > until) { continue; }
+                if query.since.is_some_and(|since| e.timestamp < since) {
+                    continue;
+                }
+                if query.until.is_some_and(|until| e.timestamp > until) {
+                    continue;
+                }
 
                 results.push(e.clone());
             }

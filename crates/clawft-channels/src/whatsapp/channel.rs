@@ -21,17 +21,17 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::{
+    Router,
     body::Bytes,
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
-    Router,
 };
+use clawft_plugin::traits::CancellationToken;
 use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use sha2::Sha256;
-use clawft_plugin::traits::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use clawft_plugin::error::PluginError;
@@ -235,11 +235,7 @@ impl ChannelAdapter for WhatsAppChannelAdapter {
         }
     }
 
-    async fn send(
-        &self,
-        target: &str,
-        payload: &MessagePayload,
-    ) -> Result<String, PluginError> {
+    async fn send(&self, target: &str, payload: &MessagePayload) -> Result<String, PluginError> {
         let content = payload.as_text().ok_or_else(|| {
             PluginError::ExecutionFailed("whatsapp: only text payloads supported".into())
         })?;
@@ -276,9 +272,7 @@ impl ChannelAdapter for WhatsAppChannelAdapter {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                PluginError::ExecutionFailed(format!("whatsapp send: HTTP error: {e}"))
-            })?;
+            .map_err(|e| PluginError::ExecutionFailed(format!("whatsapp send: HTTP error: {e}")))?;
 
         let status = resp.status();
         let body_text = resp.text().await.unwrap_or_default();
@@ -429,8 +423,15 @@ mod tests {
 
     #[derive(Default)]
     struct MockHost {
-        delivered:
-            Mutex<Vec<(String, String, String, MessagePayload, HashMap<String, serde_json::Value>)>>,
+        delivered: Mutex<
+            Vec<(
+                String,
+                String,
+                String,
+                MessagePayload,
+                HashMap<String, serde_json::Value>,
+            )>,
+        >,
     }
 
     #[async_trait]

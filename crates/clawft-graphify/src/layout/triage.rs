@@ -18,7 +18,8 @@ pub enum TopologyForm {
 
 /// Classify a node's topology form based on its Contains edges.
 pub fn classify(kg: &KnowledgeGraph, node_id: &EntityId) -> TopologyForm {
-    let children: Vec<_> = kg.edges()
+    let children: Vec<_> = kg
+        .edges()
         .filter(|(src, _, rel)| {
             src.id == *node_id && matches!(rel.relation_type, RelationType::Contains)
         })
@@ -30,7 +31,9 @@ pub fn classify(kg: &KnowledgeGraph, node_id: &EntityId) -> TopologyForm {
 
     // Check if all children are the same type (sequence) or mixed (branch).
     let first_type = &children[0].1.entity_type;
-    let all_same = children.iter().all(|(_, tgt, _)| &tgt.entity_type == first_type);
+    let all_same = children
+        .iter()
+        .all(|(_, tgt, _)| &tgt.entity_type == first_type);
 
     if all_same {
         TopologyForm::Sequence

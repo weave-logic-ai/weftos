@@ -13,9 +13,9 @@ pub mod memory;
 pub mod runtime;
 pub mod sandbox;
 pub mod sink;
+pub mod skill_autogen;
 #[cfg(feature = "native")]
 pub mod skill_watcher;
-pub mod skill_autogen;
 pub mod skills;
 pub mod skills_v2;
 pub mod system_prompt;

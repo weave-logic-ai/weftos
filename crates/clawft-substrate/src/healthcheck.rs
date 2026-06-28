@@ -349,9 +349,7 @@ pub fn sensor_health_derived_path(
     source_node_id: &str,
     sensor_name: &str,
 ) -> String {
-    format!(
-        "substrate/{daemon_id}/derived/health/{source_node_id}/sensor/{sensor_name}"
-    )
+    format!("substrate/{daemon_id}/derived/health/{source_node_id}/sensor/{sensor_name}")
 }
 
 /// Granularity inferred from the shape of a health value. Result of
@@ -384,10 +382,17 @@ pub fn classify_value(value: &serde_json::Value) -> Option<(u32, HealthGranulari
     ) {
         return None;
     }
-    if obj.get("uptime_s").and_then(serde_json::Value::as_u64).is_some() {
+    if obj
+        .get("uptime_s")
+        .and_then(serde_json::Value::as_u64)
+        .is_some()
+    {
         return Some((8, HealthGranularity::Node));
     }
-    if obj.get("last_emit_ts").and_then(serde_json::Value::as_u64).is_some()
+    if obj
+        .get("last_emit_ts")
+        .and_then(serde_json::Value::as_u64)
+        .is_some()
         || obj
             .get("observed_rate_hz")
             .and_then(serde_json::Value::as_f64)
@@ -438,10 +443,7 @@ mod tests {
 
     #[test]
     fn path_helpers_match_contract_section_1() {
-        assert_eq!(
-            node_health_path("esp32-7a"),
-            "substrate/esp32-7a/health"
-        );
+        assert_eq!(node_health_path("esp32-7a"), "substrate/esp32-7a/health");
         assert_eq!(
             sensor_health_path("esp32-7a", "mic"),
             "substrate/esp32-7a/health/sensor/mic"
@@ -636,35 +638,19 @@ mod tests {
 
     #[test]
     fn round_trip_emit_then_classify_node() {
-        let payload = NodeHealth::new(
-            Status::Degraded,
-            120,
-            "0.7.0",
-            1_700_000_000_000,
-            42,
-        )
-        .with_rssi_dbm(-72)
-        .into_value();
+        let payload = NodeHealth::new(Status::Degraded, 120, "0.7.0", 1_700_000_000_000, 42)
+            .with_rssi_dbm(-72)
+            .into_value();
         // The producer-emitted shape must classify as a node-level
         // HealthReport — otherwise the Object Type registry won't pick
         // the right viewer.
-        assert_eq!(
-            classify_value(&payload),
-            Some((8, HealthGranularity::Node))
-        );
+        assert_eq!(classify_value(&payload), Some((8, HealthGranularity::Node)));
     }
 
     #[test]
     fn round_trip_emit_then_classify_sensor() {
-        let payload = SensorHealth::new(
-            Status::Healthy,
-            1_700_000_000_000,
-            2.0,
-            1.95,
-            0,
-            7,
-        )
-        .into_value();
+        let payload =
+            SensorHealth::new(Status::Healthy, 1_700_000_000_000, 2.0, 1.95, 0, 7).into_value();
         assert_eq!(
             classify_value(&payload),
             Some((8, HealthGranularity::Sensor))
@@ -804,9 +790,7 @@ impl SensorHealthReport {
         if observed_rate_hz == 0.0 {
             return SensorStatus::Down;
         }
-        if configured_rate_hz > 0.0
-            && observed_rate_hz < 0.5 * configured_rate_hz
-        {
+        if configured_rate_hz > 0.0 && observed_rate_hz < 0.5 * configured_rate_hz {
             return SensorStatus::Stale;
         }
         SensorStatus::Healthy

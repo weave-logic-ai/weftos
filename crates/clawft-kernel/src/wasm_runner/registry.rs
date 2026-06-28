@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::types::*;
 #[cfg(feature = "wasm-sandbox")]
 use super::runner::WasmToolRunner;
+use super::types::*;
 #[cfg(feature = "wasm-sandbox")]
 use crate::governance::EffectVector;
 
@@ -279,10 +279,7 @@ impl BuiltinTool for WasmToolAdapter {
 
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         // Extract input from args, defaulting to the full args object
-        let input = args
-            .get("input")
-            .cloned()
-            .unwrap_or(args.clone());
+        let input = args.get("input").cloned().unwrap_or(args.clone());
 
         let runner = self.runner.clone();
         let wasm_bytes = self.wasm_bytes.clone();

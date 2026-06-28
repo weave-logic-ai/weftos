@@ -29,9 +29,18 @@ pub fn generate(
     // Confidence breakdown
     let confidences: Vec<Confidence> = kg.edges().map(|(_, _, r)| r.confidence).collect();
     let total = confidences.len().max(1);
-    let ext_count = confidences.iter().filter(|&&c| c == Confidence::Extracted).count();
-    let inf_count = confidences.iter().filter(|&&c| c == Confidence::Inferred).count();
-    let amb_count = confidences.iter().filter(|&&c| c == Confidence::Ambiguous).count();
+    let ext_count = confidences
+        .iter()
+        .filter(|&&c| c == Confidence::Extracted)
+        .count();
+    let inf_count = confidences
+        .iter()
+        .filter(|&&c| c == Confidence::Inferred)
+        .count();
+    let amb_count = confidences
+        .iter()
+        .filter(|&&c| c == Confidence::Ambiguous)
+        .count();
     let ext_pct = (ext_count as f64 / total as f64 * 100.0).round() as usize;
     let inf_pct = (inf_count as f64 / total as f64 * 100.0).round() as usize;
     let amb_pct = (amb_count as f64 / total as f64 * 100.0).round() as usize;
@@ -63,9 +72,7 @@ pub fn generate(
             "- {} files · ~{} words",
             detection.total_files, detection.total_words
         ));
-        lines.push(
-            "- Verdict: corpus is large enough that graph structure adds value.".to_owned(),
-        );
+        lines.push("- Verdict: corpus is large enough that graph structure adds value.".to_owned());
     }
 
     // Summary
@@ -77,9 +84,8 @@ pub fn generate(
         kg.edge_count(),
         analysis.communities.len()
     ));
-    let mut extraction_line = format!(
-        "- Extraction: {ext_pct}% EXTRACTED · {inf_pct}% INFERRED · {amb_pct}% AMBIGUOUS"
-    );
+    let mut extraction_line =
+        format!("- Extraction: {ext_pct}% EXTRACTED · {inf_pct}% INFERRED · {amb_pct}% AMBIGUOUS");
     if let Some(avg) = inf_avg {
         extraction_line.push_str(&format!(
             " · INFERRED: {} edges (avg confidence: {avg})",
@@ -96,7 +102,12 @@ pub fn generate(
     lines.push(String::new());
     lines.push("## God Nodes (most connected - your core abstractions)".to_owned());
     for (i, node) in analysis.god_nodes.iter().enumerate() {
-        lines.push(format!("{}. `{}` - {} edges", i + 1, node.label, node.edges));
+        lines.push(format!(
+            "{}. `{}` - {} edges",
+            i + 1,
+            node.label,
+            node.edges
+        ));
     }
 
     // Surprising Connections
@@ -136,14 +147,16 @@ pub fn generate(
         lines.push(String::new());
         lines.push("## Hyperedges (group relationships)".to_owned());
         for h in &kg.hyperedges {
-            let node_labels: Vec<String> = h.entity_ids.iter().map(|n| {
-                kg.entity(n).map(|e| e.label.clone()).unwrap_or_else(|| n.to_hex())
-            }).collect();
-            lines.push(format!(
-                "- **{}** -- {}",
-                h.label,
-                node_labels.join(", ")
-            ));
+            let node_labels: Vec<String> = h
+                .entity_ids
+                .iter()
+                .map(|n| {
+                    kg.entity(n)
+                        .map(|e| e.label.clone())
+                        .unwrap_or_else(|| n.to_hex())
+                })
+                .collect();
+            lines.push(format!("- **{}** -- {}", h.label, node_labels.join(", ")));
         }
     }
 
@@ -162,10 +175,7 @@ pub fn generate(
         let score = analysis.cohesion_scores.get(&cid).copied().unwrap_or(0.0);
 
         // Filter file nodes from display
-        let real_nodes: Vec<&EntityId> = nodes
-            .iter()
-            .filter(|n| !is_file_node(kg, n))
-            .collect();
+        let real_nodes: Vec<&EntityId> = nodes.iter().filter(|n| !is_file_node(kg, n)).collect();
         let display: Vec<String> = real_nodes
             .iter()
             .take(8)
@@ -200,11 +210,15 @@ pub fn generate(
         lines.push(String::new());
         lines.push("## Ambiguous Edges - Review These".to_owned());
         for (src_ent, tgt_ent, r) in &ambiguous {
-            lines.push(format!("- `{}` -> `{}`  [AMBIGUOUS]", src_ent.label, tgt_ent.label));
+            lines.push(format!(
+                "- `{}` -> `{}`  [AMBIGUOUS]",
+                src_ent.label, tgt_ent.label
+            ));
             let source_file_str = r.source_file.as_deref().unwrap_or("");
             lines.push(format!(
                 "  {} · relation: {}",
-                source_file_str, r.relation_type_str()
+                source_file_str,
+                r.relation_type_str()
             ));
         }
     }
@@ -287,14 +301,12 @@ pub fn generate(
     if !analysis.questions.is_empty() {
         lines.push(String::new());
         lines.push("## Suggested Questions".to_owned());
-        let is_no_signal = analysis.questions.len() == 1
-            && analysis.questions[0].question.is_none();
+        let is_no_signal =
+            analysis.questions.len() == 1 && analysis.questions[0].question.is_none();
         if is_no_signal {
             lines.push(format!("_{}_", analysis.questions[0].why));
         } else {
-            lines.push(
-                "_Questions this graph is uniquely positioned to answer:_".to_owned(),
-            );
+            lines.push("_Questions this graph is uniquely positioned to answer:_".to_owned());
             lines.push(String::new());
             for q in &analysis.questions {
                 if let Some(question) = &q.question {
@@ -344,7 +356,13 @@ mod tests {
         }
     }
 
-    fn rel(src_name: &str, src_file: &str, tgt_name: &str, tgt_file: &str, conf: Confidence) -> Relationship {
+    fn rel(
+        src_name: &str,
+        src_file: &str,
+        tgt_name: &str,
+        tgt_file: &str,
+        conf: Confidence,
+    ) -> Relationship {
         Relationship {
             source: EntityId::new(&DomainTag::Code, &EntityType::Function, src_name, src_file),
             target: EntityId::new(&DomainTag::Code, &EntityType::Function, tgt_name, tgt_file),
@@ -389,14 +407,24 @@ mod tests {
             total_words: 500,
             warning: None,
         };
-        let report = generate(&kg, &analysis, &detection, &TokenCost::default(), "test-project");
+        let report = generate(
+            &kg,
+            &analysis,
+            &detection,
+            &TokenCost::default(),
+            "test-project",
+        );
         assert!(report.contains("# Graph Report - test-project"));
     }
 
     #[test]
     fn report_contains_sections() {
         let kg = KnowledgeGraph::from_parts(
-            vec![entity("a", "a.py"), entity("b", "b.py"), entity("c", "c.py")],
+            vec![
+                entity("a", "a.py"),
+                entity("b", "b.py"),
+                entity("c", "c.py"),
+            ],
             vec![
                 rel("a", "a.py", "b", "b.py", Confidence::Extracted),
                 rel("b", "b.py", "c", "c.py", Confidence::Ambiguous),

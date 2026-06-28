@@ -10,12 +10,12 @@
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use clawft_plugin::{PluginPermissions, PluginResourceConfig, VoiceCapability};
 use clawft_plugin::error::WasmHostError;
+use clawft_plugin::{PluginPermissions, PluginResourceConfig, VoiceCapability};
 
 // ---------------------------------------------------------------------------
 // NetworkAllowlist
@@ -190,8 +190,7 @@ impl PluginSandbox {
             })
             .collect();
 
-        let env_var_allowlist: HashSet<String> =
-            permissions.env_vars.iter().cloned().collect();
+        let env_var_allowlist: HashSet<String> = permissions.env_vars.iter().cloned().collect();
 
         let env_var_sensitive_patterns = vec![
             regex::Regex::new(r"(?i)_SECRET").unwrap(),
@@ -244,10 +243,7 @@ impl PluginSandbox {
     /// - `read_transcripts` is not granted, OR
     /// - The plugin declared a non-empty `transcript_topics` allowlist
     ///   and `topic` is not in it.
-    pub fn check_can_read_transcript(
-        &self,
-        topic: &str,
-    ) -> Result<(), WasmHostError> {
+    pub fn check_can_read_transcript(&self, topic: &str) -> Result<(), WasmHostError> {
         let Some(voice) = &self.voice else {
             return Err(WasmHostError::CapabilityDenied {
                 capability: "voice.read_transcripts".into(),
@@ -328,8 +324,8 @@ pub fn validate_http_request(
     body: Option<&str>,
 ) -> Result<url::Url, HttpValidationError> {
     // 1. Parse URL
-    let url = url::Url::parse(url_str)
-        .map_err(|e| HttpValidationError::InvalidUrl(e.to_string()))?;
+    let url =
+        url::Url::parse(url_str).map_err(|e| HttpValidationError::InvalidUrl(e.to_string()))?;
 
     // 2. Scheme check
     let scheme = url.scheme();
@@ -448,14 +444,10 @@ pub fn validate_file_access(
 
     // 1. Canonicalize the path
     let canonical = if write {
-        let parent = path
-            .parent()
-            .ok_or(FileValidationError::CannotResolve)?;
+        let parent = path.parent().ok_or(FileValidationError::CannotResolve)?;
         let parent_canonical =
             std::fs::canonicalize(parent).map_err(|_| FileValidationError::CannotResolve)?;
-        let filename = path
-            .file_name()
-            .ok_or(FileValidationError::CannotResolve)?;
+        let filename = path.file_name().ok_or(FileValidationError::CannotResolve)?;
         parent_canonical.join(filename)
     } else {
         std::fs::canonicalize(path).map_err(|_| FileValidationError::CannotResolve)?
@@ -600,10 +592,7 @@ pub const MAX_LOG_MESSAGE_SIZE: usize = 4096;
 /// Validate and potentially truncate a log message.
 ///
 /// Returns the (possibly truncated) message and whether it was rate-limited.
-pub fn validate_log_message(
-    sandbox: &PluginSandbox,
-    message: &str,
-) -> (String, bool) {
+pub fn validate_log_message(sandbox: &PluginSandbox, message: &str) -> (String, bool) {
     // Rate limit check
     if !sandbox.log_rate.try_increment() {
         return (String::new(), true);
@@ -760,9 +749,7 @@ mod tests {
         assert!(is_private_ip(
             &"::ffff:127.0.0.1".parse::<IpAddr>().unwrap()
         ));
-        assert!(is_private_ip(
-            &"::ffff:10.0.0.1".parse::<IpAddr>().unwrap()
-        ));
+        assert!(is_private_ip(&"::ffff:10.0.0.1".parse::<IpAddr>().unwrap()));
     }
 
     #[test]
@@ -810,24 +797,14 @@ mod tests {
     #[test]
     fn t01_http_allowed_domain() {
         let sandbox = sandbox_with_network(vec!["api.example.com".into()]);
-        let result = validate_http_request(
-            &sandbox,
-            "GET",
-            "https://api.example.com/data",
-            None,
-        );
+        let result = validate_http_request(&sandbox, "GET", "https://api.example.com/data", None);
         assert!(result.is_ok());
     }
 
     #[test]
     fn t02_http_denied_domain() {
         let sandbox = sandbox_with_network(vec!["api.example.com".into()]);
-        let result = validate_http_request(
-            &sandbox,
-            "GET",
-            "https://evil.example.com/data",
-            None,
-        );
+        let result = validate_http_request(&sandbox, "GET", "https://evil.example.com/data", None);
         assert!(matches!(
             result,
             Err(HttpValidationError::HostNotAllowed(_))
@@ -837,12 +814,7 @@ mod tests {
     #[test]
     fn t03_http_file_scheme_blocked() {
         let sandbox = sandbox_with_network(vec!["*".into()]);
-        let result = validate_http_request(
-            &sandbox,
-            "GET",
-            "file:///etc/passwd",
-            None,
-        );
+        let result = validate_http_request(&sandbox, "GET", "file:///etc/passwd", None);
         assert!(matches!(
             result,
             Err(HttpValidationError::DisallowedScheme(_))
@@ -852,12 +824,7 @@ mod tests {
     #[test]
     fn t04_http_data_scheme_blocked() {
         let sandbox = sandbox_with_network(vec!["*".into()]);
-        let result = validate_http_request(
-            &sandbox,
-            "GET",
-            "data:text/html,hello",
-            None,
-        );
+        let result = validate_http_request(&sandbox, "GET", "data:text/html,hello", None);
         assert!(matches!(
             result,
             Err(HttpValidationError::DisallowedScheme(_))
@@ -867,31 +834,15 @@ mod tests {
     #[test]
     fn t05_http_loopback_blocked() {
         let sandbox = sandbox_with_network(vec!["*".into()]);
-        let result = validate_http_request(
-            &sandbox,
-            "GET",
-            "http://127.0.0.1/",
-            None,
-        );
-        assert!(matches!(
-            result,
-            Err(HttpValidationError::PrivateIp(_))
-        ));
+        let result = validate_http_request(&sandbox, "GET", "http://127.0.0.1/", None);
+        assert!(matches!(result, Err(HttpValidationError::PrivateIp(_))));
     }
 
     #[test]
     fn t06_http_ipv4_mapped_ipv6_loopback_blocked() {
         let sandbox = sandbox_with_network(vec!["*".into()]);
-        let result = validate_http_request(
-            &sandbox,
-            "GET",
-            "http://[::ffff:127.0.0.1]/",
-            None,
-        );
-        assert!(matches!(
-            result,
-            Err(HttpValidationError::PrivateIp(_))
-        ));
+        let result = validate_http_request(&sandbox, "GET", "http://[::ffff:127.0.0.1]/", None);
+        assert!(matches!(result, Err(HttpValidationError::PrivateIp(_))));
     }
 
     #[test]
@@ -903,40 +854,21 @@ mod tests {
             "http://169.254.169.254/latest/meta-data/",
             None,
         );
-        assert!(matches!(
-            result,
-            Err(HttpValidationError::PrivateIp(_))
-        ));
+        assert!(matches!(result, Err(HttpValidationError::PrivateIp(_))));
     }
 
     #[test]
     fn t08_http_rfc1918_blocked() {
         let sandbox = sandbox_with_network(vec!["*".into()]);
-        let result = validate_http_request(
-            &sandbox,
-            "GET",
-            "http://10.0.0.1/",
-            None,
-        );
-        assert!(matches!(
-            result,
-            Err(HttpValidationError::PrivateIp(_))
-        ));
+        let result = validate_http_request(&sandbox, "GET", "http://10.0.0.1/", None);
+        assert!(matches!(result, Err(HttpValidationError::PrivateIp(_))));
     }
 
     #[test]
     fn t09_http_empty_network_denied() {
         let sandbox = sandbox_with_network(vec![]);
-        let result = validate_http_request(
-            &sandbox,
-            "GET",
-            "https://api.example.com/",
-            None,
-        );
-        assert!(matches!(
-            result,
-            Err(HttpValidationError::NetworkDenied)
-        ));
+        let result = validate_http_request(&sandbox, "GET", "https://api.example.com/", None);
+        assert!(matches!(result, Err(HttpValidationError::NetworkDenied)));
     }
 
     #[test]
@@ -947,11 +879,7 @@ mod tests {
         };
         let mut resources = PluginResourceConfig::default();
         resources.max_http_requests_per_minute = 10;
-        let sandbox = PluginSandbox::from_manifest(
-            "test-plugin".into(),
-            permissions,
-            &resources,
-        );
+        let sandbox = PluginSandbox::from_manifest("test-plugin".into(), permissions, &resources);
         // Make 10 successful requests
         for i in 0..10 {
             let url = format!("https://example.com/{i}");
@@ -961,28 +889,16 @@ mod tests {
             );
         }
         // 11th should fail
-        let result = validate_http_request(
-            &sandbox,
-            "GET",
-            "https://example.com/11",
-            None,
-        );
-        assert!(matches!(
-            result,
-            Err(HttpValidationError::RateLimited)
-        ));
+        let result = validate_http_request(&sandbox, "GET", "https://example.com/11", None);
+        assert!(matches!(result, Err(HttpValidationError::RateLimited)));
     }
 
     #[test]
     fn t11_http_body_too_large() {
         let sandbox = sandbox_with_network(vec!["*".into()]);
         let large_body = "x".repeat(2 * 1024 * 1024); // 2 MB
-        let result = validate_http_request(
-            &sandbox,
-            "POST",
-            "https://example.com/",
-            Some(&large_body),
-        );
+        let result =
+            validate_http_request(&sandbox, "POST", "https://example.com/", Some(&large_body));
         assert!(matches!(
             result,
             Err(HttpValidationError::BodyTooLarge { .. })
@@ -992,24 +908,14 @@ mod tests {
     #[test]
     fn t12_http_wildcard_subdomain_match() {
         let sandbox = sandbox_with_network(vec!["*.example.com".into()]);
-        let result = validate_http_request(
-            &sandbox,
-            "GET",
-            "https://sub.example.com/",
-            None,
-        );
+        let result = validate_http_request(&sandbox, "GET", "https://sub.example.com/", None);
         assert!(result.is_ok());
     }
 
     #[test]
     fn t13_http_wildcard_no_bare_domain() {
         let sandbox = sandbox_with_network(vec!["*.example.com".into()]);
-        let result = validate_http_request(
-            &sandbox,
-            "GET",
-            "https://example.com/",
-            None,
-        );
+        let result = validate_http_request(&sandbox, "GET", "https://example.com/", None);
         assert!(matches!(
             result,
             Err(HttpValidationError::HostNotAllowed(_))
@@ -1064,19 +970,12 @@ mod tests {
     #[test]
     fn test_env_access_hardcoded_deny() {
         // Even if in allowlist, hardcoded deny list blocks access
-        let sandbox =
-            sandbox_with_env(vec!["PATH".into(), "HOME".into(), "OPENAI_API_KEY".into()]);
+        let sandbox = sandbox_with_env(vec!["PATH".into(), "HOME".into(), "OPENAI_API_KEY".into()]);
         assert_eq!(validate_env_access(&sandbox, "PATH"), None);
         assert_eq!(validate_env_access(&sandbox, "HOME"), None);
         assert_eq!(validate_env_access(&sandbox, "OPENAI_API_KEY"), None);
-        assert_eq!(
-            validate_env_access(&sandbox, "AWS_SECRET_ACCESS_KEY"),
-            None
-        );
-        assert_eq!(
-            validate_env_access(&sandbox, "ANTHROPIC_API_KEY"),
-            None
-        );
+        assert_eq!(validate_env_access(&sandbox, "AWS_SECRET_ACCESS_KEY"), None);
+        assert_eq!(validate_env_access(&sandbox, "ANTHROPIC_API_KEY"), None);
     }
 
     // -- File validation tests --
@@ -1084,11 +983,7 @@ mod tests {
     #[test]
     fn t21_fs_empty_permissions_denied() {
         let sandbox = sandbox_with_fs(vec![]);
-        let result = validate_file_access(
-            &sandbox,
-            Path::new("/tmp/test.txt"),
-            false,
-        );
+        let result = validate_file_access(&sandbox, Path::new("/tmp/test.txt"), false);
         assert!(matches!(result, Err(FileValidationError::FsDenied)));
     }
 
@@ -1115,15 +1010,8 @@ mod tests {
 
         let sandbox = sandbox_with_fs(vec![dir.to_string_lossy().to_string()]);
         // /etc/hosts should exist on Linux but is outside sandbox
-        let result = validate_file_access(
-            &sandbox,
-            Path::new("/etc/hosts"),
-            false,
-        );
-        assert!(matches!(
-            result,
-            Err(FileValidationError::OutsideSandbox)
-        ));
+        let result = validate_file_access(&sandbox, Path::new("/etc/hosts"), false);
+        assert!(matches!(result, Err(FileValidationError::OutsideSandbox)));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1147,15 +1035,8 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
 
         let sandbox = sandbox_with_fs(vec![dir.to_string_lossy().to_string()]);
-        let result = validate_file_access(
-            &sandbox,
-            Path::new("/etc/new_file.txt"),
-            true,
-        );
-        assert!(matches!(
-            result,
-            Err(FileValidationError::OutsideSandbox)
-        ));
+        let result = validate_file_access(&sandbox, Path::new("/etc/new_file.txt"), true);
+        assert!(matches!(result, Err(FileValidationError::OutsideSandbox)));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1183,11 +1064,8 @@ mod tests {
         resources.max_fuel = 500_000_000;
         resources.max_memory_mb = 32;
 
-        let sandbox = PluginSandbox::from_manifest(
-            "custom".into(),
-            PluginPermissions::default(),
-            &resources,
-        );
+        let sandbox =
+            PluginSandbox::from_manifest("custom".into(), PluginPermissions::default(), &resources);
         assert_eq!(sandbox.fuel_budget, 500_000_000);
         assert_eq!(sandbox.memory_limit, 32 * 1024 * 1024);
     }
@@ -1232,11 +1110,8 @@ mod tests {
     fn t34_log_rate_limited() {
         let mut resources = PluginResourceConfig::default();
         resources.max_log_messages_per_minute = 5;
-        let sandbox = PluginSandbox::from_manifest(
-            "test".into(),
-            PluginPermissions::default(),
-            &resources,
-        );
+        let sandbox =
+            PluginSandbox::from_manifest("test".into(), PluginPermissions::default(), &resources);
         // First 5 should succeed
         for _ in 0..5 {
             let (_, rate_limited) = validate_log_message(&sandbox, "msg");
@@ -1272,21 +1147,11 @@ mod tests {
             let url = format!("https://example.com/{i}");
             assert!(validate_http_request(&sandbox_a, "GET", &url, None).is_ok());
         }
-        let result = validate_http_request(
-            &sandbox_a,
-            "GET",
-            "https://example.com/11",
-            None,
-        );
+        let result = validate_http_request(&sandbox_a, "GET", "https://example.com/11", None);
         assert!(matches!(result, Err(HttpValidationError::RateLimited)));
 
         // Sandbox B should still work
-        let result = validate_http_request(
-            &sandbox_b,
-            "GET",
-            "https://example.com/1",
-            None,
-        );
+        let result = validate_http_request(&sandbox_b, "GET", "https://example.com/1", None);
         assert!(result.is_ok());
     }
 
@@ -1305,8 +1170,7 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(FileValidationError::OutsideSandbox)
-                    | Err(FileValidationError::CannotResolve)
+                Err(FileValidationError::OutsideSandbox) | Err(FileValidationError::CannotResolve)
             ),
             "expected OutsideSandbox or CannotResolve, got: {result:?}"
         );
@@ -1333,8 +1197,7 @@ mod tests {
                 "symlink escape should be blocked, got: {result:?}"
             );
             match result.unwrap_err() {
-                FileValidationError::OutsideSandbox
-                | FileValidationError::SymlinkEscape(_) => {} // expected
+                FileValidationError::OutsideSandbox | FileValidationError::SymlinkEscape(_) => {} // expected
                 other => panic!("unexpected error variant: {other:?}"),
             }
         }
@@ -1484,9 +1347,10 @@ mod tests {
             ..Default::default()
         };
         let sb = empty_sandbox().with_voice_capability(Some(voice));
-        assert!(sb
-            .check_can_read_transcript("weftos.voice.transcripts.v1")
-            .is_ok());
+        assert!(
+            sb.check_can_read_transcript("weftos.voice.transcripts.v1")
+                .is_ok()
+        );
         let err = sb
             .check_can_read_transcript("other.topic")
             .expect_err("must deny non-listed topic");

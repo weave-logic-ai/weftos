@@ -7,8 +7,8 @@
 //! Schemas are composable: base + project + local layers merge in order
 //! (Docker-config style). IRIs provide globally unique concept identity.
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Top-level topology schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,7 +46,6 @@ pub enum Geometry {
     Radial,
     Wardley,
 }
-
 
 /// Configuration for a node type in the topology.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,10 +99,18 @@ impl Default for NodeStyle {
     }
 }
 
-fn default_shape() -> NodeShape { NodeShape::Circle }
-fn default_color() -> String { "#a3a3a3".into() }
-fn default_min_radius() -> u32 { 8 }
-fn default_max_radius() -> u32 { 48 }
+fn default_shape() -> NodeShape {
+    NodeShape::Circle
+}
+fn default_color() -> String {
+    "#a3a3a3".into()
+}
+fn default_min_radius() -> u32 {
+    8
+}
+fn default_max_radius() -> u32 {
+    48
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -132,7 +139,9 @@ pub struct EdgeTypeConfig {
     pub animated: bool,
 }
 
-fn default_cardinality() -> String { "N:M".into() }
+fn default_cardinality() -> String {
+    "N:M".into()
+}
 
 /// Visual defaults for an edge type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,9 +170,15 @@ impl Default for EdgeStyle {
     }
 }
 
-fn default_stroke() -> String { "#888888".into() }
-fn default_edge_width() -> f64 { 1.0 }
-fn default_true() -> bool { true }
+fn default_stroke() -> String {
+    "#888888".into()
+}
+fn default_edge_width() -> f64 {
+    1.0
+}
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -200,7 +215,9 @@ pub struct StructureMode {
 
 impl Default for StructureMode {
     fn default() -> Self {
-        Self { root_geometry: Geometry::Force }
+        Self {
+            root_geometry: Geometry::Force,
+        }
     }
 }
 
@@ -237,9 +254,15 @@ impl Default for DiffColors {
     }
 }
 
-fn default_added_color() -> String { "#22c55e".into() }
-fn default_removed_color() -> String { "#ef4444".into() }
-fn default_modified_color() -> String { "#eab308".into() }
+fn default_added_color() -> String {
+    "#22c55e".into()
+}
+fn default_removed_color() -> String {
+    "#ef4444".into()
+}
+fn default_modified_color() -> String {
+    "#eab308".into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeatmapMode {
@@ -256,7 +279,9 @@ pub struct HeatmapMetric {
     pub range: Option<[f64; 2]>,
 }
 
-fn default_palette() -> String { "viridis".into() }
+fn default_palette() -> String {
+    "viridis".into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlowMode {
@@ -267,8 +292,12 @@ pub struct FlowMode {
     pub color: String,
 }
 
-fn default_flow_speed() -> f64 { 120.0 }
-fn default_flow_color() -> String { "#60a5fa".into() }
+fn default_flow_speed() -> f64 {
+    120.0
+}
+fn default_flow_color() -> String {
+    "#60a5fa".into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineMode {
@@ -303,8 +332,12 @@ impl Default for ConstraintsConfig {
     }
 }
 
-fn default_max_nodes() -> usize { 2000 }
-fn default_max_edges() -> usize { 5000 }
+fn default_max_nodes() -> usize {
+    2000
+}
+fn default_max_edges() -> usize {
+    5000
+}
 
 // ---------------------------------------------------------------------------
 // Schema loading and merging
@@ -324,8 +357,10 @@ impl TopologySchema {
             self.nodes.insert(key.clone(), config.clone());
         }
         for edge in &other.edges {
-            let exists = self.edges.iter().any(|e| e.edge_type == edge.edge_type
-                && e.from == edge.from && e.to == edge.to);
+            let exists = self
+                .edges
+                .iter()
+                .any(|e| e.edge_type == edge.edge_type && e.from == edge.from && e.to == edge.to);
             if !exists {
                 self.edges.push(edge.clone());
             }
@@ -509,7 +544,10 @@ edges: []
 "##;
         let schema = TopologySchema::from_yaml(yaml).unwrap();
         let person = schema.node_config("person").unwrap();
-        assert_eq!(person.iri.as_deref(), Some("https://weftos.weavelogic.ai/ontology/forensic#Person"));
+        assert_eq!(
+            person.iri.as_deref(),
+            Some("https://weftos.weavelogic.ai/ontology/forensic#Person")
+        );
         assert_eq!(person.same_as.len(), 2);
     }
 

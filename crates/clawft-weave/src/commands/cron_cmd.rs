@@ -77,8 +77,7 @@ pub async fn run(args: CronArgs) -> anyhow::Result<()> {
             if !resp.ok {
                 anyhow::bail!("{}", resp.error.unwrap_or_default());
             }
-            let jobs: Vec<CronJobInfo> =
-                serde_json::from_value(resp.result.unwrap_or_default())?;
+            let jobs: Vec<CronJobInfo> = serde_json::from_value(resp.result.unwrap_or_default())?;
 
             if jobs.is_empty() {
                 println!("No cron jobs.");
@@ -87,7 +86,13 @@ pub async fn run(args: CronArgs) -> anyhow::Result<()> {
 
             let mut table = Table::new();
             table.set_header(vec![
-                "ID (short)", "Name", "Interval", "Command", "Target", "Fires", "Enabled",
+                "ID (short)",
+                "Name",
+                "Interval",
+                "Command",
+                "Target",
+                "Fires",
+                "Enabled",
             ]);
             for j in &jobs {
                 let short_id = if j.id.len() > 8 { &j.id[..8] } else { &j.id };
@@ -96,10 +101,7 @@ pub async fn run(args: CronArgs) -> anyhow::Result<()> {
                     Cell::new(&j.name),
                     Cell::new(format!("{}s", j.interval_secs)),
                     Cell::new(&j.command),
-                    Cell::new(
-                        j.target_pid
-                            .map_or("-".into(), |p| format!("PID {p}")),
-                    ),
+                    Cell::new(j.target_pid.map_or("-".into(), |p| format!("PID {p}"))),
                     Cell::new(j.fire_count),
                     Cell::new(if j.enabled { "yes" } else { "no" }),
                 ]);

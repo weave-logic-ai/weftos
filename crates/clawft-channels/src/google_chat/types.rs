@@ -116,13 +116,9 @@ mod tests {
             "spaces": ["spaces/AAAA"],
             "allowedUsers": ["admin@company.com"]
         }"#;
-        let cfg: GoogleChatAdapterConfig =
-            serde_json::from_str(json).unwrap();
+        let cfg: GoogleChatAdapterConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.project_id, "my-project-123");
-        assert_eq!(
-            cfg.service_account_key_path,
-            "/etc/keys/sa.json"
-        );
+        assert_eq!(cfg.service_account_key_path, "/etc/keys/sa.json");
         assert_eq!(cfg.spaces, vec!["spaces/AAAA"]);
         assert_eq!(cfg.allowed_users, vec!["admin@company.com"]);
     }

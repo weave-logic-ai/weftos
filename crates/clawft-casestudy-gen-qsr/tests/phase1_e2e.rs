@@ -5,8 +5,14 @@
 //! stream-built case graph is equivalent to the batch-built graph.
 
 use clawft_casestudy_gen_qsr::{
-    config::GeneratorConfig, events::DailyRollup, generate, governance::Governance, graph,
-    impulse::{Hlc, Impulse, ImpulseQueue, ImpulseType}, ingest::IngestDriver, shard::ShardRouter,
+    config::GeneratorConfig,
+    events::DailyRollup,
+    generate,
+    governance::Governance,
+    graph,
+    impulse::{Hlc, Impulse, ImpulseQueue, ImpulseType},
+    ingest::IngestDriver,
+    shard::ShardRouter,
 };
 
 fn tiny_corpus() -> (tempfile::TempDir, clawft_casestudy_gen_qsr::Corpus) {
@@ -20,7 +26,10 @@ fn tiny_corpus() -> (tempfile::TempDir, clawft_casestudy_gen_qsr::Corpus) {
 fn impulse_queue_dedupes_identical_emissions() {
     let mut q = ImpulseQueue::new();
     let imp = Impulse {
-        hlc: Hlc { physical_ms: 1000, logical: 0 },
+        hlc: Hlc {
+            physical_ms: 1000,
+            logical: 0,
+        },
         kind: ImpulseType::NoveltyDetected,
         store_ref: "store:brand-a:metro-alpha_0000".into(),
         brand: "brand-a".into(),
@@ -88,7 +97,10 @@ fn late_arrival_is_rewritten_to_belief_update() {
     // is a late arrival.
     let mut q = ImpulseQueue::with_watermark_ms(3_600_000);
     let fresh = Impulse {
-        hlc: Hlc { physical_ms: 10_000_000, logical: 0 },
+        hlc: Hlc {
+            physical_ms: 10_000_000,
+            logical: 0,
+        },
         kind: ImpulseType::NoveltyDetected,
         store_ref: "store:x".into(),
         brand: "brand-a".into(),
@@ -122,7 +134,10 @@ fn late_arrival_is_rewritten_to_belief_update() {
 fn shard_router_keys_by_brand_region_quarter() {
     let router = ShardRouter::new();
     let imp = |date: &str, brand: &str, region: &str| Impulse {
-        hlc: Hlc { physical_ms: 0, logical: 0 },
+        hlc: Hlc {
+            physical_ms: 0,
+            logical: 0,
+        },
         kind: ImpulseType::NoveltyDetected,
         store_ref: format!("store:{}:{}_0001", brand, region),
         brand: brand.into(),
@@ -152,7 +167,10 @@ fn governance_blocks_denylisted_franchisee() {
     let mut g = Governance::new();
     g.denylist_franchisee("metro-alpha_0001");
     let imp = Impulse {
-        hlc: Hlc { physical_ms: 0, logical: 0 },
+        hlc: Hlc {
+            physical_ms: 0,
+            logical: 0,
+        },
         kind: ImpulseType::NoveltyDetected,
         store_ref: "store:brand-a:metro-alpha_0001".into(),
         brand: "brand-a".into(),
@@ -177,7 +195,10 @@ fn governance_blocks_novelty_in_sealed_quarter() {
     let mut g = Governance::new();
     g.seal_quarter(2026, 1);
     let imp = Impulse {
-        hlc: Hlc { physical_ms: 0, logical: 0 },
+        hlc: Hlc {
+            physical_ms: 0,
+            logical: 0,
+        },
         kind: ImpulseType::NoveltyDetected,
         store_ref: "store:brand-a:metro-alpha_0000".into(),
         brand: "brand-a".into(),
@@ -202,7 +223,10 @@ fn governance_permits_belief_update_in_sealed_quarter() {
     let mut g = Governance::new();
     g.seal_quarter(2026, 1);
     let imp = Impulse {
-        hlc: Hlc { physical_ms: 0, logical: 0 },
+        hlc: Hlc {
+            physical_ms: 0,
+            logical: 0,
+        },
         kind: ImpulseType::BeliefUpdate,
         store_ref: "store:brand-a:metro-alpha_0000".into(),
         brand: "brand-a".into(),
@@ -229,7 +253,11 @@ fn ingest_driver_throughput_smoke() {
     driver.run_to_completion();
     let elapsed = t0.elapsed().as_secs_f64();
     let per_sec = driver.stats.impulses_applied as f64 / elapsed.max(1e-9);
-    assert!(per_sec > 1_000.0, "expected >1K/sec, got {:.0}/sec", per_sec);
+    assert!(
+        per_sec > 1_000.0,
+        "expected >1K/sec, got {:.0}/sec",
+        per_sec
+    );
     assert_eq!(driver.stats.impulses_applied, corpus.events.len() as u64);
     assert!(!driver.shards.shards.is_empty());
 }
@@ -256,7 +284,12 @@ fn missing_windows_are_detected() {
     // Emit days 0, 1, 3, 4 (day 2 missing).
     for day in [0, 1, 3, 4] {
         let ev = base_event(day);
-        q.emit(Impulse::from_rollup_with_context(&ev, "brand-a", "region-1", "metro-alpha"));
+        q.emit(Impulse::from_rollup_with_context(
+            &ev,
+            "brand-a",
+            "region-1",
+            "metro-alpha",
+        ));
     }
     let gaps = q.detect_missing_windows(&["store:brand-a:metro-alpha_0000".into()]);
     assert_eq!(gaps.len(), 1);

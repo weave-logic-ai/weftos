@@ -20,11 +20,7 @@ fn main() {
 
     let hash = git_short_hash().unwrap_or_else(|| "unknown".to_string());
     let dirty = git_is_dirty().unwrap_or(false);
-    let hash_full = if dirty {
-        format!("{hash}-dirty")
-    } else {
-        hash
-    };
+    let hash_full = if dirty { format!("{hash}-dirty") } else { hash };
     println!("cargo:rustc-env=BUILD_GIT_HASH={hash_full}");
 
     // ISO-8601-ish UTC stamp. Avoiding chrono in the build script to

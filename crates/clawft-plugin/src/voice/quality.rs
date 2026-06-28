@@ -31,13 +31,8 @@ pub fn analyze_frame(samples: &[f32], noise_floor: f32) -> AudioMetrics {
         return AudioMetrics::default();
     }
 
-    let rms = (samples.iter().map(|s| s * s).sum::<f32>()
-        / samples.len() as f32)
-        .sqrt();
-    let peak = samples
-        .iter()
-        .map(|s| s.abs())
-        .fold(0.0f32, f32::max);
+    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+    let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
 
     let clipping_threshold = 0.99;
     let clipped = samples

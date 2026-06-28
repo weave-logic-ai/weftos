@@ -61,30 +61,103 @@ pub async fn run(args: EccArgs) -> anyhow::Result<()> {
             println!("ECC Cognitive Substrate Status");
             println!("  Calibration:");
             if let Some(cal) = result.get("calibration") {
-                println!("    Compute P50:     {}μs", cal.get("compute_p50_us").and_then(|v| v.as_u64()).unwrap_or(0));
-                println!("    Compute P95:     {}μs", cal.get("compute_p95_us").and_then(|v| v.as_u64()).unwrap_or(0));
-                println!("    Tick interval:   {}ms", cal.get("tick_interval_ms").and_then(|v| v.as_u64()).unwrap_or(0));
-                println!("    Spectral:        {}", cal.get("spectral_capable").and_then(|v| v.as_bool()).unwrap_or(false));
+                println!(
+                    "    Compute P50:     {}μs",
+                    cal.get("compute_p50_us")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                );
+                println!(
+                    "    Compute P95:     {}μs",
+                    cal.get("compute_p95_us")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                );
+                println!(
+                    "    Tick interval:   {}ms",
+                    cal.get("tick_interval_ms")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                );
+                println!(
+                    "    Spectral:        {}",
+                    cal.get("spectral_capable")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                );
             } else {
                 println!("    (not calibrated)");
             }
             println!("  Tick:");
             if let Some(tick) = result.get("tick") {
-                println!("    Count:           {}", tick.get("tick_count").and_then(|v| v.as_u64()).unwrap_or(0));
-                println!("    Interval:        {}ms", tick.get("current_interval_ms").and_then(|v| v.as_u64()).unwrap_or(0));
-                println!("    Avg compute:     {}μs", tick.get("avg_compute_us").and_then(|v| v.as_u64()).unwrap_or(0));
-                println!("    Drift count:     {}", tick.get("drift_count").and_then(|v| v.as_u64()).unwrap_or(0));
-                println!("    Running:         {}", tick.get("running").and_then(|v| v.as_bool()).unwrap_or(false));
+                println!(
+                    "    Count:           {}",
+                    tick.get("tick_count").and_then(|v| v.as_u64()).unwrap_or(0)
+                );
+                println!(
+                    "    Interval:        {}ms",
+                    tick.get("current_interval_ms")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                );
+                println!(
+                    "    Avg compute:     {}μs",
+                    tick.get("avg_compute_us")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                );
+                println!(
+                    "    Drift count:     {}",
+                    tick.get("drift_count")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                );
+                println!(
+                    "    Running:         {}",
+                    tick.get("running")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                );
             } else {
                 println!("    (not started)");
             }
             println!("  HNSW:");
-            println!("    Vectors:         {}", result.get("hnsw_count").and_then(|v| v.as_u64()).unwrap_or(0));
+            println!(
+                "    Vectors:         {}",
+                result
+                    .get("hnsw_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+            );
             println!("  Causal:");
-            println!("    Nodes:           {}", result.get("causal_nodes").and_then(|v| v.as_u64()).unwrap_or(0));
-            println!("    Edges:           {}", result.get("causal_edges").and_then(|v| v.as_u64()).unwrap_or(0));
-            println!("  CrossRefs:         {}", result.get("crossref_count").and_then(|v| v.as_u64()).unwrap_or(0));
-            println!("  Impulses pending:  {}", result.get("impulse_pending").and_then(|v| v.as_u64()).unwrap_or(0));
+            println!(
+                "    Nodes:           {}",
+                result
+                    .get("causal_nodes")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+            );
+            println!(
+                "    Edges:           {}",
+                result
+                    .get("causal_edges")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+            );
+            println!(
+                "  CrossRefs:         {}",
+                result
+                    .get("crossref_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+            );
+            println!(
+                "  Impulses pending:  {}",
+                result
+                    .get("impulse_pending")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+            );
         }
         EccCommand::Calibrate => {
             let resp = client.simple_call("ecc.calibrate").await?;
@@ -93,14 +166,34 @@ pub async fn run(args: EccArgs) -> anyhow::Result<()> {
             }
             println!("Calibration complete");
             if let Some(result) = resp.result {
-                println!("  P50: {}μs", result.get("compute_p50_us").and_then(|v| v.as_u64()).unwrap_or(0));
-                println!("  P95: {}μs", result.get("compute_p95_us").and_then(|v| v.as_u64()).unwrap_or(0));
-                println!("  Tick: {}ms", result.get("tick_interval_ms").and_then(|v| v.as_u64()).unwrap_or(0));
+                println!(
+                    "  P50: {}μs",
+                    result
+                        .get("compute_p50_us")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                );
+                println!(
+                    "  P95: {}μs",
+                    result
+                        .get("compute_p95_us")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                );
+                println!(
+                    "  Tick: {}ms",
+                    result
+                        .get("tick_interval_ms")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                );
             }
         }
         EccCommand::Search { query, k } => {
             let params = serde_json::json!({"query": query, "k": k});
-            let resp = client.call(Request::with_params("ecc.search", params)).await?;
+            let resp = client
+                .call(Request::with_params("ecc.search", params))
+                .await?;
             if !resp.ok {
                 anyhow::bail!("{}", resp.error.unwrap_or_default());
             }
@@ -122,9 +215,15 @@ pub async fn run(args: EccArgs) -> anyhow::Result<()> {
                 }
             }
         }
-        EccCommand::Causal { node, direction, depth } => {
+        EccCommand::Causal {
+            node,
+            direction,
+            depth,
+        } => {
             let params = serde_json::json!({"node": node, "direction": direction, "depth": depth});
-            let resp = client.call(Request::with_params("ecc.causal", params)).await?;
+            let resp = client
+                .call(Request::with_params("ecc.causal", params))
+                .await?;
             if !resp.ok {
                 anyhow::bail!("{}", resp.error.unwrap_or_default());
             }
@@ -133,7 +232,9 @@ pub async fn run(args: EccArgs) -> anyhow::Result<()> {
         }
         EccCommand::Crossrefs { id } => {
             let params = serde_json::json!({"id": id});
-            let resp = client.call(Request::with_params("ecc.crossrefs", params)).await?;
+            let resp = client
+                .call(Request::with_params("ecc.crossrefs", params))
+                .await?;
             if !resp.ok {
                 anyhow::bail!("{}", resp.error.unwrap_or_default());
             }
@@ -147,12 +248,48 @@ pub async fn run(args: EccArgs) -> anyhow::Result<()> {
             }
             let result = resp.result.unwrap_or_default();
             println!("Cognitive Tick Statistics");
-            println!("  Count:         {}", result.get("tick_count").and_then(|v| v.as_u64()).unwrap_or(0));
-            println!("  Interval:      {}ms", result.get("current_interval_ms").and_then(|v| v.as_u64()).unwrap_or(0));
-            println!("  Avg compute:   {}μs", result.get("avg_compute_us").and_then(|v| v.as_u64()).unwrap_or(0));
-            println!("  Max compute:   {}μs", result.get("max_compute_us").and_then(|v| v.as_u64()).unwrap_or(0));
-            println!("  Drift count:   {}", result.get("drift_count").and_then(|v| v.as_u64()).unwrap_or(0));
-            println!("  Running:       {}", result.get("running").and_then(|v| v.as_bool()).unwrap_or(false));
+            println!(
+                "  Count:         {}",
+                result
+                    .get("tick_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+            );
+            println!(
+                "  Interval:      {}ms",
+                result
+                    .get("current_interval_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+            );
+            println!(
+                "  Avg compute:   {}μs",
+                result
+                    .get("avg_compute_us")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+            );
+            println!(
+                "  Max compute:   {}μs",
+                result
+                    .get("max_compute_us")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+            );
+            println!(
+                "  Drift count:   {}",
+                result
+                    .get("drift_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+            );
+            println!(
+                "  Running:       {}",
+                result
+                    .get("running")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            );
         }
     }
 

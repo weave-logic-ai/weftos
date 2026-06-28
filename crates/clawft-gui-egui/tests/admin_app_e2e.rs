@@ -32,11 +32,10 @@ use clawft_substrate::adapter::{
 };
 use clawft_substrate::{StateDelta, Substrate};
 use clawft_surface::parse::parse_surface_toml;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-const ADMIN_SURFACE: &str =
-    include_str!("../../clawft-surface/fixtures/weftos-admin-desktop.toml");
+const ADMIN_SURFACE: &str = include_str!("../../clawft-surface/fixtures/weftos-admin-desktop.toml");
 
 const KERNEL_TOPICS: &[TopicDecl] = &[
     TopicDecl {
@@ -90,14 +89,10 @@ impl OntologyAdapter for CannedKernelAdapter {
         &[]
     }
 
-    async fn open(
-        &self,
-        topic: &str,
-        _args: Value,
-    ) -> Result<Subscription, AdapterError> {
+    async fn open(&self, topic: &str, _args: Value) -> Result<Subscription, AdapterError> {
         let (tx, rx) = mpsc::channel::<StateDelta>(8);
-        let value = fixture_for(topic)
-            .ok_or_else(|| AdapterError::UnknownTopic(topic.to_string()))?;
+        let value =
+            fixture_for(topic).ok_or_else(|| AdapterError::UnknownTopic(topic.to_string()))?;
         // Emit one Replace (singletons + list topics) or a sequence of
         // Append (logs). Using Replace for all four paths keeps the
         // composer's read path identical.
@@ -142,10 +137,7 @@ fn fixture_for(topic: &str) -> Option<Value> {
             "rpc-gateway":   {"status": "healthy", "cpu_percent": 9.0},
             "audit-sink":    {"status": "at_risk", "cpu_percent": 88.0},
         }),
-        "substrate/kernel/logs" => json!([
-            "[t+0s] boot ok",
-            "[t+1s] 3 services ready",
-        ]),
+        "substrate/kernel/logs" => json!(["[t+0s] boot ok", "[t+1s] 3 services ready",]),
         _ => return None,
     })
 }
@@ -229,7 +221,10 @@ async fn weftos_admin_renders_end_to_end() {
         "expected at least one ui://gauge or ui://table response, got {} gauges / {} tables; full responses: {:?}",
         gauges,
         tables,
-        responses.iter().map(|r| r.identity.clone()).collect::<Vec<_>>()
+        responses
+            .iter()
+            .map(|r| r.identity.clone())
+            .collect::<Vec<_>>()
     );
 
     // WEFT-439: the admin surface ships a wired confirm-restart Modal.
@@ -244,7 +239,10 @@ async fn weftos_admin_renders_end_to_end() {
     assert!(
         modals >= 1,
         "expected at least one ui://modal response from the wired confirm-restart node, got {modals}; full responses: {:?}",
-        responses.iter().map(|r| r.identity.clone()).collect::<Vec<_>>()
+        responses
+            .iter()
+            .map(|r| r.identity.clone())
+            .collect::<Vec<_>>()
     );
 
     // Tombstone the subscriptions (ADR-009 discipline) so the test
@@ -265,9 +263,7 @@ fn admin_surface_includes_wired_restart_modal() {
     fn find_modal_with_affordance(
         node: &clawft_surface::SurfaceNode,
     ) -> Option<&clawft_surface::SurfaceNode> {
-        if matches!(node.kind, clawft_surface::IdentityIri::Modal)
-            && !node.affordances.is_empty()
-        {
+        if matches!(node.kind, clawft_surface::IdentityIri::Modal) && !node.affordances.is_empty() {
             return Some(node);
         }
         for child in &node.children {

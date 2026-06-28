@@ -250,7 +250,11 @@ mod tests {
     #[test]
     fn tree_diff_type_variants() {
         // Ensure all variants serialize/deserialize correctly.
-        for variant in [TreeDiffType::Added, TreeDiffType::Modified, TreeDiffType::Removed] {
+        for variant in [
+            TreeDiffType::Added,
+            TreeDiffType::Modified,
+            TreeDiffType::Removed,
+        ] {
             let json = serde_json::to_string(&variant).unwrap();
             let decoded: TreeDiffType = serde_json::from_str(&json).unwrap();
             assert_eq!(decoded, variant);

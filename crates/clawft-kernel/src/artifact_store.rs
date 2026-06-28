@@ -141,11 +141,7 @@ impl ArtifactStore {
     ///
     /// If the content is already stored, increments the reference count
     /// and returns the existing hash (deduplication).
-    pub fn store(
-        &self,
-        content: &[u8],
-        content_type: ArtifactType,
-    ) -> Result<String, KernelError> {
+    pub fn store(&self, content: &[u8], content_type: ArtifactType) -> Result<String, KernelError> {
         let hash = blake3::hash(content).to_hex().to_string();
 
         // Dedup: if hash exists, just bump reference count.
@@ -162,12 +158,10 @@ impl ArtifactStore {
             ArtifactBackend::File { base_path } => {
                 let prefix = &hash[..2.min(hash.len())];
                 let dir = base_path.join(prefix);
-                std::fs::create_dir_all(&dir).map_err(|e| {
-                    KernelError::Service(format!("artifact dir create: {e}"))
-                })?;
-                std::fs::write(dir.join(&hash), content).map_err(|e| {
-                    KernelError::Service(format!("artifact write: {e}"))
-                })?;
+                std::fs::create_dir_all(&dir)
+                    .map_err(|e| KernelError::Service(format!("artifact dir create: {e}")))?;
+                std::fs::write(dir.join(&hash), content)
+                    .map_err(|e| KernelError::Service(format!("artifact write: {e}")))?;
             }
         }
 
@@ -207,15 +201,11 @@ impl ArtifactStore {
     /// Load content by hash, verifying integrity on read.
     pub fn load(&self, hash: &str) -> Result<Vec<u8>, KernelError> {
         if !self.artifacts.contains_key(hash) {
-            return Err(KernelError::Service(format!(
-                "artifact not found: {hash}"
-            )));
+            return Err(KernelError::Service(format!("artifact not found: {hash}")));
         }
 
         let content = match &self.backend {
-            ArtifactBackend::Memory(map) => map
-                .get(hash)
-                .map(|v| v.value().clone()),
+            ArtifactBackend::Memory(map) => map.get(hash).map(|v| v.value().clone()),
             ArtifactBackend::File { base_path } => {
                 let prefix = &hash[..2.min(hash.len())];
                 let path = base_path.join(prefix).join(hash);
@@ -223,9 +213,8 @@ impl ArtifactStore {
             }
         };
 
-        let content = content.ok_or_else(|| {
-            KernelError::Service(format!("artifact data missing: {hash}"))
-        })?;
+        let content = content
+            .ok_or_else(|| KernelError::Service(format!("artifact data missing: {hash}")))?;
 
         // Verify integrity.
         let actual_hash = blake3::hash(&content).to_hex().to_string();

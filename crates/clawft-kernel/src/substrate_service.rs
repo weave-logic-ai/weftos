@@ -280,7 +280,11 @@ impl SubstrateService {
     }
 
     /// Read the current value + metadata at a path.
-    pub fn read(&self, caller: Option<&str>, path: &str) -> Result<SubstrateReadSnapshot, EgressDenied> {
+    pub fn read(
+        &self,
+        caller: Option<&str>,
+        path: &str,
+    ) -> Result<SubstrateReadSnapshot, EgressDenied> {
         self.egress_check(caller, path, "read")?;
         let snapshot = match self.inner.entries.get(path) {
             Some(e) => SubstrateReadSnapshot {
@@ -353,10 +357,7 @@ impl SubstrateService {
 
         // Depth 0 — just the exact-match node.
         if depth == 0 {
-            if let Some((_, sens)) = value_paths
-                .iter()
-                .find(|(p, _)| *p == norm_prefix)
-            {
+            if let Some((_, sens)) = value_paths.iter().find(|(p, _)| *p == norm_prefix) {
                 // Respect capture-tier gate on the entry itself.
                 if egress_permits(caller, *sens) {
                     let child_count = count_descendants(&value_paths, &norm_prefix, caller);
@@ -683,11 +684,7 @@ fn strict_descendant_rest<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
     }
     let with_sep = path.strip_prefix(prefix)?;
     let rest = with_sep.strip_prefix('/')?;
-    if rest.is_empty() {
-        None
-    } else {
-        Some(rest)
-    }
+    if rest.is_empty() { None } else { Some(rest) }
 }
 
 /// Join `prefix` + segment slice into a substrate path. Root-aware:
@@ -696,7 +693,9 @@ fn join_with_prefix(prefix: &str, segs: &[&str]) -> String {
     if prefix.is_empty() {
         segs.join("/")
     } else {
-        let mut out = String::with_capacity(prefix.len() + 1 + segs.iter().map(|s| s.len() + 1).sum::<usize>());
+        let mut out = String::with_capacity(
+            prefix.len() + 1 + segs.iter().map(|s| s.len() + 1).sum::<usize>(),
+        );
         out.push_str(prefix);
         for s in segs {
             out.push('/');
@@ -832,14 +831,26 @@ mod tests {
     // ── list() ──────────────────────────────────────────────────────
 
     fn seed_sensor_substrate(svc: &SubstrateService) {
-        svc.publish(None, "substrate/sensor/mic", serde_json::json!({"rms_db": -20}));
-        svc.publish(None, "substrate/sensor/tof", serde_json::json!({"frame": 1}));
+        svc.publish(
+            None,
+            "substrate/sensor/mic",
+            serde_json::json!({"rms_db": -20}),
+        );
+        svc.publish(
+            None,
+            "substrate/sensor/tof",
+            serde_json::json!({"frame": 1}),
+        );
         svc.publish(
             None,
             "substrate/sensor/mic/history",
             serde_json::json!([1, 2, 3]),
         );
-        svc.publish(None, "substrate/kernel/status", serde_json::json!({"state": "running"}));
+        svc.publish(
+            None,
+            "substrate/kernel/status",
+            serde_json::json!({"state": "running"}),
+        );
     }
 
     #[test]
@@ -868,7 +879,11 @@ mod tests {
         // Neither is itself a published value — internal nodes.
         assert!(snap.children.iter().all(|c| !c.has_value));
         // Child counts reflect descendants-with-values.
-        let sensor = snap.children.iter().find(|c| c.path == "substrate/sensor").unwrap();
+        let sensor = snap
+            .children
+            .iter()
+            .find(|c| c.path == "substrate/sensor")
+            .unwrap();
         // substrate/sensor/mic, substrate/sensor/mic/history, substrate/sensor/tof
         assert_eq!(sensor.child_count, 3);
     }
@@ -962,7 +977,11 @@ mod tests {
         // appear in list output.
         svc.notify(None, "substrate/ghost/path");
         let snap = svc.list(None, "substrate", 1).unwrap();
-        assert!(snap.children.is_empty(), "ghost entry leaked: {:?}", snap.children);
+        assert!(
+            snap.children.is_empty(),
+            "ghost entry leaked: {:?}",
+            snap.children
+        );
     }
 
     #[test]
@@ -978,7 +997,11 @@ mod tests {
     fn list_egress_denies_anonymous_on_capture_prefix() {
         let svc = SubstrateService::new();
         svc.declare("substrate/mic/capture", Sensitivity::Capture);
-        svc.publish(Some("aid-1"), "substrate/mic/capture", serde_json::json!({"pcm": []}));
+        svc.publish(
+            Some("aid-1"),
+            "substrate/mic/capture",
+            serde_json::json!({"pcm": []}),
+        );
         let err = svc.list(None, "substrate/mic/capture", 1).unwrap_err();
         assert!(err.reason.contains("requires authenticated"));
     }
@@ -987,10 +1010,18 @@ mod tests {
     fn list_hides_capture_children_from_anonymous() {
         let svc = SubstrateService::new();
         // Parent is workspace — safe to list.
-        svc.publish(None, "substrate/mic/public", serde_json::json!({"ok": true}));
+        svc.publish(
+            None,
+            "substrate/mic/public",
+            serde_json::json!({"ok": true}),
+        );
         // Capture-tier child.
         svc.declare("substrate/mic/capture", Sensitivity::Capture);
-        svc.publish(Some("aid"), "substrate/mic/capture", serde_json::json!({"pcm": []}));
+        svc.publish(
+            Some("aid"),
+            "substrate/mic/capture",
+            serde_json::json!({"pcm": []}),
+        );
 
         let snap = svc.list(None, "substrate/mic", 1).unwrap();
         let paths: Vec<&str> = snap.children.iter().map(|c| c.path.as_str()).collect();
@@ -1035,11 +1066,7 @@ mod tests {
     fn publish_gated_rejects_cross_node_write() {
         let svc = SubstrateService::new();
         let err = svc
-            .publish_gated(
-                Some("n1"),
-                "substrate/n2/sensor/mic",
-                serde_json::json!(0),
-            )
+            .publish_gated(Some("n1"), "substrate/n2/sensor/mic", serde_json::json!(0))
             .expect_err("cross-node write must be rejected");
         match err {
             GateDenied::WrongPrefix { path, node_id } => {
@@ -1124,11 +1151,7 @@ mod tests {
         let svc = SubstrateService::new();
         let registry = crate::NodeRegistry::new();
         registry
-            .issue_derived_grant(
-                "n-daemon",
-                "transcript",
-                crate::GrantScope::TopicPrefix,
-            )
+            .issue_derived_grant("n-daemon", "transcript", crate::GrantScope::TopicPrefix)
             .unwrap();
         let tick = svc
             .publish_gated_with_grants(
@@ -1177,11 +1200,7 @@ mod tests {
         // write. R3.6: grants are bounded — one pipeline's grant
         // does NOT bleed into another's namespace.
         registry
-            .issue_derived_grant(
-                "n-daemon",
-                "transcript",
-                crate::GrantScope::TopicPrefix,
-            )
+            .issue_derived_grant("n-daemon", "transcript", crate::GrantScope::TopicPrefix)
             .unwrap();
         let err = svc
             .publish_gated_with_grants(
@@ -1245,11 +1264,7 @@ mod tests {
         let svc = SubstrateService::new();
         let registry = crate::NodeRegistry::new();
         registry
-            .issue_derived_grant(
-                "n-daemon",
-                "transcript",
-                crate::GrantScope::TopicPrefix,
-            )
+            .issue_derived_grant("n-daemon", "transcript", crate::GrantScope::TopicPrefix)
             .unwrap();
         let err = svc
             .publish_gated_with_grants(

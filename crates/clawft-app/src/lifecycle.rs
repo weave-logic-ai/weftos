@@ -218,18 +218,14 @@ mod tests {
     #[test]
     fn shape_check_rejects_unsupported_mode() {
         let m = mk_manifest();
-        let err =
-            check_launch_shape(&req(Mode::SingleApp, Input::Pointer), &m)
-                .unwrap_err();
+        let err = check_launch_shape(&req(Mode::SingleApp, Input::Pointer), &m).unwrap_err();
         assert!(matches!(err, LaunchError::ModeUnsupported { .. }));
     }
 
     #[test]
     fn shape_check_rejects_unsupported_input() {
         let m = mk_manifest();
-        let err =
-            check_launch_shape(&req(Mode::Desktop, Input::Voice), &m)
-                .unwrap_err();
+        let err = check_launch_shape(&req(Mode::Desktop, Input::Voice), &m).unwrap_err();
         assert!(matches!(err, LaunchError::InputUnsupported { .. }));
     }
 
@@ -249,8 +245,7 @@ mod tests {
     fn strict_gate_denies_camera_capture() {
         let mut m = mk_manifest();
         m.permissions.push(Permission::Camera);
-        let r =
-            StrictGate.authorize_launch(&req(Mode::Desktop, Input::Pointer), &m);
+        let r = StrictGate.authorize_launch(&req(Mode::Desktop, Input::Pointer), &m);
         assert!(matches!(r, AppLaunchResult::Denied { .. }));
     }
 
@@ -258,9 +253,9 @@ mod tests {
     fn strict_gate_grants_fs_only_permissions() {
         let mut m = mk_manifest();
         m.permissions.push(Permission::FsPath("/tmp".to_string()));
-        m.permissions.push(Permission::NetDomain("x.com".to_string()));
-        let r =
-            StrictGate.authorize_launch(&req(Mode::Desktop, Input::Pointer), &m);
+        m.permissions
+            .push(Permission::NetDomain("x.com".to_string()));
+        let r = StrictGate.authorize_launch(&req(Mode::Desktop, Input::Pointer), &m);
         assert!(matches!(r, AppLaunchResult::Granted { .. }));
     }
 }

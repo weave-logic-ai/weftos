@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use clawft_core::tools::registry::{Tool, ToolError};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Tool that speaks text through the speaker using TTS.
 pub struct VoiceSpeakTool;

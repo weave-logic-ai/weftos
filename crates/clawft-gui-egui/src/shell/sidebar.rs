@@ -455,7 +455,11 @@ fn paint_row(
     collapsed: bool,
     tokens: &Tokens,
 ) -> bool {
-    let response = ui.interact(rect, egui::Id::new(("sidebar-row", label)), egui::Sense::click());
+    let response = ui.interact(
+        rect,
+        egui::Id::new(("sidebar-row", label)),
+        egui::Sense::click(),
+    );
     let painter = ui.painter_at(rect);
 
     if active {
@@ -544,7 +548,10 @@ fn paint_subrow(
         tokens.text_dim
     };
     painter.text(
-        egui::pos2(rect.left() + ROW_PADDING_LEFT + SUBROW_INDENT, rect.center().y),
+        egui::pos2(
+            rect.left() + ROW_PADDING_LEFT + SUBROW_INDENT,
+            rect.center().y,
+        ),
         egui::Align2::LEFT_CENTER,
         format!("· {label}"),
         egui::FontId::proportional(12.0),
@@ -670,7 +677,9 @@ mod tests {
         let mut s = Sidebar::default();
         s.apply(SidebarAction::Open(SidebarTarget::Settings));
         assert_eq!(s.active, SidebarTarget::Settings);
-        s.apply(SidebarAction::Open(SidebarTarget::Logs(LogsTab::WitnessChain)));
+        s.apply(SidebarAction::Open(SidebarTarget::Logs(
+            LogsTab::WitnessChain,
+        )));
         assert_eq!(s.active, SidebarTarget::Logs(LogsTab::WitnessChain));
         assert!(s.group_holds_active("logs"));
         assert!(!s.group_holds_active("network"));
@@ -685,7 +694,10 @@ mod tests {
             (SidebarTarget::Apps(AppsTab::BuiltIn), "apps"),
         ] {
             s.active = target;
-            assert!(s.group_holds_active(group), "group {group} should hold {target:?}");
+            assert!(
+                s.group_holds_active(group),
+                "group {group} should hold {target:?}"
+            );
         }
     }
 

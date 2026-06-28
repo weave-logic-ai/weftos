@@ -37,7 +37,7 @@
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
@@ -347,10 +347,7 @@ fn spawn_reader_thread(
                         return;
                     }
                     Ok(n) => {
-                        if tx
-                            .send(TerminalEvent::Output(buf[..n].to_vec()))
-                            .is_err()
-                        {
+                        if tx.send(TerminalEvent::Output(buf[..n].to_vec())).is_err() {
                             // Receiver dropped — session is gone, nothing
                             // to publish. Stop pumping.
                             debug!(session_id = %id, "terminal: reader receiver dropped");
@@ -443,15 +440,13 @@ mod tests {
         let mut buffered: Vec<u8> = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
-            let timeout =
-                tokio::time::timeout_at(deadline, events.recv()).await;
+            let timeout = tokio::time::timeout_at(deadline, events.recv()).await;
             match timeout {
                 Ok(Some(TerminalEvent::Output(bytes))) => {
                     buffered.extend_from_slice(&bytes);
                     if buffered
                         .windows(20)
-                        .any(|w| w == b"hello-from-pty-test\n"
-                            || w == b"hello-from-pty-test\r")
+                        .any(|w| w == b"hello-from-pty-test\n" || w == b"hello-from-pty-test\r")
                     {
                         // Got the echo'd output — round-trip works.
                         break;

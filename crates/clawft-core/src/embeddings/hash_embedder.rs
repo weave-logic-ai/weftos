@@ -258,18 +258,34 @@ mod tests {
         // Golden values recorded from FNV-1a on x86_64-linux (Rust 1.85).
         // These must be identical on all platforms.
         let expected_first_8: [f32; 8] = [
-            -0.07715168, -0.07715168, 0.07715168, 0.0, 0.0, 0.0, 0.0, 0.0,
+            -0.07715168,
+            -0.07715168,
+            0.07715168,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
         ];
         let expected_last_8: [f32; 8] = [
-            0.0, 0.0, -0.07715168, 0.0, -0.07715168, 0.07715168, 0.0, 0.07715168,
+            0.0,
+            0.0,
+            -0.07715168,
+            0.0,
+            -0.07715168,
+            0.07715168,
+            0.0,
+            0.07715168,
         ];
 
         assert_eq!(
-            &emb[..8], &expected_first_8[..],
+            &emb[..8],
+            &expected_first_8[..],
             "first 8 dimensions changed -- FNV-1a determinism broken"
         );
         assert_eq!(
-            &emb[376..384], &expected_last_8[..],
+            &emb[376..384],
+            &expected_last_8[..],
             "last 8 dimensions changed -- FNV-1a determinism broken"
         );
 

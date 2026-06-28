@@ -230,8 +230,8 @@ pub fn start_watching(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use tokio::sync::RwLock;
 
@@ -407,7 +407,10 @@ mod tests {
 
         {
             let reg = registry.read().await;
-            assert_eq!(reg.get("mutable").unwrap().description, "Original description");
+            assert_eq!(
+                reg.get("mutable").unwrap().description,
+                "Original description"
+            );
         }
 
         let config = SkillWatcherConfig {
@@ -429,7 +432,10 @@ mod tests {
 
         {
             let reg = registry.read().await;
-            assert_eq!(reg.get("mutable").unwrap().description, "Updated description");
+            assert_eq!(
+                reg.get("mutable").unwrap().description,
+                "Updated description"
+            );
         }
 
         handle.stop();
@@ -471,7 +477,10 @@ mod tests {
         let prev = registry.upsert(updated);
         assert!(prev.is_some());
         assert_eq!(prev.unwrap().description, "A dynamically added skill");
-        assert_eq!(registry.get("dynamic").unwrap().description, "Updated description");
+        assert_eq!(
+            registry.get("dynamic").unwrap().description,
+            "Updated description"
+        );
 
         // Remove
         let removed = registry.remove("dynamic");
@@ -489,14 +498,19 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         create_skill_md(&dir, "first", "First skill");
 
-        let mut registry = SkillRegistry::discover(Some(&dir), None, vec![]).await.unwrap();
+        let mut registry = SkillRegistry::discover(Some(&dir), None, vec![])
+            .await
+            .unwrap();
         assert_eq!(registry.len(), 1);
 
         // Add another skill to disk
         create_skill_md(&dir, "second", "Second skill");
 
         // Rebuild
-        registry.rebuild(Some(&dir), None, vec![], true).await.unwrap();
+        registry
+            .rebuild(Some(&dir), None, vec![], true)
+            .await
+            .unwrap();
         assert_eq!(registry.len(), 2);
         assert!(registry.get("first").is_some());
         assert!(registry.get("second").is_some());

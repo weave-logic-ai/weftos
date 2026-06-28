@@ -107,8 +107,10 @@ impl CronScheduler {
             && let Some(ref expr) = job.schedule.expr
             && let Ok(schedule) = Schedule::from_str(expr)
         {
-            job.state.next_run_at =
-                schedule.after(&run_time).next().map(|dt| dt.with_timezone(&Utc));
+            job.state.next_run_at = schedule
+                .after(&run_time)
+                .next()
+                .map(|dt| dt.with_timezone(&Utc));
         }
 
         Ok(())
@@ -243,9 +245,7 @@ mod tests {
         let mut sched = CronScheduler::new();
         let mut job = make_job("j1", "past", "0 0 * * * * *");
         // Set next_run in the past (2020-01-01 00:00:00 UTC).
-        job.state.next_run_at = Some(
-            Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap(),
-        );
+        job.state.next_run_at = Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap());
         sched.add_job(job).unwrap();
 
         let due = sched.get_due_jobs();
@@ -256,9 +256,7 @@ mod tests {
     fn no_due_jobs_when_all_in_future() {
         let mut sched = CronScheduler::new();
         let mut job = make_job("j1", "future", "0 0 * * * * *");
-        job.state.next_run_at = Some(
-            Utc.with_ymd_and_hms(2099, 12, 31, 23, 59, 59).unwrap(),
-        );
+        job.state.next_run_at = Some(Utc.with_ymd_and_hms(2099, 12, 31, 23, 59, 59).unwrap());
         sched.add_job(job).unwrap();
 
         let due = sched.get_due_jobs();
@@ -269,9 +267,7 @@ mod tests {
     fn disabled_jobs_not_due() {
         let mut sched = CronScheduler::new();
         let mut job = make_job("j1", "disabled", "0 0 * * * * *");
-        job.state.next_run_at = Some(
-            Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap(),
-        );
+        job.state.next_run_at = Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap());
         job.enabled = false;
         sched.add_job(job).unwrap();
 

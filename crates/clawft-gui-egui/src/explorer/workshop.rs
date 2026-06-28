@@ -234,10 +234,7 @@ pub fn parse(value: &Value) -> Result<Workshop, String> {
         panels.push(parse_panel(p, &params).map_err(|e| format!("panels[{i}]: {e}"))?);
     }
 
-    let title = obj
-        .get("title")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let title = obj.get("title").and_then(Value::as_str).map(str::to_string);
 
     let layout = obj
         .get("layout")
@@ -274,10 +271,7 @@ fn parse_panel(value: &Value, params: &HashMap<String, String>) -> Result<Worksh
                 "missing required `substrate_path` (or `substrate_path_template`) string".into(),
             );
         };
-    let title = obj
-        .get("title")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let title = obj.get("title").and_then(Value::as_str).map(str::to_string);
     let viewer_hint = obj
         .get("viewer_hint")
         .and_then(Value::as_str)
@@ -492,9 +486,7 @@ impl WorkshopView {
         self.subs.retain(|path, _| desired.contains_key(path));
         // Ensure every desired path has a sub.
         for path in desired.keys() {
-            self.subs
-                .entry(path.clone())
-                .or_insert_with(PanelSub::new);
+            self.subs.entry(path.clone()).or_insert_with(PanelSub::new);
         }
     }
 
@@ -619,10 +611,7 @@ impl WorkshopView {
         // ui id of the current scope so two stacked Workshops each
         // get their own tab state.
         let mem_id = ui.id().with("workshop-tabs-active");
-        let mut active = ui
-            .ctx()
-            .data(|d| d.get_temp::<usize>(mem_id))
-            .unwrap_or(0);
+        let mut active = ui.ctx().data(|d| d.get_temp::<usize>(mem_id)).unwrap_or(0);
         if active >= workshop.panels.len() {
             active = workshop.panels.len() - 1;
         }
@@ -778,12 +767,7 @@ pub(crate) fn grid_columns_for(n: usize) -> usize {
 /// a registered viewer route directly to it. Unknown names fall
 /// back to shape-dispatch with an inline diagnostic so the writer
 /// sees their hint didn't match. [WEFT-280]
-pub(crate) fn paint_with_viewer_hint(
-    ui: &mut egui::Ui,
-    hint: &str,
-    path: &str,
-    value: &Value,
-) {
+pub(crate) fn paint_with_viewer_hint(ui: &mut egui::Ui, hint: &str, path: &str, value: &Value) {
     let trimmed = hint.trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
         super::viewers::dispatch(ui, path, value);
@@ -812,9 +796,7 @@ pub(crate) fn paint_with_viewer_hint(
 ///
 /// To register a new viewer here, add a `"name" => &paint_fn` arm and
 /// keep the names sorted alphabetically.
-pub(crate) fn viewer_for_hint(
-    name: &str,
-) -> Option<fn(&mut egui::Ui, &str, &Value)> {
+pub(crate) fn viewer_for_hint(name: &str) -> Option<fn(&mut egui::Ui, &str, &Value)> {
     use super::viewers::*;
     Some(match name {
         "audio_meter" => audio_meter::AudioMeterViewer::paint,
@@ -874,8 +856,8 @@ fn paint_parse_error(ui: &mut egui::Ui, err: &str, raw: &Value) {
     );
     ui.add_space(4.0);
     ui.collapsing("raw value", |ui| {
-        let pretty = serde_json::to_string_pretty(raw)
-            .unwrap_or_else(|_| "<unserialisable>".to_string());
+        let pretty =
+            serde_json::to_string_pretty(raw).unwrap_or_else(|_| "<unserialisable>".to_string());
         ui.monospace(pretty);
     });
 }

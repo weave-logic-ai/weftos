@@ -39,8 +39,14 @@ pub fn write_ops_events(ops: &OpsEventLedger, out_dir: &Path) -> Result<()> {
     let d = out_dir.join("events");
     serde_json::to_writer_pretty(File::create(d.join("inventory.json"))?, &ops.inventory)?;
     serde_json::to_writer_pretty(File::create(d.join("audits.json"))?, &ops.audits)?;
-    serde_json::to_writer_pretty(File::create(d.join("cert_renewals.json"))?, &ops.cert_renewals)?;
-    serde_json::to_writer_pretty(File::create(d.join("shift_adequacy.json"))?, &ops.shift_adequacy)?;
+    serde_json::to_writer_pretty(
+        File::create(d.join("cert_renewals.json"))?,
+        &ops.cert_renewals,
+    )?;
+    serde_json::to_writer_pretty(
+        File::create(d.join("shift_adequacy.json"))?,
+        &ops.shift_adequacy,
+    )?;
     Ok(())
 }
 
@@ -52,7 +58,12 @@ pub fn load_ops_events(corpus_dir: &Path) -> Result<OpsEventLedger> {
         serde_json::from_reader(BufReader::new(File::open(d.join("cert_renewals.json"))?))?;
     let shift_adequacy =
         serde_json::from_reader(BufReader::new(File::open(d.join("shift_adequacy.json"))?))?;
-    Ok(OpsEventLedger { inventory, audits, cert_renewals, shift_adequacy })
+    Ok(OpsEventLedger {
+        inventory,
+        audits,
+        cert_renewals,
+        shift_adequacy,
+    })
 }
 
 pub fn load_dimensions(corpus_dir: &Path) -> Result<Dimensions> {
@@ -62,7 +73,12 @@ pub fn load_dimensions(corpus_dir: &Path) -> Result<Dimensions> {
     let positions = serde_json::from_reader(BufReader::new(File::open(d.join("positions.json"))?))?;
     let promotions =
         serde_json::from_reader(BufReader::new(File::open(d.join("promotions.json"))?))?;
-    Ok(Dimensions { stores, people, positions, promotions })
+    Ok(Dimensions {
+        stores,
+        people,
+        positions,
+        promotions,
+    })
 }
 
 pub fn load_events(corpus_dir: &Path) -> Result<Vec<DailyRollup>> {

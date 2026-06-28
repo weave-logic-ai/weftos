@@ -7,8 +7,8 @@ pub mod wiki;
 
 use std::path::Path;
 
-use crate::model::KnowledgeGraph;
 use crate::GraphifyError;
+use crate::model::KnowledgeGraph;
 
 /// Supported export formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

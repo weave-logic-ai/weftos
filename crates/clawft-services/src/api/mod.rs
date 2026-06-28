@@ -283,10 +283,7 @@ pub async fn serve(
     // and expired tokens do not accumulate over the server's lifetime.
     // The handle is detached -- the task observes the store via a
     // Weak ref and self-terminates when ApiState drops its Arc.
-    let _cleanup = auth::spawn_cleanup_task(
-        state.auth.clone(),
-        auth::TOKEN_CLEANUP_INTERVAL_SECS,
-    );
+    let _cleanup = auth::spawn_cleanup_task(state.auth.clone(), auth::TOKEN_CLEANUP_INTERVAL_SECS);
     let router = build_router(state, cors_origins, static_dir);
     // `into_make_service_with_connect_info::<SocketAddr>()` makes
     // `ConnectInfo<SocketAddr>` available to handlers and middleware
@@ -334,8 +331,7 @@ pub fn build_router(state: ApiState, cors_origins: &[String], static_dir: Option
     // Serve built UI as SPA fallback when a static directory is provided.
     if let Some(dir) = static_dir {
         use tower_http::services::ServeDir;
-        router = router
-            .fallback_service(ServeDir::new(dir).append_index_html_on_directories(true));
+        router = router.fallback_service(ServeDir::new(dir).append_index_html_on_directories(true));
     }
 
     router

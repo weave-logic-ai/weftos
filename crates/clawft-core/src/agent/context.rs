@@ -15,9 +15,9 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 #[cfg(feature = "native")]
 use std::path::PathBuf;
+use std::sync::Arc;
 #[cfg(feature = "native")]
 use std::time::SystemTime;
 
@@ -102,9 +102,13 @@ impl<P: Platform> ContextBuilder<P> {
             platform,
             bootstrap_cache: {
                 #[cfg(feature = "native")]
-                { Arc::new(Mutex::new(HashMap::new())) }
+                {
+                    Arc::new(Mutex::new(HashMap::new()))
+                }
                 #[cfg(not(feature = "native"))]
-                { Arc::new(Mutex::new(())) }
+                {
+                    Arc::new(Mutex::new(()))
+                }
             },
             compression_config: None,
         }
@@ -202,12 +206,9 @@ impl<P: Platform> ContextBuilder<P> {
                 ];
                 for file_path in &candidates {
                     debug!(file = %file_path.display(), "checking for bootstrap file");
-                    if let Some(content) = Self::load_cached_file(
-                        &self.platform,
-                        &self.bootstrap_cache,
-                        file_path,
-                    )
-                    .await
+                    if let Some(content) =
+                        Self::load_cached_file(&self.platform, &self.bootstrap_cache, file_path)
+                            .await
                     {
                         debug!(file = %filename, bytes = content.len(), "loaded bootstrap file");
                         loaded_files.insert(*filename, content);
@@ -385,8 +386,13 @@ impl<P: Platform> ContextBuilder<P> {
         extra_skill_instructions: Option<&str>,
     ) -> Vec<LlmMessage> {
         let system_prompt = self.build_system_prompt_for_agent(agent, args).await;
-        self.build_messages_inner(session, system_prompt, &agent.skills, extra_skill_instructions)
-            .await
+        self.build_messages_inner(
+            session,
+            system_prompt,
+            &agent.skills,
+            extra_skill_instructions,
+        )
+        .await
     }
 
     /// Core message assembly logic shared by [`build_messages`] and
@@ -1206,7 +1212,10 @@ mod tests {
 
     #[test]
     fn first_sentence_extracts_correctly() {
-        assert_eq!(first_sentence("Hello world. More text here."), "Hello world.");
+        assert_eq!(
+            first_sentence("Hello world. More text here."),
+            "Hello world."
+        );
         assert_eq!(first_sentence("No period here"), "No period here");
         assert_eq!(first_sentence("Question? Yes."), "Question?");
         assert_eq!(first_sentence("Exclaim! Done."), "Exclaim!");
@@ -1260,7 +1269,10 @@ mod tests {
     #[test]
     fn compress_context_preserves_system_prompt() {
         // Build a context with a system message and many conversation messages.
-        let mut messages = vec![make_msg("system", "You are a helpful assistant with many capabilities.")];
+        let mut messages = vec![make_msg(
+            "system",
+            "You are a helpful assistant with many capabilities.",
+        )];
         for i in 0..20 {
             messages.push(make_msg("user", &format!("User message number {}. This is a fairly long message to inflate token count significantly.", i)));
             messages.push(make_msg("assistant", &format!("Assistant response number {}. Also fairly long to push tokens over the budget limit.", i)));
@@ -1279,11 +1291,18 @@ mod tests {
         assert!(result.messages[0].content.contains("helpful assistant"));
 
         // There should be a summary message.
-        let summary = result.messages.iter().find(|m| m.content.contains("Conversation Summary"));
+        let summary = result
+            .messages
+            .iter()
+            .find(|m| m.content.contains("Conversation Summary"));
         assert!(summary.is_some(), "should have a summary message");
 
         // Recent messages should be the last 4 conversation messages.
-        let non_system: Vec<_> = result.messages.iter().filter(|m| m.role != "system").collect();
+        let non_system: Vec<_> = result
+            .messages
+            .iter()
+            .filter(|m| m.role != "system")
+            .collect();
         assert_eq!(non_system.len(), 4);
 
         // Check the very last message is the last assistant response.
@@ -1296,7 +1315,13 @@ mod tests {
     fn compress_context_recent_messages_intact() {
         let mut messages = vec![make_msg("system", "sys prompt")];
         for i in 0..15 {
-            messages.push(make_msg("user", &format!("msg {} with enough words to make the token count go over budget easily", i)));
+            messages.push(make_msg(
+                "user",
+                &format!(
+                    "msg {} with enough words to make the token count go over budget easily",
+                    i
+                ),
+            ));
         }
 
         let config = CompressionConfig {
@@ -1308,7 +1333,11 @@ mod tests {
         let result = compress_context(messages, &config);
 
         // Last 5 user messages should be kept verbatim.
-        let user_msgs: Vec<_> = result.messages.iter().filter(|m| m.role == "user").collect();
+        let user_msgs: Vec<_> = result
+            .messages
+            .iter()
+            .filter(|m| m.role == "user")
+            .collect();
         assert_eq!(user_msgs.len(), 5);
         for (idx, msg) in user_msgs.iter().enumerate() {
             let expected_num = 10 + idx; // messages 10..14
@@ -1320,7 +1349,13 @@ mod tests {
     fn compress_context_metadata_accuracy() {
         let mut messages = vec![make_msg("system", "short system")];
         for i in 0..10 {
-            messages.push(make_msg("user", &format!("Message number {} with several words to inflate the count.", i)));
+            messages.push(make_msg(
+                "user",
+                &format!(
+                    "Message number {} with several words to inflate the count.",
+                    i
+                ),
+            ));
         }
 
         let original_tokens: usize = messages.iter().map(|m| count_tokens(&m.content)).sum();
@@ -1342,7 +1377,11 @@ mod tests {
         assert!(result.metadata.compression_ratio > 0.0);
 
         // Verify compressed_tokens matches actual content.
-        let actual_compressed: usize = result.messages.iter().map(|m| count_tokens(&m.content)).sum();
+        let actual_compressed: usize = result
+            .messages
+            .iter()
+            .map(|m| count_tokens(&m.content))
+            .sum();
         assert_eq!(result.metadata.compressed_tokens, actual_compressed);
     }
 

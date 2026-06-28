@@ -12,7 +12,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use clawft_gui_egui::surface_host::render_headless;
-use clawft_surface::builder::{stack, NodeBuilder, Surface};
+use clawft_surface::builder::{NodeBuilder, Surface, stack};
 use clawft_surface::substrate::OntologySnapshot;
 use clawft_surface::tree::{AttrValue, IdentityIri};
 use serde_json::json;
@@ -28,10 +28,8 @@ fn one_node_surface(node: NodeBuilder) -> clawft_surface::tree::SurfaceTree {
 fn field_iri_renders() {
     // ui://field — text input. With no binding, the rendered string
     // should be empty but the response must show up.
-    let n = NodeBuilder::new(IdentityIri::Field, "/root/field").attr(
-        "kind",
-        AttrValue::Str("text".into()),
-    );
+    let n = NodeBuilder::new(IdentityIri::Field, "/root/field")
+        .attr("kind", AttrValue::Str("text".into()));
     let tree = one_node_surface(n);
     let snap = OntologySnapshot::empty();
     let resps = render_headless(&tree, snap);
@@ -161,8 +159,7 @@ fn tree_iri_renders_with_children() {
 
 #[test]
 fn plot_iri_renders_with_points() {
-    let n = NodeBuilder::new(IdentityIri::Plot, "/root/plot")
-        .bind("points", "$series");
+    let n = NodeBuilder::new(IdentityIri::Plot, "/root/plot").bind("points", "$series");
     let tree = one_node_surface(n);
     let mut snap = OntologySnapshot::empty();
     snap.put("series", json!([1.0, 4.0, 9.0, 16.0, 25.0]));

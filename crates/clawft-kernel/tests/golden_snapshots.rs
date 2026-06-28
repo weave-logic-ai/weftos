@@ -13,11 +13,15 @@ mod exochain_snapshots {
         let cm = ChainManager::new(0, 100);
 
         // Append a test event after genesis.
-        cm.append("test-source", "test.event", Some(serde_json::json!({
-            "agent_id": "agent-1",
-            "action": "tool.read_file",
-            "detail": "reading config",
-        })));
+        cm.append(
+            "test-source",
+            "test.event",
+            Some(serde_json::json!({
+                "agent_id": "agent-1",
+                "action": "tool.read_file",
+                "detail": "reading config",
+            })),
+        );
 
         // Get the last event (the one we just appended).
         let events = cm.tail(1);
@@ -73,7 +77,10 @@ mod exochain_snapshots {
         cm.append("src", "evt.3", None);
 
         let checkpoints = cm.checkpoints();
-        assert!(!checkpoints.is_empty(), "checkpoint should exist after exceeding interval");
+        assert!(
+            !checkpoints.is_empty(),
+            "checkpoint should exist after exceeding interval"
+        );
 
         let checkpoint = &checkpoints[0];
         let shape = serde_json::json!({

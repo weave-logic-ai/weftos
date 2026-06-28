@@ -77,11 +77,7 @@ impl InterAgentMessage {
     }
 
     /// Create a reply to an existing message.
-    pub fn reply(
-        original: &InterAgentMessage,
-        payload: Value,
-        ttl: Duration,
-    ) -> Self {
+    pub fn reply(original: &InterAgentMessage, payload: Value, ttl: Duration) -> Self {
         Self {
             id: Uuid::new_v4(),
             from_agent: original.to_agent.clone(),
@@ -179,10 +175,7 @@ mod base64_bytes {
         let hex = String::deserialize(deserializer)?;
         (0..hex.len())
             .step_by(2)
-            .map(|i| {
-                u8::from_str_radix(&hex[i..i + 2], 16)
-                    .map_err(serde::de::Error::custom)
-            })
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).map_err(serde::de::Error::custom))
             .collect()
     }
 }

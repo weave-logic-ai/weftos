@@ -6,8 +6,8 @@
 
 use rand::Rng;
 
-use clawft_core::agent::context::{compress_context, count_tokens, CompressionConfig};
-use clawft_core::pipeline::mutation::{mutate_prompt, MutationStrategy, TrajectoryHint};
+use clawft_core::agent::context::{CompressionConfig, compress_context, count_tokens};
+use clawft_core::pipeline::mutation::{MutationStrategy, TrajectoryHint, mutate_prompt};
 use clawft_core::pipeline::scorer::FitnessScorer;
 use clawft_core::pipeline::traits::{ChatRequest, LlmMessage, QualityScorer};
 use clawft_types::provider::{ContentBlock, LlmResponse, StopReason, Usage};
@@ -132,7 +132,11 @@ fn compress_context_respects_budget() {
         for _ in 0..msg_count {
             let word_count = rng.gen_range(5..=50);
             let text = random_string(&mut rng, word_count);
-            let role = if rng.gen_bool(0.5) { "user" } else { "assistant" };
+            let role = if rng.gen_bool(0.5) {
+                "user"
+            } else {
+                "assistant"
+            };
             messages.push(make_msg(role, &text));
         }
 
@@ -375,8 +379,8 @@ fn mutate_prompt_rephrase_idempotent_for_non_instructions() {
 #[test]
 fn mutate_prompt_emphasize_adds_markers_to_instructions() {
     let instruction_verbs = [
-        "Use", "Execute", "Run", "Create", "Write", "Read", "Check", "Ensure",
-        "Verify", "Always", "Never", "Avoid",
+        "Use", "Execute", "Run", "Create", "Write", "Read", "Check", "Ensure", "Verify", "Always",
+        "Never", "Avoid",
     ];
 
     let mut rng = rand::thread_rng();

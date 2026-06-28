@@ -8,10 +8,30 @@ struct AgentCost {
 }
 
 const AGENTS: &[AgentCost] = &[
-    AgentCost { id: "coder",      tokens: 1_842_000, cost_usd: 5.52, budget_usd: 10.0 },
-    AgentCost { id: "reviewer",   tokens:   612_000, cost_usd: 1.84, budget_usd:  5.0 },
-    AgentCost { id: "researcher", tokens: 3_200_000, cost_usd: 8.95, budget_usd: 10.0 },
-    AgentCost { id: "planner",    tokens:   140_000, cost_usd: 0.42, budget_usd:  5.0 },
+    AgentCost {
+        id: "coder",
+        tokens: 1_842_000,
+        cost_usd: 5.52,
+        budget_usd: 10.0,
+    },
+    AgentCost {
+        id: "reviewer",
+        tokens: 612_000,
+        cost_usd: 1.84,
+        budget_usd: 5.0,
+    },
+    AgentCost {
+        id: "researcher",
+        tokens: 3_200_000,
+        cost_usd: 8.95,
+        budget_usd: 10.0,
+    },
+    AgentCost {
+        id: "planner",
+        tokens: 140_000,
+        cost_usd: 0.42,
+        budget_usd: 5.0,
+    },
 ];
 
 pub fn show(ui: &mut egui::Ui) {

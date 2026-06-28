@@ -11,9 +11,9 @@ use std::borrow::Cow;
 
 use eframe::egui;
 
+use super::CanonWidget;
 use super::response::CanonResponse;
 use super::types::{Affordance, Confidence, IdentityUri, MutationAxis, Tooltip, VariantId};
-use super::CanonWidget;
 
 const IDENTITY: &str = "ui://tabs";
 
@@ -118,11 +118,7 @@ where
         let strip_resp = ui
             .horizontal(|ui| {
                 for (i, label) in labels.iter().enumerate() {
-                    if ui
-                        .selectable_label(*selected == i, *label)
-                        .clicked()
-                        && *selected != i
-                    {
+                    if ui.selectable_label(*selected == i, *label).clicked() && *selected != i {
                         *selected = i;
                         changed = true;
                     }

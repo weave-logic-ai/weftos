@@ -217,17 +217,11 @@ pub enum WasmError {
 
     /// The tool exhausted its fuel budget.
     #[error("fuel exhausted after {consumed} units (limit: {limit})")]
-    FuelExhausted {
-        consumed: u64,
-        limit: u64,
-    },
+    FuelExhausted { consumed: u64, limit: u64 },
 
     /// Memory allocation exceeded the configured limit.
     #[error("memory limit exceeded: {allocated} bytes (limit: {limit} bytes)")]
-    MemoryLimitExceeded {
-        allocated: usize,
-        limit: usize,
-    },
+    MemoryLimitExceeded { allocated: usize, limit: usize },
 
     /// Execution exceeded the wall-clock timeout.
     #[error("execution timeout after {0:?}")]
@@ -243,10 +237,7 @@ pub enum WasmError {
 
     /// The module exceeds the maximum allowed size.
     #[error("module too large: {size} bytes (limit: {limit} bytes)")]
-    ModuleTooLarge {
-        size: usize,
-        limit: usize,
-    },
+    ModuleTooLarge { size: usize, limit: usize },
 
     /// Execution denied by governance gate.
     #[error("governance denied: {0}")]
@@ -474,7 +465,7 @@ pub fn verify_tool_signature(
     signature: &[u8; 64],
     public_key: &[u8; 32],
 ) -> bool {
-    use ed25519_dalek::{Verifier, VerifyingKey, Signature};
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
     let Ok(vk) = VerifyingKey::from_bytes(public_key) else {
         return false;
     };
@@ -513,11 +504,7 @@ impl BackendSelection {
     ///
     /// Simple heuristic: risk > 0.3 => WASM sandbox, else native.
     pub fn from_risk(risk: f64) -> Self {
-        if risk > 0.3 {
-            Self::Wasm
-        } else {
-            Self::Native
-        }
+        if risk > 0.3 { Self::Wasm } else { Self::Native }
     }
 }
 

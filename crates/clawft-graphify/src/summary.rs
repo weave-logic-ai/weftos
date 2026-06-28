@@ -68,11 +68,9 @@ fn generate_one(
         .unwrap_or_else(|| format!("Community {cid}"));
 
     // Top entities by degree (descending), up to 5.
-    let mut entity_degrees: Vec<(&EntityId, usize)> = members
-        .iter()
-        .map(|id| (id, kg.degree(id)))
-        .collect();
-    entity_degrees.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0 .0.cmp(&b.0 .0)));
+    let mut entity_degrees: Vec<(&EntityId, usize)> =
+        members.iter().map(|id| (id, kg.degree(id))).collect();
+    entity_degrees.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.0.cmp(&b.0.0)));
 
     let top_entities: Vec<String> = entity_degrees
         .iter()
@@ -81,14 +79,14 @@ fn generate_one(
         .collect();
 
     // Source files in this community.
-    let mut source_file_set: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut source_file_set: std::collections::HashSet<String> = std::collections::HashSet::new();
     for id in members {
         if let Some(entity) = kg.entity(id)
             && let Some(ref sf) = entity.source_file
-                && !sf.is_empty() {
-                    source_file_set.insert(sf.clone());
-                }
+            && !sf.is_empty()
+        {
+            source_file_set.insert(sf.clone());
+        }
     }
     let mut source_files: Vec<String> = source_file_set.into_iter().collect();
     source_files.sort();
@@ -98,9 +96,7 @@ fn generate_one(
     let mut rel_counts: HashMap<String, usize> = HashMap::new();
     for (src, tgt, rel) in kg.edges() {
         if member_set.contains(&src.id) && member_set.contains(&tgt.id) {
-            *rel_counts
-                .entry(rel.relation_type_str())
-                .or_insert(0) += 1;
+            *rel_counts.entry(rel.relation_type_str()).or_insert(0) += 1;
         }
     }
     let mut rel_pairs: Vec<(String, usize)> = rel_counts.into_iter().collect();
@@ -292,7 +288,11 @@ mod tests {
         }
     }
 
-    fn build_test_graph() -> (KnowledgeGraph, HashMap<usize, Vec<EntityId>>, HashMap<usize, String>) {
+    fn build_test_graph() -> (
+        KnowledgeGraph,
+        HashMap<usize, Vec<EntityId>>,
+        HashMap<usize, String>,
+    ) {
         let entities = vec![
             make_entity("auth_login", "auth.py"),
             make_entity("auth_logout", "auth.py"),
@@ -316,10 +316,7 @@ mod tests {
                 entities[2].id.clone(),
             ],
         );
-        communities.insert(
-            1,
-            vec![entities[3].id.clone(), entities[4].id.clone()],
-        );
+        communities.insert(1, vec![entities[3].id.clone(), entities[4].id.clone()]);
 
         let mut labels = HashMap::new();
         labels.insert(0, "auth".to_owned());

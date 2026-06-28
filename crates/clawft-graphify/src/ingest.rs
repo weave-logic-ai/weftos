@@ -191,14 +191,21 @@ fn strip_html(html: &str) -> String {
     let text = ws_re.replace_all(&text, " ");
     let text = text.trim().to_string();
 
-    if text.len() > 12_000 { text[..12_000].to_string() } else { text }
+    if text.len() > 12_000 {
+        text[..12_000].to_string()
+    } else {
+        text
+    }
 }
 
 fn extract_title(html: &str) -> Option<String> {
     let re = Regex::new(r"(?is)<title[^>]*>(.*?)</title>").ok()?;
     re.captures(html).map(|c| {
         let ws_re = Regex::new(r"\s+").unwrap();
-        ws_re.replace_all(c.get(1).unwrap().as_str(), " ").trim().to_string()
+        ws_re
+            .replace_all(c.get(1).unwrap().as_str(), " ")
+            .trim()
+            .to_string()
     })
 }
 
@@ -224,7 +231,10 @@ fn fetch_tweet(
             let html = data["html"].as_str().unwrap_or("");
             let tag_re = Regex::new(r"<[^>]+>").unwrap();
             let text = tag_re.replace_all(html, "").trim().to_string();
-            let author = data["author_name"].as_str().unwrap_or("unknown").to_string();
+            let author = data["author_name"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string();
             (text, author)
         }
         Err(_) => (
@@ -236,8 +246,11 @@ fn fetch_tweet(
     let now = chrono_now_iso();
     let content = format!(
         "---\nsource_url: {url}\ntype: tweet\nauthor: {tweet_author}\ncaptured_at: {now}\ncontributor: {cont}\n---\n\n# Tweet by @{tweet_author}\n\n{tweet_text}\n\nSource: {url}\n",
-        url = url, tweet_author = tweet_author, now = now,
-        cont = contributor.unwrap_or("unknown"), tweet_text = tweet_text,
+        url = url,
+        tweet_author = tweet_author,
+        now = now,
+        cont = contributor.unwrap_or("unknown"),
+        tweet_text = tweet_text,
     );
     let filename = safe_filename(url, ".md");
     Ok((content, filename))
@@ -258,18 +271,37 @@ fn fetch_arxiv(
     let (title, abstract_text, authors) = match client.fetch_text(&api_url) {
         Ok(html) => {
             let tag_re = Regex::new(r"<[^>]+>").unwrap();
-            let abs_re = Regex::new(r#"(?is)class="abstract[^"]*"[^>]*>(.*?)</blockquote>"#).unwrap();
+            let abs_re =
+                Regex::new(r#"(?is)class="abstract[^"]*"[^>]*>(.*?)</blockquote>"#).unwrap();
             let title_re = Regex::new(r#"(?is)class="title[^"]*"[^>]*>(.*?)</h1>"#).unwrap();
             let auth_re = Regex::new(r#"(?is)class="authors"[^>]*>(.*?)</div>"#).unwrap();
 
-            let abstract_text = abs_re.captures(&html)
-                .map(|c| tag_re.replace_all(c.get(1).unwrap().as_str(), "").trim().to_string())
+            let abstract_text = abs_re
+                .captures(&html)
+                .map(|c| {
+                    tag_re
+                        .replace_all(c.get(1).unwrap().as_str(), "")
+                        .trim()
+                        .to_string()
+                })
                 .unwrap_or_default();
-            let title = title_re.captures(&html)
-                .map(|c| tag_re.replace_all(c.get(1).unwrap().as_str(), " ").trim().to_string())
+            let title = title_re
+                .captures(&html)
+                .map(|c| {
+                    tag_re
+                        .replace_all(c.get(1).unwrap().as_str(), " ")
+                        .trim()
+                        .to_string()
+                })
                 .unwrap_or_else(|| arxiv_id.clone());
-            let authors = auth_re.captures(&html)
-                .map(|c| tag_re.replace_all(c.get(1).unwrap().as_str(), "").trim().to_string())
+            let authors = auth_re
+                .captures(&html)
+                .map(|c| {
+                    tag_re
+                        .replace_all(c.get(1).unwrap().as_str(), "")
+                        .trim()
+                        .to_string()
+                })
                 .unwrap_or_default();
             (title, abstract_text, authors)
         }
@@ -279,9 +311,15 @@ fn fetch_arxiv(
     let now = chrono_now_iso();
     let content = format!(
         "---\nsource_url: {url}\narxiv_id: {aid}\ntype: paper\ntitle: \"{t}\"\npaper_authors: \"{a}\"\ncaptured_at: {now}\ncontributor: {cont}\n---\n\n# {title}\n\n**Authors:** {authors}\n**arXiv:** {aid}\n\n## Abstract\n\n{abs}\n\nSource: {url}\n",
-        url = url, aid = arxiv_id, t = yaml_escape(&title), a = yaml_escape(&authors),
-        now = now, cont = contributor.unwrap_or("unknown"),
-        title = title, authors = authors, abs = abstract_text,
+        url = url,
+        aid = arxiv_id,
+        t = yaml_escape(&title),
+        a = yaml_escape(&authors),
+        now = now,
+        cont = contributor.unwrap_or("unknown"),
+        title = title,
+        authors = authors,
+        abs = abstract_text,
     );
     let filename = format!("arxiv_{}.md", arxiv_id.replace('.', "_"));
     Ok((content, filename))
@@ -299,8 +337,12 @@ fn fetch_webpage(
     let now = chrono_now_iso();
     let content = format!(
         "---\nsource_url: {url}\ntype: webpage\ntitle: \"{t}\"\ncaptured_at: {now}\ncontributor: {cont}\n---\n\n# {title}\n\nSource: {url}\n\n---\n\n{md}\n",
-        url = url, t = yaml_escape(&title), now = now,
-        cont = contributor.unwrap_or("unknown"), title = title, md = markdown,
+        url = url,
+        t = yaml_escape(&title),
+        now = now,
+        cont = contributor.unwrap_or("unknown"),
+        title = title,
+        md = markdown,
     );
     let filename = safe_filename(url, ".md");
     Ok((content, filename))
@@ -322,9 +364,8 @@ pub fn ingest(
 ) -> Result<IngestResult, GraphifyError> {
     validate_url(url)?;
 
-    std::fs::create_dir_all(target_dir).map_err(|e| {
-        GraphifyError::IngestError(format!("failed to create target dir: {e}"))
-    })?;
+    std::fs::create_dir_all(target_dir)
+        .map_err(|e| GraphifyError::IngestError(format!("failed to create target dir: {e}")))?;
 
     let url_type = detect_url_type(url);
 
@@ -334,17 +375,27 @@ pub fn ingest(
             let filename = safe_filename(url, ".pdf");
             let out_path = target_dir.join(&filename);
             std::fs::write(&out_path, bytes)?;
-            IngestResult { path: out_path, url_type, filename }
+            IngestResult {
+                path: out_path,
+                url_type,
+                filename,
+            }
         }
         UrlType::Image => {
-            let ext = url.rsplit('.').next()
+            let ext = url
+                .rsplit('.')
+                .next()
                 .map(|e| format!(".{}", e.split('?').next().unwrap_or("jpg")))
                 .unwrap_or_else(|| ".jpg".to_string());
             let bytes = client.fetch_bytes(url)?;
             let filename = safe_filename(url, &ext);
             let out_path = target_dir.join(&filename);
             std::fs::write(&out_path, bytes)?;
-            IngestResult { path: out_path, url_type, filename }
+            IngestResult {
+                path: out_path,
+                url_type,
+                filename,
+            }
         }
         _ => {
             let (content, filename) = match url_type {
@@ -356,17 +407,26 @@ pub fn ingest(
             let mut out_path = target_dir.join(&filename);
             let mut counter = 1u32;
             while out_path.exists() {
-                let stem = Path::new(&filename).file_stem()
-                    .and_then(|s| s.to_str()).unwrap_or("file");
+                let stem = Path::new(&filename)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("file");
                 out_path = target_dir.join(format!("{stem}_{counter}.md"));
                 counter += 1;
             }
 
             std::fs::write(&out_path, &content)?;
-            let final_filename = out_path.file_name()
-                .and_then(|n| n.to_str()).unwrap_or(&filename).to_string();
+            let final_filename = out_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&filename)
+                .to_string();
 
-            IngestResult { path: out_path, url_type, filename: final_filename }
+            IngestResult {
+                path: out_path,
+                url_type,
+                filename: final_filename,
+            }
         }
     };
 
@@ -405,7 +465,12 @@ pub fn save_query_result(
     let slug = if slug.len() > 50 { &slug[..50] } else { &slug };
     let slug = slug.trim_matches('_');
 
-    let ts = now.replace([':', '-', 'T'], "").split('.').next().unwrap_or("0").to_string();
+    let ts = now
+        .replace([':', '-', 'T'], "")
+        .split('.')
+        .next()
+        .unwrap_or("0")
+        .to_string();
     let filename = format!("query_{ts}_{slug}.md");
 
     let mut lines = vec![
@@ -474,13 +539,31 @@ mod tests {
 
     #[test]
     fn url_type_detection() {
-        assert_eq!(detect_url_type("https://twitter.com/user/status/123"), UrlType::Tweet);
-        assert_eq!(detect_url_type("https://x.com/user/status/456"), UrlType::Tweet);
-        assert_eq!(detect_url_type("https://arxiv.org/abs/2301.12345"), UrlType::Arxiv);
-        assert_eq!(detect_url_type("https://github.com/user/repo"), UrlType::Github);
+        assert_eq!(
+            detect_url_type("https://twitter.com/user/status/123"),
+            UrlType::Tweet
+        );
+        assert_eq!(
+            detect_url_type("https://x.com/user/status/456"),
+            UrlType::Tweet
+        );
+        assert_eq!(
+            detect_url_type("https://arxiv.org/abs/2301.12345"),
+            UrlType::Arxiv
+        );
+        assert_eq!(
+            detect_url_type("https://github.com/user/repo"),
+            UrlType::Github
+        );
         assert_eq!(detect_url_type("https://example.com/doc.pdf"), UrlType::Pdf);
-        assert_eq!(detect_url_type("https://example.com/img.png"), UrlType::Image);
-        assert_eq!(detect_url_type("https://example.com/page"), UrlType::Webpage);
+        assert_eq!(
+            detect_url_type("https://example.com/img.png"),
+            UrlType::Image
+        );
+        assert_eq!(
+            detect_url_type("https://example.com/page"),
+            UrlType::Webpage
+        );
     }
 
     #[test]
@@ -522,7 +605,8 @@ mod tests {
             &dir,
             "query",
             Some(&["AuthService".to_string()]),
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(path.exists());
         let content = std::fs::read_to_string(&path).unwrap();

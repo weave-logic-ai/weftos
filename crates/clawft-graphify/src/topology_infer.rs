@@ -18,7 +18,9 @@ pub fn infer_schema(kg: &KnowledgeGraph, name: &str) -> TopologySchema {
     // Count entity types.
     let mut type_counts: HashMap<String, usize> = HashMap::new();
     for entity in kg.entities() {
-        *type_counts.entry(entity.entity_type.discriminant().to_string()).or_default() += 1;
+        *type_counts
+            .entry(entity.entity_type.discriminant().to_string())
+            .or_default() += 1;
     }
 
     // Build children map for containment analysis.
@@ -34,9 +36,8 @@ pub fn infer_schema(kg: &KnowledgeGraph, name: &str) -> TopologySchema {
 
     // Infer geometry per entity type.
     let colors = [
-        "#6366f1", "#3b82f6", "#0ea5e9", "#14b8a6", "#22c55e",
-        "#84cc16", "#f59e0b", "#f97316", "#ef4444", "#ec4899",
-        "#a855f7", "#8b5cf6", "#78716c",
+        "#6366f1", "#3b82f6", "#0ea5e9", "#14b8a6", "#22c55e", "#84cc16", "#f59e0b", "#f97316",
+        "#ef4444", "#ec4899", "#a855f7", "#8b5cf6", "#78716c",
     ];
 
     let mut sorted_types: Vec<_> = type_counts.iter().collect();
@@ -51,7 +52,8 @@ pub fn infer_schema(kg: &KnowledgeGraph, name: &str) -> TopologySchema {
         let has_children = !contains.is_empty();
 
         // Check if this type has timestamps.
-        let has_timestamps = kg.entities()
+        let has_timestamps = kg
+            .entities()
             .filter(|e| e.entity_type.discriminant() == type_key.as_str())
             .any(|e| {
                 e.metadata.get("timestamp").is_some()
@@ -83,39 +85,47 @@ pub fn infer_schema(kg: &KnowledgeGraph, name: &str) -> TopologySchema {
             None
         };
 
-        nodes.insert(type_key.clone(), NodeTypeConfig {
-            iri: Some(format!("https://weftos.weavelogic.ai/ontology/inferred#{type_key}")),
-            same_as: vec![],
-            geometry,
-            contains,
-            style: NodeStyle {
-                shape,
-                color,
-                icon: None,
-                min_radius: 8,
-                max_radius: 48,
+        nodes.insert(
+            type_key.clone(),
+            NodeTypeConfig {
+                iri: Some(format!(
+                    "https://weftos.weavelogic.ai/ontology/inferred#{type_key}"
+                )),
+                same_as: vec![],
+                geometry,
+                contains,
+                style: NodeStyle {
+                    shape,
+                    color,
+                    icon: None,
+                    min_radius: 8,
+                    max_radius: 48,
+                },
+                size_field: None,
+                time_field,
+                lat_field: None,
+                lng_field: None,
+                display_name: Some(title_case(type_key)),
             },
-            size_field: None,
-            time_field,
-            lat_field: None,
-            lng_field: None,
-            display_name: Some(title_case(type_key)),
-        });
+        );
     }
 
     // Add wildcard fallback.
-    nodes.insert("*".to_string(), NodeTypeConfig {
-        iri: None,
-        same_as: vec![],
-        geometry: Geometry::Force,
-        contains: vec![],
-        style: NodeStyle::default(),
-        size_field: None,
-        time_field: None,
-        lat_field: None,
-        lng_field: None,
-        display_name: Some("Entity".into()),
-    });
+    nodes.insert(
+        "*".to_string(),
+        NodeTypeConfig {
+            iri: None,
+            same_as: vec![],
+            geometry: Geometry::Force,
+            contains: vec![],
+            style: NodeStyle::default(),
+            size_field: None,
+            time_field: None,
+            lat_field: None,
+            lng_field: None,
+            display_name: Some("Entity".into()),
+        },
+    );
 
     // Infer edge types from relationship patterns.
     let mut edge_patterns: HashMap<(String, String, String), usize> = HashMap::new();
@@ -138,7 +148,9 @@ pub fn infer_schema(kg: &KnowledgeGraph, name: &str) -> TopologySchema {
 
         edge_configs.push(EdgeTypeConfig {
             edge_type: rel_type.clone(),
-            iri: Some(format!("https://weftos.weavelogic.ai/ontology/inferred#{rel_type}")),
+            iri: Some(format!(
+                "https://weftos.weavelogic.ai/ontology/inferred#{rel_type}"
+            )),
             from: from.clone(),
             to: to.clone(),
             cardinality,
@@ -150,7 +162,8 @@ pub fn infer_schema(kg: &KnowledgeGraph, name: &str) -> TopologySchema {
     }
 
     // Detect root geometry.
-    let contains_count = kg.edges()
+    let contains_count = kg
+        .edges()
         .filter(|(_, _, rel)| matches!(rel.relation_type, RelationType::Contains))
         .count();
     let total_edges = kg.relationship_count();
@@ -165,7 +178,9 @@ pub fn infer_schema(kg: &KnowledgeGraph, name: &str) -> TopologySchema {
         label: format!("Inferred from {name}"),
         version: "0.1.0".into(),
         domain: None,
-        iri: Some(format!("https://weftos.weavelogic.ai/schema/inferred/{name}")),
+        iri: Some(format!(
+            "https://weftos.weavelogic.ai/schema/inferred/{name}"
+        )),
         extends: None,
         nodes,
         edges: edge_configs,
@@ -195,15 +210,18 @@ pub fn diff_schemas(declared: &TopologySchema, inferred: &TopologySchema) -> Sch
     let declared_types: HashSet<&String> = declared.nodes.keys().collect();
     let inferred_types: HashSet<&String> = inferred.nodes.keys().collect();
 
-    let added_types: Vec<String> = inferred_types.difference(&declared_types)
+    let added_types: Vec<String> = inferred_types
+        .difference(&declared_types)
         .filter(|k| **k != "*")
         .map(|k| (*k).clone())
         .collect();
-    let removed_types: Vec<String> = declared_types.difference(&inferred_types)
+    let removed_types: Vec<String> = declared_types
+        .difference(&inferred_types)
         .filter(|k| **k != "*")
         .map(|k| (*k).clone())
         .collect();
-    let common_types: Vec<String> = declared_types.intersection(&inferred_types)
+    let common_types: Vec<String> = declared_types
+        .intersection(&inferred_types)
         .filter(|k| ***k != "*")
         .map(|k| (*k).clone())
         .collect();
@@ -221,13 +239,23 @@ pub fn diff_schemas(declared: &TopologySchema, inferred: &TopologySchema) -> Sch
         }
     }
 
-    let declared_edge_types: HashSet<&str> = declared.edges.iter().map(|e| e.edge_type.as_str()).collect();
-    let inferred_edge_types: HashSet<&str> = inferred.edges.iter().map(|e| e.edge_type.as_str()).collect();
+    let declared_edge_types: HashSet<&str> = declared
+        .edges
+        .iter()
+        .map(|e| e.edge_type.as_str())
+        .collect();
+    let inferred_edge_types: HashSet<&str> = inferred
+        .edges
+        .iter()
+        .map(|e| e.edge_type.as_str())
+        .collect();
 
-    let added_edges: Vec<String> = inferred_edge_types.difference(&declared_edge_types)
+    let added_edges: Vec<String> = inferred_edge_types
+        .difference(&declared_edge_types)
         .map(|s| s.to_string())
         .collect();
-    let removed_edges: Vec<String> = declared_edge_types.difference(&inferred_edge_types)
+    let removed_edges: Vec<String> = declared_edge_types
+        .difference(&inferred_edge_types)
         .map(|s| s.to_string())
         .collect();
 
@@ -315,12 +343,17 @@ mod tests {
         assert!(schema.nodes.contains_key("module"));
         assert!(schema.nodes.contains_key("function"));
         assert_eq!(schema.nodes["module"].geometry, Geometry::Tree);
-        assert!(schema.nodes["module"].contains.contains(&"function".to_string()));
+        assert!(
+            schema.nodes["module"]
+                .contains
+                .contains(&"function".to_string())
+        );
     }
 
     #[test]
     fn diff_detects_added_types() {
-        let declared = TopologySchema::from_yaml(r##"
+        let declared = TopologySchema::from_yaml(
+            r##"
 name: declared
 label: "D"
 version: "1.0.0"
@@ -330,9 +363,12 @@ nodes:
   function:
     geometry: force
 edges: []
-"##).unwrap();
+"##,
+        )
+        .unwrap();
 
-        let inferred = TopologySchema::from_yaml(r##"
+        let inferred = TopologySchema::from_yaml(
+            r##"
 name: inferred
 label: "I"
 version: "1.0.0"
@@ -344,7 +380,9 @@ nodes:
   service:
     geometry: force
 edges: []
-"##).unwrap();
+"##,
+        )
+        .unwrap();
 
         let diff = diff_schemas(&declared, &inferred);
         assert!(diff.added_types.contains(&"service".to_string()));

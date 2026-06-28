@@ -106,15 +106,9 @@ pub async fn run(args: AppArgs) -> anyhow::Result<()> {
                     for app in apps {
                         println!(
                             "{:<20} {:<12} {}",
-                            app.get("name")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("?"),
-                            app.get("state")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("?"),
-                            app.get("version")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("?"),
+                            app.get("name").and_then(|v| v.as_str()).unwrap_or("?"),
+                            app.get("state").and_then(|v| v.as_str()).unwrap_or("?"),
+                            app.get("version").and_then(|v| v.as_str()).unwrap_or("?"),
                         );
                     }
                 }

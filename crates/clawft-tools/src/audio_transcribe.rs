@@ -8,7 +8,7 @@
 
 use async_trait::async_trait;
 use clawft_core::tools::registry::{Tool, ToolError};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Tool for transcribing audio files to text.
 ///
@@ -84,16 +84,14 @@ impl Tool for AudioTranscribeTool {
                 )));
             }
             None => {
-                return Err(ToolError::InvalidArgs(
-                    "File has no extension".into(),
-                ));
+                return Err(ToolError::InvalidArgs("File has no extension".into()));
             }
         };
 
         // Read audio file
-        let _audio_data = tokio::fs::read(file_path).await.map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to read file: {e}"))
-        })?;
+        let _audio_data = tokio::fs::read(file_path)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {e}")))?;
 
         // STT fallback chain would be injected via runtime context in the
         // full integration. For now, return a stub result that proves the

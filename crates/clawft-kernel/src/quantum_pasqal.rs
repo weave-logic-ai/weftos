@@ -366,10 +366,7 @@ fn status_from_str(s: &str) -> JobStatus {
 fn counts_to_bitstrings(counts: &std::collections::HashMap<String, u64>) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     for (bs, &n) in counts {
-        let row: Vec<u8> = bs
-            .chars()
-            .map(|c| if c == '1' { 1 } else { 0 })
-            .collect();
+        let row: Vec<u8> = bs.chars().map(|c| if c == '1' { 1 } else { 0 }).collect();
         for _ in 0..n {
             out.push(row.clone());
         }
@@ -446,10 +443,7 @@ impl QuantumBackend for PasqalBackend {
             .await
             .map_err(|e| QuantumError::Transport(e.to_string()))?;
         if !status_code.is_success() {
-            return Err(QuantumError::Rejected(format!(
-                "{}: {}",
-                status_code, text
-            )));
+            return Err(QuantumError::Rejected(format!("{}: {}", status_code, text)));
         }
         let parsed: JobStatusResponse = serde_json::from_str(&text)
             .map_err(|e| QuantumError::Serde(format!("{}: {}", e, text)))?;
@@ -482,10 +476,7 @@ impl QuantumBackend for PasqalBackend {
             .await
             .map_err(|e| QuantumError::Transport(e.to_string()))?;
         if !status_code.is_success() {
-            return Err(QuantumError::Rejected(format!(
-                "{}: {}",
-                status_code, text
-            )));
+            return Err(QuantumError::Rejected(format!("{}: {}", status_code, text)));
         }
         let parsed: BatchResultsResponse = serde_json::from_str(&text)
             .map_err(|e| QuantumError::Serde(format!("{}: {}", e, text)))?;
@@ -536,10 +527,7 @@ mod tests {
 
     #[test]
     fn build_sequence_json_shape() {
-        let reg = vec![
-            ("q0".into(), [0.0, 0.0]),
-            ("q1".into(), [5.0, 0.0]),
-        ];
+        let reg = vec![("q0".into(), [0.0, 0.0]), ("q1".into(), [5.0, 0.0])];
         let j = build_sequence_json(&reg, PasqalDevice::EmuFree, EvolutionParams::default());
         assert_eq!(j["version"], "1");
         assert_eq!(j["device"]["name"], "AnalogDevice");
@@ -554,12 +542,7 @@ mod tests {
     #[test]
     fn parse_results_computes_rydberg_probs() {
         // 4 shots, 3 atoms. Atom 0 excited 3/4, atom 1 excited 1/4, atom 2 excited 2/4.
-        let bs = vec![
-            vec![1, 0, 1],
-            vec![1, 0, 0],
-            vec![1, 1, 1],
-            vec![0, 0, 0],
-        ];
+        let bs = vec![vec![1, 0, 1], vec![1, 0, 0], vec![1, 1, 1], vec![0, 0, 0]];
         let r = parse_results(bs, 3);
         assert_eq!(r.shots, 4);
         assert!((r.rydberg_probs[0] - 0.75).abs() < 1e-9);

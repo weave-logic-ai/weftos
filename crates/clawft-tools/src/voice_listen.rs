@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use clawft_core::tools::registry::{Tool, ToolError};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Tool that listens to microphone and returns transcribed text.
 pub struct VoiceListenTool;
@@ -57,10 +57,7 @@ impl Tool for VoiceListenTool {
             .get("timeout_seconds")
             .and_then(|v| v.as_f64())
             .unwrap_or(30.0);
-        let language = args
-            .get("language")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let language = args.get("language").and_then(|v| v.as_str()).unwrap_or("");
 
         // Stub: real implementation will use AudioCapture + VAD + STT
         tracing::info!(

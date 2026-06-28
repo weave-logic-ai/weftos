@@ -127,10 +127,7 @@ enum Visibility {
 }
 
 /// Extract entities and relationships from a Rust source file.
-pub fn extract_rust(
-    source: &str,
-    file_path: &str,
-) -> ExtractionResult {
+pub fn extract_rust(source: &str, file_path: &str) -> ExtractionResult {
     let items = parse_items(source);
     let mut entities = Vec::new();
     let mut relationships = Vec::new();
@@ -262,35 +259,37 @@ pub fn extract_rust(
 
         // Impl → trait/struct relationships.
         if item.kind == ItemKind::Impl
-            && let Some(ref sig) = item.signature {
-                // "impl TraitName for StructName" or "impl StructName"
-                if let Some(target_name) = parse_impl_target(sig) {
-                    let target_id = EntityId::new(
-                        &DomainTag::Code,
-                        &EntityType::Struct,
-                        &target_name,
-                        file_path,
-                    );
-                    relationships.push(Relationship {
-                        source: item_id.clone(),
-                        target: target_id,
-                        relation_type: if sig.contains(" for ") {
-                            RelationType::Implements
-                        } else {
-                            RelationType::Extends
-                        },
-                        confidence: Confidence::Extracted,
-                        weight: 1.0,
-                        source_file: Some(file_path.to_string()),
-                        source_location: Some(format!("L{}", item.line)),
-                        metadata: serde_json::json!({}),
-                    });
-                }
+            && let Some(ref sig) = item.signature
+        {
+            // "impl TraitName for StructName" or "impl StructName"
+            if let Some(target_name) = parse_impl_target(sig) {
+                let target_id = EntityId::new(
+                    &DomainTag::Code,
+                    &EntityType::Struct,
+                    &target_name,
+                    file_path,
+                );
+                relationships.push(Relationship {
+                    source: item_id.clone(),
+                    target: target_id,
+                    relation_type: if sig.contains(" for ") {
+                        RelationType::Implements
+                    } else {
+                        RelationType::Extends
+                    },
+                    confidence: Confidence::Extracted,
+                    weight: 1.0,
+                    source_file: Some(file_path.to_string()),
+                    source_location: Some(format!("L{}", item.line)),
+                    metadata: serde_json::json!({}),
+                });
             }
+        }
     }
 
     // Extract call relationships from function bodies.
-    let fn_names: HashMap<String, EntityId> = entities.iter()
+    let fn_names: HashMap<String, EntityId> = entities
+        .iter()
         .filter(|e| matches!(e.entity_type, EntityType::Function))
         .map(|e| (e.label.clone(), e.id.clone()))
         .collect();
@@ -312,18 +311,22 @@ pub fn extract_rust(
                 } else {
                     caller.name.clone()
                 };
-                let caller_id = fn_names.get(&caller.name)
+                let caller_id = fn_names
+                    .get(&caller.name)
                     .or_else(|| fn_names.get(&caller_name));
 
                 if let Some(caller_id) = caller_id {
                     for (fn_name, fn_id) in &fn_names {
-                        if fn_id == caller_id { continue; }
+                        if fn_id == caller_id {
+                            continue;
+                        }
                         // Simple heuristic: if the function name appears in the source
                         // near the caller's line range, it's likely a call.
                         let call_pattern = format!("{}(", fn_name);
                         let caller_start = caller.line.saturating_sub(1);
                         let caller_end = caller.line + caller.line_count;
-                        let in_range = source.lines()
+                        let in_range = source
+                            .lines()
                             .enumerate()
                             .skip(caller_start)
                             .take(caller_end - caller_start)
@@ -366,18 +369,34 @@ fn parse_impl_target(sig: &str) -> Option<String> {
     if sig.contains(" for ") {
         let after_for = sig.split(" for ").last()?;
         let name = after_for.split('<').next()?.trim();
-        if !name.is_empty() { Some(name.to_string()) } else { None }
+        if !name.is_empty() {
+            Some(name.to_string())
+        } else {
+            None
+        }
     } else {
         let after_impl = sig.strip_prefix("impl")?;
         let after_generics = if after_impl.starts_with('<') {
-            after_impl.find('>')?.checked_add(1)
+            after_impl
+                .find('>')?
+                .checked_add(1)
                 .and_then(|i| after_impl.get(i..))
                 .unwrap_or(after_impl)
         } else {
             after_impl
         };
-        let name = after_generics.trim().split('<').next()?.split('{').next()?.trim();
-        if !name.is_empty() { Some(name.to_string()) } else { None }
+        let name = after_generics
+            .trim()
+            .split('<')
+            .next()?
+            .split('{')
+            .next()?
+            .trim();
+        if !name.is_empty() {
+            Some(name.to_string())
+        } else {
+            None
+        }
     }
 }
 
@@ -412,7 +431,9 @@ fn parse_items(source: &str) -> Vec<ExtractedItem> {
                     break;
                 }
             }
-            if i >= lines.len() { break; }
+            if i >= lines.len() {
+                break;
+            }
         }
 
         let line = lines[i].trim();
@@ -458,7 +479,11 @@ fn try_parse_item(
     let macro_re = cached_regex(r"^macro_rules!\s+(\w+)");
 
     let (kind, name, sig) = if let Some(cap) = fn_re.captures(line) {
-        (ItemKind::Function, cap[1].to_string(), Some(line.to_string()))
+        (
+            ItemKind::Function,
+            cap[1].to_string(),
+            Some(line.to_string()),
+        )
     } else if let Some(cap) = struct_re.captures(line) {
         (ItemKind::Struct, cap[1].to_string(), Some(line.to_string()))
     } else if let Some(cap) = enum_re.captures(line) {
@@ -468,7 +493,8 @@ fn try_parse_item(
     } else if let Some(cap) = impl_re.captures(line) {
         let _full_impl = format!("impl {}", &cap[1]);
         // Get the rest of the line for "for X" detection.
-        let sig_line = lines.get(line_num.saturating_sub(1))
+        let sig_line = lines
+            .get(line_num.saturating_sub(1))
             .map(|l| l.trim().to_string())
             .unwrap_or_default();
         (ItemKind::Impl, cap[1].to_string(), Some(sig_line))
@@ -485,7 +511,8 @@ fn try_parse_item(
     };
 
     // Count lines until closing brace at same indentation.
-    let has_body = line.contains('{') || (line_num < lines.len() && lines.get(line_num).is_some_and(|l| l.trim() == "{"));
+    let has_body = line.contains('{')
+        || (line_num < lines.len() && lines.get(line_num).is_some_and(|l| l.trim() == "{"));
     let line_count = if has_body {
         count_block_lines(lines, line_num.saturating_sub(1))
     } else {
@@ -493,7 +520,11 @@ fn try_parse_item(
     };
 
     // Extract children for items with bodies (struct fields, enum variants, impl methods).
-    let children = if has_body && matches!(kind, ItemKind::Struct | ItemKind::Enum | ItemKind::Trait | ItemKind::Impl) {
+    let children = if has_body
+        && matches!(
+            kind,
+            ItemKind::Struct | ItemKind::Enum | ItemKind::Trait | ItemKind::Impl
+        ) {
         extract_children(lines, line_num.saturating_sub(1), &kind)
     } else {
         vec![]
@@ -516,8 +547,13 @@ fn count_block_lines(lines: &[&str], start: usize) -> usize {
     let mut started = false;
     for (i, line) in lines.iter().enumerate().skip(start) {
         for ch in line.chars() {
-            if ch == '{' { depth += 1; started = true; }
-            if ch == '}' { depth -= 1; }
+            if ch == '{' {
+                depth += 1;
+                started = true;
+            }
+            if ch == '}' {
+                depth -= 1;
+            }
         }
         if started && depth <= 0 {
             return i - start + 1;
@@ -538,8 +574,12 @@ fn extract_children(lines: &[&str], start: usize, parent_kind: &ItemKind) -> Vec
             body_start = i + 1;
             // Count additional braces on the same line.
             for ch in line.chars() {
-                if ch == '{' { depth += 1; }
-                if ch == '}' { depth -= 1; }
+                if ch == '{' {
+                    depth += 1;
+                }
+                if ch == '}' {
+                    depth -= 1;
+                }
             }
             depth -= 1; // We counted the opening { twice.
             break;
@@ -553,11 +593,19 @@ fn extract_children(lines: &[&str], start: usize, parent_kind: &ItemKind) -> Vec
         // Track brace depth.
         let mut local_depth = 0i32;
         for ch in line.chars() {
-            if ch == '{' { local_depth += 1; depth += 1; }
-            if ch == '}' { local_depth -= 1; depth -= 1; }
+            if ch == '{' {
+                local_depth += 1;
+                depth += 1;
+            }
+            if ch == '}' {
+                local_depth -= 1;
+                depth -= 1;
+            }
         }
 
-        if depth <= 0 { break; }
+        if depth <= 0 {
+            break;
+        }
 
         // Only parse items at the first nesting level.
         if depth == 1 || (local_depth > 0 && depth - local_depth == 0) {
@@ -575,12 +623,18 @@ fn extract_children(lines: &[&str], start: usize, parent_kind: &ItemKind) -> Vec
                 }
                 ItemKind::Enum => {
                     // Enum variants.
-                    if !line.starts_with("//") && !line.is_empty() && !line.starts_with('#') && !line.starts_with('}') {
-                        let variant_name = line.split(['(', '{', ','])
-                            .next()
-                            .unwrap_or("")
-                            .trim();
-                        if !variant_name.is_empty() && variant_name.chars().next().is_some_and(|c| c.is_uppercase()) {
+                    if !line.starts_with("//")
+                        && !line.is_empty()
+                        && !line.starts_with('#')
+                        && !line.starts_with('}')
+                    {
+                        let variant_name = line.split(['(', '{', ',']).next().unwrap_or("").trim();
+                        if !variant_name.is_empty()
+                            && variant_name
+                                .chars()
+                                .next()
+                                .is_some_and(|c| c.is_uppercase())
+                        {
                             Some(ExtractedItem {
                                 name: variant_name.to_string(),
                                 kind: ItemKind::Constant,
@@ -600,10 +654,19 @@ fn extract_children(lines: &[&str], start: usize, parent_kind: &ItemKind) -> Vec
                 }
                 ItemKind::Struct => {
                     // Struct fields.
-                    if !line.starts_with("//") && !line.is_empty() && !line.starts_with('#') && !line.starts_with('}') {
+                    if !line.starts_with("//")
+                        && !line.is_empty()
+                        && !line.starts_with('#')
+                        && !line.starts_with('}')
+                    {
                         let field_name = line.split(':').next().unwrap_or("").trim();
                         let (fvis, fname) = parse_visibility(field_name);
-                        if !fname.is_empty() && fname.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                        if !fname.is_empty()
+                            && fname
+                                .chars()
+                                .next()
+                                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+                        {
                             Some(ExtractedItem {
                                 name: fname.to_string(),
                                 kind: ItemKind::Constant, // fields as atoms
@@ -672,13 +735,15 @@ fn extract_recursive(base: &Path, dir: &Path, results: &mut Vec<ExtractionResult
         if path.is_dir() {
             extract_recursive(base, &path, results);
         } else if path.extension().and_then(|e| e.to_str()) == Some("rs")
-            && let Ok(source) = std::fs::read_to_string(&path) {
-                let rel_path = path.strip_prefix(base)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .to_string();
-                results.push(extract_rust(&source, &rel_path));
-            }
+            && let Ok(source) = std::fs::read_to_string(&path)
+        {
+            let rel_path = path
+                .strip_prefix(base)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string();
+            results.push(extract_rust(&source, &rel_path));
+        }
     }
 }
 
@@ -751,7 +816,9 @@ fn helper() {
     fn extracts_all_item_kinds() {
         let result = extract_rust(SAMPLE_RUST, "auth.rs");
 
-        let types: Vec<String> = result.entities.iter()
+        let types: Vec<String> = result
+            .entities
+            .iter()
             .map(|e| format!("{}:{}", e.entity_type.discriminant(), e.label))
             .collect();
 
@@ -774,13 +841,16 @@ fn helper() {
     fn extracts_impl_methods_as_children() {
         let result = extract_rust(SAMPLE_RUST, "auth.rs");
 
-        let method_entities: Vec<&Entity> = result.entities.iter()
-            .filter(|e| {
-                e.metadata.get("parent").and_then(|v| v.as_str()).is_some()
-            })
+        let method_entities: Vec<&Entity> = result
+            .entities
+            .iter()
+            .filter(|e| e.metadata.get("parent").and_then(|v| v.as_str()).is_some())
             .collect();
 
-        assert!(method_entities.len() >= 2, "should have methods from impl blocks");
+        assert!(
+            method_entities.len() >= 2,
+            "should have methods from impl blocks"
+        );
     }
 
     #[test]
@@ -788,21 +858,27 @@ fn helper() {
         let result = extract_rust(SAMPLE_RUST, "auth.rs");
 
         // Struct has same-type fields → Sequence (all fields are Constant kind)
-        let user_meta = result.entities.iter()
+        let user_meta = result
+            .entities
+            .iter()
             .find(|e| e.label == "User")
             .and_then(|e| e.metadata.get("form"))
             .and_then(|v| v.as_str());
         assert_eq!(user_meta, Some("Sequence"));
 
         // Enum with variants → Sequence (all variants same kind)
-        let role_meta = result.entities.iter()
+        let role_meta = result
+            .entities
+            .iter()
             .find(|e| e.label == "Role")
             .and_then(|e| e.metadata.get("form"))
             .and_then(|v| v.as_str());
         assert_eq!(role_meta, Some("Sequence"));
 
         // Constant has no children → Atom
-        let const_meta = result.entities.iter()
+        let const_meta = result
+            .entities
+            .iter()
             .find(|e| e.label == "MAX_USERS")
             .and_then(|e| e.metadata.get("form"))
             .and_then(|v| v.as_str());
@@ -835,21 +911,36 @@ fn helper() {
     fn contains_relationships_created() {
         let result = extract_rust(SAMPLE_RUST, "auth.rs");
 
-        let contains: Vec<&Relationship> = result.relationships.iter()
+        let contains: Vec<&Relationship> = result
+            .relationships
+            .iter()
             .filter(|r| matches!(r.relation_type, RelationType::Contains))
             .collect();
 
-        assert!(contains.len() >= 4, "module should contain structs, enums, functions");
+        assert!(
+            contains.len() >= 4,
+            "module should contain structs, enums, functions"
+        );
     }
 
     #[test]
     fn impl_creates_extends_relationship() {
         let result = extract_rust(SAMPLE_RUST, "auth.rs");
 
-        let extends: Vec<&Relationship> = result.relationships.iter()
-            .filter(|r| matches!(r.relation_type, RelationType::Implements | RelationType::Extends))
+        let extends: Vec<&Relationship> = result
+            .relationships
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.relation_type,
+                    RelationType::Implements | RelationType::Extends
+                )
+            })
             .collect();
 
-        assert!(!extends.is_empty(), "impl blocks should create extends/implements edges");
+        assert!(
+            !extends.is_empty(),
+            "impl blocks should create extends/implements edges"
+        );
     }
 }

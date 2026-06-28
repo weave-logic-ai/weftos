@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::adapter::{
@@ -116,11 +116,7 @@ impl OntologyAdapter for BluetoothAdapter {
         PERMISSIONS
     }
 
-    async fn open(
-        &self,
-        topic: &str,
-        _args: Value,
-    ) -> Result<Subscription, AdapterError> {
+    async fn open(&self, topic: &str, _args: Value) -> Result<Subscription, AdapterError> {
         if topic != "substrate/bluetooth" {
             return Err(AdapterError::UnknownTopic(topic.into()));
         }

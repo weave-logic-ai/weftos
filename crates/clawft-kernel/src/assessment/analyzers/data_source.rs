@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::assessment::{analyzer::AnalysisContext, Finding};
 use crate::assessment::analyzer::Analyzer;
+use crate::assessment::{Finding, analyzer::AnalysisContext};
 
 /// Analyzer that greps for connection strings and external service references.
 pub struct DataSourceAnalyzer;
@@ -64,7 +64,12 @@ impl Analyzer for DataSourceAnalyzer {
         &["data_source"]
     }
 
-    fn analyze(&self, project: &Path, files: &[PathBuf], _context: &AnalysisContext) -> Vec<Finding> {
+    fn analyze(
+        &self,
+        project: &Path,
+        files: &[PathBuf],
+        _context: &AnalysisContext,
+    ) -> Vec<Finding> {
         let mut findings = Vec::new();
 
         for path in files {
@@ -101,7 +106,15 @@ impl Analyzer for DataSourceAnalyzer {
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
                 if (matches!(
                     ext,
-                    "toml" | "yaml" | "yml" | "json" | "env" | "cfg" | "ini" | "conf" | "properties"
+                    "toml"
+                        | "yaml"
+                        | "yml"
+                        | "json"
+                        | "env"
+                        | "cfg"
+                        | "ini"
+                        | "conf"
+                        | "properties"
                 ) || path
                     .file_name()
                     .and_then(|n| n.to_str())
@@ -112,16 +125,16 @@ impl Analyzer for DataSourceAnalyzer {
                         || lower.contains("endpoint")
                         || lower.contains("base-url")
                         || lower.contains("api-url"))
-                        && (lower.contains("http://") || lower.contains("https://"))
-                    {
-                        findings.push(Finding {
-                            severity: "info".into(),
-                            category: "data_source".into(),
-                            file: rel_str.clone(),
-                            line: Some(i + 1),
-                            message: "HTTP API base URL reference detected".into(),
-                        });
-                    }
+                    && (lower.contains("http://") || lower.contains("https://"))
+                {
+                    findings.push(Finding {
+                        severity: "info".into(),
+                        category: "data_source".into(),
+                        file: rel_str.clone(),
+                        line: Some(i + 1),
+                        message: "HTTP API base URL reference detected".into(),
+                    });
+                }
             }
         }
 

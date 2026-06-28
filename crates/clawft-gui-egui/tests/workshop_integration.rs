@@ -131,7 +131,10 @@ fn substrate_workshop_with_parameter_template_substitutes() {
         "substrate/n-6f3a9c/sensor/mic"
     );
     assert!(parsed.panels[0].substitution_status.is_ok());
-    assert_eq!(parsed.params.get("node").map(String::as_str), Some("n-6f3a9c"));
+    assert_eq!(
+        parsed.params.get("node").map(String::as_str),
+        Some("n-6f3a9c")
+    );
 }
 
 #[test]

@@ -106,15 +106,13 @@ pub fn compute_content_hash(dir: &Path) -> Result<SkillContentHash, ClawftError>
 }
 
 /// Sign a content hash string with a private key.
-pub fn sign_content(
-    hash: &str,
-    private_key_bytes: &[u8],
-) -> Result<SkillSignature, ClawftError> {
-    let key_bytes: [u8; 32] = private_key_bytes.try_into().map_err(|_| {
-        ClawftError::SecurityViolation {
-            reason: "private key must be exactly 32 bytes".into(),
-        }
-    })?;
+pub fn sign_content(hash: &str, private_key_bytes: &[u8]) -> Result<SkillSignature, ClawftError> {
+    let key_bytes: [u8; 32] =
+        private_key_bytes
+            .try_into()
+            .map_err(|_| ClawftError::SecurityViolation {
+                reason: "private key must be exactly 32 bytes".into(),
+            })?;
 
     let signing_key = SigningKey::from_bytes(&key_bytes);
     let verifying_key = signing_key.verifying_key();
@@ -142,22 +140,21 @@ pub fn verify_signature(hash: &str, sig: &SkillSignature) -> Result<bool, Clawft
         reason: format!("invalid signature hex: {e}"),
     })?;
 
-    let pub_array: [u8; 32] = pub_bytes.try_into().map_err(|_| {
-        ClawftError::SecurityViolation {
+    let pub_array: [u8; 32] = pub_bytes
+        .try_into()
+        .map_err(|_| ClawftError::SecurityViolation {
             reason: "public key must be exactly 32 bytes".into(),
-        }
-    })?;
-    let sig_array: [u8; 64] = sig_bytes.try_into().map_err(|_| {
-        ClawftError::SecurityViolation {
+        })?;
+    let sig_array: [u8; 64] = sig_bytes
+        .try_into()
+        .map_err(|_| ClawftError::SecurityViolation {
             reason: "signature must be exactly 64 bytes".into(),
-        }
-    })?;
+        })?;
 
-    let verifying_key = VerifyingKey::from_bytes(&pub_array).map_err(|e| {
-        ClawftError::SecurityViolation {
+    let verifying_key =
+        VerifyingKey::from_bytes(&pub_array).map_err(|e| ClawftError::SecurityViolation {
             reason: format!("invalid public key: {e}"),
-        }
-    })?;
+        })?;
     let signature = ed25519_dalek::Signature::from_bytes(&sig_array);
 
     Ok(verifying_key.verify(hash.as_bytes(), &signature).is_ok())
@@ -213,11 +210,7 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
 
 /// Recursively collect relative file paths under `base`, excluding hidden
 /// files and `target/` directories.
-fn collect_files(
-    current: &Path,
-    base: &Path,
-    out: &mut Vec<String>,
-) -> Result<(), ClawftError> {
+fn collect_files(current: &Path, base: &Path, out: &mut Vec<String>) -> Result<(), ClawftError> {
     if !current.is_dir() {
         return Ok(());
     }

@@ -17,11 +17,11 @@ use tracing::debug;
 use clawft_types::routing::UserPermissions;
 
 #[cfg(feature = "native")]
+use std::path::PathBuf;
+#[cfg(feature = "native")]
 use std::sync::Mutex as StdMutex;
 #[cfg(feature = "native")]
 use std::sync::OnceLock;
-#[cfg(feature = "native")]
-use std::path::PathBuf;
 
 // ── WEFT-37: per-path advisory locks ────────────────────────────────
 //
@@ -123,9 +123,7 @@ fn canonicalize_for_lock(raw: &str) -> PathBuf {
 /// long-lived agent touches is bounded enough in practice that we
 /// don't bother garbage-collecting unused entries.
 #[cfg(feature = "native")]
-async fn acquire_path_lock(
-    path: PathBuf,
-) -> tokio::sync::OwnedMutexGuard<()> {
+async fn acquire_path_lock(path: PathBuf) -> tokio::sync::OwnedMutexGuard<()> {
     let lock = {
         let mut map = path_locks().lock().expect("path lock map poisoned");
         map.entry(path)
@@ -395,11 +393,7 @@ pub fn extract_mcp_metadata(tool_decl: &serde_json::Value) -> ToolMetadata {
     let required_custom = tool_decl
         .get("required_custom_permissions")
         .and_then(|v| v.as_object())
-        .map(|obj| {
-            obj.iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect()
-        })
+        .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_default();
 
     ToolMetadata {
@@ -964,9 +958,7 @@ mod tests {
         let mut registry = ToolRegistry::new();
         registry.register(Arc::new(FailTool));
 
-        let result = registry
-            .execute("fail", serde_json::json!({}), None)
-            .await;
+        let result = registry.execute("fail", serde_json::json!({}), None).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             ToolError::ExecutionFailed(msg) => {
@@ -1281,10 +1273,7 @@ mod tests {
         let perms = UserPermissions {
             level: 2,
             tool_access: vec!["*".into()],
-            custom_permissions: HashMap::from([(
-                "exec_enabled".into(),
-                serde_json::json!(false),
-            )]),
+            custom_permissions: HashMap::from([("exec_enabled".into(), serde_json::json!(false))]),
             ..UserPermissions::default()
         };
         let meta = ToolMetadata {
@@ -1341,11 +1330,7 @@ mod tests {
 
         let perms = zero_trust_permissions();
         let result = registry
-            .execute(
-                "echo",
-                serde_json::json!({ "text": "hello" }),
-                Some(&perms),
-            )
+            .execute("echo", serde_json::json!({ "text": "hello" }), Some(&perms))
             .await;
         assert!(result.is_err());
         assert!(matches!(
@@ -1476,11 +1461,7 @@ mod tests {
 
         let perms = admin_permissions();
         let result = registry
-            .execute(
-                "echo",
-                serde_json::json!({ "text": "hello" }),
-                Some(&perms),
-            )
+            .execute("echo", serde_json::json!({ "text": "hello" }), Some(&perms))
             .await;
         assert!(result.is_ok());
     }
@@ -1518,10 +1499,7 @@ mod tests {
         registry.register(Arc::new(EchoTool));
         registry.register(Arc::new(AddTool));
 
-        let filtered = registry.filtered_tools(
-            &["echo".into(), "add".into()],
-            &["echo".into()],
-        );
+        let filtered = registry.filtered_tools(&["echo".into(), "add".into()], &["echo".into()]);
         assert_eq!(filtered.len(), 1);
         assert!(filtered.has("add"));
         assert!(!filtered.has("echo"));
@@ -1552,7 +1530,10 @@ mod tests {
         let filtered = registry.filtered_tools(&["echo".into()], &[]);
         assert!(filtered.get_metadata("echo").is_some());
         assert_eq!(
-            filtered.get_metadata("echo").unwrap().required_permission_level,
+            filtered
+                .get_metadata("echo")
+                .unwrap()
+                .required_permission_level,
             Some(2)
         );
     }
@@ -1572,11 +1553,7 @@ mod tests {
             ..UserPermissions::default()
         };
         let result = registry
-            .execute(
-                "echo",
-                serde_json::json!({ "text": "hello" }),
-                Some(&perms),
-            )
+            .execute("echo", serde_json::json!({ "text": "hello" }), Some(&perms))
             .await;
         assert!(matches!(
             result.unwrap_err(),
@@ -1613,10 +1590,7 @@ mod tests {
                 "required": ["path"]
             })
         }
-        async fn execute(
-            &self,
-            args: serde_json::Value,
-        ) -> Result<serde_json::Value, ToolError> {
+        async fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
             let path = args
                 .get("path")
                 .and_then(|v| v.as_str())

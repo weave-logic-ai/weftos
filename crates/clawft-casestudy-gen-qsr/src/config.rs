@@ -114,16 +114,36 @@ pub struct GeneratorConfig {
     pub shift_gap_rate: f64,
 }
 
-fn default_turnover_multiplier() -> f64 { 0.15 }
-fn default_cert_expiration_rate() -> f64 { 0.25 }
-fn default_training_claim_rate() -> f64 { 0.35 }
-fn default_training_missing_lms_rate() -> f64 { 0.15 }
-fn default_inventory_cadence() -> u32 { 7 }
-fn default_inventory_skip_rate() -> f64 { 0.20 }
-fn default_audit_cadence() -> u32 { 10 }
-fn default_audit_skip_rate() -> f64 { 0.20 }
-fn default_cert_renewal_rate() -> f64 { 0.70 }
-fn default_shift_gap_rate() -> f64 { 0.10 }
+fn default_turnover_multiplier() -> f64 {
+    0.15
+}
+fn default_cert_expiration_rate() -> f64 {
+    0.25
+}
+fn default_training_claim_rate() -> f64 {
+    0.35
+}
+fn default_training_missing_lms_rate() -> f64 {
+    0.15
+}
+fn default_inventory_cadence() -> u32 {
+    7
+}
+fn default_inventory_skip_rate() -> f64 {
+    0.20
+}
+fn default_audit_cadence() -> u32 {
+    10
+}
+fn default_audit_skip_rate() -> f64 {
+    0.20
+}
+fn default_cert_renewal_rate() -> f64 {
+    0.70
+}
+fn default_shift_gap_rate() -> f64 {
+    0.10
+}
 
 impl GeneratorConfig {
     /// Default tiny-tier config: 10 stores × 1 brand × 4 metros × 30 days.
@@ -160,19 +180,47 @@ impl GeneratorConfig {
 
 fn default_brands() -> Vec<BrandConfig> {
     vec![
-        BrandConfig { code: "brand-a".into(), baseline_daily_sales: 5400.0 },
-        BrandConfig { code: "brand-b".into(), baseline_daily_sales: 4200.0 },
-        BrandConfig { code: "brand-c".into(), baseline_daily_sales: 4800.0 },
-        BrandConfig { code: "brand-d".into(), baseline_daily_sales: 3900.0 },
+        BrandConfig {
+            code: "brand-a".into(),
+            baseline_daily_sales: 5400.0,
+        },
+        BrandConfig {
+            code: "brand-b".into(),
+            baseline_daily_sales: 4200.0,
+        },
+        BrandConfig {
+            code: "brand-c".into(),
+            baseline_daily_sales: 4800.0,
+        },
+        BrandConfig {
+            code: "brand-d".into(),
+            baseline_daily_sales: 3900.0,
+        },
     ]
 }
 
 fn default_metros() -> Vec<MetroConfig> {
     vec![
-        MetroConfig { code: "metro-alpha".into(), region: "region-1".into(), weather_rain_penalty: 0.08 },
-        MetroConfig { code: "metro-beta".into(),  region: "region-1".into(), weather_rain_penalty: 0.05 },
-        MetroConfig { code: "metro-gamma".into(), region: "region-2".into(), weather_rain_penalty: 0.06 },
-        MetroConfig { code: "metro-delta".into(), region: "region-2".into(), weather_rain_penalty: 0.10 },
+        MetroConfig {
+            code: "metro-alpha".into(),
+            region: "region-1".into(),
+            weather_rain_penalty: 0.08,
+        },
+        MetroConfig {
+            code: "metro-beta".into(),
+            region: "region-1".into(),
+            weather_rain_penalty: 0.05,
+        },
+        MetroConfig {
+            code: "metro-gamma".into(),
+            region: "region-2".into(),
+            weather_rain_penalty: 0.06,
+        },
+        MetroConfig {
+            code: "metro-delta".into(),
+            region: "region-2".into(),
+            weather_rain_penalty: 0.10,
+        },
     ]
 }
 

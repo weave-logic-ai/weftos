@@ -249,11 +249,7 @@ pub trait CommandHandler: Send + Sync + 'static {
     /// surface. Subject to the placeholder permission gate in
     /// [`VoiceRouter`]; production gates (WEFT-208) wrap this trait
     /// rather than the router.
-    async fn dispatch_command(
-        &self,
-        method: String,
-        params: Value,
-    ) -> Result<Value, String>;
+    async fn dispatch_command(&self, method: String, params: Value) -> Result<Value, String>;
 }
 
 /// Spawned voice-router handle. Drop / call [`Self::shutdown`] to
@@ -278,10 +274,7 @@ impl VoiceRouter {
         commands: Arc<dyn CommandHandler>,
     ) -> Result<Self, String>
     where
-        S: FnOnce(
-            Option<&str>,
-            &str,
-        ) -> Result<mpsc::Receiver<Vec<u8>>, String>,
+        S: FnOnce(Option<&str>, &str) -> Result<mpsc::Receiver<Vec<u8>>, String>,
     {
         let rx = subscribe_fn(config.subscriber_id.as_deref(), &config.transcript_topic)?;
         info!(
@@ -563,11 +556,7 @@ mod tests {
 
     #[async_trait]
     impl CommandHandler for RecordingCommands {
-        async fn dispatch_command(
-            &self,
-            method: String,
-            params: Value,
-        ) -> Result<Value, String> {
+        async fn dispatch_command(&self, method: String, params: Value) -> Result<Value, String> {
             self.calls.lock().unwrap().push((method, params));
             Ok(json!({"ok": true}))
         }
@@ -759,20 +748,14 @@ mod tests {
         assert!(cmd.calls.lock().unwrap().is_empty());
         let calls = chat.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
-        assert_eq!(
-            calls[0].metadata.principal.as_deref(),
-            Some("n-unknown")
-        );
+        assert_eq!(calls[0].metadata.principal.as_deref(), Some("n-unknown"));
     }
 
     #[tokio::test]
     async fn level1_safe_command_allowed() {
         let chat = Arc::new(RecordingChat::default());
         let cmd = Arc::new(RecordingCommands::default());
-        let c = cfg_with_permissions(perms(
-            VoiceLevel::Level0,
-            &[("n-mic1", VoiceLevel::Level1)],
-        ));
+        let c = cfg_with_permissions(perms(VoiceLevel::Level0, &[("n-mic1", VoiceLevel::Level1)]));
         let line = publish_line_from(json!({"text": "weft status"}), Some("n-mic1"));
         handle_line(&line, &c, chat.as_ref(), cmd.as_ref()).await;
         let calls = cmd.calls.lock().unwrap();
@@ -785,10 +768,7 @@ mod tests {
     async fn level1_non_safe_command_rejected() {
         let chat = Arc::new(RecordingChat::default());
         let cmd = Arc::new(RecordingCommands::default());
-        let c = cfg_with_permissions(perms(
-            VoiceLevel::Level0,
-            &[("n-mic1", VoiceLevel::Level1)],
-        ));
+        let c = cfg_with_permissions(perms(VoiceLevel::Level0, &[("n-mic1", VoiceLevel::Level1)]));
         let line = publish_line_from(json!({"text": "weft shutdown now"}), Some("n-mic1"));
         handle_line(&line, &c, chat.as_ref(), cmd.as_ref()).await;
         assert!(cmd.calls.lock().unwrap().is_empty());
@@ -820,11 +800,8 @@ mod tests {
 
     #[tokio::test]
     async fn permissions_resolver_clamps_out_of_range_levels() {
-        let p = VoicePermissions::from_raw(
-            7,
-            [("n-bad".to_string(), 99u8)],
-            ["status".to_string()],
-        );
+        let p =
+            VoicePermissions::from_raw(7, [("n-bad".to_string(), 99u8)], ["status".to_string()]);
         assert_eq!(p.default_level, VoiceLevel::Level0);
         assert_eq!(p.level_for(Some("n-bad")), VoiceLevel::Level0);
         assert_eq!(p.level_for(None), VoiceLevel::Level0);
@@ -839,12 +816,12 @@ mod tests {
     #[test]
     fn permission_denied_audit_event_emits() {
         use std::sync::Mutex as StdMutex;
+        use tracing::Subscriber;
         use tracing::field::{Field, Visit};
         use tracing::subscriber::with_default;
-        use tracing::Subscriber;
+        use tracing_subscriber::Layer;
         use tracing_subscriber::layer::{Context, SubscriberExt};
         use tracing_subscriber::registry::LookupSpan;
-        use tracing_subscriber::Layer;
 
         #[derive(Clone, Default)]
         struct CapturedEvent {
@@ -860,9 +837,7 @@ mod tests {
                 match field.name() {
                     "event" => self.event = Some(value.to_string()),
                     "principal" => self.principal = Some(value.to_string()),
-                    "requested_command" => {
-                        self.requested_command = Some(value.to_string())
-                    }
+                    "requested_command" => self.requested_command = Some(value.to_string()),
                     "reason" => self.reason = Some(value.to_string()),
                     _ => {}
                 }
@@ -877,12 +852,7 @@ mod tests {
                     self.level = Some(value as u64);
                 }
             }
-            fn record_debug(
-                &mut self,
-                _field: &Field,
-                _value: &dyn std::fmt::Debug,
-            ) {
-            }
+            fn record_debug(&mut self, _field: &Field, _value: &dyn std::fmt::Debug) {}
         }
 
         struct CapturingLayer {
@@ -893,11 +863,7 @@ mod tests {
         where
             S: Subscriber + for<'a> LookupSpan<'a>,
         {
-            fn on_event(
-                &self,
-                event: &tracing::Event<'_>,
-                _ctx: Context<'_, S>,
-            ) {
+            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
                 let mut captured = CapturedEvent::default();
                 event.record(&mut captured);
                 if captured.event.as_deref() == Some("voice.permission.denied") {
@@ -907,17 +873,13 @@ mod tests {
         }
 
         let sink: Arc<StdMutex<Vec<CapturedEvent>>> = Arc::new(StdMutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::registry()
-            .with(CapturingLayer { sink: sink.clone() });
+        let subscriber = tracing_subscriber::registry().with(CapturingLayer { sink: sink.clone() });
 
         let chat = Arc::new(RecordingChat::default());
         let cmd = Arc::new(RecordingCommands::default());
         let c = cfg_with_permissions(perms(VoiceLevel::Level0, &[]));
 
-        let line = publish_line_from(
-            json!({"text": "weft shutdown"}),
-            Some("n-attacker"),
-        );
+        let line = publish_line_from(json!({"text": "weft shutdown"}), Some("n-attacker"));
         let chat_clone = chat.clone();
         let cmd_clone = cmd.clone();
         let cfg_clone = c.clone();
@@ -932,13 +894,7 @@ mod tests {
             .unwrap();
         with_default(subscriber, || {
             rt.block_on(async {
-                handle_line(
-                    &line,
-                    &cfg_clone,
-                    chat_clone.as_ref(),
-                    cmd_clone.as_ref(),
-                )
-                .await;
+                handle_line(&line, &cfg_clone, chat_clone.as_ref(), cmd_clone.as_ref()).await;
             });
         });
 

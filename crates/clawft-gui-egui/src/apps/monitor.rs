@@ -38,10 +38,7 @@ pub fn show(
     snap: &Snapshot,
 ) {
     super::paint_heading(ui, rect, "Monitor");
-    let body = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.top() + 64.0),
-        rect.max,
-    );
+    let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + 64.0), rect.max);
 
     // Empty state: only when *nothing at all* is publishing. As soon
     // as a single source has data we paint the full grid (other tiles
@@ -113,18 +110,9 @@ fn kernel_tile(snap: &Snapshot) -> Tile {
                 .and_then(|v| v.as_str())
                 .unwrap_or("—")
                 .to_string();
-            let uptime = s
-                .get("uptime_secs")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
-            let procs = s
-                .get("process_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let svcs = s
-                .get("service_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+            let uptime = s.get("uptime_secs").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let procs = s.get("process_count").and_then(|v| v.as_u64()).unwrap_or(0);
+            let svcs = s.get("service_count").and_then(|v| v.as_u64()).unwrap_or(0);
             (
                 state,
                 format!("up {} · {procs}p / {svcs}s", fmt_duration(uptime)),
@@ -144,10 +132,7 @@ fn mesh_tile(snap: &Snapshot) -> Tile {
     let (kpi, sub) = match &snap.mesh_status {
         Some(v) => {
             let total = v.get("total_nodes").and_then(|n| n.as_u64()).unwrap_or(0);
-            let healthy = v
-                .get("healthy_nodes")
-                .and_then(|n| n.as_u64())
-                .unwrap_or(0);
+            let healthy = v.get("healthy_nodes").and_then(|n| n.as_u64()).unwrap_or(0);
             (
                 format!("{healthy}/{total}"),
                 if total == 0 {
@@ -206,7 +191,10 @@ fn chain_tile(snap: &Snapshot) -> Tile {
 fn audio_tile(snap: &Snapshot) -> Tile {
     let (kpi, sub) = match &snap.audio_mic {
         Some(v) => {
-            let avail = v.get("available").and_then(|b| b.as_bool()).unwrap_or(false);
+            let avail = v
+                .get("available")
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false);
             if !avail {
                 ("—".to_string(), "mic offline".to_string())
             } else {
@@ -228,7 +216,10 @@ fn audio_tile(snap: &Snapshot) -> Tile {
 fn tof_tile(snap: &Snapshot) -> Tile {
     let (kpi, sub) = match &snap.tof_depth {
         Some(v) => {
-            let avail = v.get("available").and_then(|b| b.as_bool()).unwrap_or(false);
+            let avail = v
+                .get("available")
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false);
             if !avail {
                 ("—".to_string(), "tof offline".to_string())
             } else {
@@ -255,18 +246,12 @@ fn tof_tile(snap: &Snapshot) -> Tile {
 fn battery_tile(snap: &Snapshot) -> Tile {
     let (kpi, sub) = match &snap.network_battery {
         Some(v) => {
-            let present = v
-                .get("present")
-                .and_then(|b| b.as_bool())
-                .unwrap_or(false);
+            let present = v.get("present").and_then(|b| b.as_bool()).unwrap_or(false);
             if !present {
                 ("—".to_string(), "no battery".to_string())
             } else {
                 let pct = v.get("percent").and_then(|n| n.as_u64()).unwrap_or(0);
-                let charging = v
-                    .get("charging")
-                    .and_then(|b| b.as_bool())
-                    .unwrap_or(false);
+                let charging = v.get("charging").and_then(|b| b.as_bool()).unwrap_or(false);
                 (
                     format!("{pct}%"),
                     if charging {
@@ -313,10 +298,7 @@ fn paint_tile_grid(ui: &egui::Ui, rect: egui::Rect, tokens: &Tokens, tiles: &[Ti
         if y + TILE_H > inner.bottom() {
             break; // overflow — out of room. acceptable for 0.7.0
         }
-        let tile_rect = egui::Rect::from_min_size(
-            egui::pos2(x, y),
-            egui::vec2(TILE_W, TILE_H),
-        );
+        let tile_rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(TILE_W, TILE_H));
         paint_tile(ui, tile_rect, tokens, tile);
         x += TILE_W + GAP;
     }
@@ -366,12 +348,7 @@ fn paint_tile(ui: &egui::Ui, rect: egui::Rect, tokens: &Tokens, tile: &Tile) {
     }
 }
 
-fn paint_sparkline(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    tokens: &Tokens,
-    samples: &[f32],
-) {
+fn paint_sparkline(painter: &egui::Painter, rect: egui::Rect, tokens: &Tokens, samples: &[f32]) {
     // Polyline along the bottom-right quadrant of the tile.
     let plot_rect = egui::Rect::from_min_max(
         egui::pos2(rect.right() - 90.0, rect.top() + 36.0),

@@ -3,7 +3,7 @@
 //! Each mesh frame is: `[4-byte big-endian length][1-byte message type][payload]`
 //! Maximum frame size is [`MAX_MESSAGE_SIZE`] (16 MiB).
 
-use crate::mesh::{MeshError, MeshStream, MAX_MESSAGE_SIZE};
+use crate::mesh::{MAX_MESSAGE_SIZE, MeshError, MeshStream};
 
 /// Mesh message types for framing dispatch.
 #[non_exhaustive]

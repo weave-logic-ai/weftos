@@ -351,7 +351,10 @@ pub struct UserPermissions {
     pub escalation_allowed: bool,
 
     /// Complexity threshold (0.0-1.0) above which escalation triggers.
-    #[serde(default = "default_escalation_threshold", alias = "escalationThreshold")]
+    #[serde(
+        default = "default_escalation_threshold",
+        alias = "escalationThreshold"
+    )]
     pub escalation_threshold: f32,
 
     /// Whether the user can manually override model selection.
@@ -360,12 +363,18 @@ pub struct UserPermissions {
 
     /// Daily cost budget in USD. 0.0 = unlimited.
     /// Zero-trust default: $0.10/day (see design doc Section 2.2).
-    #[serde(default = "default_cost_budget_daily_usd", alias = "costBudgetDailyUsd")]
+    #[serde(
+        default = "default_cost_budget_daily_usd",
+        alias = "costBudgetDailyUsd"
+    )]
     pub cost_budget_daily_usd: f64,
 
     /// Monthly cost budget in USD. 0.0 = unlimited.
     /// Zero-trust default: $2.00/month (see design doc Section 2.2).
-    #[serde(default = "default_cost_budget_monthly_usd", alias = "costBudgetMonthlyUsd")]
+    #[serde(
+        default = "default_cost_budget_monthly_usd",
+        alias = "costBudgetMonthlyUsd"
+    )]
     pub cost_budget_monthly_usd: f64,
 
     /// Extensible custom permission dimensions.
@@ -709,12 +718,10 @@ mod tests {
         let json = serde_json::to_string(&TierSelectionStrategy::Random).unwrap();
         assert_eq!(json, "\"random\"");
 
-        let strategy: TierSelectionStrategy =
-            serde_json::from_str("\"preference_order\"").unwrap();
+        let strategy: TierSelectionStrategy = serde_json::from_str("\"preference_order\"").unwrap();
         assert_eq!(strategy, TierSelectionStrategy::PreferenceOrder);
 
-        let strategy: TierSelectionStrategy =
-            serde_json::from_str("\"round_robin\"").unwrap();
+        let strategy: TierSelectionStrategy = serde_json::from_str("\"round_robin\"").unwrap();
         assert_eq!(strategy, TierSelectionStrategy::RoundRobin);
 
         let result = serde_json::from_str::<TierSelectionStrategy>("\"invalid_strategy\"");
@@ -958,24 +965,42 @@ mod tests {
     #[test]
     fn test_defaults_for_level_unknown_returns_zero_trust() {
         let perms = UserPermissions::default();
-        assert_eq!(perms.level, 0, "default permissions should be zero-trust (level 0)");
+        assert_eq!(
+            perms.level, 0,
+            "default permissions should be zero-trust (level 0)"
+        );
         assert_eq!(perms.max_tier, "free", "zero-trust should have 'free' tier");
         assert!(
             perms.tool_access.is_empty(),
             "zero-trust should have no tool access"
         );
-        assert!(!perms.streaming_allowed, "zero-trust should not allow streaming");
-        assert!(!perms.escalation_allowed, "zero-trust should not allow escalation");
-        assert!(!perms.model_override, "zero-trust should not allow model override");
+        assert!(
+            !perms.streaming_allowed,
+            "zero-trust should not allow streaming"
+        );
+        assert!(
+            !perms.escalation_allowed,
+            "zero-trust should not allow escalation"
+        );
+        assert!(
+            !perms.model_override,
+            "zero-trust should not allow model override"
+        );
     }
 
     /// F-extra: AuthContext::default() returns zero-trust with empty identity.
     #[test]
     fn test_auth_context_default_is_zero_trust() {
         let ctx = AuthContext::default();
-        assert!(ctx.sender_id.is_empty(), "default sender_id should be empty");
+        assert!(
+            ctx.sender_id.is_empty(),
+            "default sender_id should be empty"
+        );
         assert!(ctx.channel.is_empty(), "default channel should be empty");
-        assert_eq!(ctx.permissions.level, 0, "default permissions should be level 0");
+        assert_eq!(
+            ctx.permissions.level, 0,
+            "default permissions should be level 0"
+        );
     }
 
     /// F-extra: AuthContext::cli_default() returns admin with correct identity.
@@ -984,10 +1009,16 @@ mod tests {
         let ctx = AuthContext::cli_default();
         assert_eq!(ctx.sender_id, "local");
         assert_eq!(ctx.channel, "cli");
-        assert_eq!(ctx.permissions.level, 2, "CLI default should be admin (level 2)");
+        assert_eq!(
+            ctx.permissions.level, 2,
+            "CLI default should be admin (level 2)"
+        );
         assert_eq!(ctx.permissions.max_tier, "elite");
         assert!(ctx.permissions.tool_access.contains(&"*".to_string()));
-        assert_eq!(ctx.permissions.rate_limit, 0, "CLI admin should have no rate limit");
+        assert_eq!(
+            ctx.permissions.rate_limit, 0,
+            "CLI admin should have no rate limit"
+        );
         assert!(ctx.permissions.streaming_allowed);
         assert!(ctx.permissions.escalation_allowed);
         assert!(ctx.permissions.model_override);

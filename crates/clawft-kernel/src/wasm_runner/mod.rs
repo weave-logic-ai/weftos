@@ -26,22 +26,22 @@
 //! - Memory bounded by configurable cap
 //! - Wall-clock timeout as safety net
 
-mod types;
-mod runner;
-mod registry;
 mod catalog;
-mod tools_fs;
+mod registry;
+mod runner;
 mod tools_agent;
+mod tools_fs;
 mod tools_sys;
+mod types;
 
 // Re-export everything from sub-modules to preserve the public API.
-pub use types::*;
-pub use runner::{WasmToolRunner, CompiledModuleCache, compute_module_hash};
-pub use registry::{BuiltinTool, ToolRegistry};
 pub use catalog::builtin_tool_catalog;
-pub use tools_fs::*;
+pub use registry::{BuiltinTool, ToolRegistry};
+pub use runner::{CompiledModuleCache, WasmToolRunner, compute_module_hash};
 pub use tools_agent::*;
+pub use tools_fs::*;
 pub use tools_sys::*;
+pub use types::*;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -50,9 +50,9 @@ pub use tools_sys::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
-    use std::path::PathBuf;
 
     // --- Config tests (preserved) ---
 
@@ -163,10 +163,12 @@ mod tests {
         #[cfg(feature = "wasm-sandbox")]
         {
             let result = runner.validate_wasm(&wasm);
-            assert!(result.is_err() || {
-                let v = result.unwrap();
-                !v.warnings.is_empty()
-            });
+            assert!(
+                result.is_err() || {
+                    let v = result.unwrap();
+                    !v.warnings.is_empty()
+                }
+            );
         }
     }
 
@@ -259,7 +261,11 @@ mod tests {
     fn all_tools_have_valid_schema() {
         let catalog = builtin_tool_catalog();
         for spec in &catalog {
-            assert!(spec.parameters.is_object(), "{} has non-object schema", spec.name);
+            assert!(
+                spec.parameters.is_object(),
+                "{} has non-object schema",
+                spec.name
+            );
             assert!(
                 spec.parameters.get("type").and_then(|v| v.as_str()) == Some("object"),
                 "{} schema type is not 'object'",
@@ -272,7 +278,11 @@ mod tests {
     fn all_tools_have_gate_action() {
         let catalog = builtin_tool_catalog();
         for spec in &catalog {
-            assert!(!spec.gate_action.is_empty(), "{} missing gate_action", spec.name);
+            assert!(
+                !spec.gate_action.is_empty(),
+                "{} missing gate_action",
+                spec.name
+            );
             assert!(
                 spec.gate_action.starts_with("tool.") || spec.gate_action.starts_with("ecc."),
                 "{} gate_action should start with 'tool.' or 'ecc.'",
@@ -297,15 +307,27 @@ mod tests {
     #[test]
     fn tool_categories_correct() {
         let catalog = builtin_tool_catalog();
-        let fs_count = catalog.iter().filter(|s| s.category == ToolCategory::Filesystem).count();
-        let agent_count = catalog.iter().filter(|s| s.category == ToolCategory::Agent).count();
-        let sys_count = catalog.iter().filter(|s| s.category == ToolCategory::System).count();
+        let fs_count = catalog
+            .iter()
+            .filter(|s| s.category == ToolCategory::Filesystem)
+            .count();
+        let agent_count = catalog
+            .iter()
+            .filter(|s| s.category == ToolCategory::Agent)
+            .count();
+        let sys_count = catalog
+            .iter()
+            .filter(|s| s.category == ToolCategory::System)
+            .count();
         assert_eq!(fs_count, 10);
         assert_eq!(agent_count, 9);
         assert_eq!(sys_count, 10);
         #[cfg(feature = "ecc")]
         {
-            let ecc_count = catalog.iter().filter(|s| s.category == ToolCategory::Ecc).count();
+            let ecc_count = catalog
+                .iter()
+                .filter(|s| s.category == ToolCategory::Ecc)
+                .count();
             assert_eq!(ecc_count, 7);
         }
     }
@@ -438,7 +460,10 @@ mod tests {
         let parent = Arc::new(parent);
 
         let child = ToolRegistry::with_parent(parent);
-        assert!(child.get("fs.read_file").is_some(), "child should find tool in parent");
+        assert!(
+            child.get("fs.read_file").is_some(),
+            "child should find tool in parent"
+        );
     }
 
     #[test]
@@ -464,8 +489,14 @@ mod tests {
         child.register(Arc::new(AgentSpawnTool::new(pt)));
 
         let list = child.list();
-        assert!(list.contains(&"fs.read_file".to_string()), "should include parent tool");
-        assert!(list.contains(&"agent.spawn".to_string()), "should include child tool");
+        assert!(
+            list.contains(&"fs.read_file".to_string()),
+            "should include parent tool"
+        );
+        assert!(
+            list.contains(&"agent.spawn".to_string()),
+            "should include child tool"
+        );
         assert_eq!(list.len(), 2);
     }
 
@@ -483,7 +514,10 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let file = dir.join("test.txt");
         std::fs::write(&file, "delegate").unwrap();
-        let result = child.execute("fs.read_file", serde_json::json!({"path": file.to_str().unwrap()}));
+        let result = child.execute(
+            "fs.read_file",
+            serde_json::json!({"path": file.to_str().unwrap()}),
+        );
         assert!(result.is_ok());
         assert_eq!(result.unwrap()["content"], "delegate");
         let _ = std::fs::remove_dir_all(&dir);
@@ -543,7 +577,8 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let file = dir.join("out.txt");
         let tool = FsWriteFileTool::new();
-        let result = tool.execute(serde_json::json!({"path": file.to_str().unwrap(), "content": "hello"}));
+        let result =
+            tool.execute(serde_json::json!({"path": file.to_str().unwrap(), "content": "hello"}));
         assert!(result.is_ok());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "hello");
         let _ = std::fs::remove_dir_all(&dir);
@@ -563,7 +598,9 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "a").unwrap();
         std::fs::write(dir.join("b.txt"), "b").unwrap();
         let tool = FsReadDirTool::new();
-        let result = tool.execute(serde_json::json!({"path": dir.to_str().unwrap()})).unwrap();
+        let result = tool
+            .execute(serde_json::json!({"path": dir.to_str().unwrap()}))
+            .unwrap();
         assert!(result["count"].as_u64().unwrap() >= 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -622,7 +659,9 @@ mod tests {
         let dst = dir.join("dst.txt");
         std::fs::write(&src, "copy me").unwrap();
         let tool = FsCopyTool::new();
-        let result = tool.execute(serde_json::json!({"src": src.to_str().unwrap(), "dst": dst.to_str().unwrap()}));
+        let result = tool.execute(
+            serde_json::json!({"src": src.to_str().unwrap(), "dst": dst.to_str().unwrap()}),
+        );
         assert!(result.is_ok());
         assert_eq!(std::fs::read_to_string(&dst).unwrap(), "copy me");
         let _ = std::fs::remove_dir_all(&dir);
@@ -643,7 +682,9 @@ mod tests {
         let dst = dir.join("new.txt");
         std::fs::write(&src, "move me").unwrap();
         let tool = FsMoveTool::new();
-        let result = tool.execute(serde_json::json!({"src": src.to_str().unwrap(), "dst": dst.to_str().unwrap()}));
+        let result = tool.execute(
+            serde_json::json!({"src": src.to_str().unwrap(), "dst": dst.to_str().unwrap()}),
+        );
         assert!(result.is_ok());
         assert!(!src.exists());
         assert_eq!(std::fs::read_to_string(&dst).unwrap(), "move me");
@@ -664,7 +705,9 @@ mod tests {
         let file = dir.join("stat.txt");
         std::fs::write(&file, "data").unwrap();
         let tool = FsStatTool::new();
-        let result = tool.execute(serde_json::json!({"path": file.to_str().unwrap()})).unwrap();
+        let result = tool
+            .execute(serde_json::json!({"path": file.to_str().unwrap()}))
+            .unwrap();
         assert_eq!(result["size"], 4);
         assert_eq!(result["is_file"], true);
         assert_eq!(result["is_dir"], false);
@@ -685,7 +728,9 @@ mod tests {
         assert_eq!(result["exists"], true);
         assert_eq!(result["is_dir"], true);
 
-        let result = tool.execute(serde_json::json!({"path": "/no/such/path/xyz"})).unwrap();
+        let result = tool
+            .execute(serde_json::json!({"path": "/no/such/path/xyz"}))
+            .unwrap();
         assert_eq!(result["exists"], false);
     }
 
@@ -696,10 +741,12 @@ mod tests {
         std::fs::write(dir.join("test.rs"), "fn main() {}").unwrap();
         std::fs::write(dir.join("test.txt"), "text").unwrap();
         let tool = FsGlobTool::new();
-        let result = tool.execute(serde_json::json!({
-            "pattern": "*.rs",
-            "base_dir": dir.to_str().unwrap(),
-        })).unwrap();
+        let result = tool
+            .execute(serde_json::json!({
+                "pattern": "*.rs",
+                "base_dir": dir.to_str().unwrap(),
+            }))
+            .unwrap();
         assert!(result["count"].as_u64().unwrap() >= 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -709,10 +756,12 @@ mod tests {
         let dir = std::env::temp_dir().join("clawft-fs-glob-nomatch-test");
         let _ = std::fs::create_dir_all(&dir);
         let tool = FsGlobTool::new();
-        let result = tool.execute(serde_json::json!({
-            "pattern": "*.xyz",
-            "base_dir": dir.to_str().unwrap(),
-        })).unwrap();
+        let result = tool
+            .execute(serde_json::json!({
+                "pattern": "*.xyz",
+                "base_dir": dir.to_str().unwrap(),
+            }))
+            .unwrap();
         assert_eq!(result["count"], 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -723,7 +772,9 @@ mod tests {
     fn agent_stop_cancels_token() {
         let pt = Arc::new(crate::process::ProcessTable::new(64));
         let spawn = AgentSpawnTool::new(pt.clone());
-        let result = spawn.execute(serde_json::json!({"agent_id": "stop-test"})).unwrap();
+        let result = spawn
+            .execute(serde_json::json!({"agent_id": "stop-test"}))
+            .unwrap();
         let pid = result["pid"].as_u64().unwrap();
 
         let tool = AgentStopTool::new(pt.clone());
@@ -745,8 +796,12 @@ mod tests {
     fn agent_list_shows_agents() {
         let pt = Arc::new(crate::process::ProcessTable::new(64));
         let spawn = AgentSpawnTool::new(pt.clone());
-        spawn.execute(serde_json::json!({"agent_id": "list-a"})).unwrap();
-        spawn.execute(serde_json::json!({"agent_id": "list-b"})).unwrap();
+        spawn
+            .execute(serde_json::json!({"agent_id": "list-a"}))
+            .unwrap();
+        spawn
+            .execute(serde_json::json!({"agent_id": "list-b"}))
+            .unwrap();
 
         let tool = AgentListTool::new(pt);
         let result = tool.execute(serde_json::json!({})).unwrap();
@@ -757,7 +812,9 @@ mod tests {
     fn agent_inspect_returns_details() {
         let pt = Arc::new(crate::process::ProcessTable::new(64));
         let spawn = AgentSpawnTool::new(pt.clone());
-        let r = spawn.execute(serde_json::json!({"agent_id": "inspect-me"})).unwrap();
+        let r = spawn
+            .execute(serde_json::json!({"agent_id": "inspect-me"}))
+            .unwrap();
         let pid = r["pid"].as_u64().unwrap();
 
         let tool = AgentInspectTool::new(pt);
@@ -778,33 +835,49 @@ mod tests {
     fn agent_suspend_resume_cycle() {
         let pt = Arc::new(crate::process::ProcessTable::new(64));
         let spawn = AgentSpawnTool::new(pt.clone());
-        let r = spawn.execute(serde_json::json!({"agent_id": "sr-test"})).unwrap();
+        let r = spawn
+            .execute(serde_json::json!({"agent_id": "sr-test"}))
+            .unwrap();
         let pid = r["pid"].as_u64().unwrap();
 
         let suspend = AgentSuspendTool::new(pt.clone());
         suspend.execute(serde_json::json!({"pid": pid})).unwrap();
-        assert_eq!(pt.get(pid).unwrap().state, crate::process::ProcessState::Suspended);
+        assert_eq!(
+            pt.get(pid).unwrap().state,
+            crate::process::ProcessState::Suspended
+        );
 
         let resume = AgentResumeTool::new(pt.clone());
         resume.execute(serde_json::json!({"pid": pid})).unwrap();
-        assert_eq!(pt.get(pid).unwrap().state, crate::process::ProcessState::Running);
+        assert_eq!(
+            pt.get(pid).unwrap().state,
+            crate::process::ProcessState::Running
+        );
     }
 
     // --- K4 C3: System tool tests ---
 
     #[test]
     fn sys_env_get_returns_value() {
-        unsafe { std::env::set_var("CLAWFT_TEST_VAR", "test_value"); }
+        unsafe {
+            std::env::set_var("CLAWFT_TEST_VAR", "test_value");
+        }
         let tool = SysEnvGetTool::new();
-        let result = tool.execute(serde_json::json!({"name": "CLAWFT_TEST_VAR"})).unwrap();
+        let result = tool
+            .execute(serde_json::json!({"name": "CLAWFT_TEST_VAR"}))
+            .unwrap();
         assert_eq!(result["value"], "test_value");
-        unsafe { std::env::remove_var("CLAWFT_TEST_VAR"); }
+        unsafe {
+            std::env::remove_var("CLAWFT_TEST_VAR");
+        }
     }
 
     #[test]
     fn sys_env_get_missing_returns_null() {
         let tool = SysEnvGetTool::new();
-        let result = tool.execute(serde_json::json!({"name": "NO_SUCH_VAR_EVER_XYZ"})).unwrap();
+        let result = tool
+            .execute(serde_json::json!({"name": "NO_SUCH_VAR_EVER_XYZ"}))
+            .unwrap();
         assert!(result["value"].is_null());
     }
 
@@ -812,11 +885,13 @@ mod tests {
     fn sys_cron_add_list_remove() {
         let cron = Arc::new(crate::cron::CronService::new());
         let add = SysCronAddTool::new(cron.clone());
-        let result = add.execute(serde_json::json!({
-            "name": "test-job",
-            "interval_secs": 60,
-            "command": "ping",
-        })).unwrap();
+        let result = add
+            .execute(serde_json::json!({
+                "name": "test-job",
+                "interval_secs": 60,
+                "command": "ping",
+            }))
+            .unwrap();
         let job_id = result["id"].as_str().unwrap().to_string();
 
         let list = SysCronListTool::new(cron.clone());
@@ -881,7 +956,10 @@ mod tests {
             cache.put(&hash, &[i; 20]);
         }
         let entries: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
-        assert!(entries.len() < 10, "eviction should have removed some entries");
+        assert!(
+            entries.len() < 10,
+            "eviction should have removed some entries"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -937,7 +1015,7 @@ mod tests {
     #[test]
     #[cfg(feature = "exochain")]
     fn signing_verify_roundtrip() {
-        use ed25519_dalek::{SigningKey, Signer};
+        use ed25519_dalek::{Signer, SigningKey};
         let mut rng = rand::rngs::OsRng;
         let sk = SigningKey::generate(&mut rng);
         let pk_bytes: [u8; 32] = sk.verifying_key().to_bytes();
@@ -950,7 +1028,7 @@ mod tests {
     #[test]
     #[cfg(feature = "exochain")]
     fn signing_tampered_fails() {
-        use ed25519_dalek::{SigningKey, Signer};
+        use ed25519_dalek::{Signer, SigningKey};
         let mut rng = rand::rngs::OsRng;
         let sk = SigningKey::generate(&mut rng);
         let pk_bytes: [u8; 32] = sk.verifying_key().to_bytes();
@@ -1149,12 +1227,8 @@ mod tests {
     fn register_wasm_tool_invalid_bytes_rejected() {
         let runner = Arc::new(WasmToolRunner::new(WasmSandboxConfig::default()));
         let mut registry = ToolRegistry::new();
-        let result = registry.register_wasm_tool(
-            "wasm.bad",
-            "Invalid",
-            b"not wasm".to_vec(),
-            runner,
-        );
+        let result =
+            registry.register_wasm_tool("wasm.bad", "Invalid", b"not wasm".to_vec(), runner);
         assert!(result.is_err());
     }
 
@@ -1164,12 +1238,7 @@ mod tests {
         let runner = Arc::new(WasmToolRunner::new(WasmSandboxConfig::default()));
         let mut registry = ToolRegistry::new();
         registry
-            .register_wasm_tool(
-                "wasm.noop",
-                "noop",
-                NOOP_WAT.as_bytes().to_vec(),
-                runner,
-            )
+            .register_wasm_tool("wasm.noop", "noop", NOOP_WAT.as_bytes().to_vec(), runner)
             .unwrap();
         let result = registry.execute("wasm.noop", serde_json::json!({}));
         assert!(result.is_ok(), "execute should succeed: {:?}", result.err());
@@ -1185,12 +1254,7 @@ mod tests {
         let mut registry = ToolRegistry::new();
         registry.register(Arc::new(FsExistsTool::new()));
         registry
-            .register_wasm_tool(
-                "wasm.noop",
-                "noop",
-                NOOP_WAT.as_bytes().to_vec(),
-                runner,
-            )
+            .register_wasm_tool("wasm.noop", "noop", NOOP_WAT.as_bytes().to_vec(), runner)
             .unwrap();
         let list = registry.list();
         assert!(list.contains(&"fs.exists".to_string()));
@@ -1255,11 +1319,8 @@ mod tests {
             (func (export "_start") (nop))
         )"#;
 
-        let result = runner.execute_sync(
-            "alloc-bomb",
-            big_mem_wat.as_bytes(),
-            serde_json::json!({}),
-        );
+        let result =
+            runner.execute_sync("alloc-bomb", big_mem_wat.as_bytes(), serde_json::json!({}));
         assert!(
             result.is_err(),
             "module requesting 2 MiB with 64 KiB cap should fail, got: {result:?}",
@@ -1304,8 +1365,10 @@ mod tests {
 
     #[test]
     fn shell_pipeline_creates_hash() {
-        let pipeline =
-            ShellPipeline::new("deploy", "cargo build --release && scp target/release/weft server:");
+        let pipeline = ShellPipeline::new(
+            "deploy",
+            "cargo build --release && scp target/release/weft server:",
+        );
         assert_ne!(pipeline.content_hash, [0u8; 32]);
     }
 
@@ -1391,7 +1454,7 @@ mod tests {
     #[test]
     #[cfg(feature = "exochain")]
     fn d9_register_with_valid_signature_succeeds() {
-        use ed25519_dalek::{SigningKey, Signer};
+        use ed25519_dalek::{Signer, SigningKey};
 
         let sk = SigningKey::from_bytes(&[7u8; 32]);
         let pk = sk.verifying_key().to_bytes();
@@ -1420,7 +1483,7 @@ mod tests {
     #[test]
     #[cfg(feature = "exochain")]
     fn d9_verify_tool_signature_roundtrip() {
-        use ed25519_dalek::{SigningKey, Signer};
+        use ed25519_dalek::{Signer, SigningKey};
 
         let sk = SigningKey::from_bytes(&[99u8; 32]);
         let pk = sk.verifying_key().to_bytes();
@@ -1428,12 +1491,8 @@ mod tests {
         let tool_hash = compute_module_hash(b"my-tool-definition-bytes");
         let sig = sk.sign(&tool_hash);
 
-        let tool_sig = ToolSignature::new(
-            "my.tool",
-            tool_hash,
-            "dev-alice",
-            sig.to_bytes().to_vec(),
-        );
+        let tool_sig =
+            ToolSignature::new("my.tool", tool_hash, "dev-alice", sig.to_bytes().to_vec());
 
         assert!(tool_sig.verify(&pk));
 
@@ -1444,12 +1503,7 @@ mod tests {
 
     #[test]
     fn d9_tool_signature_serde_roundtrip() {
-        let sig = ToolSignature::new(
-            "test.tool",
-            [0xAB; 32],
-            "signer-1",
-            vec![0xCD; 64],
-        );
+        let sig = ToolSignature::new("test.tool", [0xAB; 32], "signer-1", vec![0xCD; 64]);
         let json = serde_json::to_string(&sig).unwrap();
         let restored: ToolSignature = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.tool_name, "test.tool");
@@ -1465,12 +1519,7 @@ mod tests {
         registry.add_trusted_key([42u8; 32]);
 
         let tool: Arc<dyn BuiltinTool> = Arc::new(FsReadFileTool::new());
-        let bad_sig = ToolSignature::new(
-            "fs.read_file",
-            [0u8; 32],
-            "bad-signer",
-            vec![0u8; 64],
-        );
+        let bad_sig = ToolSignature::new("fs.read_file", [0u8; 32], "bad-signer", vec![0u8; 64]);
 
         let result = registry.register_signed(tool, bad_sig);
         assert!(
@@ -1537,10 +1586,12 @@ mod tests {
         let tool = ShellExecTool::new();
         assert_eq!(tool.name(), "shell.exec");
 
-        let result = tool.execute(serde_json::json!({
-            "command": "echo",
-            "args": ["test"]
-        })).unwrap();
+        let result = tool
+            .execute(serde_json::json!({
+                "command": "echo",
+                "args": ["test"]
+            }))
+            .unwrap();
 
         assert_eq!(result["exit_code"], 0);
         assert_eq!(result["stdout"], "test");

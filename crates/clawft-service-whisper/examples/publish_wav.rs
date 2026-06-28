@@ -39,14 +39,14 @@ use std::env;
 use std::fs;
 use std::time::Duration;
 
-use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
 use clawft_kernel::SubstrateService;
 use clawft_service_whisper::{
-    wav::parse_wav, WhisperClient, WhisperConfig, WhisperService, WhisperServiceConfig,
-    SUBSTRATE_PCM_INPUT_PATH,
+    SUBSTRATE_PCM_INPUT_PATH, WhisperClient, WhisperConfig, WhisperService, WhisperServiceConfig,
+    wav::parse_wav,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -63,9 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wav_bytes = fs::read(&wav_path)?;
     let (pcm, sample_rate, channels) = parse_wav(&wav_bytes).map_err(|e| e.to_string())?;
     if channels != 1 {
-        eprintln!(
-            "warning: WAV has {channels} channels; whisper expects mono. Submitting anyway."
-        );
+        eprintln!("warning: WAV has {channels} channels; whisper expects mono. Submitting anyway.");
     }
 
     println!(

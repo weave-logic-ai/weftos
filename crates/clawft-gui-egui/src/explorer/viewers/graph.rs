@@ -123,11 +123,7 @@ impl SubstrateViewer for GraphViewer {
         let painter = ui.painter_at(rect);
 
         // Background.
-        painter.rect_filled(
-            rect,
-            3.0,
-            egui::Color32::from_rgb(20, 20, 28),
-        );
+        painter.rect_filled(rect, 3.0, egui::Color32::from_rgb(20, 20, 28));
 
         // Position every node in canvas space.
         let positions = layout(&nodes, rect);
@@ -169,11 +165,22 @@ fn is_valid_node_shape(v: &Value) -> bool {
 
 fn is_valid_edge_shape(v: &Value) -> bool {
     match v {
-        Value::Array(a) => a.len() == 2 && endpoint_id(&a[0]).is_some() && endpoint_id(&a[1]).is_some(),
+        Value::Array(a) => {
+            a.len() == 2 && endpoint_id(&a[0]).is_some() && endpoint_id(&a[1]).is_some()
+        }
         Value::Object(obj) => {
-            let has_src = obj.get("source").map(endpoint_id).is_some_and(|o| o.is_some())
-                || obj.get("from").map(endpoint_id).is_some_and(|o| o.is_some());
-            let has_tgt = obj.get("target").map(endpoint_id).is_some_and(|o| o.is_some())
+            let has_src = obj
+                .get("source")
+                .map(endpoint_id)
+                .is_some_and(|o| o.is_some())
+                || obj
+                    .get("from")
+                    .map(endpoint_id)
+                    .is_some_and(|o| o.is_some());
+            let has_tgt = obj
+                .get("target")
+                .map(endpoint_id)
+                .is_some_and(|o| o.is_some())
                 || obj.get("to").map(endpoint_id).is_some_and(|o| o.is_some());
             has_src && has_tgt
         }
@@ -233,10 +240,7 @@ impl GraphNode {
                     .and_then(Value::as_str)
                     .map(str::to_owned)
                     .unwrap_or_else(|| id.clone());
-                let kind = obj
-                    .get("kind")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
+                let kind = obj.get("kind").and_then(Value::as_str).map(str::to_owned);
                 let pos = obj.get("pos").and_then(|p| p.as_array()).and_then(|a| {
                     if a.len() != 2 {
                         return None;
@@ -285,10 +289,7 @@ impl GraphEdge {
                     .get("target")
                     .or_else(|| obj.get("to"))
                     .and_then(endpoint_id)?;
-                let kind = obj
-                    .get("kind")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
+                let kind = obj.get("kind").and_then(Value::as_str).map(str::to_owned);
                 Some(Self {
                     source,
                     target,
@@ -341,7 +342,8 @@ fn layout(nodes: &[GraphNode], rect: egui::Rect) -> HashMap<String, egui::Pos2> 
         let pos = if let Some((x, y)) = node.pos {
             egui::pos2(x, y)
         } else {
-            let theta = (i as f32) / (n as f32) * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+            let theta =
+                (i as f32) / (n as f32) * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
             egui::pos2(
                 center.x + radius * theta.cos(),
                 center.y + radius * theta.sin(),

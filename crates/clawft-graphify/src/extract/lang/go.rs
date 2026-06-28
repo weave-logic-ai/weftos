@@ -6,37 +6,38 @@
 
 use std::path::Path;
 
-use crate::model::ExtractionResult;
 use crate::GraphifyError;
+use crate::model::ExtractionResult;
 
 #[cfg(feature = "lang-go")]
-use crate::extract::ast::{make_id, ExtractionContext};
+use crate::extract::ast::{ExtractionContext, make_id};
 
 /// Extract entities and relationships from a Go source file.
 #[cfg(feature = "lang-go")]
 pub fn extract_go(path: &Path) -> Result<ExtractionResult, GraphifyError> {
     use tree_sitter::{Language, Parser};
 
-    let language =
-        Language::new(tree_sitter_go::LANGUAGE).map_err(|e| GraphifyError::GrammarNotAvailable {
+    let language = Language::new(tree_sitter_go::LANGUAGE).map_err(|e| {
+        GraphifyError::GrammarNotAvailable {
             language: format!("go: {e}"),
-        })?;
+        }
+    })?;
 
     let mut parser = Parser::new();
-    parser.set_language(&language).map_err(|e| {
-        GraphifyError::ExtractionFailed {
+    parser
+        .set_language(&language)
+        .map_err(|e| GraphifyError::ExtractionFailed {
             path: path.display().to_string(),
             reason: e.to_string(),
-        }
-    })?;
+        })?;
 
     let source = std::fs::read(path)?;
-    let tree = parser.parse(&source, None).ok_or_else(|| {
-        GraphifyError::ExtractionFailed {
+    let tree = parser
+        .parse(&source, None)
+        .ok_or_else(|| GraphifyError::ExtractionFailed {
             path: path.display().to_string(),
             reason: "parse returned None".into(),
-        }
-    })?;
+        })?;
 
     let mut ctx = ExtractionContext::new(path);
     walk_go(&tree.root_node(), &source, &mut ctx);
@@ -108,16 +109,22 @@ fn walk_go(node: &tree_sitter::Node, source: &[u8], ctx: &mut ExtractionContext)
                 ctx.add_node(&method_nid, &format!(".{method_name}()"), line);
                 ctx.add_extracted_edge(&parent_nid, &method_nid, "method", line);
                 if let Some(body) = node.child_by_field_name("body") {
-                    ctx.function_bodies_indices
-                        .push((method_nid, body.start_byte(), body.end_byte()));
+                    ctx.function_bodies_indices.push((
+                        method_nid,
+                        body.start_byte(),
+                        body.end_byte(),
+                    ));
                 }
             } else {
                 let method_nid = make_id(&[&ctx.stem, &method_name]);
                 ctx.add_node(&method_nid, &format!("{method_name}()"), line);
                 ctx.add_extracted_edge(&ctx.file_nid.clone(), &method_nid, "contains", line);
                 if let Some(body) = node.child_by_field_name("body") {
-                    ctx.function_bodies_indices
-                        .push((method_nid, body.start_byte(), body.end_byte()));
+                    ctx.function_bodies_indices.push((
+                        method_nid,
+                        body.start_byte(),
+                        body.end_byte(),
+                    ));
                 }
             }
         }
@@ -175,11 +182,7 @@ fn walk_go(node: &tree_sitter::Node, source: &[u8], ctx: &mut ExtractionContext)
 }
 
 #[cfg(feature = "lang-go")]
-fn handle_go_import_spec(
-    spec: &tree_sitter::Node,
-    source: &[u8],
-    ctx: &mut ExtractionContext,
-) {
+fn handle_go_import_spec(spec: &tree_sitter::Node, source: &[u8], ctx: &mut ExtractionContext) {
     if let Some(path_node) = spec.child_by_field_name("path") {
         let raw = read_text(&path_node, source);
         let raw = raw.trim_matches('"');
@@ -200,11 +203,7 @@ fn handle_go_import_spec(
 }
 
 #[cfg(feature = "lang-go")]
-fn run_go_call_graph(
-    source: &[u8],
-    ctx: &mut ExtractionContext,
-    language: &tree_sitter::Language,
-) {
+fn run_go_call_graph(source: &[u8], ctx: &mut ExtractionContext, language: &tree_sitter::Language) {
     use tree_sitter::Parser;
 
     let label_to_nid = ctx.build_label_map();

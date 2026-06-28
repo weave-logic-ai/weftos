@@ -61,19 +61,13 @@ pub fn record_sample(path: &str, v: f64) -> Vec<f64> {
 /// Returns silently if `value` is non-numeric so callers can fan this
 /// out across a list of optional fields without pre-checking each.
 /// WEFT-271.
-pub fn embed_sparkline(
-    ui: &mut egui::Ui,
-    path: &str,
-    value: &Value,
-    height: f32,
-) {
+pub fn embed_sparkline(ui: &mut egui::Ui, path: &str, value: &Value, height: f32) {
     let Some(current) = value.as_f64() else {
         return;
     };
     let history = push_sample(path, current);
     let w = ui.available_width().clamp(120.0, 480.0);
-    let (rect, _resp) =
-        ui.allocate_exact_size(egui::vec2(w, height), egui::Sense::hover());
+    let (rect, _resp) = ui.allocate_exact_size(egui::vec2(w, height), egui::Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(18, 18, 24));
     if history.len() < 2 {

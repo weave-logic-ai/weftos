@@ -275,9 +275,7 @@ async fn reset_budget_without_budget_attached_returns_no_budget_error() {
 
 #[tokio::test]
 async fn reset_budget_clears_circuit_and_returns_prior_snapshot() {
-    use clawft_core::agent::cost_budget::{
-        BudgetStore, ConversationBudget, InMemoryBudgetStore,
-    };
+    use clawft_core::agent::cost_budget::{BudgetStore, ConversationBudget, InMemoryBudgetStore};
     use clawft_types::config::CostBudgetConfig;
 
     let release = Arc::new(Notify::new());

@@ -133,10 +133,7 @@ mod tests {
         assert!(cfg.teams.is_empty());
         assert!(cfg.channels.is_empty());
         assert!(cfg.allowed_users.is_empty());
-        assert_eq!(
-            cfg.graph_url,
-            "https://graph.microsoft.com/v1.0"
-        );
+        assert_eq!(cfg.graph_url, "https://graph.microsoft.com/v1.0");
     }
 
     #[test]
@@ -184,8 +181,7 @@ mod tests {
             "channels": ["channel-1"],
             "allowedUsers": ["user@company.com"]
         }"#;
-        let cfg: TeamsAdapterConfig =
-            serde_json::from_str(json).unwrap();
+        let cfg: TeamsAdapterConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.tenant_id, "tenant-abc");
         assert_eq!(cfg.app_id, "app-123");
         assert_eq!(cfg.service_url, "https://smba.trafficmanager.net/amer/");
@@ -204,8 +200,7 @@ mod tests {
             "clientId": "client-123",
             "clientSecret": "secret-xyz"
         }"#;
-        let cfg: TeamsAdapterConfig =
-            serde_json::from_str(json).unwrap();
+        let cfg: TeamsAdapterConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.app_id, "client-123");
         assert_eq!(cfg.client_id(), "client-123");
         assert_eq!(cfg.client_secret().expose(), "secret-xyz");

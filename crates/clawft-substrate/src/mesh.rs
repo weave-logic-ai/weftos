@@ -22,7 +22,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use clawft_rpc::DaemonClient;
 use parking_lot::Mutex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::adapter::{
@@ -112,11 +112,7 @@ impl OntologyAdapter for MeshAdapter {
         PERMISSIONS
     }
 
-    async fn open(
-        &self,
-        topic: &str,
-        _args: Value,
-    ) -> Result<Subscription, AdapterError> {
+    async fn open(&self, topic: &str, _args: Value) -> Result<Subscription, AdapterError> {
         let rpc_method: &'static str = match topic {
             "substrate/mesh/status" => "cluster.status",
             "substrate/mesh/nodes" => "cluster.nodes",

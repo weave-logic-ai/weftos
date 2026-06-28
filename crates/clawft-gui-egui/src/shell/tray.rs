@@ -8,7 +8,11 @@ pub const TRAY_HEIGHT: f32 = 42.0;
 
 /// Abstract status of a tray service.
 #[derive(Copy, Clone)]
-pub enum Ok { On, Warn, Off }
+pub enum Ok {
+    On,
+    Warn,
+    Off,
+}
 
 /// Identity of a tray chip. The click handler maps this to the
 /// substrate subtree to show in the detail window (see
@@ -48,10 +52,7 @@ impl ChipId {
 
 /// Return the raw substrate value backing this chip, if present.
 /// Explorer has no single backing value — it walks the tree itself.
-pub fn chip_subtree(
-    chip: ChipId,
-    snap: &Snapshot,
-) -> Option<&serde_json::Value> {
+pub fn chip_subtree(chip: ChipId, snap: &Snapshot) -> Option<&serde_json::Value> {
     match chip {
         ChipId::Kernel => snap.status.as_ref(),
         ChipId::Mesh => snap.mesh_status.as_ref(),
@@ -97,7 +98,10 @@ pub fn paint(
     );
     painter.line_segment(
         [tray_rect.left_top(), tray_rect.right_top()],
-        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 20)),
+        egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 20),
+        ),
     );
 
     let inner_rect = tray_rect.shrink2(egui::vec2(12.0, 6.0));
@@ -143,13 +147,7 @@ pub fn paint(
     });
 }
 
-fn chip(
-    ui: &mut egui::Ui,
-    glyph: &str,
-    tip: &str,
-    status: Ok,
-    active: bool,
-) -> egui::Response {
+fn chip(ui: &mut egui::Ui, glyph: &str, tip: &str, status: Ok, active: bool) -> egui::Response {
     // Frame::show's response only senses hover, so we draw the chrome
     // inside a Frame and then *re-interact* the outer rect with
     // click+hover sense so the chip becomes a button. Active chips get
@@ -165,9 +163,9 @@ fn chip(
         .inner_margin(egui::Margin::symmetric(8, 4))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                ui.painter().circle_filled(rect.center(), 4.0, status.color());
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                ui.painter()
+                    .circle_filled(rect.center(), 4.0, status.color());
                 ui.label(
                     egui::RichText::new(glyph)
                         .monospace()
@@ -231,15 +229,14 @@ fn mesh_state_to_ok(v: &Option<serde_json::Value>) -> Ok {
     let Some(obj) = v.as_ref() else {
         return Ok::Off;
     };
-    if obj
-        .get("available")
-        .and_then(|b| b.as_bool())
-        == Some(false)
-    {
+    if obj.get("available").and_then(|b| b.as_bool()) == Some(false) {
         return Ok::Off;
     }
     let total = obj.get("total_nodes").and_then(|n| n.as_u64()).unwrap_or(0);
-    let healthy = obj.get("healthy_nodes").and_then(|n| n.as_u64()).unwrap_or(0);
+    let healthy = obj
+        .get("healthy_nodes")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0);
     match (total, healthy) {
         (0, _) => Ok::Off,
         (t, h) if h == t => Ok::On,

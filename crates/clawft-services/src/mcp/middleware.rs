@@ -223,12 +223,12 @@ impl Middleware for SecurityGuard {
         if (name_lower.contains("exec") || name_lower.contains("shell"))
             && let Some(cmd) = request.args.get("command").and_then(|v| v.as_str())
         {
-            self.command_policy.validate(cmd).map_err(|reason| {
-                ToolError::PermissionDenied {
+            self.command_policy
+                .validate(cmd)
+                .map_err(|reason| ToolError::PermissionDenied {
                     tool: request.name.clone(),
                     reason: format!("command rejected: {reason}"),
-                }
-            })?;
+                })?;
         }
 
         // Check URL-fetching tools.
@@ -350,7 +350,10 @@ impl Middleware for PermissionFilter {
         if self.allowed_exact.is_none() && self.allowed_patterns.is_none() {
             return tools;
         }
-        tools.into_iter().filter(|t| self.is_allowed(&t.name)).collect()
+        tools
+            .into_iter()
+            .filter(|t| self.is_allowed(&t.name))
+            .collect()
     }
 
     async fn before_call(&self, request: ToolCallRequest) -> Result<ToolCallRequest, ToolError> {

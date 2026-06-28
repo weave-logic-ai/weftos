@@ -456,10 +456,7 @@ impl Explorer {
         // prefix and let `tick` dispatch it on the next frame. This
         // also naturally coalesces duplicate requests within a frame.
         if !self.pending_lists.iter().any(|p| p.prefix == prefix) {
-            self.pending_lists.push(PendingList {
-                prefix,
-                rx: None,
-            });
+            self.pending_lists.push(PendingList { prefix, rx: None });
         }
     }
 
@@ -536,9 +533,8 @@ impl Explorer {
                     // a transient error shouldn't flip the UI into
                     // "backend unavailable" mode.
                     if self.tree_children.is_empty() {
-                        self.backend_hint = Some(format!(
-                            "substrate.list not yet available: {err}"
-                        ));
+                        self.backend_hint =
+                            Some(format!("substrate.list not yet available: {err}"));
                     }
                     // Record an empty cache so the row shows `(empty)`
                     // instead of an infinite "loading…".
@@ -697,12 +693,7 @@ impl Explorer {
     /// A transient confirmation label appears next to the buttons for
     /// [`COPY_TOAST_DURATION`] after a click, then drops on the next
     /// paint. WEFT-273.
-    fn paint_copy_actions(
-        &mut self,
-        ui: &mut egui::Ui,
-        path: &str,
-        value: Option<&Value>,
-    ) {
+    fn paint_copy_actions(&mut self, ui: &mut egui::Ui, path: &str, value: Option<&Value>) {
         // Drop a stale toast before painting — keeps this row visually
         // quiet when no recent copy has happened.
         if let Some((when, _)) = self.last_copy_msg
@@ -718,8 +709,7 @@ impl Explorer {
                 .clicked()
             {
                 ui.ctx().copy_text(path.to_string());
-                self.last_copy_msg =
-                    Some((web_time::Instant::now(), "path copied".to_string()));
+                self.last_copy_msg = Some((web_time::Instant::now(), "path copied".to_string()));
             }
 
             if let Some(v) = value
@@ -730,10 +720,7 @@ impl Explorer {
                     .clicked()
             {
                 ui.ctx().copy_text(key.clone());
-                self.last_copy_msg = Some((
-                    web_time::Instant::now(),
-                    format!("{field} copied"),
-                ));
+                self.last_copy_msg = Some((web_time::Instant::now(), format!("{field} copied")));
             }
 
             if let Some(v) = value
@@ -742,8 +729,7 @@ impl Explorer {
                     .on_hover_text("Copy a JSON snapshot of the current value")
                     .clicked()
             {
-                let snapshot = serde_json::to_string_pretty(v)
-                    .unwrap_or_else(|_| v.to_string());
+                let snapshot = serde_json::to_string_pretty(v).unwrap_or_else(|_| v.to_string());
                 ui.ctx().copy_text(snapshot);
                 self.last_copy_msg =
                     Some((web_time::Instant::now(), "snapshot copied".to_string()));
@@ -840,10 +826,16 @@ mod activity_map_tests {
         // Push one more. The first inserted (LRU) must drop.
         m.insert("/path/new".into(), now);
         assert_eq!(m.len(), ACTIVITY_MAX_ENTRIES);
-        assert!(m.get("/path/0").is_none(), "LRU entry should have been evicted");
+        assert!(
+            m.get("/path/0").is_none(),
+            "LRU entry should have been evicted"
+        );
         assert!(m.get("/path/new").is_some());
         // Tail entry must survive.
-        assert!(m.get(&format!("/path/{}", ACTIVITY_MAX_ENTRIES - 1)).is_some());
+        assert!(
+            m.get(&format!("/path/{}", ACTIVITY_MAX_ENTRIES - 1))
+                .is_some()
+        );
     }
 
     #[test]
@@ -858,7 +850,10 @@ mod activity_map_tests {
         m.insert("/path/0".into(), now);
         m.insert("/path/new".into(), now);
         assert!(m.get("/path/0").is_some(), "touched entry should survive");
-        assert!(m.get("/path/1").is_none(), "next-oldest should have been evicted");
+        assert!(
+            m.get("/path/1").is_none(),
+            "next-oldest should have been evicted"
+        );
     }
 
     #[test]

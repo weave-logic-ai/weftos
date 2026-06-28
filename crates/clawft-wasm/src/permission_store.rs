@@ -58,8 +58,15 @@ impl PermissionStore {
     ///
     /// Returns the canonical form of `path` on success, or a
     /// `PermissionDenied` error if the path escapes the base directory.
-    fn ensure_within_base(&self, path: &std::path::Path, plugin_id: &str) -> Result<PathBuf, std::io::Error> {
-        let canonical_base = self.base_dir.canonicalize().unwrap_or_else(|_| self.base_dir.clone());
+    fn ensure_within_base(
+        &self,
+        path: &std::path::Path,
+        plugin_id: &str,
+    ) -> Result<PathBuf, std::io::Error> {
+        let canonical_base = self
+            .base_dir
+            .canonicalize()
+            .unwrap_or_else(|_| self.base_dir.clone());
         let canonical_path = path.canonicalize()?;
         if !canonical_path.starts_with(&canonical_base) {
             return Err(std::io::Error::new(
@@ -104,8 +111,7 @@ impl PermissionStore {
         // Defense-in-depth: ensure the created directory is still under base_dir
         let canonical_dir = self.ensure_within_base(&dir, plugin_id)?;
         let path = canonical_dir.join(APPROVED_FILE);
-        let json = serde_json::to_string_pretty(record)
-            .map_err(std::io::Error::other)?;
+        let json = serde_json::to_string_pretty(record).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
     }
 }

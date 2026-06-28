@@ -55,10 +55,7 @@ pub enum EmlEvent {
         samples: usize,
     },
     /// Model was reset.
-    Reset {
-        model_name: String,
-        reason: String,
-    },
+    Reset { model_name: String, reason: String },
 }
 
 impl EmlEvent {
@@ -105,9 +102,7 @@ pub struct EmlEventLog {
 impl EmlEventLog {
     /// Create a new empty event log.
     pub fn new() -> Self {
-        Self {
-            events: Vec::new(),
-        }
+        Self { events: Vec::new() }
     }
 
     /// Push a new event.

@@ -104,11 +104,9 @@ impl Value {
         match self {
             Value::List(xs) => Some(xs.clone()),
             Value::Json(Json::Array(arr)) => Some(arr.iter().map(Value::from_json).collect()),
-            Value::Json(Json::Object(map)) => Some(
-                map.values()
-                    .map(Value::from_json)
-                    .collect::<Vec<_>>(),
-            ),
+            Value::Json(Json::Object(map)) => {
+                Some(map.values().map(Value::from_json).collect::<Vec<_>>())
+            }
             _ => None,
         }
     }
@@ -308,9 +306,7 @@ fn eval_call(
                 let key = eval(body, snap, Some(&b))?;
                 keyed.push((key, item));
             }
-            keyed.sort_by(|(a, _), (b, _)| {
-                cmp(a, b).unwrap_or(std::cmp::Ordering::Equal)
-            });
+            keyed.sort_by(|(a, _), (b, _)| cmp(a, b).unwrap_or(std::cmp::Ordering::Equal));
             Ok(Value::List(keyed.into_iter().map(|(_, v)| v).collect()))
         }
         "filter" => {

@@ -46,10 +46,7 @@ impl SubstrateViewer for SensorViewer {
         let Some(obj) = value.as_object() else {
             return;
         };
-        let kind = obj
-            .get("kind")
-            .and_then(Value::as_str)
-            .unwrap_or("sensor");
+        let kind = obj.get("kind").and_then(Value::as_str).unwrap_or("sensor");
         let has_raw = obj.contains_key("raw");
         let has_summary = obj.contains_key("summary");
 
@@ -78,10 +75,7 @@ impl SubstrateViewer for SensorViewer {
                     )
                     .on_hover_text("Navigate to the publishing node.");
                 if link.clicked() {
-                    crate::explorer::request_navigation(
-                        ui.ctx(),
-                        node_path.to_string(),
-                    );
+                    crate::explorer::request_navigation(ui.ctx(), node_path.to_string());
                 }
             });
         }
@@ -160,11 +154,7 @@ impl SubstrateViewer for SensorViewer {
                     .color(egui::Color32::from_rgb(140, 140, 150)),
             );
             for a in caps.applicable_actions {
-                ui.label(
-                    egui::RichText::new(format!("  • {a}"))
-                        .monospace()
-                        .small(),
-                );
+                ui.label(egui::RichText::new(format!("  • {a}")).monospace().small());
             }
         }
     }
@@ -180,12 +170,20 @@ impl SubstrateViewer for SensorViewer {
 fn parent_node_path(path: &str) -> Option<&str> {
     if path.ends_with("/sensor") {
         let (parent, _) = path.rsplit_once('/')?;
-        if parent.is_empty() { None } else { Some(parent) }
+        if parent.is_empty() {
+            None
+        } else {
+            Some(parent)
+        }
     } else if let Some(idx) = path.rfind("/sensor/") {
         Some(&path[..idx])
     } else {
         let (parent, _) = path.rsplit_once('/')?;
-        if parent.is_empty() { None } else { Some(parent) }
+        if parent.is_empty() {
+            None
+        } else {
+            Some(parent)
+        }
     }
 }
 

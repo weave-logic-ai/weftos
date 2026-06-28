@@ -24,8 +24,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use ed25519_dalek::SigningKey;
-use rand::rngs::OsRng;
 use rand::RngCore;
+use rand::rngs::OsRng;
 
 /// Filename of the node keypair under the runtime directory.
 const KEYFILE_NAME: &str = "node.key";
@@ -85,7 +85,10 @@ pub fn load_or_generate(runtime_dir: &Path) -> Result<DaemonIdentity, IdentityEr
     };
     let pubkey_bytes: [u8; 32] = signing_key.verifying_key().to_bytes();
     let node_id = clawft_kernel::node_id_from_pubkey(&pubkey_bytes);
-    Ok(DaemonIdentity { signing_key, node_id })
+    Ok(DaemonIdentity {
+        signing_key,
+        node_id,
+    })
 }
 
 fn generate() -> Result<SigningKey, IdentityError> {

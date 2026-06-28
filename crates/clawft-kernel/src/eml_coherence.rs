@@ -28,8 +28,8 @@ use serde::{Deserialize, Serialize};
 use crate::causal::CausalGraph;
 
 // Re-export the core operator for callers that used it directly.
-pub use eml_core::{eml, eml_safe, softmax3};
 pub use eml_core::EmlEvent;
+pub use eml_core::{eml, eml_safe, softmax3};
 
 // ---------------------------------------------------------------------------
 // CoherencePrediction
@@ -302,7 +302,8 @@ impl EmlCoherenceModel {
     ) {
         // Track prediction error for drift detection
         let predicted = self.predict(&features);
-        self.error_history.push((predicted.lambda_2 - lambda_2).abs());
+        self.error_history
+            .push((predicted.lambda_2 - lambda_2).abs());
         if self.error_history.len() > 100 {
             self.error_history.remove(0);
         }

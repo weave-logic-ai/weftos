@@ -53,18 +53,12 @@ pub enum Input {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum EntryPoint {
     /// `weaver gui --app <flag>` — the CLI path.
-    Cli {
-        flag: String,
-    },
+    Cli { flag: String },
     /// A VSCode / Cursor command id, e.g. `weft.admin.open`.
-    VscodeCommand {
-        command: String,
-    },
+    VscodeCommand { command: String },
     /// Voice wake-word (requires [`Input::Voice`] in
     /// `supported_inputs`; see ADR-015 validation rule 7).
-    WakeWord {
-        phrase: String,
-    },
+    WakeWord { phrase: String },
 }
 
 /// A reference to a surface description.
@@ -162,18 +156,13 @@ pub enum PermissionParseError {
 }
 
 impl Serialize for Permission {
-    fn serialize<S: serde::Serializer>(
-        &self,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_token())
     }
 }
 
 impl<'de> Deserialize<'de> for Permission {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = String::deserialize(deserializer)?;
         Permission::parse(&raw).map_err(serde::de::Error::custom)
     }
@@ -279,13 +268,11 @@ mod tests {
 
     /// The ADR-015 §concrete-example manifest, minus the `[narration]`
     /// table. Used by several tests in this module.
-    pub(crate) const ADMIN_FIXTURE: &str =
-        include_str!("../fixtures/weftos-admin.toml");
+    pub(crate) const ADMIN_FIXTURE: &str = include_str!("../fixtures/weftos-admin.toml");
 
     #[test]
     fn parses_weftos_admin_fixture() {
-        let m = AppManifest::from_toml_str(ADMIN_FIXTURE)
-            .expect("fixture must parse");
+        let m = AppManifest::from_toml_str(ADMIN_FIXTURE).expect("fixture must parse");
         assert_eq!(m.id, "app://weftos.admin");
         assert_eq!(m.name, "WeftOS Admin");
         assert_eq!(m.version, Version::new(0, 1, 0));
@@ -309,10 +296,7 @@ mod tests {
             EntryPoint::WakeWord { phrase } if phrase == "weft, admin status"
         ));
         assert_eq!(m.surfaces.len(), 2);
-        assert_eq!(
-            m.surfaces[0].as_str(),
-            "surfaces/admin-main.toml"
-        );
+        assert_eq!(m.surfaces[0].as_str(), "surfaces/admin-main.toml");
         assert_eq!(m.subscriptions.len(), 4);
         assert_eq!(m.influences.len(), 3);
         assert_eq!(m.permissions.len(), 1);
@@ -332,10 +316,7 @@ mod tests {
         // we construct the manifest in Rust and check the string
         // round-trips shape-equivalently.
         let mut narration = BTreeMap::new();
-        narration.insert(
-            "substrate/kernel/status".to_string(),
-            "ok".to_string(),
-        );
+        narration.insert("substrate/kernel/status".to_string(), "ok".to_string());
         let m = AppManifest {
             id: "app://weftos.admin".to_string(),
             name: "WeftOS Admin".to_string(),
@@ -353,11 +334,9 @@ mod tests {
             permissions: vec![Permission::FsPath("/var/log".to_string())],
             narration: Some(narration),
         };
-        let serialised = m
-            .to_toml_string()
-            .expect("serialize manifest back to TOML");
-        let reparsed = AppManifest::from_toml_str(&serialised)
-            .expect("reparse self-serialized TOML");
+        let serialised = m.to_toml_string().expect("serialize manifest back to TOML");
+        let reparsed =
+            AppManifest::from_toml_str(&serialised).expect("reparse self-serialized TOML");
         assert_eq!(m, reparsed);
     }
 

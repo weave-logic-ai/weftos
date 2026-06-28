@@ -287,7 +287,8 @@ mod tests {
     #[test]
     fn create_oneshot_timer() {
         let service = TimerService::new();
-        let (id, _token) = service.create_oneshot(1, Duration::from_secs(10), text_payload("fire!"));
+        let (id, _token) =
+            service.create_oneshot(1, Duration::from_secs(10), text_payload("fire!"));
 
         assert!(service.info(&id).is_some());
         assert_eq!(service.len(), 1);
@@ -372,8 +373,7 @@ mod tests {
     #[test]
     fn collect_due_repeating_reschedules() {
         let service = TimerService::new();
-        let (id, _) =
-            service.create_repeating(3, Duration::from_millis(0), text_payload("repeat"));
+        let (id, _) = service.create_repeating(3, Duration::from_millis(0), text_payload("repeat"));
 
         std::thread::sleep(Duration::from_millis(10));
 

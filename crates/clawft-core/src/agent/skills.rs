@@ -24,8 +24,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
 use crate::runtime::RwLock;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use clawft_platform::Platform;
@@ -394,14 +394,11 @@ impl<P: Platform> SkillsLoader<P> {
 
     /// Load a skill from a `SKILL.md` file with YAML frontmatter.
     async fn load_skill_md(&self, name: &str, path: &std::path::Path) -> Result<Skill> {
-        let content = self
-            .platform
-            .fs()
-            .read_to_string(path)
-            .await
-            .map_err(|e| ClawftError::PluginLoadFailed {
+        let content = self.platform.fs().read_to_string(path).await.map_err(|e| {
+            ClawftError::PluginLoadFailed {
                 plugin: format!("skill/{name}: {e}"),
-            })?;
+            }
+        })?;
 
         parse_skill_md(&content, name).map_err(|e| ClawftError::PluginLoadFailed {
             plugin: format!("skill/{name}: {e}"),
@@ -761,13 +758,7 @@ mod tests {
             None,
         )
         .await;
-        create_skill(
-            &dir_b.join(".clawft").join("skills"),
-            "beta",
-            "Beta",
-            None,
-        )
-        .await;
+        create_skill(&dir_b.join(".clawft").join("skills"), "beta", "Beta", None).await;
 
         let a_names = loader_a.list_skills().await.unwrap();
         let b_names = loader_b.list_skills().await.unwrap();
@@ -823,7 +814,13 @@ This is the prompt body.
         );
         assert!(skill.user_invocable);
         assert_eq!(skill.argument_hint.as_deref(), Some("Swarm objective"));
-        assert!(skill.prompt.as_ref().unwrap().contains("# Claude Flow Skill"));
+        assert!(
+            skill
+                .prompt
+                .as_ref()
+                .unwrap()
+                .contains("# Claude Flow Skill")
+        );
         assert!(skill.prompt.as_ref().unwrap().contains("prompt body"));
     }
 

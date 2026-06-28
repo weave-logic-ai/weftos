@@ -22,10 +22,10 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-#[cfg(feature = "exochain")]
-use crate::gate::GateBackend;
 use crate::capability::{AgentCapabilities, IpcScope};
 use crate::container::PortMapping;
+#[cfg(feature = "exochain")]
+use crate::gate::GateBackend;
 use crate::process::Pid;
 use crate::supervisor::SpawnRequest;
 
@@ -1599,9 +1599,7 @@ mod tests {
         manager
             .transition_to("backend", AppState::Starting)
             .unwrap();
-        manager
-            .transition_to("backend", AppState::Running)
-            .unwrap();
+        manager.transition_to("backend", AppState::Running).unwrap();
 
         // Add PIDs to each app independently
         manager.add_agent_pid("frontend", 100).unwrap();

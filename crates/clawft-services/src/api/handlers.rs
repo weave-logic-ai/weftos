@@ -1,9 +1,9 @@
 //! HTTP request handlers for the REST API.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::{delete, get, post},
-    Json, Router,
 };
 
 use super::ApiState;
@@ -86,10 +86,7 @@ async fn get_session(
     Json(state.sessions.get_session(&key))
 }
 
-async fn delete_session(
-    State(state): State<ApiState>,
-    Path(key): Path<String>,
-) -> Json<bool> {
+async fn delete_session(State(state): State<ApiState>, Path(key): Path<String>) -> Json<bool> {
     Json(state.sessions.delete_session(&key))
 }
 

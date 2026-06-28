@@ -24,10 +24,10 @@ mod client;
 mod protocol;
 pub mod version_check;
 
-pub use client::{is_daemon_running, DaemonClient};
+pub use client::{DaemonClient, is_daemon_running};
 pub use protocol::{
-    Request, Response, LOG_FILE_NAME, PID_FILE_NAME, SOCKET_NAME,
-    log_path, pid_path, runtime_dir, socket_path,
+    LOG_FILE_NAME, PID_FILE_NAME, Request, Response, SOCKET_NAME, log_path, pid_path, runtime_dir,
+    socket_path,
 };
 
 /// Connect to the daemon or bail with a helpful error message.

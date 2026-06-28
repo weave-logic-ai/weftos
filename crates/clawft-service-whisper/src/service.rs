@@ -25,22 +25,22 @@
 //! window. 4xx is a programmer bug (malformed WAV etc.) so we log +
 //! drop immediately without retry.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
 use clawft_kernel::{NodeRegistry, SubscriberId, SubstrateService};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn};
 
+use crate::SUBSTRATE_PCM_INPUT_PATH;
 use crate::audit::TranscriptAuditEvent;
 use crate::client::{TranscribeError, WhisperClient};
 use crate::wav::write_wav;
 use crate::windower::{PcmChunk, PcmWindow, Windower};
-use crate::SUBSTRATE_PCM_INPUT_PATH;
 
 /// Configuration for [`WhisperService`].
 #[derive(Debug, Clone)]
@@ -160,11 +160,8 @@ impl Default for WhisperServiceConfig {
             retry_backoff: Duration::from_millis(500),
             node_id: "n-test00".to_string(),
             input_path: SUBSTRATE_PCM_INPUT_PATH.to_string(),
-            output_path_derived:
-                "substrate/_derived/transcript/n-test00/mic".to_string(),
-            output_path_legacy: Some(
-                "substrate/n-test00/derived/transcript/mic".to_string(),
-            ),
+            output_path_derived: "substrate/_derived/transcript/n-test00/mic".to_string(),
+            output_path_legacy: Some("substrate/n-test00/derived/transcript/mic".to_string()),
             service_enabled: Arc::new(AtomicBool::new(true)),
             source_enabled: Arc::new(AtomicBool::new(true)),
             node_registry,
@@ -330,10 +327,12 @@ async fn run_pipeline(
     // the inference task is free it takes the slot; new windows
     // overwrite the slot if busy.
     let mut pending: Option<PcmWindow> = None;
-    let mut in_flight: Option<tokio::task::JoinHandle<(
-        PcmWindow,
-        Result<crate::client::InferenceResponse, TranscribeError>,
-    )>> = None;
+    let mut in_flight: Option<
+        tokio::task::JoinHandle<(
+            PcmWindow,
+            Result<crate::client::InferenceResponse, TranscribeError>,
+        )>,
+    > = None;
 
     loop {
         tokio::select! {
@@ -415,15 +414,16 @@ async fn run_pipeline(
 
         // If the HTTP worker is free and a window is pending, launch.
         if in_flight.is_none()
-            && let Some(window) = pending.take() {
-                let client_clone = client.clone();
-                let window_clone = window.clone();
-                let retry_backoff = config.retry_backoff;
-                in_flight = Some(tokio::spawn(async move {
-                    let result = run_one_inference(&client_clone, &window_clone, retry_backoff).await;
-                    (window_clone, result)
-                }));
-            }
+            && let Some(window) = pending.take()
+        {
+            let client_clone = client.clone();
+            let window_clone = window.clone();
+            let retry_backoff = config.retry_backoff;
+            in_flight = Some(tokio::spawn(async move {
+                let result = run_one_inference(&client_clone, &window_clone, retry_backoff).await;
+                (window_clone, result)
+            }));
+        }
     }
 
     // On shutdown: flush any partial window synchronously for the
@@ -433,9 +433,10 @@ async fn run_pipeline(
         handle_inference_result(&substrate, &config, partial, result).await;
     }
     if let Some(h) = in_flight.take()
-        && let Ok((window, result)) = h.await {
-            handle_inference_result(&substrate, &config, window, result).await;
-        }
+        && let Ok((window, result)) = h.await
+    {
+        handle_inference_result(&substrate, &config, window, result).await;
+    }
 }
 
 /// Monotonic milliseconds since process start. Used by the
@@ -485,7 +486,9 @@ async fn classifier_subscriber_loop(
     last_speech_ms: Arc<AtomicU64>,
 ) {
     while let Some(line) = rx.recv().await {
-        let Some(value) = decode_update_line(&line) else { continue };
+        let Some(value) = decode_update_line(&line) else {
+            continue;
+        };
         let speech = value
             .get("class")
             .and_then(|v| v.as_str())
@@ -565,9 +568,8 @@ async fn handle_inference_result(
                     // SC-9 audit row: one per successful transcription,
                     // text-hashed (never raw text), correlated to the
                     // substrate tick the publish landed on.
-                    let source_node =
-                        derive_source_node_from_path(&config.output_path_derived)
-                            .unwrap_or_else(|| config.source_node_hint.clone());
+                    let source_node = derive_source_node_from_path(&config.output_path_derived)
+                        .unwrap_or_else(|| config.source_node_hint.clone());
                     TranscriptAuditEvent::new(
                         tick,
                         source_node,
@@ -594,11 +596,7 @@ async fn handle_inference_result(
             // "deprecated" tag so anyone tailing the daemon log
             // notices the dual-publish happening.
             if let Some(ref legacy_path) = config.output_path_legacy {
-                match substrate.publish_gated(
-                    Some(&config.node_id),
-                    legacy_path,
-                    payload,
-                ) {
+                match substrate.publish_gated(Some(&config.node_id), legacy_path, payload) {
                     Ok(_) => warn!(
                         target: "deprecated",
                         output_path = %legacy_path,
@@ -672,19 +670,31 @@ fn decode_update_line(line: &[u8]) -> Option<Value> {
 /// so future protocol changes surface loudly instead of silently
 /// dropping data.
 fn decode_pcm_chunk(value: &Value) -> Result<(Vec<u8>, u32, u16, u64, u64), String> {
-    let chunk: PcmChunk = serde_json::from_value(value.clone())
-        .map_err(|e| format!("not a PcmChunk: {e}"))?;
+    let chunk: PcmChunk =
+        serde_json::from_value(value.clone()).map_err(|e| format!("not a PcmChunk: {e}"))?;
     if chunk.encoding != "base64" {
-        return Err(format!("unsupported encoding: {:?} (want \"base64\")", chunk.encoding));
+        return Err(format!(
+            "unsupported encoding: {:?} (want \"base64\")",
+            chunk.encoding
+        ));
     }
     if chunk.format != "i16le" {
-        return Err(format!("unsupported format: {:?} (want \"i16le\")", chunk.format));
+        return Err(format!(
+            "unsupported format: {:?} (want \"i16le\")",
+            chunk.format
+        ));
     }
     let pcm = B64
         .decode(chunk.data.as_bytes())
         .map_err(|e| format!("data b64 decode: {e}"))?;
     let chunk_ms = chunk.effective_chunk_ms();
-    Ok((pcm, chunk.sample_rate, chunk.channels, chunk.start_ts_ms, chunk_ms))
+    Ok((
+        pcm,
+        chunk.sample_rate,
+        chunk.channels,
+        chunk.start_ts_ms,
+        chunk_ms,
+    ))
 }
 
 #[cfg(test)]
@@ -753,8 +763,8 @@ mod tests {
     async fn audit_event_emitted_per_transcription() {
         use std::sync::{Arc, Mutex, OnceLock};
         use tracing::Subscriber;
-        use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
         use tracing_subscriber::Registry;
+        use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
 
         #[derive(Clone, Default)]
         struct Capture {
@@ -812,8 +822,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/inference"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string(r#"{"text": " open the pod bay"}"#),
+                ResponseTemplate::new(200).set_body_string(r#"{"text": " open the pod bay"}"#),
             )
             .mount(&server)
             .await;
@@ -950,8 +959,7 @@ mod tests {
         // dual-publish is REMOVE-AFTER-PHASE-4 and is exercised via
         // a parallel subscription to keep the migration honest.
         let (_out_id, mut out_rx) = substrate.subscribe(Some(&actor), &output_path).unwrap();
-        let (_legacy_id, mut legacy_rx) =
-            substrate.subscribe(Some(&actor), &legacy_path).unwrap();
+        let (_legacy_id, mut legacy_rx) = substrate.subscribe(Some(&actor), &legacy_path).unwrap();
 
         let svc = WhisperService::spawn(substrate.clone(), client, cfg).unwrap();
 
@@ -964,7 +972,9 @@ mod tests {
         // Wait up to 3s for a transcript to show up on the canonical
         // output path.
         let got = tokio::time::timeout(Duration::from_secs(3), out_rx.recv()).await;
-        let line = got.expect("transcript not published within 3s").expect("substrate closed");
+        let line = got
+            .expect("transcript not published within 3s")
+            .expect("substrate closed");
         let update: Value = serde_json::from_slice(&line[..line.len() - 1]).unwrap();
         assert_eq!(update["kind"], "publish");
         assert_eq!(update["path"], output_path);
@@ -1019,9 +1029,7 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path("/inference"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_string(r#"{"text": " not heard"}"#),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"text": " not heard"}"#))
             .expect(0) // ← key assertion: zero inference calls
             .mount(&server)
             .await;
@@ -1144,12 +1152,7 @@ mod tests {
     /// taking a build-time edge into the classify crate (which would
     /// flip the dependency direction we want — whisper does not
     /// depend on classify).
-    fn publish_classification(
-        substrate: &SubstrateService,
-        actor: &str,
-        path: &str,
-        class: &str,
-    ) {
+    fn publish_classification(substrate: &SubstrateService, actor: &str, path: &str, class: &str) {
         let payload = json!({
             "class": class,
             "confidence": 1.0,
@@ -1176,9 +1179,7 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path("/inference"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_string(r#"{"text": " heard"}"#),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"text": " heard"}"#))
             .expect(0) // gate must keep us at zero
             .mount(&server)
             .await;

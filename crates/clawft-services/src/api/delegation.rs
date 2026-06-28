@@ -4,9 +4,9 @@
 //! rules, and browsing delegation history.
 
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     routing::{delete, get, patch},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
@@ -86,9 +86,7 @@ pub struct PaginatedHistory {
 
 // ── Handlers ───────────────────────────────────────────────────
 
-async fn list_active_delegations(
-    State(_state): State<ApiState>,
-) -> Json<Vec<ActiveDelegation>> {
+async fn list_active_delegations(State(_state): State<ApiState>) -> Json<Vec<ActiveDelegation>> {
     // Mock data for now; will be wired to live delegation manager later.
     let delegations = vec![
         ActiveDelegation {
@@ -125,9 +123,7 @@ async fn list_active_delegations(
     Json(delegations)
 }
 
-async fn list_delegation_rules(
-    State(_state): State<ApiState>,
-) -> Json<Vec<DelegationRule>> {
+async fn list_delegation_rules(State(_state): State<ApiState>) -> Json<Vec<DelegationRule>> {
     // Mock rules; will be loaded from config in production.
     let rules = vec![
         DelegationRule {
@@ -238,12 +234,7 @@ async fn delegation_history(
     // Apply filtering.
     let filtered: Vec<_> = all_entries
         .into_iter()
-        .filter(|e| {
-            params
-                .session
-                .as_ref()
-                .is_none_or(|s| &e.session_key == s)
-        })
+        .filter(|e| params.session.as_ref().is_none_or(|s| &e.session_key == s))
         .filter(|e| params.target.as_ref().is_none_or(|t| &e.target == t))
         .collect();
 

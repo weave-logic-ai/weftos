@@ -6,10 +6,10 @@
 use std::convert::Infallible;
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     response::sse::{Event, Sse},
     routing::{get, post},
-    Json, Router,
 };
 use futures_util::stream::unfold;
 use serde::{Deserialize, Serialize};

@@ -26,8 +26,8 @@
 //! the trait shape is sync because the in-memory impl needs no I/O
 //! and the substrate impl wraps the kernel's already-sync publish.
 
-use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -167,14 +167,16 @@ impl BudgetDecision {
     pub fn into_error(self, conv_id: &str) -> Option<ClawftError> {
         match self {
             BudgetDecision::Allowed => None,
-            BudgetDecision::Tripped { dimension, limit, used } => {
-                Some(ClawftError::ConversationBudgetExceeded {
-                    conv_id: conv_id.to_string(),
-                    dimension,
-                    limit,
-                    used,
-                })
-            }
+            BudgetDecision::Tripped {
+                dimension,
+                limit,
+                used,
+            } => Some(ClawftError::ConversationBudgetExceeded {
+                conv_id: conv_id.to_string(),
+                dimension,
+                limit,
+                used,
+            }),
         }
     }
 }
@@ -231,14 +233,27 @@ impl ConversationBudget {
         if u.circuit_open {
             // Re-surface the original tripping dimension so callers
             // see the same wire shape across multiple fail-fast hits.
-            let dim = u.tripped_dimension.clone().unwrap_or_else(|| "unknown".into());
+            let dim = u
+                .tripped_dimension
+                .clone()
+                .unwrap_or_else(|| "unknown".into());
             let (limit, used) = match dim.as_str() {
-                "tokens" => (self.config.max_tokens_per_conv as f64, u.total_tokens() as f64),
+                "tokens" => (
+                    self.config.max_tokens_per_conv as f64,
+                    u.total_tokens() as f64,
+                ),
                 "usd" => (self.config.max_usd_per_conv, u.usd),
-                "iterations" => (self.config.max_iterations_per_conv as f64, u.iterations as f64),
+                "iterations" => (
+                    self.config.max_iterations_per_conv as f64,
+                    u.iterations as f64,
+                ),
                 _ => (0.0, 0.0),
             };
-            return BudgetDecision::Tripped { dimension: dim, limit, used };
+            return BudgetDecision::Tripped {
+                dimension: dim,
+                limit,
+                used,
+            };
         }
         if u.total_tokens() >= self.config.max_tokens_per_conv {
             return BudgetDecision::Tripped {
@@ -370,7 +385,9 @@ mod tests {
         b.record_call("c1", 60, 0, 0.0).unwrap();
         let u = b.record_call("c1", 60, 0, 0.0).unwrap();
         let dec = b.check_after_call(&u);
-        assert!(matches!(dec, BudgetDecision::Tripped { ref dimension, .. } if dimension == "tokens"));
+        assert!(
+            matches!(dec, BudgetDecision::Tripped { ref dimension, .. } if dimension == "tokens")
+        );
         b.mark_open("c1", "tokens").unwrap();
         // Subsequent check_can_call surfaces the same dimension.
         assert!(matches!(
@@ -386,7 +403,11 @@ mod tests {
         let u = b.record_call("c1", 10, 10, 0.30).unwrap();
         let dec = b.check_after_call(&u);
         match dec {
-            BudgetDecision::Tripped { dimension, used, limit } => {
+            BudgetDecision::Tripped {
+                dimension,
+                used,
+                limit,
+            } => {
                 assert_eq!(dimension, "usd");
                 assert!(used >= 0.50);
                 assert!((limit - 0.50).abs() < 1e-9);
@@ -405,7 +426,11 @@ mod tests {
         }
         let dec = b.check_can_call("c1");
         match dec {
-            BudgetDecision::Tripped { dimension, used, limit } => {
+            BudgetDecision::Tripped {
+                dimension,
+                used,
+                limit,
+            } => {
                 assert_eq!(dimension, "iterations");
                 assert_eq!(used, 3.0);
                 assert_eq!(limit, 3.0);
@@ -419,7 +444,10 @@ mod tests {
         let b = ConversationBudget::in_memory(cfg(100, 0.10, 5));
         b.record_call("c1", 60, 60, 0.0).unwrap();
         b.mark_open("c1", "tokens").unwrap();
-        assert!(matches!(b.check_can_call("c1"), BudgetDecision::Tripped { .. }));
+        assert!(matches!(
+            b.check_can_call("c1"),
+            BudgetDecision::Tripped { .. }
+        ));
         let prev = b.reset("c1").unwrap();
         assert!(prev.circuit_open);
         assert_eq!(prev.input_tokens, 60);
@@ -441,7 +469,12 @@ mod tests {
         assert!(msg.contains("tokens"), "{}", msg);
         assert!(msg.contains("circuit_open"), "{}", msg);
         match err {
-            ClawftError::ConversationBudgetExceeded { conv_id, dimension, limit, used } => {
+            ClawftError::ConversationBudgetExceeded {
+                conv_id,
+                dimension,
+                limit,
+                used,
+            } => {
                 assert_eq!(conv_id, "conv-abc");
                 assert_eq!(dimension, "tokens");
                 assert_eq!(limit, 200_000.0);
@@ -461,7 +494,10 @@ mod tests {
         let b = ConversationBudget::in_memory(cfg(100, 1.0, 5));
         b.record_call("a", 60, 60, 0.0).unwrap();
         b.mark_open("a", "tokens").unwrap();
-        assert!(matches!(b.check_can_call("a"), BudgetDecision::Tripped { .. }));
+        assert!(matches!(
+            b.check_can_call("a"),
+            BudgetDecision::Tripped { .. }
+        ));
         // Sibling conv is unaffected.
         assert_eq!(b.check_can_call("b"), BudgetDecision::Allowed);
     }
@@ -481,6 +517,9 @@ mod tests {
         let u = b2.usage("c1");
         assert!(u.circuit_open);
         assert_eq!(u.input_tokens, 60);
-        assert!(matches!(b2.check_can_call("c1"), BudgetDecision::Tripped { .. }));
+        assert!(matches!(
+            b2.check_can_call("c1"),
+            BudgetDecision::Tripped { .. }
+        ));
     }
 }

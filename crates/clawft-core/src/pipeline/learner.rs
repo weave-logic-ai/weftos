@@ -239,8 +239,7 @@ impl LearningBackend for TrajectoryLearner {
     fn record(&self, trajectory: &Trajectory) {
         let mut state = self.state.lock().unwrap();
 
-        let feedback =
-            Self::generate_feedback(trajectory, self.config.poor_threshold);
+        let feedback = Self::generate_feedback(trajectory, self.config.poor_threshold);
 
         let scored = ScoredTrajectory {
             trajectory: trajectory.clone(),
@@ -257,9 +256,10 @@ impl LearningBackend for TrajectoryLearner {
         state.trajectories.push_back(scored);
         if state.trajectories.len() > self.config.max_trajectories
             && let Some(removed) = state.trajectories.pop_front()
-                && removed.trajectory.quality.overall < self.config.poor_threshold {
-                    state.poor_count = state.poor_count.saturating_sub(1);
-                }
+            && removed.trajectory.quality.overall < self.config.poor_threshold
+        {
+            state.poor_count = state.poor_count.saturating_sub(1);
+        }
 
         state.total_recorded += 1;
 
@@ -292,9 +292,7 @@ impl LearningBackend for TrajectoryLearner {
     /// want to thrash the system prompt on every turn, only when
     /// enough poor outcomes have accumulated to warrant it.
     fn evolve_prompt(&self, prompt: &str) -> String {
-        use crate::pipeline::mutation::{
-            auto_select_strategy, mutate_prompt, TrajectoryHint,
-        };
+        use crate::pipeline::mutation::{TrajectoryHint, auto_select_strategy, mutate_prompt};
 
         // Snapshot relevant trajectory data while holding the lock,
         // then drop it before doing the (CPU-only) mutation work.
@@ -632,7 +630,10 @@ mod tests {
 
         let prompt = "You are a helpful assistant.";
         let out = learner.evolve_prompt(prompt);
-        assert_eq!(out, prompt, "evolve_prompt is a no-op until evolution-ready");
+        assert_eq!(
+            out, prompt,
+            "evolve_prompt is a no-op until evolution-ready"
+        );
     }
 
     #[test]

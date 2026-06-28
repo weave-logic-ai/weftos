@@ -2,7 +2,7 @@
 
 use eframe::egui;
 
-use super::{audio, boot_logo_alpha, BOOT_LEN};
+use super::{BOOT_LEN, audio, boot_logo_alpha};
 
 /// Logo bytes are embedded so the binary is self-contained. Exposed
 /// `pub(crate)` so `App::new` can preload it into the image cache before
@@ -11,11 +11,7 @@ pub(crate) const LOGO_PNG: &[u8] = include_bytes!("../../assets/weftos-gold.png"
 
 /// Render the boot splash. Returns `true` when the boot timeline has
 /// elapsed and the caller should transition to the desktop.
-pub fn show(
-    ui: &mut egui::Ui,
-    started: web_time::Instant,
-    sfx_played: &mut bool,
-) -> bool {
+pub fn show(ui: &mut egui::Ui, started: web_time::Instant, sfx_played: &mut bool) -> bool {
     let elapsed = started.elapsed().as_secs_f32();
     let alpha = boot_logo_alpha(elapsed);
 
@@ -36,12 +32,7 @@ pub fn show(
         let painter = ui.painter();
         painter.rect_filled(rect, 0.0, egui::Color32::BLACK);
 
-        let halo_color = egui::Color32::from_rgba_unmultiplied(
-            80,
-            60,
-            20,
-            (alpha * 150.0) as u8,
-        );
+        let halo_color = egui::Color32::from_rgba_unmultiplied(80, 60, 20, (alpha * 150.0) as u8);
         painter.circle_filled(center, 300.0, halo_color);
 
         let subtitle_alpha = (alpha * 0.55 * 255.0) as u8;

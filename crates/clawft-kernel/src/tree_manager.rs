@@ -101,7 +101,9 @@ impl TreeManager {
     #[cfg(feature = "exochain")]
     fn sign_bytes(&self, data: &[u8]) -> Option<Vec<u8>> {
         use ed25519_dalek::Signer;
-        self.signing_key.as_ref().map(|k| k.sign(data).to_bytes().to_vec())
+        self.signing_key
+            .as_ref()
+            .map(|k| k.sign(data).to_bytes().to_vec())
     }
 
     /// Build the canonical bytes for a mutation signature.
@@ -128,7 +130,10 @@ impl TreeManager {
         exo_resource_tree::bootstrap_fresh(&mut tree)?;
 
         // Log mutation events for each bootstrapped node (skip root, it's pre-existing)
-        let mut log = self.mutation_log.lock().map_err(|e| format!("log lock: {e}"))?;
+        let mut log = self
+            .mutation_log
+            .lock()
+            .map_err(|e| format!("log lock: {e}"))?;
         let bootstrapped_paths = [
             "/kernel",
             "/kernel/services",
@@ -142,9 +147,7 @@ impl TreeManager {
         for path in &bootstrapped_paths {
             let rid = ResourceId::new(*path);
             let kind = ResourceKind::Namespace;
-            let parent = rid
-                .parent()
-                .unwrap_or_else(ResourceId::root);
+            let parent = rid.parent().unwrap_or_else(ResourceId::root);
             let now = Utc::now();
             #[cfg(feature = "exochain")]
             let sig = self.mutation_signature("create", path, &now);
@@ -201,8 +204,10 @@ impl TreeManager {
 
         // Store chain_seq metadata on the node for traceability
         if let Some(node) = tree.get_mut(&id) {
-            node.metadata
-                .insert("chain_seq".to_string(), serde_json::json!(chain_event.sequence));
+            node.metadata.insert(
+                "chain_seq".to_string(),
+                serde_json::json!(chain_event.sequence),
+            );
         }
 
         // Recompute Merkle hashes
@@ -214,7 +219,10 @@ impl TreeManager {
         let sig = self.mutation_signature("create", &id.to_string(), &now);
         #[cfg(not(feature = "exochain"))]
         let sig = None;
-        let mut log = self.mutation_log.lock().map_err(|e| format!("log lock: {e}"))?;
+        let mut log = self
+            .mutation_log
+            .lock()
+            .map_err(|e| format!("log lock: {e}"))?;
         log.append(MutationEvent::Create {
             id,
             kind,
@@ -230,10 +238,7 @@ impl TreeManager {
     ///
     /// Removes the node, appends a MutationEvent::Remove and a
     /// `tree.remove` chain event.
-    pub fn remove(
-        &self,
-        id: ResourceId,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn remove(&self, id: ResourceId) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut tree = self.tree.lock().map_err(|e| format!("tree lock: {e}"))?;
         tree.remove(id.clone())?;
         tree.recompute_all();
@@ -251,7 +256,10 @@ impl TreeManager {
         let sig = self.mutation_signature("remove", &id.to_string(), &now);
         #[cfg(not(feature = "exochain"))]
         let sig = None;
-        let mut log = self.mutation_log.lock().map_err(|e| format!("log lock: {e}"))?;
+        let mut log = self
+            .mutation_log
+            .lock()
+            .map_err(|e| format!("log lock: {e}"))?;
         log.append(MutationEvent::Remove {
             id,
             timestamp: now,
@@ -293,7 +301,10 @@ impl TreeManager {
         let sig = self.mutation_signature("update_meta", &id.to_string(), &now);
         #[cfg(not(feature = "exochain"))]
         let sig = None;
-        let mut log = self.mutation_log.lock().map_err(|e| format!("log lock: {e}"))?;
+        let mut log = self
+            .mutation_log
+            .lock()
+            .map_err(|e| format!("log lock: {e}"))?;
         log.append(MutationEvent::UpdateMeta {
             id: id.clone(),
             key: key.to_string(),
@@ -368,14 +379,18 @@ impl TreeManager {
                 node.metadata.insert("pid".into(), serde_json::json!(pid));
                 node.metadata
                     .insert("state".into(), serde_json::json!("starting"));
-                node.metadata
-                    .insert("spawn_time".into(), serde_json::json!(Utc::now().to_rfc3339()));
+                node.metadata.insert(
+                    "spawn_time".into(),
+                    serde_json::json!(Utc::now().to_rfc3339()),
+                );
                 node.metadata
                     .insert("can_spawn".into(), serde_json::json!(caps.can_spawn));
                 node.metadata
                     .insert("can_ipc".into(), serde_json::json!(caps.can_ipc));
-                node.metadata
-                    .insert("can_exec_tools".into(), serde_json::json!(caps.can_exec_tools));
+                node.metadata.insert(
+                    "can_exec_tools".into(),
+                    serde_json::json!(caps.can_exec_tools),
+                );
             }
             tree.recompute_all();
         }
@@ -447,8 +462,10 @@ impl TreeManager {
                     .insert("state".into(), serde_json::json!("exited"));
                 node.metadata
                     .insert("exit_code".into(), serde_json::json!(exit_code));
-                node.metadata
-                    .insert("stop_time".into(), serde_json::json!(Utc::now().to_rfc3339()));
+                node.metadata.insert(
+                    "stop_time".into(),
+                    serde_json::json!(Utc::now().to_rfc3339()),
+                );
                 node.updated_at = Utc::now();
             }
             tree.recompute_all();
@@ -512,10 +529,7 @@ impl TreeManager {
 
     /// Get the root hash of the resource tree.
     pub fn root_hash(&self) -> [u8; 32] {
-        self.tree
-            .lock()
-            .map(|t| t.root_hash())
-            .unwrap_or([0u8; 32])
+        self.tree.lock().map(|t| t.root_hash()).unwrap_or([0u8; 32])
     }
 
     /// Get a statistics snapshot.
@@ -542,8 +556,7 @@ impl TreeManager {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let old = {
             let mut tree = self.tree.lock().map_err(|e| format!("tree lock: {e}"))?;
-            tree
-                .update_scoring(id, scoring)
+            tree.update_scoring(id, scoring)
                 .ok_or_else(|| format!("node not found: {id}"))?
         };
 
@@ -562,7 +575,10 @@ impl TreeManager {
         let sig = self.mutation_signature("update_scoring", &id.to_string(), &now);
         #[cfg(not(feature = "exochain"))]
         let sig = None;
-        let mut log = self.mutation_log.lock().map_err(|e| format!("log lock: {e}"))?;
+        let mut log = self
+            .mutation_log
+            .lock()
+            .map_err(|e| format!("log lock: {e}"))?;
         log.append(MutationEvent::UpdateScoring {
             id: id.clone(),
             old,
@@ -616,7 +632,10 @@ impl TreeManager {
         let sig = self.mutation_signature("update_scoring", &id.to_string(), &now);
         #[cfg(not(feature = "exochain"))]
         let sig = None;
-        let mut log = self.mutation_log.lock().map_err(|e| format!("log lock: {e}"))?;
+        let mut log = self
+            .mutation_log
+            .lock()
+            .map_err(|e| format!("log lock: {e}"))?;
         log.append(MutationEvent::UpdateScoring {
             id: id.clone(),
             old,
@@ -630,10 +649,7 @@ impl TreeManager {
     }
 
     /// Get the scoring vector for a node.
-    pub fn get_scoring(
-        &self,
-        id: &ResourceId,
-    ) -> Option<NodeScoring> {
+    pub fn get_scoring(&self, id: &ResourceId) -> Option<NodeScoring> {
         let tree = self.tree.lock().ok()?;
         tree.get(id).map(|n| n.scoring)
     }
@@ -642,11 +658,7 @@ impl TreeManager {
     ///
     /// Returns up to `count` `(ResourceId, similarity)` pairs sorted by
     /// descending similarity.
-    pub fn find_similar(
-        &self,
-        target_id: &ResourceId,
-        count: usize,
-    ) -> Vec<(ResourceId, f32)> {
+    pub fn find_similar(&self, target_id: &ResourceId, count: usize) -> Vec<(ResourceId, f32)> {
         let tree = match self.tree.lock() {
             Ok(t) => t,
             Err(_) => return Vec::new(),
@@ -671,11 +683,7 @@ impl TreeManager {
     ///
     /// Returns up to `count` `(ResourceId, weighted_score)` pairs sorted
     /// by descending score.
-    pub fn rank_by_score(
-        &self,
-        weights: &[f32; 6],
-        count: usize,
-    ) -> Vec<(ResourceId, f32)> {
+    pub fn rank_by_score(&self, weights: &[f32; 6], count: usize) -> Vec<(ResourceId, f32)> {
         let tree = match self.tree.lock() {
             Ok(t) => t,
             Err(_) => return Vec::new(),
@@ -777,13 +785,21 @@ impl TreeManager {
         )?;
 
         // Set metadata
-        self.update_meta(&tool_rid, "tool_version", serde_json::json!(version.version))?;
+        self.update_meta(
+            &tool_rid,
+            "tool_version",
+            serde_json::json!(version.version),
+        )?;
         self.update_meta(
             &tool_rid,
             "module_hash",
             serde_json::json!(hex_hash(&version.module_hash)),
         )?;
-        self.update_meta(&tool_rid, "gate_action", serde_json::json!(&spec.gate_action))?;
+        self.update_meta(
+            &tool_rid,
+            "gate_action",
+            serde_json::json!(&spec.gate_action),
+        )?;
         self.update_meta(
             &tool_rid,
             "deployed_at",
@@ -902,7 +918,12 @@ impl TreeManager {
             })),
         );
 
-        debug!(tool = name, old = old_version, new = new_version.version, "tool version updated");
+        debug!(
+            tool = name,
+            old = old_version,
+            new = new_version.version,
+            "tool version updated"
+        );
         Ok(())
     }
 
@@ -966,10 +987,7 @@ impl TreeManager {
     ///
     /// Returns the list of version entries persisted in the tree
     /// metadata, or an empty vec if the tool has no versions.
-    pub fn get_tool_versions(
-        &self,
-        name: &str,
-    ) -> Vec<serde_json::Value> {
+    pub fn get_tool_versions(&self, name: &str) -> Vec<serde_json::Value> {
         let parts: Vec<&str> = name.splitn(2, '.').collect();
         if parts.len() != 2 {
             return Vec::new();
@@ -1030,7 +1048,10 @@ impl TreeManager {
         *tree = restored;
 
         // Clear mutation log since we loaded a fresh snapshot
-        let mut log = self.mutation_log.lock().map_err(|e| format!("log lock: {e}"))?;
+        let mut log = self
+            .mutation_log
+            .lock()
+            .map_err(|e| format!("log lock: {e}"))?;
         *log = MutationLog::new();
 
         debug!(
@@ -1046,9 +1067,14 @@ impl TreeManager {
     ///
     /// Returns JSON with the tree checkpoint, mutation count, and chain
     /// checkpoint info. Full checkpoint persistence is a K1 concern.
-    pub fn checkpoint(&self) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn checkpoint(
+        &self,
+    ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
         let tree = self.tree.lock().map_err(|e| format!("tree lock: {e}"))?;
-        let log = self.mutation_log.lock().map_err(|e| format!("log lock: {e}"))?;
+        let log = self
+            .mutation_log
+            .lock()
+            .map_err(|e| format!("log lock: {e}"))?;
 
         let tree_data = exo_resource_tree::to_checkpoint(&tree)?;
         let chain_cp = self.chain.checkpoint();
@@ -1134,10 +1160,7 @@ impl TreeManager {
         // Apply based on mutation type
         match &event {
             MutationEvent::Create {
-                id,
-                kind,
-                parent,
-                ..
+                id, kind, parent, ..
             } => {
                 // Only insert if not already present (idempotent)
                 if tree.get(id).is_none() {
@@ -1213,7 +1236,11 @@ mod tests {
         // Chain should have genesis + bootstrap event
         assert!(chain.len() >= 2);
         let events = chain.tail(0);
-        assert!(events.iter().any(|e| e.kind == "bootstrap" && e.source == "tree"));
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == "bootstrap" && e.source == "tree")
+        );
 
         // Mutation log should have 8 entries (one per bootstrapped namespace)
         let log = tm.mutation_log().lock().unwrap();
@@ -1235,7 +1262,10 @@ mod tests {
         .unwrap();
 
         let tree = tm.tree().lock().unwrap();
-        assert!(tree.get(&ResourceId::new("/kernel/services/cron")).is_some());
+        assert!(
+            tree.get(&ResourceId::new("/kernel/services/cron"))
+                .is_some()
+        );
 
         // Chain should have one more event
         assert_eq!(chain.len(), before_len + 1);
@@ -1262,7 +1292,10 @@ mod tests {
         tm.remove(ResourceId::new("/kernel/services/test")).unwrap();
 
         let tree = tm.tree().lock().unwrap();
-        assert!(tree.get(&ResourceId::new("/kernel/services/test")).is_none());
+        assert!(
+            tree.get(&ResourceId::new("/kernel/services/test"))
+                .is_none()
+        );
         assert_eq!(chain.len(), before_len + 1);
     }
 
@@ -1283,7 +1316,10 @@ mod tests {
         assert_eq!(chain.len(), before_len + 1);
         let tree = tm.tree().lock().unwrap();
         let node = tree.get(&ResourceId::new("/kernel")).unwrap();
-        assert_eq!(node.metadata.get("version").unwrap(), &serde_json::json!("0.1.0"));
+        assert_eq!(
+            node.metadata.get("version").unwrap(),
+            &serde_json::json!("0.1.0")
+        );
     }
 
     #[test]
@@ -1416,7 +1452,8 @@ mod tests {
 
         let before_len = chain.len();
         let scoring = NodeScoring::new(0.9, 0.8, 0.7, 0.6, 0.5, 0.4);
-        tm.update_scoring(&ResourceId::new("/kernel"), scoring).unwrap();
+        tm.update_scoring(&ResourceId::new("/kernel"), scoring)
+            .unwrap();
 
         // Chain event emitted
         assert!(chain.len() > before_len);
@@ -1441,7 +1478,8 @@ mod tests {
 
         let before_len = chain.len();
         let obs = NodeScoring::new(1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
-        tm.blend_scoring(&ResourceId::new("/kernel"), &obs, 0.5).unwrap();
+        tm.blend_scoring(&ResourceId::new("/kernel"), &obs, 0.5)
+            .unwrap();
 
         assert!(chain.len() > before_len);
         let events = chain.tail(2);
@@ -1467,11 +1505,13 @@ mod tests {
 
         // Set /kernel to a specific scoring
         let target = NodeScoring::new(0.9, 0.9, 0.9, 0.9, 0.9, 0.9);
-        tm.update_scoring(&ResourceId::new("/kernel"), target).unwrap();
+        tm.update_scoring(&ResourceId::new("/kernel"), target)
+            .unwrap();
 
         // /apps gets a similar scoring
         let similar = NodeScoring::new(0.85, 0.85, 0.85, 0.85, 0.85, 0.85);
-        tm.update_scoring(&ResourceId::new("/apps"), similar).unwrap();
+        tm.update_scoring(&ResourceId::new("/apps"), similar)
+            .unwrap();
 
         let results = tm.find_similar(&ResourceId::new("/kernel"), 3);
         assert!(!results.is_empty());
@@ -1489,13 +1529,15 @@ mod tests {
         tm.update_scoring(
             &ResourceId::new("/kernel"),
             NodeScoring::new(1.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-        ).unwrap();
+        )
+        .unwrap();
 
         // High performance on /apps
         tm.update_scoring(
             &ResourceId::new("/apps"),
             NodeScoring::new(0.0, 1.0, 0.0, 0.0, 0.0, 0.0),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Rank by trust weight only
         let weights = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
@@ -1789,7 +1831,11 @@ mod tests {
         tm.revoke_tool_version("fs.read_file", 1).unwrap();
 
         let versions = tm.get_tool_versions("fs.read_file");
-        assert_eq!(versions.len(), 1, "version entry should persist after revoke");
+        assert_eq!(
+            versions.len(),
+            1,
+            "version entry should persist after revoke"
+        );
         // The revoke flag in the version array entry is as deployed (false),
         // but the per-version metadata key v1_revoked=true is set separately.
         // Version history records deploy-time state.
@@ -1869,7 +1915,10 @@ mod tests {
 
         // The node should exist in the tree
         let tree = tm.tree().lock().unwrap();
-        assert!(tree.get(&ResourceId::new("/kernel/services/remote_svc")).is_some());
+        assert!(
+            tree.get(&ResourceId::new("/kernel/services/remote_svc"))
+                .is_some()
+        );
     }
 
     #[test]
@@ -1906,9 +1955,8 @@ mod tests {
                 let sig_bytes = signature.as_ref().expect("insert should be signed");
                 assert_eq!(sig_bytes.len(), 64);
                 // Verify the signature bytes form a valid Ed25519 signature
-                let sig = ed25519_dalek::Signature::from_bytes(
-                    sig_bytes.as_slice().try_into().unwrap(),
-                );
+                let sig =
+                    ed25519_dalek::Signature::from_bytes(sig_bytes.as_slice().try_into().unwrap());
                 assert_eq!(sig.to_bytes().len(), 64);
             }
             _ => panic!("expected Create variant"),

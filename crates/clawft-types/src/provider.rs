@@ -661,15 +661,13 @@ mod tests {
 
     #[test]
     fn find_gateway_detects_ollama_by_port() {
-        let spec =
-            find_gateway(None, None, Some("http://192.168.1.5:11434/v1")).unwrap();
+        let spec = find_gateway(None, None, Some("http://192.168.1.5:11434/v1")).unwrap();
         assert_eq!(spec.name, "ollama");
     }
 
     #[test]
     fn find_gateway_detects_lmstudio_by_port() {
-        let spec =
-            find_gateway(None, None, Some("http://localhost:1234/v1")).unwrap();
+        let spec = find_gateway(None, None, Some("http://localhost:1234/v1")).unwrap();
         assert_eq!(spec.name, "lmstudio");
     }
 
@@ -677,11 +675,7 @@ mod tests {
     fn all_local_providers_are_local() {
         for name in &["local", "ollama", "lmstudio", "llamacpp", "vllm"] {
             let spec = find_by_name(name).unwrap();
-            assert!(
-                spec.is_local,
-                "provider {} should be marked as local",
-                name
-            );
+            assert!(spec.is_local, "provider {} should be marked as local", name);
         }
     }
 

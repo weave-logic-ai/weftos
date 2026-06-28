@@ -1,12 +1,19 @@
 //! QSR synthetic corpus generator CLI.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 use clawft_casestudy_gen_qsr::{
-    chaos::{self, ChaosConfig}, coherence, config::{GeneratorConfig, ScaleTier}, dashboard,
-    eml::EmlModel, engine::{self, ScenarioEngine}, gaps, graph,
-    ingest::IngestDriver, output, privacy, scenarios, scoring,
-    scoring::ScenarioPrediction, truth::{self, CounterfactualTruth},
+    chaos::{self, ChaosConfig},
+    coherence,
+    config::{GeneratorConfig, ScaleTier},
+    dashboard,
+    eml::EmlModel,
+    engine::{self, ScenarioEngine},
+    gaps, graph,
+    ingest::IngestDriver,
+    output, privacy, scenarios, scoring,
+    scoring::ScenarioPrediction,
+    truth::{self, CounterfactualTruth},
 };
 use std::fs::File;
 use std::io::BufReader;
@@ -173,17 +180,37 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Generate { tier, seed, out } => cmd_generate(&tier, seed, &out),
-        Cmd::Counterfactual { corpus, scenario, out } => {
-            cmd_counterfactual(&corpus, &scenario, out.as_deref())
-        }
+        Cmd::Counterfactual {
+            corpus,
+            scenario,
+            out,
+        } => cmd_counterfactual(&corpus, &scenario, out.as_deref()),
         Cmd::Score { prediction, truth } => cmd_score(&prediction, &truth),
-        Cmd::Ingest { corpus, max_per_tick } => cmd_ingest(&corpus, max_per_tick),
-        Cmd::Predict { corpus, scenario, mc_samples, mc_seed, eml, out } => {
-            cmd_predict(&corpus, &scenario, mc_samples, mc_seed, eml.as_deref(), out.as_deref())
-        }
-        Cmd::TrainEml { corpus, scenarios_dir, ridge, out } => {
-            cmd_train_eml(&corpus, &scenarios_dir, ridge, &out)
-        }
+        Cmd::Ingest {
+            corpus,
+            max_per_tick,
+        } => cmd_ingest(&corpus, max_per_tick),
+        Cmd::Predict {
+            corpus,
+            scenario,
+            mc_samples,
+            mc_seed,
+            eml,
+            out,
+        } => cmd_predict(
+            &corpus,
+            &scenario,
+            mc_samples,
+            mc_seed,
+            eml.as_deref(),
+            out.as_deref(),
+        ),
+        Cmd::TrainEml {
+            corpus,
+            scenarios_dir,
+            ridge,
+            out,
+        } => cmd_train_eml(&corpus, &scenarios_dir, ridge, &out),
         Cmd::GapSweep { corpus, out } => cmd_gap_sweep(&corpus, out.as_deref()),
         Cmd::Dashboard { corpus, top_n, out } => cmd_dashboard(&corpus, top_n, out.as_deref()),
         Cmd::ChaosRun {
@@ -194,22 +221,39 @@ fn main() -> Result<()> {
             clock_skew_store_prob,
             clock_skew_days,
             seed,
-        } => cmd_chaos_run(&corpus, ChaosConfig {
-            seed,
-            drop_rate,
-            drop_window: None,
-            duplicate_rate,
-            reorder_window,
-            clock_skew_store_prob,
-            clock_skew_days,
-        }),
+        } => cmd_chaos_run(
+            &corpus,
+            ChaosConfig {
+                seed,
+                drop_rate,
+                drop_window: None,
+                duplicate_rate,
+                reorder_window,
+                clock_skew_store_prob,
+                clock_skew_days,
+            },
+        ),
         Cmd::AuditVerify { audit } => cmd_audit_verify(&audit),
         Cmd::PrivacyScan { corpus, out } => cmd_privacy_scan(&corpus, out.as_deref()),
         Cmd::RollupWeekly { corpus, out } => cmd_rollup_weekly(&corpus, &out),
         Cmd::RollupMonthly { corpus, out } => cmd_rollup_monthly(&corpus, &out),
-        Cmd::RecallBench { corpus, k, queries, ef_construction, seed, grains, out } => {
-            cmd_recall_bench(&corpus, k, queries, ef_construction, seed, &grains, out.as_deref())
-        }
+        Cmd::RecallBench {
+            corpus,
+            k,
+            queries,
+            ef_construction,
+            seed,
+            grains,
+            out,
+        } => cmd_recall_bench(
+            &corpus,
+            k,
+            queries,
+            ef_construction,
+            seed,
+            &grains,
+            out.as_deref(),
+        ),
     }
 }
 
@@ -315,7 +359,9 @@ fn cmd_predict(
     let spec = scenarios::load_from_file(scenario_path)?;
     let graph = graph::build(&dims, &events);
     let eml_model = if let Some(p) = eml_path {
-        Some(serde_json::from_reader::<_, EmlModel>(BufReader::new(File::open(p)?))?)
+        Some(serde_json::from_reader::<_, EmlModel>(BufReader::new(
+            File::open(p)?,
+        ))?)
     } else {
         None
     };
@@ -374,8 +420,12 @@ fn cmd_gap_sweep(corpus_dir: &std::path::Path, out_path: Option<&std::path::Path
     let dims = output::load_dimensions(corpus_dir)?;
     let ops = output::load_ops_events(corpus_dir)?;
     let manifest = output::load_truth(corpus_dir)?;
-    let tier = ScaleTier::parse(&manifest.scale_tier)
-        .ok_or_else(|| anyhow::anyhow!("truth manifest has unknown scale_tier: {}", manifest.scale_tier))?;
+    let tier = ScaleTier::parse(&manifest.scale_tier).ok_or_else(|| {
+        anyhow::anyhow!(
+            "truth manifest has unknown scale_tier: {}",
+            manifest.scale_tier
+        )
+    })?;
     let config = GeneratorConfig::default_for_tier(manifest.seed, tier);
 
     let t0 = std::time::Instant::now();
@@ -543,8 +593,11 @@ fn cmd_recall_bench(
     use clawft_casestudy_gen_qsr::recall;
     use clawft_casestudy_gen_qsr::rollup;
 
-    let selected: std::collections::HashSet<&str> =
-        grains.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    let selected: std::collections::HashSet<&str> = grains
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
 
     let dims = output::load_dimensions(corpus_dir)?;
     let events = output::load_events(corpus_dir)?;
@@ -622,12 +675,19 @@ fn cmd_recall_bench(
         for &ef_search in &ef_search_sweep {
             eprintln!(
                 "bench grain={} n={} ef_construction={} ef_search={} …",
-                grain, feats.len(), ef_construction, ef_search,
+                grain,
+                feats.len(),
+                ef_construction,
+                ef_search,
             );
             let row = recall::benchmark(grain, feats, k, queries, ef_construction, ef_search, seed);
             eprintln!(
                 "  → recall@{}={:.4} build={}ms hnsw={:.1}µs brute={:.1}µs",
-                row.k, row.recall_at_k, row.build_ms, row.avg_hnsw_query_us, row.avg_brute_force_query_us,
+                row.k,
+                row.recall_at_k,
+                row.build_ms,
+                row.avg_hnsw_query_us,
+                row.avg_brute_force_query_us,
             );
             rows.push(row);
         }
@@ -641,7 +701,10 @@ fn cmd_recall_bench(
     Ok(())
 }
 
-fn cmd_privacy_scan(corpus_dir: &std::path::Path, out_path: Option<&std::path::Path>) -> Result<()> {
+fn cmd_privacy_scan(
+    corpus_dir: &std::path::Path,
+    out_path: Option<&std::path::Path>,
+) -> Result<()> {
     let report = privacy::scan_corpus(corpus_dir)?;
     let json = serde_json::to_string_pretty(&report)?;
     if let Some(p) = out_path {
@@ -664,8 +727,12 @@ fn cmd_dashboard(
     let events = output::load_events(corpus_dir)?;
     let ops = output::load_ops_events(corpus_dir)?;
     let manifest = output::load_truth(corpus_dir)?;
-    let tier = ScaleTier::parse(&manifest.scale_tier)
-        .ok_or_else(|| anyhow::anyhow!("truth manifest has unknown scale_tier: {}", manifest.scale_tier))?;
+    let tier = ScaleTier::parse(&manifest.scale_tier).ok_or_else(|| {
+        anyhow::anyhow!(
+            "truth manifest has unknown scale_tier: {}",
+            manifest.scale_tier
+        )
+    })?;
     let config = GeneratorConfig::default_for_tier(manifest.seed, tier);
 
     let gap_report = gaps::sweep(&config, &dims, &ops);

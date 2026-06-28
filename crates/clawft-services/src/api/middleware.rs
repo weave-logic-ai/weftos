@@ -22,8 +22,8 @@ use std::time::{Duration, Instant};
 
 use axum::extract::ConnectInfo;
 use axum::http::{
-    header::{AUTHORIZATION, CONTENT_TYPE},
     HeaderName, HeaderValue, Method, Request, StatusCode,
+    header::{AUTHORIZATION, CONTENT_TYPE},
 };
 use axum::middleware::Next;
 use axum::response::Response;
@@ -159,7 +159,10 @@ pub fn build_cors_layer(config_origins: &[String]) -> CorsLayer {
 /// (`http://localhost`, `http://127.0.0.1`, or either with any port).
 fn is_localhost_origin(origin: &str) -> bool {
     // Strip the scheme.
-    let rest = match origin.strip_prefix("http://").or_else(|| origin.strip_prefix("https://")) {
+    let rest = match origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+    {
         Some(r) => r,
         None => return false,
     };
@@ -244,9 +247,10 @@ impl RateLimitState {
             Ok(g) => g,
             Err(_) => return true, // poisoned lock — fail open
         };
-        let bucket = map
-            .entry((ip.to_string(), class))
-            .or_insert(Bucket { window_start: now, count: 0 });
+        let bucket = map.entry((ip.to_string(), class)).or_insert(Bucket {
+            window_start: now,
+            count: 0,
+        });
         if now.duration_since(bucket.window_start) >= Duration::from_secs(60) {
             bucket.window_start = now;
             bucket.count = 0;
@@ -282,8 +286,14 @@ mod tests {
     #[test]
     fn rate_class_classifies_paths() {
         assert_eq!(RateClass::from_path("/ws"), Some(RateClass::Ws));
-        assert_eq!(RateClass::from_path("/api/auth/token"), Some(RateClass::Auth));
-        assert_eq!(RateClass::from_path("/api/token/refresh"), Some(RateClass::Auth));
+        assert_eq!(
+            RateClass::from_path("/api/auth/token"),
+            Some(RateClass::Auth)
+        );
+        assert_eq!(
+            RateClass::from_path("/api/token/refresh"),
+            Some(RateClass::Auth)
+        );
         assert_eq!(RateClass::from_path("/api/agents"), Some(RateClass::Api));
         assert_eq!(RateClass::from_path("/api/health"), None);
         assert_eq!(RateClass::from_path("/index.html"), None);

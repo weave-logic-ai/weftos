@@ -20,7 +20,11 @@ pub fn extract(root: &Path, config: &LanguageConfig) -> anyhow::Result<LspGraph>
 
     // Discover source files.
     let files = discover_files(root, &config.extensions);
-    tracing::info!(files = files.len(), language = config.name, "discovered source files");
+    tracing::info!(
+        files = files.len(),
+        language = config.name,
+        "discovered source files"
+    );
 
     for file_path in &files {
         let rel = file_path.strip_prefix(root).unwrap_or(file_path);
@@ -89,21 +93,40 @@ fn parse_symbols(
     id_map: &mut HashMap<String, String>,
 ) {
     for sym in symbols {
-        let name = sym.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        if name.is_empty() { continue; }
+        let name = sym
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
 
         let kind_num = sym.get("kind").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         let kind = LspNodeKind::from_lsp(kind_num);
 
-        let range = sym.get("range").or_else(|| sym.get("location").and_then(|l| l.get("range")));
-        let (line, end_line) = range.map(|r| {
-            let start = r.get("start").and_then(|s| s.get("line")).and_then(|l| l.as_u64()).unwrap_or(0) as u32;
-            let end = r.get("end").and_then(|s| s.get("line")).and_then(|l| l.as_u64()).unwrap_or(0) as u32;
-            (start, end)
-        }).unwrap_or((0, 0));
+        let range = sym
+            .get("range")
+            .or_else(|| sym.get("location").and_then(|l| l.get("range")));
+        let (line, end_line) = range
+            .map(|r| {
+                let start = r
+                    .get("start")
+                    .and_then(|s| s.get("line"))
+                    .and_then(|l| l.as_u64())
+                    .unwrap_or(0) as u32;
+                let end = r
+                    .get("end")
+                    .and_then(|s| s.get("line"))
+                    .and_then(|l| l.as_u64())
+                    .unwrap_or(0) as u32;
+                (start, end)
+            })
+            .unwrap_or((0, 0));
 
         let detail = sym.get("detail").and_then(|v| v.as_str()).map(String::from);
-        let is_public = name.starts_with("pub ") || !matches!(kind, LspNodeKind::Field | LspNodeKind::Variable);
+        let is_public =
+            name.starts_with("pub ") || !matches!(kind, LspNodeKind::Field | LspNodeKind::Variable);
 
         let node_id = next_id(counter);
         let key = format!("{}:{}", file, name);
@@ -159,7 +182,11 @@ fn discover_recursive(dir: &Path, extensions: &[String], out: &mut Vec<std::path
         let path = entry.path();
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        if name_str.starts_with('.') || name_str == "target" || name_str == "node_modules" || name_str == "dist" {
+        if name_str.starts_with('.')
+            || name_str == "target"
+            || name_str == "node_modules"
+            || name_str == "dist"
+        {
             continue;
         }
         if path.is_dir() {
@@ -178,10 +205,7 @@ mod tests {
 
     #[test]
     fn discover_finds_rust_files() {
-        let files = discover_files(
-            Path::new(env!("CARGO_MANIFEST_DIR")),
-            &["rs".to_string()],
-        );
+        let files = discover_files(Path::new(env!("CARGO_MANIFEST_DIR")), &["rs".to_string()]);
         assert!(files.len() >= 5, "should find crate source files");
     }
 

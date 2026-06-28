@@ -7,9 +7,9 @@
 //! Both backends speak L2-squared on **unit-normalised** vectors so the
 //! `cosine = 1 - dist / 2` derivation holds across the whole router.
 
-use super::normalise;
 #[cfg(feature = "embedding-router")]
 use super::EmbeddingRouterError;
+use super::normalise;
 
 /// One nearest-neighbour hit returned by an [`Index`].
 ///
@@ -52,7 +52,9 @@ pub(crate) struct BruteForceIndex {
 #[allow(dead_code)]
 impl BruteForceIndex {
     pub(crate) fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     pub(crate) fn insert(&mut self, key: String, vector: Vec<f32>) {

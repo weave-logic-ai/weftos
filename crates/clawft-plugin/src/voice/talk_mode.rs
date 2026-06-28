@@ -62,8 +62,8 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    use async_trait::async_trait;
     use crate::message::MessagePayload;
+    use async_trait::async_trait;
 
     struct StubHost;
 

@@ -51,8 +51,8 @@
 //! }
 //! ```
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -153,7 +153,12 @@ impl ControlFlags {
     /// Idempotent — re-registering the same key returns the existing
     /// flag without resetting state, so subsequent toggles persist
     /// across re-registration.
-    pub fn register(&self, kind: ControlKind, target: &str, default_enabled: bool) -> Arc<AtomicBool> {
+    pub fn register(
+        &self,
+        kind: ControlKind,
+        target: &str,
+        default_enabled: bool,
+    ) -> Arc<AtomicBool> {
         let key = (kind, target.to_string());
         self.inner
             .entry(key)
@@ -210,11 +215,7 @@ mod tests {
 
     #[test]
     fn intent_path_for_sensor_with_nested_tail() {
-        let p = intent_path(
-            "n-046780",
-            ControlKind::Sensor,
-            "n-bfc4cd/mic/pcm_chunk",
-        );
+        let p = intent_path("n-046780", ControlKind::Sensor, "n-bfc4cd/mic/pcm_chunk");
         assert_eq!(
             p,
             "substrate/n-046780/control/sensors/n-bfc4cd/mic/pcm_chunk"

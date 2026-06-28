@@ -583,8 +583,7 @@ impl PipelineRegistry {
         // assembled system prompt. NoopLearner returns it unchanged;
         // TrajectoryLearner only mutates when an evolution is due
         // (configured trigger count of poor trajectories accumulated).
-        let messages =
-            apply_prompt_evolution(context.messages, pipeline.learner.as_ref());
+        let messages = apply_prompt_evolution(context.messages, pipeline.learner.as_ref());
 
         // Stage 4: transport (with latency measurement)
         let transport_request = TransportRequest {
@@ -646,8 +645,7 @@ impl PipelineRegistry {
         let context = pipeline.assembler.assemble(request, &profile).await;
 
         // Stage 3.5: same feedback loop as the non-streaming path.
-        let messages =
-            apply_prompt_evolution(context.messages, pipeline.learner.as_ref());
+        let messages = apply_prompt_evolution(context.messages, pipeline.learner.as_ref());
 
         let transport_request = TransportRequest {
             provider: routing.provider.clone(),
@@ -761,7 +759,10 @@ mod tests {
             ..Default::default()
         };
         let red = d.redacted_reason();
-        assert_eq!(red, category, "reason {reason:?} -> {red}, expected {category}");
+        assert_eq!(
+            red, category,
+            "reason {reason:?} -> {red}, expected {category}"
+        );
         // Category labels must be ASCII snake_case identifiers — no
         // formatted fields, no whitespace, no special chars.
         assert!(

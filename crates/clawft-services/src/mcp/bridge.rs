@@ -482,8 +482,7 @@ mod tests {
         let json = serde_json::to_string(&BridgeStatus::Active).unwrap();
         assert_eq!(json, "\"active\"");
 
-        let restored: BridgeStatus =
-            serde_json::from_str("\"shutting_down\"").unwrap();
+        let restored: BridgeStatus = serde_json::from_str("\"shutting_down\"").unwrap();
         assert_eq!(restored, BridgeStatus::ShuttingDown);
     }
 
@@ -610,11 +609,7 @@ mod tests {
     #[tokio::test]
     async fn connect_inbound_handshake_failure_marks_error() {
         // Initialize fails.
-        let factory = Arc::new(MockFactory::new(vec![err_response(
-            1,
-            -32600,
-            "bad init",
-        )]));
+        let factory = Arc::new(MockFactory::new(vec![err_response(1, -32600, "bad init")]));
 
         let mut bridge = McpBridge::with_factory(
             BridgeConfig {

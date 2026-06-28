@@ -21,7 +21,12 @@ async fn probe_chat_resolution_against_live_config() {
 
     println!(
         "\n>>> typed routing.permissions.channels keys: {:?}",
-        config.routing.permissions.channels.keys().collect::<Vec<_>>()
+        config
+            .routing
+            .permissions
+            .channels
+            .keys()
+            .collect::<Vec<_>>()
     );
 
     let resolver = PermissionResolver::new(&config.routing, None);

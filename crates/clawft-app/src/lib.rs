@@ -27,8 +27,6 @@ pub use lifecycle::{
     AppLaunchRequest, AppLaunchResult, LaunchError, SessionConfig,
     governance::{Gate, NoopGate, StrictGate},
 };
-pub use manifest::{
-    AppManifest, EntryPoint, Input, Mode, Permission, SurfaceRef,
-};
+pub use manifest::{AppManifest, EntryPoint, Input, Mode, Permission, SurfaceRef};
 pub use registry::{AppRegistry, InstalledApp, RegistryError};
 pub use validation::{ValidationError, validate};

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use clawft_types::skill::SkillDefinition;
 
-use super::super::{ContextRequest, ContextRouter, COMPLEXITY_HINT_LIMIT};
+use super::super::{COMPLEXITY_HINT_LIMIT, ContextRequest, ContextRouter};
 use super::{EmbeddingRouter, EmbeddingRouterError};
 use crate::agent::skills_v2::SkillRegistry;
 use crate::embeddings::{Embedder, EmbeddingError};
@@ -179,8 +179,7 @@ async fn complexity_hint_is_clamped() {
 
     let d = router.route(&req("rust compile error fix")).await;
     assert!(
-        d.complexity_hint >= -COMPLEXITY_HINT_LIMIT
-            && d.complexity_hint <= COMPLEXITY_HINT_LIMIT,
+        d.complexity_hint >= -COMPLEXITY_HINT_LIMIT && d.complexity_hint <= COMPLEXITY_HINT_LIMIT,
         "complexity_hint must lie in [-0.3, +0.3], got {}",
         d.complexity_hint
     );
@@ -190,11 +189,7 @@ async fn complexity_hint_is_clamped() {
 async fn archetype_comes_from_top1_category() {
     let skills = vec![
         skill_with_category("rust-debug", "rust compile error fix", "CodeGen"),
-        skill_with_category(
-            "python-debug",
-            "python traceback investigation",
-            "Analysis",
-        ),
+        skill_with_category("python-debug", "python traceback investigation", "Analysis"),
     ];
     let reg = registry_from(skills).await;
     let router = EmbeddingRouter::new(Arc::new(StubEmbedder::new(8)), &reg)

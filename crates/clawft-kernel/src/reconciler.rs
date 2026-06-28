@@ -38,15 +38,9 @@ pub struct DesiredAgentState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DriftEvent {
     /// A desired agent is not running.
-    AgentMissing {
-        agent_id: String,
-        app_id: String,
-    },
+    AgentMissing { agent_id: String, app_id: String },
     /// An agent is running but not in the desired state.
-    ExtraAgent {
-        pid: Pid,
-        agent_id: String,
-    },
+    ExtraAgent { pid: Pid, agent_id: String },
     /// An agent is in the wrong state.
     WrongState {
         pid: Pid,
@@ -54,15 +48,9 @@ pub enum DriftEvent {
         actual: String,
     },
     /// An agent was spawned to correct drift.
-    AgentSpawned {
-        agent_id: String,
-        app_id: String,
-    },
+    AgentSpawned { agent_id: String, app_id: String },
     /// An extra agent was stopped.
-    AgentStopped {
-        pid: Pid,
-        agent_id: String,
-    },
+    AgentStopped { pid: Pid, agent_id: String },
 }
 
 /// Reconciliation controller: desired state vs actual state.
@@ -83,10 +71,7 @@ pub struct ReconciliationController {
 
 impl ReconciliationController {
     /// Create a new reconciliation controller.
-    pub fn new(
-        process_table: Arc<ProcessTable>,
-        interval: Duration,
-    ) -> Self {
+    pub fn new(process_table: Arc<ProcessTable>, interval: Duration) -> Self {
         Self {
             interval,
             desired: DashMap::new(),
@@ -316,7 +301,9 @@ mod tests {
 
         let drifts = ctrl.tick().await;
         assert_eq!(drifts.len(), 1);
-        assert!(matches!(&drifts[0], DriftEvent::AgentMissing { agent_id, .. } if agent_id == "worker-1"));
+        assert!(
+            matches!(&drifts[0], DriftEvent::AgentMissing { agent_id, .. } if agent_id == "worker-1")
+        );
     }
 
     #[tokio::test]
@@ -341,7 +328,9 @@ mod tests {
         // No desired state set -- rogue-agent is extra
         let drifts = ctrl.tick().await;
         assert_eq!(drifts.len(), 1);
-        assert!(matches!(&drifts[0], DriftEvent::ExtraAgent { agent_id, .. } if agent_id == "rogue-agent"));
+        assert!(
+            matches!(&drifts[0], DriftEvent::ExtraAgent { agent_id, .. } if agent_id == "rogue-agent")
+        );
     }
 
     #[tokio::test]

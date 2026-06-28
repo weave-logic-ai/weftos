@@ -70,10 +70,7 @@ pub enum WeaverCommand {
         output: PathBuf,
     },
     /// Import model.
-    Import {
-        domain: String,
-        input: PathBuf,
-    },
+    Import { domain: String, input: PathBuf },
     /// Query meta-loom status.
     MetaStatus { domain: String },
     /// List learned strategies.
@@ -414,10 +411,7 @@ impl WeaverKnowledgeBase {
             .read()
             .map(|all| {
                 all.iter()
-                    .filter(|s| {
-                        s.context.contains(domain)
-                            || domain.contains(&s.context)
-                    })
+                    .filter(|s| s.context.contains(domain) || domain.contains(&s.context))
                     .cloned()
                     .collect()
             })
@@ -570,12 +564,10 @@ impl GitPoller {
                         ])
                         .output();
                     match count_output {
-                        Ok(o) if o.status.success() => {
-                            String::from_utf8_lossy(&o.stdout)
-                                .trim()
-                                .parse()
-                                .unwrap_or(1)
-                        }
+                        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+                            .trim()
+                            .parse()
+                            .unwrap_or(1),
                         _ => 1,
                     }
                 } else {
@@ -654,10 +646,11 @@ impl FileWatcher {
             if let Ok(metadata) = std::fs::metadata(&path) {
                 if let Ok(mtime) = metadata.modified()
                     && let Some(last_mtime) = self.watched.get(&path)
-                        && mtime > *last_mtime {
-                            changed.push(path.clone());
-                            self.watched.insert(path, mtime);
-                        }
+                    && mtime > *last_mtime
+                {
+                    changed.push(path.clone());
+                    self.watched.insert(path, mtime);
+                }
             } else {
                 // File deleted
                 changed.push(path.clone());
@@ -671,9 +664,10 @@ impl FileWatcher {
     /// Register a single file to watch.
     pub fn watch(&mut self, path: PathBuf) {
         if let Ok(metadata) = std::fs::metadata(&path)
-            && let Ok(mtime) = metadata.modified() {
-                self.watched.insert(path, mtime);
-            }
+            && let Ok(mtime) = metadata.modified()
+        {
+            self.watched.insert(path, mtime);
+        }
     }
 
     /// Register all files matching patterns in the root directory (non-recursive).
@@ -845,8 +839,7 @@ impl ConfidenceHistory {
         }
 
         let start = self.snapshots.len() - n;
-        let window: Vec<&ConfidenceSnapshot> =
-            self.snapshots.iter().skip(start).collect();
+        let window: Vec<&ConfidenceSnapshot> = self.snapshots.iter().skip(start).collect();
 
         let sum: f64 = window.iter().map(|s| s.confidence).sum();
         let avg = sum / n as f64;
@@ -953,11 +946,7 @@ impl StrategyTracker {
     }
 
     /// Complete a strategy and record its outcome.
-    pub fn complete_strategy(
-        &mut self,
-        handle: StrategyHandle,
-        new_confidence: f64,
-    ) {
+    pub fn complete_strategy(&mut self, handle: StrategyHandle, new_confidence: f64) {
         let delta = new_confidence - handle.confidence_before;
         let outcome = StrategyOutcome {
             strategy: handle.name,
@@ -989,10 +978,7 @@ impl StrategyTracker {
 
     /// Get strategies that hurt confidence (negative delta).
     pub fn harmful_strategies(&self) -> Vec<&StrategyOutcome> {
-        self.outcomes
-            .iter()
-            .filter(|o| o.delta < -0.01)
-            .collect()
+        self.outcomes.iter().filter(|o| o.delta < -0.01).collect()
     }
 
     /// Recommend next strategy based on past effectiveness.
@@ -1083,8 +1069,7 @@ impl TickHistory {
             .map(|r| r.git_commits_found + r.files_changed)
             .sum();
 
-        let total_elapsed_ms: u64 =
-            self.results.iter().map(|r| r.elapsed_ms as u64).sum();
+        let total_elapsed_ms: u64 = self.results.iter().map(|r| r.elapsed_ms as u64).sum();
         if total_elapsed_ms == 0 {
             return 0.0;
         }
@@ -1110,11 +1095,7 @@ impl TickHistory {
             .map(|r| r.elapsed_ms as f64 / r.budget_ms as f64)
             .sum();
 
-        let count = self
-            .results
-            .iter()
-            .filter(|r| r.budget_ms > 0)
-            .count();
+        let count = self.results.iter().filter(|r| r.budget_ms > 0).count();
 
         if count == 0 {
             return 0.0;
@@ -1129,9 +1110,7 @@ impl TickHistory {
             .iter()
             .rev()
             .take_while(|r| {
-                r.git_commits_found == 0
-                    && r.files_changed == 0
-                    && r.nodes_processed == 0
+                r.git_commits_found == 0 && r.files_changed == 0 && r.nodes_processed == 0
             })
             .count()
     }
@@ -1238,30 +1217,18 @@ impl WeaverEngine {
     /// identical to today's behaviour.
     ///
     /// NOTE(eml-swap): wired — Finding #7 (TickIntervalModel).
-    pub fn set_tick_interval_model(
-        &mut self,
-        model: crate::eml_kernel::TickIntervalModel,
-    ) {
+    pub fn set_tick_interval_model(&mut self, model: crate::eml_kernel::TickIntervalModel) {
         self.tick_interval_model = Some(model);
     }
 
     /// Returns a reference to the optional tick-interval model.
-    pub fn tick_interval_model(
-        &self,
-    ) -> Option<&crate::eml_kernel::TickIntervalModel> {
+    pub fn tick_interval_model(&self) -> Option<&crate::eml_kernel::TickIntervalModel> {
         self.tick_interval_model.as_ref()
     }
 
     /// Create a WeaverEngine with a mock embedding provider (for tests).
-    pub fn new_with_mock(
-        causal_graph: Arc<CausalGraph>,
-        hnsw: Arc<HnswService>,
-    ) -> Self {
-        Self::new(
-            causal_graph,
-            hnsw,
-            Arc::new(MockEmbeddingProvider::new(64)),
-        )
+    pub fn new_with_mock(causal_graph: Arc<CausalGraph>, hnsw: Arc<HnswService>) -> Self {
+        Self::new(causal_graph, hnsw, Arc::new(MockEmbeddingProvider::new(64)))
     }
 
     /// Set the impulse queue for emitting meta-loom signals.
@@ -1300,10 +1267,7 @@ impl WeaverEngine {
         let data = std::fs::read_to_string(path)?;
         let graph: serde_json::Value = serde_json::from_str(&data)?;
 
-        let source = graph["source"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string();
+        let source = graph["source"].as_str().unwrap_or("unknown").to_string();
 
         let empty_vec = vec![];
         let nodes = graph["nodes"].as_array().unwrap_or(&empty_vec);
@@ -1331,10 +1295,7 @@ impl WeaverEngine {
                 format!("{source}/{node_id_str}")
             };
 
-            let causal_id = self.causal_graph.add_node(
-                label.clone(),
-                node.clone(),
-            );
+            let causal_id = self.causal_graph.add_node(label.clone(), node.clone());
             id_map.insert(node_id_str.clone(), causal_id);
             nodes_added += 1;
 
@@ -1343,11 +1304,8 @@ impl WeaverEngine {
             if !embed_text.is_empty() {
                 // Use synchronous hash-embed for ingestion (avoiding async).
                 let embed_vec = self.sync_embed(&embed_text);
-                self.hnsw.insert(
-                    format!("{source}/{}", node_id_str),
-                    embed_vec,
-                    node.clone(),
-                );
+                self.hnsw
+                    .insert(format!("{source}/{}", node_id_str), embed_vec, node.clone());
                 embeddings_created += 1;
             }
         }
@@ -1364,9 +1322,7 @@ impl WeaverEngine {
 
             if let (Some(src), Some(tgt)) = (from_id, to_id) {
                 let edge_type = Self::parse_edge_type(edge_type_str);
-                let linked = self.causal_graph.link(
-                    src, tgt, edge_type, weight, 0, 0,
-                );
+                let linked = self.causal_graph.link(src, tgt, edge_type, weight, 0, 0);
                 if linked {
                     edges_added += 1;
                 }
@@ -1394,10 +1350,7 @@ impl WeaverEngine {
     /// Wraps [`ingest_graph_file`] with before/after confidence measurement,
     /// recording the result in the [`StrategyTracker`] and
     /// [`ConfidenceHistory`].
-    pub fn ingest_graph_file_tracked(
-        &mut self,
-        path: &Path,
-    ) -> Result<IngestResult, WeaverError> {
+    pub fn ingest_graph_file_tracked(&mut self, path: &Path) -> Result<IngestResult, WeaverError> {
         let confidence_before = self.compute_confidence().overall;
         let source_name = path
             .file_stem()
@@ -1666,7 +1619,8 @@ impl WeaverEngine {
         min_confidence: f64,
         path: &Path,
     ) -> Result<ExportedModel, WeaverError> {
-        let model = self.export_model(domain, min_confidence)
+        let model = self
+            .export_model(domain, min_confidence)
             .map_err(WeaverError::Domain)?;
         let json = serde_json::to_string_pretty(&model)?;
         std::fs::write(path, json)?;
@@ -1675,11 +1629,7 @@ impl WeaverEngine {
     }
 
     /// Import a model from a JSON file.
-    pub fn import_model_from_file(
-        &self,
-        domain: &str,
-        path: &Path,
-    ) -> Result<(), WeaverError> {
+    pub fn import_model_from_file(&self, domain: &str, path: &Path) -> Result<(), WeaverError> {
         let data = std::fs::read_to_string(path)?;
         let model: ExportedModel = serde_json::from_str(&data)?;
         self.import_model(domain, model)
@@ -1712,7 +1662,10 @@ impl WeaverEngine {
                 let cap = if context.is_some() { 1 } else { 0 };
                 let mut m = HashMap::with_capacity(cap);
                 if let Some(ctx) = context {
-                    m.insert("context".to_string(), serde_json::Value::String(ctx.to_string()));
+                    m.insert(
+                        "context".to_string(),
+                        serde_json::Value::String(ctx.to_string()),
+                    );
                 }
                 m
             },
@@ -1763,11 +1716,7 @@ impl WeaverEngine {
 
     /// Get a snapshot of a session.
     pub fn get_session(&self, domain: &str) -> Option<ModelingSession> {
-        self.sessions
-            .read()
-            .ok()?
-            .get(domain)
-            .cloned()
+        self.sessions.read().ok()?.get(domain).cloned()
     }
 
     /// List all session domains.
@@ -1801,7 +1750,9 @@ impl WeaverEngine {
                 source_type: source_type.to_string(),
             },
             &format!("Added source: {source_type}"),
-            self.get_session(domain).map(|s| s.confidence).unwrap_or(0.0),
+            self.get_session(domain)
+                .map(|s| s.confidence)
+                .unwrap_or(0.0),
         );
 
         // Emit impulse for source request.
@@ -1927,11 +1878,7 @@ impl WeaverEngine {
     // ── Export / Import (K3c-G4) ──────────────────────────────────
 
     /// Export the model for a domain.
-    pub fn export_model(
-        &self,
-        domain: &str,
-        min_confidence: f64,
-    ) -> Result<ExportedModel, String> {
+    pub fn export_model(&self, domain: &str, min_confidence: f64) -> Result<ExportedModel, String> {
         let sessions = self.sessions.read().map_err(|e| e.to_string())?;
         let session = sessions
             .get(domain)
@@ -1993,11 +1940,7 @@ impl WeaverEngine {
     }
 
     /// Import a previously exported model.
-    pub fn import_model(
-        &self,
-        domain: &str,
-        model: ExportedModel,
-    ) -> Result<(), String> {
+    pub fn import_model(&self, domain: &str, model: ExportedModel) -> Result<(), String> {
         // Version check.
         if !model.version.starts_with("1.") {
             return Err(format!(
@@ -2049,11 +1992,7 @@ impl WeaverEngine {
                 context,
                 goal,
                 ..
-            } => match self.start_session(
-                &domain,
-                context.as_deref(),
-                goal.as_deref(),
-            ) {
+            } => match self.start_session(&domain, context.as_deref(), goal.as_deref()) {
                 Ok(session_id) => WeaverResponse::SessionStarted { domain, session_id },
                 Err(e) => WeaverResponse::Error(e),
             },
@@ -2077,18 +2016,14 @@ impl WeaverEngine {
                 },
                 Err(e) => WeaverResponse::Error(e),
             },
-            WeaverCommand::SourceList { domain } => {
-                match self.get_session(&domain) {
-                    Some(s) => WeaverResponse::Sources(s.sources_ingested),
-                    None => WeaverResponse::Error(format!("no session for domain: {domain}")),
-                }
-            }
-            WeaverCommand::Confidence { domain, .. } => {
-                match self.evaluate_confidence(&domain) {
-                    Ok(report) => WeaverResponse::ConfidenceReport(report),
-                    Err(e) => WeaverResponse::Error(e),
-                }
-            }
+            WeaverCommand::SourceList { domain } => match self.get_session(&domain) {
+                Some(s) => WeaverResponse::Sources(s.sources_ingested),
+                None => WeaverResponse::Error(format!("no session for domain: {domain}")),
+            },
+            WeaverCommand::Confidence { domain, .. } => match self.evaluate_confidence(&domain) {
+                Ok(report) => WeaverResponse::ConfidenceReport(report),
+                Err(e) => WeaverResponse::Error(e),
+            },
             WeaverCommand::Export {
                 domain,
                 min_confidence,
@@ -2098,7 +2033,10 @@ impl WeaverEngine {
                     let edges = model.edge_types.len();
                     // In a real implementation, this would write to disk.
                     debug!(?output, edges, "model exported");
-                    WeaverResponse::Exported { path: output, edges }
+                    WeaverResponse::Exported {
+                        path: output,
+                        edges,
+                    }
                 }
                 Err(e) => WeaverResponse::Error(e),
             },
@@ -2140,17 +2078,12 @@ impl WeaverEngine {
 
         // Record in causal graph under meta-loom namespace.
         let label = format!("meta-loom/{}", domain);
-        self.causal_graph.add_node(
-            label,
-            serde_json::to_value(&event).unwrap_or_default(),
-        );
+        self.causal_graph
+            .add_node(label, serde_json::to_value(&event).unwrap_or_default());
 
         // Store in local event history.
         if let Ok(mut events) = self.meta_loom_events.write() {
-            events
-                .entry(domain.to_string())
-                .or_default()
-                .push(event);
+            events.entry(domain.to_string()).or_default().push(event);
         }
     }
 
@@ -2195,15 +2128,17 @@ impl WeaverEngine {
 
         // 1. Check for new git commits (if git polling enabled).
         if start.elapsed() < budget
-            && let Some(new_commits) = self.poll_git() {
-                result.git_commits_found = new_commits;
-            }
+            && let Some(new_commits) = self.poll_git()
+        {
+            result.git_commits_found = new_commits;
+        }
 
         // 2. Check for file changes (if file watcher enabled).
         if start.elapsed() < budget
-            && let Some(changed_files) = self.poll_file_changes() {
-                result.files_changed = changed_files;
-            }
+            && let Some(changed_files) = self.poll_file_changes()
+        {
+            result.files_changed = changed_files;
+        }
 
         // 3. Process pending ingestion queue (delegate to existing tick()).
         if start.elapsed() < budget {
@@ -2357,8 +2292,7 @@ impl WeaverEngine {
         // EML override — variance is the squared deviation of cpm
         // from the moderate-tier midpoint (5/min), normalised by 100.
         let variance = ((cpm - 5.0) * (cpm - 5.0) / 100.0).clamp(0.0, 1.0);
-        let predicted_ms =
-            model.recommend_or(cpm, idle as u64, variance, step.recommended_ms);
+        let predicted_ms = model.recommend_or(cpm, idle as u64, variance, step.recommended_ms);
         TickRecommendation {
             recommended_ms: predicted_ms,
             current_ms: step.current_ms,
@@ -2399,9 +2333,7 @@ impl WeaverEngine {
             return TickRecommendation {
                 recommended_ms: 5000,
                 current_ms: self.current_tick_interval_ms,
-                reason: format!(
-                    "No changes for {idle} consecutive ticks; entering idle mode"
-                ),
+                reason: format!("No changes for {idle} consecutive ticks; entering idle mode"),
                 changes_per_minute: cpm,
                 recommendation_confidence: 0.9,
             };
@@ -2412,9 +2344,7 @@ impl WeaverEngine {
             return TickRecommendation {
                 recommended_ms: 200,
                 current_ms: self.current_tick_interval_ms,
-                reason: format!(
-                    "High change rate ({cpm:.1}/min); recommending fast ticks"
-                ),
+                reason: format!("High change rate ({cpm:.1}/min); recommending fast ticks"),
                 changes_per_minute: cpm,
                 recommendation_confidence: 0.8,
             };
@@ -2425,9 +2355,7 @@ impl WeaverEngine {
             return TickRecommendation {
                 recommended_ms: 1000,
                 current_ms: self.current_tick_interval_ms,
-                reason: format!(
-                    "Moderate change rate ({cpm:.1}/min); default interval"
-                ),
+                reason: format!("Moderate change rate ({cpm:.1}/min); default interval"),
                 changes_per_minute: cpm,
                 recommendation_confidence: 0.7,
             };
@@ -2437,9 +2365,7 @@ impl WeaverEngine {
         TickRecommendation {
             recommended_ms: 3000,
             current_ms: self.current_tick_interval_ms,
-            reason: format!(
-                "Low change rate ({cpm:.2}/min); recommending slower ticks"
-            ),
+            reason: format!("Low change rate ({cpm:.2}/min); recommending slower ticks"),
             changes_per_minute: cpm,
             recommendation_confidence: 0.6,
         }
@@ -2539,8 +2465,7 @@ pub fn diff_models(a: &ExportedModel, b: &ExportedModel) -> ModelDiff {
         .collect();
 
     // Edge types by (from, to, type) composite key.
-    let edge_key =
-        |e: &EdgeTypeSpec| format!("{}->{}:{}", e.from_type, e.to_type, e.edge_type);
+    let edge_key = |e: &EdgeTypeSpec| format!("{}->{}:{}", e.from_type, e.to_type, e.edge_type);
     let a_edge_keys: HashSet<String> = a.edge_types.iter().map(&edge_key).collect();
     let b_edge_keys: HashSet<String> = b.edge_types.iter().map(edge_key).collect();
 
@@ -2549,10 +2474,8 @@ pub fn diff_models(a: &ExportedModel, b: &ExportedModel) -> ModelDiff {
     let edges_common: Vec<String> = a_edge_keys.intersection(&b_edge_keys).cloned().collect();
 
     // Causal nodes by label.
-    let a_causal_labels: HashSet<&str> =
-        a.causal_nodes.iter().map(|n| n.label.as_str()).collect();
-    let b_causal_labels: HashSet<&str> =
-        b.causal_nodes.iter().map(|n| n.label.as_str()).collect();
+    let a_causal_labels: HashSet<&str> = a.causal_nodes.iter().map(|n| n.label.as_str()).collect();
+    let b_causal_labels: HashSet<&str> = b.causal_nodes.iter().map(|n| n.label.as_str()).collect();
 
     let causal_nodes_added = b_causal_labels.difference(&a_causal_labels).count();
     let causal_nodes_removed = a_causal_labels.difference(&b_causal_labels).count();
@@ -2560,10 +2483,8 @@ pub fn diff_models(a: &ExportedModel, b: &ExportedModel) -> ModelDiff {
     // Causal edges by (from, to).
     let causal_edge_key =
         |e: &ExportedCausalEdge| format!("{}->{}", e.source_label, e.target_label);
-    let a_causal_edge_keys: HashSet<String> =
-        a.causal_edges.iter().map(&causal_edge_key).collect();
-    let b_causal_edge_keys: HashSet<String> =
-        b.causal_edges.iter().map(causal_edge_key).collect();
+    let a_causal_edge_keys: HashSet<String> = a.causal_edges.iter().map(&causal_edge_key).collect();
+    let b_causal_edge_keys: HashSet<String> = b.causal_edges.iter().map(causal_edge_key).collect();
 
     let causal_edges_added = b_causal_edge_keys.difference(&a_causal_edge_keys).count();
     let causal_edges_removed = a_causal_edge_keys.difference(&b_causal_edge_keys).count();
@@ -2704,8 +2625,11 @@ pub fn merge_models(a: &ExportedModel, b: &ExportedModel) -> MergeResult {
     let b_node_map: HashMap<&str, &NodeTypeSpec> =
         b.node_types.iter().map(|n| (n.name.as_str(), n)).collect();
 
-    let all_node_names: HashSet<&str> =
-        a_node_map.keys().chain(b_node_map.keys()).copied().collect();
+    let all_node_names: HashSet<&str> = a_node_map
+        .keys()
+        .chain(b_node_map.keys())
+        .copied()
+        .collect();
 
     let mut merged_node_types = Vec::new();
     let mut nodes_from_a = 0usize;
@@ -2746,8 +2670,7 @@ pub fn merge_models(a: &ExportedModel, b: &ExportedModel) -> MergeResult {
     }
 
     // ── Edge types ──────────────────────────────────────────────
-    let edge_key =
-        |e: &EdgeTypeSpec| format!("{}->{}:{}", e.from_type, e.to_type, e.edge_type);
+    let edge_key = |e: &EdgeTypeSpec| format!("{}->{}:{}", e.from_type, e.to_type, e.edge_type);
     let a_edge_map: HashMap<String, &EdgeTypeSpec> =
         a.edge_types.iter().map(|e| (edge_key(e), e)).collect();
     let b_edge_map: HashMap<String, &EdgeTypeSpec> =
@@ -2787,13 +2710,18 @@ pub fn merge_models(a: &ExportedModel, b: &ExportedModel) -> MergeResult {
     }
 
     // ── Causal nodes ────────────────────────────────────────────
-    let a_cn_map: HashMap<&str, &ExportedCausalNode> =
-        a.causal_nodes.iter().map(|n| (n.label.as_str(), n)).collect();
-    let b_cn_map: HashMap<&str, &ExportedCausalNode> =
-        b.causal_nodes.iter().map(|n| (n.label.as_str(), n)).collect();
+    let a_cn_map: HashMap<&str, &ExportedCausalNode> = a
+        .causal_nodes
+        .iter()
+        .map(|n| (n.label.as_str(), n))
+        .collect();
+    let b_cn_map: HashMap<&str, &ExportedCausalNode> = b
+        .causal_nodes
+        .iter()
+        .map(|n| (n.label.as_str(), n))
+        .collect();
 
-    let all_cn_labels: HashSet<&str> =
-        a_cn_map.keys().chain(b_cn_map.keys()).copied().collect();
+    let all_cn_labels: HashSet<&str> = a_cn_map.keys().chain(b_cn_map.keys()).copied().collect();
 
     let mut merged_causal_nodes = Vec::new();
     for label in &all_cn_labels {
@@ -2809,8 +2737,7 @@ pub fn merge_models(a: &ExportedModel, b: &ExportedModel) -> MergeResult {
     }
 
     // ── Causal edges ────────────────────────────────────────────
-    let ce_key =
-        |e: &ExportedCausalEdge| format!("{}->{}", e.source_label, e.target_label);
+    let ce_key = |e: &ExportedCausalEdge| format!("{}->{}", e.source_label, e.target_label);
     let a_ce_map: HashMap<String, &ExportedCausalEdge> =
         a.causal_edges.iter().map(|e| (ce_key(e), e)).collect();
     let b_ce_map: HashMap<String, &ExportedCausalEdge> =
@@ -2847,7 +2774,9 @@ pub fn merge_models(a: &ExportedModel, b: &ExportedModel) -> MergeResult {
     // ── Merged metadata ─────────────────────────────────────────
     let mut merged_metadata = a.metadata.clone();
     for (k, v) in &b.metadata {
-        merged_metadata.entry(k.clone()).or_insert_with(|| v.clone());
+        merged_metadata
+            .entry(k.clone())
+            .or_insert_with(|| v.clone());
     }
 
     // ── Merged confidence: weighted average by causal node count ──
@@ -2957,12 +2886,11 @@ impl WeaverKnowledgeBase {
     /// Otherwise, adds it as a new pattern.
     pub fn learn_pattern(&self, pattern: StrategyPattern) {
         if let Ok(mut strategies) = self.strategies.write() {
-            if let Some(existing) = strategies.iter_mut().find(|s| {
-                s.decision_type == pattern.decision_type
-                    && s.context == pattern.context
-            }) {
-                existing.improvement =
-                    (existing.improvement + pattern.improvement) / 2.0;
+            if let Some(existing) = strategies
+                .iter_mut()
+                .find(|s| s.decision_type == pattern.decision_type && s.context == pattern.context)
+            {
+                existing.improvement = (existing.improvement + pattern.improvement) / 2.0;
                 existing.timestamp = pattern.timestamp;
                 return;
             }
@@ -2976,10 +2904,7 @@ impl WeaverKnowledgeBase {
     /// Scores each pattern by how many of the provided characteristics
     /// appear in the pattern's context. Returns patterns sorted by
     /// relevance (highest match score first).
-    pub fn find_patterns(
-        &self,
-        domain_characteristics: &[String],
-    ) -> Vec<StrategyPattern> {
+    pub fn find_patterns(&self, domain_characteristics: &[String]) -> Vec<StrategyPattern> {
         let strategies = match self.strategies.read() {
             Ok(s) => s,
             Err(_) => return Vec::new(),
@@ -2992,11 +2917,7 @@ impl WeaverKnowledgeBase {
                     .iter()
                     .filter(|c| s.context.contains(c.as_str()))
                     .count();
-                if score > 0 {
-                    Some((score, s))
-                } else {
-                    None
-                }
+                if score > 0 { Some((score, s)) } else { None }
             })
             .collect();
 
@@ -3339,7 +3260,11 @@ mod tests {
         engine.start_session("impulse-test", None, None).unwrap();
         let impulses = queue.drain_ready();
         assert!(!impulses.is_empty());
-        assert!(impulses.iter().any(|i| i.impulse_type == ImpulseType::Custom(0x32)));
+        assert!(
+            impulses
+                .iter()
+                .any(|i| i.impulse_type == ImpulseType::Custom(0x32))
+        );
     }
 
     #[test]
@@ -3353,7 +3278,11 @@ mod tests {
         let _ = queue.drain_ready(); // clear session-start impulse
         engine.add_source("impulse-src", "git", None).unwrap();
         let impulses = queue.drain_ready();
-        assert!(impulses.iter().any(|i| i.impulse_type == ImpulseType::Custom(0x33)));
+        assert!(
+            impulses
+                .iter()
+                .any(|i| i.impulse_type == ImpulseType::Custom(0x33))
+        );
     }
 
     // ── Graph ingestion tests ────────────────────────────────────
@@ -3361,8 +3290,7 @@ mod tests {
     #[test]
     fn ingest_graph_file_git_history() {
         let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-        let graph_path = PathBuf::from(&manifest)
-            .join("../../.weftos/graph/git-history.json");
+        let graph_path = PathBuf::from(&manifest).join("../../.weftos/graph/git-history.json");
         if !graph_path.exists() {
             // Skip if running outside the project tree.
             return;
@@ -3379,8 +3307,7 @@ mod tests {
     #[test]
     fn ingest_graph_file_module_deps() {
         let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-        let graph_path = PathBuf::from(&manifest)
-            .join("../../.weftos/graph/module-deps.json");
+        let graph_path = PathBuf::from(&manifest).join("../../.weftos/graph/module-deps.json");
         if !graph_path.exists() {
             return;
         }
@@ -3393,8 +3320,7 @@ mod tests {
     #[test]
     fn ingest_graph_file_decisions() {
         let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-        let graph_path = PathBuf::from(&manifest)
-            .join("../../.weftos/graph/decisions.json");
+        let graph_path = PathBuf::from(&manifest).join("../../.weftos/graph/decisions.json");
         if !graph_path.exists() {
             return;
         }
@@ -3407,22 +3333,23 @@ mod tests {
     #[test]
     fn ingest_graph_creates_edges() {
         let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-        let graph_path = PathBuf::from(&manifest)
-            .join("../../.weftos/graph/git-history.json");
+        let graph_path = PathBuf::from(&manifest).join("../../.weftos/graph/git-history.json");
         if !graph_path.exists() {
             return;
         }
         let engine = make_engine();
         let result = engine.ingest_graph_file(&graph_path).unwrap();
-        assert!(result.edges_added > 0, "git-history graph should have edges");
+        assert!(
+            result.edges_added > 0,
+            "git-history graph should have edges"
+        );
         assert!(engine.causal_graph().edge_count() > 0);
     }
 
     #[test]
     fn ingest_graph_populates_hnsw() {
         let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-        let graph_path = PathBuf::from(&manifest)
-            .join("../../.weftos/graph/module-deps.json");
+        let graph_path = PathBuf::from(&manifest).join("../../.weftos/graph/module-deps.json");
         if !graph_path.exists() {
             return;
         }
@@ -3456,11 +3383,7 @@ mod tests {
         let dir = std::env::temp_dir().join("weaver_test_empty");
         std::fs::create_dir_all(&dir).ok();
         let path = dir.join("empty.json");
-        std::fs::write(
-            &path,
-            r#"{"source":"test","nodes":[],"edges":[]}"#,
-        )
-        .unwrap();
+        std::fs::write(&path, r#"{"source":"test","nodes":[],"edges":[]}"#).unwrap();
         let engine = make_engine();
         let result = engine.ingest_graph_file(&path).unwrap();
         assert_eq!(result.nodes_added, 0);
@@ -3489,14 +3412,16 @@ mod tests {
         let engine = make_engine();
         // Add nodes without edges -- should be partially confident.
         for i in 0..10 {
-            engine.causal_graph().add_node(
-                format!("node-{i}"),
-                serde_json::json!({"test": true}),
-            );
+            engine
+                .causal_graph()
+                .add_node(format!("node-{i}"), serde_json::json!({"test": true}));
         }
         let report = engine.compute_confidence();
         // All orphans: connectivity = 0, but volume > 0.
-        assert!(report.overall > 0.0, "should have some confidence from volume");
+        assert!(
+            report.overall > 0.0,
+            "should have some confidence from volume"
+        );
         assert!(report.overall < 0.5, "should be low without edges");
     }
 
@@ -3504,20 +3429,21 @@ mod tests {
     fn compute_confidence_with_connected_graph() {
         let engine = make_engine();
         // Create a small connected graph.
-        let n1 = engine.causal_graph().add_node(
-            "module-a".into(),
-            serde_json::json!({}),
-        );
-        let n2 = engine.causal_graph().add_node(
-            "module-b".into(),
-            serde_json::json!({}),
-        );
-        let n3 = engine.causal_graph().add_node(
-            "module-c".into(),
-            serde_json::json!({}),
-        );
-        engine.causal_graph().link(n1, n2, CausalEdgeType::Enables, 1.0, 0, 0);
-        engine.causal_graph().link(n2, n3, CausalEdgeType::Causes, 0.8, 0, 0);
+        let n1 = engine
+            .causal_graph()
+            .add_node("module-a".into(), serde_json::json!({}));
+        let n2 = engine
+            .causal_graph()
+            .add_node("module-b".into(), serde_json::json!({}));
+        let n3 = engine
+            .causal_graph()
+            .add_node("module-c".into(), serde_json::json!({}));
+        engine
+            .causal_graph()
+            .link(n1, n2, CausalEdgeType::Enables, 1.0, 0, 0);
+        engine
+            .causal_graph()
+            .link(n2, n3, CausalEdgeType::Causes, 0.8, 0, 0);
 
         let report = engine.compute_confidence();
         // At least 2 of 3 nodes have edges, so connectivity should be decent.
@@ -3527,19 +3453,18 @@ mod tests {
     #[test]
     fn compute_confidence_detects_orphans() {
         let engine = make_engine();
-        let n1 = engine.causal_graph().add_node(
-            "connected-a".into(),
-            serde_json::json!({}),
-        );
-        let n2 = engine.causal_graph().add_node(
-            "connected-b".into(),
-            serde_json::json!({}),
-        );
-        engine.causal_graph().add_node(
-            "orphan-x".into(),
-            serde_json::json!({}),
-        );
-        engine.causal_graph().link(n1, n2, CausalEdgeType::Follows, 1.0, 0, 0);
+        let n1 = engine
+            .causal_graph()
+            .add_node("connected-a".into(), serde_json::json!({}));
+        let n2 = engine
+            .causal_graph()
+            .add_node("connected-b".into(), serde_json::json!({}));
+        engine
+            .causal_graph()
+            .add_node("orphan-x".into(), serde_json::json!({}));
+        engine
+            .causal_graph()
+            .link(n1, n2, CausalEdgeType::Follows, 1.0, 0, 0);
 
         let report = engine.compute_confidence();
         // The suggestion should mention orphan nodes.
@@ -3554,18 +3479,31 @@ mod tests {
     fn compute_confidence_improves_with_more_data() {
         let engine = make_engine();
         // Small graph.
-        let n1 = engine.causal_graph().add_node("a".into(), serde_json::json!({}));
-        let n2 = engine.causal_graph().add_node("b".into(), serde_json::json!({}));
-        engine.causal_graph().link(n1, n2, CausalEdgeType::Enables, 1.0, 0, 0);
+        let n1 = engine
+            .causal_graph()
+            .add_node("a".into(), serde_json::json!({}));
+        let n2 = engine
+            .causal_graph()
+            .add_node("b".into(), serde_json::json!({}));
+        engine
+            .causal_graph()
+            .link(n1, n2, CausalEdgeType::Enables, 1.0, 0, 0);
         let c1 = engine.compute_confidence().overall;
 
         // Add more connected nodes.
         for i in 0..50 {
-            let na = engine.causal_graph().add_node(format!("extra-{i}"), serde_json::json!({}));
-            engine.causal_graph().link(n1, na, CausalEdgeType::Correlates, 0.5, 0, 0);
+            let na = engine
+                .causal_graph()
+                .add_node(format!("extra-{i}"), serde_json::json!({}));
+            engine
+                .causal_graph()
+                .link(n1, na, CausalEdgeType::Correlates, 0.5, 0, 0);
         }
         let c2 = engine.compute_confidence().overall;
-        assert!(c2 > c1, "confidence should increase with more data ({c2} > {c1})");
+        assert!(
+            c2 > c1,
+            "confidence should increase with more data ({c2} > {c1})"
+        );
     }
 
     // ── Model export/import roundtrip tests ──────────────────────
@@ -3575,13 +3513,25 @@ mod tests {
         let engine = make_engine();
         engine.start_session("exp-causal", None, None).unwrap();
         // Add some nodes and edges.
-        let n1 = engine.causal_graph().add_node("node-a".into(), serde_json::json!({}));
-        let n2 = engine.causal_graph().add_node("node-b".into(), serde_json::json!({}));
-        engine.causal_graph().link(n1, n2, CausalEdgeType::Causes, 0.9, 0, 0);
+        let n1 = engine
+            .causal_graph()
+            .add_node("node-a".into(), serde_json::json!({}));
+        let n2 = engine
+            .causal_graph()
+            .add_node("node-b".into(), serde_json::json!({}));
+        engine
+            .causal_graph()
+            .link(n1, n2, CausalEdgeType::Causes, 0.9, 0, 0);
 
         let model = engine.export_model("exp-causal", 0.0).unwrap();
-        assert!(!model.causal_nodes.is_empty(), "exported model should have nodes");
-        assert!(!model.causal_edges.is_empty(), "exported model should have edges");
+        assert!(
+            !model.causal_nodes.is_empty(),
+            "exported model should have nodes"
+        );
+        assert!(
+            !model.causal_edges.is_empty(),
+            "exported model should have edges"
+        );
     }
 
     #[test]
@@ -3595,12 +3545,20 @@ mod tests {
         engine.add_source("roundtrip", "git_log", None).unwrap();
 
         // Add some graph data.
-        let n1 = engine.causal_graph().add_node("rt-a".into(), serde_json::json!({}));
-        let n2 = engine.causal_graph().add_node("rt-b".into(), serde_json::json!({}));
-        engine.causal_graph().link(n1, n2, CausalEdgeType::Enables, 1.0, 0, 0);
+        let n1 = engine
+            .causal_graph()
+            .add_node("rt-a".into(), serde_json::json!({}));
+        let n2 = engine
+            .causal_graph()
+            .add_node("rt-b".into(), serde_json::json!({}));
+        engine
+            .causal_graph()
+            .link(n1, n2, CausalEdgeType::Enables, 1.0, 0, 0);
 
         // Export.
-        let exported = engine.export_model_to_file("roundtrip", 0.0, &path).unwrap();
+        let exported = engine
+            .export_model_to_file("roundtrip", 0.0, &path)
+            .unwrap();
         assert!(path.exists(), "export file should exist");
 
         // Read back and verify JSON is valid.
@@ -3651,20 +3609,50 @@ mod tests {
 
     #[test]
     fn parse_edge_type_known_types() {
-        assert_eq!(WeaverEngine::parse_edge_type("Causes"), CausalEdgeType::Causes);
-        assert_eq!(WeaverEngine::parse_edge_type("Enables"), CausalEdgeType::Enables);
-        assert_eq!(WeaverEngine::parse_edge_type("Follows"), CausalEdgeType::Follows);
-        assert_eq!(WeaverEngine::parse_edge_type("Correlates"), CausalEdgeType::Correlates);
-        assert_eq!(WeaverEngine::parse_edge_type("EvidenceFor"), CausalEdgeType::EvidenceFor);
-        assert_eq!(WeaverEngine::parse_edge_type("Inhibits"), CausalEdgeType::Inhibits);
-        assert_eq!(WeaverEngine::parse_edge_type("Contradicts"), CausalEdgeType::Contradicts);
-        assert_eq!(WeaverEngine::parse_edge_type("TriggeredBy"), CausalEdgeType::TriggeredBy);
+        assert_eq!(
+            WeaverEngine::parse_edge_type("Causes"),
+            CausalEdgeType::Causes
+        );
+        assert_eq!(
+            WeaverEngine::parse_edge_type("Enables"),
+            CausalEdgeType::Enables
+        );
+        assert_eq!(
+            WeaverEngine::parse_edge_type("Follows"),
+            CausalEdgeType::Follows
+        );
+        assert_eq!(
+            WeaverEngine::parse_edge_type("Correlates"),
+            CausalEdgeType::Correlates
+        );
+        assert_eq!(
+            WeaverEngine::parse_edge_type("EvidenceFor"),
+            CausalEdgeType::EvidenceFor
+        );
+        assert_eq!(
+            WeaverEngine::parse_edge_type("Inhibits"),
+            CausalEdgeType::Inhibits
+        );
+        assert_eq!(
+            WeaverEngine::parse_edge_type("Contradicts"),
+            CausalEdgeType::Contradicts
+        );
+        assert_eq!(
+            WeaverEngine::parse_edge_type("TriggeredBy"),
+            CausalEdgeType::TriggeredBy
+        );
     }
 
     #[test]
     fn parse_edge_type_unknown_defaults_to_correlates() {
-        assert_eq!(WeaverEngine::parse_edge_type("FooBar"), CausalEdgeType::Correlates);
-        assert_eq!(WeaverEngine::parse_edge_type(""), CausalEdgeType::Correlates);
+        assert_eq!(
+            WeaverEngine::parse_edge_type("FooBar"),
+            CausalEdgeType::Correlates
+        );
+        assert_eq!(
+            WeaverEngine::parse_edge_type(""),
+            CausalEdgeType::Correlates
+        );
     }
 
     // ── WeaverError tests ────────────────────────────────────────
@@ -3775,8 +3763,7 @@ mod tests {
     #[test]
     fn git_poller_poll_detects_commits_in_real_repo() {
         // Use the actual project repo for this test.
-        let manifest =
-            std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
         let repo_path = PathBuf::from(&manifest).join("../..");
         if !repo_path.join(".git").exists() {
             return; // skip if not in a git repo
@@ -3790,8 +3777,7 @@ mod tests {
 
     #[test]
     fn git_poller_poll_returns_zero_on_no_changes() {
-        let manifest =
-            std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
         let repo_path = PathBuf::from(&manifest).join("../..");
         if !repo_path.join(".git").exists() {
             return;
@@ -3884,17 +3870,18 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         let changed = watcher.poll_changes();
         assert_eq!(changed.len(), 1, "should detect deleted file");
-        assert_eq!(watcher.watched_count(), 0, "deleted file should be unregistered");
+        assert_eq!(
+            watcher.watched_count(),
+            0,
+            "deleted file should be unregistered"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn file_watcher_disabled_returns_empty() {
-        let mut watcher = FileWatcher::new(
-            PathBuf::from("/tmp"),
-            vec!["*.rs".to_string()],
-        );
+        let mut watcher = FileWatcher::new(PathBuf::from("/tmp"), vec!["*.rs".to_string()]);
         watcher.set_enabled(false);
         assert!(watcher.poll_changes().is_empty());
         assert!(!watcher.is_enabled());
@@ -3928,8 +3915,7 @@ mod tests {
 
     #[test]
     fn on_tick_with_git_polling_enabled() {
-        let manifest =
-            std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
         let repo_path = PathBuf::from(&manifest).join("../..");
         if !repo_path.join(".git").exists() {
             return;
@@ -4491,8 +4477,7 @@ mod tests {
         if let Some(inner) = json.get_mut("inner").and_then(|v| v.as_object_mut()) {
             inner.insert("trained".into(), serde_json::Value::Bool(true));
         }
-        let forced: crate::eml_kernel::TickIntervalModel =
-            serde_json::from_value(json).unwrap();
+        let forced: crate::eml_kernel::TickIntervalModel = serde_json::from_value(json).unwrap();
         assert!(forced.is_trained());
 
         let mut engine = make_engine_mut();
@@ -4566,7 +4551,10 @@ mod tests {
 
         // Strategy tracker should have one outcome.
         assert_eq!(engine.strategy_tracker().len(), 1);
-        assert_eq!(engine.strategy_tracker().outcomes()[0].strategy, "ingest:small");
+        assert_eq!(
+            engine.strategy_tracker().outcomes()[0].strategy,
+            "ingest:small"
+        );
 
         // Confidence history should have at least one PostIngestion snapshot.
         assert!(!engine.confidence_history().is_empty());
@@ -4841,10 +4829,7 @@ mod tests {
         assert_eq!(result.conflicts.len(), 1);
         // B has higher dimensions so KeepB.
         assert_eq!(result.conflicts[0].resolution, ConflictResolution::KeepB);
-        assert_eq!(
-            result.merged.node_types[0].embedding_strategy,
-            "hash_v2"
-        );
+        assert_eq!(result.merged.node_types[0].embedding_strategy, "hash_v2");
     }
 
     #[test]
@@ -4956,8 +4941,7 @@ mod tests {
 
         let result = merge_models(&a, &b);
         assert!(result.conflicts.iter().any(|c| {
-            c.item.starts_with("causal_edge:")
-                && c.resolution == ConflictResolution::Merged
+            c.item.starts_with("causal_edge:") && c.resolution == ConflictResolution::Merged
         }));
     }
 
@@ -4988,12 +4972,16 @@ mod tests {
         assert_eq!(loaded.pattern_count(), 2);
 
         let strategies = loaded.list_strategies();
-        assert!(strategies
-            .iter()
-            .any(|s| s.decision_type == "SourceAdded" && s.context == "rust-project"));
-        assert!(strategies
-            .iter()
-            .any(|s| s.decision_type == "EdgeType" && s.context == "python-project"));
+        assert!(
+            strategies
+                .iter()
+                .any(|s| s.decision_type == "SourceAdded" && s.context == "rust-project")
+        );
+        assert!(
+            strategies
+                .iter()
+                .any(|s| s.decision_type == "EdgeType" && s.context == "python-project")
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -5091,11 +5079,8 @@ mod tests {
             timestamp: Utc::now(),
         });
 
-        let matches = kb.find_patterns(&[
-            "rust".to_string(),
-            "backend".to_string(),
-            "api".to_string(),
-        ]);
+        let matches =
+            kb.find_patterns(&["rust".to_string(), "backend".to_string(), "api".to_string()]);
         // B should rank first (matches rust, backend, api = 3 hits).
         // A should rank second (matches rust = 1 hit).
         // C should not appear.
@@ -5138,9 +5123,7 @@ mod tests {
 
     #[test]
     fn knowledge_base_load_nonexistent_file_errors() {
-        let result = WeaverKnowledgeBase::load_from_file(
-            Path::new("/nonexistent/path/kb.json"),
-        );
+        let result = WeaverKnowledgeBase::load_from_file(Path::new("/nonexistent/path/kb.json"));
         assert!(result.is_err());
     }
 

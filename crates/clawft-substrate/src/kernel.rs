@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::adapter::{
@@ -165,11 +165,7 @@ impl OntologyAdapter for KernelAdapter {
         PERMISSIONS
     }
 
-    async fn open(
-        &self,
-        topic: &str,
-        args: Value,
-    ) -> Result<Subscription, AdapterError> {
+    async fn open(&self, topic: &str, args: Value) -> Result<Subscription, AdapterError> {
         let depth = match topic {
             "substrate/kernel/status" => CHAN_SINGLETON,
             "substrate/kernel/logs" => CHAN_LOG,
@@ -224,15 +220,7 @@ async fn poll_replace_loop(
     tx: mpsc::Sender<StateDelta>,
     cancel_rx: oneshot::Receiver<()>,
 ) {
-    poll_replace_loop_with_projection(
-        topic_path,
-        rpc_method,
-        period,
-        |v| v,
-        tx,
-        cancel_rx,
-    )
-    .await;
+    poll_replace_loop_with_projection(topic_path, rpc_method, period, |v| v, tx, cancel_rx).await;
 }
 
 /// Same as [`poll_replace_loop`] but applies `project` to each RPC
@@ -464,10 +452,7 @@ fn diff_tail<'a>(
 
 // ── RPC helpers ─────────────────────────────────────────────────────
 
-async fn simple_call(
-    client: &mut DaemonClient,
-    method: &str,
-) -> Result<Value, String> {
+async fn simple_call(client: &mut DaemonClient, method: &str) -> Result<Value, String> {
     let resp = client
         .simple_call(method)
         .await
@@ -481,11 +466,7 @@ async fn simple_call(
     Ok(resp.result.unwrap_or(Value::Null))
 }
 
-async fn call(
-    client: &mut DaemonClient,
-    method: &str,
-    params: Value,
-) -> Result<Value, String> {
+async fn call(client: &mut DaemonClient, method: &str, params: Value) -> Result<Value, String> {
     let resp = client
         .call(Request::with_params(method, params))
         .await

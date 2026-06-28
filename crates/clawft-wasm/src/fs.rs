@@ -108,8 +108,10 @@ impl SandboxedFileSystem {
     /// canonicalized, checked for symlink escapes, and the file size is
     /// verified against the 8 MB read limit before reading.
     pub fn read_to_string(&self, path: &Path) -> std::io::Result<String> {
-        let canonical = crate::sandbox::validate_file_access(&self.sandbox, path, false)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string()))?;
+        let canonical =
+            crate::sandbox::validate_file_access(&self.sandbox, path, false).map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string())
+            })?;
         std::fs::read_to_string(canonical)
     }
 
@@ -129,8 +131,10 @@ impl SandboxedFileSystem {
                 ),
             ));
         }
-        let canonical = crate::sandbox::validate_file_access(&self.sandbox, path, true)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string()))?;
+        let canonical =
+            crate::sandbox::validate_file_access(&self.sandbox, path, true).map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string())
+            })?;
         std::fs::write(canonical, content)
     }
 
@@ -149,8 +153,10 @@ impl SandboxedFileSystem {
                 ),
             ));
         }
-        let canonical = crate::sandbox::validate_file_access(&self.sandbox, path, false)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string()))?;
+        let canonical =
+            crate::sandbox::validate_file_access(&self.sandbox, path, false).map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string())
+            })?;
         use std::io::Write;
         let mut file = std::fs::OpenOptions::new().append(true).open(canonical)?;
         file.write_all(content.as_bytes())
@@ -165,8 +171,10 @@ impl SandboxedFileSystem {
 
     /// List all entries in a directory within the sandbox.
     pub fn list_dir(&self, path: &Path) -> std::io::Result<Vec<PathBuf>> {
-        let canonical = crate::sandbox::validate_file_access(&self.sandbox, path, false)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string()))?;
+        let canonical =
+            crate::sandbox::validate_file_access(&self.sandbox, path, false).map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string())
+            })?;
         let mut entries = Vec::new();
         for entry in std::fs::read_dir(canonical)? {
             entries.push(entry?.path());
@@ -176,15 +184,19 @@ impl SandboxedFileSystem {
 
     /// Create a directory and all parent directories within the sandbox.
     pub fn create_dir_all(&self, path: &Path) -> std::io::Result<()> {
-        let canonical = crate::sandbox::validate_file_access(&self.sandbox, path, true)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string()))?;
+        let canonical =
+            crate::sandbox::validate_file_access(&self.sandbox, path, true).map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string())
+            })?;
         std::fs::create_dir_all(canonical)
     }
 
     /// Remove a file within the sandbox.
     pub fn remove_file(&self, path: &Path) -> std::io::Result<()> {
-        let canonical = crate::sandbox::validate_file_access(&self.sandbox, path, false)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string()))?;
+        let canonical =
+            crate::sandbox::validate_file_access(&self.sandbox, path, false).map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string())
+            })?;
         std::fs::remove_file(canonical)
     }
 
@@ -330,7 +342,10 @@ mod tests {
             let fs = SandboxedFileSystem::new(sandbox_with_dir(&dir));
             let result = fs.read_to_string(Path::new("/etc/hosts"));
             assert!(result.is_err());
-            assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+            assert_eq!(
+                result.unwrap_err().kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
 
             let _ = std::fs::remove_dir_all(&dir);
         }
@@ -357,7 +372,10 @@ mod tests {
             let fs = SandboxedFileSystem::new(sandbox_with_dir(&dir));
             let result = fs.write_string(Path::new("/etc/hacked.txt"), "bad");
             assert!(result.is_err());
-            assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+            assert_eq!(
+                result.unwrap_err().kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
 
             let _ = std::fs::remove_dir_all(&dir);
         }
@@ -467,7 +485,10 @@ mod tests {
             let fs = SandboxedFileSystem::new(sandbox_no_fs());
             let result = fs.read_to_string(Path::new("/tmp/test.txt"));
             assert!(result.is_err());
-            assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+            assert_eq!(
+                result.unwrap_err().kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
         }
 
         #[test]

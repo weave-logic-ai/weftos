@@ -53,7 +53,12 @@ impl HashChainAuditor {
         Self::default()
     }
 
-    pub fn record<P: Serialize>(&mut self, kind: AuditKind, summary: impl Into<String>, payload: &P) {
+    pub fn record<P: Serialize>(
+        &mut self,
+        kind: AuditKind,
+        summary: impl Into<String>,
+        payload: &P,
+    ) {
         let summary = summary.into();
         let payload_bytes = serde_json::to_vec(payload).unwrap_or_default();
         let payload_hash = blake3::hash(&payload_bytes).to_hex().to_string();
@@ -93,7 +98,10 @@ impl HashChainAuditor {
         for (i, e) in self.entries.iter().enumerate() {
             let expected_seq = i as u64;
             if e.seq != expected_seq {
-                return Err(AuditError::SequenceGap { seq: e.seq, expected: expected_seq });
+                return Err(AuditError::SequenceGap {
+                    seq: e.seq,
+                    expected: expected_seq,
+                });
             }
             if e.prev_hash != expected_prev {
                 return Err(AuditError::ChainBreak { seq: e.seq });

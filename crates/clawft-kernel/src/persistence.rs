@@ -67,10 +67,7 @@ pub fn load_causal_graph(config: &PersistenceConfig) -> Result<CausalGraph, std:
 }
 
 /// Save the HNSW service state to the configured data directory.
-pub fn save_hnsw(
-    config: &PersistenceConfig,
-    service: &HnswService,
-) -> Result<(), std::io::Error> {
+pub fn save_hnsw(config: &PersistenceConfig, service: &HnswService) -> Result<(), std::io::Error> {
     service.save_to_file(&config.hnsw_index_path())
 }
 
@@ -120,9 +117,7 @@ pub fn save_all_with_chain(
 /// Restore all kernel state from the configured data directory.
 ///
 /// Components that have no saved state are returned as fresh instances.
-pub fn load_all(
-    config: &PersistenceConfig,
-) -> Result<(CausalGraph, HnswService), std::io::Error> {
+pub fn load_all(config: &PersistenceConfig) -> Result<(CausalGraph, HnswService), std::io::Error> {
     let graph = load_causal_graph(config)?;
     let hnsw = load_hnsw(config)?;
     Ok((graph, hnsw))
@@ -173,8 +168,14 @@ mod tests {
             data_dir: PathBuf::from("/tmp/test"),
             auto_save_interval_secs: None,
         };
-        assert_eq!(cfg.causal_graph_path(), PathBuf::from("/tmp/test/causal_graph.json"));
-        assert_eq!(cfg.hnsw_index_path(), PathBuf::from("/tmp/test/hnsw_index.json"));
+        assert_eq!(
+            cfg.causal_graph_path(),
+            PathBuf::from("/tmp/test/causal_graph.json")
+        );
+        assert_eq!(
+            cfg.hnsw_index_path(),
+            PathBuf::from("/tmp/test/hnsw_index.json")
+        );
         assert_eq!(cfg.chain_path(), PathBuf::from("/tmp/test/exochain.jsonl"));
     }
 
@@ -197,7 +198,11 @@ mod tests {
         graph.link(a, b, crate::causal::CausalEdgeType::Causes, 0.9, 100, 1);
 
         let hnsw = HnswService::new(HnswServiceConfig::default());
-        hnsw.insert("v1".into(), vec![1.0, 0.0, 0.0], serde_json::json!({"tag": "first"}));
+        hnsw.insert(
+            "v1".into(),
+            vec![1.0, 0.0, 0.0],
+            serde_json::json!({"tag": "first"}),
+        );
 
         save_all(&cfg, &graph, &hnsw).unwrap();
 
@@ -285,7 +290,11 @@ mod tests {
         }
         let hnsw = HnswService::new(HnswServiceConfig::default());
         for i in 0..50 {
-            hnsw.insert(format!("v{i}"), vec![i as f32, 0.0, 0.0], serde_json::json!({}));
+            hnsw.insert(
+                format!("v{i}"),
+                vec![i as f32, 0.0, 0.0],
+                serde_json::json!({}),
+            );
         }
 
         // Save from two threads simultaneously.
@@ -317,11 +326,13 @@ mod tests {
     fn save_to_nonexistent_deep_path_creates_dirs() {
         let cfg = PersistenceConfig {
             data_dir: std::env::temp_dir()
-                .join(format!("weftos_deep_{}",
+                .join(format!(
+                    "weftos_deep_{}",
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
-                        .as_nanos()))
+                        .as_nanos()
+                ))
                 .join("a")
                 .join("b")
                 .join("c"),
@@ -336,7 +347,13 @@ mod tests {
         assert!(cfg.causal_graph_path().exists());
 
         let _ = std::fs::remove_dir_all(
-            cfg.data_dir.parent().unwrap().parent().unwrap().parent().unwrap(),
+            cfg.data_dir
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap(),
         );
     }
 
@@ -440,7 +457,10 @@ mod tests {
         assert_eq!(loaded_graph.node_count(), 1);
         // Verify the node data is intact by checking we can retrieve by ID.
         let nodes = loaded_graph.get_node(nid);
-        assert!(nodes.is_some(), "loaded graph should contain the saved node");
+        assert!(
+            nodes.is_some(),
+            "loaded graph should contain the saved node"
+        );
         assert_eq!(nodes.unwrap().label, "important-node");
 
         let _ = std::fs::remove_dir_all(&cfg.data_dir);

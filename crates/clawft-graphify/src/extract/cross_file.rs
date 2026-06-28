@@ -67,10 +67,7 @@ pub fn resolve_cross_file_imports(
     let mut new_edges: Vec<Relationship> = Vec::new();
 
     for (result, path) in per_file.iter().zip(paths.iter()) {
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         if ext != "py" {
             continue;
         }
@@ -157,11 +154,7 @@ mod tests {
         }
     }
 
-    fn make_rel(
-        source: &str,
-        target: &str,
-        rel_type: RelationType,
-    ) -> Relationship {
+    fn make_rel(source: &str, target: &str, rel_type: RelationType) -> Relationship {
         Relationship {
             source: EntityId::from_legacy_string(source),
             target: EntityId::from_legacy_string(target),

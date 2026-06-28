@@ -33,14 +33,14 @@
 //! connections from leaking broadcaster fan-out slots.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use axum::{
     extract::{
-        ws::{Message, WebSocket},
         State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
     },
     response::IntoResponse,
 };
@@ -77,10 +77,7 @@ impl Default for HeartbeatConfig {
 }
 
 /// WebSocket upgrade handler.
-pub async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<ApiState>,
-) -> impl IntoResponse {
+pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<ApiState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
@@ -186,11 +183,9 @@ pub async fn handle_socket_with_heartbeat(
 
                         // Don't double-subscribe; just re-ack.
                         if subscriptions.contains_key(&topic) {
-                            let ack =
-                                serde_json::json!({"type": "subscribed", "topic": &topic});
+                            let ack = serde_json::json!({"type": "subscribed", "topic": &topic});
                             let mut s = sender.lock().await;
-                            let _ =
-                                s.send(Message::Text(ack.to_string().into())).await;
+                            let _ = s.send(Message::Text(ack.to_string().into())).await;
                             continue;
                         }
 
@@ -207,12 +202,8 @@ pub async fn handle_socket_with_heartbeat(
                                     Ok(msg) => {
                                         // Parse the message as JSON, falling
                                         // back to a plain string value.
-                                        let data = serde_json::from_str::<
-                                            serde_json::Value,
-                                        >(
-                                            &msg
-                                        )
-                                        .unwrap_or(serde_json::Value::String(msg));
+                                        let data = serde_json::from_str::<serde_json::Value>(&msg)
+                                            .unwrap_or(serde_json::Value::String(msg));
 
                                         let event = serde_json::json!({
                                             "type": "event",
@@ -220,20 +211,14 @@ pub async fn handle_socket_with_heartbeat(
                                             "data": data
                                         });
                                         let mut s = sender_clone.lock().await;
-                                        if s.send(Message::Text(
-                                            event.to_string().into(),
-                                        ))
-                                        .await
-                                        .is_err()
+                                        if s.send(Message::Text(event.to_string().into()))
+                                            .await
+                                            .is_err()
                                         {
                                             break; // Client disconnected.
                                         }
                                     }
-                                    Err(
-                                        tokio::sync::broadcast::error::RecvError::Lagged(
-                                            _,
-                                        ),
-                                    ) => {
+                                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                                         // Slow consumer; skip missed messages.
                                         continue;
                                     }
@@ -248,25 +233,20 @@ pub async fn handle_socket_with_heartbeat(
                         subscriptions.insert(topic.clone(), handle);
 
                         // Send subscription acknowledgement.
-                        let ack =
-                            serde_json::json!({"type": "subscribed", "topic": &topic});
+                        let ack = serde_json::json!({"type": "subscribed", "topic": &topic});
                         let mut s = sender.lock().await;
                         let _ = s.send(Message::Text(ack.to_string().into())).await;
                     }
 
                     "unsubscribe" => {
-                        let topic = cmd
-                            .get("topic")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("*");
+                        let topic = cmd.get("topic").and_then(|v| v.as_str()).unwrap_or("*");
 
                         // Abort the forwarding task if it exists.
                         if let Some(handle) = subscriptions.remove(topic) {
                             handle.abort();
                         }
 
-                        let ack =
-                            serde_json::json!({"type": "unsubscribed", "topic": topic});
+                        let ack = serde_json::json!({"type": "unsubscribed", "topic": topic});
                         let mut s = sender.lock().await;
                         let _ = s.send(Message::Text(ack.to_string().into())).await;
                     }
@@ -334,11 +314,7 @@ fn now_ms() -> u64 {
 /// forwarders, so a slow forwarder won't block the heartbeat
 /// indefinitely (it just queues behind on the next tick).
 fn spawn_heartbeat_task(
-    sender: Arc<
-        Mutex<
-            futures_util::stream::SplitSink<axum::extract::ws::WebSocket, Message>,
-        >,
-    >,
+    sender: Arc<Mutex<futures_util::stream::SplitSink<axum::extract::ws::WebSocket, Message>>>,
     last_pong_ms: Arc<AtomicU64>,
     eviction_signal: Arc<std::sync::atomic::AtomicBool>,
     cfg: HeartbeatConfig,
@@ -368,7 +344,10 @@ fn spawn_heartbeat_task(
             // loop exits.
             let ping = serde_json::json!({"type": "ping"});
             let mut s = sender.lock().await;
-            if s.send(Message::Text(ping.to_string().into())).await.is_err() {
+            if s.send(Message::Text(ping.to_string().into()))
+                .await
+                .is_err()
+            {
                 eviction_signal.store(true, Ordering::Relaxed);
                 break;
             }
@@ -393,10 +372,9 @@ mod tests {
     use crate::api::broadcaster::TopicBroadcaster;
     use crate::api::{
         AgentAccess, AgentInfo, ApiState, BusAccess, ChannelAccess, ChannelStatusInfo,
-        ConfigAccess, MemoryAccess, MemoryEntryInfo, SessionAccess, SessionDetail,
-        SessionInfo, SkillAccess, SkillInfo, ToolInfo, ToolRegistryAccess,
-        TtsProviderInfo, VoiceAccess, VoiceSettingsInfo, VoiceSettingsUpdate,
-        VoiceStatusInfo,
+        ConfigAccess, MemoryAccess, MemoryEntryInfo, SessionAccess, SessionDetail, SessionInfo,
+        SkillAccess, SkillInfo, ToolInfo, ToolRegistryAccess, TtsProviderInfo, VoiceAccess,
+        VoiceSettingsInfo, VoiceSettingsUpdate, VoiceStatusInfo,
     };
     use std::sync::Arc;
 
@@ -560,8 +538,8 @@ mod tests {
     /// Bind a localhost listener serving the WS handler with the
     /// supplied heartbeat config and return the bound address.
     async fn spawn_test_ws(cfg: HeartbeatConfig) -> std::net::SocketAddr {
-        use axum::routing::get;
         use axum::Router;
+        use axum::routing::get;
 
         set_test_cfg(cfg);
 
@@ -603,8 +581,7 @@ mod tests {
         let deadline = Duration::from_secs(2);
         let mut closed = false;
         while start.elapsed() < deadline {
-            match tokio::time::timeout(Duration::from_millis(500), read.next()).await
-            {
+            match tokio::time::timeout(Duration::from_millis(500), read.next()).await {
                 Ok(Some(Ok(TMessage::Close(_)))) => {
                     closed = true;
                     break;
@@ -641,8 +618,7 @@ mod tests {
 
         let url = format!("ws://{}/ws", addr);
         let (ws_stream, _) = connect_async(&url).await.expect("connect");
-        let (mut write, mut read) =
-            futures_util::StreamExt::split(ws_stream);
+        let (mut write, mut read) = futures_util::StreamExt::split(ws_stream);
 
         // Reply to every server ping with a JSON pong, for ~600ms (well
         // past `timeout` but never starving). Track that we got at
@@ -650,8 +626,7 @@ mod tests {
         let mut server_pings = 0;
         let deadline = std::time::Instant::now() + Duration::from_millis(600);
         while std::time::Instant::now() < deadline {
-            match tokio::time::timeout(Duration::from_millis(150), read.next()).await
-            {
+            match tokio::time::timeout(Duration::from_millis(150), read.next()).await {
                 Ok(Some(Ok(TMessage::Text(t)))) => {
                     let s = t.to_string();
                     if s.contains("\"ping\"") {

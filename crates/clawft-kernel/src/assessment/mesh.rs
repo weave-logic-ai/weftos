@@ -115,16 +115,16 @@ impl MeshCoordinator {
             } => {
                 // Update peer state with the broadcast info.
                 let mut peers = self.peer_states.lock().unwrap();
-                let entry = peers.entry(node_id.clone()).or_insert_with(|| {
-                    PeerAssessmentState {
+                let entry = peers
+                    .entry(node_id.clone())
+                    .or_insert_with(|| PeerAssessmentState {
                         node_id: node_id.clone(),
                         project_name: project_name.clone(),
                         last_assessment: None,
                         finding_count: 0,
                         analyzer_count: 0,
                         last_gossip: Utc::now().to_rfc3339(),
-                    }
-                });
+                    });
                 entry.finding_count = finding_count;
                 entry.last_gossip = Utc::now().to_rfc3339();
                 None
@@ -166,12 +166,7 @@ impl MeshCoordinator {
 
     /// Return a snapshot of all known peer assessment states.
     pub fn peer_states(&self) -> Vec<PeerAssessmentState> {
-        self.peer_states
-            .lock()
-            .unwrap()
-            .values()
-            .cloned()
-            .collect()
+        self.peer_states.lock().unwrap().values().cloned().collect()
     }
 
     /// Store or update a peer's assessment state.

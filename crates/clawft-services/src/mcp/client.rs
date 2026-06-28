@@ -282,8 +282,10 @@ impl McpClientPool {
         global: &[McpServerConfig],
         agent_overrides: &[AgentMcpServerConfig],
     ) -> Vec<McpServerConfig> {
-        let override_map: HashMap<&str, &AgentMcpServerConfig> =
-            agent_overrides.iter().map(|o| (o.name.as_str(), o)).collect();
+        let override_map: HashMap<&str, &AgentMcpServerConfig> = agent_overrides
+            .iter()
+            .map(|o| (o.name.as_str(), o))
+            .collect();
 
         let mut result: Vec<McpServerConfig> = Vec::new();
 
@@ -398,12 +400,10 @@ impl McpClientPool {
     /// Check if a server should be reconnected (exceeded max failures).
     pub async fn needs_reconnect(&self, server_name: &str) -> bool {
         let connections = self.connections.read().await;
-        connections
-            .get(server_name)
-            .is_some_and(|c| {
-                c.health == ConnectionHealth::Failed
-                    && c.failure_count < self.config.max_reconnect_attempts
-            })
+        connections.get(server_name).is_some_and(|c| {
+            c.health == ConnectionHealth::Failed
+                && c.failure_count < self.config.max_reconnect_attempts
+        })
     }
 
     /// List all servers that need health checks.
@@ -548,7 +548,8 @@ mod tests {
         );
 
         // Update to Healthy
-        pool.update_health("github", ConnectionHealth::Healthy).await;
+        pool.update_health("github", ConnectionHealth::Healthy)
+            .await;
         assert_eq!(
             pool.get_health("github").await,
             Some(ConnectionHealth::Healthy)
@@ -568,7 +569,8 @@ mod tests {
         pool.register_server(test_server("github")).await;
 
         // Healthy server doesn't need reconnect
-        pool.update_health("github", ConnectionHealth::Healthy).await;
+        pool.update_health("github", ConnectionHealth::Healthy)
+            .await;
         assert!(!pool.needs_reconnect("github").await);
 
         // Failed server needs reconnect (under max attempts)
@@ -592,7 +594,8 @@ mod tests {
         assert_eq!(needing.len(), 2);
 
         // After health check, should not need immediate recheck
-        pool.update_health("github", ConnectionHealth::Healthy).await;
+        pool.update_health("github", ConnectionHealth::Healthy)
+            .await;
         // github was just checked, slack still needs it
         let needing = pool.servers_needing_health_check().await;
         assert_eq!(needing.len(), 1);

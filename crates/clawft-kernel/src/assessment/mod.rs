@@ -11,8 +11,8 @@ pub mod analyzers;
 pub mod mesh;
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -514,10 +514,7 @@ impl AssessmentService {
 
         let peer_dir = PathBuf::from(&peer.location);
         if !peer_dir.exists() {
-            return Err(format!(
-                "peer directory '{}' does not exist",
-                peer.location
-            ));
+            return Err(format!("peer directory '{}' does not exist", peer.location));
         }
 
         let remote = self.run_assessment(&peer_dir, &local.scope, "json")?;
@@ -623,16 +620,17 @@ impl AssessmentService {
             for finding in &findings {
                 let path = project.join(&finding.file);
                 if let Some(parent) = path.parent()
-                    && parent.is_dir() {
-                        let mut extra = Vec::new();
-                        walk_dir(parent, &mut extra, &|_| true);
-                        for f in extra {
-                            if !all_scanned.contains(&f) {
-                                all_scanned.insert(f.clone());
-                                new_files.push(f);
-                            }
+                    && parent.is_dir()
+                {
+                    let mut extra = Vec::new();
+                    walk_dir(parent, &mut extra, &|_| true);
+                    for f in extra {
+                        if !all_scanned.contains(&f) {
+                            all_scanned.insert(f.clone());
+                            new_files.push(f);
                         }
                     }
+                }
             }
 
             total_discovered += new_files.len();
@@ -667,7 +665,10 @@ impl AssessmentService {
             }
         }
 
-        let warning_count = all_findings.iter().filter(|f| f.severity == "warning").count();
+        let warning_count = all_findings
+            .iter()
+            .filter(|f| f.severity == "warning")
+            .count();
         summary.complexity_warnings = all_findings
             .iter()
             .filter(|f| f.category == "size" && f.severity == "warning")
@@ -786,10 +787,7 @@ impl AssessmentService {
         let service_findings = report
             .findings
             .iter()
-            .filter(|f| {
-                f.category == "topology"
-                    && f.message.starts_with("Service:")
-            })
+            .filter(|f| f.category == "topology" && f.message.starts_with("Service:"))
             .count();
         if service_findings > 5 {
             insights.push(Finding {
@@ -930,9 +928,10 @@ fn walk_dir<F: Fn(&Path) -> bool>(dir: &Path, out: &mut Vec<PathBuf>, predicate:
         let path = entry.path();
         // Skip hidden dirs and common noise
         if let Some(name) = path.file_name().and_then(|n| n.to_str())
-            && (name.starts_with('.') || name == "target" || name == "node_modules") {
-                continue;
-            }
+            && (name.starts_with('.') || name == "target" || name == "node_modules")
+        {
+            continue;
+        }
         if path.is_dir() {
             walk_dir(&path, out, predicate);
         } else if predicate(&path) {
@@ -1045,9 +1044,7 @@ mod tests {
     fn full_assessment_scans_files() {
         let dir = setup_test_dir();
         let svc = AssessmentService::new();
-        let report = svc
-            .run_assessment(dir.path(), "full", "json")
-            .unwrap();
+        let report = svc.run_assessment(dir.path(), "full", "json").unwrap();
 
         assert_eq!(report.scope, "full");
         assert!(report.files_scanned >= 4);
@@ -1228,15 +1225,13 @@ scope = "full"
                 coherence_score: 0.8,
                 ..Default::default()
             },
-            findings: vec![
-                Finding {
-                    severity: "warning".into(),
-                    category: "size".into(),
-                    file: "old.rs".into(),
-                    line: None,
-                    message: "File has 600 lines (>500 limit)".into(),
-                },
-            ],
+            findings: vec![Finding {
+                severity: "warning".into(),
+                category: "size".into(),
+                file: "old.rs".into(),
+                line: None,
+                message: "File has 600 lines (>500 limit)".into(),
+            }],
             analyzers_run: vec!["complexity".into()],
         };
 
@@ -1250,15 +1245,13 @@ scope = "full"
                 coherence_score: 0.7,
                 ..Default::default()
             },
-            findings: vec![
-                Finding {
-                    severity: "warning".into(),
-                    category: "size".into(),
-                    file: "new.rs".into(),
-                    line: None,
-                    message: "File has 700 lines (>500 limit)".into(),
-                },
-            ],
+            findings: vec![Finding {
+                severity: "warning".into(),
+                category: "size".into(),
+                file: "new.rs".into(),
+                line: None,
+                message: "File has 700 lines (>500 limit)".into(),
+            }],
             analyzers_run: vec!["complexity".into()],
         };
 

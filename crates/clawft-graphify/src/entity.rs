@@ -193,9 +193,7 @@ pub enum FileType {
 
 impl FileType {
     /// All valid string representations (used by schema validation).
-    pub const VALID_STRINGS: &[&str] = &[
-        "code", "document", "paper", "image", "config", "unknown",
-    ];
+    pub const VALID_STRINGS: &[&str] = &["code", "document", "paper", "image", "config", "unknown"];
 
     /// Parse from a lowercase string.
     pub fn from_str_loose(s: &str) -> Option<Self> {
@@ -265,7 +263,10 @@ mod tests {
         assert_eq!(EntityType::Module.discriminant(), "module");
         assert_eq!(EntityType::Struct.discriminant(), "struct_");
         assert_eq!(EntityType::Enum.discriminant(), "enum_");
-        assert_eq!(EntityType::Custom("rationale".into()).discriminant(), "rationale");
+        assert_eq!(
+            EntityType::Custom("rationale".into()).discriminant(),
+            "rationale"
+        );
     }
 
     #[test]

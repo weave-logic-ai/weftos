@@ -1,7 +1,7 @@
 //! Project initialization for WeftOS.
 
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Result of initializing WeftOS in a project.
 pub struct InitResult {
@@ -66,8 +66,8 @@ fn generate_default_config(project_root: &Path) -> String {
     // Detect project type
     let is_rust = project_root.join("Cargo.toml").exists();
     let is_node = project_root.join("package.json").exists();
-    let is_python = project_root.join("pyproject.toml").exists()
-        || project_root.join("setup.py").exists();
+    let is_python =
+        project_root.join("pyproject.toml").exists() || project_root.join("setup.py").exists();
     let has_git = project_root.join(".git").exists();
 
     let language = if is_rust {

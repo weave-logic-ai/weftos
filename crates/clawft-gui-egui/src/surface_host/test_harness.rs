@@ -21,10 +21,7 @@ use crate::canon::CanonResponse;
 /// both responses and pending RPC dispatches. This helper keeps the
 /// historical `Vec<CanonResponse>` return shape for existing tests;
 /// callers who want dispatches should use `render_headless_full`.
-pub fn render_headless(
-    tree: &SurfaceTree,
-    snapshot: OntologySnapshot,
-) -> Vec<CanonResponse> {
+pub fn render_headless(tree: &SurfaceTree, snapshot: OntologySnapshot) -> Vec<CanonResponse> {
     render_headless_full(tree, snapshot).responses
 }
 

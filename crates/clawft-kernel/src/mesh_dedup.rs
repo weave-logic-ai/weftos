@@ -74,7 +74,8 @@ impl DedupFilter {
 
     /// Remove expired entries.
     fn evict_expired(&mut self) {
-        self.seen.retain(|_, inserted| inserted.elapsed() < self.ttl);
+        self.seen
+            .retain(|_, inserted| inserted.elapsed() < self.ttl);
     }
 
     /// Remove the oldest entry to make room for new ones.
@@ -127,7 +128,8 @@ mod tests {
     fn expired_entries_evicted() {
         // Use a zero TTL so entries expire immediately.
         let mut f = DedupFilter::new(Duration::from_nanos(0), 100);
-        f.seen.insert("old".to_string(), Instant::now() - Duration::from_secs(1));
+        f.seen
+            .insert("old".to_string(), Instant::now() - Duration::from_secs(1));
         // check_and_insert evicts expired, so "old" should be gone
         assert!(f.check_and_insert("old"));
     }

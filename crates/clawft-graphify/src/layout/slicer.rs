@@ -15,7 +15,7 @@ use crate::model::KnowledgeGraph;
 use crate::relationship::RelationType;
 use crate::topology::TopologySchema;
 
-use super::positioned::{PositionedGraph, PositionedNode, PositionedEdge, Rect};
+use super::positioned::{PositionedEdge, PositionedGraph, PositionedNode, Rect};
 
 /// A slice of the graph at a particular depth.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -45,7 +45,8 @@ pub fn top_level_slice(
     width: f64,
     height: f64,
 ) -> GraphSlice {
-    let has_parent: HashSet<EntityId> = kg.edges()
+    let has_parent: HashSet<EntityId> = kg
+        .edges()
         .filter(|(_, _, rel)| matches!(rel.relation_type, RelationType::Contains))
         .map(|(_, tgt, _)| tgt.id.clone())
         .collect();
@@ -53,12 +54,14 @@ pub fn top_level_slice(
     // Filter to nodes that have children (containers) at the top level.
     // Leaf nodes without parents (like imports) are only shown when
     // drilling into their sibling container.
-    let containers: std::collections::HashSet<EntityId> = kg.edges()
+    let containers: std::collections::HashSet<EntityId> = kg
+        .edges()
         .filter(|(_, _, rel)| matches!(rel.relation_type, RelationType::Contains))
         .map(|(src, _, _)| src.id.clone())
         .collect();
 
-    let top_nodes: Vec<EntityId> = kg.entities()
+    let top_nodes: Vec<EntityId> = kg
+        .entities()
         .filter(|e| !has_parent.contains(&e.id) && containers.contains(&e.id))
         .map(|e| e.id.clone())
         .collect();
@@ -75,7 +78,8 @@ pub fn children_slice(
     width: f64,
     height: f64,
 ) -> GraphSlice {
-    let children: Vec<EntityId> = kg.edges()
+    let children: Vec<EntityId> = kg
+        .edges()
         .filter(|(src, _, rel)| {
             src.id == *parent_id && matches!(rel.relation_type, RelationType::Contains)
         })
@@ -98,9 +102,7 @@ fn build_slice(
     let node_set: HashSet<&EntityId> = node_ids.iter().collect();
 
     // Collect entities for this slice.
-    let entities: Vec<_> = kg.entities()
-        .filter(|e| node_set.contains(&e.id))
-        .collect();
+    let entities: Vec<_> = kg.entities().filter(|e| node_set.contains(&e.id)).collect();
 
     // Which nodes have children?
     let children_of: HashMap<EntityId, usize> = {
@@ -117,7 +119,11 @@ fn build_slice(
 
     // Lay out just these nodes.
     let slice_ids: Vec<EntityId> = entities.iter().map(|e| e.id.clone()).collect();
-    let id_to_idx: HashMap<&EntityId, usize> = slice_ids.iter().enumerate().map(|(i, id)| (id, i)).collect();
+    let id_to_idx: HashMap<&EntityId, usize> = slice_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (id, i))
+        .collect();
 
     // Build ancestor map: for any entity, find which slice node it belongs to.
     // This lets us aggregate child-to-child edges onto their parent containers.
@@ -166,10 +172,11 @@ fn build_slice(
             if !seen_edge_keys.contains(&key) {
                 seen_edge_keys.insert(key);
                 if let (Some(&si), Some(&ti)) = (id_to_idx.get(&src.id), id_to_idx.get(&tgt.id))
-                    && si != ti {
-                        edge_pairs.push((si, ti));
-                        slice_edges.push((src.id.clone(), tgt.id.clone(), rel_label.clone()));
-                    }
+                    && si != ti
+                {
+                    edge_pairs.push((si, ti));
+                    slice_edges.push((src.id.clone(), tgt.id.clone(), rel_label.clone()));
+                }
             }
             continue;
         }
@@ -191,14 +198,16 @@ fn build_slice(
             }
             // Portal: one end is inside the slice, the other is outside.
             (Some(src_s), None) if node_set.contains(src_s) => {
-                portal_sources.entry(src_s.clone()).or_default().push(
-                    format!("{} (external)", tgt.label),
-                );
+                portal_sources
+                    .entry(src_s.clone())
+                    .or_default()
+                    .push(format!("{} (external)", tgt.label));
             }
             (None, Some(tgt_s)) if node_set.contains(tgt_s) => {
-                portal_sources.entry(tgt_s.clone()).or_default().push(
-                    format!("{} (external)", src.label),
-                );
+                portal_sources
+                    .entry(tgt_s.clone())
+                    .or_default()
+                    .push(format!("{} (external)", src.label));
             }
             _ => {}
         }
@@ -228,7 +237,10 @@ fn build_slice(
     // Build positioned nodes.
     let mut nodes: Vec<PositionedNode> = Vec::new();
     for entity in &entities {
-        let (x, y) = positions.get(&entity.id).copied().unwrap_or((width / 2.0, height / 2.0));
+        let (x, y) = positions
+            .get(&entity.id)
+            .copied()
+            .unwrap_or((width / 2.0, height / 2.0));
         let type_key = entity.entity_type.discriminant();
         let config = schema.node_config(type_key);
         let child_count = children_of.get(&entity.id).copied().unwrap_or(0);
@@ -247,7 +259,10 @@ fn build_slice(
 
         let portal_count = portal_sources.get(&entity.id).map(|v| v.len()).unwrap_or(0);
         let label = if child_count > 0 && portal_count > 0 {
-            format!("{} ({} children, {} external)", entity.label, child_count, portal_count)
+            format!(
+                "{} ({} children, {} external)",
+                entity.label, child_count, portal_count
+            )
         } else if child_count > 0 {
             format!("{} ({})", entity.label, child_count)
         } else if portal_count > 0 {
@@ -306,7 +321,12 @@ fn build_slice(
     let mut graph = PositionedGraph {
         nodes,
         edges,
-        viewport: Rect { x: 0.0, y: 0.0, width, height },
+        viewport: Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        },
         schema_name: schema.name.clone(),
         schema_version: schema.version.clone(),
     };
@@ -411,7 +431,8 @@ mod tests {
             relation_type: RelationType::Contains,
             confidence: Confidence::Extracted,
             weight: 1.0,
-            source_file: None, source_location: None,
+            source_file: None,
+            source_location: None,
             metadata: serde_json::json!({}),
         }
     }
@@ -431,7 +452,8 @@ mod tests {
         kg.add_relationship(contains(&p, &m2));
         kg.add_relationship(contains(&m1, &f));
 
-        let schema = TopologySchema::from_yaml(r##"
+        let schema = TopologySchema::from_yaml(
+            r##"
 name: test
 label: T
 version: "1.0.0"
@@ -439,7 +461,9 @@ nodes:
   "*":
     geometry: force
 edges: []
-"##).unwrap();
+"##,
+        )
+        .unwrap();
 
         let slice = top_level_slice(&kg, &schema, 800.0, 600.0);
         // Only the package should be at top level.
@@ -465,7 +489,8 @@ edges: []
         kg.add_relationship(contains(&p, &m2));
         kg.add_relationship(contains(&m1, &f));
 
-        let schema = TopologySchema::from_yaml(r##"
+        let schema = TopologySchema::from_yaml(
+            r##"
 name: test
 label: T
 version: "1.0.0"
@@ -473,9 +498,14 @@ nodes:
   "*":
     geometry: force
 edges: []
-"##).unwrap();
+"##,
+        )
+        .unwrap();
 
-        let crumbs = vec![BreadcrumbEntry { id: p.id.to_hex(), label: "mypackage".into() }];
+        let crumbs = vec![BreadcrumbEntry {
+            id: p.id.to_hex(),
+            label: "mypackage".into(),
+        }];
         let slice = children_slice(&kg, &schema, &p.id, &crumbs, 800.0, 600.0);
         // Should have auth and db modules, not the function.
         assert_eq!(slice.graph.nodes.len(), 2);

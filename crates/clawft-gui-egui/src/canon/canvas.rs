@@ -9,9 +9,9 @@ use std::borrow::Cow;
 
 use eframe::egui;
 
+use super::CanonWidget;
 use super::response::CanonResponse;
 use super::types::{Affordance, Confidence, IdentityUri, MutationAxis, Tooltip, VariantId};
-use super::CanonWidget;
 
 const IDENTITY: &str = "ui://canvas";
 
@@ -174,14 +174,14 @@ where
         // Pull the persisted transform. We keep two in-memory copies
         // (Copy + Default) so serde-persistence is not required.
         let transform_key = egui::Id::new(("canon.canvas.xform", id));
-        let mut transform: CanvasTransform = ui.memory_mut(|m| {
-            *m.data
-                .get_temp_mut_or_default::<CanvasTransformCell>(transform_key)
-        })
-        .0;
+        let mut transform: CanvasTransform = ui
+            .memory_mut(|m| {
+                *m.data
+                    .get_temp_mut_or_default::<CanvasTransformCell>(transform_key)
+            })
+            .0;
 
-        let (resp, painter) =
-            ui.allocate_painter(self.size, egui::Sense::click_and_drag());
+        let (resp, painter) = ui.allocate_painter(self.size, egui::Sense::click_and_drag());
         let rect = resp.rect;
 
         // Apply pan from drag delta.

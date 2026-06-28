@@ -111,7 +111,10 @@ impl GoalTree {
 
     /// Return all root goals (those with no parent).
     pub fn roots(&self) -> Vec<&Goal> {
-        self.goals.iter().filter(|g| g.parent_goal.is_none()).collect()
+        self.goals
+            .iter()
+            .filter(|g| g.parent_goal.is_none())
+            .collect()
     }
 
     /// Return all direct children of the given goal.
@@ -294,6 +297,9 @@ mod tests {
         let json = serde_json::to_string(&tree).unwrap();
         let restored: GoalTree = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.goals.len(), 2);
-        assert_eq!(restored.find("g2").unwrap().parent_goal.as_deref(), Some("g1"));
+        assert_eq!(
+            restored.find("g2").unwrap().parent_goal.as_deref(),
+            Some("g1")
+        );
     }
 }

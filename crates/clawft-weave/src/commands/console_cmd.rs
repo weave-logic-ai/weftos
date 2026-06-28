@@ -84,17 +84,21 @@ async fn replay_boot_log(client: &mut DaemonClient) -> anyhow::Result<()> {
         return Ok(());
     }
     if let Some(result) = resp.result
-        && let Some(entries) = result.as_array() {
-            for entry in entries {
-                let phase = entry.get("phase").and_then(|v| v.as_str()).unwrap_or("?");
-                let message = entry.get("message").and_then(|v| v.as_str()).unwrap_or("");
-                let level = entry.get("level").and_then(|v| v.as_str()).unwrap_or("info");
-                if level == "debug" {
-                    continue;
-                }
-                println!("  [{phase:<10}] {message}");
+        && let Some(entries) = result.as_array()
+    {
+        for entry in entries {
+            let phase = entry.get("phase").and_then(|v| v.as_str()).unwrap_or("?");
+            let message = entry.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            let level = entry
+                .get("level")
+                .and_then(|v| v.as_str())
+                .unwrap_or("info");
+            if level == "debug" {
+                continue;
             }
+            println!("  [{phase:<10}] {message}");
         }
+    }
     Ok(())
 }
 
@@ -136,12 +140,7 @@ async fn run_repl(client: &mut DaemonClient) -> anyhow::Result<()> {
             "logs" => dispatch(client, "kernel.logs").await,
             "chain status" => dispatch(client, "chain.status").await,
             "chain local" => {
-                dispatch_params(
-                    client,
-                    "chain.local",
-                    serde_json::json!({"count": 20}),
-                )
-                .await;
+                dispatch_params(client, "chain.local", serde_json::json!({"count": 20})).await;
             }
             "chain verify" => dispatch(client, "chain.verify").await,
             "tree stats" => dispatch(client, "resource.stats").await,
@@ -186,9 +185,10 @@ fn print_response(resp: &Response) {
         return;
     }
     if let Some(ref result) = resp.result
-        && let Ok(pretty) = serde_json::to_string_pretty(result) {
-            println!("{pretty}");
-        }
+        && let Ok(pretty) = serde_json::to_string_pretty(result)
+    {
+        println!("{pretty}");
+    }
 }
 
 fn print_help() {

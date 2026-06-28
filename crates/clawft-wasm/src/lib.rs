@@ -173,10 +173,7 @@ mod browser_entry {
     static RUNTIME: OnceLock<BrowserRuntime> = OnceLock::new();
 
     /// Look up the user's `ProviderConfig` by provider name.
-    fn user_provider_config(
-        config: &Config,
-        name: &str,
-    ) -> clawft_types::config::ProviderConfig {
+    fn user_provider_config(config: &Config, name: &str) -> clawft_types::config::ProviderConfig {
         match name {
             "anthropic" => config.providers.anthropic.clone(),
             "openai" => config.providers.openai.clone(),
@@ -201,7 +198,14 @@ mod browser_entry {
     fn resolve_provider(
         config: &Config,
         model: &str,
-    ) -> Result<(LlmProviderConfig, String, clawft_types::config::ProviderConfig), String> {
+    ) -> Result<
+        (
+            LlmProviderConfig,
+            String,
+            clawft_types::config::ProviderConfig,
+        ),
+        String,
+    > {
         let builtins = clawft_llm::config::builtin_providers();
 
         // 1. Find the builtin whose model_prefix matches.
@@ -228,7 +232,15 @@ mod browser_entry {
         // 2. No prefix matched — fall back to OpenRouter if it has an API key,
         //    since OpenRouter aggregates third-party models with vendor/ prefixes
         //    (e.g. arcee-ai/, meta-llama/, mistralai/).
-        let fallback_order = ["openrouter", "openai", "anthropic", "groq", "deepseek", "gemini", "xai"];
+        let fallback_order = [
+            "openrouter",
+            "openai",
+            "anthropic",
+            "groq",
+            "deepseek",
+            "gemini",
+            "xai",
+        ];
 
         for name in &fallback_order {
             let user_cfg = user_provider_config(config, name);
@@ -281,8 +293,8 @@ mod browser_entry {
         let platform = Arc::new(BrowserPlatform::new());
 
         let model = config.agents.defaults.model.clone();
-        let (llm_cfg, stripped_model, user_cfg) = resolve_provider(&config, &model)
-            .map_err(|e| JsValue::from_str(&e))?;
+        let (llm_cfg, stripped_model, user_cfg) =
+            resolve_provider(&config, &model).map_err(|e| JsValue::from_str(&e))?;
 
         let api_key = user_cfg.api_key.expose();
         if api_key.is_empty() {
@@ -295,10 +307,7 @@ mod browser_entry {
         web_sys::console::log_1(
             &format!(
                 "[clawft] provider={}, cors_proxy={:?}, browser_direct={}, base_url={}",
-                llm_cfg.name,
-                user_cfg.cors_proxy,
-                user_cfg.browser_direct,
-                llm_cfg.base_url,
+                llm_cfg.name, user_cfg.cors_proxy, user_cfg.browser_direct, llm_cfg.base_url,
             )
             .into(),
         );
@@ -548,10 +557,20 @@ mod browser_entry {
 
         // Secret patterns (mirrors SecurityAnalyzer)
         let secret_patterns: &[&str] = &[
-            "api_key=", "api_key =", "apikey=", "apikey =",
-            "password=", "password =", "passwd=", "passwd =",
-            "secret=", "secret =", "token=", "token =",
-            "aws_secret", "private_key",
+            "api_key=",
+            "api_key =",
+            "apikey=",
+            "apikey =",
+            "password=",
+            "password =",
+            "passwd=",
+            "passwd =",
+            "secret=",
+            "secret =",
+            "token=",
+            "token =",
+            "aws_secret",
+            "private_key",
         ];
 
         for file in &files {
@@ -628,8 +647,7 @@ mod browser_entry {
                     category: "security".into(),
                     file: path.clone(),
                     line: None,
-                    message: "Environment file should not be committed to version control"
-                        .into(),
+                    message: "Environment file should not be committed to version control".into(),
                 });
                 continue;
             }

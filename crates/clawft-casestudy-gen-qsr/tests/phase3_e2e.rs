@@ -1,8 +1,11 @@
 //! Phase 3 — gap analysis, coherence scoring, ops dashboard.
 
 use clawft_casestudy_gen_qsr::{
-    coherence, config::GeneratorConfig, dashboard,
-    gaps::{self, GapPattern, GapSeverity}, generate,
+    coherence,
+    config::GeneratorConfig,
+    dashboard,
+    gaps::{self, GapPattern, GapSeverity},
+    generate,
 };
 
 fn tiny_corpus() -> (tempfile::TempDir, clawft_casestudy_gen_qsr::Corpus) {
@@ -12,7 +15,9 @@ fn tiny_corpus() -> (tempfile::TempDir, clawft_casestudy_gen_qsr::Corpus) {
     (tmp, corpus)
 }
 
-fn tiny_corpus_with_config(config: GeneratorConfig) -> (tempfile::TempDir, clawft_casestudy_gen_qsr::Corpus) {
+fn tiny_corpus_with_config(
+    config: GeneratorConfig,
+) -> (tempfile::TempDir, clawft_casestudy_gen_qsr::Corpus) {
     let tmp = tempfile::tempdir().unwrap();
     let corpus = generate(&config, tmp.path()).unwrap();
     (tmp, corpus)
@@ -66,9 +71,18 @@ fn cert_detector_skips_terminated_employees() {
     let (_tmp, corpus) = tiny_corpus_with_config(config.clone());
 
     let report = gaps::sweep(&config, &corpus.dims, &corpus.ops);
-    for gap in report.gaps.iter().filter(|g| g.pattern == GapPattern::CertExpiredUnrenewed) {
+    for gap in report
+        .gaps
+        .iter()
+        .filter(|g| g.pattern == GapPattern::CertExpiredUnrenewed)
+    {
         let person_label = gap.subject.split("::").next().unwrap();
-        let person = corpus.dims.people.iter().find(|p| p.label == person_label).unwrap();
+        let person = corpus
+            .dims
+            .people
+            .iter()
+            .find(|p| p.label == person_label)
+            .unwrap();
         assert_eq!(
             person.status,
             clawft_casestudy_gen_qsr::dimensions::PersonStatus::Active,
@@ -106,8 +120,14 @@ fn inventory_and_audit_cadence_detectors_respect_window() {
     let inventory_per_store = 4;
     let audit_per_store = 2;
     let stores = corpus.dims.stores.len();
-    assert_eq!(report.count(GapPattern::InventoryNotPerformed), inventory_per_store * stores);
-    assert_eq!(report.count(GapPattern::AuditNotPerformed), audit_per_store * stores);
+    assert_eq!(
+        report.count(GapPattern::InventoryNotPerformed),
+        inventory_per_store * stores
+    );
+    assert_eq!(
+        report.count(GapPattern::AuditNotPerformed),
+        audit_per_store * stores
+    );
 }
 
 #[test]
@@ -127,7 +147,8 @@ fn shift_coverage_detector_matches_adequacy_ledger() {
 fn lambda_2_is_nonzero_for_connected_org_subgraph() {
     let (_tmp, corpus) = tiny_corpus();
     let gap_report = gaps::sweep(&GeneratorConfig::tiny(42), &corpus.dims, &corpus.ops);
-    let scores = coherence::score_all_stores(&corpus.dims, &corpus.events, &corpus.ops, &gap_report);
+    let scores =
+        coherence::score_all_stores(&corpus.dims, &corpus.events, &corpus.ops, &gap_report);
     // Every store's org subgraph connects {store, 3 positions, ~20 people}
     // → λ₂ must be strictly positive, albeit small.
     for s in &scores {
@@ -144,7 +165,8 @@ fn lambda_2_is_nonzero_for_connected_org_subgraph() {
 fn ops_health_is_in_zero_one() {
     let (_tmp, corpus) = tiny_corpus();
     let gap_report = gaps::sweep(&GeneratorConfig::tiny(42), &corpus.dims, &corpus.ops);
-    let scores = coherence::score_all_stores(&corpus.dims, &corpus.events, &corpus.ops, &gap_report);
+    let scores =
+        coherence::score_all_stores(&corpus.dims, &corpus.events, &corpus.ops, &gap_report);
     for s in &scores {
         assert!(s.ops_health >= 0.0 && s.ops_health <= 1.0);
         assert!(s.gap_weight >= 0.0);
@@ -157,7 +179,8 @@ fn ops_health_is_in_zero_one() {
 fn worst_stores_are_ranked_ascending_by_health() {
     let (_tmp, corpus) = tiny_corpus();
     let gap_report = gaps::sweep(&GeneratorConfig::tiny(42), &corpus.dims, &corpus.ops);
-    let scores = coherence::score_all_stores(&corpus.dims, &corpus.events, &corpus.ops, &gap_report);
+    let scores =
+        coherence::score_all_stores(&corpus.dims, &corpus.events, &corpus.ops, &gap_report);
     let dash = dashboard::build(&gap_report, scores, 5);
     for window in dash.worst_stores.windows(2) {
         assert!(window[0].ops_health <= window[1].ops_health);
@@ -171,7 +194,8 @@ fn worst_stores_are_ranked_ascending_by_health() {
 fn text_dashboard_renders_expected_sections() {
     let (_tmp, corpus) = tiny_corpus();
     let gap_report = gaps::sweep(&GeneratorConfig::tiny(42), &corpus.dims, &corpus.ops);
-    let scores = coherence::score_all_stores(&corpus.dims, &corpus.events, &corpus.ops, &gap_report);
+    let scores =
+        coherence::score_all_stores(&corpus.dims, &corpus.events, &corpus.ops, &gap_report);
     let dash = dashboard::build(&gap_report, scores, 5);
     let text = dashboard::render_text(&dash);
     assert!(text.contains("OPS DASHBOARD"));
@@ -187,12 +211,16 @@ fn critical_severity_weighting_hurts_ops_health_more_than_low() {
     use clawft_casestudy_gen_qsr::dimensions::Dimensions;
     let (_tmp, corpus) = tiny_corpus();
     let gap_report = gaps::sweep(&GeneratorConfig::tiny(42), &corpus.dims, &corpus.ops);
-    let scores = coherence::score_all_stores(&corpus.dims, &corpus.events, &corpus.ops, &gap_report);
+    let scores =
+        coherence::score_all_stores(&corpus.dims, &corpus.events, &corpus.ops, &gap_report);
 
     let mean_critical: f64 = scores
         .iter()
         .filter(|s| {
-            gap_report.for_store(&s.store_ref).iter().any(|g| g.severity == GapSeverity::Critical)
+            gap_report
+                .for_store(&s.store_ref)
+                .iter()
+                .any(|g| g.severity == GapSeverity::Critical)
         })
         .map(|s| s.ops_health)
         .sum();

@@ -37,7 +37,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::{
-    clamp_complexity, ContextDecision, ContextRequest, ContextRouter, COMPLEXITY_HINT_LIMIT,
+    COMPLEXITY_HINT_LIMIT, ContextDecision, ContextRequest, ContextRouter, clamp_complexity,
 };
 
 /// System prompt the v1 classifier sees on every classification turn.
@@ -197,9 +197,7 @@ impl ContextRouter for LlmClassifierRouter {
             .await
         {
             Ok(body) if body.trim().is_empty() => {
-                tracing::warn!(
-                    "LlmClassifierRouter: empty classifier response; falling back"
-                );
+                tracing::warn!("LlmClassifierRouter: empty classifier response; falling back");
                 return ContextDecision::default();
             }
             Ok(body) => body,
@@ -348,9 +346,7 @@ mod tests {
 
     #[tokio::test]
     async fn llm_classifier_parses_valid_envelope() {
-        let r = router_with(Ok(
-            r#"{"archetype":"CodeGen","complexity":0.15}"#.into(),
-        ));
+        let r = router_with(Ok(r#"{"archetype":"CodeGen","complexity":0.15}"#.into()));
         let d = r.route(&req("refactor this loop")).await;
         assert!((d.complexity_hint - 0.15).abs() < 1e-5);
         assert_eq!(d.archetype.as_deref(), Some("CodeGen"));
@@ -362,9 +358,7 @@ mod tests {
     async fn llm_classifier_clamps_out_of_range_complexity() {
         // Model misbehaves and returns 0.9 — well outside the
         // [-0.3, +0.3] band. Must saturate to +0.3 without panicking.
-        let r = router_with(Ok(
-            r#"{"archetype":"Reasoning","complexity":0.9}"#.into(),
-        ));
+        let r = router_with(Ok(r#"{"archetype":"Reasoning","complexity":0.9}"#.into()));
         let d = r.route(&req("prove ZF + AC")).await;
         assert_eq!(d.complexity_hint, COMPLEXITY_HINT_LIMIT);
         assert_eq!(d.archetype.as_deref(), Some("Reasoning"));
@@ -373,7 +367,7 @@ mod tests {
     #[tokio::test]
     async fn llm_classifier_clamps_negative_out_of_range() {
         let r = router_with(Ok(
-            r#"{"archetype":"Conversational","complexity":-1.0}"#.into(),
+            r#"{"archetype":"Conversational","complexity":-1.0}"#.into()
         ));
         let d = r.route(&req("hi")).await;
         assert_eq!(d.complexity_hint, -COMPLEXITY_HINT_LIMIT);
@@ -458,9 +452,7 @@ mod tests {
     async fn llm_classifier_handles_non_finite_complexity() {
         // Defensive: a model emitting a number too large to fit f32
         // becomes ±inf when narrowed; the pre-clamp coerces to 0.0.
-        let r = router_with(Ok(
-            r#"{"archetype":"X","complexity":1e308}"#.into(),
-        ));
+        let r = router_with(Ok(r#"{"archetype":"X","complexity":1e308}"#.into()));
         let d = r.route(&req("x")).await;
         // 1e308 as f32 is +inf → coerced to 0.0 by the pre-clamp
         // path because it's not finite.

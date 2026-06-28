@@ -110,29 +110,17 @@ impl MicroHnsw {
     /// Process a request message and return a response.
     pub fn process(&mut self, request: MicroHnswRequest) -> MicroHnswResponse {
         match request {
-            MicroHnswRequest::Insert { id, embedding } => {
-                self.insert(id, embedding)
-            }
-            MicroHnswRequest::Query { embedding, k } => {
-                self.query(&embedding, k)
-            }
+            MicroHnswRequest::Insert { id, embedding } => self.insert(id, embedding),
+            MicroHnswRequest::Query { embedding, k } => self.query(&embedding, k),
             MicroHnswRequest::Delete { id } => self.delete(id),
-            MicroHnswRequest::Count => {
-                MicroHnswResponse::Count(self.nodes.len())
-            }
+            MicroHnswRequest::Count => MicroHnswResponse::Count(self.nodes.len()),
         }
     }
 
     /// Insert a vector into the index.
-    fn insert(
-        &mut self,
-        id: u32,
-        embedding: Vec<f32>,
-    ) -> MicroHnswResponse {
+    fn insert(&mut self, id: u32, embedding: Vec<f32>) -> MicroHnswResponse {
         if self.nodes.len() >= MAX_VECTORS {
-            return MicroHnswResponse::Error(
-                "micro-HNSW capacity exceeded".into(),
-            );
+            return MicroHnswResponse::Error("micro-HNSW capacity exceeded".into());
         }
 
         if embedding.len() != self.dimension {
@@ -196,19 +184,14 @@ impl MicroHnsw {
 
             // Expand neighbors.
             for &neighbor_idx in &node.neighbors {
-                if neighbor_idx < self.nodes.len()
-                    && !visited[neighbor_idx]
-                {
+                if neighbor_idx < self.nodes.len() && !visited[neighbor_idx] {
                     visited[neighbor_idx] = true;
                     candidates.push(neighbor_idx);
                 }
             }
         }
 
-        results.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(k);
 
         MicroHnswResponse::Results(results)
@@ -246,49 +229,28 @@ impl MicroHnsw {
     }
 
     /// Find the indices of the k nearest nodes to the given embedding.
-    fn find_nearest_indices(
-        &self,
-        embedding: &[f32],
-        k: usize,
-    ) -> Vec<usize> {
+    fn find_nearest_indices(&self, embedding: &[f32], k: usize) -> Vec<usize> {
         let mut scored: Vec<(usize, f32)> = self
             .nodes
             .iter()
             .enumerate()
-            .map(|(i, node)| {
-                (i, cosine_similarity(embedding, &node.embedding))
-            })
+            .map(|(i, node)| (i, cosine_similarity(embedding, &node.embedding)))
             .collect();
 
-        scored.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(k);
         scored.into_iter().map(|(i, _)| i).collect()
     }
 
     /// Brute-force query for small datasets.
-    fn brute_force_query(
-        &self,
-        embedding: &[f32],
-        k: usize,
-    ) -> MicroHnswResponse {
+    fn brute_force_query(&self, embedding: &[f32], k: usize) -> MicroHnswResponse {
         let mut results: Vec<(u32, f32)> = self
             .nodes
             .iter()
-            .map(|node| {
-                (
-                    node.id,
-                    cosine_similarity(embedding, &node.embedding),
-                )
-            })
+            .map(|node| (node.id, cosine_similarity(embedding, &node.embedding)))
             .collect();
 
-        results.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(k);
 
         MicroHnswResponse::Results(results)

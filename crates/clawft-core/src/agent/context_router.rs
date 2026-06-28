@@ -189,8 +189,8 @@ impl ContextRouter for NullRouter {
 pub mod llm_classifier;
 
 pub use llm_classifier::{
-    Classifier, ClassifierOutput, LlmClassifierRouter, CLASSIFIER_SYSTEM_PROMPT,
-    DEFAULT_CLASSIFIER_MAX_TOKENS,
+    CLASSIFIER_SYSTEM_PROMPT, Classifier, ClassifierOutput, DEFAULT_CLASSIFIER_MAX_TOKENS,
+    LlmClassifierRouter,
 };
 
 // ── v2: EmbeddingRouter ──────────────────────────────────────────────────
@@ -206,7 +206,7 @@ pub mod embedding;
 
 #[cfg(feature = "vector-memory")]
 pub use embedding::{
-    EmbeddingRouter, EmbeddingRouterError, DEFAULT_CONFIDENCE_THRESHOLD, DEFAULT_TOP_K,
+    DEFAULT_CONFIDENCE_THRESHOLD, DEFAULT_TOP_K, EmbeddingRouter, EmbeddingRouterError,
     FALLBACK_TRACING_TARGET,
 };
 

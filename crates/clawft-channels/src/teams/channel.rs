@@ -153,9 +153,7 @@ impl TeamsChannelAdapter {
             .send()
             .await
             .map_err(|e| {
-                PluginError::ExecutionFailed(format!(
-                    "teams: token request failed: {e}"
-                ))
+                PluginError::ExecutionFailed(format!("teams: token request failed: {e}"))
             })?;
 
         if !resp.status().is_success() {
@@ -167,16 +165,13 @@ impl TeamsChannelAdapter {
         }
 
         let parsed: TokenResponse = resp.json().await.map_err(|e| {
-            PluginError::ExecutionFailed(format!(
-                "teams: malformed token response: {e}"
-            ))
+            PluginError::ExecutionFailed(format!("teams: malformed token response: {e}"))
         })?;
 
         let lifetime = Duration::from_secs(parsed.expires_in);
         // 60s safety margin so we refresh before MS rejects the token.
         let margin = Duration::from_secs(60);
-        let refresh_after =
-            now + lifetime.saturating_sub(margin);
+        let refresh_after = now + lifetime.saturating_sub(margin);
 
         let cached = CachedToken {
             access_token: parsed.access_token.clone(),
@@ -196,9 +191,7 @@ impl TeamsChannelAdapter {
     ) -> Result<String, PluginError> {
         let token = self.access_token().await?;
         let base = service_url.trim_end_matches('/');
-        let url = format!(
-            "{base}/v3/conversations/{conversation_id}/activities"
-        );
+        let url = format!("{base}/v3/conversations/{conversation_id}/activities");
         let body = Activity {
             activity_type: "message".into(),
             text: text.into(),
@@ -220,9 +213,7 @@ impl TeamsChannelAdapter {
             .send()
             .await
             .map_err(|e| {
-                PluginError::ExecutionFailed(format!(
-                    "teams: activity POST failed: {e}"
-                ))
+                PluginError::ExecutionFailed(format!("teams: activity POST failed: {e}"))
             })?;
 
         if !resp.status().is_success() {
@@ -233,12 +224,9 @@ impl TeamsChannelAdapter {
             )));
         }
 
-        let parsed: ActivityPostResponse =
-            resp.json().await.map_err(|e| {
-                PluginError::ExecutionFailed(format!(
-                    "teams: malformed activity response: {e}"
-                ))
-            })?;
+        let parsed: ActivityPostResponse = resp.json().await.map_err(|e| {
+            PluginError::ExecutionFailed(format!("teams: malformed activity response: {e}"))
+        })?;
         Ok(parsed.id)
     }
 
@@ -255,9 +243,8 @@ impl TeamsChannelAdapter {
         }
         // jsonwebtoken::decode_header validates the JWT shape and
         // ensures the alg/typ header is parseable.
-        let _header = jsonwebtoken::decode_header(token).map_err(|e| {
-            format!("teams: malformed JWT header: {e}")
-        })?;
+        let _header = jsonwebtoken::decode_header(token)
+            .map_err(|e| format!("teams: malformed JWT header: {e}"))?;
         // Splitting confirms claim payload is present (header.claims.sig).
         if token.matches('.').count() != 2 {
             return Err("teams: JWT must have exactly two '.' separators".into());
@@ -321,16 +308,12 @@ impl ChannelAdapter for TeamsChannelAdapter {
         }
 
         // Bind axum listener.
-        let bind_addr: std::net::SocketAddr = self
-            .config
-            .webhook_bind
-            .parse()
-            .map_err(|e| {
-                PluginError::LoadFailed(format!(
-                    "teams adapter: invalid webhook_bind {:?}: {e}",
-                    self.config.webhook_bind
-                ))
-            })?;
+        let bind_addr: std::net::SocketAddr = self.config.webhook_bind.parse().map_err(|e| {
+            PluginError::LoadFailed(format!(
+                "teams adapter: invalid webhook_bind {:?}: {e}",
+                self.config.webhook_bind
+            ))
+        })?;
 
         let allowed = self.config.allowed_users.clone();
         let host_for_handler = host.clone();
@@ -339,18 +322,15 @@ impl ChannelAdapter for TeamsChannelAdapter {
         let listener = tokio::net::TcpListener::bind(bind_addr)
             .await
             .map_err(|e| {
-                PluginError::LoadFailed(format!(
-                    "teams adapter: bind {bind_addr} failed: {e}"
-                ))
+                PluginError::LoadFailed(format!("teams adapter: bind {bind_addr} failed: {e}"))
             })?;
 
         info!(addr = %bind_addr, "teams: inbound webhook listening");
 
         let cancel_for_serve = cancel.clone();
-        let serve = axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                cancel_for_serve.cancelled().await;
-            });
+        let serve = axum::serve(listener, app).with_graceful_shutdown(async move {
+            cancel_for_serve.cancelled().await;
+        });
 
         if let Err(e) = serve.await {
             error!(error = %e, "teams: webhook server exited with error");
@@ -363,15 +343,9 @@ impl ChannelAdapter for TeamsChannelAdapter {
         Ok(())
     }
 
-    async fn send(
-        &self,
-        target: &str,
-        payload: &MessagePayload,
-    ) -> Result<String, PluginError> {
+    async fn send(&self, target: &str, payload: &MessagePayload) -> Result<String, PluginError> {
         let content = payload.as_text().ok_or_else(|| {
-            PluginError::ExecutionFailed(
-                "teams: only text payloads supported".into(),
-            )
+            PluginError::ExecutionFailed("teams: only text payloads supported".into())
         })?;
 
         if self.config.tenant_id.is_empty() {
@@ -404,10 +378,7 @@ struct WebhookState {
 }
 
 /// Build the axum router that handles inbound Bot Framework activities.
-fn build_router(
-    host: Arc<dyn ChannelAdapterHost>,
-    allowed_users: Vec<String>,
-) -> axum::Router {
+fn build_router(host: Arc<dyn ChannelAdapterHost>, allowed_users: Vec<String>) -> axum::Router {
     use axum::routing::post;
     let state = WebhookState {
         host,
@@ -571,8 +542,7 @@ mod tests {
     #[tokio::test]
     async fn send_non_text_fails() {
         let adapter = TeamsChannelAdapter::new(make_config());
-        let payload =
-            MessagePayload::structured(serde_json::json!({}));
+        let payload = MessagePayload::structured(serde_json::json!({}));
         let result = adapter.send("convo-1", &payload).await;
         assert!(result.is_err());
     }
@@ -621,10 +591,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let result = adapter.start(host, cancel).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("app_password"));
+        assert!(result.unwrap_err().to_string().contains("app_password"));
     }
 
     #[tokio::test]
@@ -634,9 +601,7 @@ mod tests {
         let cancel_clone = cancel.clone();
 
         let host = Arc::new(MockHost::default());
-        let handle = tokio::spawn(async move {
-            adapter.start(host, cancel_clone).await
-        });
+        let handle = tokio::spawn(async move { adapter.start(host, cancel_clone).await });
 
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         cancel.cancel();
@@ -655,14 +620,12 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/oauth2/v2.0/token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({
-                    "token_type": "Bearer",
-                    "expires_in": 3600,
-                    "ext_expires_in": 3600,
-                    "access_token": "test-bearer-token-001"
-                }),
-            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "ext_expires_in": 3600,
+                "access_token": "test-bearer-token-001"
+            })))
             .mount(&server)
             .await;
 
@@ -670,7 +633,10 @@ mod tests {
         config.oauth_token_url = format!("{}/oauth2/v2.0/token", server.uri());
 
         let adapter = TeamsChannelAdapter::new(config);
-        let token = adapter.access_token().await.expect("token fetch must succeed");
+        let token = adapter
+            .access_token()
+            .await
+            .expect("token fetch must succeed");
         assert_eq!(token, "test-bearer-token-001");
 
         // Second call should hit the cache rather than the server -- but
@@ -692,23 +658,19 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/oauth2/v2.0/token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({
-                    "access_token": "send-test-token",
-                    "expires_in": 3600
-                }),
-            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "send-test-token",
+                "expires_in": 3600
+            })))
             .mount(&server)
             .await;
 
         Mock::given(method("POST"))
             .and(path("/v3/conversations/convo-42/activities"))
             .and(header("authorization", "Bearer send-test-token"))
-            .respond_with(ResponseTemplate::new(201).set_body_json(
-                serde_json::json!({
-                    "id": "1632432598347"
-                }),
-            ))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "id": "1632432598347"
+            })))
             .mount(&server)
             .await;
 
@@ -732,9 +694,7 @@ mod tests {
         let host = Arc::new(MockHost::default());
         let app = build_router(host.clone(), Vec::new());
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server_handle = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
@@ -782,9 +742,7 @@ mod tests {
         let host = Arc::new(MockHost::default());
         let app = build_router(host.clone(), Vec::new());
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server_handle = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
@@ -808,8 +766,7 @@ mod tests {
     #[derive(Default)]
     struct MockHost {
         #[allow(clippy::type_complexity)]
-        delivered:
-            StdMutex<Vec<(String, String, String, String)>>,
+        delivered: StdMutex<Vec<(String, String, String, String)>>,
     }
 
     #[async_trait]
@@ -822,8 +779,7 @@ mod tests {
             payload: MessagePayload,
             _metadata: HashMap<String, serde_json::Value>,
         ) -> Result<(), PluginError> {
-            let text =
-                payload.as_text().unwrap_or_default().to_string();
+            let text = payload.as_text().unwrap_or_default().to_string();
             self.delivered.lock().unwrap().push((
                 channel.into(),
                 sender_id.into(),

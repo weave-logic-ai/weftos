@@ -119,9 +119,10 @@ async fn agents_use_rpc(name: &str) -> anyhow::Result<()> {
         } else {
             println!("Agent '{name}' selected via daemon.");
             if let Some(obj) = data.as_object()
-                && let Some(model) = obj.get("model").and_then(|v| v.as_str()) {
-                    println!("Model: {model}");
-                }
+                && let Some(model) = obj.get("model").and_then(|v| v.as_str())
+            {
+                println!("Model: {model}");
+            }
         }
         return Ok(());
     }
@@ -162,15 +163,19 @@ fn print_agent_detail_json(data: &serde_json::Value) {
         }
     }
     if let Some(vars) = data["variables"].as_object()
-        && !vars.is_empty() {
-            println!("Variables:");
-            let mut items: Vec<_> = vars.iter().collect();
-            items.sort_by_key(|(k, _)| k.as_str());
-            for (k, v) in items {
-                let val = v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string());
-                println!("  {k}: {val}");
-            }
+        && !vars.is_empty()
+    {
+        println!("Variables:");
+        let mut items: Vec<_> = vars.iter().collect();
+        items.sort_by_key(|(k, _)| k.as_str());
+        for (k, v) in items {
+            let val = v
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| v.to_string());
+            println!("  {k}: {val}");
         }
+    }
     if let Some(prompt) = data["system_prompt"].as_str() {
         println!();
         println!("System prompt (preview):");

@@ -50,10 +50,9 @@ use clawft_core::agent::skills::SkillsLoader;
 use clawft_core::bus::MessageBus;
 use clawft_core::pipeline::permissions::PermissionResolver;
 use clawft_core::pipeline::traits::{
-    AssembledContext, ChatRequest, ContextAssembler, LearningBackend, LearningSignal,
-    LlmTransport, ModelRouter, Pipeline, PipelineRegistry, QualityScore, QualityScorer,
-    ResponseOutcome, RoutingDecision, TaskClassifier, TaskProfile, TaskType, Trajectory,
-    TransportRequest,
+    AssembledContext, ChatRequest, ContextAssembler, LearningBackend, LearningSignal, LlmTransport,
+    ModelRouter, Pipeline, PipelineRegistry, QualityScore, QualityScorer, ResponseOutcome,
+    RoutingDecision, TaskClassifier, TaskProfile, TaskType, Trajectory, TransportRequest,
 };
 use clawft_core::session::SessionManager;
 use clawft_core::tools::registry::{Tool, ToolError, ToolRegistry};
@@ -61,9 +60,7 @@ use clawft_kernel::chain::ChainManager;
 use clawft_kernel::gate::{GateBackend, GovernanceGate};
 use clawft_kernel::governance::{GovernanceBranch, GovernanceRule, RuleSeverity};
 use clawft_platform::NativePlatform;
-use clawft_service_agent::{
-    AgentChatMessage, AgentChatParams, AgentService, KernelEffectGate,
-};
+use clawft_service_agent::{AgentChatMessage, AgentChatParams, AgentService, KernelEffectGate};
 use clawft_types::config::{AgentDefaults, AgentsConfig};
 use clawft_types::provider::{ContentBlock, LlmResponse, StopReason, Usage};
 
@@ -101,11 +98,7 @@ impl ModelRouter for StubRouter {
 struct StubAssembler;
 #[async_trait]
 impl ContextAssembler for StubAssembler {
-    async fn assemble(
-        &self,
-        request: &ChatRequest,
-        _profile: &TaskProfile,
-    ) -> AssembledContext {
+    async fn assemble(&self, request: &ChatRequest, _profile: &TaskProfile) -> AssembledContext {
         AssembledContext {
             messages: request.messages.clone(),
             token_estimate: 100,
@@ -523,12 +516,7 @@ async fn deny_dispatch_appends_deny_witness() {
         "denied-final",
     ));
 
-    let (agent, dir) = make_loop(
-        "deny",
-        transport,
-        kernel_gate,
-        vec![Arc::new(ReadFileTool)],
-    );
+    let (agent, dir) = make_loop("deny", transport, kernel_gate, vec![Arc::new(ReadFileTool)]);
     let svc = AgentService::new(Arc::new(agent));
 
     let conv_id = format!("f3-deny-{}", ulid::Ulid::new());

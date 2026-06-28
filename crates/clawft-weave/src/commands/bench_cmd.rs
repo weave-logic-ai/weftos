@@ -44,9 +44,13 @@ pub enum BenchCmd {
 /// Run the benchmark command.
 pub async fn run(cmd: BenchCmd) -> anyhow::Result<()> {
     match cmd {
-        BenchCmd::Run { format, iterations, quick, endurance, learned } => {
-            run_benchmark(&format, iterations, quick, endurance, learned).await
-        }
+        BenchCmd::Run {
+            format,
+            iterations,
+            quick,
+            endurance,
+            learned,
+        } => run_benchmark(&format, iterations, quick, endurance, learned).await,
         BenchCmd::Last => show_last().await,
     }
 }
@@ -163,7 +167,13 @@ struct PlatformInfo {
 // Main benchmark runner
 // ═══════════════════════════════════════════════════════════════════
 
-async fn run_benchmark(format: &str, iterations: u32, quick: bool, endurance: bool, learned: bool) -> anyhow::Result<()> {
+async fn run_benchmark(
+    format: &str,
+    iterations: u32,
+    quick: bool,
+    endurance: bool,
+    learned: bool,
+) -> anyhow::Result<()> {
     let mut client = DaemonClient::connect()
         .await
         .ok_or_else(|| anyhow::anyhow!("no kernel running — start with: weaver kernel start"))?;
@@ -171,7 +181,9 @@ async fn run_benchmark(format: &str, iterations: u32, quick: bool, endurance: bo
     let platform = collect_platform_info();
 
     // Get kernel version early
-    let kernel_version = client.simple_call("kernel.status").await
+    let kernel_version = client
+        .simple_call("kernel.status")
+        .await
         .ok()
         .and_then(|r| r.result)
         .and_then(|v| v.get("version").and_then(|v| v.as_str().map(String::from)))
@@ -212,11 +224,13 @@ async fn run_benchmark(format: &str, iterations: u32, quick: bool, endurance: bo
     }
 
     // Transport overhead: avg of non-ping methods minus avg ping
-    let ping_avg = rpc_results.iter()
+    let ping_avg = rpc_results
+        .iter()
         .find(|r| r.name == "ping")
         .map(|r| r.stats.avg_us)
         .unwrap_or(0.0);
-    let non_ping: Vec<f64> = rpc_results.iter()
+    let non_ping: Vec<f64> = rpc_results
+        .iter()
         .filter(|r| r.name != "ping" && r.status.starts_with("ok"))
         .map(|r| r.stats.avg_us)
         .collect();
@@ -310,7 +324,14 @@ async fn run_benchmark(format: &str, iterations: u32, quick: bool, endurance: bo
     );
 
     // Extract raw metrics for EML scoring
-    let raw_metrics = extract_raw_metrics(&dimensions, &rpc_results, &compute_results, &scalability, stress.as_ref(), endurance_result.as_ref());
+    let raw_metrics = extract_raw_metrics(
+        &dimensions,
+        &rpc_results,
+        &compute_results,
+        &scalability,
+        stress.as_ref(),
+        endurance_result.as_ref(),
+    );
 
     let (overall_score, scoring_mode) = if learned {
         let scorer = super::bench_eml::BenchmarkScorerModel::load(
@@ -359,7 +380,12 @@ async fn run_benchmark(format: &str, iterations: u32, quick: bool, endurance: bo
     } else {
         println!("-- Scoring ({scoring_mode}) --");
         for d in &dimensions {
-            println!("  {:<14} {:>3.0}/100  ({})", format!("{}:", d.name), d.score, d.detail);
+            println!(
+                "  {:<14} {:>3.0}/100  ({})",
+                format!("{}:", d.name),
+                d.score,
+                d.detail
+            );
         }
         println!("  {}", "-".repeat(40));
         println!("  Overall: {:.1}/100  Grade: {grade}", overall_score);
@@ -388,7 +414,12 @@ async fn run_warmup(client: &mut DaemonClient, count: u32) -> f64 {
 // Phase 2: RPC benchmarks
 // ═══════════════════════════════════════════════════════════════════
 
-async fn bench_rpc(client: &mut DaemonClient, method: &str, phase: &str, iterations: u32) -> BenchResult {
+async fn bench_rpc(
+    client: &mut DaemonClient,
+    method: &str,
+    phase: &str,
+    iterations: u32,
+) -> BenchResult {
     let mut latencies = Vec::with_capacity(iterations as usize);
     let mut errors = 0u32;
 
@@ -418,22 +449,28 @@ async fn bench_agent_lifecycle(client: &mut DaemonClient, iterations: u32) -> Be
         let agent_id = format!("bench-agent-{i}");
         let start = Instant::now();
 
-        let spawn_resp = client.call(Request::with_params(
-            "agent.spawn",
-            serde_json::json!({"agent_id": agent_id, "agent_type": "worker"}),
-        )).await;
+        let spawn_resp = client
+            .call(Request::with_params(
+                "agent.spawn",
+                serde_json::json!({"agent_id": agent_id, "agent_type": "worker"}),
+            ))
+            .await;
 
         if let Ok(ref r) = spawn_resp
             && r.ok
-                && let Some(pid) = r.result.as_ref()
-                    .and_then(|v| v.get("pid"))
-                    .and_then(|v| v.as_u64())
-                {
-                    let _ = client.call(Request::with_params(
-                        "agent.stop",
-                        serde_json::json!({"pid": pid}),
-                    )).await;
-                }
+            && let Some(pid) = r
+                .result
+                .as_ref()
+                .and_then(|v| v.get("pid"))
+                .and_then(|v| v.as_u64())
+        {
+            let _ = client
+                .call(Request::with_params(
+                    "agent.stop",
+                    serde_json::json!({"pid": pid}),
+                ))
+                .await;
+        }
 
         let elapsed = start.elapsed().as_micros() as f64;
         match spawn_resp {
@@ -442,7 +479,13 @@ async fn bench_agent_lifecycle(client: &mut DaemonClient, iterations: u32) -> Be
         }
     }
 
-    make_result("agent.lifecycle", "compute", iterations, &mut latencies, errors)
+    make_result(
+        "agent.lifecycle",
+        "compute",
+        iterations,
+        &mut latencies,
+        errors,
+    )
 }
 
 async fn bench_chain_ops(client: &mut DaemonClient, iterations: u32) -> BenchResult {
@@ -462,7 +505,13 @@ async fn bench_chain_ops(client: &mut DaemonClient, iterations: u32) -> BenchRes
         }
     }
 
-    make_result("chain.status", "compute", iterations, &mut latencies, errors)
+    make_result(
+        "chain.status",
+        "compute",
+        iterations,
+        &mut latencies,
+        errors,
+    )
 }
 
 async fn bench_cron_lifecycle(client: &mut DaemonClient, iterations: u32) -> BenchResult {
@@ -472,26 +521,32 @@ async fn bench_cron_lifecycle(client: &mut DaemonClient, iterations: u32) -> Ben
     for i in 0..iterations {
         let start = Instant::now();
 
-        let add_resp = client.call(Request::with_params(
-            "cron.add",
-            serde_json::json!({
-                "name": format!("bench-cron-{i}"),
-                "interval_secs": 3600,
-                "command": "benchmark test",
-            }),
-        )).await;
+        let add_resp = client
+            .call(Request::with_params(
+                "cron.add",
+                serde_json::json!({
+                    "name": format!("bench-cron-{i}"),
+                    "interval_secs": 3600,
+                    "command": "benchmark test",
+                }),
+            ))
+            .await;
 
         if let Ok(ref r) = add_resp
             && r.ok
-                && let Some(job_id) = r.result.as_ref()
-                    .and_then(|v| v.get("job_id"))
-                    .and_then(|v| v.as_str())
-                {
-                    let _ = client.call(Request::with_params(
-                        "cron.remove",
-                        serde_json::json!({"id": job_id}),
-                    )).await;
-                }
+            && let Some(job_id) = r
+                .result
+                .as_ref()
+                .and_then(|v| v.get("job_id"))
+                .and_then(|v| v.as_str())
+        {
+            let _ = client
+                .call(Request::with_params(
+                    "cron.remove",
+                    serde_json::json!({"id": job_id}),
+                ))
+                .await;
+        }
 
         let elapsed = start.elapsed().as_micros() as f64;
         match add_resp {
@@ -500,7 +555,13 @@ async fn bench_cron_lifecycle(client: &mut DaemonClient, iterations: u32) -> Ben
         }
     }
 
-    make_result("cron.lifecycle", "compute", iterations, &mut latencies, errors)
+    make_result(
+        "cron.lifecycle",
+        "compute",
+        iterations,
+        &mut latencies,
+        errors,
+    )
 }
 
 async fn bench_ipc_publish(client: &mut DaemonClient, iterations: u32) -> BenchResult {
@@ -509,13 +570,15 @@ async fn bench_ipc_publish(client: &mut DaemonClient, iterations: u32) -> BenchR
 
     for i in 0..iterations {
         let start = Instant::now();
-        let resp = client.call(Request::with_params(
-            "ipc.publish",
-            serde_json::json!({
-                "topic": "benchmark.test",
-                "message": format!("msg-{i}"),
-            }),
-        )).await;
+        let resp = client
+            .call(Request::with_params(
+                "ipc.publish",
+                serde_json::json!({
+                    "topic": "benchmark.test",
+                    "message": format!("msg-{i}"),
+                }),
+            ))
+            .await;
         let elapsed = start.elapsed().as_micros() as f64;
 
         match resp {
@@ -531,7 +594,10 @@ async fn bench_ipc_publish(client: &mut DaemonClient, iterations: u32) -> BenchR
 // Phase 4: Scalability Ladder
 // ═══════════════════════════════════════════════════════════════════
 
-async fn run_scalability_ladder(client: &mut DaemonClient, base_iterations: u32) -> ScalabilityResult {
+async fn run_scalability_ladder(
+    client: &mut DaemonClient,
+    base_iterations: u32,
+) -> ScalabilityResult {
     let levels: &[u32] = &[1, 2, 4, 8, 16, 32];
     let mut points = Vec::new();
     let mut baseline_throughput = 0.0;
@@ -592,7 +658,8 @@ async fn run_scalability_ladder(client: &mut DaemonClient, base_iterations: u32)
     };
 
     // Find knee point: first level where efficiency drops below 80%
-    let knee_point = points.iter()
+    let knee_point = points
+        .iter()
         .find(|p| p.efficiency < 80.0)
         .map(|p| p.concurrency);
 
@@ -620,7 +687,10 @@ async fn run_stress_tests(client: &mut DaemonClient, iterations: u32) -> StressR
     }
     let burst_secs = burst_start.elapsed().as_secs_f64();
     let burst_ops = burst_ok as f64 / burst_secs;
-    println!("  Burst throughput: {:.0} ops/sec ({burst_count} requests)", burst_ops);
+    println!(
+        "  Burst throughput: {:.0} ops/sec ({burst_count} requests)",
+        burst_ops
+    );
 
     // --- Payload sizes ---
     let payload_sizes: &[(usize, &str)] = &[
@@ -637,20 +707,27 @@ async fn run_stress_tests(client: &mut DaemonClient, iterations: u32) -> StressR
         let count = 20u32;
         for _ in 0..count {
             let start = Instant::now();
-            let resp = client.call(Request::with_params(
-                "ipc.publish",
-                serde_json::json!({
-                    "topic": "benchmark.payload",
-                    "message": payload,
-                }),
-            )).await;
+            let resp = client
+                .call(Request::with_params(
+                    "ipc.publish",
+                    serde_json::json!({
+                        "topic": "benchmark.payload",
+                        "message": payload,
+                    }),
+                ))
+                .await;
             let elapsed = start.elapsed().as_micros() as f64;
             if let Ok(r) = resp
-                && r.ok {
-                    latencies.push(elapsed);
-                }
+                && r.ok
+            {
+                latencies.push(elapsed);
+            }
         }
-        let avg = if latencies.is_empty() { 0.0 } else { latencies.iter().sum::<f64>() / latencies.len() as f64 };
+        let avg = if latencies.is_empty() {
+            0.0
+        } else {
+            latencies.iter().sum::<f64>() / latencies.len() as f64
+        };
         payload_strs.push(format!("{label}={avg:.0}us"));
         payload_results.push(PayloadResult {
             size_bytes: size,
@@ -690,10 +767,11 @@ async fn run_stress_tests(client: &mut DaemonClient, iterations: u32) -> StressR
         let elapsed = req_start.elapsed().as_micros() as f64;
 
         if let Ok(r) = resp
-            && r.ok {
-                sustained_latencies.push(elapsed);
-                window_latencies.push(elapsed);
-            }
+            && r.ok
+        {
+            sustained_latencies.push(elapsed);
+            window_latencies.push(elapsed);
+        }
 
         // Every second, record window p99
         if window_start.elapsed() >= Duration::from_secs(1) {
@@ -767,9 +845,10 @@ async fn run_endurance(client: &mut DaemonClient) -> EnduranceResult {
         let elapsed = req_start.elapsed().as_micros() as f64;
 
         if let Ok(r) = resp
-            && r.ok {
-                second_latencies.push(elapsed);
-            }
+            && r.ok
+        {
+            second_latencies.push(elapsed);
+        }
 
         // Sample every second
         if sample_start.elapsed() >= Duration::from_secs(1) {
@@ -809,12 +888,19 @@ async fn run_endurance(client: &mut DaemonClient) -> EnduranceResult {
 }
 
 async fn get_kernel_memory(client: &mut DaemonClient) -> Option<u64> {
-    client.simple_call("kernel.status").await
+    client
+        .simple_call("kernel.status")
+        .await
         .ok()
         .and_then(|r| r.result)
         .and_then(|v| {
-            v.get("memory_bytes").and_then(|m| m.as_u64())
-                .or_else(|| v.get("memory_kb").and_then(|m| m.as_u64()).map(|kb| kb * 1024))
+            v.get("memory_bytes")
+                .and_then(|m| m.as_u64())
+                .or_else(|| {
+                    v.get("memory_kb")
+                        .and_then(|m| m.as_u64())
+                        .map(|kb| kb * 1024)
+                })
                 .or_else(|| v.get("rss_bytes").and_then(|m| m.as_u64()))
         })
 }
@@ -835,10 +921,13 @@ fn compute_scores(
         .map(|s| s.burst_ops_per_sec)
         .or_else(|| {
             // Fallback: best RPC throughput
-            rpc_results.iter()
+            rpc_results
+                .iter()
                 .filter(|r| r.status.starts_with("ok"))
                 .map(|r| r.stats.ops_per_sec)
-                .fold(None, |max: Option<f64>, x| Some(max.map_or(x, |m: f64| m.max(x))))
+                .fold(None, |max: Option<f64>, x| {
+                    Some(max.map_or(x, |m: f64| m.max(x)))
+                })
         })
         .unwrap_or(0.0);
 
@@ -846,7 +935,8 @@ fn compute_scores(
     let throughput_detail = format!("{:.0} ops/sec", mixed_throughput);
 
     // --- Latency: P95 on compute operations ---
-    let compute_p95s: Vec<f64> = compute_results.iter()
+    let compute_p95s: Vec<f64> = compute_results
+        .iter()
         .filter(|r| r.status.starts_with("ok"))
         .map(|r| r.stats.p95_us)
         .collect();
@@ -863,7 +953,8 @@ fn compute_scores(
     let scalability_detail = format!("coefficient {:.2}", scalability.coefficient);
 
     // --- Stability: P99/P50 ratio on compute ---
-    let p99_p50_ratios: Vec<f64> = compute_results.iter()
+    let p99_p50_ratios: Vec<f64> = compute_results
+        .iter()
         .filter(|r| r.status.starts_with("ok") && r.stats.p50_us > 0.0)
         .map(|r| r.stats.p99_us / r.stats.p50_us)
         .collect();
@@ -942,15 +1033,19 @@ fn extract_raw_metrics(
     let throughput = stress
         .map(|s| s.burst_ops_per_sec)
         .or_else(|| {
-            rpc_results.iter()
+            rpc_results
+                .iter()
                 .filter(|r| r.status.starts_with("ok"))
                 .map(|r| r.stats.ops_per_sec)
-                .fold(None, |max: Option<f64>, x| Some(max.map_or(x, |m: f64| m.max(x))))
+                .fold(None, |max: Option<f64>, x| {
+                    Some(max.map_or(x, |m: f64| m.max(x)))
+                })
         })
         .unwrap_or(0.0);
 
     // Latency: avg P95 on compute
-    let compute_p95s: Vec<f64> = compute_results.iter()
+    let compute_p95s: Vec<f64> = compute_results
+        .iter()
         .filter(|r| r.status.starts_with("ok"))
         .map(|r| r.stats.p95_us)
         .collect();
@@ -964,7 +1059,8 @@ fn extract_raw_metrics(
     let scalability_coeff = scalability.coefficient;
 
     // Stability: avg P99/P50 ratio
-    let ratios: Vec<f64> = compute_results.iter()
+    let ratios: Vec<f64> = compute_results
+        .iter()
         .filter(|r| r.status.starts_with("ok") && r.stats.p50_us > 0.0)
         .map(|r| r.stats.p99_us / r.stats.p50_us)
         .collect();
@@ -980,14 +1076,24 @@ fn extract_raw_metrics(
         None => stress.map(|s| s.sustained_p99_drift_pct).unwrap_or(50.0),
     };
 
-    [throughput, latency, scalability_coeff, stability, endurance_drift]
+    [
+        throughput,
+        latency,
+        scalability_coeff,
+        stability,
+        endurance_drift,
+    ]
 }
 
 /// Throughput score: ops/sec on mixed workload.
 /// 100K+ = 100, 50K = 80, 20K = 60, 10K = 40, 5K = 20, <1K = 0
 pub fn score_throughput(ops: f64) -> f64 {
-    if ops >= 100_000.0 { return 100.0; }
-    if ops <= 1_000.0 { return 0.0; }
+    if ops >= 100_000.0 {
+        return 100.0;
+    }
+    if ops <= 1_000.0 {
+        return 0.0;
+    }
     // Piecewise linear interpolation
     let breakpoints: &[(f64, f64)] = &[
         (1_000.0, 0.0),
@@ -1003,8 +1109,12 @@ pub fn score_throughput(ops: f64) -> f64 {
 /// Latency score: P95 compute in microseconds.
 /// <50us = 100, 100us = 80, 500us = 60, 1ms = 40, 5ms = 20, >10ms = 0
 pub fn score_latency(p95_us: f64) -> f64 {
-    if p95_us <= 50.0 { return 100.0; }
-    if p95_us >= 10_000.0 { return 0.0; }
+    if p95_us <= 50.0 {
+        return 100.0;
+    }
+    if p95_us >= 10_000.0 {
+        return 0.0;
+    }
     // Inverted: lower is better
     let breakpoints: &[(f64, f64)] = &[
         (50.0, 100.0),
@@ -1020,22 +1130,25 @@ pub fn score_latency(p95_us: f64) -> f64 {
 /// Scalability score: throughput at 32x / throughput at 1x.
 /// >0.9 = 100, 0.7 = 70, 0.5 = 50, <0.3 = 0
 pub fn score_scalability(coefficient: f64) -> f64 {
-    if coefficient >= 0.9 { return 100.0; }
-    if coefficient <= 0.3 { return 0.0; }
-    let breakpoints: &[(f64, f64)] = &[
-        (0.3, 0.0),
-        (0.5, 50.0),
-        (0.7, 70.0),
-        (0.9, 100.0),
-    ];
+    if coefficient >= 0.9 {
+        return 100.0;
+    }
+    if coefficient <= 0.3 {
+        return 0.0;
+    }
+    let breakpoints: &[(f64, f64)] = &[(0.3, 0.0), (0.5, 50.0), (0.7, 70.0), (0.9, 100.0)];
     interpolate(coefficient, breakpoints)
 }
 
 /// Stability score: P99/P50 ratio.
 /// <1.5 = 100, 2.0 = 80, 3.0 = 60, 5.0 = 40, 10.0 = 20, >20 = 0
 pub fn score_stability(ratio: f64) -> f64 {
-    if ratio <= 1.5 { return 100.0; }
-    if ratio >= 20.0 { return 0.0; }
+    if ratio <= 1.5 {
+        return 100.0;
+    }
+    if ratio >= 20.0 {
+        return 0.0;
+    }
     let breakpoints: &[(f64, f64)] = &[
         (1.5, 100.0),
         (2.0, 80.0),
@@ -1051,8 +1164,12 @@ pub fn score_stability(ratio: f64) -> f64 {
 /// <1% = 100, 5% = 80, 10% = 60, 25% = 40, 50% = 20, >100% = 0
 pub fn score_endurance(drift_pct: f64) -> f64 {
     let d = drift_pct.abs();
-    if d <= 1.0 { return 100.0; }
-    if d >= 100.0 { return 0.0; }
+    if d <= 1.0 {
+        return 100.0;
+    }
+    if d >= 100.0 {
+        return 0.0;
+    }
     let breakpoints: &[(f64, f64)] = &[
         (1.0, 100.0),
         (5.0, 80.0),
@@ -1066,8 +1183,12 @@ pub fn score_endurance(drift_pct: f64) -> f64 {
 
 /// Piecewise linear interpolation through sorted breakpoints.
 fn interpolate(x: f64, breakpoints: &[(f64, f64)]) -> f64 {
-    if breakpoints.is_empty() { return 0.0; }
-    if x <= breakpoints[0].0 { return breakpoints[0].1; }
+    if breakpoints.is_empty() {
+        return 0.0;
+    }
+    if x <= breakpoints[0].0 {
+        return breakpoints[0].1;
+    }
     if x >= breakpoints[breakpoints.len() - 1].0 {
         return breakpoints[breakpoints.len() - 1].1;
     }
@@ -1102,7 +1223,13 @@ fn grade_from_score(score: f64) -> &'static str {
 // Statistical helpers
 // ═══════════════════════════════════════════════════════════════════
 
-fn make_result(name: &str, phase: &str, iterations: u32, latencies: &mut [f64], errors: u32) -> BenchResult {
+fn make_result(
+    name: &str,
+    phase: &str,
+    iterations: u32,
+    latencies: &mut [f64],
+    errors: u32,
+) -> BenchResult {
     if latencies.is_empty() {
         return BenchResult {
             name: name.to_string(),
@@ -1164,7 +1291,9 @@ fn make_result(name: &str, phase: &str, iterations: u32, latencies: &mut [f64], 
 }
 
 fn percentile(sorted: &[f64], pct: f64) -> f64 {
-    if sorted.is_empty() { return 0.0; }
+    if sorted.is_empty() {
+        return 0.0;
+    }
     let idx = ((sorted.len() as f64) * pct) as usize;
     sorted[idx.min(sorted.len() - 1)]
 }
@@ -1191,13 +1320,22 @@ fn compute_drift(samples: &[f64]) -> f64 {
 fn print_result_line(r: &BenchResult) {
     println!(
         "  {:<20} {:>8.0} {:>8.0} {:>8.0} {:>8.0} {:>8.0} {:>8.0}  {:>8}",
-        r.name, r.stats.avg_us, r.stats.p50_us, r.stats.p95_us, r.stats.p99_us,
-        r.stats.max_us, r.stats.ops_per_sec, r.status,
+        r.name,
+        r.stats.avg_us,
+        r.stats.p50_us,
+        r.stats.p95_us,
+        r.stats.p99_us,
+        r.stats.max_us,
+        r.stats.ops_per_sec,
+        r.status,
     );
 }
 
 fn print_scalability(s: &ScalabilityResult) {
-    println!("  {:<8} {:>12} {:>14} {:>12}", "Load", "Throughput", "Latency(P95)", "Efficiency");
+    println!(
+        "  {:<8} {:>12} {:>14} {:>12}",
+        "Load", "Throughput", "Latency(P95)", "Efficiency"
+    );
     for p in &s.points {
         println!(
             "  {:<8} {:>10.0}/s {:>12.0}us {:>10.0}%",
@@ -1216,7 +1354,10 @@ fn print_scalability(s: &ScalabilityResult) {
     } else {
         "poor"
     };
-    println!("  Scalability coefficient: {:.2} ({quality})", s.coefficient);
+    println!(
+        "  Scalability coefficient: {:.2} ({quality})",
+        s.coefficient
+    );
     if let Some(knee) = s.knee_point {
         println!("  Knee point: {knee}x concurrency");
     }
@@ -1234,11 +1375,23 @@ fn print_endurance(e: &EnduranceResult) {
     } else {
         "significant drift"
     };
-    println!("  Duration: {:.1}s, Samples: {}", e.duration_secs, e.samples.len());
-    println!("  Latency drift: {:+.1}% ({quality})", e.drift_coefficient_pct);
+    println!(
+        "  Duration: {:.1}s, Samples: {}",
+        e.duration_secs,
+        e.samples.len()
+    );
+    println!(
+        "  Latency drift: {:+.1}% ({quality})",
+        e.drift_coefficient_pct
+    );
     if let (Some(start), Some(end)) = (e.memory_start, e.memory_end) {
         let delta = end as i64 - start as i64;
-        println!("  Memory: {} -> {} ({:+} bytes)", fmt_bytes(start), fmt_bytes(end), delta);
+        println!(
+            "  Memory: {} -> {} ({:+} bytes)",
+            fmt_bytes(start),
+            fmt_bytes(end),
+            delta
+        );
     }
 }
 
@@ -1281,7 +1434,10 @@ async fn show_last() -> anyhow::Result<()> {
     for r in &report.rpc_results {
         print_result_line(r);
     }
-    println!("  Transport overhead: {:.0}us", report.transport_overhead_us);
+    println!(
+        "  Transport overhead: {:.0}us",
+        report.transport_overhead_us
+    );
     println!();
 
     println!("-- Compute --");
@@ -1298,12 +1454,18 @@ async fn show_last() -> anyhow::Result<()> {
 
     if let Some(ref s) = report.stress {
         println!("-- Stress --");
-        println!("  Burst: {:.0} ops/sec ({} requests)", s.burst_ops_per_sec, s.burst_count);
+        println!(
+            "  Burst: {:.0} ops/sec ({} requests)",
+            s.burst_ops_per_sec, s.burst_count
+        );
         for p in &s.payload_results {
             print!("  {}={:.0}us ", p.label, p.avg_us);
         }
         println!();
-        println!("  10s sustained: avg={:.0}us, P99 drift={:+.0}%", s.sustained_avg_us, s.sustained_p99_drift_pct);
+        println!(
+            "  10s sustained: avg={:.0}us, P99 drift={:+.0}%",
+            s.sustained_avg_us, s.sustained_p99_drift_pct
+        );
         println!();
     }
 
@@ -1315,12 +1477,25 @@ async fn show_last() -> anyhow::Result<()> {
 
     println!("-- Scoring --");
     for d in &report.dimensions {
-        println!("  {:<14} {:>3.0}/100  ({})", format!("{}:", d.name), d.score, d.detail);
+        println!(
+            "  {:<14} {:>3.0}/100  ({})",
+            format!("{}:", d.name),
+            d.score,
+            d.detail
+        );
     }
     println!("  {}", "-".repeat(40));
-    println!("  Overall: {:.1}/100  Grade: {}", report.overall_score, report.grade);
+    println!(
+        "  Overall: {:.1}/100  Grade: {}",
+        report.overall_score, report.grade
+    );
     println!();
-    println!("Report: {}", clawft_rpc::runtime_dir().join("benchmarks/latest.json").display());
+    println!(
+        "Report: {}",
+        clawft_rpc::runtime_dir()
+            .join("benchmarks/latest.json")
+            .display()
+    );
 
     Ok(())
 }
@@ -1360,7 +1535,8 @@ fn memory_info() -> String {
         if let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo") {
             for line in meminfo.lines() {
                 if line.starts_with("MemTotal:") {
-                    let kb: u64 = line.split_whitespace()
+                    let kb: u64 = line
+                        .split_whitespace()
                         .nth(1)
                         .and_then(|s| s.parse().ok())
                         .unwrap_or(0);
@@ -1376,7 +1552,9 @@ fn memory_info() -> String {
         "unknown".to_string()
     }
     #[cfg(not(target_os = "linux"))]
-    { "unknown".to_string() }
+    {
+        "unknown".to_string()
+    }
 }
 
 fn kernel_version() -> String {
@@ -1388,7 +1566,9 @@ fn kernel_version() -> String {
             .unwrap_or_else(|| "unknown".to_string())
     }
     #[cfg(not(target_os = "linux"))]
-    { "unknown".to_string() }
+    {
+        "unknown".to_string()
+    }
 }
 
 fn iso_now() -> String {

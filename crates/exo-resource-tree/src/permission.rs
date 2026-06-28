@@ -59,12 +59,7 @@ pub enum Decision {
 /// **K0 stub**: Always returns `Allow`. Preserved so existing K0
 /// call sites compile unchanged. New code must use
 /// [`CapabilityChecker::check_permission`] instead.
-pub fn check(
-    _agent_id: &str,
-    _role: &Role,
-    _action: &Action,
-    _resource: &ResourceId,
-) -> Decision {
+pub fn check(_agent_id: &str, _role: &Role, _action: &Action, _resource: &ResourceId) -> Decision {
     Decision::Allow
 }
 
@@ -150,11 +145,13 @@ impl AclPolicy {
             return false;
         }
         if let Some(ref p) = self.principal
-            && p != principal {
+            && p != principal
+        {
             return false;
         }
         if let Some(ref r) = self.role
-            && r != role {
+            && r != role
+        {
             return false;
         }
         true
@@ -212,7 +209,8 @@ impl EffectiveAclCache {
             self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Some(d.clone())
         } else {
-            self.misses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.misses
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             None
         }
     }

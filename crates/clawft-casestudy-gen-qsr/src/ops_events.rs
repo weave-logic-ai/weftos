@@ -51,7 +51,11 @@ pub struct ShiftAdequacy {
     pub required_hours: f64,
 }
 
-pub fn generate(config: &GeneratorConfig, dims: &Dimensions, events: &[DailyRollup]) -> OpsEventLedger {
+pub fn generate(
+    config: &GeneratorConfig,
+    dims: &Dimensions,
+    events: &[DailyRollup],
+) -> OpsEventLedger {
     let days = config.scale_tier.days();
 
     let mut inventory = Vec::new();
@@ -138,7 +142,12 @@ pub fn generate(config: &GeneratorConfig, dims: &Dimensions, events: &[DailyRoll
         });
     }
 
-    OpsEventLedger { inventory, audits, cert_renewals, shift_adequacy }
+    OpsEventLedger {
+        inventory,
+        audits,
+        cert_renewals,
+        shift_adequacy,
+    }
 }
 
 /// True if this person's cert has a renewal after or equal to its expiration.

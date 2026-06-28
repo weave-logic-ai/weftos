@@ -104,7 +104,10 @@ impl StdioTransport {
                                 if let Some(tx) = map.remove(&id) {
                                     let _ = tx.send(response);
                                 } else {
-                                    warn!(id, "stdio reader: received response with no pending request");
+                                    warn!(
+                                        id,
+                                        "stdio reader: received response with no pending request"
+                                    );
                                 }
                             }
                             Err(e) => {
@@ -456,10 +459,8 @@ impl McpTransportFactory for DefaultTransportFactory {
                 }
                 Ok(())
             }
-            TransportSpec::Http { url } => {
-                validate_url(url, self.config.allow_http_localhost)
-                    .map_err(ServiceError::McpTransport)
-            }
+            TransportSpec::Http { url } => validate_url(url, self.config.allow_http_localhost)
+                .map_err(ServiceError::McpTransport),
             TransportSpec::Tempfile { path } => {
                 validate_tempfile_path(path).map_err(ServiceError::McpTransport)
             }
@@ -505,10 +506,7 @@ pub fn validate_url(url: &str, allow_http_localhost: bool) -> std::result::Resul
             return Err("plain http:// not allowed (use https://)".into());
         }
         // Extract host portion (up to /, ?, #, or end).
-        let host = rest
-            .split(&['/', '?', '#'][..])
-            .next()
-            .unwrap_or(rest);
+        let host = rest.split(&['/', '?', '#'][..]).next().unwrap_or(rest);
         // Strip optional port.
         let host_only = if host.starts_with('[') {
             // IPv6 bracket notation.
@@ -526,7 +524,9 @@ pub fn validate_url(url: &str, allow_http_localhost: bool) -> std::result::Resul
         ));
     }
 
-    Err(format!("url must start with https:// or http://, got '{url}'"))
+    Err(format!(
+        "url must start with https:// or http://, got '{url}'"
+    ))
 }
 
 /// Validate that a command path canonicalizes within one of the allowed
@@ -552,9 +552,8 @@ pub fn validate_command_path(
         std::fs::canonicalize(Path::new(command))
             .map_err(|e| format!("cannot canonicalize '{command}': {e}"))?
     } else {
-        which_on_path(command).ok_or_else(|| {
-            format!("command '{command}' not found on $PATH and not absolute")
-        })?
+        which_on_path(command)
+            .ok_or_else(|| format!("command '{command}' not found on $PATH and not absolute"))?
     };
 
     let canonical_allowed: Vec<PathBuf> = allowed_paths
@@ -562,7 +561,10 @@ pub fn validate_command_path(
         .filter_map(|p| std::fs::canonicalize(p).ok())
         .collect();
 
-    if canonical_allowed.iter().any(|prefix| resolved.starts_with(prefix)) {
+    if canonical_allowed
+        .iter()
+        .any(|prefix| resolved.starts_with(prefix))
+    {
         Ok(())
     } else {
         Err(format!(
@@ -597,7 +599,10 @@ fn which_on_path(program: &str) -> Option<PathBuf> {
 ///   `/proc`, `/boot`, `/dev`).
 pub fn validate_tempfile_path(path: &Path) -> std::result::Result<(), String> {
     if !path.is_absolute() {
-        return Err(format!("tempfile path must be absolute: {}", path.display()));
+        return Err(format!(
+            "tempfile path must be absolute: {}",
+            path.display()
+        ));
     }
 
     const FORBIDDEN: &[&str] = &["/etc", "/root", "/sys", "/proc", "/boot", "/dev"];

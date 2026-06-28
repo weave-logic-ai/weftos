@@ -127,17 +127,23 @@ impl PolicyKernel {
     /// Returns `~/.clawft/agents/<agent_id>/policy_kernel.json`.
     pub fn agent_path(agent_id: &str) -> Option<PathBuf> {
         #[cfg(feature = "native")]
-        { dirs::home_dir().map(|h| {
-            h.join(".clawft")
-                .join("agents")
-                .join(agent_id)
-                .join("policy_kernel.json")
-        }) }
+        {
+            dirs::home_dir().map(|h| {
+                h.join(".clawft")
+                    .join("agents")
+                    .join(agent_id)
+                    .join("policy_kernel.json")
+            })
+        }
         #[cfg(not(feature = "native"))]
-        { Some(PathBuf::from(".clawft")
-            .join("agents")
-            .join(agent_id)
-            .join("policy_kernel.json")) }
+        {
+            Some(
+                PathBuf::from(".clawft")
+                    .join("agents")
+                    .join(agent_id)
+                    .join("policy_kernel.json"),
+            )
+        }
     }
 
     /// Resolve the default global policy kernel path.
@@ -145,10 +151,17 @@ impl PolicyKernel {
     /// Returns `~/.clawft/memory/policy_kernel.json`.
     pub fn global_path() -> Option<PathBuf> {
         #[cfg(feature = "native")]
-        { dirs::home_dir()
-            .map(|h| h.join(".clawft").join("memory").join("policy_kernel.json")) }
+        {
+            dirs::home_dir().map(|h| h.join(".clawft").join("memory").join("policy_kernel.json"))
+        }
         #[cfg(not(feature = "native"))]
-        { Some(PathBuf::from(".clawft").join("memory").join("policy_kernel.json")) }
+        {
+            Some(
+                PathBuf::from(".clawft")
+                    .join("memory")
+                    .join("policy_kernel.json"),
+            )
+        }
     }
 
     /// Load the policy kernel from disk, or create a new empty one.
@@ -266,10 +279,7 @@ impl PolicyKernel {
     }
 
     /// Replace the full state (for import). Saves immediately.
-    pub fn set_state(
-        &mut self,
-        state: PolicyKernelState,
-    ) -> Result<(), PolicyKernelError> {
+    pub fn set_state(&mut self, state: PolicyKernelState) -> Result<(), PolicyKernelError> {
         self.state = state;
         self.save()
     }
@@ -333,9 +343,7 @@ mod tests {
     fn temp_path(label: &str) -> PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
-        std::env::temp_dir().join(format!(
-            "clawft_policy_kernel_test_{label}_{pid}_{n}.json"
-        ))
+        std::env::temp_dir().join(format!("clawft_policy_kernel_test_{label}_{pid}_{n}.json"))
     }
 
     #[test]
@@ -356,12 +364,7 @@ mod tests {
         {
             let mut kernel = PolicyKernel::load(&path).unwrap();
             kernel
-                .add_policy(
-                    "p1".into(),
-                    "convert temperature".into(),
-                    vec![1.0, 0.0],
-                    2,
-                )
+                .add_policy("p1".into(), "convert temperature".into(), vec![1.0, 0.0], 2)
                 .unwrap();
             assert_eq!(kernel.policy_count(), 1);
         }
@@ -508,15 +511,12 @@ mod tests {
 
     #[test]
     fn error_display() {
-        let io_err = PolicyKernelError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "test",
-        ));
+        let io_err =
+            PolicyKernelError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "test"));
         assert!(format!("{io_err}").contains("test"));
 
         let json_str = "invalid json";
-        let serde_err: Result<PolicyKernelState, _> =
-            serde_json::from_str(json_str);
+        let serde_err: Result<PolicyKernelState, _> = serde_json::from_str(json_str);
         if let Err(e) = serde_err {
             let pke = PolicyKernelError::Serde(e);
             assert!(format!("{pke}").contains("serde"));

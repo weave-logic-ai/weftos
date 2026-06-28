@@ -11,7 +11,8 @@ const VALID_FILE_TYPES_PYTHON: &[&str] = &["code", "document", "paper", "image"]
 const REQUIRED_NODE_FIELDS: &[&str] = &["id", "label", "file_type", "source_file"];
 
 /// Required fields on each edge object.
-const REQUIRED_EDGE_FIELDS: &[&str] = &["source", "target", "relation", "confidence", "source_file"];
+const REQUIRED_EDGE_FIELDS: &[&str] =
+    &["source", "target", "relation", "confidence", "source_file"];
 
 /// Validate an extraction JSON value against the graphify schema.
 ///
@@ -36,10 +37,7 @@ pub fn validate_extraction(data: &serde_json::Value) -> Vec<String> {
                         errors.push(format!("Node {i} must be an object"));
                         continue;
                     }
-                    let node_id_display = node
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
+                    let node_id_display = node.get("id").and_then(|v| v.as_str()).unwrap_or("?");
                     for &field in REQUIRED_NODE_FIELDS {
                         if node.get(field).is_none() {
                             errors.push(format!(
@@ -92,26 +90,29 @@ pub fn validate_extraction(data: &serde_json::Value) -> Vec<String> {
                         }
                     }
                     if let Some(conf) = edge.get("confidence").and_then(|v| v.as_str())
-                        && Confidence::from_str_loose(conf).is_none() {
-                            errors.push(format!(
-                                "Edge {i} has invalid confidence '{conf}' - must be one of {:?}",
-                                Confidence::VALID_STRINGS,
-                            ));
-                        }
+                        && Confidence::from_str_loose(conf).is_none()
+                    {
+                        errors.push(format!(
+                            "Edge {i} has invalid confidence '{conf}' - must be one of {:?}",
+                            Confidence::VALID_STRINGS,
+                        ));
+                    }
                     // Dangling references: warn but don't block.
                     if !node_ids.is_empty() {
                         if let Some(src) = edge.get("source").and_then(|v| v.as_str())
-                            && !node_ids.contains(src) {
-                                errors.push(format!(
-                                    "Edge {i} source '{src}' does not match any node id"
-                                ));
-                            }
+                            && !node_ids.contains(src)
+                        {
+                            errors.push(format!(
+                                "Edge {i} source '{src}' does not match any node id"
+                            ));
+                        }
                         if let Some(tgt) = edge.get("target").and_then(|v| v.as_str())
-                            && !node_ids.contains(tgt) {
-                                errors.push(format!(
-                                    "Edge {i} target '{tgt}' does not match any node id"
-                                ));
-                            }
+                            && !node_ids.contains(tgt)
+                        {
+                            errors.push(format!(
+                                "Edge {i} target '{tgt}' does not match any node id"
+                            ));
+                        }
                     }
                 }
             } else {
@@ -145,7 +146,10 @@ mod tests {
     fn missing_nodes_key() {
         let data = serde_json::json!({"edges": []});
         let errs = validate_extraction(&data);
-        assert!(errs.iter().any(|e| e.contains("Missing required key 'nodes'")));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("Missing required key 'nodes'"))
+        );
     }
 
     #[test]
@@ -185,7 +189,10 @@ mod tests {
             ],
         });
         let errs = validate_extraction(&data);
-        assert!(errs.iter().any(|e| e.contains("does not match any node id")));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("does not match any node id"))
+        );
     }
 
     #[test]

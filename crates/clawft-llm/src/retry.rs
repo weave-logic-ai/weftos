@@ -12,8 +12,8 @@ use tracing::{debug, warn};
 
 use tokio::sync::mpsc;
 
+use crate::eml_retry::{RetryModel, error_ordinal};
 use crate::error::{ProviderError, Result};
-use crate::eml_retry::{error_ordinal, RetryModel};
 use crate::provider::Provider;
 use crate::types::{ChatRequest, ChatResponse, StreamChunk};
 
@@ -123,11 +123,7 @@ impl<P: Provider> RetryPolicy<P> {
     /// [`compute_delay`] until the model is trained. Retry outcomes
     /// (success, exhaustion) are recorded back into the model so it
     /// can learn the optimal backoff per error-type × attempt × hour.
-    pub fn with_model(
-        inner: P,
-        config: RetryConfig,
-        model: Arc<Mutex<RetryModel>>,
-    ) -> Self {
+    pub fn with_model(inner: P, config: RetryConfig, model: Arc<Mutex<RetryModel>>) -> Self {
         Self {
             inner,
             config,
@@ -223,30 +219,16 @@ impl<P: Provider> Provider for RetryPolicy<P> {
                             attempt,
                             "request succeeded after retry"
                         );
-                        if let Some((ord, prev_attempt, prev_delay)) =
-                            last_retry.take()
-                        {
-                            self.record_outcome_by_ordinal(
-                                ord,
-                                prev_attempt,
-                                prev_delay,
-                                true,
-                            );
+                        if let Some((ord, prev_attempt, prev_delay)) = last_retry.take() {
+                            self.record_outcome_by_ordinal(ord, prev_attempt, prev_delay, true);
                         }
                     }
                     return Ok(response);
                 }
                 Err(err) => {
                     if !is_retryable(&err) || attempt == self.config.max_retries {
-                        if let Some((ord, prev_attempt, prev_delay)) =
-                            last_retry.take()
-                        {
-                            self.record_outcome_by_ordinal(
-                                ord,
-                                prev_attempt,
-                                prev_delay,
-                                false,
-                            );
+                        if let Some((ord, prev_attempt, prev_delay)) = last_retry.take() {
+                            self.record_outcome_by_ordinal(ord, prev_attempt, prev_delay, false);
                         }
                         return Err(err);
                     }
@@ -297,15 +279,8 @@ impl<P: Provider> Provider for RetryPolicy<P> {
                             attempt,
                             "streaming request succeeded after retry"
                         );
-                        if let Some((ord, prev_attempt, prev_delay)) =
-                            last_retry.take()
-                        {
-                            self.record_outcome_by_ordinal(
-                                ord,
-                                prev_attempt,
-                                prev_delay,
-                                true,
-                            );
+                        if let Some((ord, prev_attempt, prev_delay)) = last_retry.take() {
+                            self.record_outcome_by_ordinal(ord, prev_attempt, prev_delay, true);
                         }
                     }
                     // Forward buffered chunks to the real sender.
@@ -321,15 +296,8 @@ impl<P: Provider> Provider for RetryPolicy<P> {
                     drop(attempt_rx);
 
                     if !is_retryable(&err) || attempt == self.config.max_retries {
-                        if let Some((ord, prev_attempt, prev_delay)) =
-                            last_retry.take()
-                        {
-                            self.record_outcome_by_ordinal(
-                                ord,
-                                prev_attempt,
-                                prev_delay,
-                                false,
-                            );
+                        if let Some((ord, prev_attempt, prev_delay)) = last_retry.take() {
+                            self.record_outcome_by_ordinal(ord, prev_attempt, prev_delay, false);
                         }
                         return Err(err);
                     }
@@ -692,8 +660,7 @@ mod tests {
             status: 503,
             body: "unavailable".into(),
         });
-        let provider =
-            RetryPolicy::with_model(mock, fast_retry_config(), model.clone());
+        let provider = RetryPolicy::with_model(mock, fast_retry_config(), model.clone());
         // Sanity: the handle roundtrips.
         assert!(provider.retry_model().is_some());
 

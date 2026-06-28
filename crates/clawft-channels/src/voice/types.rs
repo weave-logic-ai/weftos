@@ -186,9 +186,7 @@ impl VoiceAdapterConfig {
             return Err("voice adapter: min_utterance_ms must be > 0".into());
         }
         if self.max_utterance_ms <= self.min_utterance_ms {
-            return Err(
-                "voice adapter: max_utterance_ms must be > min_utterance_ms".into(),
-            );
+            return Err("voice adapter: max_utterance_ms must be > min_utterance_ms".into());
         }
         Ok(())
     }
@@ -325,10 +323,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(cfg.transcribe_url(), "http://localhost:8112/transcribe");
-        assert_eq!(
-            cfg.synthesize_url(),
-            "http://tts.example.com/synthesize"
-        );
+        assert_eq!(cfg.synthesize_url(), "http://tts.example.com/synthesize");
     }
 
     #[test]

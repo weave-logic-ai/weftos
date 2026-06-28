@@ -350,8 +350,7 @@ impl ServiceRegistry {
         });
         let content_hash = {
             use sha2::{Digest, Sha256};
-            let bytes = serde_json::to_string(&contract_content)
-                .unwrap_or_default();
+            let bytes = serde_json::to_string(&contract_content).unwrap_or_default();
             format!("{:x}", Sha256::digest(bytes.as_bytes()))
         };
 
@@ -1146,11 +1145,7 @@ mod tests {
         let svc = Arc::new(MockService::new("hash-svc", ServiceType::Plugin));
 
         registry
-            .register_with_contract(
-                svc,
-                vec!["alpha".into(), "beta".into()],
-                &chain,
-            )
+            .register_with_contract(svc, vec!["alpha".into(), "beta".into()], &chain)
             .unwrap();
 
         let events = chain.tail(1);
@@ -1448,7 +1443,10 @@ mod tests {
 
         let api: Arc<dyn ServiceApi> = Arc::new(KernelServiceApi::new(registry));
         let shell = ShellAdapter::new(api);
-        let result = shell.execute("agent.spawn {\"name\":\"test\"}").await.unwrap();
+        let result = shell
+            .execute("agent.spawn {\"name\":\"test\"}")
+            .await
+            .unwrap();
         assert_eq!(result["service"], "agent");
         assert_eq!(result["method"], "spawn");
         assert_eq!(result["status"], "dispatched");

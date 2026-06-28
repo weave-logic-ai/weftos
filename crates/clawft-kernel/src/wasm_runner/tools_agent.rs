@@ -22,7 +22,10 @@ impl AgentSpawnTool {
             .into_iter()
             .find(|s| s.name == "agent.spawn")
             .expect("agent.spawn must be in catalog");
-        Self { spec, process_table }
+        Self {
+            spec,
+            process_table,
+        }
     }
 }
 
@@ -86,21 +89,36 @@ pub struct AgentStopTool {
 
 impl AgentStopTool {
     pub fn new(process_table: Arc<crate::process::ProcessTable>) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "agent.stop").unwrap();
-        Self { spec, process_table }
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "agent.stop")
+            .unwrap();
+        Self {
+            spec,
+            process_table,
+        }
     }
 }
 
 impl BuiltinTool for AgentStopTool {
-    fn name(&self) -> &str { "agent.stop" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "agent.stop"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let pid = args.get("pid").and_then(|v| v.as_u64())
+        let pid = args
+            .get("pid")
+            .and_then(|v| v.as_u64())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'pid'".into()))?;
-        let entry = self.process_table.get(pid)
+        let entry = self
+            .process_table
+            .get(pid)
             .ok_or_else(|| ToolError::NotFound(format!("pid {pid}")))?;
         entry.cancel_token.cancel();
-        self.process_table.update_state(pid, crate::process::ProcessState::Stopping)
+        self.process_table
+            .update_state(pid, crate::process::ProcessState::Stopping)
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         Ok(serde_json::json!({"stopped": pid, "agent_id": entry.agent_id}))
     }
@@ -114,23 +132,36 @@ pub struct AgentListTool {
 
 impl AgentListTool {
     pub fn new(process_table: Arc<crate::process::ProcessTable>) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "agent.list").unwrap();
-        Self { spec, process_table }
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "agent.list")
+            .unwrap();
+        Self {
+            spec,
+            process_table,
+        }
     }
 }
 
 impl BuiltinTool for AgentListTool {
-    fn name(&self) -> &str { "agent.list" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "agent.list"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, _args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let list = self.process_table.list();
-        let entries: Vec<serde_json::Value> = list.iter().map(|e| {
-            serde_json::json!({
-                "pid": e.pid,
-                "agent_id": e.agent_id,
-                "state": format!("{:?}", e.state),
+        let entries: Vec<serde_json::Value> = list
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "pid": e.pid,
+                    "agent_id": e.agent_id,
+                    "state": format!("{:?}", e.state),
+                })
             })
-        }).collect();
+            .collect();
         Ok(serde_json::json!({"agents": entries, "count": entries.len()}))
     }
 }
@@ -143,18 +174,32 @@ pub struct AgentInspectTool {
 
 impl AgentInspectTool {
     pub fn new(process_table: Arc<crate::process::ProcessTable>) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "agent.inspect").unwrap();
-        Self { spec, process_table }
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "agent.inspect")
+            .unwrap();
+        Self {
+            spec,
+            process_table,
+        }
     }
 }
 
 impl BuiltinTool for AgentInspectTool {
-    fn name(&self) -> &str { "agent.inspect" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "agent.inspect"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let pid = args.get("pid").and_then(|v| v.as_u64())
+        let pid = args
+            .get("pid")
+            .and_then(|v| v.as_u64())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'pid'".into()))?;
-        let entry = self.process_table.get(pid)
+        let entry = self
+            .process_table
+            .get(pid)
             .ok_or_else(|| ToolError::NotFound(format!("pid {pid}")))?;
         Ok(serde_json::json!({
             "pid": entry.pid,
@@ -190,22 +235,39 @@ impl AgentSendTool {
         process_table: Arc<crate::process::ProcessTable>,
         a2a: Arc<crate::a2a::A2ARouter>,
     ) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "agent.send").unwrap();
-        Self { spec, process_table, a2a }
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "agent.send")
+            .unwrap();
+        Self {
+            spec,
+            process_table,
+            a2a,
+        }
     }
 }
 
 #[cfg(feature = "native")]
 impl BuiltinTool for AgentSendTool {
-    fn name(&self) -> &str { "agent.send" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "agent.send"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let pid = args.get("pid").and_then(|v| v.as_u64())
+        let pid = args
+            .get("pid")
+            .and_then(|v| v.as_u64())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'pid'".into()))?;
-        let message = args.get("message").cloned()
+        let message = args
+            .get("message")
+            .cloned()
             .ok_or_else(|| ToolError::InvalidArgs("missing 'message'".into()))?;
         // Verify target exists
-        let _ = self.process_table.get(pid)
+        let _ = self
+            .process_table
+            .get(pid)
             .ok_or_else(|| ToolError::NotFound(format!("pid {pid}")))?;
         let msg = crate::ipc::KernelMessage::new(
             0, // from kernel
@@ -222,9 +284,10 @@ impl BuiltinTool for AgentSendTool {
                 .build()
                 .unwrap();
             rt.block_on(async { a2a.send(msg).await })
-        }).join()
-            .map_err(|_| ToolError::ExecutionFailed("send thread panicked".into()))?
-            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+        })
+        .join()
+        .map_err(|_| ToolError::ExecutionFailed("send thread panicked".into()))?
+        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         Ok(serde_json::json!({"sent": true, "pid": pid, "msg_id": msg_id}))
     }
 }
@@ -237,18 +300,31 @@ pub struct AgentSuspendTool {
 
 impl AgentSuspendTool {
     pub fn new(process_table: Arc<crate::process::ProcessTable>) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "agent.suspend").unwrap();
-        Self { spec, process_table }
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "agent.suspend")
+            .unwrap();
+        Self {
+            spec,
+            process_table,
+        }
     }
 }
 
 impl BuiltinTool for AgentSuspendTool {
-    fn name(&self) -> &str { "agent.suspend" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "agent.suspend"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let pid = args.get("pid").and_then(|v| v.as_u64())
+        let pid = args
+            .get("pid")
+            .and_then(|v| v.as_u64())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'pid'".into()))?;
-        self.process_table.update_state(pid, crate::process::ProcessState::Suspended)
+        self.process_table
+            .update_state(pid, crate::process::ProcessState::Suspended)
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         Ok(serde_json::json!({"suspended": pid}))
     }
@@ -262,18 +338,31 @@ pub struct AgentResumeTool {
 
 impl AgentResumeTool {
     pub fn new(process_table: Arc<crate::process::ProcessTable>) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "agent.resume").unwrap();
-        Self { spec, process_table }
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "agent.resume")
+            .unwrap();
+        Self {
+            spec,
+            process_table,
+        }
     }
 }
 
 impl BuiltinTool for AgentResumeTool {
-    fn name(&self) -> &str { "agent.resume" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "agent.resume"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let pid = args.get("pid").and_then(|v| v.as_u64())
+        let pid = args
+            .get("pid")
+            .and_then(|v| v.as_u64())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'pid'".into()))?;
-        self.process_table.update_state(pid, crate::process::ProcessState::Running)
+        self.process_table
+            .update_state(pid, crate::process::ProcessState::Running)
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         Ok(serde_json::json!({"resumed": pid}))
     }
@@ -308,13 +397,17 @@ impl IpcSendTool {
 }
 
 impl BuiltinTool for IpcSendTool {
-    fn name(&self) -> &str { "ipc.send" }
+    fn name(&self) -> &str {
+        "ipc.send"
+    }
     fn spec(&self) -> &BuiltinToolSpec {
         &self.spec
     }
     fn execute(&self, _args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         // Stub: real implementation will route through KernelIpc
-        Err(ToolError::ExecutionFailed("ipc.send requires async kernel context".into()))
+        Err(ToolError::ExecutionFailed(
+            "ipc.send requires async kernel context".into(),
+        ))
     }
 }
 
@@ -343,12 +436,16 @@ impl IpcSubscribeTool {
 }
 
 impl BuiltinTool for IpcSubscribeTool {
-    fn name(&self) -> &str { "ipc.subscribe" }
+    fn name(&self) -> &str {
+        "ipc.subscribe"
+    }
     fn spec(&self) -> &BuiltinToolSpec {
         &self.spec
     }
     fn execute(&self, _args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         // Stub: real implementation will route through TopicRouter
-        Err(ToolError::ExecutionFailed("ipc.subscribe requires async kernel context".into()))
+        Err(ToolError::ExecutionFailed(
+            "ipc.subscribe requires async kernel context".into(),
+        ))
     }
 }

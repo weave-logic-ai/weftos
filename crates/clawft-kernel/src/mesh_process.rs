@@ -108,7 +108,10 @@ pub enum ConsensusOp {
     /// Deregister a service.
     DeregisterService { name: String, node_id: String },
     /// Register a process.
-    RegisterProcess { global_pid: String, agent_type: String },
+    RegisterProcess {
+        global_pid: String,
+        agent_type: String,
+    },
     /// Deregister a process.
     DeregisterProcess { global_pid: String },
 }

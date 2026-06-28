@@ -237,7 +237,10 @@ impl A2ARouter {
             .get(from)
             .ok_or(KernelError::ProcessNotFound { pid: from })?;
 
-        if !matches!(sender.state, ProcessState::Running | ProcessState::Suspended) {
+        if !matches!(
+            sender.state,
+            ProcessState::Running | ProcessState::Suspended
+        ) {
             return Err(KernelError::Ipc(format!(
                 "sender PID {from} is not running (state: {})",
                 sender.state
@@ -294,10 +297,11 @@ impl A2ARouter {
                 if sinks
                     .iter()
                     .any(|(_, s)| matches!(s, SubscriberSink::ExternalStream(_)))
-                    && let Ok(mut bytes) = serde_json::to_vec(&msg) {
-                        bytes.push(b'\n');
-                        external_line = Some(bytes);
-                    }
+                    && let Ok(mut bytes) = serde_json::to_vec(&msg)
+                {
+                    bytes.push(b'\n');
+                    external_line = Some(bytes);
+                }
 
                 for (_id, sink) in &sinks {
                     match sink {
@@ -401,12 +405,11 @@ impl A2ARouter {
                             node_id.clone(),
                             msg,
                         );
-                        runtime
-                            .send_to_peer(&node_id, envelope)
-                            .await
-                            .map_err(|e| KernelError::Mesh(format!(
+                        runtime.send_to_peer(&node_id, envelope).await.map_err(|e| {
+                            KernelError::Mesh(format!(
                                 "failed to send to remote node '{node_id}': {e}"
-                            )))
+                            ))
+                        })
                     } else {
                         debug!(from, %node_id, "remote node routing: no mesh runtime attached");
                         Err(KernelError::Mesh(format!(
@@ -498,13 +501,12 @@ impl A2ARouter {
             ))
         })?;
 
-        let target_pid = registry.resolve_target(service_name).ok_or_else(|| {
-            KernelError::Ipc(format!("service not found: '{service_name}'"))
-        })?;
+        let target_pid = registry
+            .resolve_target(service_name)
+            .ok_or_else(|| KernelError::Ipc(format!("service not found: '{service_name}'")))?;
 
         // Check IPC scope
-        self.capability_checker
-            .check_ipc_target(from, target_pid)?;
+        self.capability_checker.check_ipc_target(from, target_pid)?;
 
         self.deliver_to_inbox(target_pid, msg).await
     }
@@ -754,7 +756,9 @@ mod tests {
         router.send(msg).await.unwrap();
 
         // External stream receives a JSON line terminated by '\n'.
-        let line = rx.try_recv().expect("external stream should receive message");
+        let line = rx
+            .try_recv()
+            .expect("external stream should receive message");
         assert!(line.ends_with(b"\n"));
         let trimmed = std::str::from_utf8(&line[..line.len() - 1]).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(trimmed).unwrap();
@@ -1043,7 +1047,10 @@ mod tests {
         let received = receivers[1].try_recv().unwrap();
         assert!(matches!(
             received.payload,
-            MessagePayload::Rvf { segment_type: 0x40, .. }
+            MessagePayload::Rvf {
+                segment_type: 0x40,
+                ..
+            }
         ));
     }
 
@@ -1061,7 +1068,10 @@ mod tests {
         let result = router.send(msg).await;
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
-        assert!(err_msg.contains("inbox closed"), "expected 'inbox closed', got: {err_msg}");
+        assert!(
+            err_msg.contains("inbox closed"),
+            "expected 'inbox closed', got: {err_msg}"
+        );
 
         // Inbox should have been removed automatically
         assert!(!router.has_inbox(pids[1]));
@@ -1118,7 +1128,10 @@ mod tests {
         let result = router.send(m3).await;
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
-        assert!(err_msg.contains("inbox full"), "expected 'inbox full', got: {err_msg}");
+        assert!(
+            err_msg.contains("inbox full"),
+            "expected 'inbox full', got: {err_msg}"
+        );
 
         // Inbox should still exist (not removed on full, only on closed)
         assert!(router.has_inbox(target_pid));
@@ -1233,8 +1246,8 @@ mod tests {
         let checker = Arc::new(CapabilityChecker::new(table.clone()));
         let topic_router = Arc::new(TopicRouter::new(table.clone()));
         let registry = Arc::new(crate::service::ServiceRegistry::new());
-        let router = A2ARouter::new(table, checker, topic_router)
-            .with_service_registry(registry.clone());
+        let router =
+            A2ARouter::new(table, checker, topic_router).with_service_registry(registry.clone());
 
         let mut receivers = Vec::new();
         for &pid in &pids {
@@ -1354,7 +1367,10 @@ mod tests {
         registry.register_entry(entry).unwrap();
 
         let retrieved = registry.get_entry("metrics").unwrap();
-        assert_eq!(retrieved.audit_level, crate::service::ServiceAuditLevel::GateOnly);
+        assert_eq!(
+            retrieved.audit_level,
+            crate::service::ServiceAuditLevel::GateOnly
+        );
     }
 
     #[tokio::test]
@@ -1379,11 +1395,7 @@ mod tests {
         // Router without service registry should fail on Service target
         let (router_no_reg, pids, _receivers) = setup_router(2);
 
-        let msg = KernelMessage::text(
-            pids[0],
-            MessageTarget::Service("missing".into()),
-            "hello",
-        );
+        let msg = KernelMessage::text(pids[0], MessageTarget::Service("missing".into()), "hello");
         let result = router_no_reg.send(msg).await;
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
@@ -1410,13 +1422,12 @@ mod tests {
             })
             .unwrap();
 
-        let msg = KernelMessage::text(
-            pids[0],
-            MessageTarget::Service("redis".into()),
-            "ping",
-        );
+        let msg = KernelMessage::text(pids[0], MessageTarget::Service("redis".into()), "ping");
         let result = router.send(msg).await;
-        assert!(result.is_err(), "external service with no PID should fail routing");
+        assert!(
+            result.is_err(),
+            "external service with no PID should fail routing"
+        );
     }
 
     // ── Request-response tests ──────────────────────────────────
@@ -1458,8 +1469,7 @@ mod tests {
     async fn request_response_timeout() {
         let (router, pids, _receivers) = setup_router(2);
 
-        let request =
-            KernelMessage::text(pids[0], MessageTarget::Process(pids[1]), "no-reply");
+        let request = KernelMessage::text(pids[0], MessageTarget::Process(pids[1]), "no-reply");
         let result = router.request(request, Duration::from_millis(50)).await;
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
@@ -1493,7 +1503,10 @@ mod tests {
             request_id,
         );
         let completed = router.try_complete_request(reply);
-        assert!(completed, "try_complete_request should return true for matching id");
+        assert!(
+            completed,
+            "try_complete_request should return true for matching id"
+        );
 
         let response = rx.await.unwrap();
         assert!(matches!(
@@ -1514,7 +1527,10 @@ mod tests {
             "nonexistent-id".into(),
         );
         let completed = router.try_complete_request(reply);
-        assert!(!completed, "try_complete_request should return false for non-matching id");
+        assert!(
+            !completed,
+            "try_complete_request should return false for non-matching id"
+        );
 
         // Also test message with no correlation_id.
         let plain = KernelMessage::text(pids[1], MessageTarget::Process(pids[0]), "plain");
@@ -1656,11 +1672,8 @@ mod tests {
         let (router, pids, mut receivers) = setup_router(2);
 
         for i in 0..5 {
-            let msg = KernelMessage::text(
-                pids[0],
-                MessageTarget::Process(pids[1]),
-                format!("msg-{i}"),
-            );
+            let msg =
+                KernelMessage::text(pids[0], MessageTarget::Process(pids[1]), format!("msg-{i}"));
             router.send(msg).await.unwrap();
         }
 
@@ -1694,7 +1707,10 @@ mod tests {
         router.send(msg).await.unwrap();
 
         // pids[1] should NOT receive (unsubscribed)
-        assert!(receivers[1].try_recv().is_err(), "unsubscribed agent should not receive");
+        assert!(
+            receivers[1].try_recv().is_err(),
+            "unsubscribed agent should not receive"
+        );
 
         // pids[2] should still receive
         let received = receivers[2].try_recv().unwrap();
@@ -1768,11 +1784,7 @@ mod tests {
         let _rx_sender = router.create_inbox(sender_pid);
         let mut rx_target = router.create_inbox(target_pid);
 
-        let msg = KernelMessage::text(
-            sender_pid,
-            MessageTarget::Process(target_pid),
-            "allowed",
-        );
+        let msg = KernelMessage::text(sender_pid, MessageTarget::Process(target_pid), "allowed");
         let result = router.send(msg).await;
         assert!(result.is_ok(), "restricted sender should reach allowed PID");
 
@@ -1820,13 +1832,12 @@ mod tests {
         let _rx_sender = router.create_inbox(sender_pid);
         let _rx_target = router.create_inbox(target_pid);
 
-        let msg = KernelMessage::text(
-            sender_pid,
-            MessageTarget::Process(target_pid),
-            "blocked",
-        );
+        let msg = KernelMessage::text(sender_pid, MessageTarget::Process(target_pid), "blocked");
         let result = router.send(msg).await;
-        assert!(result.is_err(), "restricted sender should be blocked from unlisted PID");
+        assert!(
+            result.is_err(),
+            "restricted sender should be blocked from unlisted PID"
+        );
     }
 
     #[test]
@@ -1895,7 +1906,10 @@ mod tests {
 
         let msg = KernelMessage::text(pids[0], MessageTarget::Kernel, "kernel-msg");
         let result = router.send(msg).await;
-        assert!(result.is_ok(), "kernel target routing should succeed (even if no-op)");
+        assert!(
+            result.is_ok(),
+            "kernel target routing should succeed (even if no-op)"
+        );
     }
 
     #[tokio::test]
@@ -1911,9 +1925,15 @@ mod tests {
             "remote-msg",
         );
         let result = router.send(msg).await;
-        assert!(result.is_err(), "remote node routing should fail (not yet implemented)");
+        assert!(
+            result.is_err(),
+            "remote node routing should fail (not yet implemented)"
+        );
         let err_msg = format!("{}", result.unwrap_err());
-        assert!(err_msg.contains("remote routing"), "expected remote routing error, got: {err_msg}");
+        assert!(
+            err_msg.contains("remote routing"),
+            "expected remote routing error, got: {err_msg}"
+        );
     }
 
     #[tokio::test]
@@ -1948,9 +1968,16 @@ mod tests {
         let _rx_sender = router.create_inbox(sender_pid);
         let mut rx_target = router.create_inbox(target_pid);
 
-        let msg = KernelMessage::text(sender_pid, MessageTarget::Process(target_pid), "from-suspended");
+        let msg = KernelMessage::text(
+            sender_pid,
+            MessageTarget::Process(target_pid),
+            "from-suspended",
+        );
         let result = router.send(msg).await;
-        assert!(result.is_ok(), "suspended process should be allowed to send");
+        assert!(
+            result.is_ok(),
+            "suspended process should be allowed to send"
+        );
 
         let received = rx_target.try_recv().unwrap();
         assert!(matches!(
@@ -1968,17 +1995,17 @@ mod tests {
             router.topic_router().subscribe(pid, "news");
         }
 
-        let msg = KernelMessage::text(
-            pids[0],
-            MessageTarget::Topic("news".into()),
-            "breaking",
-        );
+        let msg = KernelMessage::text(pids[0], MessageTarget::Topic("news".into()), "breaking");
         router.send(msg).await.unwrap();
 
         // All subscribers should receive the same payload
         for (i, rx) in receivers[1..].iter_mut().enumerate() {
             let received = rx.try_recv().unwrap_or_else(|_| {
-                panic!("subscriber {} (pid {}) should have received message", i + 1, pids[i + 1])
+                panic!(
+                    "subscriber {} (pid {}) should have received message",
+                    i + 1,
+                    pids[i + 1]
+                )
             });
             assert!(matches!(
                 received.payload,
@@ -2027,10 +2054,16 @@ mod tests {
 
         let msg = KernelMessage::text(sender_pid, MessageTarget::Broadcast, "restricted-broadcast");
         let result = router.send(msg).await;
-        assert!(result.is_ok(), "broadcast itself should succeed even if all targets are blocked");
+        assert!(
+            result.is_ok(),
+            "broadcast itself should succeed even if all targets are blocked"
+        );
 
         // Target should NOT receive (scope blocks it)
-        assert!(rx_target.try_recv().is_err(), "restricted broadcast should not reach any target");
+        assert!(
+            rx_target.try_recv().is_err(),
+            "restricted broadcast should not reach any target"
+        );
     }
 
     #[test]
@@ -2040,11 +2073,17 @@ mod tests {
         let topic_router = Arc::new(TopicRouter::new(table.clone()));
 
         let router = A2ARouter::new(table.clone(), checker.clone(), topic_router.clone());
-        assert!(router.service_registry().is_none(), "no registry by default");
+        assert!(
+            router.service_registry().is_none(),
+            "no registry by default"
+        );
 
         let registry = Arc::new(crate::service::ServiceRegistry::new());
         let router = router.with_service_registry(registry);
-        assert!(router.service_registry().is_some(), "registry should be present after with_service_registry");
+        assert!(
+            router.service_registry().is_some(),
+            "registry should be present after with_service_registry"
+        );
     }
 
     #[test]
@@ -2131,7 +2170,11 @@ mod tests {
         let msg = KernelMessage::text(sender_pid, MessageTarget::Process(target_pid), "request");
         let result = router.request(msg, Duration::from_millis(100)).await;
         assert!(result.is_err(), "request to PID without inbox should fail");
-        assert_eq!(router.pending_request_count(), 0, "pending request should be cleaned up on send failure");
+        assert_eq!(
+            router.pending_request_count(),
+            0,
+            "pending request should be cleaned up on send failure"
+        );
     }
 
     #[tokio::test]

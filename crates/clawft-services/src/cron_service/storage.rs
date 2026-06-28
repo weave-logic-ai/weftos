@@ -203,9 +203,8 @@ fn append_event_sync(path: &std::path::Path, event: &StorageEvent) -> std::io::R
         std::fs::create_dir_all(parent)?;
     }
 
-    let mut line = serde_json::to_string(event).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-    })?;
+    let mut line = serde_json::to_string(event)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     line.push('\n');
 
     let mut file = std::fs::OpenOptions::new()
@@ -257,9 +256,9 @@ fn apply_field_update(job: &mut CronJob, field: &str, value: &serde_json::Value)
             }
         }
         "last_status" => {
-            if let Ok(v) = serde_json::from_value::<Option<clawft_types::cron::JobStatus>>(
-                value.clone(),
-            ) {
+            if let Ok(v) =
+                serde_json::from_value::<Option<clawft_types::cron::JobStatus>>(value.clone())
+            {
                 job.state.last_status = v;
             }
         }
@@ -275,8 +274,8 @@ fn apply_field_update(job: &mut CronJob, field: &str, value: &serde_json::Value)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clawft_types::cron::{CronPayload, CronSchedule, CronJobState, ScheduleKind};
     use chrono::Utc;
+    use clawft_types::cron::{CronJobState, CronPayload, CronSchedule, ScheduleKind};
 
     fn make_job(id: &str, name: &str) -> CronJob {
         let now = Utc::now();

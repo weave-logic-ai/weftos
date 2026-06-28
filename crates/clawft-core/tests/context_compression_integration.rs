@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use clawft_core::agent::context::{
-    compress_context, count_tokens, CompressedContext, CompressionConfig, ContextBuilder,
+    CompressedContext, CompressionConfig, ContextBuilder, compress_context, count_tokens,
 };
 use clawft_core::bootstrap::AppContext;
 use clawft_core::pipeline::traits::LlmMessage;

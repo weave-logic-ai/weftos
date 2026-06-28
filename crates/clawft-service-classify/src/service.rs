@@ -21,11 +21,11 @@
 //! per call should follow the whisper pattern (one in-flight slot,
 //! drop-oldest); see journal §A5 for the policy taxonomy.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
 use clawft_kernel::SubstrateService;
 use serde_json::Value;
 use tokio::sync::{mpsc, watch};
@@ -288,7 +288,9 @@ fn decode_pcm_chunk(value: &Value) -> Result<DecodedChunk, String> {
         .and_then(|v| v.as_str())
         .unwrap_or("base64");
     if encoding != "base64" {
-        return Err(format!("unsupported encoding: {encoding:?} (want \"base64\")"));
+        return Err(format!(
+            "unsupported encoding: {encoding:?} (want \"base64\")"
+        ));
     }
     let format = obj
         .get("format")
@@ -335,8 +337,8 @@ fn decode_pcm_chunk(value: &Value) -> Result<DecodedChunk, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::classifier::EnergyClassifier;
     use crate::CLASS_SILENCE;
+    use crate::classifier::EnergyClassifier;
     use serde_json::json;
     use std::time::Duration;
 

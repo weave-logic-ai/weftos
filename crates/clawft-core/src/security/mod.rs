@@ -479,14 +479,14 @@ pub fn validate_mcp_tool_name_strict(tool_name: &str) -> Result<(), ClawftError>
 /// here only when granting it via wildcard would constitute a security
 /// regression.
 pub const SENSITIVE_MCP_NAMESPACES: &[&str] = &[
-    "exec",      // shell / process exec
-    "shell",     // alternate shell namespace
-    "system",    // system control
-    "sudo",      // privilege escalation
-    "kernel",    // kernel surface
-    "subprocess",// process spawn
-    "process",   // process management
-    "fs_admin",  // privileged filesystem
+    "exec",       // shell / process exec
+    "shell",      // alternate shell namespace
+    "system",     // system control
+    "sudo",       // privilege escalation
+    "kernel",     // kernel surface
+    "subprocess", // process spawn
+    "process",    // process management
+    "fs_admin",   // privileged filesystem
 ];
 
 /// Split an MCP tool name `{server}__{tool}` into `(server, tool)`.
@@ -551,9 +551,7 @@ pub fn validate_mcp_namespace_against_wildcard(
         && server == "*"
     {
         return Err(ClawftError::SecurityViolation {
-            reason: format!(
-                "MCP tool '{tool_name}' uses wildcard '*' as namespace prefix"
-            ),
+            reason: format!("MCP tool '{tool_name}' uses wildcard '*' as namespace prefix"),
         });
     }
 
@@ -931,8 +929,14 @@ mod tests {
         // must not leave behind a reconstructed "<system>".
         let input = "before <sy<system>stem>injected</sy</system>stem> after";
         let (result, warnings) = sanitize_skill_instructions(input);
-        assert!(!result.contains("<system>"), "nested <system> survived: {result}");
-        assert!(!result.contains("</system>"), "nested </system> survived: {result}");
+        assert!(
+            !result.contains("<system>"),
+            "nested <system> survived: {result}"
+        );
+        assert!(
+            !result.contains("</system>"),
+            "nested </system> survived: {result}"
+        );
         assert!(!warnings.is_empty());
     }
 
@@ -941,7 +945,10 @@ mod tests {
         // Double nesting: <<|im_start<|im_start|>|>
         let input = "x <|im_sta<|im_start|>rt|> y";
         let (result, warnings) = sanitize_skill_instructions(input);
-        assert!(!result.contains("<|im_start|>"), "deep nested token survived: {result}");
+        assert!(
+            !result.contains("<|im_start|>"),
+            "deep nested token survived: {result}"
+        );
         assert!(!warnings.is_empty());
     }
 
@@ -1030,10 +1037,7 @@ mod tests {
 
     #[test]
     fn weft32_split_mcp_namespace_extracts_server() {
-        assert_eq!(
-            split_mcp_namespace("exec__shell"),
-            Some(("exec", "shell"))
-        );
+        assert_eq!(split_mcp_namespace("exec__shell"), Some(("exec", "shell")));
         // Multiple `__` use the FIRST as split point.
         assert_eq!(
             split_mcp_namespace("exec__shell__nested"),
@@ -1047,11 +1051,8 @@ mod tests {
     #[test]
     fn weft32_wildcard_does_not_cover_exec_namespace() {
         // The headline attack: `exec__shell` must be denied under `["*"]`.
-        let err = validate_mcp_namespace_against_wildcard(
-            "exec__shell",
-            &["*".into()],
-        )
-        .unwrap_err();
+        let err =
+            validate_mcp_namespace_against_wildcard("exec__shell", &["*".into()]).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("sensitive namespace"));
         assert!(msg.contains("exec"));
@@ -1060,61 +1061,38 @@ mod tests {
     #[test]
     fn weft32_explicit_namespace_prefix_opts_in() {
         // `exec_*` opts the caller in to the sensitive `exec` namespace.
-        assert!(validate_mcp_namespace_against_wildcard(
-            "exec__shell",
-            &["exec_*".into()]
-        )
-        .is_ok());
+        assert!(validate_mcp_namespace_against_wildcard("exec__shell", &["exec_*".into()]).is_ok());
         // Double-underscore prefix also opts in.
-        assert!(validate_mcp_namespace_against_wildcard(
-            "exec__shell",
-            &["exec__*".into()]
-        )
-        .is_ok());
+        assert!(
+            validate_mcp_namespace_against_wildcard("exec__shell", &["exec__*".into()]).is_ok()
+        );
         // Exact name opts in.
-        assert!(validate_mcp_namespace_against_wildcard(
-            "exec__shell",
-            &["exec__shell".into()]
-        )
-        .is_ok());
+        assert!(
+            validate_mcp_namespace_against_wildcard("exec__shell", &["exec__shell".into()]).is_ok()
+        );
     }
 
     #[test]
     fn weft32_non_sensitive_namespace_allowed_under_wildcard() {
         // `fs__read_file` is fine under `["*"]` — `fs` is not sensitive.
-        assert!(validate_mcp_namespace_against_wildcard(
-            "fs__read_file",
-            &["*".into()]
-        )
-        .is_ok());
+        assert!(validate_mcp_namespace_against_wildcard("fs__read_file", &["*".into()]).is_ok());
     }
 
     #[test]
     fn weft32_non_mcp_tool_passes_under_wildcard() {
         // Local tools without `__` aren't subject to the guard.
-        assert!(validate_mcp_namespace_against_wildcard(
-            "read_file",
-            &["*".into()]
-        )
-        .is_ok());
+        assert!(validate_mcp_namespace_against_wildcard("read_file", &["*".into()]).is_ok());
     }
 
     #[test]
     fn weft32_wildcard_namespace_prefix_rejected() {
         // The acceptance criterion's literal wildcard-as-namespace case:
         // a tool name like `*__*` (server="*" in the namespace position).
-        let err = validate_mcp_namespace_against_wildcard(
-            "*__*",
-            &["*".into()],
-        )
-        .unwrap_err();
+        let err = validate_mcp_namespace_against_wildcard("*__*", &["*".into()]).unwrap_err();
         assert!(err.to_string().contains("wildcard"));
 
-        let err2 = validate_mcp_namespace_against_wildcard(
-            "*__read_file",
-            &["*".into()],
-        )
-        .unwrap_err();
+        let err2 =
+            validate_mcp_namespace_against_wildcard("*__read_file", &["*".into()]).unwrap_err();
         assert!(err2.to_string().contains("wildcard"));
     }
 
@@ -1130,8 +1108,7 @@ mod tests {
         // Spot-check a few of the other sensitive namespaces.
         for ns in &["shell__cmd", "system__reboot", "sudo__run", "kernel__panic"] {
             assert!(
-                validate_mcp_namespace_against_wildcard(ns, &["*".into()])
-                    .is_err(),
+                validate_mcp_namespace_against_wildcard(ns, &["*".into()]).is_err(),
                 "namespace {ns} must be rejected under [*]"
             );
         }
@@ -1143,21 +1120,20 @@ mod tests {
         //   ["*", "*"]          → Err
         //   ["fs", "read_file"] → Ok (no sensitive namespace involved)
         //   ["*", "read_file"]  → Err for "*"-prefixed tool name
-        let err1 = validate_mcp_namespace_against_wildcard(
-            "*__*",
-            &["*".into(), "*".into()],
-        )
-        .unwrap_err();
+        let err1 =
+            validate_mcp_namespace_against_wildcard("*__*", &["*".into(), "*".into()]).unwrap_err();
         assert!(err1.to_string().contains("wildcard"));
 
         // ["fs", "read_file"] — these are tool names in an allowlist
         // for a benign tool. Asking whether `fs__read_file` is allowed
         // should succeed.
-        assert!(validate_mcp_namespace_against_wildcard(
-            "fs__read_file",
-            &["fs".into(), "read_file".into()]
-        )
-        .is_ok());
+        assert!(
+            validate_mcp_namespace_against_wildcard(
+                "fs__read_file",
+                &["fs".into(), "read_file".into()]
+            )
+            .is_ok()
+        );
 
         let err3 = validate_mcp_namespace_against_wildcard(
             "*__read_file",

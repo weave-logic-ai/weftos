@@ -31,8 +31,7 @@ impl WikiLink {
 
 /// Extract all wikilinks from markdown content.
 pub fn extract_wikilinks(content: &str) -> Vec<WikiLink> {
-    let re = Regex::new(r"\[\[([^\]|#]+)(?:#([^\]|]*))?(?:\|([^\]]+))?\]\]")
-        .expect("valid regex");
+    let re = Regex::new(r"\[\[([^\]|#]+)(?:#([^\]|]*))?(?:\|([^\]]+))?\]\]").expect("valid regex");
 
     re.captures_iter(content)
         .map(|cap| WikiLink {
@@ -46,8 +45,7 @@ pub fn extract_wikilinks(content: &str) -> Vec<WikiLink> {
 /// Extract standard markdown links `[text](path.md)`, excluding images and
 /// external URLs.
 pub fn extract_markdown_links(content: &str) -> Vec<(String, String)> {
-    let re = Regex::new(r"\[([^\]]*)\]\(([^)]+\.md)\)")
-        .expect("valid regex");
+    let re = Regex::new(r"\[([^\]]*)\]\(([^)]+\.md)\)").expect("valid regex");
 
     re.captures_iter(content)
         .filter_map(|cap| {
@@ -84,22 +82,23 @@ pub fn auto_link(content: &str, known_titles: &[String]) -> String {
         // the first occurrence outside of existing wikilinks and code blocks.
         let pattern = format!(r"(?i)\b({})\b", regex::escape(title));
         if let Ok(re) = Regex::new(&pattern)
-            && let Some(m) = re.find(&result) {
-                let matched_text = m.as_str();
-                // Don't link inside code fences or existing links.
-                let before = &result[..m.start()];
-                let in_code = !before.matches("```").count().is_multiple_of(2);
-                let in_link = before.ends_with("[[");
-                if !in_code && !in_link {
-                    let replacement = format!("[[{matched_text}]]");
-                    result = format!(
-                        "{}{}{}",
-                        &result[..m.start()],
-                        replacement,
-                        &result[m.end()..]
-                    );
-                }
+            && let Some(m) = re.find(&result)
+        {
+            let matched_text = m.as_str();
+            // Don't link inside code fences or existing links.
+            let before = &result[..m.start()];
+            let in_code = !before.matches("```").count().is_multiple_of(2);
+            let in_link = before.ends_with("[[");
+            if !in_code && !in_link {
+                let replacement = format!("[[{matched_text}]]");
+                result = format!(
+                    "{}{}{}",
+                    &result[..m.start()],
+                    replacement,
+                    &result[m.end()..]
+                );
             }
+        }
     }
 
     result
@@ -121,11 +120,7 @@ pub fn render_backlinks_section(backlinks: &[(String, String)]) -> String {
         return String::new();
     }
 
-    let mut lines = vec![
-        String::new(),
-        "## Backlinks".to_string(),
-        String::new(),
-    ];
+    let mut lines = vec![String::new(), "## Backlinks".to_string(), String::new()];
 
     for (source, context) in backlinks {
         lines.push(format!("- [[{source}]] — {context}"));

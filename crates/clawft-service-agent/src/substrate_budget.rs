@@ -89,8 +89,8 @@ impl BudgetStore for SubstrateBudgetStore {
 
     fn save(&self, conv_id: &str, usage: &BudgetUsage) -> Result<(), String> {
         let path = Self::budget_path(conv_id);
-        let body = serde_json::to_value(usage)
-            .map_err(|e| format!("budget serialise failed: {e}"))?;
+        let body =
+            serde_json::to_value(usage).map_err(|e| format!("budget serialise failed: {e}"))?;
         self.client.publish(&self.node_id, &path, body).map(|_| ())
     }
 }
@@ -177,13 +177,10 @@ mod tests {
     fn malformed_payload_falls_back_to_default() {
         let stub = Arc::new(StubClient::default());
         // Plant a non-budget value at the budget path.
-        stub.store
-            .lock()
-            .unwrap()
-            .insert(
-                SubstrateBudgetStore::budget_path("conv-bad"),
-                serde_json::json!("not an object"),
-            );
+        stub.store.lock().unwrap().insert(
+            SubstrateBudgetStore::budget_path("conv-bad"),
+            serde_json::json!("not an object"),
+        );
         let store = SubstrateBudgetStore::with_client(stub, "daemon");
         let u = store.load("conv-bad");
         assert_eq!(u, BudgetUsage::default());

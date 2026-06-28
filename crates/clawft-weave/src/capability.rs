@@ -282,7 +282,10 @@ mod tests {
 
     #[test]
     fn unknown_methods_default_to_read() {
-        assert_eq!(required_capability("zzz.never_heard_of_this"), Capability::Read);
+        assert_eq!(
+            required_capability("zzz.never_heard_of_this"),
+            Capability::Read
+        );
     }
 
     #[test]

@@ -118,7 +118,10 @@ mod tests {
         assert_eq!(restored.provider, "openai");
         assert!((restored.speed - 1.2).abs() < f32::EPSILON);
         assert!((restored.pitch - (-0.5)).abs() < f32::EPSILON);
-        assert_eq!(restored.greeting_prefix.as_deref(), Some("I am Agent Alpha."));
+        assert_eq!(
+            restored.greeting_prefix.as_deref(),
+            Some("I am Agent Alpha.")
+        );
         assert_eq!(restored.language, "en-US");
     }
 

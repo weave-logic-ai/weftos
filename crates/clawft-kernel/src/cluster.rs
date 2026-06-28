@@ -20,7 +20,6 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-
 /// Unique node identifier (UUID or DID string).
 pub type NodeId = String;
 
@@ -222,8 +221,7 @@ impl ClusterConfig {
     ) -> u64 {
         match model {
             Some(m) if m.is_trained() => {
-                let secs =
-                    m.predict(peer_count, network_latency_ms, update_frequency_hz);
+                let secs = m.predict(peer_count, network_latency_ms, update_frequency_hz);
                 secs.round().max(1.0) as u64
             }
             _ => self.heartbeat_interval_secs,
@@ -363,8 +361,18 @@ pub enum ClusterError {
 /// require a networking layer not included here.
 /// Known valid capabilities for cluster nodes.
 const KNOWN_CAPABILITIES: &[&str] = &[
-    "ipc", "chain", "tree", "governance", "ecc", "wasm", "containers", "apps",
-    "mesh", "discovery", "heartbeat", "compute",
+    "ipc",
+    "chain",
+    "tree",
+    "governance",
+    "ecc",
+    "wasm",
+    "containers",
+    "apps",
+    "mesh",
+    "discovery",
+    "heartbeat",
+    "compute",
 ];
 
 /// Validate peer capabilities against the known set.
@@ -581,9 +589,10 @@ impl ClusterMembership {
         {
             let mut last = self.last_peer_add.lock().unwrap();
             if let Some(ts) = *last
-                && ts.elapsed() < self.min_peer_add_interval {
-                    return Err(ClusterError::RateLimited);
-                }
+                && ts.elapsed() < self.min_peer_add_interval
+            {
+                return Err(ClusterError::RateLimited);
+            }
             *last = Some(Instant::now());
         }
 
@@ -648,7 +657,8 @@ impl ClusterMembership {
             }
         }
 
-        let result = self.peers
+        let result = self
+            .peers
             .remove(node_id)
             .map(|(_, peer)| peer)
             .ok_or_else(|| ClusterError::NodeNotFound {
@@ -759,8 +769,7 @@ impl ClusterMembership {
 
         // Create tree node for this peer
         let mut tree = tree.lock().unwrap();
-        let peer_id =
-            exo_resource_tree::ResourceId::new(format!("/network/peers/{peer_name}"));
+        let peer_id = exo_resource_tree::ResourceId::new(format!("/network/peers/{peer_name}"));
         let parent = exo_resource_tree::ResourceId::new("/network/peers");
         if let Err(e) = tree.insert(peer_id, exo_resource_tree::ResourceKind::Device, parent) {
             tracing::debug!(peer = %peer_name, error = %e, "failed to create tree node for peer");
@@ -866,11 +875,13 @@ impl PairingGate {
         }
 
         let data = std::fs::read_to_string(&self.persist_path)?;
-        let file: PairedHostsFile = serde_json::from_str(&data).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-        })?;
+        let file: PairedHostsFile = serde_json::from_str(&data)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
-        let mut hosts = self.paired_hosts.lock().expect("paired_hosts lock poisoned");
+        let mut hosts = self
+            .paired_hosts
+            .lock()
+            .expect("paired_hosts lock poisoned");
         for h in &file.hosts {
             hosts.insert(h.peer_id.clone());
         }
@@ -882,7 +893,10 @@ impl PairingGate {
 
     /// Persist paired hosts to disk.
     pub fn save(&self) -> Result<(), std::io::Error> {
-        let hosts = self.paired_hosts.lock().expect("paired_hosts lock poisoned");
+        let hosts = self
+            .paired_hosts
+            .lock()
+            .expect("paired_hosts lock poisoned");
         let file = PairedHostsFile {
             hosts: hosts
                 .iter()
@@ -892,9 +906,7 @@ impl PairingGate {
                 })
                 .collect(),
         };
-        let json = serde_json::to_string_pretty(&file).map_err(|e| {
-            std::io::Error::other(e)
-        })?;
+        let json = serde_json::to_string_pretty(&file).map_err(|e| std::io::Error::other(e))?;
         if let Some(parent) = self.persist_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -942,7 +954,10 @@ impl PairingGate {
     pub fn should_accept_peer(&self, peer_id: &str) -> bool {
         // Already paired: always accept.
         {
-            let hosts = self.paired_hosts.lock().expect("paired_hosts lock poisoned");
+            let hosts = self
+                .paired_hosts
+                .lock()
+                .expect("paired_hosts lock poisoned");
             if hosts.contains(peer_id) {
                 return true;
             }
@@ -951,7 +966,10 @@ impl PairingGate {
         // Check if window is open.
         if self.is_pairing_open() {
             // Pair this host.
-            let mut hosts = self.paired_hosts.lock().expect("paired_hosts lock poisoned");
+            let mut hosts = self
+                .paired_hosts
+                .lock()
+                .expect("paired_hosts lock poisoned");
             hosts.insert(peer_id.to_owned());
 
             let mut pending = self.pending_pairs.lock().expect("pending lock poisoned");
@@ -969,7 +987,10 @@ impl PairingGate {
             return true;
         }
 
-        debug!(peer_id, "rejecting peer: pairing window closed and not previously paired");
+        debug!(
+            peer_id,
+            "rejecting peer: pairing window closed and not previously paired"
+        );
         false
     }
 
@@ -985,7 +1006,10 @@ impl PairingGate {
 
     /// Remove a previously paired host. Returns `true` if it was present.
     pub fn unpair(&self, peer_id: &str) -> bool {
-        let mut hosts = self.paired_hosts.lock().expect("paired_hosts lock poisoned");
+        let mut hosts = self
+            .paired_hosts
+            .lock()
+            .expect("paired_hosts lock poisoned");
         let removed = hosts.remove(peer_id);
         if removed {
             drop(hosts);
@@ -1005,11 +1029,7 @@ impl PairingGate {
 
 impl std::fmt::Debug for PairingGate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let count = self
-            .paired_hosts
-            .lock()
-            .map(|h| h.len())
-            .unwrap_or(0);
+        let count = self.paired_hosts.lock().map(|h| h.len()).unwrap_or(0);
         f.debug_struct("PairingGate")
             .field("open", &self.is_pairing_open())
             .field("paired_hosts", &count)
@@ -1183,6 +1203,30 @@ mod cluster_service {
 
         async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             info!("starting cluster service");
+
+            // ruvector's ClusterManager.start() initializes shards by
+            // hashing each shard_id against the consistent-hash ring;
+            // an empty ring fails with "No nodes available for shard
+            // assignment". The manager never auto-registers its own
+            // node, so a single-node cluster (or a coordinator that
+            // boots before any peer is discovered) hits the failure
+            // every time.
+            //
+            // Register the local node first so the ring always has at
+            // least one entry. Address is a synthetic loopback
+            // placeholder — ruvector itself doesn't dial it, the
+            // address only matters for cross-node routing once peers
+            // join, and the kernel's mesh layer is the authoritative
+            // bind. add_node also internally calls rebalance_shards;
+            // ignore the rebalance error path because the ring is
+            // guaranteed non-empty after the insert above.
+            let local_id = self.membership.local_node_id().to_owned();
+            let placeholder_addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+            let self_node = ClusterNode::new(local_id, placeholder_addr);
+            if let Err(e) = self.manager.add_node(self_node).await {
+                debug!(error = %e, "cluster: failed to pre-register self (continuing)");
+            }
+
             self.manager
                 .start()
                 .await
@@ -1279,16 +1323,14 @@ mod tests {
         if let Some(inner) = json.get_mut("inner").and_then(|v| v.as_object_mut()) {
             inner.insert("trained".into(), serde_json::Value::Bool(true));
         }
-        let forced: crate::eml_kernel::GossipTimingModel =
-            serde_json::from_value(json).unwrap();
+        let forced: crate::eml_kernel::GossipTimingModel = serde_json::from_value(json).unwrap();
         assert!(forced.is_trained());
 
         let config = ClusterConfig {
             heartbeat_interval_secs: 5,
             ..Default::default()
         };
-        let recommended =
-            config.recommended_heartbeat_secs(Some(&forced), 10, 50.0, 1.0);
+        let recommended = config.recommended_heartbeat_secs(Some(&forced), 10, 50.0, 1.0);
         // Clamped to [1, 60] by the model.
         assert!((1..=60).contains(&recommended));
     }
@@ -1330,8 +1372,7 @@ mod tests {
 
     /// Helper: create a ClusterMembership with rate limiting disabled for tests.
     fn make_cluster(config: ClusterConfig) -> ClusterMembership {
-        ClusterMembership::new(config)
-            .with_min_peer_interval(std::time::Duration::ZERO)
+        ClusterMembership::new(config).with_min_peer_interval(std::time::Duration::ZERO)
     }
 
     #[test]
@@ -1692,8 +1733,7 @@ mod tests {
 
         assert!(path.exists(), "persist path should exist after add_peer");
 
-        let restored = ClusterMembership::new(ClusterConfig::default())
-            .with_persist_path(&path);
+        let restored = ClusterMembership::new(ClusterConfig::default()).with_persist_path(&path);
         assert_eq!(restored.len(), 2, "peers should rehydrate from disk");
         assert!(restored.get_peer("node-1").is_some());
         assert!(restored.get_peer("node-2").is_some());
@@ -1710,9 +1750,7 @@ mod tests {
             .with_persist_path(&path);
         cluster.add_peer(make_peer("node-1", "alpha")).unwrap();
         cluster.add_peer(make_peer("node-2", "beta")).unwrap();
-        cluster
-            .update_state("node-1", NodeState::Suspect)
-            .unwrap();
+        cluster.update_state("node-1", NodeState::Suspect).unwrap();
         cluster.remove_peer("node-2").unwrap();
 
         let data = std::fs::read_to_string(&path).unwrap();
@@ -1726,9 +1764,11 @@ mod tests {
 
     #[test]
     fn with_persist_path_missing_file_is_ok() {
-        let path = persist_tmp_path("missing").parent().unwrap().join("nope.json");
-        let cluster = ClusterMembership::new(ClusterConfig::default())
-            .with_persist_path(&path);
+        let path = persist_tmp_path("missing")
+            .parent()
+            .unwrap()
+            .join("nope.json");
+        let cluster = ClusterMembership::new(ClusterConfig::default()).with_persist_path(&path);
         assert_eq!(cluster.len(), 0);
 
         let _ = std::fs::remove_dir_all(path.parent().unwrap());

@@ -1,7 +1,7 @@
 //! Bootstrap and checkpoint functions for the resource tree.
 
 use crate::error::{TreeError, TreeResult};
-use crate::model::{ResourceKind, ResourceId, ResourceNode};
+use crate::model::{ResourceId, ResourceKind, ResourceNode};
 use crate::tree::ResourceTree;
 
 /// Create the well-known WeftOS namespaces on a fresh tree.
@@ -18,7 +18,11 @@ use crate::tree::ResourceTree;
 pub fn bootstrap_fresh(tree: &mut ResourceTree) -> TreeResult<()> {
     let root = ResourceId::root();
 
-    tree.insert(ResourceId::new("/kernel"), ResourceKind::Namespace, root.clone())?;
+    tree.insert(
+        ResourceId::new("/kernel"),
+        ResourceKind::Namespace,
+        root.clone(),
+    )?;
     tree.insert(
         ResourceId::new("/kernel/services"),
         ResourceKind::Namespace,
@@ -34,14 +38,26 @@ pub fn bootstrap_fresh(tree: &mut ResourceTree) -> TreeResult<()> {
         ResourceKind::Namespace,
         ResourceId::new("/kernel"),
     )?;
-    tree.insert(ResourceId::new("/network"), ResourceKind::Namespace, root.clone())?;
+    tree.insert(
+        ResourceId::new("/network"),
+        ResourceKind::Namespace,
+        root.clone(),
+    )?;
     tree.insert(
         ResourceId::new("/network/peers"),
         ResourceKind::Namespace,
         ResourceId::new("/network"),
     )?;
-    tree.insert(ResourceId::new("/apps"), ResourceKind::Namespace, root.clone())?;
-    tree.insert(ResourceId::new("/environments"), ResourceKind::Namespace, root)?;
+    tree.insert(
+        ResourceId::new("/apps"),
+        ResourceKind::Namespace,
+        root.clone(),
+    )?;
+    tree.insert(
+        ResourceId::new("/environments"),
+        ResourceKind::Namespace,
+        root,
+    )?;
 
     // Recompute Merkle hashes after bootstrap
     tree.recompute_all();

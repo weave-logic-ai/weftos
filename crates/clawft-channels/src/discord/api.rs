@@ -208,8 +208,8 @@ impl DiscordApiClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -319,7 +319,10 @@ mod tests {
 
         server.await.unwrap();
 
-        assert!(result.is_ok(), "edit_message should succeed after retry: {result:?}");
+        assert!(
+            result.is_ok(),
+            "edit_message should succeed after retry: {result:?}"
+        );
         assert_eq!(
             calls.load(Ordering::SeqCst),
             2,

@@ -57,9 +57,7 @@ pub fn project_service_rows(value: Value) -> Value {
 /// resolve on the wasm fallback (which has only the flat list). The
 /// caller gets back a `Vec<(path, value)>` to splice into the
 /// `OntologySnapshot`.
-pub fn explode_services_by_name(
-    services: &[Value],
-) -> Vec<(String, Value)> {
+pub fn explode_services_by_name(services: &[Value]) -> Vec<(String, Value)> {
     let mut out = Vec::with_capacity(services.len() * 2);
     for svc in services {
         let Some(obj) = svc.as_object() else { continue };
@@ -143,19 +141,22 @@ mod tests {
 
     #[test]
     fn explode_services_emits_name_scoped_paths() {
-        let services = vec![
-            json!({"name": "mesh-listener", "service_type": "mesh", "health": "healthy"}),
-        ];
+        let services =
+            vec![json!({"name": "mesh-listener", "service_type": "mesh", "health": "healthy"})];
         let paths: Vec<String> = explode_services_by_name(&services)
             .into_iter()
             .map(|(p, _)| p)
             .collect();
-        assert!(paths
-            .iter()
-            .any(|p| p == "substrate/kernel/services/mesh-listener/status"));
-        assert!(paths
-            .iter()
-            .any(|p| p == "substrate/kernel/services/mesh-listener/cpu_percent"));
+        assert!(
+            paths
+                .iter()
+                .any(|p| p == "substrate/kernel/services/mesh-listener/status")
+        );
+        assert!(
+            paths
+                .iter()
+                .any(|p| p == "substrate/kernel/services/mesh-listener/cpu_percent")
+        );
     }
 
     #[test]

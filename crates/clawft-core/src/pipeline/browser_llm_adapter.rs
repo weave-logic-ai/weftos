@@ -123,9 +123,7 @@ fn convert_value_to_message(value: &serde_json::Value) -> ChatMessage {
 
 /// Convert a [`clawft_llm::ChatResponse`] back into the OpenAI-format
 /// JSON shape that [`super::transport::OpenAiCompatTransport`] expects.
-fn convert_response_to_value(
-    response: &clawft_llm::types::ChatResponse,
-) -> serde_json::Value {
+fn convert_response_to_value(response: &clawft_llm::types::ChatResponse) -> serde_json::Value {
     let mut choices = Vec::with_capacity(response.choices.len());
     for choice in &response.choices {
         let mut message = serde_json::Map::new();

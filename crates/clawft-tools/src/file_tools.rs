@@ -67,11 +67,11 @@ fn path_exists(_path: &Path) -> bool {
 /// escapes the workspace or does not exist.
 fn validate_path(path: &str, workspace: &Path) -> Result<PathBuf, ToolError> {
     let resolved = workspace.join(path);
-    let canonical = resolve_sandbox_path(&resolved)
-        .map_err(|_| ToolError::FileNotFound(path.to_string()))?;
+    let canonical =
+        resolve_sandbox_path(&resolved).map_err(|_| ToolError::FileNotFound(path.to_string()))?;
 
-    let workspace_canonical = resolve_sandbox_path(workspace)
-        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+    let workspace_canonical =
+        resolve_sandbox_path(workspace).map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
     if !canonical.starts_with(&workspace_canonical) {
         return Err(ToolError::InvalidPath(format!(
@@ -98,11 +98,11 @@ fn validate_parent_path(path: &str, workspace: &Path) -> Result<PathBuf, ToolErr
             .ok_or_else(|| ToolError::InvalidPath(format!("path escapes workspace: {}", path)))?;
     }
 
-    let canonical_ancestor = resolve_sandbox_path(ancestor)
-        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+    let canonical_ancestor =
+        resolve_sandbox_path(ancestor).map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
-    let workspace_canonical = resolve_sandbox_path(workspace)
-        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+    let workspace_canonical =
+        resolve_sandbox_path(workspace).map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
     if !canonical_ancestor.starts_with(&workspace_canonical) {
         return Err(ToolError::InvalidPath(format!(

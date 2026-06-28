@@ -68,7 +68,12 @@ impl PositionedGraph {
     /// Compute the bounding box of all nodes.
     pub fn compute_viewport(&mut self) {
         if self.nodes.is_empty() {
-            self.viewport = Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
+            self.viewport = Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            };
             return;
         }
         let mut min_x = f64::MAX;

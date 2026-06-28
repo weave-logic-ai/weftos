@@ -95,13 +95,11 @@ impl ModelDownloadManager {
     /// List available VAD models. See [`Self::available_stt_models`]
     /// re: hash sourcing.
     pub fn available_vad_models() -> Vec<ModelInfo> {
-        vec![
-            ModelInfo {
-                id: "silero-vad-v5".into(),
-                url: "https://github.com/snakers4/silero-vad/raw/master/files/silero_vad.onnx".into(),
-                sha256_hint: None,
-                size_bytes: 2_000_000,
-            },
-        ]
+        vec![ModelInfo {
+            id: "silero-vad-v5".into(),
+            url: "https://github.com/snakers4/silero-vad/raw/master/files/silero_vad.onnx".into(),
+            sha256_hint: None,
+            size_bytes: 2_000_000,
+        }]
     }
 }

@@ -170,7 +170,8 @@ pub fn spawn_cleanup_task(
     let weak = Arc::downgrade(&store);
     drop(store);
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs.max(1)));
+        let mut ticker =
+            tokio::time::interval(std::time::Duration::from_secs(interval_secs.max(1)));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             ticker.tick().await;

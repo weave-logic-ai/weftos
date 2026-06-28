@@ -2,18 +2,13 @@
 //!
 //! Provides endpoints for listing channel connection statuses.
 
-use axum::{
-    extract::State,
-    routing::get,
-    Json, Router,
-};
+use axum::{Json, Router, extract::State, routing::get};
 
 use super::{ApiState, ChannelStatusInfo};
 
 /// Build channel status API routes.
 pub fn channel_routes() -> Router<ApiState> {
-    Router::new()
-        .route("/channels", get(list_channels))
+    Router::new().route("/channels", get(list_channels))
 }
 
 // ── Handlers ───────────────────────────────────────────────────

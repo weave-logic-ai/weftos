@@ -58,11 +58,7 @@ pub fn leading_zeros(key: &DhtKey) -> usize {
 /// (only the LSB set). Returns 0 for the all-zero distance (self).
 pub fn bucket_index(distance: &DhtKey) -> usize {
     let lz = leading_zeros(distance);
-    if lz >= 256 {
-        0
-    } else {
-        255 - lz
-    }
+    if lz >= 256 { 0 } else { 255 - lz }
 }
 
 // ── DHT entry ────────────────────────────────────────────────────
@@ -359,11 +355,7 @@ impl DiscoveryBackend for KademliaDiscovery {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs(),
-                governance_genesis_prefix: self
-                    .governance_genesis
-                    .chars()
-                    .take(16)
-                    .collect(),
+                governance_genesis_prefix: self.governance_genesis.chars().take(16).collect(),
             },
         );
         Ok(())
@@ -518,7 +510,10 @@ mod tests {
         for i in 0..5u8 {
             let mut pk = [0u8; 32];
             pk[0] = i + 1;
-            table.add_peer(pk, make_entry(&format!("n-{i}"), &format!("10.0.0.{i}:9470")));
+            table.add_peer(
+                pk,
+                make_entry(&format!("n-{i}"), &format!("10.0.0.{i}:9470")),
+            );
         }
 
         let target = [0u8; 32]; // same as local
@@ -692,13 +687,8 @@ mod tests {
 
     #[tokio::test]
     async fn kademlia_poll_inactive_empty() {
-        let mut disc = KademliaDiscovery::new(
-            [0u8; 32],
-            "n".into(),
-            "a".into(),
-            "p".into(),
-            "g".into(),
-        );
+        let mut disc =
+            KademliaDiscovery::new([0u8; 32], "n".into(), "a".into(), "p".into(), "g".into());
         // Not started.
         let peers = disc.poll().await;
         assert!(peers.is_empty());

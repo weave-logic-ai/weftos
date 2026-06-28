@@ -11,8 +11,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::entity::FileType;
 use crate::GraphifyError;
+use crate::entity::FileType;
 
 // ── Extension sets ──────────────────────────────────────────────────────────
 
@@ -371,13 +371,14 @@ impl Manifest {
         for file_list in detection.files.values() {
             for f in file_list {
                 if let Ok(meta) = std::fs::metadata(f)
-                    && let Ok(mtime) = meta.modified() {
-                        let secs = mtime
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs_f64();
-                        entries.insert(f.clone(), secs);
-                    }
+                    && let Ok(mtime) = meta.modified()
+                {
+                    let secs = mtime
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs_f64();
+                    entries.insert(f.clone(), secs);
+                }
             }
         }
         Self { entries }
@@ -404,11 +405,8 @@ pub fn detect_incremental(
     if manifest.entries.is_empty() {
         let new_total = full.total_files;
         let new_files = full.files.clone();
-        let unchanged_files: HashMap<String, Vec<String>> = full
-            .files
-            .keys()
-            .map(|k| (k.clone(), Vec::new()))
-            .collect();
+        let unchanged_files: HashMap<String, Vec<String>> =
+            full.files.keys().map(|k| (k.clone(), Vec::new())).collect();
         return Ok(IncrementalDetection {
             full,
             new_files,

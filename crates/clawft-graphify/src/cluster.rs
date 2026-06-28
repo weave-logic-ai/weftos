@@ -120,8 +120,7 @@ pub fn cluster_eml(
         Some(model) if model.is_trained() => {
             let node_count = kg.node_count() as f64;
             let edge_density = if kg.node_count() > 1 {
-                kg.edge_count() as f64
-                    / (kg.node_count() as f64 * (kg.node_count() as f64 - 1.0))
+                kg.edge_count() as f64 / (kg.node_count() as f64 * (kg.node_count() as f64 - 1.0))
             } else {
                 0.0
             };
@@ -158,10 +157,7 @@ pub fn cluster_eml(
         next_cid += 1;
     }
 
-    let max_size = std::cmp::max(
-        min_split,
-        (kg.node_count() as f64 * max_fraction) as usize,
-    );
+    let max_size = std::cmp::max(min_split, (kg.node_count() as f64 * max_fraction) as usize);
 
     let mut final_communities: Vec<Vec<EntityId>> = Vec::new();
     for nodes in raw.into_values() {
@@ -343,10 +339,7 @@ pub fn cohesion_score(kg: &KnowledgeGraph, community_nodes: &[EntityId]) -> f64 
 /// A value above 0.3 typically indicates significant community structure.
 ///
 /// Returns 0.0 for graphs with no edges.
-pub fn newman_modularity(
-    kg: &KnowledgeGraph,
-    communities: &HashMap<usize, Vec<EntityId>>,
-) -> f64 {
+pub fn newman_modularity(kg: &KnowledgeGraph, communities: &HashMap<usize, Vec<EntityId>>) -> f64 {
     let m = kg.edge_count();
     if m == 0 {
         return 0.0;
@@ -421,14 +414,15 @@ pub fn auto_label(kg: &KnowledgeGraph, community: &[EntityId]) -> String {
     for id in community {
         if let Some(entity) = kg.entity(id)
             && let Some(ref source) = entity.source_file
-                && !source.is_empty() {
-                    let stem = std::path::Path::new(source.as_str())
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or(source.as_str())
-                        .to_owned();
-                    *stem_counts.entry(stem).or_insert(0) += 1;
-                }
+            && !source.is_empty()
+        {
+            let stem = std::path::Path::new(source.as_str())
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(source.as_str())
+                .to_owned();
+            *stem_counts.entry(stem).or_insert(0) += 1;
+        }
     }
 
     // Pick the most common stem
@@ -569,10 +563,7 @@ mod tests {
 
     #[test]
     fn score_all_keys_match_communities() {
-        let entities = vec![
-            make_entity("a", "f.py"),
-            make_entity("b", "f.py"),
-        ];
+        let entities = vec![make_entity("a", "f.py"), make_entity("b", "f.py")];
         let rels = vec![make_rel("a", "f.py", "b", "f.py")];
         let kg = KnowledgeGraph::from_parts(entities, rels, vec![]);
         let communities = cluster(&kg);
@@ -656,10 +647,7 @@ mod tests {
     #[test]
     fn newman_modularity_bad_partition() {
         // Put connected nodes in different communities.
-        let entities = vec![
-            make_entity("a", "f.py"),
-            make_entity("b", "f.py"),
-        ];
+        let entities = vec![make_entity("a", "f.py"), make_entity("b", "f.py")];
         let rels = vec![make_rel("a", "f.py", "b", "f.py")];
         let kg = KnowledgeGraph::from_parts(entities, rels, vec![]);
 
@@ -692,7 +680,10 @@ mod tests {
         let kg = KnowledgeGraph::from_parts(entities, rels, vec![]);
         let communities = cluster(&kg);
         let q = newman_modularity(&kg, &communities);
-        assert!((-0.5..=1.0).contains(&q), "Q must be in [-0.5, 1.0], got {q}");
+        assert!(
+            (-0.5..=1.0).contains(&q),
+            "Q must be in [-0.5, 1.0], got {q}"
+        );
     }
 
     #[test]

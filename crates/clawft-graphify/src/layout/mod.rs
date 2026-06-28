@@ -1,10 +1,10 @@
 //! Layout engine — converts a KnowledgeGraph + TopologySchema into positioned
 //! geometry via tree calculus dispatch + layout algorithms.
 
-pub mod tree_layout;
 pub mod force_layout;
 pub mod positioned;
 pub mod slicer;
+pub mod tree_layout;
 pub mod triage;
 
 use std::collections::HashMap;
@@ -34,7 +34,12 @@ pub fn layout_graph(
         return PositionedGraph {
             nodes: vec![],
             edges: vec![],
-            viewport: positioned::Rect { x: 0.0, y: 0.0, width, height },
+            viewport: positioned::Rect {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height,
+            },
             schema_name: schema.name.clone(),
             schema_version: schema.version.clone(),
         };
@@ -53,7 +58,10 @@ pub fn layout_graph(
     // Build positioned nodes.
     let mut nodes: Vec<PositionedNode> = Vec::with_capacity(entities.len());
     for entity in &entities {
-        let (x, y) = positions.get(&entity.id).copied().unwrap_or((width / 2.0, height / 2.0));
+        let (x, y) = positions
+            .get(&entity.id)
+            .copied()
+            .unwrap_or((width / 2.0, height / 2.0));
         let type_key = entity.entity_type.discriminant();
         let config = schema.node_config(type_key);
         let has_children = !triage::children_of(kg, &entity.id).is_empty();
@@ -99,8 +107,7 @@ pub fn layout_graph(
 
         let rel_type_str = format!("{:?}", rel.relation_type);
         let edge_config = schema.edges.iter().find(|e| {
-            e.edge_type == rel_type_str.to_lowercase()
-                || e.edge_type == snake_case(&rel_type_str)
+            e.edge_type == rel_type_str.to_lowercase() || e.edge_type == snake_case(&rel_type_str)
         });
 
         let (stroke, w, dash, arrow, animated) = match edge_config {
@@ -125,10 +132,7 @@ pub fn layout_graph(
             target_id: tgt.id.to_hex(),
             label: Some(snake_case(&rel_type_str)),
             edge_type: snake_case(&rel_type_str),
-            path: vec![
-                [src_pos.0, src_pos.1],
-                [tgt_pos.0, tgt_pos.1],
-            ],
+            path: vec![[src_pos.0, src_pos.1], [tgt_pos.0, tgt_pos.1]],
             stroke,
             width: w,
             dash,
@@ -140,7 +144,12 @@ pub fn layout_graph(
     let mut graph = PositionedGraph {
         nodes,
         edges,
-        viewport: positioned::Rect { x: 0.0, y: 0.0, width, height },
+        viewport: positioned::Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        },
         schema_name: schema.name.clone(),
         schema_version: schema.version.clone(),
     };
@@ -161,7 +170,8 @@ pub fn detect_geometry(kg: &KnowledgeGraph, schema: &TopologySchema) -> Geometry
         return Geometry::Force;
     }
 
-    let contains_count = kg.edges()
+    let contains_count = kg
+        .edges()
         .filter(|(_, _, rel)| matches!(rel.relation_type, RelationType::Contains))
         .count();
 
@@ -179,11 +189,14 @@ pub fn detect_geometry(kg: &KnowledgeGraph, schema: &TopologySchema) -> Geometry
             || e.metadata.get("date").is_some()
     });
     let timestamp_ratio = if has_timestamps {
-        kg.entities().filter(|e| {
-            e.metadata.get("timestamp").is_some()
-                || e.metadata.get("created_at").is_some()
-                || e.metadata.get("date").is_some()
-        }).count() as f64 / kg.entity_count() as f64
+        kg.entities()
+            .filter(|e| {
+                e.metadata.get("timestamp").is_some()
+                    || e.metadata.get("created_at").is_some()
+                    || e.metadata.get("date").is_some()
+            })
+            .count() as f64
+            / kg.entity_count() as f64
     } else {
         0.0
     };
@@ -204,13 +217,17 @@ fn layout_as_tree(kg: &KnowledgeGraph, width: f64, _height: f64) -> HashMap<Enti
 
     for (src, tgt, rel) in kg.edges() {
         if matches!(rel.relation_type, RelationType::Contains) {
-            children_map.entry(src.id.clone()).or_default().push(tgt.id.clone());
+            children_map
+                .entry(src.id.clone())
+                .or_default()
+                .push(tgt.id.clone());
             has_parent.insert(tgt.id.clone());
         }
     }
 
     // Find root nodes (no parent).
-    let roots: Vec<EntityId> = kg.entities()
+    let roots: Vec<EntityId> = kg
+        .entities()
         .filter(|e| !has_parent.contains(&e.id))
         .map(|e| e.id.clone())
         .collect();
@@ -248,7 +265,8 @@ fn layout_as_tree(kg: &KnowledgeGraph, width: f64, _height: f64) -> HashMap<Enti
 fn layout_as_force(kg: &KnowledgeGraph, width: f64, height: f64) -> HashMap<EntityId, (f64, f64)> {
     let entities: Vec<_> = kg.entities().collect();
     let node_ids: Vec<EntityId> = entities.iter().map(|e| e.id.clone()).collect();
-    let id_to_idx: HashMap<&EntityId, usize> = node_ids.iter().enumerate().map(|(i, id)| (id, i)).collect();
+    let id_to_idx: HashMap<&EntityId, usize> =
+        node_ids.iter().enumerate().map(|(i, id)| (id, i)).collect();
 
     let mut edge_pairs: Vec<(usize, usize)> = Vec::new();
     for (src, tgt, _) in kg.edges() {
@@ -257,7 +275,13 @@ fn layout_as_force(kg: &KnowledgeGraph, width: f64, height: f64) -> HashMap<Enti
         }
     }
 
-    force_layout::layout(&node_ids, &edge_pairs, width, height, &force_layout::ForceConfig::default())
+    force_layout::layout(
+        &node_ids,
+        &edge_pairs,
+        width,
+        height,
+        &force_layout::ForceConfig::default(),
+    )
 }
 
 /// Convert CamelCase to snake_case.
@@ -320,7 +344,8 @@ mod tests {
     }
 
     fn test_schema() -> TopologySchema {
-        TopologySchema::from_yaml(r##"
+        TopologySchema::from_yaml(
+            r##"
 name: test
 label: "Test"
 version: "1.0.0"
@@ -348,7 +373,9 @@ edges:
 modes:
   structure:
     root_geometry: force
-"##).unwrap()
+"##,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -392,7 +419,11 @@ modes:
         assert_eq!(result.nodes.len(), 3);
         assert_eq!(result.edges.len(), 2);
 
-        let mod_node = result.nodes.iter().find(|n| n.node_type == "module").unwrap();
+        let mod_node = result
+            .nodes
+            .iter()
+            .find(|n| n.node_type == "module")
+            .unwrap();
         assert!(mod_node.has_subgraph);
         assert_eq!(mod_node.shape, crate::topology::NodeShape::Rect);
     }

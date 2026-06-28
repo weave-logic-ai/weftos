@@ -189,10 +189,7 @@ impl DiscordChannel {
         // Signal that the sender passed the allow_from check so the
         // permission resolver can promote them from zero-trust to user level.
         if !self.config.allow_from.is_empty() {
-            metadata.insert(
-                "allow_from_match".into(),
-                serde_json::Value::Bool(true),
-            );
+            metadata.insert("allow_from_match".into(), serde_json::Value::Bool(true));
         }
 
         let inbound = InboundMessage {

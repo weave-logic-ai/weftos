@@ -54,7 +54,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::adapter::{
@@ -395,11 +395,10 @@ mod tests {
             .await
             .unwrap();
         // Wait up to 2s for the first tick.
-        let delta =
-            tokio::time::timeout(Duration::from_millis(2_500), sub.rx.recv())
-                .await
-                .expect("timeout waiting for presence emission")
-                .expect("channel closed before emission");
+        let delta = tokio::time::timeout(Duration::from_millis(2_500), sub.rx.recv())
+            .await
+            .expect("timeout waiting for presence emission")
+            .expect("channel closed before emission");
         let StateDelta::Replace { path, value } = delta else {
             panic!("expected Replace, got {:?}", delta);
         };
@@ -423,8 +422,7 @@ mod tests {
 
     #[test]
     fn model_string_overrideable() {
-        let a = PresenceAdapter::with_source(PathBuf::from("/dev/null"))
-            .with_model("HC-SR501 PIR");
+        let a = PresenceAdapter::with_source(PathBuf::from("/dev/null")).with_model("HC-SR501 PIR");
         assert_eq!(a.model(), "HC-SR501 PIR");
     }
 

@@ -128,7 +128,8 @@ pub fn scan_text(file: &Path, text: &str, report: &mut PrivacyReport) {
         for m in re.find_iter(text) {
             // Skip false positives: hashed IDs look like 16-hex-char tokens.
             let s = m.as_str();
-            if kind == ViolationKind::CreditCardPattern && s.chars().all(|c| c.is_ascii_hexdigit()) {
+            if kind == ViolationKind::CreditCardPattern && s.chars().all(|c| c.is_ascii_hexdigit())
+            {
                 continue;
             }
             report.violations.push(PrivacyViolation {

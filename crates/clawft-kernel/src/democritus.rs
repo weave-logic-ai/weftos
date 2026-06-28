@@ -14,8 +14,8 @@
 //!
 //! This module is compiled only when the `ecc` feature is enabled.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ use tracing::{debug, warn};
 
 use crate::causal::{CausalEdgeType, CausalGraph};
 use crate::crossref::{CrossRef, CrossRefStore, CrossRefType, StructureTag, UniversalNodeId};
-use crate::embedding::{EmbeddingProvider};
+use crate::embedding::EmbeddingProvider;
 use crate::hnsw_service::HnswService;
 use crate::impulse::{Impulse, ImpulseQueue, ImpulseType};
 
@@ -178,8 +178,7 @@ impl DemocritusLoop {
         };
 
         // Reassemble: map batch results back to their impulse indices.
-        let mut search_results_by_index: Vec<Vec<(String, f32)>> =
-            vec![Vec::new(); embedded.len()];
+        let mut search_results_by_index: Vec<Vec<(String, f32)>> = vec![Vec::new(); embedded.len()];
         for (batch_idx, &(orig_idx, _)) in non_empty_queries.iter().enumerate() {
             search_results_by_index[orig_idx] = batch_results
                 .get(batch_idx)
@@ -189,8 +188,7 @@ impl DemocritusLoop {
         result.searches_performed = non_empty_queries.len();
 
         type NeighborTriple<'a> = (&'a Impulse, &'a Vec<f32>, Vec<(String, f32)>);
-        let mut neighbors_per_event: Vec<NeighborTriple<'_>> =
-            Vec::with_capacity(embedded.len());
+        let mut neighbors_per_event: Vec<NeighborTriple<'_>> = Vec::with_capacity(embedded.len());
         for (i, (impulse, embedding)) in impulses.iter().zip(embedded.iter()).enumerate() {
             if self.budget_exceeded(start) {
                 result.budget_exceeded = true;
@@ -285,10 +283,9 @@ impl DemocritusLoop {
 
         // Add a causal node for this impulse.
         let label = format!("impulse:{}:{}", impulse.impulse_type, impulse.id);
-        let node_id = self.causal_graph.add_node(
-            label.clone(),
-            impulse.payload.clone(),
-        );
+        let node_id = self
+            .causal_graph
+            .add_node(label.clone(), impulse.payload.clone());
         self.total_nodes_added.fetch_add(1, Ordering::Relaxed);
 
         // Insert embedding into HNSW (keyed by causal node ID).
@@ -725,10 +722,7 @@ mod tests {
             async fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
                 Err(EmbeddingError::BackendError("test failure".into()))
             }
-            async fn embed_batch(
-                &self,
-                _texts: &[&str],
-            ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            async fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
                 Err(EmbeddingError::BackendError("test failure".into()))
             }
             fn dimensions(&self) -> usize {
@@ -904,10 +898,7 @@ mod tests {
             async fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
                 Err(EmbeddingError::BackendError("test failure".into()))
             }
-            async fn embed_batch(
-                &self,
-                _texts: &[&str],
-            ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            async fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
                 Err(EmbeddingError::BackendError("test failure".into()))
             }
             fn dimensions(&self) -> usize {
@@ -962,10 +953,7 @@ mod tests {
             async fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
                 Err(EmbeddingError::BackendError("fail".into()))
             }
-            async fn embed_batch(
-                &self,
-                _texts: &[&str],
-            ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+            async fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
                 Err(EmbeddingError::BackendError("fail".into()))
             }
             fn dimensions(&self) -> usize {
@@ -1081,7 +1069,10 @@ mod tests {
         emit_test_impulse(&iq, ImpulseType::BeliefUpdate, 100);
         let result = demo.tick().await;
         // Duration should be non-negative (may be 0 on very fast systems).
-        assert!(result.duration_us < 10_000_000, "tick should complete within 10s");
+        assert!(
+            result.duration_us < 10_000_000,
+            "tick should complete within 10s"
+        );
     }
 
     #[test]
@@ -1099,10 +1090,7 @@ mod tests {
         };
 
         // Custom type below threshold → Follows.
-        assert_eq!(
-            demo.classify_edge(&impulse, 0.3),
-            CausalEdgeType::Follows
-        );
+        assert_eq!(demo.classify_edge(&impulse, 0.3), CausalEdgeType::Follows);
         // Custom type above threshold → Correlates.
         assert_eq!(
             demo.classify_edge(&impulse, 0.9),

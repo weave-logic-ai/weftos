@@ -23,9 +23,21 @@ pub fn show(ui: &mut egui::Ui, state: &mut DemoState, snap: &Snapshot) {
     // Group: service_type → [(name, health)].
     let mut buckets: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     for s in services {
-        let stype = s.get("service_type").and_then(|v| v.as_str()).unwrap_or("?").to_string();
-        let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("?").to_string();
-        let health = s.get("health").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+        let stype = s
+            .get("service_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string();
+        let name = s
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string();
+        let health = s
+            .get("health")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string();
         buckets.entry(stype).or_default().push((name, health));
     }
 
@@ -41,15 +53,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut DemoState, snap: &Snapshot) {
                 for (name, health) in entries {
                     ui.horizontal(|ui| {
                         let color = match health.as_str() {
-                            "registered" | "healthy" | "ok" => egui::Color32::from_rgb(110, 210, 140),
+                            "registered" | "healthy" | "ok" => {
+                                egui::Color32::from_rgb(110, 210, 140)
+                            }
                             "warn" | "warning" => egui::Color32::from_rgb(255, 205, 90),
                             "error" | "unhealthy" => egui::Color32::from_rgb(255, 140, 140),
                             _ => egui::Color32::GRAY,
                         };
-                        let (rect, _) = ui.allocate_exact_size(
-                            egui::vec2(8.0, 8.0),
-                            egui::Sense::hover(),
-                        );
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
                         ui.painter().circle_filled(rect.center(), 4.0, color);
                         ui.monospace(name);
                         ui.label(egui::RichText::new(format!("({health})")).weak().small());

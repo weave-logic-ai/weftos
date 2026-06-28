@@ -365,7 +365,6 @@ pub fn register_delegation(
 
 #[cfg(all(test, feature = "services"))]
 mod tests {
-    
 
     use super::*;
     use clawft_services::mcp::transport::McpTransport;

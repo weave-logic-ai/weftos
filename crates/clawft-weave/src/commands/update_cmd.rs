@@ -78,9 +78,7 @@ async fn install(force: bool) -> anyhow::Result<()> {
 
     for (asset_prefix, bin_name) in &bins {
         let asset = format!("{asset_prefix}-{triple}.tar.gz");
-        let url = format!(
-            "https://github.com/{REPO}/releases/download/v{latest}/{asset}"
-        );
+        let url = format!("https://github.com/{REPO}/releases/download/v{latest}/{asset}");
 
         println!("Downloading {bin_name}...");
         let tarball_path = temp_dir.path().join(&asset);
@@ -157,11 +155,17 @@ fn detect_target_triple() -> &'static str {
         }
     }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    { "x86_64-apple-darwin" }
+    {
+        "x86_64-apple-darwin"
+    }
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    { "aarch64-apple-darwin" }
+    {
+        "aarch64-apple-darwin"
+    }
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    { "x86_64-pc-windows-msvc" }
+    {
+        "x86_64-pc-windows-msvc"
+    }
     #[cfg(not(any(
         all(target_os = "linux", target_arch = "x86_64"),
         all(target_os = "linux", target_arch = "aarch64"),
@@ -169,7 +173,9 @@ fn detect_target_triple() -> &'static str {
         all(target_os = "macos", target_arch = "aarch64"),
         all(target_os = "windows", target_arch = "x86_64"),
     )))]
-    { "unknown" }
+    {
+        "unknown"
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -189,21 +195,21 @@ fn find_install_path(bin_name: &str) -> anyhow::Result<PathBuf> {
     // 1. Check where the current binary lives
     if bin_name == "weaver"
         && let Ok(exe) = std::env::current_exe()
-            && let Some(dir) = exe.parent() {
-                return Ok(dir.join(bin_name));
-            }
+        && let Some(dir) = exe.parent()
+    {
+        return Ok(dir.join(bin_name));
+    }
 
     // 2. Check PATH for existing installation
-    let which = std::process::Command::new("which")
-        .arg(bin_name)
-        .output();
+    let which = std::process::Command::new("which").arg(bin_name).output();
     if let Ok(output) = which
-        && output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Ok(PathBuf::from(path));
-            }
+        && output.status.success()
+    {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Ok(PathBuf::from(path));
         }
+    }
 
     // 3. Default to /usr/local/bin
     Ok(PathBuf::from("/usr/local/bin").join(bin_name))
@@ -227,20 +233,19 @@ fn replace_binary(src: &std::path::Path, dst: &std::path::Path) -> anyhow::Resul
     let backup = dst.with_extension("old");
 
     // Try rename-then-copy (handles "Text file busy").
-    if dst.exists()
-        && std::fs::rename(dst, &backup).is_ok() {
-            match std::fs::copy(src, dst) {
-                Ok(_) => {
-                    let _ = std::fs::remove_file(&backup);
-                    return Ok(());
-                }
-                Err(e) => {
-                    // Restore backup if copy fails.
-                    let _ = std::fs::rename(&backup, dst);
-                    eprintln!("  Copy failed after rename: {e}");
-                }
+    if dst.exists() && std::fs::rename(dst, &backup).is_ok() {
+        match std::fs::copy(src, dst) {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&backup);
+                return Ok(());
+            }
+            Err(e) => {
+                // Restore backup if copy fails.
+                let _ = std::fs::rename(&backup, dst);
+                eprintln!("  Copy failed after rename: {e}");
             }
         }
+    }
 
     // Try direct copy (works when binary isn't running).
     if std::fs::copy(src, dst).is_ok() {
@@ -272,7 +277,8 @@ async fn fetch_latest_version() -> anyhow::Result<String> {
     let output = std::process::Command::new("curl")
         .args([
             "-fsSL",
-            "-H", "Accept: application/vnd.github.v3+json",
+            "-H",
+            "Accept: application/vnd.github.v3+json",
             &format!("https://api.github.com/repos/{REPO}/releases/latest"),
         ])
         .output()?;

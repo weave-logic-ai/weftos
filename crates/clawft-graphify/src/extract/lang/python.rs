@@ -7,11 +7,11 @@
 
 use std::path::Path;
 
-use crate::model::ExtractionResult;
 use crate::GraphifyError;
+use crate::model::ExtractionResult;
 
 #[cfg(feature = "lang-python")]
-use crate::extract::ast::{make_id, ExtractionContext, LanguageConfig};
+use crate::extract::ast::{ExtractionContext, LanguageConfig, make_id};
 
 /// Python language configuration for the generic extractor.
 #[cfg(feature = "lang-python")]
@@ -55,20 +55,20 @@ pub fn extract_python(path: &Path) -> Result<ExtractionResult, GraphifyError> {
     })?;
 
     let mut parser = Parser::new();
-    parser.set_language(&language).map_err(|e| {
-        GraphifyError::ExtractionFailed {
+    parser
+        .set_language(&language)
+        .map_err(|e| GraphifyError::ExtractionFailed {
             path: path.display().to_string(),
             reason: e.to_string(),
-        }
-    })?;
+        })?;
 
     let source = std::fs::read(path)?;
-    let tree = parser.parse(&source, None).ok_or_else(|| {
-        GraphifyError::ExtractionFailed {
+    let tree = parser
+        .parse(&source, None)
+        .ok_or_else(|| GraphifyError::ExtractionFailed {
             path: path.display().to_string(),
             reason: "tree-sitter parse returned None".into(),
-        }
-    })?;
+        })?;
 
     let mut ctx = ExtractionContext::new(path);
 
@@ -203,11 +203,7 @@ fn walk_python(
 }
 
 #[cfg(feature = "lang-python")]
-fn handle_python_import(
-    node: &tree_sitter::Node,
-    source: &[u8],
-    ctx: &mut ExtractionContext,
-) {
+fn handle_python_import(node: &tree_sitter::Node, source: &[u8], ctx: &mut ExtractionContext) {
     let t = node.kind();
     let line = node.start_position().row + 1;
     let file_nid = ctx.file_nid.clone();
@@ -218,7 +214,12 @@ fn handle_python_import(
             if let Some(child) = node.child(i) {
                 if child.kind() == "dotted_name" || child.kind() == "aliased_import" {
                     let raw = read_text(&child, source);
-                    let module_name = raw.split(" as ").next().unwrap_or("").trim().trim_start_matches('.');
+                    let module_name = raw
+                        .split(" as ")
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .trim_start_matches('.');
                     if !module_name.is_empty() {
                         let tgt_nid = make_id(&[module_name]);
                         ctx.add_edge(&file_nid, &tgt_nid, "imports", line, "EXTRACTED", 1.0);
@@ -239,11 +240,7 @@ fn handle_python_import(
 }
 
 #[cfg(feature = "lang-python")]
-fn run_call_graph_pass(
-    source: &[u8],
-    ctx: &mut ExtractionContext,
-    config: &LanguageConfig,
-) {
+fn run_call_graph_pass(source: &[u8], ctx: &mut ExtractionContext, config: &LanguageConfig) {
     use tree_sitter::{Language, Parser};
 
     let label_to_nid = ctx.build_label_map();
@@ -295,9 +292,7 @@ fn walk_calls_in_range(
         return;
     }
 
-    if config.function_boundary_types.contains(&node.kind())
-        && node.start_byte() > body_start
-    {
+    if config.function_boundary_types.contains(&node.kind()) && node.start_byte() > body_start {
         return;
     }
 

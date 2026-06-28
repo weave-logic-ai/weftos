@@ -69,7 +69,10 @@ pub struct AudioPlayback {
 impl AudioPlayback {
     /// Create a new playback handle from a legacy [`PlaybackConfig`].
     pub fn new(config: PlaybackConfig) -> Self {
-        Self { config, active: false }
+        Self {
+            config,
+            active: false,
+        }
     }
 
     /// Create a new playback handle from a unified [`VoiceAudioConfig`].

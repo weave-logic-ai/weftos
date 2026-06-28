@@ -85,7 +85,7 @@ async fn handle_talk() -> anyhow::Result<()> {
     use clawft_plugin::error::PluginError;
     use clawft_plugin::message::MessagePayload;
     use clawft_plugin::traits::{CancellationToken, ChannelAdapterHost};
-    use clawft_plugin::voice::{VoiceChannel, VoiceStatus, TalkModeController};
+    use clawft_plugin::voice::{TalkModeController, VoiceChannel, VoiceStatus};
 
     /// Stub host that logs inbound messages.
     /// Real integration with the agent pipeline is deferred.
@@ -158,7 +158,7 @@ async fn handle_talk() -> anyhow::Result<()> {
 /// be activated automatically.
 async fn handle_wake() -> anyhow::Result<()> {
     use clawft_plugin::traits::CancellationToken;
-    use clawft_plugin::voice::{WakeWordConfig, WakeDaemon};
+    use clawft_plugin::voice::{WakeDaemon, WakeWordConfig};
 
     println!("=== ClawFT Wake Word Daemon ===");
     println!("Wake word daemon started (stub - listening for 'Hey Weft')");
@@ -230,8 +230,8 @@ fn detect_service_manager() -> String {
 async fn install_systemd_service() -> anyhow::Result<()> {
     use std::path::PathBuf;
 
-    let home = std::env::var("HOME")
-        .map_err(|_| anyhow::anyhow!("HOME environment variable not set"))?;
+    let home =
+        std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME environment variable not set"))?;
     let service_dir = PathBuf::from(&home)
         .join(".config")
         .join("systemd")
@@ -278,11 +278,9 @@ async fn install_systemd_service() -> anyhow::Result<()> {
 async fn install_launchd_service() -> anyhow::Result<()> {
     use std::path::PathBuf;
 
-    let home = std::env::var("HOME")
-        .map_err(|_| anyhow::anyhow!("HOME environment variable not set"))?;
-    let agents_dir = PathBuf::from(&home)
-        .join("Library")
-        .join("LaunchAgents");
+    let home =
+        std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME environment variable not set"))?;
+    let agents_dir = PathBuf::from(&home).join("Library").join("LaunchAgents");
 
     // Create the LaunchAgents directory if it doesn't exist.
     tokio::fs::create_dir_all(&agents_dir).await?;

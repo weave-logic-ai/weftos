@@ -226,10 +226,7 @@ mod tests {
         // i.e. -3.01 dBFS. Sanity-check the formula.
         let sine = sine_i16(16_000, 440.0, i16::MAX, 100);
         let db = EnergyClassifier::rms_db(&sine);
-        assert!(
-            (db - (-3.01)).abs() < 0.5,
-            "expected ~-3 dBFS, got {db}"
-        );
+        assert!((db - (-3.01)).abs() < 0.5, "expected ~-3 dBFS, got {db}");
     }
 
     #[test]
@@ -245,8 +242,16 @@ mod tests {
         assert_eq!(out.class, CLASS_SPEECH, "expected speech, got {out:?}");
         // Confidence should be high: -20 dBFS is 25 dB above -45,
         // well past the 12 dB span → clipped to 1.0.
-        assert!((out.confidence - 1.0).abs() < 1e-6, "got {}", out.confidence);
-        assert!(out.rms_db > -25.0 && out.rms_db < -15.0, "got {}", out.rms_db);
+        assert!(
+            (out.confidence - 1.0).abs() < 1e-6,
+            "got {}",
+            out.confidence
+        );
+        assert!(
+            out.rms_db > -25.0 && out.rms_db < -15.0,
+            "got {}",
+            out.rms_db
+        );
         assert_eq!(out.sample_rate, 16_000);
         assert_eq!(out.samples as usize, sine.len());
     }
@@ -259,7 +264,11 @@ mod tests {
         assert_eq!(out.class, CLASS_SILENCE);
         // Confidence: -120 dBFS is 75 dB below -45 — well past the
         // 12 dB span, so clipped to 1.0 ("very confident silent").
-        assert!((out.confidence - 1.0).abs() < 1e-6, "got {}", out.confidence);
+        assert!(
+            (out.confidence - 1.0).abs() < 1e-6,
+            "got {}",
+            out.confidence
+        );
         assert!(out.rms_db <= RMS_DB_FLOOR + 0.01);
     }
 

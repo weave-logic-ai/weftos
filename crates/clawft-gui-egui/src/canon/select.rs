@@ -17,9 +17,9 @@ use std::borrow::Cow;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 
+use super::CanonWidget;
 use super::response::CanonResponse;
 use super::types::{Affordance, Confidence, IdentityUri, MutationAxis, Tooltip, VariantId};
-use super::CanonWidget;
 
 const IDENTITY: &str = "ui://select";
 
@@ -187,8 +187,11 @@ impl CanonWidget for Select<'_> {
             resp = resp.on_hover_text(tt.as_ref());
         }
 
-        let chosen: Option<&'static str> =
-            if enabled && changed { Some("select") } else { None };
+        let chosen: Option<&'static str> = if enabled && changed {
+            Some("select")
+        } else {
+            None
+        };
 
         CanonResponse::from_egui(resp, Cow::Borrowed(IDENTITY), variant, chosen).with_id_hint(id)
     }
@@ -209,9 +212,7 @@ fn paint_combo_form(
         .selected_text(current_text)
         .show_ui(ui, |ui| {
             for (i, opt) in options.iter().enumerate() {
-                if ui.selectable_label(*selected == i, *opt).clicked()
-                    && *selected != i
-                {
+                if ui.selectable_label(*selected == i, *opt).clicked() && *selected != i {
                     *selected = i;
                     *changed = true;
                 }

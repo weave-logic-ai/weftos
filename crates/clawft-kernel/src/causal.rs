@@ -312,8 +312,7 @@ impl CausalGraph {
             rev.retain(|e| e.source != source);
         }
 
-        self.edge_count
-            .fetch_sub(count as u64, Ordering::SeqCst);
+        self.edge_count.fetch_sub(count as u64, Ordering::SeqCst);
 
         #[cfg(feature = "exochain")]
         if let Some(ref cm) = self.chain_manager {
@@ -391,9 +390,10 @@ impl CausalGraph {
                 crate::governance::GovernanceDecision::Deny(_)
                     | crate::governance::GovernanceDecision::EscalateToHuman(_)
             ) {
-                return Err(crate::error::KernelError::GovernanceDenied(
-                    format!("causal.clear denied: {}", result.decision),
-                ));
+                return Err(crate::error::KernelError::GovernanceDenied(format!(
+                    "causal.clear denied: {}",
+                    result.decision
+                )));
             }
         }
 
@@ -540,10 +540,7 @@ impl CausalGraph {
                     continue;
                 }
                 visited.insert(edge.target);
-                parent.insert(
-                    edge.target,
-                    (current, edge.edge_type.clone(), edge.weight),
-                );
+                parent.insert(edge.target, (current, edge.edge_type.clone(), edge.weight));
 
                 if edge.target == to {
                     // Reconstruct the chain.
@@ -707,7 +704,8 @@ impl CausalGraph {
         }
 
         // Initialize: each node gets its own ID as label.
-        let mut labels: std::collections::HashMap<NodeId, NodeId> = std::collections::HashMap::new();
+        let mut labels: std::collections::HashMap<NodeId, NodeId> =
+            std::collections::HashMap::new();
         for &id in &ids {
             labels.insert(id, id);
         }
@@ -826,24 +824,27 @@ impl CausalGraph {
             // Forward edges.
             for edge in self.get_forward_edges(id) {
                 if let Some(&j) = id_to_idx.get(&edge.target)
-                    && i != j {
-                        let w = edge.weight as f64;
-                        adj[i].push((j, w));
-                        adj[j].push((i, w));
-                        degree[i] += w;
-                        degree[j] += w;
-                    }
+                    && i != j
+                {
+                    let w = edge.weight as f64;
+                    adj[i].push((j, w));
+                    adj[j].push((i, w));
+                    degree[i] += w;
+                    degree[j] += w;
+                }
             }
             // Reverse edges — only upper triangle to avoid double-counting.
             for edge in self.get_reverse_edges(id) {
                 if let Some(&j) = id_to_idx.get(&edge.source)
-                    && i != j && j > i {
-                        let w = edge.weight as f64;
-                        adj[i].push((j, w));
-                        adj[j].push((i, w));
-                        degree[i] += w;
-                        degree[j] += w;
-                    }
+                    && i != j
+                    && j > i
+                {
+                    let w = edge.weight as f64;
+                    adj[i].push((j, w));
+                    adj[j].push((i, w));
+                    degree[i] += w;
+                    degree[j] += w;
+                }
             }
         }
 
@@ -892,7 +893,7 @@ impl CausalGraph {
 
         let k = max_iterations.min(n - 1); // can't exceed n-1 Lanczos steps
         let mut alpha: Vec<f64> = Vec::with_capacity(k); // diagonal of T
-        let mut beta: Vec<f64> = Vec::with_capacity(k);  // sub-diagonal of T
+        let mut beta: Vec<f64> = Vec::with_capacity(k); // sub-diagonal of T
         let mut basis: Vec<Vec<f64>> = Vec::with_capacity(k); // Lanczos vectors
 
         let mut q_prev: Vec<f64> = vec![0.0; n];
@@ -945,7 +946,11 @@ impl CausalGraph {
         // matrix (alpha, beta).  We only need the smallest eigenvalue of T
         // (which approximates lambda_2 since we projected out the null space).
         let m = alpha.len();
-        let (evals, evecs) = tridiag_eigen(&alpha, &beta[..m.saturating_sub(1).max(0).min(beta.len())], m);
+        let (evals, evecs) = tridiag_eigen(
+            &alpha,
+            &beta[..m.saturating_sub(1).max(0).min(beta.len())],
+            m,
+        );
 
         // Find the smallest eigenvalue (approximation to lambda_2).
         let mut min_idx = 0;
@@ -1031,23 +1036,26 @@ impl CausalGraph {
             let i = id_to_idx[&id];
             for edge in self.get_forward_edges(id) {
                 if let Some(&j) = id_to_idx.get(&edge.target)
-                    && i != j {
-                        let w = edge.weight as f64;
-                        adj[i].push((j, w));
-                        adj[j].push((i, w));
-                        degree[i] += w;
-                        degree[j] += w;
-                    }
+                    && i != j
+                {
+                    let w = edge.weight as f64;
+                    adj[i].push((j, w));
+                    adj[j].push((i, w));
+                    degree[i] += w;
+                    degree[j] += w;
+                }
             }
             for edge in self.get_reverse_edges(id) {
                 if let Some(&j) = id_to_idx.get(&edge.source)
-                    && i != j && j > i {
-                        let w = edge.weight as f64;
-                        adj[i].push((j, w));
-                        adj[j].push((i, w));
-                        degree[i] += w;
-                        degree[j] += w;
-                    }
+                    && i != j
+                    && j > i
+                {
+                    let w = edge.weight as f64;
+                    adj[i].push((j, w));
+                    adj[j].push((i, w));
+                    degree[i] += w;
+                    degree[j] += w;
+                }
             }
         }
         // Recompute degree from adjacency for correctness.
@@ -1075,7 +1083,9 @@ impl CausalGraph {
         let next_gaussian = |seed: &mut u64| -> f64 {
             // Box-Muller from two uniform values via LCG.
             let uniform = |s: &mut u64| -> f64 {
-                *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                *s = s
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 (*s >> 11) as f64 / (1u64 << 53) as f64
             };
             let u1 = uniform(seed).max(1e-15);
@@ -1107,7 +1117,11 @@ impl CausalGraph {
         let mut c_mat = vec![vec![0.0f64; m]; m];
         for i in 0..m {
             for j in i..m {
-                let dot: f64 = z_vecs[i].iter().zip(lz_vecs[j].iter()).map(|(a, b)| a * b).sum();
+                let dot: f64 = z_vecs[i]
+                    .iter()
+                    .zip(lz_vecs[j].iter())
+                    .map(|(a, b)| a * b)
+                    .sum();
                 c_mat[i][j] = dot;
                 c_mat[j][i] = dot;
             }
@@ -1125,7 +1139,8 @@ impl CausalGraph {
         let (evals, evecs) = dense_jacobi_eigen(&c_mat, m, max_iter);
 
         // Step 4: Sort eigenvalues and find lambda_2 (second smallest).
-        let mut eval_indices: Vec<(usize, f64)> = evals.iter().enumerate().map(|(i, &v)| (i, v)).collect();
+        let mut eval_indices: Vec<(usize, f64)> =
+            evals.iter().enumerate().map(|(i, &v)| (i, v)).collect();
         eval_indices.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // The smallest eigenvalue should be ~0 (constant vector projected out).
@@ -1192,10 +1207,7 @@ impl CausalGraph {
     ///   coupling = co_changes(A,B) / max(changes(A), changes(B))
     ///
     /// Returns pairs sorted by coupling score descending.
-    pub fn compute_coupling(
-        &self,
-        change_events: &[ChangeEvent],
-    ) -> Vec<CouplingPair> {
+    pub fn compute_coupling(&self, change_events: &[ChangeEvent]) -> Vec<CouplingPair> {
         let mut change_count: std::collections::HashMap<NodeId, usize> =
             std::collections::HashMap::new();
         let mut co_change_count: std::collections::HashMap<(NodeId, NodeId), usize> =
@@ -1546,9 +1558,7 @@ fn tridiag_eigen(diag: &[f64], off: &[f64], m: usize) -> (Vec<f64>, Vec<Vec<f64>
 
     // Eigenvectors: column j of V is the eigenvector for eigenvalue j.
     // Return as eigenvectors[j] = column j.
-    let eigenvectors: Vec<Vec<f64>> = (0..m)
-        .map(|j| (0..m).map(|i| v[i][j]).collect())
-        .collect();
+    let eigenvectors: Vec<Vec<f64>> = (0..m).map(|j| (0..m).map(|i| v[i][j]).collect()).collect();
 
     (eigenvalues, eigenvectors)
 }
@@ -1629,9 +1639,7 @@ fn dense_jacobi_eigen(mat: &[Vec<f64>], m: usize, max_iter: usize) -> (Vec<f64>,
     }
 
     let eigenvalues: Vec<f64> = (0..m).map(|i| a[i][i]).collect();
-    let eigenvectors: Vec<Vec<f64>> = (0..m)
-        .map(|j| (0..m).map(|i| v[i][j]).collect())
-        .collect();
+    let eigenvectors: Vec<Vec<f64>> = (0..m).map(|j| (0..m).map(|i| v[i][j]).collect()).collect();
 
     (eigenvalues, eigenvectors)
 }
@@ -1715,7 +1723,9 @@ impl CausalGraph {
             graph.forward_edges.insert(node.id, Vec::new());
             graph.reverse_edges.insert(node.id, Vec::new());
         }
-        graph.node_count.store(snapshot.nodes.len() as u64, Ordering::SeqCst);
+        graph
+            .node_count
+            .store(snapshot.nodes.len() as u64, Ordering::SeqCst);
 
         // Restore edges from forward_edges map.
         let mut total_edges: u64 = 0;
@@ -1813,8 +1823,7 @@ where
     I: IntoIterator<Item = &'a CausalEdge>,
 {
     // Snapshot the edge-kind stream so we can triage and re-iterate.
-    let kinds: Vec<&CausalEdgeType> =
-        edges.into_iter().map(|e| &e.edge_type).collect();
+    let kinds: Vec<&CausalEdgeType> = edges.into_iter().map(|e| &e.edge_type).collect();
     if kinds.is_empty() {
         return 1.0;
     }
@@ -1890,8 +1899,7 @@ pub fn compute_shadows(
 
         let fwd_edges = graph.get_forward_edges(id);
         let rev_edges = graph.get_reverse_edges(id);
-        let max_volatility =
-            max_volatility_batched(fwd_edges.iter().chain(rev_edges.iter()));
+        let max_volatility = max_volatility_batched(fwd_edges.iter().chain(rev_edges.iter()));
 
         // Geometric decay: weight = (1 - decay_rate)^(age * volatility).
         let base_weight = (1.0 - config.decay_rate).powf(age * max_volatility);
@@ -2613,19 +2621,31 @@ mod tests {
         let c = g.add_node("C".into(), serde_json::json!({}));
 
         let events = vec![
-            ChangeEvent { node_ids: vec![a, b], timestamp: 1 },
-            ChangeEvent { node_ids: vec![a, b], timestamp: 2 },
-            ChangeEvent { node_ids: vec![a, c], timestamp: 3 },
-            ChangeEvent { node_ids: vec![b, c], timestamp: 4 },
+            ChangeEvent {
+                node_ids: vec![a, b],
+                timestamp: 1,
+            },
+            ChangeEvent {
+                node_ids: vec![a, b],
+                timestamp: 2,
+            },
+            ChangeEvent {
+                node_ids: vec![a, c],
+                timestamp: 3,
+            },
+            ChangeEvent {
+                node_ids: vec![b, c],
+                timestamp: 4,
+            },
         ];
 
         let coupling = g.compute_coupling(&events);
         assert!(!coupling.is_empty());
 
         // A-B co-changed 2 times out of max(3,3)=3 → 0.67
-        let ab = coupling.iter().find(|p| {
-            (p.node_a == a && p.node_b == b) || (p.node_a == b && p.node_b == a)
-        });
+        let ab = coupling
+            .iter()
+            .find(|p| (p.node_a == a && p.node_b == b) || (p.node_a == b && p.node_b == a));
         assert!(ab.is_some());
         let ab = ab.unwrap();
         assert_eq!(ab.co_changes, 2);
@@ -2652,14 +2672,23 @@ mod tests {
         // Module C fills the rest so there are plenty of events.
         let mut events = Vec::new();
         for i in 0..50 {
-            events.push(ChangeEvent { node_ids: vec![c], timestamp: i });
+            events.push(ChangeEvent {
+                node_ids: vec![c],
+                timestamp: i,
+            });
             if i % 10 == 0 {
-                events.push(ChangeEvent { node_ids: vec![a], timestamp: i });
+                events.push(ChangeEvent {
+                    node_ids: vec![a],
+                    timestamp: i,
+                });
             }
         }
         // Burst window: module A + B change together in every recent event.
         for i in 50..60 {
-            events.push(ChangeEvent { node_ids: vec![a, b], timestamp: i });
+            events.push(ChangeEvent {
+                node_ids: vec![a, b],
+                timestamp: i,
+            });
         }
         // Module A baseline: ~5 changes in ~55 events before window (rate ~0.09).
         // Module A window: 10 changes in 10 events (rate 1.0).
@@ -2675,7 +2704,10 @@ mod tests {
 
         // Module B should be predicted (co-modified with A during burst).
         let pred_b = predictions.iter().find(|p| p.node_id == b);
-        assert!(pred_b.is_some(), "module_b should be predicted via coupling");
+        assert!(
+            pred_b.is_some(),
+            "module_b should be predicted via coupling"
+        );
     }
 
     // 37
@@ -2775,8 +2807,16 @@ mod tests {
         // Verify edges.
         let fwd_a = loaded.get_forward_edges(a);
         assert_eq!(fwd_a.len(), 2);
-        assert!(fwd_a.iter().any(|e| e.target == b && e.edge_type == CausalEdgeType::Causes));
-        assert!(fwd_a.iter().any(|e| e.target == c && e.edge_type == CausalEdgeType::Inhibits));
+        assert!(
+            fwd_a
+                .iter()
+                .any(|e| e.target == b && e.edge_type == CausalEdgeType::Causes)
+        );
+        assert!(
+            fwd_a
+                .iter()
+                .any(|e| e.target == c && e.edge_type == CausalEdgeType::Inhibits)
+        );
 
         let _ = std::fs::remove_file(&path);
     }
@@ -2785,11 +2825,14 @@ mod tests {
     #[test]
     fn persist_node_metadata_survives() {
         let g = make_graph();
-        let id = g.add_node("rich".into(), serde_json::json!({
-            "tags": ["a", "b"],
-            "count": 42,
-            "nested": {"x": true}
-        }));
+        let id = g.add_node(
+            "rich".into(),
+            serde_json::json!({
+                "tags": ["a", "b"],
+                "count": 42,
+                "nested": {"x": true}
+            }),
+        );
 
         let path = tmp_path("metadata");
         g.save_to_file(&path).unwrap();
@@ -2905,19 +2948,22 @@ mod tests {
             let i = id_to_idx[&id];
             for edge in g.get_forward_edges(id) {
                 if let Some(&j) = id_to_idx.get(&edge.target)
-                    && i != j {
-                        let w = edge.weight as f64;
-                        laplacian[i][j] -= w;
-                        laplacian[j][i] -= w;
-                    }
+                    && i != j
+                {
+                    let w = edge.weight as f64;
+                    laplacian[i][j] -= w;
+                    laplacian[j][i] -= w;
+                }
             }
             for edge in g.get_reverse_edges(id) {
                 if let Some(&j) = id_to_idx.get(&edge.source)
-                    && i != j && j > i {
-                        let w = edge.weight as f64;
-                        laplacian[i][j] -= w;
-                        laplacian[j][i] -= w;
-                    }
+                    && i != j
+                    && j > i
+                {
+                    let w = edge.weight as f64;
+                    laplacian[i][j] -= w;
+                    laplacian[j][i] -= w;
+                }
             }
         }
         for i in 0..n {
@@ -2940,21 +2986,28 @@ mod tests {
                     }
                 }
             }
-            if max_off < 1e-15 { break; }
+            if max_off < 1e-15 {
+                break;
+            }
             let theta = (a[q][q] - a[p][p]) / (2.0 * a[p][q]);
             let t = theta.signum() / (theta.abs() + (1.0 + theta * theta).sqrt());
             let c = 1.0 / (1.0 + t * t).sqrt();
             let s = t * c;
-            let app = a[p][p]; let aqq = a[q][q]; let apq = a[p][q];
+            let app = a[p][p];
+            let aqq = a[q][q];
+            let apq = a[p][q];
             a[p][p] = c * c * app - 2.0 * s * c * apq + s * s * aqq;
             a[q][q] = s * s * app + 2.0 * s * c * apq + c * c * aqq;
             a[p][q] = 0.0;
             a[q][p] = 0.0;
             for r in 0..n {
                 if r != p && r != q {
-                    let arp = a[r][p]; let arq = a[r][q];
-                    a[r][p] = c * arp - s * arq; a[p][r] = a[r][p];
-                    a[r][q] = s * arp + c * arq; a[q][r] = a[r][q];
+                    let arp = a[r][p];
+                    let arq = a[r][q];
+                    a[r][p] = c * arp - s * arq;
+                    a[p][r] = a[r][p];
+                    a[r][q] = s * arp + c * arq;
+                    a[q][r] = a[r][q];
                 }
             }
         }
@@ -2987,7 +3040,10 @@ mod tests {
             dense_lambda2,
         );
         // Both should be close to 3.0 for K3 with symmetric unit edges.
-        assert!(sparse_result.lambda_2 > 1.0, "lambda_2 should be > 1 for K3");
+        assert!(
+            sparse_result.lambda_2 > 1.0,
+            "lambda_2 should be > 1 for K3"
+        );
     }
 
     // 48
@@ -3012,7 +3068,10 @@ mod tests {
             sparse_result.lambda_2,
             dense_lambda2,
         );
-        assert!(sparse_result.lambda_2 > 0.0, "path graph should be connected");
+        assert!(
+            sparse_result.lambda_2 > 0.0,
+            "path graph should be connected"
+        );
     }
 
     // 49
@@ -3087,7 +3146,9 @@ mod tests {
     fn trace_chain_same_node() {
         let g = make_graph();
         let a = g.add_node("A".into(), serde_json::json!({}));
-        let chain = g.trace_causal_chain(a, a, 10).expect("same node => empty chain");
+        let chain = g
+            .trace_causal_chain(a, a, 10)
+            .expect("same node => empty chain");
         assert!(chain.path.is_empty());
         assert_eq!(chain.total_weight, 0.0);
         assert_eq!(chain.explanation, "A");
@@ -3275,7 +3336,12 @@ mod tests {
         }
 
         let result = g.spectral_analysis_rff(32, 200);
-        let norm: f64 = result.fiedler_vector.iter().map(|x| x * x).sum::<f64>().sqrt();
+        let norm: f64 = result
+            .fiedler_vector
+            .iter()
+            .map(|x| x * x)
+            .sum::<f64>()
+            .sqrt();
         assert!(
             (norm - 1.0).abs() < 0.05,
             "Fiedler vector should be approximately unit-normalized, got norm={}",
@@ -3325,8 +3391,10 @@ mod tests {
 
         let old_w = *weights.get(&old_id).unwrap();
         let recent_w = *weights.get(&recent_id).unwrap();
-        assert!(recent_w > old_w,
-            "Recent node (w={recent_w}) should have higher weight than old node (w={old_w})");
+        assert!(
+            recent_w > old_w,
+            "Recent node (w={recent_w}) should have higher weight than old node (w={old_w})"
+        );
     }
 
     #[test]
@@ -3350,8 +3418,10 @@ mod tests {
         let w_b = *weights.get(&b).unwrap();
         let w_c = *weights.get(&c).unwrap();
         // Node connected via Correlates should decay faster.
-        assert!(w_b > w_c,
-            "Causes-connected node (w={w_b}) should decay slower than Correlates-connected (w={w_c})");
+        assert!(
+            w_b > w_c,
+            "Causes-connected node (w={w_b}) should decay slower than Correlates-connected (w={w_c})"
+        );
     }
 
     #[test]
@@ -3448,8 +3518,10 @@ mod tests {
     #[test]
     fn batched_max_volatility_high_volatility_uniform() {
         // Sequence form for a kind whose volatility > 1.0.
-        let edges = [make_edge(1, 2, CausalEdgeType::Correlates),
-            make_edge(1, 3, CausalEdgeType::Correlates)];
+        let edges = [
+            make_edge(1, 2, CausalEdgeType::Correlates),
+            make_edge(1, 3, CausalEdgeType::Correlates),
+        ];
         assert_eq!(max_volatility_batched(edges.iter()), 2.0);
     }
 
@@ -3490,7 +3562,10 @@ mod tests {
         let weights = compute_shadows(&g, &cfg, 50);
         let w_b = *weights.get(&b).unwrap();
         let w_c = *weights.get(&c).unwrap();
-        assert!(w_b > w_c, "Causes ({w_b}) should decay slower than Correlates ({w_c})");
+        assert!(
+            w_b > w_c,
+            "Causes ({w_b}) should decay slower than Correlates ({w_c})"
+        );
     }
 
     // -- KG-014: VQ Codebook Cold-Start tests ------------------------------
@@ -3538,10 +3613,16 @@ mod tests {
 
         // Centroids should be near the cluster means.
         let func_centroid = func_vec.unwrap();
-        assert!(func_centroid[0] > 0.5, "Function centroid should be near [1,0,0]");
+        assert!(
+            func_centroid[0] > 0.5,
+            "Function centroid should be near [1,0,0]"
+        );
 
         let mod_centroid = mod_vec.unwrap();
-        assert!(mod_centroid[1] > 0.5, "Module centroid should be near [0,1,0]");
+        assert!(
+            mod_centroid[1] > 0.5,
+            "Module centroid should be near [0,1,0]"
+        );
     }
 
     #[test]
@@ -3570,6 +3651,9 @@ mod tests {
     fn vq_codebook_distance_sq_mismatched_dims() {
         // Shorter vector should be padded with zeros conceptually.
         let dist = VqCodebook::distance_sq(&[1.0, 2.0], &[1.0, 2.0, 3.0]);
-        assert!((dist - 9.0).abs() < 1e-6, "missing dim treated as 0, so diff=3 -> sq=9");
+        assert!(
+            (dist - 9.0).abs() < 1e-6,
+            "missing dim treated as 0, so diff=3 -> sq=9"
+        );
     }
 }

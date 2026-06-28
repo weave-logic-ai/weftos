@@ -93,7 +93,12 @@ pub fn generate(config: &GeneratorConfig) -> Dimensions {
     let positions = generate_positions(config, &stores);
     let people = generate_people(config, &stores);
     let promotions = generate_promotions(config);
-    Dimensions { stores, people, positions, promotions }
+    Dimensions {
+        stores,
+        people,
+        positions,
+        promotions,
+    }
 }
 
 fn generate_stores(config: &GeneratorConfig) -> Vec<Store> {
@@ -112,7 +117,11 @@ fn generate_stores(config: &GeneratorConfig) -> Vec<Store> {
             // across seeds so scenarios scoped to `brand × metro` always hit
             // at least one store at small tiers.
             let metro = &config.metros[idx as usize % config.metros.len()];
-            let franchise_model = if rng.gen_bool(0.7) { "franchised" } else { "corporate" };
+            let franchise_model = if rng.gen_bool(0.7) {
+                "franchised"
+            } else {
+                "corporate"
+            };
             let store_num = format!("{:04}", idx);
             let baseline_noise: f64 = rng.gen_range(0.7..1.4);
             stores.push(Store {
@@ -123,7 +132,8 @@ fn generate_stores(config: &GeneratorConfig) -> Vec<Store> {
                 metro_code: metro.code.clone(),
                 franchise_model: franchise_model.into(),
                 opened_year: 2000 + rng.gen_range(0u32..=25),
-                baseline_daily_sales: (brand.baseline_daily_sales * baseline_noise * 100.0).round() / 100.0,
+                baseline_daily_sales: (brand.baseline_daily_sales * baseline_noise * 100.0).round()
+                    / 100.0,
                 timezone: "UTC-05".into(),
             });
             idx += 1;
@@ -140,7 +150,10 @@ fn generate_positions(config: &GeneratorConfig, stores: &[Store]) -> Vec<Positio
             let mut rng = subseed(config.seed, "position", idx);
             let filled = rng.gen_bool(1.0 - config.vacancy_rate);
             out.push(Position {
-                label: format!("position:{}_{}_{}", store.brand, store.store_number, template),
+                label: format!(
+                    "position:{}_{}_{}",
+                    store.brand, store.store_number, template
+                ),
                 store_ref: store.label.clone(),
                 role_template: (*template).into(),
                 filled_by_ref: if filled {
@@ -183,12 +196,13 @@ fn generate_people(config: &GeneratorConfig, stores: &[Store]) -> Vec<Person> {
 
             // Phase-3: synthetic terminations. Higher turnover_risk → more
             // likely to be terminated sometime during the corpus window.
-            let (status, termination_day) =
-                if rng.gen_bool((turnover_risk * config.turnover_rate_multiplier).clamp(0.0, 0.9)) {
-                    (PersonStatus::Terminated, Some(rng.gen_range(0..days)))
-                } else {
-                    (PersonStatus::Active, None)
-                };
+            let (status, termination_day) = if rng
+                .gen_bool((turnover_risk * config.turnover_rate_multiplier).clamp(0.0, 0.9))
+            {
+                (PersonStatus::Terminated, Some(rng.gen_range(0..days)))
+            } else {
+                (PersonStatus::Active, None)
+            };
 
             // Cert expirations — every hourly/salaried/manager needs food-safety.
             let mut cert_expirations = BTreeMap::new();
@@ -242,7 +256,11 @@ fn generate_promotions(config: &GeneratorConfig) -> Vec<Promotion> {
     let mut out = Vec::with_capacity(config.promo_catalog.len());
     for (i, def) in config.promo_catalog.iter().enumerate() {
         let mut rng = subseed(config.seed, "promo", i as u64);
-        let start = if days > 14 { rng.gen_range(0..days.saturating_sub(14)) } else { 0 };
+        let start = if days > 14 {
+            rng.gen_range(0..days.saturating_sub(14))
+        } else {
+            0
+        };
         let duration = rng.gen_range(7..=21);
         out.push(Promotion {
             label: format!("promotion:{}", def.id),

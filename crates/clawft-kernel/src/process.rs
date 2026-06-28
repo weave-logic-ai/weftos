@@ -4,9 +4,9 @@
 //! access, allowing multiple kernel subsystems to query and update
 //! process state without contention.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "exochain")]
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -228,16 +228,17 @@ impl ProcessTable {
 
         #[cfg(feature = "exochain")]
         if let Some(ref entry) = removed
-            && let Some(ref cm) = self.chain_manager {
-                cm.append(
-                    "process",
-                    crate::chain::EVENT_KIND_PROCESS_DEREGISTER,
-                    Some(serde_json::json!({
-                        "pid": pid,
-                        "agent_id": &entry.agent_id,
-                    })),
-                );
-            }
+            && let Some(ref cm) = self.chain_manager
+        {
+            cm.append(
+                "process",
+                crate::chain::EVENT_KIND_PROCESS_DEREGISTER,
+                Some(serde_json::json!({
+                    "pid": pid,
+                    "agent_id": &entry.agent_id,
+                })),
+            );
+        }
 
         removed
     }

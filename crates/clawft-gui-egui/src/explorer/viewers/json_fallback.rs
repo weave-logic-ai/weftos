@@ -266,12 +266,7 @@ fn type_badge_text(value: &Value) -> egui::RichText {
 /// stroke would be closer to a real pill, but this is the cheapest
 /// thing that visually distinguishes the type at a glance.
 fn badge(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
-    ui.label(
-        egui::RichText::new(text)
-            .monospace()
-            .small()
-            .color(color),
-    );
+    ui.label(egui::RichText::new(text).monospace().small().color(color));
 }
 
 /// Clip `s` to at most `max` chars (by char boundary, not byte boundary —

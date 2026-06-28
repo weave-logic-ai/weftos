@@ -38,7 +38,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::adapter::{
@@ -60,7 +60,9 @@ const TICK_SECS: u64 = 5;
 pub const TOPICS: &[TopicDecl] = &[TopicDecl {
     path: "substrate/sensor/rfkill",
     shape: "ontology://rfkill-state",
-    refresh_hint: RefreshHint::Periodic { ms: TICK_SECS * 1000 },
+    refresh_hint: RefreshHint::Periodic {
+        ms: TICK_SECS * 1000,
+    },
     sensitivity: Sensitivity::Public,
     buffer_policy: BufferPolicy::Refuse,
     max_len: None,
@@ -183,11 +185,7 @@ impl OntologyAdapter for RfkillAdapter {
         PERMISSIONS
     }
 
-    async fn open(
-        &self,
-        topic: &str,
-        _args: Value,
-    ) -> Result<Subscription, AdapterError> {
+    async fn open(&self, topic: &str, _args: Value) -> Result<Subscription, AdapterError> {
         if topic != "substrate/sensor/rfkill" {
             return Err(AdapterError::UnknownTopic(topic.into()));
         }
@@ -245,9 +243,7 @@ impl PhysicalSensorAdapter for RfkillAdapter {
         SensorCalibration {
             scale: 1.0,
             offset: 0.0,
-            reference: Some(
-                "rfkill sysfs: soft=1 → soft-blocked; hard=1 → hard-blocked".into(),
-            ),
+            reference: Some("rfkill sysfs: soft=1 → soft-blocked; hard=1 → hard-blocked".into()),
         }
     }
 
@@ -337,7 +333,12 @@ mod tests {
 
     fn fake_rfkill_root(
         dir: &TempDir,
-        entries: &[(&str /* name */, &str /* type */, &str /* soft */, &str /* hard */)],
+        entries: &[(
+            &str, /* name */
+            &str, /* type */
+            &str, /* soft */
+            &str, /* hard */
+        )],
     ) -> PathBuf {
         let root = dir.path().join("rfkill");
         fs::create_dir_all(&root).unwrap();
@@ -358,24 +359,15 @@ mod tests {
 
     #[test]
     fn from_sysfs_soft_blocked_when_only_soft_set() {
-        assert_eq!(
-            RfkillState::from_sysfs("1", "0"),
-            RfkillState::SoftBlocked
-        );
+        assert_eq!(RfkillState::from_sysfs("1", "0"), RfkillState::SoftBlocked);
     }
 
     #[test]
     fn from_sysfs_hard_blocked_takes_priority() {
         // hard=1 trumps soft=1: even if userspace toggles soft off,
         // the radio stays down until the physical switch flips.
-        assert_eq!(
-            RfkillState::from_sysfs("1", "1"),
-            RfkillState::HardBlocked
-        );
-        assert_eq!(
-            RfkillState::from_sysfs("0", "1"),
-            RfkillState::HardBlocked
-        );
+        assert_eq!(RfkillState::from_sysfs("1", "1"), RfkillState::HardBlocked);
+        assert_eq!(RfkillState::from_sysfs("0", "1"), RfkillState::HardBlocked);
     }
 
     #[test]

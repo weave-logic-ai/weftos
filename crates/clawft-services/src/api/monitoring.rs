@@ -3,11 +3,7 @@
 //! Provides endpoints for token usage tracking, cost breakdowns,
 //! and pipeline run telemetry.
 
-use axum::{
-    extract::State,
-    routing::get,
-    Json, Router,
-};
+use axum::{Json, Router, extract::State, routing::get};
 use serde::{Deserialize, Serialize};
 
 use super::ApiState;
@@ -93,9 +89,7 @@ pub enum PipelineRunStatus {
 
 // ── Handlers ───────────────────────────────────────────────────
 
-async fn token_usage(
-    State(_state): State<ApiState>,
-) -> Json<TokenUsageSummary> {
+async fn token_usage(State(_state): State<ApiState>) -> Json<TokenUsageSummary> {
     // Mock data; will be wired to actual metrics collector later.
     let by_provider = vec![
         TokenUsage {
@@ -150,9 +144,7 @@ async fn token_usage(
     })
 }
 
-async fn cost_breakdown(
-    State(_state): State<ApiState>,
-) -> Json<CostBreakdown> {
+async fn cost_breakdown(State(_state): State<ApiState>) -> Json<CostBreakdown> {
     let by_provider = vec![
         ProviderCost {
             provider: "anthropic".into(),
@@ -200,9 +192,7 @@ async fn cost_breakdown(
     })
 }
 
-async fn pipeline_runs(
-    State(_state): State<ApiState>,
-) -> Json<Vec<PipelineRun>> {
+async fn pipeline_runs(State(_state): State<ApiState>) -> Json<Vec<PipelineRun>> {
     let runs = vec![
         PipelineRun {
             id: "run-001".into(),

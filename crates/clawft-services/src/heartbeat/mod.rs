@@ -141,10 +141,7 @@ impl HeartbeatService {
             HeartbeatMode::CheckIn { targets } => {
                 for target in targets {
                     let mut metadata = HashMap::new();
-                    metadata.insert(
-                        "heartbeat_type".to_string(),
-                        serde_json::json!("check_in"),
-                    );
+                    metadata.insert("heartbeat_type".to_string(), serde_json::json!("check_in"));
                     metadata.insert(
                         "target_channel".to_string(),
                         serde_json::json!(target.channel),

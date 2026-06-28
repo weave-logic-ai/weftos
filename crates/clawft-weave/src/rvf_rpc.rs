@@ -110,8 +110,8 @@ mod tests {
     /// produce a realistic frame with a valid content hash.
     fn make_frame(seg_type: u8, payload: &[u8], flags: SegmentFlags, segment_id: u64) -> RvfFrame {
         let segment_bytes = weftos_rvf_wire::write_segment(seg_type, payload, flags, segment_id);
-        let (header, raw_payload) =
-            weftos_rvf_wire::read_segment(&segment_bytes).expect("write_segment output must be valid");
+        let (header, raw_payload) = weftos_rvf_wire::read_segment(&segment_bytes)
+            .expect("write_segment output must be valid");
         RvfFrame {
             header,
             payload: raw_payload.to_vec(),
@@ -120,10 +120,7 @@ mod tests {
 
     #[test]
     fn request_encode_decode_roundtrip() {
-        let req = Request::with_params(
-            "kernel.status",
-            serde_json::json!({"verbose": true}),
-        );
+        let req = Request::with_params("kernel.status", serde_json::json!({"verbose": true}));
 
         let (seg_type, payload, flags, segment_id) = encode_request(&req, 10);
         let frame = make_frame(seg_type, &payload, flags, segment_id);

@@ -86,7 +86,7 @@ fn literal_binding_short_circuits() {
 /// silently return 0. Guards the wrong-shape-binding boundary.
 #[test]
 fn count_on_scalar_topic_errors_with_type_mismatch() {
-    use clawft_surface::eval::{eval, EvalError};
+    use clawft_surface::eval::{EvalError, eval};
     use clawft_surface::parse::expr::parse;
 
     let mut snap = OntologySnapshot::empty();

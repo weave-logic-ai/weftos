@@ -11,7 +11,7 @@ use std::sync::Arc;
 use eframe::egui;
 use serde_json::Value;
 
-use crate::explorer::viewers::{process_table::ProcessTableViewer, SubstrateViewer};
+use crate::explorer::viewers::{SubstrateViewer, process_table::ProcessTableViewer};
 use crate::live::{Live, Snapshot};
 use crate::shell::desktop::Desktop;
 
@@ -23,10 +23,7 @@ pub fn show(
     snap: &Snapshot,
 ) {
     super::paint_heading(ui, rect, "Processes");
-    let body = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.top() + 64.0),
-        rect.max,
-    );
+    let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + 64.0), rect.max);
     let has_data = snap
         .processes
         .as_ref()

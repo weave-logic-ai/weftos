@@ -92,11 +92,17 @@ pub enum AnalyzeAction {
 
 pub async fn run(args: AnalyzeArgs) -> anyhow::Result<()> {
     let (subcommand, sub_args) = match args.action {
-        AnalyzeAction::Extract { path, output, slices } => {
+        AnalyzeAction::Extract {
+            path,
+            output,
+            slices,
+        } => {
             let mut a = vec![
-                "topology".into(), "extract".into(),
+                "topology".into(),
+                "extract".into(),
                 path.to_string_lossy().into(),
-                "--output".into(), output.to_string_lossy().into(),
+                "--output".into(),
+                output.to_string_lossy().into(),
             ];
             if let Some(s) = slices {
                 a.push("--slices".into());
@@ -106,20 +112,27 @@ pub async fn run(args: AnalyzeArgs) -> anyhow::Result<()> {
         }
         AnalyzeAction::Detect { graph } => (
             "weaver",
-            vec!["topology".into(), "detect".into(), graph.to_string_lossy().into()],
+            vec![
+                "topology".into(),
+                "detect".into(),
+                graph.to_string_lossy().into(),
+            ],
         ),
         AnalyzeAction::Infer { graph, output } => (
             "weaver",
             vec![
-                "topology".into(), "infer".into(),
+                "topology".into(),
+                "infer".into(),
                 graph.to_string_lossy().into(),
-                "--output".into(), output.to_string_lossy().into(),
+                "--output".into(),
+                output.to_string_lossy().into(),
             ],
         ),
         AnalyzeAction::Diff { schema, graph } => (
             "weaver",
             vec![
-                "topology".into(), "diff".into(),
+                "topology".into(),
+                "diff".into(),
                 schema.to_string_lossy().into(),
                 graph.to_string_lossy().into(),
             ],
@@ -127,49 +140,60 @@ pub async fn run(args: AnalyzeArgs) -> anyhow::Result<()> {
         AnalyzeAction::Slice { graph, output } => (
             "weaver",
             vec![
-                "topology".into(), "slice".into(),
+                "topology".into(),
+                "slice".into(),
                 graph.to_string_lossy().into(),
-                "--output".into(), output.to_string_lossy().into(),
+                "--output".into(),
+                output.to_string_lossy().into(),
             ],
         ),
         AnalyzeAction::Vowl { graph, output } => (
             "weaver",
             vec![
-                "topology".into(), "vowl".into(),
+                "topology".into(),
+                "vowl".into(),
                 graph.to_string_lossy().into(),
-                "--output".into(), output.to_string_lossy().into(),
+                "--output".into(),
+                output.to_string_lossy().into(),
             ],
         ),
         AnalyzeAction::Enrich { path, force } => {
             let mut a = vec![
-                "vault".into(), "enrich".into(),
+                "vault".into(),
+                "enrich".into(),
                 path.to_string_lossy().into(),
             ];
-            if force { a.push("--force".into()); }
+            if force {
+                a.push("--force".into());
+            }
             ("weaver", a)
         }
         AnalyzeAction::Links { path, format } => (
             "weaver",
             vec![
-                "vault".into(), "analyze".into(),
+                "vault".into(),
+                "analyze".into(),
                 path.to_string_lossy().into(),
-                "--format".into(), format,
+                "--format".into(),
+                format,
             ],
         ),
         AnalyzeAction::Suggest { path } => (
             "weaver",
             vec![
-                "vault".into(), "suggest".into(),
+                "vault".into(),
+                "suggest".into(),
                 path.to_string_lossy().into(),
             ],
         ),
     };
 
     // Find weaver binary.
-    let weaver = which::which(subcommand)
-        .map_err(|_| anyhow::anyhow!(
+    let weaver = which::which(subcommand).map_err(|_| {
+        anyhow::anyhow!(
             "'weaver' not found in PATH. Install with: cargo install --path crates/clawft-weave"
-        ))?;
+        )
+    })?;
 
     let status = tokio::process::Command::new(&weaver)
         .args(&sub_args)

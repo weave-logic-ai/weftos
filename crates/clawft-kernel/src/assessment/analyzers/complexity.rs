@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::assessment::{analyzer::AnalysisContext, Finding};
 use crate::assessment::analyzer::Analyzer;
+use crate::assessment::{Finding, analyzer::AnalysisContext};
 use crate::eml_kernel::ComplexityModel;
 
 /// Default complexity threshold (lines per file). Preserved as the
@@ -80,7 +80,12 @@ impl Analyzer for ComplexityAnalyzer {
         &["size", "todo"]
     }
 
-    fn analyze(&self, project: &Path, files: &[PathBuf], _context: &AnalysisContext) -> Vec<Finding> {
+    fn analyze(
+        &self,
+        project: &Path,
+        files: &[PathBuf],
+        _context: &AnalysisContext,
+    ) -> Vec<Finding> {
         let mut findings = Vec::new();
 
         for path in files {
@@ -130,9 +135,7 @@ mod tests {
 
     fn write_file(dir: &Path, name: &str, lines: usize) -> PathBuf {
         let p = dir.join(name);
-        let body: String = (0..lines)
-            .map(|i| format!("line {i}\n"))
-            .collect();
+        let body: String = (0..lines).map(|i| format!("line {i}\n")).collect();
         std::fs::write(&p, body).unwrap();
         p
     }
@@ -147,13 +150,9 @@ mod tests {
 
         let analyzer = ComplexityAnalyzer::new();
         let ctx = AnalysisContext::default();
-        let findings =
-            analyzer.analyze(dir.path(), &[big.clone(), small.clone()], &ctx);
+        let findings = analyzer.analyze(dir.path(), &[big.clone(), small.clone()], &ctx);
 
-        let size_findings: Vec<_> = findings
-            .iter()
-            .filter(|f| f.category == "size")
-            .collect();
+        let size_findings: Vec<_> = findings.iter().filter(|f| f.category == "size").collect();
         assert_eq!(size_findings.len(), 1);
         assert!(size_findings[0].message.contains("600 lines"));
         assert!(size_findings[0].message.contains(">500 limit"));
@@ -172,10 +171,8 @@ mod tests {
         let wired = ComplexityAnalyzer::with_model(model);
 
         let ctx = AnalysisContext::default();
-        let baseline_findings =
-            baseline.analyze(dir.path(), std::slice::from_ref(&big), &ctx);
-        let wired_findings =
-            wired.analyze(dir.path(), std::slice::from_ref(&big), &ctx);
+        let baseline_findings = baseline.analyze(dir.path(), std::slice::from_ref(&big), &ctx);
+        let wired_findings = wired.analyze(dir.path(), std::slice::from_ref(&big), &ctx);
 
         assert_eq!(baseline_findings.len(), wired_findings.len());
         for (a, b) in baseline_findings.iter().zip(wired_findings.iter()) {

@@ -68,9 +68,11 @@ pub async fn run(args: VaultArgs) -> anyhow::Result<()> {
     match args.action {
         VaultAction::Enrich { path, force } => cmd_enrich(&path, force),
         VaultAction::Analyze { path, format } => cmd_analyze(&path, &format),
-        VaultAction::Suggest { path, min_score, max_per_file } => {
-            cmd_suggest(&path, min_score, max_per_file)
-        }
+        VaultAction::Suggest {
+            path,
+            min_score,
+            max_per_file,
+        } => cmd_suggest(&path, min_score, max_per_file),
         VaultAction::AutoLink { path, dry_run } => cmd_auto_link(&path, dry_run),
         VaultAction::Backlinks { path, dry_run } => cmd_backlinks(&path, dry_run),
     }
@@ -126,14 +128,36 @@ fn cmd_analyze(vault_path: &std::path::Path, format: &str) -> anyhow::Result<()>
     let mut table = comfy_table::Table::new();
     table.set_header(vec!["Metric", "Value"]);
     table.add_row(vec!["Total files", &metrics.total_files.to_string()]);
-    table.add_row(vec!["Files with links", &metrics.files_with_links.to_string()]);
+    table.add_row(vec![
+        "Files with links",
+        &metrics.files_with_links.to_string(),
+    ]);
     table.add_row(vec!["Total links", &metrics.total_links.to_string()]);
-    table.add_row(vec!["Avg links/file", &format!("{:.1}", metrics.avg_links_per_file)]);
-    table.add_row(vec!["Max links", &format!("{} ({})", metrics.max_links_in_file, metrics.max_links_file)]);
-    table.add_row(vec!["Orphan files", &format!("{} ({:.0}%)", metrics.orphan_files.len(), metrics.orphan_rate * 100.0)]);
+    table.add_row(vec![
+        "Avg links/file",
+        &format!("{:.1}", metrics.avg_links_per_file),
+    ]);
+    table.add_row(vec![
+        "Max links",
+        &format!("{} ({})", metrics.max_links_in_file, metrics.max_links_file),
+    ]);
+    table.add_row(vec![
+        "Orphan files",
+        &format!(
+            "{} ({:.0}%)",
+            metrics.orphan_files.len(),
+            metrics.orphan_rate * 100.0
+        ),
+    ]);
     table.add_row(vec!["Clusters", &metrics.clusters.to_string()]);
-    table.add_row(vec!["Broken links", &metrics.broken_links.len().to_string()]);
-    table.add_row(vec!["Link density", &format!("{:.2}", metrics.link_density)]);
+    table.add_row(vec![
+        "Broken links",
+        &metrics.broken_links.len().to_string(),
+    ]);
+    table.add_row(vec![
+        "Link density",
+        &format!("{:.2}", metrics.link_density),
+    ]);
     println!("{table}");
 
     let orphan_ok = metrics.orphan_rate < 0.10;
@@ -168,7 +192,11 @@ fn cmd_analyze(vault_path: &std::path::Path, format: &str) -> anyhow::Result<()>
     Ok(())
 }
 
-fn cmd_suggest(vault_path: &std::path::Path, min_score: f64, max_per_file: usize) -> anyhow::Result<()> {
+fn cmd_suggest(
+    vault_path: &std::path::Path,
+    min_score: f64,
+    max_per_file: usize,
+) -> anyhow::Result<()> {
     use clawft_graphify::vault::{analyze, suggest};
 
     let (nodes, _metrics) = analyze::analyze_vault(vault_path)?;
@@ -215,9 +243,10 @@ fn cmd_auto_link(vault_path: &PathBuf, dry_run: bool) -> anyhow::Result<()> {
         let content = std::fs::read_to_string(file_path)?;
         let doc = frontmatter::parse(&content);
         if let Some(title) = &doc.frontmatter.title
-            && title.len() >= 3 {
-                titles.push(title.clone());
-            }
+            && title.len() >= 3
+        {
+            titles.push(title.clone());
+        }
         if let Some(stem) = file_path.file_stem().and_then(|s| s.to_str()) {
             let name = stem.replace(['-', '_'], " ");
             if name.len() >= 3 && !titles.contains(&name) {
@@ -276,12 +305,16 @@ fn cmd_backlinks(vault_path: &PathBuf, dry_run: bool) -> anyhow::Result<()> {
             continue;
         }
 
-        let backlink_entries: Vec<(String, String)> = node.incoming.iter().filter_map(|src_key| {
-            let src_node = nodes.get(src_key)?;
-            let title = src_node.title.as_deref().unwrap_or(src_key);
-            let stem = std::path::Path::new(src_key).file_stem()?.to_str()?;
-            Some((stem.to_string(), title.to_string()))
-        }).collect();
+        let backlink_entries: Vec<(String, String)> = node
+            .incoming
+            .iter()
+            .filter_map(|src_key| {
+                let src_node = nodes.get(src_key)?;
+                let title = src_node.title.as_deref().unwrap_or(src_key);
+                let stem = std::path::Path::new(src_key).file_stem()?.to_str()?;
+                Some((stem.to_string(), title.to_string()))
+            })
+            .collect();
 
         if backlink_entries.is_empty() {
             continue;
@@ -294,10 +327,18 @@ fn cmd_backlinks(vault_path: &PathBuf, dry_run: bool) -> anyhow::Result<()> {
 
         let rel = node.path.strip_prefix(vault_path).unwrap_or(&node.path);
         if dry_run {
-            println!("Would add {} backlinks to: {}", backlink_entries.len(), rel.display());
+            println!(
+                "Would add {} backlinks to: {}",
+                backlink_entries.len(),
+                rel.display()
+            );
         } else {
             std::fs::write(&node.path, frontmatter::render(&doc))?;
-            println!("Added {} backlinks to: {}", backlink_entries.len(), rel.display());
+            println!(
+                "Added {} backlinks to: {}",
+                backlink_entries.len(),
+                rel.display()
+            );
         }
         updated += 1;
     }
@@ -325,7 +366,11 @@ fn collect_recursive(dir: &PathBuf, out: &mut Vec<PathBuf>) -> anyhow::Result<()
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
-        if name_str.starts_with('.') || name_str == "node_modules" || name_str == "dist" || name_str == "target" {
+        if name_str.starts_with('.')
+            || name_str == "node_modules"
+            || name_str == "dist"
+            || name_str == "target"
+        {
             continue;
         }
 

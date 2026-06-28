@@ -187,10 +187,9 @@ impl ToolProvider for BuiltinToolProvider {
 ///
 /// Accepts a skill (tool) name and JSON arguments, returns a future that
 /// resolves to either a success string or an error string.
-type SkillDispatchFn =
-    dyn Fn(&str, Value) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
-        + Send
-        + Sync;
+type SkillDispatchFn = dyn Fn(&str, Value) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
+    + Send
+    + Sync;
 
 /// A [`ToolProvider`] that exposes loaded skills as MCP tools.
 ///
@@ -247,7 +246,10 @@ impl SkillToolProvider {
 
     /// Number of currently registered skill tools.
     pub fn tool_count(&self) -> usize {
-        self.tools.read().expect("SkillToolProvider lock poisoned").len()
+        self.tools
+            .read()
+            .expect("SkillToolProvider lock poisoned")
+            .len()
     }
 }
 
@@ -350,9 +352,7 @@ impl ToolProvider for SkillToolProvider {
 ///
 /// This function lives in `clawft-services` (rather than `clawft-core`)
 /// because the output type `ToolDefinition` is defined here.
-pub fn skill_to_tool_definition(
-    skill: &clawft_types::skill::SkillDefinition,
-) -> ToolDefinition {
+pub fn skill_to_tool_definition(skill: &clawft_types::skill::SkillDefinition) -> ToolDefinition {
     let input_schema = if skill.variables.is_empty() {
         serde_json::json!({
             "type": "object",
@@ -601,10 +601,7 @@ mod tests {
             tool: "test".into(),
             reason: "nope".into(),
         };
-        assert_eq!(
-            err.to_string(),
-            "permission denied for tool 'test': nope"
-        );
+        assert_eq!(err.to_string(), "permission denied for tool 'test': nope");
     }
 
     #[test]
@@ -838,10 +835,9 @@ mod tests {
 
     #[test]
     fn skill_empty_provider() {
-        let provider = SkillToolProvider::new(
-            vec![],
-            |_name, _args| Box::pin(async { Ok("noop".to_string()) }),
-        );
+        let provider = SkillToolProvider::new(vec![], |_name, _args| {
+            Box::pin(async { Ok("noop".to_string()) })
+        });
         assert_eq!(provider.namespace(), "skill");
         assert_eq!(provider.tool_count(), 0);
         assert!(provider.list_tools().is_empty());
@@ -864,10 +860,7 @@ mod tests {
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["topic"].is_object());
         assert!(schema["properties"]["depth"].is_object());
-        assert_eq!(
-            schema["required"],
-            serde_json::json!(["topic", "depth"])
-        );
+        assert_eq!(schema["required"], serde_json::json!(["topic", "depth"]));
     }
 
     #[test]

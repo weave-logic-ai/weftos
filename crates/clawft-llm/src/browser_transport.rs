@@ -93,11 +93,7 @@ pub fn resolve_url(base_url: &str, path: &str, cors_proxy: Option<&str>) -> Stri
 /// * `headers` - Mutable reference to the header map to modify.
 /// * `browser_direct` - Whether the provider supports direct browser access.
 /// * `provider_name` - The provider name (used to determine which headers to add).
-pub fn add_browser_headers(
-    headers: &mut HeaderMap,
-    browser_direct: bool,
-    provider_name: &str,
-) {
+pub fn add_browser_headers(headers: &mut HeaderMap, browser_direct: bool, provider_name: &str) {
     if browser_direct {
         // Anthropic requires this header for direct browser access.
         // Other providers may need different headers in the future.
@@ -308,11 +304,7 @@ impl BrowserLlmClient {
 
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(classify_error(
-                status.as_u16(),
-                &body,
-                &request.model,
-            ));
+            return Err(classify_error(status.as_u16(), &body, &request.model));
         }
 
         // Read the SSE stream via bytes_stream (works on both native and WASM).
@@ -510,7 +502,9 @@ mod tests {
         let mut headers = HeaderMap::new();
         add_browser_headers(&mut headers, true, "anthropic");
         assert_eq!(
-            headers.get("anthropic-dangerous-direct-browser-access").unwrap(),
+            headers
+                .get("anthropic-dangerous-direct-browser-access")
+                .unwrap(),
             "true"
         );
     }
@@ -564,7 +558,10 @@ mod tests {
         );
         assert_eq!(client.api_key.as_deref(), Some("sk-browser-test"));
         assert!(client.browser_direct);
-        assert_eq!(client.cors_proxy.as_deref(), Some("https://proxy.example.com"));
+        assert_eq!(
+            client.cors_proxy.as_deref(),
+            Some("https://proxy.example.com")
+        );
     }
 
     #[test]
@@ -591,12 +588,8 @@ mod tests {
 
     #[test]
     fn client_resolve_api_key_explicit() {
-        let client = BrowserLlmClient::with_api_key(
-            test_config(),
-            "sk-explicit".into(),
-            false,
-            None,
-        );
+        let client =
+            BrowserLlmClient::with_api_key(test_config(), "sk-explicit".into(), false, None);
         let key = client.resolve_api_key().unwrap();
         assert_eq!(key, "sk-explicit");
     }
@@ -652,13 +645,19 @@ mod tests {
     #[test]
     fn classify_error_500() {
         let err = classify_error(500, "internal error", "gpt-4");
-        assert!(matches!(err, ProviderError::ServerError { status: 500, .. }));
+        assert!(matches!(
+            err,
+            ProviderError::ServerError { status: 500, .. }
+        ));
     }
 
     #[test]
     fn classify_error_503() {
         let err = classify_error(503, "service unavailable", "gpt-4");
-        assert!(matches!(err, ProviderError::ServerError { status: 503, .. }));
+        assert!(matches!(
+            err,
+            ProviderError::ServerError { status: 503, .. }
+        ));
     }
 
     #[test]

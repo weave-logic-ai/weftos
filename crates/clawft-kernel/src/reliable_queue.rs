@@ -201,8 +201,7 @@ impl ReliableQueue {
                 pending.attempts += 1;
                 pending.last_attempt = now;
 
-                let message_age_ms =
-                    pending.first_sent.elapsed().as_millis() as u64;
+                let message_age_ms = pending.first_sent.elapsed().as_millis() as u64;
                 let next_timeout = self.compute_next_timeout(
                     pending.attempts.saturating_sub(1),
                     message_age_ms,
@@ -234,9 +233,7 @@ impl ReliableQueue {
         // Hardcoded fallback — never changes behaviour.
         let backoff = self.config.initial_timeout.as_secs_f64()
             * self.config.backoff_multiplier.powi(attempt_idx as i32);
-        let fallback = Duration::from_secs_f64(
-            backoff.min(self.config.max_timeout.as_secs_f64()),
-        );
+        let fallback = Duration::from_secs_f64(backoff.min(self.config.max_timeout.as_secs_f64()));
 
         let Some(model_handle) = self.dead_letter_model.as_ref() else {
             return fallback;
@@ -247,11 +244,8 @@ impl ReliableQueue {
         if !model.is_trained() {
             return fallback;
         }
-        let (delay_ms, _should_discard) =
-            model.predict(attempt_idx, message_age_ms, queue_depth);
-        Duration::from_millis(delay_ms.min(
-            self.config.max_timeout.as_millis() as u64,
-        ))
+        let (delay_ms, _should_discard) = model.predict(attempt_idx, message_age_ms, queue_depth);
+        Duration::from_millis(delay_ms.min(self.config.max_timeout.as_millis() as u64))
     }
 
     /// Move deliveries that have exceeded max retries to the dead letter queue.
@@ -300,12 +294,7 @@ impl ReliableQueue {
     /// Discard-decision helper. Consults the optional
     /// [`DeadLetterModel`] when trained; otherwise uses the hardcoded
     /// `attempts > max_retries` rule.
-    fn should_discard(
-        &self,
-        attempts: u32,
-        message_age_ms: u64,
-        queue_depth: usize,
-    ) -> bool {
+    fn should_discard(&self, attempts: u32, message_age_ms: u64, queue_depth: usize) -> bool {
         // Hardcoded fallback — unchanged.
         let fallback = attempts > self.config.max_retries;
 
@@ -318,8 +307,7 @@ impl ReliableQueue {
         if !model.is_trained() {
             return fallback;
         }
-        let (_delay_ms, model_discard) =
-            model.predict(attempts, message_age_ms, queue_depth);
+        let (_delay_ms, model_discard) = model.predict(attempts, message_age_ms, queue_depth);
         // The model is advisory: we still enforce the hard max_retries
         // ceiling so a buggy model can never hold a message forever.
         fallback || model_discard
@@ -345,9 +333,7 @@ impl ReliableQueue {
 
     /// Cancel tracking for a specific message.
     pub fn cancel(&self, correlation_id: &str) -> Option<KernelMessage> {
-        self.pending
-            .remove(correlation_id)
-            .map(|(_, p)| p.message)
+        self.pending.remove(correlation_id).map(|(_, p)| p.message)
     }
 
     /// Calculate the timeout for a given attempt number.
@@ -625,8 +611,7 @@ mod tests {
         if let Some(inner) = json.get_mut("inner").and_then(|v| v.as_object_mut()) {
             inner.insert("trained".into(), serde_json::Value::Bool(true));
         }
-        let forced: crate::eml_kernel::DeadLetterModel =
-            serde_json::from_value(json).unwrap();
+        let forced: crate::eml_kernel::DeadLetterModel = serde_json::from_value(json).unwrap();
         assert!(forced.is_trained());
 
         let model = Arc::new(std::sync::Mutex::new(forced));

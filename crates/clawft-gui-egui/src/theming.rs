@@ -20,15 +20,15 @@ pub fn apply(ctx: &egui::Context) {
 /// single warm gold used to signal active/focused state only.
 pub struct Tokens {
     // Surfaces
-    pub bg_app: egui::Color32,       // app root
-    pub bg_panel: egui::Color32,     // side panels, dock, tray
-    pub bg_sidebar: egui::Color32,   // desktop sidebar (lifted neutral charcoal — DESIGN.md §2.1)
-    pub bg_surface: egui::Color32,   // cards / windows / inset frames
-    pub bg_hover: egui::Color32,     // hover state
-    pub bg_active: egui::Color32,    // pressed / selected
+    pub bg_app: egui::Color32,     // app root
+    pub bg_panel: egui::Color32,   // side panels, dock, tray
+    pub bg_sidebar: egui::Color32, // desktop sidebar (lifted neutral charcoal — DESIGN.md §2.1)
+    pub bg_surface: egui::Color32, // cards / windows / inset frames
+    pub bg_hover: egui::Color32,   // hover state
+    pub bg_active: egui::Color32,  // pressed / selected
     // Strokes
-    pub stroke_hair: egui::Color32,  // 1px separators
-    pub stroke_soft: egui::Color32,  // 1px panel edges
+    pub stroke_hair: egui::Color32, // 1px separators
+    pub stroke_soft: egui::Color32, // 1px panel edges
     // Text
     pub text_primary: egui::Color32,
     pub text_secondary: egui::Color32,
@@ -90,8 +90,7 @@ impl Tokens {
         v.window_stroke = egui::Stroke::new(1.0, self.stroke_soft);
         // egui 0.34 renamed `*_rounding` → `*_corner_radius` and switched
         // CornerRadius from f32 to u8.
-        v.window_corner_radius =
-            egui::CornerRadius::same((self.rounding * 2.0).round() as u8);
+        v.window_corner_radius = egui::CornerRadius::same((self.rounding * 2.0).round() as u8);
         v.menu_corner_radius = egui::CornerRadius::same(self.rounding.round() as u8);
         v.popup_shadow = egui::Shadow {
             offset: [0, 4],
@@ -197,8 +196,7 @@ mod token_contract {
     #[track_caller]
     fn assert_token(actual: Color32, expected: Color32, name: &str) {
         assert_eq!(
-            actual,
-            expected,
+            actual, expected,
             "token `{name}` drifted from DESIGN.md §2.1 / tokens.md"
         );
     }
@@ -207,12 +205,24 @@ mod token_contract {
     fn palette_matches_design_md() {
         let t = Tokens::default();
         // Surfaces (DESIGN.md §2.1 palette table)
-        assert_token(t.bg_app,     Color32::from_rgb(0x08, 0x08, 0x0A), "bg_app");
-        assert_token(t.bg_panel,   Color32::from_rgb(0x0E, 0x0E, 0x12), "bg_panel");
-        assert_token(t.bg_sidebar, Color32::from_rgb(0x2A, 0x2A, 0x30), "bg_sidebar");
-        assert_token(t.bg_surface, Color32::from_rgb(0x16, 0x16, 0x1C), "bg_surface");
-        assert_token(t.bg_hover,   Color32::from_rgb(0x20, 0x20, 0x28), "bg_hover");
-        assert_token(t.bg_active,  Color32::from_rgb(0x2C, 0x2C, 0x36), "bg_active");
+        assert_token(t.bg_app, Color32::from_rgb(0x08, 0x08, 0x0A), "bg_app");
+        assert_token(t.bg_panel, Color32::from_rgb(0x0E, 0x0E, 0x12), "bg_panel");
+        assert_token(
+            t.bg_sidebar,
+            Color32::from_rgb(0x2A, 0x2A, 0x30),
+            "bg_sidebar",
+        );
+        assert_token(
+            t.bg_surface,
+            Color32::from_rgb(0x16, 0x16, 0x1C),
+            "bg_surface",
+        );
+        assert_token(t.bg_hover, Color32::from_rgb(0x20, 0x20, 0x28), "bg_hover");
+        assert_token(
+            t.bg_active,
+            Color32::from_rgb(0x2C, 0x2C, 0x36),
+            "bg_active",
+        );
         // Strokes (white @ low alpha; egui stores premultiplied)
         assert_token(
             t.stroke_hair,
@@ -225,9 +235,17 @@ mod token_contract {
             "stroke_soft",
         );
         // Text
-        assert_token(t.text_primary,   Color32::from_rgb(0xE0, 0xDE, 0xE8), "text_primary");
-        assert_token(t.text_secondary, Color32::from_rgb(0xAA, 0xA8, 0xB4), "text_secondary");
-        assert_token(t.text_dim,       Color32::from_rgb(0x70, 0x6E, 0x7A), "text_dim");
+        assert_token(
+            t.text_primary,
+            Color32::from_rgb(0xE0, 0xDE, 0xE8),
+            "text_primary",
+        );
+        assert_token(
+            t.text_secondary,
+            Color32::from_rgb(0xAA, 0xA8, 0xB4),
+            "text_secondary",
+        );
+        assert_token(t.text_dim, Color32::from_rgb(0x70, 0x6E, 0x7A), "text_dim");
         // Accent
         assert_token(t.accent, Color32::from_rgb(0xC4, 0xA2, 0x5C), "accent");
         assert_token(
@@ -236,7 +254,7 @@ mod token_contract {
             "accent_dim",
         );
         // State
-        assert_token(t.ok,   Color32::from_rgb(0x6E, 0xC8, 0x96), "ok");
+        assert_token(t.ok, Color32::from_rgb(0x6E, 0xC8, 0x96), "ok");
         assert_token(t.warn, Color32::from_rgb(0xDC, 0xAF, 0x55), "warn");
         assert_token(t.crit, Color32::from_rgb(0xDC, 0x5F, 0x5F), "crit");
     }

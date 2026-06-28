@@ -247,10 +247,7 @@ impl LlmEmbeddingProvider {
     }
 
     /// Perform a batched LLM API embedding call.
-    async fn call_llm_api_batch(
-        &self,
-        _texts: &[&str],
-    ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+    async fn call_llm_api_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
         if !self.config.api_available {
             return Err(EmbeddingError::BackendError(
                 "LLM API not configured; using fallback".to_string(),
@@ -349,7 +346,9 @@ fn onnx_model_search_paths() -> Vec<std::path::PathBuf> {
     let mut paths = Vec::new();
 
     // Project-local.
-    paths.push(std::path::PathBuf::from(format!(".weftos/models/{model_name}")));
+    paths.push(std::path::PathBuf::from(format!(
+        ".weftos/models/{model_name}"
+    )));
 
     // User-global.
     if let Some(home) = dirs_home() {
@@ -366,9 +365,7 @@ fn onnx_model_search_paths() -> Vec<std::path::PathBuf> {
 
 /// Get the user's home directory.
 fn dirs_home() -> Option<std::path::PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(std::path::PathBuf::from)
+    std::env::var("HOME").ok().map(std::path::PathBuf::from)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────

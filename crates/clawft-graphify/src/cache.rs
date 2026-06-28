@@ -126,10 +126,11 @@ impl ContentCache {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("json")
                     && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-                        && !live_hashes.contains(stem)
-                            && fs::remove_file(&path).is_ok() {
-                                removed += 1;
-                            }
+                    && !live_hashes.contains(stem)
+                    && fs::remove_file(&path).is_ok()
+                {
+                    removed += 1;
+                }
             }
         }
         removed

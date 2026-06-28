@@ -73,7 +73,8 @@ impl NoiseChannel {
         config: &NoiseConfig,
     ) -> Result<Self, MeshError> {
         let builder = snow::Builder::new(
-            "Noise_XX_25519_ChaChaPoly_SHA256".parse()
+            "Noise_XX_25519_ChaChaPoly_SHA256"
+                .parse()
                 .map_err(|e| MeshError::Handshake(format!("bad noise params: {e}")))?,
         )
         .local_private_key(&config.local_private_key)
@@ -88,28 +89,36 @@ impl NoiseChannel {
         // XX pattern: initiator sends → responder sends → initiator sends
 
         // -> e
-        let len = handshake.write_message(&[], &mut buf)
+        let len = handshake
+            .write_message(&[], &mut buf)
             .map_err(|e| MeshError::Handshake(format!("write msg 1: {e}")))?;
         stream.send(&buf[..len]).await?;
 
         // <- e, ee, s, es
         let msg = stream.recv().await?;
-        handshake.read_message(&msg, &mut buf)
+        handshake
+            .read_message(&msg, &mut buf)
             .map_err(|e| MeshError::Handshake(format!("read msg 2: {e}")))?;
 
         // -> s, se
-        let len = handshake.write_message(&[], &mut buf)
+        let len = handshake
+            .write_message(&[], &mut buf)
             .map_err(|e| MeshError::Handshake(format!("write msg 3: {e}")))?;
         stream.send(&buf[..len]).await?;
 
         let remote_static = handshake.get_remote_static().map(|k| k.to_vec());
 
-        let transport = handshake.into_transport_mode()
+        let transport = handshake
+            .into_transport_mode()
             .map_err(|e| MeshError::Handshake(format!("transport mode: {e}")))?;
 
         tracing::info!("noise XX handshake complete (initiator)");
 
-        Ok(Self { stream, transport, remote_static })
+        Ok(Self {
+            stream,
+            transport,
+            remote_static,
+        })
     }
 
     /// Perform a Noise XX handshake as the responder and return an encrypted channel.
@@ -118,7 +127,8 @@ impl NoiseChannel {
         config: &NoiseConfig,
     ) -> Result<Self, MeshError> {
         let builder = snow::Builder::new(
-            "Noise_XX_25519_ChaChaPoly_SHA256".parse()
+            "Noise_XX_25519_ChaChaPoly_SHA256"
+                .parse()
                 .map_err(|e| MeshError::Handshake(format!("bad noise params: {e}")))?,
         )
         .local_private_key(&config.local_private_key)
@@ -134,27 +144,35 @@ impl NoiseChannel {
 
         // <- e
         let msg = stream.recv().await?;
-        handshake.read_message(&msg, &mut buf)
+        handshake
+            .read_message(&msg, &mut buf)
             .map_err(|e| MeshError::Handshake(format!("read msg 1: {e}")))?;
 
         // -> e, ee, s, es
-        let len = handshake.write_message(&[], &mut buf)
+        let len = handshake
+            .write_message(&[], &mut buf)
             .map_err(|e| MeshError::Handshake(format!("write msg 2: {e}")))?;
         stream.send(&buf[..len]).await?;
 
         // <- s, se
         let msg = stream.recv().await?;
-        handshake.read_message(&msg, &mut buf)
+        handshake
+            .read_message(&msg, &mut buf)
             .map_err(|e| MeshError::Handshake(format!("read msg 3: {e}")))?;
 
         let remote_static = handshake.get_remote_static().map(|k| k.to_vec());
 
-        let transport = handshake.into_transport_mode()
+        let transport = handshake
+            .into_transport_mode()
             .map_err(|e| MeshError::Handshake(format!("transport mode: {e}")))?;
 
         tracing::info!("noise XX handshake complete (responder)");
 
-        Ok(Self { stream, transport, remote_static })
+        Ok(Self {
+            stream,
+            transport,
+            remote_static,
+        })
     }
 }
 
@@ -162,7 +180,9 @@ impl NoiseChannel {
 impl EncryptedChannel for NoiseChannel {
     async fn send_encrypted(&mut self, plaintext: &[u8]) -> Result<(), MeshError> {
         let mut buf = vec![0u8; plaintext.len() + 16 + 2]; // AEAD tag + length prefix room
-        let len = self.transport.write_message(plaintext, &mut buf)
+        let len = self
+            .transport
+            .write_message(plaintext, &mut buf)
             .map_err(|e| MeshError::Io(format!("encrypt: {e}")))?;
         self.stream.send(&buf[..len]).await
     }
@@ -170,7 +190,9 @@ impl EncryptedChannel for NoiseChannel {
     async fn recv_encrypted(&mut self) -> Result<Vec<u8>, MeshError> {
         let ciphertext = self.stream.recv().await?;
         let mut buf = vec![0u8; ciphertext.len()];
-        let len = self.transport.read_message(&ciphertext, &mut buf)
+        let len = self
+            .transport
+            .read_message(&ciphertext, &mut buf)
             .map_err(|e| MeshError::Io(format!("decrypt: {e}")))?;
         buf.truncate(len);
         Ok(buf)
@@ -262,10 +284,7 @@ pub struct KeyRotationState {
 
 impl KeyRotationState {
     /// Create a new key rotation state at generation 0.
-    pub fn new(
-        max_lifetime: std::time::Duration,
-        grace_period: std::time::Duration,
-    ) -> Self {
+    pub fn new(max_lifetime: std::time::Duration, grace_period: std::time::Duration) -> Self {
         Self {
             generation: 0,
             established_at: std::time::Instant::now(),
@@ -388,7 +407,11 @@ impl KemUpgradeProtocol {
     /// Create a new KEM upgrade protocol from local and remote configs.
     pub fn new(local: KemConfig, remote: KemConfig) -> Self {
         let result = negotiate_kem(&local, &remote);
-        Self { local, remote, result }
+        Self {
+            local,
+            remote,
+            result,
+        }
     }
 
     /// Whether sync streams should wait for KEM to complete.
@@ -508,8 +531,8 @@ mod mock {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::mock::MockStream;
+    use super::*;
 
     #[test]
     fn noise_pattern_variants() {

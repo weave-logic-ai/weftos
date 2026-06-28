@@ -44,10 +44,7 @@ pub fn show(
     };
     super::paint_heading(ui, rect, &format!("Network · {}", tab_name));
 
-    let body = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.top() + 64.0),
-        rect.max,
-    );
+    let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + 64.0), rect.max);
 
     // Whether the bound substrate path has data. Drives the
     // empty/loading/offline branch decision below.
@@ -58,10 +55,7 @@ pub fn show(
     };
 
     let (what, hint) = match tab {
-        NetworkTab::Mesh => (
-            "No mesh peers",
-            "Run `weft mesh join <key>` to connect.",
-        ),
+        NetworkTab::Mesh => ("No mesh peers", "Run `weft mesh join <key>` to connect."),
         NetworkTab::WiFi => (
             "Wi-Fi adapter not detected",
             "Install with `weft adapter install wifi`.",
@@ -92,7 +86,11 @@ pub fn show(
             desktop::render_chip_detail(&mut child, desk, tray::ChipId::Mesh, live, snap);
         }
         NetworkTab::WiFi => {
-            render_json_dump(&mut child, "substrate/network/wifi", snap.network_wifi.as_ref());
+            render_json_dump(
+                &mut child,
+                "substrate/network/wifi",
+                snap.network_wifi.as_ref(),
+            );
         }
         NetworkTab::Bluetooth => {
             render_json_dump(&mut child, "substrate/bluetooth", snap.bluetooth.as_ref());
@@ -104,11 +102,7 @@ pub fn show(
 /// scrollable monospace area. Keeps the body honest while the
 /// WEFT-followup tickets graduate Wi-Fi / Bluetooth into composer
 /// surfaces of their own.
-fn render_json_dump(
-    ui: &mut egui::Ui,
-    path: &str,
-    value: Option<&serde_json::Value>,
-) {
+fn render_json_dump(ui: &mut egui::Ui, path: &str, value: Option<&serde_json::Value>) {
     ui.horizontal(|ui| {
         ui.monospace(path);
     });

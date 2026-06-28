@@ -83,8 +83,7 @@ fn derive_persistence_key() -> Vec<u8> {
 /// Compute the HMAC-SHA256 of `body` using the persistence key.
 fn sign_body(body: &[u8]) -> String {
     let key = derive_persistence_key();
-    let mut mac = HmacSha256::new_from_slice(&key)
-        .expect("HMAC-SHA256 accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(&key).expect("HMAC-SHA256 accepts any key length");
     mac.update(body);
     let result = mac.finalize().into_bytes();
     hex_encode(&result)
@@ -321,12 +320,7 @@ impl CostTracker {
     /// - spent increases by actual_cost
     ///
     /// Per-user spend is clamped to 0.0 minimum.
-    pub fn reconcile_actual(
-        &self,
-        sender_id: &str,
-        estimated_cost_usd: f64,
-        actual_cost_usd: f64,
-    ) {
+    pub fn reconcile_actual(&self, sender_id: &str, estimated_cost_usd: f64, actual_cost_usd: f64) {
         let mut spends = self.spends.write().expect("cost tracker lock poisoned");
         let entry = spends
             .entry(sender_id.to_string())
@@ -485,8 +479,7 @@ impl CostTracker {
             }
         };
 
-        let json = serde_json::to_string_pretty(&snapshot)
-            .map_err(std::io::Error::other)?;
+        let json = serde_json::to_string_pretty(&snapshot).map_err(std::io::Error::other)?;
 
         // WEFT-28: prepend an HMAC-SHA256 header line. The file format
         // is two parts: header + body, separated by a newline. Older
@@ -651,11 +644,7 @@ impl CostTracker {
 
 impl std::fmt::Debug for CostTracker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let user_count = self
-            .spends
-            .read()
-            .map(|s| s.len())
-            .unwrap_or(0);
+        let user_count = self.spends.read().map(|s| s.len()).unwrap_or(0);
         f.debug_struct("CostTracker")
             .field("users", &user_count)
             .field("reset_hour_utc", &self.reset_hour_utc)
@@ -720,7 +709,10 @@ mod tests {
     fn reserve_budget_daily_limit_exceeded() {
         let t = tracker();
         // Reserve 4.5 of 5.0 daily limit.
-        assert_eq!(t.reserve_budget("alice", 4.5, 5.0, 100.0), BudgetResult::Approved);
+        assert_eq!(
+            t.reserve_budget("alice", 4.5, 5.0, 100.0),
+            BudgetResult::Approved
+        );
         // Next 1.0 would exceed.
         let result = t.reserve_budget("alice", 1.0, 5.0, 100.0);
         assert!(matches!(result, BudgetResult::DailyLimitExceeded { .. }));
@@ -739,7 +731,10 @@ mod tests {
     #[test]
     fn reserve_budget_monthly_limit_exceeded() {
         let t = tracker();
-        assert_eq!(t.reserve_budget("alice", 9.5, 20.0, 10.0), BudgetResult::Approved);
+        assert_eq!(
+            t.reserve_budget("alice", 9.5, 20.0, 10.0),
+            BudgetResult::Approved
+        );
         let result = t.reserve_budget("alice", 1.0, 20.0, 10.0);
         assert!(matches!(result, BudgetResult::MonthlyLimitExceeded { .. }));
     }
@@ -757,7 +752,10 @@ mod tests {
     #[test]
     fn reconcile_actual_lower_cost() {
         let t = tracker();
-        assert_eq!(t.reserve_budget("alice", 3.00, 10.0, 100.0), BudgetResult::Approved);
+        assert_eq!(
+            t.reserve_budget("alice", 3.00, 10.0, 100.0),
+            BudgetResult::Approved
+        );
         t.reconcile_actual("alice", 3.00, 2.00);
         let (daily, monthly) = t.get_spend("alice");
         // After reconcile: reserved removed (3.0), spent added (2.0).
@@ -771,7 +769,10 @@ mod tests {
     #[test]
     fn reconcile_actual_higher_cost() {
         let t = tracker();
-        assert_eq!(t.reserve_budget("alice", 2.00, 10.0, 100.0), BudgetResult::Approved);
+        assert_eq!(
+            t.reserve_budget("alice", 2.00, 10.0, 100.0),
+            BudgetResult::Approved
+        );
         t.reconcile_actual("alice", 2.00, 3.50);
         let (daily, monthly) = t.get_spend("alice");
         // reserved removed (2.0), spent added (3.5). effective = 3.5
@@ -895,9 +896,7 @@ mod tests {
         }
 
         // 10 users * 100 records * $0.01 = $1.00 each, $10.00 total.
-        let total: f64 = (0..10)
-            .map(|i| t.get_spend(&format!("user_{i}")).0)
-            .sum();
+        let total: f64 = (0..10).map(|i| t.get_spend(&format!("user_{i}")).0).sum();
         assert!((total - 10.0).abs() < 0.01);
     }
 
@@ -1005,8 +1004,20 @@ mod tests {
     #[test]
     fn budget_result_is_approved() {
         assert!(BudgetResult::Approved.is_approved());
-        assert!(!BudgetResult::DailyLimitExceeded { spent: 5.0, limit: 5.0 }.is_approved());
-        assert!(!BudgetResult::MonthlyLimitExceeded { spent: 100.0, limit: 100.0 }.is_approved());
+        assert!(
+            !BudgetResult::DailyLimitExceeded {
+                spent: 5.0,
+                limit: 5.0
+            }
+            .is_approved()
+        );
+        assert!(
+            !BudgetResult::MonthlyLimitExceeded {
+                spent: 100.0,
+                limit: 100.0
+            }
+            .is_approved()
+        );
     }
 
     // ── Reserve does not record on failure ──────────────────────────
@@ -1014,7 +1025,10 @@ mod tests {
     #[test]
     fn reserve_budget_no_record_on_failure() {
         let t = tracker();
-        assert_eq!(t.reserve_budget("alice", 4.0, 5.0, 100.0), BudgetResult::Approved);
+        assert_eq!(
+            t.reserve_budget("alice", 4.0, 5.0, 100.0),
+            BudgetResult::Approved
+        );
         // This should fail and NOT add 2.0.
         let result = t.reserve_budget("alice", 2.0, 5.0, 100.0);
         assert!(matches!(result, BudgetResult::DailyLimitExceeded { .. }));

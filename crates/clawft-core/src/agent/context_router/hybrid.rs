@@ -152,8 +152,7 @@ mod tests {
     async fn hybrid_returns_primary_when_non_empty() {
         // Primary has a real signal (skills + non-zero hint) — the
         // chain returns it verbatim and never touches the fallback.
-        let primary_decision =
-            ContextDecision::new(vec!["x".into()], None, 0.1);
+        let primary_decision = ContextDecision::new(vec!["x".into()], None, 0.1);
         let primary = Arc::new(StubRouter::new(primary_decision));
         let fallback = Arc::new(StubRouter::new(ContextDecision::default()));
 
@@ -219,8 +218,7 @@ mod tests {
     #[tokio::test]
     async fn hybrid_does_not_call_fallback_when_primary_has_skills() {
         // Skills-only primary decision counts as non-empty.
-        let primary_decision =
-            ContextDecision::new(vec!["alpha".into(), "beta".into()], None, 0.0);
+        let primary_decision = ContextDecision::new(vec!["alpha".into(), "beta".into()], None, 0.0);
         let primary = Arc::new(StubRouter::new(primary_decision));
         let fallback = Arc::new(StubRouter::new(ContextDecision::default()));
 
@@ -266,8 +264,7 @@ mod tests {
         // skills + no archetype + no tool_subset. This guards the v1
         // classifier's "complexity-only" outputs (it can return just
         // `{archetype: ..., complexity: -0.2}` without skills).
-        let primary_decision =
-            ContextDecision::new(Vec::new(), None, -0.2);
+        let primary_decision = ContextDecision::new(Vec::new(), None, -0.2);
         let primary = Arc::new(StubRouter::new(primary_decision));
         let fallback = Arc::new(StubRouter::new(ContextDecision::default()));
 

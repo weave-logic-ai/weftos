@@ -11,16 +11,16 @@ use clawft_gui_egui::theming;
 use eframe::egui;
 use egui_demo_lib::{ColorTest, DemoWindows};
 
+#[path = "demo_lab_vendored/custom3d_glow.rs"]
+mod custom3d_glow;
 #[path = "demo_lab_vendored/fractal_clock.rs"]
 mod fractal_clock;
 #[path = "demo_lab_vendored/http_app.rs"]
 mod http_app;
-#[path = "demo_lab_vendored/custom3d_glow.rs"]
-mod custom3d_glow;
 
+use custom3d_glow::Custom3d;
 use fractal_clock::FractalClock;
 use http_app::HttpApp;
-use custom3d_glow::Custom3d;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
@@ -104,7 +104,11 @@ impl DemoLab {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Theme toggle — the undeniable proof. Flip and watch the widgets change.
-                let lbl = if self.theme_on { "WeftOS theme: on" } else { "WeftOS theme: OFF" };
+                let lbl = if self.theme_on {
+                    "WeftOS theme: on"
+                } else {
+                    "WeftOS theme: OFF"
+                };
                 if ui.toggle_value(&mut self.theme_on, lbl).changed() {
                     // handled in update() to avoid double-apply this frame
                 }
@@ -125,7 +129,10 @@ fn swatch(ui: &mut egui::Ui, color: egui::Color32, label: &str) {
         rect,
         2.0,
         color,
-        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 36)),
+        egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 36),
+        ),
         egui::StrokeKind::Inside,
     );
     ui.label(egui::RichText::new(label).small().weak());
@@ -193,10 +200,8 @@ impl eframe::App for DemoLab {
                 None => {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         ui.label(
-                            egui::RichText::new(
-                                "glow backend not available — Custom 3D disabled",
-                            )
-                            .weak(),
+                            egui::RichText::new("glow backend not available — Custom 3D disabled")
+                                .weak(),
                         );
                     });
                 }

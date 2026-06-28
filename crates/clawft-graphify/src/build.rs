@@ -6,11 +6,11 @@
 
 use std::collections::HashSet;
 
+use crate::GraphifyError;
 use crate::entity::EntityId;
 use crate::model::{Entity, ExtractionResult, KnowledgeGraph};
 use crate::relationship::Relationship;
 use crate::validation::validate_extraction;
-use crate::GraphifyError;
 
 /// Chain event kind for graph build completion.
 pub const EVENT_KIND_GRAPHIFY_BUILD: &str = "graphify.build";
@@ -158,10 +158,9 @@ pub fn merge(
                 rel.target.clone(),
                 format!("{:?}", rel.relation_type),
             );
-            if existing_sigs.insert(sig)
-                && existing.add_relationship(rel.clone()).is_some() {
-                    stats.relationships_added += 1;
-                }
+            if existing_sigs.insert(sig) && existing.add_relationship(rel.clone()).is_some() {
+                stats.relationships_added += 1;
+            }
         }
     }
 
@@ -210,8 +209,14 @@ pub fn build_from_json(data: &serde_json::Value) -> Result<KnowledgeGraph, Graph
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let source_file = node.get("source_file").and_then(|v| v.as_str()).map(String::from);
-            let source_location = node.get("source_location").and_then(|v| v.as_str()).map(String::from);
+            let source_file = node
+                .get("source_file")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let source_location = node
+                .get("source_location")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let file_type_str = node
                 .get("file_type")
                 .and_then(|v| v.as_str())
@@ -231,7 +236,10 @@ pub fn build_from_json(data: &serde_json::Value) -> Result<KnowledgeGraph, Graph
                 source_file,
                 source_location,
                 file_type,
-                metadata: node.get("metadata").cloned().unwrap_or(serde_json::json!({})),
+                metadata: node
+                    .get("metadata")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({})),
                 iri: None,
                 legacy_id: Some(legacy_id),
             };
@@ -252,12 +260,10 @@ pub fn build_from_json(data: &serde_json::Value) -> Result<KnowledgeGraph, Graph
                 .get("confidence")
                 .and_then(|v| v.as_str())
                 .unwrap_or("EXTRACTED");
-            let weight = edge
-                .get("weight")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(1.0) as f32;
+            let weight = edge.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
 
-            let confidence = Confidence::from_str_loose(confidence_str).unwrap_or(Confidence::Extracted);
+            let confidence =
+                Confidence::from_str_loose(confidence_str).unwrap_or(Confidence::Extracted);
             let relation_type = match relation_str {
                 "calls" => RelationType::Calls,
                 "imports" => RelationType::Imports,
@@ -280,8 +286,14 @@ pub fn build_from_json(data: &serde_json::Value) -> Result<KnowledgeGraph, Graph
                 relation_type,
                 confidence,
                 weight,
-                source_file: edge.get("source_file").and_then(|v| v.as_str()).map(String::from),
-                source_location: edge.get("source_location").and_then(|v| v.as_str()).map(String::from),
+                source_file: edge
+                    .get("source_file")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                source_location: edge
+                    .get("source_location")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
                 metadata: serde_json::json!({
                     "_src": src_str,
                     "_tgt": tgt_str,
@@ -330,7 +342,12 @@ mod tests {
 
     fn sample_extraction(name: &str) -> ExtractionResult {
         let e1 = Entity {
-            id: EntityId::new(&DomainTag::Code, &EntityType::Module, name, &format!("{name}.py")),
+            id: EntityId::new(
+                &DomainTag::Code,
+                &EntityType::Module,
+                name,
+                &format!("{name}.py"),
+            ),
             entity_type: EntityType::Module,
             label: name.into(),
             source_file: Some(format!("{name}.py")),
@@ -437,8 +454,10 @@ mod tests {
     }
 
     fn make_rel_between(
-        src_name: &str, src_file: &str,
-        tgt_name: &str, tgt_file: &str,
+        src_name: &str,
+        src_file: &str,
+        tgt_name: &str,
+        tgt_file: &str,
     ) -> Relationship {
         Relationship {
             source: EntityId::new(&DomainTag::Code, &EntityType::Module, src_name, src_file),
@@ -525,7 +544,9 @@ mod tests {
 
         // Try to add the same relationship again via merge.
         let mut new_ext = ExtractionResult::default();
-        new_ext.relationships.push(make_rel_between("auth", "auth.py", "db", "db.py"));
+        new_ext
+            .relationships
+            .push(make_rel_between("auth", "auth.py", "db", "db.py"));
         let stats = merge(&mut kg, &[new_ext], &[]);
 
         // Should not add a duplicate.
@@ -541,7 +562,9 @@ mod tests {
         assert_eq!(kg.relationship_count(), 0);
 
         let mut new_ext = ExtractionResult::default();
-        new_ext.relationships.push(make_rel_between("auth", "auth.py", "db", "db.py"));
+        new_ext
+            .relationships
+            .push(make_rel_between("auth", "auth.py", "db", "db.py"));
         let stats = merge(&mut kg, &[new_ext], &[]);
 
         assert_eq!(kg.relationship_count(), 1);
@@ -561,14 +584,10 @@ mod tests {
         updated_auth.entities[0].label = "auth_updated".into();
         let new_api = make_extraction("api", "api.py");
 
-        let stats = merge(
-            &mut kg,
-            &[updated_auth, new_api],
-            &["db.py".to_string()],
-        );
+        let stats = merge(&mut kg, &[updated_auth, new_api], &["db.py".to_string()]);
 
         assert_eq!(kg.entity_count(), 2); // auth + api (db removed)
-        assert_eq!(stats.entities_added, 1);   // api
+        assert_eq!(stats.entities_added, 1); // api
         assert_eq!(stats.entities_updated, 1); // auth
         assert_eq!(stats.entities_removed, 1); // db
     }

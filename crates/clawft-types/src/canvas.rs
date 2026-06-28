@@ -612,7 +612,10 @@ mod tests {
         assert_eq!(json["fields"][0]["name"], "name");
         assert_eq!(json["fields"][0]["required"], true);
         assert_eq!(json["fields"][1]["min"], 0.0);
-        assert_eq!(json["fields"][2]["options"], serde_json::json!(["Admin", "User", "Guest"]));
+        assert_eq!(
+            json["fields"][2]["options"],
+            serde_json::json!(["Admin", "User", "Guest"])
+        );
     }
 
     #[test]
@@ -740,9 +743,7 @@ mod tests {
 
     #[test]
     fn serialize_remove_command() {
-        let cmd = CanvasCommand::Remove {
-            id: "el-3".into(),
-        };
+        let cmd = CanvasCommand::Remove { id: "el-3".into() };
         let json = serde_json::to_value(&cmd).unwrap();
         assert_eq!(json["command"], "remove");
         assert_eq!(json["id"], "el-3");
@@ -834,10 +835,7 @@ mod tests {
         });
         let interaction: CanvasInteraction = serde_json::from_value(json).unwrap();
         match interaction {
-            CanvasInteraction::Click {
-                element_id,
-                action,
-            } => {
+            CanvasInteraction::Click { element_id, action } => {
                 assert_eq!(element_id, "btn-x");
                 assert_eq!(action, "delete");
             }
@@ -854,10 +852,7 @@ mod tests {
         });
         let interaction: CanvasInteraction = serde_json::from_value(json).unwrap();
         match interaction {
-            CanvasInteraction::FormSubmit {
-                element_id,
-                values,
-            } => {
+            CanvasInteraction::FormSubmit { element_id, values } => {
                 assert_eq!(element_id, "form-2");
                 assert_eq!(values.get("name").unwrap(), "Bob");
             }
@@ -951,8 +946,14 @@ mod tests {
             id: "chart-1".into(),
             element: CanvasElement::Chart {
                 data: vec![
-                    ChartDataPoint { label: "A".into(), value: 10.0 },
-                    ChartDataPoint { label: "B".into(), value: 20.0 },
+                    ChartDataPoint {
+                        label: "A".into(),
+                        value: 10.0,
+                    },
+                    ChartDataPoint {
+                        label: "B".into(),
+                        value: 20.0,
+                    },
                 ],
                 chart_type: "bar".into(),
                 title: None,

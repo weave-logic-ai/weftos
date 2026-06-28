@@ -139,17 +139,16 @@ impl DiscoveryBackend for MdnsDiscovery {
 
     async fn start(&mut self) -> Result<(), DiscoveryError> {
         // Bind to INADDR_ANY on the mDNS port (or any port as fallback).
-        let socket = match UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MDNS_PORT))
-            .await
-        {
-            Ok(s) => s,
-            Err(_) => {
-                // Port 5353 may be in use (systemd-resolved, avahi, etc.).
-                UdpSocket::bind("0.0.0.0:0")
-                    .await
-                    .map_err(|e| DiscoveryError::Backend(format!("bind failed: {e}")))?
-            }
-        };
+        let socket =
+            match UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MDNS_PORT)).await {
+                Ok(s) => s,
+                Err(_) => {
+                    // Port 5353 may be in use (systemd-resolved, avahi, etc.).
+                    UdpSocket::bind("0.0.0.0:0")
+                        .await
+                        .map_err(|e| DiscoveryError::Backend(format!("bind failed: {e}")))?
+                }
+            };
 
         // Join the multicast group — best effort (may fail in containers).
         let _ = socket.join_multicast_v4(MDNS_MULTICAST_ADDR, Ipv4Addr::UNSPECIFIED);

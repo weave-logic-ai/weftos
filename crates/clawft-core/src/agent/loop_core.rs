@@ -357,10 +357,7 @@ impl<P: Platform> AgentLoop<P> {
     /// that gates every tool call against the agent's allowlist before
     /// dispatch. Without this attached the agent loop runs un-sandboxed
     /// (legacy behaviour).
-    pub fn with_sandbox(
-        mut self,
-        sandbox: Arc<crate::agent::sandbox::SandboxEnforcer>,
-    ) -> Self {
+    pub fn with_sandbox(mut self, sandbox: Arc<crate::agent::sandbox::SandboxEnforcer>) -> Self {
         self.sandbox = Some(sandbox);
         self
     }
@@ -429,10 +426,7 @@ impl<P: Platform> AgentLoop<P> {
     /// When unset (default for CLI / legacy callers), the loop's
     /// system-prompt assembly falls through to whatever the
     /// [`ContextBuilder`] produces, exactly as before.
-    pub fn with_system_prompt_builder(
-        mut self,
-        builder: Arc<SystemPromptBuilder>,
-    ) -> Self {
+    pub fn with_system_prompt_builder(mut self, builder: Arc<SystemPromptBuilder>) -> Self {
         self.system_prompt_builder = Some(builder);
         self
     }
@@ -445,10 +439,7 @@ impl<P: Platform> AgentLoop<P> {
     /// When unset, the loop ignores the router entirely (the
     /// pre-WEFT-178 behaviour). The CLI flow keeps `None`; the daemon
     /// supplies its loaded `AgentRoutingConfig`-derived router.
-    pub fn with_agent_router(
-        mut self,
-        router: Arc<crate::agent_routing::AgentRouter>,
-    ) -> Self {
+    pub fn with_agent_router(mut self, router: Arc<crate::agent_routing::AgentRouter>) -> Self {
         self.agent_router = Some(router);
         self
     }
@@ -586,10 +577,7 @@ impl<P: Platform> AgentLoop<P> {
     /// the tool execution loop, and session persistence. Auto-delegation
     /// short-circuits the local LLM pipeline and returns the delegate's
     /// response as the reply.
-    pub async fn handle_turn(
-        &self,
-        msg: InboundMessage,
-    ) -> clawft_types::Result<OutboundMessage> {
+    pub async fn handle_turn(&self, msg: InboundMessage) -> clawft_types::Result<OutboundMessage> {
         // WEFT-178: Resolve the routed agent_id BEFORE building the
         // session key / context so the rest of the turn observes the
         // correct identity. The router is consulted only when one is
@@ -801,11 +789,7 @@ impl<P: Platform> AgentLoop<P> {
                 self.tools.schemas_for_tools(subset)
             }
         } else {
-            match msg
-                .metadata
-                .get("allowed_tools")
-                .and_then(|v| v.as_array())
-            {
+            match msg.metadata.get("allowed_tools").and_then(|v| v.as_array()) {
                 Some(tools_arr) => {
                     let allowed: Vec<String> = tools_arr
                         .iter()
@@ -833,8 +817,7 @@ impl<P: Platform> AgentLoop<P> {
         if hallucination_boost > 0.0 {
             debug!(
                 hallucination_score,
-                hallucination_boost,
-                "applying hallucination complexity boost"
+                hallucination_boost, "applying hallucination complexity boost"
             );
         }
 
@@ -877,9 +860,7 @@ impl<P: Platform> AgentLoop<P> {
         } else {
             format!("{}:{}", msg.channel, msg.sender_id)
         };
-        let tool_result = self
-            .run_tool_loop(request, &conv_id, &agent_id)
-            .await?;
+        let tool_result = self.run_tool_loop(request, &conv_id, &agent_id).await?;
 
         // 11. Update hallucination score if any write verifications occurred.
         if tool_result.hallucinations > 0 || tool_result.verified_successes > 0 {
@@ -1001,10 +982,7 @@ impl<P: Platform> AgentLoop<P> {
         // child delegator sees the carried count. Tools that don't
         // know about the field will just ignore it.
         if let Some(obj) = delegate_args.as_object_mut() {
-            obj.insert(
-                DELEGATION_DEPTH_KEY.into(),
-                serde_json::json!(next_depth),
-            );
+            obj.insert(DELEGATION_DEPTH_KEY.into(), serde_json::json!(next_depth));
         }
 
         // Save user message to session for history.
@@ -1080,8 +1058,11 @@ impl<P: Platform> AgentLoop<P> {
             .get("allow_from_match")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        self.permission_resolver
-            .resolve_auth_context(&msg.sender_id, &msg.channel, allow_from_match)
+        self.permission_resolver.resolve_auth_context(
+            &msg.sender_id,
+            &msg.channel,
+            allow_from_match,
+        )
     }
 
     /// Resolve the routed `agent_id` for an inbound message via the
@@ -1134,11 +1115,7 @@ impl<P: Platform> AgentLoop<P> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        format!(
-            "turn-{ts}-{seq:08x}",
-            ts = Self::now_ms(),
-            seq = seq
-        )
+        format!("turn-{ts}-{seq:08x}", ts = Self::now_ms(), seq = seq)
     }
 
     /// Resolve the workspace path from config, expanding `~` to home dir.
@@ -1221,10 +1198,13 @@ impl<P: Platform> AgentLoop<P> {
 
         // 3. Dispatch through the registry, with truncation applied
         //    to success results. Errors stay short by definition.
-        match self.tools.execute(tool_name, input.clone(), permissions).await {
+        match self
+            .tools
+            .execute(tool_name, input.clone(), permissions)
+            .await
+        {
             Ok(val) => {
-                let truncated =
-                    crate::security::truncate_result(val, MAX_TOOL_RESULT_BYTES);
+                let truncated = crate::security::truncate_result(val, MAX_TOOL_RESULT_BYTES);
                 serde_json::to_string(&truncated).unwrap_or_default()
             }
             Err(e) => {
@@ -1317,7 +1297,8 @@ impl<P: Platform> AgentLoop<P> {
                                 error = %err,
                                 "cost budget tripped on latest call — fail-fast"
                             );
-                            if let ClawftError::ConversationBudgetExceeded { ref dimension, .. } = err
+                            if let ClawftError::ConversationBudgetExceeded { ref dimension, .. } =
+                                err
                                 && let Err(e) = budget.mark_open(conv_id, dimension)
                             {
                                 warn!(error = %e, "budget: mark_open failed");
@@ -1440,10 +1421,7 @@ impl<P: Platform> AgentLoop<P> {
             // truncation. The shape returned by the helper matches
             // what the LLM has been seeing since Phase B2, so this
             // refactor is behaviour-preserving for `run_tool_loop`.
-            let permissions = request
-                .auth_context
-                .as_ref()
-                .map(|ctx| &ctx.permissions);
+            let permissions = request.auth_context.as_ref().map(|ctx| &ctx.permissions);
 
             let futures: Vec<_> = tool_calls
                 .iter()
@@ -1464,9 +1442,7 @@ impl<P: Platform> AgentLoop<P> {
             // stays a manual approval step per the autogen module's
             // design — we never auto-arm a generated skill.
             if let Some(detector) = self.autogen.as_ref() {
-                use crate::agent::skill_autogen::{
-                    generate_skill_md, install_pending_skill,
-                };
+                use crate::agent::skill_autogen::{generate_skill_md, install_pending_skill};
                 let candidates = {
                     let mut det = match detector.lock() {
                         Ok(g) => g,
@@ -1514,12 +1490,8 @@ impl<P: Platform> AgentLoop<P> {
             }
 
             // Post-write verification: check that claimed writes exist on disk.
-            let verification_results = verification::verify_write_results(
-                self.platform.fs(),
-                &workspace,
-                &results,
-            )
-            .await;
+            let verification_results =
+                verification::verify_write_results(self.platform.fs(), &workspace, &results).await;
 
             // Build a set of hallucinated tool call IDs for result replacement.
             let hallucinated_ids: std::collections::HashSet<String> = verification_results
@@ -1587,7 +1559,6 @@ impl<P: Platform> AgentLoop<P> {
             message: format!("max tool iterations ({}) exceeded", max_iterations),
         })
     }
-
 }
 
 #[cfg(test)]
@@ -2063,7 +2034,12 @@ mod tests {
             .await;
         let err = result.expect_err("token cap should trip");
         match err {
-            ClawftError::ConversationBudgetExceeded { conv_id, dimension, limit, used } => {
+            ClawftError::ConversationBudgetExceeded {
+                conv_id,
+                dimension,
+                limit,
+                used,
+            } => {
                 assert_eq!(conv_id, "conv-tok");
                 assert_eq!(dimension, "tokens");
                 assert_eq!(limit, 12.0);
@@ -2127,9 +2103,7 @@ mod tests {
 
     #[tokio::test]
     async fn cost_budget_usd_cap_fails_fast() {
-        use crate::agent::cost_budget::{
-            BudgetStore, BudgetUsage, ConversationBudget,
-        };
+        use crate::agent::cost_budget::{BudgetStore, BudgetUsage, ConversationBudget};
         use clawft_types::config::CostBudgetConfig;
         use clawft_types::error::ClawftError;
         use std::collections::HashMap;
@@ -2195,15 +2169,10 @@ mod tests {
                 _request: &TransportRequest,
             ) -> clawft_types::Result<LlmResponse> {
                 let mut metadata = HashMap::new();
-                metadata.insert(
-                    "usd_cost".to_string(),
-                    serde_json::json!(0.05),
-                );
+                metadata.insert("usd_cost".to_string(), serde_json::json!(0.05));
                 Ok(LlmResponse {
                     id: "usd".into(),
-                    content: vec![ContentBlock::Text {
-                        text: "ok".into(),
-                    }],
+                    content: vec![ContentBlock::Text { text: "ok".into() }],
                     stop_reason: StopReason::EndTurn,
                     usage: Usage {
                         input_tokens: 1,
@@ -2224,7 +2193,12 @@ mod tests {
             .await
             .expect_err("usd cap should trip");
         match err {
-            ClawftError::ConversationBudgetExceeded { dimension, used, limit, .. } => {
+            ClawftError::ConversationBudgetExceeded {
+                dimension,
+                used,
+                limit,
+                ..
+            } => {
                 assert_eq!(dimension, "usd");
                 assert!((limit - 1.00).abs() < 1e-9);
                 assert!(used >= 1.00, "used={used} should >= 1.00");
@@ -2265,7 +2239,10 @@ mod tests {
             .run_tool_loop(budget_request("hi"), "conv-reset", "test:agent")
             .await
             .expect_err("must trip");
-        assert!(matches!(err, ClawftError::ConversationBudgetExceeded { .. }));
+        assert!(matches!(
+            err,
+            ClawftError::ConversationBudgetExceeded { .. }
+        ));
 
         // Reset clears circuit + accumulator. Subsequent call sees a
         // fresh 0 accumulator → 15 tokens after the call is still > 12,
@@ -2315,15 +2292,17 @@ mod tests {
         // Phase 1: agent A trips the budget.
         {
             let transport = Arc::new(MockTransport::new("ok"));
-            let (mut agent, dir) =
-                make_agent_loop(transport, "budget_persist_a").await;
+            let (mut agent, dir) = make_agent_loop(transport, "budget_persist_a").await;
             let budget = Arc::new(ConversationBudget::new(cfg.clone(), Arc::clone(&store)));
             agent = agent.with_cost_budget(budget);
             let err = agent
                 .run_tool_loop(budget_request("hi"), "conv-persist", "test:agent")
                 .await
                 .expect_err("must trip");
-            assert!(matches!(err, ClawftError::ConversationBudgetExceeded { .. }));
+            assert!(matches!(
+                err,
+                ClawftError::ConversationBudgetExceeded { .. }
+            ));
             let _ = tokio::fs::remove_dir_all(&dir).await;
         }
 
@@ -2331,8 +2310,7 @@ mod tests {
         // and fails fast on the very first attempt — no LLM call issued.
         {
             let transport = Arc::new(MockTransport::new("ok"));
-            let (mut agent, dir) =
-                make_agent_loop(transport, "budget_persist_b").await;
+            let (mut agent, dir) = make_agent_loop(transport, "budget_persist_b").await;
             let budget = Arc::new(ConversationBudget::new(cfg, Arc::clone(&store)));
             agent = agent.with_cost_budget(budget);
             let err = agent
@@ -2798,11 +2776,7 @@ mod tests {
         );
 
         // Verify session was persisted with both user and assistant messages
-        let session = agent
-            .sessions
-            .get_or_create("cli:e2e-chat")
-            .await
-            .unwrap();
+        let session = agent.sessions.get_or_create("cli:e2e-chat").await.unwrap();
         assert!(
             session.messages.len() >= 2,
             "session should have at least user + assistant messages, got {}",
@@ -3430,17 +3404,12 @@ mod tests {
     impl crate::agent::identity::IdentityProvider for StubIdentityProvider {
         async fn current(
             &self,
-        ) -> Result<
-            crate::agent::identity::Identity,
-            crate::agent::identity::IdentityError,
-        > {
+        ) -> Result<crate::agent::identity::Identity, crate::agent::identity::IdentityError>
+        {
             Ok(crate::agent::identity::Identity {
                 soul: self.soul.clone(),
                 identity: self.identity.clone(),
-                hash: crate::agent::identity::sha256_identity_hash(
-                    &self.soul,
-                    &self.identity,
-                ),
+                hash: crate::agent::identity::sha256_identity_hash(&self.soul, &self.identity),
                 source: "stub",
             })
         }
@@ -3517,10 +3486,7 @@ mod tests {
 
     #[async_trait]
     impl LlmTransport for GateProbeTransport {
-        async fn complete(
-            &self,
-            request: &TransportRequest,
-        ) -> clawft_types::Result<LlmResponse> {
+        async fn complete(&self, request: &TransportRequest) -> clawft_types::Result<LlmResponse> {
             let count = self
                 .call_count
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -3568,17 +3534,14 @@ mod tests {
     /// list passed to the transport.
     #[tokio::test]
     async fn handle_turn_prepends_identity_system_prompt() {
-        use crate::agent::identity::{IdentityProvider, BINDING_THREAD_EXCERPT};
+        use crate::agent::identity::{BINDING_THREAD_EXCERPT, IdentityProvider};
         use crate::agent::system_prompt::SystemPromptBuilder;
 
         let transport = Arc::new(E2eRecordingTransport::new());
         let (mut agent, dir) =
-            make_agent_loop(transport.clone() as Arc<dyn LlmTransport>, "d1_prompt")
-                .await;
+            make_agent_loop(transport.clone() as Arc<dyn LlmTransport>, "d1_prompt").await;
 
-        let soul = format!(
-            "# SOUL.md\n\nThe binding thread: {BINDING_THREAD_EXCERPT}.\n"
-        );
+        let soul = format!("# SOUL.md\n\nThe binding thread: {BINDING_THREAD_EXCERPT}.\n");
         let identity = "# IDENTITY.md\n\nclawft Concierge.".to_string();
         let provider: Arc<dyn IdentityProvider> = Arc::new(StubIdentityProvider {
             soul: soul.clone(),
@@ -3625,8 +3588,7 @@ mod tests {
     async fn handle_turn_without_builder_skips_identity_prompt() {
         let transport = Arc::new(E2eRecordingTransport::new());
         let (agent, dir) =
-            make_agent_loop(transport.clone() as Arc<dyn LlmTransport>, "d1_nobuild")
-                .await;
+            make_agent_loop(transport.clone() as Arc<dyn LlmTransport>, "d1_nobuild").await;
 
         let inbound = InboundMessage {
             channel: "test".into(),
@@ -3707,7 +3669,10 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(&outbound.content).expect("gate result is JSON");
         assert_eq!(parsed["denied"], serde_json::json!(true));
-        assert_eq!(parsed["reason"], serde_json::json!("write blocked by policy"));
+        assert_eq!(
+            parsed["reason"],
+            serde_json::json!("write blocked by policy")
+        );
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
@@ -3787,8 +3752,7 @@ mod tests {
         // text turn so the gate gets at least one (agent_id, action) entry.
         let transport = Arc::new(GateProbeTransport::new());
         let (mut agent, dir) =
-            make_agent_loop(transport.clone() as Arc<dyn LlmTransport>, "router_match")
-                .await;
+            make_agent_loop(transport.clone() as Arc<dyn LlmTransport>, "router_match").await;
         let gate = Arc::new(StubGate::defer("test-defer"));
         agent = agent
             .with_gate(gate.clone() as Arc<dyn EffectGate>)
@@ -3832,8 +3796,7 @@ mod tests {
 
         let transport = Arc::new(GateProbeTransport::new());
         let (mut agent, dir) =
-            make_agent_loop(transport.clone() as Arc<dyn LlmTransport>, "router_nomatch")
-                .await;
+            make_agent_loop(transport.clone() as Arc<dyn LlmTransport>, "router_nomatch").await;
         let gate = Arc::new(StubGate::defer("test-defer"));
         agent = agent
             .with_gate(gate.clone() as Arc<dyn EffectGate>)
@@ -3871,8 +3834,7 @@ mod tests {
     #[tokio::test]
     async fn delegation_depth_six_deep_chain_refuses_at_hop_six() {
         let transport = Arc::new(MockTransport::new("should NOT see this"));
-        let (agent, dir) =
-            make_auto_delegation_agent(transport, "del_depth_6").await;
+        let (agent, dir) = make_auto_delegation_agent(transport, "del_depth_6").await;
         // Pin the cap explicitly so the test is hermetic regardless
         // of what CLAWFT_DELEGATION_DEPTH the host has set.
         let agent = agent.with_max_delegation_depth(DEFAULT_MAX_DELEGATION_DEPTH);
@@ -3880,10 +3842,7 @@ mod tests {
         // Inbound at depth 5 (already delegated 5 times). The next
         // hop would be #6, which exceeds the default cap of 5.
         let mut metadata = HashMap::new();
-        metadata.insert(
-            DELEGATION_DEPTH_KEY.into(),
-            serde_json::json!(5),
-        );
+        metadata.insert(DELEGATION_DEPTH_KEY.into(), serde_json::json!(5));
         let inbound = InboundMessage {
             channel: "cli".into(),
             sender_id: "local".into(),
@@ -3917,15 +3876,11 @@ mod tests {
     #[tokio::test]
     async fn delegation_depth_below_cap_still_delegates() {
         let transport = Arc::new(MockTransport::new("should NOT see this"));
-        let (agent, dir) =
-            make_auto_delegation_agent(transport, "del_depth_4").await;
+        let (agent, dir) = make_auto_delegation_agent(transport, "del_depth_4").await;
         let agent = agent.with_max_delegation_depth(DEFAULT_MAX_DELEGATION_DEPTH);
 
         let mut metadata = HashMap::new();
-        metadata.insert(
-            DELEGATION_DEPTH_KEY.into(),
-            serde_json::json!(4),
-        );
+        metadata.insert(DELEGATION_DEPTH_KEY.into(), serde_json::json!(4));
         let inbound = InboundMessage {
             channel: "cli".into(),
             sender_id: "local".into(),
@@ -3954,15 +3909,11 @@ mod tests {
     #[tokio::test]
     async fn delegation_depth_custom_cap_overrides_default() {
         let transport = Arc::new(MockTransport::new("should NOT see this"));
-        let (agent, dir) =
-            make_auto_delegation_agent(transport, "del_depth_custom").await;
+        let (agent, dir) = make_auto_delegation_agent(transport, "del_depth_custom").await;
         let agent = agent.with_max_delegation_depth(2);
 
         let mut metadata = HashMap::new();
-        metadata.insert(
-            DELEGATION_DEPTH_KEY.into(),
-            serde_json::json!(2),
-        );
+        metadata.insert(DELEGATION_DEPTH_KEY.into(), serde_json::json!(2));
         let inbound = InboundMessage {
             channel: "cli".into(),
             sender_id: "local".into(),
@@ -4018,17 +3969,11 @@ mod tests {
     #[tokio::test]
     async fn execute_tool_with_guards_returns_deny_envelope() {
         let transport = Arc::new(MockTransport::new("ok"));
-        let (mut agent, dir) =
-            make_agent_loop(transport, "etwg_deny").await;
+        let (mut agent, dir) = make_agent_loop(transport, "etwg_deny").await;
         agent = agent.with_gate(Arc::new(StubGate::deny("policy")) as Arc<dyn EffectGate>);
 
         let body = agent
-            .execute_tool_with_guards(
-                "agent-x",
-                "echo",
-                &serde_json::json!({"text": "hi"}),
-                None,
-            )
+            .execute_tool_with_guards("agent-x", "echo", &serde_json::json!({"text": "hi"}), None)
             .await;
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(parsed["denied"], true);
@@ -4043,16 +3988,10 @@ mod tests {
     #[tokio::test]
     async fn execute_tool_with_guards_truncates_large_results() {
         let transport = Arc::new(MockTransport::new("ok"));
-        let (agent, dir) =
-            make_agent_loop(transport, "etwg_trunc").await;
+        let (agent, dir) = make_agent_loop(transport, "etwg_trunc").await;
 
         let body = agent
-            .execute_tool_with_guards(
-                "agent-x",
-                "huge_output",
-                &serde_json::json!({}),
-                None,
-            )
+            .execute_tool_with_guards("agent-x", "huge_output", &serde_json::json!({}), None)
             .await;
         // The mock-loop registry has no `huge_output` tool, so this
         // path returns an `{"error": ...}` envelope. That alone

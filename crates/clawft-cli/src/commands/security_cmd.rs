@@ -41,8 +41,7 @@ pub enum SecurityAction {
 }
 
 /// Warning printed when falling back to local execution without daemon.
-const DAEMON_FALLBACK_WARNING: &str =
-    "Warning: running without kernel daemon — results may not reflect live kernel state. \
+const DAEMON_FALLBACK_WARNING: &str = "Warning: running without kernel daemon — results may not reflect live kernel state. \
      Start daemon with: weaver kernel start";
 
 /// Run the security command.
@@ -180,11 +179,36 @@ fn scan_file(
         .to_lowercase();
     let scannable = matches!(
         ext.as_str(),
-        "rs" | "py" | "js" | "ts" | "sh" | "bash" | "yaml" | "yml"
-            | "toml" | "json" | "md" | "txt" | "cfg" | "conf" | "env"
-            | "ini" | "xml" | "html" | "css" | "sql" | "rb" | "go"
-            | "java" | "kt" | "swift" | "c" | "cpp" | "h" | "hpp"
-            | "Dockerfile" | ""
+        "rs" | "py"
+            | "js"
+            | "ts"
+            | "sh"
+            | "bash"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "json"
+            | "md"
+            | "txt"
+            | "cfg"
+            | "conf"
+            | "env"
+            | "ini"
+            | "xml"
+            | "html"
+            | "css"
+            | "sql"
+            | "rb"
+            | "go"
+            | "java"
+            | "kt"
+            | "swift"
+            | "c"
+            | "cpp"
+            | "h"
+            | "hpp"
+            | "Dockerfile"
+            | ""
     );
     if !scannable {
         return Ok(());
@@ -195,10 +219,7 @@ fn scan_file(
         Err(_) => return Ok(()), // Skip unreadable files
     };
 
-    let file_findings = scanner.scan_content(
-        &content,
-        Some(&file.to_string_lossy()),
-    );
+    let file_findings = scanner.scan_content(&content, Some(&file.to_string_lossy()));
 
     for f in file_findings {
         if f.severity >= *min_sev {
@@ -249,7 +270,10 @@ fn run_checks() -> anyhow::Result<()> {
     let scanner = SecurityScanner::new();
     let by_cat = scanner.checks_by_category();
 
-    println!("Available Security Audit Checks ({} total)", scanner.check_count());
+    println!(
+        "Available Security Audit Checks ({} total)",
+        scanner.check_count()
+    );
     println!("=========================================");
 
     let mut categories: Vec<_> = by_cat.keys().collect();

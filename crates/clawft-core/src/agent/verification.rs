@@ -48,10 +48,7 @@ pub struct VerificationResult {
 /// Returns `(is_write_claim, optional_path)`. The path is extracted from the
 /// tool result JSON, looking for common patterns like `{"path": "..."}` or
 /// `"Successfully wrote N bytes to path"`.
-pub fn parse_write_claim(
-    tool_name: &str,
-    result_json: &str,
-) -> (bool, Option<String>) {
+pub fn parse_write_claim(tool_name: &str, result_json: &str) -> (bool, Option<String>) {
     let name_lower = tool_name.to_lowercase();
     let is_write = WRITE_TOOL_NAMES.iter().any(|w| name_lower.contains(w));
 
@@ -181,20 +178,14 @@ mod tests {
 
     #[test]
     fn parse_write_claim_detects_write_file() {
-        let (is_write, path) = parse_write_claim(
-            "write_file",
-            r#"{"path": "src/main.rs"}"#,
-        );
+        let (is_write, path) = parse_write_claim("write_file", r#"{"path": "src/main.rs"}"#);
         assert!(is_write);
         assert_eq!(path.as_deref(), Some("src/main.rs"));
     }
 
     #[test]
     fn parse_write_claim_detects_edit_file() {
-        let (is_write, path) = parse_write_claim(
-            "edit_file",
-            r#"{"file_path": "lib.rs"}"#,
-        );
+        let (is_write, path) = parse_write_claim("edit_file", r#"{"file_path": "lib.rs"}"#);
         assert!(is_write);
         assert_eq!(path.as_deref(), Some("lib.rs"));
     }
@@ -211,19 +202,13 @@ mod tests {
 
     #[test]
     fn parse_write_claim_ignores_non_write_tools() {
-        let (is_write, _) = parse_write_claim(
-            "web_search",
-            r#"{"path": "something"}"#,
-        );
+        let (is_write, _) = parse_write_claim("web_search", r#"{"path": "something"}"#);
         assert!(!is_write);
     }
 
     #[test]
     fn parse_write_claim_write_tool_no_path() {
-        let (is_write, path) = parse_write_claim(
-            "write_file",
-            r#"{"status": "ok"}"#,
-        );
+        let (is_write, path) = parse_write_claim("write_file", r#"{"status": "ok"}"#);
         assert!(is_write);
         assert!(path.is_none());
     }

@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::assessment::{analyzer::AnalysisContext, Finding};
 use crate::assessment::analyzer::Analyzer;
+use crate::assessment::{Finding, analyzer::AnalysisContext};
 
 /// Analyzer that inspects dependency manifests for version info and counts.
 pub struct DependencyAnalyzer;
@@ -21,7 +21,12 @@ impl Analyzer for DependencyAnalyzer {
         &["dependency"]
     }
 
-    fn analyze(&self, project: &Path, files: &[PathBuf], _context: &AnalysisContext) -> Vec<Finding> {
+    fn analyze(
+        &self,
+        project: &Path,
+        files: &[PathBuf],
+        _context: &AnalysisContext,
+    ) -> Vec<Finding> {
         let mut findings = Vec::new();
 
         for path in files {
@@ -71,18 +76,23 @@ fn analyze_cargo_toml(path: &Path, rel_str: &str) -> Vec<Finding> {
             continue;
         }
 
-        if in_deps && !trimmed.is_empty() && !trimmed.starts_with('#')
+        if in_deps
+            && !trimmed.is_empty()
+            && !trimmed.starts_with('#')
             && let Some(dep_name) = trimmed.split('=').next().map(|s| s.trim())
-                && !dep_name.is_empty() {
-                    dep_count += 1;
-                    // Check for missing version: `dep = "*"` or dep with no version key
-                    let value = trimmed.split_once('=').map(|x| x.1)
-                        .map(|s| s.trim())
-                        .unwrap_or("");
-                    if value == "\"*\"" || value.is_empty() {
-                        missing_version.push(dep_name.to_string());
-                    }
-                }
+            && !dep_name.is_empty()
+        {
+            dep_count += 1;
+            // Check for missing version: `dep = "*"` or dep with no version key
+            let value = trimmed
+                .split_once('=')
+                .map(|x| x.1)
+                .map(|s| s.trim())
+                .unwrap_or("");
+            if value == "\"*\"" || value.is_empty() {
+                missing_version.push(dep_name.to_string());
+            }
+        }
     }
 
     findings.push(Finding {

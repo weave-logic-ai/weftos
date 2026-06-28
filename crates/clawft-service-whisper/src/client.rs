@@ -228,10 +228,14 @@ impl WhisperClient {
     /// Acquires the in-flight semaphore; callers that want to apply
     /// their own scheduling (drop-oldest, say) can inspect
     /// `in_flight.available_permits()` before calling.
-    pub async fn transcribe(&self, wav_bytes: Vec<u8>) -> Result<InferenceResponse, TranscribeError> {
-        let _permit = self.in_flight.acquire().await.map_err(|_| {
-            TranscribeError::Transport("whisper in-flight semaphore closed".into())
-        })?;
+    pub async fn transcribe(
+        &self,
+        wav_bytes: Vec<u8>,
+    ) -> Result<InferenceResponse, TranscribeError> {
+        let _permit =
+            self.in_flight.acquire().await.map_err(|_| {
+                TranscribeError::Transport("whisper in-flight semaphore closed".into())
+            })?;
         self.transcribe_unchecked(wav_bytes).await
     }
 
@@ -281,18 +285,13 @@ impl WhisperClient {
         if !status.is_success() {
             let code = status.as_u16();
             if (400..500).contains(&code) {
-                return Err(TranscribeError::ClientError {
-                    status: code,
-                    body,
-                });
+                return Err(TranscribeError::ClientError { status: code, body });
             }
             return Err(TranscribeError::Server { status: code, body });
         }
 
         let mut parsed: InferenceResponse = serde_json::from_str(&body).map_err(|e| {
-            TranscribeError::Malformed(format!(
-                "body was not InferenceResponse JSON ({e}): {body}"
-            ))
+            TranscribeError::Malformed(format!("body was not InferenceResponse JSON ({e}): {body}"))
         })?;
         // Whisper's leading-space convention — strip for symmetry.
         parsed.text = parsed.text.trim_start().to_string();
@@ -387,9 +386,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/inference"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{"text": " hello world"}"#,
-            ))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"text": " hello world"}"#))
             .mount(&server)
             .await;
         let client = WhisperClient::new(test_config(server.uri())).unwrap();
@@ -418,14 +415,18 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/inference"))
-            .respond_with(ResponseTemplate::new(400).set_body_string(
-                r#"{"error":"failed to read audio data"}"#,
-            ))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_string(r#"{"error":"failed to read audio data"}"#),
+            )
             .mount(&server)
             .await;
         let client = WhisperClient::new(test_config(server.uri())).unwrap();
         let err = client.transcribe(vec![0u8; 44]).await.unwrap_err();
-        assert!(matches!(err, TranscribeError::ClientError { status: 400, .. }));
+        assert!(matches!(
+            err,
+            TranscribeError::ClientError { status: 400, .. }
+        ));
         assert!(!err.is_retriable());
     }
 

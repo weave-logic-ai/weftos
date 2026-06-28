@@ -33,9 +33,7 @@ use std::sync::Arc;
 
 use tracing::warn;
 
-use crate::agent::identity::{
-    BINDING_THREAD_EXCERPT, Identity, IdentityError, IdentityProvider,
-};
+use crate::agent::identity::{BINDING_THREAD_EXCERPT, Identity, IdentityError, IdentityProvider};
 
 /// Status of the binding-thread integrity check.
 ///
@@ -90,10 +88,7 @@ pub struct SystemPromptBuilder {
 impl SystemPromptBuilder {
     /// Wire the builder against an [`IdentityProvider`] and the
     /// workspace path used in the `[workspace]` section.
-    pub fn new(
-        identity_provider: Arc<dyn IdentityProvider>,
-        workspace: PathBuf,
-    ) -> Self {
+    pub fn new(identity_provider: Arc<dyn IdentityProvider>, workspace: PathBuf) -> Self {
         Self {
             identity_provider,
             workspace,
@@ -132,9 +127,7 @@ impl SystemPromptBuilder {
         }
 
         // Reserve roughly: identity bodies + ~512 bytes of scaffolding.
-        let mut s = String::with_capacity(
-            identity.soul.len() + identity.identity.len() + 512,
-        );
+        let mut s = String::with_capacity(identity.soul.len() + identity.identity.len() + 512);
         s.push_str("[identity]\n");
         s.push_str(&identity.soul);
         // Make sure there's a blank line between the two bodies even
@@ -176,9 +169,7 @@ impl SystemPromptBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::identity::{
-        sha256_identity_hash, FileIdentityProvider,
-    };
+    use crate::agent::identity::{FileIdentityProvider, sha256_identity_hash};
     use async_trait::async_trait;
 
     /// In-memory identity provider for tests.
@@ -264,8 +255,7 @@ mod tests {
 
     #[test]
     fn binding_status_helper_matches_constant() {
-        let with_excerpt =
-            format!("prefix\n{BINDING_THREAD_EXCERPT}\nsuffix");
+        let with_excerpt = format!("prefix\n{BINDING_THREAD_EXCERPT}\nsuffix");
         assert_eq!(
             BindingThreadStatus::from_soul(&with_excerpt),
             BindingThreadStatus::Ok
@@ -288,8 +278,7 @@ mod tests {
         .unwrap();
         std::fs::write(clawft.join("IDENTITY.md"), "# IDENTITY\nclawft").unwrap();
 
-        let provider: Arc<dyn IdentityProvider> =
-            Arc::new(FileIdentityProvider::new(tmp.path()));
+        let provider: Arc<dyn IdentityProvider> = Arc::new(FileIdentityProvider::new(tmp.path()));
         let builder = SystemPromptBuilder::new(provider, tmp.path().to_path_buf());
 
         let prompt = builder.build().await.expect("build ok");

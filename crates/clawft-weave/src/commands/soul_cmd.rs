@@ -148,10 +148,7 @@ pub trait SoulRpc: Send + Sync {
     /// Enumerate journal entries under the given prefix. Returns
     /// only **value-bearing** children (we filter on `has_value` so
     /// pure structural nodes don't appear as ghost ulids).
-    async fn list_journal(
-        &mut self,
-        prefix: &str,
-    ) -> anyhow::Result<Vec<SubstrateListChild>>;
+    async fn list_journal(&mut self, prefix: &str) -> anyhow::Result<Vec<SubstrateListChild>>;
 
     /// Read one journal entry's payload by full substrate path.
     async fn read_entry(&mut self, path: &str) -> anyhow::Result<Option<serde_json::Value>>;
@@ -194,10 +191,7 @@ impl SoulRpc for DaemonRpc {
         Ok(r.node_id)
     }
 
-    async fn list_journal(
-        &mut self,
-        prefix: &str,
-    ) -> anyhow::Result<Vec<SubstrateListChild>> {
+    async fn list_journal(&mut self, prefix: &str) -> anyhow::Result<Vec<SubstrateListChild>> {
         let params = SubstrateListParams {
             prefix: prefix.to_string(),
             depth: 1,
@@ -357,10 +351,7 @@ pub async fn run_promote_with<R: SoulRpc, P: Prompter>(
 
 /// Drive `weaver soul status` against the supplied RPC. The dry-run
 /// sibling of [`run_promote_with`] — no disk writes, no chain entry.
-pub async fn run_status_with<R: SoulRpc>(
-    args: StatusArgs,
-    rpc: &mut R,
-) -> anyhow::Result<()> {
+pub async fn run_status_with<R: SoulRpc>(args: StatusArgs, rpc: &mut R) -> anyhow::Result<()> {
     // Resolve workspace just to surface a nicer error when the user
     // calls this from outside an init'd project; the path itself
     // isn't used for status (status reads from substrate).
@@ -543,17 +534,11 @@ mod tests {
             Ok(self.node_id.clone())
         }
 
-        async fn list_journal(
-            &mut self,
-            _prefix: &str,
-        ) -> anyhow::Result<Vec<SubstrateListChild>> {
+        async fn list_journal(&mut self, _prefix: &str) -> anyhow::Result<Vec<SubstrateListChild>> {
             Ok(self.children.clone())
         }
 
-        async fn read_entry(
-            &mut self,
-            path: &str,
-        ) -> anyhow::Result<Option<serde_json::Value>> {
+        async fn read_entry(&mut self, path: &str) -> anyhow::Result<Option<serde_json::Value>> {
             Ok(self.values.get(path).cloned())
         }
 
@@ -605,13 +590,14 @@ mod tests {
             yes: true,
             workspace: Some(tmp.path().to_path_buf()),
         };
-        run_promote_with(args, &mut rpc, &mut prompt)
-            .await
-            .unwrap();
+        run_promote_with(args, &mut rpc, &mut prompt).await.unwrap();
 
         // SOUL.md untouched.
         let soul = std::fs::read_to_string(tmp.path().join(".clawft").join("SOUL.md")).unwrap();
-        assert_eq!(soul, "# SOUL\nseed\n", "empty journal must not edit SOUL.md");
+        assert_eq!(
+            soul, "# SOUL\nseed\n",
+            "empty journal must not edit SOUL.md"
+        );
         assert!(rpc.appended.is_empty(), "no chain entry on empty journal");
     }
 
@@ -650,9 +636,7 @@ mod tests {
             yes: true,
             workspace: Some(tmp.path().to_path_buf()),
         };
-        run_promote_with(args, &mut rpc, &mut prompt)
-            .await
-            .unwrap();
+        run_promote_with(args, &mut rpc, &mut prompt).await.unwrap();
 
         let soul = std::fs::read_to_string(tmp.path().join(".clawft").join("SOUL.md")).unwrap();
         assert!(
@@ -708,9 +692,7 @@ mod tests {
             yes: true,
             workspace: Some(tmp.path().to_path_buf()),
         };
-        run_promote_with(args, &mut rpc, &mut prompt)
-            .await
-            .unwrap();
+        run_promote_with(args, &mut rpc, &mut prompt).await.unwrap();
 
         assert_eq!(rpc.appended.len(), 1, "exactly one witness entry");
         let rec = &rpc.appended[0];
@@ -796,9 +778,7 @@ mod tests {
             yes: false,
             workspace: Some(tmp.path().to_path_buf()),
         };
-        run_promote_with(args, &mut rpc, &mut prompt)
-            .await
-            .unwrap();
+        run_promote_with(args, &mut rpc, &mut prompt).await.unwrap();
 
         // SOUL.md unchanged.
         let soul = std::fs::read_to_string(tmp.path().join(".clawft").join("SOUL.md")).unwrap();
@@ -821,7 +801,11 @@ mod tests {
             ts: "2026-04-27T12:00:00Z".into(),
         };
         write_audit_log(tmp.path(), &record).unwrap();
-        let path = tmp.path().join(".weftos").join("audit").join("soul-promote.log");
+        let path = tmp
+            .path()
+            .join(".weftos")
+            .join("audit")
+            .join("soul-promote.log");
         let body = std::fs::read_to_string(&path).unwrap();
         let line = body.trim();
         let parsed: WitnessRecord = serde_json::from_str(line).unwrap();

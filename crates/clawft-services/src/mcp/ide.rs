@@ -164,10 +164,9 @@ fn ide_tool_definitions() -> Vec<ToolDefinition> {
 ///
 /// The IDE extension provides an implementation that forwards tool
 /// calls to the actual editor. For testing, a mock can be provided.
-pub type IdeDispatchFn =
-    dyn Fn(&str, Value) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
-        + Send
-        + Sync;
+pub type IdeDispatchFn = dyn Fn(&str, Value) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
+    + Send
+    + Sync;
 
 // ---------------------------------------------------------------------------
 // IdeToolProvider
@@ -203,9 +202,7 @@ impl IdeToolProvider {
     pub fn stub() -> Self {
         Self::new(|name, _args| {
             let name = name.to_string();
-            Box::pin(async move {
-                Err(format!("IDE not connected: cannot execute '{name}'"))
-            })
+            Box::pin(async move { Err(format!("IDE not connected: cannot execute '{name}'")) })
         })
     }
 }

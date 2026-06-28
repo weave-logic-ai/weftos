@@ -55,7 +55,9 @@ impl Affine {
             params: vec![0.0; heads * inputs + heads],
         }
     }
-    fn param_count(&self) -> usize { self.params.len() }
+    fn param_count(&self) -> usize {
+        self.params.len()
+    }
     fn predict(&self, x: &[f64]) -> Vec<f64> {
         let mut out = vec![0.0; self.heads];
         let bias_off = self.heads * self.inputs;
@@ -69,7 +71,9 @@ impl Affine {
         }
         out
     }
-    fn params_slice_mut(&mut self) -> &mut [f64] { &mut self.params }
+    fn params_slice_mut(&mut self) -> &mut [f64] {
+        &mut self.params
+    }
 }
 
 impl BaselineAttention {
@@ -119,19 +123,35 @@ impl BaselineAttention {
         Ok(attn)
     }
 
-    pub fn name(&self) -> &str { &self.name }
-    pub fn d_model(&self) -> usize { self.d_model }
-    pub fn d_k(&self) -> usize { self.d_k }
-    pub fn seq_len(&self) -> usize { self.seq_len }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn d_model(&self) -> usize {
+        self.d_model
+    }
+    pub fn d_k(&self) -> usize {
+        self.d_k
+    }
+    pub fn seq_len(&self) -> usize {
+        self.seq_len
+    }
 
     pub fn param_count(&self) -> usize {
         self.q.param_count() + self.k.param_count() + self.v.param_count() + self.out.param_count()
     }
 
-    pub fn is_trained(&self) -> bool { self.trained }
-    pub fn training_rounds(&self) -> u64 { self.training_rounds }
-    pub fn last_accepts(&self) -> u32 { self.last_accepts }
-    pub fn buffer_len(&self) -> usize { self.buffer.len() }
+    pub fn is_trained(&self) -> bool {
+        self.trained
+    }
+    pub fn training_rounds(&self) -> u64 {
+        self.training_rounds
+    }
+    pub fn last_accepts(&self) -> u32 {
+        self.last_accepts
+    }
+    pub fn buffer_len(&self) -> usize {
+        self.buffer.len()
+    }
 
     pub fn forward(&self, x: &[f64]) -> Result<Vec<f64>, AttentionError> {
         if x.len() != self.seq_len * self.d_model {
@@ -200,10 +220,16 @@ impl BaselineAttention {
     pub fn record(&mut self, input: Vec<f64>, target: Vec<f64>) -> Result<(), AttentionError> {
         let expected = self.seq_len * self.d_model;
         if input.len() != expected {
-            return Err(AttentionError::ShapeMismatch { expected, got: input.len() });
+            return Err(AttentionError::ShapeMismatch {
+                expected,
+                got: input.len(),
+            });
         }
         if target.len() != expected {
-            return Err(AttentionError::ShapeMismatch { expected, got: target.len() });
+            return Err(AttentionError::ShapeMismatch {
+                expected,
+                got: target.len(),
+            });
         }
         if self.buffer.len() >= 256 {
             self.buffer.pop_front();
@@ -375,8 +401,8 @@ pub fn compare_eml_vs_baseline(
             let x: Vec<f64> = (0..n).map(|_| next_signed(&mut rng_state)).collect();
             let mut t = vec![0.0; n];
             for i in 0..seq_len {
-                let mean: f64 = x[i * d_model..(i + 1) * d_model].iter().sum::<f64>()
-                    / d_model as f64;
+                let mean: f64 =
+                    x[i * d_model..(i + 1) * d_model].iter().sum::<f64>() / d_model as f64;
                 for j in 0..d_model {
                     t[i * d_model + j] = mean;
                 }
@@ -450,14 +476,18 @@ pub fn compare_eml_vs_baseline(
         eml_final_mse: eml_final,
         eml_mse_reduction: if eml_baseline > 1e-12 {
             1.0 - eml_final / eml_baseline
-        } else { 0.0 },
+        } else {
+            0.0
+        },
         eml_inference_ns_p99: eml_p99,
         baseline_param_count: base.param_count(),
         baseline_baseline_mse: base_baseline,
         baseline_final_mse: base_final,
         baseline_mse_reduction: if base_baseline > 1e-12 {
             1.0 - base_final / base_baseline
-        } else { 0.0 },
+        } else {
+            0.0
+        },
         baseline_inference_ns_p99: base_p99,
     })
 }
@@ -476,9 +506,13 @@ mod tests {
     #[test]
     fn forward_shape_and_finite() {
         let b = BaselineAttention::new("t", 4, 2, 2).unwrap();
-        let y = b.forward(&[0.5, -0.3, 0.1, 0.7, -0.2, 0.4, 0.0, 0.6]).unwrap();
+        let y = b
+            .forward(&[0.5, -0.3, 0.1, 0.7, -0.2, 0.4, 0.0, 0.6])
+            .unwrap();
         assert_eq!(y.len(), 8);
-        for v in y { assert!(v.is_finite()); }
+        for v in y {
+            assert!(v.is_finite());
+        }
     }
 
     #[test]

@@ -120,10 +120,8 @@ pub trait QuantumBackend: Send + Sync {
 
     async fn poll(&self, handle: &JobHandle) -> Result<JobStatus, QuantumError>;
 
-    async fn get_results(
-        &self,
-        handle: &JobHandle,
-    ) -> Result<Option<QuantumResults>, QuantumError>;
+    async fn get_results(&self, handle: &JobHandle)
+    -> Result<Option<QuantumResults>, QuantumError>;
 
     async fn cancel(&self, handle: &JobHandle) -> Result<(), QuantumError>;
 }

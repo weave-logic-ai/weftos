@@ -142,6 +142,6 @@ mod tests {
     fn code_domain_counts() {
         let d = CodeDomainConfig::new();
         assert_eq!(d.entity_types().len(), 13); // 12 code + File
-        assert_eq!(d.edge_types().len(), 11);   // 10 code + RelatedTo
+        assert_eq!(d.edge_types().len(), 11); // 10 code + RelatedTo
     }
 }

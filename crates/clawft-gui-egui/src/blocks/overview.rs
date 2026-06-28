@@ -24,10 +24,7 @@ pub fn show(ui: &mut egui::Ui, snap: &Snapshot) {
                         .color(egui::Color32::from_rgb(110, 210, 140)),
                 );
                 if let Some(status) = &snap.status {
-                    let state = status
-                        .get("state")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
+                    let state = status.get("state").and_then(|v| v.as_str()).unwrap_or("?");
                     let uptime = status
                         .get("uptime_secs")
                         .and_then(|v| v.as_f64())
@@ -56,7 +53,11 @@ pub fn show(ui: &mut egui::Ui, snap: &Snapshot) {
             }
         }
         if let Some(err) = &snap.last_error {
-            ui.label(egui::RichText::new(format!("last error: {err}")).small().weak());
+            ui.label(
+                egui::RichText::new(format!("last error: {err}"))
+                    .small()
+                    .weak(),
+            );
         }
     });
 }

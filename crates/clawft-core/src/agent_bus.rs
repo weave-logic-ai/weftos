@@ -175,9 +175,7 @@ impl AgentBus {
             .ok_or_else(|| AgentBusError::AgentNotFound(msg.to_agent.clone()))?;
 
         tx.try_send(msg).map_err(|e| match e {
-            mpsc::error::TrySendError::Full(msg) => {
-                AgentBusError::InboxFull(msg.to_agent.clone())
-            }
+            mpsc::error::TrySendError::Full(msg) => AgentBusError::InboxFull(msg.to_agent.clone()),
             mpsc::error::TrySendError::Closed(msg) => {
                 AgentBusError::AgentNotFound(msg.to_agent.clone())
             }
@@ -242,13 +240,7 @@ impl SwarmCoordinator {
         payload: serde_json::Value,
         ttl: Duration,
     ) -> Result<uuid::Uuid, AgentBusError> {
-        let msg = InterAgentMessage::new(
-            &self.coordinator_id,
-            worker,
-            task,
-            payload,
-            ttl,
-        );
+        let msg = InterAgentMessage::new(&self.coordinator_id, worker, task, payload, ttl);
         let msg_id = msg.id;
         self.bus.send(msg).await?;
         debug!(
@@ -417,14 +409,15 @@ mod tests {
         let bus = Arc::new(AgentBus::new());
         let _inbox = bus.register_agent("worker-1").await;
 
-        let coord = SwarmCoordinator::new(
-            bus.clone(),
-            "coordinator",
-            vec!["worker-1".into()],
-        );
+        let coord = SwarmCoordinator::new(bus.clone(), "coordinator", vec!["worker-1".into()]);
 
         let msg_id = coord
-            .dispatch_subtask("subtask-1", "worker-1", json!({"data": 42}), Duration::from_secs(60))
+            .dispatch_subtask(
+                "subtask-1",
+                "worker-1",
+                json!({"data": 42}),
+                Duration::from_secs(60),
+            )
             .await
             .unwrap();
 
@@ -438,11 +431,7 @@ mod tests {
         let _inbox1 = bus.register_agent("w1").await;
         let _inbox2 = bus.register_agent("w2").await;
 
-        let coord = SwarmCoordinator::new(
-            bus.clone(),
-            "coord",
-            vec!["w1".into(), "w2".into()],
-        );
+        let coord = SwarmCoordinator::new(bus.clone(), "coord", vec!["w1".into(), "w2".into()]);
 
         let results = coord
             .broadcast_task("broadcast-task", json!({}), Duration::from_secs(60))

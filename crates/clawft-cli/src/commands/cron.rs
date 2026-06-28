@@ -26,9 +26,7 @@ use comfy_table::{Table, presets::UTF8_FULL};
 
 use clawft_rpc::{DaemonClient, Request};
 use clawft_types::config::Config;
-use clawft_types::cron::{
-    CronJob, CronJobState, CronPayload, CronSchedule, ScheduleKind,
-};
+use clawft_types::cron::{CronJob, CronJobState, CronPayload, CronSchedule, ScheduleKind};
 
 /// Default cron store filename (JSONL, shared with CronService).
 const CRON_STORE_FILENAME: &str = "cron.jsonl";
@@ -123,10 +121,13 @@ pub async fn cron_list(_config: &Config) -> anyhow::Result<()> {
         }
         // If the daemon returned an error (e.g. unknown method), fall through.
         if let Some(ref err) = resp.error
-            && !err.contains("unknown method") {
-                anyhow::bail!("{err}");
-            }
-        eprintln!("warning: daemon does not support cron.list yet, falling back to local store (deprecated)");
+            && !err.contains("unknown method")
+        {
+            anyhow::bail!("{err}");
+        }
+        eprintln!(
+            "warning: daemon does not support cron.list yet, falling back to local store (deprecated)"
+        );
     }
 
     // ── Direct file fallback (deprecated) ──
@@ -160,15 +161,14 @@ fn cron_list_local() -> anyhow::Result<()> {
                     "every ?".into()
                 }
             }
-            ScheduleKind::At => {
-                match job.schedule.at_ms {
-                    Some(ms) => Utc.timestamp_millis_opt(ms)
-                        .single()
-                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                        .unwrap_or_else(|| "-".into()),
-                    None => "-".into(),
-                }
-            }
+            ScheduleKind::At => match job.schedule.at_ms {
+                Some(ms) => Utc
+                    .timestamp_millis_opt(ms)
+                    .single()
+                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                    .unwrap_or_else(|| "-".into()),
+                None => "-".into(),
+            },
             _ => "[unknown schedule]".into(),
         };
 
@@ -239,10 +239,13 @@ pub async fn cron_add(
             return Ok(());
         }
         if let Some(ref err) = resp.error
-            && !err.contains("unknown method") {
-                anyhow::bail!("{err}");
-            }
-        eprintln!("warning: daemon does not support cron.add yet, falling back to local store (deprecated)");
+            && !err.contains("unknown method")
+        {
+            anyhow::bail!("{err}");
+        }
+        eprintln!(
+            "warning: daemon does not support cron.add yet, falling back to local store (deprecated)"
+        );
     }
 
     // ── Direct file fallback (deprecated) ──
@@ -299,10 +302,13 @@ pub async fn cron_remove(job_id: String, _config: &Config) -> anyhow::Result<()>
             return Ok(());
         }
         if let Some(ref err) = resp.error
-            && !err.contains("unknown method") {
-                anyhow::bail!("{err}");
-            }
-        eprintln!("warning: daemon does not support cron.remove yet, falling back to local store (deprecated)");
+            && !err.contains("unknown method")
+        {
+            anyhow::bail!("{err}");
+        }
+        eprintln!(
+            "warning: daemon does not support cron.remove yet, falling back to local store (deprecated)"
+        );
     }
 
     // ── Direct file fallback (deprecated) ──
@@ -331,22 +337,25 @@ fn cron_remove_local(job_id: String) -> anyhow::Result<()> {
 /// Tries daemon RPC first; falls back to direct file I/O with a
 /// deprecation warning if the daemon does not support the method yet.
 pub async fn cron_enable(job_id: String, enabled: bool, _config: &Config) -> anyhow::Result<()> {
-    let method = if enabled { "cron.enable" } else { "cron.disable" };
+    let method = if enabled {
+        "cron.enable"
+    } else {
+        "cron.disable"
+    };
 
     if let Ok(mut client) = DaemonClient::connect().await.ok_or(()) {
         let params = serde_json::json!({ "id": job_id });
-        let resp = client
-            .call(Request::with_params(method, params))
-            .await?;
+        let resp = client.call(Request::with_params(method, params)).await?;
         if resp.ok {
             let state = if enabled { "enabled" } else { "disabled" };
             println!("Cron job '{job_id}' {state}.");
             return Ok(());
         }
         if let Some(ref err) = resp.error
-            && !err.contains("unknown method") {
-                anyhow::bail!("{err}");
-            }
+            && !err.contains("unknown method")
+        {
+            anyhow::bail!("{err}");
+        }
         eprintln!(
             "warning: daemon does not support {method} yet, falling back to local store (deprecated)"
         );
@@ -397,9 +406,10 @@ pub async fn cron_run(job_id: String, _config: &Config) -> anyhow::Result<()> {
             return Ok(());
         }
         if let Some(ref err) = resp.error
-            && !err.contains("unknown method") {
-                anyhow::bail!("{err}");
-            }
+            && !err.contains("unknown method")
+        {
+            anyhow::bail!("{err}");
+        }
         eprintln!(
             "warning: daemon does not support cron.run yet, falling back to local store (deprecated)"
         );
@@ -528,10 +538,8 @@ mod tests {
 
     #[test]
     fn jsonl_roundtrip_via_sync_helpers() {
-        let dir = std::env::temp_dir().join(format!(
-            "clawft-cron-cli-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("clawft-cron-cli-test-{}", uuid::Uuid::new_v4()));
         let path = dir.join("cron.jsonl");
 
         let now = Utc::now();
@@ -564,10 +572,8 @@ mod tests {
 
     #[test]
     fn enable_disable_via_jsonl() {
-        let dir = std::env::temp_dir().join(format!(
-            "clawft-cron-cli-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("clawft-cron-cli-test-{}", uuid::Uuid::new_v4()));
         let path = dir.join("cron.jsonl");
 
         let now = Utc::now();
@@ -600,10 +606,8 @@ mod tests {
 
     #[test]
     fn remove_via_jsonl() {
-        let dir = std::env::temp_dir().join(format!(
-            "clawft-cron-cli-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("clawft-cron-cli-test-{}", uuid::Uuid::new_v4()));
         let path = dir.join("cron.jsonl");
 
         let now = Utc::now();

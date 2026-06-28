@@ -5,9 +5,9 @@
 //! integration will be wired in a future phase.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::{delete, get, post, put},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 

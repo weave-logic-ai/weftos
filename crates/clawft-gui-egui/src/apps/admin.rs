@@ -34,10 +34,7 @@ pub fn show(
     // 24px top padding + ~18px line height; the apps stubs all reserve
     // 64px for the heading so leave that here too — keeps the body
     // baseline consistent across apps).
-    let body = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.top() + 64.0),
-        rect.max,
-    );
+    let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + 64.0), rect.max);
 
     // Render into a child Ui scoped to the body rect so the composer's
     // grid honours the panel bounds (otherwise it expands into the

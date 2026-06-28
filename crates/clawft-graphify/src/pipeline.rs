@@ -2,17 +2,16 @@
 //!
 //! Ported from Python `graphify/pipeline.py`.
 
+use crate::GraphifyError;
 use crate::analyze;
 use crate::build::MergeStats;
 use crate::cluster;
 use crate::entity::EntityId;
-use crate::summary;
 use crate::model::{
-    DetectionResult, Entity, ExtractionResult, ExtractionStats, Hyperedge,
-    KnowledgeGraph,
+    DetectionResult, Entity, ExtractionResult, ExtractionStats, Hyperedge, KnowledgeGraph,
 };
 use crate::relationship::Relationship;
-use crate::GraphifyError;
+use crate::summary;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -153,8 +152,11 @@ impl Pipeline {
 
             let (god_nodes, surprising_connections, questions) = if self.config.analyze {
                 let gn = analyze::god_nodes(&graph, self.config.god_nodes_top_n);
-                let sc =
-                    analyze::surprising_connections(&graph, &communities, self.config.surprises_top_n);
+                let sc = analyze::surprising_connections(
+                    &graph,
+                    &communities,
+                    self.config.surprises_top_n,
+                );
                 let qs = analyze::suggest_questions(
                     &graph,
                     &communities,
@@ -225,8 +227,7 @@ impl Pipeline {
         }
 
         // Merge into existing graph.
-        let merge_stats =
-            crate::build::merge(&mut existing_graph, &new_extractions, removed_files);
+        let merge_stats = crate::build::merge(&mut existing_graph, &new_extractions, removed_files);
 
         tracing::info!(
             entities_added = merge_stats.entities_added,
@@ -247,8 +248,11 @@ impl Pipeline {
 
             let community_labels = cluster::auto_label_all(&existing_graph, &communities);
             let cohesion_scores = cluster::score_all(&existing_graph, &communities);
-            let community_summaries =
-                summary::generate_community_summaries(&existing_graph, &communities, &community_labels);
+            let community_summaries = summary::generate_community_summaries(
+                &existing_graph,
+                &communities,
+                &community_labels,
+            );
 
             let (god_nodes, surprising_connections, questions) = if self.config.analyze {
                 let gn = analyze::god_nodes(&existing_graph, self.config.god_nodes_top_n);
@@ -377,10 +381,7 @@ mod tests {
             vec![entity("a", "a.py"), entity("b", "a.py")],
             vec![rel("a", "a.py", "b", "a.py")],
         );
-        let ext2 = extraction(
-            vec![entity("c", "c.py")],
-            vec![],
-        );
+        let ext2 = extraction(vec![entity("c", "c.py")], vec![]);
         let detection = DetectionResult::default();
         let result = pipeline
             .run_from_extractions(vec![ext1, ext2], detection)

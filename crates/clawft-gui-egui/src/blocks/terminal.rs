@@ -149,8 +149,8 @@ fn drain_replies(state: &mut DemoState) {
     for mut p in pending {
         match crate::live::try_recv_reply(&mut p.rx) {
             crate::live::TryReply::Done(Ok(value)) => {
-                let pretty = serde_json::to_string_pretty(&value)
-                    .unwrap_or_else(|_| value.to_string());
+                let pretty =
+                    serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
                 for line in pretty.lines() {
                     state
                         .terminal_history

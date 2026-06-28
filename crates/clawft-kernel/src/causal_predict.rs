@@ -97,19 +97,17 @@ pub fn rank_evidence_by_impact(
             let phi_v = fiedler.get(tgt as usize).copied().unwrap_or(0.0);
             let delta = predict_delta_lambda2(phi_u, phi_v, w as f64);
 
-            let explanation = if phi_u.signum() != phi_v.signum()
-                && phi_u.abs() > 1e-12
-                && phi_v.abs() > 1e-12
-            {
-                format!(
-                    "Bridges the graph partition (phi[{}]={:.3}, phi[{}]={:.3})",
-                    src, phi_u, tgt, phi_v
-                )
-            } else if delta > 0.1 {
-                format!("Strengthens weak connection (delta_lambda2={:.4})", delta)
-            } else {
-                format!("Reinforces existing cluster (delta_lambda2={:.4})", delta)
-            };
+            let explanation =
+                if phi_u.signum() != phi_v.signum() && phi_u.abs() > 1e-12 && phi_v.abs() > 1e-12 {
+                    format!(
+                        "Bridges the graph partition (phi[{}]={:.3}, phi[{}]={:.3})",
+                        src, phi_u, tgt, phi_v
+                    )
+                } else if delta > 0.1 {
+                    format!("Strengthens weak connection (delta_lambda2={:.4})", delta)
+                } else {
+                    format!("Reinforces existing cluster (delta_lambda2={:.4})", delta)
+                };
 
             EvidenceRanking {
                 source: src,
@@ -287,9 +285,8 @@ pub fn is_redundant(
 
     // Condition 1: same side of the partition.
     // If they bridge the partition (opposite signs), never redundant.
-    let same_side = phi_src.signum() == phi_tgt.signum()
-        || phi_src.abs() < 1e-12
-        || phi_tgt.abs() < 1e-12;
+    let same_side =
+        phi_src.signum() == phi_tgt.signum() || phi_src.abs() < 1e-12 || phi_tgt.abs() < 1e-12;
     if !same_side {
         return false;
     }
@@ -301,14 +298,12 @@ pub fn is_redundant(
     }
 
     // Condition 3: a recent addition already bridged the partition.
-    
 
     recent_additions.iter().any(|&(rs, rt, rw)| {
         let phi_rs = fiedler.get(rs as usize).copied().unwrap_or(0.0);
         let phi_rt = fiedler.get(rt as usize).copied().unwrap_or(0.0);
-        let opposite_signs = phi_rs.signum() != phi_rt.signum()
-            && phi_rs.abs() > 1e-12
-            && phi_rt.abs() > 1e-12;
+        let opposite_signs =
+            phi_rs.signum() != phi_rt.signum() && phi_rs.abs() > 1e-12 && phi_rt.abs() > 1e-12;
         let recent_delta = predict_delta_lambda2(phi_rs, phi_rt, rw as f64);
         opposite_signs && recent_delta > threshold
     })
@@ -892,8 +887,8 @@ mod tests {
         // Synthetic Fiedler vector: A and B on same side, C on other.
         let fiedler = vec![0.0; a as usize]
             .into_iter()
-            .chain(std::iter::once(0.5))  // a
-            .chain(std::iter::once(0.3))  // b
+            .chain(std::iter::once(0.5)) // a
+            .chain(std::iter::once(0.3)) // b
             .chain(std::iter::once(-0.6)) // c
             .collect::<Vec<f64>>();
 

@@ -5,19 +5,18 @@
 //! for `StaticRouter` when `routing.mode == "tiered"`.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 
 use clawft_types::routing::{
-    AuthContext, EscalationConfig, RoutingConfig,
-    TierSelectionStrategy, UserPermissions,
+    AuthContext, EscalationConfig, RoutingConfig, TierSelectionStrategy, UserPermissions,
 };
 
 use super::traits::{
-    BudgetResult, ChatRequest, CostTrackable, ModelRouter, RateLimitable,
-    ResponseOutcome, RoutingDecision, TaskProfile,
+    BudgetResult, ChatRequest, CostTrackable, ModelRouter, RateLimitable, ResponseOutcome,
+    RoutingDecision, TaskProfile,
 };
 
 // ── ModelTier runtime struct ────────────────────────────────────────────
@@ -297,13 +296,16 @@ impl TieredRouter {
     ) -> TierBudgetResult<'a> {
         let cost_tracker = match &self.cost_tracker {
             Some(ct) => ct,
-            None => return TierBudgetResult { tier: selected, constrained: false },
+            None => {
+                return TierBudgetResult {
+                    tier: selected,
+                    constrained: false,
+                };
+            }
         };
 
         // If budget is unlimited (0.0), skip checking
-        if permissions.cost_budget_daily_usd <= 0.0
-            && permissions.cost_budget_monthly_usd <= 0.0
-        {
+        if permissions.cost_budget_daily_usd <= 0.0 && permissions.cost_budget_monthly_usd <= 0.0 {
             return TierBudgetResult {
                 tier: selected,
                 constrained: false,
@@ -499,10 +501,7 @@ impl TieredRouter {
                 }
                 _ => {
                     let (provider, model) = split_provider_model(fallback);
-                    let reason = format!(
-                        "fallback to configured fallback_model '{}'",
-                        fallback
-                    );
+                    let reason = format!("fallback to configured fallback_model '{}'", fallback);
                     return Some((provider, model, reason));
                 }
             }
@@ -530,15 +529,15 @@ impl TieredRouter {
                 .map(|t| t.ordinal);
 
             if let Some(ordinal) = fallback_tier_ordinal
-                && ordinal > max_ordinal {
-                    return RoutingDecision {
-                        provider: String::new(),
-                        model: String::new(),
-                        reason: "rate limited: fallback model not permitted for user tier"
-                            .into(),
-                        ..Default::default()
-                    };
-                }
+                && ordinal > max_ordinal
+            {
+                return RoutingDecision {
+                    provider: String::new(),
+                    model: String::new(),
+                    reason: "rate limited: fallback model not permitted for user tier".into(),
+                    ..Default::default()
+                };
+            }
 
             let (provider, model) = split_provider_model(fallback);
             RoutingDecision {
@@ -576,11 +575,7 @@ impl TieredRouter {
             // (FIX-06 / WEFT-27). If the fallback model lives in a tier
             // above the caller's max_tier, deny rather than leak access.
             if let Some(perms) = permissions {
-                let max_ordinal = self
-                    .tier_index
-                    .get(&perms.max_tier)
-                    .copied()
-                    .unwrap_or(0);
+                let max_ordinal = self.tier_index.get(&perms.max_tier).copied().unwrap_or(0);
                 let fallback_tier_ordinal = self
                     .tiers
                     .iter()
@@ -627,17 +622,9 @@ impl TieredRouter {
 
 #[async_trait]
 impl ModelRouter for TieredRouter {
-    async fn route(
-        &self,
-        request: &ChatRequest,
-        profile: &TaskProfile,
-    ) -> RoutingDecision {
+    async fn route(&self, request: &ChatRequest, profile: &TaskProfile) -> RoutingDecision {
         // Step 1: Extract auth context
-        let auth = request
-            .auth_context
-            .as_ref()
-            .cloned()
-            .unwrap_or_default(); // zero-trust if absent
+        let auth = request.auth_context.as_ref().cloned().unwrap_or_default(); // zero-trust if absent
 
         // Step 2: Read pre-resolved permissions
         let default_permissions = UserPermissions::default();
@@ -709,11 +696,11 @@ impl ModelRouter for TieredRouter {
         // Step 3: Check rate limit
         if let Some(ref limiter) = self.rate_limiter
             && permissions.rate_limit > 0
-                && !limiter.check(&auth.sender_id, permissions.rate_limit)
-            {
-                tracing::info!(sender = %auth.sender_id, "route: rate limited");
-                return self.rate_limited_decision(permissions);
-            }
+            && !limiter.check(&auth.sender_id, permissions.rate_limit)
+        {
+            tracing::info!(sender = %auth.sender_id, "route: rate limited");
+            return self.rate_limited_decision(permissions);
+        }
 
         // Step 4: Filter tiers by permission level
         let allowed_tiers = self.filter_tiers_by_permissions(permissions);
@@ -723,16 +710,11 @@ impl ModelRouter for TieredRouter {
         }
 
         // Step 5: Select tier by complexity (with escalation)
-        let tier_selection =
-            self.select_tier(profile.complexity, &allowed_tiers, permissions);
+        let tier_selection = self.select_tier(profile.complexity, &allowed_tiers, permissions);
 
         // Step 6: Apply budget constraints
-        let budget_result = self.apply_budget_constraints(
-            tier_selection.tier,
-            &allowed_tiers,
-            &auth,
-            permissions,
-        );
+        let budget_result =
+            self.apply_budget_constraints(tier_selection.tier, &allowed_tiers, &auth, permissions);
 
         let final_tier = budget_result.tier;
         let escalated = tier_selection.escalated;
@@ -797,8 +779,7 @@ impl ModelRouter for TieredRouter {
         // Record actual cost after response is received.
         // For now, cost_estimate_usd is used as a proxy for actual cost.
         // A proper cost calculation from token usage will be added later.
-        if let (Some(cost), Some(sender_id)) =
-            (decision.cost_estimate_usd, &decision.sender_id)
+        if let (Some(cost), Some(sender_id)) = (decision.cost_estimate_usd, &decision.sender_id)
             && let Some(ref tracker) = self.cost_tracker
         {
             // Reconcile: actual == estimated for now (no token-based cost yet)
@@ -888,12 +869,7 @@ mod tests {
                 [0.3, 1.0],
                 0.01,
             ),
-            make_tier_config(
-                "elite",
-                vec!["anthropic/claude-opus-4"],
-                [0.7, 1.0],
-                0.05,
-            ),
+            make_tier_config("elite", vec!["anthropic/claude-opus-4"], [0.7, 1.0], 0.05),
         ]
     }
 
@@ -1476,9 +1452,12 @@ mod tests {
     #[test]
     fn fallback_to_fallback_model() {
         // All tiers have denied models
-        let config = make_config(vec![
-            make_tier_config("only", vec!["denied/model"], [0.0, 1.0], 0.0),
-        ]);
+        let config = make_config(vec![make_tier_config(
+            "only",
+            vec!["denied/model"],
+            [0.0, 1.0],
+            0.0,
+        )]);
         let router = TieredRouter::new(config);
         let primary = &router.tiers[0];
         let perms = UserPermissions {
@@ -1497,9 +1476,12 @@ mod tests {
 
     #[test]
     fn fallback_returns_none_when_no_fallback() {
-        let mut config = make_config(vec![
-            make_tier_config("only", vec!["denied/model"], [0.0, 1.0], 0.0),
-        ]);
+        let mut config = make_config(vec![make_tier_config(
+            "only",
+            vec!["denied/model"],
+            [0.0, 1.0],
+            0.0,
+        )]);
         config.fallback_model = None;
         let router = TieredRouter::new(config);
         let primary = &router.tiers[0];
@@ -1680,10 +1662,7 @@ mod tests {
 
     #[test]
     fn model_matches_pattern_no_match() {
-        assert!(!model_matches_pattern(
-            "openai/gpt-4o",
-            "anthropic/*"
-        ));
+        assert!(!model_matches_pattern("openai/gpt-4o", "anthropic/*"));
     }
 
     #[tokio::test]
@@ -1862,9 +1841,7 @@ mod tests {
     #[tokio::test]
     async fn weft52_admin_in_restricted_channel_is_clamped_to_channel_level() {
         use crate::pipeline::permissions::PermissionResolver;
-        use clawft_types::routing::{
-            PermissionLevelConfig, PermissionsConfig, RoutingConfig,
-        };
+        use clawft_types::routing::{PermissionLevelConfig, PermissionsConfig, RoutingConfig};
         use std::collections::HashMap;
 
         // alice is configured as level=2 (admin) globally.
@@ -1905,7 +1882,10 @@ mod tests {
 
         // Channel override wins: admin is clamped to user level + free
         // tier and model_override is denied.
-        assert_eq!(perms.level, 1, "channel level override must beat user override");
+        assert_eq!(
+            perms.level, 1,
+            "channel level override must beat user override"
+        );
         assert_eq!(perms.max_tier, "free");
         assert!(
             !perms.model_override,

@@ -215,12 +215,7 @@ impl HnswStore {
     ///
     /// Uses upsert semantics: if an entry with the same ID already exists,
     /// it is replaced.
-    pub fn insert(
-        &mut self,
-        id: String,
-        embedding: Vec<f32>,
-        metadata: serde_json::Value,
-    ) {
+    pub fn insert(&mut self, id: String, embedding: Vec<f32>, metadata: serde_json::Value) {
         // Remove existing entry with the same ID (upsert) in O(1).
         if let Some(old_pos) = self.id_index.remove(&id) {
             self.entries.swap_remove(old_pos);
@@ -250,11 +245,7 @@ impl HnswStore {
     /// strategy: HNSW search over the previously-indexed entries plus a
     /// brute-force scan over entries added since the last rebuild. This
     /// avoids the O(n log n) cost of a full HNSW rebuild on every insert.
-    pub fn query(
-        &mut self,
-        query_embedding: &[f32],
-        top_k: usize,
-    ) -> Vec<HnswQueryResult> {
+    pub fn query(&mut self, query_embedding: &[f32], top_k: usize) -> Vec<HnswQueryResult> {
         if self.entries.is_empty() || top_k == 0 {
             return Vec::new();
         }
@@ -308,8 +299,7 @@ impl HnswStore {
         // brute-force scan entries added after the last rebuild and merge.
         if self.dirty && self.index_built_len < self.entries.len() {
             for entry in &self.entries[self.index_built_len..] {
-                let score =
-                    cosine_similarity(query_embedding, &entry.embedding);
+                let score = cosine_similarity(query_embedding, &entry.embedding);
                 results.push(HnswQueryResult {
                     id: entry.id.clone(),
                     score,
@@ -380,9 +370,8 @@ impl HnswStore {
             ef_construction: self.ef_construction,
         };
 
-        let json = serde_json::to_string_pretty(&snapshot).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-        })?;
+        let json = serde_json::to_string_pretty(&snapshot)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
         std::fs::write(path, json)
     }
 
@@ -395,10 +384,8 @@ impl HnswStore {
         }
 
         let data = std::fs::read_to_string(path)?;
-        let snapshot: StoreSnapshot =
-            serde_json::from_str(&data).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-            })?;
+        let snapshot: StoreSnapshot = serde_json::from_str(&data)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
 
         debug!(
             entries = snapshot.entries.len(),
@@ -406,8 +393,7 @@ impl HnswStore {
             "loaded HnswStore from disk"
         );
 
-        let mut id_index: HashMap<String, usize> =
-            HashMap::with_capacity(snapshot.entries.len());
+        let mut id_index: HashMap<String, usize> = HashMap::with_capacity(snapshot.entries.len());
         for (i, e) in snapshot.entries.iter().enumerate() {
             id_index.insert(e.id.clone(), i);
         }
@@ -511,11 +497,7 @@ impl HnswStore {
     }
 
     /// Brute-force cosine similarity search (fallback for small datasets).
-    fn brute_force_query(
-        &self,
-        query_embedding: &[f32],
-        top_k: usize,
-    ) -> Vec<HnswQueryResult> {
+    fn brute_force_query(&self, query_embedding: &[f32], top_k: usize) -> Vec<HnswQueryResult> {
         let mut scored: Vec<HnswQueryResult> = self
             .entries
             .iter()
@@ -581,7 +563,15 @@ pub struct TieredSearch {
 
 /// Project a full embedding to a subset of dimensions.
 fn project(embedding: &[f32], dims: &[usize]) -> Vec<f32> {
-    dims.iter().map(|&d| if d < embedding.len() { embedding[d] } else { 0.0 }).collect()
+    dims.iter()
+        .map(|&d| {
+            if d < embedding.len() {
+                embedding[d]
+            } else {
+                0.0
+            }
+        })
+        .collect()
 }
 
 impl TieredSearch {
@@ -714,7 +704,11 @@ impl TieredSearch {
                 })
             })
             .collect();
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(top_k);
         results
     }
@@ -773,9 +767,7 @@ mod tests {
     fn temp_path(label: &str) -> std::path::PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
-        std::env::temp_dir().join(format!(
-            "clawft_hnsw_test_{label}_{pid}_{n}.json"
-        ))
+        std::env::temp_dir().join(format!("clawft_hnsw_test_{label}_{pid}_{n}.json"))
     }
 
     #[test]
@@ -821,16 +813,8 @@ mod tests {
     #[test]
     fn upsert_semantics() {
         let mut store = HnswStore::new();
-        store.insert(
-            "doc1".into(),
-            vec![1.0, 0.0],
-            serde_json::json!({"v": 1}),
-        );
-        store.insert(
-            "doc1".into(),
-            vec![0.0, 1.0],
-            serde_json::json!({"v": 2}),
-        );
+        store.insert("doc1".into(), vec![1.0, 0.0], serde_json::json!({"v": 1}));
+        store.insert("doc1".into(), vec![0.0, 1.0], serde_json::json!({"v": 2}));
 
         assert_eq!(store.len(), 1);
         let entry = store.get("doc1").unwrap();
@@ -909,11 +893,7 @@ mod tests {
             let dim = 16;
             let mut emb = vec![0.0f32; dim];
             emb[i % dim] = 1.0;
-            store.insert(
-                format!("doc{i}"),
-                emb,
-                serde_json::json!({"idx": i}),
-            );
+            store.insert(format!("doc{i}"), emb, serde_json::json!({"idx": i}));
         }
 
         // Query should use HNSW path and return correct results.

@@ -73,10 +73,18 @@ impl LanguageConfig {
             }
         }
 
-        if has_rs { configs.push(Self::rust()); }
-        if has_ts { configs.push(Self::typescript()); }
-        if has_py { configs.push(Self::python()); }
-        if has_go { configs.push(Self::go()); }
+        if has_rs {
+            configs.push(Self::rust());
+        }
+        if has_ts {
+            configs.push(Self::typescript());
+        }
+        if has_py {
+            configs.push(Self::python());
+        }
+        if has_go {
+            configs.push(Self::go());
+        }
 
         configs
     }
@@ -93,7 +101,9 @@ fn collect_extensions(
     exts: &mut Vec<String>,
     depth: usize,
 ) -> Result<(), std::io::Error> {
-    if depth == 0 { return Ok(()); }
+    if depth == 0 {
+        return Ok(());
+    }
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();

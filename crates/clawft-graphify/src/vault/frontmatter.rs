@@ -59,8 +59,7 @@ pub fn parse(content: &str) -> Document {
             } else {
                 String::new()
             };
-            let fm: Frontmatter =
-                serde_yaml::from_str(yaml_block).unwrap_or_default();
+            let fm: Frontmatter = serde_yaml::from_str(yaml_block).unwrap_or_default();
             Document {
                 frontmatter: fm,
                 body,
@@ -160,12 +159,30 @@ struct TypePattern {
 }
 
 const TYPE_PATTERNS: &[TypePattern] = &[
-    TypePattern { pattern: "readme|index", doc_type: "guide" },
-    TypePattern { pattern: "api|endpoint", doc_type: "technical" },
-    TypePattern { pattern: "standard|convention", doc_type: "standard" },
-    TypePattern { pattern: "adr|decision", doc_type: "architecture" },
-    TypePattern { pattern: "spec|requirement", doc_type: "specification" },
-    TypePattern { pattern: "changelog|release", doc_type: "documentation" },
+    TypePattern {
+        pattern: "readme|index",
+        doc_type: "guide",
+    },
+    TypePattern {
+        pattern: "api|endpoint",
+        doc_type: "technical",
+    },
+    TypePattern {
+        pattern: "standard|convention",
+        doc_type: "standard",
+    },
+    TypePattern {
+        pattern: "adr|decision",
+        doc_type: "architecture",
+    },
+    TypePattern {
+        pattern: "spec|requirement",
+        doc_type: "specification",
+    },
+    TypePattern {
+        pattern: "changelog|release",
+        doc_type: "documentation",
+    },
 ];
 
 fn infer_type(path: &Path, body: &str) -> Option<String> {
@@ -180,10 +197,10 @@ fn infer_type(path: &Path, body: &str) -> Option<String> {
     }
 
     let has_code_blocks = body.contains("```");
-    let has_install_section = body.to_lowercase().contains("## install")
-        || body.to_lowercase().contains("## setup");
-    let has_api_section = body.to_lowercase().contains("## api")
-        || body.to_lowercase().contains("## endpoints");
+    let has_install_section =
+        body.to_lowercase().contains("## install") || body.to_lowercase().contains("## setup");
+    let has_api_section =
+        body.to_lowercase().contains("## api") || body.to_lowercase().contains("## endpoints");
     let has_overview = body.to_lowercase().contains("## overview")
         || body.to_lowercase().contains("## introduction");
 
@@ -219,18 +236,54 @@ struct TagPattern {
 }
 
 const TAG_PATTERNS: &[TagPattern] = &[
-    TagPattern { keywords: &["api", "endpoint", "rest", "graphql"], tag: "api" },
-    TagPattern { keywords: &["database", "sql", "postgres", "mysql", "mongo"], tag: "database" },
-    TagPattern { keywords: &["test", "testing", "jest", "vitest"], tag: "testing" },
-    TagPattern { keywords: &["docker", "container", "kubernetes", "k8s"], tag: "devops" },
-    TagPattern { keywords: &["security", "auth", "authentication", "oauth"], tag: "security" },
-    TagPattern { keywords: &["performance", "optimization", "cache"], tag: "performance" },
-    TagPattern { keywords: &["react", "vue", "angular", "frontend"], tag: "frontend" },
-    TagPattern { keywords: &["node", "express", "backend", "server"], tag: "backend" },
-    TagPattern { keywords: &["typescript", "javascript", "python", "rust"], tag: "programming" },
-    TagPattern { keywords: &["guide", "tutorial", "howto"], tag: "guide" },
-    TagPattern { keywords: &["architecture", "design", "pattern"], tag: "architecture" },
-    TagPattern { keywords: &["config", "configuration", "setup"], tag: "configuration" },
+    TagPattern {
+        keywords: &["api", "endpoint", "rest", "graphql"],
+        tag: "api",
+    },
+    TagPattern {
+        keywords: &["database", "sql", "postgres", "mysql", "mongo"],
+        tag: "database",
+    },
+    TagPattern {
+        keywords: &["test", "testing", "jest", "vitest"],
+        tag: "testing",
+    },
+    TagPattern {
+        keywords: &["docker", "container", "kubernetes", "k8s"],
+        tag: "devops",
+    },
+    TagPattern {
+        keywords: &["security", "auth", "authentication", "oauth"],
+        tag: "security",
+    },
+    TagPattern {
+        keywords: &["performance", "optimization", "cache"],
+        tag: "performance",
+    },
+    TagPattern {
+        keywords: &["react", "vue", "angular", "frontend"],
+        tag: "frontend",
+    },
+    TagPattern {
+        keywords: &["node", "express", "backend", "server"],
+        tag: "backend",
+    },
+    TagPattern {
+        keywords: &["typescript", "javascript", "python", "rust"],
+        tag: "programming",
+    },
+    TagPattern {
+        keywords: &["guide", "tutorial", "howto"],
+        tag: "guide",
+    },
+    TagPattern {
+        keywords: &["architecture", "design", "pattern"],
+        tag: "architecture",
+    },
+    TagPattern {
+        keywords: &["config", "configuration", "setup"],
+        tag: "configuration",
+    },
 ];
 
 fn infer_tags(path: &Path, body: &str) -> Vec<String> {
@@ -301,9 +354,13 @@ fn infer_priority(body: &str) -> Option<String> {
     let lower = body.to_lowercase();
     if lower.contains("critical") || lower.contains("urgent") || lower.contains("p0") {
         Some("critical".into())
-    } else if lower.contains("high priority") || lower.contains("important") || lower.contains("p1") {
+    } else if lower.contains("high priority") || lower.contains("important") || lower.contains("p1")
+    {
         Some("high".into())
-    } else if lower.contains("low priority") || lower.contains("nice to have") || lower.contains("p3") {
+    } else if lower.contains("low priority")
+        || lower.contains("nice to have")
+        || lower.contains("p3")
+    {
         Some("low".into())
     } else {
         None

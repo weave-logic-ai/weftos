@@ -61,10 +61,7 @@ pub use tree::EmlTree;
 #[cfg(feature = "experimental-attention")]
 pub use attention::{
     run_benchmark, run_benchmark_with_trials, AttentionBenchmark, AttentionError,
-    EndToEndTrainConfig, SafeTree, ScalingPoint, ToyEmlAttention, MAX_TOY_D_MODEL,
-    MAX_TOY_SEQ_LEN,
+    EndToEndTrainConfig, SafeTree, ScalingPoint, ToyEmlAttention, MAX_TOY_D_MODEL, MAX_TOY_SEQ_LEN,
 };
 #[cfg(feature = "experimental-attention")]
-pub use baseline_attention::{
-    compare_eml_vs_baseline, AttentionComparison, BaselineAttention,
-};
+pub use baseline_attention::{compare_eml_vs_baseline, AttentionComparison, BaselineAttention};

@@ -270,9 +270,6 @@ mod tests {
             message_id: "<msg-002@example.com>".into(),
             in_reply_to: Some("<msg-001@example.com>".into()),
         };
-        assert_eq!(
-            email.in_reply_to.as_deref(),
-            Some("<msg-001@example.com>")
-        );
+        assert_eq!(email.in_reply_to.as_deref(), Some("<msg-001@example.com>"));
     }
 }

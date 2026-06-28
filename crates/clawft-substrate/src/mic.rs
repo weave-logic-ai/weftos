@@ -39,7 +39,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::adapter::{
@@ -48,7 +48,7 @@ use crate::adapter::{
 };
 use crate::delta::StateDelta;
 use crate::healthcheck::{
-    build_report_delta as build_health_delta, SensorHealthReport, SensorStatus,
+    SensorHealthReport, SensorStatus, build_report_delta as build_health_delta,
 };
 use crate::physical::{
     Characterization, PhysicalSensorAdapter, SensorCalibration, SensorInterface,
@@ -179,18 +179,12 @@ impl OntologyAdapter for MicrophoneAdapter {
         PERMISSIONS
     }
 
-    async fn open(
-        &self,
-        topic: &str,
-        _args: Value,
-    ) -> Result<Subscription, AdapterError> {
+    async fn open(&self, topic: &str, _args: Value) -> Result<Subscription, AdapterError> {
         // Both declared topics share the same producer loop — the
         // poller emits the level payload AND the per-sensor health
         // report on every tick. Subscribing to either gives the caller
         // the full delta stream; the substrate routes by path.
-        if topic != "substrate/sensor/mic"
-            && topic != "substrate/meta/adapter/mic/healthcheck"
-        {
+        if topic != "substrate/sensor/mic" && topic != "substrate/meta/adapter/mic/healthcheck" {
             return Err(AdapterError::UnknownTopic(topic.into()));
         }
         let id = {
@@ -247,9 +241,7 @@ impl PhysicalSensorAdapter for MicrophoneAdapter {
         SensorCalibration {
             scale: 1.0,
             offset: 0.0,
-            reference: Some(
-                "s16le full-scale = ±32767; dBFS = 20 * log10(rms / 32768)".into(),
-            ),
+            reference: Some("s16le full-scale = ±32767; dBFS = 20 * log10(rms / 32768)".into()),
         }
     }
 
@@ -380,11 +372,7 @@ fn now_ms() -> u64 {
 /// Read up to `WINDOW_SAMPLES` from the file at `cursor`, compute
 /// RMS + peak in dBFS, return the emission shape. Advances `cursor`
 /// to the new end-of-read position.
-fn read_and_measure(
-    source_path: &Path,
-    sample_rate: u32,
-    cursor: &mut u64,
-) -> Value {
+fn read_and_measure(source_path: &Path, sample_rate: u32, cursor: &mut u64) -> Value {
     let Ok(mut file) = std::fs::File::open(source_path) else {
         return json!({
             "available": false,
@@ -457,11 +445,7 @@ fn sample_to_dbfs(v: f64) -> f64 {
         return -120.0;
     }
     let db = 20.0 * (v / 32768.0).log10();
-    if db < -120.0 {
-        -120.0
-    } else {
-        db
-    }
+    if db < -120.0 { -120.0 } else { db }
 }
 
 #[cfg(test)]
@@ -495,7 +479,9 @@ mod tests {
     fn full_scale_sine_peaks_near_zero_dbfs() {
         let dir = TempDir::new().unwrap();
         // A full-scale square wave — peak = 32767, RMS = 32767.
-        let samples: Vec<i16> = (0..1024).map(|i| if i % 2 == 0 { 32767 } else { -32767 }).collect();
+        let samples: Vec<i16> = (0..1024)
+            .map(|i| if i % 2 == 0 { 32767 } else { -32767 })
+            .collect();
         let path = write_pcm(&dir, "fullscale.raw", &samples);
         let mut cursor = 0u64;
         let v = read_and_measure(&path, 16000, &mut cursor);
@@ -510,7 +496,9 @@ mod tests {
     fn half_scale_sine_rms_is_minus_nine_dbfs_ish() {
         // A 50%-amplitude square wave. RMS = 16384; 20*log10(16384/32768) = -6.02 dBFS.
         let dir = TempDir::new().unwrap();
-        let samples: Vec<i16> = (0..1024).map(|i| if i % 2 == 0 { 16384 } else { -16384 }).collect();
+        let samples: Vec<i16> = (0..1024)
+            .map(|i| if i % 2 == 0 { 16384 } else { -16384 })
+            .collect();
         let path = write_pcm(&dir, "halfscale.raw", &samples);
         let mut cursor = 0u64;
         let v = read_and_measure(&path, 16000, &mut cursor);
@@ -534,9 +522,7 @@ mod tests {
         // read consumes one window's worth and the next read picks up
         // from the right offset.
         let mut samples: Vec<i16> = vec![0i16; WINDOW_SAMPLES];
-        samples.extend(
-            (0..WINDOW_SAMPLES).map(|i| if i % 2 == 0 { 32767 } else { -32767 }),
-        );
+        samples.extend((0..WINDOW_SAMPLES).map(|i| if i % 2 == 0 { 32767 } else { -32767 }));
         let path = write_pcm(&dir, "twohalf.raw", &samples);
 
         let mut cursor = 0u64;
@@ -619,13 +605,10 @@ mod tests {
 
         // The very first delta must be the unknown-status health
         // report — sent before the ticker has fired.
-        let first = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            sub.rx.recv(),
-        )
-        .await
-        .expect("recv timed out")
-        .expect("channel closed");
+        let first = tokio::time::timeout(std::time::Duration::from_millis(500), sub.rx.recv())
+            .await
+            .expect("recv timed out")
+            .expect("channel closed");
         match first {
             StateDelta::Replace { path, value } => {
                 assert_eq!(path, "substrate/meta/adapter/mic/healthcheck");
@@ -657,11 +640,8 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         let mut got_unhealthy = false;
         while std::time::Instant::now() < deadline {
-            let delta = tokio::time::timeout(
-                std::time::Duration::from_millis(700),
-                sub.rx.recv(),
-            )
-            .await;
+            let delta =
+                tokio::time::timeout(std::time::Duration::from_millis(700), sub.rx.recv()).await;
             let Ok(Some(delta)) = delta else { continue };
             if let StateDelta::Replace { path, value } = delta
                 && path == "substrate/meta/adapter/mic/healthcheck"

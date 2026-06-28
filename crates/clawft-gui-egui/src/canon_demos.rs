@@ -187,10 +187,7 @@ fn note(state: &mut CanonDemoState, resp: &CanonResponse) {
             "{}  variant={}  bearing={}  latency={}",
             resp.identity,
             resp.variant,
-            resp.bearing
-                .affordance
-                .as_deref()
-                .unwrap_or("(none)"),
+            resp.bearing.affordance.as_deref().unwrap_or("(none)"),
             resp.range
                 .latency_ms()
                 .map(|l| format!("{l:.1}ms"))
@@ -294,27 +291,18 @@ fn show_strip(ui: &mut egui::Ui) {
         ])
         .body(|strip| {
             strip.cell(|ui| {
-                ui.painter().rect_filled(
-                    ui.max_rect(),
-                    4.0,
-                    egui::Color32::from_rgb(60, 80, 120),
-                );
+                ui.painter()
+                    .rect_filled(ui.max_rect(), 4.0, egui::Color32::from_rgb(60, 80, 120));
                 ui.label("25%");
             });
             strip.cell(|ui| {
-                ui.painter().rect_filled(
-                    ui.max_rect(),
-                    4.0,
-                    egui::Color32::from_rgb(40, 60, 90),
-                );
+                ui.painter()
+                    .rect_filled(ui.max_rect(), 4.0, egui::Color32::from_rgb(40, 60, 90));
                 ui.label("remainder");
             });
             strip.cell(|ui| {
-                ui.painter().rect_filled(
-                    ui.max_rect(),
-                    4.0,
-                    egui::Color32::from_rgb(80, 60, 120),
-                );
+                ui.painter()
+                    .rect_filled(ui.max_rect(), 4.0, egui::Color32::from_rgb(80, 60, 120));
                 ui.label("120px");
             });
         })
@@ -452,12 +440,20 @@ fn show_field(ui: &mut egui::Ui, state: &mut CanonDemoState) {
 
 fn show_toggle(ui: &mut egui::Ui, state: &mut CanonDemoState) {
     ui.label("Switch and Checkbox styles bound to separate bools.");
-    Toggle::new("demo.toggle.switch", "switch style", &mut state.toggle_switch)
-        .style(ToggleStyle::Switch)
-        .show(ui);
-    Toggle::new("demo.toggle.check", "checkbox style", &mut state.toggle_check)
-        .style(ToggleStyle::Checkbox)
-        .show(ui);
+    Toggle::new(
+        "demo.toggle.switch",
+        "switch style",
+        &mut state.toggle_switch,
+    )
+    .style(ToggleStyle::Switch)
+    .show(ui);
+    Toggle::new(
+        "demo.toggle.check",
+        "checkbox style",
+        &mut state.toggle_check,
+    )
+    .style(ToggleStyle::Checkbox)
+    .show(ui);
     ui.monospace(format!(
         "switch={}  check={}",
         state.toggle_switch, state.toggle_check
@@ -474,15 +470,9 @@ fn show_select(ui: &mut egui::Ui, state: &mut CanonDemoState) {
 }
 
 fn show_slider(ui: &mut egui::Ui, state: &mut CanonDemoState) {
-    Slider::new(
-        "demo.slider",
-        "ratio",
-        &mut state.slider_value,
-        0.0,
-        1.0,
-    )
-    .suffix(" ratio")
-    .show(ui);
+    Slider::new("demo.slider", "ratio", &mut state.slider_value, 0.0, 1.0)
+        .suffix(" ratio")
+        .show(ui);
     ui.monospace(format!("value = {:.3}", state.slider_value));
 }
 
@@ -525,9 +515,9 @@ fn show_dock(ui: &mut egui::Ui, state: &mut CanonDemoState) {
     ui.label("egui_dock-backed workspace. Drag tabs to split/reorder.");
     let dock_state = state.dock_state.get_or_insert_with(|| {
         let mut d = DockState::new(vec!["overview".into(), "logs".into()]);
-        let [_old, _new] = d
-            .main_surface_mut()
-            .split_right(NodeIndex::root(), 0.5, vec!["metrics".into()]);
+        let [_old, _new] =
+            d.main_surface_mut()
+                .split_right(NodeIndex::root(), 0.5, vec!["metrics".into()]);
         d
     });
     // Render the dock in a fixed-height child so the rest of the demo
@@ -609,10 +599,7 @@ fn show_canvas(ui: &mut egui::Ui) {
             painter.circle_stroke(
                 origin,
                 r,
-                egui::Stroke::new(
-                    1.0,
-                    egui::Color32::from_gray(80 + ring as u8 * 20),
-                ),
+                egui::Stroke::new(1.0, egui::Color32::from_gray(80 + ring as u8 * 20)),
             );
         }
         painter.text(

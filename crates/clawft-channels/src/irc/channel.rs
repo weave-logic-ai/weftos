@@ -34,7 +34,7 @@ use clawft_plugin::error::PluginError;
 use clawft_plugin::message::MessagePayload;
 use clawft_plugin::traits::{ChannelAdapter, ChannelAdapterHost};
 
-use super::types::{validate_config, IrcAdapterConfig};
+use super::types::{IrcAdapterConfig, validate_config};
 
 /// Maximum body bytes per PRIVMSG line. The IRC line limit is 512
 /// bytes including command, target, prefix, and CRLF. 400 leaves
@@ -207,11 +207,7 @@ impl ChannelAdapter for IrcChannelAdapter {
         Ok(())
     }
 
-    async fn send(
-        &self,
-        target: &str,
-        payload: &MessagePayload,
-    ) -> Result<String, PluginError> {
+    async fn send(&self, target: &str, payload: &MessagePayload) -> Result<String, PluginError> {
         let content = match payload {
             MessagePayload::Text { content } => content.clone(),
             MessagePayload::Binary { .. } => {
@@ -270,9 +266,7 @@ impl ChannelAdapter for IrcChannelAdapter {
 // dial / handshake / line I/O helpers
 // ---------------------------------------------------------------------------
 
-async fn dial(
-    cfg: &IrcAdapterConfig,
-) -> Result<(DynReader, DynWriter), PluginError> {
+async fn dial(cfg: &IrcAdapterConfig) -> Result<(DynReader, DynWriter), PluginError> {
     let addr = format!("{}:{}", cfg.server, cfg.port);
     let tcp = TcpStream::connect(&addr)
         .await
@@ -295,8 +289,8 @@ async fn tls_connect(
     tcp: TcpStream,
 ) -> Result<tokio_rustls::client::TlsStream<TcpStream>, PluginError> {
     use std::sync::Arc;
-    use tokio_rustls::rustls::{ClientConfig, RootCertStore};
     use tokio_rustls::TlsConnector;
+    use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
     // Trust roots from webpki-roots (Mozilla CA bundle, statically
     // compiled — no runtime cert-store dependency).
@@ -406,14 +400,13 @@ async fn handshake<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                 .map_err(|e| PluginError::LoadFailed(format!("irc: read AUTHENTICATE: {e}")))?;
             debug!(line = %prompt.trim_end(), "irc: ← authenticate-prompt");
 
-            let pw = IrcChannelAdapter::read_secret(cfg.password_env.as_deref())
-                .ok_or_else(|| {
+            let pw =
+                IrcChannelAdapter::read_secret(cfg.password_env.as_deref()).ok_or_else(|| {
                     PluginError::LoadFailed(
                         "irc: SASL configured but password_env unset at runtime".into(),
                     )
                 })?;
-            let payload =
-                IrcChannelAdapter::sasl_plain_payload(&cfg.nickname, &pw);
+            let payload = IrcChannelAdapter::sasl_plain_payload(&cfg.nickname, &pw);
             send_line(writer, &format!("AUTHENTICATE {payload}")).await?;
 
             // Expect 903 RPL_SASLSUCCESS (or 904/905 failure).
@@ -421,9 +414,7 @@ async fn handshake<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
             reader
                 .read_line(&mut sasl_result)
                 .await
-                .map_err(|e| {
-                    PluginError::LoadFailed(format!("irc: read SASL result: {e}"))
-                })?;
+                .map_err(|e| PluginError::LoadFailed(format!("irc: read SASL result: {e}")))?;
             debug!(line = %sasl_result.trim_end(), "irc: ← sasl-result");
             let sr_trim = sasl_result.trim_end_matches(['\r', '\n']);
             if !sr_trim.contains(" 903 ") {
@@ -454,8 +445,7 @@ async fn handshake<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
         cfg.nickname.as_str()
     };
     // RFC 2812 USER: <user> <mode> <unused> :<realname>
-    send_line(writer, &format!("USER {user} 0 * :{user} (clawft bot)"))
-        .await?;
+    send_line(writer, &format!("USER {user} 0 * :{user} (clawft bot)")).await?;
 
     // Step 3: wait for 001 RPL_WELCOME (or fail on hard errors).
     let mut welcome_seen = false;
@@ -510,9 +500,9 @@ async fn handshake<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
 /// 3-digit code. Numerics look like `:server 001 nick :Welcome…`.
 fn has_numeric(line: &str, code: &str) -> bool {
     // Skip the optional source prefix.
-    let rest = line.strip_prefix(':').map_or(line, |s| {
-        s.split_once(' ').map(|(_, r)| r).unwrap_or(s)
-    });
+    let rest = line
+        .strip_prefix(':')
+        .map_or(line, |s| s.split_once(' ').map(|(_, r)| r).unwrap_or(s));
     rest.starts_with(code)
         && rest
             .as_bytes()
@@ -762,7 +752,9 @@ mod tests {
         let mut br = TokioBufReader::new(r);
         let mut line = String::new();
         // Send a single CAP LS reply (no sasl).
-        w.write_all(b":mock.test CAP * LS :multi-prefix\r\n").await.unwrap();
+        w.write_all(b":mock.test CAP * LS :multi-prefix\r\n")
+            .await
+            .unwrap();
         loop {
             line.clear();
             if br.read_line(&mut line).await.unwrap() == 0 {
@@ -772,19 +764,15 @@ mod tests {
             sent.lock().unwrap().push(trimmed.clone());
             if trimmed.starts_with("USER ") {
                 // Send 001 welcome.
-                w.write_all(
-                    b":mock.test 001 clawft-bot :Welcome to mock.test clawft-bot\r\n",
-                )
-                .await
-                .unwrap();
+                w.write_all(b":mock.test 001 clawft-bot :Welcome to mock.test clawft-bot\r\n")
+                    .await
+                    .unwrap();
             }
             if trimmed.starts_with("JOIN ") {
                 // Acknowledge join + immediately deliver an inbound PRIVMSG.
-                w.write_all(
-                    b":alice!alice@host PRIVMSG #general :hello bot\r\n",
-                )
-                .await
-                .unwrap();
+                w.write_all(b":alice!alice@host PRIVMSG #general :hello bot\r\n")
+                    .await
+                    .unwrap();
             }
             if trimmed.starts_with("QUIT") {
                 let _ = w.shutdown().await;
@@ -831,24 +819,23 @@ mod tests {
         let cancel = CancellationToken::new();
         let cancel_for_task = cancel.clone();
         let adapter_for_task = adapter.clone();
-        let handle = tokio::spawn(async move {
-            adapter_for_task.start(host, cancel_for_task).await
-        });
+        let handle =
+            tokio::spawn(async move { adapter_for_task.start(host, cancel_for_task).await });
 
         // Wait briefly for handshake + JOIN to flush server-side.
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         cancel.cancel();
-        let res = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            handle,
-        )
-        .await
-        .expect("adapter shutdown timeout")
-        .unwrap();
+        let res = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .expect("adapter shutdown timeout")
+            .unwrap();
         assert!(res.is_ok(), "start() returned error: {res:?}");
 
         let lines = server.sent.lock().unwrap().clone();
-        assert!(lines.iter().any(|l| l == "CAP LS 302"), "missing CAP LS 302: {lines:?}");
+        assert!(
+            lines.iter().any(|l| l == "CAP LS 302"),
+            "missing CAP LS 302: {lines:?}"
+        );
         assert!(lines.iter().any(|l| l == "CAP END"));
         assert!(lines.iter().any(|l| l == "NICK clawft-bot"));
         assert!(lines.iter().any(|l| l.starts_with("USER ")));
@@ -869,9 +856,8 @@ mod tests {
         let cancel = CancellationToken::new();
         let cancel_for_task = cancel.clone();
         let adapter_for_task = adapter.clone();
-        let handle = tokio::spawn(async move {
-            adapter_for_task.start(host, cancel_for_task).await
-        });
+        let handle =
+            tokio::spawn(async move { adapter_for_task.start(host, cancel_for_task).await });
 
         // Wait for connection + welcome to settle.
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
@@ -883,12 +869,9 @@ mod tests {
         // Allow the line to flush before we capture.
         tokio::time::sleep(std::time::Duration::from_millis(75)).await;
         cancel.cancel();
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            handle,
-        )
-        .await
-        .unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .unwrap();
 
         let lines = server.sent.lock().unwrap().clone();
         assert!(
@@ -910,27 +893,20 @@ mod tests {
         let cancel = CancellationToken::new();
         let cancel_for_task = cancel.clone();
         let adapter_for_task = adapter.clone();
-        let handle = tokio::spawn(async move {
-            adapter_for_task.start(host, cancel_for_task).await
-        });
+        let handle =
+            tokio::spawn(async move { adapter_for_task.start(host, cancel_for_task).await });
 
         // The mock server emits one inbound PRIVMSG immediately after JOIN.
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         cancel.cancel();
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            handle,
-        )
-        .await
-        .unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .unwrap();
 
         let got = delivered.lock().unwrap().clone();
         assert!(
             got.iter().any(|(ch, sender, target, body)| {
-                ch == "irc"
-                    && sender == "alice"
-                    && target == "#general"
-                    && body == "hello bot"
+                ch == "irc" && sender == "alice" && target == "#general" && body == "hello bot"
             }),
             "expected inbound PRIVMSG not delivered: {got:?}"
         );
@@ -969,9 +945,8 @@ mod tests {
         let cancel = CancellationToken::new();
         let cancel_for_task = cancel.clone();
         let adapter_for_task = adapter.clone();
-        let handle = tokio::spawn(async move {
-            adapter_for_task.start(host, cancel_for_task).await
-        });
+        let handle =
+            tokio::spawn(async move { adapter_for_task.start(host, cancel_for_task).await });
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
         let bad = MessagePayload::text("inject\r\nQUIT");
@@ -979,11 +954,8 @@ mod tests {
         assert!(err.to_string().contains("CR/LF/NUL"));
 
         cancel.cancel();
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            handle,
-        )
-        .await
-        .unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .unwrap();
     }
 }

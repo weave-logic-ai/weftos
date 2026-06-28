@@ -69,7 +69,12 @@ impl EmlModel {
         }
 
         let weights = solve4(xtx, xty);
-        let mut model = Self { weights, trained: true, training_samples: n, training_rmse: 0.0 };
+        let mut model = Self {
+            weights,
+            trained: true,
+            training_samples: n,
+            training_rmse: 0.0,
+        };
 
         let mut ss = 0.0f64;
         for s in samples {

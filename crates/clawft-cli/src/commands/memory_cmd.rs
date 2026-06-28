@@ -147,7 +147,10 @@ pub async fn memory_export(
         .map_err(|e| anyhow::anyhow!("serialization failed: {e}"))?;
     std::fs::write(output, &json)?;
 
-    println!("Exported memory for agent '{}' to {}", agent_id, output_path);
+    println!(
+        "Exported memory for agent '{}' to {}",
+        agent_id, output_path
+    );
     println!(
         "  Memory: {} bytes, History: {} bytes",
         export.memory_content.len(),

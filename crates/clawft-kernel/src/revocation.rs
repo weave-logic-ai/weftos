@@ -141,10 +141,11 @@ impl RevocationList {
     /// Persist the current state to disk.
     fn save_inner(inner: &RevocationInner) {
         if let Some(parent) = inner.path.parent()
-            && let Err(e) = std::fs::create_dir_all(parent) {
-                warn!(error = %e, "failed to create revocation dir");
-                return;
-            }
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            warn!(error = %e, "failed to create revocation dir");
+            return;
+        }
         match serde_json::to_string_pretty(&inner.hosts) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&inner.path, json) {
@@ -159,7 +160,9 @@ impl RevocationList {
 
     /// Default path for the revocation file relative to a base directory.
     pub fn default_path(base: &Path) -> PathBuf {
-        base.join(".weftos").join("runtime").join("revoked_hosts.json")
+        base.join(".weftos")
+            .join("runtime")
+            .join("revoked_hosts.json")
     }
 }
 

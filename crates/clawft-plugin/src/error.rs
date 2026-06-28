@@ -52,9 +52,7 @@ pub enum SkillLoadError {
     /// One or more declared tools are not in the grant scope for the skill.
     ///
     /// The `denied` field contains the offending tool names (sorted, dedup'd).
-    #[error(
-        "skill '{skill}' declares tool(s) not in its grant scope: {denied:?}"
-    )]
+    #[error("skill '{skill}' declares tool(s) not in its grant scope: {denied:?}")]
     ToolNotGranted {
         /// Skill that failed load.
         skill: String,
@@ -77,9 +75,7 @@ pub enum SkillLoadError {
     ///
     /// `denied` is the sorted, deduplicated list of denied sub-permissions
     /// (e.g. `["voice.dispatch_commands", "voice.synthesize_audio"]`).
-    #[error(
-        "plugin '{plugin}' requested voice sub-permission(s) not granted: {denied:?}"
-    )]
+    #[error("plugin '{plugin}' requested voice sub-permission(s) not granted: {denied:?}")]
     VoiceCapabilityNotGranted {
         /// Plugin id from the manifest.
         plugin: String,
@@ -168,9 +164,7 @@ mod tests {
             PluginError::ResourceExhausted(String::new()),
             PluginError::NotImplemented(String::new()),
             PluginError::Io(std::io::Error::new(std::io::ErrorKind::Other, "")),
-            PluginError::Serialization(
-                serde_json::from_str::<serde_json::Value>("!").unwrap_err(),
-            ),
+            PluginError::Serialization(serde_json::from_str::<serde_json::Value>("!").unwrap_err()),
         ];
         assert_eq!(_variants.len(), 7);
     }

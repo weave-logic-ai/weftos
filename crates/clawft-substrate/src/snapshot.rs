@@ -26,7 +26,7 @@ use tokio::task::JoinHandle;
 use crate::adapter::{AdapterError, OntologyAdapter, SubId};
 use crate::delta::StateDelta;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::health::{build_event_delta, AdapterHealthEvent};
+use crate::health::{AdapterHealthEvent, build_event_delta};
 
 /// Read-only snapshot of the substrate state tree at a point in time.
 ///
@@ -517,8 +517,8 @@ mod tests {
 
     #[test]
     fn snapshot_read_direct_topic() {
-        let snap = OntologySnapshot::empty()
-            .with("substrate/kernel/status", json!({"state": "healthy"}));
+        let snap =
+            OntologySnapshot::empty().with("substrate/kernel/status", json!({"state": "healthy"}));
         assert_eq!(
             snap.read("substrate/kernel/status"),
             Some(json!({"state": "healthy"}))

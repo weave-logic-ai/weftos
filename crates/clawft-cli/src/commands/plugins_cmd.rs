@@ -67,9 +67,7 @@ fn create_plugin(name: &str, plugin_type: &str, dir: Option<&str>) -> anyhow::Re
         );
     }
 
-    let base = dir
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
+    let base = dir.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
     let crate_name = format!("clawft-plugin-{name}");
     let root = base.join(&crate_name);
 
@@ -389,10 +387,19 @@ fn list_templates() {
     let mut table = Table::new();
     table.load_preset(presets::UTF8_FULL_CONDENSED);
     table.set_header(["Type", "Description"]);
-    table.add_row(["analyzer", "Implements the Analyzer trait for data analysis pipelines"]);
-    table.add_row(["channel", "Channel adapter for integrating external messaging platforms"]);
+    table.add_row([
+        "analyzer",
+        "Implements the Analyzer trait for data analysis pipelines",
+    ]);
+    table.add_row([
+        "channel",
+        "Channel adapter for integrating external messaging platforms",
+    ]);
     table.add_row(["tool", "Registers a new tool in the WeftOS tool registry"]);
-    table.add_row(["generic", "Minimal plugin scaffold with no trait constraints"]);
+    table.add_row([
+        "generic",
+        "Minimal plugin scaffold with no trait constraints",
+    ]);
     println!("{table}");
 }
 
@@ -483,10 +490,7 @@ fn validate_plugin(path: &str) -> anyhow::Result<()> {
                 warnings.len()
             );
         } else {
-            println!(
-                "Plugin at {path} is valid ({} warning(s)).",
-                warnings.len()
-            );
+            println!("Plugin at {path} is valid ({} warning(s)).", warnings.len());
         }
     }
 
@@ -514,10 +518,7 @@ mod tests {
     fn manifest_template_parses() {
         let t = plugin_manifest_template("test", "analyzer");
         let parsed: toml::Value = toml::from_str(&t).unwrap();
-        assert_eq!(
-            parsed["plugin"]["name"].as_str().unwrap(),
-            "test"
-        );
+        assert_eq!(parsed["plugin"]["name"].as_str().unwrap(), "test");
     }
 
     #[test]

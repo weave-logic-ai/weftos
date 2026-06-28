@@ -108,20 +108,39 @@ pub enum TopologyAction {
 
 pub async fn run(args: TopologyArgs) -> anyhow::Result<()> {
     match args.action {
-        TopologyAction::Layout { graph, schema, output, width, height } => {
-            cmd_layout(&graph, schema.as_deref(), &output, width, height)
-        }
+        TopologyAction::Layout {
+            graph,
+            schema,
+            output,
+            width,
+            height,
+        } => cmd_layout(&graph, schema.as_deref(), &output, width, height),
         TopologyAction::Validate { schema } => cmd_validate(&schema),
         TopologyAction::Detect { graph } => cmd_detect(&graph),
-        TopologyAction::Slice { graph, schema, output, width, height } => {
-            cmd_slice(&graph, schema.as_deref(), &output, width, height)
-        }
-        TopologyAction::Extract { path, output, slices, schema } => {
-            cmd_extract(&path, &output, slices.as_deref(), schema.as_deref())
-        }
-        TopologyAction::Infer { graph, name, output } => cmd_infer(&graph, &name, &output),
+        TopologyAction::Slice {
+            graph,
+            schema,
+            output,
+            width,
+            height,
+        } => cmd_slice(&graph, schema.as_deref(), &output, width, height),
+        TopologyAction::Extract {
+            path,
+            output,
+            slices,
+            schema,
+        } => cmd_extract(&path, &output, slices.as_deref(), schema.as_deref()),
+        TopologyAction::Infer {
+            graph,
+            name,
+            output,
+        } => cmd_infer(&graph, &name, &output),
         TopologyAction::Diff { declared, graph } => cmd_diff(&declared, &graph),
-        TopologyAction::Vowl { graph, schema, output } => cmd_vowl(&graph, schema.as_deref(), &output),
+        TopologyAction::Vowl {
+            graph,
+            schema,
+            output,
+        } => cmd_vowl(&graph, schema.as_deref(), &output),
     }
 }
 
@@ -132,7 +151,9 @@ fn load_graph(path: &std::path::Path) -> anyhow::Result<clawft_graphify::Knowled
     Ok(kg)
 }
 
-fn load_schema(path: Option<&std::path::Path>) -> anyhow::Result<clawft_graphify::topology::TopologySchema> {
+fn load_schema(
+    path: Option<&std::path::Path>,
+) -> anyhow::Result<clawft_graphify::topology::TopologySchema> {
     match path {
         Some(p) => {
             let yaml = std::fs::read_to_string(p)?;
@@ -221,9 +242,12 @@ fn cmd_detect(graph_path: &std::path::Path) -> anyhow::Result<()> {
     );
 
     // Count edge types.
-    let mut edge_type_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut edge_type_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for (_, _, rel) in kg.edges() {
-        *edge_type_counts.entry(format!("{:?}", rel.relation_type)).or_default() += 1;
+        *edge_type_counts
+            .entry(format!("{:?}", rel.relation_type))
+            .or_default() += 1;
     }
 
     println!("\nEdge type distribution:");
@@ -235,9 +259,12 @@ fn cmd_detect(graph_path: &std::path::Path) -> anyhow::Result<()> {
     }
 
     // Count entity types.
-    let mut entity_type_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut entity_type_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for entity in kg.entities() {
-        *entity_type_counts.entry(entity.entity_type.discriminant().to_string()).or_default() += 1;
+        *entity_type_counts
+            .entry(entity.entity_type.discriminant().to_string())
+            .or_default() += 1;
     }
 
     println!("\nEntity type distribution:");
@@ -272,7 +299,11 @@ fn cmd_detect(graph_path: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_infer(graph_path: &std::path::Path, name: &str, output_path: &std::path::Path) -> anyhow::Result<()> {
+fn cmd_infer(
+    graph_path: &std::path::Path,
+    name: &str,
+    output_path: &std::path::Path,
+) -> anyhow::Result<()> {
     let kg = load_graph(graph_path)?;
 
     println!(
@@ -369,10 +400,13 @@ fn cmd_extract(
     slices_dir: Option<&std::path::Path>,
     schema_path: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
-    use clawft_graphify::extract::treecalc;
     use clawft_graphify::build;
+    use clawft_graphify::extract::treecalc;
 
-    println!("Extracting from {} using tree calculus + EML...", path.display());
+    println!(
+        "Extracting from {} using tree calculus + EML...",
+        path.display()
+    );
     let start = std::time::Instant::now();
 
     let extractions = treecalc::extract_directory(path);
@@ -414,8 +448,13 @@ fn cmd_extract(
         let schema = load_schema(schema_path)?;
         println!("Generating slices...");
         let manifest = clawft_graphify::layout::slicer::generate_all_slices(
-            &graph, &schema, slices_path, 1200.0, 800.0,
-        ).map_err(|e| anyhow::anyhow!("{e}"))?;
+            &graph,
+            &schema,
+            slices_path,
+            1200.0,
+            800.0,
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
         println!(
             "Generated {} slices → {}",
             manifest.slices.len() + 1,
@@ -428,28 +467,34 @@ fn cmd_extract(
 
 /// Export a KnowledgeGraph as JSON compatible with build_from_json input format.
 fn export_graph_json(graph: &clawft_graphify::KnowledgeGraph) -> serde_json::Value {
-    let nodes: Vec<serde_json::Value> = graph.entities().map(|e| {
-        serde_json::json!({
-            "id": e.id.to_hex(),
-            "label": e.label,
-            "entity_type": e.entity_type.discriminant(),
-            "source_file": e.source_file,
-            "source_location": e.source_location,
-            "file_type": format!("{:?}", e.file_type).to_lowercase(),
-            "metadata": e.metadata,
+    let nodes: Vec<serde_json::Value> = graph
+        .entities()
+        .map(|e| {
+            serde_json::json!({
+                "id": e.id.to_hex(),
+                "label": e.label,
+                "entity_type": e.entity_type.discriminant(),
+                "source_file": e.source_file,
+                "source_location": e.source_location,
+                "file_type": format!("{:?}", e.file_type).to_lowercase(),
+                "metadata": e.metadata,
+            })
         })
-    }).collect();
+        .collect();
 
-    let edges: Vec<serde_json::Value> = graph.edges().map(|(src, tgt, rel)| {
-        serde_json::json!({
-            "source": src.id.to_hex(),
-            "target": tgt.id.to_hex(),
-            "relation": format!("{:?}", rel.relation_type).to_lowercase(),
-            "confidence": format!("{:?}", rel.confidence).to_uppercase(),
-            "source_file": rel.source_file,
-            "weight": rel.weight,
+    let edges: Vec<serde_json::Value> = graph
+        .edges()
+        .map(|(src, tgt, rel)| {
+            serde_json::json!({
+                "source": src.id.to_hex(),
+                "target": tgt.id.to_hex(),
+                "relation": format!("{:?}", rel.relation_type).to_lowercase(),
+                "confidence": format!("{:?}", rel.confidence).to_uppercase(),
+                "source_file": rel.source_file,
+                "weight": rel.weight,
+            })
         })
-    }).collect();
+        .collect();
 
     serde_json::json!({
         "nodes": nodes,
@@ -476,7 +521,8 @@ fn cmd_slice(
 
     let manifest = clawft_graphify::layout::slicer::generate_all_slices(
         &kg, &schema, output_dir, width, height,
-    ).map_err(|e| anyhow::anyhow!("{e}"))?;
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     println!(
         "Generated {} slices ({} expandable nodes) → {}",

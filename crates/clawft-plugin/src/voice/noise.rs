@@ -60,9 +60,7 @@ impl NoiseSuppressor {
         }
         // Update noise floor estimate (simple exponential moving average)
         if !input.is_empty() {
-            let rms = (input.iter().map(|s| s * s).sum::<f32>()
-                / input.len() as f32)
-                .sqrt();
+            let rms = (input.iter().map(|s| s * s).sum::<f32>() / input.len() as f32).sqrt();
             self.noise_floor = 0.95 * self.noise_floor + 0.05 * rms;
         }
         // STUB: Real noise suppression would use spectral subtraction or RNNoise
@@ -115,8 +113,14 @@ mod tests {
 
         // Noise floor should have moved from 0.0 toward 0.5
         let floor = ns.noise_floor();
-        assert!(floor > 0.0, "Noise floor should be positive after processing");
-        assert!(floor < 0.5, "Noise floor should not have reached signal level yet");
+        assert!(
+            floor > 0.0,
+            "Noise floor should be positive after processing"
+        );
+        assert!(
+            floor < 0.5,
+            "Noise floor should not have reached signal level yet"
+        );
 
         // Process many frames to let noise floor converge
         for _ in 0..200 {

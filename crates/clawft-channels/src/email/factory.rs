@@ -17,9 +17,7 @@ pub struct EmailChannelAdapterFactory;
 
 impl EmailChannelAdapterFactory {
     /// Create an email channel adapter from a JSON config value.
-    pub fn build(
-        config: &serde_json::Value,
-    ) -> Result<Arc<dyn ChannelAdapter>, PluginError> {
+    pub fn build(config: &serde_json::Value) -> Result<Arc<dyn ChannelAdapter>, PluginError> {
         let adapter_config: EmailAdapterConfig = serde_json::from_value(config.clone())
             .map_err(|e| PluginError::LoadFailed(format!("invalid email config: {e}")))?;
 

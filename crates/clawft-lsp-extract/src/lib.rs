@@ -26,11 +26,11 @@
 //! LspGraph { nodes: Vec<LspNode>, edges: Vec<LspEdge> }
 //! ```
 
-pub mod protocol;
-pub mod server;
+pub mod config;
 pub mod extract;
 pub mod graph;
-pub mod config;
+pub mod protocol;
+pub mod server;
 
-pub use graph::{LspGraph, LspNode, LspEdge, LspNodeKind, LspEdgeKind};
 pub use config::LanguageConfig;
+pub use graph::{LspEdge, LspEdgeKind, LspGraph, LspNode, LspNodeKind};

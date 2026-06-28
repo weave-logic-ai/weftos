@@ -200,7 +200,7 @@ pub enum SyncPayloadType {
 /// QUIC stream priority per SyncStreamType (lower = higher priority).
 pub fn stream_priority(stream_type: SyncStreamType) -> u8 {
     match stream_type {
-        SyncStreamType::Control => 0,  // highest
+        SyncStreamType::Control => 0, // highest
         SyncStreamType::Chain => 1,
         SyncStreamType::Tree => 2,
         SyncStreamType::Ipc => 3,
@@ -319,10 +319,7 @@ mod tests {
     #[test]
     fn sync_strategy_event_by_event() {
         let strategy = sync_strategy(1100, 500);
-        assert_eq!(
-            strategy,
-            ChainSyncStrategy::EventByEvent { count: 600 }
-        );
+        assert_eq!(strategy, ChainSyncStrategy::EventByEvent { count: 600 });
     }
 
     #[test]
@@ -341,10 +338,7 @@ mod tests {
     fn sync_strategy_boundary_at_threshold() {
         // Exactly at threshold: event-by-event
         let strategy = sync_strategy(1000, 0);
-        assert_eq!(
-            strategy,
-            ChainSyncStrategy::EventByEvent { count: 1000 }
-        );
+        assert_eq!(strategy, ChainSyncStrategy::EventByEvent { count: 1000 });
         // One past threshold: checkpoint
         let strategy = sync_strategy(1001, 0);
         assert_eq!(
@@ -400,16 +394,11 @@ mod tests {
     #[test]
     fn stream_priority_ordering() {
         // Control has highest priority (lowest number)
-        assert!(stream_priority(SyncStreamType::Control)
-            < stream_priority(SyncStreamType::Chain));
-        assert!(stream_priority(SyncStreamType::Chain)
-            < stream_priority(SyncStreamType::Tree));
-        assert!(stream_priority(SyncStreamType::Tree)
-            < stream_priority(SyncStreamType::Ipc));
-        assert!(stream_priority(SyncStreamType::Ipc)
-            < stream_priority(SyncStreamType::Hnsw));
-        assert!(stream_priority(SyncStreamType::Hnsw)
-            < stream_priority(SyncStreamType::Impulse));
+        assert!(stream_priority(SyncStreamType::Control) < stream_priority(SyncStreamType::Chain));
+        assert!(stream_priority(SyncStreamType::Chain) < stream_priority(SyncStreamType::Tree));
+        assert!(stream_priority(SyncStreamType::Tree) < stream_priority(SyncStreamType::Ipc));
+        assert!(stream_priority(SyncStreamType::Ipc) < stream_priority(SyncStreamType::Hnsw));
+        assert!(stream_priority(SyncStreamType::Hnsw) < stream_priority(SyncStreamType::Impulse));
         // Causal and CrossRef share priority
         assert_eq!(
             stream_priority(SyncStreamType::Causal),

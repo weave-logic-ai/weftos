@@ -19,8 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use super::config::{VoiceAudioConfig, VoiceCaptureSpec};
 use super::privacy_indicator::{
-    emit_indicator, IndicatorPayload, IndicatorPublisher, IndicatorState,
-    NoopIndicatorPublisher,
+    IndicatorPayload, IndicatorPublisher, IndicatorState, NoopIndicatorPublisher, emit_indicator,
 };
 
 /// Audio capture configuration.
@@ -267,7 +266,10 @@ mod tests {
         let pub_ = InMemoryIndicatorPublisher::new();
         let cap = AudioCapture::new_with_publisher(cfg(), Arc::new(pub_.clone()));
         drop(cap);
-        assert!(pub_.is_empty(), "no indicator events for never-started capture");
+        assert!(
+            pub_.is_empty(),
+            "no indicator events for never-started capture"
+        );
     }
 
     #[test]

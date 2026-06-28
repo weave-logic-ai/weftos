@@ -256,12 +256,7 @@ impl ConfigService {
     }
 
     /// Delete a configuration value.
-    pub fn delete(
-        &self,
-        namespace: &str,
-        key: &str,
-        changed_by: Pid,
-    ) -> Result<(), KernelError> {
+    pub fn delete(&self, namespace: &str, key: &str, changed_by: Pid) -> Result<(), KernelError> {
         // Governance gate: config deletion is gated.
         #[cfg(feature = "exochain")]
         if let Some(ref gate) = self.governance_gate {
@@ -522,13 +517,14 @@ impl ConfigService {
             .ok_or_else(|| KernelError::Service("secret not found".into()))?;
 
         // Check authorization.
-        if !secret_ref.scoped_to.is_empty()
-            && !secret_ref.scoped_to.contains(&requester_pid)
-        {
+        if !secret_ref.scoped_to.is_empty() && !secret_ref.scoped_to.contains(&requester_pid) {
             return Err(KernelError::CapabilityDenied {
                 pid: requester_pid,
                 action: "read_secret".into(),
-                reason: format!("PID {} not authorized for secret {secret_key}", requester_pid),
+                reason: format!(
+                    "PID {} not authorized for secret {secret_key}",
+                    requester_pid
+                ),
             });
         }
 
@@ -561,7 +557,10 @@ impl ConfigService {
 
     /// Get the change log (for auditing).
     pub fn change_log(&self) -> Vec<ConfigChange> {
-        self.change_log.read().map(|l| l.clone()).unwrap_or_default()
+        self.change_log
+            .read()
+            .map(|l| l.clone())
+            .unwrap_or_default()
     }
 
     /// Total number of config sets performed.
@@ -612,7 +611,8 @@ mod tests {
     #[test]
     fn set_and_get_config() {
         let svc = ConfigService::new_default();
-        svc.set("app", "timeout", serde_json::json!(30), pid(1)).unwrap();
+        svc.set("app", "timeout", serde_json::json!(30), pid(1))
+            .unwrap();
         let val = svc.get("app", "timeout").unwrap();
         assert_eq!(val, serde_json::json!(30));
     }
@@ -626,7 +626,8 @@ mod tests {
     #[test]
     fn delete_config() {
         let svc = ConfigService::new_default();
-        svc.set("app", "key", serde_json::json!("val"), pid(1)).unwrap();
+        svc.set("app", "key", serde_json::json!("val"), pid(1))
+            .unwrap();
         svc.delete("app", "key", pid(1)).unwrap();
         assert!(svc.get("app", "key").is_none());
     }
@@ -646,7 +647,8 @@ mod tests {
     fn config_change_notification() {
         let svc = ConfigService::new_default();
         let sub = svc.subscribe("watch");
-        svc.set("watch", "flag", serde_json::json!(true), pid(1)).unwrap();
+        svc.set("watch", "flag", serde_json::json!(true), pid(1))
+            .unwrap();
         let changes = sub.read().unwrap();
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].key, "flag");
@@ -689,11 +691,15 @@ mod tests {
     #[test]
     fn unauthorized_pid_cannot_read_secret() {
         let svc = ConfigService::new_default();
-        svc.set_secret("creds", "key", b"val", vec![pid(1)]).unwrap();
+        svc.set_secret("creds", "key", b"val", vec![pid(1)])
+            .unwrap();
         let result = svc.get_secret("creds", "key", pid(99));
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("denied") || err.contains("authorized"), "got: {err}");
+        assert!(
+            err.contains("denied") || err.contains("authorized"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -762,7 +768,8 @@ mod tests {
     #[test]
     fn typed_delete_removes_entry() {
         let svc = ConfigService::new_default();
-        svc.set_typed("ns", "k", ConfigValue::Boolean(true), pid(1)).unwrap();
+        svc.set_typed("ns", "k", ConfigValue::Boolean(true), pid(1))
+            .unwrap();
         assert!(svc.delete_typed("ns", "k", pid(1)).unwrap());
         assert!(svc.get_typed("ns", "k").is_none());
         // Second delete returns false.
@@ -784,8 +791,10 @@ mod tests {
     #[test]
     fn typed_set_updates_existing_value() {
         let svc = ConfigService::new_default();
-        svc.set_typed("app", "level", ConfigValue::Integer(1), pid(1)).unwrap();
-        svc.set_typed("app", "level", ConfigValue::Integer(2), pid(1)).unwrap();
+        svc.set_typed("app", "level", ConfigValue::Integer(1), pid(1))
+            .unwrap();
+        svc.set_typed("app", "level", ConfigValue::Integer(2), pid(1))
+            .unwrap();
         let entry = svc.get_typed("app", "level").unwrap();
         assert_eq!(entry.value, ConfigValue::Integer(2));
     }
@@ -793,8 +802,10 @@ mod tests {
     #[test]
     fn typed_namespace_isolation() {
         let svc = ConfigService::new_default();
-        svc.set_typed("alpha", "key", ConfigValue::Text("a".into()), pid(1)).unwrap();
-        svc.set_typed("beta", "key", ConfigValue::Text("b".into()), pid(1)).unwrap();
+        svc.set_typed("alpha", "key", ConfigValue::Text("a".into()), pid(1))
+            .unwrap();
+        svc.set_typed("beta", "key", ConfigValue::Text("b".into()), pid(1))
+            .unwrap();
 
         let a = svc.get_typed("alpha", "key").unwrap();
         let b = svc.get_typed("beta", "key").unwrap();
@@ -811,16 +822,38 @@ mod tests {
     fn typed_all_value_variants() {
         let svc = ConfigService::new_default();
 
-        svc.set_typed("t", "text", ConfigValue::Text("hello".into()), pid(1)).unwrap();
-        svc.set_typed("t", "int", ConfigValue::Integer(42), pid(1)).unwrap();
-        svc.set_typed("t", "float", ConfigValue::Float(3.14), pid(1)).unwrap();
-        svc.set_typed("t", "bool", ConfigValue::Boolean(false), pid(1)).unwrap();
-        svc.set_typed("t", "json", ConfigValue::Json(serde_json::json!({"a": 1})), pid(1)).unwrap();
+        svc.set_typed("t", "text", ConfigValue::Text("hello".into()), pid(1))
+            .unwrap();
+        svc.set_typed("t", "int", ConfigValue::Integer(42), pid(1))
+            .unwrap();
+        svc.set_typed("t", "float", ConfigValue::Float(3.14), pid(1))
+            .unwrap();
+        svc.set_typed("t", "bool", ConfigValue::Boolean(false), pid(1))
+            .unwrap();
+        svc.set_typed(
+            "t",
+            "json",
+            ConfigValue::Json(serde_json::json!({"a": 1})),
+            pid(1),
+        )
+        .unwrap();
 
-        assert_eq!(svc.get_typed("t", "text").unwrap().value, ConfigValue::Text("hello".into()));
-        assert_eq!(svc.get_typed("t", "int").unwrap().value, ConfigValue::Integer(42));
-        assert_eq!(svc.get_typed("t", "float").unwrap().value, ConfigValue::Float(3.14));
-        assert_eq!(svc.get_typed("t", "bool").unwrap().value, ConfigValue::Boolean(false));
+        assert_eq!(
+            svc.get_typed("t", "text").unwrap().value,
+            ConfigValue::Text("hello".into())
+        );
+        assert_eq!(
+            svc.get_typed("t", "int").unwrap().value,
+            ConfigValue::Integer(42)
+        );
+        assert_eq!(
+            svc.get_typed("t", "float").unwrap().value,
+            ConfigValue::Float(3.14)
+        );
+        assert_eq!(
+            svc.get_typed("t", "bool").unwrap().value,
+            ConfigValue::Boolean(false)
+        );
         assert_eq!(
             svc.get_typed("t", "json").unwrap().value,
             ConfigValue::Json(serde_json::json!({"a": 1}))

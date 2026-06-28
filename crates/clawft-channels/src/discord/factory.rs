@@ -198,7 +198,10 @@ mod tests {
         let result = factory.build(&config);
         match result {
             Err(ChannelError::Other(msg)) => {
-                assert!(msg.contains("CLAWFT_TEST_NONEXISTENT_VAR_99999"), "error should mention env var: {msg}");
+                assert!(
+                    msg.contains("CLAWFT_TEST_NONEXISTENT_VAR_99999"),
+                    "error should mention env var: {msg}"
+                );
             }
             _ => panic!("expected ChannelError::Other"),
         }

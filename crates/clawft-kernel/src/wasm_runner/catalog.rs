@@ -22,7 +22,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["path"]
         }),
         gate_action: "tool.fs.read".into(),
-        effect: EffectVector { risk: 0.1, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.1,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -39,7 +42,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["path", "content"]
         }),
         gate_action: "tool.fs.write".into(),
-        effect: EffectVector { risk: 0.4, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.4,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -54,7 +60,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["path"]
         }),
         gate_action: "tool.fs.read".into(),
-        effect: EffectVector { risk: 0.1, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.1,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -70,7 +79,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["path"]
         }),
         gate_action: "tool.fs.write".into(),
-        effect: EffectVector { risk: 0.3, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.3,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -86,7 +98,11 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["path"]
         }),
         gate_action: "tool.fs.delete".into(),
-        effect: EffectVector { risk: 0.7, security: 0.3, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.7,
+            security: 0.3,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -102,7 +118,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["src", "dst"]
         }),
         gate_action: "tool.fs.write".into(),
-        effect: EffectVector { risk: 0.3, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.3,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -118,7 +137,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["src", "dst"]
         }),
         gate_action: "tool.fs.write".into(),
-        effect: EffectVector { risk: 0.5, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.5,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -133,7 +155,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["path"]
         }),
         gate_action: "tool.fs.read".into(),
-        effect: EffectVector { risk: 0.05, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.05,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -148,7 +173,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["path"]
         }),
         gate_action: "tool.fs.read".into(),
-        effect: EffectVector { risk: 0.05, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.05,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -164,7 +192,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["pattern"]
         }),
         gate_action: "tool.fs.read".into(),
-        effect: EffectVector { risk: 0.1, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.1,
+            ..Default::default()
+        },
         native: true,
     });
 
@@ -184,7 +215,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["agent_id"]
         }),
         gate_action: "tool.agent.spawn".into(),
-        effect: EffectVector { risk: 0.5, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.5,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -200,7 +234,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["pid"]
         }),
         gate_action: "tool.agent.stop".into(),
-        effect: EffectVector { risk: 0.4, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.4,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -209,7 +246,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
         description: "List all running agents".into(),
         parameters: serde_json::json!({"type": "object", "properties": {}}),
         gate_action: "tool.agent.read".into(),
-        effect: EffectVector { risk: 0.05, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.05,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -224,7 +264,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["pid"]
         }),
         gate_action: "tool.agent.read".into(),
-        effect: EffectVector { risk: 0.1, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.1,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -240,7 +283,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["pid", "message"]
         }),
         gate_action: "tool.agent.ipc".into(),
-        effect: EffectVector { risk: 0.2, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.2,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -255,7 +301,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["pid"]
         }),
         gate_action: "tool.agent.suspend".into(),
-        effect: EffectVector { risk: 0.3, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.3,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -270,7 +319,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["pid"]
         }),
         gate_action: "tool.agent.resume".into(),
-        effect: EffectVector { risk: 0.2, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.2,
+            ..Default::default()
+        },
         native: true,
     });
 
@@ -305,7 +357,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["topic"]
         }),
         gate_action: "tool.ipc.subscribe".into(),
-        effect: EffectVector { risk: 0.1, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.1,
+            ..Default::default()
+        },
         native: true,
     });
 
@@ -316,7 +371,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
         description: "List registered services".into(),
         parameters: serde_json::json!({"type": "object", "properties": {}}),
         gate_action: "tool.sys.read".into(),
-        effect: EffectVector { risk: 0.05, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.05,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -330,7 +388,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             }
         }),
         gate_action: "tool.sys.read".into(),
-        effect: EffectVector { risk: 0.05, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.05,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -339,7 +400,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
         description: "Get chain status".into(),
         parameters: serde_json::json!({"type": "object", "properties": {}}),
         gate_action: "tool.sys.read".into(),
-        effect: EffectVector { risk: 0.05, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.05,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -355,7 +419,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             }
         }),
         gate_action: "tool.sys.read".into(),
-        effect: EffectVector { risk: 0.1, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.1,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -364,7 +431,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
         description: "Read resource tree".into(),
         parameters: serde_json::json!({"type": "object", "properties": {}}),
         gate_action: "tool.sys.read".into(),
-        effect: EffectVector { risk: 0.05, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.05,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -379,7 +449,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["path"]
         }),
         gate_action: "tool.sys.read".into(),
-        effect: EffectVector { risk: 0.1, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.1,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -394,7 +467,11 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["name"]
         }),
         gate_action: "tool.sys.env".into(),
-        effect: EffectVector { risk: 0.2, privacy: 0.3, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.2,
+            privacy: 0.3,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -412,7 +489,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["name", "interval_secs", "command"]
         }),
         gate_action: "tool.sys.cron".into(),
-        effect: EffectVector { risk: 0.4, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.4,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -421,7 +501,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
         description: "List cron jobs".into(),
         parameters: serde_json::json!({"type": "object", "properties": {}}),
         gate_action: "tool.sys.read".into(),
-        effect: EffectVector { risk: 0.05, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.05,
+            ..Default::default()
+        },
         native: true,
     });
     catalog.push(BuiltinToolSpec {
@@ -436,7 +519,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             "required": ["id"]
         }),
         gate_action: "tool.sys.cron".into(),
-        effect: EffectVector { risk: 0.3, ..Default::default() },
+        effect: EffectVector {
+            risk: 0.3,
+            ..Default::default()
+        },
         native: true,
     });
 
@@ -457,7 +543,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
                 "required": ["id", "embedding"]
             }),
             gate_action: "ecc.embed".into(),
-            effect: EffectVector { risk: 0.1, ..Default::default() },
+            effect: EffectVector {
+                risk: 0.1,
+                ..Default::default()
+            },
             native: true,
         });
         catalog.push(BuiltinToolSpec {
@@ -473,7 +562,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
                 "required": ["query"]
             }),
             gate_action: "ecc.search".into(),
-            effect: EffectVector { risk: 0.05, ..Default::default() },
+            effect: EffectVector {
+                risk: 0.05,
+                ..Default::default()
+            },
             native: true,
         });
         catalog.push(BuiltinToolSpec {
@@ -491,7 +583,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
                 "required": ["source", "target", "edge_type"]
             }),
             gate_action: "ecc.causal.link".into(),
-            effect: EffectVector { risk: 0.3, ..Default::default() },
+            effect: EffectVector {
+                risk: 0.3,
+                ..Default::default()
+            },
             native: true,
         });
         catalog.push(BuiltinToolSpec {
@@ -508,7 +603,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
                 "required": ["node"]
             }),
             gate_action: "ecc.causal.query".into(),
-            effect: EffectVector { risk: 0.05, ..Default::default() },
+            effect: EffectVector {
+                risk: 0.05,
+                ..Default::default()
+            },
             native: true,
         });
         catalog.push(BuiltinToolSpec {
@@ -525,7 +623,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
                 "required": ["source_id", "target_id", "ref_type"]
             }),
             gate_action: "ecc.crossref.create".into(),
-            effect: EffectVector { risk: 0.2, ..Default::default() },
+            effect: EffectVector {
+                risk: 0.2,
+                ..Default::default()
+            },
             native: true,
         });
         catalog.push(BuiltinToolSpec {
@@ -534,7 +635,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             description: "Query cognitive tick state".into(),
             parameters: serde_json::json!({"type": "object", "properties": {}}),
             gate_action: "ecc.tick.status".into(),
-            effect: EffectVector { risk: 0.05, ..Default::default() },
+            effect: EffectVector {
+                risk: 0.05,
+                ..Default::default()
+            },
             native: true,
         });
         catalog.push(BuiltinToolSpec {
@@ -543,7 +647,10 @@ pub fn builtin_tool_catalog() -> Vec<BuiltinToolSpec> {
             description: "Re-run boot calibration".into(),
             parameters: serde_json::json!({"type": "object", "properties": {}}),
             gate_action: "ecc.calibration.run".into(),
-            effect: EffectVector { risk: 0.1, ..Default::default() },
+            effect: EffectVector {
+                risk: 0.1,
+                ..Default::default()
+            },
             native: true,
         });
     }

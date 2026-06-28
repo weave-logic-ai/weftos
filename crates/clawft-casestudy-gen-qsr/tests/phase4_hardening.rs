@@ -205,8 +205,11 @@ fn chaos_reorder_is_rescued_by_hlc_ordering() {
 
     // Graph correctness invariant: every day:* node still unique and count
     // equals the number of distinct (store, day) pairs in the stream.
-    let distinct_expected: std::collections::HashSet<_> =
-        corpus.events.iter().map(|e| (e.store_ref.clone(), e.day_index)).collect();
+    let distinct_expected: std::collections::HashSet<_> = corpus
+        .events
+        .iter()
+        .map(|e| (e.store_ref.clone(), e.day_index))
+        .collect();
     let daily_count = driver
         .graph
         .nodes
@@ -225,7 +228,12 @@ fn chaos_reorder_is_rescued_by_hlc_ordering() {
 fn privacy_scan_clean_on_generator_output() {
     let (tmp, _corpus) = tiny_corpus();
     let report = privacy::scan_corpus(tmp.path()).unwrap();
-    assert_eq!(report.violations.len(), 0, "unexpected violations: {:?}", report.violations);
+    assert_eq!(
+        report.violations.len(),
+        0,
+        "unexpected violations: {:?}",
+        report.violations
+    );
     assert!(report.hashed_id_count > 0);
     assert_eq!(report.hashed_id_count, report.people_count);
     assert!(!report.scanned_files.is_empty());
@@ -236,9 +244,18 @@ fn privacy_scan_detects_raw_email_injected_into_corpus() {
     let (tmp, _corpus) = tiny_corpus();
     // Simulate a bad-actor payload leaking an email into a dimensions file.
     let leaky = tmp.path().join("dimensions").join("leak.json");
-    std::fs::write(&leaky, r#"[{"note":"contact jane.doe@acme.com for details"}]"#).unwrap();
+    std::fs::write(
+        &leaky,
+        r#"[{"note":"contact jane.doe@acme.com for details"}]"#,
+    )
+    .unwrap();
     let report = privacy::scan_corpus(tmp.path()).unwrap();
-    assert!(report.violations.iter().any(|v| matches!(v.kind, privacy::ViolationKind::EmailPattern)));
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| matches!(v.kind, privacy::ViolationKind::EmailPattern))
+    );
 }
 
 #[test]
@@ -246,7 +263,11 @@ fn privacy_scan_detects_malformed_hash_prefix() {
     let (_tmp, mut corpus) = tiny_corpus();
     corpus.dims.people[0].employee_id_hashed = "raw-employee-id-0000".into();
     let violations = privacy::check_dimensions(&corpus.dims);
-    assert!(violations.iter().any(|v| matches!(v.kind, privacy::ViolationKind::MalformedHashPrefix)));
+    assert!(
+        violations
+            .iter()
+            .any(|v| matches!(v.kind, privacy::ViolationKind::MalformedHashPrefix))
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -317,7 +338,8 @@ fn full_stack_smoke_medium() {
     );
 
     // Dashboard
-    let scores = coherence::score_all_stores(&corpus.dims, &corpus.events, &corpus.ops, &gap_report);
+    let scores =
+        coherence::score_all_stores(&corpus.dims, &corpus.events, &corpus.ops, &gap_report);
     let dash = dashboard::build(&gap_report, scores, 10);
     eprintln!(
         "dashboard: {} stores, avg_health={:.3}",
@@ -326,5 +348,9 @@ fn full_stack_smoke_medium() {
 
     // Privacy
     let report = privacy::scan_corpus(tmp.path()).unwrap();
-    assert!(report.is_clean(), "privacy scan failed: {:?}", report.violations);
+    assert!(
+        report.is_clean(),
+        "privacy scan failed: {:?}",
+        report.violations
+    );
 }

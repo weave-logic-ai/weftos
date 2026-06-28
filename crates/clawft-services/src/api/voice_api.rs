@@ -5,12 +5,12 @@
 //! Reads/writes real configuration via the [`VoiceAccess`] trait on ApiState.
 
 use axum::{
+    Json, Router,
     body::Body,
     extract::State,
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post, put},
-    Json, Router,
 };
 use tracing::{debug, error};
 

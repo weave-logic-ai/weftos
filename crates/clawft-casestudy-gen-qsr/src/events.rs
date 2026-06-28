@@ -45,7 +45,15 @@ pub fn generate(config: &GeneratorConfig, dims: &Dimensions) -> Vec<DailyRollup>
 
     for (sidx, store) in dims.stores.iter().enumerate() {
         for day in 0..days {
-            let rollup = synth_rollup(config, store, &dims.promotions, sidx, day, start_date, &normal);
+            let rollup = synth_rollup(
+                config,
+                store,
+                &dims.promotions,
+                sidx,
+                day,
+                start_date,
+                &normal,
+            );
             out.push(rollup);
         }
     }

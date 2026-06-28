@@ -65,7 +65,14 @@ impl GovernanceScorerModel {
     /// Predict a composite governance score from effect dimensions.
     ///
     /// When untrained, falls back to L2 norm (sqrt of sum of squares).
-    pub fn predict(&self, risk: f64, fairness: f64, privacy: f64, novelty: f64, security: f64) -> f64 {
+    pub fn predict(
+        &self,
+        risk: f64,
+        fairness: f64,
+        privacy: f64,
+        novelty: f64,
+        security: f64,
+    ) -> f64 {
         if !self.inner.is_trained() {
             return (risk * risk
                 + fairness * fairness
@@ -300,10 +307,7 @@ impl HealthThresholdModel {
             history_depth as f64,
             recent_latency_ms / 1000.0,
         ];
-        let targets = [
-            Some(optimal_degraded as f64),
-            Some(optimal_failed as f64),
-        ];
+        let targets = [Some(optimal_degraded as f64), Some(optimal_failed as f64)];
         self.inner.record(&inputs, &targets);
     }
 
@@ -574,13 +578,7 @@ impl TickIntervalModel {
     /// Recommend a tick interval: when trained returns
     /// [`Self::predict`]; otherwise returns the caller-provided
     /// `fallback` (typically the existing step-function's choice).
-    pub fn recommend_or(
-        &self,
-        cpm: f64,
-        idle_ticks: u64,
-        variance: f64,
-        fallback: u32,
-    ) -> u32 {
+    pub fn recommend_or(&self, cpm: f64, idle_ticks: u64, variance: f64, fallback: u32) -> u32 {
         if self.inner.is_trained() {
             self.predict(cpm, idle_ticks, variance)
         } else {
@@ -590,13 +588,7 @@ impl TickIntervalModel {
 
     /// Record an observed (cpm, idle_ticks, variance, recommended_ms)
     /// tuple for training.
-    pub fn record(
-        &mut self,
-        cpm: f64,
-        idle_ticks: u64,
-        variance: f64,
-        recommended_ms: u32,
-    ) {
+    pub fn record(&mut self, cpm: f64, idle_ticks: u64, variance: f64, recommended_ms: u32) {
         let inputs = [cpm, idle_ticks as f64, variance];
         self.inner.record(&inputs, &[Some(recommended_ms as f64)]);
     }
@@ -656,12 +648,7 @@ impl ComplexityModel {
     /// Result is clamped to [100, 5000] lines.
     ///
     /// When untrained, returns 500 lines.
-    pub fn predict(
-        &self,
-        language_type: u32,
-        avg_file_size: f64,
-        team_size_proxy: f64,
-    ) -> usize {
+    pub fn predict(&self, language_type: u32, avg_file_size: f64, team_size_proxy: f64) -> usize {
         if !self.inner.is_trained() {
             return 500;
         }

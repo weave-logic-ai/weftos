@@ -90,7 +90,12 @@ mod tests {
     fn modal_mutation_axes_are_frozen_on_modal_modality() {
         // ADR-014 + foundations §active-radar loop — consent flows
         // declare zero mutation axes.
-        let m = Modal::new("m", Modality::Modal, "Confirm", |_ui: &mut eframe::egui::Ui| {});
+        let m = Modal::new(
+            "m",
+            Modality::Modal,
+            "Confirm",
+            |_ui: &mut eframe::egui::Ui| {},
+        );
         assert!(m.mutation_axes().is_empty());
 
         let f = Modal::new(

@@ -236,13 +236,19 @@ mod tests {
 
     #[test]
     fn error_store_full_display() {
-        let err = VectorError::StoreFull { max: 100, current: 100 };
+        let err = VectorError::StoreFull {
+            max: 100,
+            current: 100,
+        };
         assert!(format!("{err}").contains("100"));
     }
 
     #[test]
     fn error_epoch_conflict_display() {
-        let err = VectorError::EpochConflict { expected: 5, actual: 10 };
+        let err = VectorError::EpochConflict {
+            expected: 5,
+            actual: 10,
+        };
         let msg = format!("{err}");
         assert!(msg.contains("5"));
         assert!(msg.contains("10"));

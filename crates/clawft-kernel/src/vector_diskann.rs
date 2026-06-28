@@ -14,8 +14,8 @@
 //! Compiled only when the `ecc` feature is enabled.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -356,9 +356,11 @@ impl VectorBackend for DiskAnnBackend {
         // Effective capacity check.
         let live = entries.len().saturating_sub(ts.len());
         if let Some(max) = self.effective_max()
-            && live >= max && !entries.contains_key(&id) {
-                return Err(VectorError::StoreFull { max, current: live });
-            }
+            && live >= max
+            && !entries.contains_key(&id)
+        {
+            return Err(VectorError::StoreFull { max, current: live });
+        }
 
         drop(ts);
 
@@ -461,7 +463,12 @@ impl VectorBackend for DiskAnnBackend {
             return false;
         }
         let epoch = self.bump_epoch();
-        ts.insert(id, Tombstone { deleted_at_epoch: epoch });
+        ts.insert(
+            id,
+            Tombstone {
+                deleted_at_epoch: epoch,
+            },
+        );
         true
     }
 

@@ -22,22 +22,35 @@ pub struct SysServiceListTool {
 
 impl SysServiceListTool {
     pub fn new(service_registry: Arc<crate::service::ServiceRegistry>) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "sys.service.list").unwrap();
-        Self { spec, service_registry }
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "sys.service.list")
+            .unwrap();
+        Self {
+            spec,
+            service_registry,
+        }
     }
 }
 
 impl BuiltinTool for SysServiceListTool {
-    fn name(&self) -> &str { "sys.service.list" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "sys.service.list"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, _args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let services = self.service_registry.list();
-        let entries: Vec<serde_json::Value> = services.iter().map(|(name, stype)| {
-            serde_json::json!({
-                "name": name,
-                "service_type": format!("{stype:?}"),
+        let entries: Vec<serde_json::Value> = services
+            .iter()
+            .map(|(name, stype)| {
+                serde_json::json!({
+                    "name": name,
+                    "service_type": format!("{stype:?}"),
+                })
             })
-        }).collect();
+            .collect();
         Ok(serde_json::json!({"services": entries, "count": entries.len()}))
     }
 }
@@ -50,20 +63,31 @@ pub struct SysServiceHealthTool {
 
 impl SysServiceHealthTool {
     pub fn new(service_registry: Arc<crate::service::ServiceRegistry>) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "sys.service.health").unwrap();
-        Self { spec, service_registry }
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "sys.service.health")
+            .unwrap();
+        Self {
+            spec,
+            service_registry,
+        }
     }
 }
 
 impl BuiltinTool for SysServiceHealthTool {
-    fn name(&self) -> &str { "sys.service.health" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "sys.service.health"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, _args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         // health_all() is async -- use service list as sync fallback
         let services = self.service_registry.list();
-        let entries: Vec<serde_json::Value> = services.iter().map(|(name, _)| {
-            serde_json::json!({"name": name, "status": "registered"})
-        }).collect();
+        let entries: Vec<serde_json::Value> = services
+            .iter()
+            .map(|(name, _)| serde_json::json!({"name": name, "status": "registered"}))
+            .collect();
         Ok(serde_json::json!({"health": entries, "count": entries.len()}))
     }
 }
@@ -82,15 +106,22 @@ pub struct SysChainStatusTool {
 #[cfg(feature = "exochain")]
 impl SysChainStatusTool {
     pub fn new(chain: Arc<crate::chain::ChainManager>) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "sys.chain.status").unwrap();
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "sys.chain.status")
+            .unwrap();
         Self { spec, chain }
     }
 }
 
 #[cfg(feature = "exochain")]
 impl BuiltinTool for SysChainStatusTool {
-    fn name(&self) -> &str { "sys.chain.status" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "sys.chain.status"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, _args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let status = self.chain.status();
         Ok(serde_json::json!({
@@ -112,26 +143,36 @@ pub struct SysChainQueryTool {
 #[cfg(feature = "exochain")]
 impl SysChainQueryTool {
     pub fn new(chain: Arc<crate::chain::ChainManager>) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "sys.chain.query").unwrap();
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "sys.chain.query")
+            .unwrap();
         Self { spec, chain }
     }
 }
 
 #[cfg(feature = "exochain")]
 impl BuiltinTool for SysChainQueryTool {
-    fn name(&self) -> &str { "sys.chain.query" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "sys.chain.query"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let count = args.get("count").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
         let events = self.chain.tail(count);
-        let entries: Vec<serde_json::Value> = events.iter().map(|e| {
-            serde_json::json!({
-                "sequence": e.sequence,
-                "source": e.source,
-                "kind": e.kind,
-                "timestamp": e.timestamp.to_rfc3339(),
+        let entries: Vec<serde_json::Value> = events
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "sequence": e.sequence,
+                    "source": e.source,
+                    "kind": e.kind,
+                    "timestamp": e.timestamp.to_rfc3339(),
+                })
             })
-        }).collect();
+            .collect();
         Ok(serde_json::json!({"events": entries, "count": entries.len()}))
     }
 }
@@ -150,15 +191,22 @@ pub struct SysTreeReadTool {
 #[cfg(feature = "exochain")]
 impl SysTreeReadTool {
     pub fn new(tree: Arc<crate::tree_manager::TreeManager>) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "sys.tree.read").unwrap();
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "sys.tree.read")
+            .unwrap();
         Self { spec, tree }
     }
 }
 
 #[cfg(feature = "exochain")]
 impl BuiltinTool for SysTreeReadTool {
-    fn name(&self) -> &str { "sys.tree.read" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "sys.tree.read"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, _args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let stats = self.tree.stats();
         Ok(serde_json::json!({
@@ -179,22 +227,35 @@ pub struct SysTreeInspectTool {
 #[cfg(feature = "exochain")]
 impl SysTreeInspectTool {
     pub fn new(tree: Arc<crate::tree_manager::TreeManager>) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "sys.tree.inspect").unwrap();
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "sys.tree.inspect")
+            .unwrap();
         Self { spec, tree }
     }
 }
 
 #[cfg(feature = "exochain")]
 impl BuiltinTool for SysTreeInspectTool {
-    fn name(&self) -> &str { "sys.tree.inspect" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "sys.tree.inspect"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let path = args.get("path").and_then(|v| v.as_str())
+        let path = args
+            .get("path")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'path'".into()))?;
         let rid = exo_resource_tree::ResourceId::new(path);
-        let tree_lock = self.tree.tree().lock()
+        let tree_lock = self
+            .tree
+            .tree()
+            .lock()
             .map_err(|e| ToolError::ExecutionFailed(format!("tree lock: {e}")))?;
-        let node = tree_lock.get(&rid)
+        let node = tree_lock
+            .get(&rid)
             .ok_or_else(|| ToolError::NotFound(format!("node not found: {path}")))?;
         Ok(serde_json::json!({
             "path": path,
@@ -216,16 +277,25 @@ pub struct SysEnvGetTool {
 
 impl SysEnvGetTool {
     pub fn new() -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "sys.env.get").unwrap();
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "sys.env.get")
+            .unwrap();
         Self { spec }
     }
 }
 
 impl BuiltinTool for SysEnvGetTool {
-    fn name(&self) -> &str { "sys.env.get" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "sys.env.get"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let name = args.get("name").and_then(|v| v.as_str())
+        let name = args
+            .get("name")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'name'".into()))?;
         match std::env::var(name) {
             Ok(val) => Ok(serde_json::json!({"name": name, "value": val})),
@@ -242,23 +312,43 @@ pub struct SysCronAddTool {
 
 impl SysCronAddTool {
     pub fn new(cron: Arc<crate::cron::CronService>) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "sys.cron.add").unwrap();
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "sys.cron.add")
+            .unwrap();
         Self { spec, cron }
     }
 }
 
 impl BuiltinTool for SysCronAddTool {
-    fn name(&self) -> &str { "sys.cron.add" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "sys.cron.add"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let name = args.get("name").and_then(|v| v.as_str())
+        let name = args
+            .get("name")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'name'".into()))?;
-        let interval_secs = args.get("interval_secs").and_then(|v| v.as_u64())
+        let interval_secs = args
+            .get("interval_secs")
+            .and_then(|v| v.as_u64())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'interval_secs'".into()))?;
-        let command = args.get("command").and_then(|v| v.as_str())
+        let command = args
+            .get("command")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'command'".into()))?;
         let target_pid = args.get("target_pid").and_then(|v| v.as_u64());
-        let job = self.cron.add_job(name.to_string(), interval_secs, command.to_string(), target_pid)
+        let job = self
+            .cron
+            .add_job(
+                name.to_string(),
+                interval_secs,
+                command.to_string(),
+                target_pid,
+            )
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         Ok(serde_json::to_value(&job).unwrap_or_default())
     }
@@ -272,14 +362,21 @@ pub struct SysCronListTool {
 
 impl SysCronListTool {
     pub fn new(cron: Arc<crate::cron::CronService>) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "sys.cron.list").unwrap();
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "sys.cron.list")
+            .unwrap();
         Self { spec, cron }
     }
 }
 
 impl BuiltinTool for SysCronListTool {
-    fn name(&self) -> &str { "sys.cron.list" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "sys.cron.list"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, _args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let jobs = self.cron.list_jobs();
         Ok(serde_json::to_value(&jobs).unwrap_or_default())
@@ -294,16 +391,25 @@ pub struct SysCronRemoveTool {
 
 impl SysCronRemoveTool {
     pub fn new(cron: Arc<crate::cron::CronService>) -> Self {
-        let spec = builtin_tool_catalog().into_iter().find(|s| s.name == "sys.cron.remove").unwrap();
+        let spec = builtin_tool_catalog()
+            .into_iter()
+            .find(|s| s.name == "sys.cron.remove")
+            .unwrap();
         Self { spec, cron }
     }
 }
 
 impl BuiltinTool for SysCronRemoveTool {
-    fn name(&self) -> &str { "sys.cron.remove" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "sys.cron.remove"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let id = args.get("id").and_then(|v| v.as_str())
+        let id = args
+            .get("id")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'id'".into()))?;
         match self.cron.remove_job(id) {
             Ok(Some(job)) => Ok(serde_json::json!({"removed": true, "job_id": job.id})),
@@ -358,9 +464,10 @@ pub fn execute_shell(cmd: &ShellCommand) -> Result<ShellResult, ToolError> {
     // Sandbox path check: if sandbox_config has allowed_paths,
     // reject commands that reference paths outside the sandbox.
     if let Some(ref sandbox) = cmd.sandbox_config
-        && sandbox.sudo_override {
-            tracing::warn!(command = %cmd.command, "shell exec with sudo override");
-        }
+        && sandbox.sudo_override
+    {
+        tracing::warn!(command = %cmd.command, "shell exec with sudo override");
+    }
 
     // Builtin dispatch: for now, handle a small set of safe builtins.
     // Real execution would compile to WASM and run in the sandbox.
@@ -374,7 +481,11 @@ pub fn execute_shell(cmd: &ShellCommand) -> Result<ShellResult, ToolError> {
         _ => {
             // Unknown commands return a descriptive error in stderr.
             // Future: compile to WASM and run in sandbox.
-            (127, String::new(), format!("command not found: {}", cmd.command))
+            (
+                127,
+                String::new(),
+                format!("command not found: {}", cmd.command),
+            )
         }
     };
 
@@ -426,12 +537,19 @@ impl ShellExecTool {
 }
 
 impl BuiltinTool for ShellExecTool {
-    fn name(&self) -> &str { "shell.exec" }
-    fn spec(&self) -> &BuiltinToolSpec { &self.spec }
+    fn name(&self) -> &str {
+        "shell.exec"
+    }
+    fn spec(&self) -> &BuiltinToolSpec {
+        &self.spec
+    }
     fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let command = args.get("command").and_then(|v| v.as_str())
+        let command = args
+            .get("command")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidArgs("missing 'command'".into()))?;
-        let cmd_args: Vec<String> = args.get("args")
+        let cmd_args: Vec<String> = args
+            .get("args")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
 

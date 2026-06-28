@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
 use crate::pipeline::learner::TrajectoryLearner;
-use crate::pipeline::mutation::{auto_select_strategy, mutate_prompt, TrajectoryHint};
+use crate::pipeline::mutation::{TrajectoryHint, auto_select_strategy, mutate_prompt};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -163,9 +163,7 @@ impl PatternDetector {
         // Extract patterns of length 2..=max_window from recent calls
         let n = self.recent_calls.len();
         for len in 2..=self.max_window.min(n) {
-            let pattern = ToolCallPattern::new(
-                self.recent_calls[n - len..n].to_vec(),
-            );
+            let pattern = ToolCallPattern::new(self.recent_calls[n - len..n].to_vec());
             *self.pattern_counts.entry(pattern).or_insert(0) += 1;
         }
     }
@@ -309,12 +307,10 @@ pub fn install_pending_skill(
 ) -> Result<PathBuf, String> {
     let skill_dir = install_dir.join(&candidate.name);
 
-    std::fs::create_dir_all(&skill_dir)
-        .map_err(|e| format!("create skill dir: {e}"))?;
+    std::fs::create_dir_all(&skill_dir).map_err(|e| format!("create skill dir: {e}"))?;
 
     let skill_path = skill_dir.join("SKILL.md");
-    std::fs::write(&skill_path, &candidate.skill_md)
-        .map_err(|e| format!("write SKILL.md: {e}"))?;
+    std::fs::write(&skill_path, &candidate.skill_md).map_err(|e| format!("write SKILL.md: {e}"))?;
 
     // Write a .pending marker file -- the skill watcher should
     // skip loading skills with this marker until approved.
@@ -346,8 +342,7 @@ pub fn approve_skill(skill_dir: &Path) -> Result<(), String> {
 /// Reject a pending skill by removing its directory.
 pub fn reject_skill(skill_dir: &Path) -> Result<(), String> {
     if skill_dir.exists() {
-        std::fs::remove_dir_all(skill_dir)
-            .map_err(|e| format!("remove skill dir: {e}"))?;
+        std::fs::remove_dir_all(skill_dir).map_err(|e| format!("remove skill dir: {e}"))?;
         info!(skill_dir = %skill_dir.display(), "rejected and removed pending skill");
         Ok(())
     } else {
@@ -373,10 +368,7 @@ pub fn is_pending(skill_dir: &Path) -> bool {
 ///
 /// Returns the (possibly improved) instructions. If there are no
 /// successful patterns, the original instructions are returned unchanged.
-pub fn improve_skill_instructions(
-    instructions: &str,
-    learner: &TrajectoryLearner,
-) -> String {
+pub fn improve_skill_instructions(instructions: &str, learner: &TrajectoryLearner) -> String {
     let best = learner.get_best_trajectories(10);
     let poor = learner.get_poor_trajectories(10);
 
@@ -401,7 +393,11 @@ pub fn improve_skill_instructions(
         .collect();
 
     let strategy = auto_select_strategy(&hints);
-    debug!(?strategy, hints_count = hints.len(), "mutating skill instructions");
+    debug!(
+        ?strategy,
+        hints_count = hints.len(),
+        "mutating skill instructions"
+    );
     mutate_prompt(instructions, &hints, strategy)
 }
 
@@ -527,10 +523,7 @@ mod tests {
             detector.record_tool_call("edit_file");
         }
         let candidates = detector.detect_candidates();
-        assert!(
-            !candidates.is_empty(),
-            "should detect at least one pattern"
-        );
+        assert!(!candidates.is_empty(), "should detect at least one pattern");
     }
 
     #[test]
@@ -737,9 +730,7 @@ mod tests {
             routing: RoutingDecision::default(),
             response: LlmResponse {
                 id: "r".into(),
-                content: vec![ContentBlock::Text {
-                    text: "ok".into(),
-                }],
+                content: vec![ContentBlock::Text { text: "ok".into() }],
                 stop_reason: StopReason::EndTurn,
                 usage: Usage {
                     input_tokens: 5,

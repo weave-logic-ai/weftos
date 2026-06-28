@@ -3,8 +3,8 @@
 //! Velocity Verlet integration with quadtree-accelerated repulsion (O(n log n)),
 //! spring attraction on edges, and center gravity.
 
-use std::collections::HashMap;
 use crate::entity::EntityId;
+use std::collections::HashMap;
 
 /// Force layout configuration — can be tuned by EML LayoutModel.
 #[derive(Debug, Clone)]
@@ -71,18 +71,28 @@ pub fn layout(
     let cy = height / 2.0;
     let radius = (width.min(height) / 4.0).max(50.0);
 
-    let mut bodies: Vec<Body> = node_ids.iter().enumerate().map(|(i, id)| {
-        let angle = 2.0 * std::f64::consts::PI * (i as f64) / (n as f64);
-        Body {
-            id: id.clone(),
-            x: cx + radius * angle.cos(),
-            y: cy + radius * angle.sin(),
-            vx: 0.0,
-            vy: 0.0,
-        }
-    }).collect();
+    let mut bodies: Vec<Body> = node_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| {
+            let angle = 2.0 * std::f64::consts::PI * (i as f64) / (n as f64);
+            Body {
+                id: id.clone(),
+                x: cx + radius * angle.cos(),
+                y: cy + radius * angle.sin(),
+                vx: 0.0,
+                vy: 0.0,
+            }
+        })
+        .collect();
 
-    let sim_edges: Vec<Edge> = edges.iter().map(|&(s, t)| Edge { source: s, target: t }).collect();
+    let sim_edges: Vec<Edge> = edges
+        .iter()
+        .map(|&(s, t)| Edge {
+            source: s,
+            target: t,
+        })
+        .collect();
 
     // Iterate.
     for iter in 0..config.iterations {

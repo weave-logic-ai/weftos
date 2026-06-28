@@ -228,7 +228,10 @@ impl SandboxPolicy {
         if self.network.allowed_domains.is_empty() {
             return true;
         }
-        self.network.allowed_domains.iter().any(|a| domain_matches(domain, a))
+        self.network
+            .allowed_domains
+            .iter()
+            .any(|a| domain_matches(domain, a))
     }
 
     /// Check whether a file path is readable.
@@ -356,10 +359,12 @@ fn is_path_within_allowlist(
         Err(_) => return false,
     };
 
-    allowlist.iter().any(|allowed| match allowed.canonicalize() {
-        Ok(allowed_canon) => target_canon.starts_with(&allowed_canon),
-        Err(_) => false,
-    })
+    allowlist
+        .iter()
+        .any(|allowed| match allowed.canonicalize() {
+            Ok(allowed_canon) => target_canon.starts_with(&allowed_canon),
+            Err(_) => false,
+        })
 }
 
 /// File names inside `.clawft/` that are NEVER writable by the agent,
@@ -373,8 +378,7 @@ fn is_path_within_allowlist(
 ///   topic with a `DerivedWriteGrant` (Phase F1/F2) so the
 ///   `chain.rs` witness records the append. Direct filesystem writes
 ///   bypass that audit, so we deny them here too.
-const PROTECTED_IDENTITY_FILENAMES: &[&str] =
-    &["SOUL.md", "IDENTITY.md", "SOUL.journal.md"];
+const PROTECTED_IDENTITY_FILENAMES: &[&str] = &["SOUL.md", "IDENTITY.md", "SOUL.journal.md"];
 
 /// Return `true` when `path`'s tail is `<...>/.clawft/<protected>`.
 ///
@@ -412,8 +416,7 @@ fn domain_matches(domain: &str, pattern: &str) -> bool {
         return true;
     }
     if let Some(suffix) = pattern_lower.strip_prefix("*.") {
-        return domain_lower.ends_with(&format!(".{suffix}"))
-            || domain_lower == suffix;
+        return domain_lower.ends_with(&format!(".{suffix}")) || domain_lower == suffix;
     }
     domain_lower == pattern_lower
 }

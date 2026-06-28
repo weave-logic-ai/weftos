@@ -43,12 +43,7 @@ use super::WorkspaceManager;
 /// directory layout visible to operators and lets the sandbox grant
 /// the path proactively. See the module-level docs and
 /// `docs/guides/workspaces.md` "tool_state contract".
-const AGENT_WORKSPACE_SUBDIRS: &[&str] = &[
-    "sessions",
-    "memory",
-    "skills",
-    "tool_state",
-];
+const AGENT_WORKSPACE_SUBDIRS: &[&str] = &["sessions", "memory", "skills", "tool_state"];
 
 impl WorkspaceManager {
     /// Resolve the agents directory root.
@@ -86,10 +81,22 @@ impl WorkspaceManager {
 
         // Create template files (only if they don't already exist).
         let files = [
-            ("SOUL.md", format!("# Agent: {agent_id}\n\nPersonality and directives for this agent.\n")),
-            ("AGENTS.md", format!("# Agent: {agent_id}\n\nCapabilities and tool access.\n")),
-            ("USER.md", format!("# Agent: {agent_id}\n\nUser preferences for this agent.\n")),
-            ("config.toml", format!("# Per-agent configuration overrides for {agent_id}\n")),
+            (
+                "SOUL.md",
+                format!("# Agent: {agent_id}\n\nPersonality and directives for this agent.\n"),
+            ),
+            (
+                "AGENTS.md",
+                format!("# Agent: {agent_id}\n\nCapabilities and tool access.\n"),
+            ),
+            (
+                "USER.md",
+                format!("# Agent: {agent_id}\n\nUser preferences for this agent.\n"),
+            ),
+            (
+                "config.toml",
+                format!("# Per-agent configuration overrides for {agent_id}\n"),
+            ),
         ];
 
         for (filename, content) in &files {
@@ -128,10 +135,7 @@ impl WorkspaceManager {
                     Some(p.to_path_buf())
                 } else {
                     return Err(ClawftError::ConfigInvalid {
-                        reason: format!(
-                            "template path is not a directory: {}",
-                            p.display()
-                        ),
+                        reason: format!("template path is not a directory: {}", p.display()),
                     });
                 }
             }
@@ -293,10 +297,7 @@ pub(crate) fn validate_agent_id(agent_id: &str) -> Result<()> {
             reason: format!("agent ID must not start with dot: {agent_id}"),
         });
     }
-    if agent_id.contains('/')
-        || agent_id.contains('\\')
-        || agent_id.contains('\0')
-    {
+    if agent_id.contains('/') || agent_id.contains('\\') || agent_id.contains('\0') {
         return Err(ClawftError::ConfigInvalid {
             reason: format!("agent ID contains invalid characters: {agent_id}"),
         });
@@ -314,10 +315,7 @@ pub(crate) fn set_dir_permissions_0700(path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(
-            path,
-            std::fs::Permissions::from_mode(0o700),
-        );
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
     }
     #[cfg(not(unix))]
     {
@@ -357,10 +355,7 @@ mod tests {
         assert!(agent_dir.is_dir());
 
         for subdir in &["sessions", "memory", "skills", "tool_state"] {
-            assert!(
-                agent_dir.join(subdir).is_dir(),
-                "missing subdir: {subdir}"
-            );
+            assert!(agent_dir.join(subdir).is_dir(), "missing subdir: {subdir}");
         }
 
         for file in &["SOUL.md", "AGENTS.md", "USER.md", "config.toml"] {
@@ -448,11 +443,7 @@ mod tests {
         let template = dir.join("my-template");
         std::fs::create_dir_all(template.join("skills")).unwrap();
         std::fs::write(template.join("SOUL.md"), "template soul").unwrap();
-        std::fs::write(
-            template.join("skills/custom.md"),
-            "skill data",
-        )
-        .unwrap();
+        std::fs::write(template.join("skills/custom.md"), "skill data").unwrap();
 
         let agent_dir = wm
             .create_agent_workspace("from-template", Some(&template))
@@ -490,11 +481,7 @@ mod tests {
         let wm = WorkspaceManager::with_registry_path(registry_path).unwrap();
 
         let agent_dir = wm.ensure_agent_workspace("perms-agent").unwrap();
-        let mode = std::fs::metadata(&agent_dir)
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777;
+        let mode = std::fs::metadata(&agent_dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700, "agent dir should have 0700 permissions");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -509,8 +496,7 @@ mod tests {
         wm.ensure_agent_workspace("exporter").unwrap();
         wm.ensure_agent_workspace("importer").unwrap();
 
-        let exporter_ns =
-            wm.agents_root().join("exporter/memory/project-ctx");
+        let exporter_ns = wm.agents_root().join("exporter/memory/project-ctx");
         std::fs::create_dir_all(&exporter_ns).unwrap();
         std::fs::write(exporter_ns.join("data.txt"), "shared data").unwrap();
 
@@ -520,8 +506,7 @@ mod tests {
 
         assert!(link.is_symlink());
 
-        let content =
-            std::fs::read_to_string(link.join("data.txt")).unwrap();
+        let content = std::fs::read_to_string(link.join("data.txt")).unwrap();
         assert_eq!(content, "shared data");
 
         let _ = std::fs::remove_dir_all(&dir);

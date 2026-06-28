@@ -145,7 +145,8 @@ impl SandboxedHttpClient {
         let body_ref = body_str.as_deref();
 
         // Validate against sandbox
-        let _validated_url = self.validate_request(method, url, body_ref)
+        let _validated_url = self
+            .validate_request(method, url, body_ref)
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
         // Actual HTTP execution not yet wired -- will be connected in C2.8
@@ -225,79 +226,68 @@ mod tests {
 
         #[test]
         fn sandboxed_validate_allowed_domain() {
-            let client = SandboxedHttpClient::new(
-                sandbox_with_network(vec!["api.example.com".into()]),
-            );
-            let result = client.validate_request(
-                "GET",
-                "https://api.example.com/data",
-                None,
-            );
+            let client =
+                SandboxedHttpClient::new(sandbox_with_network(vec!["api.example.com".into()]));
+            let result = client.validate_request("GET", "https://api.example.com/data", None);
             assert!(result.is_ok());
         }
 
         #[test]
         fn sandboxed_validate_denied_domain() {
-            let client = SandboxedHttpClient::new(
-                sandbox_with_network(vec!["api.example.com".into()]),
-            );
-            let result = client.validate_request(
-                "GET",
-                "https://evil.example.com/data",
-                None,
-            );
+            let client =
+                SandboxedHttpClient::new(sandbox_with_network(vec!["api.example.com".into()]));
+            let result = client.validate_request("GET", "https://evil.example.com/data", None);
             assert!(result.is_err());
         }
 
         #[test]
         fn sandboxed_validate_private_ip_blocked() {
-            let client = SandboxedHttpClient::new(
-                sandbox_with_network(vec!["*".into()]),
-            );
-            let result = client.validate_request(
-                "GET",
-                "http://127.0.0.1/",
-                None,
-            );
+            let client = SandboxedHttpClient::new(sandbox_with_network(vec!["*".into()]));
+            let result = client.validate_request("GET", "http://127.0.0.1/", None);
             assert!(result.is_err());
         }
 
         #[test]
         fn sandboxed_request_validates_then_returns_not_wired() {
-            let client = SandboxedHttpClient::new(
-                sandbox_with_network(vec!["api.example.com".into()]),
-            );
+            let client =
+                SandboxedHttpClient::new(sandbox_with_network(vec!["api.example.com".into()]));
             let headers = HashMap::new();
             let result = client.request("GET", "https://api.example.com/", &headers, None);
             // Should pass validation but return "not wired" error
             assert!(result.is_err());
             let err = result.unwrap_err().to_string();
-            assert!(err.contains("not yet wired"), "expected 'not yet wired', got: {err}");
+            assert!(
+                err.contains("not yet wired"),
+                "expected 'not yet wired', got: {err}"
+            );
         }
 
         #[test]
         fn sandboxed_request_fails_validation_before_wiring() {
-            let client = SandboxedHttpClient::new(
-                sandbox_with_network(vec!["api.example.com".into()]),
-            );
+            let client =
+                SandboxedHttpClient::new(sandbox_with_network(vec!["api.example.com".into()]));
             let headers = HashMap::new();
             let result = client.request("GET", "https://evil.com/", &headers, None);
             assert!(result.is_err());
             let err = result.unwrap_err().to_string();
             // Should fail at validation (host not allowed), not at "not wired"
-            assert!(err.contains("not in network allowlist"), "expected allowlist error, got: {err}");
+            assert!(
+                err.contains("not in network allowlist"),
+                "expected allowlist error, got: {err}"
+            );
         }
 
         #[test]
         fn sandboxed_request_no_network_denied() {
-            let client = SandboxedHttpClient::new(
-                sandbox_with_network(vec![]),
-            );
+            let client = SandboxedHttpClient::new(sandbox_with_network(vec![]));
             let headers = HashMap::new();
             let result = client.request("GET", "https://api.example.com/", &headers, None);
             assert!(result.is_err());
             let err = result.unwrap_err().to_string();
-            assert!(err.contains("not permitted"), "expected denied error, got: {err}");
+            assert!(
+                err.contains("not permitted"),
+                "expected denied error, got: {err}"
+            );
         }
     }
 }

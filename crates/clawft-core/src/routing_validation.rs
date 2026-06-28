@@ -291,60 +291,66 @@ fn validate_permission_level(
 ) {
     // Rule 9: level values are 0, 1, or 2 (warn on others).
     if let Some(level) = plc.level
-        && level > 2 {
-            errors.push(ValidationError {
-                field: format!("{}.level", field_prefix),
-                message: format!(
-                    "permission level {} is not recognized (expected 0, 1, or 2)",
-                    level
-                ),
-                severity: ValidationSeverity::Warning,
-            });
-        }
+        && level > 2
+    {
+        errors.push(ValidationError {
+            field: format!("{}.level", field_prefix),
+            message: format!(
+                "permission level {} is not recognized (expected 0, 1, or 2)",
+                level
+            ),
+            severity: ValidationSeverity::Warning,
+        });
+    }
 
     // Rule 10: escalation_threshold in [0.0, 1.0].
     if let Some(threshold) = plc.escalation_threshold
-        && (!(0.0..=1.0).contains(&threshold)) {
-            errors.push(ValidationError {
-                field: format!("{}.escalation_threshold", field_prefix),
-                message: format!("escalation_threshold {} must be in [0.0, 1.0]", threshold),
-                severity: ValidationSeverity::Error,
-            });
-        }
+        && (!(0.0..=1.0).contains(&threshold))
+    {
+        errors.push(ValidationError {
+            field: format!("{}.escalation_threshold", field_prefix),
+            message: format!("escalation_threshold {} must be in [0.0, 1.0]", threshold),
+            severity: ValidationSeverity::Error,
+        });
+    }
 
     // Rule 11: cost_budget_daily_usd >= 0.0.
     if let Some(daily) = plc.cost_budget_daily_usd
-        && daily < 0.0 {
-            errors.push(ValidationError {
-                field: format!("{}.cost_budget_daily_usd", field_prefix),
-                message: format!("cost_budget_daily_usd {} must be non-negative", daily),
-                severity: ValidationSeverity::Error,
-            });
-        }
+        && daily < 0.0
+    {
+        errors.push(ValidationError {
+            field: format!("{}.cost_budget_daily_usd", field_prefix),
+            message: format!("cost_budget_daily_usd {} must be non-negative", daily),
+            severity: ValidationSeverity::Error,
+        });
+    }
 
     // Rule 12: cost_budget_monthly_usd >= 0.0.
     if let Some(monthly) = plc.cost_budget_monthly_usd
-        && monthly < 0.0 {
-            errors.push(ValidationError {
-                field: format!("{}.cost_budget_monthly_usd", field_prefix),
-                message: format!("cost_budget_monthly_usd {} must be non-negative", monthly),
-                severity: ValidationSeverity::Error,
-            });
-        }
+        && monthly < 0.0
+    {
+        errors.push(ValidationError {
+            field: format!("{}.cost_budget_monthly_usd", field_prefix),
+            message: format!("cost_budget_monthly_usd {} must be non-negative", monthly),
+            severity: ValidationSeverity::Error,
+        });
+    }
 
     // Rule 13: max_tier references an existing tier name (warning only).
     if let Some(ref max_tier) = plc.max_tier
-        && !valid_tiers.is_empty() && !valid_tiers.contains(max_tier.as_str()) {
-            errors.push(ValidationError {
-                field: format!("{}.max_tier", field_prefix),
-                message: format!(
-                    "max_tier '{}' does not match any defined tier (available: {})",
-                    max_tier,
-                    valid_tiers.iter().copied().collect::<Vec<_>>().join(", ")
-                ),
-                severity: ValidationSeverity::Warning,
-            });
-        }
+        && !valid_tiers.is_empty()
+        && !valid_tiers.contains(max_tier.as_str())
+    {
+        errors.push(ValidationError {
+            field: format!("{}.max_tier", field_prefix),
+            message: format!(
+                "max_tier '{}' does not match any defined tier (available: {})",
+                max_tier,
+                valid_tiers.iter().copied().collect::<Vec<_>>().join(", ")
+            ),
+            severity: ValidationSeverity::Warning,
+        });
+    }
 
     // Rule 14: tool access patterns with `*` in middle generate warning.
     if let Some(ref tool_access) = plc.tool_access {
@@ -470,16 +476,17 @@ fn validate_rate_limiting(config: &RoutingConfig, errors: &mut Vec<ValidationErr
 /// Rule 17: fallback model format.
 fn validate_fallback_model(config: &RoutingConfig, errors: &mut Vec<ValidationError>) {
     if let Some(ref model) = config.fallback_model
-        && !model.contains('/') {
-            errors.push(ValidationError {
-                field: "routing.fallback_model".into(),
-                message: format!(
-                    "fallback_model '{}' should match 'provider/model' format",
-                    model
-                ),
-                severity: ValidationSeverity::Warning,
-            });
-        }
+        && !model.contains('/')
+    {
+        errors.push(ValidationError {
+            field: "routing.fallback_model".into(),
+            message: format!(
+                "fallback_model '{}' should match 'provider/model' format",
+                model
+            ),
+            severity: ValidationSeverity::Warning,
+        });
+    }
 }
 
 // ── Workspace ceiling enforcement (FIX-04) ──────────────────────────────
@@ -578,16 +585,17 @@ fn check_level_ceiling(
 ) {
     // Level ceiling: workspace cannot grant level above max_grantable_level.
     if let Some(ws_level) = ws_plc.level
-        && ws_level > max_grantable {
-            errors.push(ValidationError {
-                field: format!("{}.level", field_prefix),
-                message: format!(
-                    "workspace level {} exceeds max_grantable_level {}",
-                    ws_level, max_grantable
-                ),
-                severity: ValidationSeverity::Error,
-            });
-        }
+        && ws_level > max_grantable
+    {
+        errors.push(ValidationError {
+            field: format!("{}.level", field_prefix),
+            message: format!(
+                "workspace level {} exceeds max_grantable_level {}",
+                ws_level, max_grantable
+            ),
+            severity: ValidationSeverity::Error,
+        });
+    }
 
     // Escalation ceiling: workspace cannot enable escalation if global disables it.
     if let (Some(true), Some(false)) = (ws_plc.escalation_allowed, global_plc.escalation_allowed) {
@@ -599,9 +607,7 @@ fn check_level_ceiling(
     }
 
     // Tool access ceiling: workspace cannot add tools not in global allowlist.
-    if let (Some(ws_tools), Some(global_tools)) =
-        (&ws_plc.tool_access, &global_plc.tool_access)
-    {
+    if let (Some(ws_tools), Some(global_tools)) = (&ws_plc.tool_access, &global_plc.tool_access) {
         // If global is ["*"], anything goes.
         if !global_tools.iter().any(|s| s == "*") {
             for ws_tool in ws_tools {
@@ -626,48 +632,52 @@ fn check_level_ceiling(
 
     // Rate limit ceiling: workspace cannot increase beyond global.
     if let (Some(ws_rate), Some(global_rate)) = (ws_plc.rate_limit, global_plc.rate_limit)
-        && global_rate > 0 && (ws_rate > global_rate || ws_rate == 0) {
-            errors.push(ValidationError {
-                field: format!("{}.rate_limit", field_prefix),
-                message: format!(
-                    "workspace rate_limit {} exceeds global ceiling {}",
-                    ws_rate, global_rate
-                ),
-                severity: ValidationSeverity::Error,
-            });
-        }
+        && global_rate > 0
+        && (ws_rate > global_rate || ws_rate == 0)
+    {
+        errors.push(ValidationError {
+            field: format!("{}.rate_limit", field_prefix),
+            message: format!(
+                "workspace rate_limit {} exceeds global ceiling {}",
+                ws_rate, global_rate
+            ),
+            severity: ValidationSeverity::Error,
+        });
+    }
 
     // Cost budget daily ceiling.
     if let (Some(ws_daily), Some(global_daily)) = (
         ws_plc.cost_budget_daily_usd,
         global_plc.cost_budget_daily_usd,
-    )
-        && global_daily > 0.0 && (ws_daily > global_daily || ws_daily == 0.0) {
-            errors.push(ValidationError {
-                field: format!("{}.cost_budget_daily_usd", field_prefix),
-                message: format!(
-                    "workspace daily budget {} exceeds global ceiling {}",
-                    ws_daily, global_daily
-                ),
-                severity: ValidationSeverity::Error,
-            });
-        }
+    ) && global_daily > 0.0
+        && (ws_daily > global_daily || ws_daily == 0.0)
+    {
+        errors.push(ValidationError {
+            field: format!("{}.cost_budget_daily_usd", field_prefix),
+            message: format!(
+                "workspace daily budget {} exceeds global ceiling {}",
+                ws_daily, global_daily
+            ),
+            severity: ValidationSeverity::Error,
+        });
+    }
 
     // Cost budget monthly ceiling.
     if let (Some(ws_monthly), Some(global_monthly)) = (
         ws_plc.cost_budget_monthly_usd,
         global_plc.cost_budget_monthly_usd,
-    )
-        && global_monthly > 0.0 && (ws_monthly > global_monthly || ws_monthly == 0.0) {
-            errors.push(ValidationError {
-                field: format!("{}.cost_budget_monthly_usd", field_prefix),
-                message: format!(
-                    "workspace monthly budget {} exceeds global ceiling {}",
-                    ws_monthly, global_monthly
-                ),
-                severity: ValidationSeverity::Error,
-            });
-        }
+    ) && global_monthly > 0.0
+        && (ws_monthly > global_monthly || ws_monthly == 0.0)
+    {
+        errors.push(ValidationError {
+            field: format!("{}.cost_budget_monthly_usd", field_prefix),
+            message: format!(
+                "workspace monthly budget {} exceeds global ceiling {}",
+                ws_monthly, global_monthly
+            ),
+            severity: ValidationSeverity::Error,
+        });
+    }
 }
 
 // ── Default tiers ───────────────────────────────────────────────────────

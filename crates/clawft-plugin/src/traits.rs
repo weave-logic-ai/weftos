@@ -136,11 +136,7 @@ pub trait ChannelAdapter: Send + Sync {
     /// Send a message payload through this channel.
     ///
     /// Returns a message ID on success.
-    async fn send(
-        &self,
-        target: &str,
-        payload: &MessagePayload,
-    ) -> Result<String, PluginError>;
+    async fn send(&self, target: &str, payload: &MessagePayload) -> Result<String, PluginError>;
 }
 
 /// Host services exposed to channel adapters.
@@ -192,10 +188,7 @@ pub trait PipelineStage: Send + Sync {
     ///
     /// `input` is a JSON value representing the current pipeline state.
     /// Returns the transformed pipeline state.
-    async fn process(
-        &self,
-        input: serde_json::Value,
-    ) -> Result<serde_json::Value, PluginError>;
+    async fn process(&self, input: serde_json::Value) -> Result<serde_json::Value, PluginError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,11 +277,7 @@ pub trait MemoryBackend: Send + Sync {
     ) -> Result<Vec<(String, String, f64)>, PluginError>;
 
     /// Delete a value by key. Returns `true` if the key existed.
-    async fn delete(
-        &self,
-        key: &str,
-        namespace: Option<&str>,
-    ) -> Result<bool, PluginError>;
+    async fn delete(&self, key: &str, namespace: Option<&str>) -> Result<bool, PluginError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -336,10 +325,7 @@ pub trait VoiceHandler: Send + Sync {
     /// Synthesize text into audio output.
     ///
     /// Returns audio bytes and the MIME type of the output format.
-    async fn synthesize(
-        &self,
-        text: &str,
-    ) -> Result<(Vec<u8>, String), PluginError>;
+    async fn synthesize(&self, text: &str) -> Result<(Vec<u8>, String), PluginError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -627,11 +613,7 @@ mod tests {
         ) -> Result<Vec<(String, String, f64)>, PluginError> {
             Ok(vec![("key".into(), "value".into(), 0.95)])
         }
-        async fn delete(
-            &self,
-            _key: &str,
-            _namespace: Option<&str>,
-        ) -> Result<bool, PluginError> {
+        async fn delete(&self, _key: &str, _namespace: Option<&str>) -> Result<bool, PluginError> {
             Ok(true)
         }
     }
@@ -647,10 +629,7 @@ mod tests {
         ) -> Result<String, PluginError> {
             Ok("transcribed text".into())
         }
-        async fn synthesize(
-            &self,
-            _text: &str,
-        ) -> Result<(Vec<u8>, String), PluginError> {
+        async fn synthesize(&self, _text: &str) -> Result<(Vec<u8>, String), PluginError> {
             Ok((vec![0u8; 100], "audio/wav".into()))
         }
     }

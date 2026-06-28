@@ -151,11 +151,7 @@ impl QuantumCognitiveState {
             .iter()
             .map(|a| {
                 let p = a.norm_sq();
-                if p > 1e-15 {
-                    p * p.ln()
-                } else {
-                    0.0
-                }
+                if p > 1e-15 { p * p.ln() } else { 0.0 }
             })
             .sum::<f64>()
     }
@@ -166,11 +162,7 @@ impl QuantumCognitiveState {
     /// H = graph Laplacian L (sparse, computed from CausalGraph adjacency).
     ///
     /// `laplacian_action` computes H|psi> given |psi>.
-    pub fn evolve(
-        &mut self,
-        laplacian_action: impl Fn(&[Complex]) -> Vec<Complex>,
-        dt: f64,
-    ) {
+    pub fn evolve(&mut self, laplacian_action: impl Fn(&[Complex]) -> Vec<Complex>, dt: f64) {
         // |psi'> = |psi> - i*dt * H|psi>
         let h_psi = laplacian_action(&self.psi);
         for (i, hp) in h_psi.iter().enumerate() {
@@ -210,10 +202,7 @@ impl QuantumCognitiveState {
                     impact,
                     prob_u: p_u,
                     prob_v: p_v,
-                    explanation: format!(
-                        "Impact={:.4}, P(u)={:.3}, P(v)={:.3}",
-                        impact, p_u, p_v
-                    ),
+                    explanation: format!("Impact={:.4}, P(u)={:.3}, P(v)={:.3}", impact, p_u, p_v),
                 }
             })
             .collect();
@@ -293,8 +282,7 @@ impl QuantumCognitiveState {
         if recent.len() < 2 {
             return None;
         }
-        let rate =
-            (recent.first().unwrap() - recent.last().unwrap()) / recent.len() as f64;
+        let rate = (recent.first().unwrap() - recent.last().unwrap()) / recent.len() as f64;
         if rate <= 0.0 {
             return None; // not converging
         }
@@ -416,11 +404,7 @@ impl HypothesisSuperposition {
             .iter()
             .map(|h| {
                 let p = h.amplitude.powi(2);
-                if p > 1e-15 {
-                    p * p.ln()
-                } else {
-                    0.0
-                }
+                if p > 1e-15 { p * p.ln() } else { 0.0 }
             })
             .sum::<f64>()
     }
@@ -710,7 +694,10 @@ mod tests {
     #[test]
     fn is_collapsed_detects_low_entropy() {
         let mut qs = QuantumCognitiveState::uniform(3, &[1, 2, 3]);
-        assert!(!qs.is_collapsed(0.1), "uniform state should not be collapsed");
+        assert!(
+            !qs.is_collapsed(0.1),
+            "uniform state should not be collapsed"
+        );
 
         qs.psi[0] = Complex::real(1.0);
         qs.psi[1] = Complex::zero();
@@ -850,10 +837,7 @@ mod tests {
         let mut qs = QuantumCognitiveState::from_fiedler(&[1.0, -0.5, 0.3, -0.2], &[0, 1, 2, 3]);
 
         // Evolve
-        qs.evolve(
-            |psi| psi.iter().map(|a| a.scale(0.5)).collect(),
-            0.1,
-        );
+        qs.evolve(|psi| psi.iter().map(|a| a.scale(0.5)).collect(), 0.1);
 
         // Observe
         qs.observe_evidence(0, 1, 0.8);

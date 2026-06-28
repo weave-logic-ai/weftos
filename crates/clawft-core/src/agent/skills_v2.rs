@@ -41,11 +41,11 @@ use tracing::{debug, warn};
 use clawft_types::skill::{SkillDefinition, SkillFormat};
 use clawft_types::{ClawftError, Result};
 
+#[cfg(feature = "native")]
+use crate::security::validate_directory_name;
 use crate::security::{
     MAX_SKILL_MD_SIZE, sanitize_skill_instructions, validate_file_size, validate_yaml_depth,
 };
-#[cfg(feature = "native")]
-use crate::security::validate_directory_name;
 
 // ── SKILL.md parser ─────────────────────────────────────────────────────
 
@@ -827,8 +827,9 @@ Instructions.
 
         let builtin = SkillDefinition::new("shared", "Built-in version");
 
-        let registry =
-            SkillRegistry::discover(Some(&dir_ws), Some(&dir_user), vec![builtin]).await.unwrap();
+        let registry = SkillRegistry::discover(Some(&dir_ws), Some(&dir_user), vec![builtin])
+            .await
+            .unwrap();
 
         let skill = registry.get("shared").unwrap();
         // Workspace has highest priority.
@@ -846,7 +847,9 @@ Instructions.
 
         let builtin = SkillDefinition::new("tool", "Built-in tool");
 
-        let registry = SkillRegistry::discover(None, Some(&dir_user), vec![builtin]).await.unwrap();
+        let registry = SkillRegistry::discover(None, Some(&dir_user), vec![builtin])
+            .await
+            .unwrap();
 
         let skill = registry.get("tool").unwrap();
         assert_eq!(skill.description, "User tool");
@@ -874,7 +877,9 @@ Instructions.
         let dir = temp_dir("legacy_reg");
         create_legacy_skill_dir(&dir, "legacy", "Legacy skill", "Legacy prompt");
 
-        let registry = SkillRegistry::discover(Some(&dir), None, vec![]).await.unwrap();
+        let registry = SkillRegistry::discover(Some(&dir), None, vec![])
+            .await
+            .unwrap();
 
         let skill = registry.get("legacy").unwrap();
         assert_eq!(skill.name, "legacy");
@@ -893,7 +898,8 @@ Instructions.
 
         // Create both formats in the same directory.
         let skill_md =
-            "---\nname: dual\ndescription: SKILL.md version\n---\n\nSKILL.md instructions".to_string();
+            "---\nname: dual\ndescription: SKILL.md version\n---\n\nSKILL.md instructions"
+                .to_string();
         std::fs::write(skill_dir.join("SKILL.md"), skill_md).unwrap();
 
         let skill_json = serde_json::json!({
@@ -906,7 +912,9 @@ Instructions.
         )
         .unwrap();
 
-        let registry = SkillRegistry::discover(Some(&dir), None, vec![]).await.unwrap();
+        let registry = SkillRegistry::discover(Some(&dir), None, vec![])
+            .await
+            .unwrap();
 
         let skill = registry.get("dual").unwrap();
         // SKILL.md is checked first in load_dir, so it wins.
@@ -926,8 +934,9 @@ Instructions.
 
         let builtin = SkillDefinition::new("builtin_only", "Built-in only");
 
-        let registry =
-            SkillRegistry::discover(Some(&dir_ws), Some(&dir_user), vec![builtin]).await.unwrap();
+        let registry = SkillRegistry::discover(Some(&dir_ws), Some(&dir_user), vec![builtin])
+            .await
+            .unwrap();
 
         assert_eq!(registry.len(), 3);
         assert!(registry.get("builtin_only").is_some());
@@ -954,7 +963,9 @@ Instructions.
         )
         .unwrap();
 
-        let registry = SkillRegistry::discover(Some(&dir), None, vec![]).await.unwrap();
+        let registry = SkillRegistry::discover(Some(&dir), None, vec![])
+            .await
+            .unwrap();
         assert_eq!(registry.len(), 1);
         assert!(registry.get("good").is_some());
         assert!(registry.get("bad").is_none());
@@ -1062,8 +1073,7 @@ Nested instructions.
     #[test]
     fn test_serde_yaml_multiline_values() {
         // Literal block scalar with |
-        let content =
-            "---\nname: multiline-skill\ndescription: |\n  This is a multi-line\n  description that spans\n  several lines.\nversion: 1.0.0\n---\n\nBody text.";
+        let content = "---\nname: multiline-skill\ndescription: |\n  This is a multi-line\n  description that spans\n  several lines.\nversion: 1.0.0\n---\n\nBody text.";
         let skill = parse_skill_md(content, None).unwrap();
         assert_eq!(skill.name, "multiline-skill");
         assert!(skill.description.contains("multi-line"));
@@ -1145,10 +1155,7 @@ Analyze the given {{document}} under {{jurisdiction}} law.
             Some(&serde_json::json!("https://openclaw.dev/skills"))
         );
         let tags = skill.metadata.get("openclaw-tags").unwrap();
-        assert_eq!(
-            tags,
-            &serde_json::json!(["legal", "analysis", "contracts"])
-        );
+        assert_eq!(tags, &serde_json::json!(["legal", "analysis", "contracts"]));
         assert_eq!(
             skill.metadata.get("openclaw-min-version"),
             Some(&serde_json::json!("0.5.0"))
@@ -1339,7 +1346,9 @@ Transform input using the WASM module.
         // Also create a good skill.
         create_skill_md_dir(&dir, "good", "Good skill", "Good prompt");
 
-        let registry = SkillRegistry::discover(Some(&dir), None, vec![]).await.unwrap();
+        let registry = SkillRegistry::discover(Some(&dir), None, vec![])
+            .await
+            .unwrap();
         assert!(registry.get("good").is_some());
         // The evil directory should be skipped (name contains "..")
         // Note: the actual directory name is "..%2Fevil" which contains ".."
@@ -1380,10 +1389,9 @@ Transform input using the WASM module.
         create_skill_md_dir(&dir_ws, "ws_skill", "WS skill", "WS prompt");
 
         // With trust, workspace skills should load.
-        let registry =
-            SkillRegistry::discover_with_trust(Some(&dir_ws), None, vec![], true)
-                .await
-                .unwrap();
+        let registry = SkillRegistry::discover_with_trust(Some(&dir_ws), None, vec![], true)
+            .await
+            .unwrap();
 
         assert!(registry.get("ws_skill").is_some());
 

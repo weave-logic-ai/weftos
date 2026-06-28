@@ -32,13 +32,22 @@ impl LspServer {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| anyhow::anyhow!(
-                "failed to spawn LSP server '{}': {}. Is it installed?",
-                config.command, e
-            ))?;
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to spawn LSP server '{}': {}. Is it installed?",
+                    config.command,
+                    e
+                )
+            })?;
 
-        let stdin = process.stdin.take().ok_or_else(|| anyhow::anyhow!("no stdin"))?;
-        let stdout = process.stdout.take().ok_or_else(|| anyhow::anyhow!("no stdout"))?;
+        let stdin = process
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("no stdin"))?;
+        let stdout = process
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("no stdout"))?;
 
         let mut server = Self {
             process,
@@ -49,7 +58,8 @@ impl LspServer {
         };
 
         // Initialize handshake.
-        let init_req = initialize_request(server.next_id(), &root_uri, &config.initialization_options);
+        let init_req =
+            initialize_request(server.next_id(), &root_uri, &config.initialization_options);
         server.send_request(&init_req)?;
         let _resp = server.read_response()?;
 
@@ -71,7 +81,10 @@ impl LspServer {
         match resp.result {
             Some(v) => Ok(v),
             None => {
-                let err = resp.error.map(|e| e.message).unwrap_or_else(|| "no result".into());
+                let err = resp
+                    .error
+                    .map(|e| e.message)
+                    .unwrap_or_else(|| "no result".into());
                 Err(anyhow::anyhow!("LSP error: {}", err))
             }
         }
@@ -90,7 +103,12 @@ impl LspServer {
     }
 
     /// Get references to a symbol at a position.
-    pub fn references(&mut self, uri: &str, line: u32, character: u32) -> anyhow::Result<serde_json::Value> {
+    pub fn references(
+        &mut self,
+        uri: &str,
+        line: u32,
+        character: u32,
+    ) -> anyhow::Result<serde_json::Value> {
         let req = references_request(self.next_id(), uri, line, character);
         self.request(&req)
     }

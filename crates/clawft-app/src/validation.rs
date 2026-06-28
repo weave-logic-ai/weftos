@@ -23,32 +23,24 @@ pub enum ValidationError {
     /// ADR-015 rule 3 — `[narration]` entries declared but
     /// `supported_inputs` does not contain `voice`. Narration is a
     /// voice-mode concept; without voice it's incoherent.
-    #[error(
-        "`[narration]` declared but `supported_inputs` does not include `voice`"
-    )]
+    #[error("`[narration]` declared but `supported_inputs` does not include `voice`")]
     NarrationWithoutVoice,
 
     /// ADR-015 rule 4 — `supported_modes == ["single-app"]` but
     /// `surfaces.len() != 1`. Single-app is a locked kiosk: exactly
     /// one surface, no escape (Session 10 recommendation 2).
-    #[error(
-        "single-app apps must declare exactly one surface (found {found})"
-    )]
+    #[error("single-app apps must declare exactly one surface (found {found})")]
     SingleAppSurfaceCount { found: usize },
 
     /// ADR-015 rule 5 — `influences` contains an `ide.*` verb but
     /// `ide` is not in `supported_modes`. ADR-018 only activates the
     /// IDE bridge in `ide` sessions.
-    #[error(
-        "influence `{verb}` requires `ide` in supported_modes (ADR-018)"
-    )]
+    #[error("influence `{verb}` requires `ide` in supported_modes (ADR-018)")]
     IdeInfluenceWithoutIdeMode { verb: String },
 
     /// ADR-015 rule 7 — `wake-word` entry point declared but `voice`
     /// is not in `supported_inputs`.
-    #[error(
-        "wake-word entry point declared but `voice` is not in supported_inputs"
-    )]
+    #[error("wake-word entry point declared but `voice` is not in supported_inputs")]
     WakeWordWithoutVoice,
 
     /// ADR-015 rule 8 — `version` is not valid semver. (Normally this
@@ -66,9 +58,7 @@ pub enum ValidationError {
 
     /// ADR-015 rule covering `[narration]` keys must appear in
     /// `subscriptions` (§Schema (8)).
-    #[error(
-        "narration key `{key}` is not in `subscriptions`"
-    )]
+    #[error("narration key `{key}` is not in `subscriptions`")]
     NarrationKeyNotSubscribed { key: String },
 
     /// ADR-015 rule 1 (value set) — a `supported_modes` entry used an
@@ -133,17 +123,13 @@ pub fn validate(manifest: &AppManifest) -> Result<(), ValidationError> {
     if let Some(narration) = manifest.narration.as_ref() {
         for key in narration.keys() {
             if !manifest.subscriptions.iter().any(|s| s == key) {
-                return Err(ValidationError::NarrationKeyNotSubscribed {
-                    key: key.clone(),
-                });
+                return Err(ValidationError::NarrationKeyNotSubscribed { key: key.clone() });
             }
         }
     }
 
     // Rule 4 — single-app kiosk has exactly one surface.
-    if manifest.supported_modes == [Mode::SingleApp]
-        && manifest.surfaces.len() != 1
-    {
+    if manifest.supported_modes == [Mode::SingleApp] && manifest.surfaces.len() != 1 {
         return Err(ValidationError::SingleAppSurfaceCount {
             found: manifest.surfaces.len(),
         });
@@ -153,9 +139,7 @@ pub fn validate(manifest: &AppManifest) -> Result<(), ValidationError> {
     if !has_ide {
         for verb in &manifest.influences {
             if verb.starts_with("ide.") {
-                return Err(ValidationError::IdeInfluenceWithoutIdeMode {
-                    verb: verb.clone(),
-                });
+                return Err(ValidationError::IdeInfluenceWithoutIdeMode { verb: verb.clone() });
             }
         }
     }
@@ -233,10 +217,8 @@ mod tests {
 
     #[test]
     fn weftos_admin_fixture_is_valid() {
-        let m = AppManifest::from_toml_str(
-            include_str!("../fixtures/weftos-admin.toml"),
-        )
-        .expect("fixture parses");
+        let m = AppManifest::from_toml_str(include_str!("../fixtures/weftos-admin.toml"))
+            .expect("fixture parses");
         validate(&m).expect("fixture must validate");
     }
 
@@ -268,10 +250,7 @@ mod tests {
     fn narration_without_voice_rejected() {
         let mut m = baseline();
         let mut narration = BTreeMap::new();
-        narration.insert(
-            "substrate/kernel/status".to_string(),
-            "ok".to_string(),
-        );
+        narration.insert("substrate/kernel/status".to_string(), "ok".to_string());
         m.narration = Some(narration);
         // supported_inputs is [Pointer] — no voice.
         assert_eq!(validate(&m), Err(ValidationError::NarrationWithoutVoice));
@@ -297,10 +276,7 @@ mod tests {
     fn single_app_requires_exactly_one_surface() {
         let mut m = baseline();
         m.supported_modes = vec![Mode::SingleApp];
-        m.surfaces = vec![
-            SurfaceRef::from("a.toml"),
-            SurfaceRef::from("b.toml"),
-        ];
+        m.surfaces = vec![SurfaceRef::from("a.toml"), SurfaceRef::from("b.toml")];
         assert_eq!(
             validate(&m),
             Err(ValidationError::SingleAppSurfaceCount { found: 2 })

@@ -391,8 +391,7 @@ impl McpServerManager {
             let name = config.name.clone();
             if let Some(existing) = self.servers.get(&name) {
                 // Check if config changed.
-                if existing.config.command != config.command
-                    || existing.config.args != config.args
+                if existing.config.command != config.command || existing.config.args != config.args
                 {
                     self.add_server(config);
                     changed += 1;
@@ -403,12 +402,7 @@ impl McpServerManager {
             }
         }
 
-        info!(
-            added,
-            removed,
-            changed,
-            "applied MCP server config diff"
-        );
+        info!(added, removed, changed, "applied MCP server config diff");
 
         (added, removed, changed)
     }
@@ -552,7 +546,7 @@ mod tests {
         let new_configs = vec![
             test_config("github"), // kept
             test_config("jira"),   // added
-            // slack removed
+                                   // slack removed
         ];
 
         let (added, removed, _changed) = mgr.apply_config_diff(new_configs);

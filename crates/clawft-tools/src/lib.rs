@@ -12,23 +12,23 @@
 //! All file and directory operations enforce workspace path containment
 //! to prevent directory traversal attacks.
 
-#[cfg(feature = "canvas")]
-pub mod render_ui;
+#[cfg(feature = "voice")]
+pub mod audio_synthesize;
+#[cfg(feature = "voice")]
+pub mod audio_transcribe;
 #[cfg(feature = "delegate")]
 pub mod delegate_tool;
 pub mod file_tools;
 pub mod memory_tool;
 pub mod message_tool;
+#[cfg(feature = "canvas")]
+pub mod render_ui;
 pub mod security_policy;
 #[cfg(feature = "native-exec")]
 pub mod shell_tool;
 #[cfg(feature = "native-exec")]
 pub mod spawn_tool;
 pub mod url_safety;
-#[cfg(feature = "voice")]
-pub mod audio_synthesize;
-#[cfg(feature = "voice")]
-pub mod audio_transcribe;
 #[cfg(feature = "voice")]
 pub mod voice_listen;
 #[cfg(feature = "voice")]

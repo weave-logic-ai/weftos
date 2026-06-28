@@ -19,9 +19,7 @@ use eframe::egui;
 
 use crate::live::{Live, Snapshot};
 use crate::shell::desktop::{self, Desktop};
-use crate::shell::sidebar::{
-    AppsTab, LogsTab, NetworkTab, SidebarAction, SidebarTarget,
-};
+use crate::shell::sidebar::{AppsTab, LogsTab, NetworkTab, SidebarAction, SidebarTarget};
 
 /// Tile dimensions — DESIGN.md §4.3 tile-grid archetype: ~140×110 px
 /// per tile, ~20 px gap. Hand-rolled rather than via `egui::Grid` so
@@ -50,10 +48,7 @@ pub fn show(
     };
     super::paint_heading(ui, rect, &format!("Apps · {tab_label}"));
 
-    let body = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.top() + 64.0),
-        rect.max,
-    );
+    let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + 64.0), rect.max);
 
     match tab {
         AppsTab::BuiltIn => render_builtin(ui, body, desk),
@@ -100,12 +95,7 @@ fn render_builtin(ui: &mut egui::Ui, rect: egui::Rect, desk: &mut Desktop) {
 /// Installed tab — tile-grid of locally installed apps from the
 /// registry. Selecting a tile sets `desk.selected_app` so the Admin
 /// pane (and any future composer-driven app) renders that surface.
-fn render_installed(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    desk: &mut Desktop,
-    snap: &Snapshot,
-) {
+fn render_installed(ui: &mut egui::Ui, rect: egui::Rect, desk: &mut Desktop, snap: &Snapshot) {
     // Snapshot `(id, name)` up front so we don't hold a borrow over
     // the click handler that writes `desk.selected_app`.
     let entries: Vec<(String, String)> = desk
@@ -190,10 +180,7 @@ fn paint_tile_grid<'a>(
             origin.x + col as f32 * (TILE_W + TILE_GAP),
             origin.y + row as f32 * (TILE_H + TILE_GAP),
         );
-        let tile_rect = egui::Rect::from_min_size(
-            tile_min,
-            egui::vec2(TILE_W, TILE_H),
-        );
+        let tile_rect = egui::Rect::from_min_size(tile_min, egui::vec2(TILE_W, TILE_H));
         // Skip tiles that wholly fall outside the panel rect — keeps
         // hit-testing tight and avoids painting under the sidebar
         // when the window is narrow.
@@ -251,8 +238,17 @@ mod tests {
     fn builtin_tile_order_matches_canonical_sidebar() {
         // Reflect the literal tiles array from `render_builtin`.
         let labels = [
-            "Files", "Processes", "Services", "Network", "Settings",
-            "Scheduler", "Monitor", "Logs", "Terminal", "Chat", "Admin",
+            "Files",
+            "Processes",
+            "Services",
+            "Network",
+            "Settings",
+            "Scheduler",
+            "Monitor",
+            "Logs",
+            "Terminal",
+            "Chat",
+            "Admin",
             "Explorer",
         ];
         assert_eq!(labels.len(), 12, "twelve canonical tiles");

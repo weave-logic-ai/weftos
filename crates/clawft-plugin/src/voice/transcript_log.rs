@@ -154,7 +154,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp_dir);
 
         let logger = TranscriptLogger::new(&tmp_dir, "test-session-001").unwrap();
-        assert!(logger.path().to_string_lossy().contains("test-session-001.jsonl"));
+        assert!(
+            logger
+                .path()
+                .to_string_lossy()
+                .contains("test-session-001.jsonl")
+        );
 
         // Write two entries
         let entry1 = TranscriptEntry {

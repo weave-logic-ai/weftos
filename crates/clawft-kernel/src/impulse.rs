@@ -9,8 +9,8 @@
 //! coupling. They correspond to `crossref::StructureTag::as_u8()`.
 
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -229,8 +229,22 @@ mod tests {
     fn impulse_queue_emit_assigns_id() {
         let q = ImpulseQueue::new();
         let node = [0u8; 32];
-        let id1 = q.emit(0, node, 2, ImpulseType::BeliefUpdate, serde_json::json!({}), 100);
-        let id2 = q.emit(1, node, 0, ImpulseType::CoherenceAlert, serde_json::json!({}), 200);
+        let id1 = q.emit(
+            0,
+            node,
+            2,
+            ImpulseType::BeliefUpdate,
+            serde_json::json!({}),
+            100,
+        );
+        let id2 = q.emit(
+            1,
+            node,
+            0,
+            ImpulseType::CoherenceAlert,
+            serde_json::json!({}),
+            200,
+        );
         assert_eq!(id1, 1);
         assert_eq!(id2, 2);
         assert_eq!(q.len(), 2);
@@ -241,9 +255,30 @@ mod tests {
         let q = ImpulseQueue::new();
         let node = [0u8; 32];
         // Emit in reverse timestamp order.
-        q.emit(0, node, 2, ImpulseType::BeliefUpdate, serde_json::json!({}), 300);
-        q.emit(1, node, 0, ImpulseType::CoherenceAlert, serde_json::json!({}), 100);
-        q.emit(2, node, 0, ImpulseType::NoveltyDetected, serde_json::json!({}), 200);
+        q.emit(
+            0,
+            node,
+            2,
+            ImpulseType::BeliefUpdate,
+            serde_json::json!({}),
+            300,
+        );
+        q.emit(
+            1,
+            node,
+            0,
+            ImpulseType::CoherenceAlert,
+            serde_json::json!({}),
+            100,
+        );
+        q.emit(
+            2,
+            node,
+            0,
+            ImpulseType::NoveltyDetected,
+            serde_json::json!({}),
+            200,
+        );
 
         let drained = q.drain_ready();
         assert_eq!(drained.len(), 3);
@@ -256,8 +291,22 @@ mod tests {
     fn impulse_queue_drain_removes_items() {
         let q = ImpulseQueue::new();
         let node = [0u8; 32];
-        q.emit(0, node, 2, ImpulseType::BeliefUpdate, serde_json::json!({}), 1);
-        q.emit(0, node, 2, ImpulseType::EdgeConfirmed, serde_json::json!({}), 2);
+        q.emit(
+            0,
+            node,
+            2,
+            ImpulseType::BeliefUpdate,
+            serde_json::json!({}),
+            1,
+        );
+        q.emit(
+            0,
+            node,
+            2,
+            ImpulseType::EdgeConfirmed,
+            serde_json::json!({}),
+            2,
+        );
         assert_eq!(q.len(), 2);
 
         let drained = q.drain_ready();
@@ -269,8 +318,22 @@ mod tests {
     fn impulse_queue_clear() {
         let q = ImpulseQueue::new();
         let node = [0u8; 32];
-        q.emit(0, node, 1, ImpulseType::EmbeddingRefined, serde_json::json!({}), 10);
-        q.emit(0, node, 1, ImpulseType::Custom(7), serde_json::json!({}), 20);
+        q.emit(
+            0,
+            node,
+            1,
+            ImpulseType::EmbeddingRefined,
+            serde_json::json!({}),
+            10,
+        );
+        q.emit(
+            0,
+            node,
+            1,
+            ImpulseType::Custom(7),
+            serde_json::json!({}),
+            20,
+        );
         assert_eq!(q.len(), 2);
 
         q.clear();
@@ -282,8 +345,22 @@ mod tests {
     fn impulse_queue_pending_count() {
         let q = ImpulseQueue::new();
         let node = [0u8; 32];
-        q.emit(0, node, 2, ImpulseType::BeliefUpdate, serde_json::json!({}), 1);
-        q.emit(1, node, 0, ImpulseType::CoherenceAlert, serde_json::json!({}), 2);
+        q.emit(
+            0,
+            node,
+            2,
+            ImpulseType::BeliefUpdate,
+            serde_json::json!({}),
+            1,
+        );
+        q.emit(
+            1,
+            node,
+            0,
+            ImpulseType::CoherenceAlert,
+            serde_json::json!({}),
+            2,
+        );
         assert_eq!(q.pending_count(), 2);
 
         // Acknowledge one via the internal queue.
@@ -298,8 +375,22 @@ mod tests {
     fn impulse_emit_and_acknowledge() {
         let q = ImpulseQueue::new();
         let node = [1u8; 32];
-        q.emit(0, node, 2, ImpulseType::NoveltyDetected, serde_json::json!({"k": "v"}), 50);
-        q.emit(0, node, 3, ImpulseType::EdgeConfirmed, serde_json::json!(null), 60);
+        q.emit(
+            0,
+            node,
+            2,
+            ImpulseType::NoveltyDetected,
+            serde_json::json!({"k": "v"}),
+            50,
+        );
+        q.emit(
+            0,
+            node,
+            3,
+            ImpulseType::EdgeConfirmed,
+            serde_json::json!(null),
+            60,
+        );
 
         let drained = q.drain_ready();
         assert_eq!(drained.len(), 2);

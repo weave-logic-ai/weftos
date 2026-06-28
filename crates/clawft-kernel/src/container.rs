@@ -576,7 +576,10 @@ impl SystemService for ContainerService {
     }
 
     async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        debug!("container service starting ({} managed)", self.manager.len());
+        debug!(
+            "container service starting ({} managed)",
+            self.manager.len()
+        );
         Ok(())
     }
 
@@ -972,10 +975,7 @@ mod tests {
         });
         let svc = ContainerService::new(mgr.clone());
         svc.stop().await.unwrap();
-        assert_eq!(
-            mgr.container_state("redis"),
-            Some(ContainerState::Stopped)
-        );
+        assert_eq!(mgr.container_state("redis"), Some(ContainerState::Stopped));
     }
 
     // ── K4 gate tests: container config, lifecycle, health propagation ──
@@ -1394,7 +1394,13 @@ mod tests {
         };
         manager.configure(spec2).unwrap();
 
-        assert_eq!(manager.container_state("svc-a"), Some(ContainerState::Stopped));
-        assert_eq!(manager.container_state("svc-b"), Some(ContainerState::Stopped));
+        assert_eq!(
+            manager.container_state("svc-a"),
+            Some(ContainerState::Stopped)
+        );
+        assert_eq!(
+            manager.container_state("svc-b"),
+            Some(ContainerState::Stopped)
+        );
     }
 }

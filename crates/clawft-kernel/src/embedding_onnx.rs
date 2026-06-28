@@ -242,9 +242,13 @@ fn vocab_search_paths(model_path: &Path) -> Vec<PathBuf> {
 
     // Also check standard WeftOS model paths.
     let model_dir_name = "all-MiniLM-L6-v2";
-    paths.push(PathBuf::from(format!(".weftos/models/{model_dir_name}/vocab.txt")));
+    paths.push(PathBuf::from(format!(
+        ".weftos/models/{model_dir_name}/vocab.txt"
+    )));
     if let Ok(home) = std::env::var("HOME") {
-        paths.push(PathBuf::from(format!("{home}/.weftos/models/{model_dir_name}/vocab.txt")));
+        paths.push(PathBuf::from(format!(
+            "{home}/.weftos/models/{model_dir_name}/vocab.txt"
+        )));
     }
     if let Ok(env_dir) = std::env::var("WEFTOS_VOCAB_PATH") {
         paths.push(PathBuf::from(env_dir));
@@ -262,7 +266,11 @@ fn simple_tokenize(text: &str, max_tokens: usize) -> Vec<String> {
     text.to_lowercase()
         .split_whitespace()
         .take(max_tokens)
-        .map(|s| s.chars().filter(|c| c.is_alphanumeric()).collect::<String>())
+        .map(|s| {
+            s.chars()
+                .filter(|c| c.is_alphanumeric())
+                .collect::<String>()
+        })
         .filter(|s| !s.is_empty())
         .collect()
 }
@@ -446,12 +454,13 @@ impl OnnxEmbeddingProvider {
     #[cfg(feature = "onnx-embeddings")]
     fn try_load_session(model_path: &PathBuf) -> Option<Arc<ort::Session>> {
         if !model_path.exists() {
-            tracing::debug!("ONNX model not found at {}, using hash fallback", model_path.display());
+            tracing::debug!(
+                "ONNX model not found at {}, using hash fallback",
+                model_path.display()
+            );
             return None;
         }
-        match ort::Session::builder()
-            .and_then(|builder| builder.commit_from_file(model_path))
-        {
+        match ort::Session::builder().and_then(|builder| builder.commit_from_file(model_path)) {
             Ok(session) => {
                 tracing::info!("ONNX session loaded from {}", model_path.display());
                 Some(Arc::new(session))
@@ -502,40 +511,41 @@ impl OnnxEmbeddingProvider {
     fn onnx_embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
         use ndarray::Array2;
 
-        let session = self.session.as_ref().ok_or_else(|| {
-            EmbeddingError::BackendError("ONNX session not loaded".to_string())
-        })?;
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| EmbeddingError::BackendError("ONNX session not loaded".to_string()))?;
 
         // Tokenize using WordPiece if available, otherwise fall back to hashing.
-        let (input_ids, attention_mask, token_type_ids) = if let Some(ref tokenizer) = self.tokenizer {
-            tokenizer.encode(text).ok_or_else(|| {
-                EmbeddingError::BackendError("WordPiece tokenizer returned None".to_string())
-            })?
-        } else {
-            // Legacy hash-based fallback (produces structurally valid but
-            // semantically meaningless token IDs).
-            tracing::warn_once!(
-                "ONNX inference without WordPiece vocab — embeddings will not be semantic"
-            );
-            let tokens = simple_tokenize(text, self.max_tokens);
-            let seq_len = tokens.len().max(1) + 2; // +2 for [CLS] and [SEP]
+        let (input_ids, attention_mask, token_type_ids) =
+            if let Some(ref tokenizer) = self.tokenizer {
+                tokenizer.encode(text).ok_or_else(|| {
+                    EmbeddingError::BackendError("WordPiece tokenizer returned None".to_string())
+                })?
+            } else {
+                // Legacy hash-based fallback (produces structurally valid but
+                // semantically meaningless token IDs).
+                tracing::warn_once!(
+                    "ONNX inference without WordPiece vocab — embeddings will not be semantic"
+                );
+                let tokens = simple_tokenize(text, self.max_tokens);
+                let seq_len = tokens.len().max(1) + 2; // +2 for [CLS] and [SEP]
 
-            let mut ids = vec![CLS_ID];
-            for token in &tokens {
-                let mut hasher = Sha256::new();
-                hasher.update(token.as_bytes());
-                let hash = hasher.finalize();
-                let id = 1000
-                    + (u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]) % 29000)
-                        as i64;
-                ids.push(id);
-            }
-            ids.push(SEP_ID);
+                let mut ids = vec![CLS_ID];
+                for token in &tokens {
+                    let mut hasher = Sha256::new();
+                    hasher.update(token.as_bytes());
+                    let hash = hasher.finalize();
+                    let id = 1000
+                        + (u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]) % 29000) as i64;
+                    ids.push(id);
+                }
+                ids.push(SEP_ID);
 
-            let mask = vec![1i64; seq_len];
-            let types = vec![0i64; seq_len];
-            (ids, mask, types)
-        };
+                let mask = vec![1i64; seq_len];
+                let types = vec![0i64; seq_len];
+                (ids, mask, types)
+            };
 
         let seq_len = input_ids.len();
 
@@ -550,14 +560,17 @@ impl OnnxEmbeddingProvider {
             "input_ids" => input_ids_arr,
             "attention_mask" => attention_mask_arr,
             "token_type_ids" => token_type_ids_arr,
-        ].map_err(|e| EmbeddingError::BackendError(format!("input error: {e}")))?;
+        ]
+        .map_err(|e| EmbeddingError::BackendError(format!("input error: {e}")))?;
 
-        let outputs = session.run(inputs)
+        let outputs = session
+            .run(inputs)
             .map_err(|e| EmbeddingError::BackendError(format!("inference error: {e}")))?;
 
         // Extract the last_hidden_state output and mean-pool across the sequence.
         // Output shape: (1, seq_len, hidden_dim)
-        let output_tensor = outputs.get("last_hidden_state")
+        let output_tensor = outputs
+            .get("last_hidden_state")
             .or_else(|| outputs.iter().next().map(|(_, v)| v))
             .ok_or_else(|| EmbeddingError::BackendError("no output tensor".to_string()))?;
 
@@ -567,18 +580,18 @@ impl OnnxEmbeddingProvider {
 
         let shape = tensor.shape();
         if shape.len() < 2 {
-            return Err(EmbeddingError::BackendError(
-                format!("unexpected output shape: {shape:?}"),
-            ));
+            return Err(EmbeddingError::BackendError(format!(
+                "unexpected output shape: {shape:?}"
+            )));
         }
         let hidden_dim = *shape.last().unwrap();
         let seq = shape[1];
 
         // Attention-masked mean pooling: only average over non-padding tokens.
         let mut embedding = vec![0.0f32; hidden_dim];
-        let data = tensor.as_slice().ok_or_else(|| {
-            EmbeddingError::BackendError("tensor not contiguous".to_string())
-        })?;
+        let data = tensor
+            .as_slice()
+            .ok_or_else(|| EmbeddingError::BackendError("tensor not contiguous".to_string()))?;
 
         let mut active_count: f32 = 0.0;
         for s in 0..seq {
@@ -710,10 +723,10 @@ impl SentenceTransformerProvider {
 /// Pre-process markdown text by stripping structural elements.
 pub fn preprocess_markdown(text: &str) -> String {
     text.lines()
-        .filter(|l| !l.starts_with('#'))      // skip headers
-        .filter(|l| !l.starts_with("```"))     // skip code fences
-        .filter(|l| !l.starts_with('|'))       // skip tables
-        .filter(|l| !l.starts_with("- ["))     // skip checklists
+        .filter(|l| !l.starts_with('#')) // skip headers
+        .filter(|l| !l.starts_with("```")) // skip code fences
+        .filter(|l| !l.starts_with('|')) // skip tables
+        .filter(|l| !l.starts_with("- [")) // skip checklists
         .map(|l| l.trim())
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
@@ -1199,14 +1212,20 @@ mod tests {
     #[tokio::test]
     async fn sentence_embed_returns_correct_dimensions() {
         let p = SentenceTransformerProvider::new("/tmp/model.onnx");
-        let vec = p.embed("This is a test paragraph with enough words.").await.unwrap();
+        let vec = p
+            .embed("This is a test paragraph with enough words.")
+            .await
+            .unwrap();
         assert_eq!(vec.len(), 384);
     }
 
     #[tokio::test]
     async fn sentence_embed_l2_normalized() {
         let p = SentenceTransformerProvider::new("/tmp/model.onnx");
-        let vec = p.embed("Testing normalisation of sentence embeddings here.").await.unwrap();
+        let vec = p
+            .embed("Testing normalisation of sentence embeddings here.")
+            .await
+            .unwrap();
         let mag = vec_magnitude(&vec);
         assert!((mag - 1.0).abs() < 0.01, "magnitude = {mag}, expected ~1.0");
     }
@@ -1230,9 +1249,18 @@ mod tests {
     #[tokio::test]
     async fn sentence_similar_inputs_positive_cosine() {
         let p = SentenceTransformerProvider::new("/tmp/model.onnx");
-        let v1 = p.embed("The kernel boots up the system and runs all the services correctly.").await.unwrap();
-        let v2 = p.embed("The kernel boots up the system and runs all the services properly.").await.unwrap();
-        let v3 = p.embed("Quantum chromodynamics explains the strong interaction between quarks.").await.unwrap();
+        let v1 = p
+            .embed("The kernel boots up the system and runs all the services correctly.")
+            .await
+            .unwrap();
+        let v2 = p
+            .embed("The kernel boots up the system and runs all the services properly.")
+            .await
+            .unwrap();
+        let v3 = p
+            .embed("Quantum chromodynamics explains the strong interaction between quarks.")
+            .await
+            .unwrap();
         let sim_similar = cosine_similarity(&v1, &v2);
         let sim_different = cosine_similarity(&v1, &v3);
         assert!(
@@ -1513,21 +1541,55 @@ pub async fn process_batch(&self, items: Vec<Item>) -> Result<(), Error> {
         for i in 0..100 {
             writeln!(content, "[unused{}]", i).unwrap();
         }
-        writeln!(content, "[UNK]").unwrap();   // ID 100
-        writeln!(content, "[CLS]").unwrap();   // ID 101
-        writeln!(content, "[SEP]").unwrap();   // ID 102
-        writeln!(content, "[MASK]").unwrap();  // ID 103
+        writeln!(content, "[UNK]").unwrap(); // ID 100
+        writeln!(content, "[CLS]").unwrap(); // ID 101
+        writeln!(content, "[SEP]").unwrap(); // ID 102
+        writeln!(content, "[MASK]").unwrap(); // ID 103
         for i in 104..1000 {
             writeln!(content, "[unused{}]", i).unwrap();
         }
         // ID 1000+: real tokens
         let words = [
-            "the", "a", "is", "of", "and", "to", "in", "for", "that", "it",
-            "hello", "world", "test", "input", "embedding", "model", "token",
-            "##s", "##ing", "##ed", "##er", "##tion", "##ly", "##ize",
-            ".", ",", "!", "?",
-            "quick", "brown", "fox", "dog", "cat", "rust", "code",
-            "function", "struct", "pub", "async", "fn",
+            "the",
+            "a",
+            "is",
+            "of",
+            "and",
+            "to",
+            "in",
+            "for",
+            "that",
+            "it",
+            "hello",
+            "world",
+            "test",
+            "input",
+            "embedding",
+            "model",
+            "token",
+            "##s",
+            "##ing",
+            "##ed",
+            "##er",
+            "##tion",
+            "##ly",
+            "##ize",
+            ".",
+            ",",
+            "!",
+            "?",
+            "quick",
+            "brown",
+            "fox",
+            "dog",
+            "cat",
+            "rust",
+            "code",
+            "function",
+            "struct",
+            "pub",
+            "async",
+            "fn",
         ];
         for w in &words {
             writeln!(content, "{}", w).unwrap();
@@ -1537,10 +1599,7 @@ pub async fn process_batch(&self, items: Vec<Item>) -> Result<(), Error> {
             writeln!(content, "extra{}", i).unwrap();
         }
 
-        let path = PathBuf::from(format!(
-            "/tmp/clawft_test_vocab_{}.txt",
-            std::process::id()
-        ));
+        let path = PathBuf::from(format!("/tmp/clawft_test_vocab_{}.txt", std::process::id()));
         std::fs::write(&path, &content).expect("failed to write test vocab");
         path
     }
@@ -1569,7 +1628,10 @@ pub async fn process_batch(&self, items: Vec<Item>) -> Result<(), Error> {
         let sep_pos = ids.iter().position(|&x| x == SEP_ID);
         assert!(sep_pos.is_some(), "must contain [SEP]");
         let sep_pos = sep_pos.unwrap();
-        assert!(sep_pos >= 2, "[SEP] should come after at least one content token");
+        assert!(
+            sep_pos >= 2,
+            "[SEP] should come after at least one content token"
+        );
         // Attention mask: 1s up to and including [SEP], then 0s.
         assert_eq!(mask[0], 1);
         assert_eq!(mask[sep_pos], 1);
@@ -1586,11 +1648,15 @@ pub async fn process_batch(&self, items: Vec<Item>) -> Result<(), Error> {
         let tok = WordPieceTokenizer::load(&f).unwrap().with_max_length(16);
         let (ids, _, _) = tok.encode("hello").unwrap();
         // "hello" is in our test vocab -- should NOT be [UNK].
-        let content_ids: Vec<i64> = ids[1..].iter()
+        let content_ids: Vec<i64> = ids[1..]
+            .iter()
             .take_while(|&&x| x != SEP_ID)
             .cloned()
             .collect();
-        assert!(!content_ids.is_empty(), "should tokenize 'hello' to at least one token");
+        assert!(
+            !content_ids.is_empty(),
+            "should tokenize 'hello' to at least one token"
+        );
         assert!(
             content_ids.iter().any(|&id| id != UNK_ID),
             "known word 'hello' should not be all [UNK]"
@@ -1603,7 +1669,8 @@ pub async fn process_batch(&self, items: Vec<Item>) -> Result<(), Error> {
         let tok = WordPieceTokenizer::load(&f).unwrap().with_max_length(16);
         let (ids, _, _) = tok.encode("xyzzyplugh").unwrap();
         // "xyzzyplugh" is not in our vocab, so it should produce [UNK].
-        let content_ids: Vec<i64> = ids[1..].iter()
+        let content_ids: Vec<i64> = ids[1..]
+            .iter()
             .take_while(|&&x| x != SEP_ID)
             .cloned()
             .collect();
@@ -1660,10 +1727,7 @@ pub async fn process_batch(&self, items: Vec<Item>) -> Result<(), Error> {
         // "tokens" should split into "token" + "##s" since both are in vocab.
         let ids = tok.wordpiece_split("tokens");
         // If "token" and "##s" are in the vocab, we should get 2 IDs (neither UNK).
-        assert!(
-            !ids.is_empty(),
-            "should produce at least one subword token"
-        );
+        assert!(!ids.is_empty(), "should produce at least one subword token");
     }
 
     #[test]
@@ -1680,7 +1744,9 @@ pub async fn process_batch(&self, items: Vec<Item>) -> Result<(), Error> {
         let paths = vocab_search_paths(Path::new("/models/all-MiniLM-L6-v2.onnx"));
         assert!(paths.iter().any(|p| p.ends_with("vocab.txt")));
         assert!(
-            paths.iter().any(|p| p.to_string_lossy().contains("all-MiniLM-L6-v2/vocab.txt")),
+            paths
+                .iter()
+                .any(|p| p.to_string_lossy().contains("all-MiniLM-L6-v2/vocab.txt")),
             "should check sibling directory: {:?}",
             paths
         );

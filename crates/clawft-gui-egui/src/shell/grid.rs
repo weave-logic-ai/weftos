@@ -69,8 +69,7 @@ pub fn paint(ui: &mut egui::Ui, rect: egui::Rect, time: f32) {
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(4, 4, 6));
 
     // Compute current mass positions once per frame.
-    let positions: [egui::Pos2; 4] =
-        std::array::from_fn(|i| MASSES[i].pos(time, rect));
+    let positions: [egui::Pos2; 4] = std::array::from_fn(|i| MASSES[i].pos(time, rect));
 
     // Grid dimensions in cells.
     let cols = (rect.width() / CELL).ceil() as i32 + 2;

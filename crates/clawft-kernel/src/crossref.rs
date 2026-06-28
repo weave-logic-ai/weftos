@@ -278,11 +278,7 @@ mod tests {
         UniversalNodeId::new(tag, ctx, ts, b"hash", b"parent")
     }
 
-    fn sample_crossref(
-        src: UniversalNodeId,
-        tgt: UniversalNodeId,
-        rt: CrossRefType,
-    ) -> CrossRef {
+    fn sample_crossref(src: UniversalNodeId, tgt: UniversalNodeId, rt: CrossRefType) -> CrossRef {
         CrossRef {
             source: src,
             source_structure: StructureTag::ExoChain,
@@ -382,7 +378,11 @@ mod tests {
         let c = make_id(&StructureTag::CausalGraph, b"c", 3);
 
         // a -> b
-        store.insert(sample_crossref(a.clone(), b.clone(), CrossRefType::TriggeredBy));
+        store.insert(sample_crossref(
+            a.clone(),
+            b.clone(),
+            CrossRefType::TriggeredBy,
+        ));
         // c -> a
         store.insert(sample_crossref(c, a.clone(), CrossRefType::Elaborates));
 

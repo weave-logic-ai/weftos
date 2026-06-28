@@ -30,15 +30,13 @@ use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{SigningKey, VerifyingKey};
+use rvf_types::SEGMENT_HEADER_SIZE;
 use weftos_rvf_crypto::hash::shake256_256;
 use weftos_rvf_crypto::{
-    create_witness_chain, decode_signature_footer, encode_signature_footer,
-    lineage_record_to_bytes, lineage_witness_entry, sign_segment, verify_segment,
-    sign_segment_ml_dsa, verify_segment_ml_dsa,
-    MlDsa65Key, MlDsa65VerifyKey,
-    verify_witness_chain, WitnessEntry,
+    MlDsa65Key, MlDsa65VerifyKey, WitnessEntry, create_witness_chain, decode_signature_footer,
+    encode_signature_footer, lineage_record_to_bytes, lineage_witness_entry, sign_segment,
+    sign_segment_ml_dsa, verify_segment, verify_segment_ml_dsa, verify_witness_chain,
 };
-use rvf_types::SEGMENT_HEADER_SIZE;
 use weftos_rvf_wire::writer::{calculate_padded_size, write_segment};
 use weftos_rvf_wire::{read_segment, validate_segment};
 
@@ -838,8 +836,7 @@ impl LocalChain {
         self.events.push(event);
 
         // Auto-checkpoint
-        if self.checkpoint_interval > 0
-            && self.events_since_checkpoint >= self.checkpoint_interval
+        if self.checkpoint_interval > 0 && self.events_since_checkpoint >= self.checkpoint_interval
         {
             self.create_checkpoint();
         }
@@ -1015,15 +1012,9 @@ impl ChainManager {
             }
             let bytes = std::fs::read(path)?;
             if bytes.len() != 32 {
-                return Err(format!(
-                    "key file is {} bytes, expected 32",
-                    bytes.len()
-                )
-                .into());
+                return Err(format!("key file is {} bytes, expected 32", bytes.len()).into());
             }
-            let key_bytes: [u8; 32] = bytes
-                .try_into()
-                .map_err(|_| "key file not 32 bytes")?;
+            let key_bytes: [u8; 32] = bytes.try_into().map_err(|_| "key file not 32 bytes")?;
             let key = SigningKey::from_bytes(&key_bytes);
             info!(path = %path.display(), "loaded Ed25519 signing key");
             Ok(key)
@@ -1185,9 +1176,7 @@ impl ChainManager {
     ///
     /// Returns `Ok(entry_count)` if the witness chain is valid, or
     /// `Err` if verification fails.
-    pub fn verify_witness(
-        &self,
-    ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn verify_witness(&self) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
         let chain = self.inner.lock().unwrap();
         if chain.witness_entries.is_empty() {
             return Ok(0);
@@ -1277,8 +1266,10 @@ impl ChainManager {
                 errors.push(format!(
                     "seq {}: prev_hash mismatch (expected {:02x}{:02x}..., got {:02x}{:02x}...)",
                     event.sequence,
-                    expected_prev[0], expected_prev[1],
-                    event.prev_hash[0], event.prev_hash[1],
+                    expected_prev[0],
+                    expected_prev[1],
+                    event.prev_hash[0],
+                    event.prev_hash[1],
                 ));
             }
 
@@ -1306,9 +1297,7 @@ impl ChainManager {
             if event.hash != recomputed {
                 errors.push(format!(
                     "seq {}: hash mismatch (recomputed {:02x}{:02x}..., stored {:02x}{:02x}...)",
-                    event.sequence,
-                    recomputed[0], recomputed[1],
-                    event.hash[0], event.hash[1],
+                    event.sequence, recomputed[0], recomputed[1], event.hash[0], event.hash[1],
                 ));
             }
         }
@@ -1325,7 +1314,10 @@ impl ChainManager {
     ///
     /// Writes all events as newline-delimited JSON to the given path.
     /// Creates parent directories if they don't exist.
-    pub fn save_to_file(&self, path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn save_to_file(
+        &self,
+        path: &Path,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let chain = self.inner.lock().map_err(|e| format!("lock: {e}"))?;
 
         if let Some(parent) = path.parent() {
@@ -1411,10 +1403,7 @@ impl ChainManager {
     /// containing a 64-byte ExoChainHeader + CBOR payload. A trailing
     /// ExochainCheckpoint segment (subtype 0x41) records the final chain
     /// state for external verification.
-    pub fn save_to_rvf(
-        &self,
-        path: &Path,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn save_to_rvf(&self, path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let chain = self.inner.lock().map_err(|e| format!("lock: {e}"))?;
 
         if let Some(parent) = path.parent() {
@@ -1559,29 +1548,23 @@ impl ChainManager {
 
             // Decode the ExoChainHeader + CBOR from the segment payload.
             let (exo_header, cbor_bytes) = decode_exochain_payload(seg_payload)
-                .ok_or_else(|| {
-                    format!("decode exochain payload at offset {offset}")
-                })?;
+                .ok_or_else(|| format!("decode exochain payload at offset {offset}"))?;
 
             if exo_header.subtype == 0x40 {
                 // ExochainEvent -- deserialize the CBOR payload.
-                let rvf_payload: RvfChainPayload =
-                    ciborium::from_reader(cbor_bytes)
-                        .map_err(|e| format!("cbor decode at offset {offset}: {e}"))?;
+                let rvf_payload: RvfChainPayload = ciborium::from_reader(cbor_bytes)
+                    .map_err(|e| format!("cbor decode at offset {offset}: {e}"))?;
 
                 let payload_hash = parse_hex_hash(&rvf_payload.payload_hash)?;
                 let hash = parse_hex_hash(&rvf_payload.hash)?;
 
-                let timestamp = DateTime::from_timestamp(
-                    exo_header.timestamp_secs as i64,
-                    0,
-                )
-                .ok_or_else(|| {
-                    format!(
-                        "invalid timestamp {} at offset {offset}",
-                        exo_header.timestamp_secs
-                    )
-                })?;
+                let timestamp = DateTime::from_timestamp(exo_header.timestamp_secs as i64, 0)
+                    .ok_or_else(|| {
+                        format!(
+                            "invalid timestamp {} at offset {offset}",
+                            exo_header.timestamp_secs
+                        )
+                    })?;
 
                 events.push(ChainEvent {
                     sequence: exo_header.sequence,
@@ -1600,10 +1583,9 @@ impl ChainManager {
                 });
             } else if exo_header.subtype == 0x41 {
                 // Checkpoint — extract witness chain if present.
-                let cp_obj: serde_json::Value = ciborium::from_reader(cbor_bytes)
-                    .unwrap_or_default();
-                if let Some(wc_hex) = cp_obj.get("witness_chain")
-                    .and_then(|v| v.as_str())
+                let cp_obj: serde_json::Value =
+                    ciborium::from_reader(cbor_bytes).unwrap_or_default();
+                if let Some(wc_hex) = cp_obj.get("witness_chain").and_then(|v| v.as_str())
                     && let Ok(wc_bytes) = hex_decode(wc_hex)
                 {
                     match verify_witness_chain(&wc_bytes) {
@@ -1623,10 +1605,8 @@ impl ChainManager {
             // subtype 0x42 (Proof) is skipped.
 
             // Advance past the segment: header + payload padded to 64 bytes.
-            let padded = calculate_padded_size(
-                SEGMENT_HEADER_SIZE,
-                seg_header.payload_length as usize,
-            );
+            let padded =
+                calculate_padded_size(SEGMENT_HEADER_SIZE, seg_header.payload_length as usize);
             offset += padded;
         }
 
@@ -1635,24 +1615,22 @@ impl ChainManager {
         let mut has_signature = false;
         let mut has_dual_signature = false;
         if offset < data.len()
-            && let Ok(first_footer) = decode_signature_footer(&data[offset..]) {
-                has_signature = true;
-                let first_footer_size = first_footer.footer_length as usize;
-                let next_offset = offset + first_footer_size;
-                if next_offset < data.len()
-                    && decode_signature_footer(&data[next_offset..]).is_ok() {
-                        has_dual_signature = true;
-                    }
+            && let Ok(first_footer) = decode_signature_footer(&data[offset..])
+        {
+            has_signature = true;
+            let first_footer_size = first_footer.footer_length as usize;
+            let next_offset = offset + first_footer_size;
+            if next_offset < data.len() && decode_signature_footer(&data[next_offset..]).is_ok() {
+                has_dual_signature = true;
             }
+        }
 
         if events.is_empty() {
             return Err("RVF file contains no chain events".into());
         }
 
         let chain_id = events[0].chain_id;
-        let chain = LocalChain::from_events(
-            chain_id, checkpoint_interval, events, witness_entries,
-        );
+        let chain = LocalChain::from_events(chain_id, checkpoint_interval, events, witness_entries);
 
         let mgr = Self {
             inner: Mutex::new(chain),
@@ -1712,9 +1690,7 @@ impl ChainManager {
         mutation_count: u32,
         description: &str,
     ) -> ChainEvent {
-        let timestamp_ns = chrono::Utc::now()
-            .timestamp_nanos_opt()
-            .unwrap_or(0) as u64;
+        let timestamp_ns = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
 
         let record = rvf_types::LineageRecord::new(
             child_id,
@@ -1770,13 +1746,28 @@ impl ChainManager {
                 continue;
             };
 
-            let child_id_hex = payload.get("child_id").and_then(|v| v.as_str()).unwrap_or("");
-            let parent_id_hex = payload.get("parent_id").and_then(|v| v.as_str()).unwrap_or("");
-            let parent_hash_hex = payload.get("parent_hash").and_then(|v| v.as_str()).unwrap_or("");
+            let child_id_hex = payload
+                .get("child_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let parent_id_hex = payload
+                .get("parent_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let parent_hash_hex = payload
+                .get("parent_hash")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
 
-            let Ok(child_bytes) = hex_decode(child_id_hex) else { continue };
-            let Ok(parent_bytes) = hex_decode(parent_id_hex) else { continue };
-            let Ok(parent_hash) = parse_hex_hash(parent_hash_hex) else { continue };
+            let Ok(child_bytes) = hex_decode(child_id_hex) else {
+                continue;
+            };
+            let Ok(parent_bytes) = hex_decode(parent_id_hex) else {
+                continue;
+            };
+            let Ok(parent_hash) = parse_hex_hash(parent_hash_hex) else {
+                continue;
+            };
 
             if child_bytes.len() != 16 || parent_bytes.len() != 16 {
                 continue;
@@ -1828,7 +1819,8 @@ impl ChainManager {
                     "lineage record for {} references unknown parent {}",
                     hex_encode(&fi.file_id),
                     hex_encode(&fi.parent_id),
-                ).into());
+                )
+                .into());
             }
         }
 
@@ -1974,10 +1966,8 @@ impl ChainManager {
                 Err(_) => break,
             };
             last_seg_start = offset;
-            let padded = calculate_padded_size(
-                SEGMENT_HEADER_SIZE,
-                seg_header.payload_length as usize,
-            );
+            let padded =
+                calculate_padded_size(SEGMENT_HEADER_SIZE, seg_header.payload_length as usize);
             offset += padded;
         }
 
@@ -2022,10 +2012,8 @@ impl ChainManager {
                 Err(_) => break,
             };
             last_seg_start = offset;
-            let padded = calculate_padded_size(
-                SEGMENT_HEADER_SIZE,
-                seg_header.payload_length as usize,
-            );
+            let padded =
+                calculate_padded_size(SEGMENT_HEADER_SIZE, seg_header.payload_length as usize);
             offset += padded;
         }
 
@@ -2095,18 +2083,17 @@ impl ChainManager {
         if sig.ed25519.len() != 64 {
             return false;
         }
-        let ed_sig = Signature::from_bytes(
-            sig.ed25519.as_slice().try_into().unwrap_or(&[0u8; 64]),
-        );
+        let ed_sig = Signature::from_bytes(sig.ed25519.as_slice().try_into().unwrap_or(&[0u8; 64]));
         if ed25519_pubkey.verify(data, &ed_sig).is_err() {
             return false;
         }
 
         // ML-DSA-65 when both signature and key are present.
         if let (Some(ml_sig), Some(ml_key)) = (&sig.ml_dsa65, ml_dsa_pubkey)
-            && !ml_dsa_verify_raw(ml_key, data, ml_sig) {
-                return false;
-            }
+            && !ml_dsa_verify_raw(ml_key, data, ml_sig)
+        {
+            return false;
+        }
 
         true
     }
@@ -2305,7 +2292,10 @@ impl ChainAnchor for MockAnchor {
     fn anchor(&self, hash: &[u8; 32]) -> Result<AnchorReceipt, String> {
         Ok(AnchorReceipt {
             hash: *hash,
-            tx_id: format!("mock-{}", hex_hash(hash).chars().take(16).collect::<String>()),
+            tx_id: format!(
+                "mock-{}",
+                hex_hash(hash).chars().take(16).collect::<String>()
+            ),
             anchored_at: Utc::now(),
         })
     }
@@ -2504,7 +2494,11 @@ mod tests {
         assert_eq!(e1.prev_hash, genesis_hash);
         assert_ne!(e1.hash, [0u8; 32]);
 
-        let e2 = cm.append("test", "event.two", Some(serde_json::json!({"key": "value"})));
+        let e2 = cm.append(
+            "test",
+            "event.two",
+            Some(serde_json::json!({"key": "value"})),
+        );
         assert_eq!(e2.prev_hash, e1.hash);
     }
 
@@ -2545,18 +2539,8 @@ mod tests {
         let cm = ChainManager::new(0, 1000);
         let starting_len = cm.len();
 
-        let _ = cm.append_idempotent(
-            "test",
-            "k.a",
-            None,
-            Some([0x01u8; 32]),
-        );
-        let _ = cm.append_idempotent(
-            "test",
-            "k.b",
-            None,
-            Some([0x02u8; 32]),
-        );
+        let _ = cm.append_idempotent("test", "k.a", None, Some([0x01u8; 32]));
+        let _ = cm.append_idempotent("test", "k.b", None, Some([0x02u8; 32]));
         // No key -- always appends.
         let _ = cm.append_idempotent("test", "k.none", None, None);
         let _ = cm.append_idempotent("test", "k.none", None, None);
@@ -2732,11 +2716,7 @@ mod tests {
     fn save_and_load_rvf_roundtrip() {
         let cm = ChainManager::new(0, 1000);
         cm.append("kernel", "boot.init", None);
-        cm.append(
-            "tree",
-            "bootstrap",
-            Some(serde_json::json!({"nodes": 8})),
-        );
+        cm.append("tree", "bootstrap", Some(serde_json::json!({"nodes": 8})));
         cm.append("kernel", "boot.ready", None);
 
         let original_seq = cm.sequence();
@@ -2786,7 +2766,10 @@ mod tests {
         std::fs::write(&path, &data).unwrap();
 
         let result = ChainManager::load_from_rvf(&path, 1000);
-        assert!(result.is_err(), "expected validation error on corrupted RVF");
+        assert!(
+            result.is_err(),
+            "expected validation error on corrupted RVF"
+        );
 
         // Clean up.
         let _ = std::fs::remove_dir_all(&dir);
@@ -3188,9 +3171,9 @@ mod tests {
         let initial_len = cm.len();
 
         let event = cm.record_lineage(
-            [0x01; 16],           // child_id
-            [0x00; 16],           // parent_id (root)
-            [0x00; 32],           // parent_hash (root)
+            [0x01; 16], // child_id
+            [0x00; 16], // parent_id (root)
+            [0x00; 32], // parent_hash (root)
             DerivationType::Clone,
             0,
             "root agent",
@@ -3288,11 +3271,10 @@ mod tests {
         let record_bytes = hex_decode(record_hex).unwrap();
         assert_eq!(record_bytes.len(), 128); // LINEAGE_RECORD_SIZE
 
-        let record: rvf_types::LineageRecord =
-            weftos_rvf_crypto::lineage_record_from_bytes(
-                record_bytes.as_slice().try_into().unwrap(),
-            )
-            .unwrap();
+        let record: rvf_types::LineageRecord = weftos_rvf_crypto::lineage_record_from_bytes(
+            record_bytes.as_slice().try_into().unwrap(),
+        )
+        .unwrap();
         assert_eq!(record.file_id, [0xAA; 16]);
         assert_eq!(record.parent_id, [0xBB; 16]);
         assert_eq!(record.parent_hash, [0xCC; 32]);
@@ -3423,8 +3405,7 @@ mod tests {
         let ed_key = SigningKey::generate(&mut OsRng);
         let (ml_key, ml_vk) = weftos_rvf_crypto::MlDsa65Key::generate(&ed_key.to_bytes());
 
-        let mut cm = ChainManager::new(0, 1000)
-            .with_signing_key(ed_key.clone());
+        let mut cm = ChainManager::new(0, 1000).with_signing_key(ed_key.clone());
         cm.set_ml_dsa_key(ml_key);
         assert!(cm.has_dual_signing());
 
@@ -3455,13 +3436,18 @@ mod tests {
         assert!(ed_valid, "Ed25519 signature should be valid");
 
         // Verify dual signatures.
-        let dual_valid = ChainManager::verify_rvf_dual_signature(&path, &ed_pubkey, &ml_vk).unwrap();
+        let dual_valid =
+            ChainManager::verify_rvf_dual_signature(&path, &ed_pubkey, &ml_vk).unwrap();
         assert!(dual_valid, "dual signature should be valid");
 
         // Wrong ML-DSA key should fail dual verification.
         let (_, wrong_ml_vk) = weftos_rvf_crypto::MlDsa65Key::generate(b"wrong-seed");
-        let dual_wrong = ChainManager::verify_rvf_dual_signature(&path, &ed_pubkey, &wrong_ml_vk).unwrap();
-        assert!(!dual_wrong, "dual signature should fail with wrong ML-DSA key");
+        let dual_wrong =
+            ChainManager::verify_rvf_dual_signature(&path, &ed_pubkey, &wrong_ml_vk).unwrap();
+        assert!(
+            !dual_wrong,
+            "dual signature should fail with wrong ML-DSA key"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3474,8 +3460,7 @@ mod tests {
         let ed_key = SigningKey::generate(&mut OsRng);
         let (ml_key, ml_vk) = weftos_rvf_crypto::MlDsa65Key::generate(b"checkpoint-test");
 
-        let mut cm = ChainManager::new(0, 1000)
-            .with_signing_key(ed_key.clone());
+        let mut cm = ChainManager::new(0, 1000).with_signing_key(ed_key.clone());
         cm.set_ml_dsa_key(ml_key);
         cm.append("kernel", "boot", None);
 
@@ -3511,7 +3496,8 @@ mod tests {
 
         // Verify both independently.
         let ed_pubkey = ed_key.verifying_key();
-        let dual_valid = ChainManager::verify_rvf_dual_signature(&path, &ed_pubkey, &ml_vk).unwrap();
+        let dual_valid =
+            ChainManager::verify_rvf_dual_signature(&path, &ed_pubkey, &ml_vk).unwrap();
         assert!(dual_valid);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -3537,7 +3523,10 @@ mod tests {
         );
 
         // Verify hash linkage (cryptographic integrity)
-        assert!(!entry.hash.iter().all(|&b| b == 0), "entry hash must be non-zero");
+        assert!(
+            !entry.hash.iter().all(|&b| b == 0),
+            "entry hash must be non-zero"
+        );
         assert!(
             !entry.prev_hash.iter().all(|&b| b == 0),
             "prev_hash must link to genesis (non-zero)"
@@ -3549,7 +3538,10 @@ mod tests {
 
         // Retrieve entry via tail_from (sequence > genesis)
         let events = cm.tail_from(0);
-        assert!(!events.is_empty(), "must retrieve at least the created entry");
+        assert!(
+            !events.is_empty(),
+            "must retrieve at least the created entry"
+        );
         let found = events.iter().find(|e| e.kind == "file.create");
         assert!(found.is_some(), "file.create entry must be retrievable");
 
@@ -3580,7 +3572,10 @@ mod tests {
         let sig = cm.dual_sign(data).expect("should produce a signature");
 
         assert_eq!(sig.ed25519.len(), 64, "Ed25519 signature must be 64 bytes");
-        assert!(sig.ml_dsa65.is_none(), "ML-DSA-65 should be absent without key");
+        assert!(
+            sig.ml_dsa65.is_none(),
+            "ML-DSA-65 should be absent without key"
+        );
     }
 
     #[test]
@@ -3680,7 +3675,11 @@ mod tests {
     #[test]
     fn chain_event_serde_roundtrip() {
         let cm = ChainManager::new(0, 1000);
-        cm.append("test", "agent.spawn", Some(serde_json::json!({"name": "test-agent"})));
+        cm.append(
+            "test",
+            "agent.spawn",
+            Some(serde_json::json!({"name": "test-agent"})),
+        );
         let events = cm.tail(1);
         let event = &events[0];
 
@@ -3884,8 +3883,14 @@ mod tests {
         };
 
         assert_eq!(make_event("Permit").chain_event_kind(), "governance.permit");
-        assert_eq!(make_event("PermitWithWarning").chain_event_kind(), "governance.warn");
-        assert_eq!(make_event("EscalateToHuman").chain_event_kind(), "governance.defer");
+        assert_eq!(
+            make_event("PermitWithWarning").chain_event_kind(),
+            "governance.warn"
+        );
+        assert_eq!(
+            make_event("EscalateToHuman").chain_event_kind(),
+            "governance.defer"
+        );
         assert_eq!(make_event("Deny").chain_event_kind(), "governance.deny");
     }
 
@@ -3976,13 +3981,21 @@ mod tests {
              vector_count:{}\n\
              content_hash:{}\n\
              timestamp:{}",
-            att.device_id, att.epoch, att.chain_head, att.chain_depth,
-            att.vector_count, att.content_hash, att.timestamp,
+            att.device_id,
+            att.epoch,
+            att.chain_head,
+            att.chain_depth,
+            att.vector_count,
+            att.content_hash,
+            att.timestamp,
         );
-        let sig = ed25519_dalek::Signature::from_bytes(
-            att.signature.as_slice().try_into().unwrap(),
+        let sig =
+            ed25519_dalek::Signature::from_bytes(att.signature.as_slice().try_into().unwrap());
+        assert!(
+            key.verifying_key()
+                .verify(canonical.as_bytes(), &sig)
+                .is_ok()
         );
-        assert!(key.verifying_key().verify(canonical.as_bytes(), &sig).is_ok());
     }
 
     #[test]

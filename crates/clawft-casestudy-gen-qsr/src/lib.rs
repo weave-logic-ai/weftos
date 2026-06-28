@@ -65,5 +65,10 @@ pub fn generate(config: &GeneratorConfig, out_dir: &Path) -> Result<Corpus> {
     output::write_ops_events(&ops, out_dir)?;
     output::write_truth(&truth, out_dir)?;
 
-    Ok(Corpus { dims, events, ops, truth })
+    Ok(Corpus {
+        dims,
+        events,
+        ops,
+        truth,
+    })
 }

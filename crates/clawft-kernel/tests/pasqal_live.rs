@@ -31,8 +31,8 @@
 use std::time::Duration;
 
 use clawft_kernel::{
-    build_register, EvolutionParams, JobStatus, PasqalBackend, PasqalConfig, PasqalDevice,
-    QuantumBackend, QuantumCognitiveState, RegisterConstraints,
+    EvolutionParams, JobStatus, PasqalBackend, PasqalConfig, PasqalDevice, QuantumBackend,
+    QuantumCognitiveState, RegisterConstraints, build_register,
 };
 
 fn device_from_env() -> PasqalDevice {

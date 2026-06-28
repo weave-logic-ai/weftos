@@ -37,8 +37,8 @@ impl ShardRouter {
 
     pub fn route(&self, impulse: &Impulse) -> ShardKey {
         // Parse "2026-04-20" to year/quarter.
-        let (year, quarter) = parse_year_quarter(&impulse.business_date)
-            .unwrap_or((self.epoch_year, 1));
+        let (year, quarter) =
+            parse_year_quarter(&impulse.business_date).unwrap_or((self.epoch_year, 1));
         ShardKey {
             brand: impulse.brand.clone(),
             region: impulse.region.clone(),

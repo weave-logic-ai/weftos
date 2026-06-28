@@ -30,7 +30,7 @@
 use std::sync::Arc;
 
 use eframe::egui;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::live::{Command, Live, Snapshot};
 use crate::shell::desktop::Desktop;
@@ -77,10 +77,7 @@ pub fn show(
     snap: &Snapshot,
 ) {
     super::paint_heading(ui, rect, "Services");
-    let body = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.top() + 64.0),
-        rect.max,
-    );
+    let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + 64.0), rect.max);
 
     let has_data = snap
         .services
@@ -108,12 +105,7 @@ pub fn show(
     paint_body(&mut child, desk, live, rows);
 }
 
-fn paint_body(
-    ui: &mut egui::Ui,
-    desk: &mut Desktop,
-    live: &Arc<Live>,
-    rows: &[Value],
-) {
+fn paint_body(ui: &mut egui::Ui, desk: &mut Desktop, live: &Arc<Live>, rows: &[Value]) {
     paint_tab_bar(ui, &mut desk.services_tab);
     ui.add_space(6.0);
 
@@ -123,11 +115,7 @@ fn paint_body(
         .filter(|r| tab.includes(field_state(r)))
         .collect();
 
-    let count_lbl = format!(
-        "{} of {} services",
-        filtered.len(),
-        rows.len(),
-    );
+    let count_lbl = format!("{} of {} services", filtered.len(), rows.len(),);
     ui.label(
         egui::RichText::new(count_lbl)
             .small()
@@ -195,12 +183,7 @@ fn paint_row(ui: &mut egui::Ui, _idx: usize, row: &Value, live: &Arc<Live>) {
 /// the matching `service.*` verb directly — no inline-confirm step.
 /// Failed RPCs stay visible because the daemon's next snapshot tick
 /// is the source of truth on whether the action took.
-fn paint_action_affordances(
-    ui: &mut egui::Ui,
-    name: &str,
-    state: &str,
-    live: &Arc<Live>,
-) {
+fn paint_action_affordances(ui: &mut egui::Ui, name: &str, state: &str, live: &Arc<Live>) {
     if name == "-" {
         ui.label("");
         return;

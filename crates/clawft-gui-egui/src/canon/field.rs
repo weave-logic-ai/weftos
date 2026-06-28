@@ -20,9 +20,9 @@ use std::borrow::Cow;
 
 use eframe::egui;
 
+use super::CanonWidget;
 use super::response::CanonResponse;
 use super::types::{Affordance, Confidence, IdentityUri, MutationAxis, Tooltip, VariantId};
-use super::CanonWidget;
 
 const IDENTITY: &str = "ui://field";
 
@@ -136,7 +136,10 @@ pub enum FieldValue {
     /// Multi-line source code buffer. `lang` is the syntax-highlighter
     /// language hint (see [`FieldKind::Code::language`]); `src` is the
     /// edit buffer.
-    Code { lang: String, src: String },
+    Code {
+        lang: String,
+        src: String,
+    },
 }
 
 impl FieldValue {
@@ -258,9 +261,7 @@ impl CanonWidget for Field<'_> {
                         let r = ui.add(edit);
                         let chosen: Option<&'static str> = if !enabled {
                             None
-                        } else if r.lost_focus()
-                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                        {
+                        } else if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                             Some("commit")
                         } else if r.changed() {
                             Some("edit")
@@ -270,11 +271,7 @@ impl CanonWidget for Field<'_> {
                         (r, chosen)
                     }
                     (FieldKind::Number { min, max, step }, FieldValue::Number(n)) => {
-                        let r = ui.add(
-                            egui::DragValue::new(n)
-                                .range(*min..=*max)
-                                .speed(*step),
-                        );
+                        let r = ui.add(egui::DragValue::new(n).range(*min..=*max).speed(*step));
                         let chosen: Option<&'static str> = if enabled && r.changed() {
                             Some("edit")
                         } else {
@@ -289,11 +286,7 @@ impl CanonWidget for Field<'_> {
                             .selected_text(current)
                             .show_ui(ui, |ui| {
                                 for (i, opt) in options.iter().enumerate() {
-                                    if ui
-                                        .selectable_label(*idx == i, *opt)
-                                        .clicked()
-                                        && *idx != i
-                                    {
+                                    if ui.selectable_label(*idx == i, *opt).clicked() && *idx != i {
                                         *idx = i;
                                         changed = true;
                                     }
@@ -313,9 +306,7 @@ impl CanonWidget for Field<'_> {
                         // string so the popup state survives across
                         // frames (id_salt takes &str, not Hash).
                         let salt = format!("{:?}", id);
-                        let r = ui.add(
-                            egui_extras::DatePickerButton::new(date).id_salt(&salt),
-                        );
+                        let r = ui.add(egui_extras::DatePickerButton::new(date).id_salt(&salt));
                         let chosen: Option<&'static str> = if enabled && r.changed() {
                             Some("edit")
                         } else {
@@ -333,9 +324,9 @@ impl CanonWidget for Field<'_> {
                         } else {
                             lang.as_str()
                         };
-                        let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-                            let mut layout_job =
-                                egui_extras::syntax_highlighting::highlight(
+                        let mut layouter =
+                            |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                                let mut layout_job = egui_extras::syntax_highlighting::highlight(
                                     ui.ctx(),
                                     ui.style(),
                                     &egui_extras::syntax_highlighting::CodeTheme::from_style(
@@ -344,9 +335,9 @@ impl CanonWidget for Field<'_> {
                                     buf.as_str(),
                                     effective_lang,
                                 );
-                            layout_job.wrap.max_width = wrap_width;
-                            ui.ctx().fonts_mut(|f| f.layout_job(layout_job))
-                        };
+                                layout_job.wrap.max_width = wrap_width;
+                                ui.ctx().fonts_mut(|f| f.layout_job(layout_job))
+                            };
                         let r = ui.add(
                             egui::TextEdit::multiline(src)
                                 .font(egui::TextStyle::Monospace)
@@ -358,8 +349,7 @@ impl CanonWidget for Field<'_> {
                             None
                         } else if r.lost_focus()
                             && ui.input(|i| {
-                                i.modifiers.command_only()
-                                    && i.key_pressed(egui::Key::Enter)
+                                i.modifiers.command_only() && i.key_pressed(egui::Key::Enter)
                             })
                         {
                             // Cmd/Ctrl-Enter commits a code field; bare

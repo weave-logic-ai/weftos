@@ -19,6 +19,5 @@
 pub mod checks;
 
 pub use checks::{
-    AuditCategory, AuditCheck, AuditFinding, AuditReport, AuditSeverity,
-    SecurityScanner,
+    AuditCategory, AuditCheck, AuditFinding, AuditReport, AuditSeverity, SecurityScanner,
 };

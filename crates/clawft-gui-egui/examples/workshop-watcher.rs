@@ -135,8 +135,7 @@ impl LocalNode {
         let pk = sk.verifying_key().to_bytes();
 
         let ts: u64 = unix_ms();
-        let payload =
-            clawft_kernel::node_registry::node_register_payload(&pk, ts, &label);
+        let payload = clawft_kernel::node_registry::node_register_payload(&pk, ts, &label);
         let proof = sk.sign(&payload);
 
         let req_params = serde_json::json!({
@@ -325,19 +324,17 @@ fn main() -> anyhow::Result<()> {
 
     // Initial publish — the --once short-circuit.
     match read_and_convert(&args.toml) {
-        Ok(value) => {
-            match rt.block_on(node.publish(&mut client, &publish_path, value)) {
-                Ok(tick) => {
-                    eprintln!("[workshop-watcher] initial publish ok tick={tick}");
-                }
-                Err(e) => {
-                    eprintln!("[workshop-watcher] initial publish failed: {e}");
-                    if args.once {
-                        std::process::exit(1);
-                    }
+        Ok(value) => match rt.block_on(node.publish(&mut client, &publish_path, value)) {
+            Ok(tick) => {
+                eprintln!("[workshop-watcher] initial publish ok tick={tick}");
+            }
+            Err(e) => {
+                eprintln!("[workshop-watcher] initial publish failed: {e}");
+                if args.once {
+                    std::process::exit(1);
                 }
             }
-        }
+        },
         Err(e) => {
             eprintln!("[workshop-watcher] initial read failed: {e}");
             if args.once {
@@ -452,8 +449,8 @@ fn is_relevant(event: &Event, target: &Path) -> bool {
 fn read_and_convert(toml_path: &Path) -> anyhow::Result<Value> {
     let text = std::fs::read_to_string(toml_path)
         .map_err(|e| anyhow::anyhow!("read {}: {e}", toml_path.display()))?;
-    let parsed: toml::Value = toml::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("toml parse: {e}"))?;
+    let parsed: toml::Value =
+        toml::from_str(&text).map_err(|e| anyhow::anyhow!("toml parse: {e}"))?;
 
     // If the document has a `[workshop]` table, unwrap it; otherwise
     // treat the whole document as the Workshop.
@@ -470,8 +467,8 @@ fn read_and_convert(toml_path: &Path) -> anyhow::Result<Value> {
 
     // Serialize through serde_json to land in the wire shape the
     // daemon expects.
-    let json_value: Value = serde_json::to_value(workshop_value)
-        .map_err(|e| anyhow::anyhow!("toml→json: {e}"))?;
+    let json_value: Value =
+        serde_json::to_value(workshop_value).map_err(|e| anyhow::anyhow!("toml→json: {e}"))?;
 
     // Sanity: must be an object. The parsed Workshop side will
     // reject deeper mistakes; here we short-circuit on the most

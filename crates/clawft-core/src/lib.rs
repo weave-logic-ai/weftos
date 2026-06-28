@@ -25,10 +25,10 @@
 pub mod agent;
 #[cfg(feature = "native")]
 pub mod agent_bus;
-pub mod chain_event;
 pub mod agent_routing;
 pub mod bootstrap;
 pub mod bus;
+pub mod chain_event;
 pub mod clawft_md;
 pub mod config_merge;
 pub mod json_repair;

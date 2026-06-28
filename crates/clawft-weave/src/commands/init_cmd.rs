@@ -17,8 +17,7 @@ use std::path::{Path, PathBuf};
 /// the two in lockstep is what guarantees the
 /// [`clawft_core::agent::identity::BINDING_THREAD_EXCERPT`] substring
 /// is present in every freshly-initialized project.
-const SOUL_TEMPLATE: &str =
-    include_str!("../../../../docs/skills/clawft/SOUL.md");
+const SOUL_TEMPLATE: &str = include_str!("../../../../docs/skills/clawft/SOUL.md");
 
 /// Scaffold for `.clawft/IDENTITY.md`. Short by design — the user
 /// is expected to customize. The corresponding template under
@@ -301,9 +300,7 @@ fn ensure_gitignore(dir: &Path) -> anyhow::Result<()> {
             }
         }
         if !additions.is_empty() {
-            let mut file = std::fs::OpenOptions::new()
-                .append(true)
-                .open(&gitignore)?;
+            let mut file = std::fs::OpenOptions::new().append(true).open(&gitignore)?;
             std::io::Write::write_all(&mut file, b"\n# WeftOS\n")?;
             std::io::Write::write_all(&mut file, additions.as_bytes())?;
             println!("Updated .gitignore");

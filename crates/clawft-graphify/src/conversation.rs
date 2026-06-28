@@ -81,11 +81,7 @@ impl ConversationContext {
     /// 4. Detect topic shifts when no results overlap with focus.
     /// 5. Update focus, visited set, and topic stack.
     /// 6. Generate follow-up suggestions from unexplored neighbors.
-    pub fn query(
-        &mut self,
-        kg: &KnowledgeGraph,
-        question: &str,
-    ) -> ConversationResponse {
+    pub fn query(&mut self, kg: &KnowledgeGraph, question: &str) -> ConversationResponse {
         self.turn_count += 1;
 
         let keywords = tokenize(question);
@@ -144,21 +140,15 @@ impl ConversationContext {
         }
 
         // Sort descending.
-        scored.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Limit to top results.
         scored.truncate(10);
 
         // Detect topic shift.
-        let result_ids: HashSet<EntityId> =
-            scored.iter().map(|(id, _)| id.clone()).collect();
+        let result_ids: HashSet<EntityId> = scored.iter().map(|(id, _)| id.clone()).collect();
         let topic_shift = !self.focus_entities.is_empty()
-            && self
-                .focus_entities
-                .iter()
-                .all(|f| !result_ids.contains(f))
+            && self.focus_entities.iter().all(|f| !result_ids.contains(f))
             && !scored.is_empty();
 
         // Build explanation.
@@ -222,10 +212,7 @@ impl ConversationContext {
                 if !self.visited.contains(&neighbor.id)
                     && seen_labels.insert(neighbor.label.clone())
                 {
-                    let focus_label = kg
-                        .entity(focus_id)
-                        .map(|e| e.label.as_str())
-                        .unwrap_or("?");
+                    let focus_label = kg.entity(focus_id).map(|e| e.label.as_str()).unwrap_or("?");
                     suggestions.push(format!(
                         "Tell me about '{}' (connected to '{}')",
                         neighbor.label, focus_label
@@ -260,20 +247,17 @@ impl ConversationContext {
 /// Tokenize a question into lowercase keywords, filtering stop words.
 fn tokenize(question: &str) -> Vec<String> {
     const STOP_WORDS: &[&str] = &[
-        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "will", "would", "shall",
-        "should", "may", "might", "must", "can", "could", "about", "above",
-        "after", "again", "all", "also", "am", "and", "any", "as", "at",
-        "because", "before", "between", "both", "but", "by", "came", "come",
-        "each", "for", "from", "get", "got", "he", "her", "here", "him",
-        "his", "how", "i", "if", "in", "into", "it", "its", "just", "know",
-        "let", "like", "make", "me", "more", "most", "my", "no", "not", "now",
-        "of", "on", "one", "only", "or", "other", "our", "out", "over",
-        "said", "same", "she", "so", "some", "still", "such", "take", "tell",
-        "than", "that", "their", "them", "then", "there", "these", "they",
-        "this", "those", "through", "to", "too", "under", "up", "very",
-        "want", "what", "when", "where", "which", "while", "who", "why",
-        "with", "you", "your",
+        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+        "do", "does", "did", "will", "would", "shall", "should", "may", "might", "must", "can",
+        "could", "about", "above", "after", "again", "all", "also", "am", "and", "any", "as", "at",
+        "because", "before", "between", "both", "but", "by", "came", "come", "each", "for", "from",
+        "get", "got", "he", "her", "here", "him", "his", "how", "i", "if", "in", "into", "it",
+        "its", "just", "know", "let", "like", "make", "me", "more", "most", "my", "no", "not",
+        "now", "of", "on", "one", "only", "or", "other", "our", "out", "over", "said", "same",
+        "she", "so", "some", "still", "such", "take", "tell", "than", "that", "their", "them",
+        "then", "there", "these", "they", "this", "those", "through", "to", "too", "under", "up",
+        "very", "want", "what", "when", "where", "which", "while", "who", "why", "with", "you",
+        "your",
     ];
 
     question
@@ -376,12 +360,20 @@ mod tests {
         let mut ctx = ConversationContext::new();
 
         let response = ctx.query(&kg, "auth service");
-        assert!(!response.results.is_empty(), "Expected results for 'auth service'");
+        assert!(
+            !response.results.is_empty(),
+            "Expected results for 'auth service'"
+        );
         assert!(!response.topic_shift);
         assert_eq!(ctx.turn_count, 1);
 
         // auth_service should be in focus.
-        let auth_id = EntityId::new(&DomainTag::Code, &EntityType::Module, "auth_service", "test.rs");
+        let auth_id = EntityId::new(
+            &DomainTag::Code,
+            &EntityType::Module,
+            "auth_service",
+            "test.rs",
+        );
         assert!(ctx.focus_entities.contains(&auth_id));
         assert!(ctx.visited.contains(&auth_id));
     }

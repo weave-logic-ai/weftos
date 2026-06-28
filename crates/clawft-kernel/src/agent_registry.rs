@@ -103,9 +103,8 @@ pub fn register_payload(name: &str, pubkey: &[u8; 32], ts: u64) -> Vec<u8> {
 /// Layout:
 /// `b"ipc.publish\0" || topic || b"\0" || message || b"\0" || ts_le || b"\0" || actor_id`.
 pub fn publish_payload(topic: &str, message: &str, ts: u64, actor_id: &str) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(
-        12 + topic.len() + 1 + message.len() + 1 + 8 + 1 + actor_id.len(),
-    );
+    let mut buf =
+        Vec::with_capacity(12 + topic.len() + 1 + message.len() + 1 + 8 + 1 + actor_id.len());
     buf.extend_from_slice(b"ipc.publish\0");
     buf.extend_from_slice(topic.as_bytes());
     buf.push(0);
@@ -122,8 +121,7 @@ pub fn publish_payload(topic: &str, message: &str, ts: u64, actor_id: &str) -> V
 ///
 /// Layout: `b"ipc.subscribe\0" || topic || b"\0" || ts_le || b"\0" || actor_id`.
 pub fn subscribe_payload(topic: &str, ts: u64, actor_id: &str) -> Vec<u8> {
-    let mut buf =
-        Vec::with_capacity(14 + topic.len() + 1 + 8 + 1 + actor_id.len());
+    let mut buf = Vec::with_capacity(14 + topic.len() + 1 + 8 + 1 + actor_id.len());
     buf.extend_from_slice(b"ipc.subscribe\0");
     buf.extend_from_slice(topic.as_bytes());
     buf.push(0);

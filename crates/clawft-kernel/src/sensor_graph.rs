@@ -120,7 +120,10 @@ impl SensorGraph {
     /// # Panics
     /// Panics if `node_idx` is out of bounds.
     pub fn push_temporal(&mut self, node_idx: usize, values: &[f32]) {
-        assert!(node_idx < self.temporal_buffers.len(), "node index out of bounds");
+        assert!(
+            node_idx < self.temporal_buffers.len(),
+            "node index out of bounds"
+        );
         self.temporal_buffers[node_idx].extend_from_slice(values);
     }
 
@@ -150,7 +153,9 @@ impl SensorGraph {
     /// mean-aggregator; a full GNN would learn the aggregation weights.
     pub fn aggregate_neighbors(&self, node_idx: usize, hop: usize) -> Vec<f32> {
         if node_idx >= self.nodes.len() || hop == 0 {
-            return self.nodes.get(node_idx)
+            return self
+                .nodes
+                .get(node_idx)
                 .map(|n| n.features.clone())
                 .unwrap_or_default();
         }
@@ -179,7 +184,9 @@ impl SensorGraph {
         }
 
         // Build distance lookup for direct edges from node_idx.
-        let edge_distances: std::collections::HashMap<usize, f64> = self.edges.iter()
+        let edge_distances: std::collections::HashMap<usize, f64> = self
+            .edges
+            .iter()
             .filter_map(|e| {
                 if e.from == node_idx {
                     Some((e.to, e.distance_m))
@@ -248,7 +255,9 @@ impl SensorGraph {
     /// The resulting vector can feed into a classification head for
     /// species ID, vessel detection, etc.
     pub fn fused_features(&self, node_idx: usize) -> Vec<f32> {
-        let own = self.nodes.get(node_idx)
+        let own = self
+            .nodes
+            .get(node_idx)
             .map(|n| n.features.clone())
             .unwrap_or_default();
         let spatial = self.aggregate_neighbors(node_idx, 1);

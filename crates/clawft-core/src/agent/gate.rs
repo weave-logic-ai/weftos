@@ -71,12 +71,7 @@ pub trait EffectGate: Send + Sync + 'static {
     ///
     /// Implementations MUST be cancel-safe — the caller can drop the
     /// future without leaving the gate in a broken state.
-    async fn check(
-        &self,
-        agent_id: &str,
-        action: &str,
-        effect: &EffectVector,
-    ) -> GateDecision;
+    async fn check(&self, agent_id: &str, action: &str, effect: &EffectVector) -> GateDecision;
 }
 
 /// Trivial gate that permits every action.
@@ -89,12 +84,7 @@ pub struct NoopGate;
 
 #[async_trait]
 impl EffectGate for NoopGate {
-    async fn check(
-        &self,
-        _agent_id: &str,
-        _action: &str,
-        _effect: &EffectVector,
-    ) -> GateDecision {
+    async fn check(&self, _agent_id: &str, _action: &str, _effect: &EffectVector) -> GateDecision {
         GateDecision::Permit {
             token: "noop".into(),
         }
@@ -135,17 +125,8 @@ mod tests {
 
     #[test]
     fn is_permit_matches_only_permit() {
-        assert!(GateDecision::Permit {
-            token: "x".into()
-        }
-        .is_permit());
-        assert!(!GateDecision::Defer {
-            reason: "x".into()
-        }
-        .is_permit());
-        assert!(!GateDecision::Deny {
-            reason: "x".into()
-        }
-        .is_permit());
+        assert!(GateDecision::Permit { token: "x".into() }.is_permit());
+        assert!(!GateDecision::Defer { reason: "x".into() }.is_permit());
+        assert!(!GateDecision::Deny { reason: "x".into() }.is_permit());
     }
 }

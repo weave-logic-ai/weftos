@@ -119,15 +119,9 @@ impl ChannelAdapter for MatrixChannelAdapter {
         Ok(())
     }
 
-    async fn send(
-        &self,
-        target: &str,
-        payload: &MessagePayload,
-    ) -> Result<String, PluginError> {
+    async fn send(&self, target: &str, payload: &MessagePayload) -> Result<String, PluginError> {
         let content = payload.as_text().ok_or_else(|| {
-            PluginError::ExecutionFailed(
-                "matrix: only text payloads supported currently".into(),
-            )
+            PluginError::ExecutionFailed("matrix: only text payloads supported currently".into())
         })?;
 
         if self.config.homeserver_url.is_empty() {
@@ -144,10 +138,7 @@ impl ChannelAdapter for MatrixChannelAdapter {
             "sending Matrix message (stub)"
         );
 
-        let event_id = format!(
-            "${}",
-            chrono::Utc::now().timestamp_millis()
-        );
+        let event_id = format!("${}", chrono::Utc::now().timestamp_millis());
         Ok(event_id)
     }
 }
@@ -205,9 +196,7 @@ mod tests {
     async fn send_text_message() {
         let adapter = MatrixChannelAdapter::new(make_config());
         let payload = MessagePayload::text("Hello from bot");
-        let result = adapter
-            .send("!room1:matrix.test.org", &payload)
-            .await;
+        let result = adapter.send("!room1:matrix.test.org", &payload).await;
         assert!(result.is_ok());
         assert!(result.unwrap().starts_with('$'));
     }
@@ -215,11 +204,8 @@ mod tests {
     #[tokio::test]
     async fn send_non_text_fails() {
         let adapter = MatrixChannelAdapter::new(make_config());
-        let payload =
-            MessagePayload::structured(serde_json::json!({}));
-        let result = adapter
-            .send("!room1:matrix.test.org", &payload)
-            .await;
+        let payload = MessagePayload::structured(serde_json::json!({}));
+        let result = adapter.send("!room1:matrix.test.org", &payload).await;
         assert!(result.is_err());
     }
 
@@ -233,10 +219,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let result = adapter.start(host, cancel).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("homeserver_url"));
+        assert!(result.unwrap_err().to_string().contains("homeserver_url"));
     }
 
     #[tokio::test]
@@ -249,10 +232,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let result = adapter.start(host, cancel).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("access_token"));
+        assert!(result.unwrap_err().to_string().contains("access_token"));
     }
 
     #[tokio::test]
@@ -265,10 +245,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let result = adapter.start(host, cancel).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("user_id"));
+        assert!(result.unwrap_err().to_string().contains("user_id"));
     }
 
     #[tokio::test]
@@ -278,9 +255,7 @@ mod tests {
         let cancel_clone = cancel.clone();
 
         let host = Arc::new(MockHost);
-        let handle = tokio::spawn(async move {
-            adapter.start(host, cancel_clone).await
-        });
+        let handle = tokio::spawn(async move { adapter.start(host, cancel_clone).await });
 
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         cancel.cancel();

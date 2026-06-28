@@ -34,8 +34,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::assessment::mesh::{AssessmentMessage, MeshCoordinator, PeerAssessmentState};
 use crate::assessment::AssessmentReport;
+use crate::assessment::mesh::{AssessmentMessage, MeshCoordinator, PeerAssessmentState};
 use crate::error::{KernelError, KernelResult};
 use crate::mesh_framing::{FrameType, MeshFrame};
 
@@ -534,15 +534,14 @@ mod tests {
 
         // 1. Node A completes an assessment and broadcasts.
         let broadcast = transport_a.build_broadcast_frame(&report_a).unwrap();
-        let len = u32::from_be_bytes([broadcast[0], broadcast[1], broadcast[2], broadcast[3]])
-            as usize;
+        let len =
+            u32::from_be_bytes([broadcast[0], broadcast[1], broadcast[2], broadcast[3]]) as usize;
         let frame = MeshFrame::decode(&broadcast[4..4 + len]).unwrap();
         transport_b.handle_incoming(&frame.payload).unwrap();
 
         // 2. Node A also gossips.
         let gossip = transport_a.build_gossip_frame(&report_a).unwrap();
-        let len =
-            u32::from_be_bytes([gossip[0], gossip[1], gossip[2], gossip[3]]) as usize;
+        let len = u32::from_be_bytes([gossip[0], gossip[1], gossip[2], gossip[3]]) as usize;
         let frame = MeshFrame::decode(&gossip[4..4 + len]).unwrap();
         transport_b.handle_incoming(&frame.payload).unwrap();
 
@@ -575,8 +574,8 @@ mod tests {
     #[tokio::test]
     async fn tcp_assessment_sync_between_two_nodes() {
         use crate::mesh::MeshStream;
-        use crate::mesh_tcp::TcpTransport;
         use crate::mesh::MeshTransport;
+        use crate::mesh_tcp::TcpTransport;
 
         let transport_tcp = TcpTransport;
         let mut listener = transport_tcp.listen("127.0.0.1:0").await.unwrap();

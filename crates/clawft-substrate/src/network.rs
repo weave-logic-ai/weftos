@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::adapter::{
@@ -146,16 +146,10 @@ impl OntologyAdapter for NetworkAdapter {
         PERMISSIONS
     }
 
-    async fn open(
-        &self,
-        topic: &str,
-        _args: Value,
-    ) -> Result<Subscription, AdapterError> {
+    async fn open(&self, topic: &str, _args: Value) -> Result<Subscription, AdapterError> {
         let known = matches!(
             topic,
-            "substrate/network/wifi"
-                | "substrate/network/ethernet"
-                | "substrate/network/battery"
+            "substrate/network/wifi" | "substrate/network/ethernet" | "substrate/network/battery"
         );
         if !known {
             return Err(AdapterError::UnknownTopic(topic.into()));
@@ -371,11 +365,7 @@ mod tests {
         root
     }
 
-    fn fake_power_root_with_battery(
-        dir: &TempDir,
-        capacity: &str,
-        status: &str,
-    ) -> PathBuf {
+    fn fake_power_root_with_battery(dir: &TempDir, capacity: &str, status: &str) -> PathBuf {
         let root = dir.path().join("power");
         let bat = root.join("BAT0");
         fs::create_dir_all(&bat).unwrap();
@@ -395,10 +385,7 @@ mod tests {
     #[test]
     fn wifi_connected_when_wireless_iface_up() {
         let dir = TempDir::new().unwrap();
-        let net = fake_net_root(
-            &dir,
-            &[("wlan0", true, "up"), ("eth0", false, "up")],
-        );
+        let net = fake_net_root(&dir, &[("wlan0", true, "up"), ("eth0", false, "up")]);
         let v = sample_link_state(&net, LinkKind::Wifi);
         assert_eq!(v["state"], "connected");
         assert_eq!(v["iface"], "wlan0");
@@ -432,10 +419,7 @@ mod tests {
     #[test]
     fn ethernet_absent_when_only_virtual_ifaces() {
         let dir = TempDir::new().unwrap();
-        let net = fake_net_root(
-            &dir,
-            &[("lo", false, "unknown"), ("docker0", false, "up")],
-        );
+        let net = fake_net_root(&dir, &[("lo", false, "unknown"), ("docker0", false, "up")]);
         let v = sample_link_state(&net, LinkKind::Ethernet);
         assert_eq!(v["state"], "absent");
     }

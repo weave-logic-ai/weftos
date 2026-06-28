@@ -108,7 +108,7 @@ impl RetryModel {
 
         let inputs = [
             error_ordinal(err) / 8.0, // normalize to [0, 1]
-            attempt as f64 / 10.0,     // normalize (typical max ~5-10)
+            attempt as f64 / 10.0,    // normalize (typical max ~5-10)
             hour_of_day_normalized(),
         ];
         let predicted = self.model.predict_primary(&inputs);
@@ -125,13 +125,7 @@ impl RetryModel {
     /// - `attempt`: The attempt number (0-indexed).
     /// - `delay_ms`: The actual delay used before this attempt.
     /// - `succeeded`: Whether the subsequent attempt succeeded.
-    pub fn record(
-        &mut self,
-        err: &ProviderError,
-        attempt: u32,
-        delay_ms: u64,
-        succeeded: bool,
-    ) {
+    pub fn record(&mut self, err: &ProviderError, attempt: u32, delay_ms: u64, succeeded: bool) {
         self.record_by_ordinal(error_ordinal(err), attempt, delay_ms, succeeded);
     }
 
@@ -215,7 +209,10 @@ mod tests {
         let delay = model.delay_ms(&err, 0);
         // Default: base_delay=1000ms, attempt 0 => 2^0 * 1000 = 1000ms + jitter
         assert!(delay >= 1000, "delay should be >= 1000ms, got {delay}");
-        assert!(delay <= 1500, "delay should be <= 1500ms (with jitter), got {delay}");
+        assert!(
+            delay <= 1500,
+            "delay should be <= 1500ms (with jitter), got {delay}"
+        );
     }
 
     #[test]
@@ -240,12 +237,22 @@ mod tests {
 
     #[test]
     fn error_ordinal_mappings() {
-        assert!((error_ordinal(&ProviderError::RateLimited { retry_after_ms: 1000 })).abs() < 1e-9);
+        assert!(
+            (error_ordinal(&ProviderError::RateLimited {
+                retry_after_ms: 1000
+            }))
+            .abs()
+                < 1e-9
+        );
         assert!((error_ordinal(&ProviderError::Timeout) - 1.0).abs() < 1e-9);
-        assert!((error_ordinal(&ProviderError::ServerError {
-            status: 503,
-            body: String::new(),
-        }) - 5.0).abs() < 1e-9);
+        assert!(
+            (error_ordinal(&ProviderError::ServerError {
+                status: 503,
+                body: String::new(),
+            }) - 5.0)
+                .abs()
+                < 1e-9
+        );
     }
 
     #[test]

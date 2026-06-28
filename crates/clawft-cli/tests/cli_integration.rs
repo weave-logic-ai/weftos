@@ -34,7 +34,8 @@ fn version_output() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("weft") && stdout.contains(env!("CARGO_PKG_VERSION")),
-        "version output should contain 'weft' and '{}', got: {stdout}", env!("CARGO_PKG_VERSION")
+        "version output should contain 'weft' and '{}', got: {stdout}",
+        env!("CARGO_PKG_VERSION")
     );
 }
 

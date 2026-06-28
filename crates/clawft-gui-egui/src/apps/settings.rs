@@ -86,10 +86,7 @@ pub fn show(
     snap: &Snapshot,
 ) {
     super::paint_heading(ui, rect, "Settings");
-    let body = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.top() + 64.0),
-        rect.max,
-    );
+    let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + 64.0), rect.max);
 
     // Pull whatever config the substrate has — empty in 0.7.0 because
     // no adapter publishes config yet. Forward-compat: if a future
@@ -109,10 +106,8 @@ pub fn show(
         body.min,
         egui::pos2(body.left() + LEFT_PANE_W, body.bottom()),
     );
-    let right = egui::Rect::from_min_max(
-        egui::pos2(body.left() + LEFT_PANE_W, body.top()),
-        body.max,
-    );
+    let right =
+        egui::Rect::from_min_max(egui::pos2(body.left() + LEFT_PANE_W, body.top()), body.max);
 
     // Auto-select first category if nothing selected yet.
     if desk.settings_state.selected_category.is_none()
@@ -223,10 +218,8 @@ fn paint_pane_split(ui: &egui::Ui, body: egui::Rect, tokens: &Tokens) {
     );
     painter.rect_filled(left, 0.0, tokens.bg_panel);
     // Right pane fill.
-    let right = egui::Rect::from_min_max(
-        egui::pos2(body.left() + LEFT_PANE_W, body.top()),
-        body.max,
-    );
+    let right =
+        egui::Rect::from_min_max(egui::pos2(body.left() + LEFT_PANE_W, body.top()), body.max);
     painter.rect_filled(right, 0.0, tokens.bg_surface);
     // Divider.
     painter.line_segment(
@@ -362,11 +355,13 @@ fn paint_leaf_row(
         );
 
         let kind = ValueKind::classify(value);
-        let buf = edits.entry(dotted_path.to_string()).or_insert_with(|| EditBuffer {
-            value: stringify(value),
-            last_change_ms: f64::NEG_INFINITY,
-            kind,
-        });
+        let buf = edits
+            .entry(dotted_path.to_string())
+            .or_insert_with(|| EditBuffer {
+                value: stringify(value),
+                last_change_ms: f64::NEG_INFINITY,
+                kind,
+            });
 
         let mut changed = false;
         match buf.kind {
@@ -379,28 +374,20 @@ fn paint_leaf_row(
             }
             ValueKind::Int => {
                 let mut n: i64 = buf.value.parse().unwrap_or(0);
-                if ui
-                    .add(egui::DragValue::new(&mut n).speed(1.0))
-                    .changed()
-                {
+                if ui.add(egui::DragValue::new(&mut n).speed(1.0)).changed() {
                     buf.value = n.to_string();
                     changed = true;
                 }
             }
             ValueKind::Float => {
                 let mut n: f64 = buf.value.parse().unwrap_or(0.0);
-                if ui
-                    .add(egui::DragValue::new(&mut n).speed(0.1))
-                    .changed()
-                {
+                if ui.add(egui::DragValue::new(&mut n).speed(0.1)).changed() {
                     buf.value = n.to_string();
                     changed = true;
                 }
             }
             ValueKind::Str => {
-                let resp = ui.add(
-                    egui::TextEdit::singleline(&mut buf.value).desired_width(220.0),
-                );
+                let resp = ui.add(egui::TextEdit::singleline(&mut buf.value).desired_width(220.0));
                 if resp.changed() {
                     changed = true;
                 }

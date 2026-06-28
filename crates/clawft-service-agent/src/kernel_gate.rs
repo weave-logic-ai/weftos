@@ -102,12 +102,7 @@ fn map_decision(k: KernelGateDecision) -> GateDecision {
 
 #[async_trait]
 impl EffectGate for KernelEffectGate {
-    async fn check(
-        &self,
-        agent_id: &str,
-        action: &str,
-        effect: &EffectVector,
-    ) -> GateDecision {
+    async fn check(&self, agent_id: &str, action: &str, effect: &EffectVector) -> GateDecision {
         // Build the kernel-side context JSON. The kernel's
         // GovernanceGate extracts `effect` back through serde_json
         // (see `clawft_kernel::gate::GovernanceGate::extract_effect`);
@@ -162,13 +157,25 @@ mod tests {
             })
         }
         fn last_context(&self) -> Option<serde_json::Value> {
-            self.observed.lock().unwrap().last().map(|(_, _, c)| c.clone())
+            self.observed
+                .lock()
+                .unwrap()
+                .last()
+                .map(|(_, _, c)| c.clone())
         }
         fn last_action(&self) -> Option<String> {
-            self.observed.lock().unwrap().last().map(|(_, a, _)| a.clone())
+            self.observed
+                .lock()
+                .unwrap()
+                .last()
+                .map(|(_, a, _)| a.clone())
         }
         fn last_agent(&self) -> Option<String> {
-            self.observed.lock().unwrap().last().map(|(g, _, _)| g.clone())
+            self.observed
+                .lock()
+                .unwrap()
+                .last()
+                .map(|(g, _, _)| g.clone())
         }
     }
 
@@ -179,11 +186,10 @@ mod tests {
             action: &str,
             context: &serde_json::Value,
         ) -> KernelGateDecision {
-            self.observed.lock().unwrap().push((
-                agent_id.into(),
-                action.into(),
-                context.clone(),
-            ));
+            self.observed
+                .lock()
+                .unwrap()
+                .push((agent_id.into(), action.into(), context.clone()));
             // Decisions are stamped Once; `take` preserves intent
             // while panicking loudly if a test forgets to set it.
             self.decision
@@ -208,7 +214,9 @@ mod tests {
     async fn permit_passes_through() {
         let backend = StubBackend::permit(Some(vec![0xAB, 0xCD]));
         let gate = KernelEffectGate::new(backend.clone());
-        let dec = gate.check("agent-1", "tool.read_file", &sample_effect()).await;
+        let dec = gate
+            .check("agent-1", "tool.read_file", &sample_effect())
+            .await;
         match dec {
             GateDecision::Permit { token } => {
                 assert_eq!(token, "abcd", "token should be hex-encoded");

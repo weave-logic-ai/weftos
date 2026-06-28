@@ -9,9 +9,9 @@ use std::borrow::Cow;
 
 use eframe::egui;
 
+use super::CanonWidget;
 use super::response::CanonResponse;
 use super::types::{Affordance, Confidence, IdentityUri, MutationAxis, Tooltip, VariantId};
-use super::CanonWidget;
 
 /// Visual variant. The canon mutation axis `style` ranges over these.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -91,9 +91,7 @@ impl Pressable {
         let text = egui::RichText::new(self.label.as_ref());
         let btn = match self.style {
             PressableStyle::Primary => egui::Button::new(text),
-            PressableStyle::Secondary => {
-                egui::Button::new(text).fill(egui::Color32::from_gray(40))
-            }
+            PressableStyle::Secondary => egui::Button::new(text).fill(egui::Color32::from_gray(40)),
             PressableStyle::Ghost => egui::Button::new(text).frame(false),
             PressableStyle::Destructive => {
                 egui::Button::new(text.color(egui::Color32::from_rgb(220, 80, 80)))

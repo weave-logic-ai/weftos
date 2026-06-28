@@ -84,8 +84,7 @@ pub enum ToolsAction {
 }
 
 /// Warning printed when falling back to local execution without daemon.
-const DAEMON_FALLBACK_WARNING: &str =
-    "Warning: running without kernel daemon — results may not reflect live kernel state. \
+const DAEMON_FALLBACK_WARNING: &str = "Warning: running without kernel daemon — results may not reflect live kernel state. \
      Start daemon with: weaver kernel start";
 
 /// Try to send an RPC to the daemon. Returns `Some(result_json)` on success,
@@ -399,10 +398,7 @@ fn tools_search(query: &str, registry: &ToolRegistry) -> anyhow::Result<()> {
 
     println!("{table}");
     println!();
-    println!(
-        "Found: {} tool(s) matching '{query}'",
-        matches.len()
-    );
+    println!("Found: {} tool(s) matching '{query}'", matches.len());
 
     Ok(())
 }
@@ -525,7 +521,10 @@ mod tests {
 
     #[test]
     fn classify_mcp() {
-        assert_eq!(classify_source("claude-flow__agent_spawn"), "mcp:claude-flow");
+        assert_eq!(
+            classify_source("claude-flow__agent_spawn"),
+            "mcp:claude-flow"
+        );
         assert_eq!(classify_source("github__create_pr"), "mcp:github");
     }
 
@@ -557,10 +556,7 @@ mod tests {
 
     #[test]
     fn deny_adds_pattern_to_config() {
-        let dir = std::env::temp_dir().join(format!(
-            "clawft_tools_deny_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("clawft_tools_deny_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let config_path = dir.join("config.json");
         std::fs::write(&config_path, "{}").unwrap();
@@ -582,10 +578,8 @@ mod tests {
 
     #[test]
     fn deny_idempotent() {
-        let dir = std::env::temp_dir().join(format!(
-            "clawft_tools_deny_idem_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("clawft_tools_deny_idem_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let config_path = dir.join("config.json");
         std::fs::write(&config_path, "{}").unwrap();
@@ -601,7 +595,10 @@ mod tests {
             .as_array()
             .unwrap();
         assert_eq!(
-            denylist.iter().filter(|v| v == &&serde_json::json!("exec_*")).count(),
+            denylist
+                .iter()
+                .filter(|v| v == &&serde_json::json!("exec_*"))
+                .count(),
             1,
             "duplicate entry should not be added"
         );
@@ -611,10 +608,7 @@ mod tests {
 
     #[test]
     fn allow_removes_pattern() {
-        let dir = std::env::temp_dir().join(format!(
-            "clawft_tools_allow_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("clawft_tools_allow_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let config_path = dir.join("config.json");
 
@@ -628,7 +622,11 @@ mod tests {
                 }
             }
         });
-        std::fs::write(&config_path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
+        std::fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&initial).unwrap(),
+        )
+        .unwrap();
 
         let result = tools_allow("exec_*", Some(config_path.to_str().unwrap()));
         assert!(result.is_ok());
@@ -648,10 +646,8 @@ mod tests {
 
     #[test]
     fn allow_pattern_not_found() {
-        let dir = std::env::temp_dir().join(format!(
-            "clawft_tools_allow_nf_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("clawft_tools_allow_nf_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let config_path = dir.join("config.json");
 
@@ -664,7 +660,11 @@ mod tests {
                 }
             }
         });
-        std::fs::write(&config_path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
+        std::fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&initial).unwrap(),
+        )
+        .unwrap();
 
         let result = tools_allow("nonexistent_*", Some(config_path.to_str().unwrap()));
         assert!(result.is_ok());

@@ -34,17 +34,17 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::process::{Child, Command};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -53,7 +53,7 @@ use clawft_plugin::error::PluginError;
 use clawft_plugin::message::MessagePayload;
 use clawft_plugin::traits::{ChannelAdapter, ChannelAdapterHost};
 
-use super::types::{sanitize_argument, SignalAdapterConfig};
+use super::types::{SignalAdapterConfig, sanitize_argument};
 
 /// Pending JSON-RPC request waiters keyed by request id.
 type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
@@ -103,25 +103,17 @@ impl SignalChannelAdapter {
             ));
         }
         sanitize_argument(&self.config.phone_number).map_err(|e| {
-            PluginError::LoadFailed(format!(
-                "signal adapter: invalid phone_number: {e}"
-            ))
+            PluginError::LoadFailed(format!("signal adapter: invalid phone_number: {e}"))
         })?;
         sanitize_argument(&self.config.signal_cli_path).map_err(|e| {
-            PluginError::LoadFailed(format!(
-                "signal adapter: invalid signal_cli_path: {e}"
-            ))
+            PluginError::LoadFailed(format!("signal adapter: invalid signal_cli_path: {e}"))
         })?;
         sanitize_argument(&self.config.daemon_bind_addr).map_err(|e| {
-            PluginError::LoadFailed(format!(
-                "signal adapter: invalid daemon_bind_addr: {e}"
-            ))
+            PluginError::LoadFailed(format!("signal adapter: invalid daemon_bind_addr: {e}"))
         })?;
         if let Some(dir) = self.config.data_dir.as_deref() {
             sanitize_argument(dir).map_err(|e| {
-                PluginError::LoadFailed(format!(
-                    "signal adapter: invalid data_dir: {e}"
-                ))
+                PluginError::LoadFailed(format!("signal adapter: invalid data_dir: {e}"))
             })?;
         }
         Ok(())
@@ -153,9 +145,7 @@ impl SignalChannelAdapter {
 
     /// Poll [`TcpStream::connect`] until it succeeds or we exhaust the
     /// timeout budget.
-    async fn await_listener(
-        &self,
-    ) -> Result<TcpStream, PluginError> {
+    async fn await_listener(&self) -> Result<TcpStream, PluginError> {
         let deadline = Duration::from_secs(self.config.timeout_secs);
         let poll_every = Duration::from_millis(100);
         let result = timeout(deadline, async {
@@ -247,9 +237,10 @@ async fn handle_frame(
     host: &dyn ChannelAdapterHost,
     pending: &PendingMap,
 ) -> Result<(), String> {
-    let v: Value = serde_json::from_str(line)
-        .map_err(|e| format!("invalid JSON: {e}"))?;
-    let obj = v.as_object().ok_or_else(|| "frame is not an object".to_string())?;
+    let v: Value = serde_json::from_str(line).map_err(|e| format!("invalid JSON: {e}"))?;
+    let obj = v
+        .as_object()
+        .ok_or_else(|| "frame is not an object".to_string())?;
 
     // Response: id present, no method.
     if let Some(id_val) = obj.get("id") {
@@ -284,10 +275,7 @@ async fn handle_frame(
 
 /// Translate a `MessageReceived`-shape JSON-RPC params object into a
 /// [`MessagePayload`] and deliver it.
-async fn forward_inbound(
-    host: &dyn ChannelAdapterHost,
-    params: &Value,
-) -> Result<(), String> {
+async fn forward_inbound(host: &dyn ChannelAdapterHost, params: &Value) -> Result<(), String> {
     let envelope = params.get("envelope").unwrap_or(params);
     let source = envelope
         .get("source")
@@ -295,9 +283,11 @@ async fn forward_inbound(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let data_msg = envelope
-        .get("dataMessage")
-        .or_else(|| envelope.get("syncMessage").and_then(|s| s.get("sentMessage")));
+    let data_msg = envelope.get("dataMessage").or_else(|| {
+        envelope
+            .get("syncMessage")
+            .and_then(|s| s.get("sentMessage"))
+    });
     let body = data_msg
         .and_then(|m| m.get("message"))
         .and_then(Value::as_str)
@@ -409,23 +399,13 @@ impl ChannelAdapter for SignalChannelAdapter {
         // Read-loop should now exit on EOF / cancellation; wait briefly.
         let _ = timeout(Duration::from_secs(2), read_handle).await;
 
-        SignalChannelAdapter::drain_pending(
-            &self.pending,
-            "signal channel shut down",
-        )
-        .await;
+        SignalChannelAdapter::drain_pending(&self.pending, "signal channel shut down").await;
         Ok(())
     }
 
-    async fn send(
-        &self,
-        target: &str,
-        payload: &MessagePayload,
-    ) -> Result<String, PluginError> {
+    async fn send(&self, target: &str, payload: &MessagePayload) -> Result<String, PluginError> {
         let content = payload.as_text().ok_or_else(|| {
-            PluginError::ExecutionFailed(
-                "signal: only text payloads supported".into(),
-            )
+            PluginError::ExecutionFailed("signal: only text payloads supported".into())
         })?;
 
         if self.config.phone_number.is_empty() {
@@ -436,9 +416,7 @@ impl ChannelAdapter for SignalChannelAdapter {
 
         // Sanitize the target before passing it to the daemon.
         sanitize_argument(target).map_err(|e| {
-            PluginError::ExecutionFailed(format!(
-                "signal: invalid target number: {e}"
-            ))
+            PluginError::ExecutionFailed(format!("signal: invalid target number: {e}"))
         })?;
 
         // Build JSON-RPC request.
@@ -454,9 +432,7 @@ impl ChannelAdapter for SignalChannelAdapter {
             "id": id,
         });
         let mut frame = serde_json::to_vec(&request).map_err(|e| {
-            PluginError::ExecutionFailed(format!(
-                "signal: failed to encode request: {e}"
-            ))
+            PluginError::ExecutionFailed(format!("signal: failed to encode request: {e}"))
         })?;
         frame.push(b'\n');
 
@@ -471,9 +447,7 @@ impl ChannelAdapter for SignalChannelAdapter {
         {
             let mut w = self.writer.lock().await;
             let writer = w.as_mut().ok_or_else(|| {
-                PluginError::ExecutionFailed(
-                    "signal: not started; no JSON-RPC connection".into(),
-                )
+                PluginError::ExecutionFailed("signal: not started; no JSON-RPC connection".into())
             })?;
             if let Err(e) = writer.write_all(&frame).await {
                 // Drop the pending entry so no future response leaks.
@@ -493,22 +467,18 @@ impl ChannelAdapter for SignalChannelAdapter {
         }
 
         // Await response with a timeout.
-        let response = timeout(
-            Duration::from_secs(self.config.timeout_secs),
-            rx,
-        )
-        .await;
+        let response = timeout(Duration::from_secs(self.config.timeout_secs), rx).await;
         let value = match response {
             Ok(Ok(Ok(v))) => v,
             Ok(Ok(Err(e))) => {
                 return Err(PluginError::ExecutionFailed(format!(
                     "signal: daemon error: {e}"
-                )))
+                )));
             }
             Ok(Err(_)) => {
                 return Err(PluginError::ExecutionFailed(
                     "signal: response channel closed".into(),
-                ))
+                ));
             }
             Err(_) => {
                 let mut g = self.pending.lock().await;
@@ -525,9 +495,7 @@ impl ChannelAdapter for SignalChannelAdapter {
             .get("timestamp")
             .and_then(Value::as_i64)
             .ok_or_else(|| {
-                PluginError::ExecutionFailed(format!(
-                    "signal: response missing timestamp: {value}"
-                ))
+                PluginError::ExecutionFailed(format!("signal: response missing timestamp: {value}"))
             })?;
         debug!(to = %target, content_len = content.len(), id = ts, "signal: send ok");
         Ok(ts.to_string())
@@ -866,20 +834,13 @@ mod tests {
             *w = Some(writer);
         }
 
-        let host: Arc<dyn ChannelAdapterHost> =
-            Arc::new(RecordingHost::default());
+        let host: Arc<dyn ChannelAdapterHost> = Arc::new(RecordingHost::default());
         let host_ref = host.clone();
         let pending = adapter.pending.clone();
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
         let read_task = tokio::spawn(async move {
-            SignalChannelAdapter::read_loop(
-                reader,
-                host_ref,
-                pending,
-                cancel_clone,
-            )
-            .await;
+            SignalChannelAdapter::read_loop(reader, host_ref, pending, cancel_clone).await;
         });
 
         // First, send and confirm we get a real timestamp back.
@@ -927,13 +888,7 @@ mod tests {
         let cancel_clone = cancel.clone();
 
         let read_task = tokio::spawn(async move {
-            SignalChannelAdapter::read_loop(
-                reader,
-                host_dyn,
-                pending,
-                cancel_clone,
-            )
-            .await;
+            SignalChannelAdapter::read_loop(reader, host_dyn, pending, cancel_clone).await;
         });
 
         // Wait until the notification arrives.
@@ -993,8 +948,7 @@ mod tests {
         config.phone_number = String::new();
         let adapter = SignalChannelAdapter::new(config);
 
-        let host: Arc<dyn ChannelAdapterHost> =
-            Arc::new(RecordingHost::default());
+        let host: Arc<dyn ChannelAdapterHost> = Arc::new(RecordingHost::default());
         let cancel = CancellationToken::new();
         let result = adapter.start(host, cancel).await;
         assert!(result.is_err());

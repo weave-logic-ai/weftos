@@ -29,7 +29,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut DemoState, snap: &Snapshot) {
                 3 => a.memory_bytes.cmp(&b.memory_bytes),
                 _ => a.cpu_time_ms.cmp(&b.cpu_time_ms),
             };
-            if state.table_sort_asc { ord } else { ord.reverse() }
+            if state.table_sort_asc {
+                ord
+            } else {
+                ord.reverse()
+            }
         });
     }
 
@@ -41,7 +45,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut DemoState, snap: &Snapshot) {
         .column(Column::auto().at_least(100.0))
         .column(Column::remainder())
         .header(24.0, |mut h| {
-            for (i, label) in ["PID", "Agent", "State", "Memory", "CPU ms"].iter().enumerate() {
+            for (i, label) in ["PID", "Agent", "State", "Memory", "CPU ms"]
+                .iter()
+                .enumerate()
+            {
                 h.col(|ui| {
                     if ui.strong(*label).clicked() {
                         toggle_sort(state, i);
@@ -58,10 +65,18 @@ pub fn show(ui: &mut egui::Ui, state: &mut DemoState, snap: &Snapshot) {
                             state.selected_row = Some(idx);
                         }
                     });
-                    row.col(|ui| { ui.monospace(&r.agent_id); });
-                    row.col(|ui| { ui.label(&r.state); });
-                    row.col(|ui| { ui.monospace(fmt_bytes(r.memory_bytes)); });
-                    row.col(|ui| { ui.monospace(r.cpu_time_ms.to_string()); });
+                    row.col(|ui| {
+                        ui.monospace(&r.agent_id);
+                    });
+                    row.col(|ui| {
+                        ui.label(&r.state);
+                    });
+                    row.col(|ui| {
+                        ui.monospace(fmt_bytes(r.memory_bytes));
+                    });
+                    row.col(|ui| {
+                        ui.monospace(r.cpu_time_ms.to_string());
+                    });
                 });
             }
         });
@@ -88,10 +103,15 @@ impl ProcRow {
 }
 
 fn fmt_bytes(b: u64) -> String {
-    if b >= 1 << 30 { format!("{:.1} GiB", b as f64 / (1u64 << 30) as f64) }
-    else if b >= 1 << 20 { format!("{:.1} MiB", b as f64 / (1u64 << 20) as f64) }
-    else if b >= 1 << 10 { format!("{:.1} KiB", b as f64 / (1u64 << 10) as f64) }
-    else { format!("{b} B") }
+    if b >= 1 << 30 {
+        format!("{:.1} GiB", b as f64 / (1u64 << 30) as f64)
+    } else if b >= 1 << 20 {
+        format!("{:.1} MiB", b as f64 / (1u64 << 20) as f64)
+    } else if b >= 1 << 10 {
+        format!("{:.1} KiB", b as f64 / (1u64 << 10) as f64)
+    } else {
+        format!("{b} B")
+    }
 }
 
 fn toggle_sort(state: &mut DemoState, col: usize) {

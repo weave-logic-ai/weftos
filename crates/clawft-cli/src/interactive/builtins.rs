@@ -689,7 +689,10 @@ mod tests {
         register_skill_commands(&mut reg, &skills);
 
         let mut ctx = test_ctx();
-        let result = reg.dispatch("/lookup some query", &mut ctx).unwrap().unwrap();
+        let result = reg
+            .dispatch("/lookup some query", &mut ctx)
+            .unwrap()
+            .unwrap();
         assert!(result.contains("Activated skill: lookup"));
         assert!(result.contains("some query"));
     }

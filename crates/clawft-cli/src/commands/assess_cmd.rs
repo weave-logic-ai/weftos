@@ -213,7 +213,9 @@ pub async fn run(args: AssessArgs) -> anyhow::Result<()> {
             run_review_with_daemon(history, dir.as_deref()).await
         }
         // No subcommand — run assessment with top-level args.
-        None => run_assessment_with_daemon(&args.scope, &args.format, args.dir.as_deref(), None).await,
+        None => {
+            run_assessment_with_daemon(&args.scope, &args.format, args.dir.as_deref(), None).await
+        }
     }
 }
 
@@ -221,8 +223,7 @@ pub async fn run(args: AssessArgs) -> anyhow::Result<()> {
 // Daemon-first wrappers (ADR-021)
 // ---------------------------------------------------------------------------
 
-const NO_DAEMON_WARNING: &str =
-    "Warning: running without kernel daemon. Assessment not logged to ExoChain. \
+const NO_DAEMON_WARNING: &str = "Warning: running without kernel daemon. Assessment not logged to ExoChain. \
      Start daemon with: weaver kernel start";
 
 /// Try daemon RPC for `assess.run`; fall back to local execution.
@@ -254,9 +255,10 @@ async fn run_assessment_with_daemon(
         }
         // If daemon doesn't support the method yet, fall through.
         if let Some(ref err) = resp.error
-            && !err.contains("unknown method") {
-                anyhow::bail!("{err}");
-            }
+            && !err.contains("unknown method")
+        {
+            anyhow::bail!("{err}");
+        }
     } else {
         eprintln!("{NO_DAEMON_WARNING}");
     }
@@ -265,11 +267,7 @@ async fn run_assessment_with_daemon(
 }
 
 /// Try daemon RPC for `assess.link`; fall back to local execution.
-async fn run_link_with_daemon(
-    name: &str,
-    location: &str,
-    dir: Option<&str>,
-) -> anyhow::Result<()> {
+async fn run_link_with_daemon(name: &str, location: &str, dir: Option<&str>) -> anyhow::Result<()> {
     if let Some(mut client) = DaemonClient::connect().await {
         let mut params = serde_json::json!({
             "name": name,
@@ -288,9 +286,10 @@ async fn run_link_with_daemon(
             return Ok(());
         }
         if let Some(ref err) = resp.error
-            && !err.contains("unknown method") {
-                anyhow::bail!("{err}");
-            }
+            && !err.contains("unknown method")
+        {
+            anyhow::bail!("{err}");
+        }
     } else {
         eprintln!("{NO_DAEMON_WARNING}");
     }
@@ -299,10 +298,7 @@ async fn run_link_with_daemon(
 }
 
 /// Try daemon RPC for `assess.compare`; fall back to local execution.
-async fn run_compare_with_daemon(
-    peer_name: &str,
-    dir: Option<&str>,
-) -> anyhow::Result<()> {
+async fn run_compare_with_daemon(peer_name: &str, dir: Option<&str>) -> anyhow::Result<()> {
     if let Some(mut client) = DaemonClient::connect().await {
         let mut params = serde_json::json!({
             "peer": peer_name,
@@ -320,9 +316,10 @@ async fn run_compare_with_daemon(
             return Ok(());
         }
         if let Some(ref err) = resp.error
-            && !err.contains("unknown method") {
-                anyhow::bail!("{err}");
-            }
+            && !err.contains("unknown method")
+        {
+            anyhow::bail!("{err}");
+        }
     } else {
         eprintln!("{NO_DAEMON_WARNING}");
     }
@@ -331,10 +328,7 @@ async fn run_compare_with_daemon(
 }
 
 /// Try daemon RPC for `assess.review`; fall back to local execution.
-async fn run_review_with_daemon(
-    history: usize,
-    dir: Option<&str>,
-) -> anyhow::Result<()> {
+async fn run_review_with_daemon(history: usize, dir: Option<&str>) -> anyhow::Result<()> {
     if let Some(mut client) = DaemonClient::connect().await {
         let mut params = serde_json::json!({
             "history": history,
@@ -352,9 +346,10 @@ async fn run_review_with_daemon(
             return Ok(());
         }
         if let Some(ref err) = resp.error
-            && !err.contains("unknown method") {
-                anyhow::bail!("{err}");
-            }
+            && !err.contains("unknown method")
+        {
+            anyhow::bail!("{err}");
+        }
     } else {
         eprintln!("{NO_DAEMON_WARNING}");
     }
@@ -563,15 +558,9 @@ fn run_review(history: usize, dir: Option<&str>) -> anyhow::Result<()> {
     println!("====================================");
     println!();
     println!("Trends:");
-    println!(
-        "  Findings:   {findings_arrow} ({findings_pct:+.1}% over {count} runs)"
-    );
-    println!(
-        "  Coherence:  {first_coherence:.1}% → {last_coherence:.1}% ({coherence_delta:+.1}%)"
-    );
-    println!(
-        "  Complexity: {last_complexity} warnings ({complexity_trend})"
-    );
+    println!("  Findings:   {findings_arrow} ({findings_pct:+.1}% over {count} runs)");
+    println!("  Coherence:  {first_coherence:.1}% → {last_coherence:.1}% ({coherence_delta:+.1}%)");
+    println!("  Complexity: {last_complexity} warnings ({complexity_trend})");
 
     if !recommendations.is_empty() {
         println!();
@@ -769,9 +758,10 @@ fn collect_files_recursive(dir: &Path, extensions: &[&str], out: &mut Vec<PathBu
                 collect_files_recursive(&path, extensions, out);
             }
         } else if let Some(ext) = path.extension()
-            && extensions.contains(&ext.to_string_lossy().as_ref()) {
-                out.push(path);
-            }
+            && extensions.contains(&ext.to_string_lossy().as_ref())
+        {
+            out.push(path);
+        }
     }
 }
 
@@ -850,9 +840,15 @@ fn assess_files(
                         findings.push(Finding {
                             severity: "medium".into(),
                             category: "complexity".into(),
-                            file: file.strip_prefix(project).unwrap_or(file).display().to_string(),
+                            file: file
+                                .strip_prefix(project)
+                                .unwrap_or(file)
+                                .display()
+                                .to_string(),
                             line: None,
-                            message: format!("{line_count} lines — consider splitting (target: <500)"),
+                            message: format!(
+                                "{line_count} lines — consider splitting (target: <500)"
+                            ),
                         });
                         summary.complexity_warnings += 1;
                     }
@@ -862,7 +858,11 @@ fn assess_files(
                             findings.push(Finding {
                                 severity: "info".into(),
                                 category: "technical-debt".into(),
-                                file: file.strip_prefix(project).unwrap_or(file).display().to_string(),
+                                file: file
+                                    .strip_prefix(project)
+                                    .unwrap_or(file)
+                                    .display()
+                                    .to_string(),
                                 line: Some(i + 1),
                                 message: line.trim().to_string(),
                             });
@@ -875,7 +875,11 @@ fn assess_files(
                         findings.push(Finding {
                             severity: "medium".into(),
                             category: "complexity".into(),
-                            file: file.strip_prefix(project).unwrap_or(file).display().to_string(),
+                            file: file
+                                .strip_prefix(project)
+                                .unwrap_or(file)
+                                .display()
+                                .to_string(),
                             line: None,
                             message: format!("{line_count} lines — consider splitting"),
                         });
@@ -883,13 +887,10 @@ fn assess_files(
                     }
                 }
                 "toml" | "json" => {
-                    if file
-                        .file_name()
-                        .is_some_and(|n| {
-                            let s = n.to_string_lossy();
-                            s.contains("Cargo") || s.contains("package")
-                        })
-                    {
+                    if file.file_name().is_some_and(|n| {
+                        let s = n.to_string_lossy();
+                        s.contains("Cargo") || s.contains("package")
+                    }) {
                         summary.dependency_files += 1;
                     } else {
                         summary.config_files += 1;
@@ -952,10 +953,7 @@ fn print_table_report(report: &AssessmentReport) {
         println!("Findings ({} total)", report.findings.len());
         println!("---------");
         for finding in &report.findings {
-            let loc = finding
-                .line
-                .map(|l| format!(":{l}"))
-                .unwrap_or_default();
+            let loc = finding.line.map(|l| format!(":{l}")).unwrap_or_default();
             println!(
                 "  [{:>8}] {}{} — {}",
                 finding.severity, finding.file, loc, finding.message
@@ -1026,7 +1024,8 @@ fn run_hooks(hook_type: &str, dir: Option<&str>, uninstall: bool) -> anyhow::Res
 # WeftOS assessment hook — installed by `weft assess hooks`
 # Runs assessment scoped to the latest commit.
 weft assess run --scope commit 2>&1 || true
-"#.to_string();
+"#
+    .to_string();
 
     std::fs::write(&hook_path, hook_script)?;
 
@@ -1210,8 +1209,7 @@ impl Peer {
                     String::from_utf8_lossy(&output.stderr)
                 );
             }
-            let report: serde_json::Value =
-                serde_json::from_slice(&output.stdout)?;
+            let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
             Ok(report)
         } else {
             // Local filesystem
@@ -1262,9 +1260,7 @@ fn run_link(name: &str, location: &str, dir: Option<&str>) -> anyhow::Result<()>
             anyhow::bail!("Peer path does not exist: {location}");
         }
         if !peer_path.join("artifacts").exists() {
-            anyhow::bail!(
-                "No artifacts/ directory at {location} — is this a .weftos/ directory?"
-            );
+            anyhow::bail!("No artifacts/ directory at {location} — is this a .weftos/ directory?");
         }
     }
 
@@ -1314,12 +1310,12 @@ fn run_peers(dir: Option<&str>) -> anyhow::Result<()> {
     println!("=============");
     for peer in &peers {
         let kind = if peer.is_remote() { "remote" } else { "local " };
-        let last = peer
-            .last_assessment
-            .as_deref()
-            .unwrap_or("(none)");
+        let last = peer.last_assessment.as_deref().unwrap_or("(none)");
         println!("  [{kind}] {:<20} {}", peer.name, peer.location);
-        println!("           linked: {}  last assessment: {last}", peer.linked_at);
+        println!(
+            "           linked: {}  last assessment: {last}",
+            peer.linked_at
+        );
     }
 
     Ok(())
@@ -1329,12 +1325,9 @@ fn run_compare(peer_name: &str, dir: Option<&str>) -> anyhow::Result<()> {
     let project = resolve_project_dir(dir);
     let peers = load_peers(&project)?;
 
-    let peer = peers
-        .iter()
-        .find(|p| p.name == peer_name)
-        .ok_or_else(|| {
-            anyhow::anyhow!("peer '{peer_name}' not found — run `weft assess link` first")
-        })?;
+    let peer = peers.iter().find(|p| p.name == peer_name).ok_or_else(|| {
+        anyhow::anyhow!("peer '{peer_name}' not found — run `weft assess link` first")
+    })?;
 
     // Load local assessment
     let local_path = project.join(".weftos/artifacts/assessment-latest.json");

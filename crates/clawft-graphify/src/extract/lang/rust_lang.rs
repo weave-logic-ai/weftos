@@ -5,37 +5,38 @@
 
 use std::path::Path;
 
-use crate::model::ExtractionResult;
 use crate::GraphifyError;
+use crate::model::ExtractionResult;
 
 #[cfg(feature = "lang-rust-ts")]
-use crate::extract::ast::{make_id, ExtractionContext};
+use crate::extract::ast::{ExtractionContext, make_id};
 
 /// Extract entities and relationships from a Rust source file.
 #[cfg(feature = "lang-rust-ts")]
 pub fn extract_rust(path: &Path) -> Result<ExtractionResult, GraphifyError> {
     use tree_sitter::{Language, Parser};
 
-    let language =
-        Language::new(tree_sitter_rust::LANGUAGE).map_err(|e| GraphifyError::GrammarNotAvailable {
+    let language = Language::new(tree_sitter_rust::LANGUAGE).map_err(|e| {
+        GraphifyError::GrammarNotAvailable {
             language: format!("rust: {e}"),
-        })?;
+        }
+    })?;
 
     let mut parser = Parser::new();
-    parser.set_language(&language).map_err(|e| {
-        GraphifyError::ExtractionFailed {
+    parser
+        .set_language(&language)
+        .map_err(|e| GraphifyError::ExtractionFailed {
             path: path.display().to_string(),
             reason: e.to_string(),
-        }
-    })?;
+        })?;
 
     let source = std::fs::read(path)?;
-    let tree = parser.parse(&source, None).ok_or_else(|| {
-        GraphifyError::ExtractionFailed {
+    let tree = parser
+        .parse(&source, None)
+        .ok_or_else(|| GraphifyError::ExtractionFailed {
             path: path.display().to_string(),
             reason: "parse returned None".into(),
-        }
-    })?;
+        })?;
 
     let mut ctx = ExtractionContext::new(path);
     walk_rust(&tree.root_node(), &source, &mut ctx, None);
@@ -78,16 +79,22 @@ fn walk_rust(
                 ctx.add_node(&func_nid, &format!(".{func_name}()"), line);
                 ctx.add_extracted_edge(impl_nid, &func_nid, "method", line);
                 if let Some(body) = node.child_by_field_name("body") {
-                    ctx.function_bodies_indices
-                        .push((func_nid, body.start_byte(), body.end_byte()));
+                    ctx.function_bodies_indices.push((
+                        func_nid,
+                        body.start_byte(),
+                        body.end_byte(),
+                    ));
                 }
             } else {
                 let func_nid = make_id(&[&ctx.stem, &func_name]);
                 ctx.add_node(&func_nid, &format!("{func_name}()"), line);
                 ctx.add_extracted_edge(&ctx.file_nid.clone(), &func_nid, "contains", line);
                 if let Some(body) = node.child_by_field_name("body") {
-                    ctx.function_bodies_indices
-                        .push((func_nid, body.start_byte(), body.end_byte()));
+                    ctx.function_bodies_indices.push((
+                        func_nid,
+                        body.start_byte(),
+                        body.end_byte(),
+                    ));
                 }
             }
         }
@@ -134,7 +141,10 @@ fn walk_rust(
             let raw = read_text(&arg, source);
             // Split on `{`, strip `::*`, take last `::` segment
             let clean = raw.split('{').next().unwrap_or("");
-            let clean = clean.trim_end_matches(':').trim_end_matches('*').trim_end_matches(':');
+            let clean = clean
+                .trim_end_matches(':')
+                .trim_end_matches('*')
+                .trim_end_matches(':');
             let module_name = clean.rsplit("::").next().unwrap_or("").trim();
             if !module_name.is_empty() {
                 let tgt_nid = make_id(&[module_name]);

@@ -86,7 +86,10 @@ fn install_hook(
         }
         let new_content = format!("{}\n\n{}", content.trim_end(), script);
         std::fs::write(&hook_path, new_content)?;
-        return Ok(format!("appended to existing {name} hook at {}", hook_path.display()));
+        return Ok(format!(
+            "appended to existing {name} hook at {}",
+            hook_path.display()
+        ));
     }
 
     let content = format!("#!/bin/bash\n{script}");
@@ -115,7 +118,9 @@ fn uninstall_hook(
 
     let content = std::fs::read_to_string(&hook_path)?;
     if !content.contains(marker_start) {
-        return Ok(format!("graphify hook not found in {name} -- nothing to remove."));
+        return Ok(format!(
+            "graphify hook not found in {name} -- nothing to remove."
+        ));
     }
 
     let pattern = format!(
@@ -132,7 +137,10 @@ fn uninstall_hook(
     }
 
     std::fs::write(&hook_path, format!("{new_content}\n"))?;
-    Ok(format!("graphify removed from {name} at {} (other content preserved)", hook_path.display()))
+    Ok(format!(
+        "graphify removed from {name} at {} (other content preserved)",
+        hook_path.display()
+    ))
 }
 
 /// Chain event kind for hook install / uninstall.
@@ -141,14 +149,27 @@ pub const EVENT_KIND_GRAPHIFY_HOOK: &str = "graphify.hook";
 /// Install graphify post-commit and post-checkout hooks.
 pub fn install_hooks(repo_root: &Path) -> Result<String, GraphifyError> {
     let root = find_git_root(repo_root).ok_or_else(|| {
-        GraphifyError::HookError(format!("no git repository found at or above {}", repo_root.display()))
+        GraphifyError::HookError(format!(
+            "no git repository found at or above {}",
+            repo_root.display()
+        ))
     })?;
 
     let hooks_dir = root.join(".git").join("hooks");
     std::fs::create_dir_all(&hooks_dir)?;
 
-    let commit_msg = install_hook(&hooks_dir, "post-commit", POST_COMMIT_SCRIPT, HOOK_MARKER_START)?;
-    let checkout_msg = install_hook(&hooks_dir, "post-checkout", POST_CHECKOUT_SCRIPT, CHECKOUT_MARKER_START)?;
+    let commit_msg = install_hook(
+        &hooks_dir,
+        "post-commit",
+        POST_COMMIT_SCRIPT,
+        HOOK_MARKER_START,
+    )?;
+    let checkout_msg = install_hook(
+        &hooks_dir,
+        "post-checkout",
+        POST_CHECKOUT_SCRIPT,
+        CHECKOUT_MARKER_START,
+    )?;
 
     // Chain event marker -- daemon subscriber forwards to ExoChain.
     tracing::info!(
@@ -160,18 +181,33 @@ pub fn install_hooks(repo_root: &Path) -> Result<String, GraphifyError> {
         "chain"
     );
 
-    Ok(format!("post-commit: {commit_msg}\npost-checkout: {checkout_msg}"))
+    Ok(format!(
+        "post-commit: {commit_msg}\npost-checkout: {checkout_msg}"
+    ))
 }
 
 /// Remove graphify post-commit and post-checkout hooks.
 pub fn uninstall_hooks(repo_root: &Path) -> Result<String, GraphifyError> {
     let root = find_git_root(repo_root).ok_or_else(|| {
-        GraphifyError::HookError(format!("no git repository found at or above {}", repo_root.display()))
+        GraphifyError::HookError(format!(
+            "no git repository found at or above {}",
+            repo_root.display()
+        ))
     })?;
 
     let hooks_dir = root.join(".git").join("hooks");
-    let commit_msg = uninstall_hook(&hooks_dir, "post-commit", HOOK_MARKER_START, HOOK_MARKER_END)?;
-    let checkout_msg = uninstall_hook(&hooks_dir, "post-checkout", CHECKOUT_MARKER_START, CHECKOUT_MARKER_END)?;
+    let commit_msg = uninstall_hook(
+        &hooks_dir,
+        "post-commit",
+        HOOK_MARKER_START,
+        HOOK_MARKER_END,
+    )?;
+    let checkout_msg = uninstall_hook(
+        &hooks_dir,
+        "post-checkout",
+        CHECKOUT_MARKER_START,
+        CHECKOUT_MARKER_END,
+    )?;
 
     // Chain event marker -- daemon subscriber forwards to ExoChain.
     tracing::info!(
@@ -183,7 +219,9 @@ pub fn uninstall_hooks(repo_root: &Path) -> Result<String, GraphifyError> {
         "chain"
     );
 
-    Ok(format!("post-commit: {commit_msg}\npost-checkout: {checkout_msg}"))
+    Ok(format!(
+        "post-commit: {commit_msg}\npost-checkout: {checkout_msg}"
+    ))
 }
 
 /// Check the installation status of graphify hooks.
@@ -228,7 +266,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp);
         std::fs::create_dir_all(&git_dir).unwrap();
 
-        let msg = install_hook(&git_dir, "post-commit", POST_COMMIT_SCRIPT, HOOK_MARKER_START).unwrap();
+        let msg = install_hook(
+            &git_dir,
+            "post-commit",
+            POST_COMMIT_SCRIPT,
+            HOOK_MARKER_START,
+        )
+        .unwrap();
         assert!(msg.contains("installed"));
 
         let hook_path = git_dir.join("post-commit");
@@ -237,10 +281,17 @@ mod tests {
         assert!(content.contains(HOOK_MARKER_START));
         assert!(content.contains("weaver graphify rebuild"));
 
-        let msg2 = install_hook(&git_dir, "post-commit", POST_COMMIT_SCRIPT, HOOK_MARKER_START).unwrap();
+        let msg2 = install_hook(
+            &git_dir,
+            "post-commit",
+            POST_COMMIT_SCRIPT,
+            HOOK_MARKER_START,
+        )
+        .unwrap();
         assert!(msg2.contains("already installed"));
 
-        let msg3 = uninstall_hook(&git_dir, "post-commit", HOOK_MARKER_START, HOOK_MARKER_END).unwrap();
+        let msg3 =
+            uninstall_hook(&git_dir, "post-commit", HOOK_MARKER_START, HOOK_MARKER_END).unwrap();
         assert!(msg3.contains("removed"));
 
         let _ = std::fs::remove_dir_all(&temp);

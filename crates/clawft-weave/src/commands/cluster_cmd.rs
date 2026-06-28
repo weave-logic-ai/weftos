@@ -9,7 +9,7 @@
 //! - `weaver cluster shards`  -- shard distribution table
 
 use clap::{Parser, Subcommand};
-use comfy_table::{presets, Table};
+use comfy_table::{Table, presets};
 
 use crate::client::DaemonClient;
 use crate::protocol;
@@ -73,9 +73,22 @@ pub async fn run(args: ClusterArgs) -> anyhow::Result<()> {
                     serde_json::from_value(resp.result.unwrap())?;
                 println!("WeftOS Cluster Status");
                 println!("---------------------");
-                println!("Nodes:     {} total, {} healthy", result.total_nodes, result.healthy_nodes);
-                println!("Shards:    {} total, {} active", result.total_shards, result.active_shards);
-                println!("Consensus: {}", if result.consensus_enabled { "enabled" } else { "disabled" });
+                println!(
+                    "Nodes:     {} total, {} healthy",
+                    result.total_nodes, result.healthy_nodes
+                );
+                println!(
+                    "Shards:    {} total, {} active",
+                    result.total_shards, result.active_shards
+                );
+                println!(
+                    "Consensus: {}",
+                    if result.consensus_enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                );
             } else {
                 let msg = resp.error.unwrap_or_else(|| "unknown error".into());
                 eprintln!("error: {msg}");
@@ -108,16 +121,17 @@ pub async fn run(args: ClusterArgs) -> anyhow::Result<()> {
                 eprintln!("error: {msg}");
             }
         }
-        ClusterAction::Join { address, platform, name } => {
+        ClusterAction::Join {
+            address,
+            platform,
+            name,
+        } => {
             let params = protocol::ClusterJoinParams {
                 address,
                 platform,
                 name,
             };
-            let req = protocol::Request::with_params(
-                "cluster.join",
-                serde_json::to_value(params)?,
-            );
+            let req = protocol::Request::with_params("cluster.join", serde_json::to_value(params)?);
             let resp = client.call(req).await?;
             if resp.ok {
                 let result = resp.result.unwrap();
@@ -129,11 +143,11 @@ pub async fn run(args: ClusterArgs) -> anyhow::Result<()> {
             }
         }
         ClusterAction::Leave { node_id } => {
-            let params = protocol::ClusterLeaveParams { node_id: node_id.clone() };
-            let req = protocol::Request::with_params(
-                "cluster.leave",
-                serde_json::to_value(params)?,
-            );
+            let params = protocol::ClusterLeaveParams {
+                node_id: node_id.clone(),
+            };
+            let req =
+                protocol::Request::with_params("cluster.leave", serde_json::to_value(params)?);
             let resp = client.call(req).await?;
             if resp.ok {
                 println!("Node removed: {node_id}");
@@ -145,8 +159,7 @@ pub async fn run(args: ClusterArgs) -> anyhow::Result<()> {
         ClusterAction::Health => {
             let resp = client.simple_call("cluster.health").await?;
             if resp.ok {
-                let health: Vec<serde_json::Value> =
-                    serde_json::from_value(resp.result.unwrap())?;
+                let health: Vec<serde_json::Value> = serde_json::from_value(resp.result.unwrap())?;
                 if health.is_empty() {
                     println!("No cluster nodes.");
                 } else {

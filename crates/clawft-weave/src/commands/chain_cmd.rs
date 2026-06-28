@@ -59,7 +59,10 @@ pub async fn run(args: ChainArgs) -> anyhow::Result<()> {
             println!("  Sequence:                {}", status.sequence);
             println!("  Events:                  {}", status.event_count);
             println!("  Checkpoints:             {}", status.checkpoint_count);
-            println!("  Since last checkpoint:   {}", status.events_since_checkpoint);
+            println!(
+                "  Since last checkpoint:   {}",
+                status.events_since_checkpoint
+            );
             println!("  Last hash:               {}...", &status.last_hash[..16]);
         }
         ChainCommand::Local { count } => {

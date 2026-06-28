@@ -38,8 +38,8 @@ impl WasmToolRunner {
             wt_config.consume_fuel(true);
             wt_config.async_support(true);
             // Memory limit is enforced per-store, not per-engine
-            let engine = wasmtime::Engine::new(&wt_config)
-                .expect("failed to create wasmtime engine");
+            let engine =
+                wasmtime::Engine::new(&wt_config).expect("failed to create wasmtime engine");
             Self {
                 config,
                 engine,
@@ -128,10 +128,8 @@ impl WasmToolRunner {
             // Parse module to extract exports/imports
             match wasmtime::Module::new(&self.engine, wasm_bytes) {
                 Ok(module) => {
-                    let exports: Vec<String> = module
-                        .exports()
-                        .map(|e| e.name().to_string())
-                        .collect();
+                    let exports: Vec<String> =
+                        module.exports().map(|e| e.name().to_string()).collect();
                     let imports: Vec<String> = module
                         .imports()
                         .map(|i| format!("{}::{}", i.module(), i.name()))
@@ -283,9 +281,7 @@ impl WasmToolRunner {
         let entry = instance
             .get_func(&mut store, "_start")
             .or_else(|| instance.get_func(&mut store, "run"))
-            .ok_or_else(|| {
-                WasmError::WasmTrap(format!("{name}: no _start or run export"))
-            })?;
+            .ok_or_else(|| WasmError::WasmTrap(format!("{name}: no _start or run export")))?;
 
         // Call the entry function
         match entry.call(&mut store, &[], &mut []) {
@@ -561,7 +557,10 @@ impl CompiledModuleCache {
     /// Create a new module cache at the given directory.
     pub fn new(cache_dir: PathBuf, max_size: u64) -> Self {
         let _ = std::fs::create_dir_all(&cache_dir);
-        Self { cache_dir, max_size }
+        Self {
+            cache_dir,
+            max_size,
+        }
     }
 
     /// Get a cached compiled module by its hash.

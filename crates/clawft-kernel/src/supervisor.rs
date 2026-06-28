@@ -135,12 +135,8 @@ impl RestartTracker {
     ) -> u64 {
         match model {
             Some(m) => {
-                let (delay, _should_retry) = m.predict(
-                    self.restart_count,
-                    failure_type,
-                    uptime_secs,
-                    system_load,
-                );
+                let (delay, _should_retry) =
+                    m.predict(self.restart_count, failure_type, uptime_secs, system_load);
                 delay
             }
             None => self.next_backoff_ms(),
@@ -504,11 +500,7 @@ impl<P: Platform> AgentSupervisor<P> {
 
     /// Configure the restart strategy and budget for this supervisor.
     #[cfg(feature = "os-patterns")]
-    pub fn with_restart_config(
-        mut self,
-        strategy: RestartStrategy,
-        budget: RestartBudget,
-    ) -> Self {
+    pub fn with_restart_config(mut self, strategy: RestartStrategy, budget: RestartBudget) -> Self {
         self.restart_strategy = strategy;
         self.restart_budget = budget;
         self
@@ -541,11 +533,7 @@ impl<P: Platform> AgentSupervisor<P> {
     /// Returns a list of `(old_pid, new_spawn_result)` for any restarts
     /// that were performed, or an empty vec if no restarts occurred.
     #[cfg(feature = "os-patterns")]
-    pub fn handle_exit(
-        &self,
-        pid: Pid,
-        exit_code: i32,
-    ) -> Vec<(Pid, SpawnResult)> {
+    pub fn handle_exit(&self, pid: Pid, exit_code: i32) -> Vec<(Pid, SpawnResult)> {
         use crate::monitor::ExitReason;
 
         let reason = if exit_code == 0 {
@@ -555,8 +543,7 @@ impl<P: Platform> AgentSupervisor<P> {
         };
 
         // Deliver link/monitor signals
-        let (_link_signals, _down_signals) =
-            self.monitor_registry.process_exited(pid, &reason);
+        let (_link_signals, _down_signals) = self.monitor_registry.process_exited(pid, &reason);
 
         let mut restarts = Vec::new();
 
@@ -567,20 +554,14 @@ impl<P: Platform> AgentSupervisor<P> {
         }
 
         // Check budget via per-PID tracker
-        let mut tracker = self
-            .restart_trackers
-            .entry(pid)
-            .or_default();
+        let mut tracker = self.restart_trackers.entry(pid).or_default();
 
         let within_budget = tracker.record_restart(&self.restart_budget);
         let backoff_ms = tracker.backoff_ms;
         drop(tracker);
 
         if !within_budget {
-            warn!(
-                pid,
-                "restart budget exhausted for pid, escalating"
-            );
+            warn!(pid, "restart budget exhausted for pid, escalating");
             return restarts;
         }
 
@@ -642,11 +623,7 @@ impl<P: Platform> AgentSupervisor<P> {
                     .collect();
                 all.sort_by_key(|e| e.pid);
 
-                let after: Vec<Pid> = all
-                    .iter()
-                    .filter(|e| e.pid > pid)
-                    .map(|e| e.pid)
-                    .collect();
+                let after: Vec<Pid> = all.iter().filter(|e| e.pid > pid).map(|e| e.pid).collect();
 
                 for sibling_pid in &after {
                     if let Ok(result) = self.restart(*sibling_pid) {
@@ -753,11 +730,7 @@ impl<P: Platform> AgentSupervisor<P> {
     /// Returns `KernelError::ProcessTableFull` if the process table
     /// has reached its maximum capacity.
     #[cfg(feature = "native")]
-    pub fn spawn_and_run<F, Fut>(
-        &self,
-        request: SpawnRequest,
-        work: F,
-    ) -> KernelResult<SpawnResult>
+    pub fn spawn_and_run<F, Fut>(&self, request: SpawnRequest, work: F) -> KernelResult<SpawnResult>
     where
         F: FnOnce(Pid, CancellationToken) -> Fut,
         Fut: std::future::Future<Output = i32> + Send + 'static,
@@ -785,9 +758,7 @@ impl<P: Platform> AgentSupervisor<P> {
         }
 
         // 3. Transition to Running
-        let _ = self
-            .process_table
-            .update_state(pid, ProcessState::Running);
+        let _ = self.process_table.update_state(pid, ProcessState::Running);
 
         // 3b. Log spawn chain event
         #[cfg(feature = "exochain")]
@@ -1103,9 +1074,9 @@ impl<P: Platform> AgentSupervisor<P> {
             if let Some((_, handle)) = self.running_agents.remove(&pid) {
                 // Check if the task panicked
                 let exit_code = match handle.await {
-                    Ok(()) => -2,  // Watchdog reap (task finished but cleanup didn't remove from map)
-                    Err(e) if e.is_panic() => -3,  // Panic reap
-                    Err(_) => -2,  // Cancelled or other
+                    Ok(()) => -2, // Watchdog reap (task finished but cleanup didn't remove from map)
+                    Err(e) if e.is_panic() => -3, // Panic reap
+                    Err(_) => -2, // Cancelled or other
                 };
 
                 // Only transition if process table still shows Running
@@ -1212,8 +1183,7 @@ impl<P: Platform> AgentSupervisor<P> {
                 // Since we moved the handles into join_all, they're already being
                 // awaited. The timeout drop aborts them. Record all remaining
                 // agents from the running_agents map.
-                let remaining: Vec<Pid> =
-                    self.running_agents.iter().map(|e| *e.key()).collect();
+                let remaining: Vec<Pid> = self.running_agents.iter().map(|e| *e.key()).collect();
                 for pid in remaining {
                     if let Some((pid, handle)) = self.running_agents.remove(&pid) {
                         handle.abort();
@@ -1709,9 +1679,7 @@ mod tests {
 
         assert_eq!(sup.running_task_count(), 2);
 
-        let results = sup
-            .shutdown_all(std::time::Duration::from_secs(5))
-            .await;
+        let results = sup.shutdown_all(std::time::Duration::from_secs(5)).await;
 
         assert_eq!(results.len(), 2);
         assert_eq!(sup.running_task_count(), 0);
@@ -1833,7 +1801,10 @@ mod tests {
         let err = result.unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("wasm"), "error should mention wasm: {msg}");
-        assert!(msg.contains("not available"), "error should say not available: {msg}");
+        assert!(
+            msg.contains("not available"),
+            "error should say not available: {msg}"
+        );
     }
 
     #[test]
@@ -1851,7 +1822,10 @@ mod tests {
         let result = sup.spawn(request);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("container"), "error should mention container: {msg}");
+        assert!(
+            msg.contains("container"),
+            "error should mention container: {msg}"
+        );
     }
 
     #[test]
@@ -1897,11 +1871,11 @@ mod tests {
     #[cfg(feature = "os-patterns")]
     mod restart_tests {
         use super::*;
-        use crate::supervisor::{
-            RestartBudget, RestartStrategy, RestartTracker,
-            ResourceCheckResult, check_resource_usage,
-        };
         use crate::capability::ResourceLimits;
+        use crate::supervisor::{
+            ResourceCheckResult, RestartBudget, RestartStrategy, RestartTracker,
+            check_resource_usage,
+        };
 
         #[test]
         fn restart_strategy_default_is_one_for_one() {
@@ -2031,12 +2005,7 @@ mod tests {
                 tracker.check_window(&budget);
                 tracker.restart_count += 1;
                 let hardcoded = tracker.next_backoff_ms();
-                let via_model = tracker.next_backoff_ms_with_model(
-                    Some(&model),
-                    0,
-                    60.0,
-                    0.5,
-                );
+                let via_model = tracker.next_backoff_ms_with_model(Some(&model), 0, 60.0, 0.5);
                 assert_eq!(
                     hardcoded, via_model,
                     "untrained model must reproduce hardcoded backoff at count {}",
@@ -2063,12 +2032,7 @@ mod tests {
             tracker.restart_count = 3; // would give 400ms hardcoded
 
             let hardcoded = tracker.next_backoff_ms();
-            let via_model = tracker.next_backoff_ms_with_model(
-                Some(&forced),
-                0,
-                60.0,
-                0.5,
-            );
+            let via_model = tracker.next_backoff_ms_with_model(Some(&forced), 0, 60.0, 0.5);
             assert_eq!(hardcoded, 400);
             // With zero-param trained model the prediction differs
             // from the formula — invariant is that the branch fires.
@@ -2119,7 +2083,9 @@ mod tests {
             let limits = ResourceLimits::default();
             let results = check_resource_usage(&usage, &limits);
             assert_eq!(results.len(), 1);
-            assert!(matches!(&results[0], ResourceCheckResult::Warning { resource, .. } if resource == "memory"));
+            assert!(
+                matches!(&results[0], ResourceCheckResult::Warning { resource, .. } if resource == "memory")
+            );
         }
 
         #[test]
@@ -2133,7 +2099,9 @@ mod tests {
             let limits = ResourceLimits::default();
             let results = check_resource_usage(&usage, &limits);
             assert_eq!(results.len(), 1);
-            assert!(matches!(&results[0], ResourceCheckResult::Exceeded { resource, .. } if resource == "memory"));
+            assert!(
+                matches!(&results[0], ResourceCheckResult::Exceeded { resource, .. } if resource == "memory")
+            );
         }
 
         #[test]
@@ -2189,7 +2157,9 @@ mod tests {
             };
             let results = check_resource_usage(&usage, &limits);
             assert_eq!(results.len(), 1);
-            assert!(matches!(&results[0], ResourceCheckResult::Exceeded { resource, .. } if resource == "messages"));
+            assert!(
+                matches!(&results[0], ResourceCheckResult::Exceeded { resource, .. } if resource == "messages")
+            );
         }
 
         #[test]
@@ -2204,7 +2174,9 @@ mod tests {
             };
             let results = check_resource_usage(&usage, &limits);
             assert_eq!(results.len(), 1);
-            assert!(matches!(&results[0], ResourceCheckResult::Exceeded { resource, .. } if resource == "cpu_time"));
+            assert!(
+                matches!(&results[0], ResourceCheckResult::Exceeded { resource, .. } if resource == "cpu_time")
+            );
         }
 
         // ── Sprint 10 W1: Self-healing tests ────────────────────
@@ -2227,37 +2199,76 @@ mod tests {
 
         #[test]
         fn should_restart_permanent_never_restarts() {
-            assert!(!RestartTracker::should_restart(&RestartStrategy::Permanent, 0));
-            assert!(!RestartTracker::should_restart(&RestartStrategy::Permanent, 1));
-            assert!(!RestartTracker::should_restart(&RestartStrategy::Permanent, -1));
+            assert!(!RestartTracker::should_restart(
+                &RestartStrategy::Permanent,
+                0
+            ));
+            assert!(!RestartTracker::should_restart(
+                &RestartStrategy::Permanent,
+                1
+            ));
+            assert!(!RestartTracker::should_restart(
+                &RestartStrategy::Permanent,
+                -1
+            ));
         }
 
         #[test]
         fn should_restart_transient_only_on_abnormal() {
             // Normal exit (0) should NOT restart
-            assert!(!RestartTracker::should_restart(&RestartStrategy::Transient, 0));
+            assert!(!RestartTracker::should_restart(
+                &RestartStrategy::Transient,
+                0
+            ));
             // Abnormal exits should restart
-            assert!(RestartTracker::should_restart(&RestartStrategy::Transient, 1));
-            assert!(RestartTracker::should_restart(&RestartStrategy::Transient, -1));
-            assert!(RestartTracker::should_restart(&RestartStrategy::Transient, 42));
+            assert!(RestartTracker::should_restart(
+                &RestartStrategy::Transient,
+                1
+            ));
+            assert!(RestartTracker::should_restart(
+                &RestartStrategy::Transient,
+                -1
+            ));
+            assert!(RestartTracker::should_restart(
+                &RestartStrategy::Transient,
+                42
+            ));
         }
 
         #[test]
         fn should_restart_one_for_one_always() {
-            assert!(RestartTracker::should_restart(&RestartStrategy::OneForOne, 0));
-            assert!(RestartTracker::should_restart(&RestartStrategy::OneForOne, 1));
+            assert!(RestartTracker::should_restart(
+                &RestartStrategy::OneForOne,
+                0
+            ));
+            assert!(RestartTracker::should_restart(
+                &RestartStrategy::OneForOne,
+                1
+            ));
         }
 
         #[test]
         fn should_restart_one_for_all_always() {
-            assert!(RestartTracker::should_restart(&RestartStrategy::OneForAll, 0));
-            assert!(RestartTracker::should_restart(&RestartStrategy::OneForAll, -1));
+            assert!(RestartTracker::should_restart(
+                &RestartStrategy::OneForAll,
+                0
+            ));
+            assert!(RestartTracker::should_restart(
+                &RestartStrategy::OneForAll,
+                -1
+            ));
         }
 
         #[test]
         fn should_restart_rest_for_one_always() {
-            assert!(RestartTracker::should_restart(&RestartStrategy::RestForOne, 0));
-            assert!(RestartTracker::should_restart(&RestartStrategy::RestForOne, 1));
+            assert!(RestartTracker::should_restart(
+                &RestartStrategy::RestForOne,
+                0
+            ));
+            assert!(RestartTracker::should_restart(
+                &RestartStrategy::RestForOne,
+                1
+            ));
         }
 
         #[test]
@@ -2330,34 +2341,37 @@ mod tests {
 
         #[test]
         fn handle_exit_permanent_no_restart() {
-            let sup = make_supervisor_with_strategy(
-                RestartStrategy::Permanent,
-                RestartBudget::default(),
-            );
+            let sup =
+                make_supervisor_with_strategy(RestartStrategy::Permanent, RestartBudget::default());
             let result = sup.spawn(simple_request("perm-agent")).unwrap();
             sup.process_table()
                 .update_state(result.pid, ProcessState::Running)
                 .unwrap();
 
             // Mark as exited
-            let _ = sup.process_table().update_state(result.pid, ProcessState::Exited(1));
+            let _ = sup
+                .process_table()
+                .update_state(result.pid, ProcessState::Exited(1));
 
             let restarts = sup.handle_exit(result.pid, 1);
-            assert!(restarts.is_empty(), "Permanent strategy should never restart");
+            assert!(
+                restarts.is_empty(),
+                "Permanent strategy should never restart"
+            );
         }
 
         #[test]
         fn handle_exit_transient_normal_no_restart() {
-            let sup = make_supervisor_with_strategy(
-                RestartStrategy::Transient,
-                RestartBudget::default(),
-            );
+            let sup =
+                make_supervisor_with_strategy(RestartStrategy::Transient, RestartBudget::default());
             let result = sup.spawn(simple_request("trans-agent")).unwrap();
             sup.process_table()
                 .update_state(result.pid, ProcessState::Running)
                 .unwrap();
 
-            let _ = sup.process_table().update_state(result.pid, ProcessState::Exited(0));
+            let _ = sup
+                .process_table()
+                .update_state(result.pid, ProcessState::Exited(0));
 
             let restarts = sup.handle_exit(result.pid, 0);
             assert!(
@@ -2370,17 +2384,26 @@ mod tests {
         fn handle_exit_transient_abnormal_restarts() {
             let sup = make_supervisor_with_strategy(
                 RestartStrategy::Transient,
-                RestartBudget { max_restarts: 5, within_secs: 60 },
+                RestartBudget {
+                    max_restarts: 5,
+                    within_secs: 60,
+                },
             );
             let result = sup.spawn(simple_request("trans-crash")).unwrap();
             sup.process_table()
                 .update_state(result.pid, ProcessState::Running)
                 .unwrap();
 
-            let _ = sup.process_table().update_state(result.pid, ProcessState::Exited(1));
+            let _ = sup
+                .process_table()
+                .update_state(result.pid, ProcessState::Exited(1));
 
             let restarts = sup.handle_exit(result.pid, 1);
-            assert_eq!(restarts.len(), 1, "Transient should restart on abnormal exit");
+            assert_eq!(
+                restarts.len(),
+                1,
+                "Transient should restart on abnormal exit"
+            );
             assert_eq!(restarts[0].0, result.pid);
         }
 
@@ -2388,14 +2411,23 @@ mod tests {
         fn handle_exit_one_for_one_restarts_only_failed() {
             let sup = make_supervisor_with_strategy(
                 RestartStrategy::OneForOne,
-                RestartBudget { max_restarts: 10, within_secs: 60 },
+                RestartBudget {
+                    max_restarts: 10,
+                    within_secs: 60,
+                },
             );
             let r1 = sup.spawn(simple_request("ofo-a")).unwrap();
             let r2 = sup.spawn(simple_request("ofo-b")).unwrap();
-            sup.process_table().update_state(r1.pid, ProcessState::Running).unwrap();
-            sup.process_table().update_state(r2.pid, ProcessState::Running).unwrap();
+            sup.process_table()
+                .update_state(r1.pid, ProcessState::Running)
+                .unwrap();
+            sup.process_table()
+                .update_state(r2.pid, ProcessState::Running)
+                .unwrap();
 
-            let _ = sup.process_table().update_state(r1.pid, ProcessState::Exited(1));
+            let _ = sup
+                .process_table()
+                .update_state(r1.pid, ProcessState::Exited(1));
 
             let restarts = sup.handle_exit(r1.pid, 1);
             // Only r1 should be restarted
@@ -2411,13 +2443,20 @@ mod tests {
         fn handle_exit_budget_exhausted_no_restart() {
             let sup = make_supervisor_with_strategy(
                 RestartStrategy::OneForOne,
-                RestartBudget { max_restarts: 1, within_secs: 60 },
+                RestartBudget {
+                    max_restarts: 1,
+                    within_secs: 60,
+                },
             );
 
             // First agent and restart
             let r1 = sup.spawn(simple_request("budget-a")).unwrap();
-            sup.process_table().update_state(r1.pid, ProcessState::Running).unwrap();
-            let _ = sup.process_table().update_state(r1.pid, ProcessState::Exited(1));
+            sup.process_table()
+                .update_state(r1.pid, ProcessState::Running)
+                .unwrap();
+            let _ = sup
+                .process_table()
+                .update_state(r1.pid, ProcessState::Exited(1));
 
             let restarts1 = sup.handle_exit(r1.pid, 1);
             assert_eq!(restarts1.len(), 1, "first restart should succeed");
@@ -2425,11 +2464,18 @@ mod tests {
             // Second crash of same PID -- budget exhausted
             // Need to mark new process as exited too
             let new_pid = restarts1[0].1.pid;
-            sup.process_table().update_state(new_pid, ProcessState::Running).unwrap();
-            let _ = sup.process_table().update_state(r1.pid, ProcessState::Exited(1));
+            sup.process_table()
+                .update_state(new_pid, ProcessState::Running)
+                .unwrap();
+            let _ = sup
+                .process_table()
+                .update_state(r1.pid, ProcessState::Exited(1));
 
             let restarts2 = sup.handle_exit(r1.pid, 1);
-            assert!(restarts2.is_empty(), "budget should be exhausted after 1 restart");
+            assert!(
+                restarts2.is_empty(),
+                "budget should be exhausted after 1 restart"
+            );
         }
 
         #[test]
@@ -2447,8 +2493,12 @@ mod tests {
             // Also set up a monitor
             let _ref_id = sup.monitor_registry().monitor(r2.pid, r1.pid);
 
-            sup.process_table().update_state(r1.pid, ProcessState::Running).unwrap();
-            let _ = sup.process_table().update_state(r1.pid, ProcessState::Exited(1));
+            sup.process_table()
+                .update_state(r1.pid, ProcessState::Running)
+                .unwrap();
+            let _ = sup
+                .process_table()
+                .update_state(r1.pid, ProcessState::Exited(1));
 
             // handle_exit should process links and monitors
             let _restarts = sup.handle_exit(r1.pid, 1);
@@ -2469,7 +2519,10 @@ mod tests {
                 AgentSupervisor::new(process_table, ipc, AgentCapabilities::default())
                     .with_restart_config(
                         RestartStrategy::RestForOne,
-                        RestartBudget { max_restarts: 3, within_secs: 30 },
+                        RestartBudget {
+                            max_restarts: 3,
+                            within_secs: 30,
+                        },
                     );
 
             assert_eq!(*sup.restart_strategy(), RestartStrategy::RestForOne);

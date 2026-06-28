@@ -14,8 +14,8 @@
 //! Compiled only when the `ecc` feature is enabled.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::hnsw_service::{HnswService, HnswServiceConfig};
 use crate::vector_backend::{SearchResult, VectorBackend, VectorError, VectorResult};
@@ -40,9 +40,10 @@ impl IdMap {
     fn insert(&mut self, id: u64, key: String) {
         // Remove old key mapping if this id was previously used.
         if let Some(old_key) = self.id_to_key.insert(id, key.clone())
-            && old_key != key {
-                self.key_to_id.remove(&old_key);
-            }
+            && old_key != key
+        {
+            self.key_to_id.remove(&old_key);
+        }
         self.key_to_id.insert(key, id);
     }
 
@@ -273,7 +274,12 @@ impl VectorBackend for HnswBackend {
         }
 
         let epoch = self.bump_epoch();
-        ts.insert(id, Tombstone { deleted_at_epoch: epoch });
+        ts.insert(
+            id,
+            Tombstone {
+                deleted_at_epoch: epoch,
+            },
+        );
         true
     }
 

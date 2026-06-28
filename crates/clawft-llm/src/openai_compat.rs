@@ -179,10 +179,7 @@ impl Provider for OpenAiCompatProvider {
             // Emit structured ServerError for 5xx, RequestFailed for other codes.
             let code = status.as_u16();
             if (500..=599).contains(&code) {
-                return Err(ProviderError::ServerError {
-                    status: code,
-                    body,
-                });
+                return Err(ProviderError::ServerError { status: code, body });
             }
 
             return Err(ProviderError::RequestFailed(format!(
@@ -282,10 +279,7 @@ impl Provider for OpenAiCompatProvider {
             // Emit structured ServerError for 5xx, RequestFailed for other codes.
             let code = status.as_u16();
             if (500..=599).contains(&code) {
-                return Err(ProviderError::ServerError {
-                    status: code,
-                    body,
-                });
+                return Err(ProviderError::ServerError { status: code, body });
             }
 
             return Err(ProviderError::RequestFailed(format!(
@@ -374,16 +368,14 @@ fn is_quota_exhausted(body: &str) -> bool {
 /// Extract a human-readable error message from a JSON error response body.
 fn extract_error_message(body: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(body).ok()?;
-    value
-        .get("error")
-        .and_then(|v| {
-            // OpenAI format: {"error": {"message": "..."}}
-            v.get("message")
-                .and_then(|m| m.as_str())
-                .map(String::from)
-                // xAI format: {"error": "..."}
-                .or_else(|| v.as_str().map(String::from))
-        })
+    value.get("error").and_then(|v| {
+        // OpenAI format: {"error": {"message": "..."}}
+        v.get("message")
+            .and_then(|m| m.as_str())
+            .map(String::from)
+            // xAI format: {"error": "..."}
+            .or_else(|| v.as_str().map(String::from))
+    })
 }
 
 /// Try to extract a retry-after value from the HTTP `Retry-After` header.

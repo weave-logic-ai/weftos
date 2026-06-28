@@ -34,9 +34,7 @@ pub struct WorkspaceEntry {
 /// - A native chrono `DateTime<Utc>` JSON value (RFC 3339 string from chrono's Serialize)
 /// - A plain ISO 8601 / RFC 3339 string (legacy format)
 /// - `null` / missing field -> `None`
-fn deserialize_optional_datetime<'de, D>(
-    deserializer: D,
-) -> Result<Option<DateTime<Utc>>, D::Error>
+fn deserialize_optional_datetime<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

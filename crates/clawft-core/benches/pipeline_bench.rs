@@ -1,11 +1,9 @@
 //! Criterion benchmarks for pipeline components.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 
-use clawft_core::agent::context::{
-    compress_context, count_tokens, CompressionConfig,
-};
-use clawft_core::pipeline::mutation::{mutate_prompt, MutationStrategy, TrajectoryHint};
+use clawft_core::agent::context::{CompressionConfig, compress_context, count_tokens};
+use clawft_core::pipeline::mutation::{MutationStrategy, TrajectoryHint, mutate_prompt};
 use clawft_core::pipeline::scorer::FitnessScorer;
 use clawft_core::pipeline::traits::{ChatRequest, LlmMessage, QualityScorer};
 use clawft_types::provider::{ContentBlock, LlmResponse, StopReason, Usage};
@@ -179,9 +177,7 @@ fn bench_mutate_prompt(c: &mut Criterion) {
         ("emphasize", MutationStrategy::Emphasize),
     ] {
         group.bench_function(name, |b| {
-            b.iter(|| {
-                mutate_prompt(black_box(prompt), black_box(&trajectories), strategy)
-            });
+            b.iter(|| mutate_prompt(black_box(prompt), black_box(&trajectories), strategy));
         });
     }
 

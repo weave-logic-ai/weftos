@@ -56,7 +56,10 @@ fn parse_language(params: &serde_json::Value) -> Result<Language, PluginError> {
     Ok(language)
 }
 
-fn get_source(params: &serde_json::Value, config: &TreeSitterConfig) -> Result<String, PluginError> {
+fn get_source(
+    params: &serde_json::Value,
+    config: &TreeSitterConfig,
+) -> Result<String, PluginError> {
     let source = params
         .get("source")
         .and_then(|v| v.as_str())
@@ -331,10 +334,7 @@ mod tests {
         async fn delete(&self, _key: &str) -> Result<bool, PluginError> {
             Ok(false)
         }
-        async fn list_keys(
-            &self,
-            _prefix: Option<&str>,
-        ) -> Result<Vec<String>, PluginError> {
+        async fn list_keys(&self, _prefix: Option<&str>) -> Result<Vec<String>, PluginError> {
             Ok(vec![])
         }
     }
@@ -480,12 +480,8 @@ struct Point {
             });
 
             let result = tool.execute(params, &ctx).await.unwrap();
-            let symbols: Vec<serde_json::Value> =
-                serde_json::from_value(result).unwrap();
-            let names: Vec<&str> = symbols
-                .iter()
-                .filter_map(|s| s["name"].as_str())
-                .collect();
+            let symbols: Vec<serde_json::Value> = serde_json::from_value(result).unwrap();
+            let names: Vec<&str> = symbols.iter().filter_map(|s| s["name"].as_str()).collect();
             assert!(names.contains(&"hello"), "missing 'hello': {names:?}");
             assert!(names.contains(&"Point"), "missing 'Point': {names:?}");
         }

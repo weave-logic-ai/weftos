@@ -50,12 +50,10 @@ use clawft_services::heartbeat::HeartbeatService;
 #[cfg(feature = "channels")]
 use crate::markdown::dispatch::MarkdownDispatcher;
 
+use super::load_config;
 #[cfg(feature = "channels")]
 use super::make_channel_host;
-use super::load_config;
 
-#[cfg(feature = "api")]
-use clawft_services::api::{AgentInfo, ApiState};
 #[cfg(feature = "api")]
 use clawft_services::api::bridge::{
     AgentBridge, BusBridge, ChannelBridge, ConfigBridge, MemoryBridge, SessionBridge, SkillBridge,
@@ -63,6 +61,8 @@ use clawft_services::api::bridge::{
 };
 #[cfg(feature = "api")]
 use clawft_services::api::broadcaster::TopicBroadcaster;
+#[cfg(feature = "api")]
+use clawft_services::api::{AgentInfo, ApiState};
 
 /// Arguments for the `weft gateway` subcommand.
 #[derive(Args)]
@@ -256,7 +256,12 @@ pub async fn run_with_config(
 
     // Telegram
     let telegram_has_token = !config.channels.telegram.token.is_empty()
-        || config.channels.telegram.token_env.as_ref().is_some_and(|v| !v.is_empty());
+        || config
+            .channels
+            .telegram
+            .token_env
+            .as_ref()
+            .is_some_and(|v| !v.is_empty());
     if config.channels.telegram.enabled && telegram_has_token {
         plugin_host
             .register_factory(Arc::new(TelegramChannelFactory))
@@ -272,7 +277,12 @@ pub async fn run_with_config(
 
     // Slack
     let slack_has_token = !config.channels.slack.bot_token.is_empty()
-        || config.channels.slack.bot_token_env.as_ref().is_some_and(|v| !v.is_empty());
+        || config
+            .channels
+            .slack
+            .bot_token_env
+            .as_ref()
+            .is_some_and(|v| !v.is_empty());
     if config.channels.slack.enabled && slack_has_token {
         plugin_host
             .register_factory(Arc::new(SlackChannelFactory))
@@ -288,7 +298,12 @@ pub async fn run_with_config(
 
     // Discord
     let discord_has_token = !config.channels.discord.token.is_empty()
-        || config.channels.discord.token_env.as_ref().is_some_and(|v| !v.is_empty());
+        || config
+            .channels
+            .discord
+            .token_env
+            .as_ref()
+            .is_some_and(|v| !v.is_empty());
     if config.channels.discord.enabled && discord_has_token {
         plugin_host
             .register_factory(Arc::new(DiscordChannelFactory))
@@ -506,8 +521,16 @@ pub async fn run_with_config(
         }
     });
 
-    let api_status = if config.gateway.api_enabled { " + API" } else { "" };
-    info!(channels = started_count, api = config.gateway.api_enabled, "gateway running");
+    let api_status = if config.gateway.api_enabled {
+        " + API"
+    } else {
+        ""
+    };
+    info!(
+        channels = started_count,
+        api = config.gateway.api_enabled,
+        "gateway running"
+    );
     eprintln!(
         "gateway running ({started_count} channel{}{api_status}) -- press Ctrl+C to stop",
         if started_count == 1 { "" } else { "s" }
@@ -637,8 +660,7 @@ fn build_api_state(
         Some(path) => ConfigBridge::with_save_path(config.clone(), path),
         None => ConfigBridge::new(config.clone()),
     };
-    let channel_bridge =
-        ChannelBridge::from_config(&config.channels, config.gateway.api_enabled);
+    let channel_bridge = ChannelBridge::from_config(&config.channels, config.gateway.api_enabled);
 
     // Discover agents from the 3-level hierarchy (workspace > user > builtin).
     let user_agents_dir = dirs::home_dir().map(|h| h.join(".clawft").join("agents"));
@@ -659,9 +681,10 @@ fn build_api_state(
                 .map(|def| AgentInfo {
                     name: def.name.clone(),
                     description: def.description.clone(),
-                    model: def.model.clone().unwrap_or_else(|| {
-                        config.agents.defaults.model.clone()
-                    }),
+                    model: def
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| config.agents.defaults.model.clone()),
                     skills: def.skills.clone(),
                 })
                 .collect();

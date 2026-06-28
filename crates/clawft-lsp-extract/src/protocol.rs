@@ -73,9 +73,7 @@ pub fn read_message<R: BufRead>(reader: &mut R) -> std::io::Result<String> {
     // Read body.
     let mut body = vec![0u8; content_length];
     reader.read_exact(&mut body)?;
-    String::from_utf8(body).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-    })
+    String::from_utf8(body).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 /// Build an initialize request for the LSP handshake.

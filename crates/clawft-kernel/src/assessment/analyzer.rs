@@ -28,7 +28,8 @@ pub trait Analyzer: Send + Sync {
     /// Categories of findings this analyzer may produce.
     fn categories(&self) -> &[&str];
     /// Run analysis over the given files and return findings.
-    fn analyze(&self, project: &Path, files: &[PathBuf], context: &AnalysisContext) -> Vec<Finding>;
+    fn analyze(&self, project: &Path, files: &[PathBuf], context: &AnalysisContext)
+    -> Vec<Finding>;
 }
 
 /// Registry that holds all pluggable analyzers.
@@ -111,16 +112,9 @@ pub fn diff_reports(current: &AssessmentReport, previous: &AssessmentReport) -> 
     use std::collections::HashSet;
 
     // Collect file sets from findings + all scanned context
-    let current_files: HashSet<String> = current
-        .findings
-        .iter()
-        .map(|f| f.file.clone())
-        .collect();
-    let previous_files: HashSet<String> = previous
-        .findings
-        .iter()
-        .map(|f| f.file.clone())
-        .collect();
+    let current_files: HashSet<String> = current.findings.iter().map(|f| f.file.clone()).collect();
+    let previous_files: HashSet<String> =
+        previous.findings.iter().map(|f| f.file.clone()).collect();
 
     let files_added: Vec<String> = current_files.difference(&previous_files).cloned().collect();
     let files_removed: Vec<String> = previous_files.difference(&current_files).cloned().collect();
@@ -148,8 +142,8 @@ pub fn diff_reports(current: &AssessmentReport, previous: &AssessmentReport) -> 
         .cloned()
         .collect();
 
-    let complexity_delta = current.summary.complexity_warnings as i64
-        - previous.summary.complexity_warnings as i64;
+    let complexity_delta =
+        current.summary.complexity_warnings as i64 - previous.summary.complexity_warnings as i64;
 
     let coherence_delta = current.summary.coherence_score - previous.summary.coherence_score;
 

@@ -129,11 +129,26 @@ pub struct AuditReport {
 impl AuditReport {
     /// Create a report from a list of findings.
     pub fn from_findings(findings: Vec<AuditFinding>, checks_run: usize) -> Self {
-        let critical_count = findings.iter().filter(|f| f.severity == AuditSeverity::Critical).count();
-        let high_count = findings.iter().filter(|f| f.severity == AuditSeverity::High).count();
-        let medium_count = findings.iter().filter(|f| f.severity == AuditSeverity::Medium).count();
-        let low_count = findings.iter().filter(|f| f.severity == AuditSeverity::Low).count();
-        let info_count = findings.iter().filter(|f| f.severity == AuditSeverity::Info).count();
+        let critical_count = findings
+            .iter()
+            .filter(|f| f.severity == AuditSeverity::Critical)
+            .count();
+        let high_count = findings
+            .iter()
+            .filter(|f| f.severity == AuditSeverity::High)
+            .count();
+        let medium_count = findings
+            .iter()
+            .filter(|f| f.severity == AuditSeverity::Medium)
+            .count();
+        let low_count = findings
+            .iter()
+            .filter(|f| f.severity == AuditSeverity::Low)
+            .count();
+        let info_count = findings
+            .iter()
+            .filter(|f| f.severity == AuditSeverity::Info)
+            .count();
         let passed = critical_count == 0 && high_count == 0;
 
         Self {
@@ -191,10 +206,7 @@ impl SecurityScanner {
                     check_name: check.name.clone(),
                     category: check.category,
                     severity: check.severity,
-                    description: format!(
-                        "{} pattern detected: {}",
-                        check.category, check.name
-                    ),
+                    description: format!("{} pattern detected: {}", check.category, check.name),
                     location: source.map(String::from),
                     remediation: check.remediation.clone(),
                     matched_content: Some(truncated),
@@ -214,18 +226,16 @@ impl SecurityScanner {
     pub fn checks_by_category(&self) -> std::collections::HashMap<AuditCategory, Vec<&AuditCheck>> {
         let mut map = std::collections::HashMap::new();
         for check in &self.checks {
-            map.entry(check.category).or_insert_with(Vec::new).push(check);
+            map.entry(check.category)
+                .or_insert_with(Vec::new)
+                .push(check);
         }
         map
     }
 
     /// Get all unique categories covered.
     pub fn categories(&self) -> Vec<AuditCategory> {
-        let mut cats: Vec<AuditCategory> = self
-            .checks_by_category()
-            .keys()
-            .copied()
-            .collect();
+        let mut cats: Vec<AuditCategory> = self.checks_by_category().keys().copied().collect();
         cats.sort_by_key(|c| format!("{c:?}"));
         cats
     }
@@ -255,7 +265,11 @@ mod tests {
     fn scanner_covers_all_10_categories() {
         let scanner = SecurityScanner::new();
         let cats = scanner.categories();
-        assert!(cats.len() >= 10, "expected 10+ categories, got {}", cats.len());
+        assert!(
+            cats.len() >= 10,
+            "expected 10+ categories, got {}",
+            cats.len()
+        );
     }
 
     #[test]
@@ -266,7 +280,9 @@ mod tests {
             Some("test.txt"),
         );
         assert!(
-            findings.iter().any(|f| f.category == AuditCategory::PromptInjection),
+            findings
+                .iter()
+                .any(|f| f.category == AuditCategory::PromptInjection),
             "expected prompt injection finding"
         );
     }
@@ -279,7 +295,9 @@ mod tests {
             Some("config.txt"),
         );
         assert!(
-            findings.iter().any(|f| f.category == AuditCategory::CredentialLiteral),
+            findings
+                .iter()
+                .any(|f| f.category == AuditCategory::CredentialLiteral),
             "expected credential literal finding"
         );
     }
@@ -292,7 +310,9 @@ mod tests {
             Some("plugin.js"),
         );
         assert!(
-            findings.iter().any(|f| f.category == AuditCategory::ExfiltrationUrl),
+            findings
+                .iter()
+                .any(|f| f.category == AuditCategory::ExfiltrationUrl),
             "expected exfiltration URL finding"
         );
     }
@@ -300,12 +320,11 @@ mod tests {
     #[test]
     fn scanner_detects_unsafe_shell() {
         let scanner = SecurityScanner::new();
-        let findings = scanner.scan_content(
-            "Execute: rm -rf /",
-            Some("script.sh"),
-        );
+        let findings = scanner.scan_content("Execute: rm -rf /", Some("script.sh"));
         assert!(
-            findings.iter().any(|f| f.category == AuditCategory::UnsafeShell),
+            findings
+                .iter()
+                .any(|f| f.category == AuditCategory::UnsafeShell),
             "expected unsafe shell finding"
         );
     }
@@ -359,31 +378,80 @@ mod tests {
         let by_cat = scanner.checks_by_category();
 
         // P0 categories: 5+ each
-        assert!(by_cat.get(&AuditCategory::PromptInjection).map_or(0, |v| v.len()) >= 5);
-        assert!(by_cat.get(&AuditCategory::ExfiltrationUrl).map_or(0, |v| v.len()) >= 5);
-        assert!(by_cat.get(&AuditCategory::CredentialLiteral).map_or(0, |v| v.len()) >= 5);
+        assert!(
+            by_cat
+                .get(&AuditCategory::PromptInjection)
+                .map_or(0, |v| v.len())
+                >= 5
+        );
+        assert!(
+            by_cat
+                .get(&AuditCategory::ExfiltrationUrl)
+                .map_or(0, |v| v.len())
+                >= 5
+        );
+        assert!(
+            by_cat
+                .get(&AuditCategory::CredentialLiteral)
+                .map_or(0, |v| v.len())
+                >= 5
+        );
 
         // P1 categories: 5+ each
-        assert!(by_cat.get(&AuditCategory::PermissionEscalation).map_or(0, |v| v.len()) >= 5);
-        assert!(by_cat.get(&AuditCategory::UnsafeShell).map_or(0, |v| v.len()) >= 5);
-        assert!(by_cat.get(&AuditCategory::SupplyChainRisk).map_or(0, |v| v.len()) >= 5);
+        assert!(
+            by_cat
+                .get(&AuditCategory::PermissionEscalation)
+                .map_or(0, |v| v.len())
+                >= 5
+        );
+        assert!(
+            by_cat
+                .get(&AuditCategory::UnsafeShell)
+                .map_or(0, |v| v.len())
+                >= 5
+        );
+        assert!(
+            by_cat
+                .get(&AuditCategory::SupplyChainRisk)
+                .map_or(0, |v| v.len())
+                >= 5
+        );
 
         // P2 categories: 3+ each
-        assert!(by_cat.get(&AuditCategory::DenialOfService).map_or(0, |v| v.len()) >= 3);
-        assert!(by_cat.get(&AuditCategory::IndirectPromptInjection).map_or(0, |v| v.len()) >= 3);
-        assert!(by_cat.get(&AuditCategory::InformationDisclosure).map_or(0, |v| v.len()) >= 3);
-        assert!(by_cat.get(&AuditCategory::CrossAgentAccess).map_or(0, |v| v.len()) >= 3);
+        assert!(
+            by_cat
+                .get(&AuditCategory::DenialOfService)
+                .map_or(0, |v| v.len())
+                >= 3
+        );
+        assert!(
+            by_cat
+                .get(&AuditCategory::IndirectPromptInjection)
+                .map_or(0, |v| v.len())
+                >= 3
+        );
+        assert!(
+            by_cat
+                .get(&AuditCategory::InformationDisclosure)
+                .map_or(0, |v| v.len())
+                >= 3
+        );
+        assert!(
+            by_cat
+                .get(&AuditCategory::CrossAgentAccess)
+                .map_or(0, |v| v.len())
+                >= 3
+        );
     }
 
     #[test]
     fn scanner_detects_dos_pattern() {
         let scanner = SecurityScanner::new();
-        let findings = scanner.scan_content(
-            "while(true) { fork(); }",
-            Some("script.js"),
-        );
+        let findings = scanner.scan_content("while(true) { fork(); }", Some("script.js"));
         assert!(
-            findings.iter().any(|f| f.category == AuditCategory::DenialOfService),
+            findings
+                .iter()
+                .any(|f| f.category == AuditCategory::DenialOfService),
             "expected DoS finding"
         );
     }
@@ -391,12 +459,11 @@ mod tests {
     #[test]
     fn scanner_detects_permission_escalation() {
         let scanner = SecurityScanner::new();
-        let findings = scanner.scan_content(
-            "sudo chmod 777 /etc/shadow",
-            Some("script.sh"),
-        );
+        let findings = scanner.scan_content("sudo chmod 777 /etc/shadow", Some("script.sh"));
         assert!(
-            findings.iter().any(|f| f.category == AuditCategory::PermissionEscalation),
+            findings
+                .iter()
+                .any(|f| f.category == AuditCategory::PermissionEscalation),
             "expected permission escalation finding"
         );
     }

@@ -9,8 +9,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::model::KnowledgeGraph;
 use crate::GraphifyError;
+use crate::model::KnowledgeGraph;
 
 // ---------------------------------------------------------------------------
 // Vault export (one .md per entity)
@@ -22,13 +22,9 @@ use crate::GraphifyError;
 /// - YAML frontmatter (type, source_file, community, degree)
 /// - Wikilink connections to neighbors
 /// - Bridge node indicator if the entity spans multiple communities
-pub fn to_obsidian_vault(
-    kg: &KnowledgeGraph,
-    output_dir: &Path,
-) -> Result<usize, GraphifyError> {
-    std::fs::create_dir_all(output_dir).map_err(|e| {
-        GraphifyError::ExportError(format!("failed to create output dir: {e}"))
-    })?;
+pub fn to_obsidian_vault(kg: &KnowledgeGraph, output_dir: &Path) -> Result<usize, GraphifyError> {
+    std::fs::create_dir_all(output_dir)
+        .map_err(|e| GraphifyError::ExportError(format!("failed to create output dir: {e}")))?;
 
     let communities = kg.communities.as_ref();
     let labels = kg.community_labels.as_ref();
@@ -52,7 +48,9 @@ pub fn to_obsidian_vault(
             .iter()
             .map(|n| entity_community.get(&n.id.to_hex()))
             .collect();
-        if neighbor_comms.len() > 1 || (my_comm.is_some() && neighbor_comms.iter().any(|c| c != &my_comm)) {
+        if neighbor_comms.len() > 1
+            || (my_comm.is_some() && neighbor_comms.iter().any(|c| c != &my_comm))
+        {
             bridge_nodes.insert(entity.id.to_hex());
         }
     }
@@ -104,10 +102,7 @@ pub fn to_obsidian_vault(
         }
 
         // Metadata.
-        lines.push(format!(
-            "**Type:** {}",
-            entity.entity_type.discriminant()
-        ));
+        lines.push(format!("**Type:** {}", entity.entity_type.discriminant()));
         if let Some(src) = &entity.source_file {
             lines.push(format!("**Source:** `{src}`"));
         }
@@ -168,10 +163,7 @@ pub fn to_obsidian_vault(
 ///
 /// Nodes are laid out in a grid grouped by community. Edges map to
 /// Obsidian canvas connections.
-pub fn to_obsidian_canvas(
-    kg: &KnowledgeGraph,
-    output_path: &Path,
-) -> Result<(), GraphifyError> {
+pub fn to_obsidian_canvas(kg: &KnowledgeGraph, output_path: &Path) -> Result<(), GraphifyError> {
     let communities = kg.communities.as_ref();
 
     // Group entities by community.
@@ -252,17 +244,14 @@ pub fn to_obsidian_canvas(
     });
 
     if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            GraphifyError::ExportError(format!("failed to create canvas dir: {e}"))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| GraphifyError::ExportError(format!("failed to create canvas dir: {e}")))?;
     }
 
-    let content = serde_json::to_string_pretty(&canvas).map_err(|e| {
-        GraphifyError::ExportError(format!("failed to serialize canvas: {e}"))
-    })?;
-    std::fs::write(output_path, content).map_err(|e| {
-        GraphifyError::ExportError(format!("failed to write canvas: {e}"))
-    })?;
+    let content = serde_json::to_string_pretty(&canvas)
+        .map_err(|e| GraphifyError::ExportError(format!("failed to serialize canvas: {e}")))?;
+    std::fs::write(output_path, content)
+        .map_err(|e| GraphifyError::ExportError(format!("failed to write canvas: {e}")))?;
 
     Ok(())
 }
@@ -306,7 +295,12 @@ mod tests {
             iri: None,
         };
         let e2 = Entity {
-            id: crate::EntityId::new(&DomainTag::Code, &EntityType::Class, "AuthService", "auth.py"),
+            id: crate::EntityId::new(
+                &DomainTag::Code,
+                &EntityType::Class,
+                "AuthService",
+                "auth.py",
+            ),
             entity_type: EntityType::Class,
             label: "AuthService".to_string(),
             source_file: Some("auth.py".into()),

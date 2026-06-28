@@ -11,9 +11,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use chrono::Utc;
-use percent_encoding::{percent_decode_str, percent_encode, NON_ALPHANUMERIC};
 use crate::runtime::Mutex;
+use chrono::Utc;
+use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, percent_encode};
 use tracing::{debug, warn};
 
 use clawft_platform::Platform;
@@ -518,7 +518,10 @@ mod tests {
             _body: Option<&[u8]>,
         ) -> Result<clawft_platform::http::HttpResponse, Box<dyn std::error::Error + Send + Sync>>
         {
-            Err("MockHttp::request not implemented — use a real HTTP client for integration tests".into())
+            Err(
+                "MockHttp::request not implemented — use a real HTTP client for integration tests"
+                    .into(),
+            )
         }
     }
 
@@ -781,7 +784,8 @@ mod tests {
         let mgr = make_manager(platform.clone());
 
         // Simulate an old-format file written by the previous implementation.
-        let old_path = PathBuf::from("/mock-home/.clawft/workspace/sessions/telegram_user_123.jsonl");
+        let old_path =
+            PathBuf::from("/mock-home/.clawft/workspace/sessions/telegram_user_123.jsonl");
         let meta = serde_json::json!({
             "_type": "metadata",
             "created_at": "2025-01-01T00:00:00Z",

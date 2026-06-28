@@ -12,10 +12,7 @@ fn main() {
 
     // Iteration-2 reference shape + heavy Phase-2 trial budget.
     let b = match eml_core::run_benchmark_with_trials(
-        /* d_model */ 4,
-        /* d_k     */ 2,
-        /* seq_len */ 2,
-        /* depth   */ 3,
+        /* d_model */ 4, /* d_k     */ 2, /* seq_len */ 2, /* depth   */ 3,
         /* trials  */ 15_000,
     ) {
         Ok(b) => b,
@@ -26,9 +23,15 @@ fn main() {
     };
 
     println!("ToyEmlAttention Iteration 2 — go/no-go gate");
-    println!("shape: seq_len={} d_model={} d_k={} depth={}", b.seq_len, b.d_model, b.d_k, b.depth);
+    println!(
+        "shape: seq_len={} d_model={} d_k={} depth={}",
+        b.seq_len, b.d_model, b.d_k, b.depth
+    );
     println!("param_count: {}", b.param_count);
-    println!("phase1 warmup:   {:>8} ns   (roundtrip={})", b.phase1_warmup_ns, b.phase1_serialize_roundtrip);
+    println!(
+        "phase1 warmup:   {:>8} ns   (roundtrip={})",
+        b.phase1_warmup_ns, b.phase1_serialize_roundtrip
+    );
     println!(
         "phase2 e2e CD:   baseline={:.4}  final={:.4}  reduction={:.1}%  rounds={}",
         b.phase2_baseline_mse,
@@ -85,7 +88,11 @@ fn main() {
 
 #[cfg(feature = "experimental-attention")]
 fn tag(ok: bool) -> &'static str {
-    if ok { "PASS" } else { "FAIL" }
+    if ok {
+        "PASS"
+    } else {
+        "FAIL"
+    }
 }
 
 #[cfg(not(feature = "experimental-attention"))]

@@ -134,11 +134,11 @@ fn now_unix_micros() -> i128 {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
-    use tracing::subscriber;
     use tracing::Subscriber;
+    use tracing::subscriber;
+    use tracing_subscriber::Registry;
     use tracing_subscriber::fmt;
     use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::Registry;
 
     /// A tiny tracing layer that captures records emitted on the
     /// audit target so tests can assert one-row-per-transcription.
@@ -166,27 +166,15 @@ mod tests {
     #[derive(Default)]
     struct StringVisitor(String);
     impl tracing::field::Visit for StringVisitor {
-        fn record_debug(
-            &mut self,
-            field: &tracing::field::Field,
-            value: &dyn std::fmt::Debug,
-        ) {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
             use std::fmt::Write;
             let _ = write!(self.0, "{}={:?} ", field.name(), value);
         }
-        fn record_str(
-            &mut self,
-            field: &tracing::field::Field,
-            value: &str,
-        ) {
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
             use std::fmt::Write;
             let _ = write!(self.0, "{}={} ", field.name(), value);
         }
-        fn record_u64(
-            &mut self,
-            field: &tracing::field::Field,
-            value: u64,
-        ) {
+        fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
             use std::fmt::Write;
             let _ = write!(self.0, "{}={} ", field.name(), value);
         }

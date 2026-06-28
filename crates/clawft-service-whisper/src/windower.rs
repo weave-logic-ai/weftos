@@ -163,7 +163,14 @@ impl Windower {
     /// buffer past [`Self::target_window_ms`]. On a format change
     /// (sample rate or channels), the in-flight partial window is
     /// discarded and the new chunk seeds a fresh window.
-    pub fn push(&mut self, chunk_pcm: &[u8], sample_rate: u32, channels: u16, seq: u64, chunk_ms: u64) -> Option<PcmWindow> {
+    pub fn push(
+        &mut self,
+        chunk_pcm: &[u8],
+        sample_rate: u32,
+        channels: u16,
+        seq: u64,
+        chunk_ms: u64,
+    ) -> Option<PcmWindow> {
         // Format change: drop what we had, restart.
         let reset = match (self.sample_rate, self.channels) {
             (Some(sr), Some(ch)) if sr == sample_rate && ch == channels => false,

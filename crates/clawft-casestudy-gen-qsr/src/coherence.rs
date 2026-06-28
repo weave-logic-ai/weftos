@@ -94,9 +94,7 @@ fn rollup_variance_by_store(events: &[DailyRollup]) -> BTreeMap<String, f64> {
         .collect()
 }
 
-fn shift_adequacy_ratio(
-    ledger: &crate::ops_events::OpsEventLedger,
-) -> BTreeMap<String, f64> {
+fn shift_adequacy_ratio(ledger: &crate::ops_events::OpsEventLedger) -> BTreeMap<String, f64> {
     let mut by_store: BTreeMap<String, (u32, u32)> = BTreeMap::new();
     for s in &ledger.shift_adequacy {
         let entry = by_store.entry(s.store_ref.clone()).or_default();
@@ -108,7 +106,11 @@ fn shift_adequacy_ratio(
     by_store
         .into_iter()
         .map(|(k, (total, adeq))| {
-            let ratio = if total > 0 { adeq as f64 / total as f64 } else { 1.0 };
+            let ratio = if total > 0 {
+                adeq as f64 / total as f64
+            } else {
+                1.0
+            };
             (k, ratio)
         })
         .collect()
@@ -208,7 +210,13 @@ fn org_subgraph_lambda_2(store: &Store, dims: &Dimensions) -> f64 {
     // Power iteration on (σI − L) with deflation against the all-ones vector
     // (eigenvalue 0 of L). Resulting dominant eigenvalue of the shifted
     // operator = σ − λ₂ of L. Choose σ conservatively.
-    let sigma = 2.0 * laplacian.iter().enumerate().map(|(i, r)| r[i]).fold(0.0f64, f64::max).max(1.0);
+    let sigma = 2.0
+        * laplacian
+            .iter()
+            .enumerate()
+            .map(|(i, r)| r[i])
+            .fold(0.0f64, f64::max)
+            .max(1.0);
     let mut v = seed_vector(n);
     deflate_ones(&mut v);
 
@@ -260,7 +268,9 @@ fn org_subgraph_lambda_2(store: &Store, dims: &Dimensions) -> f64 {
 fn seed_vector(n: usize) -> Vec<f64> {
     // Deterministic non-constant seed so we avoid trivial overlap with the
     // all-ones vector.
-    (0..n).map(|i| ((i as f64 + 1.0).sin()).abs() + 0.01).collect()
+    (0..n)
+        .map(|i| ((i as f64 + 1.0).sin()).abs() + 0.01)
+        .collect()
 }
 
 fn deflate_ones(v: &mut [f64]) {

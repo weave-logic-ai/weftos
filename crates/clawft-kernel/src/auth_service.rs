@@ -4,8 +4,8 @@
 //! never hold raw secrets. Instead, agents request scoped, time-limited tokens
 //! via IPC. All credential access is audited.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -322,11 +322,7 @@ impl AuthService {
     }
 
     /// Update an existing credential's value (rotation).
-    pub fn rotate_credential(
-        &self,
-        name: &str,
-        new_value: &[u8],
-    ) -> Result<(), KernelError> {
+    pub fn rotate_credential(&self, name: &str, new_value: &[u8]) -> Result<(), KernelError> {
         // Governance gate: credential rotation is a critical security action.
         #[cfg(feature = "exochain")]
         if let Some(ref gate) = self.governance_gate {
@@ -366,10 +362,7 @@ impl AuthService {
     // ── Token issuance ────────────────────────────────────────────
 
     /// Request a scoped, time-limited token.
-    pub fn request_token(
-        &self,
-        request: &CredentialRequest,
-    ) -> Result<IssuedToken, KernelError> {
+    pub fn request_token(&self, request: &CredentialRequest) -> Result<IssuedToken, KernelError> {
         // Governance gate: token issuance is governed by policy.
         #[cfg(feature = "exochain")]
         if let Some(ref gate) = self.governance_gate {
@@ -391,17 +384,17 @@ impl AuthService {
             .credentials
             .get(&request.credential_name)
             .ok_or_else(|| {
-                KernelError::Service(format!(
-                    "credential not found: {}",
-                    request.credential_name
-                ))
+                KernelError::Service(format!("credential not found: {}", request.credential_name))
             })?;
 
         // Authorization check.
-        if !cred.allowed_agents.is_empty()
-            && !cred.allowed_agents.contains(&request.agent_id)
-        {
-            self.audit("token.denied", &request.agent_id, &request.credential_name, false);
+        if !cred.allowed_agents.is_empty() && !cred.allowed_agents.contains(&request.agent_id) {
+            self.audit(
+                "token.denied",
+                &request.agent_id,
+                &request.credential_name,
+                false,
+            );
             warn!(
                 agent_id = %request.agent_id,
                 credential = %request.credential_name,
@@ -423,13 +416,19 @@ impl AuthService {
             credential_name: request.credential_name.clone(),
             issued_to: request.requester_pid,
             issued_at: Utc::now(),
-            expires_at: Utc::now() + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::hours(1)),
+            expires_at: Utc::now()
+                + chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::hours(1)),
             scope: request.scope.clone(),
         };
 
         self.active_tokens
             .insert(token.token_id.clone(), token.clone());
-        self.audit("token.issued", &request.agent_id, &request.credential_name, true);
+        self.audit(
+            "token.issued",
+            &request.agent_id,
+            &request.credential_name,
+            true,
+        );
 
         #[cfg(feature = "exochain")]
         if let Some(ref cm) = self.chain_manager {
@@ -502,16 +501,15 @@ impl AuthService {
         let removed = self.active_tokens.remove(token_id).is_some();
 
         #[cfg(feature = "exochain")]
-        if removed
-            && let Some(ref cm) = self.chain_manager {
-                cm.append(
-                    "auth",
-                    crate::chain::EVENT_KIND_AUTH_TOKEN_REVOKE,
-                    Some(serde_json::json!({
-                        "token_id": token_id,
-                    })),
-                );
-            }
+        if removed && let Some(ref cm) = self.chain_manager {
+            cm.append(
+                "auth",
+                crate::chain::EVENT_KIND_AUTH_TOKEN_REVOKE,
+                Some(serde_json::json!({
+                    "token_id": token_id,
+                })),
+            );
+        }
 
         Ok(removed)
     }
@@ -790,7 +788,10 @@ mod tests {
         let result = svc.request_token(&req);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("denied") || err.contains("authorized"), "got: {err}");
+        assert!(
+            err.contains("denied") || err.contains("authorized"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -853,12 +854,7 @@ mod tests {
 
         struct RevokeDenyGate;
         impl GateBackend for RevokeDenyGate {
-            fn check(
-                &self,
-                _source: &str,
-                action: &str,
-                _ctx: &serde_json::Value,
-            ) -> GateDecision {
+            fn check(&self, _source: &str, action: &str, _ctx: &serde_json::Value) -> GateDecision {
                 if action == "auth.token.revoke" {
                     GateDecision::Deny {
                         reason: "policy: revoke disabled".into(),
@@ -985,7 +981,8 @@ mod tests {
     #[test]
     fn authenticate_wrong_credential_fails() {
         let svc = AuthService::new_default();
-        svc.register_hashed_credential("agent-2", b"correct", vec![]).unwrap();
+        svc.register_hashed_credential("agent-2", b"correct", vec![])
+            .unwrap();
         let result = svc.authenticate("agent-2", b"wrong");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -1008,7 +1005,8 @@ mod tests {
     #[test]
     fn validate_auth_token_succeeds() {
         let svc = AuthService::new_default();
-        svc.register_hashed_credential("v-agent", b"pass", vec![]).unwrap();
+        svc.register_hashed_credential("v-agent", b"pass", vec![])
+            .unwrap();
         let token = svc.authenticate("v-agent", b"pass").unwrap();
         let validated = svc.validate_auth_token(&token.token_id).unwrap();
         assert_eq!(validated.agent_id, "v-agent");
@@ -1017,7 +1015,8 @@ mod tests {
     #[test]
     fn validate_expired_auth_token_fails() {
         let svc = AuthService::new_default();
-        svc.register_hashed_credential("exp-agent", b"pass", vec![]).unwrap();
+        svc.register_hashed_credential("exp-agent", b"pass", vec![])
+            .unwrap();
         let token = svc.authenticate("exp-agent", b"pass").unwrap();
 
         // Manually insert an expired token.
@@ -1041,7 +1040,8 @@ mod tests {
     #[test]
     fn revoke_auth_token_works() {
         let svc = AuthService::new_default();
-        svc.register_hashed_credential("rev-agent", b"pass", vec![]).unwrap();
+        svc.register_hashed_credential("rev-agent", b"pass", vec![])
+            .unwrap();
         let token = svc.authenticate("rev-agent", b"pass").unwrap();
         assert!(svc.revoke_auth_token(&token.token_id));
         assert!(svc.validate_auth_token(&token.token_id).is_err());
@@ -1073,7 +1073,8 @@ mod tests {
     fn raw_credentials_never_stored_in_hash() {
         let svc = AuthService::new_default();
         let raw = b"super_secret_password";
-        svc.register_hashed_credential("hash-check", raw, vec![]).unwrap();
+        svc.register_hashed_credential("hash-check", raw, vec![])
+            .unwrap();
 
         let cred = svc.hashed_credentials.get("hash-check").unwrap();
         // The hash must not equal the raw input.

@@ -88,16 +88,11 @@ impl DelegationEngine {
     /// 3. If the matched target is `Flow`, treat as Claude (Flow delegation
     ///    removed in MCP-first architecture).
     /// 4. If no rule matches, use `Auto` mode (complexity heuristic).
-    pub fn decide(
-        &self,
-        task: &str,
-        claude_available: bool,
-    ) -> DelegationTarget {
+    pub fn decide(&self, task: &str, claude_available: bool) -> DelegationTarget {
         // Try explicit rules first.
         for rule in &self.compiled_rules {
             if rule.regex.is_match(task) {
-                let target =
-                    self.resolve_availability(rule.target, claude_available);
+                let target = self.resolve_availability(rule.target, claude_available);
                 debug!(
                     task = %task,
                     matched_target = ?rule.target,
@@ -147,11 +142,7 @@ impl DelegationEngine {
     ///
     /// - Low complexity (< 0.3): Local
     /// - Medium/High complexity (>= 0.3): Claude (if available), else Local
-    fn auto_decide(
-        &self,
-        task: &str,
-        claude_available: bool,
-    ) -> DelegationTarget {
+    fn auto_decide(&self, task: &str, claude_available: bool) -> DelegationTarget {
         let complexity = Self::complexity_estimate(task);
 
         let target = if complexity < 0.3 {
@@ -432,10 +423,7 @@ mod tests {
             },
         ]);
         // The broken rule is skipped; "hello" still matches.
-        assert_eq!(
-            engine.decide("hello world", true),
-            DelegationTarget::Local
-        );
+        assert_eq!(engine.decide("hello world", true), DelegationTarget::Local);
     }
 
     #[test]
@@ -495,9 +483,6 @@ mod tests {
             },
         ]);
         // Flow rules resolve to Claude now.
-        assert_eq!(
-            engine.decide("deploy now", true),
-            DelegationTarget::Claude
-        );
+        assert_eq!(engine.decide("deploy now", true), DelegationTarget::Claude);
     }
 }

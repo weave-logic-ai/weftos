@@ -7,11 +7,11 @@ use std::borrow::Cow;
 
 use eframe::egui;
 
+use super::CanonWidget;
 use super::response::CanonResponse;
 use super::types::{
     Affordance, Confidence, ConfidenceSource, IdentityUri, MutationAxis, Tooltip, VariantId,
 };
-use super::CanonWidget;
 
 const IDENTITY: &str = "ui://gauge";
 

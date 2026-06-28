@@ -4,8 +4,8 @@
 //! that survive agent restarts. Pipes support multiple senders (fan-in)
 //! delivering to a single receiver endpoint.
 
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -111,10 +111,7 @@ impl NamedPipeRegistry {
     ///
     /// Returns the receiver half of the pipe channel.
     /// If a pipe with this name already exists, returns an error.
-    pub fn create(
-        &self,
-        name: impl Into<String>,
-    ) -> KernelResult<mpsc::Receiver<KernelMessage>> {
+    pub fn create(&self, name: impl Into<String>) -> KernelResult<mpsc::Receiver<KernelMessage>> {
         self.create_with_options(name, DEFAULT_PIPE_CAPACITY, DEFAULT_TTL_SECS)
     }
 
@@ -151,10 +148,7 @@ impl NamedPipeRegistry {
     /// Connect to an existing named pipe as a sender.
     ///
     /// Returns a sender that can push messages into the pipe.
-    pub fn connect_sender(
-        &self,
-        name: &str,
-    ) -> KernelResult<mpsc::Sender<KernelMessage>> {
+    pub fn connect_sender(&self, name: &str) -> KernelResult<mpsc::Sender<KernelMessage>> {
         let pipe = self
             .pipes
             .get(name)
@@ -176,16 +170,14 @@ impl NamedPipeRegistry {
             .ok_or_else(|| KernelError::Ipc(format!("named pipe '{name}' not found")))?;
 
         pipe.touch();
-        pipe.sender
-            .try_send(msg)
-            .map_err(|e| match e {
-                mpsc::error::TrySendError::Full(_) => {
-                    KernelError::Ipc(format!("named pipe '{name}' is full"))
-                }
-                mpsc::error::TrySendError::Closed(_) => {
-                    KernelError::Ipc(format!("named pipe '{name}' receiver dropped"))
-                }
-            })
+        pipe.sender.try_send(msg).map_err(|e| match e {
+            mpsc::error::TrySendError::Full(_) => {
+                KernelError::Ipc(format!("named pipe '{name}' is full"))
+            }
+            mpsc::error::TrySendError::Closed(_) => {
+                KernelError::Ipc(format!("named pipe '{name}' receiver dropped"))
+            }
+        })
     }
 
     /// Disconnect a sender from a named pipe.

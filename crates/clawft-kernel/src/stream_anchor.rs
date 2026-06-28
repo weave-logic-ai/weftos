@@ -144,9 +144,7 @@ async fn run_consumer(
     cancel: CancellationToken,
 ) {
     let started = Instant::now();
-    let now_ms = || {
-        chrono::Utc::now().timestamp_millis().max(0) as u64
-    };
+    let now_ms = || chrono::Utc::now().timestamp_millis().max(0) as u64;
     let mut current = Window::new(now_ms());
     let mut timer = tokio::time::interval_at(tokio::time::Instant::now() + window, window);
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

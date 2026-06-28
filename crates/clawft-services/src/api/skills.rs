@@ -4,9 +4,9 @@
 //! skills, and searching the skill registry (ClawHub).
 
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     routing::{delete, get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 

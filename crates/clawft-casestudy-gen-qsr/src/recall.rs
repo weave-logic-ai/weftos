@@ -16,8 +16,8 @@ use crate::dimensions::Dimensions;
 use crate::events::DailyRollup;
 use crate::rollup::{MonthlyRollup, WeeklyRollup};
 use instant_distance::{Builder, HnswMap, Point, Search};
-use rand::seq::IteratorRandom;
 use rand::SeedableRng;
+use rand::seq::IteratorRandom;
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -166,10 +166,7 @@ pub fn featurize_monthly(rollup: &MonthlyRollup, baseline_monthly_sales: f64) ->
 
 /// Convenience: featurize an entire daily corpus using dimension metadata
 /// for per-store baseline normalisation.
-pub fn featurize_daily_corpus(
-    events: &[DailyRollup],
-    dims: &Dimensions,
-) -> Vec<FeatureVector> {
+pub fn featurize_daily_corpus(events: &[DailyRollup], dims: &Dimensions) -> Vec<FeatureVector> {
     let baseline: HashMap<&str, f64> = dims
         .stores
         .iter()
@@ -178,7 +175,10 @@ pub fn featurize_daily_corpus(
     events
         .iter()
         .map(|e| {
-            let base = baseline.get(e.store_ref.as_str()).copied().unwrap_or(5000.0);
+            let base = baseline
+                .get(e.store_ref.as_str())
+                .copied()
+                .unwrap_or(5000.0);
             featurize_daily(e, base)
         })
         .collect()
@@ -194,11 +194,18 @@ pub struct NeighbourHit {
     pub distance: f32,
 }
 
-pub fn brute_force_knn(corpus: &[FeatureVector], query: &FeatureVector, k: usize) -> Vec<NeighbourHit> {
+pub fn brute_force_knn(
+    corpus: &[FeatureVector],
+    query: &FeatureVector,
+    k: usize,
+) -> Vec<NeighbourHit> {
     let mut hits: Vec<NeighbourHit> = corpus
         .iter()
         .enumerate()
-        .map(|(index, v)| NeighbourHit { index, distance: v.distance(query) })
+        .map(|(index, v)| NeighbourHit {
+            index,
+            distance: v.distance(query),
+        })
         .collect();
     hits.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
     hits.truncate(k);
@@ -213,7 +220,11 @@ pub struct BuiltIndex {
     map: HnswMap<FeatureVector, usize>,
 }
 
-pub fn build_hnsw(corpus: &[FeatureVector], ef_construction: usize, ef_search: usize) -> BuiltIndex {
+pub fn build_hnsw(
+    corpus: &[FeatureVector],
+    ef_construction: usize,
+    ef_search: usize,
+) -> BuiltIndex {
     let values: Vec<usize> = (0..corpus.len()).collect();
     let map = Builder::default()
         .ef_construction(ef_construction)
@@ -227,7 +238,10 @@ impl BuiltIndex {
         let mut state = Search::default();
         let mut out = Vec::with_capacity(k);
         for item in self.map.search(query, &mut state).take(k) {
-            out.push(NeighbourHit { index: *item.value, distance: item.distance });
+            out.push(NeighbourHit {
+                index: *item.value,
+                distance: item.distance,
+            });
         }
         out
     }

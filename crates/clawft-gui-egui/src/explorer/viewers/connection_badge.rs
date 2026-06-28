@@ -40,7 +40,10 @@ impl SubstrateViewer for ConnectionBadgeViewer {
             Some(o) => o,
             None => return,
         };
-        let state = obj.get("state").and_then(Value::as_str).unwrap_or("unknown");
+        let state = obj
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
         let color = state_color(state);
 
         ui.label(

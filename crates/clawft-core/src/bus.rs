@@ -82,10 +82,7 @@ impl MessageBus {
     ///
     /// Prefer this over [`publish_inbound`](Self::publish_inbound) in async
     /// contexts to avoid dropping messages under backpressure.
-    pub async fn publish_inbound_async(
-        &self,
-        msg: InboundMessage,
-    ) -> Result<(), ClawftError> {
+    pub async fn publish_inbound_async(&self, msg: InboundMessage) -> Result<(), ClawftError> {
         debug!(
             channel = %msg.channel,
             chat_id = %msg.chat_id,
@@ -127,10 +124,7 @@ impl MessageBus {
     }
 
     /// Dispatch an outbound message, waiting asynchronously if the buffer is full.
-    pub async fn dispatch_outbound_async(
-        &self,
-        msg: OutboundMessage,
-    ) -> Result<(), ClawftError> {
+    pub async fn dispatch_outbound_async(&self, msg: OutboundMessage) -> Result<(), ClawftError> {
         debug!(
             channel = %msg.channel,
             chat_id = %msg.chat_id,
@@ -177,7 +171,8 @@ pub struct MessageBus {
     inbound_tx: futures_util::lock::Mutex<futures_channel::mpsc::UnboundedSender<InboundMessage>>,
     inbound_rx: futures_util::lock::Mutex<futures_channel::mpsc::UnboundedReceiver<InboundMessage>>,
     outbound_tx: futures_util::lock::Mutex<futures_channel::mpsc::UnboundedSender<OutboundMessage>>,
-    outbound_rx: futures_util::lock::Mutex<futures_channel::mpsc::UnboundedReceiver<OutboundMessage>>,
+    outbound_rx:
+        futures_util::lock::Mutex<futures_channel::mpsc::UnboundedReceiver<OutboundMessage>>,
 }
 
 #[cfg(feature = "browser")]
@@ -211,28 +206,23 @@ impl MessageBus {
         );
         // For browser single-threaded context, try_lock should always succeed.
         if let Some(tx) = self.inbound_tx.try_lock() {
-            tx.unbounded_send(msg).map_err(|_| {
-                ClawftError::Channel("inbound channel closed".into())
-            })
+            tx.unbounded_send(msg)
+                .map_err(|_| ClawftError::Channel("inbound channel closed".into()))
         } else {
             Err(ClawftError::Channel("inbound channel busy".into()))
         }
     }
 
     /// Publish an inbound message (async version).
-    pub async fn publish_inbound_async(
-        &self,
-        msg: InboundMessage,
-    ) -> Result<(), ClawftError> {
+    pub async fn publish_inbound_async(&self, msg: InboundMessage) -> Result<(), ClawftError> {
         debug!(
             channel = %msg.channel,
             chat_id = %msg.chat_id,
             "publishing inbound message (async)"
         );
         let tx = self.inbound_tx.lock().await;
-        tx.unbounded_send(msg).map_err(|_| {
-            ClawftError::Channel("inbound channel closed".into())
-        })
+        tx.unbounded_send(msg)
+            .map_err(|_| ClawftError::Channel("inbound channel closed".into()))
     }
 
     /// Consume the next inbound message from the bus.
@@ -250,28 +240,23 @@ impl MessageBus {
             "dispatching outbound message"
         );
         if let Some(tx) = self.outbound_tx.try_lock() {
-            tx.unbounded_send(msg).map_err(|_| {
-                ClawftError::Channel("outbound channel closed".into())
-            })
+            tx.unbounded_send(msg)
+                .map_err(|_| ClawftError::Channel("outbound channel closed".into()))
         } else {
             Err(ClawftError::Channel("outbound channel busy".into()))
         }
     }
 
     /// Dispatch an outbound message (async version).
-    pub async fn dispatch_outbound_async(
-        &self,
-        msg: OutboundMessage,
-    ) -> Result<(), ClawftError> {
+    pub async fn dispatch_outbound_async(&self, msg: OutboundMessage) -> Result<(), ClawftError> {
         debug!(
             channel = %msg.channel,
             chat_id = %msg.chat_id,
             "dispatching outbound message (async)"
         );
         let tx = self.outbound_tx.lock().await;
-        tx.unbounded_send(msg).map_err(|_| {
-            ClawftError::Channel("outbound channel closed".into())
-        })
+        tx.unbounded_send(msg)
+            .map_err(|_| ClawftError::Channel("outbound channel closed".into()))
     }
 
     /// Consume the next outbound message from the bus.
@@ -310,10 +295,7 @@ impl MessageBus {
     }
 
     /// Always returns an error (no channel backend).
-    pub async fn publish_inbound_async(
-        &self,
-        _msg: InboundMessage,
-    ) -> Result<(), ClawftError> {
+    pub async fn publish_inbound_async(&self, _msg: InboundMessage) -> Result<(), ClawftError> {
         Err(ClawftError::Channel("no channel backend available".into()))
     }
 
@@ -328,10 +310,7 @@ impl MessageBus {
     }
 
     /// Always returns an error (no channel backend).
-    pub async fn dispatch_outbound_async(
-        &self,
-        _msg: OutboundMessage,
-    ) -> Result<(), ClawftError> {
+    pub async fn dispatch_outbound_async(&self, _msg: OutboundMessage) -> Result<(), ClawftError> {
         Err(ClawftError::Channel("no channel backend available".into()))
     }
 

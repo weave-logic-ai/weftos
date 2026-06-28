@@ -11,7 +11,7 @@
 
 use crate::config::GeneratorConfig;
 use crate::dimensions::{Dimensions, PersonStatus};
-use crate::ops_events::{cert_is_renewed, OpsEventLedger};
+use crate::ops_events::{OpsEventLedger, cert_is_renewed};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -100,11 +100,7 @@ impl GapReport {
     }
 }
 
-pub fn sweep(
-    config: &GeneratorConfig,
-    dims: &Dimensions,
-    ledger: &OpsEventLedger,
-) -> GapReport {
+pub fn sweep(config: &GeneratorConfig, dims: &Dimensions, ledger: &OpsEventLedger) -> GapReport {
     let mut gaps = Vec::new();
     let days = config.scale_tier.days();
 
@@ -127,7 +123,11 @@ pub fn sweep(
         }
     }
 
-    GapReport { gaps, by_pattern, by_store }
+    GapReport {
+        gaps,
+        by_pattern,
+        by_store,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -139,13 +139,14 @@ pub fn detect_vacant_positions(dims: &Dimensions) -> Vec<Gap> {
         .filter(|p| p.filled_by_ref.is_none())
         .map(|p| Gap {
             pattern: GapPattern::VacantPosition,
-            severity: if p.critical { GapSeverity::Critical } else { GapSeverity::High },
+            severity: if p.critical {
+                GapSeverity::Critical
+            } else {
+                GapSeverity::High
+            },
             store_ref: Some(p.store_ref.clone()),
             subject: p.label.clone(),
-            message: format!(
-                "Position {} ({}) is vacant",
-                p.label, p.role_template
-            ),
+            message: format!("Position {} ({}) is vacant", p.label, p.role_template),
             suggested_action: if p.critical {
                 "Immediately cover GM role; escalate to DM".into()
             } else {
@@ -173,14 +174,19 @@ pub fn detect_cert_gaps(dims: &Dimensions, ledger: &OpsEventLedger, days: u32) -
                 let critical = cert.ends_with("-gm-cert");
                 out.push(Gap {
                     pattern: GapPattern::CertExpiredUnrenewed,
-                    severity: if critical { GapSeverity::Critical } else { GapSeverity::High },
+                    severity: if critical {
+                        GapSeverity::Critical
+                    } else {
+                        GapSeverity::High
+                    },
                     store_ref: Some(person.home_store_ref.clone()),
                     subject: format!("{}::{}", person.label, cert),
                     message: format!(
                         "Certification `{}` for {} expired day {} with no renewal event",
                         cert, person.label, expiration
                     ),
-                    suggested_action: "Submit renewal test; suspend from role if food-safety".into(),
+                    suggested_action: "Submit renewal test; suspend from role if food-safety"
+                        .into(),
                     day_index: Some(expiration),
                 });
             }
@@ -258,7 +264,10 @@ pub fn detect_staffing_anti_patterns(dims: &Dimensions) -> Vec<Gap> {
             let vacancy_rate = if positions.is_empty() {
                 0.0
             } else {
-                positions.iter().filter(|p| p.filled_by_ref.is_none()).count() as f64
+                positions
+                    .iter()
+                    .filter(|p| p.filled_by_ref.is_none())
+                    .count() as f64
                     / positions.len() as f64
             };
             let people: Vec<_> = dims
@@ -269,7 +278,10 @@ pub fn detect_staffing_anti_patterns(dims: &Dimensions) -> Vec<Gap> {
             let turnover_rate = if people.is_empty() {
                 0.0
             } else {
-                people.iter().filter(|p| p.status == PersonStatus::Terminated).count() as f64
+                people
+                    .iter()
+                    .filter(|p| p.status == PersonStatus::Terminated)
+                    .count() as f64
                     / people.len() as f64
             };
             let avg_risk = if people.is_empty() {
@@ -364,7 +376,10 @@ pub fn detect_turnover_clusters(dims: &Dimensions, _days: u32) -> Vec<Gap> {
         if total == 0 {
             continue;
         }
-        let terminated = people.iter().filter(|p| p.status == PersonStatus::Terminated).count();
+        let terminated = people
+            .iter()
+            .filter(|p| p.status == PersonStatus::Terminated)
+            .count();
         let rate = terminated as f64 / total as f64;
         if rate >= 0.20 && terminated >= 3 {
             out.push(Gap {
@@ -423,4 +438,3 @@ pub fn detect_audits_missing(
     }
     out
 }
-

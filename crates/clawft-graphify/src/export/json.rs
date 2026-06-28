@@ -24,17 +24,18 @@ use std::path::Path;
 
 use serde_json::json;
 
+use crate::GraphifyError;
 use crate::entity::EntityId;
 use crate::model::KnowledgeGraph;
-use crate::GraphifyError;
 
 /// Export a `KnowledgeGraph` to JSON in Python-compatible `node_link_data` format.
 pub fn to_json(kg: &KnowledgeGraph, output: &Path) -> Result<(), GraphifyError> {
     let data = to_json_value(kg);
     let json_str = serde_json::to_string_pretty(&data)
         .map_err(|e| GraphifyError::ExportError(format!("JSON serialization failed: {e}")))?;
-    fs::write(output, json_str)
-        .map_err(|e| GraphifyError::ExportError(format!("Failed to write {}: {e}", output.display())))?;
+    fs::write(output, json_str).map_err(|e| {
+        GraphifyError::ExportError(format!("Failed to write {}: {e}", output.display()))
+    })?;
     Ok(())
 }
 
@@ -57,11 +58,7 @@ pub fn to_json_value(kg: &KnowledgeGraph) -> serde_json::Value {
     let nodes: Vec<serde_json::Value> = kg
         .entities()
         .map(|entity| {
-            let id_str = entity
-                .legacy_id
-                .as_deref()
-                .unwrap_or("")
-                .to_string();
+            let id_str = entity.legacy_id.as_deref().unwrap_or("").to_string();
             let id_display = if id_str.is_empty() {
                 entity.id.to_hex()
             } else {
@@ -78,9 +75,13 @@ pub fn to_json_value(kg: &KnowledgeGraph) -> serde_json::Value {
 
             // Add community if available.
             if let Some(&cid) = community_map.get(&entity.id) {
-                node.as_object_mut().unwrap().insert("community".into(), json!(cid));
+                node.as_object_mut()
+                    .unwrap()
+                    .insert("community".into(), json!(cid));
             } else {
-                node.as_object_mut().unwrap().insert("community".into(), serde_json::Value::Null);
+                node.as_object_mut()
+                    .unwrap()
+                    .insert("community".into(), serde_json::Value::Null);
             }
 
             node
@@ -91,18 +92,18 @@ pub fn to_json_value(kg: &KnowledgeGraph) -> serde_json::Value {
     let edges: Vec<serde_json::Value> = kg
         .edges()
         .map(|(src, tgt, rel)| {
-            let src_str = src
-                .legacy_id
-                .as_deref()
-                .unwrap_or("")
-                .to_string();
-            let tgt_str = tgt
-                .legacy_id
-                .as_deref()
-                .unwrap_or("")
-                .to_string();
-            let src_display = if src_str.is_empty() { src.id.to_hex() } else { src_str.clone() };
-            let tgt_display = if tgt_str.is_empty() { tgt.id.to_hex() } else { tgt_str.clone() };
+            let src_str = src.legacy_id.as_deref().unwrap_or("").to_string();
+            let tgt_str = tgt.legacy_id.as_deref().unwrap_or("").to_string();
+            let src_display = if src_str.is_empty() {
+                src.id.to_hex()
+            } else {
+                src_str.clone()
+            };
+            let tgt_display = if tgt_str.is_empty() {
+                tgt.id.to_hex()
+            } else {
+                tgt_str.clone()
+            };
 
             // Use _src/_tgt from metadata if present (for roundtrip fidelity).
             let meta_src = rel

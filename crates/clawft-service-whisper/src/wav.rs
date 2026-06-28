@@ -120,8 +120,7 @@ pub fn parse_wav(bytes: &[u8]) -> Result<(Vec<u8>, u32, u16), &'static str> {
                     bytes[pos + 6],
                     bytes[pos + 7],
                 ]);
-                let bits =
-                    u16::from_le_bytes([bytes[pos + 14], bytes[pos + 15]]);
+                let bits = u16::from_le_bytes([bytes[pos + 14], bytes[pos + 15]]);
                 fmt = Some((sample_rate, channels, bits));
             }
             b"data" => {

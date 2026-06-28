@@ -35,11 +35,7 @@ pub struct PatternRow {
     pub count: usize,
 }
 
-pub fn build(
-    gaps: &GapReport,
-    mut scores: Vec<StoreCoherence>,
-    top_n: usize,
-) -> Dashboard {
+pub fn build(gaps: &GapReport, mut scores: Vec<StoreCoherence>, top_n: usize) -> Dashboard {
     crate::coherence::rank_by_health(&mut scores);
     let total_stores = scores.len();
     let avg = if total_stores > 0 {

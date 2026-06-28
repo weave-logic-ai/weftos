@@ -136,27 +136,26 @@ pub enum HooksAction {
 /// Run the graphify subcommand.
 pub async fn run(args: GraphifyArgs) -> anyhow::Result<()> {
     match args.action {
-        GraphifyAction::Ingest { target, output, contributor } => {
-            run_ingest(&target, &output, contributor.as_deref()).await
-        }
-        GraphifyAction::Query { question, graph, mode, depth } => {
-            run_query(&question, &graph, &mode, depth).await
-        }
-        GraphifyAction::Export { format, output, graph } => {
-            run_export(&format, output.as_deref(), &graph).await
-        }
-        GraphifyAction::Diff { old, current } => {
-            run_diff(&old, &current).await
-        }
-        GraphifyAction::Rebuild { root, clean } => {
-            run_rebuild(&root, clean).await
-        }
-        GraphifyAction::Watch { root, debounce } => {
-            run_watch(&root, debounce).await
-        }
-        GraphifyAction::Hooks { action } => {
-            run_hooks(action).await
-        }
+        GraphifyAction::Ingest {
+            target,
+            output,
+            contributor,
+        } => run_ingest(&target, &output, contributor.as_deref()).await,
+        GraphifyAction::Query {
+            question,
+            graph,
+            mode,
+            depth,
+        } => run_query(&question, &graph, &mode, depth).await,
+        GraphifyAction::Export {
+            format,
+            output,
+            graph,
+        } => run_export(&format, output.as_deref(), &graph).await,
+        GraphifyAction::Diff { old, current } => run_diff(&old, &current).await,
+        GraphifyAction::Rebuild { root, clean } => run_rebuild(&root, clean).await,
+        GraphifyAction::Watch { root, debounce } => run_watch(&root, debounce).await,
+        GraphifyAction::Hooks { action } => run_hooks(action).await,
     }
 }
 
@@ -227,7 +226,9 @@ async fn run_query(
     let json_for_build = if json_value.get("edges").is_none() && json_value.get("links").is_some() {
         let mut obj = json_value.clone();
         if let Some(links) = obj.get("links").cloned() {
-            obj.as_object_mut().unwrap().insert("edges".to_string(), links);
+            obj.as_object_mut()
+                .unwrap()
+                .insert("edges".to_string(), links);
         }
         obj
     } else {
@@ -245,8 +246,11 @@ async fn run_query(
     // Run community detection for proximity and community features.
     let communities = clawft_graphify::cluster::cluster(&kg);
     let community_labels = clawft_graphify::cluster::auto_label_all(&kg, &communities);
-    let community_summaries =
-        clawft_graphify::summary::generate_community_summaries(&kg, &communities, &community_labels);
+    let community_summaries = clawft_graphify::summary::generate_community_summaries(
+        &kg,
+        &communities,
+        &community_labels,
+    );
 
     // Build node -> community map for quick lookups.
     let node_community = clawft_graphify::analyze::node_community_map(&communities);
@@ -283,16 +287,16 @@ async fn run_query(
     for id in kg.entity_ids() {
         if let Some(entity) = kg.entity(id) {
             let label = entity.label.to_lowercase();
-            let source = entity
-                .source_file
-                .as_deref()
-                .unwrap_or("")
-                .to_lowercase();
+            let source = entity.source_file.as_deref().unwrap_or("").to_lowercase();
             let score: f64 = terms
                 .iter()
                 .map(|t| {
                     (if label.contains(t.as_str()) { 1.0 } else { 0.0 })
-                        + (if source.contains(t.as_str()) { 0.5 } else { 0.0 })
+                        + (if source.contains(t.as_str()) {
+                            0.5
+                        } else {
+                            0.0
+                        })
                 })
                 .sum();
             if score > 0.0 {
@@ -367,10 +371,7 @@ async fn run_query(
                 _ => 0.0,
             };
             let type_str = entity.entity_type.discriminant().to_lowercase();
-            let entity_type_relevance = if code_types
-                .iter()
-                .any(|t| type_str.contains(t))
-            {
+            let entity_type_relevance = if code_types.iter().any(|t| type_str.contains(t)) {
                 1.0
             } else {
                 0.5
@@ -408,10 +409,7 @@ async fn run_query(
     } else {
         println!("\nMatching nodes (hybrid fusion):");
         for r in results.iter().take(10) {
-            let cid_str = r
-                .community_id
-                .map(|c| c.to_string())
-                .unwrap_or_default();
+            let cid_str = r.community_id.map(|c| c.to_string()).unwrap_or_default();
             let explanation = format!(
                 "kw={:.2} prox={:.2} comm={:.0} type_rel",
                 r.keyword_score, r.proximity_score, r.community_score
@@ -470,7 +468,9 @@ async fn run_export(
     let json_for_build = if json_value.get("edges").is_none() && json_value.get("links").is_some() {
         let mut obj = json_value.clone();
         if let Some(links) = obj.get("links").cloned() {
-            obj.as_object_mut().unwrap().insert("edges".to_string(), links);
+            obj.as_object_mut()
+                .unwrap()
+                .insert("edges".to_string(), links);
         }
         obj
     } else {
@@ -510,7 +510,8 @@ async fn run_diff(
     }
 
     let old_data: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(old_path)?)?;
-    let cur_data: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(current_path)?)?;
+    let cur_data: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(current_path)?)?;
 
     let old_nodes = old_data["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
     let cur_nodes = cur_data["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
@@ -565,21 +566,24 @@ async fn run_rebuild(root: &std::path::Path, clean: bool) -> anyhow::Result<()> 
 
 /// Shared extraction pipeline used by both `rebuild` and local `ingest`.
 fn run_graphify_pipeline(root: &std::path::Path) -> anyhow::Result<()> {
+    use clawft_graphify::export;
     use clawft_graphify::extract::detect;
     use clawft_graphify::pipeline::{Pipeline, PipelineConfig};
-    use clawft_graphify::export;
     use clawft_graphify::report;
 
     // 1. Detect files
     println!("Scanning files...");
-    let detection = detect::detect(root)
-        .map_err(|e| anyhow::anyhow!("Detection failed: {e}"))?;
+    let detection = detect::detect(root).map_err(|e| anyhow::anyhow!("Detection failed: {e}"))?;
 
     println!(
         "Detected {} files ({} code, {} doc, {} paper, {} image)",
         detection.total_files,
         detection.files.get("code").map(|v| v.len()).unwrap_or(0),
-        detection.files.get("document").map(|v| v.len()).unwrap_or(0),
+        detection
+            .files
+            .get("document")
+            .map(|v| v.len())
+            .unwrap_or(0),
         detection.files.get("paper").map(|v| v.len()).unwrap_or(0),
         detection.files.get("image").map(|v| v.len()).unwrap_or(0),
     );
@@ -627,12 +631,8 @@ fn run_graphify_pipeline(root: &std::path::Path) -> anyhow::Result<()> {
 
     // 6. Export to JSON
     let json_path = out_dir.join("graph.json");
-    export::export(
-        &graph,
-        export::ExportFormat::Json,
-        &json_path,
-    )
-    .map_err(|e| anyhow::anyhow!("JSON export failed: {e}"))?;
+    export::export(&graph, export::ExportFormat::Json, &json_path)
+        .map_err(|e| anyhow::anyhow!("JSON export failed: {e}"))?;
     println!("Wrote {}", json_path.display());
 
     // 7. Generate GRAPH_REPORT.md
@@ -642,8 +642,13 @@ fn run_graphify_pipeline(root: &std::path::Path) -> anyhow::Result<()> {
             output: result.stats.output_tokens as usize,
         };
         let root_str = root.to_string_lossy();
-        let report_content =
-            report::generate(&graph, analysis, &pipeline_detection, &token_cost, &root_str);
+        let report_content = report::generate(
+            &graph,
+            analysis,
+            &pipeline_detection,
+            &token_cost,
+            &root_str,
+        );
         let report_path = out_dir.join("GRAPH_REPORT.md");
         std::fs::write(&report_path, &report_content)?;
         println!("Wrote {}", report_path.display());
@@ -681,8 +686,8 @@ fn run_graphify_pipeline_incremental(
     manifest_path: &std::path::Path,
 ) -> anyhow::Result<()> {
     use clawft_graphify::build;
-    use clawft_graphify::extract::detect;
     use clawft_graphify::export;
+    use clawft_graphify::extract::detect;
     use clawft_graphify::pipeline::{Pipeline, PipelineConfig};
     use clawft_graphify::report;
 
@@ -712,7 +717,9 @@ fn run_graphify_pipeline_incremental(
     let json_for_build = if json_value.get("edges").is_none() && json_value.get("links").is_some() {
         let mut obj = json_value.clone();
         if let Some(links) = obj.get("links").cloned() {
-            obj.as_object_mut().unwrap().insert("edges".to_string(), links);
+            obj.as_object_mut()
+                .unwrap()
+                .insert("edges".to_string(), links);
         }
         obj
     } else {
@@ -732,10 +739,7 @@ fn run_graphify_pipeline_incremental(
     };
     let extractions = build_extractions_from_detection(&incr_detection);
 
-    println!(
-        "Extracting {} file(s)...",
-        extractions.len()
-    );
+    println!("Extracting {} file(s)...", extractions.len());
 
     // 4. Run incremental pipeline: merge -> cluster -> analyze.
     let pipeline_detection = clawft_graphify::model::DetectionResult {
@@ -790,8 +794,13 @@ fn run_graphify_pipeline_incremental(
             output: result.stats.output_tokens as usize,
         };
         let root_str = root.to_string_lossy();
-        let report_content =
-            report::generate(&graph, analysis, &pipeline_detection, &token_cost, &root_str);
+        let report_content = report::generate(
+            &graph,
+            analysis,
+            &pipeline_detection,
+            &token_cost,
+            &root_str,
+        );
         let report_path = out_dir.join("GRAPH_REPORT.md");
         std::fs::write(&report_path, &report_content)?;
         println!("Wrote {}", report_path.display());
@@ -816,7 +825,10 @@ fn run_graphify_pipeline_incremental(
             );
         }
     }
-    println!("  Files processed (incremental): {}", result.stats.files_processed);
+    println!(
+        "  Files processed (incremental): {}",
+        result.stats.files_processed
+    );
 
     Ok(())
 }
@@ -840,7 +852,11 @@ fn build_extractions_from_detection(
 
     let type_map: &[(&str, FileType, EntityType)] = &[
         ("code", FileType::Code, EntityType::Module),
-        ("document", FileType::Document, EntityType::Custom("document".into())),
+        (
+            "document",
+            FileType::Document,
+            EntityType::Custom("document".into()),
+        ),
         ("paper", FileType::Paper, EntityType::Custom("paper".into())),
         ("image", FileType::Image, EntityType::Custom("image".into())),
     ];
@@ -919,9 +935,10 @@ fn build_extractions_from_detection(
                 metadata: serde_json::json!({"co_located": true}),
             };
             // Append to the first extraction for this directory's hub
-            if let Some(ext) = extractions.iter_mut().find(|e| {
-                e.entities.first().map(|ent| &ent.id) == Some(hub_id)
-            }) {
+            if let Some(ext) = extractions
+                .iter_mut()
+                .find(|e| e.entities.first().map(|ent| &ent.id) == Some(hub_id))
+            {
                 ext.relationships.push(rel);
             }
         }
@@ -956,8 +973,8 @@ async fn run_watch(root: &std::path::Path, debounce: f64) -> anyhow::Result<()> 
 async fn run_hooks(action: HooksAction) -> anyhow::Result<()> {
     match action {
         HooksAction::Install { path } => {
-            let msg = clawft_graphify::hooks::install_hooks(&path)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let msg =
+                clawft_graphify::hooks::install_hooks(&path).map_err(|e| anyhow::anyhow!("{e}"))?;
             println!("{msg}");
         }
         HooksAction::Uninstall { path } => {
@@ -966,8 +983,8 @@ async fn run_hooks(action: HooksAction) -> anyhow::Result<()> {
             println!("{msg}");
         }
         HooksAction::Status { path } => {
-            let msg = clawft_graphify::hooks::hook_status(&path)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let msg =
+                clawft_graphify::hooks::hook_status(&path).map_err(|e| anyhow::anyhow!("{e}"))?;
             println!("{msg}");
         }
     }

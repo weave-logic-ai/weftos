@@ -20,14 +20,7 @@ use serde_json::Value;
 /// object root is the lowest-bar match. The viewer side filters to
 /// scalars present at paint time, so adding to this list is forward-
 /// compatible.
-const HEALTH_SCALAR_KEYS: &[&str] = &[
-    "rssi",
-    "free_heap",
-    "uptime_s",
-    "cpu_pct",
-    "temp_c",
-    "tick",
-];
+const HEALTH_SCALAR_KEYS: &[&str] = &["rssi", "free_heap", "uptime_s", "cpu_pct", "temp_c", "tick"];
 
 /// Minimum number of scalar matches before classifying as HealthReport.
 /// Two prevents a single stray `tick` field on an unrelated payload
@@ -58,7 +51,11 @@ impl ObjectType for HealthReport {
             .iter()
             .filter(|k| obj.get(**k).map(Value::is_number).unwrap_or(false))
             .count();
-        if hits >= HEALTH_SCALAR_THRESHOLD { 12 } else { 0 }
+        if hits >= HEALTH_SCALAR_THRESHOLD {
+            12
+        } else {
+            0
+        }
     }
 
     fn properties() -> &'static [PropertyDecl] {

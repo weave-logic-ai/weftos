@@ -25,14 +25,7 @@ use serde_json::Value;
 
 /// Known top-level substrate sections the daemon populates. A value
 /// having ≥ 3 of these as object-valued keys is classified as a Mesh.
-const MESH_SECTION_KEYS: &[&str] = &[
-    "kernel",
-    "cluster",
-    "chain",
-    "sensor",
-    "network",
-    "agent",
-];
+const MESH_SECTION_KEYS: &[&str] = &["kernel", "cluster", "chain", "sensor", "network", "agent"];
 
 /// Minimum number of known section keys before a value qualifies as a
 /// Mesh. Chosen at 3 so a stub value with just `{ kernel, cluster }`
@@ -59,7 +52,11 @@ impl ObjectType for Mesh {
             .iter()
             .filter(|k| obj.get(**k).map(Value::is_object).unwrap_or(false))
             .count();
-        if hits >= MESH_SECTION_THRESHOLD { 20 } else { 0 }
+        if hits >= MESH_SECTION_THRESHOLD {
+            20
+        } else {
+            0
+        }
     }
 
     fn properties() -> &'static [PropertyDecl] {
@@ -97,11 +94,7 @@ impl ObjectType for Mesh {
             // WEFT-276: read-only Action surface for the Mesh root.
             // Surfaces in the Explorer detail pane as a passive list
             // until the Action pipeline (T08-33+) lands.
-            applicable_actions: &[
-                "mesh.export_snapshot",
-                "mesh.list_nodes",
-                "mesh.refresh",
-            ],
+            applicable_actions: &["mesh.export_snapshot", "mesh.list_nodes", "mesh.refresh"],
             events_emitted: &[],
             default_viewer_priority_hint: Some(20),
         }

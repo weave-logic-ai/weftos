@@ -13,8 +13,7 @@
 //! * otherwise `~/.weftos/apps.json`
 
 use std::{
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -126,15 +125,10 @@ impl AppRegistry {
 
     /// Install a manifest. Validates structurally (ADR-015 rules
     /// 1–9); rejects duplicates by `id`. Saves on success.
-    pub fn install(
-        &mut self,
-        manifest: AppManifest,
-    ) -> Result<&InstalledApp, RegistryError> {
+    pub fn install(&mut self, manifest: AppManifest) -> Result<&InstalledApp, RegistryError> {
         validate(&manifest)?;
         if self.apps.iter().any(|a| a.manifest.id == manifest.id) {
-            return Err(RegistryError::AlreadyInstalled {
-                id: manifest.id,
-            });
+            return Err(RegistryError::AlreadyInstalled { id: manifest.id });
         }
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -146,25 +140,17 @@ impl AppRegistry {
             enabled: true,
         });
         self.save()?;
-        Ok(self
-            .apps
-            .last()
-            .expect("just-pushed app must exist"))
+        Ok(self.apps.last().expect("just-pushed app must exist"))
     }
 
     /// Remove the installed app with `id`. Returns the removed row or
     /// `NotFound`.
-    pub fn uninstall(
-        &mut self,
-        id: &str,
-    ) -> Result<InstalledApp, RegistryError> {
+    pub fn uninstall(&mut self, id: &str) -> Result<InstalledApp, RegistryError> {
         let idx = self
             .apps
             .iter()
             .position(|a| a.manifest.id == id)
-            .ok_or_else(|| RegistryError::NotFound {
-                id: id.to_string(),
-            })?;
+            .ok_or_else(|| RegistryError::NotFound { id: id.to_string() })?;
         let removed = self.apps.remove(idx);
         self.save()?;
         Ok(removed)
@@ -190,18 +176,12 @@ impl AppRegistry {
         self.set_enabled(id, false)
     }
 
-    fn set_enabled(
-        &mut self,
-        id: &str,
-        enabled: bool,
-    ) -> Result<(), RegistryError> {
+    fn set_enabled(&mut self, id: &str, enabled: bool) -> Result<(), RegistryError> {
         let app = self
             .apps
             .iter_mut()
             .find(|a| a.manifest.id == id)
-            .ok_or_else(|| RegistryError::NotFound {
-                id: id.to_string(),
-            })?;
+            .ok_or_else(|| RegistryError::NotFound { id: id.to_string() })?;
         app.enabled = enabled;
         self.save()?;
         Ok(())
@@ -284,7 +264,10 @@ mod tests {
         let mut reg2 = AppRegistry::new(&path);
         reg2.load().expect("load from disk");
         assert_eq!(reg2.list().len(), 1);
-        assert_eq!(reg2.get("app://weftos.admin").map(|a| &a.manifest), Some(&m));
+        assert_eq!(
+            reg2.get("app://weftos.admin").map(|a| &a.manifest),
+            Some(&m)
+        );
 
         // Uninstall returns the row and removes it.
         let removed = reg2.uninstall("app://weftos.admin").expect("uninstall");

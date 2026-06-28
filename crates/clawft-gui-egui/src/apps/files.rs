@@ -48,10 +48,7 @@ pub fn show(
 ) {
     super::paint_heading(ui, rect, "Files · substrate/");
 
-    let body = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.top() + HEADER_H),
-        rect.max,
-    );
+    let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + HEADER_H), rect.max);
     let inset = body.shrink2(egui::vec2(24.0, 8.0));
 
     // Snapshot the substrate once per frame; the tree builds from
@@ -82,12 +79,7 @@ pub fn show(
     paint_right_pane(ui, right_rect, &snapshot, &desk.files_state);
 }
 
-fn paint_toolbar(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    state: &mut FilesState,
-    tree: &TreeNode,
-) {
+fn paint_toolbar(ui: &mut egui::Ui, rect: egui::Rect, state: &mut FilesState, tree: &TreeNode) {
     let mut child = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(rect)
@@ -108,12 +100,7 @@ fn paint_toolbar(
     );
 }
 
-fn paint_left_pane(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    tree: &TreeNode,
-    state: &mut FilesState,
-) {
+fn paint_left_pane(ui: &mut egui::Ui, rect: egui::Rect, tree: &TreeNode, state: &mut FilesState) {
     let tokens = Tokens::default();
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, egui::CornerRadius::same(4), tokens.bg_surface);
@@ -176,9 +163,13 @@ fn paint_tree_node(
         ui.add_space(indent);
         let label = format!("{glyph}  {name}");
         let text = if is_selected {
-            egui::RichText::new(label).monospace().color(tokens.text_primary)
+            egui::RichText::new(label)
+                .monospace()
+                .color(tokens.text_primary)
         } else {
-            egui::RichText::new(label).monospace().color(tokens.text_secondary)
+            egui::RichText::new(label)
+                .monospace()
+                .color(tokens.text_secondary)
         };
         if ui.selectable_label(is_selected, text).clicked() {
             state.selected = Some(path.clone());

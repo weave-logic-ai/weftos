@@ -391,7 +391,8 @@ impl EnvironmentManager {
             *active = None;
         }
 
-        let result = self.environments
+        let result = self
+            .environments
             .remove(id)
             .map(|(_, env)| env)
             .ok_or_else(|| EnvironmentError::NotFound { id: id.to_owned() });

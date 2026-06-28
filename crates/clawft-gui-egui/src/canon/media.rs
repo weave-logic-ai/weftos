@@ -9,11 +9,11 @@ use std::borrow::Cow;
 
 use eframe::egui;
 
+use super::CanonWidget;
 use super::response::CanonResponse;
 use super::types::{
     Affordance, Confidence, ConfidenceSource, IdentityUri, MutationAxis, Tooltip, VariantId,
 };
-use super::CanonWidget;
 
 const IDENTITY: &str = "ui://media";
 
@@ -26,10 +26,8 @@ static AFFORDANCES_OPEN: &[Affordance] = &[Affordance {
 }];
 static AFFORDANCES_NONE: &[Affordance] = &[];
 
-static MUTATION_AXES: &[MutationAxis] = &[
-    MutationAxis::new("fit"),
-    MutationAxis::new("placeholder"),
-];
+static MUTATION_AXES: &[MutationAxis] =
+    &[MutationAxis::new("fit"), MutationAxis::new("placeholder")];
 
 /// How the image should fit inside its allocated rect. Maps to egui's
 /// `Image` fit methods.

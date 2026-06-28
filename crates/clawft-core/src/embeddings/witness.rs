@@ -325,9 +325,7 @@ impl WitnessChain {
     /// Load and verify a chain from a file.
     ///
     /// Returns an error if the chain is corrupted.
-    pub fn load_verified(
-        path: &std::path::Path,
-    ) -> Result<Self, WitnessError> {
+    pub fn load_verified(path: &std::path::Path) -> Result<Self, WitnessError> {
         let chain = Self::load(path)?;
         chain.verify_detailed()?;
         Ok(chain)
@@ -363,9 +361,7 @@ mod tests {
     fn temp_path(label: &str) -> std::path::PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
-        std::env::temp_dir().join(format!(
-            "clawft_witness_test_{label}_{pid}_{n}.json"
-        ))
+        std::env::temp_dir().join(format!("clawft_witness_test_{label}_{pid}_{n}.json"))
     }
 
     #[test]

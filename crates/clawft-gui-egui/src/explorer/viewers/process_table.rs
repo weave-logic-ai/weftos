@@ -98,18 +98,13 @@ impl SubstrateViewer for ProcessTableViewer {
                                 .and_then(Value::as_str)
                                 .or_else(|| o.get("agent_id").and_then(Value::as_str))
                                 .unwrap_or("?");
-                            let state = o
-                                .get("state")
-                                .and_then(Value::as_str)
-                                .unwrap_or("-");
+                            let state = o.get("state").and_then(Value::as_str).unwrap_or("-");
                             let cpu = cpu_str(o);
                             let mem = mem_str(o);
 
                             ui.monospace(pid.to_string());
                             ui.label(name);
-                            ui.label(
-                                egui::RichText::new(state).color(state_color(state)),
-                            );
+                            ui.label(egui::RichText::new(state).color(state_color(state)));
                             ui.monospace(cpu);
                             ui.monospace(mem);
                             ui.end_row();
@@ -126,9 +121,7 @@ fn header(ui: &mut egui::Ui, label: &str, selected: bool, id: egui::Id, col: Sor
             .strong()
             .color(egui::Color32::from_rgb(200, 200, 220))
     } else {
-        egui::RichText::new(label)
-            .small()
-            .weak()
+        egui::RichText::new(label).small().weak()
     };
     if ui.selectable_label(selected, text).clicked() {
         ui.ctx().data_mut(|d| d.insert_temp(id, col));

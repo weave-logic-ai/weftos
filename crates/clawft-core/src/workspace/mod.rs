@@ -50,9 +50,13 @@ pub fn discover_workspace() -> Option<PathBuf> {
 
     // Step 3: global default
     #[cfg(feature = "native")]
-    { dirs::home_dir().map(|h| h.join(".clawft")) }
+    {
+        dirs::home_dir().map(|h| h.join(".clawft"))
+    }
     #[cfg(not(feature = "native"))]
-    { Some(std::path::PathBuf::from(".clawft")) }
+    {
+        Some(std::path::PathBuf::from(".clawft"))
+    }
 }
 
 // ── Workspace status ─────────────────────────────────────────────────────
@@ -78,8 +82,7 @@ pub struct WorkspaceStatus {
 // ── WorkspaceManager ─────────────────────────────────────────────────────
 
 /// The canonical subdirectories created inside `.clawft/`.
-const WORKSPACE_SUBDIRS: &[&str] =
-    &["sessions", "memory", "skills", "agents", "hooks"];
+const WORKSPACE_SUBDIRS: &[&str] = &["sessions", "memory", "skills", "agents", "hooks"];
 
 /// Manages workspace lifecycle (create, list, load, status, delete).
 pub struct WorkspaceManager {
@@ -96,18 +99,16 @@ impl WorkspaceManager {
     /// The default registry path is `~/.clawft/workspaces.json`.
     pub fn new() -> Result<Self> {
         #[cfg(feature = "native")]
-        let home =
-            dirs::home_dir().ok_or_else(|| ClawftError::ConfigInvalid {
-                reason: "cannot determine home directory".into(),
-            })?;
+        let home = dirs::home_dir().ok_or_else(|| ClawftError::ConfigInvalid {
+            reason: "cannot determine home directory".into(),
+        })?;
         #[cfg(not(feature = "native"))]
         let home = std::path::PathBuf::from(".clawft");
         let registry_path = home.join(".clawft").join("workspaces.json");
-        let registry = WorkspaceRegistry::load(&registry_path).map_err(|e| {
-            ClawftError::ConfigInvalid {
+        let registry =
+            WorkspaceRegistry::load(&registry_path).map_err(|e| ClawftError::ConfigInvalid {
                 reason: format!("failed to load workspace registry: {e}"),
-            }
-        })?;
+            })?;
 
         Ok(Self {
             registry_path,
@@ -119,11 +120,10 @@ impl WorkspaceManager {
     ///
     /// Useful for testing.
     pub fn with_registry_path(registry_path: PathBuf) -> Result<Self> {
-        let registry = WorkspaceRegistry::load(&registry_path).map_err(|e| {
-            ClawftError::ConfigInvalid {
+        let registry =
+            WorkspaceRegistry::load(&registry_path).map_err(|e| ClawftError::ConfigInvalid {
                 reason: format!("failed to load workspace registry: {e}"),
-            }
-        })?;
+            })?;
 
         Ok(Self {
             registry_path,
@@ -215,9 +215,7 @@ impl WorkspaceManager {
         let path = PathBuf::from(name_or_path);
         if path.join(".clawft").is_dir() {
             // If this path is also in the registry, bump its last_accessed.
-            if let Some(name) =
-                self.registry.find_by_path(&path).map(|e| e.name.clone())
-            {
+            if let Some(name) = self.registry.find_by_path(&path).map(|e| e.name.clone()) {
                 self.touch_last_accessed_by_name(&name)?;
             }
             return Ok(path);
@@ -322,15 +320,13 @@ pub(crate) mod tests {
     #[test]
     fn discover_workspace_env_var() {
         let n = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir()
-            .join(format!("clawft-test-discover-env-{n}"));
+        let dir = std::env::temp_dir().join(format!("clawft-test-discover-env-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join(".clawft")).unwrap();
 
-        let result =
-            temp_env::with_var("CLAWFT_WORKSPACE", Some(dir.to_str().unwrap()), || {
-                discover_workspace()
-            });
+        let result = temp_env::with_var("CLAWFT_WORKSPACE", Some(dir.to_str().unwrap()), || {
+            discover_workspace()
+        });
 
         assert_eq!(result, Some(dir.clone()));
 
@@ -346,10 +342,7 @@ pub(crate) mod tests {
         );
 
         assert!(result.is_some());
-        assert_ne!(
-            result.unwrap(),
-            PathBuf::from("/nonexistent/path/for/test")
-        );
+        assert_ne!(result.unwrap(), PathBuf::from("/nonexistent/path/for/test"));
     }
 
     // ── WorkspaceManager tests ───────────────────────────────────────
@@ -357,8 +350,7 @@ pub(crate) mod tests {
     /// Create a unique temp directory and registry path for each test.
     pub(crate) fn temp_registry(label: &str) -> (PathBuf, PathBuf) {
         let n = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir()
-            .join(format!("clawft-test-wm-{label}-{n}"));
+        let dir = std::env::temp_dir().join(format!("clawft-test-wm-{label}-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let registry_path = dir.join("workspaces.json");
@@ -368,17 +360,13 @@ pub(crate) mod tests {
     #[test]
     fn workspace_manager_create_directories() {
         let (dir, registry_path) = temp_registry("create-dirs");
-        let mut wm =
-            WorkspaceManager::with_registry_path(registry_path).unwrap();
+        let mut wm = WorkspaceManager::with_registry_path(registry_path).unwrap();
 
         let ws_path = wm.create("test-ws", &dir).unwrap();
         let dot_clawft = ws_path.join(".clawft");
 
         for subdir in WORKSPACE_SUBDIRS {
-            assert!(
-                dot_clawft.join(subdir).is_dir(),
-                "missing subdir: {subdir}"
-            );
+            assert!(dot_clawft.join(subdir).is_dir(), "missing subdir: {subdir}");
         }
 
         assert!(dot_clawft.join("config.json").exists());
@@ -392,8 +380,7 @@ pub(crate) mod tests {
     #[test]
     fn workspace_manager_create_registers_in_registry() {
         let (dir, registry_path) = temp_registry("create-reg");
-        let mut wm =
-            WorkspaceManager::with_registry_path(registry_path.clone()).unwrap();
+        let mut wm = WorkspaceManager::with_registry_path(registry_path.clone()).unwrap();
 
         wm.create("reg-test", &dir).unwrap();
 
@@ -406,8 +393,7 @@ pub(crate) mod tests {
     #[test]
     fn workspace_manager_list() {
         let (dir, registry_path) = temp_registry("list");
-        let mut wm =
-            WorkspaceManager::with_registry_path(registry_path).unwrap();
+        let mut wm = WorkspaceManager::with_registry_path(registry_path).unwrap();
 
         assert!(wm.list().is_empty(), "fresh registry should be empty");
 
@@ -423,8 +409,7 @@ pub(crate) mod tests {
     #[test]
     fn workspace_manager_load_by_name() {
         let (dir, registry_path) = temp_registry("load-name");
-        let mut wm =
-            WorkspaceManager::with_registry_path(registry_path).unwrap();
+        let mut wm = WorkspaceManager::with_registry_path(registry_path).unwrap();
 
         let created = wm.create("load-test", &dir).unwrap();
         let loaded = wm.load("load-test").unwrap();
@@ -436,8 +421,7 @@ pub(crate) mod tests {
     #[test]
     fn workspace_manager_load_by_path() {
         let (dir, registry_path) = temp_registry("load-path");
-        let mut wm =
-            WorkspaceManager::with_registry_path(registry_path).unwrap();
+        let mut wm = WorkspaceManager::with_registry_path(registry_path).unwrap();
 
         let created = wm.create("path-test", &dir).unwrap();
         let loaded = wm.load(created.to_str().unwrap()).unwrap();
@@ -449,8 +433,7 @@ pub(crate) mod tests {
     #[test]
     fn workspace_manager_load_not_found() {
         let (dir, registry_path) = temp_registry("load-notfound");
-        let mut wm =
-            WorkspaceManager::with_registry_path(registry_path).unwrap();
+        let mut wm = WorkspaceManager::with_registry_path(registry_path).unwrap();
 
         let result = wm.load("nonexistent");
         assert!(result.is_err());
@@ -461,8 +444,7 @@ pub(crate) mod tests {
     #[test]
     fn workspace_manager_status() {
         let (dir, registry_path) = temp_registry("status");
-        let mut wm =
-            WorkspaceManager::with_registry_path(registry_path).unwrap();
+        let mut wm = WorkspaceManager::with_registry_path(registry_path).unwrap();
 
         let ws_path = wm.create("status-test", &dir).unwrap();
         let status = wm.status(&ws_path).unwrap();
@@ -479,8 +461,7 @@ pub(crate) mod tests {
     #[test]
     fn workspace_manager_load_by_name_bumps_last_accessed() {
         let (dir, registry_path) = temp_registry("load-bumps-name");
-        let mut wm = WorkspaceManager::with_registry_path(registry_path.clone())
-            .unwrap();
+        let mut wm = WorkspaceManager::with_registry_path(registry_path.clone()).unwrap();
 
         wm.create("recency", &dir).unwrap();
         let before = wm
@@ -517,8 +498,7 @@ pub(crate) mod tests {
     #[test]
     fn workspace_manager_load_by_path_bumps_last_accessed_when_registered() {
         let (dir, registry_path) = temp_registry("load-bumps-path");
-        let mut wm = WorkspaceManager::with_registry_path(registry_path)
-            .unwrap();
+        let mut wm = WorkspaceManager::with_registry_path(registry_path).unwrap();
 
         let ws_path = wm.create("path-recency", &dir).unwrap();
         let before = wm
@@ -543,8 +523,7 @@ pub(crate) mod tests {
     #[test]
     fn workspace_manager_load_orders_by_recency_after_use() {
         let (dir, registry_path) = temp_registry("load-recency-order");
-        let mut wm = WorkspaceManager::with_registry_path(registry_path)
-            .unwrap();
+        let mut wm = WorkspaceManager::with_registry_path(registry_path).unwrap();
 
         // Create A then B; load A — A should now be more recent than B.
         wm.create("ws-a", &dir).unwrap();
@@ -574,8 +553,7 @@ pub(crate) mod tests {
     #[test]
     fn workspace_manager_delete() {
         let (dir, registry_path) = temp_registry("delete");
-        let mut wm =
-            WorkspaceManager::with_registry_path(registry_path).unwrap();
+        let mut wm = WorkspaceManager::with_registry_path(registry_path).unwrap();
 
         wm.create("del-test", &dir).unwrap();
         assert_eq!(wm.list().len(), 1);
@@ -589,8 +567,7 @@ pub(crate) mod tests {
     #[test]
     fn workspace_manager_delete_not_found() {
         let (dir, registry_path) = temp_registry("delete-notfound");
-        let mut wm =
-            WorkspaceManager::with_registry_path(registry_path).unwrap();
+        let mut wm = WorkspaceManager::with_registry_path(registry_path).unwrap();
 
         let result = wm.delete("nonexistent");
         assert!(result.is_err());

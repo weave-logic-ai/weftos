@@ -78,12 +78,14 @@ pub async fn run(args: ResourceArgs) -> anyhow::Result<()> {
             if !resp.ok {
                 anyhow::bail!("{}", resp.error.unwrap_or_default());
             }
-            let node: ResourceNodeInfo =
-                serde_json::from_value(resp.result.unwrap_or_default())?;
+            let node: ResourceNodeInfo = serde_json::from_value(resp.result.unwrap_or_default())?;
 
             println!("Resource: {}", node.id);
             println!("  Kind:       {}", node.kind);
-            println!("  Parent:     {}", node.parent.as_deref().unwrap_or("(root)"));
+            println!(
+                "  Parent:     {}",
+                node.parent.as_deref().unwrap_or("(root)")
+            );
             println!("  Children:   {}", node.children.join(", "));
             println!("  Hash:       {}", node.merkle_hash);
             if node.metadata != serde_json::json!({}) {

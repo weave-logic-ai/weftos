@@ -40,7 +40,10 @@ fn tiny_tier_generates_deterministically() {
     assert_eq!(filled + unfilled, corpus.dims.positions.len());
 
     // Truth manifest lists one causal edge per promotion
-    assert_eq!(corpus.truth.causal_edges.len(), corpus.dims.promotions.len());
+    assert_eq!(
+        corpus.truth.causal_edges.len(),
+        corpus.dims.promotions.len()
+    );
 
     // Determinism: same seed → same first store label
     let other = tempfile::tempdir().unwrap();
@@ -60,7 +63,11 @@ fn geo_miss_counterfactual_has_negative_delta() {
 
     assert!(cf.delta < 0.0, "expected negative delta, got {}", cf.delta);
     // tiny-tier corpora should produce a small but non-trivial magnitude
-    assert!(cf.delta.abs() > 100.0, "expected |delta| > 100, got {}", cf.delta);
+    assert!(
+        cf.delta.abs() > 100.0,
+        "expected |delta| > 100, got {}",
+        cf.delta
+    );
     // Scope hit at least one metro-alpha brand-a store
     assert!(cf.stores_in_scope > 0);
     // Intervention spans one week (7 days), possibly fewer if a store has a stream gap
@@ -93,7 +100,15 @@ fn promo_pull_counterfactual_negative_across_brand() {
     // Pulling a 12%-lift promo on brand-a should reduce revenue — scenario
     // expresses this with revenue_factor=0.88 across the promo window.
     assert!(cf.delta < 0.0, "expected negative delta, got {}", cf.delta);
-    assert!(cf.stores_in_scope >= corpus.dims.stores.iter().filter(|s| s.brand == "brand-a").count());
+    assert!(
+        cf.stores_in_scope
+            >= corpus
+                .dims
+                .stores
+                .iter()
+                .filter(|s| s.brand == "brand-a")
+                .count()
+    );
 }
 
 #[test]
@@ -108,7 +123,10 @@ fn on_disk_corpus_round_trips() {
 
     assert_eq!(dims.stores.len(), corpus.dims.stores.len());
     assert_eq!(events.len(), corpus.events.len());
-    assert_eq!(truth_loaded.causal_edges.len(), corpus.truth.causal_edges.len());
+    assert_eq!(
+        truth_loaded.causal_edges.len(),
+        corpus.truth.causal_edges.len()
+    );
     assert_eq!(dims.stores[0].label, corpus.dims.stores[0].label);
     assert_eq!(events[0].label, corpus.events[0].label);
 }

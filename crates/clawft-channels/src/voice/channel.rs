@@ -195,9 +195,7 @@ mod cpal_io {
                         })?,
                     None => host
                         .default_input_device()
-                        .ok_or_else(|| {
-                            VoiceError::Audio("no default cpal input device".into())
-                        })?,
+                        .ok_or_else(|| VoiceError::Audio("no default cpal input device".into()))?,
                 };
                 let config = device
                     .default_input_config()
@@ -255,7 +253,9 @@ mod cpal_io {
                     }
                 }
                 .map_err(|e| VoiceError::Audio(e.to_string()))?;
-                stream.play().map_err(|e| VoiceError::Audio(e.to_string()))?;
+                stream
+                    .play()
+                    .map_err(|e| VoiceError::Audio(e.to_string()))?;
 
                 while !cancel.is_cancelled() {
                     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -276,11 +276,7 @@ mod cpal_io {
 
     #[async_trait]
     impl PlaybackSink for CpalPlaybackSink {
-        async fn play(
-            &self,
-            samples: &[i16],
-            sample_rate: u32,
-        ) -> Result<(), VoiceError> {
+        async fn play(&self, samples: &[i16], sample_rate: u32) -> Result<(), VoiceError> {
             let pcm = samples.to_vec();
             tokio::task::spawn_blocking(move || -> Result<(), VoiceError> {
                 let host = cpal::default_host();
@@ -316,10 +312,11 @@ mod cpal_io {
                         None,
                     )
                     .map_err(|e| VoiceError::Audio(e.to_string()))?;
-                stream.play().map_err(|e| VoiceError::Audio(e.to_string()))?;
+                stream
+                    .play()
+                    .map_err(|e| VoiceError::Audio(e.to_string()))?;
                 let total_samples = pcm.len();
-                let dur_ms =
-                    (total_samples as u64 * 1_000) / u64::from(sample_rate.max(1));
+                let dur_ms = (total_samples as u64 * 1_000) / u64::from(sample_rate.max(1));
                 std::thread::sleep(std::time::Duration::from_millis(dur_ms + 50));
                 drop(stream);
                 Ok(())
@@ -396,10 +393,7 @@ impl VoiceChannelAdapter {
 
     /// POST a captured segment to the substrate Whisper endpoint.
     /// Returns the transcribed text. Visible for tests.
-    pub async fn transcribe_segment(
-        &self,
-        seg: &AudioSegment,
-    ) -> Result<String, VoiceError> {
+    pub async fn transcribe_segment(&self, seg: &AudioSegment) -> Result<String, VoiceError> {
         let wav = pcm_s16le_to_wav(&seg.samples, seg.sample_rate);
         let part = Part::bytes(wav)
             .file_name("audio.wav")
@@ -442,10 +436,7 @@ impl VoiceChannelAdapter {
     /// `(samples, sample_rate)` pair. Accepts either an `audio/wav`
     /// body (decoded locally) or a JSON body of shape
     /// `{"audio_b64": "...", "sample_rate": 16000}`.
-    pub async fn synthesize_text(
-        &self,
-        text: &str,
-    ) -> Result<(Vec<i16>, u32), VoiceError> {
+    pub async fn synthesize_text(&self, text: &str) -> Result<(Vec<i16>, u32), VoiceError> {
         let body = serde_json::json!({ "text": text });
         let resp = self
             .http
@@ -456,10 +447,7 @@ impl VoiceChannelAdapter {
             .map_err(|e| VoiceError::Transport(e.to_string()))?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp
-                .text()
-                .await
-                .unwrap_or_else(|_| "<unreadable>".into());
+            let body = resp.text().await.unwrap_or_else(|_| "<unreadable>".into());
             return Err(VoiceError::Server {
                 status: status.as_u16(),
                 body: truncate(&body, 4096),
@@ -483,9 +471,8 @@ impl VoiceChannelAdapter {
         // Fallback: JSON `{audio_b64, sample_rate}` shape (no extra crate;
         // we use a tiny inline base64 decoder to avoid pulling in another
         // workspace dep just for the synth path).
-        let v: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
-            VoiceError::Malformed(format!("tts response: {e}"))
-        })?;
+        let v: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|e| VoiceError::Malformed(format!("tts response: {e}")))?;
         let b64 = v
             .get("audio_b64")
             .and_then(|s| s.as_str())
@@ -494,8 +481,8 @@ impl VoiceChannelAdapter {
             .get("sample_rate")
             .and_then(|s| s.as_u64())
             .unwrap_or(u64::from(self.config.sample_rate)) as u32;
-        let raw = decode_base64(b64)
-            .map_err(|e| VoiceError::Malformed(format!("tts audio_b64: {e}")))?;
+        let raw =
+            decode_base64(b64).map_err(|e| VoiceError::Malformed(format!("tts audio_b64: {e}")))?;
         let mut pcm = Vec::with_capacity(raw.len() / 2);
         for chunk in raw.chunks_exact(2) {
             pcm.push(i16::from_le_bytes([chunk[0], chunk[1]]));
@@ -616,8 +603,7 @@ impl ChannelAdapter for VoiceChannelAdapter {
         // buffer by max_utterance_ms × sample_rate so a buggy VAD
         // can't OOM us.
         let mut buf: Vec<i16> = Vec::new();
-        let max_buf = (u64::from(self.config.sample_rate)
-            * u64::from(self.config.max_utterance_ms)
+        let max_buf = (u64::from(self.config.sample_rate) * u64::from(self.config.max_utterance_ms)
             / 1_000) as usize
             + self.config.sample_rate as usize; // +1 s slack
         let mut buffering = false;
@@ -719,11 +705,7 @@ impl ChannelAdapter for VoiceChannelAdapter {
         Ok(())
     }
 
-    async fn send(
-        &self,
-        target: &str,
-        payload: &MessagePayload,
-    ) -> Result<String, PluginError> {
+    async fn send(&self, target: &str, payload: &MessagePayload) -> Result<String, PluginError> {
         let text = match payload.as_text() {
             Some(t) => t,
             None => {
@@ -754,9 +736,7 @@ fn voice_to_plugin_err(e: VoiceError) -> PluginError {
     match e {
         VoiceError::Config(s) => PluginError::LoadFailed(s),
         VoiceError::Audio(s) => PluginError::ExecutionFailed(format!("voice audio: {s}")),
-        VoiceError::Transport(s) => {
-            PluginError::ExecutionFailed(format!("voice transport: {s}"))
-        }
+        VoiceError::Transport(s) => PluginError::ExecutionFailed(format!("voice transport: {s}")),
         VoiceError::Server { status, body } => {
             PluginError::ExecutionFailed(format!("voice server {status}: {body}"))
         }
@@ -784,9 +764,7 @@ impl VoiceChannelAdapterFactory {
     /// Build with cpal-backed source + sink. Compiled only with
     /// `voice-real-audio`.
     #[cfg(feature = "voice-real-audio")]
-    pub fn build(
-        config: &serde_json::Value,
-    ) -> Result<Arc<dyn ChannelAdapter>, PluginError> {
+    pub fn build(config: &serde_json::Value) -> Result<Arc<dyn ChannelAdapter>, PluginError> {
         Self::build_with(
             config,
             Arc::new(CpalAudioSource),
@@ -843,7 +821,9 @@ mod tests {
     }
 
     fn loud_frame(n: usize) -> Vec<i16> {
-        (0..n).map(|i| if i % 2 == 0 { 8_000 } else { -8_000 }).collect()
+        (0..n)
+            .map(|i| if i % 2 == 0 { 8_000 } else { -8_000 })
+            .collect()
     }
 
     fn silent_frame(n: usize) -> Vec<i16> {
@@ -949,9 +929,10 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/inference"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({"text": " hello world "}),
-            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"text": " hello world "})),
+            )
             .mount(&server)
             .await;
 
@@ -1068,8 +1049,7 @@ mod tests {
         let raw: Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
         // Simple base64 encoder for the test.
         fn enc(b: &[u8]) -> String {
-            const A: &[u8] =
-                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
             let mut out = String::new();
             let mut i = 0;
             while i + 3 <= b.len() {
@@ -1203,9 +1183,10 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/inference"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({"text": "hello from substrate"}),
-            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"text": "hello from substrate"})),
+            )
             .mount(&server)
             .await;
         let script = build_script(16_000);
@@ -1220,9 +1201,7 @@ mod tests {
             chat_id: "voice-test-chat".into(),
             ..Default::default()
         };
-        let adapter = Arc::new(
-            VoiceChannelAdapter::new(cfg, source, sink).unwrap(),
-        );
+        let adapter = Arc::new(VoiceChannelAdapter::new(cfg, source, sink).unwrap());
         let host = Arc::new(RecordingHost::default());
         let host_dyn: Arc<dyn ChannelAdapterHost> = host.clone();
         let cancel = clawft_plugin::traits::CancellationToken::new();
@@ -1241,12 +1220,9 @@ mod tests {
         }
         cancel.cancel();
         // Watchdog polls every 50 ms; allow up to 500 ms for shutdown.
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            handle,
-        )
-        .await
-        .unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .unwrap();
         let delivered = host.delivered.lock().await;
         assert!(
             !delivered.is_empty(),
@@ -1265,10 +1241,7 @@ mod tests {
     fn base64_decoder_basic() {
         assert_eq!(decode_base64("AAAA").unwrap(), vec![0u8, 0, 0]);
         // "Hello" -> SGVsbG8=
-        assert_eq!(
-            decode_base64("SGVsbG8=").unwrap(),
-            b"Hello".to_vec()
-        );
+        assert_eq!(decode_base64("SGVsbG8=").unwrap(), b"Hello".to_vec());
         assert!(decode_base64("@@@@").is_err());
     }
 }

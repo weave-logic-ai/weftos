@@ -284,10 +284,7 @@ mod tests {
         let dlq = DeadLetterQueue::new(3);
 
         for i in 0..5u64 {
-            dlq.intake(
-                make_msg(0, i),
-                DeadLetterReason::TargetNotFound { pid: i },
-            );
+            dlq.intake(make_msg(0, i), DeadLetterReason::TargetNotFound { pid: i });
         }
 
         assert_eq!(dlq.len(), 3);
@@ -310,14 +307,8 @@ mod tests {
             make_msg(0, 10),
             DeadLetterReason::TargetNotFound { pid: 10 },
         );
-        dlq.intake(
-            make_msg(0, 20),
-            DeadLetterReason::InboxFull { pid: 20 },
-        );
-        dlq.intake(
-            make_msg(0, 10),
-            DeadLetterReason::AgentExited { pid: 10 },
-        );
+        dlq.intake(make_msg(0, 20), DeadLetterReason::InboxFull { pid: 20 });
+        dlq.intake(make_msg(0, 10), DeadLetterReason::AgentExited { pid: 10 });
 
         let results = dlq.query_by_target(10);
         assert_eq!(results.len(), 2);
@@ -326,15 +317,9 @@ mod tests {
     #[test]
     fn query_by_reason() {
         let dlq = DeadLetterQueue::new(100);
-        dlq.intake(
-            make_msg(0, 1),
-            DeadLetterReason::TargetNotFound { pid: 1 },
-        );
+        dlq.intake(make_msg(0, 1), DeadLetterReason::TargetNotFound { pid: 1 });
         dlq.intake(make_msg(0, 2), DeadLetterReason::InboxFull { pid: 2 });
-        dlq.intake(
-            make_msg(0, 3),
-            DeadLetterReason::TargetNotFound { pid: 3 },
-        );
+        dlq.intake(make_msg(0, 3), DeadLetterReason::TargetNotFound { pid: 3 });
 
         let results = dlq.query_by_reason("TargetNotFound");
         assert_eq!(results.len(), 2);
@@ -346,10 +331,7 @@ mod tests {
     fn query_by_time_range() {
         let dlq = DeadLetterQueue::new(100);
         let before = Utc::now();
-        dlq.intake(
-            make_msg(0, 1),
-            DeadLetterReason::TargetNotFound { pid: 1 },
-        );
+        dlq.intake(make_msg(0, 1), DeadLetterReason::TargetNotFound { pid: 1 });
         let after = Utc::now();
 
         let results = dlq.query_by_time_range(before, after);
@@ -400,10 +382,7 @@ mod tests {
     fn clear_removes_all() {
         let dlq = DeadLetterQueue::new(100);
         for i in 0..5 {
-            dlq.intake(
-                make_msg(0, i),
-                DeadLetterReason::TargetNotFound { pid: i },
-            );
+            dlq.intake(make_msg(0, i), DeadLetterReason::TargetNotFound { pid: i });
         }
         assert_eq!(dlq.len(), 5);
         dlq.clear();
@@ -486,7 +465,12 @@ mod tests {
 
         let payload = events[0].payload.as_ref().unwrap();
         assert_eq!(payload["from_pid"], 0);
-        assert!(payload["reason"].as_str().unwrap().contains("target_not_found"));
+        assert!(
+            payload["reason"]
+                .as_str()
+                .unwrap()
+                .contains("target_not_found")
+        );
     }
 
     #[cfg(feature = "exochain")]

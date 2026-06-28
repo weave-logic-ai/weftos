@@ -63,8 +63,7 @@ impl SubstrateViewer for MeshNodesViewer {
             (healthy as f32 / total as f32).clamp(0.0, 1.0)
         };
         let bar_w = ui.available_width().min(320.0);
-        let (rect, _resp) =
-            ui.allocate_exact_size(egui::vec2(bar_w, 6.0), egui::Sense::hover());
+        let (rect, _resp) = ui.allocate_exact_size(egui::vec2(bar_w, 6.0), egui::Sense::hover());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(24, 24, 32));
         let mut fill = rect;
@@ -107,10 +106,8 @@ impl SubstrateViewer for MeshNodesViewer {
                                         n.get("id").and_then(Value::as_u64).map(|u| u.to_string())
                                     })
                                     .unwrap_or_else(|| "?".to_string());
-                                let status = n
-                                    .get("status")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("unknown");
+                                let status =
+                                    n.get("status").and_then(Value::as_str).unwrap_or("unknown");
                                 let age = n
                                     .get("age_ms")
                                     .and_then(Value::as_u64)
@@ -230,15 +227,9 @@ mod tests {
     #[test]
     fn health_color_buckets() {
         // Full health = green.
-        assert_eq!(
-            health_color(10, 10),
-            egui::Color32::from_rgb(110, 200, 150)
-        );
+        assert_eq!(health_color(10, 10), egui::Color32::from_rgb(110, 200, 150));
         // Two-thirds = amber.
-        assert_eq!(
-            health_color(6, 10),
-            egui::Color32::from_rgb(220, 180, 80)
-        );
+        assert_eq!(health_color(6, 10), egui::Color32::from_rgb(220, 180, 80));
         // Quarter = red.
         assert_eq!(health_color(2, 10), egui::Color32::from_rgb(200, 90, 90));
         // Empty mesh = neutral.

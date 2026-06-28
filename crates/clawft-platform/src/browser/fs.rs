@@ -88,10 +88,7 @@ impl FileSystem for BrowserFileSystem {
         if let Some(parent) = key.parent() {
             self.create_dir_all(parent).await?;
         }
-        let mut files = self
-            .files
-            .lock()
-            .expect("BrowserFileSystem mutex poisoned");
+        let mut files = self.files.lock().expect("BrowserFileSystem mutex poisoned");
         let entry = files.entry(key).or_default();
         entry.push_str(content);
         Ok(())
@@ -99,10 +96,7 @@ impl FileSystem for BrowserFileSystem {
 
     async fn exists(&self, path: &Path) -> bool {
         let key = normalize(path);
-        let files = self
-            .files
-            .lock()
-            .expect("BrowserFileSystem mutex poisoned");
+        let files = self.files.lock().expect("BrowserFileSystem mutex poisoned");
         if files.contains_key(&key) {
             return true;
         }
@@ -120,10 +114,7 @@ impl FileSystem for BrowserFileSystem {
 
     async fn list_dir(&self, path: &Path) -> std::io::Result<Vec<PathBuf>> {
         let dir = normalize(path);
-        let files = self
-            .files
-            .lock()
-            .expect("BrowserFileSystem mutex poisoned");
+        let files = self.files.lock().expect("BrowserFileSystem mutex poisoned");
 
         let mut entries = std::collections::BTreeSet::new();
         for key in files.keys() {

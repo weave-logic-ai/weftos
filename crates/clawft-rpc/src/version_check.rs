@@ -98,11 +98,8 @@ fn fetch_latest_from(url: &str) -> Option<String> {
 /// Compare two semver-ish version strings.
 /// Returns true if `latest` is newer than `current`.
 fn is_newer(current: &str, latest: &str) -> bool {
-    let parse = |v: &str| -> Vec<u32> {
-        v.split('.')
-            .filter_map(|s| s.parse::<u32>().ok())
-            .collect()
-    };
+    let parse =
+        |v: &str| -> Vec<u32> { v.split('.').filter_map(|s| s.parse::<u32>().ok()).collect() };
     let c = parse(current);
     let l = parse(latest);
     l > c
@@ -149,7 +146,10 @@ fn check_and_notify_sync() {
 /// Suppressed by setting `WEFTOS_NO_UPDATE_CHECK=1`.
 pub fn check_for_updates() {
     // Allow users to disable
-    if std::env::var("WEFTOS_NO_UPDATE_CHECK").map(|v| v == "1").unwrap_or(false) {
+    if std::env::var("WEFTOS_NO_UPDATE_CHECK")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+    {
         return;
     }
     check_and_notify_sync();
@@ -205,10 +205,7 @@ mod tests {
     #[test]
     fn fetch_latest_returns_none_on_404() {
         let mut server = mockito::Server::new();
-        let _m = server
-            .mock("GET", "/missing")
-            .with_status(404)
-            .create();
+        let _m = server.mock("GET", "/missing").with_status(404).create();
 
         let url = format!("{}/missing", server.url());
         assert!(fetch_latest_from(&url).is_none());

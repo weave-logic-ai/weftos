@@ -94,7 +94,6 @@ pub enum ClockSource {
     Gps = 4,
 }
 
-
 /// Mesh time synchronization state for a node.
 #[derive(Debug, Clone)]
 pub struct MeshClockSync {
@@ -164,8 +163,7 @@ impl MeshClockSync {
 
             // EMA smoothing: alpha=0.1 for stability.
             let alpha = if self.sync_count < 5 { 0.5 } else { 0.1 };
-            self.smoothed_offset =
-                (1.0 - alpha) * self.smoothed_offset + alpha * raw_offset as f64;
+            self.smoothed_offset = (1.0 - alpha) * self.smoothed_offset + alpha * raw_offset as f64;
             self.offset_us = self.smoothed_offset as i64;
 
             self.authority_id = Some(sender_id.to_string());
@@ -174,18 +172,17 @@ impl MeshClockSync {
 
             // Uncertainty decreases with more samples.
             self.uncertainty_us = match self.sync_count {
-                0..=5 => 10_000,    // 10ms
-                6..=20 => 1_000,    // 1ms
-                21..=100 => 100,    // 100µs
-                _ => 50,            // 50µs steady state
+                0..=5 => 10_000, // 10ms
+                6..=20 => 1_000, // 1ms
+                21..=100 => 100, // 100µs
+                _ => 50,         // 50µs steady state
             };
         }
     }
 
     /// Check if this node should be the time authority.
     pub fn is_authority(&self, our_node_id: &str) -> bool {
-        self.authority_id.as_deref() == Some(our_node_id)
-            || self.authority_id.is_none()
+        self.authority_id.as_deref() == Some(our_node_id) || self.authority_id.is_none()
     }
 
     /// Whether we have a better clock source than the given source.
@@ -269,8 +266,7 @@ impl PeerHeartbeat {
 
     /// Check if this peer should be considered unreachable.
     pub fn is_unreachable(&self, config: &HeartbeatConfig) -> bool {
-        self.state == HeartbeatState::Dead
-            || self.last_seen.elapsed() > config.suspect_timeout * 3
+        self.state == HeartbeatState::Dead || self.last_seen.elapsed() > config.suspect_timeout * 3
     }
 }
 
@@ -298,9 +294,7 @@ impl HeartbeatTracker {
 
     /// Start tracking a new peer.
     pub fn add_peer(&mut self, node_id: String) {
-        self.peers
-            .entry(node_id)
-            .or_default();
+        self.peers.entry(node_id).or_default();
     }
 
     /// Remove a peer from tracking.

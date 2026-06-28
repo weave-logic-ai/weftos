@@ -306,12 +306,8 @@ impl EmlModel {
             }
             4 => {
                 // Level 2: 4 mixing nodes
-                let level2_pairs: [(usize, usize, usize, usize); 4] = [
-                    (0, 1, 2, 3),
-                    (0, 1, 2, 3),
-                    (0, 2, 1, 3),
-                    (1, 3, 0, 2),
-                ];
+                let level2_pairs: [(usize, usize, usize, usize); 4] =
+                    [(0, 1, 2, 3), (0, 1, 2, 3), (0, 2, 1, 3), (1, 3, 0, 2)];
                 let mut c = [0.0f64; 4];
                 for i in 0..4 {
                     let base = 24 + i * 3;
@@ -319,18 +315,14 @@ impl EmlModel {
                     let (alpha, beta, gamma) =
                         softmax3(params[base], params[base + 1], params[base + 2]);
                     let mix_left = (alpha + beta * b[li] + gamma * b[lj]).clamp(-10.0, 10.0);
-                    let (ar, br, gr) = softmax3(
-                        params[base] + 0.5,
-                        params[base + 1] - 0.5,
-                        params[base + 2],
-                    );
+                    let (ar, br, gr) =
+                        softmax3(params[base] + 0.5, params[base + 1] - 0.5, params[base + 2]);
                     let mix_right = (ar + br * b[ri] + gr * b[rj]).clamp(0.01, 10.0);
                     c[i] = eml_safe(mix_left, mix_right);
                 }
 
                 // Level 3: 2 mixing nodes
-                let level3_pairs: [(usize, usize, usize, usize); 2] =
-                    [(0, 1, 2, 3), (0, 2, 1, 3)];
+                let level3_pairs: [(usize, usize, usize, usize); 2] = [(0, 1, 2, 3), (0, 2, 1, 3)];
                 let mut d = [0.0f64; 2];
                 for i in 0..2 {
                     let base = 36 + i * 4;
@@ -349,12 +341,8 @@ impl EmlModel {
             }
             5 => {
                 // Level 2: 4 mixing nodes (same as depth 4)
-                let level2_pairs: [(usize, usize, usize, usize); 4] = [
-                    (0, 1, 2, 3),
-                    (0, 1, 2, 3),
-                    (0, 2, 1, 3),
-                    (1, 3, 0, 2),
-                ];
+                let level2_pairs: [(usize, usize, usize, usize); 4] =
+                    [(0, 1, 2, 3), (0, 1, 2, 3), (0, 2, 1, 3), (1, 3, 0, 2)];
                 let mut c = [0.0f64; 4];
                 for i in 0..4 {
                     let base = 24 + i * 3;
@@ -362,22 +350,15 @@ impl EmlModel {
                     let (alpha, beta, gamma) =
                         softmax3(params[base], params[base + 1], params[base + 2]);
                     let mix_left = (alpha + beta * b[li] + gamma * b[lj]).clamp(-10.0, 10.0);
-                    let (ar, br, gr) = softmax3(
-                        params[base] + 0.5,
-                        params[base + 1] - 0.5,
-                        params[base + 2],
-                    );
+                    let (ar, br, gr) =
+                        softmax3(params[base] + 0.5, params[base + 1] - 0.5, params[base + 2]);
                     let mix_right = (ar + br * b[ri] + gr * b[rj]).clamp(0.01, 10.0);
                     c[i] = eml_safe(mix_left, mix_right);
                 }
 
                 // Level 3: 4 mixing nodes
-                let level3_pairs: [(usize, usize, usize, usize); 4] = [
-                    (0, 1, 2, 3),
-                    (0, 2, 1, 3),
-                    (1, 3, 0, 2),
-                    (0, 3, 1, 2),
-                ];
+                let level3_pairs: [(usize, usize, usize, usize); 4] =
+                    [(0, 1, 2, 3), (0, 2, 1, 3), (1, 3, 0, 2), (0, 3, 1, 2)];
                 let mut e = [0.0f64; 4];
                 for i in 0..4 {
                     let base = 36 + i * 3;
@@ -385,11 +366,8 @@ impl EmlModel {
                     let (alpha, beta, gamma) =
                         softmax3(params[base], params[base + 1], params[base + 2]);
                     let mix_left = (alpha + beta * c[li] + gamma * c[lj]).clamp(-10.0, 10.0);
-                    let (ar, br, gr) = softmax3(
-                        params[base] + 0.5,
-                        params[base + 1] - 0.5,
-                        params[base + 2],
-                    );
+                    let (ar, br, gr) =
+                        softmax3(params[base] + 0.5, params[base + 1] - 0.5, params[base + 2]);
                     let mix_right = (ar + br * c[ri] + gr * c[rj]).clamp(0.01, 10.0);
                     e[i] = eml_safe(mix_left, mix_right);
                 }
@@ -445,10 +423,7 @@ impl EmlModel {
     fn feature_pairs(input_count: usize) -> [(usize, usize); 8] {
         let mut pairs = [(0usize, 0usize); 8];
         for (i, slot) in pairs.iter_mut().enumerate() {
-            *slot = (
-                (i * 2) % input_count,
-                (i * 2 + 1) % input_count,
-            );
+            *slot = ((i * 2) % input_count, (i * 2 + 1) % input_count);
         }
         pairs
     }
@@ -537,7 +512,10 @@ impl EmlModel {
 
         // Emit a Trained event for ExoChain logging.
         let name = if self.model_name.is_empty() {
-            format!("eml_d{}x{}x{}", self.depth, self.input_count, self.head_count)
+            format!(
+                "eml_d{}x{}x{}",
+                self.depth, self.input_count, self.head_count
+            )
         } else {
             self.model_name.clone()
         };
@@ -611,7 +589,9 @@ impl EmlModel {
         // Use a simple LCG for reproducibility without needing `rand`.
         let mut rng_state: u64 = 0xCAFE_BABE_1234_5678;
         let lcg_next = |state: &mut u64| -> f64 {
-            *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             // Map to [0, 1]
             (*state >> 33) as f64 / (1u64 << 31) as f64
         };
@@ -731,10 +711,7 @@ mod tests {
     fn train_insufficient_data_returns_false() {
         let mut m = EmlModel::new(3, 3, 1);
         for i in 0..10 {
-            m.record(
-                &[i as f64 / 10.0, 0.5, 0.5],
-                &[Some(1.0)],
-            );
+            m.record(&[i as f64 / 10.0, 0.5, 0.5], &[Some(1.0)]);
         }
         assert!(!m.train());
         assert!(!m.is_trained());
@@ -761,10 +738,7 @@ mod tests {
         for i in 0..80 {
             let x = i as f64 / 80.0;
             let y = (i + 10) as f64 / 80.0;
-            m.record(
-                &[x, y],
-                &[Some(x + y), Some(x * y), None],
-            );
+            m.record(&[x, y], &[Some(x + y), Some(x * y), None]);
         }
         let _ = m.train();
         let pred = m.predict(&[0.5, 0.5]);
@@ -791,10 +765,7 @@ mod tests {
         assert_eq!(m.head_count, m2.head_count);
         assert_eq!(m.params.len(), m2.params.len());
         for (i, (a, b)) in m.params.iter().zip(m2.params.iter()).enumerate() {
-            assert!(
-                (a - b).abs() < 1e-14,
-                "param[{i}] mismatch: {a} vs {b}"
-            );
+            assert!((a - b).abs() < 1e-14, "param[{i}] mismatch: {a} vs {b}");
         }
         assert_eq!(m.trained, m2.trained);
         // training_data is skipped in serde
@@ -814,10 +785,7 @@ mod tests {
             let result = m.predict(&inputs);
             assert_eq!(result.len(), 2);
             for &v in &result {
-                assert!(
-                    v.is_finite(),
-                    "depth-{depth} should produce finite output"
-                );
+                assert!(v.is_finite(), "depth-{depth} should produce finite output");
             }
         }
     }

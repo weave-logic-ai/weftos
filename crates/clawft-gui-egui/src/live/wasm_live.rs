@@ -19,11 +19,11 @@ use std::sync::Arc;
 
 use parking_lot::Mutex as PLMutex;
 use parking_lot::RwLock;
-use serde_json::{json, Value};
-use wasm_bindgen::prelude::*;
+use serde_json::{Value, json};
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 
-use super::{now_ms, Command, Connection, Live, Snapshot};
+use super::{Command, Connection, Live, Snapshot, now_ms};
 
 /// Poll cadence (ms). Matches the native transport for predictable UX.
 const POLL_INTERVAL_MS: i32 = 1000;
@@ -45,7 +45,11 @@ enum ReplySlot {
 
 impl Bridge {
     pub(super) fn submit(&self, cmd: Command) -> bool {
-        let Command::Raw { method, params, reply } = cmd;
+        let Command::Raw {
+            method,
+            params,
+            reply,
+        } = cmd;
         let id = {
             let mut n = self.next_id.lock();
             let id = *n;
@@ -73,7 +77,11 @@ pub(super) fn spawn() -> Arc<Live> {
     });
 
     install_message_listener(Arc::clone(&live), Arc::clone(&pending));
-    install_poll_timer(Arc::clone(&live), Arc::clone(&pending), Arc::clone(&next_id));
+    install_poll_timer(
+        Arc::clone(&live),
+        Arc::clone(&pending),
+        Arc::clone(&next_id),
+    );
 
     live
 }
@@ -81,48 +89,46 @@ pub(super) fn spawn() -> Arc<Live> {
 /// Install a `message` event listener on the window that routes
 /// `{ type: "rpc-response", id, ok, result?, error? }` shapes into
 /// the pending-RPC registry, and any other shapes into the snapshot.
-fn install_message_listener(
-    live: Arc<Live>,
-    pending: Arc<PLMutex<HashMap<u64, ReplySlot>>>,
-) {
+fn install_message_listener(live: Arc<Live>, pending: Arc<PLMutex<HashMap<u64, ReplySlot>>>) {
     let window = web_sys::window().expect("no global window");
 
-    let closure = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |ev: web_sys::MessageEvent| {
-        let data = ev.data();
-        let value = match js_value_to_json(&data) {
-            Some(v) => v,
-            None => return,
-        };
-        let kind = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        match kind {
-            "rpc-response" => {
-                let id = value.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
-                let ok = value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
-                let result = if ok {
-                    Ok(value.get("result").cloned().unwrap_or(Value::Null))
-                } else {
-                    Err(value
-                        .get("error")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown error")
-                        .to_string())
-                };
-                let maybe = pending.lock().remove(&id);
-                if let Some(slot) = maybe {
-                    match slot {
-                        ReplySlot::External(tx) => {
-                            let _ = tx.send(result.clone());
+    let closure =
+        Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |ev: web_sys::MessageEvent| {
+            let data = ev.data();
+            let value = match js_value_to_json(&data) {
+                Some(v) => v,
+                None => return,
+            };
+            let kind = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            match kind {
+                "rpc-response" => {
+                    let id = value.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let ok = value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let result = if ok {
+                        Ok(value.get("result").cloned().unwrap_or(Value::Null))
+                    } else {
+                        Err(value
+                            .get("error")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown error")
+                            .to_string())
+                    };
+                    let maybe = pending.lock().remove(&id);
+                    if let Some(slot) = maybe {
+                        match slot {
+                            ReplySlot::External(tx) => {
+                                let _ = tx.send(result.clone());
+                            }
+                            ReplySlot::Internal(cb) => cb(result.clone()),
                         }
-                        ReplySlot::Internal(cb) => cb(result.clone()),
+                    }
+                    if let Err(e) = &result {
+                        live.write(|s| s.last_error = Some(e.clone()));
                     }
                 }
-                if let Err(e) = &result {
-                    live.write(|s| s.last_error = Some(e.clone()));
-                }
+                _ => { /* ignore unknown messages */ }
             }
-            _ => { /* ignore unknown messages */ }
-        }
-    });
+        });
 
     window
         .add_event_listener_with_callback("message", closure.as_ref().unchecked_ref())
@@ -145,13 +151,23 @@ fn install_poll_timer(
         let started_ms = now_ms();
         let partial = Arc::new(PLMutex::new(PartialPoll::default()));
 
-        // Fire the four RPCs in parallel via postMessage. When all four
-        // replies are in, update the snapshot.
+        // Fire the polled RPCs in parallel via postMessage. When all
+        // expected replies are in, update the snapshot. Note: cluster.*
+        // / chain.* / cron.list / ecc.status may return error against
+        // older daemons — `into_snapshot` treats those as "subsystem
+        // unavailable" rather than rolling the whole connection back to
+        // disconnected.
         let methods: &[(&str, Value, fn(&mut PartialPoll, Result<Value, String>))] = &[
             ("kernel.status", Value::Null, |p, r| p.status = Some(r)),
             ("kernel.ps", Value::Null, |p, r| p.ps = Some(r)),
             ("kernel.services", Value::Null, |p, r| p.services = Some(r)),
-            ("kernel.logs", json!({ "count": LOG_TAIL }), |p, r| p.logs = Some(r)),
+            ("kernel.logs", json!({ "count": LOG_TAIL }), |p, r| {
+                p.logs = Some(r)
+            }),
+            ("cluster.status", Value::Null, |p, r| p.mesh = Some(r)),
+            ("chain.status", Value::Null, |p, r| p.chain = Some(r)),
+            ("cron.list", Value::Null, |p, r| p.cron = Some(r)),
+            ("ecc.status", Value::Null, |p, r| p.ecc = Some(r)),
         ];
 
         for (method, params, setter) in methods {
@@ -217,12 +233,11 @@ fn post_to_host(payload_json: &str) -> bool {
     let Some(window) = web_sys::window() else {
         return false;
     };
-    let host_fn = js_sys::Reflect::get(
-        &window,
-        &JsValue::from_str("__weftPostToHost"),
-    )
-    .ok();
-    let func = match host_fn.as_ref().and_then(|v| v.dyn_ref::<js_sys::Function>()) {
+    let host_fn = js_sys::Reflect::get(&window, &JsValue::from_str("__weftPostToHost")).ok();
+    let func = match host_fn
+        .as_ref()
+        .and_then(|v| v.dyn_ref::<js_sys::Function>())
+    {
         Some(f) => f,
         None => return false,
     };
@@ -242,11 +257,22 @@ struct PartialPoll {
     ps: Option<Result<Value, String>>,
     services: Option<Result<Value, String>>,
     logs: Option<Result<Value, String>>,
+    mesh: Option<Result<Value, String>>,
+    chain: Option<Result<Value, String>>,
+    cron: Option<Result<Value, String>>,
+    ecc: Option<Result<Value, String>>,
 }
 
 impl PartialPoll {
     fn is_complete(&self) -> bool {
-        self.status.is_some() && self.ps.is_some() && self.services.is_some() && self.logs.is_some()
+        self.status.is_some()
+            && self.ps.is_some()
+            && self.services.is_some()
+            && self.logs.is_some()
+            && self.mesh.is_some()
+            && self.chain.is_some()
+            && self.cron.is_some()
+            && self.ecc.is_some()
     }
 
     fn into_snapshot(self, started_ms: f64, finished_ms: f64) -> Snapshot {
@@ -254,11 +280,59 @@ impl PartialPoll {
             r.as_ref().ok().and_then(|v| v.as_array().cloned())
         };
         let status = self.status.as_ref().and_then(|r| r.as_ref().ok().cloned());
+        // Connection state is driven by the *core* kernel RPCs; the
+        // optional ones (cluster/chain/cron/ecc) may return error
+        // against older daemons or in feature-disabled builds without
+        // implying the whole link is down.
         let err = [&self.status, &self.ps, &self.services, &self.logs]
             .iter()
             .find_map(|r| r.as_ref().and_then(|rr| rr.as_ref().err().cloned()));
+
+        // mesh — pass through the cluster.status object on success so
+        // the Monitor mesh tile / tray chip can render counts. On
+        // error, we synthesize an `available: false` envelope so the
+        // tile shows the reason rather than a stale "no data" hint.
+        let mesh_status = match self.mesh.as_ref() {
+            Some(Ok(v)) => {
+                let mut v = v.clone();
+                if let Value::Object(ref mut obj) = v {
+                    obj.entry("available").or_insert(Value::Bool(true));
+                }
+                Some(v)
+            }
+            Some(Err(e)) => Some(json!({
+                "available": false,
+                "reason": e,
+            })),
+            None => None,
+        };
+        // chain — the daemon's chain.status returns the bare
+        // ChainStatusResult on success; we inject `available: true` to
+        // match the native ChainAdapter's contract so monitor.rs and
+        // the witness-chain chip composer can rely on a single shape.
+        let chain_status = match self.chain.as_ref() {
+            Some(Ok(v)) => {
+                let mut v = v.clone();
+                if let Value::Object(ref mut obj) = v {
+                    obj.insert("available".into(), Value::Bool(true));
+                }
+                Some(v)
+            }
+            Some(Err(e)) => Some(json!({
+                "available": false,
+                "reason": e,
+            })),
+            None => None,
+        };
+        let cron_jobs = as_array(self.cron.as_ref().unwrap_or(&Err(String::new())));
+        let ecc_status = self.ecc.as_ref().and_then(|r| r.as_ref().ok().cloned());
+
         Snapshot {
-            connection: if err.is_some() { Connection::Disconnected } else { Connection::Connected },
+            connection: if err.is_some() {
+                Connection::Disconnected
+            } else {
+                Connection::Connected
+            },
             status,
             processes: as_array(self.ps.as_ref().unwrap_or(&Err(String::new()))),
             services: as_array(self.services.as_ref().unwrap_or(&Err(String::new()))),
@@ -272,22 +346,16 @@ impl PartialPoll {
             // M1.5.1c — BluetoothAdapter is native-only for the same
             // reason as the network adapter.
             bluetooth: None,
-            // M1.5.1d — mesh/chain adapters are native-only (they
-            // call daemon RPC which the wasm build can't reach
-            // directly). Extension host proxies kernel.* RPCs but
-            // doesn't allowlist cluster.*/chain.* yet; M1.6+ wires
-            // them alongside the substrate-over-postMessage bridge.
-            mesh_status: None,
-            chain_status: None,
-            // M1.5.2 — MicrophoneAdapter is native-only (reads a host
-            // file path); the wasm panel would need a dedicated
-            // `substrate.sensor.mic.stream` RPC or MediaStream shim,
-            // tracked with the rest of the M1.6+ bridge work.
+            // mesh/chain are now polled directly via cluster.status /
+            // chain.status RPC — both are in the extension allowlist
+            // (added M1.5.1d). Audio + ToF still need the substrate-
+            // over-postMessage bridge (tracked M1.6+).
+            mesh_status,
+            chain_status,
             audio_mic: None,
-            // M1.5.3 — ToF sensor is hardware-attached; same native-
-            // only story until the substrate-over-postMessage bridge
-            // ships.
             tof_depth: None,
+            cron_jobs,
+            ecc_status,
             last_error: err,
             tick: 0,
             last_tick_at_ms: Some(finished_ms),
@@ -295,4 +363,3 @@ impl PartialPoll {
         }
     }
 }
-

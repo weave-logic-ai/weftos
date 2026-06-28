@@ -59,12 +59,6 @@ pub fn show(
     let sentinel = json!({ "kind": "chat", "model": "local" });
 
     ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
-        crate::explorer::chat::paint(
-            ui,
-            SIDEBAR_CHAT_PATH,
-            &sentinel,
-            &mut desk.chat,
-            live,
-        );
+        crate::explorer::chat::paint(ui, SIDEBAR_CHAT_PATH, &sentinel, &mut desk.chat, live);
     });
 }

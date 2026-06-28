@@ -21,8 +21,8 @@
 //! to approximately `max_tracked_users * 1 KB` at peak.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::pipeline::traits::RateLimitable;
@@ -149,7 +149,9 @@ impl RateLimiter {
         // Purge expired timestamps.
         // Because timestamps are appended monotonically, we can drain
         // from the front until we find one within the window.
-        entry.timestamps.retain(|ts| now.duration_since(*ts) < self.window_duration);
+        entry
+            .timestamps
+            .retain(|ts| now.duration_since(*ts) < self.window_duration);
 
         // Check if under the limit.
         if entry.timestamps.len() >= limit as usize {
@@ -359,11 +361,7 @@ mod tests {
         // 5 requests from different users should all pass.
         for i in 0..5 {
             let sender = format!("user_{}", i);
-            assert!(
-                limiter.check(&sender, 0),
-                "request {} should be allowed",
-                i
-            );
+            assert!(limiter.check(&sender, 0), "request {} should be allowed", i);
         }
         // 6th request from a new user should be rejected (global limit hit).
         assert!(!limiter.check("user_new", 0));

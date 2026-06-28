@@ -83,11 +83,11 @@ impl DimensionScorer {
     /// Uses the same ranges as the original piecewise breakpoints.
     fn normalize_input(&self, value: f64) -> f64 {
         match self.name.as_str() {
-            "throughput" => value / 100_000.0,   // 0..100K ops/sec
-            "latency" => value / 10_000.0,       // 0..10K us
-            "scalability" => value,               // 0..1 coefficient
-            "stability" => value / 20.0,          // 0..20 ratio
-            "endurance" => value / 100.0,         // 0..100 drift %
+            "throughput" => value / 100_000.0, // 0..100K ops/sec
+            "latency" => value / 10_000.0,     // 0..10K us
+            "scalability" => value,            // 0..1 coefficient
+            "stability" => value / 20.0,       // 0..20 ratio
+            "endurance" => value / 100.0,      // 0..100 drift %
             _ => value,
         }
     }
@@ -133,7 +133,10 @@ impl BenchmarkScorerModel {
     pub fn score(&self, metrics: &[f64; 5]) -> f64 {
         if self.composite.is_trained() {
             let normalized = self.normalize_metrics(metrics);
-            return self.composite.predict_primary(&normalized).clamp(0.0, 100.0);
+            return self
+                .composite
+                .predict_primary(&normalized)
+                .clamp(0.0, 100.0);
         }
 
         // Fallback: use per-dimension scorers (which themselves fall back
@@ -149,11 +152,16 @@ impl BenchmarkScorerModel {
     ///           stability_score, endurance_score]`.
     pub fn score_dimensions(&self, metrics: &[f64; 5]) -> [f64; 5] {
         [
-            self.throughput.score(metrics[0], super::bench_cmd::score_throughput),
-            self.latency.score(metrics[1], super::bench_cmd::score_latency),
-            self.scalability.score(metrics[2], super::bench_cmd::score_scalability),
-            self.stability.score(metrics[3], super::bench_cmd::score_stability),
-            self.endurance.score(metrics[4], super::bench_cmd::score_endurance),
+            self.throughput
+                .score(metrics[0], super::bench_cmd::score_throughput),
+            self.latency
+                .score(metrics[1], super::bench_cmd::score_latency),
+            self.scalability
+                .score(metrics[2], super::bench_cmd::score_scalability),
+            self.stability
+                .score(metrics[3], super::bench_cmd::score_stability),
+            self.endurance
+                .score(metrics[4], super::bench_cmd::score_endurance),
         ]
     }
 
@@ -204,13 +212,37 @@ impl BenchmarkScorerModel {
         format!(
             "composite: {} ({} samples), throughput: {}, latency: {}, \
              scalability: {}, stability: {}, endurance: {}",
-            if self.composite.is_trained() { "trained" } else { "untrained" },
+            if self.composite.is_trained() {
+                "trained"
+            } else {
+                "untrained"
+            },
             self.composite.training_sample_count(),
-            if self.throughput.is_trained() { "trained" } else { "untrained" },
-            if self.latency.is_trained() { "trained" } else { "untrained" },
-            if self.scalability.is_trained() { "trained" } else { "untrained" },
-            if self.stability.is_trained() { "trained" } else { "untrained" },
-            if self.endurance.is_trained() { "trained" } else { "untrained" },
+            if self.throughput.is_trained() {
+                "trained"
+            } else {
+                "untrained"
+            },
+            if self.latency.is_trained() {
+                "trained"
+            } else {
+                "untrained"
+            },
+            if self.scalability.is_trained() {
+                "trained"
+            } else {
+                "untrained"
+            },
+            if self.stability.is_trained() {
+                "trained"
+            } else {
+                "untrained"
+            },
+            if self.endurance.is_trained() {
+                "trained"
+            } else {
+                "untrained"
+            },
         )
     }
 
@@ -237,7 +269,10 @@ impl BenchmarkScorerModel {
     /// Save all models to the given directory.
     pub fn save(&self, dir: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
-        std::fs::write(dir.join("scorer.json"), serde_json::to_string_pretty(self).unwrap())?;
+        std::fs::write(
+            dir.join("scorer.json"),
+            serde_json::to_string_pretty(self).unwrap(),
+        )?;
         Ok(())
     }
 
@@ -246,9 +281,10 @@ impl BenchmarkScorerModel {
         let path = dir.join("scorer.json");
         if path.exists()
             && let Ok(data) = std::fs::read_to_string(&path)
-                && let Ok(model) = serde_json::from_str::<Self>(&data) {
-                    return model;
-                }
+            && let Ok(model) = serde_json::from_str::<Self>(&data)
+        {
+            return model;
+        }
         Self::new()
     }
 }
@@ -273,9 +309,14 @@ mod tests {
         assert!(!scorer.is_trained());
 
         // Should delegate to the fallback function
-        fn mock_fallback(x: f64) -> f64 { x * 2.0 }
+        fn mock_fallback(x: f64) -> f64 {
+            x * 2.0
+        }
         let result = scorer.score(25.0, mock_fallback);
-        assert!((result - 50.0).abs() < 1e-9, "untrained should use fallback");
+        assert!(
+            (result - 50.0).abs() < 1e-9,
+            "untrained should use fallback"
+        );
     }
 
     #[test]
@@ -342,11 +383,7 @@ mod tests {
     fn train_insufficient_data() {
         let mut scorer = BenchmarkScorerModel::new();
         for i in 0..10 {
-            scorer.record(
-                [i as f64 * 10_000.0, 500.0, 0.5, 3.0, 10.0],
-                None,
-                50.0,
-            );
+            scorer.record([i as f64 * 10_000.0, 500.0, 0.5, 3.0, 10.0], None, 50.0);
         }
         // Not enough data (need >= 50)
         assert!(!scorer.train());

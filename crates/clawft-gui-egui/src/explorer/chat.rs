@@ -88,11 +88,7 @@ pub fn matches(value: &Value) -> u32 {
         .and_then(Value::as_str)
         .map(|s| s == "chat")
         .unwrap_or(false);
-    if kind_ok {
-        PRIORITY
-    } else {
-        0
-    }
+    if kind_ok { PRIORITY } else { 0 }
 }
 
 /// One conversation turn. Mirrors `LlmPromptMessage` on the wire but
@@ -219,14 +215,8 @@ impl ChatView {
         }));
         let mut obj = serde_json::Map::new();
         obj.insert("messages".into(), Value::Array(messages));
-        obj.insert(
-            "temperature".into(),
-            serde_json::json!(DEFAULT_TEMPERATURE),
-        );
-        obj.insert(
-            "max_tokens".into(),
-            serde_json::json!(DEFAULT_MAX_TOKENS),
-        );
+        obj.insert("temperature".into(), serde_json::json!(DEFAULT_TEMPERATURE));
+        obj.insert("max_tokens".into(), serde_json::json!(DEFAULT_MAX_TOKENS));
         if let Some(id) = self.conv_id.as_deref() {
             obj.insert("conv_id".into(), serde_json::json!(id));
         }
@@ -249,8 +239,7 @@ impl ChatView {
             .or_else(|| response.get("completion"))
             .and_then(Value::as_str)
             .unwrap_or("(empty completion)");
-        self.history
-            .push(ChatMessage::assistant(text.to_string()));
+        self.history.push(ChatMessage::assistant(text.to_string()));
         // Capture identity_source for the WEFT-259 drift-warning chip.
         // The daemon injects this at the wire boundary; if absent, we
         // intentionally clear the cached value so a previously-sticky
@@ -444,15 +433,10 @@ pub fn paint(ui: &mut egui::Ui, path: &str, value: &Value, view: &mut ChatView, 
 
         ui.horizontal(|ui| {
             let send_clicked = ui.button("Send").clicked();
-            if (send_clicked || enter_pressed)
-                && !view.draft.trim().is_empty()
-            {
+            if (send_clicked || enter_pressed) && !view.draft.trim().is_empty() {
                 view.submit_draft(live);
             }
-            if !view.history.is_empty()
-                && ui.button("Clear").clicked()
-                && !view.is_in_flight()
-            {
+            if !view.history.is_empty() && ui.button("Clear").clicked() && !view.is_in_flight() {
                 view.history.clear();
             }
         });
@@ -475,11 +459,9 @@ fn paint_history(ui: &mut egui::Ui, view: &mut ChatView) {
         ui.vertical_centered(|ui| {
             ui.add_space(24.0);
             ui.label(
-                egui::RichText::new(
-                    "(no messages yet — type below to start)",
-                )
-                .italics()
-                .color(egui::Color32::from_rgb(160, 160, 170)),
+                egui::RichText::new("(no messages yet — type below to start)")
+                    .italics()
+                    .color(egui::Color32::from_rgb(160, 160, 170)),
             );
         });
         return;
@@ -519,9 +501,7 @@ fn paint_system_editor(ui: &mut egui::Ui, view: &mut ChatView) {
             egui::TextEdit::multiline(&mut text)
                 .desired_rows(2)
                 .desired_width(f32::INFINITY)
-                .hint_text(
-                    "Extra context layered on top of the workspace identity prompt.",
-                ),
+                .hint_text("Extra context layered on top of the workspace identity prompt."),
         );
         if resp.changed() {
             view.system = if text.trim().is_empty() {
@@ -614,8 +594,7 @@ fn paint_heartbeat(ui: &mut egui::Ui, view: &ChatView, live: &Arc<Live>) {
         let t = (live::now_ms() / 1000.0).fract() as f32;
         let pulse = 120 + ((1.0 - t) * 80.0) as u8;
         let dot_color = egui::Color32::from_rgb(80, pulse, 200);
-        let (rect, _) =
-            ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
         ui.painter().circle_filled(rect.center(), 4.0, dot_color);
 
         ui.label(
@@ -641,7 +620,8 @@ fn paint_heartbeat(ui: &mut egui::Ui, view: &ChatView, live: &Arc<Live>) {
     // Request a repaint at the heartbeat cadence so the age counter
     // ticks even when the user isn't moving the mouse. egui only
     // repaints on input by default — without this, the label stalls.
-    ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(500));
     ui.add_space(2.0);
 }
 
@@ -655,11 +635,7 @@ fn paint_heartbeat(ui: &mut egui::Ui, view: &ChatView, live: &Arc<Live>) {
 ///   parsed AST is reused across paints rather than re-parsed each
 ///   frame.
 /// - `error`    — left-aligned, red bg + red strong text. UI-only role.
-fn paint_bubble(
-    ui: &mut egui::Ui,
-    msg: &ChatMessage,
-    md_cache: &mut CommonMarkCache,
-) {
+fn paint_bubble(ui: &mut egui::Ui, msg: &ChatMessage, md_cache: &mut CommonMarkCache) {
     match msg.role.as_str() {
         "system" => {
             ui.label(
@@ -671,62 +647,55 @@ fn paint_bubble(
             ui.add_space(2.0);
         }
         "user" => {
-            ui.with_layout(
-                egui::Layout::top_down(egui::Align::RIGHT),
-                |ui| {
-                    egui::Frame::new()
-                        .fill(egui::Color32::from_rgb(50, 60, 80))
-                        .inner_margin(egui::Margin::symmetric(8, 4))
-                        .corner_radius(6.0)
-                        .show(ui, |ui| {
-                            ui.label(
-                                egui::RichText::new(&msg.content)
-                                    .color(egui::Color32::from_rgb(225, 230, 240)),
-                            );
-                        });
-                },
-            );
+            ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(50, 60, 80))
+                    .inner_margin(egui::Margin::symmetric(8, 4))
+                    .corner_radius(6.0)
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(&msg.content)
+                                .color(egui::Color32::from_rgb(225, 230, 240)),
+                        );
+                    });
+            });
             ui.add_space(4.0);
         }
         "assistant" => {
-            ui.with_layout(
-                egui::Layout::top_down(egui::Align::LEFT),
-                |ui| {
-                    egui::Frame::new()
-                        .fill(egui::Color32::from_rgb(40, 50, 50))
-                        .inner_margin(egui::Margin::symmetric(8, 4))
-                        .corner_radius(6.0)
-                        .show(ui, |ui| {
-                            // WEFT-252: markdown rendering. The
-                            // `id_salt` is unique-per-bubble (combined
-                            // hash of content + role) so collapsible
-                            // sections and copy buttons inside markdown
-                            // don't share state across bubbles.
-                            CommonMarkViewer::new()
-                                .max_image_width(Some(480))
-                                .show(ui, md_cache, &msg.content);
-                        });
-                },
-            );
+            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(40, 50, 50))
+                    .inner_margin(egui::Margin::symmetric(8, 4))
+                    .corner_radius(6.0)
+                    .show(ui, |ui| {
+                        // WEFT-252: markdown rendering. The
+                        // `id_salt` is unique-per-bubble (combined
+                        // hash of content + role) so collapsible
+                        // sections and copy buttons inside markdown
+                        // don't share state across bubbles.
+                        CommonMarkViewer::new().max_image_width(Some(480)).show(
+                            ui,
+                            md_cache,
+                            &msg.content,
+                        );
+                    });
+            });
             ui.add_space(4.0);
         }
         "error" => {
-            ui.with_layout(
-                egui::Layout::top_down(egui::Align::LEFT),
-                |ui| {
-                    egui::Frame::new()
-                        .fill(egui::Color32::from_rgb(70, 30, 30))
-                        .inner_margin(egui::Margin::symmetric(8, 4))
-                        .corner_radius(6.0)
-                        .show(ui, |ui| {
-                            ui.label(
-                                egui::RichText::new(format!("error: {}", msg.content))
-                                    .strong()
-                                    .color(egui::Color32::from_rgb(240, 170, 170)),
-                            );
-                        });
-                },
-            );
+            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(70, 30, 30))
+                    .inner_margin(egui::Margin::symmetric(8, 4))
+                    .corner_radius(6.0)
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("error: {}", msg.content))
+                                .strong()
+                                .color(egui::Color32::from_rgb(240, 170, 170)),
+                        );
+                    });
+            });
             ui.add_space(4.0);
         }
         other => {
@@ -881,7 +850,10 @@ mod tests {
         // per-conv state lines up across turns.
         view.ensure_conv_id();
         let params = view.build_request_params("second");
-        let id = params.get("conv_id").and_then(Value::as_str).expect("conv_id");
+        let id = params
+            .get("conv_id")
+            .and_then(Value::as_str)
+            .expect("conv_id");
         assert!(id.starts_with("panel-"), "got {id:?}");
     }
 
@@ -1008,11 +980,7 @@ mod tests {
 
         assert_eq!(view.history.len(), 2);
         assert_eq!(view.history[1].role, "error");
-        assert!(
-            view.history[1]
-                .content
-                .contains("llm service is disabled")
-        );
+        assert!(view.history[1].content.contains("llm service is disabled"));
         assert!(!view.is_in_flight());
     }
 }

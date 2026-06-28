@@ -38,7 +38,7 @@ use async_trait::async_trait;
 use clawft_types::skill::SkillDefinition;
 use tracing::{debug, info, warn};
 
-use super::{clamp_complexity, ContextDecision, ContextRequest, ContextRouter};
+use super::{ContextDecision, ContextRequest, ContextRouter, clamp_complexity};
 use crate::agent::skills_v2::SkillRegistry;
 use crate::embeddings::Embedder;
 
@@ -46,11 +46,11 @@ mod index;
 #[cfg(test)]
 mod tests;
 
-use index::Index;
-#[cfg(feature = "embedding-router")]
-use index::DiskAnnEmbeddingIndex;
 #[cfg(not(feature = "embedding-router"))]
 use index::BruteForceIndex;
+#[cfg(feature = "embedding-router")]
+use index::DiskAnnEmbeddingIndex;
+use index::Index;
 
 // ── Tunables ─────────────────────────────────────────────────────────────
 

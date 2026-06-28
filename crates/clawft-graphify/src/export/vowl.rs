@@ -6,9 +6,9 @@
 
 use std::collections::HashMap;
 
+use crate::GraphifyError;
 use crate::model::KnowledgeGraph;
 use crate::topology::TopologySchema;
-use crate::GraphifyError;
 
 /// Generate VOWL-compatible JSON from a knowledge graph and schema.
 pub fn to_vowl_json(
@@ -53,14 +53,16 @@ pub fn to_vowl_json(
         if let Some(iri) = &entity.iri {
             attr["iri"] = serde_json::Value::String(iri.clone());
         } else if let Some(c) = config
-            && let Some(iri) = &c.iri {
-                attr["baseIri"] = serde_json::Value::String(iri.clone());
-            }
+            && let Some(iri) = &c.iri
+        {
+            attr["baseIri"] = serde_json::Value::String(iri.clone());
+        }
 
         if let Some(c) = config
-            && let Some(name) = &c.display_name {
-                attr["comment"] = serde_json::json!({"en": name});
-            }
+            && let Some(name) = &c.display_name
+        {
+            attr["comment"] = serde_json::json!({"en": name});
+        }
 
         if let Some(desc) = entity.metadata.get("description").and_then(|v| v.as_str()) {
             attr["description"] = serde_json::Value::String(desc.to_string());
@@ -97,7 +99,10 @@ pub fn to_vowl_json(
         }));
 
         let mut label = serde_json::Map::new();
-        label.insert("en".into(), serde_json::Value::String(snake_case(&rel_type_str)));
+        label.insert(
+            "en".into(),
+            serde_json::Value::String(snake_case(&rel_type_str)),
+        );
 
         let mut prop_attr = serde_json::json!({
             "id": pid,
@@ -108,22 +113,24 @@ pub fn to_vowl_json(
 
         // Add IRI from schema edge config if available.
         let edge_config = schema.edges.iter().find(|e| {
-            e.edge_type == rel_type_str.to_lowercase()
-                || e.edge_type == snake_case(&rel_type_str)
+            e.edge_type == rel_type_str.to_lowercase() || e.edge_type == snake_case(&rel_type_str)
         });
         if let Some(ec) = edge_config
-            && let Some(iri) = &ec.iri {
-                prop_attr["iri"] = serde_json::Value::String(iri.clone());
-            }
+            && let Some(iri) = &ec.iri
+        {
+            prop_attr["iri"] = serde_json::Value::String(iri.clone());
+        }
 
         property_attrs.push(prop_attr);
     }
 
     // Metrics.
-    let obj_prop_count = properties.iter()
+    let obj_prop_count = properties
+        .iter()
         .filter(|p| p["type"] == "owl:ObjectProperty")
         .count();
-    let dt_prop_count = properties.iter()
+    let dt_prop_count = properties
+        .iter()
         .filter(|p| p["type"] == "owl:DatatypeProperty")
         .count();
 
@@ -200,7 +207,8 @@ mod tests {
             metadata: serde_json::json!({}),
         });
 
-        let schema = TopologySchema::from_yaml(r##"
+        let schema = TopologySchema::from_yaml(
+            r##"
 name: test
 label: "Test"
 version: "1.0.0"
@@ -215,7 +223,9 @@ edges:
   - type: contains
     from: module
     to: function
-"##).unwrap();
+"##,
+        )
+        .unwrap();
 
         let vowl = to_vowl_json(&kg, &schema).unwrap();
 

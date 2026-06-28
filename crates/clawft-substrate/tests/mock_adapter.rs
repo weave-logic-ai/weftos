@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use clawft_substrate::{
@@ -41,11 +41,7 @@ impl OntologyAdapter for MockAdapter {
     fn permissions(&self) -> &'static [PermissionReq] {
         &[]
     }
-    async fn open(
-        &self,
-        topic: &str,
-        _args: Value,
-    ) -> Result<Subscription, AdapterError> {
+    async fn open(&self, topic: &str, _args: Value) -> Result<Subscription, AdapterError> {
         if topic != "substrate/mock/items" {
             return Err(AdapterError::UnknownTopic(topic.into()));
         }

@@ -151,10 +151,7 @@ pub fn run_calibration(
         }
 
         // 4. BLAKE3 hash (Merkle commit simulation)
-        let vec_bytes: Vec<u8> = vectors[i]
-            .iter()
-            .flat_map(|f| f.to_le_bytes())
-            .collect();
+        let vec_bytes: Vec<u8> = vectors[i].iter().flat_map(|f| f.to_le_bytes()).collect();
         let _hash = blake3::hash(&vec_bytes);
 
         let elapsed = start.elapsed().as_micros() as u64;
@@ -186,17 +183,17 @@ pub fn run_calibration(
     //
     // Example: p95=24μs, budget=30% → required=0.08ms → band=0.1ms (10,000 Hz)
     const TICK_BANDS_US: &[u64] = &[
-        10,      // 0.01ms — 100,000 Hz (extreme real-time)
-        50,      // 0.05ms —  20,000 Hz
-        100,     // 0.1ms  —  10,000 Hz
-        250,     // 0.25ms —   4,000 Hz (hard real-time)
-        500,     // 0.5ms  —   2,000 Hz
-        1_000,   // 1ms    —   1,000 Hz (servo control)
-        10_000,  // 10ms   —     100 Hz (fast planning)
-        25_000,  // 25ms   —      40 Hz
-        50_000,  // 50ms   —      20 Hz (default planning)
-        100_000, // 100ms  —      10 Hz
-        500_000, // 500ms  —       2 Hz (slow/constrained)
+        10,        // 0.01ms — 100,000 Hz (extreme real-time)
+        50,        // 0.05ms —  20,000 Hz
+        100,       // 0.1ms  —  10,000 Hz
+        250,       // 0.25ms —   4,000 Hz (hard real-time)
+        500,       // 0.5ms  —   2,000 Hz
+        1_000,     // 1ms    —   1,000 Hz (servo control)
+        10_000,    // 10ms   —     100 Hz (fast planning)
+        25_000,    // 25ms   —      40 Hz
+        50_000,    // 50ms   —      20 Hz (default planning)
+        100_000,   // 100ms  —      10 Hz
+        500_000,   // 500ms  —       2 Hz (slow/constrained)
         1_000_000, // 1000ms —     1 Hz (minimal)
     ];
 
@@ -228,7 +225,10 @@ pub fn run_calibration(
         tick_us = tick_us,
         tick_hz = tick_hz,
         "ECC tick auto-computed: {}μs ({}Hz), p95={}μs, budget={:.0}%",
-        tick_us, tick_hz, p95, config.tick_budget_ratio * 100.0
+        tick_us,
+        tick_hz,
+        p95,
+        config.tick_budget_ratio * 100.0
     );
 
     // Headroom ratio: what fraction of the tick interval does p95 consume?
@@ -407,7 +407,7 @@ mod tests {
         // so that p95 forces an upward adjustment.
         let cfg = EccCalibrationConfig {
             calibration_ticks: 10,
-            tick_interval_ms: 1, // very low
+            tick_interval_ms: 1,     // very low
             tick_budget_ratio: 0.01, // very tight budget
             vector_dimensions: 64,
         };

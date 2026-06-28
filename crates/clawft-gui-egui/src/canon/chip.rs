@@ -8,9 +8,9 @@ use std::borrow::Cow;
 
 use eframe::egui;
 
+use super::CanonWidget;
 use super::response::CanonResponse;
 use super::types::{Affordance, Confidence, IdentityUri, MutationAxis, Tooltip, VariantId};
-use super::CanonWidget;
 
 const IDENTITY: &str = "ui://chip";
 
@@ -51,10 +51,7 @@ pub enum ChipTone {
 impl ChipTone {
     fn colors(self) -> (egui::Color32, egui::Color32) {
         match self {
-            ChipTone::Neutral => (
-                egui::Color32::from_gray(28),
-                egui::Color32::from_gray(210),
-            ),
+            ChipTone::Neutral => (egui::Color32::from_gray(28), egui::Color32::from_gray(210)),
             ChipTone::Ok => (
                 egui::Color32::from_rgb(20, 48, 30),
                 egui::Color32::from_rgb(110, 210, 140),

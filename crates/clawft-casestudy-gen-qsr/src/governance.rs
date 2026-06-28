@@ -32,7 +32,12 @@ pub struct Decision {
 
 impl Decision {
     pub fn permit() -> Self {
-        Self { permitted: true, severity: Severity::Warning, rule: "default".into(), reason: "permit".into() }
+        Self {
+            permitted: true,
+            severity: Severity::Warning,
+            rule: "default".into(),
+            reason: "permit".into(),
+        }
     }
     pub fn deny(rule: &str, reason: &str) -> Self {
         Self {
@@ -71,7 +76,11 @@ impl Governance {
     /// Evaluate a candidate impulse. Returns a `Decision`.
     pub fn evaluate(&self, impulse: &Impulse) -> Decision {
         // Franchisee boundary
-        if self.franchisee_denylist.iter().any(|deny| impulse.store_ref.contains(deny)) {
+        if self
+            .franchisee_denylist
+            .iter()
+            .any(|deny| impulse.store_ref.contains(deny))
+        {
             return Decision::deny(
                 "franchisee_boundary",
                 "store belongs to a franchisee outside the tenant data boundary",

@@ -26,21 +26,15 @@ fn main() {
     println!("{:-<32} {:->12} {:->12}", "", "", "");
     println!(
         "{:<32} {:>12} {:>12}",
-        "param_count",
-        c.eml_param_count,
-        c.baseline_param_count,
+        "param_count", c.eml_param_count, c.baseline_param_count,
     );
     println!(
         "{:<32} {:>12.4} {:>12.4}",
-        "baseline_mse (untrained)",
-        c.eml_baseline_mse,
-        c.baseline_baseline_mse,
+        "baseline_mse (untrained)", c.eml_baseline_mse, c.baseline_baseline_mse,
     );
     println!(
         "{:<32} {:>12.4} {:>12.4}",
-        "final_mse",
-        c.eml_final_mse,
-        c.baseline_final_mse,
+        "final_mse", c.eml_final_mse, c.baseline_final_mse,
     );
     println!(
         "{:<32} {:>11.1}% {:>11.1}%",
@@ -50,15 +44,12 @@ fn main() {
     );
     println!(
         "{:<32} {:>10} ns {:>10} ns",
-        "inference p99",
-        c.eml_inference_ns_p99,
-        c.baseline_inference_ns_p99,
+        "inference p99", c.eml_inference_ns_p99, c.baseline_inference_ns_p99,
     );
     println!();
     println!("Headline:");
     let eml_better_mse = c.eml_final_mse < c.baseline_final_mse;
-    let baseline_better_speed =
-        c.baseline_inference_ns_p99 < c.eml_inference_ns_p99;
+    let baseline_better_speed = c.baseline_inference_ns_p99 < c.eml_inference_ns_p99;
     let speed_ratio = c.eml_inference_ns_p99 as f64 / c.baseline_inference_ns_p99.max(1) as f64;
     if eml_better_mse {
         println!(
@@ -74,7 +65,11 @@ fn main() {
     println!(
         "  - EML inference is {:.2}x {} than baseline ({} vs {} ns p99)",
         speed_ratio.max(1.0 / speed_ratio),
-        if baseline_better_speed { "slower" } else { "faster" },
+        if baseline_better_speed {
+            "slower"
+        } else {
+            "faster"
+        },
         c.eml_inference_ns_p99,
         c.baseline_inference_ns_p99,
     );
@@ -82,7 +77,11 @@ fn main() {
     println!(
         "  - EML uses {:.2}x {} params than baseline ({} vs {})",
         param_ratio.max(1.0 / param_ratio),
-        if c.eml_param_count > c.baseline_param_count { "more" } else { "fewer" },
+        if c.eml_param_count > c.baseline_param_count {
+            "more"
+        } else {
+            "fewer"
+        },
         c.eml_param_count,
         c.baseline_param_count,
     );
