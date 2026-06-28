@@ -16,12 +16,12 @@
 # compilation, multi-arch via cargo-dist).
 
 FROM rust:1.93-alpine AS builder
-# musl-dev for the static C runtime; openssl-dev + pkgconf so the
-# `openssl-sys` build script can locate OpenSSL (the `--features native`
-# graph pulls it in). Without these the from-source build fails with
-# "pkg-config command could not be found" / "Could not find openssl".
-RUN apk add --no-cache musl-dev openssl-dev pkgconf
-ENV OPENSSL_DIR=/usr
+# musl-dev only — weaver links fully static against musl. (Do NOT add
+# openssl-dev: it makes openssl-sys link libssl/libcrypto dynamically,
+# and the minimal runtime stage then fails with "weaver: no such file or
+# directory" at exec. The workspace reqwest uses rustls-tls, so no
+# openssl is pulled — see the workspace Cargo.toml comment.)
+RUN apk add --no-cache musl-dev
 WORKDIR /build
 COPY . .
 RUN cargo build --release --bin weaver --features native
