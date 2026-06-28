@@ -58,6 +58,8 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | [ADR-053](adr-053-voice-stt-canonical-path.md) | Voice STT canonical path — substrate-side whisper | Accepted | Architecture | 0.7.0 release-gate audit (WEFT-205) |
 | [ADR-054](adr-054-claude-flow-integration.md) | claude-flow integration — user-installed, not first-party | Accepted | Integration | 0.7.0 release-gate audit (WEFT-488) |
 | [ADR-055](adr-055-backend-adapter-contract.md) | BackendAdapter contract for the agent dashboard | Accepted | GUI | 0.7.0 release-gate audit (WEFT-319) |
+| [ADR-056](adr-056-bvh-spatial-index.md) | BVH-on-RVF spatial-temporal index over ECC | Accepted | Architecture | scorch_and_awe concept paper (2026-05-03) |
+| [ADR-057](adr-057-substrate-read-acl.md) | Substrate per-path read ACLs (MUST-HAVE for 0.8.x) | Accepted | Security | Watch-as-Actor decision 2026-05-12 |
 
 ## Categories
 
@@ -65,8 +67,8 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 |----------|------|-------------|
 | **Release** | 001, 002, 012, 029, 037, 044 | Versioning, distribution, and build decisions |
 | **GUI** | 003, 004, 005, 006, 007, 013, 016, 038, 055 | UI/UX technology and architecture decisions |
-| **Architecture** | 010, 017, 019, 020, 021, 022, 023, 026, 027, 030, 031, 033, 034, 035, 036, 039, 040, 041, 042, 045, 046, 047, 048, 049, 053 | Core system design decisions |
-| **Security** | 024, 025, 028, 043 | Cryptography, identity, and chain-integrity decisions |
+| **Architecture** | 010, 017, 019, 020, 021, 022, 023, 026, 027, 030, 031, 033, 034, 035, 036, 039, 040, 041, 042, 045, 046, 047, 048, 049, 053, 056 | Core system design decisions |
+| **Security** | 024, 025, 028, 043, 057 | Cryptography, identity, and chain-integrity decisions |
 | **Performance** | 009, 011, 032 | Algorithmic and optimization decisions |
 | **Integration** | 008, 018, 054 | External system integration decisions |
 | **Documentation** | 014, 015 | Documentation and web presence decisions |

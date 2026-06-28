@@ -1,3 +1,1732 @@
+# Session handoff — 2026-05-17 — Vector-first leaf display: end-to-end built, hardware-rendering, residual visual gap blocked on bus-swap diagnosis
+
+Continuation of the 2026-05-14/15 sessions below. Major
+architectural pivot mid-session: after 11 iterations of patching
+the hand-rolled raster DPI driver (config #1 → config #11), we
+**threw out the raster compositor entirely** and rebuilt the leaf
+display as a **retained-mode vector scene graph** with damage-rect
+rendering. Five phases dispatched in (mostly) parallel; all
+delivered build-clean. Hardware test: vector pipeline renders the
+process table over the mesh end-to-end (telemetry confirmed). One
+residual visual gap remains.
+
+**Working tree only, nothing committed across the entire session
+chain. The accumulating untracked surface area is now substantial
+— see "Recoverability" at the end.**
+
+## The pivot
+
+After landing config #11 (LovyanGFX-faithful port of `Bus_RGB.cpp`
+in `lgfx-bus-rgb-rs` + integrated into edge-pad via a thin
+`LeafSurface` adapter), the panel rendered the process table but
+with persistent "glitchy" tearing. User flashed the **factory
+`.bin`** as control — it rendered clean. That killed the
+"floating-LSB hardware reality" theory I'd been advancing and
+forced a re-diagnosis: the bus driver was correct (gradients +
+static text were clean), but the **integrated compose-during-scan
+path** rewrote the whole 800×480 framebuffer on every push event,
+causing tearing. Double-buffering helped but spun out into its own
+race (compose-while-swap-pending). User: *"toss out what we have
+start from scratch with vector at the core"*.
+
+## Architecture — vector-first leaf display
+
+Full design spec at **`docs/design/vector-leaf-display.md`** (~4800
+words after expansion). Highlights:
+
+- **Retained-mode scene graph**, not immediate-mode raster. Each
+  mesh push carries a `SceneEnvelope { version, display_id, ops }`
+  where `SceneOp` is `Insert | Update | Remove | Tween |
+  CancelTween | SetLayerBlend | Clear | Replace(Scene) | Batch`.
+- **Hybrid delta + 5s snapshot wire format.** Steady-state ~30
+  byte cell updates; full `Replace(Scene)` on mesh-connect + every
+  5s for self-healing across lossy links. Wayland-style request/
+  event split.
+- **NodeId = `[DisplayId:8 | PathHash:24]`** via fxhash on
+  producer-named paths (`"ps.row[0]"`). 256 displays per leaf, u24
+  hash space.
+- **Q24.8 fixed-point coords on the wire** — v1 renderer rounds to
+  integer, v1.1 can do AA without breaking the wire.
+- **Capability mask per backend** (ALPHA / SUBPIXEL / ANTIALIASED
+  / BLEND_MODES / VECTOR_FONTS / BITMAP_QOI / BITMAP_PNG /
+  ANIMATION / HIT_TEST_PATH). DPI v1 declares `empty()`; canvas v1
+  declares ALPHA+SUBPIXEL+AA+BLEND+PNG; renderer degrades
+  gracefully.
+- **Seven previously-excluded features moved to first-class wire
+  slots with v1 stubs**: touch input, browser backend, animation
+  (Tween op), sub-pixel/AA, bitmap compression, per-node/layer
+  alpha, multi-display per leaf. Wire format is shaped to
+  accommodate without breaking changes when v1.x ships each
+  capability.
+
+## What got built (Phase A → E)
+
+All under their own `[workspace]` tables, isolated from the bare-
+metal workspace. Each phase produced a fresh agent dispatch with
+the prior phase's stable types as inputs.
+
+### Phase A — `crates/weftos-leaf-scene/` (no_std + alloc, **112 tests**)
+
+Foundation. Scene graph types + wire-format codec + damage
+computation + tween coalescing + hit-test.
+
+- `Scene` / `Node` / `NodeId` / `Primitive` (`Rect`, `Line`,
+  `Circle`, `Text`, `Bitmap`, `Path`) / `Style` / `Transform`
+  (Q24.8) / `Rgba` / `Layer` (Bg|Widget|Text|Alert) / `BlendMode`
+- `SceneStore::{apply, tick, hit_test, to_snapshot,
+  walk_draw_order, walk_top_down}` — runtime-mutable state
+- `DamageSet` — 8-rect budget, edge-merge, **50% area threshold →
+  full repaint escalation**
+- `ActiveTween` table with **coalescing on `(node_id, property)`**
+  (user-approved): new tween's `from` = current interpolated state
+  of the old, then old is cancelled
+- `codec::{encode, decode_scene_envelope, decode_input_envelope}`
+  — CBOR via ciborium, deterministic bytes, `WIRE_VERSION` byte
+  with mismatch rejection
+- `InputEvent` / `InputEnvelope` / `HitShape` / `InputRegion` for
+  the bidirectional touch path
+
+Phase A required ONE backport during Phase B: `#[derive(Hash)]` on
+`FontFace` so the glyph cache can key on `(face, char, size_q8)`.
+Otherwise untouched after Phase A landed.
+
+### Phase B — `crates/weftos-leaf-renderer/` + `crates/weftos-leaf-sim/` (**74 tests**)
+
+Generic scene-to-pixels engine + desktop simulator.
+
+- `SceneSurface` trait (the porting seam):
+  ```
+  fn capabilities(&self) -> CapabilityMask;
+  fn begin_frame(&mut self, damage: &DamageSet, viewport: Rect) -> Result<(), Self::Error>;
+  fn draw_primitive(&mut self, p: &Primitive, s: &Style, t: &Transform) -> Result<(), Self::Error>;
+  fn end_frame(&mut self) -> Result<(), Self::Error>;
+  ```
+- `render_damage(store, display_id, damage, surface) -> RenderStats`
+  — walks `display.node_order` by layer, AABB-filters against
+  damage rects, calls `surface.draw_primitive(&node.primitive,
+  &resolved_style, &node.transform)`. Returns `Ok(stats)` with
+  `drawn` / `skipped_invisible` / `skipped_offscreen` counts.
+- LRU `GlyphCache` keyed on `(FontFace, char, size_q8)` (cache
+  itself is a pass-through for v1 mono fonts since
+  `embedded-graphics::MonoTextStyle` rasterizes from compile-time
+  bitmaps; cache lights up for v1.1 vector fonts)
+- `to_rgb888` / `to_rgb565` / `to_rgb565_be` — the byte-swap path
+  the CrowPanel needs lives in shared code so all backends reuse it
+- `decode_bitmap(format, w, h, bytes)` — `Raw8888` + `Raw565` for
+  v1; `Qoi` / `Png` / `Rle` / `WebP` declared as enum variants
+  returning `Unsupported` (wire-stable for v1.1)
+- `weftos-leaf-sim::SimSurface` — embedded-graphics-simulator
+  window backend; `cargo run --example boot` renders the boot
+  scene to a desktop window for dev iteration
+
+### Phase C — rewritten `clawft-edge-pad/src/drivers/dpi_surface.rs`
+
+`SceneSurface` impl over the proven `lgfx-bus-rgb-rs` v0.2.1 bus
+(synchronous double-buffer, FIFO-skip restart descriptor — the
+hardware-verified substrate from the 2026-05-14 bringup).
+
+- `DpiSurface` keeps the same constructor name (`new(dpi)`) so
+  `main.rs` doesn't churn
+- `begin_frame` clears only damage rects (vs old "always blast
+  whole FB" — the whole point of the vector pipeline)
+- `draw_primitive`:
+  - Rect/Line/Circle via `embedded-graphics::primitives::*` with
+    `rgba_to_rgb888` + byte-swap RGB565 at the framebuffer edge
+  - Text via `MonoTextStyle<Rgb888>` over `FONT_6X10` / `FONT_10X20`
+  - Bitmap::Raw565 = fast memcpy + `.swap_bytes()`; Raw8888 via
+    `decode_bitmap` + per-pixel `draw_iter`
+  - Path / Qoi / Png / Rle / WebP / vector fonts → log-once + skip
+- `end_frame` calls `bus.present()` (synchronous double-buffer
+  swap with 100ms watchdog)
+- `capabilities()` returns `CapabilityMask::empty()` — v1 baseline
+
+Old `weftos-leaf-display` removed from edge-pad's `Cargo.toml`.
+
+### Phase D — `crates/weftos-leaf-canvas/` (wasm32-unknown-unknown)
+
+Browser/WASM `SceneSurface` impl via `web_sys::
+CanvasRenderingContext2d`. ~1135 LoC, build-clean for
+`wasm32-unknown-unknown`, clippy `-D warnings` clean.
+
+- `CanvasSurface::{new(canvas_id), from_canvas(html)}` constructors
+- Capabilities: `ALPHA | SUBPIXEL | ANTIALIASED | BLEND_MODES |
+  BITMAP_PNG` (Canvas2D gives all of these natively)
+- All v1 primitives implemented; Path + PNG-decode shipped as
+  v1.1 stubs (dispatch shape ready)
+- Opacity honored via `globalAlpha`
+
+The browser **mesh client** (WebSocket-to-mesh-gateway) is not
+wired yet — that's the next milestone for browser-leaf parity.
+`examples/boot.html` is the integration stub.
+
+### Phase E — host-side scene producer + leaf-side rewire + touch driver
+
+The biggest phase. New crates + extensive modifications.
+
+**New crates:**
+- `crates/weftos-scene-builder/` (host-side, std, **19 tests**) —
+  ergonomic `SceneBuilder` for producers, scene `diff` for
+  computing deltas, `to_envelope` for snapshots
+- `crates/weftos-leaf-touch-gt911/` (no_std, **6 tests**) — GT911
+  driver lifted out of edge-pad; `hit_test_event(scene, display,
+  raw_touch) -> InputEnvelope` plumbs scene hit-testing through
+
+**Modified:**
+- `crates/clawft-weave/src/commands/leaf_cmd.rs` — wholesale CLI
+  rewrite. Old `weaver leaf push text/clear/brightness/effect`
+  gone. New `weaver leaf scene { push, clear, snapshot, ps }`.
+  Audio variants (`chord`, `scuttle`) preserved on the outer
+  `LeafPush` envelope per design §C.
+- `weaver leaf scene ps --target <pk> [--snapshot]` — Rust
+  producer that calls `weaver kernel ps`, builds a `SceneStore`
+  via `weftos-scene-builder`, diffs against
+  `~/.clawft/leaf-state/<target>-<display>.cbor`, emits either a
+  `Replace(Scene)` snapshot or a `Vec<Update>` delta. First run
+  ~2.5 KB; steady-state with no changes = skips publish entirely;
+  one row state change = ~80-120 bytes.
+- `crates/clawft-edge-pad/src/mesh.rs` — wholesale rewrite. TCP
+  read loop decodes `SceneEnvelope` via
+  `codec::decode_scene_envelope`, calls `store.apply(&env)` to get
+  a `DamageSet`, then `render_damage(&store, display_id, &damage,
+  &mut surface)`. Silent on success (gives the panel its fast
+  path); errors logged with `[mesh] render_damage error: ...`.
+  Second outgoing task `input_task` owns the GT911 driver, runs
+  `hit_test_event` against the shared `Mutex<SceneStore>`, and
+  publishes `InputEnvelope`s on `mesh.leaf.<pk>.input`. Shared
+  store via `static_cell::StaticCell<Mutex<SceneStore>>`.
+- `crates/clawft-edge-pad/src/main.rs` — removed in-firmware
+  `touch_task`; new `input_task` spawn. Inline `SceneStore` boot
+  scene (Bg rect + 2 Text nodes — "clawft-edge-pad :: vector
+  display ready") rendered once via `render_damage(&store, 0,
+  &DamageSet::full(), &mut surface)` before WiFi/mesh start.
+
+**Deleted:**
+- `crates/clawft-edge-pad/src/drivers/gt911.rs` — superseded by
+  `weftos-leaf-touch-gt911`
+- `weftos-leaf-display` — **directory retained for now** because
+  `crates/clawft-edge-pad-idf` still path-deps on it. Removed
+  from workspace `members`, added to `exclude`. Phase F (cleanup
+  pass) should migrate the IDF sibling and delete the tree.
+
+## Hardware test results
+
+### What works confirmed-on-hardware
+- **Bus driver** (`lgfx-bus-rgb-rs`) — gradients render clean,
+  static text renders clean. Confirmed from `examples/
+  crowpanel_dis08070h.rs` flashed standalone.
+- **Vector pipeline end-to-end** — flashed integrated edge-pad,
+  ran `weaver leaf scene ps --target 3cdc75fabc7c --snapshot`,
+  serial telemetry confirms:
+  ```
+  [edge-pad] DpiSurface up — framebuffer @ 0x3c19b800 (align%64 = 0)
+  [edge-pad] boot scene rendered: drawn=3 skipped_inv=0 skipped_off=0 skipped_unsup=0
+  [mesh] display ingest: leaf id '3cdc75fabc7c', push topic 'mesh.leaf.3cdc75fabc7c.push'
+  [net] wifi connected
+  [mesh] connected — subscribing to 'mesh.leaf.3cdc75fabc7c.push'
+  [mesh] APPLY display=0 ops=1 damage_rects=0 full=true drawn=9
+  ```
+  9 primitives = 1 header + 8 process rows. Per-push, exactly
+  one APPLY fires (not in a loop).
+- **Wire format** — CBOR encoding verified via `cbor2`-decoded
+  cached state. Transforms in PSRAM-cached snapshot:
+  `nodes[i].transform.x = 12800` (= `50 << 8` Q24.8 = 50 px),
+  `transform.y = 16896, 20992, 25088, ...` (= 66, 82, 98 px,
+  matching `Y0 = GUTTER + ROW_H = 50 + 16 = 66` and
+  `+16` per row). **The producer is encoding the correct
+  coords.**
+- **Math path** — `from_px_q8(12800) = (12800 + 128) >> 8 = 50`
+  arithmetic-correct. `Point::new(50, 66)` is the value
+  `DpiSurface::draw_primitive` would pass to embedded-graphics.
+
+### Residual visual gap
+
+**Symptom:** with `GUTTER=50` in the producer (text should be
+visibly inset ~50px from left, ~66px from top), user reports
+"Really bad tearing, and I still don't see a gutter." Identical
+visual result as `GUTTER=10` and as the old no-gutter layout.
+
+**Diagnosis state at session end:** the wire is correct, the
+renderer is called once per push with the correct transforms,
+`drawn=9` confirms primitives are issued, but the visible
+content on the panel does not move with the gutter value.
+
+**Highest-probability root cause** (not yet confirmed): the
+`lgfx-bus-rgb-rs` v0.2.1 **double-buffer swap** is broken — the
+synchronous swap-wait returns "success" but the buffer that
+actually becomes scanned is the WRONG one, so the panel ends up
+showing the previous frame's content even after a clean apply +
+render + present. This would explain both symptoms simultaneously
+(no visible gutter change + "really bad tearing" from old/new
+flickering at the GDMA's natural cadence).
+
+**Cheap disambiguation queued, not run:** flip the
+`double-buffer` Cargo feature off in
+`crates/clawft-edge-pad/Cargo.toml` so the bus runs single-buffer
+(writes directly to the scanned framebuffer). Expect visible
+tearing during writes but **coords land at (50, 66) cleanly** if
+the swap was the bug. If single-buffer also fails, the bug is
+deeper than the bus.
+
+### The sidecar option
+
+User raised the possibility that we may not be able to drive this
+panel cleanly in pure Rust on `esp-hal 1.0` and should consider a
+**dual-stack sidecar**: LovyanGFX (C++/Arduino-on-IDF, the proven
+factory stack) for the display, Rust for mesh/scene/protocol. Two
+viable shapes:
+1. Single ESP32-S3: `esp-idf-hal` runtime, link LovyanGFX as a C++
+   component, Rust handles `weftos-leaf-scene` + mesh + touch.
+2. Two ESP32 chips: one runs factory firmware (LovyanGFX + LVGL),
+   the other runs Rust mesh client; they talk via UART/I²C/ESP-NOW.
+
+The `clawft-edge-pad-idf` crate from the 2026-05-15 IDF migration
+attempt already proves toolchain viability (`esp-idf-svc 0.52 +
+esp-idf-hal 0.46 + esp-idf-sys 0.37` in this repo), though that
+build panics on WiFi init with a "cache disabled but cached memory
+region accessed" — needs sdkconfig tuning to land. The
+`clawft-edge-bench` sibling is the in-repo IDF-on-Rust precedent
+that already works.
+
+If the single-buffer disambiguation confirms the bus swap is the
+root cause and the fix isn't obvious from the bus crate, **pivot
+to the sidecar (option 1) is the recommended path** — finish the
+Rust mesh/scene work on `esp-idf-hal` and let LovyanGFX own the
+display register-banging where it has a decade of production
+proof.
+
+## Expert agent
+
+`~/.claude/agents/esp32-s3-rgb-touch-display/esp32-s3-rgb-touch-display.md`
+augmented with **~220 lines of institutional session learnings**:
+PSRAM contention story + fix-B heap split, FIFO-skip restart
+descriptor with line cites against `Bus_RGB.cpp:220-225`, boot
+order requirements, RGB888-low-bit hardware reality (the "Fallout
+glitch"), clock mode mapping (`pclk_active_neg=1` → esp-hal
+`Polarity::IdleLow + Phase::ShiftHigh`), esp-hal upstream issue
+#5262 gap. Future sessions invoking this agent start from this
+foundation instead of re-discovering it.
+
+## The "Fallout glitch" aesthetic preservation
+
+Captured at `.planning/actors/inkpad-snapshots/2026-05-15-fallout-glitch/`
+with the three load-bearing firmware files (dpi_surface.rs +
+main.rs + board.rs from config #11) + a `README.md` recipe. The
+"pleasantly glitchy" hardware-revision visual was preserved as
+either a recovery snapshot or a deliberate effect mode for future
+use, even after the migration to a clean display stack.
+
+## Daemon binary mapping gotcha (this session's repeating issue)
+
+`cp target/release/weaver ~/.cargo/bin/weaver` while the daemon
+runs gets "Text file busy". Atomic rename
+(`mv -f .new ~/.cargo/bin/weaver`) succeeds at the FILE level
+but **the running daemon process keeps the old inode mapped**:
+`ls -la /proc/<pid>/exe` shows `→ /home/aepod/.cargo/bin/weaver
+(deleted)`. The daemon must be **restarted** (Ctrl-C in the
+foreground terminal + `weaver kernel start --foreground`) for
+binary updates to take. This bit us 3+ times across the session —
+every time the user reported "the new behavior isn't there", the
+daemon was running stale code.
+
+## Recoverability
+
+**The accumulating untracked surface area is the biggest risk for
+the next session:**
+- `crates/lgfx-bus-rgb-rs/` (v0.2.1, untracked)
+- `crates/weftos-leaf-scene/` (untracked)
+- `crates/weftos-leaf-renderer/` (untracked)
+- `crates/weftos-leaf-sim/` (untracked)
+- `crates/weftos-leaf-canvas/` (untracked)
+- `crates/weftos-scene-builder/` (untracked)
+- `crates/weftos-leaf-touch-gt911/` (untracked)
+- `crates/clawft-edge-pad/` (modified, untracked)
+- `crates/clawft-edge-pad-idf/` (untracked sibling)
+- `docs/design/vector-leaf-display.md` (new, untracked)
+- `.planning/actors/inkpad-snapshots/2026-05-15-fallout-glitch/`
+  (new, untracked)
+- `~/.claude/agents/esp32-s3-rgb-touch-display/...` (modified,
+  outside repo so not git-tracked at all)
+- `scripts/leaf-push-ps.sh` (Phase E rewrote it; thin wrapper now)
+- `scripts/mesh-leaf-sim.py` (untracked diagnostic tool)
+- `crates/clawft-weave/src/commands/leaf_cmd.rs` (modified)
+- `crates/clawft-weave/Cargo.toml` (added path deps)
+- `Cargo.toml` (workspace, exclude list expanded)
+
+The fallout-glitch snapshot + the expert-agent file are the only
+session artifacts with their own backups outside the working tree.
+Everything else is one accidental `git checkout` from disappearing.
+**Strong recommendation: commit a focused diff covering at minimum
+the new crates + design doc + expert-agent learnings before
+touching anything else.**
+
+## Open punch list for the next session
+
+1. **Run the single-buffer disambiguation** (flip `double-buffer`
+   Cargo feature off in clawft-edge-pad/Cargo.toml, re-flash,
+   check if gutter coords now land visibly). Diagnoses whether
+   the bus swap is the residual visual bug or whether something
+   deeper is at play.
+2. **Commit the vector-display work.** New crates + design doc +
+   leaf-cmd CLI rewrite + edge-pad rewrite + snapshot directory.
+   A single focused commit, just edge-pad-and-vector-display
+   scope.
+3. **If single-buffer fixes the gutter**, decide whether to fix
+   the bus crate's swap (likely an off-by-one in
+   `SCANNING_FB.toggle()` ordering relative to descriptor re-arm)
+   or live with single-buffer + accept tearing during writes.
+   Compose-after-VSYNC scheduling becomes an option once the
+   damage-rect renderer keeps write area small.
+4. **If single-buffer doesn't fix it**, pivot to the sidecar.
+   Start by getting `clawft-edge-pad-idf` past the WiFi-init
+   panic (sdkconfig tuning) so we have a known-good IDF substrate,
+   then layer LovyanGFX as a C++ component for the display only.
+5. **Wire the browser mesh client** (`weftos-leaf-canvas` exists
+   with the rendering shape; needs WebSocket-to-mesh-gateway
+   transport).
+6. **Migrate `clawft-edge-pad-idf` off `weftos-leaf-display` dep**
+   so we can finally delete that directory.
+7. **GT911 input flow live test** — the plumbing is fully wired
+   (driver + hit-test + envelope + mesh publish) and unit-tested;
+   needs hardware verification once a touch happens on a known
+   scene region.
+
+---
+
+# Session handoff — 2026-05-14 (cont.) — Day-2 COMPLETE: LCD lit + GT911 touch working (multi-point, drag tracking)
+
+Continuation of the day-2 execution session below. The GT911
+touch blocker — which the prior section left as "blocked on a
+config blob" — was resolved. **Touch is fully working: multi-
+point, smooth finger-drag tracking, correct 800×480
+coordinates.** Both halves of day-2 (LCD + touch) are now done.
+**Working tree only, nothing committed.**
+
+## The GT911 resolution
+
+The "blocked on a config blob" conclusion was wrong, based on a
+misread. Two corrections:
+
+1. **`config version = 0xFF` is NOT "blank config".** A full
+   185-byte dump of the config region (0x8047..0x80FF) showed a
+   complete, valid factory config — correct 800×480 resolution
+   bytes, real drive/sense channel map, 170/185 bytes non-0xFF.
+   0xFF is a valid *max-priority* config version, not an empty
+   marker.
+
+2. **The actual bug was my own `commit_config()` call.** It wrote
+   1 to `CONFIG_FRESH` (0x8100) intending to "kick the chip into
+   scanning" — but that tells the GT911 to re-validate its
+   config, and that was disrupting the scan engine. Removing it
+   entirely (leave the factory config 100% untouched) + the
+   PCA9557 RST release = the chip scans on its own.
+
+Bonus correction: the earlier "passive diagnostic proves the
+chip is dead" conclusion was also flawed — the GT911 is
+single-buffered and won't post a new scan result until the host
+clears `POINT_INFO`. A passive reader that never clears the flag
+sees it frozen, which *looks* like a dead chip but is actually
+normal handshake behavior.
+
+Net: the GT911 driver (`src/drivers/gt911.rs`) now just probes
+the address and reads frames — no config writes at all. Touch
+output confirmed on hardware:
+
+```
+GT911 POINT_INFO: 0x81
+touch[0]: x=378 y=183 size=17 id=0
+GT911 POINT_INFO: 0x82
+touch[0]: x=378 y=183 ... touch[1]: x=287 y=192 id=1   ← 2-finger
+touch[0]: x=386 → x=417 → x=439 ...                    ← drag tracking
+```
+
+## Day-2 final scorecard
+
+| Criterion | Status |
+|---|---|
+| Boot + embassy + backlight | ✅ |
+| PSRAM init (8 MiB heap) | ✅ |
+| Pin map → `board.rs` | ✅ |
+| LCD RGB DPI — red fill on panel | ✅ |
+| PCA9557 board expander driver | ✅ |
+| GT911 touch — multi-point coordinates | ✅ |
+| Local stroke render | ⏸ next (needs real PSRAM framebuffer) |
+| Actor keypair provisioning | ⏸ next |
+| First ink publish over WiFi | ⏸ next |
+| Echo-subscribe + ADR-057 test | ⏸ next |
+
+Day-2's hardware-bringup goals are all met. What remains is
+day-3+ application logic: stroke capture → render → substrate
+publish.
+
+## What to pick up next (day-3)
+
+1. **Real PSRAM framebuffer.** Swap the `dma_loop_buffer!` solid-
+   fill for an 800×480×2-byte (768 KB) framebuffer in PSRAM, fed
+   to the DPI peripheral via GDMA. embedded-graphics `DrawTarget`
+   on top.
+2. **Stroke capture + local render.** Wire `gt911.read_frame()`
+   touch points into a `heapless::Vec` stroke buffer; render the
+   in-progress stroke as an embedded-graphics `Polyline` on the
+   framebuffer.
+3. **Actor identity.** ed25519 keypair gen + NVS persistence +
+   `a-<6-hex>` derivation.
+4. **First ink publish.** embassy-net + WiFi + substrate JSON-RPC.
+
+---
+
+# Session handoff — 2026-05-14 — Day-2 execution: LCD panel LIT (red fill confirmed), GT911 touch reverse-engineered + blocked on config blob
+
+Executed day-2 of the Inkpad spike with parallel development —
+agent-assisted research (the `embedded-acoustic-firmware` agent
+twice, the new `esp32-s3-rgb-touch-display` agent once) running
+alongside hands-on driver bringup. **The LCD is fully working —
+solid red fill confirmed on the physical 800×480 panel.** The
+GT911 touch path was reverse-engineered down to the root cause
+(missing config blob) but is blocked there. **Working tree only,
+nothing committed.**
+
+## What landed (day-2 execution)
+
+### 1. LCD RGB panel — LIT ✅
+
+`esp-hal` `lcd_cam` DPI driver wired end-to-end:
+- Pin map (21 GPIOs) + panel timings transcribed from Elecrow's
+  `gfx_conf.h` `CrowPanel_70` block into `src/board.rs`, all
+  verified correct against the physical panel.
+- `Dpi::new` + `dma_loop_buffer!` + `send(next_frame_en=true)`.
+- **Result: solid red screen, confirmed by eyeball.**
+
+Two non-obvious gotchas found and fixed:
+- **`next_frame_en` must be `true`.** The esp-hal example passes
+  `false` (it changes color every frame); `false` drives exactly
+  one frame then the panel goes black. The arg name in
+  `dpi.rs:502` — "Automatically send the next frame data when the
+  current frame is sent" — was the tell.
+- **`core::mem::forget(transfer)` blocks espflash auto-reset.**
+  Leaking the DMA transfer keeps the panel lit forever, but the
+  held LCD_CAM + GDMA peripherals stop the chip from entering
+  download mode on the CH340 auto-reset handshake. Fix: a 3-second
+  do-nothing **flash-grace window** at the very top of `main()`.
+  After that one manual BOOT+RESET to break the cycle, every
+  subsequent `espflash flash` connects cleanly.
+
+### 2. GT911 touch — reverse-engineered, blocked on config blob
+
+Touch went deep. The chain of discoveries:
+- The chip answers I²C, `PRODUCT_ID` reads `"911"` — but
+  `POINT_INFO` (0x814E) was stuck at `0x00` and no touches ever
+  registered.
+- Probed: it's at I²C address **0x5D** (not 0x14 — Elecrow's
+  `gfx_conf.h` 0x14 is a different CrowPanel variant; FluidTouch's
+  `config.h` 0x5D was right).
+- A RST pulse on GPIO 38 (FluidTouch's value) did nothing.
+- The Elecrow **v3.0 touch demo** revealed the real story:
+  `#include <PCA9557.h>` — the v3.0 board has a **PCA9557 I²C I/O
+  expander** and routes the GT911 RST through expander pin **IO1**.
+  New driver `src/drivers/pca9557.rs` transcribes the demo's
+  reset sequence (probe 0x18-0x1F → found at **0x18** → drive
+  IO0/IO1 low, 20 ms, IO0 high, 100 ms, IO1 → input to release
+  GT911 RST).
+- After the PCA9557 reset, the GT911 scan engine runs **one**
+  cycle (`POINT_INFO` 0x00 → 0x80) — real progress — but then
+  **freezes at 0x80 forever**. A pure passive read-only
+  diagnostic (never clearing the flag) confirmed: the register
+  never changes, even under hard multi-finger touch.
+- **Root cause: `config version` register (0x8047) reads `0xFF`
+  — the GT911 has no valid touch-panel config.** Without the
+  panel-specific config blob (drive/sense channel map,
+  thresholds) the chip cannot sustain scanning. The TAMC Arduino
+  driver reads the config *from* the chip, so it only works on
+  units that ship with NV-flash config; ours doesn't have one.
+
+**Blocked on:** sourcing a known-good GT911 config blob for the
+CrowPanel 7" 800×480 panel — from a working-unit register dump,
+deeper in Elecrow's firmware, or a compatible-panel reference —
+and writing it (config bytes + checksum + `CONFIG_FRESH`) in
+`Gt911::new`. The `read_frame` handler is already correct and
+will produce touches the instant a valid config is committed.
+
+### 3. New drivers + files
+
+```
+A crates/clawft-edge-pad/src/board.rs          # pin map, panel timings, touch/SD pins
+A crates/clawft-edge-pad/src/drivers/mod.rs
+A crates/clawft-edge-pad/src/drivers/lcd_rgb.rs # RGB565 helpers + color consts
+A crates/clawft-edge-pad/src/drivers/gt911.rs   # async GT911 driver — probe, read_frame, commit_config
+A crates/clawft-edge-pad/src/drivers/pca9557.rs # NEW — board I/O expander reset sequence
+M crates/clawft-edge-pad/src/main.rs            # LCD DPI bringup + I²C + touch_task + flash-grace window
+M crates/clawft-edge-pad/Cargo.toml             # +embedded-hal-async
+M crates/clawft-edge-pad/.cargo/config.toml     # +ESP_HAL_CONFIG_PSRAM_MODE=octal (from day-1)
+```
+
+### 4. Agent-pattern validation (again)
+
+Three agent spawns this session, all paid off:
+- `embedded-acoustic-firmware` → root-caused the PSRAM Quad/Octal
+  mode panic in ~3 min.
+- `embedded-acoustic-firmware` (2nd) → produced the esp-hal DPI
+  API surface + a paste-ready `LcdRgb` struct (I'd already
+  written an equivalent inline by the time it returned — but it
+  independently confirmed the approach, including the
+  `next_frame_en` semantics).
+- The new `esp32-s3-rgb-touch-display` agent file is in place at
+  `~/.claude/agents/` for the next session to consult on the
+  GT911 config-blob problem.
+
+## Day-2 status vs. the journal's 5-day acceptance criteria
+
+| Criterion | Status |
+|---|---|
+| Boot + embassy + backlight | ✅ day-1 |
+| PSRAM init (8 MiB heap) | ✅ day-1 |
+| Pin map → `board.rs` | ✅ |
+| GT911 driver scaffold | ✅ (but see below) |
+| LCD scaffold | ✅ |
+| `esp32-s3-rgb-touch-display` agent | ✅ |
+| **LCD RGB DPI wired up — color fill on panel** | ✅ **red confirmed** |
+| GT911 touch producing coordinates | ⛔ blocked on config blob |
+| Local stroke render | ⏸ blocked on touch |
+| Actor keypair provisioning | ⏸ not started |
+| First ink publish over WiFi | ⏸ not started |
+| Echo-subscribe + ADR-057 test | ⏸ not started |
+
+## What to pick up next
+
+1. **GT911 config blob** — the one hard blocker. Options, in
+   rough order of effort: (a) dump the config registers from a
+   CrowPanel running Elecrow's working LVGL firmware over I²C;
+   (b) dig deeper in Elecrow's repos / forums for a hardcoded
+   800×480 GT911 config; (c) find a reference config for a
+   compatible 7" capacitive panel. Once obtained, write it in
+   `Gt911::new` (the constants `CONFIG_SIZE`, `REG_CONFIG_START`,
+   `REG_CONFIG_CHKSUM`, `REG_CONFIG_FRESH` are already in
+   `gt911.rs`).
+2. **Then**: local stroke render (embedded-graphics Polyline on
+   the framebuffer — needs the loop-buffer swapped for a real
+   PSRAM framebuffer, ~768 KB).
+3. **Then**: Actor keypair provisioning + first ink publish.
+
+The LCD half of day-2 is genuinely done. The touch half is one
+config blob away from working — the entire signal path
+(PCA9557 → GT911 RST → I²C → scan engine) is reverse-engineered
+and the driver code is in place.
+
+---
+
+# Session handoff — 2026-05-13 (evening) — Day-2 Inkpad bringup: PSRAM diagnosed + heap online, drivers scaffolded, expert agent landed
+
+Picking up after the day-1 ~~smoke test~~ blink success. Goals
+this round: get PSRAM out of its panic state (blocking the LCD
+framebuffer), transcribe the LCD + touch pin maps from the
+reference projects, scaffold the driver modules, and stand up a
+hardware-specific expert agent so future sessions have a
+domain peer (the way `embedded-acoustic-firmware` is to the
+sonobuoy work). All four shipped. **Working tree only —
+nothing committed yet.**
+
+## What landed (day-2)
+
+### 1. PSRAM panic root-caused and fixed
+
+The `esp_alloc::psram_allocator!` panic from day 1 was
+diagnosed by spawning the `embedded-acoustic-firmware` agent
+in parallel. Verdict (in ~3 min wall time): esp-hal 1.0
+defaults `ESP_HAL_CONFIG_PSRAM_MODE` to `"quad"`, but the
+N4R8 module on the CrowPanel has **Octal** PSRAM.
+`init_psram` silently fails, returns a 0-byte region, and
+`linked_list_allocator::hole` asserts on the empty slot.
+
+**Fix:** added `ESP_HAL_CONFIG_PSRAM_MODE = "octal"` to
+`crates/clawft-edge-pad/.cargo/config.toml`. One line.
+
+**Verification:** reflashed with both `heap_allocator!(size: 64 KiB)`
+(SRAM, for esp-radio later) and `psram_allocator!(peripherals.PSRAM,
+esp_hal::psram)` (PSRAM). Boot serial shows
+`[edge-pad] heap free: 8454144 bytes` = exactly 65,536 + 8,388,608
+= 64 KiB SRAM + 8 MiB Octal PSRAM. PSRAM is online.
+
+This is a generic ESP32-S3-WROOM-1 N4R8 issue, not specific
+to the CrowPanel. The waveshare-watch-rs reference firmware
+"works" because Waveshare's variant ships in Quad mode, or
+they set the env elsewhere. The new
+`esp32-s3-rgb-touch-display` agent captures this gotcha
+canonically.
+
+### 2. Pin map + driver scaffolds
+
+Two reference projects fully cross-walked:
+
+- **`Elecrow-RD/CrowPanel-ESP32-Display-Course-File`** —
+  Lesson 2's `gfx_conf.h`, specifically the `CrowPanel_70`
+  block. Canonical pin map for the v3.0 board revision.
+- **`jeyeager65/FluidTouch`** — `include/config.h`. Touch
+  + SD pin maps for the Basic SKU. Mostly agrees with
+  Elecrow; **conflict** on GT911 RST (FluidTouch: GPIO 38;
+  Elecrow: not used) and I²C address (FluidTouch: 0x5D;
+  Elecrow: 0x14). The v3.0 board strap moved the GT911
+  address; both probed at driver init time.
+
+New files:
+
+- `crates/clawft-edge-pad/src/board.rs` — every pin + every
+  panel timing constant + the GT911 reference conflict
+  inline-commented.
+- `crates/clawft-edge-pad/src/drivers/mod.rs` — module
+  skeleton.
+- `crates/clawft-edge-pad/src/drivers/gt911.rs` — async port
+  of `Elecrow-RD/gt911_for_crowpanel`. Implements `Gt911::new`
+  (probes both 0x14 / 0x5D, picks whichever responds to
+  `PRODUCT_ID` read), `read_frame` (clears the data-available
+  flag after read — required by the chip), full register-map
+  constants. Compiles. Not yet bound to a real I²C bus.
+- `crates/clawft-edge-pad/src/drivers/lcd_rgb.rs` — RGB DPI
+  scaffold. Documents the day-2.x bring-up plan (the actual
+  `Dpi::new` + GDMA + PSRAM framebuffer wiring) but leaves
+  the implementation as TODO. Ships an `rgb565()` encoder
+  with unit tests as a sanity-check on the color math.
+
+### 3. New expert agent: `esp32-s3-rgb-touch-display`
+
+At `~/.claude/agents/esp32-s3-rgb-touch-display/esp32-s3-rgb-touch-display.md`.
+Hardware-specific complement to `embedded-acoustic-firmware`:
+where that one knows ISR determinism + ADC capture + DSP,
+this one knows LCD_CAM DPI + capacitive touch + PSRAM init
+quirks + the CrowPanel hardware family.
+
+The agent's description captures:
+- Canonical hardware (CrowPanel DIS08070H + family)
+- Software stack (esp-hal 1.0 LCD_CAM, esp-rtos, embassy,
+  embedded-graphics, esp-alloc 0.9, ed25519-dalek)
+- Reference repos (`waveshare-watch-rs`, `FluidTouch`,
+  `CrowPanel-ESP32-Display-Course-File`, `gt911_for_crowpanel`)
+- Architecture diagram for the Inkpad firmware (two-core
+  split: touch on core 0, display + network on core 1)
+- Known boot-path quirks (PSRAM mode, GPIO 0 strapping,
+  GT911 address probe, CH340 + WSL contention)
+- Real-time-safety patterns (no allocator on touch path,
+  framebuffer flip on VSYNC, key separation for Actor vs
+  Node identity)
+- Substrate integration contract referencing ADR-057 + the
+  Actor journal
+
+Operator-applicable lesson: **for any hardware-shaped
+problem domain, a dedicated agent pays for itself within the
+first non-trivial use.** The PSRAM diagnosis took the
+acoustic-firmware agent under 4 minutes when I had been
+about to start guessing. The sonar project had already
+proven this pattern; the user's call to extend it to display
+nodes was right.
+
+### 4. Build chain proven end-to-end on real hardware
+
+- ✅ `cargo build --release` clean (5 deps + edge-pad; ~10 s
+  incremental, ~36 s from cold).
+- ✅ `espflash save-image` produces 85 KB / 2.07% of partition.
+- ✅ `espflash flash` writes to device in ~4 s.
+- ✅ Device boots: ESP-ROM → ESP-IDF stage-2 (v5.5.1) →
+  Rust embassy main → 1 Hz blink loop on GPIO 2.
+- ✅ Heap stats confirm PSRAM init worked (8,454,144 bytes).
+- ✅ Stock firmware backup is on disk if anything goes wrong:
+  `crates/clawft-edge-pad/firmware-backups/elecrow-DIS08070H-stock-2026-05-13.bin`
+  (sha256 `3397e760fb…baa3`).
+
+## What's NOT done — day-2 punch list (revised)
+
+1. **`Dpi::new` + GDMA wiring in `lcd_rgb.rs`.** The pin
+   constants are ready, panel timings are ready, PSRAM is
+   ready. Remaining: read esp-hal 1.0's `lcd_cam::lcd::dpi`
+   examples + write the actual GDMA + framebuffer setup. ~1 day.
+2. **I²C bus instantiation + GT911 driver bind.** The driver
+   compiles standalone; need to wire it to an
+   `embedded-hal-async` I²C bus from esp-hal and run a
+   `read_frame` loop with logging. ~0.5 day.
+3. **embedded-graphics integration for stroke render.**
+   Local Polyline draw of in-progress touch on the
+   framebuffer. ~0.5 day. Blocked on #1 and #2.
+4. **Actor + Node keypair provisioning at boot.** Generate
+   ed25519 keys, persist to NVS, derive `a-<6-hex>` /
+   `n-<6-hex>`, print them on boot. ~0.5 day.
+5. **First ink publish over WiFi.** Embassy-net + smoltcp +
+   substrate JSON-RPC client. ~1 day.
+6. **Echo-subscribe test + ADR-057 enforcement.** Two-end
+   verification. ~1 day.
+
+Total remaining for the 5-day spike: ~3-4 days of focused
+work. We're ahead of schedule on the toolchain + diagnostics
+side, behind on the actual driver implementations.
+
+## Files touched (working tree, uncommitted) — cumulative across day-1 + day-2
+
+```
+M docs/handoff.md                                  # this section
+A docs/adr/adr-057-substrate-read-acl.md           # MUST-HAVE for 0.8.x
+M docs/adr/README.md                               # ADR-057 index + categories
+A .planning/actors/JOURNALED-ACTOR-INKPAD.md       # design contract + §8 progress
+A crates/clawft-edge-pad/Cargo.toml                # +embedded-hal-async dep
+A crates/clawft-edge-pad/src/main.rs               # PSRAM init wired
+A crates/clawft-edge-pad/src/board.rs              # pin map + timings
+A crates/clawft-edge-pad/src/drivers/mod.rs
+A crates/clawft-edge-pad/src/drivers/gt911.rs      # async port, compiles
+A crates/clawft-edge-pad/src/drivers/lcd_rgb.rs    # scaffold + RGB565 encoder
+A crates/clawft-edge-pad/rust-toolchain.toml       # esp channel
+A crates/clawft-edge-pad/.cargo/config.toml        # +ESP_HAL_CONFIG_PSRAM_MODE=octal
+A crates/clawft-edge-pad/.gitignore
+?? crates/clawft-edge-pad/firmware-backups/        # 4 MB stock dump (gitignored)
+?? crates/clawft-edge-pad/clawft-edge-pad-firstboot.bin  # 85 KB, gitignored
+?? crates/clawft-edge-pad/target/                  # build artifacts, gitignored
+
+# Outside this repo (agent definitions are user-global):
+A ~/.claude/agents/esp32-s3-rgb-touch-display/esp32-s3-rgb-touch-display.md
+```
+
+## Decisions of the day worth remembering
+
+1. **Hardware-specific agents are worth building.** This
+   session demonstrates it: the PSRAM panic would have eaten
+   hours of guessing without the acoustic-firmware agent's
+   esp-hal source-level expertise. The user explicitly
+   called this out as a pattern to repeat (it worked for the
+   sonar project's `hydrophone-transducer-expert` etc.).
+2. **The Elecrow `gfx_conf.h` is the canonical reference**
+   for board pin maps over FluidTouch when the two disagree
+   — FluidTouch tracks the older v1.x board rev.
+3. **Day-2 doesn't need 120 MHz PSRAM.** Stock 40 MHz Octal
+   gives us the full 8 MiB heap and is plenty for the
+   framebuffer. The `PsramConfig` 3-arg form is documented
+   in the agent for when bandwidth becomes the bottleneck.
+
+---
+
+# Session handoff — 2026-05-13 — display-node hardware survey + Inkpad Actor spike (ADR-057, edge-pad scaffold, first build green)
+
+Hive Mind session that started as a survey of cheap ESP32-based
+display hardware as candidate WeftOS sink/Actor nodes, and turned
+into a concrete spike landing: a new ADR for substrate read-ACLs,
+a new firmware crate scaffold, a working build against real
+hardware, and a journaled Actor design doc for the first
+non-sensor substrate emission shape (handwritten ink). User has
+an **Elecrow CrowPanel DIS08070H** (7" 800×480 ESP32-S3 HMI
+display) on hand — confirmed silicon: ESP32-S3-WROOM-1 N4R8
+(4 MB flash, 8 MB Octal PSRAM), GT911 touch, RGB-parallel TFT,
+PWM backlight on GPIO2, CH340 USB-UART bridge. Device flashes
+fine; build pipeline confirmed end-to-end. **Working tree only —
+nothing committed yet.**
+
+## What landed
+
+### 1. ADR-057: Substrate per-path read ACLs (MUST-HAVE for 0.8.x)
+
+New ADR at `docs/adr/adr-057-substrate-read-acl.md`. The trigger:
+the daemon's capability gate
+(`crates/clawft-weave/src/capability.rs`) classifies
+`substrate.read`, `substrate.list`, and `substrate.subscribe` as
+`Capability::Read`, and the anonymous baseline grants Read. Net
+result: any caller that can open the daemon IPC can subscribe to
+*every* substrate path, including raw mic PCM under
+`substrate/<node-id>/sensor/mic/pcm_chunk`. Fine when the only
+reader was the egui shell on the same host; not fine the moment
+we admit subscriber-only nodes (the Waveshare watch, the
+CrowPanel inkpad, Tidbyt-replacement display nodes).
+
+Decision (Accepted, MUST-HAVE for 0.8.x):
+- Per-path ACL table at `substrate/<mesh-id>/acl/**` with
+  glob patterns and `allow`/`deny`/`inherit` rules.
+- Identity strings: `node:n-<id>`, `actor:a-<id>`, `scope:<name>`,
+  literal `public`.
+- Deny-by-default for `sensor/**` and `actor/<actor-id>/**`
+  subtrees. Public-by-default for `cluster/health`, `meta`, `chain`.
+- `publish_public` helper for opt-in (signed by the path-owning
+  node's key).
+- Distinguishable `acl_denied` error type (NOT collapsed to
+  not-found — we accept the existence-leak in exchange for
+  operator diagnosability).
+- ExoChain emits `substrate.read.denied` events per ADR-022.
+
+Nine-item acceptance checklist for 0.8.x in the ADR body.
+
+### 2. Inkpad Actor journal — first non-sensor substrate emission
+
+New design doc at `.planning/actors/JOURNALED-ACTOR-INKPAD.md`
+(new `actors/` subdir; mirrors `.planning/sensors/JOURNALED-*`).
+Main-thread decisions captured:
+
+- **The CrowPanel inkpad is an Actor**, not a Node. (Hive Mind
+  decision 2026-05-13.) It also runs on physical hardware that
+  emits node-level health, so it is *also* a Node — first
+  concrete case of an Actor and a Node sharing one device. Two
+  ed25519 keypairs, two identities (`a-<6-hex>` and `n-<6-hex>`),
+  burned at provisioning.
+- **Ink wire format v0** (subject to revision by the spike): one
+  stroke per substrate publish, atomic on touch-up. Delta-encoded
+  point list (first point absolute `x,y,t`, subsequent `dx,dy,dt`).
+  Pressure field present but always 1.0 on capacitive touch;
+  reserved for future EMR digitizer hardware.
+- **Path map**:
+  - `substrate/<actor-id>/ink/pages/<page-id>` — page metadata
+  - `substrate/<actor-id>/ink/strokes/<stroke-id>` — one stroke
+  - `substrate/<actor-id>/signature/<action-id>` — signature
+    stroke bound to an Action envelope
+- **ACL seeding** honoring ADR-057 — all three subtrees default
+  to `allow: [actor:<actor-id>, scope:admin]`. `publish_public`
+  is the only opt-in mechanism for sharing a page.
+- **Five-day spike acceptance criteria** in §8 (build smoke
+  test → backlight → LCD fill → touch capture → local render →
+  publish → echo-subscribe → ADR-057 enforcement test).
+
+### 3. Firmware crate scaffold — `crates/clawft-edge-pad/`
+
+Out-of-workspace (mirrors `clawft-edge-bench` pattern; empty
+`[workspace]` table in the crate's own Cargo.toml stops cargo
+walking up to claim it for the host workspace). Files:
+
+- `Cargo.toml` — esp-hal 1.0 + esp-rtos + embassy + embedded-
+  graphics + ed25519-dalek + esp-radio. Trimmed from
+  `infinition/waveshare-watch-rs`'s dep tree (no AXP2101, no
+  nanomp3, no SD).
+- `src/main.rs` — embassy entry, boots SoC at 240 MHz, inits the
+  PSRAM allocator, hands TIMG0 to embassy, drives GPIO2 (backlight)
+  high, blinks once per second with `[edge-pad] tick` log line.
+- `rust-toolchain.toml` — `esp` channel (espup-installed).
+- `.cargo/config.toml` — `xtensa-esp32s3-none-elf` target,
+  `espflash flash --monitor` runner, `build-std = [core, alloc]`.
+- `.gitignore` — excludes `target/`, `*.bin` at crate root, and
+  `firmware-backups/*.bin` (4 MB blobs aren't going in git).
+
+**First test build was green** — `cargo build --release` finished
+in 35.68 s on warm-toolchain (cold would be ~5-10 min). All key
+deps compiled clean: esp-hal 1.0.0, esp-rtos 0.2.0, embassy-net
+0.9.1, ed25519-dalek 2.2.0, embedded-graphics 0.8.2, esp-alloc
+0.9.0. ELF: 226,688 bytes unstripped. Flashable image generated
+via `espflash save-image`: **85,328 bytes — uses 2.07 % of the
+4 MB partition**. Hash:
+`3884dfcef702ceb79ad8321ef10b1de500b22a5bd150f86ed6380d0dca797103`.
+
+### 4. Hardware verification of DIS08070H
+
+`espflash board-info` + `esptool` both confirm:
+- ESP32-S3 (QFN56), revision v0.2
+- Dual Core LX7 + LP Core, 240 MHz
+- 40 MHz crystal
+- 4 MB embedded flash
+- 8 MB Octal embedded PSRAM (AP_3v3 rail)
+- WiFi 2.4 GHz + BLE 5
+- MAC `3c:dc:75:fa:bc:7c`
+- Secure Boot **disabled**, Flash Encryption **disabled** (safe
+  to read and reflash freely)
+
+USB enumeration: QinHeng CH340 (`1a86:7523`), USB 1.1 full-speed.
+
+The Amazon listing's "LX6 dual-core" claim is **wrong** — this is
+unambiguously an LX7/S3. The `MC` prefix on the WROOM-1 shield
+silkscreen is a factory date/lot stamp, not load-bearing; the
+suffix `N4R8` is the only meaningful part of the module ID.
+
+Pin map for the LCD-CAM RGB bus + GT911 I²C is still pending —
+to be transcribed from `jeyeager65/FluidTouch`'s `include/` and
+`Elecrow-RD/CrowPanel-ESP32-Display-Course-File`'s Lesson 2.
+
+### 5. CH340 + WSL2 USBIP throughput gotcha (documented in journal)
+
+Tried to back up the stock LVGL firmware before flashing. Three
+consecutive attempts via `espflash read-flash` at varying baud
+rates and block sizes failed with the same symptom: "expected
+0x1000 bytes, received 0xfXX bytes" — small but consistent
+shortages partway through a 4 MB read. Initial diagnosis was
+"USBIP packet loss" but the user pushed back. Instrumented
+properly:
+
+- 4 KB read: ✅ clean, 86.5 kbit/s
+- 64 KB read: ✅ clean, 89.5 kbit/s
+- 1 MB read: ✅ clean, 90.0 kbit/s (linear throughput)
+- 4 MB read **with cargo building in parallel**: ❌ corrupts
+  around 8 % completion
+
+The real cause: **CPU/disk contention from the parallel
+`cargo build` was starving the Windows-side CH340 driver and/or
+the WSL USBIP service**. WSL2's known "drive slowness creep"
+(dirty pages, 9p layer pressure) compounds the issue. Path
+forward when sustained reads are needed: don't run them in
+parallel with heavy CPU work, and `wsl --shutdown` from a Windows
+PowerShell when the system's been hot for a while.
+
+This is in `.planning/actors/JOURNALED-ACTOR-INKPAD.md` §1 as an
+"Operational gotcha" blockquote so future-us doesn't redo this.
+
+### 6. Backup retry — succeeded with idle system
+
+Fresh `esptool read-flash 0 0x400000` ran clean with no parallel
+builds. **Backup completed: 4,194,304 bytes (exactly 4 MB), no
+corruption.**
+
+- Path: `crates/clawft-edge-pad/firmware-backups/elecrow-DIS08070H-stock-2026-05-13.bin`
+- SHA256: `3397e760fb8282848759480be55d77f47e6f48fff54716d52e4c73cc57adbaa3`
+
+This confirms the contention-not-USBIP diagnosis: with the host
+idle, the CH340 path delivers sustained 90 kbit/s without byte
+loss. The backup is gitignored (4 MB blob); re-grab via the same
+command if it's ever lost.
+
+## What's NOT done — explicit punch list
+
+1. ~~Backup completion verification.~~ ✅ Done — see §6.
+2. ~~Flash the firstboot image to the device.~~ ✅ Done — flashed
+   in 4 s, firmware boots clean, ESP-IDF bootloader hands off to
+   our embassy main, prints the boot banner + 1 Hz `[edge-pad] tick`
+   loop on UART. Day-1 acceptance criterion met.
+   - **First-boot gotcha**: `esp_alloc::psram_allocator!` panicked
+     in `linked_list_allocator-0.10.6/src/hole.rs:331` (assertion
+     `hole_size >= size_of::<Hole>()` failed). Cribbed from
+     `waveshare-watch-rs` so the macro itself is right; likely a
+     PSRAM init-ordering issue specific to N4R8 / AP_3v3.
+     Swapped to `heap_allocator!(size: 16 * 1024)` (SRAM heap)
+     for the day-1 smoke test. PSRAM will be re-enabled when
+     LCD bringup needs the framebuffer (~750 KB per buffer × 2).
+3. **LCD-CAM RGB DPI bring-up.** Pin map transcription from
+   FluidTouch + Elecrow Lesson 2 → `src/board.rs` →
+   `src/drivers/lcd_rgb.rs`. Day-2 of the spike.
+4. **GT911 touch driver.** Either port `Elecrow-RD/gt911_for_crowpanel`
+   to embedded-hal-async I²C or wrap `gt911-async` from crates.io.
+   Day-2 of the spike.
+5. **Actor keypair provisioning.** Host-side CLI that generates
+   the ed25519 keypair, burns the private half to NVS, and
+   records the public half under
+   `substrate/<mesh-id>/cluster/actors/<actor-id>`. Same shape as
+   the Node provisioning path proposed in
+   `JOURNALED-NODE-ESP32.md` §2.
+6. **ADR-057 implementation.** The MUST-HAVE acceptance criteria
+   in the ADR body need to be translated into Plane items under
+   0.8.x. Until that lands, the inkpad spike's ACL test (a CLI
+   subscriber getting `acl_denied` on the stroke path) cannot
+   pass.
+7. **Pubkey directory for actors.** ADR-057 references
+   `substrate/<mesh-id>/cluster/actors/<actor-id>` for actor
+   pubkey lookup, but the cluster subtree only holds `nodes/`
+   today. Adding `actors/` is a Mesh-namespace write, which means
+   the daemon's own Actor needs to be bootstrap-trusted to seed
+   it.
+
+## Files touched (working tree, uncommitted)
+
+```
+M docs/handoff.md                                  # this section
+A docs/adr/adr-057-substrate-read-acl.md           # new ADR (Accepted, MUST-HAVE)
+M docs/adr/README.md                               # ADR-057 index entry
+A .planning/actors/JOURNALED-ACTOR-INKPAD.md       # design contract
+A crates/clawft-edge-pad/Cargo.toml                # new firmware crate (out-of-workspace)
+A crates/clawft-edge-pad/src/main.rs               # embassy entry + backlight smoke test
+A crates/clawft-edge-pad/rust-toolchain.toml       # esp channel
+A crates/clawft-edge-pad/.cargo/config.toml        # xtensa-esp32s3-none-elf
+A crates/clawft-edge-pad/.gitignore                # target/, *.bin, firmware-backups/*.bin
+?? crates/clawft-edge-pad/firmware-backups/        # 4 MB stock dump (in progress, gitignored)
+?? crates/clawft-edge-pad/clawft-edge-pad-firstboot.bin   # 85 KB, gitignored
+?? crates/clawft-edge-pad/target/                  # build artifacts, gitignored
+```
+
+## What to pick up next
+
+If the user wants to keep going on the spike:
+
+1. **Flash the firstboot image** and confirm the backlight blink
+   pattern on the device. This is the day-1 acceptance criterion.
+3. **Open Plane work items** for ADR-057's nine MUST-HAVE
+   acceptance criteria under cycle 0.8.x. The substrate-read-ACL
+   plumbing is a release-blocker for *any* mesh feature that
+   admits remote subscribers, not just the inkpad.
+4. **Transcribe the LCD/touch pin map** from FluidTouch and
+   write `src/board.rs`. This is the second-largest chunk of
+   the spike (~1 day).
+
+If the user wants to pivot away from this thread, everything in
+the working tree is self-contained — `crates/clawft-edge-pad/` can
+be deleted without touching anything else, and ADR-057 can stay as
+a written-down decision waiting for an implementer.
+
+---
+
+# Session handoff — 2026-05-04 (afternoon) — agent.chat → witness chain / HNSW / causal graph mirror, plus chain.tail panel alias
+
+Follow-on to the morning 401 chase. After the user landed the `.env`
+cleanup and started `gemma-iq2m` on `127.0.0.1:8111`, chat ran
+through the local llama-server and turn JSONL appeared under
+`substrate/_derived/chat/<conv>/turns/<ulid>`. But the witness
+chain seq stayed flat and the Explorer KPIs (`hnsw_entries`,
+`causal_graph`, `crossref_count`) never moved off zero. We unwound
+that as architectural — the C3 substrate sink only writes the
+JSONL archive, with no path to `chain.append` / `HnswService.insert`
+/ `CausalGraph.add_node`. Chat traffic was never wired into those
+stores. This session fills that gap behind operator-visible flags
+and lands a one-line panel-RPC alias that was masking the result.
+**Working tree only — nothing committed yet.**
+
+## What landed
+
+### 1. `[kernel.agent]` anchor flags (config + sink + daemon)
+
+New optional config block on `KernelConfig`:
+
+```toml
+[kernel.agent]
+anchor_chain  = true   # append `agent.chat.turn` to the witness chain per turn
+anchor_hnsw   = true   # insert a per-turn embedding into the HNSW index
+anchor_causal = true   # add a causal node + link prev→this within the same conv
+```
+
+All three default false → existing behaviour unchanged. `weave.toml`
+in the repo root has them all on for iteration.
+
+Wiring:
+
+- `crates/clawft-types/src/config/kernel.rs:206` — new
+  `pub agent: Option<AgentAnchorConfig>` field on `KernelConfig`.
+- `crates/clawft-types/src/config/kernel.rs:241` — new
+  `AgentAnchorConfig { anchor_chain, anchor_hnsw, anchor_causal }`
+  with `any_enabled()` helper. CamelCase serde aliases
+  (`anchorChain` etc.) for the JSON overlay path.
+- `crates/clawft-service-agent/src/substrate_sink.rs:175` — new
+  `TurnAnchor` async trait + `NoopTurnAnchor` (default for tests
+  and disabled-flags path) + `KernelTurnAnchor` (production impl
+  holding `Option<Arc<ChainManager>>` / `Option<Arc<HnswService>>` /
+  `Option<Arc<CausalGraph>>` plus a per-conv `DashMap<conv_id,
+  prev_node_id>` so causal links span turns within a conv).
+- `crates/clawft-service-agent/src/substrate_sink.rs:280` —
+  `hash_embed(input, dim)` — deterministic SHA-256 + xorshift
+  fan-out producing an L2-normalised 384-d vector. KPI moves
+  but neighbours are NOT semantic — a future change will route
+  through a real embedder.
+- `crates/clawft-service-agent/src/substrate_sink.rs:315` —
+  `KernelTurnAnchor::anchor_turn` body, three independent
+  side-effects per flag.
+- `SubstrateConversationSink` gained an `anchor: Arc<dyn TurnAnchor>`
+  field, three new constructors: `with_anchor` (production),
+  `with_client_and_anchor` (tests), and `with_client` keeps the
+  old defaults. `append_turn` runs the substrate publish first;
+  on success it restamps `Turn::turn_id` so the anchor sees the
+  same id that landed under `_derived/chat`, then calls
+  `anchor.anchor_turn(...)`. On publish error the anchor is
+  skipped — corrupting the audit trail with a non-existent turn
+  is the worst thing this could do.
+- `crates/clawft-weave/src/daemon.rs:825` — daemon construction
+  site reads `kernel.kernel_config().agent`, builds either
+  `KernelTurnAnchor` (any flag on, with kernel handles gated per
+  flag) or `NoopTurnAnchor` (default). Logs one line at boot:
+  `agent.chat anchors wired chain=<bool> hnsw=<bool> causal=<bool>`.
+
+Tests in `crates/clawft-service-agent/tests/substrate_sink.rs`:
+
+- `anchor_fires_after_successful_publish_with_minted_turn_id` —
+  verifies the sink restamps the turn id before calling the anchor
+  and that the substrate path's last segment matches.
+- `anchor_skipped_on_publish_error` — confirms a failed publish
+  doesn't fire the anchor.
+
+### 2. `chain.tail` RPC alias (one-line fix)
+
+After running a chat turn, `chain.local` (the daemon-side console
+RPC) showed real `agent.chat.turn` events landing — but the panel's
+"Logs → Witness chain" view stayed blank. Cause: the panel's
+allowlist (`extensions/vscode-weft-panel/src/extension.ts:64`)
+calls `chain.tail`, the daemon only ever implemented `chain.local`,
+so the panel got `unknown method: chain.tail` and rendered
+empty. Pre-existing — unrelated to the anchor work, but it was
+hiding the success.
+
+Fix at `crates/clawft-weave/src/daemon.rs:3826` — widened the
+match arm from `"chain.local"` to `"chain.local" | "chain.tail"`.
+Same handler. Comment block above explains the alias.
+
+### 3. Test-builder churn (caught yesterday's drop)
+
+The morning session added `pub llm: Option<LlmEndpointConfig>` to
+`KernelConfig` but didn't update the 13 literal `KernelConfig { ... }`
+constructors in test fixtures and `boot.rs` / `config.rs`. With
+this session's `agent` field added on top, both fields needed
+landing across:
+
+```
+crates/clawft-types/src/config/kernel.rs       (the serde_roundtrip test)
+crates/clawft-kernel/src/boot.rs               (test_kernel_config helper, 3 sites)
+crates/clawft-kernel/src/config.rs             (kernel_config_ext_from_base test)
+crates/clawft-kernel/tests/{e2e_integration,feature_composition,stream_anchor_test}.rs
+crates/clawft-weave/tests/{node_register,agent_register_and_sign,
+                           agent_chat_dispatch,substrate_rpc,
+                           ipc_subscribe_stream,derived_grant_gate,
+                           control_rpc}.rs
+```
+
+Each got `llm: None,` and `agent: None,` injected after the
+existing `ipc_tcp: None,` line.
+
+## Verifying it end-to-end
+
+1. **Build + install** (running daemon's old inode is unaffected — `cp` with `--remove-destination` unlinks first):
+   ```bash
+   scripts/build.sh native
+   cp -f --remove-destination target/release/weaver ~/.cargo/bin/weaver
+   cp -f --remove-destination target/release/weft   ~/.cargo/bin/weft
+   ```
+2. **Restart the foreground daemon** (Ctrl-C the running one, then
+   `weaver kernel start --foreground`). The boot line you want:
+   ```
+   agent.chat anchors wired (mirrors turns to enabled stores) chain=true hnsw=true causal=true
+   ```
+3. **Send one chat turn through the panel**, then probe:
+   ```bash
+   echo '{"jsonrpc":"2.0","id":"1","method":"chain.tail","params":{"count":15}}' \
+     | nc -U .weftos/runtime/kernel.sock | jq '.result[] | "\(.sequence) \(.source) \(.kind)"'
+   ```
+   You should see `agent / agent.chat.turn` rows mixed in with the
+   `health.check` / `routing` rows.
+
+Observed behaviour from this session (PID 952079, before the
+`chain.tail` alias landed):
+
+- `chain.status` went from `seq=50988` → `seq=50993` on a single
+  hand-fired `agent.chat` turn (+5 events: 1 routing audit + 2
+  `agent.chat.turn` + 2 health ticks that happened to land
+  between).
+- `chain.local` showed entries 50983, 50986, 50989, 50992 all as
+  `agent / agent.chat.turn` with `{conv_id, turn_id, role,
+  content_hash, ts_ms}` payloads — the exact schema in
+  `KernelTurnAnchor::anchor_turn`. Anchor is correct; the panel
+  was the bottleneck.
+
+## Build state at HEAD (working tree)
+
+| Gate | Result |
+|---|---|
+| `scripts/build.sh check` | clean |
+| `scripts/build.sh clippy` (`-D warnings`) | clean |
+| `cargo check --workspace --all-targets` | clean |
+| `cargo test -p clawft-types -p clawft-service-agent -p clawft-weave -- --skip append_turns_are_monotonic` | all green |
+| `scripts/build.sh test` (full workspace) | not run to completion — kernel `hnsw_eml::benchmark_*` suite genuinely runs 30+ min in debug, well outside the bounds of this session. The crates I actually touched all pass targeted. |
+
+`append_turns_are_monotonic` is a pre-existing flake (~50% fail
+rate) confirmed identical on master via `git stash`. Cause: the
+sink mints `{ULID}-{counter}` ids; ULIDs are NOT monotonic
+within the same ms (each `Ulid::new()` call uses fresh
+randomness), so two appends in the same ms can sort either way.
+The base-32 counter suffix would fix this if it came BEFORE the
+ULID. Out of scope this session — flagged as a future-session
+followup.
+
+## Build & install recipe (current)
+
+```bash
+pkill -f "weaver kernel start" || true
+scripts/build.sh native
+cp -f --remove-destination target/release/weaver ~/.cargo/bin/weaver
+cp -f --remove-destination target/release/weft   ~/.cargo/bin/weft
+weaver kernel start --foreground
+```
+
+(`--remove-destination` is the difference vs. yesterday's recipe —
+it unlinks the busy inode that the running daemon is mmap'd
+against, so the `cp` succeeds even with a foreground daemon
+running. The running daemon keeps the OLD inode until you
+restart, so the swap is non-disruptive until the next boot.)
+
+## Known gaps / next steps
+
+- **HNSW vectors aren't semantic.** `hash_embed` is a deterministic
+  fill that gives KPI motion but not similarity. The kernel
+  already wires an `EmbeddingRouter` at boot (with the
+  `OPENAI_API_KEY hash-only fallback` we see at every boot); next
+  step is to plumb that handle into `KernelTurnAnchor` so HNSW
+  inserts get real embeddings. Will need an embedder Arc on the
+  anchor + an `async` path through `anchor_turn` that's prepared
+  to swallow embedder errors (substrate JSONL must always remain
+  the durable record).
+- **Crossref count stays at 0.** Not wired this session — chat
+  turns don't currently produce crossref entries. Mirror of the
+  same architectural gap; a future change can add a fourth
+  `anchor_crossref` flag.
+- **`append_turns_are_monotonic` flake.** See build-state note;
+  fix is reordering the id format to `{counter}-{ULID}` (or
+  switching to `ulid::Generator` for monotonic mode).
+- **panel `chain.tail` consumer**. With the alias landed, the
+  panel works; an alternative would be to also rename the
+  console-side RPC to `chain.tail` and retire `chain.local`. The
+  alias is non-disruptive and good enough.
+
+## Branch state
+
+`feat/weftos-579-591-graduations` — still 27 commits ahead of
+`master`. Working tree dirty; the new files for this session are
+the same set as the morning chase plus:
+
+```
+crates/clawft-types/src/config/kernel.rs               (+AgentAnchorConfig + field)
+crates/clawft-service-agent/src/substrate_sink.rs      (+TurnAnchor + Kernel/Noop impls + sink wiring)
+crates/clawft-service-agent/src/lib.rs                 (re-exports)
+crates/clawft-service-agent/tests/substrate_sink.rs    (+2 anchor tests)
+crates/clawft-weave/src/daemon.rs                      (+anchor wiring, chain.tail alias)
+crates/clawft-kernel/src/{boot,config}.rs              (+llm/agent in test literals)
+crates/clawft-kernel/tests/*.rs                        (+llm/agent in helpers)
+crates/clawft-weave/tests/*.rs                         (+llm/agent in helpers)
+weave.toml                                             (+[kernel.agent] block, all flags on)
+```
+
+Nothing committed; iteration loop pattern preserved per prior
+sessions.
+
+---
+
+# Session handoff — 2026-05-04 — boot banner / cluster boot warning / IPC TCP relay / WASM-not-booting / agent.chat → local llama.cpp
+
+The user surfaced four defects from a fresh `weaver kernel start --foreground`
+run plus the Cursor panel: stale `WeftOS v0.1.0` banner, a
+cluster shard-assignment WARN before the banner, an IPC-TCP
+relay WARN at the end, and a "WASM panel does not boot, no error
+messages" report. We chased each one down. While testing the
+chat panel we then unwound a deeper pipeline issue: `agent.chat`
+was hitting OpenRouter unauthenticated (401), even after wiring
+`[kernel.llm]`, because a stale `.env` in cwd was shadowing the
+config. This session ends with the daemon correctly routing to
+the user's local llama.cpp gemma-iq2m server and an actionable
+recipe for the user to land the missing `.env` cleanup. **Working
+tree only — nothing committed yet.**
+
+## Defects + fixes
+
+1. **`WeftOS v0.1.0` boot banner** — hardcoded literal in two
+   places (`clawft-kernel/src/console.rs:325` and `boot.rs:169`).
+   Replaced with `env!("CARGO_PKG_VERSION")` so the banner tracks
+   the workspace version (currently `0.6.19`). Tests at
+   `console.rs:349,404` and `boot.rs:2115,2805` updated to assert
+   against `CARGO_PKG_VERSION` instead of the literal `0.1.0`. 54
+   boot-suite tests pass with the cluster feature on.
+
+2. **Cluster service "No nodes available for shard assignment"
+   WARN before banner** — `ruvector_cluster::ClusterManager.start()`
+   initializes shards by hashing each `shard_id` against an empty
+   consistent-hash ring. The manager never auto-registers its own
+   node, and the kernel passes a `StaticDiscovery` with zero
+   seeds, so the ring stays empty and `assign_shard` errors out
+   for every shard. Fix in `clawft-kernel/src/cluster.rs:1184` —
+   `ClusterService::start()` now pre-registers the local node
+   (id from `membership.local_node_id()`, synthetic
+   `127.0.0.1:0` placeholder address) before calling
+   `manager.start()`. The ring is guaranteed non-empty,
+   shard assignment succeeds, the rest of the pipeline runs
+   normally. 40 cluster tests pass.
+
+3. **IPC TCP relay non-loopback bind WARN** — user's local
+   `weave.toml` (gitignored) had `[kernel.ipc_tcp]` enabled with
+   `listen_addr = "0.0.0.0:9471"` and no bearer token, which
+   trips WEFT-481's "refusing to bind non-loopback address"
+   guard. Flipped `listen_addr` back to `127.0.0.1:9471` (the
+   documented safe default) and rewrote the comment block to
+   explain how to opt back into 0.0.0.0 binding (must set a
+   bearer token alongside).
+
+4. **Cursor WASM panel "does not boot, no error messages"** —
+   `extensions/vscode-weft-panel/src/extension.ts` had a watchdog
+   that was supposed to escalate after 8 s if the panel hadn't
+   finished booting, but every `setSplash()` call (including
+   in-flight progress messages like `"init: fetching wasm…"`)
+   stamped `splash.dataset.err = "1"`, which the watchdog uses
+   as its "an error has been displayed" suppression flag. Result:
+   if `init()` or `weft_start()` hung, the panel sat on the first
+   progress text forever with no escalation. Changes:
+   - `setSplash` no longer stamps `dataset.err`.
+   - The catch block + the global `error` /
+     `unhandledrejection` handler are now the only writers of
+     `dataset.err`.
+   - Watchdog timer raised 8 s → 12 s and now includes the last
+     splash text in its yellow diagnostic so the user can see
+     which stage stalled.
+
+   `out/extension.js` regenerated via `npm run compile`.
+
+## Pipeline detour — chat hangs / 401 / wrong model
+
+While the user was testing the chat path through the panel against
+the running 0.6.19 daemon, four stacked failures came out one at a
+time. Each fix below is concrete, not theoretical.
+
+### A. OpenRouter free-tier returned a 200 keep-alive-padded body with no `choices`
+
+User saw `agent.chat: agent loop error: provider error: llm response
+malformed: body was not ChatResponse JSON (missing field 'choices' at
+line 571 column 58):` after a long timeout. OpenRouter's free-tier
+Nemotron endpoint pads its response with hundreds of empty
+keep-alive newlines while the model is queued, then sometimes
+returns an `{"error":{"message":"...","code":N}}` envelope at status
+200 when the upstream provider eventually fails. Direct parsing as
+`ChatResponse` in that case yields a confusing stack-of-newlines
+error with no hint that the upstream actually reported an error.
+Fix in `clawft-service-llm/src/client.rs:637` —
+`complete_with_tools()` now tries to parse the response body as an
+OpenRouter error envelope BEFORE attempting `ChatResponse`. When the
+envelope matches, the daemon surfaces it as `LlmError::ClientError`
+with the upstream message (e.g. "Provider returned error: rate
+limit exceeded") instead of the cryptic missing-field-at-line-571
+noise. Also caps the malformed-body preview at 512 chars so a
+571-line keep-alive-padded body doesn't blow out the log. 25 llm
+tests pass.
+
+### B. OpenRouter takeover fired even when user had pointed `LLM_SERVICE_URL` at localhost
+
+The previous logic in `clawft-weave/src/daemon.rs` set
+`using_openrouter = api_key.is_some()` purely on
+`OPENROUTER_API_KEY` presence, which meant a user pointing
+`LLM_SERVICE_URL` at a local llama-server while still having
+`OPENROUTER_API_KEY` in the shell got bearer-auth headers sent to
+localhost AND the OpenRouter model name as the request body's
+`model` field — confusing and wrong. Fix at
+`crates/clawft-weave/src/daemon.rs:655` — endpoint precedence is
+now explicit:
+
+   1. `LLM_SERVICE_URL` env (one-off override)
+   2. `[kernel.llm].service_url` in config (durable operator
+      choice — see C below)
+   3. `OPENROUTER_API_KEY` set AND no URL above → opt-in
+      OpenRouter takeover (bearer auth + OpenRouter defaults)
+   4. Local llama-server defaults (`http://127.0.0.1:8111`,
+      model `"local"`)
+
+   When 1 or 2 supplies the URL, OpenRouter takeover is skipped —
+   bearer auth, `HTTP-Referer`, and `X-Title` are not attached, so
+   the local llama-server gets a clean OpenAI-compat request.
+
+### C. New `[kernel.llm]` config block
+
+So the operator can pin URL+model durably without env vars.
+Defined in `crates/clawft-types/src/config/kernel.rs`:
+
+```toml
+[kernel.llm]
+service_url = "http://127.0.0.1:8111"
+model = "gemma-iq2m"
+```
+
+Both fields optional, skip serialisation when `None`. Daemon reads
+them via `kernel.read().await.kernel_config().llm.clone()`.
+Appended to user's `weave.toml` accordingly.
+
+### D. Agent loop hardcoded `model=deepseek/deepseek-chat` regardless of upstream
+
+The agent loop builds its request with
+`model: Some(self.config.defaults.model.clone())` —
+`Config::default()` injects the literal `deepseek/deepseek-chat`
+(`clawft-types/src/config/mod.rs:262`). The daemon never read
+`~/.clawft/config.json`'s `agents.defaults.model`. Combined with the
+panel principal's `model_override: true` permission, the tiered
+router took the hardcoded `deepseek/deepseek-chat` verbatim
+(observed via the `routing.audit` WARN: `model_override applied:
+tier filtering bypassed principal=panel channel=agent.chat level=2
+model=deepseek/deepseek-chat`) and the request went out asking
+upstream for a model it doesn't host.
+
+Fix at `crates/clawft-core/src/bootstrap.rs:638` —
+`build_daemon_agent_loop` now stamps the daemon's actual upstream
+model name (`llm.config().model`) into
+`config.agents.defaults.model`. The agent loop's request body now
+says `model=gemma-iq2m` (or whatever the operator configured)
+instead of the hardcoded deepseek. The `model_override` audit WARN
+now reads `model=gemma-iq2m`, the body matches the upstream, and
+the local llama-server gets the right name.
+
+### E. The trap that ate four boot cycles — `.env` in cwd shadowing `[kernel.llm]`
+
+After all the above, the daemon was STILL booting with
+`url=https://openrouter.ai/api/v1 model=nvidia/nemotron-3-super-120b-a12b:free
+openrouter=false` AND chat was STILL 401-ing. Walking through it
+with debug `info!()` lines confirmed:
+
+- `cfg_llm_url = Some("http://127.0.0.1:8111")` — `[kernel.llm]`
+  was loaded from `weave.toml` correctly.
+- `llm_url_env = Some("https://openrouter.ai/api/v1")` — the env
+  HAD `LLM_SERVICE_URL` set, despite `env | grep LLM_` in my shell
+  showing it unset.
+
+Source: `crates/clawft-weave/src/main.rs:112` calls
+`dotenvy::dotenv()` early at boot, which loads
+`/home/aepod/dev/clawft/.env` from cwd. That `.env` had stale
+`LLM_SERVICE_URL=https://openrouter.ai/api/v1` and
+`LLM_MODEL=nvidia/nemotron-3-super-120b-a12b:free` lines from a
+prior experiment. Env-precedence over `[kernel.llm]` (which is the
+right precedence for one-off overrides) faithfully picked them up
+every boot, silently shadowing the durable config.
+
+Code addition: in `daemon.rs` the precedence comment block now
+warns operators to look in `./env` first if `[kernel.llm]` appears
+to be ignored — preserving the precedence (env > config) while
+making the `.env` trap discoverable.
+
+User-side cleanup (the harness blocks me from reading or editing
+`.env` directly, so this lands by hand):
+
+```bash
+sed -i '/^LLM_SERVICE_URL=/d; /^LLM_MODEL=/d' /home/aepod/dev/clawft/.env
+```
+
+After that, the daemon boots with
+`url=http://127.0.0.1:8111 model=gemma-iq2m openrouter=false`,
+and chat turns route through the local llama-server.
+
+## What changed in the codebase (this session)
+
+```
+crates/clawft-kernel/src/console.rs               banner uses CARGO_PKG_VERSION
+crates/clawft-kernel/src/boot.rs                  [INIT] line uses CARGO_PKG_VERSION
+crates/clawft-kernel/src/cluster.rs               ClusterService::start pre-registers self
+crates/clawft-types/src/config/kernel.rs          new [kernel.llm] / LlmEndpointConfig
+crates/clawft-weave/src/daemon.rs                 endpoint precedence + .env warn comment
+crates/clawft-core/src/bootstrap.rs               stamp llm.config().model into agents.defaults.model
+crates/clawft-service-llm/src/client.rs           OpenRouter error envelope detection + body preview cap
+extensions/vscode-weft-panel/src/extension.ts     watchdog dataset.err only on real errors; 12s timeout
+extensions/vscode-weft-panel/out/extension.js     regenerated via npm run compile
+weave.toml (gitignored)                           added [kernel.llm]; ipc_tcp listen_addr → 127.0.0.1
+```
+
+## Build state at HEAD (working tree)
+
+| Gate | Result |
+|---|---|
+| `scripts/build.sh check` | clean |
+| `scripts/build.sh clippy` (`-D warnings`) | clean |
+| `cargo check -p clawft-gui-egui --target wasm32-unknown-unknown --no-default-features` | clean (4 pre-existing dead-code warnings in `terminal.rs`) |
+| `npm run compile` (panel extension) | clean |
+| `cargo test -p clawft-kernel --lib --features cluster cluster::` | 40/40 |
+| `cargo test -p clawft-kernel --lib --features cluster boot::` | 54/54 |
+| `cargo test -p clawft-service-llm --lib` | 25/25 |
+| `cargo test -p clawft-kernel --lib embedding_onnx::tests::wordpiece -- --test-threads=1` | 10/10 |
+| `scripts/build.sh test` (full workspace, parallel) | 1937/1939 — 2 wordpiece-test parallel-isolation flakes, **pre-existing on HEAD** (verified by reverting working tree and re-running) |
+
+## Outstanding for the user
+
+1. **Strip the stale `LLM_*` lines from `/home/aepod/dev/clawft/.env`**
+   so the new `[kernel.llm]` block is honoured:
+
+   ```bash
+   sed -i '/^LLM_SERVICE_URL=/d; /^LLM_MODEL=/d' /home/aepod/dev/clawft/.env
+   ```
+
+2. After that, boot should read:
+
+   ```
+   INFO clawft_weave::daemon: llm service handle wired url=http://127.0.0.1:8111 model=gemma-iq2m openrouter=false
+   INFO clawft_weave::daemon: llm service: healthy url=http://127.0.0.1:8111
+   ```
+
+   And a chat turn through the panel should:
+   - hit the local gemma-iq2m server,
+   - return a real completion in seconds,
+   - bump the witness chain seq from its current ~50000 floor,
+   - tick the Explorer KPIs (`hnsw_entries`, `causal_graph`, `crossref_count`) above zero on the first completion.
+
+3. **Iteration loop reminder** (unchanged from prior sessions):
+
+   ```bash
+   pkill -f "weaver kernel start" || true
+   scripts/build.sh native
+   cp target/release/weaver ~/.cargo/bin/weaver
+   cp target/release/weft   ~/.cargo/bin/weft
+   weaver kernel start --foreground
+   ```
+
+   Then Cmd/Ctrl-Shift-P → "Developer: Reload Window" in Cursor so
+   the extension JS picks up any allowlist / watchdog changes.
+
+4. **`scripts/install-local.sh`** still not written — see prior
+   sessions' followups list. Iteration loop continues to wedge on
+   stale daemons until it lands.
+
+## Operational gotcha — `.env` shadows `[kernel.llm]`
+
+`crates/clawft-weave/src/main.rs:112` calls `dotenvy::dotenv()` at
+process start, which loads any `LLM_SERVICE_URL` /
+`LLM_MODEL` / `OPENROUTER_API_KEY` from `./env`. These take
+precedence over `[kernel.llm]` in `weave.toml` by design (so
+operators can do one-off experiments without editing config), but
+the precedence is invisible to a user who put a value in `.env`
+months ago and forgot. Documented inline in the precedence comment
+block in `daemon.rs:655`. Long-term: surface a boot-line that
+echoes WHICH layer supplied URL+model, so the operator can see the
+trap from the boot log alone (filed as a future-session followup).
+
+## Branch state
+
+`feat/weftos-579-591-graduations` — 27 commits ahead of `master`
+(unchanged from prior session in commit count). Working tree dirty
+with the eight files above plus the `.env` cleanup the user runs
+manually. Nothing committed this session; the user evaluates first
+per the prior "see-how-it-lands" pattern. `node_modules/` and `ui/`
+remain gitignored, untouched.
+
+---
+
+# Session handoff — 2026-05-03 (overnight) — five-defect chase post-graduation iteration
+
+Follow-on to the 2026-05-02 evening session. The user fired off five
+specific defects from the graduated panel running in Cursor; this
+session chases each down with code, not promises. **Working tree only
+— nothing committed yet.** All gates green at HEAD; binaries rebuilt
+and the WASM panel + extension TS recompiled.
+
+## Defects + fixes
+
+1. **"Processes still showing 0 bytes, this should show real ammount."**
+   `crates/clawft-weave/src/daemon.rs` — the `kernel.ps` handler used
+   to attribute `/proc/self/status` VmRSS only to the lowest-pid
+   (kernel-root) row and zero out every synthesised service row,
+   which is what the user was seeing. The handler now apportions the
+   measured daemon RSS evenly across every in-daemon-pid row (kernel
+   root + each service), with the integer-division remainder rolled
+   into the first row so the column **sums exactly to the observed
+   RSS**. Documented inline that this is shared-address-space
+   apportionment (services live inside the daemon's process), not
+   per-service accounting — the alternative ("0 everywhere") was
+   what the user surfaced as a defect.
+
+2. **"Scheduler needs add scheduled job, this needs to work now."**
+   `crates/clawft-gui-egui/src/apps/scheduler.rs` rewritten from a
+   pure-stub archetype-shape into a working app. New
+   `+ Add job` toolbar button toggles an inline form (Name /
+   Every-s / Command); on submit, validates fields via
+   `build_cron_add_params` and fires `cron.add` through
+   `Live::submit`. Table now reads from `snap.cron_jobs` (populated
+   from a polled `cron.list` — added to both the native and wasm
+   live drivers; see plumbing below). Each row gets a `remove`
+   button that fires `cron.remove`. New `SchedulerState`
+   (`adding`, three form fields, `last_error`) lives on `Desktop`
+   so an in-flight edit isn't clobbered by snapshot ticks. Dropped
+   the unfilled plot region — `substrate/scheduler/run_history` is
+   0.9.x work and a half-rendered axis read as a bug, not a
+   placeholder.
+
+3. **"Monitor mesh and chain should show when kernel is connected.
+   Witness chain always shows disconnected."** Root cause was in
+   `crates/clawft-gui-egui/src/live/wasm_live.rs:280-281`:
+   `mesh_status: None, chain_status: None` were hardcoded to None on
+   the wasm path with a comment claiming the extension allowlist
+   didn't include `cluster.*` / `chain.*` (it does — has since
+   M1.5.1d). The wasm poller now also fetches `cluster.status` and
+   `chain.status` per tick, injects `available: true` on success
+   and `{available: false, reason}` on error, and feeds them into
+   the snapshot. With chain_status populated, the Logs · Witness
+   chain tab's `render_chip_detail(ChipId::ExoChain)` gets real
+   data — the chip composer paints `chain_id`, `sequence`,
+   `event_count`, `last_hash`, and the connection pill above it
+   correctly reads "● connected" instead of always "◯ disconnected".
+   Same fix lights up the Mesh + Chain tiles in Monitor.
+
+4. **"Explorer should probably show the rnn and vector db as best
+   it can as well."** `crates/clawft-gui-egui/src/apps/explorer.rs`
+   now paints a 56 px **intelligence band** above the substrate
+   browser. Four KPI tiles: RNN tick interval (ms or "off"/"paused"),
+   vector entries (HNSW count), causal-graph nodes/edges, crossref
+   count. Data comes from `snap.ecc_status`, populated by a polled
+   `ecc.status` RPC on both transports. When ECC is disabled or
+   hasn't reported yet, every tile shows "—" so the layout below
+   doesn't shift between paints. `build_intel_kpis` is pulled out as
+   a free fn so the four field-extraction branches are unit-testable
+   without egui scaffolding.
+
+## Plumbing that supports the above
+
+- `Snapshot` grew two fields:
+  - `cron_jobs: Option<Vec<Value>>` — driven by `cron.list`. Drives
+    the Scheduler table.
+  - `ecc_status: Option<Value>` — driven by `ecc.status`. Drives
+    the Explorer intelligence band.
+
+  See `crates/clawft-gui-egui/src/live.rs`.
+
+- **Native driver** (`crates/clawft-gui-egui/src/live/native_live.rs`)
+  added `poll_aux_rpcs(&mut Option<DaemonClient>, &Arc<Live>)` that
+  fires `cron.list` + `ecc.status` direct-RPC and writes results
+  into the live snapshot. Throttled to ~1 Hz off the SNAPSHOT_MS
+  ticker via an `aux_tick % aux_every == 0` gate so we don't burn
+  4×/s on data that doesn't change at that rate. Failures null the
+  client so the next tick reconnects.
+
+- **Wasm driver** (`crates/clawft-gui-egui/src/live/wasm_live.rs`)
+  `PartialPoll` extended from 4 fields to 8 — adds `mesh`, `chain`,
+  `cron`, `ecc`. The four core kernel RPCs still gate the
+  `Connection::Disconnected` decision; the optional ones don't, so
+  older daemons that lack `ecc.status` (or any single failing aux
+  call) don't roll the whole panel back to "disconnected". On
+  success the `chain` value gets `available: true` injected to
+  match the native ChainAdapter's contract; on error both
+  `mesh_status` and `chain_status` synthesize an
+  `{available: false, reason: <err>}` envelope so the Monitor tile
+  shows the failure reason rather than a stale "no data" hint.
+
+- **Extension allowlist** (`extensions/vscode-weft-panel/src/extension.ts`)
+  added `cron.list`, `cron.add`, `cron.remove`, `ecc.status` to
+  `STATIC_ALLOWED_METHODS`. Recompiled to `out/extension.js` (gitignored).
+
+## What changed in the codebase
+
+```
+crates/clawft-gui-egui/src/apps/explorer.rs    rewrite + intel band
+crates/clawft-gui-egui/src/apps/scheduler.rs   rewrite — real form + RPC
+crates/clawft-gui-egui/src/live.rs             +cron_jobs, +ecc_status
+crates/clawft-gui-egui/src/live/native_live.rs +poll_aux_rpcs (1 Hz)
+crates/clawft-gui-egui/src/live/wasm_live.rs   +4 polls in PartialPoll
+crates/clawft-gui-egui/src/shell/desktop.rs    +scheduler: SchedulerState
+crates/clawft-weave/src/daemon.rs              kernel.ps RSS apportion
+extensions/vscode-weft-panel/src/extension.ts  +4 allowlist verbs
+```
+
+## Build state at HEAD
+
+| Gate | Result |
+|---|---|
+| `scripts/build.sh check` | clean |
+| `scripts/build.sh clippy` (`-D warnings`) | clean |
+| `cargo test -p clawft-gui-egui --lib` | **376 / 376** (+6 new — 4 explorer KPI + 2 scheduler) |
+| `cargo test -p clawft-weave --lib` | 81 / 81 |
+| `cargo test -p clawft-rpc --lib` | 11 / 13 — 2 env-bound flakes (`is_daemon_running_false_when_no_daemon`, `connect_returns_none_when_no_daemon`) fail because the user's `weaver` is running on the dev box; pre-existing, not from this session |
+| `scripts/build.sh native` | weft 12.39 MB · weaver 14.01 MB |
+| `scripts/build.sh wasm-panel` | 7452 KB raw / 3460 KB gz, within 7600/3500 budget |
+| `npm run compile` (extension) | clean |
+
+## Known followups (not in this session)
+
+1. **Apportioned RSS is honest but coarse.** `kernel.ps` divides
+   `/proc/self/status` VmRSS evenly across in-daemon rows. Real
+   per-task accounting needs cgroup stats or per-task /proc/self/
+   task/<tid>/status sampling. Not blocking; tracked alongside the
+   existing process memory sampler followup from the prior session.
+2. **Witness chain bindings are flat fields.** The exochain chip
+   surface paints `chain_id / sequence / event_count / last_hash`
+   as separate `ui://chip` rows. With real data flowing now, this
+   reads thinly compared to the chain.tail event detail the chip
+   could surface — worth widening the fixture once we have a few
+   sessions of "is the data shape working at all" feedback.
+3. **`scripts/install-local.sh`** still not written. Iteration
+   loop continues to wedge on stale daemons until it lands.
+   Restart cycle the user runs each iteration is unchanged from
+   the prior session:
+   ```bash
+   kill <weaver-pid>
+   cp target/release/weaver  ~/.cargo/bin/weaver
+   cp target/release/weft    ~/.cargo/bin/weft
+   weaver kernel start --foreground
+   ```
+   Then Cmd/Ctrl-Shift-P → "Developer: Reload Window" in Cursor
+   so the extension JS picks up the new allowlist.
+4. **`cron.add` form has no target_pid input.** The handler accepts
+   `target_pid: Option<u64>`; the GUI form sends Null today. Adding
+   a fifth field is trivial but the user didn't ask for it — held
+   until a real use case shows up.
+5. **`cron.list` polled at 1 Hz by both transports.** Cheap (small
+   array, in-memory list_jobs() in the kernel) but worth a backoff
+   if the panel grows more aux RPCs.
+
+## Branch state
+
+`feat/weftos-579-591-graduations` — **27 commits ahead** of
+`master`, working tree dirty with the eight files above. Nothing
+committed this session; the user evaluates first per the prior
+"see-how-it-lands" pattern. `node_modules/` and `ui/` remain
+gitignored, untouched.
+
+---
+
 # Session handoff — 2026-05-02 (evening) — graduation iteration + daemon-side service plumbing
 
 Iteration session against the 22-commit graduation wave from earlier
