@@ -13,27 +13,29 @@ time, then add a matching `[X.Y.Z]: ...compare/...` link to the
 footnote block at the bottom of the file. The release runbook documents
 the cut-over (`docs/deployment/release.md`).
 
-## [0.6.21] - 2026-06-28
+### Fixed (parked — verified locally, not yet released)
 
-Patch release — Docker image fixes so the published container runs the
-gateway out-of-the-box (the v0.6.20 image's gateway crashed at startup,
-caught by the WEFT-550 post-publish smoke test). Binaries and WASM are
-unchanged from 0.6.20.
+Docker-image fixes that are **not** in a published release. A v0.6.21 cut
+was attempted and rolled back: cargo-dist stopped publishing the platform
+binaries (its plan produced an empty target matrix — root cause TBD), and
+the download-based image depends on them. The published binaries remain
+at **v0.6.20**. Re-cut once the binary-publish issue is resolved (and the
+download-vs-self-contained Docker choice is settled).
 
-### Fixed
 - **Docker (`Dockerfile`)**: pre-create `~/.clawft` owned by the `weft`
-  user *before* the `VOLUME` — Docker created the unmounted mountpoint
-  root-owned, so `weft gateway` (uid 1000) died with "bootstrap app
-  context: Permission denied" creating `~/.clawft/workspace/sessions`.
-  Also ship a default `config.json` enabling the REST/WS API on the
-  exposed port 8080 (`weft gateway` refuses to start with no channel and
-  the API off). The API stays auth-gated (Bearer token via `TokenStore`);
-  only `/api/health` and the token-bootstrap path are public, so the
-  smoke test's `/api/health` probe returns 200 without a token.
+  user *before* the `VOLUME` (Docker created the unmounted mountpoint
+  root-owned, so `weft gateway` died at "bootstrap app context:
+  Permission denied"), and ship a default `config.json` enabling the
+  auth-gated REST/WS API on the exposed port 8080 so `weft gateway` runs
+  out-of-the-box (it refuses to start with no channel and the API off).
+  The image was also refactored to a self-contained multi-stage build to
+  drop the published-asset coupling — but that makes the multi-arch CI
+  build slow (arm64 under QEMU), so the approach is still open.
 - **`Dockerfile.alpine`** (dev kernel-from-source image): build fully
   static against musl (`musl-dev` only) rather than dynamically linking
-  OpenSSL, which had made the built image fail at exec. Verified it
-  builds and `weaver` runs in-container.
+  OpenSSL.
+- **`.dockerignore`**: exclude `node_modules` / `.embuild` / generated
+  dirs from the build context.
 
 ## [0.6.20] - 2026-06-28
 
@@ -1066,8 +1068,7 @@ data structure as an interactive, drillable topology graph.
 - Release profile with LTO, strip, single codegen unit, and abort-on-panic
 - 1,029 tests across the workspace
 
-[Unreleased]: https://github.com/weave-logic-ai/weftos/compare/v0.6.21...HEAD
-[0.6.21]: https://github.com/weave-logic-ai/weftos/compare/v0.6.20...v0.6.21
+[Unreleased]: https://github.com/weave-logic-ai/weftos/compare/v0.6.20...HEAD
 [0.6.20]: https://github.com/weave-logic-ai/weftos/compare/v0.6.19...v0.6.20
 [0.6.19]: https://github.com/weave-logic-ai/weftos/compare/v0.6.18...v0.6.19
 [0.6.18]: https://github.com/weave-logic-ai/weftos/compare/v0.6.17...v0.6.18
