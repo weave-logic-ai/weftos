@@ -680,6 +680,15 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
             .ok()
             .filter(|s| !s.is_empty());
 
+        // Provenance for observability — capture which layer supplied
+        // each value before `.or()` consumes the Options, so the boot
+        // log can name the winning source and warn when a (possibly
+        // stale) env value silently shadows an explicit [kernel.llm].
+        let url_from_env = llm_url_env.is_some();
+        let url_from_cfg = cfg_llm_url.is_some();
+        let model_from_env = llm_model_env.is_some();
+        let model_from_cfg = cfg_llm_model.is_some();
+
         // Resolved override (env wins over config).
         let llm_url_override = llm_url_env.or(cfg_llm_url);
         let llm_model_override = llm_model_env.or(cfg_llm_model);
@@ -707,6 +716,56 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         // expect them and a routing proxy may reject them.
         let using_openrouter = openrouter_takeover;
         let api_key = if using_openrouter { api_key_env } else { None };
+
+        // Make endpoint resolution observable at boot: name the winning
+        // source for URL + model, and warn loudly when an env var —
+        // which `main.rs` also loads from `./env` via `dotenvy` —
+        // shadows an explicit `[kernel.llm]` value. The shadow itself is
+        // intended precedence (env = one-off override), but it was
+        // previously silent, which made a stale `./env` line a recurring
+        // "panel keeps hitting OpenRouter" footgun.
+        let url_source = if url_from_env {
+            "env:LLM_SERVICE_URL"
+        } else if url_from_cfg {
+            "config:[kernel.llm].service_url"
+        } else if using_openrouter {
+            "default:openrouter"
+        } else {
+            "default:local"
+        };
+        let model_source = if model_from_env {
+            "env:LLM_MODEL"
+        } else if model_from_cfg {
+            "config:[kernel.llm].model"
+        } else if using_openrouter {
+            "default:openrouter"
+        } else {
+            "default:local"
+        };
+        info!(
+            url = %llm_url,
+            url_source,
+            model = %llm_model,
+            model_source,
+            openrouter = using_openrouter,
+            "llm endpoint resolved"
+        );
+        if url_from_env && url_from_cfg {
+            warn!(
+                env_url = %llm_url,
+                "LLM_SERVICE_URL (possibly from ./env) shadows \
+                 [kernel.llm].service_url — the env value wins; unset it \
+                 to use the durable config value"
+            );
+        }
+        if model_from_env && model_from_cfg {
+            warn!(
+                env_model = %llm_model,
+                "LLM_MODEL (possibly from ./env) shadows [kernel.llm].model \
+                 — the env value wins; unset it to use the durable config value"
+            );
+        }
+
         let cfg = clawft_service_llm::LlmConfig {
             base_url: llm_url.clone(),
             model: llm_model.clone(),
