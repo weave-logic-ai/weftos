@@ -1,50 +1,46 @@
-# Minimal Docker image for weft (clawft CLI)
+# Self-contained image for weft (clawft CLI).
 #
-# Uses pre-built musl binaries from GitHub Releases + Alpine base.
-# No compilation — just downloads the correct binary for the target arch.
+# Builds the static musl `weft` binary from source in a multi-stage build
+# — no dependency on published GitHub Release assets. The previous image
+# downloaded a release tarball, which coupled the image tag to
+# already-published binaries and broke whenever a (patch) release did not
+# rebuild them (e.g. cargo-dist skipping the binary matrix). Building from
+# the build context makes the image reproducible from any commit/tag.
 #
-# Build:
-#   docker buildx build --platform linux/amd64,linux/arm64 \
-#     --build-arg VERSION=0.4.2 -t weft .
-#
-# Target: ~15MB compressed image.
+# Build (from the repo root):
+#   docker build -t weft:dev .
+# Target: a small static-musl runtime image.
 
+# ── Stage 1: build weft (static musl, default features) ───────────────
+FROM rust:1.93-alpine AS builder
+RUN apk add --no-cache musl-dev
+WORKDIR /build
+COPY . .
+# Default features = channels + services + delegate + api (gateway-capable).
+# The workspace reqwest uses rustls-tls, so this links fully static with
+# no openssl — runs on a bare alpine runtime.
+RUN cargo build --release -p clawft-cli --bin weft
+
+# ── Stage 2: minimal runtime ──────────────────────────────────────────
 FROM alpine:3.21
 
-ARG VERSION=0.6.21
-ARG TARGETARCH
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="weft" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.source="https://github.com/weave-logic-ai/weftos"
 
 RUN apk add --no-cache ca-certificates tzdata \
     && adduser -D -h /home/weft weft
 
-# Map Docker TARGETARCH to Rust target triple
-# TARGETARCH is set automatically by buildx: amd64 or arm64
-COPY <<'EOF' /tmp/install.sh
-#!/bin/sh
-set -eu
-case "$TARGETARCH" in
-  amd64) TRIPLE="x86_64-unknown-linux-musl" ;;
-  arm64) TRIPLE="aarch64-unknown-linux-musl" ;;
-  *) echo "Unsupported arch: $TARGETARCH"; exit 1 ;;
-esac
-ASSET="clawft-cli-${TRIPLE}.tar.gz"
-URL="https://github.com/weave-logic-ai/weftos/releases/download/v${VERSION}/${ASSET}"
-echo "Downloading ${URL}"
-wget -qO- "$URL" | tar xz --strip-components=1 -C /usr/local/bin/
-chmod +x /usr/local/bin/weft
-EOF
-RUN sh /tmp/install.sh && rm /tmp/install.sh
+COPY --from=builder /build/target/release/weft /usr/local/bin/weft
 
-# Pre-create the data dir owned by the weft user BEFORE declaring the
-# VOLUME (Docker creates an unmounted VOLUME mountpoint root-owned, so
-# `weft gateway` as uid 1000 would otherwise die at "bootstrap app
-# context: Permission denied" creating ~/.clawft/workspace/sessions),
-# and ship a default config that turns the REST/WS API on at the exposed
-# port 8080. `weft gateway` refuses to start with no channel and the API
-# off; enabling the API makes the image usable out-of-the-box and lets
-# the EXPOSE 8080 / HEALTHCHECK / `/api/health` probe work. The API is
-# auth-gated (Bearer token via TokenStore); only /api/health and the
-# token-bootstrap path are public.
+# Pre-create .clawft weft-owned BEFORE the VOLUME — Docker would otherwise
+# create the unmounted mountpoint root-owned and `weft gateway` (uid 1000)
+# would die at "bootstrap app context: Permission denied". Also ship a
+# default config enabling the auth-gated REST/WS API on the exposed port
+# 8080 so `weft gateway` runs out-of-the-box (it refuses to start with no
+# channel and the API off). The API stays Bearer-token gated; only
+# /api/health and the token-bootstrap path are public.
 RUN mkdir -p /home/weft/.clawft \
     && printf '{"gateway":{"api_enabled":true,"api_port":8080}}\n' \
        > /home/weft/.clawft/config.json \
