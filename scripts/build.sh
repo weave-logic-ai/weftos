@@ -602,6 +602,13 @@ CARGO_AUDIT_IGNORES=(
     --ignore RUSTSEC-2026-0094
     --ignore RUSTSEC-2026-0095
     --ignore RUSTSEC-2026-0096
+    # WEFT-551 (cont.) wasmtime 33.0.2 — newly disclosed 2026-06; a real fix
+    # needs the wasmtime 34+ major bump (out of in-range update). Deferred
+    # with the rest of the wasmtime advisories. RUSTSEC-2026-0149 is HIGH
+    # (WASI path_open TRUNCATE bypasses FilePerms::WRITE) — prioritize.
+    --ignore RUSTSEC-2026-0114
+    --ignore RUSTSEC-2026-0149
+    --ignore RUSTSEC-2026-0182
     # WEFT-552 rustls-webpki
     --ignore RUSTSEC-2026-0098
     --ignore RUSTSEC-2026-0099
