@@ -1,0 +1,57 @@
+# weftos-scene-builder
+#
+# Phase E host-side ergonomics layer for the WeftOS vector-first leaf
+# display. Wraps `weftos-leaf-scene`'s POD types in a fluent builder API,
+# a snapshot-to-snapshot differ, and a `SceneEnvelope` packager.
+#
+# Canonical design doc: docs/design/vector-leaf-display.md §10 Migration
+# Plan, "Phase B — weftos-scene-builder host crate".
+#
+# What this crate is for:
+#   - Process-table renderers (`weaver leaf scene ps`) that emit a
+#     stable, path-keyed set of nodes per frame and want
+#     "diff-against-last-frame → minimal SceneOp delta" without writing
+#     the diff by hand.
+#   - Hardware bring-up tests that want to script a scene declaratively
+#     and verify the wire bytes via the codec.
+#   - Future per-service renderers (kernel.logs, agent.chat, …) that
+#     follow the same pattern.
+#
+# What it is NOT:
+#   - Embedded — this is host-side and std-allowed by design. The leaf
+#     does not need diffs (it just applies whatever ops arrive).
+#   - A scene graph runtime — that's `SceneStore`; this crate produces
+#     the ops that drive a remote `SceneStore`.
+#
+# Standalone crate — own workspace table to stop cargo from walking up
+# into the parent clawft workspace and dragging in target-specific
+# toolchains. Mirrors the isolation pattern used by `weftos-leaf-scene`
+# and `weftos-leaf-renderer`.
+[workspace]
+
+[package]
+name = "weftos-scene-builder"
+version = "0.1.0"
+edition = "2021"
+description = "Host-side scene builder + differ + envelope packager for WeftOS leaf displays (std)."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/weave-logic-ai/weftos"
+keywords = ["weftos", "leaf", "scene-graph", "builder", "diff"]
+categories = ["graphics", "gui"]
+readme = "README.md"
+publish = false
+
+[dependencies]
+# Phase A foundation. Std-enabled so producer-side code can serde-round-
+# trip without the no_std ciborium feature gate.
+weftos-leaf-scene = { path = "../weftos-leaf-scene", features = ["std"] }
+
+[dev-dependencies]
+weftos-leaf-scene = { path = "../weftos-leaf-scene", features = ["std"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = "s"
+lto = true

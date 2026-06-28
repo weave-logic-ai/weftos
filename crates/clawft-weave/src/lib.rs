@@ -13,10 +13,12 @@ pub mod commands;
 pub mod control;
 #[cfg(unix)]
 pub mod daemon;
+#[cfg(unix)]
+pub mod llm_service;
 pub mod node_identity;
 pub mod protocol;
-pub mod voice_router;
 #[cfg(feature = "rvf-rpc")]
 pub mod rvf_codec;
 #[cfg(feature = "rvf-rpc")]
 pub mod rvf_rpc;
+pub mod voice_router;

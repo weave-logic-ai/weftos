@@ -1,0 +1,18 @@
+# Cargo build artifacts
+/target
+
+# Flashable firmware images — regenerable from the ELF in target/.
+# Kept on-disk for inspection / staging, never committed.
+/*.bin
+
+# Stock firmware backups — opaque 4 MB blobs, too large for git.
+# Re-grab any time via:
+#   esptool --chip esp32s3 --port /dev/ttyUSB0 read_flash 0 0x400000 <name>.bin
+/firmware-backups/*.bin
+
+# WiFi credentials — never commit. Copy wifi_secrets.rs.example →
+# wifi_secrets.rs and fill in. The .example template IS committed.
+/src/wifi_secrets.rs
+
+# Downloaded reference material (schematics etc.) — not source.
+/ref/

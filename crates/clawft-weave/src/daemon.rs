@@ -70,9 +70,8 @@ fn daemon_terminal() -> Option<Arc<clawft_service_terminal::TerminalManager>> {
 /// Generic param matches the blanket
 /// `impl<P: Platform> AgentLoopHandle for AgentLoop<P>` so production
 /// uses `AgentLoop<NativePlatform>` directly.
-type DaemonAgentService = clawft_service_agent::AgentService<
-    clawft_core::agent::loop_core::AgentLoop<NativePlatform>,
->;
+type DaemonAgentService =
+    clawft_service_agent::AgentService<clawft_core::agent::loop_core::AgentLoop<NativePlatform>>;
 
 static DAEMON_AGENT: OnceLock<Arc<DaemonAgentService>> = OnceLock::new();
 
@@ -97,14 +96,11 @@ static DAEMON_CONCIERGE_AGENT_ID: OnceLock<String> = OnceLock::new();
 /// Per-service restart counter. Bumped each time `service.restart`
 /// fires; read by `kernel.services` to populate the `restarts` field.
 /// Keyed by service name (`SystemService::name()`).
-static SERVICE_RESTART_COUNTS: OnceLock<
-    std::sync::Mutex<std::collections::HashMap<String, u64>>,
-> = OnceLock::new();
+static SERVICE_RESTART_COUNTS: OnceLock<std::sync::Mutex<std::collections::HashMap<String, u64>>> =
+    OnceLock::new();
 
-fn service_restart_counts(
-) -> &'static std::sync::Mutex<std::collections::HashMap<String, u64>> {
-    SERVICE_RESTART_COUNTS
-        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+fn service_restart_counts() -> &'static std::sync::Mutex<std::collections::HashMap<String, u64>> {
+    SERVICE_RESTART_COUNTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 /// Read this process's resident set size in bytes from
@@ -142,12 +138,11 @@ use clawft_platform::NativePlatform;
 use clawft_types::config::{Config, KernelConfig};
 
 use crate::protocol::{
-    self, AgentChatParams, AgentInspectResult,
-    AgentSendParams, AgentSpawnParams, AgentSpawnResult, AgentStopParams,
-    AgentRestartParams, ClusterJoinParams, ClusterLeaveParams, ClusterNodeInfo,
-    ClusterStatusResult, CronAddParams, CronJobInfo, CronRemoveParams, IpcPublishParams,
-    IpcSubscribeParams, IpcTopicInfo, KernelStatusResult, LogEntry, LogsParams, ProcessInfo,
-    Request, Response, ServiceInfo,
+    self, AgentChatParams, AgentInspectResult, AgentRestartParams, AgentSendParams,
+    AgentSpawnParams, AgentSpawnResult, AgentStopParams, ClusterJoinParams, ClusterLeaveParams,
+    ClusterNodeInfo, ClusterStatusResult, CronAddParams, CronJobInfo, CronRemoveParams,
+    IpcPublishParams, IpcSubscribeParams, IpcTopicInfo, KernelStatusResult, LogEntry, LogsParams,
+    ProcessInfo, Request, Response, ServiceInfo,
 };
 #[cfg(feature = "exochain")]
 use crate::protocol::{
@@ -328,10 +323,7 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     // Clean up stale socket file
     if socket_path.exists() {
         // Try connecting to see if a daemon is already running
-        if tokio::net::UnixStream::connect(&socket_path)
-            .await
-            .is_ok()
-        {
+        if tokio::net::UnixStream::connect(&socket_path).await.is_ok() {
             anyhow::bail!(
                 "daemon already running (socket exists and is accepting connections: {})",
                 socket_path.display()
@@ -385,7 +377,8 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     {
         let k = kernel.read().await;
         let pubkey: [u8; 32] = daemon_identity.signing_key.verifying_key().to_bytes();
-        k.node_registry().register(pubkey, Some("daemon".to_string()));
+        k.node_registry()
+            .register(pubkey, Some("daemon".to_string()));
         info!(node_id = %daemon_identity.node_id, "daemon node registered");
         k.event_log().info(
             "node",
@@ -469,14 +462,12 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     // Pre-register control flags before spawn so the service holds
     // shared `Arc<AtomicBool>` handles to flags the RPC handler can
     // flip.
-    let source_node_id = std::env::var("WHISPER_INPUT_NODE_ID")
-        .unwrap_or_else(|_| "n-bfc4cd".to_string());
+    let source_node_id =
+        std::env::var("WHISPER_INPUT_NODE_ID").unwrap_or_else(|_| "n-bfc4cd".to_string());
     let pcm_chunk_target = format!("{source_node_id}/mic/pcm_chunk");
     let rms_target = format!("{source_node_id}/mic/rms");
-    let whisper_service_flag =
-        control_flags.register(ControlKind::Service, "whisper", true);
-    let whisper_source_flag =
-        control_flags.register(ControlKind::Sensor, &pcm_chunk_target, true);
+    let whisper_service_flag = control_flags.register(ControlKind::Service, "whisper", true);
+    let whisper_source_flag = control_flags.register(ControlKind::Sensor, &pcm_chunk_target, true);
     // RMS sensor isn't consumed by anything in-process today; the
     // flag still lives here so toggling it from the GUI publishes
     // the intent that the firmware will eventually subscribe to.
@@ -493,23 +484,18 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         daemon = daemon_identity.node_id,
         source = source_node_id,
     );
-    let classify_service_flag =
-        control_flags.register(ControlKind::Service, "classify", true);
+    let classify_service_flag = control_flags.register(ControlKind::Service, "classify", true);
 
     let _whisper_handle: Option<clawft_service_whisper::WhisperService> = {
         let whisper_url = std::env::var(clawft_service_whisper::WHISPER_SERVICE_URL_ENV)
             .unwrap_or_else(|_| "http://127.0.0.1:8123".to_string());
-        let input_path = format!(
-            "substrate/{source_node_id}/sensor/mic/pcm_chunk"
-        );
+        let input_path = format!("substrate/{source_node_id}/sensor/mic/pcm_chunk");
         // Mesh-canonical transcript path (R3.2). Source node is part
         // of the path so subscribers see one stable subtree across
         // leader handoff. The daemon issued itself a `transcript`
         // grant above; the gate consults the registry handed to the
         // service via config.
-        let output_path_derived = format!(
-            "substrate/_derived/transcript/{source_node_id}/mic",
-        );
+        let output_path_derived = format!("substrate/_derived/transcript/{source_node_id}/mic",);
         // REMOVE AFTER PHASE 4: dual-publish for migration.
         // Old node-private path stays alive for one release so
         // existing in-tree subscribers (the Explorer's substrate
@@ -599,9 +585,7 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     // the wire shape, so neither the whisper gate nor any GUI
     // subscriber needs a code change.
     let _classify_handle: Option<clawft_service_classify::ClassifierService> = {
-        let input_path = format!(
-            "substrate/{source_node_id}/sensor/mic/pcm_chunk"
-        );
+        let input_path = format!("substrate/{source_node_id}/sensor/mic/pcm_chunk");
         let cfg = clawft_service_classify::ClassifierServiceConfig {
             node_id: daemon_identity.node_id.clone(),
             source_node: source_node_id.clone(),
@@ -650,17 +634,61 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     // Pre-register the control flag so `control.set_enabled
     // {kind:"service", target:"llm"}` works the first time the
     // user toggles it from the GUI.
-    let _llm_service_flag =
-        control_flags.register(ControlKind::Service, "llm", true);
+    let _llm_service_flag = control_flags.register(ControlKind::Service, "llm", true);
     {
-        // OpenRouter takeover: when OPENROUTER_API_KEY is set we
-        // default the base URL + model to OpenRouter and attach
-        // bearer auth. Local-llama-server users see no behaviour
-        // change (api_key stays None, defaults match the prior code).
-        let api_key = std::env::var(clawft_service_llm::OPENROUTER_API_KEY_ENV)
+        // LLM endpoint resolution.
+        //
+        // Precedence (first hit wins):
+        //   1. LLM_SERVICE_URL env — one-off override / experiments.
+        //      Note: `main.rs` calls `dotenvy::dotenv()` early, so any
+        //      `LLM_SERVICE_URL=` line in `./env` ALSO gets picked up
+        //      here and silently shadows `[kernel.llm]` below. If the
+        //      panel keeps hitting OpenRouter despite a localhost
+        //      `[kernel.llm].service_url`, look in `./env` first.
+        //   2. [kernel.llm].service_url in config — durable operator
+        //      choice.
+        //   3. OPENROUTER_API_KEY set AND no URL above — opt-in
+        //      OpenRouter takeover (bearer auth + OpenRouter defaults).
+        //   4. Local llama-server defaults (127.0.0.1:8111, "local").
+        //
+        // The earlier logic flipped `using_openrouter` purely on
+        // OPENROUTER_API_KEY presence, which meant a user pointing
+        // LLM_SERVICE_URL at a local llama-server while still having
+        // OPENROUTER_API_KEY in the shell got bearer-auth headers
+        // sent to localhost AND the OpenRouter model name as the
+        // request body's `model` field — confusing and wrong.
+        let cfg_llm = {
+            let k = kernel.read().await;
+            k.kernel_config().llm.clone()
+        };
+        let cfg_llm_url = cfg_llm
+            .as_ref()
+            .and_then(|c| c.service_url.clone())
+            .filter(|s| !s.is_empty());
+        let cfg_llm_model = cfg_llm
+            .as_ref()
+            .and_then(|c| c.model.clone())
+            .filter(|s| !s.is_empty());
+
+        let api_key_env = std::env::var(clawft_service_llm::OPENROUTER_API_KEY_ENV)
             .ok()
             .filter(|s| !s.is_empty());
-        let (default_url, default_model) = if api_key.is_some() {
+        let llm_url_env = std::env::var(clawft_service_llm::LLM_SERVICE_URL_ENV)
+            .ok()
+            .filter(|s| !s.is_empty());
+        let llm_model_env = std::env::var(clawft_service_llm::LLM_MODEL_ENV)
+            .ok()
+            .filter(|s| !s.is_empty());
+
+        // Resolved override (env wins over config).
+        let llm_url_override = llm_url_env.or(cfg_llm_url);
+        let llm_model_override = llm_model_env.or(cfg_llm_model);
+
+        // OpenRouter takeover only fires when the operator hasn't
+        // explicitly pointed the URL elsewhere (env or config).
+        let openrouter_takeover = api_key_env.is_some() && llm_url_override.is_none();
+
+        let (default_url, default_model) = if openrouter_takeover {
             (
                 clawft_service_llm::DEFAULT_OPENROUTER_BASE_URL.to_string(),
                 clawft_service_llm::DEFAULT_OPENROUTER_MODEL.to_string(),
@@ -671,15 +699,14 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
                 clawft_service_llm::DEFAULT_LLM_MODEL.to_string(),
             )
         };
-        let llm_url = std::env::var(clawft_service_llm::LLM_SERVICE_URL_ENV)
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(default_url);
-        let llm_model = std::env::var(clawft_service_llm::LLM_MODEL_ENV)
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(default_model);
-        let using_openrouter = api_key.is_some();
+        let llm_url = llm_url_override.unwrap_or(default_url);
+        let llm_model = llm_model_override.unwrap_or(default_model);
+        // Only attach bearer auth + OpenRouter headers when we're
+        // actually targeting OpenRouter. If the user pointed the URL
+        // elsewhere, suppress them — local llama-server doesn't
+        // expect them and a routing proxy may reject them.
+        let using_openrouter = openrouter_takeover;
+        let api_key = if using_openrouter { api_key_env } else { None };
         let cfg = clawft_service_llm::LlmConfig {
             base_url: llm_url.clone(),
             model: llm_model.clone(),
@@ -712,7 +739,74 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
                         }
                     });
                 }
-                let _ = DAEMON_LLM.set(arc);
+                let _ = DAEMON_LLM.set(Arc::clone(&arc));
+
+                // Register the LLM as a first-class kernel service so
+                // it shows up in `kernel.services`, in the desktop
+                // Services panel, and answers to
+                // `service.{start,stop,restart}`. The same
+                // `_llm_service_flag` we registered above is the
+                // backing toggle — `service.stop` flips it off, after
+                // which `handle_llm_prompt` returns the standard
+                // disabled error. Registration also publishes a
+                // `service.contract.register` chain event listing the
+                // exposed methods, mirroring the governance treatment
+                // every other kernel service gets at boot.
+                {
+                    let svc = Arc::new(crate::llm_service::LlmSystemService::new(
+                        Arc::clone(&arc),
+                        Arc::clone(&_llm_service_flag),
+                    ));
+                    let k = kernel.read().await;
+                    let methods: Vec<String> = crate::llm_service::LLM_CONTRACT_METHODS
+                        .iter()
+                        .map(|s| (*s).to_string())
+                        .collect();
+                    let registered = {
+                        #[cfg(feature = "exochain")]
+                        {
+                            match k.chain_manager() {
+                                Some(cm) => {
+                                    k.services()
+                                        .register_with_contract(svc.clone(), methods, cm)
+                                }
+                                None => k.services().register(svc.clone()),
+                            }
+                        }
+                        #[cfg(not(feature = "exochain"))]
+                        {
+                            let _ = methods;
+                            k.services().register(svc.clone())
+                        }
+                    };
+                    match registered {
+                        Ok(()) => {
+                            // Record a metadata entry too so callers
+                            // resolving by name can see the upstream
+                            // URL without poking at LlmClient internals.
+                            let entry = clawft_kernel::ServiceEntry {
+                                name: "llm".to_string(),
+                                owner_pid: None,
+                                endpoint: clawft_kernel::ServiceEndpoint::External {
+                                    url: arc.config().base_url.clone(),
+                                },
+                                audit_level: clawft_kernel::ServiceAuditLevel::Full,
+                                registered_at: chrono::Utc::now(),
+                            };
+                            if let Err(e) = k.services().register_entry(entry) {
+                                warn!(
+                                    error = %e,
+                                    "llm service entry registration failed (the SystemService is still live)"
+                                );
+                            }
+                        }
+                        Err(e) => warn!(
+                            error = %e,
+                            "llm service registration failed — llm.prompt still works, but it won't appear in kernel.services"
+                        ),
+                    }
+                }
+
                 info!(
                     url = %llm_url,
                     model = %llm_model,
@@ -743,8 +837,7 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     // Pre-register the control flag so
     // `control.set_enabled {kind:"service", target:"agent"}` works the
     // first time the user toggles it.
-    let _agent_service_flag =
-        control_flags.register(ControlKind::Service, "agent", true);
+    let _agent_service_flag = control_flags.register(ControlKind::Service, "agent", true);
     if let Some(llm_for_agent) = DAEMON_LLM.get().cloned() {
         // Workspace = daemon CWD. The C2 spike used the same
         // resolution; a future config change will lift this into
@@ -757,9 +850,9 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
             }
         };
 
-        let identity_loader = Arc::new(
-            clawft_core::agent::identity::IdentityLoader::new(&workspace),
-        );
+        let identity_loader = Arc::new(clawft_core::agent::identity::IdentityLoader::new(
+            &workspace,
+        ));
 
         let mut tool_registry = clawft_core::tools::registry::ToolRegistry::new();
         clawft_tools::register_all(
@@ -782,11 +875,49 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
             let k = kernel.read().await;
             let substrate = k.substrate_service().clone();
             let node_registry = k.node_registry().clone();
-            Arc::new(clawft_service_agent::SubstrateConversationSink::new(
-                substrate,
-                node_registry,
-                daemon_identity.node_id.clone(),
-            ))
+
+            // [kernel.agent].anchor_* — when any flag is on, mirror
+            // every successful turn into the witness chain / HNSW
+            // index / causal graph so the Explorer KPIs and the
+            // chain seq move with chat traffic. Each side-effect is
+            // gated independently. With every flag off (default) the
+            // sink falls back to the no-op anchor — pure substrate
+            // JSONL behaviour, no extra work per turn.
+            let anchor_cfg = k.kernel_config().agent.clone().unwrap_or_default();
+            let anchor: Arc<dyn clawft_service_agent::TurnAnchor> = if anchor_cfg.any_enabled() {
+                let chain = anchor_cfg
+                    .anchor_chain
+                    .then(|| k.chain_manager().cloned())
+                    .flatten();
+                let hnsw = anchor_cfg
+                    .anchor_hnsw
+                    .then(|| k.ecc_hnsw().cloned())
+                    .flatten();
+                let causal = anchor_cfg
+                    .anchor_causal
+                    .then(|| k.ecc_causal().cloned())
+                    .flatten();
+                info!(
+                    chain = chain.is_some(),
+                    hnsw = hnsw.is_some(),
+                    causal = causal.is_some(),
+                    "agent.chat anchors wired (mirrors turns to enabled stores)"
+                );
+                Arc::new(clawft_service_agent::KernelTurnAnchor::new(
+                    chain, hnsw, causal,
+                ))
+            } else {
+                Arc::new(clawft_service_agent::NoopTurnAnchor)
+            };
+
+            Arc::new(
+                clawft_service_agent::SubstrateConversationSink::with_anchor(
+                    substrate,
+                    node_registry,
+                    daemon_identity.node_id.clone(),
+                    anchor,
+                ),
+            )
         };
 
         // agent-core-v1 Phase D1: wire a FileIdentityProvider so each
@@ -794,10 +925,9 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         // `.clawft/SOUL.md` + `.clawft/IDENTITY.md` (with the
         // docs/skills/clawft fallback). The provider caches the most
         // recent successful load so cross-turn IO is cheap.
-        let identity_provider: Arc<dyn clawft_core::agent::identity::IdentityProvider> =
-            Arc::new(clawft_core::agent::identity::FileIdentityProvider::new(
-                &workspace,
-            ));
+        let identity_provider: Arc<dyn clawft_core::agent::identity::IdentityProvider> = Arc::new(
+            clawft_core::agent::identity::FileIdentityProvider::new(&workspace),
+        );
 
         // agent-core-v1 Phase D2: register a single concierge
         // principal in the kernel's AgentRegistry. v1 chat is
@@ -873,100 +1003,100 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         // picks a model and NEVER escalates a tier — `TieredRouter`
         // owns the actual decision; the router only nudges
         // `complexity_hint` and surfaces an `archetype` label.
-        let context_router: Option<
-            Arc<dyn clawft_core::agent::context_router::ContextRouter>,
-        > = match context_router_choice.as_str() {
-            "llm-classifier" => {
-                info!(
-                    router = "llm-classifier",
-                    "agent-core: ContextRouter v1 (LlmClassifierRouter) live"
-                );
-                Some(Arc::new(
-                    clawft_core::agent::context_router::LlmClassifierRouter::new(
-                        llm_for_agent.clone(),
-                    ),
-                ))
-            }
-            "embedding" => {
-                // E2: build the v2 router via the shared helper. On
-                // any prerequisite failure (empty registry, discover
-                // error, embedder/index build error) the helper logs
-                // a `warn!` and returns None; we propagate that so the
-                // daemon falls back to the built-in NullRouter rather
-                // than crashing the boot path.
-                match build_embedding_router_or_warn(workspace.as_path()).await {
-                    Some(r) => {
-                        info!(
-                            router = "embedding",
-                            "agent-core: ContextRouter v2 (EmbeddingRouter) live"
-                        );
-                        Some(r)
-                    }
-                    None => {
-                        warn!(
-                            "agent-core: EmbeddingRouter unavailable; falling back to NullRouter"
-                        );
-                        None
+        let context_router: Option<Arc<dyn clawft_core::agent::context_router::ContextRouter>> =
+            match context_router_choice.as_str() {
+                "llm-classifier" => {
+                    info!(
+                        router = "llm-classifier",
+                        "agent-core: ContextRouter v1 (LlmClassifierRouter) live"
+                    );
+                    Some(Arc::new(
+                        clawft_core::agent::context_router::LlmClassifierRouter::new(
+                            llm_for_agent.clone(),
+                        ),
+                    ))
+                }
+                "embedding" => {
+                    // E2: build the v2 router via the shared helper. On
+                    // any prerequisite failure (empty registry, discover
+                    // error, embedder/index build error) the helper logs
+                    // a `warn!` and returns None; we propagate that so the
+                    // daemon falls back to the built-in NullRouter rather
+                    // than crashing the boot path.
+                    match build_embedding_router_or_warn(workspace.as_path()).await {
+                        Some(r) => {
+                            info!(
+                                router = "embedding",
+                                "agent-core: ContextRouter v2 (EmbeddingRouter) live"
+                            );
+                            Some(r)
+                        }
+                        None => {
+                            warn!(
+                                "agent-core: EmbeddingRouter unavailable; falling back to NullRouter"
+                            );
+                            None
+                        }
                     }
                 }
-            }
-            "hybrid" => {
-                // E3: v2.5 plumbing. EmbeddingRouter (v2) primary,
-                // LlmClassifierRouter (v1) fallback on empty/low-
-                // confidence (the v2 router already collapses to
-                // ContextDecision::default() below its confidence
-                // threshold, so "empty primary" == "low-confidence
-                // primary" without any extra signaling).
-                //
-                // If the v2 primary fails to construct (no
-                // OPENAI_API_KEY *and* the hash floor still errors —
-                // unlikely but possible if skills discovery breaks),
-                // we degrade gracefully to the v1 classifier alone.
-                // If even the classifier can't be constructed (it
-                // can't fail today — `Arc::new(LlmClient.into())`),
-                // we fall through to NullRouter.
-                let v1: Arc<dyn clawft_core::agent::context_router::ContextRouter> =
-                    Arc::new(
+                "hybrid" => {
+                    // E3: v2.5 plumbing. EmbeddingRouter (v2) primary,
+                    // LlmClassifierRouter (v1) fallback on empty/low-
+                    // confidence (the v2 router already collapses to
+                    // ContextDecision::default() below its confidence
+                    // threshold, so "empty primary" == "low-confidence
+                    // primary" without any extra signaling).
+                    //
+                    // If the v2 primary fails to construct (no
+                    // OPENAI_API_KEY *and* the hash floor still errors —
+                    // unlikely but possible if skills discovery breaks),
+                    // we degrade gracefully to the v1 classifier alone.
+                    // If even the classifier can't be constructed (it
+                    // can't fail today — `Arc::new(LlmClient.into())`),
+                    // we fall through to NullRouter.
+                    let v1: Arc<dyn clawft_core::agent::context_router::ContextRouter> = Arc::new(
                         clawft_core::agent::context_router::LlmClassifierRouter::new(
                             llm_for_agent.clone(),
                         ),
                     );
-                match build_embedding_router_or_warn(workspace.as_path()).await {
-                    Some(emb) => {
-                        info!(
-                            router = "hybrid",
-                            "agent-core: ContextRouter v2.5 (HybridRouter) live \
+                    match build_embedding_router_or_warn(workspace.as_path()).await {
+                        Some(emb) => {
+                            info!(
+                                router = "hybrid",
+                                "agent-core: ContextRouter v2.5 (HybridRouter) live \
                              — EmbeddingRouter primary, LlmClassifierRouter fallback"
-                        );
-                        Some(Arc::new(
-                            clawft_core::agent::context_router::HybridRouter::new(emb, v1),
-                        )
-                            as Arc<dyn clawft_core::agent::context_router::ContextRouter>)
-                    }
-                    None => {
-                        warn!(
-                            "hybrid router: embedding primary unavailable; \
+                            );
+                            Some(
+                                Arc::new(clawft_core::agent::context_router::HybridRouter::new(
+                                    emb, v1,
+                                ))
+                                    as Arc<dyn clawft_core::agent::context_router::ContextRouter>,
+                            )
+                        }
+                        None => {
+                            warn!(
+                                "hybrid router: embedding primary unavailable; \
                              using LlmClassifierRouter alone"
-                        );
-                        Some(v1)
+                            );
+                            Some(v1)
+                        }
                     }
                 }
-            }
-            "null" => {
-                info!(
-                    router = "null",
-                    "agent-core: ContextRouter v0 (NullRouter) live"
-                );
-                None
-            }
-            other => {
-                warn!(
-                    requested = %other,
-                    "agent-core: unknown context_router setting; falling back to NullRouter"
-                );
-                None
-            }
-        };
+                "null" => {
+                    info!(
+                        router = "null",
+                        "agent-core: ContextRouter v0 (NullRouter) live"
+                    );
+                    None
+                }
+                other => {
+                    warn!(
+                        requested = %other,
+                        "agent-core: unknown context_router setting; falling back to NullRouter"
+                    );
+                    None
+                }
+            };
 
         let agent_loop = clawft_core::bootstrap::build_daemon_agent_loop(
             llm_for_agent,
@@ -1016,9 +1146,7 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     // until the 5 P0 voice security controls (WEFT-207..211) ship.
     let _voice_router_handle: Option<crate::voice_router::VoiceRouter> = {
         if !voice_consumer_cfg.enabled {
-            info!(
-                "voice consumer: disabled by config (voice.consumer.enabled=false)"
-            );
+            info!("voice consumer: disabled by config (voice.consumer.enabled=false)");
             None
         } else if DAEMON_AGENT.get().is_none() {
             warn!(
@@ -1108,20 +1236,13 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     {
         let k = kernel.read().await;
         let substrate = k.substrate_service();
-        let path = format!(
-            "substrate/{}/ui/terminal",
-            daemon_identity.node_id
-        );
+        let path = format!("substrate/{}/ui/terminal", daemon_identity.node_id);
         let value = serde_json::json!({
             "kind": "terminal",
             "label": "Terminal",
             "updated_at_ms": crate::control::now_ms(),
         });
-        if let Err(e) = substrate.publish_gated(
-            Some(&daemon_identity.node_id),
-            &path,
-            value,
-        ) {
+        if let Err(e) = substrate.publish_gated(Some(&daemon_identity.node_id), &path, value) {
             warn!(error = %e, path = %path, "terminal: ui sentinel publish failed");
         } else {
             debug!(path = %path, "terminal: ui sentinel published");
@@ -1137,9 +1258,17 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         let initial = [
             (ControlKind::Service, "whisper".to_string(), "Whisper STT"),
             (ControlKind::Service, "llm".to_string(), "Local LLM"),
-            (ControlKind::Service, "classify".to_string(), "Audio classifier"),
+            (
+                ControlKind::Service,
+                "classify".to_string(),
+                "Audio classifier",
+            ),
             (ControlKind::Service, "agent".to_string(), "Agent service"),
-            (ControlKind::Sensor, pcm_chunk_target.clone(), "Mic PCM chunks"),
+            (
+                ControlKind::Sensor,
+                pcm_chunk_target.clone(),
+                "Mic PCM chunks",
+            ),
             (ControlKind::Sensor, rms_target.clone(), "Mic RMS summary"),
         ];
         for (kind, target, label) in &initial {
@@ -1153,16 +1282,10 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
                 label: (*label).to_string(),
                 updated_at_ms: crate::control::now_ms(),
             };
-            let path = crate::control::intent_path(
-                &daemon_identity.node_id,
-                *kind,
-                target,
-            );
-            if let Err(e) = substrate.publish_gated(
-                Some(&daemon_identity.node_id),
-                &path,
-                intent.to_value(),
-            ) {
+            let path = crate::control::intent_path(&daemon_identity.node_id, *kind, target);
+            if let Err(e) =
+                substrate.publish_gated(Some(&daemon_identity.node_id), &path, intent.to_value())
+            {
                 warn!(error = %e, path = %path, "control: initial intent publish failed");
             } else {
                 debug!(path = %path, "control: initial intent published");
@@ -1176,24 +1299,17 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
         // handler picks the actual model server-side; this just makes
         // the choice visible in the Explorer's tree label and chat
         // header.
-        let chat_path = format!(
-            "substrate/{}/ui/chat",
-            daemon_identity.node_id,
-        );
+        let chat_path = format!("substrate/{}/ui/chat", daemon_identity.node_id,);
         let model_name = daemon_llm()
             .map(|c| c.config().model.clone())
-            .unwrap_or_else(|| {
-                clawft_service_llm::DEFAULT_LLM_MODEL.to_string()
-            });
+            .unwrap_or_else(|| clawft_service_llm::DEFAULT_LLM_MODEL.to_string());
         let chat_sentinel = serde_json::json!({
             "kind": "chat",
             "model": model_name,
         });
-        if let Err(e) = substrate.publish_gated(
-            Some(&daemon_identity.node_id),
-            &chat_path,
-            chat_sentinel,
-        ) {
+        if let Err(e) =
+            substrate.publish_gated(Some(&daemon_identity.node_id), &chat_path, chat_sentinel)
+        {
             warn!(error = %e, path = %chat_path, "ui: chat sentinel publish failed");
         } else {
             debug!(path = %chat_path, "ui: chat sentinel published");
@@ -1244,32 +1360,34 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     {
         let k = kernel.read().await;
         if let Some(cfg) = k.kernel_config().anchor.as_ref()
-            && cfg.enabled && !cfg.topics.is_empty() {
-                let window = std::time::Duration::from_secs(cfg.window_secs.max(1));
-                let a2a = k.a2a_router().clone();
-                let chain = k.chain_manager().cloned();
-                for pattern in &cfg.topics {
-                    // Exact topics are wired directly; wildcard patterns
-                    // like "sensor.*" are not expanded here — the
-                    // config-writer provides the exact topic prefix
-                    // they want to anchor, and the anchor currently
-                    // subscribes by literal name. A wildcard anchor
-                    // watchdog is a follow-up (M1.6+).
-                    let topic = pattern.clone();
-                    let anchor = clawft_kernel::StreamWindowAnchor::start_topic(
-                        Arc::clone(&a2a),
-                        chain.clone(),
-                        topic.clone(),
-                        window,
-                    );
-                    stream_anchors.push(anchor);
-                }
-                info!(
-                    anchors = stream_anchors.len(),
-                    window_ms = window.as_millis() as u64,
-                    "stream-window anchors started"
+            && cfg.enabled
+            && !cfg.topics.is_empty()
+        {
+            let window = std::time::Duration::from_secs(cfg.window_secs.max(1));
+            let a2a = k.a2a_router().clone();
+            let chain = k.chain_manager().cloned();
+            for pattern in &cfg.topics {
+                // Exact topics are wired directly; wildcard patterns
+                // like "sensor.*" are not expanded here — the
+                // config-writer provides the exact topic prefix
+                // they want to anchor, and the anchor currently
+                // subscribes by literal name. A wildcard anchor
+                // watchdog is a follow-up (M1.6+).
+                let topic = pattern.clone();
+                let anchor = clawft_kernel::StreamWindowAnchor::start_topic(
+                    Arc::clone(&a2a),
+                    chain.clone(),
+                    topic.clone(),
+                    window,
                 );
+                stream_anchors.push(anchor);
             }
+            info!(
+                anchors = stream_anchors.len(),
+                window_ms = window.as_millis() as u64,
+                "stream-window anchors started"
+            );
+        }
     }
 
     // Shutdown signal
@@ -1563,7 +1681,11 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
                     println!(
                         "IPC TCP relay listening on {} (bearer={})",
                         cfg.listen_addr,
-                        if cfg.bearer.is_some() { "required" } else { "none" }
+                        if cfg.bearer.is_some() {
+                            "required"
+                        } else {
+                            "none"
+                        }
                     );
                     let relay_socket_path = socket_path.clone();
                     let mut relay_shutdown_rx = shutdown_tx.subscribe();
@@ -1717,9 +1839,15 @@ pub async fn run(config: Config, kernel_config: KernelConfig) -> anyhow::Result<
     // Gracefully shut down running agents before kernel shutdown
     {
         let k = kernel.read().await;
-        let results = k.supervisor().shutdown_all(std::time::Duration::from_secs(5)).await;
+        let results = k
+            .supervisor()
+            .shutdown_all(std::time::Duration::from_secs(5))
+            .await;
         for (pid, code) in &results {
-            k.event_log().info("shutdown", format!("agent PID {pid} exited with code {code}"));
+            k.event_log().info(
+                "shutdown",
+                format!("agent PID {pid} exited with code {code}"),
+            );
         }
     }
 
@@ -1858,9 +1986,7 @@ async fn resolve_caller_capabilities(
     // but that accessor doesn't exist on `Kernel<P>` yet. Until it
     // lands, deny. This is the safer default — a typo'd token must
     // never silently fall back to anonymous.
-    tracing::warn!(
-        "rpc auth: presented token did not match any recognised shape; denying"
-    );
+    tracing::warn!("rpc auth: presented token did not match any recognised shape; denying");
     crate::capability::CallerCapabilities::denied()
 }
 
@@ -1908,25 +2034,28 @@ async fn dispatch_json_line(
             // returns a receiver the caller pipes into the socket.
             if req.method == "ipc.subscribe_stream" {
                 match handle_ipc_subscribe_stream(req.params, Arc::clone(kernel)).await {
-                    Ok((ack, topic, rx, on_disconnect)) => (
-                        ack.with_id(id),
-                        Some((topic, rx, on_disconnect)),
-                    ),
+                    Ok((ack, topic, rx, on_disconnect)) => {
+                        (ack.with_id(id), Some((topic, rx, on_disconnect)))
+                    }
                     Err(msg) => (Response::error(msg).with_id(id), None),
                 }
             } else if req.method == "substrate.subscribe" {
                 match handle_substrate_subscribe(req.params, Arc::clone(kernel)).await {
-                    Ok((ack, path, rx, on_disconnect)) => (
-                        ack.with_id(id),
-                        Some((path, rx, on_disconnect)),
-                    ),
+                    Ok((ack, path, rx, on_disconnect)) => {
+                        (ack.with_id(id), Some((path, rx, on_disconnect)))
+                    }
                     Err(msg) => (Response::error(msg).with_id(id), None),
                 }
             } else {
                 (
-                    dispatch(req.method, req.params, Arc::clone(kernel), shutdown_tx.clone())
-                        .await
-                        .with_id(id),
+                    dispatch(
+                        req.method,
+                        req.params,
+                        Arc::clone(kernel),
+                        shutdown_tx.clone(),
+                    )
+                    .await
+                    .with_id(id),
                     None,
                 )
             }
@@ -2187,10 +2316,7 @@ async fn handle_agent_register(
         Err(e) => return Response::error(format!("proof decode: {e}")),
     };
     if proof_bytes.len() != 64 {
-        return Response::error(format!(
-            "proof must be 64 bytes, got {}",
-            proof_bytes.len()
-        ));
+        return Response::error(format!("proof must be 64 bytes, got {}", proof_bytes.len()));
     }
     let mut proof_arr = [0u8; 64];
     proof_arr.copy_from_slice(&proof_bytes);
@@ -2285,20 +2411,13 @@ async fn handle_node_register(
         Err(e) => return Response::error(format!("proof decode: {e}")),
     };
     if proof_bytes.len() != 64 {
-        return Response::error(format!(
-            "proof must be 64 bytes, got {}",
-            proof_bytes.len()
-        ));
+        return Response::error(format!("proof must be 64 bytes, got {}", proof_bytes.len()));
     }
     let mut proof_arr = [0u8; 64];
     proof_arr.copy_from_slice(&proof_bytes);
 
     // Verify proof-of-possession over the canonical payload.
-    let payload = clawft_kernel::node_registry::node_register_payload(
-        &pubkey_arr,
-        p.ts,
-        &p.label,
-    );
+    let payload = clawft_kernel::node_registry::node_register_payload(&pubkey_arr, p.ts, &p.label);
     let vk = match VerifyingKey::from_bytes(&pubkey_arr) {
         Ok(vk) => vk,
         Err(e) => return Response::error(format!("invalid pubkey: {e}")),
@@ -2403,10 +2522,7 @@ async fn handle_ipc_subscribe_stream(
     let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
 
     let router = k.a2a_router().topic_router().clone();
-    let id = router.subscribe_sink(
-        &p.topic,
-        clawft_kernel::SubscriberSink::ExternalStream(tx),
-    );
+    let id = router.subscribe_sink(&p.topic, clawft_kernel::SubscriberSink::ExternalStream(tx));
     k.event_log().info(
         "ipc",
         format!(
@@ -2474,8 +2590,7 @@ async fn handle_rvf_connection(
             Err(e) => Response::error(format!("invalid RVF request: {e}")),
         };
 
-        let (seg_type, payload, flags, segment_id) =
-            rvf_rpc::encode_response(&response, next_id);
+        let (seg_type, payload, flags, segment_id) = rvf_rpc::encode_response(&response, next_id);
         next_id += 1;
 
         if let Err(e) = frame_writer
@@ -2815,7 +2930,10 @@ async fn handle_llm_prompt(
     // shape.
     if let Some(sys) = p.system
         && !sys.is_empty()
-        && !messages.first().map(|m| m.role == "system").unwrap_or(false)
+        && !messages
+            .first()
+            .map(|m| m.role == "system")
+            .unwrap_or(false)
     {
         messages.insert(0, clawft_service_llm::ChatMessage::system(sys));
     }
@@ -2888,10 +3006,7 @@ async fn handle_terminal_spawn(
         Some(s) => s.daemon_node_id.clone(),
         None => return Response::error("daemon control state not initialized".to_string()),
     };
-    let output_path = format!(
-        "substrate/{}/derived/terminal/{}",
-        daemon_node_id, id
-    );
+    let output_path = format!("substrate/{}/derived/terminal/{}", daemon_node_id, id);
     let resolved_shell = session.shell().to_string();
     let resolved_cwd = session.cwd().to_string();
 
@@ -2930,11 +3045,7 @@ async fn handle_terminal_spawn(
                         continue;
                     }
                 };
-                if let Err(e) = substrate.publish_gated(
-                    Some(&publish_node),
-                    &publish_path,
-                    value,
-                ) {
+                if let Err(e) = substrate.publish_gated(Some(&publish_node), &publish_path, value) {
                     warn!(error = %e, path = %publish_path, "terminal: publish_gated failed");
                 }
                 if chunk.exit {
@@ -2950,8 +3061,16 @@ async fn handle_terminal_spawn(
 
     let result = crate::protocol::TerminalSpawnResult {
         session_id: id.to_string(),
-        rows: if p.rows == 0 { clawft_service_terminal::DEFAULT_ROWS } else { p.rows },
-        cols: if p.cols == 0 { clawft_service_terminal::DEFAULT_COLS } else { p.cols },
+        rows: if p.rows == 0 {
+            clawft_service_terminal::DEFAULT_ROWS
+        } else {
+            p.rows
+        },
+        cols: if p.cols == 0 {
+            clawft_service_terminal::DEFAULT_COLS
+        } else {
+            p.cols
+        },
         shell: resolved_shell,
         cwd: resolved_cwd,
         output_path,
@@ -3027,7 +3146,9 @@ async fn handle_terminal_close(
         Some(m) => m,
         None => return Response::error("terminal service not initialized".to_string()),
     };
-    match mgr.close(&clawft_service_terminal::SessionId::from(p.session_id.as_str())) {
+    match mgr.close(&clawft_service_terminal::SessionId::from(
+        p.session_id.as_str(),
+    )) {
         Ok(()) => Response::success(
             serde_json::to_value(crate::protocol::TerminalAck { ok: true }).unwrap(),
         ),
@@ -3052,11 +3173,10 @@ async fn handle_control_set_enabled(
     params: serde_json::Value,
     kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
 ) -> Response {
-    let p: crate::protocol::ControlSetEnabledParams =
-        match serde_json::from_value(params) {
-            Ok(p) => p,
-            Err(e) => return Response::error(format!("invalid params: {e}")),
-        };
+    let p: crate::protocol::ControlSetEnabledParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(format!("invalid params: {e}")),
+    };
     let kind = match ControlKind::parse(&p.kind) {
         Some(k) => k,
         None => {
@@ -3132,18 +3252,18 @@ async fn handle_control_list(
         .flags
         .list()
         .into_iter()
-        .map(|(kind, target, enabled)| crate::protocol::ControlListEntry {
-            kind: match kind {
-                ControlKind::Service => "service".to_string(),
-                ControlKind::Sensor => "sensor".to_string(),
+        .map(
+            |(kind, target, enabled)| crate::protocol::ControlListEntry {
+                kind: match kind {
+                    ControlKind::Service => "service".to_string(),
+                    ControlKind::Sensor => "sensor".to_string(),
+                },
+                target,
+                enabled,
             },
-            target,
-            enabled,
-        })
+        )
         .collect();
-    Response::success(
-        serde_json::to_value(crate::protocol::ControlListResult { entries }).unwrap(),
-    )
+    Response::success(serde_json::to_value(crate::protocol::ControlListResult { entries }).unwrap())
 }
 
 /// Handle `substrate.canonical_publish_payload`: diagnostic — return
@@ -3174,12 +3294,8 @@ async fn handle_substrate_canonical_publish_payload(
     };
     let canonical_value_json = String::from_utf8_lossy(&value_bytes).into_owned();
 
-    let payload = clawft_kernel::node_publish_payload(
-        &p.path,
-        &canonical_value_json,
-        p.node_ts,
-        &p.node_id,
-    );
+    let payload =
+        clawft_kernel::node_publish_payload(&p.path, &canonical_value_json, p.node_ts, &p.node_id);
 
     let payload_hex = hex_encode(&payload);
     let payload_len = payload.len();
@@ -3204,9 +3320,7 @@ async fn handle_substrate_notify(
         Err(e) => return Response::error(format!("invalid params: {e}")),
     };
     let k = kernel.read().await;
-    let tick = k
-        .substrate_service()
-        .notify(p.actor_id.as_deref(), &p.path);
+    let tick = k.substrate_service().notify(p.actor_id.as_deref(), &p.path);
     Response::success(serde_json::json!({
         "path": p.path,
         "tick": tick,
@@ -3291,6 +3405,16 @@ async fn dispatch(
             // health_check; pid is the daemon's own pid (they live
             // there); parent_pid points at the root kernel process so
             // the table renders as a tree under it.
+            //
+            // Memory: services share the daemon's address space, so a
+            // truly accurate per-service RSS is unobtainable from the
+            // OS. We surface the daemon's measured RSS apportioned
+            // evenly across the in-daemon entries (kernel root + each
+            // service) so the user sees real, non-zero numbers on
+            // every row instead of a misleading 0. The apportionment
+            // is documented in the column header on the GUI side; the
+            // alternative ("0 bytes" everywhere) is what the user
+            // surfaced as a defect.
             let services = k.services().list();
             let daemon_pid = std::process::id() as u64;
             let root_pid: Option<u64> = entries.iter().map(|e| e.pid).min();
@@ -3309,13 +3433,42 @@ async fn dispatch(
                     pid: daemon_pid,
                     agent_id: name,
                     state: state.to_string(),
-                    // Per-service memory accounting isn't separable
-                    // when services share the daemon's address space.
-                    // The aggregate sits on the root kernel row above.
                     memory_bytes: 0,
                     cpu_time_ms: 0,
                     parent_pid: root_pid,
                 });
+            }
+
+            // Apportion the daemon RSS evenly across every row that is
+            // hosted in the daemon's address space (kernel root +
+            // services). Rows in entries.iter_mut() are still in
+            // pre-sort order; we just count rows with memory_bytes==0
+            // (after the kernel-root assignment above) plus the root
+            // itself, then divide. This keeps the column sum bounded
+            // by the actual daemon RSS instead of multiplying it by
+            // the row count.
+            let in_daemon_rows = entries
+                .iter()
+                .filter(|e| e.pid == daemon_pid || Some(e.pid) == root_pid)
+                .count() as u64;
+            if daemon_rss_bytes > 0 && in_daemon_rows > 0 {
+                let share = daemon_rss_bytes / in_daemon_rows;
+                let remainder = daemon_rss_bytes % in_daemon_rows;
+                let mut first = true;
+                for row in entries.iter_mut() {
+                    if row.pid == daemon_pid || Some(row.pid) == root_pid {
+                        // Round the remainder into the first row so the
+                        // apportioned values still sum exactly to the
+                        // observed RSS. Only override rows that are
+                        // currently 0 OR carry the un-apportioned full
+                        // RSS from the kernel-root assignment above.
+                        let new_val = if first { share + remainder } else { share };
+                        first = false;
+                        if row.memory_bytes == 0 || row.memory_bytes == daemon_rss_bytes {
+                            row.memory_bytes = new_val;
+                        }
+                    }
+                }
             }
 
             entries.sort_by_key(|e| e.pid);
@@ -3342,10 +3495,8 @@ async fn dispatch(
             // the registry for services started post-boot.
             let kernel_uptime_ms = k.uptime().as_millis() as u64;
             let restart_counts = service_restart_counts();
-            let restart_snapshot: std::collections::HashMap<String, u64> = restart_counts
-                .lock()
-                .map(|m| m.clone())
-                .unwrap_or_default();
+            let restart_snapshot: std::collections::HashMap<String, u64> =
+                restart_counts.lock().map(|m| m.clone()).unwrap_or_default();
             let mut infos: Vec<ServiceInfo> = Vec::with_capacity(services.len());
             for (name, stype) in services {
                 let (state, health_label) = match k.services().get(&name) {
@@ -3371,7 +3522,11 @@ async fn dispatch(
                     None => ("unknown".to_string(), "registered".to_string()),
                 };
                 let restarts = restart_snapshot.get(&name).copied().unwrap_or(0);
-                let uptime_ms = if state == "running" { kernel_uptime_ms } else { 0 };
+                let uptime_ms = if state == "running" {
+                    kernel_uptime_ms
+                } else {
+                    0
+                };
                 infos.push(ServiceInfo {
                     name,
                     service_type: stype.to_string(),
@@ -3397,15 +3552,11 @@ async fn dispatch(
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
             let Some(name) = name else {
-                return Response::error(format!(
-                    "{verb} requires {{name: <string>}}"
-                ));
+                return Response::error(format!("{verb} requires {{name: <string>}}"));
             };
             let k = kernel.read().await;
             let Some(svc) = k.services().get(&name) else {
-                return Response::error(format!(
-                    "service not registered: {name}"
-                ));
+                return Response::error(format!("service not registered: {name}"));
             };
             let result = match verb {
                 "service.start" => svc.start().await,
@@ -3539,16 +3690,12 @@ async fn dispatch(
             if let Some(pid) = k.services().resolve_target(&name) {
                 match k.supervisor().restart(pid) {
                     Ok(result) => {
-                        let _ = k.process_table().update_state(
-                            result.pid,
-                            clawft_kernel::ProcessState::Running,
-                        );
+                        let _ = k
+                            .process_table()
+                            .update_state(result.pid, clawft_kernel::ProcessState::Running);
                         k.event_log().info(
                             "kernel",
-                            format!(
-                                "restart-service {name} (PID {pid} -> {})",
-                                result.pid
-                            ),
+                            format!("restart-service {name} (PID {pid} -> {})", result.pid),
                         );
                         return Response::success(serde_json::json!({
                             "name": name,
@@ -3615,11 +3762,10 @@ async fn dispatch(
             Response::success(serde_json::to_value(nodes).unwrap())
         }
         "cluster.join" => {
-            let join_params: ClusterJoinParams =
-                match serde_json::from_value(params) {
-                    Ok(p) => p,
-                    Err(e) => return Response::error(format!("invalid params: {e}")),
-                };
+            let join_params: ClusterJoinParams = match serde_json::from_value(params) {
+                Ok(p) => p,
+                Err(e) => return Response::error(format!("invalid params: {e}")),
+            };
 
             let k = kernel.read().await;
             let membership = k.cluster_membership();
@@ -3647,11 +3793,10 @@ async fn dispatch(
             }
         }
         "cluster.leave" => {
-            let leave_params: ClusterLeaveParams =
-                match serde_json::from_value(params) {
-                    Ok(p) => p,
-                    Err(e) => return Response::error(format!("invalid params: {e}")),
-                };
+            let leave_params: ClusterLeaveParams = match serde_json::from_value(params) {
+                Ok(p) => p,
+                Err(e) => return Response::error(format!("invalid params: {e}")),
+            };
 
             let k = kernel.read().await;
             let membership = k.cluster_membership();
@@ -3686,8 +3831,11 @@ async fn dispatch(
                 let k = kernel.read().await;
                 if let Some(cm) = k.chain_manager() {
                     let status = cm.status();
-                    let hash_hex: String =
-                        status.last_hash.iter().map(|b| format!("{b:02x}")).collect();
+                    let hash_hex: String = status
+                        .last_hash
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect();
                     let result = ChainStatusResult {
                         chain_id: status.chain_id,
                         sequence: status.sequence,
@@ -3704,11 +3852,17 @@ async fn dispatch(
             #[cfg(not(feature = "exochain"))]
             Response::error("exochain feature not enabled")
         }
-        "chain.local" => {
+        // `chain.tail` is the panel/extension-side name; `chain.local` is
+        // the older console-side name. Same handler — the alias keeps the
+        // panel's witness-chain view (and any other UI consumers) wired
+        // without forcing a frontend rebuild. Without this match arm the
+        // panel hits `unknown method: chain.tail` and renders blank even
+        // when the chain is happily ticking new events.
+        "chain.local" | "chain.tail" => {
             #[cfg(feature = "exochain")]
             {
-                let local_params: ChainLocalParams = serde_json::from_value(params)
-                    .unwrap_or(ChainLocalParams { count: 20 });
+                let local_params: ChainLocalParams =
+                    serde_json::from_value(params).unwrap_or(ChainLocalParams { count: 20 });
                 let k = kernel.read().await;
                 if let Some(cm) = k.chain_manager() {
                     let events = cm.tail(local_params.count);
@@ -3739,7 +3893,8 @@ async fn dispatch(
                                     if let Some(v) = p.get("job_name").and_then(|v| v.as_str()) {
                                         parts.push(format!("job={v}"));
                                     }
-                                    if let Some(v) = p.get("payload_type").and_then(|v| v.as_str()) {
+                                    if let Some(v) = p.get("payload_type").and_then(|v| v.as_str())
+                                    {
                                         parts.push(format!("type={v}"));
                                     }
                                     if let Some(v) = p.get("state").and_then(|v| v.as_str()) {
@@ -3748,7 +3903,11 @@ async fn dispatch(
                                     if parts.is_empty() {
                                         // Fallback: show first 60 chars of payload
                                         let s = p.to_string();
-                                        if s.len() > 60 { format!("{}...", &s[..60]) } else { s }
+                                        if s.len() > 60 {
+                                            format!("{}...", &s[..60])
+                                        } else {
+                                            s
+                                        }
                                     } else {
                                         parts.join(" ")
                                     }
@@ -3799,8 +3958,8 @@ async fn dispatch(
                     let signature_verified = if let Some(pubkey) = cm.verifying_key() {
                         let cfg = k.kernel_config().chain.clone().unwrap_or_default();
                         if let Some(ref ckpt_path) = cfg.effective_checkpoint_path() {
-                            let rvf_path = std::path::PathBuf::from(ckpt_path)
-                                .with_extension("rvf");
+                            let rvf_path =
+                                std::path::PathBuf::from(ckpt_path).with_extension("rvf");
                             if rvf_path.exists() {
                                 match clawft_kernel::ChainManager::verify_rvf_signature(
                                     &rvf_path, &pubkey,
@@ -3835,8 +3994,8 @@ async fn dispatch(
         "chain.export" => {
             #[cfg(feature = "exochain")]
             {
-                let export_params: ChainExportParams = serde_json::from_value(params)
-                    .unwrap_or(ChainExportParams {
+                let export_params: ChainExportParams =
+                    serde_json::from_value(params).unwrap_or(ChainExportParams {
                         format: "json".into(),
                         output: None,
                     });
@@ -3895,8 +4054,11 @@ async fn dispatch(
                     let mut nodes: Vec<ResourceNodeInfo> = tree
                         .iter()
                         .map(|(id, node)| {
-                            let hash_hex: String =
-                                node.merkle_hash.iter().map(|b| format!("{b:02x}")).collect();
+                            let hash_hex: String = node
+                                .merkle_hash
+                                .iter()
+                                .map(|b| format!("{b:02x}"))
+                                .collect();
                             ResourceNodeInfo {
                                 id: id.to_string(),
                                 kind: format!("{:?}", node.kind),
@@ -3931,13 +4093,19 @@ async fn dispatch(
                     let node_data = {
                         let tree = tm.tree().lock().unwrap();
                         tree.get(&rid).map(|node| {
-                            let hash_hex: String =
-                                node.merkle_hash.iter().map(|b| format!("{b:02x}")).collect();
+                            let hash_hex: String = node
+                                .merkle_hash
+                                .iter()
+                                .map(|b| format!("{b:02x}"))
+                                .collect();
                             (
                                 node.id.to_string(),
                                 format!("{:?}", node.kind),
                                 node.parent.as_ref().map(|p| p.to_string()),
-                                node.children.iter().map(|c| c.to_string()).collect::<Vec<_>>(),
+                                node.children
+                                    .iter()
+                                    .map(|c| c.to_string())
+                                    .collect::<Vec<_>>(),
                                 serde_json::to_value(&node.metadata).unwrap_or_default(),
                                 hash_hex,
                             )
@@ -3989,8 +4157,11 @@ async fn dispatch(
                 let k = kernel.read().await;
                 if let Some(tm) = k.tree_manager() {
                     let tree = tm.tree().lock().unwrap();
-                    let hash_hex: String =
-                        tree.root_hash().iter().map(|b| format!("{b:02x}")).collect();
+                    let hash_hex: String = tree
+                        .root_hash()
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect();
                     let mut namespaces = 0usize;
                     let mut services = 0usize;
                     let mut agents = 0usize;
@@ -4126,7 +4297,7 @@ async fn dispatch(
                 #[cfg(feature = "exochain")]
                 let gate: Option<std::sync::Arc<dyn clawft_kernel::GateBackend>> = {
                     use clawft_kernel::{
-                        GovernanceGate, GovernanceBranch, GovernanceRule, RuleSeverity,
+                        GovernanceBranch, GovernanceGate, GovernanceRule, RuleSeverity,
                     };
                     let mut g = GovernanceGate::new(0.8, false);
                     if let Some(ref cm) = chain {
@@ -4174,7 +4345,10 @@ async fn dispatch(
                 }
             }) {
                 Ok(result) => {
-                    k.event_log().info("agent", format!("spawned {} (PID {})", result.agent_id, result.pid));
+                    k.event_log().info(
+                        "agent",
+                        format!("spawned {} (PID {})", result.agent_id, result.pid),
+                    );
                     let spawn_result = AgentSpawnResult {
                         pid: result.pid,
                         agent_id: result.agent_id,
@@ -4192,7 +4366,8 @@ async fn dispatch(
             let k = kernel.read().await;
             match k.supervisor().stop(stop_params.pid, stop_params.graceful) {
                 Ok(()) => {
-                    k.event_log().info("agent", format!("stopped PID {}", stop_params.pid));
+                    k.event_log()
+                        .info("agent", format!("stopped PID {}", stop_params.pid));
                     Response::success(serde_json::json!("ok"))
                 }
                 Err(e) => Response::error(format!("stop failed: {e}")),
@@ -4206,8 +4381,16 @@ async fn dispatch(
             let k = kernel.read().await;
             match k.supervisor().restart(restart_params.pid) {
                 Ok(result) => {
-                    let _ = k.process_table().update_state(result.pid, clawft_kernel::ProcessState::Running);
-                    k.event_log().info("agent", format!("restarted {} (PID {} -> {})", result.agent_id, restart_params.pid, result.pid));
+                    let _ = k
+                        .process_table()
+                        .update_state(result.pid, clawft_kernel::ProcessState::Running);
+                    k.event_log().info(
+                        "agent",
+                        format!(
+                            "restarted {} (PID {} -> {})",
+                            result.agent_id, restart_params.pid, result.pid
+                        ),
+                    );
                     let spawn_result = AgentSpawnResult {
                         pid: result.pid,
                         agent_id: result.agent_id,
@@ -4218,17 +4401,11 @@ async fn dispatch(
             }
         }
         "agent.inspect" => {
-            let pid = params
-                .get("pid")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+            let pid = params.get("pid").and_then(|v| v.as_u64()).unwrap_or(0);
             let k = kernel.read().await;
             match k.supervisor().inspect(pid) {
                 Ok(entry) => {
-                    let topics = k
-                        .a2a_router()
-                        .topic_router()
-                        .topics_for_pid(pid);
+                    let topics = k.a2a_router().topic_router().topics_for_pid(pid);
                     let result = AgentInspectResult {
                         pid: entry.pid,
                         agent_id: entry.agent_id,
@@ -4297,17 +4474,15 @@ async fn dispatch(
 
             match send_result {
                 Ok(()) => {
-                    k.event_log().info("ipc", format!("message sent to PID {}", send_params.pid));
+                    k.event_log()
+                        .info("ipc", format!("message sent to PID {}", send_params.pid));
 
                     // Wait briefly for a response from the agent
                     // Create a temporary inbox for kernel PID 0 if not already present
                     // (it may already exist from a previous call — A2ARouter replaces it)
                     let mut reply_rx = a2a.create_inbox(0);
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(2),
-                        reply_rx.recv(),
-                    )
-                    .await
+                    match tokio::time::timeout(std::time::Duration::from_secs(2), reply_rx.recv())
+                        .await
                     {
                         Ok(Some(reply)) => {
                             let reply_value = match &reply.payload {
@@ -4344,7 +4519,10 @@ async fn dispatch(
                 Err(e) => return Response::error(format!("cron.add failed: {e}")),
             };
 
-            k.event_log().info("cron", format!("job added: {} ({}s)", job.name, job.interval_secs));
+            k.event_log().info(
+                "cron",
+                format!("job added: {} ({}s)", job.name, job.interval_secs),
+            );
             let info = CronJobInfo {
                 id: job.id,
                 name: job.name,
@@ -4396,7 +4574,8 @@ async fn dispatch(
                             })),
                         );
                     }
-                    k.event_log().info("cron", format!("job removed: {}", job.name));
+                    k.event_log()
+                        .info("cron", format!("job removed: {}", job.name));
                     Response::success(serde_json::json!({"removed": true, "job_id": job.id}))
                 }
                 Ok(None) => Response::error(format!("cron job not found: {}", remove_params.id)),
@@ -4436,10 +4615,14 @@ async fn dispatch(
             }
 
             let a2a = k.a2a_router();
-            a2a.topic_router().subscribe(sub_params.pid, &sub_params.topic);
+            a2a.topic_router()
+                .subscribe(sub_params.pid, &sub_params.topic);
             k.event_log().info(
                 "ipc",
-                format!("PID {} subscribed to '{}'", sub_params.pid, sub_params.topic),
+                format!(
+                    "PID {} subscribed to '{}'",
+                    sub_params.pid, sub_params.topic
+                ),
             );
 
             #[cfg(feature = "exochain")]
@@ -4496,10 +4679,7 @@ async fn dispatch(
             let a2a = k.a2a_router().clone();
 
             // Count all registered subscribers for reporting
-            let subscriber_count = a2a
-                .topic_router()
-                .subscribers(&pub_params.topic)
-                .len();
+            let subscriber_count = a2a.topic_router().subscribers(&pub_params.topic).len();
 
             // Build message payload
             let payload = match serde_json::from_str::<serde_json::Value>(&pub_params.message) {
@@ -4580,8 +4760,8 @@ async fn dispatch(
         "resource.rank" => {
             #[cfg(feature = "exochain")]
             {
-                let rank_params: ResourceRankParams = serde_json::from_value(params)
-                    .unwrap_or(ResourceRankParams { count: 10 });
+                let rank_params: ResourceRankParams =
+                    serde_json::from_value(params).unwrap_or(ResourceRankParams { count: 10 });
                 let k = kernel.read().await;
                 if let Some(tm) = k.tree_manager() {
                     // Equal weight across all 6 dimensions
@@ -4604,11 +4784,11 @@ async fn dispatch(
         }
         // ── Assessment endpoints ──────────────────────────────
         "assess.run" => {
-            let run_params: crate::protocol::AssessRunParams =
-                match serde_json::from_value(params) {
-                    Ok(p) => p,
-                    Err(e) => return Response::error(format!("invalid params: {e}")),
-                };
+            let run_params: crate::protocol::AssessRunParams = match serde_json::from_value(params)
+            {
+                Ok(p) => p,
+                Err(e) => return Response::error(format!("invalid params: {e}")),
+            };
             let dir = run_params.dir.as_deref().unwrap_or(".");
             let k = kernel.read().await;
 
@@ -4627,7 +4807,10 @@ async fn dispatch(
 
             k.event_log().info(
                 "assessment",
-                format!("assess.run scope={} format={} dir={}", run_params.scope, run_params.format, dir),
+                format!(
+                    "assess.run scope={} format={} dir={}",
+                    run_params.scope, run_params.format, dir
+                ),
             );
 
             Response::success(serde_json::json!({
@@ -4646,7 +4829,8 @@ async fn dispatch(
                 cm.append("assessment", "assess.status", None);
             }
 
-            k.event_log().info("assessment", "assess.status queried".to_string());
+            k.event_log()
+                .info("assessment", "assess.status queried".to_string());
 
             // Return stub until AssessmentService is fully wired
             Response::success(serde_json::json!({
@@ -4678,7 +4862,10 @@ async fn dispatch(
 
             k.event_log().info(
                 "assessment",
-                format!("peer linked: {} -> {}", link_params.name, link_params.location),
+                format!(
+                    "peer linked: {} -> {}",
+                    link_params.name, link_params.location
+                ),
             );
 
             Response::success(serde_json::json!({
@@ -4695,7 +4882,8 @@ async fn dispatch(
                 cm.append("assessment", "assess.peers", None);
             }
 
-            k.event_log().info("assessment", "assess.peers queried".to_string());
+            k.event_log()
+                .info("assessment", "assess.peers queried".to_string());
 
             // Return empty list until AssessmentService manages peers
             Response::success(serde_json::json!({
@@ -4741,7 +4929,8 @@ async fn dispatch(
                 cm.append("assessment", "assess.mesh.status", None);
             }
 
-            k.event_log().info("assessment", "assess.mesh.status queried".to_string());
+            k.event_log()
+                .info("assessment", "assess.mesh.status queried".to_string());
 
             {
                 let svc = k.assessment_service();
@@ -4759,25 +4948,27 @@ async fn dispatch(
                         })
                         .collect();
                     let peer_count = peers.len();
-                    Response::success(serde_json::to_value(
-                        crate::protocol::AssessMeshStatusResult {
+                    Response::success(
+                        serde_json::to_value(crate::protocol::AssessMeshStatusResult {
                             mesh_enabled: true,
                             node_id: Some(mc.node_id().to_string()),
                             project_name: Some(mc.project_name().to_string()),
                             peer_count,
                             peers,
-                        },
-                    ).unwrap())
+                        })
+                        .unwrap(),
+                    )
                 } else {
-                    Response::success(serde_json::to_value(
-                        crate::protocol::AssessMeshStatusResult {
+                    Response::success(
+                        serde_json::to_value(crate::protocol::AssessMeshStatusResult {
                             mesh_enabled: false,
                             node_id: None,
                             project_name: None,
                             peer_count: 0,
                             peers: vec![],
-                        },
-                    ).unwrap())
+                        })
+                        .unwrap(),
+                    )
                 }
             }
         }
@@ -4789,7 +4980,8 @@ async fn dispatch(
                 cm.append("assessment", "assess.mesh.gossip", None);
             }
 
-            k.event_log().info("assessment", "assess.mesh.gossip triggered".to_string());
+            k.event_log()
+                .info("assessment", "assess.mesh.gossip triggered".to_string());
 
             {
                 let svc = k.assessment_service();
@@ -4797,19 +4989,21 @@ async fn dispatch(
                     if let Some(report) = svc.get_latest() {
                         let gossip = mc.build_gossip(&report);
                         mc.set_pending_broadcast(gossip);
-                        Response::success(serde_json::to_value(
-                            crate::protocol::AssessMeshGossipResult {
+                        Response::success(
+                            serde_json::to_value(crate::protocol::AssessMeshGossipResult {
                                 sent: true,
                                 message: "Gossip broadcast queued.".into(),
-                            },
-                        ).unwrap())
+                            })
+                            .unwrap(),
+                        )
                     } else {
-                        Response::success(serde_json::to_value(
-                            crate::protocol::AssessMeshGossipResult {
+                        Response::success(
+                            serde_json::to_value(crate::protocol::AssessMeshGossipResult {
                                 sent: false,
                                 message: "No assessment report available to gossip.".into(),
-                            },
-                        ).unwrap())
+                            })
+                            .unwrap(),
+                        )
                     }
                 } else {
                     Response::error("mesh coordination not enabled")
@@ -4943,7 +5137,8 @@ async fn dispatch(
 
                     match cm.generate_attestation(vector_count, epoch, &content_hash) {
                         Some(att) => {
-                            let sig_hex: String = att.signature.iter().map(|b| format!("{b:02x}")).collect();
+                            let sig_hex: String =
+                                att.signature.iter().map(|b| format!("{b:02x}")).collect();
                             let result = crate::protocol::CustodyAttestResult {
                                 device_id: att.device_id,
                                 epoch: att.epoch,
@@ -4956,7 +5151,9 @@ async fn dispatch(
                             };
                             Response::success(serde_json::to_value(result).unwrap())
                         }
-                        None => Response::error("no signing key configured — attestation requires Ed25519 key"),
+                        None => Response::error(
+                            "no signing key configured — attestation requires Ed25519 key",
+                        ),
                     }
                 } else {
                     Response::error("chain not enabled")
@@ -4968,20 +5165,25 @@ async fn dispatch(
 
         // ── Host revocation ──────────────────────────────────────────
         "mesh.revoke" => {
-            let revoke_params: crate::protocol::MeshRevokeParams = match serde_json::from_value(params) {
-                Ok(p) => p,
-                Err(e) => return Response::error(format!("invalid params: {e}")),
-            };
+            let revoke_params: crate::protocol::MeshRevokeParams =
+                match serde_json::from_value(params) {
+                    Ok(p) => p,
+                    Err(e) => return Response::error(format!("invalid params: {e}")),
+                };
             let k = kernel.read().await;
             let list = k.revocation_list();
             let added = list.revoke_host(&revoke_params.host_id, &revoke_params.reason);
 
             #[cfg(feature = "exochain")]
             if let Some(cm) = k.chain_manager() {
-                cm.append("mesh", "host.revoked", Some(serde_json::json!({
-                    "host_id": revoke_params.host_id,
-                    "reason": revoke_params.reason,
-                })));
+                cm.append(
+                    "mesh",
+                    "host.revoked",
+                    Some(serde_json::json!({
+                        "host_id": revoke_params.host_id,
+                        "reason": revoke_params.reason,
+                    })),
+                );
             }
 
             Response::success(serde_json::json!({
@@ -4990,19 +5192,24 @@ async fn dispatch(
             }))
         }
         "mesh.unrevoke" => {
-            let unrevoke_params: crate::protocol::MeshUnrevokeParams = match serde_json::from_value(params) {
-                Ok(p) => p,
-                Err(e) => return Response::error(format!("invalid params: {e}")),
-            };
+            let unrevoke_params: crate::protocol::MeshUnrevokeParams =
+                match serde_json::from_value(params) {
+                    Ok(p) => p,
+                    Err(e) => return Response::error(format!("invalid params: {e}")),
+                };
             let k = kernel.read().await;
             let list = k.revocation_list();
             let removed = list.unrevoke_host(&unrevoke_params.host_id);
 
             #[cfg(feature = "exochain")]
             if let Some(cm) = k.chain_manager() {
-                cm.append("mesh", "host.unrevoked", Some(serde_json::json!({
-                    "host_id": unrevoke_params.host_id,
-                })));
+                cm.append(
+                    "mesh",
+                    "host.unrevoked",
+                    Some(serde_json::json!({
+                        "host_id": unrevoke_params.host_id,
+                    })),
+                );
             }
 
             Response::success(serde_json::json!({
@@ -5189,7 +5396,10 @@ async fn dispatch(
             if !current.is_object() {
                 *current = serde_json::json!({});
             }
-            current.as_object_mut().unwrap().insert(last.into(), json_value);
+            current
+                .as_object_mut()
+                .unwrap()
+                .insert(last.into(), json_value);
 
             match std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()) {
                 Ok(()) => Response::success(serde_json::json!({ "key": key, "value": value })),
@@ -5266,10 +5476,7 @@ struct DaemonAgentChatHandler;
 
 #[async_trait::async_trait]
 impl crate::voice_router::ChatHandler for DaemonAgentChatHandler {
-    async fn dispatch_chat(
-        &self,
-        turn: crate::voice_router::VoiceChatTurn,
-    ) -> Result<(), String> {
+    async fn dispatch_chat(&self, turn: crate::voice_router::VoiceChatTurn) -> Result<(), String> {
         let Some(agent) = daemon_agent() else {
             return Err("agent service not wired (DAEMON_AGENT unset)".into());
         };

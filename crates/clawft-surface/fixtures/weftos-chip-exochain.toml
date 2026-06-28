@@ -1,43 +1,67 @@
-# Tray-chip detail surface for the ExoChain chip.
-# Binds to `substrate/chain/status` (ChainAdapter, M1.5.1d). Chain
-# identity + monotonic counters. When the daemon lacks the `exochain`
-# feature, the adapter emits `{available: false, reason}` and every
-# field reads as Null — the chip row ends up empty, which is honest
-# signal ("chain is not wired") rather than a lie.
+# Tray-chip detail surface for the ExoChain chip + the canonical
+# Logs · Witness chain panel. Binds to `substrate/chain/status` and
+# `substrate/chain/tail` (ChainAdapter, M1.5.1d + this session's
+# tail topic). Chain identity + monotonic counters in the header
+# strip; trailing event list below. When the daemon lacks the
+# `exochain` feature the adapter emits `{available: false, reason}`
+# for status and an empty array for tail — the chip row reads as
+# empty, which is honest signal ("chain is not wired") rather than
+# a lie.
 
 [[surfaces]]
 id     = "weftos-chip/exochain"
 modes  = ["desktop"]
 inputs = ["pointer"]
 title  = "ExoChain"
-subscriptions = ["substrate/chain/status"]
+subscriptions = [
+  "substrate/chain/status",
+  "substrate/chain/tail",
+]
 
 [surfaces.root]
 type  = "ui://stack"
 id    = "/root"
 attrs = { axis = "vertical" }
 
+  # ── Header strip — five summary KPIs from chain.status ─────────────
   [[surfaces.root.children]]
-  type     = "ui://chip"
-  id       = "/root/chain-id"
-  bindings = { label = "$substrate/chain/status.chain_id" }
+  type  = "ui://stack"
+  id    = "/root/summary"
+  attrs = { axis = "horizontal", wrap = true }
 
-  [[surfaces.root.children]]
-  type     = "ui://chip"
-  id       = "/root/sequence"
-  bindings = { label = "$substrate/chain/status.sequence" }
+    [[surfaces.root.children.children]]
+    type     = "ui://chip"
+    id       = "/root/summary/chain-id"
+    bindings = { label = "$substrate/chain/status.chain_id" }
 
-  [[surfaces.root.children]]
-  type     = "ui://chip"
-  id       = "/root/event-count"
-  bindings = { label = "$substrate/chain/status.event_count" }
+    [[surfaces.root.children.children]]
+    type     = "ui://chip"
+    id       = "/root/summary/sequence"
+    bindings = { label = "$substrate/chain/status.sequence" }
 
-  [[surfaces.root.children]]
-  type     = "ui://chip"
-  id       = "/root/checkpoint-count"
-  bindings = { label = "$substrate/chain/status.checkpoint_count" }
+    [[surfaces.root.children.children]]
+    type     = "ui://chip"
+    id       = "/root/summary/event-count"
+    bindings = { label = "$substrate/chain/status.event_count" }
 
+    [[surfaces.root.children.children]]
+    type     = "ui://chip"
+    id       = "/root/summary/checkpoint-count"
+    bindings = { label = "$substrate/chain/status.checkpoint_count" }
+
+    [[surfaces.root.children.children]]
+    type     = "ui://chip"
+    id       = "/root/summary/last-hash"
+    bindings = { label = "$substrate/chain/status.last_hash" }
+
+  # ── Event tail — newest-last list of recent chain events ──────────
+  # Each row is one `ChainEventInfo` from `chain.tail`; the
+  # stream-view's display logic falls back to the JSON object's
+  # `to_string()` so the row reads as `{"sequence":123,"kind":...}`.
+  # That's verbose but readable; a richer viewer will graduate to
+  # `ui://table` once the composer's table primitive supports the
+  # `timestamp` / `detail` columns this adapter produces.
   [[surfaces.root.children]]
-  type     = "ui://chip"
-  id       = "/root/last-hash"
-  bindings = { label = "$substrate/chain/status.last_hash" }
+  type     = "ui://stream-view"
+  id       = "/root/tail"
+  bindings = { stream = "$substrate/chain/tail" }

@@ -59,6 +59,8 @@ fn kernel_config_with_chain() -> KernelConfig {
         mesh: None,
         anchor: None,
         ipc_tcp: None,
+        llm: None,
+        agent: None,
     }
 }
 

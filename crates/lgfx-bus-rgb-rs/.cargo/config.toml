@@ -1,0 +1,20 @@
+[build]
+target = "xtensa-esp32s3-none-elf"
+
+[unstable]
+build-std = ["core", "alloc"]
+
+[target.xtensa-esp32s3-none-elf]
+# `cargo run --example crowpanel_dis08070h` would flash via espflash.
+# Build-only callers can ignore this. (`cargo install espflash`.)
+runner = "espflash flash --monitor"
+rustflags = [
+    "-C", "link-arg=-Tlinkall.x",
+    "-C", "link-arg=-nostartfiles",
+]
+
+[env]
+# Octal PSRAM is required for the framebuffer allocation on the
+# CrowPanel N4R8 / N8R8 modules. esp-hal's default is "quad".
+ESP_HAL_CONFIG_PSRAM_MODE = "octal"
+ESP_LOG = "info"

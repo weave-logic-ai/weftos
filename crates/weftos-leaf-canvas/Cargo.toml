@@ -1,0 +1,84 @@
+# weftos-leaf-canvas
+#
+# Phase D of the WeftOS vector-first leaf display. Implements
+# `weftos_leaf_renderer::SceneSurface` against
+# `web_sys::CanvasRenderingContext2d` so a browser tab can render the
+# same `kernel.ps` scene that ships to the embedded leaf — minus the
+# DPI bus, plus all the rich features Canvas2D gives us for free.
+#
+# Canonical design doc: docs/design/vector-leaf-display.md (§4.6 Browser
+# Backend, §6 Renderer Trait, §11 capability matrix).
+#
+# This crate is the "rich capability" backend that proves the
+# `SceneSurface` abstraction works across embedded *and* web. It
+# declares `ALPHA | SUBPIXEL | ANTIALIASED | BLEND_MODES | BITMAP_PNG`
+# — Canvas2D handles all of these natively, so the renderer can skip
+# its degradation fallbacks for this surface.
+#
+# Standalone crate — own workspace table to stop cargo from walking up
+# into the parent clawft workspace and pulling in target-specific
+# toolchains. Mirrors `weftos-leaf-scene`, `weftos-leaf-renderer`, and
+# `weftos-leaf-sim`.
+[workspace]
+
+[package]
+name = "weftos-leaf-canvas"
+version = "0.1.0"
+edition = "2021"
+description = "Browser backend for WeftOS leaf displays: implements weftos-leaf-renderer::SceneSurface against web_sys::CanvasRenderingContext2d."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/weave-logic-ai/weftos"
+keywords = ["weftos", "leaf", "canvas", "wasm", "web"]
+categories = ["wasm", "graphics", "gui"]
+readme = "README.md"
+publish = false
+
+[lib]
+# `cdylib` so wasm-bindgen / wasm-pack can emit a loadable wasm module;
+# `rlib` so downstream Rust crates (a future browser viewer) can pull
+# the surface in as a library dependency.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Phase A foundation — scene graph, primitives, geometry, damage.
+weftos-leaf-scene = { path = "../weftos-leaf-scene", features = ["std"] }
+# Phase B foundation — SceneSurface trait, CapabilityMask, bitmap decoder.
+weftos-leaf-renderer = { path = "../weftos-leaf-renderer", features = ["std"] }
+
+# wasm-bindgen + the web-sys / js-sys companions. Versions match the
+# rest of the clawft wasm stack (see crates/clawft-wasm/Cargo.toml).
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    # Document lookup + canvas element handle.
+    "Window",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    # The actual 2D rendering context + everything we draw through it.
+    "CanvasRenderingContext2d",
+    "ImageData",
+    "Path2d",
+    "TextMetrics",
+    # PNG via createImageBitmap — guarded behind capability flag, but the
+    # types must be reachable so the dispatch shape exists in v1.
+    "ImageBitmap",
+    # Console logging for the renderer's "fell back to v1.1" warnings.
+    "console",
+]
+
+[dev-dependencies]
+# wasm-bindgen-test would live here once we wire a browser smoke test
+# in a later phase. Phase D is build-verify only.
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+# `s` mirrors the rest of the leaf stack — keeps the wasm payload small
+# without sacrificing rendering hot-path performance.
+opt-level = "s"
+lto = true

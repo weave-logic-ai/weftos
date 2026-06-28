@@ -1,0 +1,36 @@
+# ESP-IDF on Rust — Xtensa target.
+#
+# This file plus a sourced `~/export-esp.sh` (espup-installed Xtensa
+# toolchain + LIBCLANG_PATH) is enough to drive `cargo build --release`.
+# The first build runs `embuild` which auto-downloads + compiles the
+# ESP-IDF v5.x toolchain if `IDF_PATH` is not set; subsequent builds
+# use the cached IDF tree under `target/`.
+#
+# Mirrors crates/clawft-edge-bench's invocation but pinned here for
+# ergonomic `cargo build` (edge-bench relied on the user passing
+# `--target xtensa-esp32s3-espidf` manually).
+
+[build]
+target = "xtensa-esp32s3-espidf"
+
+[target.xtensa-esp32s3-espidf]
+linker = "ldproxy"
+# espflash 3.x: `cargo run` flashes + opens the monitor.
+runner = "espflash flash --monitor"
+rustflags = [
+    # When the IDF picks up a custom partition table at the project
+    # root (`partitions.csv`), embuild handles it.
+    "--cfg",
+    "espidf_time64",
+]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+# Xtensa target needs the esp-rs toolchain Rust components.
+ESP_IDF_VERSION = "v5.3.2"
+# IDF flag — match the factory CrowPanel 7" sdkconfig where load-bearing.
+# The actual sdkconfig.defaults at the crate root drives the IDF build;
+# this env is only for embuild's pre-build discovery.
+MCU = "esp32s3"

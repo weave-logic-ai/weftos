@@ -66,6 +66,14 @@ pub struct Snapshot {
     /// flagged as "no valid reading" are 65535 (0xFFFF) per
     /// VL53L5CX/L7CX convention.
     pub tof_depth: Option<Value>,
+    /// Result of `cron.list` — array of `CronJobInfo` rows. `None` until
+    /// the first poll lands. Drives the Scheduler app's table.
+    pub cron_jobs: Option<Vec<Value>>,
+    /// Result of `ecc.status` — RNN/vector backend stats. Shape:
+    /// `{enabled, hnsw_entries, cognitive_tick?, causal_graph?, crossref_count}`.
+    /// Surfaced in the Explorer header so the user can see RNN +
+    /// vector-DB state at a glance.
+    pub ecc_status: Option<Value>,
     pub last_error: Option<String>,
     /// Incremented every successful poll tick so the UI can detect freshness.
     pub tick: u64,
@@ -271,20 +279,14 @@ impl Live {
             }
             if let Some(v) = &snap.services {
                 let raw = serde_json::Value::Array(v.clone());
-                let projected =
-                    clawft_substrate::projection::project_service_rows(raw.clone());
+                let projected = clawft_substrate::projection::project_service_rows(raw.clone());
                 out = out.with("substrate/kernel/services", projected);
-                for (path, value) in
-                    clawft_substrate::projection::explode_services_by_name(v)
-                {
+                for (path, value) in clawft_substrate::projection::explode_services_by_name(v) {
                     out = out.with(path, value);
                 }
             }
             if let Some(v) = &snap.logs {
-                out = out.with(
-                    "substrate/kernel/logs",
-                    serde_json::Value::Array(v.clone()),
-                );
+                out = out.with("substrate/kernel/logs", serde_json::Value::Array(v.clone()));
             }
             out
         }

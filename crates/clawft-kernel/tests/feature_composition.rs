@@ -40,6 +40,8 @@ fn minimal_kernel_config() -> KernelConfig {
         mesh: None,
         anchor: None,
         ipc_tcp: None,
+        llm: None,
+        agent: None,
     }
 }
 
@@ -67,6 +69,8 @@ fn exochain_kernel_config() -> KernelConfig {
         mesh: None,
         anchor: None,
         ipc_tcp: None,
+        llm: None,
+        agent: None,
     }
 }
 
@@ -79,7 +83,10 @@ async fn feature_comp_native_boots() {
         .await
         .unwrap();
     assert_eq!(*kernel.state(), KernelState::Running);
-    assert!(!kernel.process_table().is_empty(), "kernel process must exist");
+    assert!(
+        !kernel.process_table().is_empty(),
+        "kernel process must exist"
+    );
     assert!(kernel.services().len() >= 2, "cron + containers at minimum");
     kernel.shutdown().await.unwrap();
     assert_eq!(*kernel.state(), KernelState::Halted);
@@ -97,11 +104,20 @@ async fn feature_comp_native_exochain_boots() {
     assert_eq!(*kernel.state(), KernelState::Running);
 
     // Chain and tree should be present
-    assert!(kernel.chain_manager().is_some(), "chain manager required with exochain");
-    assert!(kernel.tree_manager().is_some(), "tree manager required with exochain");
+    assert!(
+        kernel.chain_manager().is_some(),
+        "chain manager required with exochain"
+    );
+    assert!(
+        kernel.tree_manager().is_some(),
+        "tree manager required with exochain"
+    );
 
     // Governance gate should be wired
-    assert!(kernel.governance_gate().is_some(), "governance gate required with chain");
+    assert!(
+        kernel.governance_gate().is_some(),
+        "governance gate required with chain"
+    );
 
     kernel.shutdown().await.unwrap();
     assert_eq!(*kernel.state(), KernelState::Halted);
@@ -120,11 +136,26 @@ async fn feature_comp_native_ecc_boots() {
 
     // ECC subsystems should be present
     assert!(kernel.ecc_hnsw().is_some(), "HNSW required with ecc");
-    assert!(kernel.ecc_tick().is_some(), "cognitive tick required with ecc");
-    assert!(kernel.ecc_causal().is_some(), "causal graph required with ecc");
-    assert!(kernel.ecc_crossrefs().is_some(), "crossref store required with ecc");
-    assert!(kernel.ecc_impulses().is_some(), "impulse queue required with ecc");
-    assert!(kernel.ecc_calibration().is_some(), "calibration required with ecc");
+    assert!(
+        kernel.ecc_tick().is_some(),
+        "cognitive tick required with ecc"
+    );
+    assert!(
+        kernel.ecc_causal().is_some(),
+        "causal graph required with ecc"
+    );
+    assert!(
+        kernel.ecc_crossrefs().is_some(),
+        "crossref store required with ecc"
+    );
+    assert!(
+        kernel.ecc_impulses().is_some(),
+        "impulse queue required with ecc"
+    );
+    assert!(
+        kernel.ecc_calibration().is_some(),
+        "calibration required with ecc"
+    );
 
     kernel.shutdown().await.unwrap();
 }
@@ -150,8 +181,14 @@ async fn feature_comp_exochain_ecc_boots() {
     // ECC calibration logged to chain
     let chain = kernel.chain_manager().unwrap();
     let events = chain.tail(50);
-    let ecc_events: Vec<_> = events.iter().filter(|e| e.kind.starts_with("ecc.")).collect();
-    assert!(!ecc_events.is_empty(), "ECC calibration should be logged to chain");
+    let ecc_events: Vec<_> = events
+        .iter()
+        .filter(|e| e.kind.starts_with("ecc."))
+        .collect();
+    assert!(
+        !ecc_events.is_empty(),
+        "ECC calibration should be logged to chain"
+    );
 
     kernel.shutdown().await.unwrap();
 }
@@ -193,8 +230,8 @@ async fn feature_comp_ipc_message_routing() {
     let mut inbox = a2a.create_inbox(0);
 
     // Spawn a test agent via process table + inbox
-    use clawft_kernel::process::{ProcessEntry, ProcessState, ResourceUsage};
     use clawft_kernel::capability::AgentCapabilities;
+    use clawft_kernel::process::{ProcessEntry, ProcessState, ResourceUsage};
 
     let agent_entry = ProcessEntry {
         pid: 0, // auto-assigned
@@ -217,13 +254,10 @@ async fn feature_comp_ipc_message_routing() {
     a2a.send(msg).await.unwrap();
 
     // Kernel inbox should receive the message
-    let received = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        inbox.recv(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let received = tokio::time::timeout(std::time::Duration::from_secs(1), inbox.recv())
+        .await
+        .unwrap()
+        .unwrap();
 
     if let MessagePayload::Json(v) = &received.payload {
         assert_eq!(v["test"], "hello");
@@ -291,15 +325,15 @@ async fn feature_comp_shutdown_cleans_spawned_agents() {
         .unwrap();
 
     // Spawn an agent via supervisor
-    let spawn_result = kernel.supervisor().spawn(
-        clawft_kernel::supervisor::SpawnRequest {
+    let spawn_result = kernel
+        .supervisor()
+        .spawn(clawft_kernel::supervisor::SpawnRequest {
             agent_id: "cleanup-test-agent".into(),
             capabilities: None,
             parent_pid: None,
             env: std::collections::HashMap::new(),
             backend: None,
-        },
-    );
+        });
     assert!(spawn_result.is_ok());
 
     kernel.shutdown().await.unwrap();

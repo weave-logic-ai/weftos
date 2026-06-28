@@ -1,0 +1,22 @@
+[package]
+name = "weftos-leaf-display"
+version = "0.1.0"
+publish = true
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/weave-logic-ai/weftos"
+description = "LeafSurface display-bus primitive + layer compositor for WeftOS leaf devices (no_std)"
+keywords = ["weftos", "leaf", "display", "embedded", "no-std"]
+categories = ["embedded", "no-std", "gui"]
+
+[features]
+default = []
+# Enables the host-side `SimSurface` (Vec-backed LeafSurface) for
+# testing the compositor + LeafPush render path with zero hardware.
+std = ["weftos-leaf-types/std"]
+
+[dependencies]
+weftos-leaf-types = { path = "../weftos-leaf-types" }
+# Full embedded-graphics (not just -core): the compositor needs
+# `mono_font`, `Text`, and `ImageRaw` to render LeafPush ops.
+embedded-graphics = "0.8"

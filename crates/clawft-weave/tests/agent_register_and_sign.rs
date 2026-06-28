@@ -47,6 +47,8 @@ fn minimal_kernel_config() -> KernelConfig {
         mesh: None,
         anchor: None,
         ipc_tcp: None,
+        llm: None,
+        agent: None,
     }
 }
 
@@ -239,7 +241,10 @@ async fn publish_with_wrong_signature_is_rejected() {
     .await;
     assert_eq!(resp["ok"], serde_json::Value::Bool(false));
     let err = resp["error"].as_str().unwrap_or("");
-    assert!(err.contains("unauthorized"), "expected unauthorized, got: {err}");
+    assert!(
+        err.contains("unauthorized"),
+        "expected unauthorized, got: {err}"
+    );
 
     let _ = shutdown_tx.send(true);
 }

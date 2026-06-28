@@ -274,10 +274,7 @@ impl serde::Serialize for ToolChoice {
                 use serde::ser::SerializeMap;
                 let mut m = ser.serialize_map(Some(2))?;
                 m.serialize_entry("type", "function")?;
-                m.serialize_entry(
-                    "function",
-                    &serde_json::json!({ "name": name }),
-                )?;
+                m.serialize_entry("function", &serde_json::json!({ "name": name }))?;
                 m.end()
             }
         }
@@ -634,14 +631,47 @@ impl LlmClient {
             });
         }
 
+        // OpenRouter's free-tier endpoints (Nemotron, llama, etc.)
+        // pad the response with keep-alive whitespace lines while the
+        // request is queued, then sometimes return an error envelope
+        // (`{"error":{"message":...,"code":...}}`) at status 200 when
+        // the upstream provider eventually fails. Direct parsing as
+        // ChatResponse in that case yields a confusing
+        // `missing field 'choices' at line 571 column 58` — no hint
+        // that the upstream actually reported an error. Try the error
+        // shape first and surface it as ClientError so the caller (and
+        // the user) sees the real reason.
+        if let Ok(env) = serde_json::from_str::<OpenRouterErrorEnvelope>(&text) {
+            return Err(LlmError::ClientError {
+                status: env.error.code.unwrap_or(status.as_u16()),
+                body: env.error.message,
+            });
+        }
         let parsed: ChatResponse = serde_json::from_str(&text).map_err(|e| {
-            LlmError::Malformed(format!("body was not ChatResponse JSON ({e}): {text}"))
+            // Trim the body in the error message so a 571-line
+            // keep-alive-padded response doesn't blow out the log.
+            let preview: String = text.chars().take(512).collect();
+            LlmError::Malformed(format!("body was not ChatResponse JSON ({e}): {preview}"))
         })?;
         if parsed.choices.is_empty() {
             return Err(LlmError::NoChoices);
         }
         Ok(parsed)
     }
+}
+
+/// OpenRouter error-envelope wire shape. Used to disambiguate a 200
+/// response that actually carries an upstream-provider failure.
+#[derive(Debug, Deserialize)]
+struct OpenRouterErrorEnvelope {
+    error: OpenRouterError,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterError {
+    message: String,
+    #[serde(default)]
+    code: Option<u16>,
 }
 
 #[cfg(test)]
@@ -819,9 +849,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
-            .respond_with(
-                ResponseTemplate::new(400).set_body_string(r#"{"error":"bad request"}"#),
-            )
+            .respond_with(ResponseTemplate::new(400).set_body_string(r#"{"error":"bad request"}"#))
             .mount(&server)
             .await;
         let client = LlmClient::new(test_config(server.uri())).unwrap();

@@ -22,10 +22,11 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use clawft_core::agent::sink::{ConversationSink, Turn};
 use clawft_service_agent::{
-    AudioRef, HEARTBEAT_PERIOD, SubstrateClient, SubstrateConversationSink, TurnContent,
-    TurnContentPart,
+    AudioRef, HEARTBEAT_PERIOD, SubstrateClient, SubstrateConversationSink, TurnAnchor,
+    TurnContent, TurnContentPart,
 };
 use serde_json::Value;
 
@@ -296,4 +297,101 @@ fn turn_content_mixed_serde_round_trips() {
     let s = serde_json::to_string(&m).unwrap();
     let back: TurnContent = serde_json::from_str(&s).unwrap();
     assert_eq!(back, m);
+}
+
+/// Recording [`TurnAnchor`] — captures every `anchor_turn` call so we
+/// can assert that successful publishes invoke the side-effect seam.
+#[derive(Default)]
+struct RecordAnchor {
+    calls: StdMutex<Vec<(String, String, String, String)>>, // (conv, turn_id, role, content)
+}
+
+impl RecordAnchor {
+    fn calls(&self) -> Vec<(String, String, String, String)> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl TurnAnchor for RecordAnchor {
+    async fn anchor_turn(&self, conv_id: &str, turn_id: &str, turn: &Turn) {
+        self.calls.lock().unwrap().push((
+            conv_id.into(),
+            turn_id.into(),
+            turn.role.clone(),
+            turn.content.clone(),
+        ));
+    }
+}
+
+#[tokio::test]
+async fn anchor_fires_after_successful_publish_with_minted_turn_id() {
+    // Wires the new TurnAnchor seam end-to-end against the StubClient.
+    // Asserts: (a) anchor IS called after publish succeeds, (b) the
+    // turn_id passed to the anchor matches the one in the substrate
+    // path (i.e. the sink restamps the empty Turn::turn_id with the
+    // ULID it minted before handing it to the anchor).
+    let stub = Arc::new(StubClient::default());
+    let anchor = Arc::new(RecordAnchor::default());
+    let sink = Arc::new(SubstrateConversationSink::with_client_and_anchor(
+        Arc::clone(&stub) as Arc<dyn SubstrateClient>,
+        "n-test",
+        HEARTBEAT_PERIOD,
+        Arc::clone(&anchor) as Arc<dyn TurnAnchor>,
+    ));
+
+    sink.append_turn("c-anchor", turn_text("assistant", "ok", 1_700_000_000_000))
+        .await
+        .unwrap();
+
+    // Anchor saw exactly one call with the minted turn_id.
+    let calls = anchor.calls();
+    assert_eq!(calls.len(), 1, "anchor should fire once per turn");
+    let (conv, turn_id, role, content) = &calls[0];
+    assert_eq!(conv, "c-anchor");
+    assert_eq!(role, "assistant");
+    assert_eq!(content, "ok");
+    assert!(!turn_id.is_empty(), "anchor must receive a real turn id");
+
+    // The substrate path's last segment matches the anchor's turn_id —
+    // proves the sink restamped Turn::turn_id before the anchor saw it.
+    let snap = stub.snapshot();
+    let path = snap.keys().next().expect("one publish");
+    assert!(
+        path.ends_with(&format!("/{turn_id}")),
+        "path {path} should end with /{turn_id}"
+    );
+}
+
+#[tokio::test]
+async fn anchor_skipped_on_publish_error() {
+    // If the substrate publish errors, the anchor must not run —
+    // anchoring a non-existent turn would corrupt the audit trail.
+    #[derive(Default)]
+    struct FailingClient;
+    impl SubstrateClient for FailingClient {
+        fn publish(&self, _node_id: &str, _path: &str, _value: Value) -> Result<u64, String> {
+            Err("publish denied".into())
+        }
+        fn list(&self, _prefix: &str, _depth: u32) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn read(&self, _path: &str) -> Result<Option<Value>, String> {
+            Ok(None)
+        }
+    }
+    let anchor = Arc::new(RecordAnchor::default());
+    let sink = Arc::new(SubstrateConversationSink::with_client_and_anchor(
+        Arc::new(FailingClient) as Arc<dyn SubstrateClient>,
+        "n-test",
+        HEARTBEAT_PERIOD,
+        Arc::clone(&anchor) as Arc<dyn TurnAnchor>,
+    ));
+
+    let res = sink.append_turn("c-fail", turn_text("user", "hi", 0)).await;
+    assert!(res.is_err(), "publish error must propagate");
+    assert!(
+        anchor.calls().is_empty(),
+        "anchor must not fire when publish fails"
+    );
 }

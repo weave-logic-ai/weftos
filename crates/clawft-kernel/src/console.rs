@@ -112,7 +112,8 @@ impl BootEvent {
 
     /// Format this event for console display.
     ///
-    /// Example: `  [INIT]      WeftOS v0.1.0 booting...`
+    /// Example: `  [INIT]      WeftOS v0.6.19 booting...` (version
+    /// pulled from `CARGO_PKG_VERSION`).
     pub fn format_line(&self) -> String {
         let tag = self.phase.tag();
         format!("  [{tag:<10}] {}", self.message)
@@ -247,7 +248,11 @@ impl KernelEventLog {
         let msg = message.into();
         self.info(source, &msg);
         if let Some(cm) = chain {
-            cm.append(source, "log.info", Some(serde_json::json!({ "message": msg })));
+            cm.append(
+                source,
+                "log.info",
+                Some(serde_json::json!({ "message": msg })),
+            );
         }
     }
 
@@ -322,7 +327,9 @@ impl std::fmt::Debug for KernelEventLog {
 /// Format the boot banner header.
 pub fn boot_banner() -> String {
     let mut output = String::new();
-    output.push_str("\n  WeftOS v0.1.0\n");
+    output.push_str("\n  WeftOS v");
+    output.push_str(env!("CARGO_PKG_VERSION"));
+    output.push('\n');
     output.push_str("  ");
     output.push_str(&"-".repeat(45));
     output.push('\n');
@@ -346,10 +353,11 @@ mod tests {
 
     #[test]
     fn boot_event_info() {
-        let event = BootEvent::info(BootPhase::Init, "WeftOS v0.1.0 booting...");
+        let msg = format!("WeftOS v{} booting...", env!("CARGO_PKG_VERSION"));
+        let event = BootEvent::info(BootPhase::Init, msg.clone());
         assert_eq!(event.phase, BootPhase::Init);
         assert_eq!(event.level, LogLevel::Info);
-        assert_eq!(event.message, "WeftOS v0.1.0 booting...");
+        assert_eq!(event.message, msg);
     }
 
     #[test]
@@ -401,7 +409,8 @@ mod tests {
     #[test]
     fn boot_banner_format() {
         let banner = boot_banner();
-        assert!(banner.contains("WeftOS v0.1.0"));
+        assert!(banner.contains("WeftOS v"));
+        assert!(banner.contains(env!("CARGO_PKG_VERSION")));
         assert!(banner.contains("---"));
     }
 

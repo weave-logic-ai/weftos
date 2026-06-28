@@ -1,0 +1,5 @@
+[toolchain]
+# Xtensa LX7 requires the esp-rs toolchain (Espressif's Rust fork).
+# Install via `espup install` — see https://esp-rs.github.io/book/installation/index.html
+channel = "esp"
+components = ["rustc", "rust-std"]

@@ -1,0 +1,70 @@
+# weftos-leaf-touch-gt911
+#
+# Phase E touch driver crate for the WeftOS vector-first leaf display.
+# Extracted from `clawft-edge-pad::drivers::gt911` and given a
+# scene-aware hit-test layer on top of the raw register I/O.
+#
+# Canonical design doc: docs/design/vector-leaf-display.md §10 Phase E,
+# "weftos-leaf-touch-gt911: GT911 I2C driver feeding LeafInput::Pointer
+# into a leaf-side dispatcher that calls SceneStore::hit_test".
+#
+# The crate is `no_std + alloc`. It depends on:
+#
+#   - `embedded-hal-async` (1.0) — async I²C trait
+#   - `weftos-leaf-scene` — `SceneStore::hit_test`, `InputEnvelope`,
+#     `InputEvent`, `DisplayId`, `NodeId`
+#
+# It does NOT depend on:
+#
+#   - any esp-hal / esp-rtos crate. The driver is generic over any
+#     `embedded_hal_async::i2c::I2c` implementation; the firmware-side
+#     code (in `clawft-edge-pad`) hands it the concrete I²C peripheral.
+#   - any allocator policy or executor (`embassy-time` is NOT a hard
+#     dep — the driver exposes `poll()` and the caller drives cadence).
+#
+# Hardware notes specific to the CrowPanel DIS08070H (the only board
+# this driver has been hardware-verified against, 2026-05-15):
+#
+#   - GT911 RST is on PCA9557 IO1, NOT on a GPIO. The PCA9557 reset
+#     dance MUST run before this driver opens an I²C session. See
+#     `clawft-edge-pad::drivers::pca9557::reset_board_peripherals`.
+#   - The factory config blob is `version=0xFF` valid — do NOT rewrite.
+#   - The chip answers on 0x14 first (factory v3.0+), 0x5D as fallback.
+#
+# Standalone crate — own workspace table to stop cargo from walking up
+# into the parent clawft workspace and dragging in target-specific
+# toolchains. Mirrors the isolation pattern used by `weftos-leaf-scene`,
+# `weftos-leaf-renderer`, and `weftos-scene-builder`.
+[workspace]
+
+[package]
+name = "weftos-leaf-touch-gt911"
+version = "0.1.0"
+edition = "2021"
+description = "GT911 capacitive touch driver + scene-aware hit-test → InputEnvelope publisher (no_std + alloc)."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/weave-logic-ai/weftos"
+keywords = ["weftos", "leaf", "touch", "gt911", "no_std"]
+categories = ["embedded", "no-std", "hardware-support"]
+readme = "README.md"
+publish = false
+
+[dependencies]
+# Phase A foundation — SceneStore::hit_test, InputEnvelope, NodeId.
+weftos-leaf-scene = { path = "../weftos-leaf-scene" }
+
+# Async I²C trait. v1.0 is what `clawft-edge-pad` uses (esp-hal 1.0
+# implements it directly on `I2c<Async>`).
+embedded-hal-async = "1.0"
+
+# heapless 0.8 — IndexSet for the per-poll active-id tracker. The
+# `FnvIndexSet` capacity of 8 is twice the GT911's max simultaneous
+# touches (5) and bounded statically; no allocation per poll.
+heapless = "0.8"
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = "s"
+lto = true

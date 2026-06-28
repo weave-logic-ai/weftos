@@ -72,6 +72,8 @@ fn minimal_kernel_config() -> KernelConfig {
         mesh: None,
         anchor: None,
         ipc_tcp: None,
+        llm: None,
+        agent: None,
     }
 }
 

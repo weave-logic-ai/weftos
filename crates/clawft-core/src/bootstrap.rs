@@ -264,7 +264,8 @@ impl<P: Platform> AppContext<P> {
     /// Panics if Arc clones have already been taken (e.g. via `tools_arc()`).
     /// Always call `tools_mut()` for registration *before* sharing the registry.
     pub fn tools_mut(&mut self) -> &mut ToolRegistry {
-        Arc::get_mut(&mut self.tools).expect("tools already shared -- register tools before cloning Arc")
+        Arc::get_mut(&mut self.tools)
+            .expect("tools already shared -- register tools before cloning Arc")
     }
 
     /// Get a reference to the tool registry.
@@ -316,12 +317,11 @@ impl<P: Platform> AppContext<P> {
         use std::sync::Arc as ArcAlias;
         use tokio::sync::RwLock;
 
-        use crate::agent::skill_watcher::{start_watching, SkillWatcherConfig};
+        use crate::agent::skill_watcher::{SkillWatcherConfig, start_watching};
         use crate::agent::skills_v2::SkillRegistry;
 
         let workspace_dir = Some(self.skills.skills_dir().clone());
-        let registry = match SkillRegistry::discover(workspace_dir.as_deref(), None, vec![]).await
-        {
+        let registry = match SkillRegistry::discover(workspace_dir.as_deref(), None, vec![]).await {
             Ok(r) => ArcAlias::new(RwLock::new(r)),
             Err(e) => {
                 tracing::warn!(error = %e, "skill watcher: initial discover failed; not starting");
@@ -366,10 +366,7 @@ impl<P: Platform> AppContext<P> {
     /// for inbound-message-to-agent routing. Multi-agent dispatchers
     /// (e.g. the daemon) consume this; the single-agent CLI flow
     /// ignores it.
-    pub fn set_agent_router(
-        &mut self,
-        router: Arc<crate::agent_routing::AgentRouter>,
-    ) {
+    pub fn set_agent_router(&mut self, router: Arc<crate::agent_routing::AgentRouter>) {
         self.agent_router = Some(router);
     }
 
@@ -486,8 +483,7 @@ fn build_default_transport() -> Arc<OpenAiCompatTransport> {
     let llm_config = LlmConfig::from_env();
     match LlmClient::new(llm_config) {
         Ok(client) => {
-            let adapter: Arc<dyn LlmProvider> =
-                Arc::new(ServiceLlmAdapter::new(Arc::new(client)));
+            let adapter: Arc<dyn LlmProvider> = Arc::new(ServiceLlmAdapter::new(Arc::new(client)));
             tracing::info!(
                 "pipeline: transport wired to clawft-service-llm (LlmClient over llama-server)"
             );
@@ -636,6 +632,20 @@ pub async fn build_daemon_agent_loop(
     // `None`, we fall back to defaults (test/dev path only).
     let mut config = Config::default();
     config.agents.defaults.workspace = workspace.display().to_string();
+    // Stamp the daemon's actual LLM model into agents.defaults.model so
+    // the agent loop's request body matches the upstream the operator
+    // configured (`[kernel.llm].model` / `LLM_MODEL` env). Without
+    // this, `Config::default()` injects a hardcoded
+    // `deepseek/deepseek-chat`; combined with the panel principal's
+    // `model_override: true` permission the tiered router takes that
+    // verbatim and the request goes out asking for a model the local
+    // llama-server (or any non-deepseek upstream) doesn't host.
+    {
+        let upstream_model = llm.config().model.clone();
+        if !upstream_model.is_empty() {
+            config.agents.defaults.model = upstream_model;
+        }
+    }
     if let Some(r) = routing {
         config.routing = r.clone();
     }
@@ -666,17 +676,10 @@ pub async fn build_daemon_agent_loop(
         workspace,
         platform.clone(),
     ));
-    let skills_loader = crate::agent::skills::SkillsLoader::for_workspace(
-        workspace,
-        platform.clone(),
-    );
+    let skills_loader =
+        crate::agent::skills::SkillsLoader::for_workspace(workspace, platform.clone());
     let skills = Arc::new(skills_loader);
-    let context = ContextBuilder::new(
-        config.agents.clone(),
-        memory,
-        skills,
-        platform.clone(),
-    );
+    let context = ContextBuilder::new(config.agents.clone(), memory, skills, platform.clone());
 
     // Pipeline transport: bridge the daemon's already-constructed
     // LlmClient through the ServiceLlmAdapter so the agent loop
@@ -707,10 +710,7 @@ pub async fn build_daemon_agent_loop(
     // `config_loader::load_config_raw`, so workspace policy reaches
     // the resolver but the security ceiling pattern is bypassed. Fine
     // for single-user kernels; needed for multi-tenant.
-    let resolver = crate::pipeline::permissions::PermissionResolver::new(
-        &config.routing,
-        None,
-    );
+    let resolver = crate::pipeline::permissions::PermissionResolver::new(&config.routing, None);
     let mut agent = crate::agent::loop_core::AgentLoop::new(
         config.agents,
         platform,
@@ -767,12 +767,11 @@ pub async fn build_daemon_agent_loop(
 fn build_router_from_config(config: &Config) -> Arc<dyn ModelRouter> {
     if config.routing.mode == "tiered" {
         let routing = config.routing.clone();
-        let cost_tracker = Arc::new(
-            CostTracker::new(routing.cost_budgets.reset_hour_utc),
-        );
-        let rate_limiter = Arc::new(
-            RateLimiter::new(routing.rate_limiting.window_seconds, routing.rate_limiting.global_rate_limit_rpm),
-        );
+        let cost_tracker = Arc::new(CostTracker::new(routing.cost_budgets.reset_hour_utc));
+        let rate_limiter = Arc::new(RateLimiter::new(
+            routing.rate_limiting.window_seconds,
+            routing.rate_limiting.global_rate_limit_rpm,
+        ));
         Arc::new(
             TieredRouter::new(routing)
                 .with_cost_tracker(cost_tracker)
@@ -818,10 +817,7 @@ mod tests {
     async fn config_accessor() {
         let platform = Arc::new(NativePlatform::new());
         let ctx = AppContext::new(test_config(), platform).await.unwrap();
-        assert_eq!(
-            ctx.config().agents.defaults.model,
-            "deepseek/deepseek-chat"
-        );
+        assert_eq!(ctx.config().agents.defaults.model, "deepseek/deepseek-chat");
         assert_eq!(ctx.config().agents.defaults.max_tokens, 4096);
     }
 

@@ -63,6 +63,14 @@ const STATIC_ALLOWED_METHODS = new Set<string>([
     "chain.status",
     "chain.tail",
     "sensor.mic.status",
+    // Scheduler app: list / add / remove cron jobs through the
+    // daemon. The Scheduler panel polls `cron.list` once a second and
+    // submits `cron.add` from its add-job dialog.
+    "cron.list",
+    "cron.add",
+    "cron.remove",
+    // Explorer header: ECC (RNN + vector backend) status summary.
+    "ecc.status",
     // Ontology Explorer Phase 0 (2026-04-23): the WASM `Live` loop inside
     // the webview drives `Snapshot` through these two verbs — same code
     // the native GUI runs. Without them the tray chip icons never go
@@ -495,14 +503,20 @@ function renderHtml(context: vscode.ExtensionContext, webview: vscode.Webview): 
             splash.style.textAlign = "left";
             splash.style.color = "#ff8080";
             splash.textContent = "[" + stage + "] " + text;
+            splash.dataset.err = "1";
           }
         } catch (_) {}
       }
       window.addEventListener("error", (ev) => surface("error", ev.error || ev.message));
       window.addEventListener("unhandledrejection", (ev) => surface("unhandledrejection", ev.reason));
-      // Watchdog: if nothing has removed the loading class within 8s,
-      // the module script most likely never executed (CSP block on the
-      // static import). Flag it visibly.
+      // Watchdog: 12s after page load, if the body is still in the
+      // 'loading' class and no error message has been surfaced, escalate
+      // visibly. The previous version skipped on every setSplash call
+      // (which stamped 'dataset.err = "1"' even for in-flight progress
+      // messages), so a hung wasm fetch left the panel stuck on
+      // "init: fetching wasm…" with no escalation. Now we only suppress
+      // the watchdog when an actual error has been displayed (see
+      // 'surface' above and the catch block below).
       setTimeout(() => {
         if (document.body.classList.contains("loading") && splash && !splash.dataset.err) {
           splash.style.whiteSpace = "pre-wrap";
@@ -510,14 +524,17 @@ function renderHtml(context: vscode.ExtensionContext, webview: vscode.Webview): 
           splash.style.textAlign = "left";
           splash.style.color = "#f0c060";
           splash.textContent =
-            "[watchdog] module script did not finish in 8s.\\n" +
+            "[watchdog] panel did not finish booting in 12s.\\n" +
+            "Last splash text was: \\"" + (splash.textContent || "") + "\\"\\n\\n" +
             "Likely causes:\\n" +
             "  • CSP blocked the import of clawft_gui_egui.js\\n" +
-            "  • Wasm bundle missing or URL mismatch\\n" +
-            "  • wasm-bindgen init or weft_start threw before DOM update\\n" +
+            "  • Wasm bundle missing or URL mismatch (404)\\n" +
+            "  • wasm-bindgen init or weft_start hung\\n" +
+            "  • host postMessage bridge not responding\\n" +
             "Open: Developer: Open Webview Developer Tools for console.";
+          splash.dataset.err = "1";
         }
-      }, 8000);
+      }, 12000);
     })();
   </script>
   <script type="module" nonce="${nonce}">
@@ -525,9 +542,12 @@ function renderHtml(context: vscode.ExtensionContext, webview: vscode.Webview): 
 
     const vscode = acquireVsCodeApi();
     const splash = document.getElementById("weft-splash");
+    // setSplash paints in-flight progress text; deliberately does NOT
+    // set splash.dataset.err. That flag is reserved for the catch
+    // block below + the bootstrap-script 'surface' handler so the
+    // watchdog can still escalate when init/weft_start hang silently.
     const setSplash = (text, color) => {
       if (!splash) return;
-      splash.dataset.err = "1";
       splash.style.whiteSpace = "pre-wrap";
       splash.style.padding = "24px";
       splash.style.textAlign = "left";
@@ -570,7 +590,9 @@ function renderHtml(context: vscode.ExtensionContext, webview: vscode.Webview): 
         pre.textContent = msg;
         fb.appendChild(pre);
       }
-      document.getElementById("weft-canvas").style.display = "none";
+      const canvas = document.getElementById("weft-canvas");
+      if (canvas) canvas.style.display = "none";
+      if (splash) splash.dataset.err = "1";
     }
   </script>
 </body>

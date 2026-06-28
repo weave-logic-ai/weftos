@@ -51,6 +51,8 @@ mod tests {
             mesh: None,
             anchor: None,
             ipc_tcp: None,
+            llm: None,
+            agent: None,
         };
         let ext = KernelConfigExt::from(base.clone());
         assert!(ext.base.enabled);

@@ -1,0 +1,80 @@
+# Standalone crate — explicitly NOT part of the host workspace at
+# `/home/aepod/dev/clawft/Cargo.toml`. The empty `[workspace]` table
+# stops cargo from walking up the directory tree to claim this crate
+# for the host workspace. Same pattern as `clawft-edge-bench` and
+# `clawft-edge-pad`. This isolates the ESP-IDF Xtensa toolchain
+# (xtensa-esp32s3-espidf) from the host stable-x86_64 workspace.
+[workspace]
+
+[package]
+name = "clawft-edge-pad-idf"
+version = "0.1.0"
+edition = "2021"
+description = "WeftOS Inkpad Actor firmware — ESP-IDF port. ESP32-S3 + Elecrow CrowPanel DIS08070H using esp-idf-hal + esp-idf-svc + Espressif's official esp_lcd_panel_rgb RGB-DPI driver (bounce buffers, frame sync). Sibling of clawft-edge-pad (the bare-metal esp-hal spike); see crate README for the why."
+license = "MIT OR Apache-2.0"
+# rationale: ESP32-S3 firmware binary, not a reusable library. Lives outside
+# the main workspace (mirrors clawft-edge-bench + clawft-edge-pad) so the
+# Xtensa toolchain stays out of the host workspace build.
+publish = false
+
+[dependencies]
+# ── ESP-IDF Rust bindings ────────────────────────────────────────────
+# Same versions as clawft-edge-bench (the proven IDF-on-Rust precedent
+# in this repo). `binstart` makes esp-idf-sys provide the entry symbol
+# the IDF bootloader expects.
+# Internally-consistent matrix as of 2026-05-15 (latest published):
+#   esp-idf-svc 0.52  ⇒  esp-idf-hal ^0.46  ⇒  esp-idf-sys ^0.37
+#   embedded-svc 0.29 is the version esp-idf-svc 0.52 re-exports.
+# The clawft-edge-bench precedent in this repo pins to 0.51/0.46/0.36
+# but its Cargo.lock resolves higher in practice. We pin the latest
+# coherent set explicitly here.
+esp-idf-svc = "0.52"
+esp-idf-hal = "0.46"
+esp-idf-sys = { version = "0.37", features = ["binstart"] }
+embedded-svc = "0.29"
+
+# ── std-ecosystem deps ───────────────────────────────────────────────
+log = "0.4"
+anyhow = "1"
+thiserror = "1"
+
+# ── Graphics ─────────────────────────────────────────────────────────
+# Same versions as clawft-edge-pad. embedded-graphics is std-compatible
+# (it uses core APIs); compositor (in weftos-leaf-display) renders into
+# any DrawTarget<Color = Rgb888>.
+embedded-graphics = "0.8"
+embedded-graphics-core = "0.4"
+
+# ── WeftOS leaf protocol + display primitive ─────────────────────────
+# Path deps to workspace members. Both are `no_std + alloc` with empty
+# default features; they compile cleanly under std (alloc is available
+# in std too). The std-target wins: ciborium/serde pull in std bits
+# transparently. We deliberately do NOT enable their `std` feature —
+# their public API is identical, and keeping them no_std maximises
+# what we share with the bare-metal sibling crate.
+weftos-leaf-types = { path = "../weftos-leaf-types" }
+weftos-leaf-display = { path = "../weftos-leaf-display" }
+
+# ── Crypto for Actor identity ────────────────────────────────────────
+# Same as clawft-edge-pad — keeps the ed25519 / blake3 path identical
+# on both ports so the substrate-publish + provisioning flow ports 1:1.
+ed25519-dalek = { version = "2", default-features = false, features = ["rand_core"] }
+blake3 = { version = "1", default-features = false }
+
+# ── Embedded HAL traits (for I²C driver portability) ─────────────────
+# esp-idf-hal::i2c::I2cDriver implements embedded_hal::i2c::I2c (the
+# blocking trait). Our PCA9557 + GT911 drivers are written against
+# the blocking trait so both ports use the same driver crate.
+embedded-hal = "1.0"
+
+[build-dependencies]
+embuild = "0.33"
+
+# Match clawft-edge-bench profile choices.
+[profile.release]
+opt-level = "s"
+lto = true
+
+[profile.dev]
+debug = true
+opt-level = "z"

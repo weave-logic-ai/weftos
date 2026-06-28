@@ -1,0 +1,34 @@
+lgfx-bus-rgb-rs
+================
+
+This crate is a derivative work of LovyanGFX
+(https://github.com/lovyan03/LovyanGFX), specifically the file
+
+  src/lgfx/v1/platforms/esp32s3/Bus_RGB.cpp
+  src/lgfx/v1/platforms/esp32s3/Bus_RGB.hpp
+
+Upstream LovyanGFX is copyright (c) lovyan03 and contributors (ciniml,
+mongonta0716, tobozo), and is distributed under the BSD-3-Clause
+("FreeBSD") license. See:
+
+  https://github.com/lovyan03/LovyanGFX/blob/master/license.txt
+
+The Rust port (this crate) adds the following on top of LovyanGFX's
+work:
+
+  - Adaptation to esp-hal 1.0 (Rust no_std) primitives, where the
+    LovyanGFX C++ uses raw IDF / soc-struct register access.
+  - Use of esp-alloc capability-tagged heap regions in place of
+    `heap_caps_malloc(MALLOC_CAP_SPIRAM)` and
+    `heap_caps_malloc(MALLOC_CAP_DMA)`.
+  - Rust ownership / borrowing discipline around the singleton
+    descriptor storage.
+
+Per BSD-3-Clause clauses 1 and 2, the original copyright notice and
+this notice are reproduced here. Redistribution in any form must
+retain this notice.
+
+The Rust additions are dual-licensed MIT OR Apache-2.0, allowing
+downstream consumers to pick the license that best matches their
+project. The BSD-3-Clause carries through regardless, because the
+underlying port is a derivative work.

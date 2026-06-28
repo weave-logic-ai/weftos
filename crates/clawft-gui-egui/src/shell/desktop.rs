@@ -14,8 +14,7 @@ use clawft_surface::SurfaceTree;
 /// Admin app manifest, loaded inline so the reference panel always
 /// boots with at least one app installed even on a fresh workspace.
 /// Path-resolved at compile time via `include_str!`.
-const WEFTOS_ADMIN_MANIFEST: &str =
-    include_str!("../../../clawft-app/fixtures/weftos-admin.toml");
+const WEFTOS_ADMIN_MANIFEST: &str = include_str!("../../../clawft-app/fixtures/weftos-admin.toml");
 
 /// Admin desktop surface description (ADR-016 §10). Loaded inline for
 /// the same reason as the manifest above.
@@ -131,6 +130,11 @@ pub struct Desktop {
     /// browser. Survives sidebar navigation so the user comes back
     /// to the same expanded folders. WEFT-579 follow-up.
     pub files_state: crate::apps::files::FilesState,
+
+    /// Add-job form state for the Scheduler app (WEFT-584 follow-up).
+    /// Survives across paints so an in-flight edit isn't clobbered by
+    /// the next snapshot tick.
+    pub scheduler: crate::apps::scheduler::SchedulerState,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -211,16 +215,12 @@ impl Default for Desktop {
                     }
                 }
                 selected_app = Some(id.clone());
-                match clawft_surface::parse::parse_surface_toml(
-                    WEFTOS_ADMIN_DESKTOP_SURFACE,
-                ) {
+                match clawft_surface::parse::parse_surface_toml(WEFTOS_ADMIN_DESKTOP_SURFACE) {
                     Ok(tree) => {
                         app_surfaces.insert(id, tree);
                     }
                     Err(e) => {
-                        log::warn!(
-                            "failed to parse WeftOS Admin desktop surface: {e}"
-                        );
+                        log::warn!("failed to parse WeftOS Admin desktop surface: {e}");
                     }
                 }
             }
@@ -286,6 +286,7 @@ impl Default for Desktop {
             services_tab: crate::apps::services::ServicesTab::default(),
             settings_state: crate::apps::settings::SettingsState::default(),
             files_state: crate::apps::files::FilesState::default(),
+            scheduler: crate::apps::scheduler::SchedulerState::default(),
         }
     }
 }
@@ -304,10 +305,8 @@ pub fn show(
         total.min,
         egui::pos2(total.left() + sidebar_w, total.bottom()),
     );
-    let rect = egui::Rect::from_min_max(
-        egui::pos2(total.left() + sidebar_w, total.top()),
-        total.max,
-    );
+    let rect =
+        egui::Rect::from_min_max(egui::pos2(total.left() + sidebar_w, total.top()), total.max);
 
     // Wallpaper — warped grid (right of the sidebar only).
     let t = desk.boot_started.elapsed().as_secs_f32();
@@ -414,8 +413,7 @@ pub(crate) fn render_chip_detail(
     // failed to parse at startup (logged in `Desktop::default`).
     match tray::chip_subtree(chip, snap) {
         Some(value) => {
-            let pretty = serde_json::to_string_pretty(value)
-                .unwrap_or_else(|_| value.to_string());
+            let pretty = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
             egui::ScrollArea::both()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -443,24 +441,17 @@ pub(crate) fn render_chip_detail(
 /// the connection's state without hunting for it.
 pub(crate) fn connection_pill(ui: &mut egui::Ui, conn: crate::live::Connection) {
     let (text, color) = match conn {
-        crate::live::Connection::Connected => (
-            "● connected",
-            egui::Color32::from_rgb(110, 210, 160),
-        ),
-        crate::live::Connection::Connecting => (
-            "◐ connecting…",
-            egui::Color32::from_rgb(240, 200, 110),
-        ),
-        crate::live::Connection::Disconnected => (
-            "◯ disconnected",
-            egui::Color32::from_rgb(240, 150, 150),
-        ),
+        crate::live::Connection::Connected => {
+            ("● connected", egui::Color32::from_rgb(110, 210, 160))
+        }
+        crate::live::Connection::Connecting => {
+            ("◐ connecting…", egui::Color32::from_rgb(240, 200, 110))
+        }
+        crate::live::Connection::Disconnected => {
+            ("◯ disconnected", egui::Color32::from_rgb(240, 150, 150))
+        }
     };
-    ui.label(
-        egui::RichText::new(text)
-            .monospace()
-            .color(color),
-    );
+    ui.label(egui::RichText::new(text).monospace().color(color));
 }
 
 /// Diagnostic footer for chip-detail windows whose subsystem has no
@@ -470,10 +461,9 @@ pub(crate) fn connection_pill(ui: &mut egui::Ui, conn: crate::live::Connection) 
 /// wired / etc.
 pub(crate) fn render_empty_hint(ui: &mut egui::Ui, chip: tray::ChipId, snap: &Snapshot) {
     let (body, show_error) = match snap.connection {
-        crate::live::Connection::Connecting => (
-            "Waiting for first poll tick (~1s).".to_string(),
-            false,
-        ),
+        crate::live::Connection::Connecting => {
+            ("Waiting for first poll tick (~1s).".to_string(), false)
+        }
         crate::live::Connection::Disconnected => (
             "Daemon link is down — the extension's RPC to the daemon \
              failed on the last tick. Check `weaver kernel status` and \
@@ -513,15 +503,14 @@ pub(crate) fn render_empty_hint(ui: &mut egui::Ui, chip: tray::ChipId, snap: &Sn
             .italics()
             .color(egui::Color32::from_rgb(170, 170, 180)),
     );
-    if show_error
-        && let Some(err) = &snap.last_error {
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new(format!("last error: {err}"))
-                    .monospace()
-                    .color(egui::Color32::from_rgb(220, 140, 140)),
-            );
-        }
+    if show_error && let Some(err) = &snap.last_error {
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(format!("last error: {err}"))
+                .monospace()
+                .color(egui::Color32::from_rgb(220, 140, 140)),
+        );
+    }
 }
 
 #[allow(dead_code)] // wired up by graduations needing floating windows
@@ -603,9 +592,7 @@ pub(crate) fn render_blocks_window(
                             .app_registry
                             .list()
                             .iter()
-                            .map(|a| {
-                                (a.manifest.id.clone(), a.manifest.name.clone())
-                            })
+                            .map(|a| (a.manifest.id.clone(), a.manifest.name.clone()))
                             .collect();
                         if entries.is_empty() {
                             ui.label(

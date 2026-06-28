@@ -24,7 +24,7 @@ use clawft_substrate::{OntologyAdapter, Substrate};
 use parking_lot::RwLock;
 use serde_json::Value;
 
-use super::{now_ms, Command, Connection, Live, Snapshot};
+use super::{Command, Connection, Live, Snapshot, now_ms};
 
 const CMD_QUEUE: usize = 64;
 /// Cadence for reading the substrate into the legacy `Snapshot` shape
@@ -170,9 +170,16 @@ fn run_driver(live: Arc<Live>, mut cmd_rx: tokio::sync::mpsc::Receiver<Command>)
         }
 
         // Separate channel for raw UI commands (ADR-011 passthrough for
-        // `blocks::terminal`). Keeps its own `DaemonClient` so the
-        // substrate pollers aren't serialised behind ad-hoc calls.
-        let mut raw_client: Option<DaemonClient> = None;
+        // `blocks::terminal`). Each in-flight Raw command runs in its
+        // own spawned task with a fresh `DaemonClient` so a long-running
+        // RPC (e.g. `agent.chat` blocking on the LLM round-trip) does
+        // NOT block the snapshot ticker, the substrate refresh, the ToF
+        // / mic relay, or the aux-RPC poller. Earlier shape held a
+        // single `Option<DaemonClient>` and awaited the call inline in
+        // the `tokio::select!` arm, which froze every other live-driver
+        // activity for the duration of the chat turn.
+        use std::sync::Mutex as StdMutex;
+        let raw_client = Arc::new(StdMutex::new(None::<DaemonClient>));
 
         // Relay poller: for paths that are *published into the daemon's
         // SubstrateService from outside* (e.g. a Windows-side bridge
@@ -193,6 +200,16 @@ fn run_driver(live: Arc<Live>, mut cmd_rx: tokio::sync::mpsc::Receiver<Command>)
         // the daemon connection drops and reconnects.
         let mut discovered_mic_path: Option<String> = None;
         const TOF_RELAYED_PATH: &str = "substrate/sensor/tof";
+
+        // Direct-RPC poller: cron.list + ecc.status feed the Scheduler
+        // app and the Explorer's RNN/vector summary. Both are cheap
+        // and small; piggybacks on its own DaemonClient so substrate
+        // pollers aren't serialised behind it.
+        let mut aux_client: Option<DaemonClient> = None;
+        // Throttle aux RPCs to ~1 Hz instead of every SNAPSHOT_MS tick;
+        // cron.list / ecc.status don't change at 4 Hz.
+        let aux_every = (1000 / SNAPSHOT_MS).max(1);
+        let mut aux_tick: u64 = 0;
 
         let mut ticker = tokio::time::interval(std::time::Duration::from_millis(SNAPSHOT_MS));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -219,6 +236,10 @@ fn run_driver(live: Arc<Live>, mut cmd_rx: tokio::sync::mpsc::Receiver<Command>)
                         &paths,
                     )
                     .await;
+                    if aux_tick.is_multiple_of(aux_every) {
+                        poll_aux_rpcs(&mut aux_client, &live).await;
+                    }
+                    aux_tick = aux_tick.wrapping_add(1);
                     refresh_snapshot(
                         &substrate,
                         &live,
@@ -229,13 +250,27 @@ fn run_driver(live: Arc<Live>, mut cmd_rx: tokio::sync::mpsc::Receiver<Command>)
                 Some(cmd) = cmd_rx.recv() => {
                     match cmd {
                         Command::Raw { method, params, reply } => {
-                            let result = run_raw(&mut raw_client, &method, params).await;
-                            if let Some(tx) = reply {
-                                let _ = tx.send(result.clone());
-                            }
-                            if let Err(ref e) = result {
-                                live.write(|s| s.last_error = Some(e.clone()));
-                            }
+                            // Detach the call so a slow `agent.chat`
+                            // (or any long-running RPC) doesn't block
+                            // the ticker arm above. The `raw_client`
+                            // is a shared `Mutex<Option<DaemonClient>>`;
+                            // each spawned task takes the slot, runs
+                            // the call, and puts it back. If the slot
+                            // is busy when the next command lands, we
+                            // fall through to a fresh connection so
+                            // commands never queue behind each other.
+                            let raw_client = Arc::clone(&raw_client);
+                            let live = Arc::clone(&live);
+                            tokio::spawn(async move {
+                                let result =
+                                    run_raw_shared(&raw_client, &method, params).await;
+                                if let Some(tx) = reply {
+                                    let _ = tx.send(result.clone());
+                                }
+                                if let Err(ref e) = result {
+                                    live.write(|s| s.last_error = Some(e.clone()));
+                                }
+                            });
                         }
                     }
                 }
@@ -256,11 +291,7 @@ fn run_driver(live: Arc<Live>, mut cmd_rx: tokio::sync::mpsc::Receiver<Command>)
 /// `None`, `Snapshot::audio_mic` stays unset and the tray-chip mic
 /// gauge renders its dimmed "no mic" state instead of polling a
 /// stale legacy path.
-async fn refresh_snapshot(
-    substrate: &Arc<Substrate>,
-    live: &Arc<Live>,
-    mic_path: Option<&str>,
-) {
+async fn refresh_snapshot(substrate: &Arc<Substrate>, live: &Arc<Live>, mic_path: Option<&str>) {
     let snap = substrate.snapshot();
 
     let status = snap.get("substrate/kernel/status").cloned();
@@ -295,15 +326,12 @@ async fn refresh_snapshot(
     // Heuristic: if any real data from the adapter has landed in the
     // substrate we treat the connection as Connected; otherwise the
     // daemon is either still starting up or unreachable.
-    let connection = if status.is_some()
-        || processes.is_some()
-        || services.is_some()
-        || logs.is_some()
-    {
-        Connection::Connected
-    } else {
-        Connection::Connecting
-    };
+    let connection =
+        if status.is_some() || processes.is_some() || services.is_some() || logs.is_some() {
+            Connection::Connected
+        } else {
+            Connection::Connecting
+        };
 
     live.write(|s| {
         s.connection = connection;
@@ -421,27 +449,52 @@ async fn relay_external_paths(
         // Expected shape from substrate.read:
         // `{value: Option<Value>, tick: u64, sensitivity: String}`.
         if let Some(value) = result.get("value").cloned()
-            && !value.is_null() {
-                substrate.apply(clawft_substrate::StateDelta::Replace {
-                    path: path.to_string(),
-                    value,
-                });
-            }
+            && !value.is_null()
+        {
+            substrate.apply(clawft_substrate::StateDelta::Replace {
+                path: path.to_string(),
+                value,
+            });
+        }
     }
 }
 
-async fn run_raw(
-    client_opt: &mut Option<DaemonClient>,
+/// Shared-slot raw RPC dispatcher used by the spawned `Command::Raw`
+/// task. Tries to take the cached `DaemonClient` out of the shared
+/// `Mutex`; if it's busy (another concurrent Raw command holds it),
+/// opens a fresh connection so the new command runs in parallel
+/// instead of queuing behind the in-flight one. On success the client
+/// is parked back into the slot; on transport error it's dropped so
+/// the next call reconnects.
+async fn run_raw_shared(
+    slot: &std::sync::Mutex<Option<DaemonClient>>,
     method: &str,
     params: Value,
 ) -> Result<Value, String> {
-    if client_opt.is_none() {
-        *client_opt = DaemonClient::connect().await;
+    // Take the cached client if available; otherwise connect a
+    // fresh one. We never hold the std Mutex across an `.await`.
+    let mut client = match slot.lock().ok().and_then(|mut g| g.take()) {
+        Some(c) => c,
+        None => match DaemonClient::connect().await {
+            Some(c) => c,
+            None => return Err("no daemon running".to_string()),
+        },
+    };
+
+    let result = call(&mut client, method, params).await;
+
+    // Park the client back in the slot on success so the next Raw
+    // reuses the connection. On error, drop the client — it may be
+    // half-closed; let the next caller reconnect.
+    if result.is_ok()
+        && let Ok(mut g) = slot.lock()
+        && g.is_none()
+    {
+        // Only repark if the slot is still empty; if some other task
+        // already parked a fresh client, just drop ours.
+        *g = Some(client);
     }
-    let c = client_opt
-        .as_mut()
-        .ok_or_else(|| "no daemon running".to_string())?;
-    call(c, method, params).await
+    result
 }
 
 async fn call(client: &mut DaemonClient, method: &str, params: Value) -> Result<Value, String> {
@@ -458,3 +511,49 @@ async fn call(client: &mut DaemonClient, method: &str, params: Value) -> Result<
     Ok(resp.result.unwrap_or(Value::Null))
 }
 
+/// Poll the daemon for `cron.list` and `ecc.status` and feed the
+/// results into the live snapshot. Failures are silent — the relevant
+/// `Snapshot` field stays at its previous value (the UI's empty-state
+/// hint covers the never-published case).
+async fn poll_aux_rpcs(client_opt: &mut Option<DaemonClient>, live: &Arc<Live>) {
+    if client_opt.is_none() {
+        *client_opt = DaemonClient::connect().await;
+    }
+    let Some(client) = client_opt.as_mut() else {
+        return;
+    };
+    // cron.list — array of CronJobInfo.
+    match client
+        .call(Request::with_params("cron.list", Value::Null))
+        .await
+    {
+        Ok(resp) if resp.ok => {
+            let list = resp
+                .result
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default();
+            live.write(|s| s.cron_jobs = Some(list.clone()));
+        }
+        Ok(_) => {
+            // Daemon returned an error response — leave previous value.
+        }
+        Err(_) => {
+            *client_opt = None;
+            return;
+        }
+    }
+    // ecc.status — object with hnsw_entries, causal_graph, etc.
+    match client
+        .call(Request::with_params("ecc.status", Value::Null))
+        .await
+    {
+        Ok(resp) if resp.ok => {
+            let v = resp.result.unwrap_or(Value::Null);
+            live.write(|s| s.ecc_status = Some(v.clone()));
+        }
+        Ok(_) => {}
+        Err(_) => {
+            *client_opt = None;
+        }
+    }
+}

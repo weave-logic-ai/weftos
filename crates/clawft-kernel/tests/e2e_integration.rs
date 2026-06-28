@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use clawft_kernel::boot::{Kernel, KernelState};
-use clawft_kernel::ipc::{KernelMessage, MessagePayload, MessageTarget};
 use clawft_kernel::health::OverallHealth;
+use clawft_kernel::ipc::{KernelMessage, MessagePayload, MessageTarget};
 use clawft_kernel::supervisor::SpawnRequest;
 use clawft_platform::NativePlatform;
 use clawft_types::config::{AgentDefaults, AgentsConfig, Config, KernelConfig};
@@ -45,6 +45,8 @@ fn minimal_kernel_config() -> KernelConfig {
         mesh: None,
         anchor: None,
         ipc_tcp: None,
+        llm: None,
+        agent: None,
     }
 }
 
@@ -72,6 +74,8 @@ fn exochain_kernel_config() -> KernelConfig {
         mesh: None,
         anchor: None,
         ipc_tcp: None,
+        llm: None,
+        agent: None,
     }
 }
 
@@ -129,13 +133,10 @@ async fn boot_spawn_message_shutdown() {
     a2a.send(msg).await.unwrap();
 
     // Verify response received at kernel inbox
-    let received = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        kernel_inbox.recv(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let received = tokio::time::timeout(std::time::Duration::from_secs(2), kernel_inbox.recv())
+        .await
+        .unwrap()
+        .unwrap();
 
     if let MessagePayload::Json(v) = &received.payload {
         assert_eq!(v["type"], "ping");
@@ -201,7 +202,10 @@ async fn governance_blocks_unauthorized_action() {
     );
 
     let send_result = a2a.send(msg).await;
-    assert!(send_result.is_err(), "send should fail for restricted agent");
+    assert!(
+        send_result.is_err(),
+        "send should fail for restricted agent"
+    );
 
     // Verify the governance gate is wired when exochain is enabled
     assert!(
@@ -242,7 +246,10 @@ async fn service_lifecycle() {
     let health = kernel.health();
     let (overall, _details) = health.aggregate(services).await;
     assert!(
-        matches!(overall, OverallHealth::Healthy | OverallHealth::Degraded { .. }),
+        matches!(
+            overall,
+            OverallHealth::Healthy | OverallHealth::Degraded { .. }
+        ),
         "health should be healthy or degraded, not {overall:?}",
     );
 }
@@ -253,7 +260,7 @@ async fn service_lifecycle() {
 #[tokio::test]
 async fn persistence_roundtrip() {
     use clawft_kernel::causal::CausalGraph;
-    use clawft_kernel::persistence::{PersistenceConfig, save_causal_graph, load_causal_graph};
+    use clawft_kernel::persistence::{PersistenceConfig, load_causal_graph, save_causal_graph};
 
     // Create a causal graph with some nodes
     let graph = CausalGraph::new();
@@ -318,13 +325,10 @@ async fn multi_agent_ipc() {
     a2a.send(msg1).await.unwrap();
 
     // Agent 2 receives
-    let received_at_2 = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        inbox2.recv(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let received_at_2 = tokio::time::timeout(std::time::Duration::from_secs(2), inbox2.recv())
+        .await
+        .unwrap()
+        .unwrap();
 
     if let MessagePayload::Json(v) = &received_at_2.payload {
         assert_eq!(v["step"], 1);
@@ -341,13 +345,10 @@ async fn multi_agent_ipc() {
     a2a.send(msg2).await.unwrap();
 
     // Agent 3 receives
-    let received_at_3 = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        inbox3.recv(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let received_at_3 = tokio::time::timeout(std::time::Duration::from_secs(2), inbox3.recv())
+        .await
+        .unwrap()
+        .unwrap();
 
     if let MessagePayload::Json(v) = &received_at_3.payload {
         assert_eq!(v["step"], 2);
@@ -396,21 +397,15 @@ async fn topic_pubsub() {
     a2a.send(topic_msg).await.unwrap();
 
     // Both subscribers should receive the message
-    let recv1 = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        sub1_inbox.recv(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let recv1 = tokio::time::timeout(std::time::Duration::from_secs(2), sub1_inbox.recv())
+        .await
+        .unwrap()
+        .unwrap();
 
-    let recv2 = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        sub2_inbox.recv(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let recv2 = tokio::time::timeout(std::time::Duration::from_secs(2), sub2_inbox.recv())
+        .await
+        .unwrap()
+        .unwrap();
 
     if let MessagePayload::Json(v) = &recv1.payload {
         assert_eq!(v["event"], "build_complete");
@@ -431,7 +426,7 @@ async fn topic_pubsub() {
 #[tokio::test]
 async fn agent_restart_on_failure() {
     use clawft_kernel::process::ProcessState;
-    use clawft_kernel::supervisor::{RestartStrategy, RestartTracker, RestartBudget};
+    use clawft_kernel::supervisor::{RestartBudget, RestartStrategy, RestartTracker};
 
     let platform = Arc::new(NativePlatform::new());
     let kernel = Kernel::boot(base_config(), minimal_kernel_config(), platform)
@@ -481,8 +476,14 @@ async fn agent_restart_on_failure() {
     // Verify restart budget tracking works
     let budget = RestartBudget::default();
     let mut tracker = RestartTracker::new();
-    assert!(tracker.record_restart(&budget), "first restart within budget");
-    assert!(tracker.record_restart(&budget), "second restart within budget");
+    assert!(
+        tracker.record_restart(&budget),
+        "first restart within budget"
+    );
+    assert!(
+        tracker.record_restart(&budget),
+        "second restart within budget"
+    );
     assert_eq!(tracker.remaining(&budget), budget.max_restarts - 2);
 
     // Perform an actual restart through the supervisor
@@ -553,11 +554,18 @@ async fn dead_letter_queue_captures() {
     }
 
     // Verify DLQ has at least 1 entry
-    assert!(dlq.len() >= 1, "DLQ should have at least 1 entry, got {}", dlq.len());
+    assert!(
+        dlq.len() >= 1,
+        "DLQ should have at least 1 entry, got {}",
+        dlq.len()
+    );
 
     // Query DLQ by target PID and verify content
     let letters = dlq.query_by_target(nonexistent_pid);
-    assert!(!letters.is_empty(), "should find at least 1 dead letter for target PID");
+    assert!(
+        !letters.is_empty(),
+        "should find at least 1 dead letter for target PID"
+    );
 
     let letter = &letters[0];
     assert!(

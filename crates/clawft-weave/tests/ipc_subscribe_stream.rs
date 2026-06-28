@@ -49,6 +49,8 @@ fn minimal_kernel_config() -> KernelConfig {
         mesh: None,
         anchor: None,
         ipc_tcp: None,
+        llm: None,
+        agent: None,
     }
 }
 
@@ -99,7 +101,11 @@ async fn send_request(
     socket: &std::path::Path,
     method: &str,
     params: serde_json::Value,
-) -> (BufReader<tokio::net::unix::OwnedReadHalf>, tokio::net::unix::OwnedWriteHalf, serde_json::Value) {
+) -> (
+    BufReader<tokio::net::unix::OwnedReadHalf>,
+    tokio::net::unix::OwnedWriteHalf,
+    serde_json::Value,
+) {
     let stream = UnixStream::connect(socket).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
@@ -140,7 +146,11 @@ async fn external_subscriber_receives_publish() {
         serde_json::json!({ "topic": "t1", "message": "hello world" }),
     )
     .await;
-    assert_eq!(ack_b["ok"], serde_json::Value::Bool(true), "publish ack: {ack_b}");
+    assert_eq!(
+        ack_b["ok"],
+        serde_json::Value::Bool(true),
+        "publish ack: {ack_b}"
+    );
 
     // Client A should now receive the published message as a JSON line.
     let mut line = String::new();

@@ -1,0 +1,78 @@
+# weftos-leaf-renderer
+#
+# Phase B of the WeftOS vector-first leaf display. Implements the
+# scene-to-pixels engine that walks a `SceneStore` (from Phase A's
+# `weftos-leaf-scene`), filters nodes against a `DamageSet`, and drives
+# a backend-supplied `SceneSurface` implementation.
+#
+# Canonical design doc: docs/design/vector-leaf-display.md (§6 Renderer
+# Trait, §7 Damage Computation).
+#
+# This crate is `no_std + alloc`, backend-agnostic, and ships the
+# shared building blocks every leaf renderer needs:
+#
+#   - `SceneSurface` — the trait every backend implements
+#   - `CapabilityMask` — what a backend can natively render
+#   - `GlyphCache` — LRU glyph cache (mono fonts in v1; vector v1.1)
+#   - `decode_bitmap` — Raw8888 + Raw565 happy path, everything else Unsupported
+#   - `render_damage` — the canonical entry point
+#   - `color` — Rgba → Rgb888 / Rgb565 (incl. byte-swapped) helpers
+#
+# Backends (`weftos-leaf-sim`, the upcoming DpiSurface in Phase C,
+# the canvas surface in Phase D) consume this crate; they implement
+# `SceneSurface` and call `render_damage(&store, display_id, &dmg, &mut self)`.
+#
+# Standalone crate — own workspace table to stop cargo from walking up
+# into the parent clawft workspace and dragging in target-specific
+# toolchains. Mirrors the isolation pattern used by `weftos-leaf-scene`
+# and `lgfx-bus-rgb-rs`.
+[workspace]
+
+[package]
+name = "weftos-leaf-renderer"
+version = "0.1.0"
+edition = "2021"
+description = "Scene-to-pixels rendering engine for WeftOS leaf displays: damage walker, LRU glyph cache, bitmap decoder, SceneSurface trait (no_std + alloc)."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/weave-logic-ai/weftos"
+keywords = ["weftos", "leaf", "renderer", "no_std", "embedded"]
+categories = ["embedded", "no-std", "graphics"]
+readme = "README.md"
+publish = false
+
+[features]
+default = []
+# `std` is only needed for tests + downstream sim crates. Embedded
+# builds (DpiSurface in Phase C) leave it off.
+std = ["weftos-leaf-scene/std"]
+
+[dependencies]
+# Phase A foundation — scene graph, damage, primitives.
+weftos-leaf-scene = { path = "../weftos-leaf-scene" }
+
+# Mono fonts + primitive rasterization. We re-use embedded-graphics
+# only for its glyph data (Mono6x10 / Mono10x20) and `MonoFont`
+# metrics — the renderer itself does NOT hand draw calls to
+# embedded-graphics. Backends choose whether to call into it.
+embedded-graphics = { version = "0.8", default-features = false }
+
+# CapabilityMask is `bitflags`-derived. v2 has no_std support gated by
+# the default-off `std` feature; we leave it off.
+bitflags = { version = "2", default-features = false }
+
+# `hashbrown` for the no_std-clean LRU cache. v0.14+ exposes `HashMap`
+# without `std`. We build the LRU around `HashMap` + a `VecDeque`
+# usage-order witness rather than pulling in `linked-hash-map` (which
+# is std-only).
+hashbrown = { version = "0.14", default-features = false, features = ["ahash", "inline-more"] }
+
+[dev-dependencies]
+# Tests run on host; std-enabled scene for snapshot helpers.
+weftos-leaf-scene = { path = "../weftos-leaf-scene", features = ["std"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = "s"
+lto = true

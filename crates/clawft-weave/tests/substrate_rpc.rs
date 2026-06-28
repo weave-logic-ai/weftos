@@ -29,8 +29,7 @@ impl TestNode {
         let pk = sk.verifying_key().to_bytes();
         let ts: u64 = 1_700_000_000;
         let label = format!("test-node-{seed}");
-        let payload =
-            clawft_kernel::node_registry::node_register_payload(&pk, ts, &label);
+        let payload = clawft_kernel::node_registry::node_register_payload(&pk, ts, &label);
         let proof = sk.sign(&payload);
         let resp = one_shot(
             socket,
@@ -43,7 +42,11 @@ impl TestNode {
             }),
         )
         .await;
-        assert_eq!(resp["ok"], serde_json::Value::Bool(true), "register: {resp}");
+        assert_eq!(
+            resp["ok"],
+            serde_json::Value::Bool(true),
+            "register: {resp}"
+        );
         let node_id = resp["result"]["node_id"].as_str().unwrap().to_string();
         Self { sk, node_id }
     }
@@ -123,6 +126,8 @@ fn minimal_kernel_config() -> KernelConfig {
         mesh: None,
         anchor: None,
         ipc_tcp: None,
+        llm: None,
+        agent: None,
     }
 }
 
@@ -197,7 +202,9 @@ async fn substrate_read_write_notify_roundtrip() {
     assert_eq!(r1["result"]["tick"], 0);
 
     // Publish a value through the gate.
-    let r2 = node.publish(&socket, &path, serde_json::json!({ "x": 7 })).await;
+    let r2 = node
+        .publish(&socket, &path, serde_json::json!({ "x": 7 }))
+        .await;
     assert_eq!(r2["ok"], serde_json::Value::Bool(true), "publish: {r2}");
     let tick_after_publish = r2["result"]["tick"].as_u64().unwrap();
     assert!(tick_after_publish > 0);
@@ -258,8 +265,14 @@ async fn substrate_list_returns_prefix_children() {
     // Seed two children and one grandchild — all under the test
     // node's prefix so the gate accepts them.
     let paths_to_publish = [
-        (node.path("list-test/mic"), serde_json::json!({ "rms_db": -20 })),
-        (node.path("list-test/tof"), serde_json::json!({ "frame": 1 })),
+        (
+            node.path("list-test/mic"),
+            serde_json::json!({ "rms_db": -20 }),
+        ),
+        (
+            node.path("list-test/tof"),
+            serde_json::json!({ "frame": 1 }),
+        ),
         (
             node.path("list-test/mic/history"),
             serde_json::json!([1, 2, 3]),
@@ -267,7 +280,11 @@ async fn substrate_list_returns_prefix_children() {
     ];
     for (path, value) in &paths_to_publish {
         let r = node.publish(&socket, path, value.clone()).await;
-        assert_eq!(r["ok"], serde_json::Value::Bool(true), "publish {path}: {r}");
+        assert_eq!(
+            r["ok"],
+            serde_json::Value::Bool(true),
+            "publish {path}: {r}"
+        );
     }
 
     let mic_path = node.path("list-test/mic");
@@ -344,7 +361,11 @@ async fn substrate_subscribe_streams_updates() {
 
     // Publish twice; subscriber should see both in order.
     let pub_resp = node.publish(&socket, &path, serde_json::json!(1)).await;
-    assert_eq!(pub_resp["ok"], serde_json::Value::Bool(true), "publish: {pub_resp}");
+    assert_eq!(
+        pub_resp["ok"],
+        serde_json::Value::Bool(true),
+        "publish: {pub_resp}"
+    );
     one_shot(
         &socket,
         "substrate.notify",
@@ -400,7 +421,11 @@ async fn substrate_notify_wakes_subscriber_without_prior_publish() {
     let mut ack = String::new();
     reader.read_line(&mut ack).await.unwrap();
     let ack_v: serde_json::Value = serde_json::from_str(ack.trim()).unwrap();
-    assert_eq!(ack_v["ok"], serde_json::Value::Bool(true), "subscribe ack: {ack_v}");
+    assert_eq!(
+        ack_v["ok"],
+        serde_json::Value::Bool(true),
+        "subscribe ack: {ack_v}"
+    );
 
     // Read tick before notify so we can assert it advances.
     let read_before = one_shot(
@@ -438,10 +463,7 @@ async fn substrate_notify_wakes_subscriber_without_prior_publish() {
         evt["kind"], "notify",
         "first event after notify-only must be a notify, got: {evt}"
     );
-    assert_eq!(
-        evt["path"], path,
-        "notify must carry the subscribed path"
-    );
+    assert_eq!(evt["path"], path, "notify must carry the subscribed path");
     assert_eq!(
         evt["tick"].as_u64().unwrap(),
         tick_after,
@@ -491,8 +513,18 @@ async fn substrate_notify_back_to_back_delivers_both_events() {
     assert_eq!(ack_v["ok"], serde_json::Value::Bool(true));
 
     // Two notifies in quick succession; each must produce a wakeup.
-    one_shot(&socket, "substrate.notify", serde_json::json!({ "path": path })).await;
-    one_shot(&socket, "substrate.notify", serde_json::json!({ "path": path })).await;
+    one_shot(
+        &socket,
+        "substrate.notify",
+        serde_json::json!({ "path": path }),
+    )
+    .await;
+    one_shot(
+        &socket,
+        "substrate.notify",
+        serde_json::json!({ "path": path }),
+    )
+    .await;
 
     let mut buf1 = String::new();
     tokio::time::timeout(Duration::from_secs(2), reader.read_line(&mut buf1))
@@ -511,7 +543,10 @@ async fn substrate_notify_back_to_back_delivers_both_events() {
     let e2: serde_json::Value = serde_json::from_str(buf2.trim()).unwrap();
     assert_eq!(e2["kind"], "notify");
     let tick2 = e2["tick"].as_u64().unwrap();
-    assert!(tick2 > tick1, "ticks must monotonically advance: {tick1} → {tick2}");
+    assert!(
+        tick2 > tick1,
+        "ticks must monotonically advance: {tick1} → {tick2}"
+    );
 
     let _ = shutdown_tx.send(true);
 }
@@ -531,7 +566,10 @@ async fn substrate_publish_rejects_unsigned() {
     .await;
     assert_eq!(r["ok"], serde_json::Value::Bool(false));
     let err = r["error"].as_str().unwrap_or("");
-    assert!(err.contains("node_id"), "expected node_id error, got: {err}");
+    assert!(
+        err.contains("node_id"),
+        "expected node_id error, got: {err}"
+    );
 
     let _ = shutdown_tx.send(true);
 }
@@ -544,7 +582,9 @@ async fn substrate_publish_rejects_cross_node_write() {
 
     // Alice tries to write under Bob's prefix — must be rejected.
     let bob_path = format!("substrate/{}/sneaky", bob.node_id());
-    let r = alice.publish(&socket, &bob_path, serde_json::json!("hi")).await;
+    let r = alice
+        .publish(&socket, &bob_path, serde_json::json!("hi"))
+        .await;
     assert_eq!(r["ok"], serde_json::Value::Bool(false));
     let err = r["error"].as_str().unwrap_or("");
     assert!(
@@ -569,8 +609,7 @@ async fn substrate_publish_rejects_top_level_write() {
     let value = serde_json::json!(0);
     let value_bytes = serde_json::to_vec(&value).unwrap();
     let value_str = String::from_utf8_lossy(&value_bytes);
-    let payload =
-        clawft_kernel::node_publish_payload(path, &value_str, ts, &node.node_id);
+    let payload = clawft_kernel::node_publish_payload(path, &value_str, ts, &node.node_id);
     let sig = node.sk.sign(&payload);
     // sanity: avoid unused warning on pk
     let _ = pk;
@@ -681,8 +720,7 @@ async fn substrate_canonical_publish_payload_matches_real_publish_payload() {
     // mirroring what the daemon does on a real publish.
     let value_bytes = serde_json::to_vec(&value).unwrap();
     let value_str = String::from_utf8_lossy(&value_bytes);
-    let local_payload =
-        clawft_kernel::node_publish_payload(&path, &value_str, ts, &node.node_id);
+    let local_payload = clawft_kernel::node_publish_payload(&path, &value_str, ts, &node.node_id);
     let local_hex = hex_str(&local_payload);
 
     assert_eq!(

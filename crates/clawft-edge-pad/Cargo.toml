@@ -1,0 +1,128 @@
+# Standalone crate — explicitly NOT part of the host workspace at
+# `/home/aepod/dev/clawft/Cargo.toml`. The empty `[workspace]` table
+# stops cargo from walking up the directory tree to claim this crate
+# for the host workspace, which would otherwise apply host-side
+# toolchain settings (stable, x86_64) instead of the esp/Xtensa
+# settings pinned by this crate's `rust-toolchain.toml`.
+[workspace]
+
+[package]
+name = "clawft-edge-pad"
+version = "0.6.19"
+edition = "2021"
+description = "WeftOS Inkpad Actor firmware — ESP32-S3 + Elecrow CrowPanel DIS08070H. Spike per .planning/actors/JOURNALED-ACTOR-INKPAD.md."
+license = "MIT OR Apache-2.0"
+# rationale: ESP32-S3 firmware binary, not a reusable library. Lives outside
+# the main workspace (mirrors clawft-edge-bench) so the Xtensa toolchain
+# stays out of the host workspace build.
+publish = false
+
+[dependencies]
+# ── ESP HAL + runtime ────────────────────────────────────────────────
+# Mirrors infinition/waveshare-watch-rs (the LX7 reference firmware).
+esp-hal = { version = "1.0.0", default-features = true, features = [
+    "esp32s3",
+    "unstable",
+    "psram",
+] }
+esp-rtos = { version = "0.2.0", features = ["esp32s3", "embassy", "esp-radio"] }
+esp-alloc = "0.9.0"
+esp-println = { version = "0.16.1", features = ["esp32s3", "log-04"] }
+esp-backtrace = { version = "0.18.1", features = ["esp32s3", "panic-handler", "println"] }
+esp-bootloader-esp-idf = { version = "0.4", features = ["esp32s3"] }
+log = "0.4"
+
+# ── Embassy async runtime ────────────────────────────────────────────
+embassy-executor = "0.9.0"
+embassy-time = "0.5.1"
+embassy-sync = "0.8"
+embassy-futures = "0.1"
+static_cell = "2.1"
+
+# ── Graphics ─────────────────────────────────────────────────────────
+embedded-graphics = "0.8"
+embedded-graphics-core = "0.4"
+
+# ── HAL traits ───────────────────────────────────────────────────────
+embedded-hal = "1.0"
+embedded-hal-async = "1.0"
+embedded-hal-bus = "0.3"
+
+# ── WiFi / networking ────────────────────────────────────────────────
+# Needed for substrate.publish over JSON-RPC.
+esp-radio = { version = "0.17.0", features = [
+    "esp32s3",
+    "wifi",
+    "ble",
+    "coex",
+    "unstable",
+    "log-04",
+] }
+embassy-net = { version = "0.9.0", features = [
+    "dhcpv4",
+    "medium-ethernet",
+    "tcp",
+    "udp",
+    "dns",
+] }
+embedded-io = "0.6"
+embedded-io-async = "0.6"
+
+# ── WeftOS vector-first leaf display (Phase A + B + C) ───────────────
+# Path deps — these are workspace members; clawft-edge-pad is itself
+# out-of-workspace but a path dependency works regardless. All are
+# no_std with empty default features.
+#
+# Phase A `weftos-leaf-scene`: scene graph, wire envelopes, damage,
+#   primitives, hit-test. The renderer consumes a SceneStore + DamageSet.
+# Phase B `weftos-leaf-renderer`: render_damage walker, SceneSurface
+#   trait, glyph cache, capability mask, bitmap decoder, the canonical
+#   `to_rgb565_be` byte-swap our DpiSurface reuses.
+# Phase C `drivers::dpi_surface`: SceneSurface impl over lgfx-bus-rgb-rs
+#   (in *this* crate; see src/drivers/dpi_surface.rs).
+#
+# The previous `weftos-leaf-display` dep is gone — its LeafPush /
+# Compositor protocol is superseded by the SceneOp wire format. The
+# old crate stays in the workspace until Phase E's producer rewrite
+# closes the last LeafPush call site.
+#
+# `weftos-leaf-types` is kept for `push_topic` + the leaf-services
+# announce caps; Phase E's mesh rewrite will refresh those callers.
+weftos-leaf-types = { path = "../weftos-leaf-types" }
+weftos-leaf-scene = { path = "../weftos-leaf-scene" }
+weftos-leaf-renderer = { path = "../weftos-leaf-renderer" }
+# Phase E `weftos-leaf-touch-gt911`: GT911 register I/O + scene-aware
+# hit-test → `InputEnvelope` publisher. Replaces the in-firmware
+# `drivers/gt911.rs` driver (which now thinly re-exports this crate's
+# types for any code that still names them). The hit-test path calls
+# `SceneStore::hit_test` against the shared store the mesh task writes.
+weftos-leaf-touch-gt911 = { path = "../weftos-leaf-touch-gt911" }
+
+# ── RGB-DPI bus driver ───────────────────────────────────────────────
+# Faithful Rust port of LovyanGFX `Bus_RGB.cpp` — owns the PSRAM
+# framebuffer, the circular GDMA descriptor ring + FIFO-skip restart
+# descriptor, and the VSYNC ISR. Hardware-verified on this exact panel
+# (CrowPanel DIS08070H) on 2026-05-15. Replaces the hand-rolled
+# `drivers::dpi_surface` register-bang from configs #1-#11.
+#
+# `default-features = false` disables the `double-buffer` feature for
+# the single-buffer disambiguation per docs/handoff.md punch-list
+# item 1: if the gutter now lands visibly (with tearing during
+# writes), the bus swap was the residual visual bug. Re-enable by
+# dropping `default-features = false` once the swap is fixed.
+lgfx-bus-rgb-rs = { path = "../lgfx-bus-rgb-rs", default-features = false }
+
+# ── Crypto for Actor identity ────────────────────────────────────────
+# ed25519-dalek with no_std + rand_core for keygen.
+ed25519-dalek = { version = "2", default-features = false, features = ["rand_core"] }
+blake3 = { version = "1", default-features = false }
+
+# ── no_std utility ───────────────────────────────────────────────────
+heapless = "0.8"
+
+[profile.dev]
+opt-level = "s"
+
+[profile.release]
+opt-level = "s"
+lto = true

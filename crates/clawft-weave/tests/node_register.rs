@@ -50,6 +50,8 @@ fn minimal_kernel_config() -> KernelConfig {
         mesh: None,
         anchor: None,
         ipc_tcp: None,
+        llm: None,
+        agent: None,
     }
 }
 
@@ -144,7 +146,11 @@ async fn register_returns_deterministic_node_id() {
         }),
     )
     .await;
-    assert_eq!(resp["ok"], serde_json::Value::Bool(true), "register failed: {resp}");
+    assert_eq!(
+        resp["ok"],
+        serde_json::Value::Bool(true),
+        "register failed: {resp}"
+    );
     assert_eq!(resp["result"]["node_id"], expected_id);
     assert_eq!(resp["result"]["label"], label);
     assert!(
@@ -195,8 +201,7 @@ async fn reregister_same_key_returns_same_id() {
     let pk_bytes = sk.verifying_key().to_bytes();
 
     let mk_resp = |label: &str, ts: u64| {
-        let payload =
-            clawft_kernel::node_registry::node_register_payload(&pk_bytes, ts, label);
+        let payload = clawft_kernel::node_registry::node_register_payload(&pk_bytes, ts, label);
         let proof = sk.sign(&payload);
         (
             label.to_string(),

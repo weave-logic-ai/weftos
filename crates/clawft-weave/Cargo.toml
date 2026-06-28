@@ -57,6 +57,18 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 weftos-leaf-types = { path = "../weftos-leaf-types", features = ["std"] }
+# Phase E: vector scene producer pipeline.
+#
+# `weftos-leaf-scene` (Phase A) supplies the wire types (`SceneEnvelope`,
+# `SceneOp`, `Scene`, codec). `weftos-scene-builder` (this phase) wraps
+# them in a fluent producer API + diff/snapshot helpers.
+#
+# Both are out-of-workspace crates with their own `[workspace]` tables;
+# path deps land them in clawft-weave's build graph regardless. The
+# leaf-scene `std` feature is required so its serde derive lights up
+# host-side allocators.
+weftos-leaf-scene = { path = "../weftos-leaf-scene", features = ["std"] }
+weftos-scene-builder = { path = "../weftos-scene-builder" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 comfy-table = { workspace = true }

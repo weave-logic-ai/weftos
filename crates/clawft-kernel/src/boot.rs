@@ -8,9 +8,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use tracing::{error, info};
 #[cfg(feature = "exochain")]
 use tracing::warn;
+use tracing::{error, info};
 
 use clawft_core::bootstrap::AppContext;
 use clawft_core::bus::MessageBus;
@@ -84,7 +84,8 @@ pub struct EccSubsystem {
     pub(crate) impulses: Option<Arc<crate::impulse::ImpulseQueue>>,
     pub(crate) calibration: Option<crate::calibration::EccCalibration>,
     pub(crate) vector_backend: Option<Arc<dyn crate::vector_backend::VectorBackend>>,
-    pub(crate) eml_coherence: Option<Arc<std::sync::Mutex<crate::eml_coherence::EmlCoherenceModel>>>,
+    pub(crate) eml_coherence:
+        Option<Arc<std::sync::Mutex<crate::eml_coherence::EmlCoherenceModel>>>,
 }
 
 /// OS-patterns observability: metrics, structured logging, timers,
@@ -166,7 +167,10 @@ impl<P: Platform> Kernel<P> {
         let mut boot_log = BootLog::new();
 
         info!("WeftOS kernel booting");
-        boot_log.push(BootEvent::info(BootPhase::Init, "WeftOS v0.1.0 booting..."));
+        boot_log.push(BootEvent::info(
+            BootPhase::Init,
+            format!("WeftOS v{} booting...", env!("CARGO_PKG_VERSION")),
+        ));
         boot_log.push(BootEvent::info(BootPhase::Init, "PID 0 (kernel)"));
 
         // 1. Create subsystems
@@ -238,7 +242,10 @@ impl<P: Platform> Kernel<P> {
         if let Err(e) = service_registry.register(cron_svc.clone()) {
             error!(error = %e, "failed to register cron service");
         } else {
-            boot_log.push(BootEvent::info(BootPhase::Services, "Cron service registered"));
+            boot_log.push(BootEvent::info(
+                BootPhase::Services,
+                "Cron service registered",
+            ));
         }
 
         // 5b½. Register assessment service
@@ -248,16 +255,19 @@ impl<P: Platform> Kernel<P> {
         if let Err(e) = service_registry.register(assessment_svc.clone()) {
             error!(error = %e, "failed to register assessment service");
         } else {
-            boot_log.push(BootEvent::info(BootPhase::Services, "Assessment service registered"));
+            boot_log.push(BootEvent::info(
+                BootPhase::Services,
+                "Assessment service registered",
+            ));
         }
 
         // 5c. Register container service (K4)
-        let container_manager = std::sync::Arc::new(
-            crate::container::ContainerManager::new(crate::container::ContainerConfig::default()),
-        );
-        let container_service = std::sync::Arc::new(
-            crate::container::ContainerService::new(container_manager.clone()),
-        );
+        let container_manager = std::sync::Arc::new(crate::container::ContainerManager::new(
+            crate::container::ContainerConfig::default(),
+        ));
+        let container_service = std::sync::Arc::new(crate::container::ContainerService::new(
+            container_manager.clone(),
+        ));
         if let Err(e) = service_registry.register(container_service) {
             error!(error = %e, "failed to register container service");
         } else {
@@ -290,6 +300,18 @@ impl<P: Platform> Kernel<P> {
 
                 let runtime = Arc::new(runtime);
 
+                // Wire the A2A router BACK to the mesh runtime — the
+                // counterpart of `set_local_router` above. Without
+                // this, the A2A router's `Topic` handler has no mesh
+                // runtime to consult, so locally-published topics
+                // (e.g. via `ipc.publish` / `weaver leaf push`) are
+                // never forwarded to mesh-subscribed peers like leaf
+                // devices. `set_local_router` is mesh→A2A (inbound);
+                // this is A2A→mesh (outbound). Both directions are
+                // required for the leaf-push topic forwarding path
+                // (`peers_for_topic` → `send_to_peer`) to work.
+                a2a_router.set_mesh_runtime(Arc::clone(&runtime));
+
                 // Clone values needed by seed-peer loop before moving mesh_config.
                 let seed_peers = mesh_config.seed_peers.clone();
                 let transport_name_for_seeds = mesh_config.transport.clone();
@@ -299,7 +321,9 @@ impl<P: Platform> Kernel<P> {
 
                 // Generate or load Noise keypair.
                 let noise_config = if noise_enabled {
-                    let private_key: [u8; 32] = if let Some(ref key_path) = mesh_config.noise_key_path {
+                    let private_key: [u8; 32] = if let Some(ref key_path) =
+                        mesh_config.noise_key_path
+                    {
                         let key_bytes = std::fs::read(key_path).unwrap_or_else(|_| {
                             tracing::warn!("noise key file not found, generating ephemeral key");
                             let mut key = [0u8; 32];
@@ -333,17 +357,14 @@ impl<P: Platform> Kernel<P> {
                     use crate::mesh::MeshTransport;
 
                     let transport: Box<dyn MeshTransport> = match mesh_config.transport.as_str() {
-                        "ws" | "websocket" => {
-                            Box::new(crate::mesh_ws::WsTransport)
-                        }
-                        _ => {
-                            Box::new(crate::mesh_tcp::TcpTransport)
-                        }
+                        "ws" | "websocket" => Box::new(crate::mesh_ws::WsTransport),
+                        _ => Box::new(crate::mesh_tcp::TcpTransport),
                     };
 
                     match transport.listen(&listen_addr).await {
                         Ok(mut listener) => {
-                            let bind = listener.local_addr()
+                            let bind = listener
+                                .local_addr()
                                 .map(|a| a.to_string())
                                 .unwrap_or_else(|_| listen_addr.clone());
                             tracing::info!(
@@ -366,9 +387,15 @@ impl<P: Platform> Kernel<P> {
                                             );
 
                                             // Optionally wrap in Noise encryption.
-                                            let mut channel: Box<dyn crate::mesh_noise::EncryptedChannel> = match &nc {
+                                            let mut channel: Box<
+                                                dyn crate::mesh_noise::EncryptedChannel,
+                                            > = match &nc {
                                                 Some(cfg) => {
-                                                    match crate::mesh_noise::NoiseChannel::respond(stream, cfg).await {
+                                                    match crate::mesh_noise::NoiseChannel::respond(
+                                                        stream, cfg,
+                                                    )
+                                                    .await
+                                                    {
                                                         Ok(ch) => {
                                                             tracing::info!(peer = %peer_addr, "noise handshake complete");
                                                             Box::new(ch)
@@ -379,9 +406,11 @@ impl<P: Platform> Kernel<P> {
                                                         }
                                                     }
                                                 }
-                                                None => {
-                                                    Box::new(crate::mesh_noise::PassthroughChannel::new(stream))
-                                                }
+                                                None => Box::new(
+                                                    crate::mesh_noise::PassthroughChannel::new(
+                                                        stream,
+                                                    ),
+                                                ),
                                             };
 
                                             // Outbound channel: the kernel pushes frames into
@@ -390,7 +419,8 @@ impl<P: Platform> Kernel<P> {
                                             // stream. This is what lets the topic forwarder in
                                             // `A2ARouter` deliver pushes to inbound leaf peers that
                                             // subscribed via `mesh.subscribe`.
-                                            let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+                                            let (out_tx, mut out_rx) =
+                                                tokio::sync::mpsc::channel::<Vec<u8>>(256);
 
                                             // Bidirectional loop. `handle_incoming_from` auto-
                                             // registers the peer by `envelope.source_node` on first
@@ -453,21 +483,28 @@ impl<P: Platform> Kernel<P> {
                         match transport.connect(&addr).await {
                             Ok(stream) => {
                                 // Optionally wrap in Noise encryption (as initiator).
-                                let mut channel: Box<dyn crate::mesh_noise::EncryptedChannel> = match &nc {
-                                    Some(cfg) => {
-                                        match crate::mesh_noise::NoiseChannel::initiate(stream, cfg).await {
-                                            Ok(ch) => {
-                                                tracing::info!(peer = %addr, "noise handshake complete (initiator)");
-                                                Box::new(ch)
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!(peer = %addr, error = %e, "noise handshake failed");
-                                                return;
+                                let mut channel: Box<dyn crate::mesh_noise::EncryptedChannel> =
+                                    match &nc {
+                                        Some(cfg) => {
+                                            match crate::mesh_noise::NoiseChannel::initiate(
+                                                stream, cfg,
+                                            )
+                                            .await
+                                            {
+                                                Ok(ch) => {
+                                                    tracing::info!(peer = %addr, "noise handshake complete (initiator)");
+                                                    Box::new(ch)
+                                                }
+                                                Err(e) => {
+                                                    tracing::warn!(peer = %addr, error = %e, "noise handshake failed");
+                                                    return;
+                                                }
                                             }
                                         }
-                                    }
-                                    None => Box::new(crate::mesh_noise::PassthroughChannel::new(stream)),
-                                };
+                                        None => Box::new(
+                                            crate::mesh_noise::PassthroughChannel::new(stream),
+                                        ),
+                                    };
 
                                 let (tx, mut rx) = tokio::sync::mpsc::channel(256);
                                 let peer_id = addr.clone();
@@ -526,11 +563,9 @@ impl<P: Platform> Kernel<P> {
             ..ClusterConfig::default()
         };
         // Cluster peer membership persists to disk so joins survive restarts.
-        let cluster_peers_path =
-            std::path::PathBuf::from(".weftos/runtime/cluster_peers.json");
-        let cluster_membership = Arc::new(
-            ClusterMembership::new(cluster_config).with_persist_path(&cluster_peers_path),
-        );
+        let cluster_peers_path = std::path::PathBuf::from(".weftos/runtime/cluster_peers.json");
+        let cluster_membership =
+            Arc::new(ClusterMembership::new(cluster_config).with_persist_path(&cluster_peers_path));
 
         boot_log.push(BootEvent::info(
             BootPhase::Network,
@@ -542,7 +577,8 @@ impl<P: Platform> Kernel<P> {
         ));
 
         // 6b. Load host revocation list (persistent ban list)
-        let revocation_path = crate::revocation::RevocationList::default_path(std::path::Path::new("."));
+        let revocation_path =
+            crate::revocation::RevocationList::default_path(std::path::Path::new("."));
         let revocation_list = Arc::new(crate::revocation::RevocationList::load(revocation_path));
         {
             let count = revocation_list.len();
@@ -565,10 +601,7 @@ impl<P: Platform> Kernel<P> {
             use crate::cluster::ClusterService;
             use ruvector_cluster::StaticDiscovery;
 
-            let net_config = kernel_config
-                .cluster
-                .clone()
-                .unwrap_or_default();
+            let net_config = kernel_config.cluster.clone().unwrap_or_default();
             let seed_addrs: Vec<std::net::SocketAddr> = net_config
                 .seed_nodes
                 .iter()
@@ -621,7 +654,9 @@ impl<P: Platform> Kernel<P> {
             let chain_config = kernel_config.chain.clone().unwrap_or_default();
             if chain_config.enabled {
                 // Load or generate Ed25519 signing key for chain integrity.
-                let signing_key = if let Some(ref ckpt_path) = chain_config.effective_checkpoint_path() {
+                let signing_key = if let Some(ref ckpt_path) =
+                    chain_config.effective_checkpoint_path()
+                {
                     let key_path = std::path::PathBuf::from(ckpt_path).with_extension("key");
                     match crate::chain::ChainManager::load_or_create_key(&key_path) {
                         Ok(key) => {
@@ -651,7 +686,10 @@ impl<P: Platform> Kernel<P> {
 
                     if rvf_path.exists() {
                         // Prefer RVF format (cryptographic integrity verification)
-                        match crate::chain::ChainManager::load_from_rvf(&rvf_path, chain_config.checkpoint_interval) {
+                        match crate::chain::ChainManager::load_from_rvf(
+                            &rvf_path,
+                            chain_config.checkpoint_interval,
+                        ) {
                             Ok(restored) => {
                                 let seq = restored.sequence();
                                 boot_log.push(BootEvent::info(
@@ -667,7 +705,10 @@ impl<P: Platform> Kernel<P> {
                                 error!(error = %e, "failed to restore RVF chain, trying JSON fallback");
                                 // Fall back to JSON
                                 if json_path.exists() {
-                                    match crate::chain::ChainManager::load_from_file(&json_path, chain_config.checkpoint_interval) {
+                                    match crate::chain::ChainManager::load_from_file(
+                                        &json_path,
+                                        chain_config.checkpoint_interval,
+                                    ) {
                                         Ok(restored) => {
                                             let seq = restored.sequence();
                                             boot_log.push(BootEvent::info(
@@ -705,7 +746,10 @@ impl<P: Platform> Kernel<P> {
                         }
                     } else if json_path.exists() {
                         // Legacy JSON format
-                        match crate::chain::ChainManager::load_from_file(&json_path, chain_config.checkpoint_interval) {
+                        match crate::chain::ChainManager::load_from_file(
+                            &json_path,
+                            chain_config.checkpoint_interval,
+                        ) {
                             Ok(restored) => {
                                 let seq = restored.sequence();
                                 boot_log.push(BootEvent::info(
@@ -792,10 +836,7 @@ impl<P: Platform> Kernel<P> {
 
                 Some(cm)
             } else {
-                boot_log.push(BootEvent::info(
-                    BootPhase::Services,
-                    "Local chain disabled",
-                ));
+                boot_log.push(BootEvent::info(BootPhase::Services, "Local chain disabled"));
                 None
             }
         };
@@ -995,7 +1036,10 @@ impl<P: Platform> Kernel<P> {
                         }
                         boot_log.push(BootEvent::info(
                             BootPhase::ResourceTree,
-                            format!("Registered {} built-in tools in resource tree", catalog.len()),
+                            format!(
+                                "Registered {} built-in tools in resource tree",
+                                catalog.len()
+                            ),
                         ));
                     }
 
@@ -1026,15 +1070,15 @@ impl<P: Platform> Kernel<P> {
         #[cfg(feature = "exochain")]
         let governance_gate: Option<Arc<dyn crate::gate::GateBackend>> = {
             if let Some(ref cm) = chain_manager {
-                use crate::governance::{GovernanceBranch, GovernanceRule, RuleSeverity};
                 use crate::gate::GovernanceGate;
+                use crate::governance::{GovernanceBranch, GovernanceRule, RuleSeverity};
 
                 // Default risk threshold (0.7 for production safety)
                 let risk_threshold = 0.7;
                 let human_approval = false;
 
-                let mut gate = GovernanceGate::new(risk_threshold, human_approval)
-                    .with_chain(Arc::clone(cm));
+                let mut gate =
+                    GovernanceGate::new(risk_threshold, human_approval).with_chain(Arc::clone(cm));
 
                 // ── Genesis governance rules (immutable chain entries) ────
                 // These are the constitutional rules that govern all agent
@@ -1249,16 +1293,19 @@ impl<P: Platform> Kernel<P> {
 
                 // Anchor genesis rules to chain
                 let genesis_seq = cm.sequence();
-                let rules_json: Vec<serde_json::Value> = genesis_rules.iter().map(|r| {
-                    serde_json::json!({
-                        "id": r.id,
-                        "description": r.description,
-                        "branch": format!("{}", r.branch),
-                        "severity": format!("{}", r.severity),
-                        "reference_url": r.reference_url,
-                        "sop_category": r.sop_category,
+                let rules_json: Vec<serde_json::Value> = genesis_rules
+                    .iter()
+                    .map(|r| {
+                        serde_json::json!({
+                            "id": r.id,
+                            "description": r.description,
+                            "branch": format!("{}", r.branch),
+                            "severity": format!("{}", r.severity),
+                            "reference_url": r.reference_url,
+                            "sop_category": r.sop_category,
+                        })
                     })
-                }).collect();
+                    .collect();
 
                 // The governance.genesis event is the ROOT — it establishes the
                 // constitutional rules. Its chain sequence is the governance root.
@@ -1376,20 +1423,32 @@ impl<P: Platform> Kernel<P> {
 
         // 8e. Initialize ECC cognitive substrate (when ecc feature is enabled)
         #[cfg(feature = "ecc")]
-        let (ecc_hnsw, ecc_causal, ecc_tick, ecc_crossrefs, ecc_impulses, ecc_calibration, ecc_vector_backend, ecc_eml_model) = {
+        let (
+            ecc_hnsw,
+            ecc_causal,
+            ecc_tick,
+            ecc_crossrefs,
+            ecc_impulses,
+            ecc_calibration,
+            ecc_vector_backend,
+            ecc_eml_model,
+        ) = {
             use crate::calibration::{EccCalibrationConfig, run_calibration};
             use crate::causal::CausalGraph;
             use crate::cognitive_tick::{CognitiveTick, CognitiveTickConfig};
-            use crate::service::SystemService;
             use crate::crossref::CrossRefStore;
             use crate::hnsw_service::{HnswService, HnswServiceConfig};
             use crate::impulse::ImpulseQueue;
+            use crate::service::SystemService;
             use crate::vector_backend::VectorBackend;
-            use crate::vector_hnsw::HnswBackend;
             use crate::vector_diskann::{DiskAnnBackend, DiskAnnConfig};
+            use crate::vector_hnsw::HnswBackend;
             use crate::vector_hybrid::{HybridBackend, HybridConfig};
 
-            boot_log.push(BootEvent::info(BootPhase::Ecc, "Initializing ECC cognitive substrate"));
+            boot_log.push(BootEvent::info(
+                BootPhase::Ecc,
+                "Initializing ECC cognitive substrate",
+            ));
 
             let hnsw = Arc::new(HnswService::new(HnswServiceConfig::default()));
             let causal = Arc::new(CausalGraph::new());
@@ -1398,64 +1457,78 @@ impl<P: Platform> Kernel<P> {
 
             // Construct the vector backend based on kernel config.
             let vector_config = kernel_config.vector.clone();
-            let vector_backend: Arc<dyn VectorBackend> = match vector_config.as_ref().map(|v| v.backend) {
-                Some(clawft_types::config::VectorBackendKind::DiskAnn) => {
-                    let da_cfg = vector_config.as_ref()
-                        .and_then(|v| v.diskann.as_ref())
-                        .map(|d| DiskAnnConfig {
-                            max_points: d.max_points,
-                            dimensions: d.dimensions,
-                            num_neighbors: d.num_neighbors,
-                            search_list_size: d.search_list_size,
-                            data_path: d.data_path.clone(),
-                            use_pq: d.use_pq,
-                            pq_num_chunks: d.pq_num_chunks,
-                        })
-                        .unwrap_or_default();
-                    boot_log.push(BootEvent::info(BootPhase::Ecc, "Vector backend: DiskANN (stub)"));
-                    Arc::new(DiskAnnBackend::new(da_cfg))
-                }
-                Some(clawft_types::config::VectorBackendKind::Hybrid) => {
-                    let hnsw_cfg = vector_config.as_ref()
-                        .and_then(|v| v.hnsw.as_ref())
-                        .map(|h| HnswServiceConfig {
-                            ef_construction: h.ef_construction,
-                            ef_search: 100,
-                            default_dimensions: 384,
-                        })
-                        .unwrap_or_default();
-                    let da_cfg = vector_config.as_ref()
-                        .and_then(|v| v.diskann.as_ref())
-                        .map(|d| DiskAnnConfig {
-                            max_points: d.max_points,
-                            dimensions: d.dimensions,
-                            num_neighbors: d.num_neighbors,
-                            search_list_size: d.search_list_size,
-                            data_path: d.data_path.clone(),
-                            use_pq: d.use_pq,
-                            pq_num_chunks: d.pq_num_chunks,
-                        })
-                        .unwrap_or_default();
-                    let hybrid_cfg = vector_config.as_ref()
-                        .and_then(|v| v.hybrid.as_ref())
-                        .map(|h| HybridConfig {
-                            hot_capacity: h.hot_capacity,
-                            promotion_threshold: h.promotion_threshold,
-                            eviction_policy: crate::vector_hybrid::EvictionPolicy::Lru,
-                        })
-                        .unwrap_or_default();
-                    boot_log.push(BootEvent::info(
-                        BootPhase::Ecc,
-                        format!("Vector backend: Hybrid (hot={}, threshold={})", hybrid_cfg.hot_capacity, hybrid_cfg.promotion_threshold),
-                    ));
-                    Arc::new(HybridBackend::new(hnsw_cfg, da_cfg, hybrid_cfg))
-                }
-                _ => {
-                    // Default: HNSW only.
-                    boot_log.push(BootEvent::info(BootPhase::Ecc, "Vector backend: HNSW (in-memory)"));
-                    Arc::new(HnswBackend::with_defaults())
-                }
-            };
+            let vector_backend: Arc<dyn VectorBackend> =
+                match vector_config.as_ref().map(|v| v.backend) {
+                    Some(clawft_types::config::VectorBackendKind::DiskAnn) => {
+                        let da_cfg = vector_config
+                            .as_ref()
+                            .and_then(|v| v.diskann.as_ref())
+                            .map(|d| DiskAnnConfig {
+                                max_points: d.max_points,
+                                dimensions: d.dimensions,
+                                num_neighbors: d.num_neighbors,
+                                search_list_size: d.search_list_size,
+                                data_path: d.data_path.clone(),
+                                use_pq: d.use_pq,
+                                pq_num_chunks: d.pq_num_chunks,
+                            })
+                            .unwrap_or_default();
+                        boot_log.push(BootEvent::info(
+                            BootPhase::Ecc,
+                            "Vector backend: DiskANN (stub)",
+                        ));
+                        Arc::new(DiskAnnBackend::new(da_cfg))
+                    }
+                    Some(clawft_types::config::VectorBackendKind::Hybrid) => {
+                        let hnsw_cfg = vector_config
+                            .as_ref()
+                            .and_then(|v| v.hnsw.as_ref())
+                            .map(|h| HnswServiceConfig {
+                                ef_construction: h.ef_construction,
+                                ef_search: 100,
+                                default_dimensions: 384,
+                            })
+                            .unwrap_or_default();
+                        let da_cfg = vector_config
+                            .as_ref()
+                            .and_then(|v| v.diskann.as_ref())
+                            .map(|d| DiskAnnConfig {
+                                max_points: d.max_points,
+                                dimensions: d.dimensions,
+                                num_neighbors: d.num_neighbors,
+                                search_list_size: d.search_list_size,
+                                data_path: d.data_path.clone(),
+                                use_pq: d.use_pq,
+                                pq_num_chunks: d.pq_num_chunks,
+                            })
+                            .unwrap_or_default();
+                        let hybrid_cfg = vector_config
+                            .as_ref()
+                            .and_then(|v| v.hybrid.as_ref())
+                            .map(|h| HybridConfig {
+                                hot_capacity: h.hot_capacity,
+                                promotion_threshold: h.promotion_threshold,
+                                eviction_policy: crate::vector_hybrid::EvictionPolicy::Lru,
+                            })
+                            .unwrap_or_default();
+                        boot_log.push(BootEvent::info(
+                            BootPhase::Ecc,
+                            format!(
+                                "Vector backend: Hybrid (hot={}, threshold={})",
+                                hybrid_cfg.hot_capacity, hybrid_cfg.promotion_threshold
+                            ),
+                        ));
+                        Arc::new(HybridBackend::new(hnsw_cfg, da_cfg, hybrid_cfg))
+                    }
+                    _ => {
+                        // Default: HNSW only.
+                        boot_log.push(BootEvent::info(
+                            BootPhase::Ecc,
+                            "Vector backend: HNSW (in-memory)",
+                        ));
+                        Arc::new(HnswBackend::with_defaults())
+                    }
+                };
 
             // Run boot-time calibration
             let cal_config = EccCalibrationConfig::default();
@@ -1639,10 +1712,7 @@ impl<P: Platform> Kernel<P> {
 
         // 9c. Wire exochain managers into supervisor
         #[cfg(feature = "exochain")]
-        let supervisor = supervisor.with_exochain(
-            tree_manager.clone(),
-            chain_manager.clone(),
-        );
+        let supervisor = supervisor.with_exochain(tree_manager.clone(), chain_manager.clone());
 
         // 10. Seed the event ring buffer with boot events
         let event_log = Arc::new(KernelEventLog::new());
@@ -1767,40 +1837,44 @@ impl<P: Platform> Kernel<P> {
         if let Some(ref cm) = self.chain.chain_manager {
             let chain_config = self.config.chain.clone().unwrap_or_default();
             if let Some(ref ckpt_path) = chain_config.effective_checkpoint_path() {
-            let json_path = std::path::PathBuf::from(ckpt_path);
-            let rvf_path = json_path.with_extension("rvf");
+                let json_path = std::path::PathBuf::from(ckpt_path);
+                let rvf_path = json_path.with_extension("rvf");
 
-            // Save RVF format (primary)
-            match cm.save_to_rvf(&rvf_path) {
-                Ok(()) => info!(path = %rvf_path.display(), "chain saved to RVF checkpoint"),
-                Err(e) => {
-                    error!(error = %e, "failed to save RVF checkpoint, falling back to JSON");
-                    // Fallback: save JSON
-                    match cm.save_to_file(&json_path) {
-                        Ok(()) => info!(path = %json_path.display(), "chain saved to JSON checkpoint (fallback)"),
-                        Err(e2) => error!(error = %e2, "failed to save JSON checkpoint fallback"),
+                // Save RVF format (primary)
+                match cm.save_to_rvf(&rvf_path) {
+                    Ok(()) => info!(path = %rvf_path.display(), "chain saved to RVF checkpoint"),
+                    Err(e) => {
+                        error!(error = %e, "failed to save RVF checkpoint, falling back to JSON");
+                        // Fallback: save JSON
+                        match cm.save_to_file(&json_path) {
+                            Ok(()) => {
+                                info!(path = %json_path.display(), "chain saved to JSON checkpoint (fallback)")
+                            }
+                            Err(e2) => {
+                                error!(error = %e2, "failed to save JSON checkpoint fallback")
+                            }
+                        }
                     }
                 }
-            }
 
-            // Save tree checkpoint alongside chain
-            if let Some(ref tm) = self.chain.tree_manager {
-                let tree_path = json_path.with_extension("tree.json");
-                match tm.save_checkpoint(&tree_path) {
-                    Ok(()) => {
-                        info!(path = %tree_path.display(), "tree checkpoint saved");
-                        cm.append(
-                            "tree",
-                            "tree.checkpoint",
-                            Some(serde_json::json!({
-                                "path": tree_path.display().to_string(),
-                                "root_hash": tm.stats().root_hash,
-                            })),
-                        );
+                // Save tree checkpoint alongside chain
+                if let Some(ref tm) = self.chain.tree_manager {
+                    let tree_path = json_path.with_extension("tree.json");
+                    match tm.save_checkpoint(&tree_path) {
+                        Ok(()) => {
+                            info!(path = %tree_path.display(), "tree checkpoint saved");
+                            cm.append(
+                                "tree",
+                                "tree.checkpoint",
+                                Some(serde_json::json!({
+                                    "path": tree_path.display().to_string(),
+                                    "root_hash": tm.stats().root_hash,
+                                })),
+                            );
+                        }
+                        Err(e) => error!(error = %e, "failed to save tree checkpoint"),
                     }
-                    Err(e) => error!(error = %e, "failed to save tree checkpoint"),
                 }
-            }
             }
         }
 
@@ -1991,7 +2065,9 @@ impl<P: Platform> Kernel<P> {
 
     /// Get the EML coherence model (if ecc feature enabled).
     #[cfg(feature = "ecc")]
-    pub fn ecc_eml_coherence(&self) -> Option<&Arc<std::sync::Mutex<crate::eml_coherence::EmlCoherenceModel>>> {
+    pub fn ecc_eml_coherence(
+        &self,
+    ) -> Option<&Arc<std::sync::Mutex<crate::eml_coherence::EmlCoherenceModel>>> {
         self.ecc.eml_coherence.as_ref()
     }
 
@@ -2066,6 +2142,8 @@ mod tests {
             mesh: None,
             anchor: None,
             ipc_tcp: None,
+            llm: None,
+            agent: None,
         }
     }
 
@@ -2112,7 +2190,7 @@ mod tests {
         assert!(!log.is_empty());
 
         let formatted = log.format_all();
-        assert!(formatted.contains("WeftOS v0.1.0"));
+        assert!(formatted.contains(&format!("WeftOS v{}", env!("CARGO_PKG_VERSION"))));
         assert!(formatted.contains("Boot complete"));
     }
 
@@ -2138,9 +2216,15 @@ mod tests {
         // Base: cron + containers; +cluster; +hnsw +cognitive_tick (ecc); +assess (native)
         let count = kernel.services().len();
         #[cfg(all(feature = "ecc", feature = "cluster"))]
-        assert_eq!(count, 6, "expected cron+containers+assess+cluster+hnsw+cognitive_tick");
+        assert_eq!(
+            count, 6,
+            "expected cron+containers+assess+cluster+hnsw+cognitive_tick"
+        );
         #[cfg(all(feature = "ecc", not(feature = "cluster")))]
-        assert_eq!(count, 5, "expected cron+containers+assess+hnsw+cognitive_tick");
+        assert_eq!(
+            count, 5,
+            "expected cron+containers+assess+hnsw+cognitive_tick"
+        );
         #[cfg(all(not(feature = "ecc"), feature = "cluster"))]
         assert_eq!(count, 4, "expected cron+containers+assess+cluster");
         #[cfg(all(not(feature = "ecc"), not(feature = "cluster")))]
@@ -2209,6 +2293,8 @@ mod tests {
             mesh: None,
             anchor: None,
             ipc_tcp: None,
+            llm: None,
+            agent: None,
         }
     }
 
@@ -2233,16 +2319,18 @@ mod tests {
         assert!(svc_count >= 4, "expected >= 4 services, got {svc_count}");
 
         // ── K1: Spawn a native agent ───────────────────────────────
-        let spawn_result = kernel.supervisor().spawn(
-            crate::supervisor::SpawnRequest {
-                agent_id: "integration-agent-1".into(),
-                capabilities: None,
-                parent_pid: None,
-                env: std::collections::HashMap::new(),
-                backend: None, // defaults to Native
-            },
+        let spawn_result = kernel.supervisor().spawn(crate::supervisor::SpawnRequest {
+            agent_id: "integration-agent-1".into(),
+            capabilities: None,
+            parent_pid: None,
+            env: std::collections::HashMap::new(),
+            backend: None, // defaults to Native
+        });
+        assert!(
+            spawn_result.is_ok(),
+            "native agent spawn failed: {:?}",
+            spawn_result.err()
         );
-        assert!(spawn_result.is_ok(), "native agent spawn failed: {:?}", spawn_result.err());
         let agent_pid = spawn_result.unwrap().pid;
         assert!(agent_pid > 0, "agent should get PID > 0");
 
@@ -2265,7 +2353,11 @@ mod tests {
         );
         let send_result = a2a.send(msg).await;
         // This should succeed: PID 0 exists, agent inbox exists
-        assert!(send_result.is_ok(), "A2A send failed: {:?}", send_result.err());
+        assert!(
+            send_result.is_ok(),
+            "A2A send failed: {:?}",
+            send_result.err()
+        );
 
         // ── K3: WASM tool execution ────────────────────────────────
         let wasm_config = crate::wasm_runner::WasmSandboxConfig::default();
@@ -2274,7 +2366,11 @@ mod tests {
         // Minimal WAT module that exports _start and immediately returns
         let noop_wat = r#"(module (func (export "_start")))"#;
         let result = wasm_runner
-            .execute_bytes("integration-tool", noop_wat.as_bytes(), serde_json::json!({}))
+            .execute_bytes(
+                "integration-tool",
+                noop_wat.as_bytes(),
+                serde_json::json!({}),
+            )
             .await;
         assert!(result.is_ok(), "WASM execution failed: {:?}", result.err());
         let wasm_result = result.unwrap();
@@ -2282,11 +2378,9 @@ mod tests {
         assert!(wasm_result.fuel_consumed > 0, "WASM should consume fuel");
 
         // ── K3: WASM tool in registry ──────────────────────────────
-        let wasm_runner_arc = Arc::new(
-            crate::wasm_runner::WasmToolRunner::new(
-                crate::wasm_runner::WasmSandboxConfig::default(),
-            ),
-        );
+        let wasm_runner_arc = Arc::new(crate::wasm_runner::WasmToolRunner::new(
+            crate::wasm_runner::WasmSandboxConfig::default(),
+        ));
         let mut registry = crate::wasm_runner::ToolRegistry::new();
         registry
             .register_wasm_tool(
@@ -2296,7 +2390,10 @@ mod tests {
                 wasm_runner_arc,
             )
             .unwrap();
-        assert!(registry.get("demo-tool").is_some(), "WASM tool should be in registry");
+        assert!(
+            registry.get("demo-tool").is_some(),
+            "WASM tool should be in registry"
+        );
         let tool_list = registry.list();
         assert!(
             tool_list.contains(&"demo-tool".to_string()),
@@ -2313,16 +2410,30 @@ mod tests {
         // ── K3c: ECC cognitive substrate active ────────────────────
         let ecc_hnsw = kernel.ecc_hnsw().expect("HNSW service should be present");
         // After calibration the store is cleared, so it should be empty
-        assert_eq!(ecc_hnsw.len(), 0, "HNSW should be empty after calibration cleanup");
+        assert_eq!(
+            ecc_hnsw.len(),
+            0,
+            "HNSW should be empty after calibration cleanup"
+        );
 
         let ecc_causal = kernel.ecc_causal().expect("causal graph should be present");
-        assert_eq!(ecc_causal.node_count(), 0, "causal graph should be empty after cleanup");
+        assert_eq!(
+            ecc_causal.node_count(),
+            0,
+            "causal graph should be empty after cleanup"
+        );
 
         let _ecc_tick = kernel.ecc_tick().expect("cognitive tick should be present");
 
         let calibration = kernel.ecc_calibration().expect("calibration should exist");
-        assert!(calibration.compute_p95_us > 0, "calibration should have run");
-        assert!(calibration.tick_interval_ms > 0, "tick interval should be auto-calibrated");
+        assert!(
+            calibration.compute_p95_us > 0,
+            "calibration should have run"
+        );
+        assert!(
+            calibration.tick_interval_ms > 0,
+            "tick interval should be auto-calibrated"
+        );
 
         // ── ECC: Insert a vector and search ────────────────────────
         ecc_hnsw.insert(
@@ -2361,20 +2472,31 @@ mod tests {
 
         // Verify chain integrity
         let verify_result = chain.verify_integrity();
-        assert!(verify_result.valid, "chain should be valid: {:?}", verify_result.errors);
+        assert!(
+            verify_result.valid,
+            "chain should be valid: {:?}",
+            verify_result.errors
+        );
         assert!(verify_result.errors.is_empty(), "no integrity errors");
 
         // ── Governance: genesis rules anchored to chain ────────────
-        let _governance = kernel.governance_gate().expect("governance gate should exist");
+        let _governance = kernel
+            .governance_gate()
+            .expect("governance gate should exist");
         let all_events = chain.tail(0);
-        let genesis_events: Vec<_> = all_events.iter()
+        let genesis_events: Vec<_> = all_events
+            .iter()
             .filter(|e| e.kind == "governance.genesis")
             .collect();
-        assert!(!genesis_events.is_empty(), "governance genesis should be on chain");
+        assert!(
+            !genesis_events.is_empty(),
+            "governance genesis should be on chain"
+        );
 
         // Verify the genesis payload contains the correct rule count
         // Find the kernel's own genesis event (version 2.0.0)
-        let genesis_payload = genesis_events.iter()
+        let genesis_payload = genesis_events
+            .iter()
             .filter_map(|e| e.payload.as_ref())
             .find(|p| p.get("version").and_then(|v| v.as_str()) == Some("2.0.0"))
             .expect("should find v2.0.0 governance genesis on chain");
@@ -2390,7 +2512,8 @@ mod tests {
         );
 
         // Each rule should be individually anchored (at least 22)
-        let rule_events: Vec<_> = all_events.iter()
+        let rule_events: Vec<_> = all_events
+            .iter()
             .filter(|e| e.kind == "governance.rule")
             .collect();
         assert!(
@@ -2400,14 +2523,15 @@ mod tests {
         );
 
         // Verify all rule IDs are present (GOV-001..007 + SOP-L/E/J)
-        let rule_ids: Vec<&str> = rule_events.iter()
+        let rule_ids: Vec<&str> = rule_events
+            .iter()
             .filter_map(|e| e.payload.as_ref()?.get("rule_id")?.as_str())
             .collect();
         for expected_id in &[
             "GOV-001", "GOV-002", "GOV-003", "GOV-004", "GOV-005", "GOV-006", "GOV-007",
-            "SOP-L001", "SOP-L002", "SOP-L003", "SOP-L004", "SOP-L005", "SOP-L006",
-            "SOP-E001", "SOP-E002", "SOP-E003", "SOP-E004", "SOP-E005",
-            "SOP-J001", "SOP-J002", "SOP-J003", "SOP-J004",
+            "SOP-L001", "SOP-L002", "SOP-L003", "SOP-L004", "SOP-L005", "SOP-L006", "SOP-E001",
+            "SOP-E002", "SOP-E003", "SOP-E004", "SOP-E005", "SOP-J001", "SOP-J002", "SOP-J003",
+            "SOP-J004",
         ] {
             assert!(
                 rule_ids.contains(expected_id),
@@ -2416,7 +2540,10 @@ mod tests {
         }
 
         // ── ExoChain: ECC calibration event logged ─────────────────
-        let ecc_events: Vec<_> = all_events.iter().filter(|e| e.kind.starts_with("ecc.")).collect();
+        let ecc_events: Vec<_> = all_events
+            .iter()
+            .filter(|e| e.kind.starts_with("ecc."))
+            .collect();
         assert!(
             !ecc_events.is_empty(),
             "ECC boot calibration should be logged to chain"
@@ -2433,7 +2560,10 @@ mod tests {
 
         // ── K2: ServiceApi + adapters compile ──────────────────────
         // (validated by service::tests; here we just confirm registry is queryable)
-        assert!(kernel.services().get("cron").is_some(), "cron service should be accessible");
+        assert!(
+            kernel.services().get("cron").is_some(),
+            "cron service should be accessible"
+        );
         assert!(
             kernel.services().get("containers").is_some(),
             "container service should be accessible"
@@ -2453,11 +2583,11 @@ mod tests {
     #[test]
     #[cfg(feature = "wasm-sandbox")]
     fn integration_cross_backend_tools() {
-        use crate::wasm_runner::{
-            BuiltinTool, BuiltinToolSpec, ToolCategory, ToolError, ToolRegistry,
-            WasmSandboxConfig, WasmToolRunner,
-        };
         use crate::governance::EffectVector;
+        use crate::wasm_runner::{
+            BuiltinTool, BuiltinToolSpec, ToolCategory, ToolError, ToolRegistry, WasmSandboxConfig,
+            WasmToolRunner,
+        };
 
         // ── A native (Rust) tool ───────────────────────────────────
         struct EchoTool;
@@ -2505,14 +2635,18 @@ mod tests {
         // ── Both tools accessible through one registry ─────────────
         assert_eq!(registry.list().len(), 2);
 
-        let native = registry.get("native.echo").expect("native tool should exist");
+        let native = registry
+            .get("native.echo")
+            .expect("native tool should exist");
         assert!(native.spec().native, "native tool should be marked native");
 
         let wasm = registry.get("wasm.noop").expect("wasm tool should exist");
         assert!(!wasm.spec().native, "wasm tool should NOT be marked native");
 
         // ── Native tool executes synchronously ─────────────────────
-        let result = native.execute(serde_json::json!({"hello": "world"})).unwrap();
+        let result = native
+            .execute(serde_json::json!({"hello": "world"}))
+            .unwrap();
         assert_eq!(result["echo"]["hello"], "world");
 
         // ── Hierarchical registry ──────────────────────────────────
@@ -2521,8 +2655,14 @@ mod tests {
         let mut child = ToolRegistry::with_parent(parent);
 
         // Child sees parent tools
-        assert!(child.get("native.echo").is_some(), "child sees parent native tool");
-        assert!(child.get("wasm.noop").is_some(), "child sees parent wasm tool");
+        assert!(
+            child.get("native.echo").is_some(),
+            "child sees parent native tool"
+        );
+        assert!(
+            child.get("wasm.noop").is_some(),
+            "child sees parent wasm tool"
+        );
 
         // Child can shadow
         struct OverrideTool;
@@ -2548,11 +2688,21 @@ mod tests {
         }
 
         child.register(Arc::new(OverrideTool));
-        let result = child.get("native.echo").unwrap().execute(serde_json::json!({})).unwrap();
-        assert_eq!(result["overridden"], true, "child should shadow parent tool");
+        let result = child
+            .get("native.echo")
+            .unwrap()
+            .execute(serde_json::json!({}))
+            .unwrap();
+        assert_eq!(
+            result["overridden"], true,
+            "child should shadow parent tool"
+        );
 
         // Parent WASM tool still reachable from child
-        assert!(child.get("wasm.noop").is_some(), "WASM tool still reachable via parent");
+        assert!(
+            child.get("wasm.noop").is_some(),
+            "WASM tool still reachable via parent"
+        );
     }
 
     // ── Boot path coverage tests ─────────────────────────────────
@@ -2614,6 +2764,8 @@ mod tests {
             mesh: None,
             anchor: None,
             ipc_tcp: None,
+            llm: None,
+            agent: None,
         }
     }
 
@@ -2718,8 +2870,15 @@ mod tests {
         let kernel = Kernel::boot(test_config(), test_kernel_config(), platform)
             .await
             .unwrap();
-        assert!(kernel.ecc_causal().is_some(), "causal graph must be accessible");
-        assert_eq!(kernel.ecc_causal().unwrap().node_count(), 0, "causal graph starts empty");
+        assert!(
+            kernel.ecc_causal().is_some(),
+            "causal graph must be accessible"
+        );
+        assert_eq!(
+            kernel.ecc_causal().unwrap().node_count(),
+            0,
+            "causal graph starts empty"
+        );
     }
 
     #[cfg(feature = "ecc")]
@@ -2729,8 +2888,14 @@ mod tests {
         let kernel = Kernel::boot(test_config(), test_kernel_config(), platform)
             .await
             .unwrap();
-        assert!(kernel.ecc_crossrefs().is_some(), "cross-ref store must be accessible");
-        assert!(kernel.ecc_impulses().is_some(), "impulse queue must be accessible");
+        assert!(
+            kernel.ecc_crossrefs().is_some(),
+            "cross-ref store must be accessible"
+        );
+        assert!(
+            kernel.ecc_impulses().is_some(),
+            "impulse queue must be accessible"
+        );
     }
 
     #[tokio::test]
@@ -2740,7 +2905,10 @@ mod tests {
             .await
             .unwrap();
         let cm = kernel.cluster_membership();
-        assert!(!cm.local_node_id().is_empty(), "cluster membership should have a node ID");
+        assert!(
+            !cm.local_node_id().is_empty(),
+            "cluster membership should have a node ID"
+        );
     }
 
     #[tokio::test]
@@ -2802,10 +2970,22 @@ mod tests {
             .await
             .unwrap();
         let formatted = kernel.boot_log().format_all();
-        assert!(formatted.contains("WeftOS v0.1.0"), "should contain version");
-        assert!(formatted.contains("Service registry ready"), "should have service phase");
-        assert!(formatted.contains("A2A router ready"), "should have A2A phase");
-        assert!(formatted.contains("Boot complete"), "should have ready phase");
+        assert!(
+            formatted.contains(&format!("WeftOS v{}", env!("CARGO_PKG_VERSION"))),
+            "should contain version"
+        );
+        assert!(
+            formatted.contains("Service registry ready"),
+            "should have service phase"
+        );
+        assert!(
+            formatted.contains("A2A router ready"),
+            "should have A2A phase"
+        );
+        assert!(
+            formatted.contains("Boot complete"),
+            "should have ready phase"
+        );
     }
 
     #[tokio::test]
@@ -2817,7 +2997,10 @@ mod tests {
         // The event_log is populated from boot_log during boot
         let events = kernel.event_log();
         // At minimum there should be some events from boot ingestion
-        assert!(!events.is_empty(), "event log should have entries after boot");
+        assert!(
+            !events.is_empty(),
+            "event log should have entries after boot"
+        );
     }
 
     #[tokio::test]
@@ -3101,9 +3284,18 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(kernel.take_app_context().is_some(), "first take should succeed");
-        assert!(kernel.take_app_context().is_none(), "second take should return None");
-        assert!(kernel.take_app_context().is_none(), "third take should also return None");
+        assert!(
+            kernel.take_app_context().is_some(),
+            "first take should succeed"
+        );
+        assert!(
+            kernel.take_app_context().is_none(),
+            "second take should return None"
+        );
+        assert!(
+            kernel.take_app_context().is_none(),
+            "third take should also return None"
+        );
     }
 
     #[tokio::test]
@@ -3200,7 +3392,10 @@ mod tests {
             .unwrap();
 
         let registry = kernel.metrics_registry();
-        assert!(registry.is_some(), "MetricsRegistry should be created at boot");
+        assert!(
+            registry.is_some(),
+            "MetricsRegistry should be created at boot"
+        );
         // Verify a built-in gauge was seeded
         let r = registry.unwrap();
         let val = r.gauge_get("kernel.process.count");
@@ -3259,7 +3454,10 @@ mod tests {
         let registry = kernel.metrics_registry().unwrap();
         // Verify counter_inc works on built-in metric
         registry.counter_inc(crate::metrics::METRIC_MESSAGES_SENT);
-        assert_eq!(registry.counter_get(crate::metrics::METRIC_MESSAGES_SENT), 1);
+        assert_eq!(
+            registry.counter_get(crate::metrics::METRIC_MESSAGES_SENT),
+            1
+        );
     }
 
     #[tokio::test]
@@ -3298,11 +3496,7 @@ mod tests {
         kernel.a2a_router().create_inbox(sender_pid);
 
         // Send to a PID that has no inbox (PID 9999 doesn't exist)
-        let msg = KernelMessage::text(
-            sender_pid,
-            MessageTarget::Process(9999),
-            "dead letter test",
-        );
+        let msg = KernelMessage::text(sender_pid, MessageTarget::Process(9999), "dead letter test");
         let result = kernel.a2a_router().send(msg).await;
         assert!(result.is_err(), "send to unknown PID should fail");
 

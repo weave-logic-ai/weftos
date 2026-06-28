@@ -37,10 +37,7 @@ pub struct ClusterNetworkConfig {
     pub shard_count: u32,
 
     /// Interval between heartbeat checks in seconds (default: 5).
-    #[serde(
-        default = "default_cluster_heartbeat",
-        alias = "heartbeatIntervalSecs"
-    )]
+    #[serde(default = "default_cluster_heartbeat", alias = "heartbeatIntervalSecs")]
     pub heartbeat_interval_secs: u64,
 
     /// Timeout before marking a node offline in seconds (default: 30).
@@ -144,7 +141,11 @@ pub struct KernelConfig {
     pub chain: Option<ChainConfig>,
 
     /// Resource tree configuration (exochain feature).
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "resourceTree")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "resourceTree"
+    )]
     pub resource_tree: Option<ResourceTreeConfig>,
 
     /// Vector search backend configuration (ECC feature).
@@ -186,6 +187,24 @@ pub struct KernelConfig {
     /// side of WSL, remote bridges) that cannot open `AF_UNIX`.
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "ipcTcp")]
     pub ipc_tcp: Option<IpcTcpConfig>,
+
+    /// Optional LLM endpoint configuration.
+    ///
+    /// Sets the daemon's `llm.prompt` / `agent.chat` upstream when no
+    /// `LLM_SERVICE_URL` / `LLM_MODEL` env vars are present. Env vars
+    /// always win over this block — the env path is for one-off
+    /// experiments; the config block is the durable home.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm: Option<LlmEndpointConfig>,
+
+    /// Optional agent-anchoring configuration.
+    ///
+    /// Controls whether successful `agent.chat` turns are mirrored into
+    /// the witness chain, the HNSW vector index, and the causal graph.
+    /// All flags default to `false` so the substrate JSONL archive
+    /// behaviour stays the only side-effect unless an operator opts in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentAnchorConfig>,
 }
 
 impl Default for KernelConfig {
@@ -203,8 +222,100 @@ impl Default for KernelConfig {
             mesh: None,
             anchor: None,
             ipc_tcp: None,
+            llm: None,
+            agent: None,
         }
     }
+}
+
+// ── Agent-anchor configuration ──────────────────────────────────────────
+
+/// Operator-set agent-anchor flags for `agent.chat`.
+///
+/// Lives under `[kernel.agent]`. When any flag is true, a successful
+/// chat turn produces side-effects beyond the substrate JSONL archive
+/// (`_derived/chat/<conv>/turns/<ulid>`):
+///
+/// - `chain` → append `agent.chat.turn` to the witness chain.
+/// - `hnsw`  → insert a deterministic-hash 384-dim embedding into the
+///   kernel HNSW index keyed by the turn id (Explorer "Vector entries"
+///   ticks). Without a real embedder this gives motion in the KPI but
+///   no semantic similarity; a future change will route through the
+///   `EmbeddingRouter` once it's daemon-side.
+/// - `causal` → add a causal node per turn and link it to the previous
+///   turn in the same conversation (Explorer "Causal graph" ticks).
+///
+/// Example:
+///
+/// ```toml
+/// [kernel.agent]
+/// anchor_chain  = true
+/// anchor_hnsw   = true
+/// anchor_causal = true
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentAnchorConfig {
+    /// Append a `agent.chat.turn` event to the witness chain on every
+    /// successful turn.
+    #[serde(default, alias = "anchorChain")]
+    pub anchor_chain: bool,
+
+    /// Insert a per-turn embedding into the kernel HNSW index. Uses a
+    /// deterministic hash-derived 384-d vector — KPI moves but
+    /// neighbours are not semantic.
+    #[serde(default, alias = "anchorHnsw")]
+    pub anchor_hnsw: bool,
+
+    /// Add a causal-graph node per turn and link `prev_turn → this_turn`
+    /// within the same conversation.
+    #[serde(default, alias = "anchorCausal")]
+    pub anchor_causal: bool,
+}
+
+impl AgentAnchorConfig {
+    /// True if at least one anchor side-effect is enabled.
+    pub fn any_enabled(&self) -> bool {
+        self.anchor_chain || self.anchor_hnsw || self.anchor_causal
+    }
+}
+
+// ── LLM endpoint configuration ──────────────────────────────────────────
+
+/// Operator-set LLM endpoint for `llm.prompt` / `agent.chat`.
+///
+/// Lives under `[kernel.llm]`. Env vars `LLM_SERVICE_URL` and
+/// `LLM_MODEL` override these fields when present. When this block is
+/// absent and no env vars are set, the daemon falls back to:
+///
+/// - `OPENROUTER_API_KEY` set: OpenRouter takeover (defaults to the
+///   OpenRouter base URL + a free-tier reasoning model, attaches
+///   bearer auth).
+/// - Otherwise: local llama-server at `http://127.0.0.1:8111` with
+///   model name `"local"`.
+///
+/// Example:
+///
+/// ```toml
+/// [kernel.llm]
+/// service_url = "http://127.0.0.1:8080"
+/// model = "gemma-iq2m"
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LlmEndpointConfig {
+    /// Base URL of the OpenAI-compat chat-completions server. The
+    /// client appends `/v1/chat/completions` (or `/chat/completions`
+    /// when the base already ends with `/v1`). Setting this disables
+    /// the OpenRouter takeover even when `OPENROUTER_API_KEY` is in
+    /// the environment, so the local endpoint receives no bearer auth
+    /// or `HTTP-Referer` / `X-Title` headers.
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "serviceUrl")]
+    pub service_url: Option<String>,
+
+    /// Model name sent in the `model` field of the request body. For
+    /// llama.cpp this should match the server's `--alias` (or its
+    /// default `local` when no alias is set).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 // ── IPC TCP relay configuration ─────────────────────────────────────────
@@ -901,6 +1012,8 @@ mod tests {
             mesh: None,
             anchor: None,
             ipc_tcp: None,
+            llm: None,
+            agent: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let restored: KernelConfig = serde_json::from_str(&json).unwrap();
@@ -918,7 +1031,8 @@ mod tests {
 
     #[test]
     fn profiles_config_deserialize() {
-        let json = r#"{"enabled": false, "storage_path": "/tmp/profiles", "default_profile": "admin"}"#;
+        let json =
+            r#"{"enabled": false, "storage_path": "/tmp/profiles", "default_profile": "admin"}"#;
         let cfg: ProfilesConfig = serde_json::from_str(json).unwrap();
         assert!(!cfg.enabled);
         assert_eq!(cfg.storage_path, "/tmp/profiles");
@@ -963,7 +1077,8 @@ mod tests {
 
     #[test]
     fn vector_config_deserialize_hybrid() {
-        let json = r#"{"backend": "hybrid", "hybrid": {"hot_capacity": 1000, "promotion_threshold": 5}}"#;
+        let json =
+            r#"{"backend": "hybrid", "hybrid": {"hot_capacity": 1000, "promotion_threshold": 5}}"#;
         let cfg: VectorConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.backend, VectorBackendKind::Hybrid);
         let h = cfg.hybrid.unwrap();

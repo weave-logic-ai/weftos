@@ -1,0 +1,24 @@
+[build]
+target = "xtensa-esp32s3-none-elf"
+
+[unstable]
+build-std = ["core", "alloc"]
+
+[target.xtensa-esp32s3-none-elf]
+# Flash + open serial monitor. Install with: cargo install espflash
+runner = "espflash flash --monitor"
+rustflags = [
+    "-C", "link-arg=-Tlinkall.x",
+    "-C", "link-arg=-nostartfiles",
+]
+
+[env]
+ESP_LOG = "info"
+# Octal PSRAM (8 MiB) on the ESP32-S3-WROOM-1 N4R8 module the Elecrow
+# CrowPanel DIS08070H uses. esp-hal 1.0's default is "quad" — leaving
+# this unset causes `init_psram` to silently fail, the PSRAM region
+# is reported as 0 bytes, and `esp_alloc::psram_allocator!` panics
+# in `linked_list_allocator::hole`. Diagnosis credit: the
+# embedded-acoustic-firmware agent walked through this 2026-05-13.
+# Source-of-truth doc: `esp-rs/esp-hal/esp_config.yml`.
+ESP_HAL_CONFIG_PSRAM_MODE = "octal"

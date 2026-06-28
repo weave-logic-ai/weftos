@@ -1617,8 +1617,10 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "weftos-leaf-scene",
  "weftos-leaf-types",
  "weftos-rvf-wire",
+ "weftos-scene-builder",
 ]
 
 [[package]]
@@ -8929,6 +8931,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "weftos-leaf-scene"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.11.0",
+ "ciborium",
+ "rustc-hash 2.1.1",
+ "serde",
+]
+
+[[package]]
 name = "weftos-leaf-types"
 version = "0.1.0"
 dependencies = [
@@ -8958,6 +8970,13 @@ dependencies = [
  "sha3",
  "subtle",
  "xxhash-rust",
+]
+
+[[package]]
+name = "weftos-scene-builder"
+version = "0.1.0"
+dependencies = [
+ "weftos-leaf-scene",
 ]
 
 [[package]]

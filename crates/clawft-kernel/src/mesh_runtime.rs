@@ -198,11 +198,7 @@ impl MeshRuntime {
     /// Serializes the envelope to JSON bytes and pushes them into the
     /// peer's outbound channel. Returns an error if the peer is not
     /// connected or the channel is closed/full.
-    pub async fn send_to_peer(
-        &self,
-        node_id: &str,
-        envelope: MeshIpcEnvelope,
-    ) -> KernelResult<()> {
+    pub async fn send_to_peer(&self, node_id: &str, envelope: MeshIpcEnvelope) -> KernelResult<()> {
         let peer = self
             .peers
             .get(node_id)
@@ -225,13 +221,8 @@ impl MeshRuntime {
     ///
     /// Wraps a [`KernelMessage`] in a [`MeshIpcEnvelope`] with the
     /// correct source/dest and sends it to the named peer.
-    pub async fn route_to_remote(
-        &self,
-        node_id: &str,
-        message: KernelMessage,
-    ) -> KernelResult<()> {
-        let envelope =
-            MeshIpcEnvelope::new(self.node_id.clone(), node_id.to_string(), message);
+    pub async fn route_to_remote(&self, node_id: &str, message: KernelMessage) -> KernelResult<()> {
+        let envelope = MeshIpcEnvelope::new(self.node_id.clone(), node_id.to_string(), message);
         self.send_to_peer(node_id, envelope).await
     }
 
@@ -252,10 +243,13 @@ impl MeshRuntime {
     /// Used by the mesh accept loop: the kernel doesn't know the peer's
     /// node ID until the first envelope arrives, so we opportunistically
     /// register `envelope.source_node → outbound` before dispatching.
-    /// Idempotent — a no-op if the peer is already registered under the
-    /// same ID. This is what wires `A2ARouter` topic forwarding to
-    /// inbound leaf subscribers (they send `mesh.subscribe`, then the
-    /// kernel can call `send_to_peer` back over this connection).
+    /// Always (re)registers the channel: on reconnect the node_id is
+    /// unchanged but the TCP connection — and thus the outbound channel
+    /// — is new, and a stale entry would route every push to the dead
+    /// channel of the previous connection. This is what wires
+    /// `A2ARouter` topic forwarding to inbound leaf subscribers (they
+    /// send `mesh.subscribe`, then the kernel can call `send_to_peer`
+    /// back over this connection).
     pub async fn handle_incoming_from(
         &self,
         data: &[u8],
@@ -264,10 +258,18 @@ impl MeshRuntime {
         let envelope = MeshIpcEnvelope::from_bytes(data)
             .map_err(|e| KernelError::Mesh(format!("deserialization error: {e}")))?;
 
-        if !self.peers.contains_key(&envelope.source_node) {
+        // Always (re)register the peer's outbound channel. A leaf that
+        // reconnects (daemon restart, wifi blip, socket idle-timeout)
+        // keeps the same node_id but gets a fresh channel — the stale
+        // entry must be replaced or `send_to_peer` delivers into the
+        // dead channel of the dropped connection and the peer never
+        // receives anything again.
+        if self.peers.contains_key(&envelope.source_node) {
+            debug!(peer = %envelope.source_node, "re-registering reconnected peer");
+        } else {
             debug!(peer = %envelope.source_node, "auto-registering inbound peer");
-            self.add_peer(envelope.source_node.clone(), outbound);
         }
+        self.add_peer(envelope.source_node.clone(), outbound);
 
         self.handle_envelope(envelope).await
     }
@@ -308,9 +310,10 @@ impl MeshRuntime {
             let _ = cm.append("mesh", "peer.envelope", Some(payload));
         }
 
-        let router = self.local_router.as_ref().ok_or_else(|| {
-            KernelError::Mesh("no local router attached to mesh runtime".into())
-        })?;
+        let router = self
+            .local_router
+            .as_ref()
+            .ok_or_else(|| KernelError::Mesh("no local router attached to mesh runtime".into()))?;
 
         // Unwrap the RemoteNode wrapper so the local router sees the
         // inner target (Process, Service, Topic, etc.).
@@ -326,20 +329,22 @@ impl MeshRuntime {
         // the subscription and consume the message — it does not propagate
         // to the local router or any local subscribers.
         if let MessageTarget::Topic(ref ctrl_topic) = message.target
-            && ctrl_topic == "mesh.subscribe" {
-                if let MessagePayload::Json(ref payload) = message.payload
-                    && let Some(topic) = payload.get("topic").and_then(|v| v.as_str()) {
-                        self.register_peer_topic(topic, &envelope.source_node);
-                        return Ok(());
-                    }
-                // Malformed subscribe — drop silently rather than routing to
-                // local subscribers who have no idea what to do with it.
-                warn!(
-                    from = %envelope.source_node,
-                    "received malformed mesh.subscribe envelope (missing 'topic' field)"
-                );
+            && ctrl_topic == "mesh.subscribe"
+        {
+            if let MessagePayload::Json(ref payload) = message.payload
+                && let Some(topic) = payload.get("topic").and_then(|v| v.as_str())
+            {
+                self.register_peer_topic(topic, &envelope.source_node);
                 return Ok(());
             }
+            // Malformed subscribe — drop silently rather than routing to
+            // local subscribers who have no idea what to do with it.
+            warn!(
+                from = %envelope.source_node,
+                "received malformed mesh.subscribe envelope (missing 'topic' field)"
+            );
+            return Ok(());
+        }
 
         router.send(message).await
     }
@@ -351,10 +356,7 @@ impl MeshRuntime {
 
     /// List the node IDs of all connected peers.
     pub fn peer_ids(&self) -> Vec<String> {
-        self.peers
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect()
+        self.peers.iter().map(|entry| entry.key().clone()).collect()
     }
 
     /// Disconnect a peer, dropping its send channel.
@@ -438,19 +440,12 @@ impl MeshRuntime {
     }
 
     /// Process a time sync sample from a peer's heartbeat.
-    pub fn sync_clock_from_peer(
-        &self,
-        peer_id: &str,
-        peer_time_us: u64,
-        peer_source: ClockSource,
-    ) {
+    pub fn sync_clock_from_peer(&self, peer_id: &str, peer_time_us: u64, peer_source: ClockSource) {
         let local_time = crate::mesh_heartbeat::system_time_us();
-        self.clock.lock().unwrap().process_sync(
-            peer_id,
-            peer_time_us,
-            peer_source,
-            local_time,
-        );
+        self.clock
+            .lock()
+            .unwrap()
+            .process_sync(peer_id, peer_time_us, peer_source, local_time);
     }
 
     /// Check if this node is the time authority.
@@ -468,11 +463,7 @@ impl MeshRuntime {
                     .into_iter()
                     .map(|s| s.to_string())
                     .collect();
-                unhealthy.extend(
-                    hb.dead_peers()
-                        .into_iter()
-                        .map(|s| s.to_string()),
-                );
+                unhealthy.extend(hb.dead_peers().into_iter().map(|s| s.to_string()));
                 unhealthy
             }
             None => Vec::new(),
@@ -484,10 +475,7 @@ impl MeshRuntime {
         if let Some(ref disc) = self.discovery {
             let dead: Vec<String> = {
                 let hb = disc.heartbeat.lock().unwrap();
-                hb.dead_peers()
-                    .into_iter()
-                    .map(|s| s.to_string())
-                    .collect()
+                hb.dead_peers().into_iter().map(|s| s.to_string()).collect()
             };
             for node_id in &dead {
                 self.disconnect_peer(node_id);
@@ -896,10 +884,7 @@ mod tests {
             hb.add_peer("dead-peer".into());
             hb.record_miss("dead-peer");
             hb.record_miss("dead-peer");
-            assert_eq!(
-                hb.peer_state("dead-peer"),
-                Some(HeartbeatState::Dead)
-            );
+            assert_eq!(hb.peer_state("dead-peer"), Some(HeartbeatState::Dead));
         }
 
         assert_eq!(rt.peer_count(), 1);
@@ -973,8 +958,7 @@ mod tests {
         let rt = MeshRuntime::new("sync-node".into());
         let bytes = rt.build_chain_sync_request(42);
 
-        let req: crate::mesh_chain::ChainSyncRequest =
-            serde_json::from_slice(&bytes).unwrap();
+        let req: crate::mesh_chain::ChainSyncRequest = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(req.chain_id, 0);
         assert_eq!(req.after_sequence, 42);
         assert_eq!(req.max_events, 256);
@@ -1037,8 +1021,7 @@ mod tests {
             MessageTarget::Topic("mesh.subscribe".into()),
             MessagePayload::Json(serde_json::json!({"topic": "push.leaf-x"})),
         );
-        let sub_env =
-            MeshIpcEnvelope::new("leaf-x".into(), "kernel".into(), sub_msg);
+        let sub_env = MeshIpcEnvelope::new("leaf-x".into(), "kernel".into(), sub_msg);
         let sub_bytes = sub_env.to_bytes().unwrap();
 
         rt.handle_incoming_from(&sub_bytes, out_tx.clone())
@@ -1051,7 +1034,10 @@ mod tests {
             rt.peer_ids().contains(&"leaf-x".to_string()),
             "inbound peer should be auto-registered by source_node"
         );
-        assert_eq!(rt.peers_for_topic("push.leaf-x"), vec!["leaf-x".to_string()]);
+        assert_eq!(
+            rt.peers_for_topic("push.leaf-x"),
+            vec!["leaf-x".to_string()]
+        );
 
         // Locally publish to the subscribed topic. The A2A router's Topic
         // handler should forward to the mesh peer via send_to_peer.
@@ -1063,13 +1049,11 @@ mod tests {
         router.send(push).await.unwrap();
 
         // The outbound drain should see the forwarded envelope.
-        let forwarded_bytes = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            out_rx.recv(),
-        )
-        .await
-        .expect("forward should arrive within timeout")
-        .expect("channel should not be closed");
+        let forwarded_bytes =
+            tokio::time::timeout(std::time::Duration::from_millis(500), out_rx.recv())
+                .await
+                .expect("forward should arrive within timeout")
+                .expect("channel should not be closed");
 
         let forwarded = MeshIpcEnvelope::from_bytes(&forwarded_bytes).unwrap();
         assert_eq!(forwarded.source_node, "kernel");
@@ -1087,5 +1071,51 @@ mod tests {
         // publish has nowhere to go.
         rt.disconnect_peer("leaf-x");
         assert!(rt.peers_for_topic("push.leaf-x").is_empty());
+    }
+
+    // ── Test 24: reconnecting peer re-registers its outbound channel ─
+
+    /// Regression: a leaf that reconnects keeps the same `source_node`
+    /// but gets a fresh outbound channel. `handle_incoming_from` must
+    /// replace the stale entry — otherwise `send_to_peer` delivers into
+    /// the dead channel of the dropped connection and the leaf never
+    /// receives anything again.
+    #[tokio::test]
+    async fn reconnecting_peer_replaces_stale_outbound_channel() {
+        let rt = MeshRuntime::new("kernel".into());
+
+        let sub_msg = KernelMessage::new(
+            0,
+            MessageTarget::Topic("mesh.subscribe".into()),
+            MessagePayload::Json(serde_json::json!({"topic": "push.leaf-y"})),
+        );
+        let sub_env = MeshIpcEnvelope::new("leaf-y".into(), "kernel".into(), sub_msg);
+        let sub_bytes = sub_env.to_bytes().unwrap();
+
+        // First connection.
+        let (old_tx, mut old_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(16);
+        rt.handle_incoming_from(&sub_bytes, old_tx).await.unwrap();
+
+        // Reconnect: same node_id, brand-new channel (old connection dropped).
+        let (new_tx, mut new_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(16);
+        rt.handle_incoming_from(&sub_bytes, new_tx).await.unwrap();
+
+        // A push must land on the NEW channel, not the stale one.
+        let push = KernelMessage::new(
+            0,
+            MessageTarget::Topic("push.leaf-y".into()),
+            MessagePayload::Text("after-reconnect".into()),
+        );
+        let env = MeshIpcEnvelope::new("kernel".into(), "leaf-y".into(), push);
+        rt.send_to_peer("leaf-y", env).await.unwrap();
+
+        assert!(
+            new_rx.try_recv().is_ok(),
+            "push should be delivered on the reconnected channel"
+        );
+        assert!(
+            old_rx.try_recv().is_err(),
+            "stale channel from the dropped connection must not receive"
+        );
     }
 }

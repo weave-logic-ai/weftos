@@ -1,0 +1,7 @@
+[toolchain]
+# Xtensa LX7 requires the esp-rs toolchain (Espressif's Rust fork).
+# Install via `espup install` — see https://esp-rs.github.io/book/installation/index.html
+# Source `~/export-esp.sh` before invoking cargo so LIBCLANG_PATH and
+# the Xtensa GCC are on PATH (required by embuild + esp-idf-sys).
+channel = "esp"
+components = ["rustc", "rust-std", "rust-src"]

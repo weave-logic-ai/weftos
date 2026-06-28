@@ -1,0 +1,5 @@
+[toolchain]
+# Xtensa LX7 — Espressif's Rust fork (install via `espup install`).
+# https://esp-rs.github.io/book/installation/index.html
+channel = "esp"
+components = ["rustc", "rust-std"]

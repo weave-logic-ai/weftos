@@ -1,0 +1,80 @@
+# lgfx-bus-rgb-rs
+#
+# Faithful Rust port of LovyanGFX `Bus_RGB.cpp` (ESP32-S3 RGB-DPI bus
+# driver) to no_std esp-hal 1.0. Targets boards where the ESP32-S3
+# `LCD_CAM` peripheral drives a parallel RGB TFT directly out of a
+# PSRAM framebuffer over a circular GDMA descriptor chain — the
+# pattern the Elecrow CrowPanel DIS08070H, Makerfabs MaTouch 7", and
+# similar dev boards use.
+#
+# This crate is published independently of any host workspace. The
+# empty `[workspace]` table below prevents cargo from walking upward
+# and pulling the Xtensa target into a parent x86_64 workspace; the
+# pinned esp-toolchain in `rust-toolchain.toml` then stays scoped to
+# this crate.
+#
+# Standalone crate — own workspace, mirroring `clawft-edge-pad`.
+[workspace]
+
+[package]
+name = "lgfx-bus-rgb-rs"
+version = "0.2.1"
+edition = "2021"
+description = "Faithful Rust port of LovyanGFX Bus_RGB for ESP32-S3 RGB-DPI panels (PSRAM framebuffer, GDMA circular chain, VSYNC re-arm). v0.2 adds synchronous double-buffering with VSYNC sync."
+license = "MIT OR Apache-2.0 OR BSD-3-Clause"
+repository = "https://github.com/weave-logic/lgfx-bus-rgb-rs"
+keywords = ["esp32s3", "lcd", "rgb", "dpi", "no_std"]
+categories = ["embedded", "no-std", "hardware-support"]
+readme = "README.md"
+# Derived work — see NOTICE / module-level doc comments for full
+# attribution to LovyanGFX (lovyan03 et al., BSD-3-Clause / FreeBSD
+# license). The MIT/Apache-2.0 dual-license is for the Rust additions;
+# the upstream BSD-3-Clause is preserved because this is a derivative
+# port of LovyanGFX source.
+
+[features]
+# `double-buffer` (DEFAULT): allocate two PSRAM framebuffers + two
+# descriptor rings; `BusRgb::present()` schedules a swap at the next
+# VSYNC. Eliminates compose-during-scan tearing at the cost of a
+# second framebuffer in PSRAM (1.5 MB total at 800×480 RGB565).
+#
+# Without this feature the crate falls back to v0.1.0 behaviour:
+# single framebuffer, no swap, `present()` only flushes the dcache.
+# Useful when PSRAM is tight or when the upstream rendering layer
+# (e.g. LVGL) does its own double-buffering.
+default = ["double-buffer"]
+double-buffer = []
+
+[dependencies]
+# Pinned to the same esp-hal 1.0 the reference firmware (clawft-edge-pad
+# / Elecrow CrowPanel bringup) uses. `unstable` is required because the
+# LCD_CAM DPI module + raw `regs()` peripheral access are gated on it.
+esp-hal = { version = "1.0.0", default-features = true, features = [
+    "esp32s3",
+    "unstable",
+    "psram",
+] }
+# Capability-tagged heap. Consumers must register at least one
+# `MemoryCapability::External` (PSRAM) heap region BEFORE calling
+# `BusRgb::new` so the framebuffer can land there. See the example.
+esp-alloc = "0.9.0"
+
+# Dev-deps for the example binary. Kept out of the library deps so
+# downstream consumers don't drag in the panic handler / println.
+[dev-dependencies]
+esp-bootloader-esp-idf = { version = "0.4", features = ["esp32s3"] }
+esp-backtrace = { version = "0.18.1", features = ["esp32s3", "panic-handler", "println"] }
+esp-println = { version = "0.16.1", features = ["esp32s3", "log-04"] }
+log = "0.4"
+embedded-graphics = "0.8"
+
+[[example]]
+name = "crowpanel_dis08070h"
+path = "examples/crowpanel_dis08070h.rs"
+
+[profile.dev]
+opt-level = "s"
+
+[profile.release]
+opt-level = "s"
+lto = true

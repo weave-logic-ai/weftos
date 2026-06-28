@@ -52,6 +52,6 @@ pub use protocol::{AgentChatMessage, AgentChatParams, AgentChatResult, AgentChat
 pub use service::{AgentLoopHandle, AgentService, AgentServiceError};
 pub use substrate_budget::SubstrateBudgetStore;
 pub use substrate_sink::{
-    AudioRef, HEARTBEAT_PERIOD, KernelSubstrateClient, SubstrateClient, SubstrateConversationSink,
-    TurnContent, TurnContentPart,
+    AudioRef, HEARTBEAT_PERIOD, KernelSubstrateClient, KernelTurnAnchor, NoopTurnAnchor,
+    SubstrateClient, SubstrateConversationSink, TurnAnchor, TurnContent, TurnContentPart,
 };

@@ -26,7 +26,8 @@ pub const ANNOUNCE_TOPIC_SUFFIX: &str = ".announce";
 
 /// Build the push topic for a leaf: `mesh.leaf.<pubkey_hex>.push`.
 pub fn push_topic(pubkey_hex: &str) -> String {
-    let mut s = String::with_capacity(PUSH_TOPIC_PREFIX.len() + pubkey_hex.len() + PUSH_TOPIC_SUFFIX.len());
+    let mut s =
+        String::with_capacity(PUSH_TOPIC_PREFIX.len() + pubkey_hex.len() + PUSH_TOPIC_SUFFIX.len());
     s.push_str(PUSH_TOPIC_PREFIX);
     s.push_str(pubkey_hex);
     s.push_str(PUSH_TOPIC_SUFFIX);
@@ -35,7 +36,9 @@ pub fn push_topic(pubkey_hex: &str) -> String {
 
 /// Build the announce topic for a leaf: `mesh.leaf.<pubkey_hex>.announce`.
 pub fn announce_topic(pubkey_hex: &str) -> String {
-    let mut s = String::with_capacity(PUSH_TOPIC_PREFIX.len() + pubkey_hex.len() + ANNOUNCE_TOPIC_SUFFIX.len());
+    let mut s = String::with_capacity(
+        PUSH_TOPIC_PREFIX.len() + pubkey_hex.len() + ANNOUNCE_TOPIC_SUFFIX.len(),
+    );
     s.push_str(PUSH_TOPIC_PREFIX);
     s.push_str(pubkey_hex);
     s.push_str(ANNOUNCE_TOPIC_SUFFIX);
@@ -226,15 +229,13 @@ impl std::error::Error for DecodeError {}
 /// CBOR-serialize a value.
 pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, EncodeError> {
     let mut buf = Vec::new();
-    ciborium::ser::into_writer(value, &mut buf)
-        .map_err(|e| EncodeError(alloc::format!("{e}")))?;
+    ciborium::ser::into_writer(value, &mut buf).map_err(|e| EncodeError(alloc::format!("{e}")))?;
     Ok(buf)
 }
 
 /// CBOR-deserialize a value.
 pub fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, DecodeError> {
-    ciborium::de::from_reader(bytes)
-        .map_err(|e| DecodeError(alloc::format!("{e}")))
+    ciborium::de::from_reader(bytes).map_err(|e| DecodeError(alloc::format!("{e}")))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────

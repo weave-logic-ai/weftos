@@ -1,0 +1,94 @@
+# ── CrowPanel DIS08070H sdkconfig — ESP-IDF / Rust port ───────────────
+#
+# Derived from the factory sdkconfig at:
+#   .planning/devices/crowpanel-display/CrowPanel-7.0-HMI-ESP32-Display-800x480/
+#       example/ESP_IDF/CrowPanel_ESP32_7.0/sdkconfig
+# The factory ships SPIRAM disabled because it draws the framebuffer
+# from internal SRAM with the LovyanGFX driver. We use esp_lcd_panel_rgb
+# with a PSRAM framebuffer + internal-SRAM bounce buffer, so SPIRAM is
+# enabled in Octal mode at 80 MHz to match the N4R8 module.
+#
+# Load-bearing flags below carry the rationale that drives them; every
+# value has a `# why` comment. Do not delete lines without an entry in
+# the session-learnings doc.
+
+# ── MCU + CPU ────────────────────────────────────────────────────────
+CONFIG_IDF_TARGET="esp32s3"
+# 240 MHz: the factory CrowPanel firmware uses 160 MHz, but esp_lcd
+# bounce buffers need CPU headroom to memcpy ~24 MB/s sustained. The
+# session-learnings doc explicitly recommends 240 MHz for the RGB DPI path.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
+CONFIG_FREERTOS_HZ=1000
+
+# ── PSRAM (8 MiB Octal on the N4R8 module) ───────────────────────────
+# CRITICAL: the N4R8 variant of ESP32-S3-WROOM-1 ships with Octal PSRAM
+# on the AP_3v3 rail. Quad mode (CONFIG_SPIRAM_MODE_QUAD=y) silently
+# leaves PSRAM uninitialised — `heap_caps_get_free_size(MALLOC_CAP_SPIRAM)`
+# returns 0 and any psram alloc panics. Octal is mandatory here.
+CONFIG_ESP32S3_SPIRAM_SUPPORT=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_BOOT_INIT=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=n
+# Keep instructions + rodata in flash, NOT PSRAM. Two reasons:
+# 1. PSRAM bus contention. The session-learnings doc flags this as the
+#    cause of "blocks shifting / blinking" when the GDMA framebuffer
+#    read shares PSRAM bandwidth with CPU code/data fetches. Keep PSRAM
+#    for the framebuffer only.
+# 2. Performance. PSRAM is 80 MHz Octal vs flash QSPI; instruction
+#    fetch from PSRAM is *slower* per fetch on this MCU.
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=n
+CONFIG_SPIRAM_RODATA=n
+CONFIG_SPIRAM_USE_MALLOC=y
+# Caller-data heap policy: malloc() default returns internal SRAM. Only
+# explicit MALLOC_CAP_SPIRAM allocations (the framebuffer in
+# esp_lcd_new_rgb_panel + our explicit `heap_caps_malloc` calls) hit
+# PSRAM. This avoids reproducing the "WiFi/embassy/Vec in PSRAM
+# contends with framebuffer DMA" failure mode the bare-metal port hit.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=n
+
+# ── LCD RGB driver ───────────────────────────────────────────────────
+# Espressif explicitly recommends ISR_IRAM_SAFE for RGB panels: the
+# VSYNC + GDMA done ISRs fire every ~33 ms; without IRAM placement, an
+# L1-icache miss in flash adds ~20-30 µs of jitter per fire, producing
+# the "fine glitch that moves" pattern documented in the session
+# learnings.
+CONFIG_LCD_RGB_ISR_IRAM_SAFE=y
+# Force the GDMA chain restart to the start of VSYNC blanking. This is
+# the modern-IDF equivalent of the FIFO-skip restart descriptor the
+# bare-metal port had to hand-roll (config #11). With this on, esp_lcd
+# does the right thing automatically on every VSYNC.
+CONFIG_LCD_RGB_RESTART_IN_VSYNC=y
+
+# ── GDMA ─────────────────────────────────────────────────────────────
+# IRAM-safe GDMA ISR — same reasoning as LCD_RGB_ISR_IRAM_SAFE. The
+# GDMA descriptor walk handler must not stall on flash fetches during
+# active scanout.
+CONFIG_GDMA_ISR_IRAM_SAFE=y
+
+# ── FreeRTOS / tasks ─────────────────────────────────────────────────
+# 4 KiB system event task — our WiFi + mesh code does small ops on it.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+# 8 KiB main task — boot path + esp_lcd init are stack-heavy.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# ── Heap ─────────────────────────────────────────────────────────────
+CONFIG_HEAP_POISONING_COMPREHENSIVE=n
+CONFIG_HEAP_TRACING_OFF=y
+
+# ── WiFi ─────────────────────────────────────────────────────────────
+# AMPDU + dynamic buffers — the standard Espressif WiFi-with-IDF defaults.
+CONFIG_ESP_WIFI_RX_BA_WIN=16
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=y
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=y
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
+
+# ── Logging ──────────────────────────────────────────────────────────
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# ── Compiler ─────────────────────────────────────────────────────────
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

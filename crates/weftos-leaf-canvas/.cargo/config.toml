@@ -1,0 +1,14 @@
+# weftos-leaf-canvas defaults to the browser wasm target.
+#
+# A bare `cargo build` in this crate's directory compiles for
+# `wasm32-unknown-unknown` without a `--target` flag — matching the
+# crate's intended deployment shape and keeping the build-verify
+# instructions terse.
+#
+# Override explicitly (`cargo build --target x86_64-unknown-linux-gnu`)
+# only if you need to spot-check a non-wasm error path; the library is
+# not expected to compile on hosts because `web-sys` symbols are wasm-
+# only.
+
+[build]
+target = "wasm32-unknown-unknown"

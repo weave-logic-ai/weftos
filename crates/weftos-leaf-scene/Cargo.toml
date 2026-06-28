@@ -1,0 +1,62 @@
+# weftos-leaf-scene
+#
+# Phase A foundation for the WeftOS vector-first leaf display.
+# Implements the retained-mode scene graph, wire-format envelopes,
+# damage computation, hit-testing, and tween table that every
+# subsequent renderer / surface backend will consume.
+#
+# Canonical design doc: docs/design/vector-leaf-display.md
+#
+# This crate is `no_std + alloc`, host- and embedded-clean, and
+# carries only POD-like serde types + a single `SceneStore` runtime.
+# Renderer-specific concerns (glyph cache, surface backends, frame
+# pacing) live in `weftos-leaf-renderer` (Phase B) and are explicitly
+# OUT of scope here.
+#
+# Standalone crate — own workspace table to stop cargo from walking
+# up into the parent clawft workspace and dragging in target-specific
+# toolchains. Mirrors the isolation pattern used by lgfx-bus-rgb-rs.
+[workspace]
+
+[package]
+name = "weftos-leaf-scene"
+version = "0.1.0"
+edition = "2021"
+description = "Vector-first scene graph + wire format + damage computation for WeftOS leaf displays (no_std + alloc, Send + Sync)."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/weave-logic-ai/weftos"
+keywords = ["weftos", "leaf", "scene-graph", "no_std", "embedded"]
+categories = ["embedded", "no-std", "graphics"]
+readme = "README.md"
+publish = false
+
+[features]
+default = []
+# `std` lights up `std`-aware features in serde + ciborium. Tests use
+# this implicitly via dev-dependencies; runtime targets (embedded leaf,
+# wasm32) leave it off.
+std = ["serde/std", "ciborium/std"]
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+ciborium = { version = "0.2", default-features = false }
+bitflags = { version = "2", default-features = false, features = ["serde"] }
+# rustc-hash is the lighter no_std-clean choice vs. `fxhash`. v2.x has
+# explicit `no_std` support via the default-off `std` feature and no
+# `Send`/`Sync` quirks. Used only for the producer-side path → 24-bit
+# hash that builds NodeIds — the hash MUST be deterministic and stable
+# across leaf reboots so the renderer's glyph/AABB caches survive
+# warm-resets. See `id::path_to_id`.
+rustc-hash = { version = "2", default-features = false }
+
+[dev-dependencies]
+# Tests run on host; std is fine.
+ciborium = { version = "0.2", features = ["std"] }
+serde = { version = "1", features = ["std", "derive"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = "s"
+lto = true

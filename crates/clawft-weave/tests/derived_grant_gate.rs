@@ -51,6 +51,8 @@ fn minimal_kernel_config() -> KernelConfig {
         mesh: None,
         anchor: None,
         ipc_tcp: None,
+        llm: None,
+        agent: None,
     }
 }
 
@@ -122,7 +124,10 @@ async fn derived_publish_fails_without_grant() {
         .expect_err("publish must reject without grant");
     let err_msg = err.to_string();
     match &err {
-        GateDenied::MissingDerivedGrant { path: p, node_id: n } => {
+        GateDenied::MissingDerivedGrant {
+            path: p,
+            node_id: n,
+        } => {
             assert_eq!(p, path);
             assert_eq!(n, &daemon_id);
             // Spec asks for a "clean error string" — verify the

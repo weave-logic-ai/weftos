@@ -1,0 +1,67 @@
+# weftos-leaf-sim
+#
+# Desktop simulator for the WeftOS vector-first leaf display. Provides
+# `SimSurface`, an in-memory implementation of `SceneSurface` backed
+# by `embedded-graphics-simulator`. Lets developers exercise the full
+# scene-to-pixels pipeline (Phase A store + Phase B renderer + this
+# sim) without any hardware.
+#
+# Canonical design doc: docs/design/vector-leaf-display.md (§6, §6.1).
+#
+# This crate is `std`-allowed — it's a dev tool. Embedded targets use
+# the DPI backend (Phase C); browsers use the canvas backend (Phase D).
+# The sim is never deployed; it lives here for hardware-free workflow.
+#
+# Standalone crate — own workspace table to stop cargo from walking up
+# into the parent clawft workspace.
+[workspace]
+
+[package]
+name = "weftos-leaf-sim"
+version = "0.1.0"
+edition = "2021"
+description = "Desktop simulator for WeftOS leaf displays: implements weftos-leaf-renderer::SceneSurface against embedded-graphics-simulator's Window."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/weave-logic-ai/weftos"
+keywords = ["weftos", "leaf", "simulator", "embedded-graphics"]
+categories = ["development-tools", "graphics", "gui"]
+readme = "README.md"
+publish = false
+
+[features]
+default = []
+# Pull in SDL2-backed Window rendering. With this feature off the sim
+# still works headlessly (off-screen buffer), but `cargo run --example
+# boot` can't open a window. Enabled by default for the example bins.
+window = ["embedded-graphics-simulator/with-sdl"]
+
+[dependencies]
+# Phase A + Phase B foundations.
+weftos-leaf-scene = { path = "../weftos-leaf-scene", features = ["std"] }
+weftos-leaf-renderer = { path = "../weftos-leaf-renderer", features = ["std"] }
+
+# Headless rasterization + windowed presentation.
+embedded-graphics = "0.8"
+# Pinned to v0.8 (current stable, ouroboros-backed). `with-sdl` is
+# off by default; enabled via the `window` feature so headless CI
+# builds don't need SDL2 development headers.
+embedded-graphics-simulator = { version = "0.8", default-features = false }
+
+[dev-dependencies]
+# Examples want the windowed rendering path.
+embedded-graphics-simulator = { version = "0.8", default-features = true }
+
+[[example]]
+name = "boot"
+required-features = ["window"]
+
+[[example]]
+name = "tween_demo"
+required-features = ["window"]
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = "s"
+lto = true

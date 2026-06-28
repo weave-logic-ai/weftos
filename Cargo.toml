@@ -26,6 +26,13 @@ members = [
     "crates/clawft-graphify",
     "crates/clawft-lsp-extract",
     "crates/weftos-leaf-types",
+    # `weftos-leaf-display` removed from the workspace in Phase E
+    # (2026-05-15) — superseded by `weftos-leaf-scene`,
+    # `weftos-leaf-renderer`, and `weftos-scene-builder`. The directory
+    # is intentionally retained on-disk because the sibling
+    # `clawft-edge-pad-idf` firmware (out-of-workspace) still
+    # path-depends on it; Phase F's cleanup pass migrates that
+    # firmware before deleting the directory tree.
     "crates/eml-core",
     "crates/clawft-app",
     "crates/clawft-gui-egui",
@@ -50,6 +57,32 @@ exclude = [
     # preserved in-tree for git-history continuity and possible future
     # revival, but are not part of the active workspace build.
     "crates/archive",
+    # Vector-first leaf display sibling crates. Each has its own
+    # `[workspace]` table to keep the embedded toolchain isolation
+    # working (Phase A through Phase E — see
+    # `docs/design/vector-leaf-display.md`). When a workspace member
+    # (clawft-weave) path-deps to one of these, cargo would otherwise
+    # complain about "multiple workspace roots in the same workspace"
+    # because the inner `[workspace]` declarations are detected during
+    # the path-dep walk. Listing them in `exclude` tells cargo
+    # explicitly "these directories are not part of THIS workspace,
+    # even though a member references them" — the dependent crate is
+    # still resolved by the path dep.
+    "crates/weftos-leaf-scene",
+    "crates/weftos-leaf-renderer",
+    "crates/weftos-scene-builder",
+    "crates/weftos-leaf-touch-gt911",
+    # Pre-Phase-E raster crate. Deprecated; kept out-of-workspace until
+    # Phase F's cleanup pass migrates `clawft-edge-pad-idf`.
+    "crates/weftos-leaf-display",
+    # `clawft-edge-pad` (Inkpad firmware) is out-of-workspace already
+    # via its own `[workspace]` table (Xtensa toolchain isolation);
+    # listing here is defensive.
+    "crates/clawft-edge-pad",
+    "crates/clawft-edge-pad-idf",
+    "crates/clawft-edge-bench",
+    "crates/lgfx-bus-rgb-rs",
+    "crates/weftos-leaf-sim",
 ]
 
 [workspace.package]

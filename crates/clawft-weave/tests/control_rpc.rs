@@ -49,6 +49,8 @@ fn minimal_kernel_config() -> KernelConfig {
         mesh: None,
         anchor: None,
         ipc_tcp: None,
+        llm: None,
+        agent: None,
     }
 }
 
@@ -126,8 +128,7 @@ async fn register_node(socket: &std::path::Path, seed: u8) -> (String, SigningKe
     let pk = sk.verifying_key().to_bytes();
     let ts: u64 = 1_700_000_000;
     let label = format!("test-control-{seed}");
-    let payload =
-        clawft_kernel::node_registry::node_register_payload(&pk, ts, &label);
+    let payload = clawft_kernel::node_registry::node_register_payload(&pk, ts, &label);
     let proof = sk.sign(&payload);
     let resp = one_shot(
         socket,
@@ -140,7 +141,11 @@ async fn register_node(socket: &std::path::Path, seed: u8) -> (String, SigningKe
         }),
     )
     .await;
-    assert_eq!(resp["ok"], serde_json::Value::Bool(true), "register: {resp}");
+    assert_eq!(
+        resp["ok"],
+        serde_json::Value::Bool(true),
+        "register: {resp}"
+    );
     let node_id = resp["result"]["node_id"].as_str().unwrap().to_string();
     (node_id, sk)
 }
@@ -225,12 +230,7 @@ async fn capability_gate_rejects_anonymous_write() {
 #[tokio::test]
 async fn capability_gate_rejects_anonymous_admin() {
     let (_tmp, socket, shutdown_tx, _kernel) = spawn_test_daemon().await;
-    let resp = one_shot_no_auth(
-        &socket,
-        "kernel.shutdown",
-        serde_json::json!({}),
-    )
-    .await;
+    let resp = one_shot_no_auth(&socket, "kernel.shutdown", serde_json::json!({})).await;
     assert_eq!(resp["ok"], serde_json::Value::Bool(false));
     let err = resp["error"].as_str().unwrap_or("");
     assert!(
@@ -246,7 +246,11 @@ async fn capability_gate_allows_anonymous_read() {
     let resp = one_shot_no_auth(&socket, "kernel.status", serde_json::json!({})).await;
     // kernel.status is Read, anonymous always allowed; we don't
     // care about the body here, only that the gate didn't reject.
-    assert_eq!(resp["ok"], serde_json::Value::Bool(true), "kernel.status: {resp}");
+    assert_eq!(
+        resp["ok"],
+        serde_json::Value::Bool(true),
+        "kernel.status: {resp}"
+    );
     let _ = shutdown_tx.send(true);
 }
 
