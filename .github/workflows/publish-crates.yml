@@ -1,8 +1,13 @@
 name: Publish Crates
 
 on:
-  push:
-    tags: ['v*']
+  # crates.io publish is DEFERRED for the pre-beta line: it no longer
+  # auto-runs on a release tag (avoids committing a churning public API
+  # surface before the API settles). Trigger it deliberately from the
+  # Actions tab ("Run workflow") when ready to publish. To restore
+  # auto-publish on tag, re-add under `on:`:
+  #   push:
+  #     tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -12,7 +17,7 @@ jobs:
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
         with:
