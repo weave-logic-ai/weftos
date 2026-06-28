@@ -373,9 +373,10 @@ pub struct SubstrateConversationSink {
     /// Per-conv heartbeat task. `start_heartbeat` inserts;
     /// `stop_heartbeat` (or [`Drop`]) aborts.
     heartbeats: DashMap<String, JoinHandle<()>>,
-    /// Per-conv monotonic counter; appended as a base-32 suffix to
-    /// the ULID prefix in [`Self::turn_id_for`] so two appends within
-    /// the same ms still sort deterministically.
+    /// Per-conv monotonic counter; prepended as a fixed-width base-32
+    /// PREFIX before the ULID in [`Self::turn_id_for`] so two appends
+    /// within the same ms still sort by append order (the ULID's
+    /// intra-ms bits are random and cannot order burst-fire turns).
     counters: DashMap<String, AtomicU64>,
     /// Side-effect seam — fired after every successful publish in
     /// `append_turn`. Defaults to [`NoopTurnAnchor`]; the daemon
@@ -462,16 +463,24 @@ impl SubstrateConversationSink {
         format!("substrate/_derived/chat/{conv_id}/status")
     }
 
-    /// Mint a sortable per-turn id: [`ulid::Ulid::new()`] (ms-prefixed
-    /// timestamp + 80-bit randomness) + a base-32 per-conv counter
-    /// suffix so burst-fire turns within the same ms still sort.
+    /// Mint a sortable per-turn id: a fixed-width base-32 per-conv
+    /// counter PREFIX followed by a [`ulid::Ulid::new()`] suffix
+    /// (ms-prefixed timestamp + 80-bit randomness for uniqueness).
+    ///
+    /// The counter leads so a lexicographic sort of turn_ids preserves
+    /// append order even for several turns in the same millisecond — a
+    /// ULID-first id sorts by the ULID's random intra-ms bits and cannot
+    /// order burst-fire turns (the old `{ULID}-{counter}` format flaked
+    /// ~50% of the time). `base32_u64` is big-endian, so left-padding
+    /// with '0' to 13 chars (width of u64::MAX in base 32) keeps the
+    /// lexicographic order numeric.
     fn turn_id_for(&self, conv_id: &str) -> String {
         let counter_entry = self
             .counters
             .entry(conv_id.to_string())
             .or_insert_with(|| AtomicU64::new(0));
         let n = counter_entry.fetch_add(1, Ordering::AcqRel);
-        format!("{}-{}", ulid::Ulid::new(), base32_u64(n))
+        format!("{:0>13}-{}", base32_u64(n), ulid::Ulid::new())
     }
 
     /// Spawn the per-conv heartbeat task. Idempotent. The task holds
@@ -611,8 +620,8 @@ impl ConversationSink for SubstrateConversationSink {
         }
         // Sort ascending by ts_ms so callers always see the
         // conversation in chronological order. Equal ts_ms ties
-        // break on turn_id (which carries the per-conv counter
-        // suffix) so the order is deterministic.
+        // break on turn_id (whose fixed-width per-conv counter prefix
+        // preserves append order) so the order is deterministic.
         turns.sort_by(|a, b| {
             a.ts_ms
                 .cmp(&b.ts_ms)
