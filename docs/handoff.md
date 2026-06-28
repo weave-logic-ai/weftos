@@ -1,4 +1,137 @@
-# Session handoff — 2026-05-17 — Vector-first leaf display: end-to-end built, hardware-rendering, residual visual gap blocked on bus-swap diagnosis
+# Session handoff — 2026-06-28 — Brain build, toolchain bring-up, gate-to-green, v0.6.20 release, Docker parked
+
+A long session that took the repo from "uncommitted leaf-display work, no
+toolchain on this Mac, nothing tested here" to **a clean, published v0.6.20
+GitHub release** — and surfaced a set of concrete next steps + deployment
+challenges. Full machine-readable detail is in the project **brain**
+(`docs/brain/`) and the persistent memory at
+`~/.claude/projects/-Users-mathewbeane-weftos/memory/` (start with
+`MEMORY.md` → `weftos-release-state`, `weftos-testing-and-punchlist`,
+`weftos-rust-toolchain`, `weftos-open-critical-bugs`).
+
+## What shipped this session
+
+- **Project "brain"** built (`docs/brain/` + file-memory + the ruvector/HNSW
+  vector store under `weftos/*` namespaces): roadmap/phases, release history,
+  architecture+ADR index, bugs/gaps, RVF/research streams.
+- **Git cleaned.** The whole uncommitted 2026-05-14..05-17 leaf-display session
+  (~588 modified + new crates) was committed in honest, build-coherent groups
+  (fmt/clippy hygiene split from the feature work). No secrets committed;
+  business/client docs (`symposiums/krause-docs-generator`, `symposiums/
+  sonobuoy`) excluded via `.gitignore`.
+- **Rust toolchain installed + configured on this Mac** (it was absent) — so
+  `scripts/build.sh gate` ran here for the **first time** and exposed real bugs.
+- **Gate taken to 12/12 green**, fixing: clippy `redundant_closure`; the
+  `mesh_runtime` reconnect test (mesh.subscribe vs router-check order); 5 test
+  flakes (wordpiece temp-file race, two zero-duration `>`→`>=` boundaries,
+  monotonic turn-ids, classifier env-var race); a **latent surface bug** nextest
+  exposed (the surface builder had no `modal()` constructor); security advisories
+  (patched quinn-proto HIGH + memmap2/rkyv; deferred wasmtime).
+- **Adopted `cargo-nextest`** in `scripts/build.sh` (per-test process isolation
+  → killed the env/static/subscriber parallel-test flake class; ~500s workspace).
+- **Cut v0.6.20** — a 373-commit rollup on the 0.6 line. **Published: 63 assets**
+  (binaries all 6 targets incl. musl, WASM browser+wasip2, KB). crates.io
+  deferred (publish-crates gated to manual dispatch). The **musl release was
+  unblocked** by switching the workspace `reqwest` from `default-tls`→`rustls-tls`
+  (openssl-sys can't build on static musl).
+- **Docker** verified e2e locally, gateway bugs fixed (see below), then **parked**.
+
+## Current state (clean)
+
+- `master` HEAD = `cf6ef0be`, **version 0.6.20**, last tag **v0.6.20**.
+- v0.6.20 GitHub release intact (63 assets). v0.6.21 was attempted + fully rolled
+  back (tag + release object gone; version churn reverted).
+- Docker-image fixes are on master, **unreleased** (CHANGELOG `[Unreleased]`).
+- Toolchain: Rust 1.93.1 + clippy/rustfmt, wasm32-wasip2 + wasm32-unknown-unknown,
+  `wasm-bindgen-cli` **0.2.108** (exact pin), SDL2, cargo-nextest, cargo-audit,
+  OrbStack. **The agent shell does not auto-load cargo — prefix with
+  `source "$HOME/.cargo/env" &&`.**
+
+## Next development tasks — where to start
+
+**P0 — unblock binary releases (do first; everything Docker depends on it):**
+1. **cargo-dist binary-skip.** On the v0.6.21 tag the `Release` workflow's `plan`
+   job produced an empty `artifacts_matrix`, so `build-local-artifacts` was
+   SKIPPED and no platform binaries published (v0.6.20 built all 6 fine). *Start
+   here:* `brew install gh && gh auth login`, then
+   `gh run view <release-run-id> --log` on the failing `Release` run's **plan**
+   job (or read it in the Actions tab). Likely a cargo-dist 0.31 quirk with
+   back-to-back patch tags / the workspace version bump. Fix → binary releases
+   work again.
+
+**P1 — Docker image (fixes done, decision pending):**
+2. Decide **download-based vs self-contained** Dockerfile (see Deployment
+   challenges #2). The image *bugs* are already fixed + verified locally
+   (`Dockerfile` on master). Once P0 is fixed, reverting to the fast download
+   image is the lightest path; the self-contained refactor is on master if you
+   prefer no asset coupling (but solve the multi-arch QEMU slowness first).
+   *Start:* `crates/clawft-kernel/Dockerfile.alpine` is the working self-contained
+   reference; `release-docker.yml` line ~86 sets `platforms: amd64,arm64`.
+
+**P1 — leaf-display (the actual product work that was in flight):**
+3. **BUG-1 residual display gap** — run the single-buffer disambiguation: flip
+   the `double-buffer` Cargo feature off in `crates/clawft-edge-pad/Cargo.toml`,
+   reflash, check whether gutter coords land. *Source:* the 2026-05-17 entry
+   below + `weftos-open-critical-bugs` memory. If single-buffer fixes it, repair
+   the `lgfx-bus-rgb-rs` swap; else pivot to the `clawft-edge-pad-idf` +
+   LovyanGFX sidecar.
+4. Leaf Phase F: wire the browser mesh client to `weftos-leaf-canvas`; migrate
+   `clawft-edge-pad-idf` off the deprecated `weftos-leaf-display` dep then delete
+   it; hardware-test the GT911 input path.
+
+**P1 — kernel/governance gaps (release-blockers for 0.8.x mesh):**
+5. **ADR-057 substrate per-path read ACLs** — Accepted but **unimplemented** (9
+   acceptance criteria); MUST-HAVE before any mesh feature admits remote
+   subscribers. *Start:* `docs/adr/adr-057-substrate-read-acl.md` +
+   `crates/clawft-substrate/`.
+6. **BUG-3 daemon chain bridge** — ~12 ExoChain events from non-kernel crates
+   emit to stdout and never reach `ChainManager` (`crates/clawft-weave/src/
+   main.rs`); wire the tracing→ChainManager bridge.
+
+**P2 — hardening / debt:**
+7. **Dependabot: 142 vulnerabilities** on the repo (5 critical / 41 high) —
+   mostly the **npm** side (root `agentic-flow`, clawft-ui React/Vite); the
+   cargo-audit gate doesn't cover npm. Triage separately.
+8. ADR-056 `clawft-bvh` not yet scaffolded. `append_turns` ULID monotonic flake
+   (fixed). The ~40 env-var test sites are now safe under nextest but would still
+   bite a `cargo test` run — keep nextest as the canonical runner.
+
+## Deployment / environment challenges we hit
+
+1. **No toolchain on the box.** Rust, cargo-nextest, cargo-audit, wasm-bindgen-cli,
+   SDL2, and a container runtime were all absent. Installed now (see Current
+   state), but: the **agent (Claude Code) shell does not source `~/.cargo/env`** —
+   every build command needs `source "$HOME/.cargo/env" &&` first. This is why
+   the gate had never actually run on this machine — and why latent bugs (the
+   surface `modal()` gap) had gone unnoticed.
+2. **The release Docker image is fragile by design.** The root `Dockerfile`
+   *downloads* a published release tarball, coupling the image tag to
+   already-published binaries → it 404s on any release that doesn't rebuild them.
+   The self-contained rewrite removes that coupling but trips a **multi-arch
+   problem**: `release-docker.yml` builds amd64+arm64, and compiling Rust for
+   arm64 under QEMU emulation is impractically slow. Cleanest fix is **(a)** make
+   the binary publish reliable (P0 #1) and keep the fast download image, or
+   **(b)** cross-compile in the Dockerfile (no QEMU) if self-contained is wanted.
+3. **cargo-dist binary-skip** (P0 #1) — the single biggest blocker; needs CI log
+   access to diagnose.
+4. **`wasm-bindgen-cli` exact-version pin.** A transitive dep hard-pins
+   `wasm-bindgen = "=0.2.108"`, so the browser `pkg/` build requires CLI
+   **0.2.108** exactly (the latest 0.2.126 fails). Either keep 0.2.108 installed
+   or relax that transitive pin.
+5. **No `gh`/API token in the agent shell.** Can push via SSH (had to add
+   github.com to `known_hosts`, verified against GitHub's published fingerprint)
+   but **cannot read CI logs, delete releases, or pull private ghcr images**.
+   Installing + authing `gh` would unblock the cargo-dist diagnosis and release
+   cleanup.
+6. **Repo renamed `clawft` → `weftos`** (GitHub redirects). `origin` was updated
+   to `git@github.com:weave-logic-ai/weftos.git`. `Cargo.toml repository` already
+   says weftos.
+7. **`.dockerignore` was too thin** — shipped multi-GB (`.embuild` ESP-IDF
+   toolchain, `node_modules`) to the daemon; hardened.
+
+---
+
+
 
 Continuation of the 2026-05-14/15 sessions below. Major
 architectural pivot mid-session: after 11 iterations of patching
