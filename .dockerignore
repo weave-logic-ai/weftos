@@ -1,5 +1,25 @@
 target/
 .git/
 .weftos/
-gui/node_modules/
 *.onnx
+
+# Node deps anywhere (root agentic-flow install, gui/, clawft-ui/)
+node_modules/
+**/node_modules/
+gui/dist/
+clawft-ui/dist/
+
+# ESP-IDF embedded toolchain (multi-GB, regenerable) under
+# crates/clawft-edge-pad-idf/.embuild — must not enter the build context.
+.embuild/
+**/.embuild/
+
+# Generated WASM bindings + local vector-store brain.
+crates/clawft-wasm/www/pkg/
+ruvector.db/
+ruvector.db
+
+# Build artifacts / large planning binaries not needed in any image.
+*.pdf
+*.pptx
+*.zip
