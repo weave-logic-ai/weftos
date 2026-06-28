@@ -35,6 +35,13 @@ chmod +x /usr/local/bin/weft
 EOF
 RUN sh /tmp/install.sh && rm /tmp/install.sh
 
+# Pre-create the data dir owned by the weft user BEFORE declaring the
+# VOLUME. Docker creates an unmounted VOLUME's mountpoint as root, so
+# without this `weft gateway` (uid 1000) dies bootstrapping its app
+# context: "Permission denied" creating ~/.clawft/workspace/sessions.
+# Creating it weft-owned here makes the anonymous volume inherit that.
+RUN mkdir -p /home/weft/.clawft && chown -R weft:weft /home/weft/.clawft
+
 USER weft
 WORKDIR /home/weft
 
