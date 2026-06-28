@@ -7,7 +7,7 @@
 //! opaque (it embeds a parsed expression AST), so we compare the two
 //! trees via a stable structural fingerprint rather than `PartialEq`.
 
-use clawft_surface::builder::{Surface, chip, gauge, grid, stack, stream_view, table};
+use clawft_surface::builder::{Surface, chip, gauge, grid, modal, stack, stream_view, table};
 use clawft_surface::parse::parse_surface_toml;
 use clawft_surface::tree::{
     AttrValue, IdentityIri, Input, Invocation, Mode, SurfaceNode, SurfaceTree,
@@ -88,7 +88,23 @@ fn build_admin_surface_via_rust() -> SurfaceTree {
                         ),
                 )
                 // Quadrant 4: log stream
-                .child(stream_view("/root/logs").bind("stream", "$substrate/kernel/logs")),
+                .child(stream_view("/root/logs").bind("stream", "$substrate/kernel/logs"))
+                // Overlay: confirm-restart modal (mirrors the TOML fixture's
+                // `/root/restart-modal` node — WEFT-589 confirm-restart Modal).
+                .child(
+                    modal("/root/restart-modal")
+                        .attr("title", AttrValue::Str("Confirm restart".into()))
+                        .affordance_with_schema(
+                            "confirm-restart",
+                            "rpc.kernel.restart",
+                            &[Invocation::Pointer, Invocation::Voice],
+                            "ontology://kernel/restart",
+                        )
+                        .child(chip("/root/restart-modal/prompt").attr(
+                            "label",
+                            AttrValue::Str("Restart kernel? In-flight RPCs may drop.".into()),
+                        )),
+                ),
         )
         .build()
 }
@@ -159,8 +175,13 @@ fn rust_builder_produces_admin_surface() {
     let tree = build_admin_surface_via_rust();
     assert_eq!(tree.id, "weftos-admin/desktop");
     assert_eq!(tree.root.kind, IdentityIri::Grid);
-    assert_eq!(tree.root.children.len(), 4, "four quadrants");
-    assert_eq!(tree.count_of("ui://chip"), 2);
+    assert_eq!(
+        tree.root.children.len(),
+        5,
+        "four quadrants + restart-modal overlay"
+    );
+    assert_eq!(tree.count_of("ui://chip"), 3);
+    assert_eq!(tree.count_of("ui://modal"), 1);
     assert_eq!(tree.count_of("ui://gauge"), 1);
     assert_eq!(tree.count_of("ui://table"), 1);
     assert_eq!(tree.count_of("ui://stream-view"), 1);

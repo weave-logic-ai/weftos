@@ -165,3 +165,7 @@ pub fn table(path: impl Into<String>) -> NodeBuilder {
 pub fn stream_view(path: impl Into<String>) -> NodeBuilder {
     NodeBuilder::new(IdentityIri::StreamView, path)
 }
+
+pub fn modal(path: impl Into<String>) -> NodeBuilder {
+    NodeBuilder::new(IdentityIri::Modal, path)
+}
