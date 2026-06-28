@@ -310,11 +310,6 @@ impl MeshRuntime {
             let _ = cm.append("mesh", "peer.envelope", Some(payload));
         }
 
-        let router = self
-            .local_router
-            .as_ref()
-            .ok_or_else(|| KernelError::Mesh("no local router attached to mesh runtime".into()))?;
-
         // Unwrap the RemoteNode wrapper so the local router sees the
         // inner target (Process, Service, Topic, etc.).
         let mut message = envelope.message;
@@ -327,7 +322,11 @@ impl MeshRuntime {
         // A peer sends `Topic("mesh.subscribe")` with a JSON payload of the
         // form `{"topic": "<topic-name>"}` to register interest. We record
         // the subscription and consume the message — it does not propagate
-        // to the local router or any local subscribers.
+        // to the local router or any local subscribers. This is handled
+        // before the local-router lookup: a subscribe is consumed here and
+        // never routed, so it must succeed even on a runtime with no router
+        // attached (e.g. a pure leaf-push relay, or before the kernel wires
+        // its router in).
         if let MessageTarget::Topic(ref ctrl_topic) = message.target
             && ctrl_topic == "mesh.subscribe"
         {
@@ -346,6 +345,11 @@ impl MeshRuntime {
             return Ok(());
         }
 
+        // Everything else routes to the local kernel router.
+        let router = self
+            .local_router
+            .as_ref()
+            .ok_or_else(|| KernelError::Mesh("no local router attached to mesh runtime".into()))?;
         router.send(message).await
     }
 
