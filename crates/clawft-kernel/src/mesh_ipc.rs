@@ -144,7 +144,10 @@ impl MeshRequest {
 
     /// Check if the request has timed out.
     pub fn is_timed_out(&self) -> bool {
-        self.sent_at.elapsed() > self.timeout
+        // `>=` so a zero-duration timeout (and the exact-deadline instant)
+        // counts as timed out — `>` left a sub-tick race where a freshly
+        // created zero-timeout request read as not-yet-expired under load.
+        self.sent_at.elapsed() >= self.timeout
     }
 
     /// Check if a response envelope matches this request.

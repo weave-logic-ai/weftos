@@ -296,7 +296,10 @@ impl KeyRotationState {
 
     /// Check if key rotation is needed based on elapsed lifetime.
     pub fn needs_rotation(&self) -> bool {
-        self.established_at.elapsed() > self.max_lifetime
+        // `>=` so a zero lifetime (and the exact-deadline instant) needs
+        // rotation — `>` left a sub-tick race where a freshly established
+        // zero-lifetime key read as not-yet-due under parallel load.
+        self.established_at.elapsed() >= self.max_lifetime
     }
 
     /// Start key rotation (marks as in-progress).
