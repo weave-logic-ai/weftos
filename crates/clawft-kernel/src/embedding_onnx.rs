@@ -1599,7 +1599,19 @@ pub async fn process_batch(&self, items: Vec<Item>) -> Result<(), Error> {
             writeln!(content, "extra{}", i).unwrap();
         }
 
-        let path = PathBuf::from(format!("/tmp/clawft_test_vocab_{}.txt", std::process::id()));
+        // Unique path per call. All tests in this binary share one
+        // process, so a PID-only filename made them race on a single
+        // file: `fs::write` truncates before writing, and a concurrent
+        // `load()` could read the half-written file (<1000 entries) and
+        // return None — the wordpiece tests then flaked under parallel
+        // execution. A per-call counter gives each test its own file.
+        static VOCAB_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = VOCAB_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "clawft_test_vocab_{}_{}.txt",
+            std::process::id(),
+            seq
+        ));
         std::fs::write(&path, &content).expect("failed to write test vocab");
         path
     }
