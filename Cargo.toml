@@ -86,7 +86,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.6.20"
+version = "0.6.21"
 edition = "2024"
 rust-version = "1.93"
 license = "MIT OR Apache-2.0"
@@ -224,34 +224,34 @@ futures = "0.3"
 # Internal crates (version + path: version for crates.io, path for workspace).
 # Versions MUST track `workspace.package.version` so that bumping the workspace
 # version atomically updates all path-dep version constraints (WEFT-8).
-clawft-rpc = { version = "0.6.20", path = "crates/clawft-rpc" }
-clawft-types = { version = "0.6.20", path = "crates/clawft-types", default-features = false }
-clawft-platform = { version = "0.6.20", path = "crates/clawft-platform", default-features = false }
-clawft-core = { version = "0.6.20", path = "crates/clawft-core", default-features = false }
-clawft-tools = { version = "0.6.20", path = "crates/clawft-tools", default-features = false }
-clawft-channels = { version = "0.6.20", path = "crates/clawft-channels" }
-clawft-llm = { version = "0.6.20", path = "crates/clawft-llm", default-features = false }
-clawft-services = { version = "0.6.20", path = "crates/clawft-services" }
-clawft-plugin = { version = "0.6.20", path = "crates/clawft-plugin", default-features = false }
+clawft-rpc = { version = "0.6.21", path = "crates/clawft-rpc" }
+clawft-types = { version = "0.6.21", path = "crates/clawft-types", default-features = false }
+clawft-platform = { version = "0.6.21", path = "crates/clawft-platform", default-features = false }
+clawft-core = { version = "0.6.21", path = "crates/clawft-core", default-features = false }
+clawft-tools = { version = "0.6.21", path = "crates/clawft-tools", default-features = false }
+clawft-channels = { version = "0.6.21", path = "crates/clawft-channels" }
+clawft-llm = { version = "0.6.21", path = "crates/clawft-llm", default-features = false }
+clawft-services = { version = "0.6.21", path = "crates/clawft-services" }
+clawft-plugin = { version = "0.6.21", path = "crates/clawft-plugin", default-features = false }
 # Only the treesitter plugin retains a workspace dependency entry --
 # it is the sole orphan-survivor (ADR-051) and is wired into
 # `clawft-kernel` via the `treesitter` feature. The other eight
 # `clawft-plugin-*` crates live under `crates/archive/` and are not
 # referenced by the active workspace build.
-clawft-plugin-treesitter = { version = "0.6.20", path = "crates/clawft-plugin-treesitter" }
-clawft-graphify = { version = "0.6.20", path = "crates/clawft-graphify", default-features = false }
-clawft-security = { version = "0.6.20", path = "crates/clawft-security" }
-clawft-kernel = { version = "0.6.20", path = "crates/clawft-kernel", default-features = false }
-exo-resource-tree = { version = "0.6.20", path = "crates/exo-resource-tree" }
-weftos = { version = "0.6.20", path = "crates/weftos", default-features = false }
-clawft-substrate = { version = "0.6.20", path = "crates/clawft-substrate" }
-clawft-app = { version = "0.6.20", path = "crates/clawft-app" }
-clawft-surface = { version = "0.6.20", path = "crates/clawft-surface" }
-clawft-service-whisper = { version = "0.6.20", path = "crates/clawft-service-whisper" }
-clawft-service-llm = { version = "0.6.20", path = "crates/clawft-service-llm" }
-clawft-service-terminal = { version = "0.6.20", path = "crates/clawft-service-terminal" }
-clawft-service-classify = { version = "0.6.20", path = "crates/clawft-service-classify" }
-clawft-service-agent = { version = "0.6.20", path = "crates/clawft-service-agent" }
+clawft-plugin-treesitter = { version = "0.6.21", path = "crates/clawft-plugin-treesitter" }
+clawft-graphify = { version = "0.6.21", path = "crates/clawft-graphify", default-features = false }
+clawft-security = { version = "0.6.21", path = "crates/clawft-security" }
+clawft-kernel = { version = "0.6.21", path = "crates/clawft-kernel", default-features = false }
+exo-resource-tree = { version = "0.6.21", path = "crates/exo-resource-tree" }
+weftos = { version = "0.6.21", path = "crates/weftos", default-features = false }
+clawft-substrate = { version = "0.6.21", path = "crates/clawft-substrate" }
+clawft-app = { version = "0.6.21", path = "crates/clawft-app" }
+clawft-surface = { version = "0.6.21", path = "crates/clawft-surface" }
+clawft-service-whisper = { version = "0.6.21", path = "crates/clawft-service-whisper" }
+clawft-service-llm = { version = "0.6.21", path = "crates/clawft-service-llm" }
+clawft-service-terminal = { version = "0.6.21", path = "crates/clawft-service-terminal" }
+clawft-service-classify = { version = "0.6.21", path = "crates/clawft-service-classify" }
+clawft-service-agent = { version = "0.6.21", path = "crates/clawft-service-agent" }
 
 # EML (exp-ln) function approximation
 eml-core = { version = "0.1.0", path = "crates/eml-core" }
