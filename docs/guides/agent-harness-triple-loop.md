@@ -119,6 +119,8 @@ a worktree if another coder is live, then `done` with tests/build.
 
 ```bash
 node scripts/dashboard-board.mjs claim <ticket-uuid-or-WEFT-N>
+node scripts/dashboard-board.mjs goals
+node scripts/dashboard-board.mjs link <ticket-uuid-or-WEFT-N> <goal-uuid>
 # … implement …
 node scripts/dashboard-board.mjs done <ticket-uuid-or-WEFT-N> \
   "Shipped …; commit <sha>; tests scripts/build.sh test; build scripts/build.sh check"
@@ -136,8 +138,11 @@ node UUID from `~/.config/weftos/node-id`; it runs as `dashboard-heartbeat` in
 process-compose or a host-local systemd user service. Keep these host-local
 files off Grokbot sync.
 The dashboard retains imported `WEFT-N` references but no longer writes Plane.
-Project boards such as Shasta, BakeOS, and Sansone retain write authority for
-their own tasks; their future dashboard subscriptions are read-only views.
+Shasta software harnesses use a Shasta-scoped dashboard credential from their
+own repo. Shasta restoration and BakeOS production tasks retain their native
+board authority; their dashboard subscriptions are read-only views. BakeOS's
+subscription awaits its first selected source snapshot. Sansone remains a
+read-only research candidate until its steward reviews the scope.
 
 ## Loop 3 — ops / process-compose
 

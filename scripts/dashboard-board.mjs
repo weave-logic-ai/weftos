@@ -6,16 +6,20 @@ import { join } from 'node:path';
 const baseUrl = process.env.WEFTOS_DASHBOARD_URL ?? 'https://weftos-dashboard.vercel.app';
 const tokenFile = process.env.WEFTOS_BOARD_TOKEN_FILE ?? join(homedir(), '.config/weftos/board-token');
 const statuses = new Set(['todo', 'in_progress', 'review', 'done']);
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function usage() {
   console.log(`WeftOS dashboard board
   dashboard-board.mjs ready [--json]
   dashboard-board.mjs list [todo|in_progress|review|done] [--json]
+  dashboard-board.mjs goals [--json]
   dashboard-board.mjs show <ticket UUID|WEFT-N> [--json]
   dashboard-board.mjs create <stable-source-key> <title> <description> [source URL]
   dashboard-board.mjs claim <ticket UUID|WEFT-N>
   dashboard-board.mjs move <ticket UUID|WEFT-N> <status>
   dashboard-board.mjs note <ticket UUID|WEFT-N> <comment>
+  dashboard-board.mjs link <ticket UUID|WEFT-N> <goal UUID>
+  dashboard-board.mjs unlink <ticket UUID|WEFT-N>
   dashboard-board.mjs done <ticket UUID|WEFT-N> <tests, build, and shipped evidence>
 
 Credential: WEFTOS_BOARD_TOKEN or mode-600 ${tokenFile}`);
@@ -53,6 +57,17 @@ async function allTickets(token, status = null) {
   throw new Error('Board pagination exceeded 10,000 items');
 }
 
+async function allGoals(token) {
+  const items = [];
+  for (let offset = 0; offset < 10_000; offset += 100) {
+    const page = await request(token, 'GET', `/api/harness/goals?limit=100&offset=${offset}`);
+    if (!Array.isArray(page.items)) throw new Error('Dashboard returned an invalid goal page');
+    items.push(...page.items);
+    if (page.items.length < 100) return items;
+  }
+  throw new Error('Goal pagination exceeded 10,000 goals');
+}
+
 function shortRef(ticket) {
   return ticket.source_url?.match(/WEFT-\d+$/)?.[0] ?? ticket.id;
 }
@@ -84,6 +99,12 @@ async function main() {
     const items = await allTickets(token, status);
     return json ? console.log(JSON.stringify(items, null, 2)) : printList(items);
   }
+  if (command === 'goals') {
+    const goals = await allGoals(token);
+    if (json) return console.log(JSON.stringify(goals, null, 2));
+    for (const goal of goals) console.log(`${goal.id} ${goal.status.padEnd(9)} ${goal.title}`);
+    return console.log(`${goals.length} goal(s)`);
+  }
   if (!ref) throw new Error(`${command} requires a ticket reference`);
   if (command === 'create') {
     const [title, description, sourceUrl] = rest;
@@ -97,6 +118,16 @@ async function main() {
   }
   const ticket = await resolve(token, ref);
   if (command === 'show') return console.log(json ? JSON.stringify(ticket, null, 2) : `${shortRef(ticket)} · ${ticket.status}\n${ticket.title}\n${ticket.description}\n${ticket.source_url ?? ''}`);
+  if (command === 'link' || command === 'unlink') {
+    const goalId = command === 'unlink' ? null : rest[0];
+    if (command === 'link' && !uuidPattern.test(goalId ?? '')) {
+      throw new Error('link requires a goal UUID from this project');
+    }
+    const linked = await request(token, 'POST', '/api/harness/tickets', {
+      ticket_id: ticket.id, action: 'goal', value: goalId,
+    });
+    return console.log(json ? JSON.stringify(linked, null, 2) : `${shortRef(ticket)} → ${linked.goal_id ?? 'no goal'}`);
+  }
   let result;
   if (command === 'claim') {
     result = await request(token, 'POST', '/api/harness/tickets', { ticket_id: ticket.id, action: 'claim' });
