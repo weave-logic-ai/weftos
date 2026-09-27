@@ -23,3 +23,8 @@ processes:
     port: 8081
     adopt: true
     kill_foreign: false
+  dashboard-heartbeat:
+    desired: up
+    adopt: true
+    kill_foreign: false
+    match: scripts/dashboard-heartbeat.mjs

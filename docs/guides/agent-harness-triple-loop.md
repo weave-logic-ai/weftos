@@ -12,7 +12,7 @@ process-compose. Published twin: [Agent Harness](/weftos/guides/agent-harness).
 
 A chat that picks up a ticket and dies is not a harness. Incoming work,
 research, and development have to keep turning when the human is elsewhere.
-WeftOS already has Plane, MetaHarness, and a flywheel runner. This document
+WeftOS has the dashboard board, MetaHarness, and a flywheel runner. This document
 wires those into the same **triple loop** the Forge lead uses.
 
 ```
@@ -23,7 +23,7 @@ wires those into the same **triple loop** the Forge lead uses.
    1. research loop     2. development loop   3. ops / compose
    (always on)          (plan + do ≥ 90)      (desired state)
           │                   │                   │
-          └────────── one board (Plane) ──────────┘
+          └──── one board (WeftOS dashboard) ─────┘
 ```
 
 The master controller is a long-lived Grok (or Claude) session that **does
@@ -40,7 +40,7 @@ are the 2026-08-17 contract.
 | `AGENTS.md` | Master + lanes, loop verbs, hard rules |
 | `.grok/rules/agent-harness.md` | Short rule the host actually loads |
 | `.grok/rules/metaharness.md` | Score / flywheel / no silent promote |
-| Plane + `scripts/plane-dag.sh` | Incoming work SoT |
+| Dashboard + `scripts/dashboard-board.mjs` | Incoming WeftOS work SoT |
 | `process-compose.yaml` | This project's servers + jobs |
 | `compose/desired.yaml` | Up/down flags |
 | `compose/manifest.yaml` | Project id, namespace, ports (overlay contract) |
@@ -53,11 +53,11 @@ WeftOS mapping of Forge verbs:
 
 | Forge | WeftOS |
 |---|---|
-| `forge-loop.mjs say/hand/work` | `scripts/grok-team-bus.mjs` + Plane comments |
-| `forge-harness` board | Plane (`plane-dag.sh ready/claim/done`) |
+| `forge-loop.mjs say/hand/work` | `scripts/grok-team-bus.mjs` + dashboard ticket notes |
+| `forge-harness` board | Dashboard (`dashboard-board.mjs ready/claim/done`) |
 | `/harness-score` | `scripts/metaharness/score.sh` |
-| `/harness-research` | `scripts/metaharness/crosscut.mjs` + Plane hunt |
-| `/harness-plan` / `/harness-do` | plane-dag claim → worktree → `done` |
+| `/harness-research` | `scripts/metaharness/crosscut.mjs` + dashboard board hunt |
+| `/harness-plan` / `/harness-do` | dashboard claim → worktree → `done` |
 | flywheel forever | `node scripts/metaharness/loop-runner.mjs --forever` (opt-in) |
 
 ## Master controller
@@ -67,7 +67,7 @@ You (the lead session) sit **outside** the inner cogs.
 Every turn:
 
 1. Theme work (not wait-black) if this host uses Ghostty surfaces.
-2. Drain Plane ready (`scripts/plane-dag.sh ready`) and any team-bus inbox.
+2. Drain dashboard ready (`node scripts/dashboard-board.mjs ready`) and any team-bus inbox.
 3. Run the **score** cog (`scripts/metaharness/score.sh`) as its own subtask.
 4. Run the **research** cog. Never skip. Fail open.
 5. If a development ticket is ready, cut or claim **one** singular task.
@@ -87,47 +87,55 @@ to cut. This is the “full-time loop” for a large board.
 |---|---|
 | Index | `node scripts/metaharness/weftos-brain.mjs index` |
 | Crosscut | `node scripts/metaharness/crosscut.mjs` |
-| Ready set | `scripts/plane-dag.sh ready --cycle 0.8.x` |
+| Ready set | `node scripts/dashboard-board.mjs ready` |
 | Optional Darwin dry | `node scripts/metaharness/darwin-loop.mjs` (no promote) |
 
 Rules:
 
 - Fail open. A missing MCP does not stop the turn.
-- Do not invent tickets that are already on Plane.
+- Do not invent tickets that are already on the dashboard board.
 - Do not start `loop-runner.mjs --forever` unless the user asked — it
   spends tokens on a timer.
-- Receipt: `.metaharness/brain/crosscut-latest.json` or a Plane note.
+- Receipt: `.metaharness/brain/crosscut-latest.json` or a dashboard ticket note.
 
 When ready is empty, hunt leftovers (docs drift, score gaps, fusion
-anchors) and file **one** Plane ticket with acceptance, ruin, and
+anchors) and file **one** dashboard ticket with acceptance, ruin, and
 `blocked_by`.
 
 ## Loop 2 — development (plan + do)
 
-Inner cogs. Both must hit **90**. Plane plan-pass is 0.80 / doer 0.85;
+Inner cogs. Both must hit **90**. The historical Plane plan-pass was 0.80 / doer 0.85;
 the meta bar here is 90.
 
-**Plan** cuts a singular task from Plane or from a brief:
+**Plan** cuts a singular task from the dashboard board or from a brief:
 
 - One doer can finish it.
 - Acceptance is a command or an observable.
 - Ruin is named.
 - Dependencies are `WEFT-N`, not vibes.
 
-**Do** claims first (`scripts/plane-dag.sh claim WEFT-N`), implements in
+**Do** claims first (`node scripts/dashboard-board.mjs claim <ref>`), implements in
 a worktree if another coder is live, then `done` with tests/build.
 
 ```bash
-scripts/plane-dag.sh claim WEFT-N
+node scripts/dashboard-board.mjs claim <ticket-uuid-or-WEFT-N>
 # … implement …
-scripts/plane-dag.sh done WEFT-N \
-  --shipped "…" --commits <sha> \
-  --tests "scripts/build.sh test" --build "scripts/build.sh check"
+node scripts/dashboard-board.mjs done <ticket-uuid-or-WEFT-N> \
+  "Shipped …; commit <sha>; tests scripts/build.sh test; build scripts/build.sh check"
 ```
 
 Jobs (typecheck, gate, score) run through this project's
 `process-compose.yaml` (`job_*`, `disabled: true`) or
 `process-compose process start job_…` once that project's PC is up.
+
+The dashboard client reads a host-local `wfb_` credential from
+`~/.config/weftos/board-token` (mode 600), or `WEFTOS_BOARD_TOKEN`. Give each
+harness host its own credential. The Mac heartbeat reporter reads a separate
+`wft_` credential from `~/.config/weftos/node-token` and runs as
+`dashboard-heartbeat` in process-compose. These files stay off Grokbot sync.
+The dashboard retains imported `WEFT-N` references but no longer writes Plane.
+Project boards such as Shasta, BakeOS, and Sansone retain write authority for
+their own tasks; their future dashboard subscriptions are read-only views.
 
 ## Loop 3 — ops / process-compose
 
@@ -189,5 +197,5 @@ file that only **lists** them. See ADR-098.
 - MetaHarness does not become a `weft` link dependency (ADR-096).
 - No silent flywheel promote.
 - No invented torque / LOTO / manufacturer PN (Forge). No invented
-  Plane acceptance.
+  dashboard ticket acceptance.
 - Do not take down a desired-up webserver you do not own.

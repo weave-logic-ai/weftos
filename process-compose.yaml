@@ -1,4 +1,4 @@
-# WeftOS local plane. HTTP :18090  MCP SSE :18091
+# WeftOS local processes. HTTP :18090  MCP SSE :18091
 # Do not merge this file into Forge's instance (ADR-098).
 version: "0.5"
 
@@ -80,6 +80,20 @@ processes:
     success_exit_codes: [143]
     log_location: .grok/compose/logs/weft-serve.log
 
+  dashboard-heartbeat:
+    description: Report this Mac installation and MetaHarness receipts to the dashboard
+    command: node scripts/dashboard-heartbeat.mjs
+    working_dir: /Users/mathewbeane/weftos
+    namespace: weftos
+    environment:
+      - WEFTOS_DASHBOARD_NODE_ID=42b37925-9ff9-4879-b0e4-c632b097d046
+    availability:
+      restart: on_failure
+      backoff_seconds: 5
+      max_restarts: 3
+    success_exit_codes: [143]
+    log_location: .grok/compose/logs/dashboard-heartbeat.log
+
   job_score:
     description: MetaHarness score + genome
     command: scripts/metaharness/score.sh
@@ -90,15 +104,15 @@ processes:
       type: tool
     log_location: .grok/compose/logs/job-score.log
 
-  job_plane_ready:
-    description: List Plane wave-0 ready
-    command: scripts/plane-dag.sh ready --cycle 0.8.x
+  job_board_ready:
+    description: List WeftOS dashboard board ready tickets
+    command: node scripts/dashboard-board.mjs ready
     working_dir: /Users/mathewbeane/weftos
     disabled: true
     namespace: jobs
     mcp:
       type: tool
-    log_location: .grok/compose/logs/job-plane-ready.log
+    log_location: .grok/compose/logs/job-board-ready.log
 
   job_crosscut:
     description: Research crosscut

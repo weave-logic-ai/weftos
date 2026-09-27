@@ -4,7 +4,7 @@ description: Add the triple loop (research, development, ops) with a master cont
 ---
 
 How WeftOS runs incoming work the way Forge does: a **master controller**,
-three standing loops, one Plane board, jobs in process-compose.
+three standing loops, the WeftOS dashboard board, jobs in process-compose.
 
 The long form (agents grep this):
 [`docs/guides/agent-harness-triple-loop.md`](https://github.com/weave-logic-ai/weftos/blob/0.8-metaharness/docs/guides/agent-harness-triple-loop.md).
@@ -20,13 +20,13 @@ Decision: [ADR-098](/docs/weftos/decisions) (environment pane is **planned only*
    1. research loop     2. development loop   3. ops / compose
    (always on)          (plan + do ≥ 90)      (desired state)
           │                   │                   │
-          └────────── one board (Plane) ──────────┘
+          └──── one board (WeftOS dashboard) ─────┘
 ```
 
 | Loop | Every turn | Command |
 |---|---|---|
-| **Research** | Never skip | `node scripts/metaharness/crosscut.mjs` + `scripts/plane-dag.sh ready` |
-| **Development** | When ready exists | `plane-dag.sh claim` → implement → `done` |
+| **Research** | Never skip | `node scripts/metaharness/crosscut.mjs` + `node scripts/dashboard-board.mjs ready` |
+| **Development** | When ready exists | `node scripts/dashboard-board.mjs claim <ref>` → implement → `done` |
 | **Ops** | When servers/jobs move | This repo `process-compose` on **:18090** / **:18091** |
 
 Score is its own subtask: `scripts/metaharness/score.sh`.
@@ -47,7 +47,12 @@ Ruflo to write code. Do not start
 | `compose/ports.yaml` | Ports this repo claims |
 
 Jobs are YAML processes with `disabled: true` and `mcp.type: tool`.
-No ad-hoc Python for score / gate / plane-ready.
+No ad-hoc Python for score / gate / board-ready.
+
+The dashboard board is authoritative for WeftOS work. Its harness client uses
+a host-local board credential. Imported Plane IDs remain searchable references.
+Shasta, BakeOS, and Sansone keep authority over their own boards; subscribed
+items appear as read-only snapshots with source links and sync timestamps.
 
 ## Why there is no machine-wide pane yet
 

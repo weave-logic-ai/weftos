@@ -1,0 +1,15 @@
+---
+description: WeftOS harness board and work loop
+alwaysApply: true
+---
+
+Use the WeftOS dashboard board as the authoritative tracker for work in this
+repository. On each work turn, run `node scripts/metaharness/crosscut.mjs` and
+`node scripts/dashboard-board.mjs ready`. Before editing for a ticket, run
+`node scripts/dashboard-board.mjs claim <ticket UUID|WEFT-N>`. Record findings
+with `note`, and close with `done` including shipped work, commit, and test/build
+evidence. Create new work with a stable source key and acceptance criteria.
+
+Imported Plane IDs remain references only. Project boards such as Shasta,
+BakeOS, and Sansone retain authority for their own tickets. Follow AGENTS.md
+and docs/guides/agent-harness-triple-loop.md for the full contract.

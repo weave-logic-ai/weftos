@@ -1,4 +1,6 @@
 target/
+**/target/
+crates/*/target/
 .git/
 .weftos/
 *.onnx
@@ -13,6 +15,10 @@ clawft-ui/dist/
 # crates/clawft-edge-pad-idf/.embuild — must not enter the build context.
 .embuild/
 **/.embuild/
+crates/*/.embuild/
+docs/src/.next/
+gui/.next/
+clawft-ui/.next/
 
 # Generated WASM bindings + local vector-store brain.
 crates/clawft-wasm/www/pkg/

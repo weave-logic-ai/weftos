@@ -11,29 +11,17 @@
 - ALWAYS read a file before editing it
 - NEVER commit secrets, credentials, or .env files
 
-## Plane is the authoritative work tracker
+## Dashboard board is the authoritative work tracker
 
-Every meaningful unit of work for WeftOS / clawft goes through a Plane work
-item in the `weftos` workspace. State must reflect reality. Use the
-`plane-workflow` skill (`.claude/skills/plane-workflow/SKILL.md`) for the
-operational manual; the rule itself:
-
-- **New items**: when a TODO is identified (audit, code review, user
-  request, in-flight discovery), create a Plane work item in the
-  appropriate cycle (`0.7.x` for must-ship-before-0.7, `0.8.x`+ for
-  later). Include file path / source citation, acceptance criteria,
-  dependencies, link back to source-of-truth doc.
-- **Items being worked on**: transition to **In Progress** on claim,
-  before starting code.
-- **Items finished**: close with what shipped, the commit SHA, any
-  follow-up items spawned, and tests / build status. No silent closures.
-- **Items deferred**: move to a later cycle with an explicit reason in
-  the comment (blocked by upstream, scope-cut, superseded, etc.).
-
-Mechanism: `scripts/plane.sh` (project-local under `.claude/skills/
-plane-workflow/scripts/`) wraps the Plane HTTP API. The MCP server's
-`list_*` endpoints currently return HTTP 404; the wrapper is the
-load-bearing path.
+Every meaningful unit of WeftOS / clawft work goes through the WeftOS
+dashboard board. Use `node scripts/dashboard-board.mjs ready` to read incoming
+work, `create <stable-key> <title> <description> [source URL]` for a new item,
+and `claim <ticket UUID|WEFT-N>` before starting code. Include source citation,
+acceptance criteria, dependencies, and an observable completion condition in
+the description. On completion, use `done <ref> <shipped, commit, tests, build>`.
+Use `note` to record blockers or deferrals and `move` to set the state. Imported
+WEFT-N IDs remain searchable references; Plane is historical after cutover.
+Do not create or update WeftOS tickets in Plane.
 
 ## File Organization
 
