@@ -13,7 +13,7 @@ competing copies.
 | Shasta software coordination | Dashboard Shasta board, from the Shasta repo | Native tickets and goals |
 | Shasta trailer restoration | Shasta Postgres `/board` | Existing read-only subscription |
 | BakeOS product work and goals | BakeOS OS board | Scoped subscription after source review |
-| Sansone product work and goals | Sansone steward and approved OS paths | Restricted subscription after authorization review |
+| Sansone product work and goals | Sansone steward and approved OS paths | Restricted subscription after the [export decision](sansone-board-subscription-proposal-2026-09.md) |
 | RuView and oil-rig demo work | Their dashboard project boards | Native project goals and tickets |
 
 ## Roles
