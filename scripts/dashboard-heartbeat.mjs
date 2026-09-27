@@ -3,11 +3,19 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const baseUrl = process.env.WEFTOS_DASHBOARD_URL ?? "https://weftos-dashboard.vercel.app";
-const nodeId = process.env.WEFTOS_DASHBOARD_NODE_ID;
+const nodeIdFile = process.env.WEFTOS_DASHBOARD_NODE_ID_FILE ?? join(homedir(), ".config/weftos/node-id");
 const tokenFile = process.env.WEFTOS_DASHBOARD_TOKEN_FILE ?? join(homedir(), ".config/weftos/node-token");
 const installationId = process.env.WEFTOS_INSTALLATION_ID ?? hostname();
 const intervalMs = Number(process.env.WEFTOS_DASHBOARD_INTERVAL_MS ?? 60_000);
 const repoRoot = process.env.WEFTOS_REPO_ROOT ?? process.cwd();
+
+let nodeId;
+try {
+  nodeId = (await readFile(nodeIdFile, "utf8")).trim();
+} catch (error) {
+  if (error?.code !== "ENOENT") throw error;
+  nodeId = process.env.WEFTOS_DASHBOARD_NODE_ID;
+}
 
 async function receipt(path) {
   try {
@@ -39,8 +47,8 @@ async function metaharnessReport() {
   return Object.keys(report).length ? report : undefined;
 }
 
-if (!nodeId) {
-  console.error("Set WEFTOS_DASHBOARD_NODE_ID.");
+if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(nodeId ?? "")) {
+  console.error(`Put this installation's dashboard node UUID in ${nodeIdFile} or set WEFTOS_DASHBOARD_NODE_ID.`);
   process.exit(2);
 }
 if (!Number.isFinite(intervalMs) || intervalMs < 15_000) {

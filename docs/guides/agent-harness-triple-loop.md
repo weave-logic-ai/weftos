@@ -130,9 +130,11 @@ Jobs (typecheck, gate, score) run through this project's
 
 The dashboard client reads a host-local `wfb_` credential from
 `~/.config/weftos/board-token` (mode 600), or `WEFTOS_BOARD_TOKEN`. Give each
-harness host its own credential. The Mac heartbeat reporter reads a separate
-`wft_` credential from `~/.config/weftos/node-token` and runs as
-`dashboard-heartbeat` in process-compose. These files stay off Grokbot sync.
+harness host its own credential. Each host's heartbeat reporter reads a
+separate `wft_` credential from `~/.config/weftos/node-token` and its dashboard
+node UUID from `~/.config/weftos/node-id`; it runs as `dashboard-heartbeat` in
+process-compose or a host-local systemd user service. Keep these host-local
+files off Grokbot sync.
 The dashboard retains imported `WEFT-N` references but no longer writes Plane.
 Project boards such as Shasta, BakeOS, and Sansone retain write authority for
 their own tasks; their future dashboard subscriptions are read-only views.

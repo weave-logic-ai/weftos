@@ -81,12 +81,9 @@ processes:
     log_location: .grok/compose/logs/weft-serve.log
 
   dashboard-heartbeat:
-    description: Report this Mac installation and MetaHarness receipts to the dashboard
+    description: Report this installation and MetaHarness receipts to the dashboard
     command: node scripts/dashboard-heartbeat.mjs
-    working_dir: /Users/mathewbeane/weftos
     namespace: weftos
-    environment:
-      - WEFTOS_DASHBOARD_NODE_ID=42b37925-9ff9-4879-b0e4-c632b097d046
     availability:
       restart: on_failure
       backoff_seconds: 5
