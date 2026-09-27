@@ -82,11 +82,12 @@ Alert on a stuck cursor, repeated write conflicts, or snapshot lag. Test
 crashes at the source-write and publish boundaries, two-node races, revoked
 credentials, and a ticket edited by a person between assessment and apply.
 
-The first implementation pass should establish the ledger and conservative
-decision path on native dashboard, BakeOS, Sansone, and FlipsOS boards. Shasta
-restoration remains queued until its source writer supports conditional
-actions. No steward should report a project as active merely because its
-snapshot subscription exists.
+The first implementation pass establishes the ledger and conservative
+decision path on native dashboard, BakeOS, Sansone, FlipsOS, and Shasta boards.
+Shasta's conditional source writer is staged in a project branch; its steward
+is not active until that branch is released and a project schedule runs it.
+No steward should report a project as active merely because its snapshot
+subscription exists.
 
 ## Native dashboard runner
 
