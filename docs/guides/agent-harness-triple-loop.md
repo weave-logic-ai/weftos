@@ -139,11 +139,13 @@ process-compose or a host-local systemd user service. Keep these host-local
 files off Grokbot sync.
 The dashboard retains imported `WEFT-N` references but no longer writes Plane.
 Shasta software harnesses use a Shasta-scoped dashboard credential from their
-own repo. Shasta restoration, BakeOS production tasks, and Sansone Product
+own repo. Shasta restoration, BakeOS production tasks, Sansone Product
 Board tickets retain their native board authority; their dashboard
 subscriptions are read-only views. BakeOS publishes native `MS-` IDs, and
 Sansone publishes `SO-` IDs under the engagement lead's
 [scoped export decision](../plans/sansone-board-subscription-proposal-2026-09.md).
+FlipsOS publishes redacted native ticket numbers; its first verified snapshot
+contains 102 tickets. Goal publication awaits its schema migration.
 
 ## Loop 3 — ops / process-compose
 
