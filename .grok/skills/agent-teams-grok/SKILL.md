@@ -6,7 +6,7 @@ description: >
   development with architect→coder→tester→reviewer, or replacing Claude SendMessage.
 ---
 
-# Agent Teams on Grok (ADR-320)
+# Agent Teams on Grok (ADR-402)
 
 Claude `SendMessage` / TeammateTool are **not** available. Prefer **Ruflo MCP** `team_*` tools; CLI bus is the fallback.
 
@@ -46,19 +46,32 @@ node scripts/grok-team-bus.mjs spawn --team feature-x --agent reviewer --role re
 
 ## Lead (you) then
 
-1. Parse each `spawnPlan.host.grok` from stdout.
-2. Call **`spawn_subagent`** in **one message** for all agents (`background: true`).
-3. Use `spawnPlan.prompt` as the child prompt; set `subagent_type`, `capability_mode`, `isolation` from the plan.
-4. Prefer agent types under `.grok/agents/` when available (`ruflo-architect`, `ruflo-coder`, …).
-5. On completions: `on-stop`, then spawn/resume next if needed.
+Checked against **Grok Build 1.0.41**. Pass only the live spawn arguments:
+
+```
+spawn_subagent({
+  prompt: spawnPlan.prompt,
+  description: spawnPlan.host.grok.spawn.description,
+  background: spawnPlan.host.grok.spawn.background,
+  isolation: spawnPlan.host.grok.spawn.isolation,
+})
+```
+
+1. Parse `spawnPlan.host.grok.spawn` (and `prompt`). Call **`spawn_subagent`** in **one message** for every agent (`background: true`).
+2. Leave `host.grok.advisory` on the plan. `capability_mode` and `subagent_type` are not spawn arguments on this Grok. The prompt carries the read-only or worktree constraint. `isolation` is the knob Grok enforces.
+3. `.grok/agents/ruflo-*` are session profiles (`grok --agent-profile ruflo-coder` or `/agents`). `spawn_subagent` does not select them. An omitted type is `general-purpose`.
+4. Children must not call `spawn_subagent`. Nesting depth is 1. The lead spawns the whole pipeline.
+5. On completions: `on-stop`, then spawn or resume the next step if needed.
 6. Synthesize results; `shutdown` the team.
 
-## Defaults (better than Claude shared-tree teams)
+If `grok --version` is newer than 1.0.41, re-read `~/.grok/docs/user-guide/16-subagents.md` (Spawning Subagents) before forwarding extra keys. A key the schema dropped fails the spawn.
 
-| Role | capability_mode | isolation |
-|------|-----------------|-----------|
-| architect / reviewer | read-only / plan | none |
-| developer / tester | all | **worktree** |
+## Defaults
+
+| Role | Prompt constraint (`advisory.capability_mode`) | `isolation` (passed through) |
+|------|------------------------------------------------|------------------------------|
+| architect / reviewer | read-only | `none` |
+| developer / tester | full tools | **`worktree`** |
 
 ## Messaging
 
@@ -78,4 +91,6 @@ node scripts/grok-team-bus.mjs status --team feature-x
 
 - Waiting for `swarm start` to write code
 - Inventing SendMessage
+- Passing `capability_mode` or `subagent_type` into `spawn_subagent` (they are advisory on Grok Build 1.0.41)
 - Parallel coders on the same tree without worktrees
+- A child calling `spawn_subagent` (depth limit is 1)

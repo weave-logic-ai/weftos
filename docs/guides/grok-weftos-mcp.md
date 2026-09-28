@@ -244,7 +244,7 @@ Local stdio remains the default for single-machine attach (`grok mcp add weftos 
 
 Running both at once can create **delegation loops**. Prefer one primary driver per session. See recursive-delegation notes in [tool-calls.md](./tool-calls.md).
 
-### WeftOS on a Ruflo agent team (ADR-320)
+### WeftOS on a Ruflo agent team (ADR-402)
 
 WeftOS joins a Ruflo team in two ways. Neither needs Rust changes.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Grok SubagentStop → `ruflo team hook-stop --host grok` (ADR-320).
+ * Grok SubagentStop → `ruflo team hook-stop --host grok` (ADR-402).
  *
  * Ruflo maps the hook payload (Grok's `role:agent` description, SUBAGENT_NAME,
  * TEAM_NAME) to team_on_stop. With several active teams and none named it

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Host-agnostic Agent Teams bus (ADR-320) — CLI shim.
+ * Host-agnostic Agent Teams bus (ADR-402) — CLI shim.
  *
  * Keeps the original flag set, but every verb calls
  * `ruflo team <verb> --params <json>`, so the team_* handlers stay the only

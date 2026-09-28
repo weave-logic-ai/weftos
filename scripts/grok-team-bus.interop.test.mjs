@@ -1,5 +1,5 @@
 // Interop test: scripts/grok-team-bus.mjs (shim) and `ruflo team` share one
-// on-disk format, and Ruflo's team_* handlers are its only writer (ADR-320).
+// on-disk format, and Ruflo's team_* handlers are its only writer (ADR-402).
 //
 //   RUFLO_CLI=<ruflo>/v3/@claude-flow/cli/bin/cli.js node --test scripts/grok-team-bus.interop.test.mjs
 //
