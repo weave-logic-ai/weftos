@@ -57,6 +57,7 @@ INFERRED_NAME_EDGES: list[tuple[str, str, str]] = [
     # 642 can ship as surgical democritus chain_seq fix without full registry.
     # (r"AtomRegistry \+ atom\.locate", r"ECC brain HNSW cannot join", "soft prefer only"),
     (r"MCP server runs 'npx ruflo@latest'", r"memory_import drops the tags", "pin schema before import fixes"),
+    (r"RMM retrospective", r"RMM prospective", "citation ids + non-dump inject before topic merge is observable"),
     # Voice (architect: DROP hard 644→615 Silero; KEEP 628→615 Phase1)
     (r"ADR-068 Phase 1", r"Re-enable barge-in", "Phase1 ERL before barge-in"),
     (r"decide the disposition of clawft-plugin/src/voice", r"Voicelab parity", "disposition before more voice ports"),
