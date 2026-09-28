@@ -1,0 +1,80 @@
+name: eikon-specialist
+nickname: (none — a zero-shot hybrid child, not a persona)
+kind: specialist
+trust_tier: core
+
+capabilities:
+  - image_specialist_splat        # feasibility + backend call for gaussian-splat capture; never trains
+  - image_specialist_document      # careful read of a hard page via the quality-tier VLM
+  - image_specialist_ground        # pointing at a phrase via Molmo
+  - image_specialist_segment       # open-vocabulary boxes + masks via SAM 3.1
+  - image_specialist_retrieve      # lexical/image kb search, names ColQwen2.5 as an upgrade only
+
+# Fields this agent expects to find in .agents/project-context.md.
+required_project_context:
+  - key: llm_home
+    description: >
+      absolute path to the local model-lab repo that owns bin/eikon, bin/sam, bin/depth,
+      and the model/reconstruction registries this agent's skills read. Every
+      runtime_requires path below is relative to it.
+    default: "~/llm"
+
+# External runtime this agent shells out to, by specialist skill. None of it is vendored.
+runtime_requires:
+  bins:
+    - path: bin/eikon
+      description: used for `bin/eikon stop` (heavy-model release) and `bin/eikon note
+        <id> --json` (filing the specialist's result); also `kb search`/`kb show` for
+        the retrieve skill.
+    - path: bin/sam
+      used_by: segment skill
+      description: >
+        SAM 3.1 wrapper (Sam3Predictor, sam3_1.predict_multi). Default weights are
+        gated; if the load reports a license gate, pull via `bin/eikon pull --specialist
+        sam` after accepting it, then re-check the model store.
+    - path: bin/depth
+      used_by: splat skill
+      description: >
+        metric-depth wrapper. Meters ONLY with --focal-px or --hfov-deg; without one of
+        those the map stays canonical. See Rule zero in AGENT.md — this is a hard
+        honesty rule, not a style note.
+  ports:
+    - port: 8093
+      role: quality-tier VLM server, used only by the document skill
+      note: refuse to start this if a different model is already resident; `bin/eikon
+        stop` first, and never run it beside a resident Molmo/SAM/fast-VLM process.
+  model_store:
+    path: /Volumes/ai-models
+    check_command: "bin/modelstore status"
+
+secrets: []
+
+requires:
+  - skill: eikon-specialist
+
+dependencies:
+  - agent: eikon
+    relationship: >
+      eikon-specialist is only ever spawned by eikon (or a caller following the same
+      `bin/eikon dispatch` contract) with a one-skill (or small advisory-combination)
+      brief. It never spawns itself and never answers a general image question directly.
+
+provenance:
+  source: "~/llm (local model lab)"
+  source_registry: local model lab (private, non-WeftOS repo on this Mac)
+  source_url: null
+  upstream_license: none (internal lab agent, not open-source)
+  upstream_commit: null
+  adopted_at: "2026-09-28"
+  verdict: adapt
+  notes: >
+    Ported from the local model lab's eikon-specialist agent plus the five specialist
+    skill files under its skills/eikon/specialists/ (document, ground, retrieve,
+    segment, splat). Kept as a separate package from eikon because the source treats it
+    as a distinct spawn target with its own tool list, its own "brief is the whole
+    procedure" discipline, and a hard separation from the lead's own context (the lead
+    is explicitly told not to open these skill files itself). The depth honesty rule
+    (canonical unless a focal length or field of view is given) and the
+    never-two-heavy-models-resident rule ported verbatim as load-bearing. Absolute
+    paths were replaced with the llm_home project-context key and this
+    runtime_requires block.

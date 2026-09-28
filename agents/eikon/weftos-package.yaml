@@ -1,0 +1,72 @@
+name: eikon
+nickname: Eikon (ikon, icon)
+kind: specialist
+trust_tier: core
+
+capabilities:
+  - image_analyze               # Apple Vision + one VLM pass -> catalog record (bin/eikon analyze)
+  - image_kb_search              # lexical + image-similarity search over the local catalog
+  - image_specialist_dispatch    # hands splat/document/ground/segment/retrieve work to eikon-specialist
+
+# Fields this agent expects to find in .agents/project-context.md.
+required_project_context:
+  - key: llm_home
+    description: >
+      absolute path to the local model-lab repo that owns bin/eikon, its catalog, and
+      USING_LOCAL_MODELS.md. Every runtime_requires path below is relative to it.
+    default: "~/llm"
+  - key: eikon_kb_path
+    required: false
+    description: where analyze/kb records land; default var/eikon/kb under llm_home
+
+# External runtime this agent shells out to. None of it is vendored — the project must
+# supply a real llm_home checkout with these binaries, ports, and model store present.
+runtime_requires:
+  bins:
+    - path: bin/eikon
+      description: >
+        the catalog CLI this agent drives directly — roster, pull, warm, analyze,
+        kb search/show, dispatch, stop, selftest. See USING_LOCAL_MODELS.md section 3
+        ("Eikon") for the wider serving context.
+  ports:
+    - port: 8093
+      role: eikon VLM server (mlx_vlm.server, started by `bin/eikon warm`)
+      note: >
+        do not use this port for anything else; leave the daily-coder and secondary-model
+        ports (conventionally :8081 and :8092 on this lab's machines) alone.
+  model_store:
+    path: /Volumes/ai-models
+    check_command: "bin/modelstore status"
+    note: weights are pulled to the boot disk first and must be swept to the store volume
+
+secrets: []
+
+requires:
+  - skill: eikon
+
+dependencies:
+  - agent: eikon-specialist
+    relationship: >
+      eikon dispatches splat, document, ground, segment, and retrieve work to this agent
+      via `bin/eikon dispatch`; eikon never runs those skills or loads those models
+      itself.
+
+provenance:
+  source: "~/llm (local model lab)"
+  source_registry: local model lab (private, non-WeftOS repo on this Mac)
+  source_url: null
+  upstream_license: none (internal lab agent, not open-source)
+  upstream_commit: null
+  adopted_at: "2026-09-28"
+  verdict: adapt
+  notes: >
+    Ported from the local model lab's eikon agent + eikon skill (SKILL.md, models.md).
+    The role, fan-out discipline (Vision first, one VLM call for describe/categorize/
+    tag/OCR, SigLIP/Molmo only on request), memory discipline (one heavy model at a
+    time, check the monitor before a big load), and the "never invent a runner for a
+    held model" rule ported near-verbatim as the portable part of the design. Absolute
+    paths and the lab's own hardware-specific serving details were replaced with the
+    llm_home project-context key and this runtime_requires block; the specialist
+    dispatch skills (splat, document, ground, segment, retrieve) were kept with the
+    eikon-specialist package, matching the source's own separation — the lead agent
+    never reads them.
