@@ -119,3 +119,11 @@ legal/compliance), `sonobuoy` (business+technical tracks, PPTX decks, ADRs 081â€
 `gaming-robotics`, `ontology-navigator` (EML/TreeCalc for ontology layer),
 `RLM-arxiv-2512.24601` (RL-from-memory paper â†’ ECC mapping), `cognitum-seed-gaps`
 (tiered profiles), `krause-docs-generator` (client docs service), `lewm-worldmodel`.
+
+**RMM / citation-attributed memory** (2026-09-11). Tan et al., ACL 2025,
+arXiv:2503.08026. Prospective topic merge + retrospective citation-RL
+rerank on a frozen retriever. Canonical note
+`docs/research/rmm-reflective-memory-management.md`. Plane **WEFT-732**
+(retrospective) then **WEFT-733** (prospective).
+Pairs with the RLM symposium (strategies vs which-memories-were-used).
+Do not dump `MEMORY.md` into L1. Do not RL-update the embedder.

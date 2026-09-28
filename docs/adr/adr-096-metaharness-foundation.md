@@ -17,6 +17,7 @@
 - **Source**:
   - `docs/research/metaharness-foundation.md`
   - `docs/research/ruv-worldgraph-vs-weftos.md`
+  - `docs/research/rmm-reflective-memory-management.md` (SONA memory-reranker weights are a flywheel champion — evaluate → receipt → `confirm=true`; paper ablation shows RL-updating the retriever collapses)
   - `docs/plans/release-0.8-readiness-review-2026-07-31.md` §2
   - Live `metaharness_score` on weftos (2026-07-31): harnessFit 75, taskCoverage 65, memoryUsefulness 51
 

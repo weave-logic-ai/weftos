@@ -28,7 +28,7 @@ in `.rvf` files (VEC + INDEX + HNSW + WITNESS segments).
 | **Releases & Shipped Features** | [`02-release-history-and-features.md`](02-release-history-and-features.md) | Every release 0.1.0→0.6.19, the 10 commit "waves", implemented-feature inventory, WEFT ticket map, recent session narrative |
 | **Architecture & ADRs** | [`03-architecture-and-adrs.md`](03-architecture-and-adrs.md) | 44-crate map, K0–K8 kernel layer model, full ADR-001→057 index, key patterns, `weave.toml` config surface |
 | **Bugs, Gaps & Current State** | [`04-bugs-gaps-and-current-state.md`](04-bugs-gaps-and-current-state.md) | Known open bugs, audit/review findings, phase gaps, the uncommitted-work hazard, TODO density, operational gotchas |
-| **RVF Brain & Research** | [`05-rvf-brain-and-research.md`](05-rvf-brain-and-research.md) | RVF/ruvector primer, ECC cognitive substrate, how the brain is chunked, the sonobuoy/sensors/actors/symposium research streams |
+| **RVF Brain & Research** | [`05-rvf-brain-and-research.md`](05-rvf-brain-and-research.md) | RVF/ruvector primer, ECC cognitive substrate, how the brain is chunked, the sonobuoy/sensors/actors/symposium research streams, **RMM / citation-attributed memory** (`docs/research/rmm-reflective-memory-management.md`) |
 
 ## The one-paragraph picture
 

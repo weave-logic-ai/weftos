@@ -73,6 +73,18 @@ reports whether product code is correct. It was lying in three ways.
 
 Full resume context: `docs/handoff-tracker-ci-memory.md`.
 
+## 0c. Research capture — 2026-09-11 (RMM / MEMORY.md dump)
+
+Long-term memory inject is still the nanobot dump: `ContextBuilder` labels the
+**entire** `MEMORY.md` as `# Relevant Memory:` every turn. WEFT-665 already
+showed graft debris in that file is re-injected and hallucinated. Google Cloud
+AI Research RMM (Tan et al., ACL 2025, arXiv:2503.08026) is the landing:
+frozen retriever Top-K → SONA citation-rerank Top-M → session-end topic
+merge/insert. Canonical note
+`docs/research/rmm-reflective-memory-management.md`. Plane **WEFT-732** (retrospective) then **WEFT-733**
+(prospective). Do not RL-update the embedder; do not
+treat tweet 43/37/28% figures as paper results.
+
 ## 1. Known bugs / defects
 
 | ID | Severity | Summary | Status |

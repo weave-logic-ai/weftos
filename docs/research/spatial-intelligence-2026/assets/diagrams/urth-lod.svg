@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" width="720" height="420" role="img" aria-labelledby="lod-title lod-desc">
+  <title id="lod-title">Urth level of detail</title>
+  <desc id="lod-desc">Six nested LOD bands from planetary basemap to object AABBs. Unobserved space is honest empty.</desc>
+  <defs>
+    <style>
+      .lod-bg { fill: #0d1117; }
+      .lod-band { fill: none; stroke-width: 1.5; }
+      .lod-label { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 12px; fill: #e6edf3; }
+      .lod-sub { font-family: ui-sans-serif, system-ui, sans-serif; font-size: 11px; fill: #8b98a8; }
+      .lod-note { font-family: ui-sans-serif, system-ui, sans-serif; font-size: 12px; fill: #c4a25c; }
+    </style>
+  </defs>
+  <rect class="lod-bg" x="0" y="0" width="720" height="420" rx="4"/>
+  <rect class="lod-band" stroke="#3a4a60" x="36" y="24" width="648" height="52" rx="4"/>
+  <text class="lod-label" x="52" y="46">L0 planet</text>
+  <text class="lod-sub" x="52" y="64">DEM / coastline · thin open feeds</text>
+  <rect class="lod-band" stroke="#4a5a70" x="56" y="84" width="608" height="48" rx="4"/>
+  <text class="lod-label" x="72" y="104">L1 admin</text>
+  <text class="lod-sub" x="72" y="122">boundaries · transport</text>
+  <rect class="lod-band" stroke="#6dd3ff" x="76" y="140" width="568" height="48" rx="4"/>
+  <text class="lod-label" x="92" y="160">L2 city</text>
+  <text class="lod-sub" x="92" y="178">OSM footprints · CityGaussian-scale appearance</text>
+  <rect class="lod-band" stroke="#7ae0c3" x="96" y="196" width="528" height="48" rx="4"/>
+  <text class="lod-label" x="112" y="216">L3 site</text>
+  <text class="lod-sub" x="112" y="234">campus + anchors · ENU local frame</text>
+  <rect class="lod-band" stroke="#ffb65a" x="116" y="252" width="488" height="48" rx="4"/>
+  <text class="lod-label" x="132" y="272">L4 quilt</text>
+  <text class="lod-sub" x="132" y="290">splat + multi-cam · seams OK</text>
+  <rect class="lod-band" stroke="#c4a25c" x="136" y="308" width="448" height="48" rx="4"/>
+  <text class="lod-label" x="152" y="328">L5 object</text>
+  <text class="lod-sub" x="152" y="346">AABB + VectorRef · BVH Object leaves</text>
+  <text class="lod-note" x="360" y="392" text-anchor="middle">Most of Urth stays unobserved. Fake cities are not metric.</text>
+</svg>

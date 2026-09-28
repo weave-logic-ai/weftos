@@ -4,6 +4,9 @@
 **Date:** 2026-07-31  
 **Companions:** ADR-096 (draft), ADR-095 / Graph Views,  
 `docs/research/ruv-worldgraph-vs-weftos.md`,  
+`docs/research/rmm-reflective-memory-management.md` (SONA memory-reranker
+weights = flywheel champion, `confirm=true`; never silent-promote, never
+RL the frozen retriever),  
 `docs/plans/release-0.8-readiness-review-2026-07-31.md` §2 (score snapshot)
 
 ---

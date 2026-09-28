@@ -10,6 +10,8 @@
 
 **Urth** is the product name for WeftOS’s sparse-first planetary digital twin.
 
+> **Rename candidate (2026-09-26, not decided):** stylized mark **uvRTH** = **Region Tessellated Holograph**, also a letter-play on **rUv + Earth** (credit rUv’s naming scheme). See `docs/research/uvrth-name-candidate.md`. This ADR’s name stays **Urth** until product agrees.
+
 - Deliberately **not** “Earth” / “Google Earth” as a product label (trademark / confusion hygiene).  
 - Physical planet still uses **WGS84 / ECEF** geodesy under the hood — Urth is the **software world**, not a second planet.  
 - Prefer `urth`, `region/urth/…` in IDs and UI copy.
@@ -42,6 +44,8 @@ We already have the seeds: free-form **regions**, camera-stats contributions, BV
 | **L5 Object** | Instance AABBs, affordances | Structure stage + human/agent |
 
 BVH (or sharded BVHs) indexes leaves at each LOD; coarse leaves **contain** finer ones (parent region IDs). Root region id: `urth` (or `region/urth`).
+
+Spoken tessellation ladder (nano → micro → mini → meso → normal → macro → major → super → inf) maps onto L0–L5; see `docs/research/uvrth-tessellation-scales.md`. Not a wire-format change.
 
 ### 2. Sparse-first is the only viable start
 

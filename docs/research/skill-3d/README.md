@@ -44,8 +44,8 @@ published docs. The repository code is Apache-2.0.
 - **Licensing:** Pi3 weights are CC BY-NC (research only). SAM 3.1 is under Meta's custom license.
   Orient-Anything v2's license is unresolved. Depth Anything 3's license differs by checkpoint.
   Models are served by `~/llm`: SAM 3.1 is the segmenter (a `bin/` runner over mlx-vlm's
-  `Sam3Predictor`), Grounding DINO is an unbuilt catalog fallback, and metric depth (DA3METRIC-LARGE)
-  is still to be served there. See plan §9.
+  `Sam3Predictor`), Grounding DINO is an unbuilt catalog fallback, and metric depth is `bin/depth`
+  (DA3METRIC-LARGE, metric only when a focal length or FOV is supplied). See plan §9.
 - **Evaluate with ReVSI and MMSI-Bench, not raw VSI-Bench.** BLINK is non-commercial. The paper's
   splits are disjoint by question, not by scene, so our held-out set must be scene-disjoint. No
   benchmark covers glasses capture, so we build one.

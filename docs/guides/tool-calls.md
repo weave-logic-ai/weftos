@@ -34,7 +34,7 @@ these steps:
 4. **For each tool call**:
    a. Look up the tool by name in the `ToolRegistry`.
    b. Execute the tool with the provided JSON arguments.
-   c. On success, truncate the result to 64 KB (`MAX_TOOL_RESULT_BYTES = 65,536`).
+   c. On success, keep the prompt body at 64 KB (`MAX_TOOL_RESULT_BYTES = 65,536`). Large results are archived next to the session JSONL and projected (head/tail + `obs_recall` handle); the tail is not discarded. Archive failure falls back to `truncate_result`.
    d. On error, produce a JSON error object (`{"error": "..."}`).
    e. Append the tool result as a `"tool"` role message to the conversation,
       tagged with the matching `tool_call_id`.
@@ -257,7 +257,7 @@ The following tools are registered by `clawft_tools::register_all()`:
 | `edit_file`      | Apply edits to existing files (workspace-sandboxed) |
 | `list_directory` | List directory contents (workspace-sandboxed)       |
 | `exec_shell`     | Execute shell commands (workspace CWD)              |
-| `memory_read`    | Read from long-term memory                          |
+| `memory_read`    | Read from long-term memory (`MEMORY.md`; optional vector search). Not the same path as prompt injection — the loop still dumps the whole file today; RMM (`docs/research/rmm-reflective-memory-management.md`) splits those. |
 | `memory_write`   | Write to long-term memory                           |
 | `web_search`     | Search the web via configured endpoint              |
 | `web_fetch`      | Fetch content from a URL                            |
@@ -406,9 +406,18 @@ error rather than looping indefinitely.
 
 ### Result Truncation
 
-Tool results are truncated to 64 KB (`MAX_TOOL_RESULT_BYTES = 65,536`) before
-being appended to the conversation. This is enforced by the agent loop, not by
-individual tools. Truncation is type-aware:
+Tool results shown to the LLM stay at or under 64 KB
+(`MAX_TOOL_RESULT_BYTES = 65,536`). That cap is a **prompt budget**, not a
+store. Native builds archive anything larger than the V2 head+tail window
+(2048 + 1536 bytes) under `{sessions_dir}/{encoded-key}.observations/` and
+return either the full body (first two sends per tool+session, when it still
+fits the cap) or an `observation_pack` projection with `head` / `tail` and an
+`obs_recall` id. Page the SHA blob with `obs_recall` (`offset` / `limit`)
+instead of re-running the tool. WASM/browser skips the archive and keeps
+`truncate_result`. Fail-open: if the archive write fails, `truncate_result`
+still runs and the loop does not error.
+
+`truncate_result` remains the fail-open / WASM path and is type-aware:
 
 - **Strings** receive a truncation suffix indicating the content was cut.
 - **Arrays** keep leading elements with a sentinel object appended.

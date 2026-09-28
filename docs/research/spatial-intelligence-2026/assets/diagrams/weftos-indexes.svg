@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 340" width="960" height="340" role="img" aria-labelledby="ix-title ix-desc">
+  <title id="ix-title">WeftOS index stack</title>
+  <desc id="ix-desc">BVH, HNSW, causal graph, and chain sequence as peer indexes. Graph Views promote into BVH. Panopticon reverse join is proposed.</desc>
+  <defs>
+    <marker id="ix-arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#8b98a8"/>
+    </marker>
+    <style>
+      .ix-bg { fill: #0d1117; }
+      .ix-box { fill: #121820; stroke: #3a4a60; stroke-width: 1.5; }
+      .ix-bvh { stroke: #7ae0c3; }
+      .ix-hnsw { stroke: #b18cff; }
+      .ix-causal { stroke: #6dd3ff; }
+      .ix-chain { stroke: #c4a25c; }
+      .ix-views { stroke: #ffb65a; stroke-dasharray: 5 4; }
+      .ix-label { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 13px; fill: #e6edf3; }
+      .ix-sub { font-family: ui-sans-serif, system-ui, sans-serif; font-size: 12px; fill: #8b98a8; }
+      .ix-line { stroke: #8b98a8; stroke-width: 1.5; fill: none; }
+    </style>
+  </defs>
+  <rect class="ix-bg" x="0" y="0" width="960" height="340" rx="4"/>
+  <rect class="ix-box ix-chain" x="280" y="20" width="400" height="48" rx="4"/>
+  <text class="ix-label" x="480" y="40" text-anchor="middle">chain_seq  (ExoChain)</text>
+  <text class="ix-sub" x="480" y="58" text-anchor="middle">panopticon reverse map · ADR-069 proposed</text>
+  <line class="ix-line" x1="480" y1="68" x2="480" y2="100" marker-end="url(#ix-arrow)"/>
+  <g>
+    <rect class="ix-box ix-bvh" x="40" y="110" width="250" height="110" rx="4"/>
+    <text class="ix-label" x="165" y="140" text-anchor="middle">BVH</text>
+    <text class="ix-sub" x="165" y="164" text-anchor="middle">where / when / shape</text>
+    <text class="ix-sub" x="165" y="184" text-anchor="middle">ADR-056 · clawft-bvh</text>
+  </g>
+  <g>
+    <rect class="ix-box ix-hnsw" x="355" y="110" width="250" height="110" rx="4"/>
+    <text class="ix-label" x="480" y="140" text-anchor="middle">HNSW</text>
+    <text class="ix-sub" x="480" y="164" text-anchor="middle">feature similarity</text>
+    <text class="ix-sub" x="480" y="184" text-anchor="middle">VectorRef join · ADR-088/093</text>
+  </g>
+  <g>
+    <rect class="ix-box ix-causal" x="670" y="110" width="250" height="110" rx="4"/>
+    <text class="ix-label" x="795" y="140" text-anchor="middle">Causal</text>
+    <text class="ix-sub" x="795" y="164" text-anchor="middle">why / walks</text>
+    <text class="ix-sub" x="795" y="184" text-anchor="middle">ECC edges · UNID</text>
+  </g>
+  <line class="ix-line" x1="290" y1="165" x2="355" y2="165" marker-end="url(#ix-arrow)"/>
+  <text class="ix-sub" x="322" y="156" text-anchor="middle">ref</text>
+  <rect class="ix-box ix-views" x="280" y="250" width="400" height="64" rx="4"/>
+  <text class="ix-label" x="480" y="276" text-anchor="middle">Graph Views  F1–F10</text>
+  <text class="ix-sub" x="480" y="296" text-anchor="middle">fusion graph · promote F9 into BVH · not the world SoT</text>
+  <line class="ix-line" x1="165" y1="250" x2="165" y2="220" marker-end="url(#ix-arrow)"/>
+  <text class="ix-sub" x="200" y="238">promote</text>
+</svg>

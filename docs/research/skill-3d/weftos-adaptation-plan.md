@@ -341,7 +341,14 @@ These supersede the recommendations in §8 and the rows they name.
    wrapper. That is `~/llm`'s work; WeftOS consumes the masks and does not grow its own SAM stack.
    **Grounding DINO** stays in the catalog as the permissive fallback for the day the SAM license
    blocks something. It is not built, and it gets no Eikon stage.
-   **Metric depth** (DA3METRIC-LARGE) is still not served by `~/llm`; it remains a request there.
+   **Metric depth is served by `~/llm` as `bin/depth`** (DA3METRIC-LARGE, Apache-2.0, 0.35B, via the
+   fp16 ONNX trace `Heliosoph/da3metric-large-onnx` through ONNX Runtime, CoreML first; card in
+   `~/llm/docs/models/registry/reconstruction.yaml`). The network outputs canonical depth for a
+   300-pixel focal length on a 504×504 input; meters = canonical × focal_at_504 / 300. The caller
+   passes `--focal-px` (focal length of the original photo, scaled by 504 / width) or `--hfov-deg`.
+   **Without either, the result stays canonical and must not be treated as metric.** That is the
+   honest-geometry rule in the runner itself, and the MentraOS intrinsics calibration (R3.1) is what
+   supplies the focal length. Eikon's splat skill calls it when a capture needs scale.
 2. **Pi3** is research-only and off by default (non-commercial weights; R2.6). **SAM 3.1** is the
    segmenter, served by `~/llm` under Meta's SAM License; R2.2 still records its terms, and Grounding
    DINO is the documented fallback if those terms ever block a use.

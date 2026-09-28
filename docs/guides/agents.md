@@ -113,3 +113,4 @@ hashes.
 | `agents.defaults.model` | Default LLM model id |
 | `agents.cost_budget` | Per-conversation spend circuit-breaker |
 | `agents.cow_memory` | Per-turn COW memory checkpoints |
+| (planned, WEFT-732/733) | RMM citation-rerank + topic merge — `docs/research/rmm-reflective-memory-management.md` |

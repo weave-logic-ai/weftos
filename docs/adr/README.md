@@ -60,7 +60,7 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | [ADR-055](adr-055-backend-adapter-contract.md) | BackendAdapter contract for the agent dashboard | Accepted | GUI | 0.7.0 release-gate audit (WEFT-319) |
 | [ADR-056](adr-056-bvh-spatial-index.md) | BVH-on-RVF spatial-temporal index over ECC | Accepted | Architecture | scorch_and_awe concept paper (2026-05-03) |
 | [ADR-057](adr-057-substrate-read-acl.md) | Substrate per-path read ACLs (MUST-HAVE for 0.8.x) | Accepted | Security | Watch-as-Actor decision 2026-05-12 |
-| [ADR-058](adr-058-per-conversation-context-memory-tier.md) | Per-conversation context memory tier (session RVF + HNSW) | Accepted | Architecture | Long-context agent-loop thread 2026-06-28 |
+| [ADR-058](adr-058-per-conversation-context-memory-tier.md) | Per-conversation context memory tier (session RVF + HNSW) | Accepted | Architecture | Long-context agent-loop thread 2026-06-28; RMM follow-on `docs/research/rmm-reflective-memory-management.md` |
 | [ADR-059](adr-059-qwen3-embedding-provider.md) | Qwen3-Embedding-0.6B as the clawft-kernel embedding provider (ort/ONNX) | Accepted | Architecture | Long-context agent-loop thread 2026-06-28 |
 | [ADR-060](adr-060-local-hermes-serving-kv.md) | Local Hermes serving + KV management for the agent loop | Accepted | Architecture | Long-context agent-loop thread 2026-06-28 |
 | [ADR-061](adr-061-conversational-voice-agent-loop.md) | Conversational voice agent loop — full-duplex, dual-layer TTS | Accepted | Architecture | Voice-pipeline thread 2026-06-26..28 (`~/llm` voicelab) |

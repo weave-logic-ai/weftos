@@ -98,6 +98,7 @@ require Claude Code for WeftOS release engineering.
 | rUv | WeftOS |
 |-----|--------|
 | AgentDB `.rvf`, hierarchical tiers, pattern-store / ReasoningBank | `seed-patterns.sh`, COW memory crate, AgentDB via Ruflo |
+| RMM (Tan et al. ACL 2025, arXiv:2503.08026) — topic merge + citation-RL rerank | WeftOS gap: `MEMORY.md` dump. Landing: frozen VectorStore/HNSW + SONA `observe` ±1. Canonical `docs/research/rmm-reflective-memory-management.md`. Plane **WEFT-732** then **WEFT-733** |
 | Namespace `patterns` multi-host recall | ADR-096 §3 — store winning ViewSpec/harness patterns |
 | Causal graph / Reflexion | ECC + ExoChain (product authority, not MH) |
 

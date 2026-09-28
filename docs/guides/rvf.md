@@ -253,6 +253,10 @@ sona = ["dep:sona"]
 - `intelligent-routing` -- Full routing stack (requires `ruvllm` and
   `tiny-dancer`).
 - `sona` -- Self-learning: MicroLoRA, ReasoningBank, EWC++.
+  Planned memory path (ws06-memory): same engine reranks *retrieved memory
+  nodes* from generator citations (RMM arXiv:2503.08026). See
+  `docs/research/rmm-reflective-memory-management.md`. Do not RL-update the
+  VEC/HNSW retriever from those rewards.
 
 ### CLI Aggregate Features (clawft-cli Cargo.toml)
 
@@ -283,7 +287,7 @@ cargo build --features ruvector-full  # includes cryptographic audit trail
 | Crate | Purpose | Notes |
 |-------|---------|-------|
 | `ruvllm` | 7-factor complexity scoring, HNSW routing, quality scoring | Minimal feature footprint |
-| `sona` | Self-learning: MicroLoRA, ReasoningBank, EWC++ | ~30 KB WASM |
+| `sona` | Self-learning: MicroLoRA, ReasoningBank, EWC++; planned RMM memory-citation rerank (`docs/research/rmm-reflective-memory-management.md`) | ~30 KB WASM |
 | `ruvector-core` | AgenticDB: PolicyMemoryStore, SessionStateIndex | Core storage abstractions |
 | `ruvector-attention` | 40+ attention mechanisms | Optional, for advanced routing |
 | `micro-hnsw-wasm` | Zero-dependency WASM HNSW search | 11.8 KB compiled |

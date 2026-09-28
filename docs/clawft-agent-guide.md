@@ -245,7 +245,7 @@ When the LLM returns `stop_reason == ToolUse`, the agent loop:
 
 clawft uses two markdown files for persistent memory, following the nanobot pattern:
 
-- **MEMORY.md** -- Long-term facts (append-only, periodically consolidated). Contains knowledge the agent should remember across sessions.
+- **MEMORY.md** -- Long-term facts (append-only, periodically consolidated). Contains knowledge the agent should remember across sessions. **Today the agent loop injects this entire file** as `# Relevant Memory:` (`ContextBuilder`). That dump is the fail-open store, not the target architecture — see RMM (`docs/research/rmm-reflective-memory-management.md`, ws06-memory): retrieve Top-K topic nodes, citation-rerank Top-M, merge-or-insert on session end.
 - **HISTORY.md** -- Session summaries (grep-searchable log). Contains a chronological record of past sessions.
 
 The `MemoryStore` (461 lines) manages these files through the platform filesystem abstraction.

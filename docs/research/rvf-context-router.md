@@ -10,6 +10,10 @@
 - `.planning/development_notes/ruv-ecosystem-analysis-20260414.md` — current crate state
 - `.planning/development_notes/adaptive-hnsw-tiered-search.md` — three-tier HNSW pattern (in our codebase)
 - `docs/research/gepa-prompt-evolution-analysis.md` — prompt evolution loop
+- `docs/research/rmm-reflective-memory-management.md` — citation-attributed
+  memory rerank (SONA `observe` generalized off skills onto retrieved nodes;
+  ws06-memory). Skill routing (this doc) and episodic memory retrieval are
+  the same reranker engine, different candidate sets.
 
 ---
 

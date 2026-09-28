@@ -52,6 +52,11 @@ let hybrid = HybridRouter::new(primary, fallback)
     .with_skill_reranker(SonaSkillReranker::new());
 // Optional feedback path (not yet wired into AgentLoop):
 // sona.observe(query, selected_skill, quality); sona.force_learn();
+//
+// Follow-on (ws06-memory, RMM arXiv:2503.08026): the same observe path
+// should take per-retrieved-memory (id, +1 cited | −1 ignored) and
+// rerank memory candidates, not only skills. Retriever stays frozen.
+// Canonical: docs/research/rmm-reflective-memory-management.md
 ```
 
 ## Files changed

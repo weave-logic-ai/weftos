@@ -4,7 +4,7 @@
 **Status**: Accepted (2026-06-28)
 **Deciders**: Main-thread design discussion 2026-06-28 (long-context agent-loop / local-model serving thread)
 **Depends-On**: ADR-018 (Hermes models as clawft-llm provider), ADR-022 (ExoChain mandatory audit), ADR-056 (BVH-on-RVF spatial-temporal index over ECC), ADR-011 (raw HNSW sufficient — no FrankenSearch), ADR-031 (RVF wire mesh format), ADR-020 (ChainLoggable), ADR-028 (dual signing Ed25519 + ML-DSA-65), ADR-030 (CBOR exochain codec), ADR-057 (substrate per-path read ACLs)
-**Relates-To**: ADR-059 (embedding provider implementation — Qwen3 via ort); ADR-017 (GEPA prompt evolution — promotion lineage); the context-compression gap tracked in `crates/clawft-core/src/agent/context.rs`
+**Relates-To**: ADR-059 (embedding provider implementation — Qwen3 via ort); ADR-017 (GEPA prompt evolution — promotion lineage); the context-compression gap tracked in `crates/clawft-core/src/agent/context.rs`; RMM / citation-attributed memory (`docs/research/rmm-reflective-memory-management.md`, ws06-memory)
 
 ## Context
 
@@ -445,3 +445,24 @@ The assembly path (`ContextBuilder::build_messages` + `session.get_history`)
 and this tier's graft splice are unchanged; only the *source* of the hydrated
 `Session.messages` moved (sink history, filtered to the store-1 subset). One
 durable store now feeds sink → chain → tier → forest.
+
+## Update — Reflective Memory Management (2026-09-11)
+
+Google Cloud AI Research RMM (Tan et al., ACL 2025, arXiv:2503.08026) is the
+reserved **semantic re-chunking** follow-on from resolution #2 above, plus the
+missing retrieval-attribution loop this ADR does not specify.
+
+- **L3 bank organization (prospective):** topic units with merge-or-insert,
+  not more append-only `MEMORY.md`. Session-end hook is ConversationSink /
+  chain after M3, not `SessionManager`.
+- **L1 inject path (retrospective):** `ContextBuilder` still dumps the entire
+  `MEMORY.md` as `# Relevant Memory:`. RMM says frozen retriever Top-K →
+  lightweight reranker Top-M with generator citations as `+1/−1`. That
+  reranker is SONA (WEFT-46), not a second store, and **not** RL on the
+  embedder (paper ablation collapsed Acc 58.8→31.0).
+- **ADR-059 `Qwen3-Reranker-0.6B`** remains the optional offline cross-encoder.
+  RMM's linear adapter is the *online* citation-RL loop; they can stack; they
+  are not substitutes.
+- Canonical note + Plane tickets: `docs/research/rmm-reflective-memory-management.md`,
+  **WEFT-732** (retrospective) then **WEFT-733** (prospective). Do not
+  silently promote reranker weights (ADR-096).

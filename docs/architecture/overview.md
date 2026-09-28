@@ -157,7 +157,7 @@ Central engine crate containing the agent loop, message bus, pipeline system, se
 **Modules:**
 - **bus** -- `MessageBus`: tokio MPSC channels for inbound/outbound message routing (Send + Sync via `Arc<Mutex<UnboundedReceiver>>`)
 - **pipeline** -- 6-stage pluggable pipeline: `TaskClassifier`, `ModelRouter`, `ContextAssembler`, `LlmTransport`, `QualityScorer`, `LearningBackend`. `PipelineRegistry` maps `TaskType` to specialized pipelines with a default fallback.
-- **agent** -- `AgentLoop` (message processing), `ContextBuilder` (system prompt + skills + memory + history), `MemoryStore` (MEMORY.md/HISTORY.md), `SkillsLoader`
+- **agent** -- `AgentLoop` (message processing), `ContextBuilder` (system prompt + skills + memory + history), `MemoryStore` (MEMORY.md/HISTORY.md; today dumped whole into `# Relevant Memory:` — RMM follow-on `docs/research/rmm-reflective-memory-management.md`), `SkillsLoader`
 - **session** -- `SessionManager`: JSONL-backed persistence keyed by `"{channel}:{chat_id}"` with in-memory cache
 - **security** -- `validate_session_id()`, `sanitize_content()`, `truncate_result()` (64KB cap)
 - **bootstrap** -- `AppContext`: wires all dependencies; `enable_live_llm()` swaps stub for `ClawftLlmAdapter`

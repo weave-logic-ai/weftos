@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 280" width="960" height="280" role="img" aria-labelledby="tf-title tf-desc">
+  <title id="tf-title">Three functions of a world model</title>
+  <desc id="tf-desc">Renderer, simulator, and planner as three columns. Urth treats the simulator column as metric truth.</desc>
+  <defs>
+    <marker id="tf-arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#8b98a8"/>
+    </marker>
+    <style>
+      .tf-bg { fill: #0d1117; }
+      .tf-box { fill: #121820; stroke: #3a4a60; stroke-width: 1.5; }
+      .tf-render { stroke: #ffb65a; }
+      .tf-sim { stroke: #7ae0c3; }
+      .tf-plan { stroke: #b18cff; }
+      .tf-label { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 13px; fill: #e6edf3; }
+      .tf-sub { font-family: ui-sans-serif, system-ui, sans-serif; font-size: 12px; fill: #8b98a8; }
+      .tf-note { font-family: ui-sans-serif, system-ui, sans-serif; font-size: 12px; fill: #c4a25c; }
+      .tf-line { stroke: #8b98a8; stroke-width: 1.5; fill: none; }
+    </style>
+  </defs>
+  <rect class="tf-bg" x="0" y="0" width="960" height="280" rx="4"/>
+  <g>
+    <rect class="tf-box tf-render" x="40" y="36" width="240" height="140" rx="4"/>
+    <text class="tf-label" x="160" y="64" text-anchor="middle">RENDERER</text>
+    <text class="tf-sub" x="160" y="88" text-anchor="middle">how it looks</text>
+    <text class="tf-sub" x="160" y="118" text-anchor="middle">Gaussians · Marble splat</text>
+    <text class="tf-sub" x="160" y="138" text-anchor="middle">Genie frames · SOG</text>
+  </g>
+  <g>
+    <rect class="tf-box tf-sim" x="360" y="36" width="240" height="140" rx="4"/>
+    <text class="tf-label" x="480" y="64" text-anchor="middle">SIMULATOR</text>
+    <text class="tf-sub" x="480" y="88" text-anchor="middle">what has shape</text>
+    <text class="tf-sub" x="480" y="118" text-anchor="middle">AABB · collider mesh</text>
+    <text class="tf-sub" x="480" y="138" text-anchor="middle">BVH Object / Event leaves</text>
+  </g>
+  <g>
+    <rect class="tf-box tf-plan" x="680" y="36" width="240" height="140" rx="4"/>
+    <text class="tf-label" x="800" y="64" text-anchor="middle">PLANNER</text>
+    <text class="tf-sub" x="800" y="88" text-anchor="middle">what to do next</text>
+    <text class="tf-sub" x="800" y="118" text-anchor="middle">Graph Views · agents</text>
+    <text class="tf-sub" x="800" y="138" text-anchor="middle">LeWM / V-JEPA priors</text>
+  </g>
+  <line class="tf-line" x1="280" y1="106" x2="360" y2="106" marker-end="url(#tf-arrow)"/>
+  <line class="tf-line" x1="600" y1="106" x2="680" y2="106" marker-end="url(#tf-arrow)"/>
+  <text class="tf-note" x="480" y="220" text-anchor="middle">Urth only treats the middle column as metric truth. Pixels may be cosmetic.</text>
+  <text class="tf-sub" x="480" y="244" text-anchor="middle">Li 2026 taxonomy · WeftOS ADR-078 / 079 / 090</text>
+</svg>

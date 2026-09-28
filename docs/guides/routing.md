@@ -342,6 +342,10 @@ Both `record()` and `adapt()` silently discard all data.
 - Base-LoRA: Hourly aggregated parameter updates.
 - EWC++: Weekly elastic weight consolidation to prevent catastrophic forgetting.
 - ReasoningBank: Persistent store of successful reasoning traces for retrieval.
+- **RMM citation loop (ws06-memory):** generator citations on retrieved
+  *memory* nodes as `+1/−1` into SONA `observe`, retriever frozen. Canonical
+  note `docs/research/rmm-reflective-memory-management.md`. This is not the
+  skill-routing WEFT-46 path; it generalizes it.
 
 ---
 
@@ -767,6 +771,7 @@ The `sona` feature flag will introduce four learning mechanisms:
 | Base-LoRA | Hourly | Aggregated low-rank updates from accumulated trajectories |
 | EWC++ | Weekly | Elastic weight consolidation to prevent catastrophic forgetting |
 | ReasoningBank | Continuous | Persistent store of successful reasoning traces, queried for similar future requests |
+| RMM citation-rerank | Per-turn (planned, ws06-memory) | Generator cites which retrieved memory ids it used; `+1/−1` trains a lightweight SONA reranker. Retriever stays frozen (arXiv:2503.08026). See `docs/research/rmm-reflective-memory-management.md` |
 
 ---
 
@@ -968,6 +973,8 @@ here as stubs for future development.
 - [ ] Base-LoRA hourly batch updates
 - [ ] EWC++ weekly consolidation
 - [ ] ReasoningBank with semantic retrieval
+- [ ] RMM: stop dumping `MEMORY.md`; retrieve Top-K / citation-rerank Top-M
+      (`docs/research/rmm-reflective-memory-management.md`, **WEFT-732** then **WEFT-733**)
 
 ### Routing Policy Persistence
 
