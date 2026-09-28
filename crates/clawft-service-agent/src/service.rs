@@ -47,6 +47,7 @@ use tracing::{debug, warn};
 
 use crate::interrupt_router::{InterruptAction, InterruptCtx, InterruptOutcome};
 use crate::protocol::{AgentChatParams, AgentChatResult};
+use clawft_types::agent_chat::FINISH_REASON_ERROR;
 use crate::session_tier::SessionTier;
 use crate::system_service::AgentChatMetrics;
 use clawft_kernel::AgentRegistry;
@@ -916,7 +917,12 @@ fn result_from_outbound(outbound: OutboundMessage, _params: &AgentChatParams) ->
         .get(AGENT_LOOP_RESULT_META_KEY)
         .and_then(|v| serde_json::from_value::<AgentLoopResultMeta>(v.clone()).ok())
         .unwrap_or_default();
-    let finish_reason = if meta.finish_reason.is_empty() {
+    // A turn the loop flagged as failed (provider error, failed or refused
+    // delegation) keeps its readable text for the panel but reports
+    // `finish_reason: "error"` so scripted callers can tell it apart.
+    let finish_reason = if outbound.is_error() {
+        FINISH_REASON_ERROR.into()
+    } else if meta.finish_reason.is_empty() {
         "stop".into()
     } else {
         meta.finish_reason
@@ -1328,6 +1334,23 @@ mod tests {
         assert_eq!(r.iterations, 0);
         assert!(r.tool_calls.is_empty());
         assert!(r.spawned_tasks.is_empty());
+    }
+
+    #[test]
+    fn result_from_outbound_reports_flagged_failure_as_error() {
+        let mut out = OutboundMessage {
+            channel: "agent.chat".into(),
+            chat_id: "c".into(),
+            content: "Delegation failed: credit balance is too low.".into(),
+            reply_to: None,
+            media: Vec::new(),
+            metadata: HashMap::new(),
+        };
+        out.mark_error();
+        let r = result_from_outbound(out, &params_for("c", ""));
+        assert_eq!(r.finish_reason, FINISH_REASON_ERROR);
+        assert!(r.is_error());
+        assert!(r.assistant_text.starts_with("Delegation failed"));
     }
 
     // ── WEFT-334: AgentServiceError → AgentChatError ──────────────

@@ -75,9 +75,49 @@ pub struct OutboundMessage {
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
+/// Metadata key the agent loop sets to `true` when a turn failed (provider
+/// error, delegation failure, refused delegation, …). The content is still a
+/// readable message for chat UIs; scripted callers such as one-shot
+/// `weft agent -m` read this flag to exit non-zero instead of treating the
+/// text as a successful reply.
+pub const OUTBOUND_ERROR_KEY: &str = "error";
+
+impl OutboundMessage {
+    /// True when the producing turn failed (see [`OUTBOUND_ERROR_KEY`]).
+    pub fn is_error(&self) -> bool {
+        self.metadata
+            .get(OUTBOUND_ERROR_KEY)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    /// Mark this message as the result of a failed turn.
+    pub fn mark_error(&mut self) {
+        self.metadata
+            .insert(OUTBOUND_ERROR_KEY.to_string(), serde_json::Value::Bool(true));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outbound_error_flag_round_trips() {
+        let mut msg = OutboundMessage {
+            channel: "cli".into(),
+            chat_id: "c".into(),
+            content: "Delegation failed".into(),
+            reply_to: None,
+            media: vec![],
+            metadata: HashMap::new(),
+        };
+        assert!(!msg.is_error());
+        msg.mark_error();
+        assert!(msg.is_error());
+        let back: OutboundMessage = serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+        assert!(back.is_error());
+    }
 
     #[test]
     fn inbound_session_key() {

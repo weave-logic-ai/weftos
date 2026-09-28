@@ -382,11 +382,14 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     let default_filter = if cli.verbose { "debug" } else { "warn" };
+    // Logs go to stderr: stdout carries `weft agent -m` replies and the
+    // `weft mcp-server` stdio JSON-RPC stream.
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| default_filter.into()),
         )
+        .with_writer(std::io::stderr)
         .init();
 
     // Check for updates (non-blocking, cached 24h)

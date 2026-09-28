@@ -29,7 +29,8 @@ enum Cli {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    // Logs go to stderr so stdout stays command output.
+    tracing_subscriber::fmt().with_writer(std::io::stderr).init();
 
     let cli = Cli::parse();
 
