@@ -1,0 +1,19 @@
+# Used when deploying from repo root. Prefer `cd docs/src && vercel deploy`
+# after project Root Directory is unset.
+.weftos
+**/*.sock
+target
+**/target
+.planning
+.claude-flow
+.swarm
+.metaharness
+**/node_modules
+.git
+crates
+gui
+clawft-ui
+docs/src/node_modules
+docs/src/.next
+docs/src/public/kb
+docs/src/public/wasm

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" width="960" height="300" role="img" aria-labelledby="q-title q-desc">
+  <title id="q-title">Spatial research queue</title>
+  <desc id="q-desc">Three columns: shipped 0.8 work, residuals still open in docs, new 2026 proposals from this survey.</desc>
+  <defs>
+    <style>
+      .q-bg { fill: #0d1117; }
+      .q-box { fill: #121820; stroke: #3a4a60; stroke-width: 1.5; }
+      .q-ship { stroke: #7ae0c3; }
+      .q-res { stroke: #ffb65a; }
+      .q-new { stroke: #6dd3ff; }
+      .q-label { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 13px; fill: #e6edf3; }
+      .q-sub { font-family: ui-sans-serif, system-ui, sans-serif; font-size: 12px; fill: #8b98a8; }
+    </style>
+  </defs>
+  <rect class="q-bg" x="0" y="0" width="960" height="300" rx="4"/>
+  <g>
+    <rect class="q-box q-ship" x="28" y="24" width="280" height="252" rx="4"/>
+    <text class="q-label" x="168" y="52" text-anchor="middle">SHIPPED</text>
+    <text class="q-sub" x="48" y="84">BVH Phases A–F</text>
+    <text class="q-sub" x="48" y="108">VectorRef + join helpers</text>
+    <text class="q-sub" x="48" y="132">W0/W1 world_model export</text>
+    <text class="q-sub" x="48" y="156">Urth E0 doctrine</text>
+    <text class="q-sub" x="48" y="180">Graph Views research</text>
+    <text class="q-sub" x="48" y="204">LeWM crate stack</text>
+    <text class="q-sub" x="48" y="240">Plane spatial tickets: none open</text>
+  </g>
+  <g>
+    <rect class="q-box q-res" x="340" y="24" width="280" height="252" rx="4"/>
+    <text class="q-label" x="480" y="52" text-anchor="middle">RESIDUAL</text>
+    <text class="q-sub" x="360" y="84">live BVH publish</text>
+    <text class="q-sub" x="360" y="108">spatial_rpc / CLI e2e</text>
+    <text class="q-sub" x="360" y="132">F9 promote</text>
+    <text class="q-sub" x="360" y="156">Urth E1/E2 OSM</text>
+    <text class="q-sub" x="360" y="180">panopticon ADR-069</text>
+    <text class="q-sub" x="360" y="204">DiskANN cold tier</text>
+    <text class="q-sub" x="360" y="228">ADR-087 dual-branch</text>
+  </g>
+  <g>
+    <rect class="q-box q-new" x="652" y="24" width="280" height="252" rx="4"/>
+    <text class="q-label" x="792" y="52" text-anchor="middle">NEW 2026</text>
+    <text class="q-sub" x="672" y="84">VGGT / MASt3R path</text>
+    <text class="q-sub" x="672" y="108">SpatialLM → W1 layout</text>
+    <text class="q-sub" x="672" y="132">scene-graph hierarchy</text>
+    <text class="q-sub" x="672" y="156">Octree-GS appearance LOD</text>
+    <text class="q-sub" x="672" y="180">V-JEPA visual index_id</text>
+    <text class="q-sub" x="672" y="204">Marble dual-export language</text>
+    <text class="q-sub" x="672" y="228">Spark-style splat LOD</text>
+  </g>
+</svg>

@@ -1,0 +1,107 @@
+/* Route-scoped theme for /urth-spatial. Isolated under .urth-scope. */
+
+.urth-scope {
+  --urth-bg: #08080a;
+  --urth-surface: #0e0e12;
+  --urth-surface-2: #16161c;
+  --urth-grid: #1c1c24;
+  --urth-ink: #e0dee8;
+  --urth-mute: #aaa8b4;
+  --urth-dim: #706e7a;
+  --urth-line: #ffffff14;
+  --urth-gold: #c4a25c;
+  --urth-mint: #6ec896;
+  --urth-cyan: #6dd3ff;
+  --urth-violet: #b18cff;
+  --urth-amber: #dcaf55;
+  --urth-white: #e0dee8;
+  --urth-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  background: var(--urth-bg);
+  color: var(--urth-ink);
+  font-family: var(--font-inter, 'Inter'), system-ui, sans-serif;
+  min-height: 100svh;
+  isolation: isolate;
+}
+
+.urth-scope * {
+  box-sizing: border-box;
+}
+
+.urth-mono {
+  font-family: var(--font-mono-urth), 'JetBrains Mono', ui-monospace, monospace;
+  font-feature-settings: 'ss01', 'ss02', 'zero';
+}
+
+.urth-editorial {
+  font-family: var(--font-fraunces), Georgia, serif;
+  font-weight: 450;
+  letter-spacing: -0.01em;
+}
+
+.urth-grid-bg {
+  background-image:
+    linear-gradient(var(--urth-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--urth-grid) 1px, transparent 1px);
+  background-size: 48px 48px;
+  opacity: 0.28;
+}
+
+.urth-panel {
+  background: color-mix(in oklab, var(--urth-surface) 94%, transparent);
+  border: 1px solid var(--urth-line);
+  border-radius: 4px;
+}
+
+.urth-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.65rem;
+  font-family: var(--font-mono-urth), 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.72rem;
+  color: var(--urth-mute);
+  border: 1px solid var(--urth-line);
+  border-radius: 999px;
+}
+
+.urth-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--urth-gold);
+  transform-origin: 0 50%;
+  z-index: 40;
+}
+
+.urth-scene-grid {
+  width: 100%;
+  max-width: 78rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+}
+
+.urth-scene-head,
+.urth-scene-body {
+  min-width: 0;
+}
+
+@media (min-width: 1024px) {
+  .urth-scene-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+    gap: 2.5rem;
+    align-items: start;
+  }
+  .urth-scene-head {
+    position: sticky;
+    top: 6rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .urth-scope * {
+    scroll-behavior: auto !important;
+  }
+}

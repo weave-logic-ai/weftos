@@ -1,0 +1,30 @@
+---
+title: Urth
+description: Sparse-first planetary twin, spatial indexes, and the 2026 world-model landscape
+---
+
+**Urth** is WeftOS’s sparse-first digital twin of the planet. Geometry lives in the BVH. Appearance may be a splat. Plans may use Graph Views or optional LeWM. Generative fill is never metric truth.
+
+## Scrollyteller
+
+The living briefing (where we are, 2026 sources, research queue):
+
+**[Open /urth-spatial →](/urth-spatial)**
+
+## Canon
+
+- [ADR-056](/docs/weftos/decisions) BVH spatial-temporal index
+- [ADR-078](/docs/weftos/decisions) splat feeds structure
+- [ADR-079](/docs/weftos/decisions) Urth LOD and honesty rule
+- Survey: `docs/research/spatial-intelligence-2026/README.md`
+
+## Indexes
+
+| Lens | Answers |
+|---|---|
+| BVH | where / when / shape |
+| HNSW | feature similarity |
+| Causal + UNID | why / lookup |
+| Graph Views | fusion, then promote into BVH |
+
+Plane has no remaining spatial tickets. Residuals (live publish, daemon RPC, F9 promote, OSM ingest) live in docs, not the board.

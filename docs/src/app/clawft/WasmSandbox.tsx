@@ -582,7 +582,7 @@ function computeKBGraph(entries: KBEntry[]): { nodes: GraphNode[]; edges: GraphE
     }
   }
 
-  const nodeEntries = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 30);
+  const nodeEntries = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 48);
   const nodeSet = new Set(nodeEntries.map(([id]) => id));
   const nodes: GraphNode[] = nodeEntries.map(([id, count], i) => ({
     id,
@@ -613,6 +613,19 @@ const TAG_COLORS: Record<string, string> = {
   wasm: '#fb923c',
   runtime: '#fbbf24',
   docs: '#94a3b8',
+  adr: '#818cf8',
+  research: '#22d3ee',
+  metaharness: '#f472b6',
+  rvf: '#4ade80',
+  kernel: '#facc15',
+  ecc: '#c084fc',
+  graphify: '#38bdf8',
+  urth: '#2dd4bf',
+  brain: '#fb7185',
+  weftos: '#a3e635',
+  governance: '#f97316',
+  voice: '#e879f9',
+  mesh: '#67e8f9',
 };
 
 function tagColor(tag: string): string {

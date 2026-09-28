@@ -43,7 +43,7 @@ when tokens allow.
   (gate / plane-dag / fusion-view); AgentDB pattern seed; universal
   data-surface governance inventory.
 - **Native GUI release artifact (WEFT-499)**: `weft-gui-egui` first-class
-  cargo-dist app (`clawft-gui-egui-<triple>.tar.gz`).
+  cargo-dist app (`clawft-gui-egui-{triple}.tar.gz`).
 
 ### Fixed
 
@@ -255,7 +255,7 @@ Eight learnable models replace hard-coded constants:
   tests.
 - **weaver leaf push**: CLI command to push audio/display/control to leaf
   devices via kernel daemon IPC. Publishes CBOR payload (base64 wrapped)
-  to mesh.leaf.<pubkey>.push topic. Supports text, chord, scuttle, clear,
+  to `mesh.leaf.PUBKEY.push` topic. Supports text, chord, scuttle, clear,
   brightness, effect subcommands with --dry-run and named colors.
 
 ---
@@ -266,7 +266,7 @@ Eight learnable models replace hard-coded constants:
 
 ### Added
 
-- **MessagePayload::Binary(Vec<u8>)**: raw binary payload variant for
+- **MessagePayload::Binary** (`Vec` of `u8`): raw binary payload variant for
   mesh transport, sensor data, file transfer, and opaque byte streams.
   Serde roundtrip test included.
 
@@ -306,7 +306,7 @@ Eight learnable models replace hard-coded constants:
 - **MeshClockSync**: authority-based time sync piggybacked on heartbeats.
   Clock hierarchy: GPS > TSF > NTP > Mesh > Local. Authority elected
   from best source. EMA smoothing with outlier rejection. Precision
-  targets: <1µs (WiFi TSF), ~100µs (same LAN), ~1-5ms (cross-network).
+  targets: `<1µs` (WiFi TSF), ~100µs (same LAN), ~1-5ms (cross-network).
 - **ClockSource enum**: Local, Mesh, Ntp, Tsf, Gps with ordering.
 - **mesh_time_us()** on MeshRuntime: returns authority-aligned microseconds.
 - PingRequest/PingResponse carry `mesh_time_us` and `clock_source` fields.
@@ -447,17 +447,17 @@ data structure as an interactive, drillable topology graph.
 
 ### CLI Commands
 
-- `weaver topology layout <graph.json>` — compute positioned geometry
+- `weaver topology layout GRAPH.json` — compute positioned geometry
   with schema-driven or auto-detected layout
-- `weaver topology validate <schema.yaml>` — validate schemas with warnings
-- `weaver topology detect <graph.json>` — auto-detect geometry, show
+- `weaver topology validate SCHEMA.yaml` — validate schemas with warnings
+- `weaver topology detect GRAPH.json` — auto-detect geometry, show
   edge/entity distribution and tree calculus triage classification
-- `weaver topology infer <graph.json>` — infer a schema from graph data
-- `weaver topology diff <schema.yaml> <graph.json>` — declared vs inferred
+- `weaver topology infer GRAPH.json` — infer a schema from graph data
+- `weaver topology diff SCHEMA.yaml GRAPH.json` — declared vs inferred
   schema drift detection
-- `weaver topology vowl <graph.json>` — export VOWL JSON for the navigator
-- `weaver topology slice <graph.json>` — generate drill-down slices
-- `weaver topology extract <path>` — extract codebase using tree calculus + EML
+- `weaver topology vowl GRAPH.json` — export VOWL JSON for the navigator
+- `weaver topology slice GRAPH.json` — generate drill-down slices
+- `weaver topology extract PATH` — extract codebase using tree calculus + EML
 
 ### Tree Calculus + EML AST Extractor
 
@@ -533,7 +533,7 @@ data structure as an interactive, drillable topology graph.
 - 8-session agenda covering schema design, layout algorithms, graph
   nesting, navigator modes, investigative instrument use case
 - Tree calculus + EML dual substrate architecture (ADR): triage for
-  structural dispatch, EML for continuous parameters, pure Rust, <50ms
+  structural dispatch, EML for continuous parameters, pure Rust, `<50ms`
   for 10K nodes
 - IRI-based identity architecture (ADR): word vs concept, same_as
   mappings, OWL/RDF compatibility
@@ -547,7 +547,7 @@ data structure as an interactive, drillable topology graph.
   Document, Visual, Telemetry) producing composable YAML fragments
 - Navigator mode system: Base (Explore/Timeline/Cluster/Wardley) +
   Overlay (Diff/Heatmap/Flow/Search) + Tool (Annotate), with
-  performance budgets (base <300ms, overlay <100ms, tool <16ms)
+  performance budgets (base `<300ms`, overlay `<100ms`, tool `<16ms`)
 - Cold case investigation walkthrough scenario
 - Founder Q&A: 7 decisions (composable schemas, OWL compat, single
   overlay mode, topological distortion for missing nodes, IRI identity)
@@ -667,7 +667,7 @@ data structure as an interactive, drillable topology graph.
 - **Single-param coordinate descent plateaus well short of TS-port
   convergence.** At the browser shape (seq_len=4 d_model=8 d_k=4)
   the TS port reaches 95% MSE reduction; Rust currently plateaus at
-  <1%. Root cause: each accepted perturbation changes output by ~1e-6
+  `<1%`. Root cause: each accepted perturbation changes output by ~1e-6
   when a single param sits among 2800 others in a smooth SafeTree
   landscape. Iteration 3 will add multi-param coordinated perturbation
   (pattern search or small-batch gradient-free) to match TS behavior

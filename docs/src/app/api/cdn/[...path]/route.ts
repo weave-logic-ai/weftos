@@ -1,4 +1,8 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { type NextRequest, NextResponse } from 'next/server';
+
+export const runtime = 'nodejs';
 
 /**
  * Server-side proxy for CDN assets (WASM, KB).
@@ -90,6 +94,29 @@ export async function GET(
     return NextResponse.json({ error: 'not found' }, { status: 404 });
   }
 
+  const ext = filePath.includes('.')
+    ? filePath.substring(filePath.lastIndexOf('.'))
+    : '';
+  const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+
+  // Local public/ copy wins (scripts/pull-assets.sh --local, scripts/build-kb.sh).
+  // Production deploys gitignore these files and fall through to GitHub Releases.
+  try {
+    const localPath = join(process.cwd(), 'public', filePath);
+    const body = await readFile(localPath);
+    return new NextResponse(body, {
+      status: 200,
+      headers: {
+        'Content-Type': contentType,
+        'Cache-Control': 'public, max-age=0, must-revalidate',
+        'Access-Control-Allow-Origin': '*',
+        'X-Weft-CDN-Source': 'local',
+      },
+    });
+  } catch {
+    // not on disk — proxy the rolling GitHub Release
+  }
+
   // The GitHub Release URL uses the filename directly (no subdirectories).
   const filename = toUpstreamFilename(filePath);
   const upstream = `${CDN_ORIGIN}/${filename}`;
@@ -101,11 +128,6 @@ export async function GET(
       { status: resp.status },
     );
   }
-
-  const ext = filename.includes('.')
-    ? filename.substring(filename.lastIndexOf('.'))
-    : '';
-  const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
   // SHA-stamped assets are immutable → longer browser cache is safe.
   // Rolling assets stay short so a rollback becomes visible within 1h.
