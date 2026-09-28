@@ -1,19 +1,21 @@
 #!/usr/bin/env node
 /**
- * Grok SubagentStop → team bus on-stop (ADR-320).
- * Reads hook JSON from stdin (Grok / Claude compatible fields).
- * Fail-open: always exit 0.
+ * Grok SubagentStop → `ruflo team hook-stop --host grok` (ADR-320).
+ *
+ * Ruflo maps the hook payload (Grok's `role:agent` description, SUBAGENT_NAME,
+ * TEAM_NAME) to team_on_stop. With several active teams and none named it
+ * does nothing rather than advance the wrong plan.
+ *
+ * The ruflo CLI resolves like scripts/grok-team-bus.mjs: RUFLO_CLI, then
+ * .claude-flow/ruflo-cli-path. Fail-open: always exit 0.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 
 const projectRoot = process.env.CLAUDE_PROJECT_DIR
   || process.env.GROK_WORKSPACE_ROOT
   || process.cwd();
-
-const bus = path.join(projectRoot, 'scripts', 'grok-team-bus.mjs');
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -26,49 +28,29 @@ function readStdin() {
   });
 }
 
-function activeTeam() {
-  const teamsDir = path.join(projectRoot, '.claude-flow', 'teams');
-  if (!fs.existsSync(teamsDir)) return null;
-  const names = fs.readdirSync(teamsDir).filter((n) => {
+function rufloCli() {
+  let cli = process.env.RUFLO_CLI;
+  if (!cli) {
     try {
-      const t = JSON.parse(fs.readFileSync(path.join(teamsDir, n, 'team.json'), 'utf8'));
-      return t && t.status === 'active';
+      cli = fs.readFileSync(path.join(projectRoot, '.claude-flow', 'ruflo-cli-path'), 'utf8').trim();
     } catch {
-      return false;
+      return null;
     }
-  });
-  return names[0] || null;
+  }
+  const abs = path.resolve(projectRoot, cli);
+  return fs.existsSync(abs) ? abs : null;
 }
 
 const raw = await readStdin();
-let input = {};
-try {
-  input = raw.trim() ? JSON.parse(raw) : {};
-} catch {
-  input = {};
-}
-
-const agent =
-  process.env.SUBAGENT_NAME
-  || input.subagentName
-  || input.agentName
-  || input.agent
-  || input.description
-  || input.toolInput?.description
-  || 'unknown';
-
-const team =
-  process.env.TEAM_NAME
-  || input.teamName
-  || input.team
-  || activeTeam();
-
-if (team && fs.existsSync(bus)) {
+const cli = rufloCli();
+if (cli) {
   try {
-    spawnSync(process.execPath, [bus, 'on-stop', '--team', String(team), '--agent', String(agent).replace(/\s+/g, '-').slice(0, 64)], {
+    spawnSync(process.execPath, [cli, 'team', 'hook-stop', '--host', 'grok'], {
       cwd: projectRoot,
+      env: { ...process.env, CLAUDE_FLOW_CWD: projectRoot },
+      input: raw,
       timeout: 4000,
-      stdio: 'ignore',
+      stdio: ['pipe', 'ignore', 'ignore'],
     });
   } catch {
     /* fail-open */

@@ -11,7 +11,7 @@ Host integration so Ruflo runs **at least as well as Claude Code**, with stronge
 | [`.grok/skills/agent-teams-grok/`](../../.grok/skills/agent-teams-grok/) | Named teams skill |
 | [`.grok/skills/handoff/`](../../.grok/skills/handoff/) | Session handoff → **`docs/handoff.md`** |
 | [`scripts/grok-team-bus.mjs`](../../scripts/grok-team-bus.mjs) | Host-agnostic mailbox (ADR-320) |
-| [ADR-320](../../v3/docs/adr/ADR-320-grok-host-agnostic-agent-teams.md) | Architecture decision |
+| [ADR-320](https://github.com/ruvnet/ruflo/blob/main/v3/docs/adr/ADR-320-grok-host-agnostic-agent-teams.md) | Architecture decision (upstream Ruflo; the file lands with ruvnet/ruflo PR 3512) |
 
 ## Setup (once per machine)
 

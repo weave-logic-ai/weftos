@@ -6,7 +6,9 @@
 !.claude/agents/
 .claude/agents/*
 !.claude/agents/ruv-researcher/
-.claude-flow/
+.claude-flow/*
+# The team-bus host entry is project config (ADR-320 command host); keep it tracked.
+!.claude-flow/team-hosts.json
 .hive-mind
 .swarm/
 target/
