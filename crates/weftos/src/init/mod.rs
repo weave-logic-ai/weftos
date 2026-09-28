@@ -1,4 +1,22 @@
 //! Project initialization for WeftOS.
+//!
+//! `init_project` sets up `.weftos/` and `weave.toml`. The host renderer
+//! (`weftos init --claude|--grok|--codex`) lives in the submodules: it renders
+//! the WeftOS agent packages into each host's layout ([`plan::plan`], then
+//! [`apply::apply`]).
+
+pub mod apply;
+pub mod lock;
+pub mod package;
+pub mod plan;
+pub mod render;
+mod render_claude;
+mod render_codex;
+mod render_grok;
+pub mod source;
+
+pub use plan::{AgentInitOptions, Plan};
+pub use render::Host;
 
 use std::fs;
 use std::path::{Path, PathBuf};

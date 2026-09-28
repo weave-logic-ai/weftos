@@ -43,7 +43,13 @@ exo-resource-tree = { workspace = true }
 tokio = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+sha2 = { workspace = true }
+toml = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 clap = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
