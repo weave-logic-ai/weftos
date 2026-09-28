@@ -7,7 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Staging area for changes after the 0.8.0 cut.
+Staging area for changes after the 0.8.1 cut.
+
+## [0.8.1] - 2026-09-28
+
+Point release from `0.8-metaharness` so the current agent-team and harness work can be tested
+against Ruflo.
+
+### Added
+
+- **Ruflo agent teams**: `weft` joins Ruflo agent teams as a command host (ADR-402), with a Grok
+  team-bus shim and the canonical Grok spawn plan (Grok Build 1.0.41 spawn arguments only).
+- **One-shot agent sessions**: `weft agent -m` starts a fresh conversation per call; `--session <id>`
+  continues a named one. Failed turns are flagged (`finish_reason: "error"`) and scripted callers
+  exit non-zero. Agent conversations live under the project's `.clawft/sessions/`.
+- **ObservationPack**: large tool results are archived in the session's `.observations/` ledger
+  instead of truncated, with a bounded projection in context and an `obs_recall` tool to page the
+  archive (`observation.archived` / `observation.recalled` chain events).
+- **WeftOS base agents** (`agents/`): durable, generalized copies of the harness agents (steward,
+  doc-gardener, liber, mo, lead doctrine, developer/reviewer/tester/documenter/measurer lanes, and
+  three templates), each with `AGENT.md`, skills, `weftos-package.yaml` and eval scenarios, plus
+  `scripts/agents-leak-check.sh`.
+- **Knowledge base**: `build-kb` builds the RVF KB from Fumadocs MDX and repo markdown.
+- **Docs site**: the Urth spatial scrollyteller (`/urth-spatial`) and research pages.
+- **Research and design**: Skill-3D Rust adaptation plan and 100-reference analysis, Episteme STEM
+  skill pack review, agent directory design and accepted ADR, agent-skill design research, spatial
+  intelligence 2026 survey, sensor and memory research.
+
+### Security
+
+- Rust: `h2` 0.4.19, `rkyv` 0.8.18, `rustls` 0.23.45, `webbrowser` 1.2.4, and the yanked `chacha20`,
+  `der` and `spin` updated. RUSTSEC-2026-0269 (wasmtime) is ignored with rationale until the
+  Rust 1.94 / wasmtime 46 bump: the only WASI context has no filesystem preopens.
+- npm: all four lockfiles at 0 critical / 0 high (overrides for `adm-zip`, `sharp`,
+  `brace-expansion`, `fast-uri`, `toml`; `next` 16.3.6; audit fixes in `gui` and `clawft-ui`).
+  See `docs/security/npm-audit-residual.md`.
+
+### Fixed
+
+- `clawft-weave` daemon `ipc_publish` tests match their own topic instead of the first
+  `ipc.publish` event on a shared chain.
+- `pull-assets` finds the browser WASM under `crates/clawft-wasm/www/pkg`.
 
 ### Fixed (release CI follow-ups on v0.8.0 re-cut)
 
