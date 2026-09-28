@@ -54,14 +54,24 @@ if [[ "$MODE" == "local" ]]; then
     fi
     echo "Copying from local build artifacts..."
 
-    # WASM from crates/clawft-wasm/pkg/
-    PKG_DIR="$ROOT/crates/clawft-wasm/pkg"
-    if [[ -f "$PKG_DIR/clawft_wasm_bg.wasm" ]]; then
+    # WASM from bindgen output. scripts/build.sh browser writes www/pkg/;
+    # older wasm-pack builds used crates/clawft-wasm/pkg/.
+    PKG_DIR=""
+    for candidate in \
+        "$ROOT/crates/clawft-wasm/www/pkg" \
+        "$ROOT/crates/clawft-wasm/pkg"
+    do
+        if [[ -f "$candidate/clawft_wasm_bg.wasm" ]]; then
+            PKG_DIR="$candidate"
+            break
+        fi
+    done
+    if [[ -n "$PKG_DIR" ]]; then
         cp "$PKG_DIR/clawft_wasm_bg.wasm" "$WASM_DIR/"
         cp "$PKG_DIR/clawft_wasm.js" "$WASM_DIR/"
         echo "  WASM: copied from $PKG_DIR"
     else
-        echo "  WASM: not found at $PKG_DIR — run browser WASM build first"
+        echo "  WASM: not found in www/pkg or pkg — run scripts/build.sh browser first"
         exit 1
     fi
 

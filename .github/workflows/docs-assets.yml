@@ -108,7 +108,9 @@ jobs:
         run: |
           cargo build --release --manifest-path tools/build-kb/Cargo.toml
           tools/build-kb/target/release/build-kb \
+            --repo-root . \
             --docs-dir docs/src/content/docs \
+            --docs-dir docs \
             --output weftos-docs.rvf
 
       # ── Package assets ──────────────────────────────────────────

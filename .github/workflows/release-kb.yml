@@ -46,7 +46,9 @@ jobs:
         run: |
           mkdir -p docs/src/public/kb
           tools/build-kb/target/release/build-kb \
+            --repo-root . \
             --docs-dir docs/src/content/docs \
+            --docs-dir docs \
             --output docs/src/public/kb/weftos-docs.rvf
 
           SIZE_BYTES=$(wc -c < docs/src/public/kb/weftos-docs.rvf)

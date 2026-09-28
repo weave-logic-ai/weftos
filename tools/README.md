@@ -29,8 +29,11 @@ contract here and in [`docs/deployment/release.md`](../docs/deployment/release.m
 
 ### `build-kb`
 
-- **Purpose:** Walk `docs/src/content/docs/`, chunk MDX by heading, emit a
-  binary `.rvf` knowledge base for the docs playground / tour guide.
+- **Purpose:** Walk Fumadocs MDX (`docs/src/content/docs/`) **and** repo
+  markdown (`docs/` — ADRs, guides, research, brain, architecture, weftos
+  specs). Chunk by heading, emit a binary `.rvf` knowledge base for the
+  `/clawft` playground RAG + tag graph. Skips `docs/plans/` and generated
+  `docs/src/{app,public,lib,e2e}` trees.
 - **Local:** `scripts/build-kb.sh` (or
   `cargo build --release --manifest-path tools/build-kb/Cargo.toml`).
 - **CI:** `.github/workflows/release-kb.yml`,
