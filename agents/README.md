@@ -43,6 +43,51 @@ Specialized agents for developing, operating, and evolving WeftOS.
 | `weftos-kernel/` | Kernel development skill |
 | `weftos-mesh/` | Mesh networking skill |
 | `clawft/` | General clawft development skill |
+| `steward/`, `doc-gardener/`, `liber/`, `mo/`, `lead-doctrine/`, `developer/`, `reviewer/`, `tester/`, `documenter/`, `measurer/`, `templates/` | Base team ported from the user's own harness (see below) |
+
+## Base team (ported from the user's harness, 2026-09-28)
+
+These packages are durable WeftOS copies of agents the user runs in their own harness —
+not agents delivered as part of any client engagement's own code. They follow the
+Higgsfield-derived WeftOS skill package standard v0
+(`docs/research/agent-skills-design/higgsfield-format-standard.md` §13,
+`docs/research/agent-directory/design.md` §1): each package root has `AGENT.md` (or, for
+a doctrine-only package, `SKILL.md`), a `skills/` directory, an optional `scripts/`, a
+`weftos-package.yaml` sidecar (capabilities, required project-context keys, secret
+placeholders, trust tier, and a `provenance` block), and `evals/scenarios.md` with
+behavioral eval scenarios. None of these packages render host-specific output
+(`.claude/`, `.codex/`, `.grok/`) directly — that's a future `weftos init` renderer's job.
+
+Every package's `weftos-package.yaml` names its source as `"user harness (private
+engagement repo)"`, never a client name, per each package's `provenance` block. Personas
+and nicknames that are the harness's own (Stew, Doc/Gus/Chirurgus, Liber, Mo) are kept;
+everything client-identifying (org names, ticket ids, business-rule vocabulary, granted
+third-party system names, absolute paths) was generalized into project-context
+placeholders or dropped. `scripts/agents-leak-check.sh` enforces this on every run — see
+below.
+
+| Package | Nickname | Kind | Ported from (role only — see provenance for the "why") |
+|---|---|---|---|
+| `steward/` | Stew | specialist | a board/ticket-tracker steward — sole delegated board-write authority |
+| `doc-gardener/` | Doc (Gus) | specialist | a standing documentation-estate owner |
+| `liber/` | Liber | specialist | a memory-destination router |
+| `mo/` | Mo | specialist | a purpose-and-voice consultant (Darwin capability excluded — unbuilt in the source, no WeftOS infra to run it on) |
+| `lead-doctrine/` | — | skill (not spawnable) | the lead/coordinator-session doctrine — explicitly not a spawn target, see `SKILL.md` |
+| `developer/` | — | lane | a worktree-isolated build lane |
+| `reviewer/` | — | lane | a read-only, adversarial review lane |
+| `tester/` | — | lane | a unit-test lane that proves a test bites before shipping it |
+| `documenter/` | — | lane | a per-change docs/decision-record lane (companion to `doc-gardener/`, not a replacement) |
+| `measurer/` | — | lane | a read-only, no-edit-tools measurement lane |
+| `templates/domain-expert/` | — | template | an expert grounded in a curated, cited knowledge store |
+| `templates/model-domain-expert/` | — | template | the base-vs-override honesty pattern for a computational/financial model (narrowest port — one pattern only) |
+| `templates/external-system-reader/` | — | template | a read-only reader of a granted external system, with an enforced transport wall |
+
+### Deliberately excluded from this port
+
+| Source agent | Reason |
+|---|---|
+| a client-engagement methodology agent (its exact source id is intentionally not repeated here — see the confidentiality note above; it's on record in the private harness inventory this port was scoped from) | Encodes a specific, named third-party consulting methodology as its core IP and vocabulary — a licensing/attribution question, not just a portability one. Valuable only for a future *client-engagement* agent, not the WeftOS base engineering team. |
+| `weftos-core` | Already WeftOS's own agent, imported *into* the source engagement repo the other direction (evidence WeftOS ideas already flow outward) — not something to port back in. |
 
 ## Agents
 

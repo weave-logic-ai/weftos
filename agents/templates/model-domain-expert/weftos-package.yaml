@@ -1,0 +1,38 @@
+name: model-domain-expert
+kind: template
+trust_tier: template
+
+capabilities:
+  - model_trace          # read-only tracing against project-supplied model tooling
+
+required_project_context:
+  - key: model_tracing.io_map_or_docs
+    description: the project's own documented model structure (IO map, doc, or schema)
+  - key: model_tracing.dependency_trace_command
+    required: false
+    description: a dependency-graph / formula-explain command, if the project has one
+  - key: model_tracing.threshold_doc_path
+    required: false
+    description: where documented policy thresholds (hurdles, cutoffs) live, if anywhere
+
+secrets: []
+
+requires:
+  - skill: base-vs-override
+
+dependencies: []
+
+provenance:
+  source_registry: user harness (private engagement repo)
+  source_url: null
+  upstream_license: none (internal harness agent, not open-source)
+  upstream_commit: null
+  adopted_at: "2026-09-28"
+  verdict: pattern
+  notes: >
+    Per the inventory, the source financial-model domain-expert agent is "deeply coupled
+    to one client's financial model and its recalculation service" (Low generalizability
+    as an agent). Only the base-vs-override honesty pattern was extracted; the workbook,
+    recalc engine, and asset-class scaffolding described in the source were deliberately
+    NOT ported. A project adopting this template must supply its own model-tracing
+    tooling via project context.

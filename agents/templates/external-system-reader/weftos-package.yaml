@@ -1,0 +1,46 @@
+name: external-system-reader
+kind: template
+trust_tier: template
+
+capabilities:
+  - external_read_only     # transport must structurally refuse writes; see SKILL.md
+
+required_project_context:
+  - key: external_system.read_only_transport_command
+    description: >
+      the project's own read-only CLI/wrapper for the granted system. Must refuse
+      non-GET methods, denylist mutating paths, and refuse off-system URLs BY
+      CONSTRUCTION, not by agent instruction alone.
+  - key: external_system.health_check_command
+    description: a "whoami"-style call confirming the credential and transport before use
+  - key: external_system.estate_analysis_path
+    required: false
+    description: path to any existing usage-map/parity analysis of the granted estate
+  - key: external_system.administrator
+    description: named human owner of the granted system, for routing declined write requests
+
+secrets:
+  - name: EXTERNAL_SYSTEM_API_TOKEN
+    description: placeholder — the granted credential; never echoed, logged, or passed on a command line
+    required: true
+
+requires:
+  - skill: read-only-wall
+
+dependencies: []
+
+provenance:
+  source_registry: user harness (private engagement repo)
+  source_url: null
+  upstream_license: none (internal harness agent, not open-source)
+  upstream_commit: null
+  adopted_at: "2026-09-28"
+  verdict: pattern
+  notes: >
+    Extracted as a template from the harness's read-only third-party-work-management
+    reader agent. Per the
+    inventory: "low as a literal agent (system-specific), medium-high as a pattern —
+    read-only external-system agent, enforced at the transport layer, that converts
+    write-requests into findings for a named human owner." The specific third-party
+    product name, its command surface, and any estate-specific details were deliberately
+    generalized out; this template names no third-party product.

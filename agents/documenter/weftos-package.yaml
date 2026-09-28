@@ -1,0 +1,41 @@
+name: documenter
+kind: lane
+trust_tier: core
+
+capabilities:
+  - docs_write
+  - decision_record_draft
+
+required_project_context:
+  - key: citation_gate_command
+    required: false
+    description: CI/local command verifying quoted evidence is a literal substring of its source
+  - key: decision_record_index_path
+    required: false
+    description: path to the decision-record index and numbering convention
+  - key: confidential_paths
+    required: false
+    description: gitignored/confidential paths this agent must never commit (client assets, recordings, restricted corpora)
+
+secrets: []
+
+requires:
+  - skill: doc-lane
+
+dependencies:
+  - agent: doc-gardener
+    relationship: complementary — doc-gardener owns the estate and the queue; this agent
+      is the per-change writing companion a build lane hands its diff to
+
+provenance:
+  source_registry: user harness (private engagement repo)
+  source_url: null
+  upstream_license: none (internal harness agent, not open-source)
+  upstream_commit: null
+  adopted_at: "2026-09-28"
+  verdict: adopt
+  notes: >
+    Ported the harness's per-PR documentation lane. Per the inventory, its scope is
+    largely superseded by the doc-gardener agent for anything durable, so it's kept
+    narrowly as the "per-PR doc lane" companion rather than a second estate owner —
+    both packages exist and cross-reference each other rather than merging.

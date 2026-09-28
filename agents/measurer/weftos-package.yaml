@@ -1,0 +1,42 @@
+name: measurer
+kind: lane
+trust_tier: internal   # elevated read reach — narrower default trust than the other lanes
+
+capabilities:
+  - read_only_measurement    # no write/edit capability declared anywhere in this package
+
+required_project_context:
+  - key: measurement_bindings
+    description: >
+      placeholder list of project-declared, read-only measurement endpoints/commands
+      (e.g. board list, environment state, an internal API catalog). The source agent
+      this was ported from bound five project-specific MCP tools directly in its
+      frontmatter; those bindings are NOT reproduced here and must be supplied per
+      project via this key.
+  - key: measurement_environment_flag
+    required: false
+    description: name of any shared mutable mode flag (e.g. local vs. live) the transport exposes
+
+secrets:
+  - name: MEASUREMENT_API_TOKEN
+    description: placeholder — credential for whatever read-only API surface the project grants
+    required: false
+
+requires:
+  - skill: measure-only
+
+dependencies: []
+
+provenance:
+  source_registry: user harness (private engagement repo)
+  source_url: null
+  upstream_license: none (internal harness agent, not open-source)
+  upstream_commit: null
+  adopted_at: "2026-09-28"
+  verdict: adapt
+  notes: >
+    Ported the separation-of-measurement-from-change doctrine near-verbatim (high per
+    the inventory). The source bound five project-specific MCP tools (a board reader,
+    an environment-state reader, a generic API-call tool, and an API catalog) directly
+    in its tool list — those bindings are explicitly NOT ported; this package declares a
+    generic `measurement_bindings` placeholder instead, to be filled per project.

@@ -1,0 +1,38 @@
+name: mo
+nickname: Mo
+kind: specialist
+trust_tier: core
+
+capabilities:
+  - voice_consult       # read-only analysis + structured read-back; never writes the artifact
+
+required_project_context:
+  - key: package_registry_path
+    required: false
+    description: path to the project's content/voice package registry, if one exists
+  - key: calibrated_gauge_example_path
+    required: false
+    description: an existing length/shape gauge to use as the calibration precedent
+  - key: confidentiality_never_relax_rules
+    required: false
+    description: rules Mo must treat as never-relaxable (e.g. no internal ids on client surfaces)
+
+secrets: []
+
+requires:
+  - skill: purpose-and-voice
+
+dependencies: []
+
+provenance:
+  source_registry: user harness (private engagement repo)
+  source_url: null
+  upstream_license: none (internal harness agent, not open-source)
+  upstream_commit: null
+  adopted_at: "2026-09-28"
+  verdict: adapt
+  notes: >
+    Ported the consult/read-back contract near-verbatim (medium-high generalizability per
+    the inventory). The "Darwin" variation-and-scoring capability described in the source
+    is explicitly excluded — it was unbuilt there and has no WeftOS infrastructure to run
+    on; see AGENT.md §5 for the note kept in place of the feature.

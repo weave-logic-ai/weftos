@@ -137,3 +137,6 @@ scripts/__pycache__/
 
 # Full-text copies of third-party papers: kept locally for search, not redistributed
 docs/research/**/paper-*.txt
+
+# Private harness inventory (maps a client engagement repo); local only
+docs/research/agent-directory/private/

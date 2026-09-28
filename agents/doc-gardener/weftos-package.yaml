@@ -1,0 +1,46 @@
+name: doc-gardener
+nickname: Doc (Gus)
+kind: specialist
+trust_tier: core
+
+capabilities:
+  - docs_write               # prose in docs/, README, reference material
+  - decision_record_draft    # draft/amend ADR-equivalents; never marks Accepted itself
+  - queue_write              # durable per-item queue under docs/doc-queue/
+  - subagent_dispatch        # read-only research/measurement helpers only, never writers
+
+required_project_context:
+  - key: docs_root
+    description: root path(s) the estate covers (e.g. docs/, adr/)
+  - key: citation_gate_command
+    required: false
+    description: CI/local command that verifies quoted evidence is a literal substring of its source
+  - key: decision_record_index_path
+    required: false
+    description: path to the decision-record index/README and its numbering convention
+  - key: queue_path
+    description: durable queue directory, default docs/doc-queue/
+  - key: confidentiality_tiers
+    required: false
+    description: names of restricted tiers this agent must never quote into a lower tier
+
+secrets: []
+
+requires:
+  - skill: doc-garden
+
+dependencies: []
+
+provenance:
+  source_registry: user harness (private engagement repo)
+  source_url: null
+  upstream_license: none (internal harness agent, not open-source)
+  upstream_commit: null
+  adopted_at: "2026-09-28"
+  verdict: adopt
+  notes: >
+    Ported near-verbatim from the harness's doc-gardener agent — the inventory rates this
+    the strongest-designed agent in the source set. Role, evidence rules, retraction
+    rules and queue design are project-agnostic; only corpus paths were parameterized.
+    Flywheel mode discipline (off / shadow / on) kept intact; ships off by default per
+    the task brief.

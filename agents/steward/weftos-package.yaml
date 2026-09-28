@@ -1,0 +1,51 @@
+name: steward
+nickname: Stew
+kind: specialist
+trust_tier: core
+
+capabilities:
+  - board_write            # writes ticket rows through a project-declared adapter only
+  - board_read
+  - manifest_validate
+  - manifest_dedupe
+
+# Fields this agent expects to find in .agents/project-context.md.
+required_project_context:
+  - key: board_adapter.list_command
+    description: shell command that lists the live board (no args needed to run read-only)
+  - key: board_adapter.dry_run_command
+    description: command that validates + prints a plan for a manifest without writing
+  - key: board_adapter.apply_command
+    description: command that writes a manifest; must accept an explicit write flag
+  - key: board_adapter.intake_contract_path
+    description: path to the machine-checkable card-shape validator/contract
+  - key: board_adapter.roster
+    description: the set of names the board can resolve as an owner/turn_owner
+  - key: goal_object
+    required: false
+    description: name of a separate goal/outcome object, if the board schema has one
+
+secrets:
+  - name: BOARD_API_TOKEN
+    description: placeholder — credential for the project's board API, if the adapter needs one
+    required: false
+
+requires:
+  - skill: board-steward
+
+dependencies: []
+
+provenance:
+  source_registry: user harness (private engagement repo)
+  source_url: null
+  upstream_license: none (internal harness agent, not open-source)
+  upstream_commit: null
+  adopted_at: "2026-09-28"
+  verdict: adapt
+  notes: >
+    Ported from the harness's product-board-steward agent. The write-path mechanics
+    (intake-manifest.mjs, board-sync.mjs, a specific board schema and people roster) were
+    replaced with a generic board-adapter contract read from project context. The
+    discipline (dedupe-before-write, dry-run-then-confirm, disposition reporting,
+    stand-down thresholds, mini-steward fan-out) ported near-verbatim as the portable
+    part of the design.
