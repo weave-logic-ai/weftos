@@ -214,14 +214,26 @@ pub async fn gc_migrated_session_files<P: Platform>(
 
 /// Resolve the sessions directory the same way [`SessionManager::new`] does:
 ///
-/// 1. `~/.clawft/workspace/sessions/` if it exists,
-/// 2. else `~/.nanobot/workspace/sessions/` (legacy fallback) if it exists,
-/// 3. else create and return `~/.clawft/workspace/sessions/`.
+/// 1. the project workspace's `.clawft/sessions/` when a workspace is found
+///    (`$CLAWFT_WORKSPACE`, else a `.clawft/` directory walking up from the
+///    current directory — the same discovery memory and skills use), unless
+///    that workspace is the home directory itself;
+/// 2. else `~/.clawft/workspace/sessions/` if it exists,
+/// 3. else `~/.nanobot/workspace/sessions/` (legacy fallback) if it exists,
+/// 4. else create and return `~/.clawft/workspace/sessions/`.
 ///
 /// Shared with [`crate::agent::local_file_sink::LocalFileSink`] so both the
 /// legacy manager and the M3 in-process sink agree on the directory.
 pub(crate) async fn discover_sessions_dir<P: Platform>(
     platform: &P,
+) -> clawft_types::Result<PathBuf> {
+    discover_sessions_dir_in(platform, crate::workspace::discover_workspace()).await
+}
+
+/// [`discover_sessions_dir`] with the workspace root passed in (testable).
+pub(crate) async fn discover_sessions_dir_in<P: Platform>(
+    platform: &P,
+    workspace_root: Option<PathBuf>,
 ) -> clawft_types::Result<PathBuf> {
     let home = platform
         .fs()
@@ -229,6 +241,23 @@ pub(crate) async fn discover_sessions_dir<P: Platform>(
         .ok_or_else(|| ClawftError::ConfigInvalid {
             reason: "cannot determine home directory".into(),
         })?;
+
+    // A project workspace keeps its own conversations. `~/.clawft` found by
+    // walking up from somewhere under $HOME is the global workspace, which
+    // keeps the legacy `~/.clawft/workspace/sessions` layout below.
+    if let Some(root) = workspace_root {
+        let dot_clawft = root.join(".clawft");
+        if root != home && platform.fs().exists(&dot_clawft).await {
+            let dir = dot_clawft.join("sessions");
+            platform
+                .fs()
+                .create_dir_all(&dir)
+                .await
+                .map_err(ClawftError::Io)?;
+            debug!(path = %dir.display(), "using workspace sessions dir");
+            return Ok(dir);
+        }
+    }
 
     let clawft_dir = home.join(".clawft").join("workspace").join("sessions");
     let nanobot_dir = home.join(".nanobot").join("workspace").join("sessions");
@@ -1296,6 +1325,44 @@ mod tests {
             mgr.sessions_dir,
             PathBuf::from("/mock-home/.clawft/workspace/sessions")
         );
+    }
+
+    #[tokio::test]
+    async fn sessions_dir_follows_the_project_workspace() {
+        let platform = make_platform();
+        platform
+            .fs()
+            .create_dir_all(Path::new("/proj/.clawft"))
+            .await
+            .unwrap();
+        let dir = discover_sessions_dir_in(platform.as_ref(), Some(PathBuf::from("/proj")))
+            .await
+            .unwrap();
+        assert_eq!(dir, PathBuf::from("/proj/.clawft/sessions"));
+        assert!(platform.fs().exists(&dir).await);
+    }
+
+    #[tokio::test]
+    async fn sessions_dir_keeps_global_layout_for_home_or_no_workspace() {
+        let platform = make_platform();
+        platform
+            .fs()
+            .create_dir_all(Path::new("/mock-home/.clawft"))
+            .await
+            .unwrap();
+        let global = PathBuf::from("/mock-home/.clawft/workspace/sessions");
+        // `~/.clawft` found by walking up is the global workspace.
+        let home_ws = discover_sessions_dir_in(platform.as_ref(), Some(PathBuf::from("/mock-home")))
+            .await
+            .unwrap();
+        assert_eq!(home_ws, global);
+        // A workspace root without a `.clawft/` dir is ignored.
+        let missing = discover_sessions_dir_in(platform.as_ref(), Some(PathBuf::from("/nope")))
+            .await
+            .unwrap();
+        assert_eq!(missing, global);
+        let none = discover_sessions_dir_in(platform.as_ref(), None).await.unwrap();
+        assert_eq!(none, global);
     }
 
     #[tokio::test]

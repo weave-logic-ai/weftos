@@ -48,8 +48,18 @@ use crate::interactive::registry::{InteractiveContext, SlashCommandRegistry};
 #[derive(Args)]
 pub struct AgentArgs {
     /// Send a single message and exit (non-interactive mode).
+    ///
+    /// Each `-m` turn starts a fresh conversation with no prior history
+    /// unless `--session` names one to continue.
     #[arg(short, long)]
     pub message: Option<String>,
+
+    /// Continue a named conversation with `-m` (letters, digits, `.`, `_`,
+    /// `-`; up to 128 characters). Two `-m` calls with the same
+    /// `--session` share history. The interactive REPL keeps its own
+    /// `cli-session` conversation and does not take this flag.
+    #[arg(long, value_name = "ID", requires = "message")]
+    pub session: Option<String>,
 
     /// Model to use (overrides config).
     #[arg(long)]
@@ -79,6 +89,12 @@ pub struct AgentArgs {
 /// loop processes messages through the full pipeline, including
 /// tool execution.
 pub async fn run(args: AgentArgs) -> anyhow::Result<()> {
+    // Resolve the one-shot conversation first so a bad --session fails fast.
+    let one_shot_chat = match args.message {
+        Some(_) => Some(one_shot_chat_id(args.session.as_deref())?),
+        None => None,
+    };
+
     let platform = Arc::new(NativePlatform::new());
     let loaded = super::load_config_layered(&*platform, args.config.as_deref()).await?;
     let mut config = loaded.config;
@@ -117,8 +133,8 @@ pub async fn run(args: AgentArgs) -> anyhow::Result<()> {
     // AgentLoop below with no behaviour change.
     if let Some(client) = super::agent_daemon::detect().await {
         info!("kernel daemon reachable — routing agent turns via agent.chat");
-        if let Some(ref message) = args.message {
-            return super::agent_daemon::run_single_message(client, message).await;
+        if let (Some(message), Some(chat_id)) = (args.message.as_deref(), one_shot_chat.as_deref()) {
+            return super::agent_daemon::run_single_message(client, message, chat_id).await;
         }
         let skill_registry = discover_skill_registry(args.trust_project_skills).await;
         return super::agent_daemon::run_interactive(client, &skill_registry).await;
@@ -231,11 +247,37 @@ pub async fn run(args: AgentArgs) -> anyhow::Result<()> {
         );
     }
 
-    if let Some(ref message) = args.message {
-        return run_single_message(message, &bus, agent, effective_model).await;
+    if let (Some(message), Some(chat_id)) = (args.message.as_deref(), one_shot_chat.as_deref()) {
+        return run_single_message(message, chat_id, &bus, agent, effective_model).await;
     }
 
     run_interactive(&bus, agent, &tool_names, effective_model, &skill_registry).await
+}
+
+/// Chat id prefix for fresh one-shot (`-m`) conversations.
+pub(crate) const ONE_SHOT_CHAT_PREFIX: &str = "oneshot-";
+
+/// Chat id for a one-shot `-m` turn: the `--session` name when given
+/// (validated so it is safe as a session file name), otherwise a fresh
+/// `oneshot-<uuid>` so no earlier turn's history is loaded.
+pub(crate) fn one_shot_chat_id(session: Option<&str>) -> anyhow::Result<String> {
+    match session {
+        Some(id) => {
+            let ok = !id.is_empty()
+                && id.len() <= 128
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+                && !id.starts_with('.');
+            if !ok {
+                anyhow::bail!(
+                    "invalid --session {id:?}: use letters, digits, '.', '_' or '-' (max 128, not starting with '.')"
+                );
+            }
+            Ok(id.to_owned())
+        }
+        None => Ok(format!("{ONE_SHOT_CHAT_PREFIX}{}", uuid::Uuid::new_v4())),
+    }
 }
 
 /// Process a single message through the agent loop and exit.
@@ -244,6 +286,7 @@ pub async fn run(args: AgentArgs) -> anyhow::Result<()> {
 /// background, waits for the outbound response, and prints it.
 async fn run_single_message(
     message: &str,
+    chat_id: &str,
     bus: &Arc<MessageBus>,
     agent: clawft_core::agent::loop_core::AgentLoop<NativePlatform>,
     model: &str,
@@ -253,11 +296,12 @@ async fn run_single_message(
     // Engine line to stderr so `-m` stdout stays clean for scripting.
     eprintln!("Engine: in-process (daemon not running)");
 
-    // Create and publish the inbound message.
+    // Create and publish the inbound message. The chat id is fresh per
+    // invocation (or the `--session` name), never the REPL's `cli-session`.
     let inbound = InboundMessage {
         channel: "cli".into(),
         sender_id: "local".into(),
-        chat_id: "cli-session".into(),
+        chat_id: chat_id.to_owned(),
         content: message.to_owned(),
         timestamp: Utc::now(),
         media: vec![],
@@ -276,18 +320,13 @@ async fn run_single_message(
     // Wait for the outbound response.
     let response = bus.consume_outbound().await;
 
-    // The loop marks failed turns with metadata.error=true (e.g. provider
-    // not configured, max tool iterations) — exit non-zero instead of
-    // printing the error as a normal reply.
+    // The loop flags failed turns (`OutboundMessage::is_error`: provider
+    // not configured, max tool iterations, failed or refused delegation)
+    // — exit non-zero instead of printing the error as a normal reply.
     let mut failure: Option<String> = None;
     match response {
         Some(msg) => {
-            let is_error = msg
-                .metadata
-                .get("error")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if is_error {
+            if msg.is_error() {
                 eprintln!("{}", msg.content);
                 failure = Some(msg.content);
             } else {
@@ -629,10 +668,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn one_shot_turns_get_distinct_fresh_conversations() {
+        let a = one_shot_chat_id(None).unwrap();
+        let b = one_shot_chat_id(None).unwrap();
+        assert!(a.starts_with(ONE_SHOT_CHAT_PREFIX));
+        assert_ne!(a, b, "two -m calls must not share a conversation");
+        assert_ne!(a, "cli-session", "a -m call must not use the REPL conversation");
+    }
+
+    #[test]
+    fn named_session_is_reused_and_validated() {
+        assert_eq!(one_shot_chat_id(Some("review-1")).unwrap(), "review-1");
+        assert_eq!(
+            one_shot_chat_id(Some("review-1")).unwrap(),
+            one_shot_chat_id(Some("review-1")).unwrap()
+        );
+        for bad in ["", "../x", "a/b", ".hidden", "sp ace", &"x".repeat(129)] {
+            assert!(one_shot_chat_id(Some(bad)).is_err(), "{bad:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn session_flag_requires_message() {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct Wrap {
+            #[command(flatten)]
+            a: AgentArgs,
+        }
+        assert!(Wrap::try_parse_from(["weft", "--session", "x"]).is_err());
+        let w = Wrap::try_parse_from(["weft", "-m", "hi", "--session", "x"]).unwrap();
+        assert_eq!(w.a.session.as_deref(), Some("x"));
+    }
+
+    #[test]
     fn agent_args_defaults() {
         // Verify the struct can be constructed with all-None fields.
         let args = AgentArgs {
             message: None,
+            session: None,
             model: None,
             config: None,
             intelligent_routing: false,
@@ -647,6 +721,7 @@ mod tests {
     fn agent_args_with_message() {
         let args = AgentArgs {
             message: Some("test message".into()),
+            session: None,
             model: None,
             config: None,
             intelligent_routing: false,
@@ -659,6 +734,7 @@ mod tests {
     fn agent_args_with_model_override() {
         let args = AgentArgs {
             message: None,
+            session: None,
             model: Some("openai/gpt-4".into()),
             config: None,
             intelligent_routing: false,
@@ -671,6 +747,7 @@ mod tests {
     fn agent_args_with_config_path() {
         let args = AgentArgs {
             message: None,
+            session: None,
             model: None,
             config: Some("/tmp/test-config.json".into()),
             intelligent_routing: false,

@@ -1224,16 +1224,15 @@ impl<P: Platform> AgentLoop<P> {
                             // going silent: single-message CLI mode blocks on
                             // the outbound reply, and channel users otherwise
                             // see nothing at all.
-                            let mut metadata = std::collections::HashMap::new();
-                            metadata.insert("error".to_string(), serde_json::Value::Bool(true));
-                            let outbound = OutboundMessage {
+                            let mut outbound = OutboundMessage {
                                 channel,
                                 chat_id,
                                 content: format!("error: {e}"),
                                 reply_to: None,
                                 media: vec![],
-                                metadata,
+                                metadata: Default::default(),
                             };
+                            outbound.mark_error();
                             if let Err(e) = self.bus.dispatch_outbound(outbound) {
                                 error!("failed to dispatch error reply: {}", e);
                             }
@@ -1943,14 +1942,18 @@ impl<P: Platform> AgentLoop<P> {
                 self.sink_append_user(&conv_id, msg).await;
             }
             self.sink_append_plain(&conv_id, "assistant", &body).await;
-            return Ok(OutboundMessage {
+            // The task was not done: flag the turn as failed so scripted
+            // callers (one-shot `weft agent -m`) exit non-zero.
+            let mut refused = OutboundMessage {
                 channel: msg.channel.clone(),
                 chat_id: msg.chat_id.clone(),
                 content: body,
                 reply_to: None,
                 media: vec![],
                 metadata: Default::default(),
-            });
+            };
+            refused.mark_error();
+            return Ok(refused);
         }
         // Stamp the bumped depth into the delegation args so the
         // child delegator sees the carried count. Tools that don't
@@ -1970,6 +1973,7 @@ impl<P: Platform> AgentLoop<P> {
         let permissions = Some(&auth.permissions);
 
         // Invoke delegate_task tool directly.
+        let mut delegation_failed = false;
         let response_text = match self
             .tools
             .execute("delegate_task", delegate_args, permissions)
@@ -1985,10 +1989,13 @@ impl<P: Platform> AgentLoop<P> {
                 }
             }
             Err(e) => {
-                warn!(error = %e, "auto-delegation failed, falling through to local LLM");
-                // On delegation failure, surface a user-visible error.
-                // (A future enhancement could re-enter the local LLM
-                // pipeline here; today we keep the simpler contract.)
+                warn!(error = %e, "auto-delegation failed");
+                // On delegation failure, surface a user-visible error and
+                // flag the turn as failed (see `OutboundMessage::mark_error`)
+                // so chat UIs show the text while one-shot callers exit
+                // non-zero. (A future enhancement could re-enter the local
+                // LLM pipeline here; today we keep the simpler contract.)
+                delegation_failed = true;
                 format!("Delegation failed: {e}. The task could not be routed to the delegate.")
             }
         };
@@ -1998,7 +2005,7 @@ impl<P: Platform> AgentLoop<P> {
             .await;
 
         // Build outbound reply (caller handles dispatch).
-        let outbound = OutboundMessage {
+        let mut outbound = OutboundMessage {
             channel: msg.channel.clone(),
             chat_id: msg.chat_id.clone(),
             content: response_text,
@@ -2006,6 +2013,9 @@ impl<P: Platform> AgentLoop<P> {
             media: vec![],
             metadata: Default::default(),
         };
+        if delegation_failed {
+            outbound.mark_error();
+        }
 
         debug!(session_key = %session_key, "auto-delegated message processed");
         Ok(outbound)
@@ -5492,6 +5502,15 @@ mod tests {
         transport: Arc<dyn LlmTransport>,
         prefix: &str,
     ) -> (AgentLoop<NativePlatform>, PathBuf) {
+        make_auto_delegation_agent_with(transport, prefix, Arc::new(MockDelegateTaskTool)).await
+    }
+
+    /// Same as [`make_auto_delegation_agent`] with a caller-supplied `delegate_task` tool.
+    async fn make_auto_delegation_agent_with(
+        transport: Arc<dyn LlmTransport>,
+        prefix: &str,
+        delegate: Arc<dyn Tool>,
+    ) -> (AgentLoop<NativePlatform>, PathBuf) {
         let dir = temp_dir(prefix);
         let platform = Arc::new(NativePlatform::new());
         let bus = Arc::new(MessageBus::new());
@@ -5506,7 +5525,7 @@ mod tests {
 
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
-        tools.register(Arc::new(MockDelegateTaskTool));
+        tools.register(delegate);
 
         let pipeline = make_pipeline(transport);
 
@@ -6847,6 +6866,79 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
+    /// One-shot `weft agent -m` turns use a fresh chat id each call (or
+    /// the `--session` name). History is keyed by chat id, so two
+    /// different ids never see each other's turns while a repeated id
+    /// does. This is the loop-side half of that contract.
+    #[tokio::test]
+    async fn history_is_keyed_by_chat_id() {
+        struct RecordingTransport {
+            requests: std::sync::Mutex<Vec<String>>,
+        }
+
+        #[async_trait]
+        impl LlmTransport for RecordingTransport {
+            async fn complete(
+                &self,
+                request: &TransportRequest,
+            ) -> clawft_types::Result<LlmResponse> {
+                let text = request
+                    .messages
+                    .iter()
+                    .map(|m| m.content.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.requests.lock().unwrap().push(text);
+                Ok(LlmResponse {
+                    id: "rec".into(),
+                    content: vec![ContentBlock::Text { text: "ok".into() }],
+                    stop_reason: StopReason::EndTurn,
+                    usage: Usage {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                        total_tokens: 0,
+                    },
+                    metadata: HashMap::new(),
+                })
+            }
+        }
+
+        let transport = Arc::new(RecordingTransport {
+            requests: std::sync::Mutex::new(Vec::new()),
+        });
+        let (agent, dir) =
+            make_agent_loop(transport.clone() as Arc<dyn LlmTransport>, "history_by_chat").await;
+
+        async fn turn(agent: &AgentLoop<NativePlatform>, chat_id: &str, content: &str) {
+            let msg = InboundMessage {
+                channel: "cli".into(),
+                sender_id: "local".into(),
+                chat_id: chat_id.into(),
+                content: content.into(),
+                timestamp: chrono::Utc::now(),
+                media: vec![],
+                metadata: HashMap::new(),
+            };
+            agent.handle_turn(msg, &CancellationToken::new()).await.unwrap();
+        }
+
+        // Two fresh one-shot ids: the second must not see the first.
+        turn(&agent, "oneshot-a", "marker-alpha").await;
+        turn(&agent, "oneshot-b", "marker-beta").await;
+        // A named session used twice: the second sees the first.
+        turn(&agent, "review", "marker-gamma").await;
+        turn(&agent, "review", "marker-delta").await;
+
+        let reqs = transport.requests.lock().unwrap().clone();
+        assert_eq!(reqs.len(), 4);
+        assert!(!reqs[1].contains("marker-alpha"), "fresh ids must not share history");
+        assert!(reqs[1].contains("marker-beta"));
+        assert!(reqs[3].contains("marker-gamma"), "a repeated id must continue its history");
+        assert!(reqs[3].contains("marker-delta"));
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
     // ── WEFT-180: recursive-delegation depth guard ──────────────────
 
     /// A 6-deep delegation chain (depth 5 inbound) refuses the next
@@ -6888,8 +6980,79 @@ mod tests {
             "refusal should mention the cap, got: {}",
             outbound.content
         );
+        assert!(outbound.is_error(), "a refused delegation is a failed turn");
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    /// A `delegate_task` that fails (e.g. the provider rejects the call)
+    /// keeps a readable reply for chat UIs but flags the turn as failed,
+    /// so one-shot `weft agent -m` exits non-zero instead of reporting
+    /// success.
+    #[tokio::test]
+    async fn delegation_failure_flags_outbound_as_error() {
+        struct FailingDelegateTaskTool;
+
+        #[async_trait]
+        impl Tool for FailingDelegateTaskTool {
+            fn name(&self) -> &str {
+                "delegate_task"
+            }
+            fn description(&self) -> &str {
+                "Always fails"
+            }
+            fn parameters(&self) -> serde_json::Value {
+                serde_json::json!({ "type": "object" })
+            }
+            async fn execute(
+                &self,
+                _args: serde_json::Value,
+            ) -> Result<serde_json::Value, crate::tools::registry::ToolError> {
+                Err(crate::tools::registry::ToolError::ExecutionFailed(
+                    "provider returned 400: credit balance is too low".into(),
+                ))
+            }
+        }
+
+        fn swarm_inbound(chat_id: &str) -> InboundMessage {
+            InboundMessage {
+                channel: "cli".into(),
+                sender_id: "local".into(),
+                chat_id: chat_id.into(),
+                content: "run a swarm".into(), // matches MockAutoDelegation
+                timestamp: chrono::Utc::now(),
+                media: vec![],
+                metadata: HashMap::new(),
+            }
+        }
+
+        let transport = Arc::new(MockTransport::new("should NOT see this"));
+        let (agent, dir) = make_auto_delegation_agent_with(
+            transport,
+            "del_fail_flag",
+            Arc::new(FailingDelegateTaskTool),
+        )
+        .await;
+        agent.bus.publish_inbound(swarm_inbound("fail-test")).unwrap();
+        let msg = agent.bus.consume_inbound().await.unwrap();
+        let outbound = agent.handle_turn(msg, &CancellationToken::new()).await.unwrap();
+        assert!(
+            outbound.content.starts_with("Delegation failed"),
+            "got: {}",
+            outbound.content
+        );
+        assert!(outbound.is_error(), "a failed delegation must set the error flag");
+
+        // A successful delegation does not set it.
+        let transport = Arc::new(MockTransport::new("should NOT see this"));
+        let (ok_agent, ok_dir) = make_auto_delegation_agent(transport, "del_ok_flag").await;
+        ok_agent.bus.publish_inbound(swarm_inbound("ok-test")).unwrap();
+        let msg = ok_agent.bus.consume_inbound().await.unwrap();
+        let outbound = ok_agent.handle_turn(msg, &CancellationToken::new()).await.unwrap();
+        assert!(!outbound.is_error());
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        let _ = tokio::fs::remove_dir_all(&ok_dir).await;
     }
 
     /// Inbound at depth 4 (one below the cap) still gets delegated;

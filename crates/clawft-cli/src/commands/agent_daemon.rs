@@ -12,7 +12,9 @@
 //! server-side keyed by `conv_id` (see
 //! `clawft_service_agent::AgentService::dispatch`). So the CLI sends
 //! just the current turn under a single stable [`CLI_CONV_ID`] and the
-//! daemon threads the history across turns and restarts.
+//! daemon threads the history across turns and restarts. One-shot `-m`
+//! turns use their own conversation instead (fresh per call, or the
+//! `--session` name), so they never inherit the REPL's history.
 
 use std::time::Duration;
 
@@ -36,6 +38,12 @@ use crate::interactive::registry::{InteractiveContext, SlashCommandRegistry};
 /// the canonical one; the in-process `cli-session` history only applies
 /// when no daemon was reachable.
 pub const CLI_CONV_ID: &str = "cli:cli-session";
+
+/// Daemon conversation id for a one-shot chat id (`cli:` namespace, like
+/// [`CLI_CONV_ID`]).
+pub fn one_shot_conv_id(chat_id: &str) -> String {
+    format!("cli:{chat_id}")
+}
 
 /// Short probe timeout for daemon detection.
 ///
@@ -66,7 +74,11 @@ pub async fn detect() -> Option<DaemonClient> {
 /// error response from the daemon (`ok: false`, e.g. the agent service
 /// failed to wire at boot) is returned as `Err` so callers map it to
 /// the right exit code (one-shot) or REPL notice (interactive).
-async fn daemon_turn(client: &mut DaemonClient, user_input: &str) -> anyhow::Result<String> {
+async fn daemon_turn(
+    client: &mut DaemonClient,
+    conv_id: &str,
+    user_input: &str,
+) -> anyhow::Result<AgentChatResult> {
     let params = AgentChatParams {
         messages: vec![AgentChatMessage {
             role: "user".into(),
@@ -75,7 +87,7 @@ async fn daemon_turn(client: &mut DaemonClient, user_input: &str) -> anyhow::Res
         }],
         temperature: None,
         max_tokens: None,
-        conv_id: CLI_CONV_ID.to_owned(),
+        conv_id: conv_id.to_owned(),
         metadata: None,
         caller_id: None,
     };
@@ -86,7 +98,7 @@ async fn daemon_turn(client: &mut DaemonClient, user_input: &str) -> anyhow::Res
     let value = response.into_result()?;
     let result: AgentChatResult = serde_json::from_value(value)
         .map_err(|e| anyhow::anyhow!("failed to decode agent.chat result: {e}"))?;
-    Ok(result.assistant_text)
+    Ok(result)
 }
 
 /// One-shot (`-m`) turn routed through the daemon.
@@ -95,12 +107,25 @@ async fn daemon_turn(client: &mut DaemonClient, user_input: &str) -> anyhow::Res
 /// error goes to stderr and the function bails so the process exits
 /// non-zero — matching the in-process one-shot's fix-C contract where
 /// an error reply is an exit-1 condition, not a normal print.
-pub async fn run_single_message(mut client: DaemonClient, message: &str) -> anyhow::Result<()> {
+/// `chat_id` is the one-shot conversation (see
+/// `agent::one_shot_chat_id`): fresh per call unless `--session` named one,
+/// so a daemon-routed `-m` never continues the REPL's [`CLI_CONV_ID`].
+pub async fn run_single_message(
+    mut client: DaemonClient,
+    message: &str,
+    chat_id: &str,
+) -> anyhow::Result<()> {
     // Engine line to stderr so `-m` stdout stays clean for scripting.
     eprintln!("Engine: daemon (shared)");
-    match daemon_turn(&mut client, message).await {
-        Ok(text) => {
-            println!("{text}");
+    match daemon_turn(&mut client, &one_shot_conv_id(chat_id), message).await {
+        // A turn the loop flagged as failed (finish_reason "error") is an
+        // exit-1 condition with the text on stderr, same as in-process.
+        Ok(result) if result.is_error() => {
+            eprintln!("{}", result.assistant_text);
+            anyhow::bail!("{}", result.assistant_text)
+        }
+        Ok(result) => {
+            println!("{}", result.assistant_text);
             Ok(())
         }
         Err(e) => {
@@ -203,9 +228,10 @@ pub async fn run_interactive(
             warned_skill = true;
         }
 
-        match daemon_turn(&mut client, input).await {
-            Ok(text) => {
-                println!("{text}");
+        match daemon_turn(&mut client, CLI_CONV_ID, input).await {
+            // Interactive chat keeps showing a failed turn's text as a reply.
+            Ok(result) => {
+                println!("{}", result.assistant_text);
                 println!();
             }
             Err(e) => {
@@ -236,6 +262,14 @@ pub async fn run_interactive(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_shot_conv_ids_are_namespaced_and_distinct_from_the_repl() {
+        let a = one_shot_conv_id("oneshot-1");
+        assert_eq!(a, "cli:oneshot-1");
+        assert_ne!(a, CLI_CONV_ID);
+        assert_eq!(one_shot_conv_id("review"), one_shot_conv_id("review"));
+    }
 
     #[test]
     fn cli_conv_id_is_stable_and_namespaced() {

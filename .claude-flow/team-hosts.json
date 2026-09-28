@@ -1,0 +1,13 @@
+{
+  "hosts": {
+    "weft": {
+      "kind": "exec",
+      "description": "WeftOS agent, one non-interactive turn (weft agent -m). Run with: ruflo team run --team <team> --agent <agent> --host weft",
+      "command": "weft",
+      "args": ["agent", "-m", "{prompt}"],
+      "promptVia": "arg",
+      "passEnv": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"],
+      "isolation": "none"
+    }
+  }
+}

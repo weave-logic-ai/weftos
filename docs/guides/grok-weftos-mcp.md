@@ -247,6 +247,52 @@ Local stdio remains the default for single-machine attach (`grok mcp add weftos 
 
 Running both at once can create **delegation loops**. Prefer one primary driver per session. See recursive-delegation notes in [tool-calls.md](./tool-calls.md).
 
+### WeftOS on a Ruflo agent team (ADR-402)
+
+WeftOS joins a Ruflo team in two ways. Neither needs Rust changes.
+
+**As an exec host (a spawnable teammate).** `.claude-flow/team-hosts.json` (tracked) declares the `weft` command host:
+
+```json
+{ "hosts": { "weft": { "kind": "exec", "command": "weft",
+  "args": ["agent", "-m", "{prompt}"], "promptVia": "arg",
+  "passEnv": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"],
+  "isolation": "none" } } }
+```
+
+A lead then registers and runs a WeftOS teammate:
+
+```bash
+ruflo team create --params '{"name":"demo","host":"weft"}'
+ruflo team plan   --params '{"team":"demo","steps":["helper"]}'
+ruflo team spawn  --params '{"team":"demo","agent":"helper","role":"researcher","prompt":"..."}'
+ruflo team run --team demo --agent helper --dry-run   # show the argv first
+ruflo team run --team demo --agent helper             # one weft agent -m turn
+```
+
+The runner starts `weft agent -m` with no shell, captures stdout as the result, sends it to the next agent (or `lead`), and advances the plan. `weft` has no Ruflo MCP by default, so before the run the runner drains the member's inbox (archived, like `team_inbox`) and puts those messages in a `=== Messages for you ===` block before the task in the prompt. The MCP participant setup below is only needed for sends and reads during a turn. A non-zero exit or a timeout marks the step `failed` without advancing it. `passEnv` names the only secret-named variables the child keeps; the runner strips every other key, token and password variable. Keep `passEnv` in step with the providers in `.clawft/config.json`, and remember that `./.env` can shadow config values (see the `.env` gotcha in the build notes). `--trust-project-skills` is left out on purpose (SEC-SKILL-05); add it to `args` only when team children need workspace skills.
+
+**As an MCP participant.** Register Ruflo's team tools with the WeftOS MCP client so a WeftOS agent can call `team_inbox` and `team_send` itself:
+
+```bash
+weft mcp add ruflo \
+  --env CLAUDE_FLOW_MCP_TOOLS=team \
+  --env CLAUDE_FLOW_CWD="$(pwd)" \
+  --internal-only=false \
+  -- node <ruflo-checkout>/v3/@claude-flow/cli/bin/cli.js mcp start
+```
+
+`CLAUDE_FLOW_MCP_TOOLS=team` keeps the ToolRegistry to the nine `team_*` tools instead of the full Ruflo catalog. `CLAUDE_FLOW_CWD` pins the team root, so a child started elsewhere still reads this repo's mailboxes. Use a local Ruflo checkout until a published release ships `ruflo team` (the same caveat as `.grok/config.toml`).
+
+**Grok CLI bus.** `scripts/grok-team-bus.mjs` keeps its flags but is now a shim over `ruflo team <verb> --params`, and `scripts/grok-subagent-stop-hook.mjs` calls `ruflo team hook-stop --host grok`. Both find the Ruflo CLI through `RUFLO_CLI` or a one-line, gitignored `.claude-flow/ruflo-cli-path`:
+
+```bash
+echo "$HOME/dev/ruflo/v3/@claude-flow/cli/bin/cli.js" > .claude-flow/ruflo-cli-path
+node --test scripts/grok-team-bus.interop.test.mjs   # SKIPs when the CLI cannot be resolved
+```
+
+If the CLI cannot be resolved, the shim exits 2 instead of writing team state in its own format.
+
 ---
 
 ## 6. Security notes

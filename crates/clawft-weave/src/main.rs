@@ -134,7 +134,8 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| default_filter.into()),
         )
         .with(clawft_weave::chain_bridge::ChainEventLayer::new())
-        .with(tracing_subscriber::fmt::layer())
+        // Logs go to stderr: stdout carries command output and JSON.
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();
 
     // Check for updates (non-blocking, cached 24h)

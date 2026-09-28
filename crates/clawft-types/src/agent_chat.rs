@@ -332,6 +332,19 @@ impl DeferredActionEvent {
     }
 }
 
+/// `AgentChatResult::finish_reason` for a turn the agent loop flagged as
+/// failed (`OutboundMessage::is_error`). `assistant_text` still carries the
+/// readable error for chat panels; scripted callers (one-shot
+/// `weft agent -m`) treat it as a failure.
+pub const FINISH_REASON_ERROR: &str = "error";
+
+impl AgentChatResult {
+    /// True when the loop reported this turn as failed.
+    pub fn is_error(&self) -> bool {
+        self.finish_reason == FINISH_REASON_ERROR
+    }
+}
+
 /// Result of `agent.chat`.
 ///
 /// Since WEFT-328 the loop threads a real [`AgentLoopResultMeta`] through

@@ -6,7 +6,11 @@
 !.claude/agents/
 .claude/agents/*
 !.claude/agents/ruv-researcher/
-.claude-flow/
+.claude-flow/*
+# The team-bus host entry is project config (ADR-402 command host); keep it tracked.
+!.claude-flow/team-hosts.json
+# Per-project agent conversations (weft sessions dir follows the workspace).
+.clawft/sessions/
 .hive-mind
 .swarm/
 target/

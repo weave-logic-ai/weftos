@@ -10,8 +10,8 @@ Host integration so Ruflo runs **at least as well as Claude Code**, with stronge
 | [`.grok/agents/`](../../.grok/agents/) | Pipeline roles (architect/coder/tester/reviewer) |
 | [`.grok/skills/agent-teams-grok/`](../../.grok/skills/agent-teams-grok/) | Named teams skill |
 | [`.grok/skills/handoff/`](../../.grok/skills/handoff/) | Session handoff → **`docs/handoff.md`** |
-| [`scripts/grok-team-bus.mjs`](../../scripts/grok-team-bus.mjs) | Host-agnostic mailbox (ADR-320) |
-| [ADR-320](../../v3/docs/adr/ADR-320-grok-host-agnostic-agent-teams.md) | Architecture decision |
+| [`scripts/grok-team-bus.mjs`](../../scripts/grok-team-bus.mjs) | Host-agnostic mailbox (ADR-402) |
+| [ADR-402](https://github.com/ruvnet/ruflo/blob/main/v3/docs/adr/ADR-402-host-agnostic-agent-teams.md) | Architecture decision (upstream Ruflo; lands with ruvnet/ruflo PR 3512) |
 
 ## Setup (once per machine)
 
@@ -92,7 +92,7 @@ Feature work lands on `feat/grok-host` (or similar), not upstream `main` force-p
 - [x] Project MCP config + Grok rules
 - [x] Host-agnostic team bus MVP (CLI)
 - [x] Grok agents + skill
-- [x] MCP `team_*` tools inside Ruflo server (ADR-320; local build / next publish)
+- [x] MCP `team_*` tools inside Ruflo server (ADR-402; local build / next publish)
 - [x] `npx ruflo init --grok` productization
 - [x] Brain MCP template: `KB_DIR` + timeouts + `$HOME` expand on init
 - [x] Conformance bench (`scripts/bench-grok-host-conformance.mjs` — teams/swarm/hive/learning/neural/CLI)

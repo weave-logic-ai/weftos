@@ -23,6 +23,7 @@ async fn main() -> anyhow::Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "info".into()),
         )
+        .with_writer(std::io::stderr)
         .init();
 
     let config_path = std::env::var("SPLATD_CONFIG").unwrap_or_else(|_| "./config/splatd.toml".into());
