@@ -1,6 +1,6 @@
 # ADR-XXX: Agent Directory: agents authored in weftos, installed by `weftos init`, approved by git
 
-- **Status**: Accepted (decisions D1–D6 recorded 2026-09-28)
+- **Status**: Accepted (decisions D1–D6 recorded 2026-09-28). **Updated 2026-09-28:** AD-1, AD-2 and AD-4 implemented in weftos (`scripts/agents-*.mjs`, gate checks 17-19, `weftos init --claude|--grok|--codex`); AD-5 and AD-6 implemented on weftos-dashboard `feat/agent-directory`; AD-3 evals and AD-7 delivery in progress.
 - **Date**: 2026-09-28
 - **Deciders**: Workspace owner (Mathew Beane)
 - **Related**: ADR-075/076 (WeftOS MCP server and profiles), ADR-096 (MetaHarness

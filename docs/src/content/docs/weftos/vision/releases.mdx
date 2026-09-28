@@ -31,6 +31,16 @@ against Ruflo.
   doc-gardener, liber, mo, lead doctrine, developer/reviewer/tester/documenter/measurer lanes, and
   three templates), each with `AGENT.md`, skills, `weftos-package.yaml` and eval scenarios, plus
   `scripts/agents-leak-check.sh`.
+- **`weftos init --claude | --grok | --codex`**: renders the agent packages into each host's agent and
+  skill files (plus the Codex `AGENTS.md` block, `.agents/project-context.md` and
+  `.weftos/agents.lock.json`). `--plan` previews, `--apply` writes (never commits), `--global`
+  installs into `~/.claude`, `~/.grok` and `~/.codex`, and `--team` / `--agent` choose what to install.
+  The agent set is embedded per release; re-runs are no-ops and local edits are reported as drift.
+- **Agent package gate**: `agents-validate`, `agents-catalog` (generated `agents/catalog.json`) and
+  `agents-leak-check` run as gate checks 17-19 and in PR CI; `agents/teams/weftos-core/team.yaml`
+  defines the base team.
+- **Eikon** image agent and specialist packaged from the `~/llm` model lab (install with
+  `--agent eikon --agent eikon-specialist`).
 - **Knowledge base**: `build-kb` builds the RVF KB from Fumadocs MDX and repo markdown.
 - **Docs site**: the Urth spatial scrollyteller (`/urth-spatial`) and research pages.
 - **Research and design**: Skill-3D Rust adaptation plan and 100-reference analysis, Episteme STEM
