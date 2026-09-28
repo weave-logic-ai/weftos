@@ -333,11 +333,18 @@ These supersede the recommendations in §8 and the rows they name.
    weights on `/Volumes/ai-models`, one heavy model resident at a time, fixed ports, and `bin/pull`,
    `bin/modelstore` and `bin/monitor`. The eikon pattern (`~/llm/eikon`, `bin/eikon`) is the model:
    Apple Vision first, one Qwen3-VL call per batch on `:8093`, and specialists only on request. This
-   replaces R2.3–R2.5 (the `OrtBackend`/`CandleBackend` rows). The missing runners are metric depth
-   (DA3METRIC-LARGE), open-vocabulary detection (Grounding DINO) and a SAM predictor. They are
-   requested from `~/llm`; in the meantime they stay behind the R2.1 sidecar contract.
-2. **Pi3 and SAM 3.1:** research-only and off by default, as recommended (R2.6). The shipped path uses
-   license-clean models through `~/llm`.
+   replaces R2.3–R2.5 (the `OrtBackend`/`CandleBackend` rows).
+   **Segmentation is SAM 3.1, owned by `~/llm`.** `mlx-community/sam3.1-bf16` is already in
+   `~/llm/docs/models/registry/image-embed.yaml` (~3.5 GB). The missing piece is a runner: a thin
+   `bin/` wrapper over the installed mlx-vlm `Sam3Predictor.predict` (`mlx_vlm/models/sam3/generate.py`),
+   like `bin/whisper`, returning masks, boxes, scores and ids. Eikon's segment skill calls that
+   wrapper. That is `~/llm`'s work; WeftOS consumes the masks and does not grow its own SAM stack.
+   **Grounding DINO** stays in the catalog as the permissive fallback for the day the SAM license
+   blocks something. It is not built, and it gets no Eikon stage.
+   **Metric depth** (DA3METRIC-LARGE) is still not served by `~/llm`; it remains a request there.
+2. **Pi3** is research-only and off by default (non-commercial weights; R2.6). **SAM 3.1** is the
+   segmenter, served by `~/llm` under Meta's SAM License; R2.2 still records its terms, and Grounding
+   DINO is the documented fallback if those terms ever block a use.
 3. **MentraOS capture runs on the WeftOS substrate as streams.** The glasses are a WeftOS node with
    their own Ed25519 identity (ADR-025, ADR-077 edge-node model). They publish signed values to
    per-node sensor paths following the journaled-sensor contract (`.planning/sensors/`,
