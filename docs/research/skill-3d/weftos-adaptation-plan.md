@@ -1,7 +1,7 @@
 # Skill-3D → WeftOS spatial: Rust rewrite plan
 
 **Date:** 2026-09-28
-**Status:** Research plan (not an ADR; no board tickets filed)
+**Status:** Research plan with decisions recorded 2026-09-28 (§9); board tickets filed
 **Author role:** world-builder (Urth)
 **Subject:** `~/dev/Skill-3D` (weave-logic-ai fork of `skill-3d/Skill-3D`, Apache-2.0, arXiv 2606.07436). The fork is a pure mirror of upstream at `e379d64` ([code-review.md](./code-review.md) §8)
 **Scope:** Rewrite Skill-3D's original logic in Rust inside WeftOS crates. Keep Python only where model inference or training has no realistic Rust path yet.
@@ -323,3 +323,38 @@ For which experts a single head-mounted RGB camera needs, see [experts-and-front
 3. **Glasses transport.** Recommend the direct on-glasses Rust daemon over LAN for the pilot: lower latency, and frames stay on our network. Use the MentraOS cloud `AppSession` path only for sessions whose consent notice covers the third-party cloud.
 4. **Canonical source for host wrappers.** Recommend authoring in `.grok/` and extending `grok-claude-sync` with a Codex target (needs sign-off, since the helper is global), instead of a new generator.
 5. **Monocular promotion and distillation timing.** Recommend no monocular-only promotion to Object leaves (§3.2), and no distillation spend until R5.1 shows lift on our own held-out set.
+
+## 9. Decisions recorded 2026-09-28
+
+These supersede the recommendations in §8 and the rows they name.
+
+1. **Model runtime: `~/llm` owns the models.** The Rust service does not embed its own vision
+   runtime. It calls `~/llm`'s served models through their contracts and follows its rules:
+   weights on `/Volumes/ai-models`, one heavy model resident at a time, fixed ports, and `bin/pull`,
+   `bin/modelstore` and `bin/monitor`. The eikon pattern (`~/llm/eikon`, `bin/eikon`) is the model:
+   Apple Vision first, one Qwen3-VL call per batch on `:8093`, and specialists only on request. This
+   replaces R2.3–R2.5 (the `OrtBackend`/`CandleBackend` rows). The missing runners are metric depth
+   (DA3METRIC-LARGE), open-vocabulary detection (Grounding DINO) and a SAM predictor. They are
+   requested from `~/llm`; in the meantime they stay behind the R2.1 sidecar contract.
+2. **Pi3 and SAM 3.1:** research-only and off by default, as recommended (R2.6). The shipped path uses
+   license-clean models through `~/llm`.
+3. **MentraOS capture runs on the WeftOS substrate as streams.** The glasses are a WeftOS node with
+   their own Ed25519 identity (ADR-025, ADR-077 edge-node model). They publish signed values to
+   per-node sensor paths following the journaled-sensor contract (`.planning/sensors/`,
+   `clawft-substrate/src/sensor_paths.rs`): `substrate/<node-id>/sensor/camera/summary` beside
+   frame and `sensor/imu/*` sibling paths. Camera topics are `Sensitivity::Capture`, so they need a
+   per-goal ADR-012 `CapabilityGrant`, which is where bystander consent is enforced. Streams use
+   `BufferPolicy::DropOldest` with a bounded window, are read under the ADR-057 ACL, and are joined
+   by node `tick`. Open point: whether frame bytes ride in the substrate value or as a content-addressed
+   reference with bytes over the ADR-077 QUIC chunk stream. Check the substrate size limits and
+   the splat pipeline first. This replaces R3.2's transport choice and reshapes R3.3 into a substrate
+   adapter.
+4. **Host wrappers:** authored in weftos and rendered per host by `weftos init --claude|--grok|--codex`
+   (agent directory ADR, D1/D2). This replaces R4.2's grok-claude-sync step.
+5. **Metric scale comes from sensor fusion.** No single-camera estimate is promoted to a metric object
+   on its own. The direction is fusion: IMU, multi-view geometry, calibrated intrinsics, depth sensors
+   where present, and known references. R1.3's promote rule is the fusion gate.
+6. **Training is on hold.** R5.2 and R5.3 wait. Every place that would need training data, a reward
+   signal or fine-tuning goes into the standing "Skill-3D training needs" ticket instead of being built:
+   the R0.6 rollout export, the R0.5c compat checkpoints, the R4.3 episode verdicts, and reward shaping
+   such as the tool-cost term (§3.4) and a perception-consistency term.
