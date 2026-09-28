@@ -7,7 +7,8 @@
  * does nothing rather than advance the wrong plan.
  *
  * The ruflo CLI resolves like scripts/grok-team-bus.mjs: RUFLO_CLI, then
- * .claude-flow/ruflo-cli-path. Fail-open: always exit 0.
+ * .claude-flow/ruflo-cli-path. It never downloads a package. With no CLI it
+ * says so on stderr. Fail-open: always exit 0.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -43,7 +44,12 @@ function rufloCli() {
 
 const raw = await readStdin();
 const cli = rufloCli();
-if (cli) {
+if (!cli) {
+  process.stderr.write(
+    'grok-subagent-stop-hook: no ruflo CLI found, team stop not recorded. Set RUFLO_CLI or write the path to ' +
+      '<ruflo>/v3/@claude-flow/cli/bin/cli.js into .claude-flow/ruflo-cli-path\n',
+  );
+} else {
   try {
     spawnSync(process.execPath, [cli, 'team', 'hook-stop', '--host', 'grok'], {
       cwd: projectRoot,
