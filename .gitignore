@@ -141,15 +141,6 @@ docs/research/**/paper-*.txt
 # Private harness inventory (maps a client engagement repo); local only
 docs/research/agent-directory/private/
 
-# CONFIDENTIAL (oil-rig / Deck Twin energy study; see the files' own headers). Never publish in this
-# public repo. Kept locally for the private study site and its handoff.
-apps/oil-rig-study/
-docs/handoff-oil-rig.md
-docs/plans/cognitum-cogs-deck-twin.md
-docs/research/cognitum-cogs-deck-twin.md
-docs/plans/chicago-agentics-meetup-brief.md
-docs/planning/presentations/
-
 # Generated agent-host copies and local install markers
 .agents/skills/
 .weavelogic/
