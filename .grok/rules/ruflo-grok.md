@@ -22,7 +22,7 @@ After any `swarm_init` / `team_create` / `agent_spawn` / MCP coordination call: 
 | `Read` / `Grep` / `Glob` | `read_file` / `grep` / `list_dir` |
 | `Write` / `Edit` / `MultiEdit` | `write` / `search_replace` |
 | `claude -p` workers | `spawn_subagent` or `grok -p` |
-| `mcp__claude-flow__*` / `mcp__ruflo__*` | `search_tool` then `use_tool` with `ruflo__*` names |
+| `mcp__claude-flow__*` / `mcp__ruflo__*` | `search_tool` then `use_tool` with **`ruflo__*`** names (Grok project MCP is `[mcp_servers.ruflo]` → local `feat/grok-host` CLI, not registry `claude-flow`) |
 | Haiku / Sonnet / Opus routing | Ignore Anthropic tiers; use Grok models / subagent `model` only when needed |
 
 ## MCP usage
@@ -91,12 +91,13 @@ Do **not** invent a `SendMessage` tool. Use MCP team tools or memory handoffs.
 Grok loads Claude-compatible hooks when the folder is trusted. Expect:
 
 - SessionStart: session restore + memory import
-- UserPromptSubmit: route / intelligence context
-- PreToolUse Bash: pre-bash safety
-- PostToolUse edits: post-edit learning
-- SubagentStop: post-task / idle assign
+- UserPromptSubmit: writes `.swarm/route-latest.md` (Grok discards allowing-hook stdout)
+- PreToolUse: `Bash|run_terminal_command` safety
+- PostToolUse: `Write|Edit|MultiEdit|write|search_replace` learning
+- SubagentStart: snapshot live teammates (fires in the parent)
+- SubagentStop + PostToolUse `get_command_or_subagent_output`: `grok-team-on-stop.cjs` → `on-stop` when Grok delivers those events; otherwise the lead still calls `team_on_stop`
 
-If route context does not appear in the transcript, call `hooks route` via CLI/MCP or read `.swarm/route-latest.md` when present.
+If route context does not appear in the transcript, read `.swarm/route-latest.md`.
 
 ## CLI fallback
 

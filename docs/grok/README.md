@@ -4,7 +4,7 @@ Host integration so Ruflo runs **at least as well as Claude Code**, with stronge
 
 | Artifact | Purpose |
 |----------|---------|
-| [`.grok/config.toml`](../../.grok/config.toml) | Project MCP (`weftos` tool surface + optional ruflo) |
+| [`.grok/config.toml`](../../.grok/config.toml) | Project MCP: `weftos` tool surface + **`ruflo` = local `feat/grok-host` CLI** |
 | [Grok ↔ WeftOS MCP guide](../guides/grok-weftos-mcp.md) | Attach Grok Build to `weft mcp-server` (ADR-075) |
 | [`.grok/rules/ruflo-grok.md`](../../.grok/rules/ruflo-grok.md) | Host doctrine + tool map |
 | [`.grok/agents/`](../../.grok/agents/) | Pipeline roles (architect/coder/tester/reviewer) |
@@ -15,8 +15,11 @@ Host integration so Ruflo runs **at least as well as Claude Code**, with stronge
 
 ## Setup (once per machine)
 
-1. **Scaffold** (any repo): `npx -y ruflo@3.32.38 init --grok` (use local CLI after build for newest templates).
-   Pin matches `package.json` / `.mcp.json` (WEFT-684). Never `ruflo@latest` — it owns the AgentDB schema.
+1. **Harness is `~/dev/ruflo` branch `feat/grok-host`**, not npm. After
+   `~/dev/ruflo/scripts/use-local-ruflo.sh`, Grok loads `[mcp_servers.ruflo]`
+   from `.grok/config.toml` (absolute path to the grok-host `cli.js`).
+   `package.json` `weftos.rufloPin` only *documents* that checkout.
+   Never `ruflo@latest` — it owns the AgentDB schema (WEFT-684) and lacks `team_*`.
 2. **Trust the folder** in Grok (`/hooks-trust` or launch with `--trust`) — already required for project hooks.
 3. **Restart Grok** (or reload MCPs) so `.grok/config.toml` is picked up.
 4. Confirm:
@@ -31,9 +34,9 @@ grok mcp doctor ruflo
 5. Optional daemon (project-local install preferred after `npm ci`):
 
 ```bash
-npx --no-install ruflo daemon start
-npx --no-install ruflo doctor
-# or, without a local install: npx -y ruflo@3.32.38 doctor
+ruflo daemon start
+ruflo doctor
+# PATH ruflo must be the grok-host link (use-local-ruflo.sh), not a registry copy.
 ```
 
 6. Optional **RuvNet Brain** grounding (not installed by default):
@@ -46,12 +49,12 @@ npx ruvnet-brain@latest
 # Raise tool_timeout_sec (e.g. 600) for cold BGE model download.
 ```
 
-7. **Local team_* without npm publish** (monorepo only):
+7. **team_* without npm publish** — already the WeftOS Grok default:
 
 ```bash
-cd v3 && pnpm --filter @claude-flow/cli build
-# Point [mcp_servers.ruflo] at node + ABS path to bin/cli.js (see config.toml comments)
-# Restart Grok → grok mcp doctor ruflo should report ~336 tools
+~/dev/ruflo/scripts/use-local-ruflo.sh
+# .grok/config.toml [mcp_servers.ruflo] → …/v3/@claude-flow/cli/bin/cli.js
+# Restart Grok → grok mcp doctor ruflo should list team_create … team_shutdown
 ```
 
 ## Agent Teams (no Claude SendMessage)
@@ -93,5 +96,6 @@ Feature work lands on `feat/grok-host` (or similar), not upstream `main` force-p
 - [x] `npx ruflo init --grok` productization
 - [x] Brain MCP template: `KB_DIR` + timeouts + `$HOME` expand on init
 - [x] Conformance bench (`scripts/bench-grok-host-conformance.mjs` — teams/swarm/hive/learning/neural/CLI)
-- [ ] Publish release with team_* on pinned `npx ruflo@3.32.38` (bump pin deliberately; never `@latest`)
+- [ ] Publish a grok-host release that carries `team_*` so machines without
+      `~/dev/ruflo` can pin npm; until then **feat/grok-host is the product path**
 )

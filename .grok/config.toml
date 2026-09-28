@@ -13,10 +13,24 @@ tool_timeout_sec = 600
 # Optional: pin a config file
 # args = ["mcp-server", "--config", "/path/to/config.json"]
 
-# Ruflo / claude-flow orchestration (complementary — not a substitute for weftos)
-# Prefer project pin from package.json / .mcp.json (WEFT-684). Example:
-# [mcp_servers.ruflo]
-# command = "npx"
-# args = ["--no-install", "@claude-flow/cli", "mcp", "start"]
-# enabled = true
-# startup_timeout_sec = 90
+# Ruflo harness — LOCAL feat/grok-host CLI (ADR-320 team_*). This is the
+# Grok path. Do not use npx ruflo@latest / registry 3.42.4 here: published
+# tarballs do not carry team_* until a grok-host release. Rebuild:
+#   ~/dev/ruflo/scripts/use-local-ruflo.sh
+# Claude Code still uses tracked .mcp.json (npx --no-install); WEFT-684
+# forbids putting this absolute path in .mcp.json.
+[mcp_servers.ruflo]
+command = "node"
+args = ["/Users/mathewbeane/dev/ruflo/v3/@claude-flow/cli/bin/cli.js", "mcp", "start"]
+enabled = true
+startup_timeout_sec = 120
+tool_timeout_sec = 180
+
+[permission]
+allow = [
+  "Bash(ruflo*)",
+  "Bash(npx --no-install ruflo*)",
+  "Bash(node scripts/grok-team-bus.mjs*)",
+  "MCPTool(ruflo__*)",
+  "MCPTool(weftos__*)",
+]

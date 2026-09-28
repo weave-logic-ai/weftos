@@ -26,7 +26,10 @@ weft mcp-server  ──► ToolRegistry / skills / (future) WindowIntent
 
 **Not the same as ADR-074:** Grok *Voice* (speech-to-speech) is Talk-Mode. This guide is Grok *CLI* as a coding/ops agent.
 
-**Not the same as Ruflo MCP:** Project Ruflo/claude-flow MCP is swarm orchestration. WeftOS MCP is the **OS/agent tool surface**. Both can be enabled in Grok at once.
+**Not the same as Ruflo MCP:** Ruflo is swarm / memory / **ADR-320 team bus**.
+On Grok that server is **`ruflo`**, pointed at the local `feat/grok-host` CLI
+(`.grok/config.toml`), not `npx ruflo@latest`. WeftOS MCP is the **OS/agent
+tool surface**. Both are enabled in Grok at once.
 
 ---
 

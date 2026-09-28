@@ -31,11 +31,11 @@ const DEFAULT_ROOT = process.env.CLAUDE_PROJECT_DIR
 
 const ROLE_DEFAULTS = {
   researcher: { capability_mode: 'read-only', isolation: 'none', subagent_type: 'explore' },
-  architect: { capability_mode: 'read-only', isolation: 'none', subagent_type: 'plan' },
-  developer: { capability_mode: 'all', isolation: 'worktree', subagent_type: 'general-purpose' },
-  coder: { capability_mode: 'all', isolation: 'worktree', subagent_type: 'general-purpose' },
-  tester: { capability_mode: 'all', isolation: 'worktree', subagent_type: 'general-purpose' },
-  reviewer: { capability_mode: 'read-only', isolation: 'none', subagent_type: 'general-purpose' },
+  architect: { capability_mode: 'read-only', isolation: 'none', subagent_type: 'ruflo-architect' },
+  developer: { capability_mode: 'all', isolation: 'worktree', subagent_type: 'ruflo-coder' },
+  coder: { capability_mode: 'all', isolation: 'worktree', subagent_type: 'ruflo-coder' },
+  tester: { capability_mode: 'all', isolation: 'worktree', subagent_type: 'ruflo-tester' },
+  reviewer: { capability_mode: 'read-only', isolation: 'none', subagent_type: 'ruflo-reviewer' },
   security: { capability_mode: 'read-only', isolation: 'none', subagent_type: 'general-purpose' },
   coordinator: { capability_mode: 'all', isolation: 'none', subagent_type: 'general-purpose' },
 };

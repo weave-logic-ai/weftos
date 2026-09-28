@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && node .claude/helpers/grok-team-on-stop.cjs stop",
+            "timeout": 8000
+          }
+        ]
+      }
+    ]
+  }
+}

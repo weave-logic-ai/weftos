@@ -50,7 +50,7 @@ node scripts/grok-team-bus.mjs spawn --team feature-x --agent reviewer --role re
 2. Call **`spawn_subagent`** in **one message** for all agents (`background: true`).
 3. Use `spawnPlan.prompt` as the child prompt; set `subagent_type`, `capability_mode`, `isolation` from the plan.
 4. Prefer agent types under `.grok/agents/` when available (`ruflo-architect`, `ruflo-coder`, …).
-5. On completions: `on-stop`, then spawn/resume next if needed.
+5. `grok-team-on-stop.cjs` marks the teammate idle when Grok fires `SubagentStop` (or PostToolUse on the wait tool). If `lastStopAt` is missing, the lead still calls `on-stop`. Then spawn/resume the next plan step.
 6. Synthesize results; `shutdown` the team.
 
 ## Defaults (better than Claude shared-tree teams)
