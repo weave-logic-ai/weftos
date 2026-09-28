@@ -28,8 +28,13 @@ weft mcp-server  ──► ToolRegistry / skills / (future) WindowIntent
 
 **Not the same as Ruflo MCP:** Ruflo is swarm / memory / **ADR-320 team bus**.
 On Grok that server is **`ruflo`**, pointed at the local `feat/grok-host` CLI
-(`.grok/config.toml`), not `npx ruflo@latest`. WeftOS MCP is the **OS/agent
-tool surface**. Both are enabled in Grok at once.
+(`.grok/config.toml`), not `npx ruflo@latest`. As of 2026-09-28,
+`feat/grok-host` does not yet carry ADR-402 (the Agent Teams bus below —
+see `package.json` `weftos.rufloPinNote`); until it does, using the bus needs
+a local Ruflo checkout that includes upstream `ruvnet/ruflo` PR #3512 + #3513,
+pointed to from the local, gitignored `.claude-flow/ruflo-cli-path` (never
+from a tracked file — see §"Grok CLI bus" below). WeftOS MCP is the
+**OS/agent tool surface**. Both are enabled in Grok at once.
 
 ---
 
@@ -256,8 +261,13 @@ WeftOS joins a Ruflo team in two ways. Neither needs Rust changes.
 ```json
 { "hosts": { "weft": { "kind": "exec", "command": "weft",
   "args": ["agent", "-m", "{prompt}"], "promptVia": "arg",
-  "passEnv": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"],
-  "isolation": "none" } } }
+  "passEnv": [], "isolation": "none" } } }
+```
+
+Once, per machine, trust the entry (required before `ruflo team run` will start it):
+
+```bash
+ruflo team trust-host weft
 ```
 
 A lead then registers and runs a WeftOS teammate:
@@ -270,7 +280,7 @@ ruflo team run --team demo --agent helper --dry-run   # show the argv first
 ruflo team run --team demo --agent helper             # one weft agent -m turn
 ```
 
-The runner starts `weft agent -m` with no shell, captures stdout as the result, sends it to the next agent (or `lead`), and advances the plan. `weft` has no Ruflo MCP by default, so before the run the runner drains the member's inbox (archived, like `team_inbox`) and puts those messages in a `=== Messages for you ===` block before the task in the prompt. The MCP participant setup below is only needed for sends and reads during a turn. A non-zero exit or a timeout marks the step `failed` without advancing it. `passEnv` names the only secret-named variables the child keeps; the runner strips every other key, token and password variable. Keep `passEnv` in step with the providers in `.clawft/config.json`, and remember that `./.env` can shadow config values (see the `.env` gotcha in the build notes). `--trust-project-skills` is left out on purpose (SEC-SKILL-05); add it to `args` only when team children need workspace skills.
+The runner starts `weft agent -m` with no shell, captures stdout as the result, sends it to the next agent (or `lead`), and advances the plan. `weft` has no Ruflo MCP by default, so before the run the runner drains the member's inbox (archived, like `team_inbox`) and puts those messages in a `=== Messages for you ===` block before the task in the prompt. The MCP participant setup below is only needed for sends and reads during a turn. A non-zero exit or a timeout marks the step `failed` without advancing it. **`passEnv` may never carry a secret-named variable or a `CLAUDE_FLOW_*` variable — `ruflo team run` rejects the whole `team-hosts.json` entry if it does.** `weft` reads its provider API key from local `.clawft/config.json` (`providers.<name>.apiKey`, gitignored) instead, so `passEnv` for the `weft` host stays empty; remember that `./.env` can shadow config values (see the `.env` gotcha in the build notes). `--trust-project-skills` is left out on purpose (SEC-SKILL-05); add it to `args` only when team children need workspace skills.
 
 **As an MCP participant.** Register Ruflo's team tools with the WeftOS MCP client so a WeftOS agent can call `team_inbox` and `team_send` itself:
 
@@ -287,7 +297,11 @@ weft mcp add ruflo \
 **Grok CLI bus.** `scripts/grok-team-bus.mjs` keeps its flags but is now a shim over `ruflo team <verb> --params`, and `scripts/grok-subagent-stop-hook.mjs` calls `ruflo team hook-stop --host grok`. Both find the Ruflo CLI through `RUFLO_CLI` or a one-line, gitignored `.claude-flow/ruflo-cli-path`:
 
 ```bash
-echo "$HOME/dev/ruflo/v3/@claude-flow/cli/bin/cli.js" > .claude-flow/ruflo-cli-path
+# Point this at any local Ruflo checkout's cli.js — normally ~/dev/ruflo
+# (feat/grok-host); before that branch absorbs ADR-402, a checkout that
+# includes PR #3512 + #3513 instead. Personal paths belong only in this
+# gitignored file, never in .grok/config.toml or package.json.
+echo "$HOME/dev/<ruflo-checkout>/v3/@claude-flow/cli/bin/cli.js" > .claude-flow/ruflo-cli-path
 node --test scripts/grok-team-bus.interop.test.mjs   # SKIPs when the CLI cannot be resolved
 ```
 

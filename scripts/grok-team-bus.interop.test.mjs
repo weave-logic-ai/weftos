@@ -1,5 +1,9 @@
 // Interop test: scripts/grok-team-bus.mjs (shim) and `ruflo team` share one
-// on-disk format, and Ruflo's team_* handlers are its only writer (ADR-402).
+// on-disk format, and Ruflo's team_* handlers are its only writer (ADR-402,
+// upstream ruvnet/ruflo PR #3512 + #3513 — templates/grok/scripts/
+// grok-team-bus.mjs + grok-team-store.mjs are the single store the CLI
+// loads for every read and write; there is no v0/schemaVersion migration
+// path in that store, so this test does not exercise one).
 //
 //   RUFLO_CLI=<ruflo>/v3/@claude-flow/cli/bin/cli.js node --test scripts/grok-team-bus.interop.test.mjs
 //
@@ -7,7 +11,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,10 +19,9 @@ import { fileURLToPath } from 'node:url';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..');
 const SHIM = join(HERE, 'grok-team-bus.mjs');
-const FIXTURE = join(HERE, 'fixtures', 'team-v0');
 
-// team.json top-level keys written by Ruflo's TeamState (schemaVersion 1).
-const TEAM_KEYS = ['createdAt', 'host', 'id', 'maxAgents', 'members', 'name', 'plan', 'schemaVersion', 'status', 'topology'];
+// team.json top-level keys written by the fixed store (grok-team-store.mjs).
+const TEAM_KEYS = ['createdAt', 'host', 'id', 'maxAgents', 'members', 'name', 'plan', 'status', 'topology'];
 
 function rufloCli() {
   let cli = process.env.RUFLO_CLI;
@@ -72,41 +75,37 @@ test('(a) shim and ruflo team interleave on one team', { skip }, () => {
     const inbox = shim(root, 'inbox', '--team', 'demo', '--agent', 'developer');
     assert.equal(inbox.messages.length, 1);
     assert.equal(inbox.messages[0].content, 'Use layers');
-    ruflo(root, 'on-stop', { team: 'demo', agent: 'architect' });
+    // Per-team mailbox (ADR-402 fix): teams/<team>/mailbox/<agent>/, not the
+    // old global .claude-flow/swarm/mailbox/<agent>/.
+    assert.ok(existsSync(join(root, '.claude-flow', 'teams', 'demo', 'mailbox', 'developer')));
+
+    const stop = ruflo(root, 'on-stop', { team: 'demo', agent: 'architect', outcome: 'done', runId: 'run_a_1' });
+    assert.equal(stop.advanced, true);
     const status = shim(root, 'status', '--team', 'demo');
     assert.equal(status.team.plan.index, 1);
 
     const team = readTeam(root, 'demo');
-    assert.equal(team.schemaVersion, 1);
     assert.deepEqual(Object.keys(team).sort(), TEAM_KEYS);
+    assert.equal(team.members.architect.lastOutcome, 'done');
+    assert.equal(team.members.architect.lastStopRunId, 'run_a_1');
+
+    // Spawn description carries role:agent@team (ADR-402 identity format).
+    const spawn = shim(root, 'spawn', '--team', 'demo', '--agent', 'reviewer', '--role', 'reviewer');
+    assert.equal(spawn.spawnPlan.host.grok.spawn.description, 'reviewer:reviewer@demo');
+
+    // A repeated runId on a later on-stop is a no-op (dedupe), and a
+    // failed outcome does not advance the plan.
+    const dup = ruflo(root, 'on-stop', { team: 'demo', agent: 'architect', outcome: 'done', runId: 'run_a_1' });
+    assert.equal(dup.duplicate, true);
+    const failStop = ruflo(root, 'on-stop', { team: 'demo', agent: 'reviewer', outcome: 'failed', reason: 'boom' });
+    assert.equal(failStop.advanced, false);
+    assert.equal(readTeam(root, 'demo').members.reviewer.status, 'failed');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('(b) a team.json written by the old script is advanced and stamped v1', { skip }, () => {
-  const root = project();
-  try {
-    mkdirSync(join(root, '.claude-flow', 'teams', 'legacy'), { recursive: true });
-    cpSync(join(FIXTURE, 'team.json'), join(root, '.claude-flow', 'teams', 'legacy', 'team.json'));
-    cpSync(join(FIXTURE, 'mailbox'), join(root, '.claude-flow', 'swarm', 'mailbox'), { recursive: true });
-    assert.equal(readTeam(root, 'legacy').schemaVersion, undefined);
-
-    const stop = shim(root, 'on-stop', '--team', 'legacy', '--agent', 'architect');
-    assert.equal(stop.assign.agent, 'developer');
-    const team = readTeam(root, 'legacy');
-    assert.equal(team.schemaVersion, 1);
-    assert.equal(team.plan.index, 1);
-    // The old flat Grok spawn plan is kept as data.
-    assert.equal(team.members.architect.spawn.grok.subagent_type, 'plan');
-    const inbox = shim(root, 'inbox', '--team', 'legacy', '--agent', 'developer', '--peek');
-    assert.equal(inbox.messages.length, 1);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('(c) 8 parallel on-stop calls through the shim and ruflo keep team.json valid', { skip }, async () => {
+test('(b) 8 parallel on-stop calls through the shim and ruflo keep team.json valid', { skip }, async () => {
   const root = project();
   try {
     shim(root, 'create', '--name', 'par');

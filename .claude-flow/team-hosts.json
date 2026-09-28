@@ -2,11 +2,11 @@
   "hosts": {
     "weft": {
       "kind": "exec",
-      "description": "WeftOS agent, one non-interactive turn (weft agent -m). Run with: ruflo team run --team <team> --agent <agent> --host weft",
+      "description": "WeftOS agent, one non-interactive turn (weft agent -m). Run with: ruflo team run --team <team> --agent <agent> --host weft. Needs `ruflo team trust-host weft` once per machine (ADR-402 command-host trust). weft reads its provider API key from local .clawft/config.json (gitignored), never from this file: Ruflo's command-host validator rejects secret-named passEnv entries.",
       "command": "weft",
       "args": ["agent", "-m", "{prompt}"],
       "promptVia": "arg",
-      "passEnv": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"],
+      "passEnv": [],
       "isolation": "none"
     }
   }

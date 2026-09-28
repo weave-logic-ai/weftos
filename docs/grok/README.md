@@ -11,15 +11,20 @@ Host integration so Ruflo runs **at least as well as Claude Code**, with stronge
 | [`.grok/skills/agent-teams-grok/`](../../.grok/skills/agent-teams-grok/) | Named teams skill |
 | [`.grok/skills/handoff/`](../../.grok/skills/handoff/) | Session handoff → **`docs/handoff.md`** |
 | [`scripts/grok-team-bus.mjs`](../../scripts/grok-team-bus.mjs) | Host-agnostic mailbox (ADR-402) |
-| [ADR-402](https://github.com/ruvnet/ruflo/blob/main/v3/docs/adr/ADR-402-host-agnostic-agent-teams.md) | Architecture decision (upstream Ruflo; lands with ruvnet/ruflo PR 3512) |
+| [ADR-402](https://github.com/ruvnet/ruflo/blob/main/v3/docs/adr/ADR-402-host-agnostic-agent-teams.md) | Architecture decision (upstream Ruflo PR [#3512](https://github.com/ruvnet/ruflo/pull/3512) + [#3513](https://github.com/ruvnet/ruflo/pull/3513): Grok/Claude bus, then Codex + generic command hosts) |
 
 ## Setup (once per machine)
 
-1. **Harness is `~/dev/ruflo` branch `feat/grok-host`**, not npm. After
-   `~/dev/ruflo/scripts/use-local-ruflo.sh`, Grok loads `[mcp_servers.ruflo]`
-   from `.grok/config.toml` (absolute path to the grok-host `cli.js`).
-   `package.json` `weftos.rufloPin` only *documents* that checkout.
-   Never `ruflo@latest` — it owns the AgentDB schema (WEFT-684) and lacks `team_*`.
+1. **Harness is a local Ruflo checkout**, not npm. `package.json`
+   `weftos.rufloPinNote` is the source of truth: `~/dev/ruflo` branch
+   `feat/grok-host` (rebuild via `~/dev/ruflo/scripts/use-local-ruflo.sh`).
+   As of 2026-09-28 the Agent Teams bus below (ADR-402, upstream
+   `ruvnet/ruflo` PR #3512 + #3513) is not on `feat/grok-host` yet. If you
+   need it before that lands, build a local Ruflo checkout that includes
+   PR #3512 + #3513 and point the local, gitignored
+   `.claude-flow/ruflo-cli-path` at its `cli.js` — do **not** repoint
+   `.grok/config.toml` at a personal path; that file is tracked. Never
+   `ruflo@latest` — it owns the AgentDB schema (WEFT-684) and lacks `team_*`.
 2. **Trust the folder** in Grok (`/hooks-trust` or launch with `--trust`) — already required for project hooks.
 3. **Restart Grok** (or reload MCPs) so `.grok/config.toml` is picked up.
 4. Confirm:
@@ -49,12 +54,14 @@ npx ruvnet-brain@latest
 # Raise tool_timeout_sec (e.g. 600) for cold BGE model download.
 ```
 
-7. **team_* without npm publish** — already the WeftOS Grok default:
+7. **team_* without npm publish** — already the WeftOS Grok default once
+   `feat/grok-host` carries ADR-402 (see step 1 for the interim path):
 
 ```bash
 ~/dev/ruflo/scripts/use-local-ruflo.sh
 # .grok/config.toml [mcp_servers.ruflo] → …/v3/@claude-flow/cli/bin/cli.js
-# Restart Grok → grok mcp doctor ruflo should list team_create … team_shutdown
+# Restart Grok → grok mcp doctor ruflo should list
+# team_create … team_shutdown, team_run and team_trust_host
 ```
 
 ## Agent Teams (no Claude SendMessage)

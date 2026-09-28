@@ -95,7 +95,7 @@ Grok loads Claude-compatible hooks when the folder is trusted. Expect:
 - PreToolUse: `Bash|run_terminal_command` safety
 - PostToolUse: `Write|Edit|MultiEdit|write|search_replace` learning
 - SubagentStart: snapshot live teammates (fires in the parent)
-- SubagentStop + PostToolUse `get_command_or_subagent_output`: `grok-team-on-stop.cjs` → `on-stop` when Grok delivers those events; otherwise the lead still calls `team_on_stop`
+- SubagentStop + PostToolUse `get_command_or_subagent_output`: `scripts/grok-subagent-stop-hook.mjs` → `ruflo team hook-stop --host grok` when Grok delivers those events; otherwise the lead still calls `team_on_stop`
 
 If route context does not appear in the transcript, read `.swarm/route-latest.md`.
 

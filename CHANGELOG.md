@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.1 cut.
 
+### Fixed (0.8.2)
+
+- **Ruflo team bus synced to the fixed ADR-402 store** (upstream `ruvnet/ruflo` PR
+  [#3512](https://github.com/ruvnet/ruflo/pull/3512) + [#3513](https://github.com/ruvnet/ruflo/pull/3513),
+  head `040e0f1b0`, which added Codex and generic command hosts, `ruflo team run` /
+  `team hook-stop` / `team trust-host`, and a single locked, atomically-written store per team with
+  per-team mailboxes at `teams/<team>/mailbox/<agent>/` — replacing the earlier per-project
+  `.claude-flow/swarm/mailbox/<agent>/` layout and dropping v0/`schemaVersion` migration entirely).
+  WeftOS's `scripts/grok-team-bus.mjs` and `scripts/grok-subagent-stop-hook.mjs` were already thin
+  shims over `ruflo team <verb>` / `ruflo team hook-stop` (no second store vendored) and needed no
+  logic changes; re-verified against a local build of `040e0f1b0` (per-team mailbox path, no
+  `schemaVersion` field, `role:agent@team` spawn descriptions, `outcome`/`runId`/`reason` on
+  `on-stop` with dedupe and no-advance-on-failure all confirmed). Three real gaps against the fixed
+  protocol are closed:
+  - `.claude-flow/team-hosts.json`'s `weft` command host no longer lists secret-named `passEnv`
+    entries (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY`) — the fixed
+    `ruflo team run` now refuses a `team-hosts.json` entry outright if `passEnv` names a
+    secret-looking or `CLAUDE_FLOW_*` variable (confirmed: the old entry is rejected against
+    `040e0f1b0`). `weft` already reads its provider key from local, gitignored `.clawft/config.json`,
+    so `passEnv` is now `[]`. Running the `weft` host also now needs a one-time
+    `ruflo team trust-host weft` per machine (ADR-402's command-host trust step; confirmed working).
+  - `.claude/helpers/grok-team-on-stop.cjs`, a stale ADR-320-era independent writer (its own
+    `.claude-flow/teams/*/team.json` reads plus role/description-guessing heuristics, calling the
+    old `scripts/grok-team-bus.mjs on-stop --team --agent` flags), was retired. `.claude/settings.json`
+    (`SubagentStop`, `PostToolUse` on `get_command_or_subagent_output`) and `.grok/hooks/ruflo-team.json`
+    now call `scripts/grok-subagent-stop-hook.mjs`, which already delegated to
+    `ruflo team hook-stop --host grok` (the fixed hook resolves the `role:agent@team` spawn
+    description and refuses to guess among several active teams, instead of the old script's
+    best-effort member scoring).
+  - `docs/grok/README.md` and `docs/guides/grok-weftos-mcp.md` now record that the local Ruflo
+    authority checkout, `~/dev/ruflo` branch `feat/grok-host`, does not yet carry ADR-402, and that
+    using the bus before that lands needs a separate local checkout including PR #3512 + #3513,
+    referenced only from the local, gitignored `.claude-flow/ruflo-cli-path` — never from a tracked
+    file such as `.grok/config.toml` or `package.json` (WEFT-684/669: no personal checkout paths in
+    tracked config).
+  - `scripts/grok-team-bus.interop.test.mjs` was rewritten against the fixed protocol: dropped the
+    v0-upgrade/`schemaVersion` case and fixture (`scripts/fixtures/team-v0/`, removed — the fixed
+    store has no v0 migration path), added assertions for the per-team mailbox path, the
+    `role:agent@team` spawn description, and `on-stop` outcome/runId dedupe and failed-step
+    no-advance. All cases pass against a local build of `040e0f1b0`.
+  - No Rust changes: `crates/clawft-cli/src/commands/agent.rs` (`weft agent -m`) has no team-bus
+    protocol of its own to update — it is a generic one-shot `<bin> <flags> <prompt>` command host,
+    driven entirely by `ruflo team run` from outside, matching ADR-402's command-adapter contract
+    unchanged.
+
 ## [0.8.1] - 2026-09-28
 
 Point release from `0.8-metaharness` so the current agent-team and harness work can be tested

@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && node .claude/helpers/grok-team-on-stop.cjs stop",
+            "command": "cd \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && node scripts/grok-subagent-stop-hook.mjs",
             "timeout": 8000
           }
         ]
