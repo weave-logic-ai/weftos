@@ -30,9 +30,12 @@ use clawft_types::session::Session;
 /// path scheme, shared with [`crate::agent::local_file_sink::LocalFileSink`]
 /// (M3 store-collapse, design §D4) so the in-process sink reuses the **exact**
 /// same files SessionManager writes today — zero migration.
+pub(crate) fn session_key_stem(key: &str) -> String {
+    percent_encode(key.as_bytes(), NON_ALPHANUMERIC).to_string()
+}
+
 pub(crate) fn session_file_path(sessions_dir: &Path, key: &str) -> PathBuf {
-    let encoded = percent_encode(key.as_bytes(), NON_ALPHANUMERIC).to_string();
-    sessions_dir.join(format!("{encoded}.jsonl"))
+    sessions_dir.join(format!("{}.jsonl", session_key_stem(key)))
 }
 
 /// Legacy on-disk basename for a session key (pre-percent-encoding).
@@ -55,6 +58,8 @@ pub struct SessionGcReport {
     pub skipped_mismatch: Vec<String>,
     /// When true, no files were deleted — `removed` lists candidates only.
     pub dry_run: bool,
+    /// Observation archive dirs removed because their sibling `.jsonl` is gone.
+    pub removed_observations: Vec<String>,
 }
 
 impl SessionGcReport {
@@ -201,6 +206,9 @@ pub async fn gc_migrated_session_files<P: Platform>(
 
     report.removed.sort();
     report.skipped_mismatch.sort();
+    report.removed_observations =
+        crate::observation_pack::gc_orphaned_observation_dirs(platform, sessions_dir, dry_run)
+            .await;
     Ok(report)
 }
 
@@ -692,6 +700,11 @@ impl<P: Platform> SessionManager<P> {
                 .await
                 .map_err(ClawftError::Io)?;
         }
+        crate::observation_pack::remove_observations_dir(
+            self.platform.as_ref(),
+            &crate::observation_pack::observations_dir(&self.sessions_dir, key),
+        )
+        .await;
         self.invalidate(key).await;
 
         // Chain event marker for session destruction.

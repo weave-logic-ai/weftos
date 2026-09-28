@@ -746,6 +746,29 @@ mod tests {
         assert!(result.get("_truncated_json").is_some());
     }
 
+    #[cfg(feature = "native")]
+    #[tokio::test]
+    async fn observation_pack_projection_stays_within_max_tool_result_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let val = Value::String("x".repeat(200_000));
+        let packed = crate::observation_pack::pack_tool_result(
+            dir.path(),
+            "crit02",
+            "bash",
+            "c1",
+            val,
+            65_536,
+        )
+        .await;
+        let ser = serde_json::to_string(&packed).unwrap();
+        assert!(
+            ser.len() <= 65_536,
+            "projection {} bytes exceeds CRIT-02 cap",
+            ser.len()
+        );
+        assert!(packed.get("observation_pack").is_some());
+    }
+
     // ── sanitize_content ───────────────────────────────────────────
 
     #[test]

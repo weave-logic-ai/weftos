@@ -230,6 +230,11 @@ impl<P: Platform> LocalFileSink<P> {
                 .await
                 .map_err(ClawftError::Io)?;
         }
+        crate::observation_pack::remove_observations_dir(
+            self.platform.as_ref(),
+            &crate::observation_pack::observations_dir(&self.sessions_dir, conv_id),
+        )
+        .await;
         Ok(())
     }
 }

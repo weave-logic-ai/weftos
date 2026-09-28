@@ -5,6 +5,12 @@
 //! over all entries, returning top-k results sorted by descending score.
 //!
 //! This module is gated behind the `vector-memory` feature flag.
+//!
+//! Frozen first-stage retriever in the RMM landing (arXiv:2503.08026):
+//! Top-K comes from here (or HNSW/RVF); a lightweight SONA reranker
+//! learns from generator citations. Do not RL-update these vectors from
+//! ±1 citation rewards. See
+//! `docs/research/rmm-reflective-memory-management.md`.
 
 use std::collections::HashMap;
 

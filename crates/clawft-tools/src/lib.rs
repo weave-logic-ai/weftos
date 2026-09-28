@@ -8,6 +8,7 @@
 //! - **File tools** ([`file_tools`]): `read_file`, `write_file`, `edit_file`, `list_directory`
 //! - **Shell tool** ([`shell_tool`]): `exec_shell`
 //! - **Memory tools** ([`memory_tool`]): `memory_read`, `memory_write`
+//! - **Observation recall** (`obs_recall`): page session ObservationPack archives (native)
 //!
 //! All file and directory operations enforce workspace path containment
 //! to prevent directory traversal attacks.
@@ -30,6 +31,8 @@ pub mod delegate_tool;
 pub mod file_tools;
 pub mod memory_tool;
 pub mod message_tool;
+#[cfg(feature = "native")]
+pub mod obs_recall;
 #[cfg(feature = "canvas")]
 pub mod render_ui;
 pub mod security_policy;
@@ -115,6 +118,9 @@ pub fn register_all<P: Platform + 'static>(
         workspace_dir.clone(),
         command_policy.clone(),
     )));
+
+    #[cfg(feature = "native")]
+    registry.register(Arc::new(obs_recall::ObsRecallTool::new()));
 
     registry.register(Arc::new(memory_tool::MemoryReadTool::new(platform.clone())));
     registry.register(Arc::new(memory_tool::MemoryWriteTool::new(

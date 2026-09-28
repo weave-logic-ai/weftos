@@ -9,6 +9,10 @@
 //! 1. **System prompt** (role=`"system"`) -- identity and instructions
 //! 2. **Active skill prompts** (role=`"system"`) -- prefixed with `# Skill: {name}`
 //! 3. **Memory context** (role=`"system"`) -- prefixed with `# Relevant Memory:`
+//!    Today this is the entire `MEMORY.md` (nanobot dump). RMM
+//!    (arXiv:2503.08026) says retrieve Top-K topic nodes and inject Top-M
+//!    after citation-aware rerank; dump is fail-open only. See
+//!    `docs/research/rmm-reflective-memory-management.md` (ws06-memory).
 //! 4. **Conversation history** -- recent messages from the session
 //!
 //! The current user message is **not** added here; the caller appends it.
@@ -514,7 +518,10 @@ impl<P: Platform> ContextBuilder<P> {
             });
         }
 
-        // 4. Memory context
+        // 4. Memory context.
+        // Dumps the entire MEMORY.md (labeled "Relevant"). ws06-memory RMM
+        // follow-on: retrieve Top-K / inject Top-M with m_i ids; keep this
+        // dump as fail-open. docs/research/rmm-reflective-memory-management.md
         match self.memory.read_long_term().await {
             Ok(memory) if !memory.trim().is_empty() => {
                 messages.push(LlmMessage {

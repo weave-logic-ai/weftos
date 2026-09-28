@@ -9,6 +9,13 @@
 //! [`HashEmbedder`](clawft_core::embeddings::hash_embedder::HashEmbedder)
 //! for semantic similarity ranking. Otherwise, a simple substring paragraph
 //! match is used as a fallback.
+//!
+//! Tool I/O against MEMORY.md is not the same as prompt injection: the
+//! agent loop still dumps the whole file as `# Relevant Memory:` today.
+//! RMM (arXiv:2503.08026, ws06-memory) splits those paths — retrieve
+//! Top-K / inject Top-M in `ContextBuilder`, keep these tools as
+//! explicit read/write. See
+//! `docs/research/rmm-reflective-memory-management.md`.
 
 use std::path::PathBuf;
 use std::sync::Arc;

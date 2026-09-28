@@ -15,6 +15,12 @@
 //! Learning is optional and offline to the hot path: call
 //! [`SonaSkillReranker::observe`] after a turn outcome so future
 //! reranks can crystallize patterns via `force_learn` / background tick.
+//!
+//! Follow-on (ws06-memory, RMM arXiv:2503.08026): generalize `observe` from
+//! one `(skill, quality)` to per-retrieved-memory `(id, +1 cited | −1
+//! ignored)` and attach a memory-candidate rerank, not only skills. Do not
+//! RL-update the dense retriever (paper ablation collapsed Acc 58.8→31.0).
+//! See `docs/research/rmm-reflective-memory-management.md`.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -105,6 +111,10 @@ impl SonaSkillReranker {
     ///
     /// `quality` ∈ [0, 1]. Call from the agent-loop feedback path once
     /// available; the hot `rerank` path never depends on this.
+    ///
+    /// RMM follow-on: this scalar is the skill-routing analogue of
+    /// citation rewards. Memory rerank wants a list of `(id, ±1)` instead
+    /// of one quality — keep the retriever frozen.
     pub fn observe(&self, query: &str, selected_skill: &str, quality: f32) {
         let q = hash_embed(query, self.dim);
         let skill_emb = hash_embed(selected_skill, self.dim);

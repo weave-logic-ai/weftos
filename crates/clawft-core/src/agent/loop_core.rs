@@ -621,6 +621,10 @@ pub struct AgentLoop<P: Platform> {
     /// can re-plan without a panel. Daemon path wires
     /// `clawft-service-agent`'s broker via [`Self::set_defer_interactor`].
     defer_interactor: std::sync::OnceLock<Arc<dyn super::defer::DeferInteractor>>,
+    /// Sessions directory for ObservationPack archives (native). When unset,
+    /// the first pack call discovers the default `~/.clawft/workspace/sessions`.
+    #[cfg(feature = "native")]
+    observation_sessions_dir: std::sync::OnceLock<std::path::PathBuf>,
 }
 
 impl<P: Platform> AgentLoop<P> {
@@ -682,6 +686,8 @@ impl<P: Platform> AgentLoop<P> {
             pending_hold: std::sync::Mutex::new(None),
             turn_ledger: std::sync::OnceLock::new(),
             defer_interactor: std::sync::OnceLock::new(),
+            #[cfg(feature = "native")]
+            observation_sessions_dir: std::sync::OnceLock::new(),
         }
     }
 
@@ -829,6 +835,15 @@ impl<P: Platform> AgentLoop<P> {
     /// identical to pre-B2 (turns are recorded but never observed).
     pub fn with_sink(mut self, sink: Arc<dyn ConversationSink>) -> Self {
         self.sink = sink;
+        self
+    }
+
+    /// Pin the ObservationPack sessions directory (tests / known path).
+    ///
+    /// Without this, native packs discover `~/.clawft/workspace/sessions`.
+    #[cfg(feature = "native")]
+    pub fn with_observation_sessions_dir(self, dir: std::path::PathBuf) -> Self {
+        let _ = self.observation_sessions_dir.set(dir);
         self
     }
 
@@ -2295,6 +2310,8 @@ impl<P: Platform> AgentLoop<P> {
     /// `conv_id` + `cancel` are required for the interactive-defer path
     /// (panel prompt + WEFT-323 cancel). Callers without a live turn
     /// (unit tests of the deny envelope) may pass `""` and a fresh token.
+    /// `tool_call_id` is stored on ObservationPack ledger rows (empty in
+    /// tests that do not have a model-issued id).
     pub async fn execute_tool_with_guards(
         &self,
         agent_id: &str,
@@ -2303,6 +2320,7 @@ impl<P: Platform> AgentLoop<P> {
         permissions: Option<&clawft_types::routing::UserPermissions>,
         conv_id: &str,
         cancel: &CancellationToken,
+        tool_call_id: &str,
     ) -> String {
         // 1. EffectGate (policy) check.
         let ev = effect_for_tool(tool_name, input);
@@ -2391,15 +2409,33 @@ impl<P: Platform> AgentLoop<P> {
             .tools
             .permit_issuer()
             .issue(agent_id, tool_name, &gate_token);
-        match self
-            .tools
-            .execute_with_permit(tool_name, input.clone(), permissions, Some(&permit))
-            .await
-        {
-            Ok(val) => {
-                let truncated = crate::security::truncate_result(val, MAX_TOOL_RESULT_BYTES);
-                serde_json::to_string(&truncated).unwrap_or_default()
+        let execute = self.tools.execute_with_permit(
+            tool_name,
+            input.clone(),
+            permissions,
+            Some(&permit),
+        );
+
+        #[cfg(feature = "native")]
+        let result = {
+            if let Some(sessions_dir) = self.resolve_observation_sessions_dir().await {
+                crate::observation_pack::ObservationContext {
+                    sessions_dir,
+                    session_key: conv_id.to_string(),
+                }
+                .scope(execute)
+                .await
+            } else {
+                execute.await
             }
+        };
+        #[cfg(not(feature = "native"))]
+        let result = execute.await;
+
+        match result {
+            Ok(val) => self
+                .pack_or_truncate(tool_name, tool_call_id, conv_id, val)
+                .await,
             Err(e) => {
                 error!(tool = %tool_name, error = %e, "tool execution failed");
                 let mut msg = e.to_string();
@@ -2420,6 +2456,53 @@ impl<P: Platform> AgentLoop<P> {
                 serde_json::json!({"error": msg}).to_string()
             }
         }
+    }
+
+    #[cfg(feature = "native")]
+    async fn resolve_observation_sessions_dir(&self) -> Option<std::path::PathBuf> {
+        if let Some(dir) = self.observation_sessions_dir.get() {
+            return Some(dir.clone());
+        }
+        match crate::session::discover_sessions_dir(self.platform.as_ref()).await {
+            Ok(dir) => {
+                let _ = self.observation_sessions_dir.set(dir.clone());
+                Some(dir)
+            }
+            Err(e) => {
+                warn!(error = %e, "observation pack: sessions dir unavailable");
+                None
+            }
+        }
+    }
+
+    async fn pack_or_truncate(
+        &self,
+        tool_name: &str,
+        tool_call_id: &str,
+        conv_id: &str,
+        val: serde_json::Value,
+    ) -> String {
+        #[cfg(feature = "native")]
+        {
+            if let Some(sessions_dir) = self.resolve_observation_sessions_dir().await {
+                let packed = crate::observation_pack::pack_tool_result(
+                    &sessions_dir,
+                    conv_id,
+                    tool_name,
+                    tool_call_id,
+                    val,
+                    MAX_TOOL_RESULT_BYTES,
+                )
+                .await;
+                return serde_json::to_string(&packed).unwrap_or_default();
+            }
+        }
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = (tool_name, tool_call_id, conv_id);
+        }
+        let truncated = crate::security::truncate_result(val, MAX_TOOL_RESULT_BYTES);
+        serde_json::to_string(&truncated).unwrap_or_default()
     }
 
     /// Execute the tool loop: call LLM, execute tools, repeat.
@@ -2731,6 +2814,7 @@ impl<P: Platform> AgentLoop<P> {
                             permissions,
                             conv_id,
                             cancel,
+                            id,
                         )
                         .await;
                     (id.clone(), name.clone(), body)
@@ -3386,6 +3470,30 @@ mod tests {
         }
     }
 
+    struct SizedOutputTool {
+        name: &'static str,
+        n_bytes: usize,
+    }
+
+    #[async_trait]
+    impl Tool for SizedOutputTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn description(&self) -> &str {
+            "Returns a payload of a chosen size"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({ "type": "object", "properties": {} })
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Value,
+        ) -> Result<serde_json::Value, crate::tools::registry::ToolError> {
+            Ok(serde_json::json!({ "data": "x".repeat(self.n_bytes) }))
+        }
+    }
+
     /// Helper to create an AgentLoop with the given transport.
     async fn make_agent_loop(
         transport: Arc<dyn LlmTransport>,
@@ -3408,6 +3516,8 @@ mod tests {
 
         let pipeline = make_pipeline(transport);
 
+        let sessions = dir.join("sessions");
+        let _ = std::fs::create_dir_all(&sessions);
         let agent = AgentLoop::new(
             test_config(),
             platform,
@@ -3416,7 +3526,8 @@ mod tests {
             Arc::new(tools),
             context,
             PermissionResolver::default_resolver(),
-        );
+        )
+        .with_observation_sessions_dir(sessions);
         (agent, dir)
     }
 
@@ -3886,6 +3997,8 @@ mod tests {
 
         let pipeline = make_pipeline(transport);
 
+        let sessions = dir.join("sessions");
+        let _ = std::fs::create_dir_all(&sessions);
         let agent = AgentLoop::new(
             test_config(),
             platform,
@@ -3894,7 +4007,8 @@ mod tests {
             Arc::new(tools),
             context,
             PermissionResolver::default_resolver(),
-        );
+        )
+        .with_observation_sessions_dir(sessions);
         (agent, dir)
     }
 
@@ -3960,6 +4074,7 @@ mod tests {
                 None,
                 "schema_echo",
                 &CancellationToken::new(),
+                "",
             )
             .await;
 
@@ -4557,6 +4672,8 @@ mod tests {
 
         let pipeline = make_pipeline(Arc::new(OversizedToolTransport::new()));
 
+        let sessions = dir.join("sessions");
+        let _ = std::fs::create_dir_all(&sessions);
         let agent = AgentLoop::new(
             test_config(),
             platform,
@@ -4565,7 +4682,8 @@ mod tests {
             Arc::new(tools),
             context,
             PermissionResolver::default_resolver(),
-        );
+        )
+        .with_observation_sessions_dir(sessions);
 
         let request = ChatRequest {
             messages: vec![LlmMessage {
@@ -4601,6 +4719,29 @@ mod tests {
             result_len <= MAX_TOOL_RESULT_BYTES,
             "tool result ({result_len} bytes) should be truncated to <= {} bytes",
             MAX_TOOL_RESULT_BYTES
+        );
+
+        let obs = crate::observation_pack::observations_dir(&dir.join("sessions"), "test-conv");
+        let ledger = tokio::fs::read_to_string(obs.join("ledger.jsonl"))
+            .await
+            .expect("200KB tool result must be archived");
+        let row: serde_json::Value = serde_json::from_str(ledger.lines().next().unwrap()).unwrap();
+        let id = row["id"].as_str().unwrap();
+        let total = row["bytes"].as_u64().unwrap();
+        assert!(total > MAX_TOOL_RESULT_BYTES as u64);
+        let page = crate::observation_pack::recall(
+            &dir.join("sessions"),
+            "test-conv",
+            id,
+            total.saturating_sub(32),
+            64,
+        )
+        .await
+        .unwrap();
+        assert_eq!(page["eof"], true);
+        assert!(
+            page["chunk"].as_str().unwrap().contains('x'),
+            "tail past 64KB must be recallable"
         );
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -6861,6 +7002,7 @@ mod tests {
                 None,
                 "etwg_deny",
                 &CancellationToken::new(),
+                "",
             )
             .await;
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -6886,6 +7028,7 @@ mod tests {
                 None,
                 "etwg_trunc",
                 &CancellationToken::new(),
+                "",
             )
             .await;
         // The mock-loop registry has no `huge_output` tool, so this
@@ -6897,6 +7040,208 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert!(parsed["error"].is_string());
 
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    async fn make_obs_loop(
+        prefix: &str,
+        tool: SizedOutputTool,
+    ) -> (AgentLoop<NativePlatform>, PathBuf) {
+        let transport = Arc::new(MockTransport::new("ok"));
+        let dir = temp_dir(prefix);
+        let platform = Arc::new(NativePlatform::new());
+        let bus = Arc::new(MessageBus::new());
+        let memory = Arc::new(MemoryStore::with_paths(
+            dir.join("memory").join("MEMORY.md"),
+            dir.join("memory").join("HISTORY.md"),
+            platform.clone(),
+        ));
+        let skills = Arc::new(SkillsLoader::with_dir(dir.join("skills"), platform.clone()));
+        let context = ContextBuilder::new(test_config(), memory, skills, platform.clone());
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(EchoTool));
+        tools.register(Arc::new(tool));
+        let pipeline = make_pipeline(transport);
+        let sessions = dir.join("sessions");
+        let _ = std::fs::create_dir_all(&sessions);
+        let agent = AgentLoop::new(
+            test_config(),
+            platform,
+            bus,
+            pipeline,
+            Arc::new(tools),
+            context,
+            PermissionResolver::default_resolver(),
+        )
+        .with_observation_sessions_dir(sessions);
+        (agent, dir)
+    }
+
+    #[tokio::test]
+    async fn execute_tool_tiny_result_does_not_archive() {
+        let (agent, dir) = make_obs_loop(
+            "obs_tiny",
+            SizedOutputTool {
+                name: "tiny_output",
+                n_bytes: 32,
+            },
+        )
+        .await;
+        let body = agent
+            .execute_tool_with_guards(
+                "agent-x",
+                "tiny_output",
+                &serde_json::json!({}),
+                None,
+                "obs_tiny",
+                &CancellationToken::new(),
+                "c1",
+            )
+            .await;
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(parsed.get("observation_pack").is_none());
+        let obs = crate::observation_pack::observations_dir(&dir.join("sessions"), "obs_tiny");
+        assert!(!obs.exists(), "tiny result must not create {obs:?}");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn execute_tool_10kb_full_twice_then_projects() {
+        let (agent, dir) = make_obs_loop(
+            "obs_10k",
+            SizedOutputTool {
+                name: "medium_output",
+                n_bytes: 10_000,
+            },
+        )
+        .await;
+        let mut bodies = Vec::new();
+        for i in 0..3 {
+            bodies.push(
+                agent
+                    .execute_tool_with_guards(
+                        "agent-x",
+                        "medium_output",
+                        &serde_json::json!({}),
+                        None,
+                        "obs_10k",
+                        &CancellationToken::new(),
+                        &format!("c{i}"),
+                    )
+                    .await,
+            );
+        }
+        let first: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
+        let second: serde_json::Value = serde_json::from_str(&bodies[1]).unwrap();
+        let third: serde_json::Value = serde_json::from_str(&bodies[2]).unwrap();
+        assert!(first.get("observation_pack").is_none());
+        assert!(second.get("observation_pack").is_none());
+        assert!(first["data"].as_str().unwrap().len() == 10_000);
+        assert_eq!(first, second);
+        let pack = third
+            .get("observation_pack")
+            .expect("third send is a projection");
+        assert_eq!(pack["tool"], "medium_output");
+        assert!(pack["head"].as_str().is_some());
+        assert!(pack["tail"].as_str().is_some());
+        assert!(bodies[2].len() <= MAX_TOOL_RESULT_BYTES);
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn execute_tool_over_64kb_is_recallable() {
+        let (agent, dir) = make_obs_loop(
+            "obs_64k",
+            SizedOutputTool {
+                name: "huge_output",
+                n_bytes: 80_000,
+            },
+        )
+        .await;
+        let body = agent
+            .execute_tool_with_guards(
+                "agent-x",
+                "huge_output",
+                &serde_json::json!({}),
+                None,
+                "obs_64k",
+                &CancellationToken::new(),
+                "call-huge",
+            )
+            .await;
+        assert!(body.len() <= MAX_TOOL_RESULT_BYTES);
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let pack = parsed
+            .get("observation_pack")
+            .expect("oversize result must project");
+        let id = pack["id"].as_str().unwrap();
+        let total = pack["bytes"].as_u64().unwrap();
+        assert!(total > MAX_TOOL_RESULT_BYTES as u64);
+
+        let page = crate::observation_pack::recall(
+            &dir.join("sessions"),
+            "obs_64k",
+            id,
+            total.saturating_sub(64),
+            128,
+        )
+        .await
+        .unwrap();
+        assert_eq!(page["eof"], true);
+        let chunk = page["chunk"].as_str().unwrap();
+        assert!(!chunk.is_empty());
+        assert!(chunk.contains('x'), "tail past 64KB must be recallable");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn execute_tool_archive_failure_does_not_error_loop() {
+        let transport = Arc::new(MockTransport::new("ok"));
+        let dir = temp_dir("obs_fail");
+        let _ = std::fs::create_dir_all(&dir);
+        let platform = Arc::new(NativePlatform::new());
+        let bus = Arc::new(MessageBus::new());
+        let memory = Arc::new(MemoryStore::with_paths(
+            dir.join("memory").join("MEMORY.md"),
+            dir.join("memory").join("HISTORY.md"),
+            platform.clone(),
+        ));
+        let skills = Arc::new(SkillsLoader::with_dir(dir.join("skills"), platform.clone()));
+        let context = ContextBuilder::new(test_config(), memory, skills, platform.clone());
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(SizedOutputTool {
+            name: "medium_output",
+            n_bytes: 10_000,
+        }));
+        let pipeline = make_pipeline(transport);
+        let blocker = dir.join("sessions_blocker");
+        std::fs::write(&blocker, b"not-a-dir").unwrap();
+        let agent = AgentLoop::new(
+            test_config(),
+            platform,
+            bus,
+            pipeline,
+            Arc::new(tools),
+            context,
+            PermissionResolver::default_resolver(),
+        )
+        .with_observation_sessions_dir(blocker);
+
+        let body = agent
+            .execute_tool_with_guards(
+                "agent-x",
+                "medium_output",
+                &serde_json::json!({}),
+                None,
+                "obs_fail",
+                &CancellationToken::new(),
+                "c1",
+            )
+            .await;
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(parsed.get("error").is_none(), "loop must not error: {body}");
+        assert!(parsed.get("observation_pack").is_none());
+        assert!(body.len() <= MAX_TOOL_RESULT_BYTES);
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 

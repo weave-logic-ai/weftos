@@ -48,6 +48,12 @@ pub const EVENT_KIND_TOOL_REGISTER: &str = "tool.register";
 /// chain bridge and plugin host share a vocabulary.
 pub const EVENT_KIND_PLUGIN_WASM_INVOKE: &str = "plugin.wasm.invoke";
 
+/// ObservationPack archive write (`ImpulseType::Custom(0x70)`).
+pub const EVENT_KIND_OBSERVATION_ARCHIVED: &str = "observation.archived";
+
+/// ObservationPack recall (`ImpulseType::Custom(0x71)`).
+pub const EVENT_KIND_OBSERVATION_RECALLED: &str = "observation.recalled";
+
 /// LeWM per-frame observational tuple attestation (WEFT-533).
 ///
 /// Payload is a version-tagged SIGReg manifold reference plus
@@ -157,6 +163,8 @@ mod tests {
             EVENT_KIND_LEWM_FRAME_ATTESTATION,
             "lewm.frame.attestation"
         );
+        assert_eq!(EVENT_KIND_OBSERVATION_ARCHIVED, "observation.archived");
+        assert_eq!(EVENT_KIND_OBSERVATION_RECALLED, "observation.recalled");
     }
 
     #[test]

@@ -4,6 +4,11 @@
 //! - `MEMORY.md` -- long-term facts (append-only, periodically consolidated)
 //! - `HISTORY.md` -- session summaries (grep-searchable log)
 //!
+//! This file-dump is the fail-open store. Do not treat it as the retrieval
+//! architecture: RMM (arXiv:2503.08026) wants topic nodes + merge/insert and
+//! citation-attributed rerank before anything is labeled "relevant." See
+//! `docs/research/rmm-reflective-memory-management.md` (ws06-memory).
+//!
 //! File locations follow the discovery chain:
 //! `~/.clawft/workspace/memory/` with fallback to `~/.nanobot/workspace/memory/`.
 //!

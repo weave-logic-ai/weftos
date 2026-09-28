@@ -155,6 +155,11 @@ pub fn effect_for_tool(name: &str, _args: &serde_json::Value) -> EffectVector {
             privacy: 0.05,
             ..Default::default()
         },
+        // Session-archive paging (ObservationPack). Read-only; no workspace FS.
+        "obs_recall" => EffectVector {
+            privacy: 0.05,
+            ..Default::default()
+        },
 
         // Unknown tools = neutral. New tools land in this table the
         // first time they need policy-aware behaviour; until then a
@@ -221,7 +226,7 @@ mod tests {
 
     #[test]
     fn task_introspection_tools_are_near_zero() {
-        for tool in ["task_status", "task_result"] {
+        for tool in ["task_status", "task_result", "obs_recall"] {
             let ev = effect_for_tool(tool, &json!({"task_id": "t"}));
             assert!(
                 ev.magnitude() < 0.1,

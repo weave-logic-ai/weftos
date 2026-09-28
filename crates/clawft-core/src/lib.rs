@@ -54,6 +54,7 @@ pub mod pipeline;
 pub mod planning;
 pub mod routing_validation;
 pub mod runtime;
+pub mod observation_pack;
 pub mod security;
 pub mod session;
 pub mod tools;
