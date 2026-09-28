@@ -134,3 +134,6 @@ scripts/__pycache__/
 .metaharness/brain/df.json
 .metaharness/brain/meta.json
 .metaharness/brain/crosscut-latest.json
+
+# Full-text copies of third-party papers: kept locally for search, not redistributed
+docs/research/**/paper-*.txt

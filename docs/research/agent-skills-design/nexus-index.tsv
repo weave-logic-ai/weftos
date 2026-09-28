@@ -1,0 +1,158 @@
+taxonomy_section	subsection	title	arxiv_id	year	already_covered
+related-surveys		A Survey on Agent Skills: Externalized Procedural Knowledge in Language Models		2026	
+related-surveys		A Survey of Agent Skills: Toward Procedural Infrastructure for LLM Agents		2026	
+related-surveys		Agent Skill Evaluation and Evolution: Frameworks and Benchmarks	2606.11435	2026	
+related-surveys		A Systematic Survey of Self-Evolving Agents: From Model-Centric to Environment-Driven Co-Evolution		2026	
+related-surveys		Externalization in LLM Agents: A Unified Review of Memory, Skills, Protocols and Harness Engineering	2604.08224	2026	
+related-surveys		SoK: Agentic Skills -- Beyond Tool Use in LLM Agents	2602.20867	2026	docs/research/agent-skills-design/paper-scivis-agent-skills.md
+0-foundations		Toolformer	2302.04761	2023	
+0-foundations		ReAct	2210.03629	2023	
+0-foundations		HuggingGPT	2303.17580	2023	
+0-foundations		ToolLLM	2307.16789	2023	
+0-foundations		Model Context Protocol (MCP)		2024	
+0-foundations		Function Calling		2023	
+0-foundations		RAG	2005.11401	2020	
+0-foundations		DPR		2020	
+0-foundations		In-depth Analysis of Graph-based RAG in a Unified Framework	2503.04338	2025	
+0-foundations		ArchRAG: Attributed Community-based Hierarchical Retrieval-Augmented Generation	2502.09891	2025	
+0-foundations		Clue-RAG	2507.08445	2025	
+0-foundations		BookRAG: A Hierarchical Structure-aware Index-based Approach for RAG on Complex Documents	2512.03413	2025	
+0-foundations		EraRAG	2506.20963	2025	
+0-foundations		MemGPT	2310.08560	2023	
+0-foundations		Think-in-Memory	2311.08719	2023	
+0-foundations		EverMemOS	2601.02163	2026	
+0-foundations		HyperMem	2604.08256	2026	
+0-foundations		MSA	2603.23516	2026	
+1-representation	Text-Based Skills	Reflexion	2303.11366	2023	
+1-representation	Text-Based Skills	ExpeL	2308.10144	2024	
+1-representation	Text-Based Skills	Buffer of Thoughts	2406.04271	2024	
+1-representation	Text-Based Skills	Trace2Skill	2603.25158	2026	
+1-representation	Text-Based Skills	Ctx2Skill	2604.27660	2026	
+1-representation	Text-Based Skills	From Anatomy to Smells: An Empirical Study of SKILL.md in Agent Skills	2607.01456	2026	
+1-representation	Code-Backed Skills	Voyager	2305.16291	2023	
+1-representation	Code-Backed Skills	SkillCraft	2603.00718	2026	
+1-representation	Code-Backed Skills	PolySkill	2510.15863	2026	
+1-representation	Code-Backed Skills	Inducing Programmatic Skills for Agentic Tasks	2504.06821	2025	
+1-representation	Code-Backed Skills	Harnessing LLM Agents with Skill Programs	2605.17734	2026	
+1-representation	Code-Backed Skills	Skill-as-Pseudocode	2605.27955	2026	
+1-representation	Hybrid Skills	JARVIS-1	2311.05997	2025	
+1-representation	Hybrid Skills	Synapse	2306.07863	2024	
+1-representation	Hybrid Skills	SkillWeaver	2504.07079	2025	
+1-representation	Hybrid Skills	AgentSkillOS	2603.02176	2026	docs/research/skill-3d/papers/analysis/029-agentskillos.md
+1-representation	Hybrid Skills	Agent Skills Should Go Beyond Text: The Case for Visual Skills	2606.01414	2026	
+1-representation	Hybrid Skills	Skill-RM	2606.03980	2026	
+1-representation	Hybrid Skills	AIP	2606.04781	2026	
+2-acquisition	Human-Derived	SkillNet	2603.04448	2026	docs/research/skill-3d/papers/analysis/032-skillnet.md
+2-acquisition	Human-Derived	AgentSkillOS	2603.02176	2026	docs/research/skill-3d/papers/analysis/029-agentskillos.md
+2-acquisition	Human-Derived	SoK: Agentic Skills	2602.20867	2026	docs/research/agent-skills-design/paper-scivis-agent-skills.md
+2-acquisition	Human-Derived	Agent Hospital	2405.02957	2024	
+2-acquisition	Human-Derived	SciVisAgentSkills	2606.05525	2026	docs/research/agent-skills-design/paper-scivis-agent-skills.md
+2-acquisition	Experience-Derived	Voyager	2305.16291	2023	
+2-acquisition	Experience-Derived	Reflexion	2303.11366	2023	
+2-acquisition	Experience-Derived	ExpeL	2308.10144	2024	
+2-acquisition	Experience-Derived	Buffer of Thoughts	2406.04271	2024	
+2-acquisition	Experience-Derived	Trace2Skill	2603.25158	2026	
+2-acquisition	Experience-Derived	Agent Workflow Memory	2409.07429	2025	
+2-acquisition	Experience-Derived	AgentEvolver	2511.10395	2025	
+2-acquisition	Experience-Derived	G-memory	2506.07398	2025	
+2-acquisition	Experience-Derived	Nemori	2502.14828	2025	
+2-acquisition	Experience-Derived	PANDO	2605.24785	2026	
+2-acquisition	Experience-Derived	SkillGen: Verified Inference-Time Agent Skill Synthesis	2605.10999	2026	
+2-acquisition	Task-Derived	CREATOR		2023	
+2-acquisition	Task-Derived	ToolMakers	2305.17126	2024	
+2-acquisition	Task-Derived	Cradle	2403.03186	2024	
+2-acquisition	Task-Derived	CodeAct	2402.01030	2024	
+2-acquisition	Corpus-Derived	AppAgent	2312.13771	2023	
+2-acquisition	Corpus-Derived	AutoGuide	2403.08978	2024	
+2-acquisition	Corpus-Derived	HuggingGPT	2303.17580	2023	
+2-acquisition	Corpus-Derived	ToolLLM	2307.16789	2023	
+2-acquisition	Corpus-Derived	DS-Agent	2402.17453	2024	
+2-acquisition	Corpus-Derived	OpenSkill: Open-World Self-Evolution for LLM Agents	2606.06741	2026	
+2-acquisition	Corpus-Derived	Ctx2Skill	2604.27660	2026	
+3-retrieval-selection	Retrieval	ToolGen: Unified Tool Retrieval and Calling via Generation	2410.03439	2025	
+3-retrieval-selection	Retrieval	ToolLLM	2307.16789	2023	
+3-retrieval-selection	Retrieval	AgentSkillOS	2603.02176	2026	docs/research/skill-3d/papers/analysis/029-agentskillos.md
+3-retrieval-selection	Retrieval	SkillNet	2603.04448	2026	docs/research/skill-3d/papers/analysis/032-skillnet.md
+3-retrieval-selection	Retrieval	GraphSkill	2603.06620	2026	
+3-retrieval-selection	Retrieval	Skill Is Not Document	2606.03565	2026	
+3-retrieval-selection	Retrieval	SkillDAG	2606.03056	2026	
+3-retrieval-selection	Selection and Routing	AutoGuide	2403.08978	2024	
+3-retrieval-selection	Selection and Routing	MemSkill	2602.02474	2026	docs/research/skill-3d/papers/analysis/090-memskill.md
+3-retrieval-selection	Selection and Routing	Memento-Skills	2603.18743	2026	
+3-retrieval-selection	Selection and Routing	SkillRouter	2603.22455	2026	
+3-retrieval-selection	Selection and Routing	GraSP	2604.17870	2026	
+3-retrieval-selection	Selection and Routing	ToolExpNet		2025	
+3-retrieval-selection	Selection and Routing	Maestro	2605.22177	2026	
+3-retrieval-selection	Selection and Routing	Skill is Not One-Size-Fits-All	2605.30723	2026	
+3-retrieval-selection	Selection and Routing	Skill or Skip? Learning Selective Skill Invocation in Agentic Tasks via Dual-Granularity Preference Learning	2606.00510	2026	
+3-retrieval-selection	Selection and Routing	SkillsInjector	2605.29794	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	TROVE	2401.12869	2024	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	Memento-Skills	2603.18743	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	AutoSkill	2603.01145	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	EvoSkill	2603.02766	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	CoEvoSkills	2604.01687	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	Ctx2Skill	2604.27660	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	AutoRefine	2601.22758	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	SkillRL	2602.08234	2026	docs/research/skill-3d/papers/analysis/077-skillrl.md
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	Uni-Skill	2603.02623	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	ARISE	2603.16060	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	CASCADE	2512.23880	2025	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	SkillOpt	2605.23904	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	MUSE-Autoskill	2605.27366	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	SkillRevise	2606.01139	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	SkillSmith	2606.01314	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	ReSkill	2606.01619	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	SkillComposer	2606.06079	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	SkillMaster: Toward Autonomous Skill Mastery in LLM Agents	2605.08693	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	SkillMAS: Skill Co-Evolution with LLM-based Multi-Agent System	2605.09341	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	COMFYCLAW: Self-Evolving Skill Harnesses for Image Generation Workflows	2607.01709	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	MOCHA	2605.19330	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	SkillGrad	2605.27760	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	You Live More Than Once: Towards Hierarchical Skill Meta-Evolving	2605.28390	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	GRASP	2605.29668	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	FederatedSkill	2606.03143	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	Bayesian-Agent	2606.08348	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	SkillHone	2606.08671	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	SKILL0	2604.02268	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	Skill1	2605.06130	2026	
+4-evolution-governance	Skill Formation, Refinement, and RL Optimization	Skill0.5	2605.28424	2026	
+4-evolution-governance	Memory-Centric and Runtime Re-entry	ReasoningBank	2509.25140	2025	
+4-evolution-governance	Memory-Centric and Runtime Re-entry	MemRL	2601.03192	2026	
+4-evolution-governance	Memory-Centric and Runtime Re-entry	MemSkill	2602.02474	2026	docs/research/skill-3d/papers/analysis/090-memskill.md
+4-evolution-governance	Memory-Centric and Runtime Re-entry	MemEvolve	2512.18746	2025	
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	SkillRouter	2603.22455	2026	
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	SkillNet	2603.04448	2026	docs/research/skill-3d/papers/analysis/032-skillnet.md
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	SkillOS		2026	
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	Audited Skill-Graph	2512.23760	2025	
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	PoisonedSkills		2026	
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	Agent Skills: A Data-Driven Analysis of Claude Skills for Extending Large Language Model Functionality	2602.08004	2026	docs/research/agent-skills-design/paper-scivis-agent-skills.md
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	Towards Secure Agent Skills: Architecture, Threat Taxonomy, and Security Analysis	2604.02837	2026	
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	SkillsVote	2605.18401	2026	
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	Library Drift	2605.19576	2026	
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	Harmless Yet Harmful	2605.29354	2026	
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	When Safe Skills Collide: Measuring Compositional Risk in Agent Skill Ecosystems	2606.00448	2026	
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	ClawHub Security Signals: When VirusTotal, Static Analysis, and SkillSpector Disagree	2606.01494	2026	
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	SkillHarm	2606.02540	2026	
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	SkillGuard	2606.03024	2026	
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	POISE	2606.07943	2026	
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	From Registry to Repository: How AI Agent Skills Are Written, Adapted, and Maintained	2607.00911	2026	
+4-evolution-governance	Governance, Trust, and Ecosystem Risk	Skills Are Not Islands: Measuring Dependency and Risk in Agent Skill Supply Chains	2607.01136	2026	
+benchmarks		AgentBench	2308.03688		
+benchmarks		WebArena	2307.13854		
+benchmarks		TaskBench	2311.18760		
+benchmarks		STULIFE	2508.19005		
+benchmarks		TRACE	2510.00415		
+benchmarks		Evo-Memory	2511.20857		
+benchmarks		SkillsBench	2602.12670		docs/research/skill-3d/papers/analysis/030-skillsbench.md;docs/research/agent-skills-design/refs.tsv#23
+benchmarks		SRA-Bench	2604.24594		
+benchmarks		R3-Skill	2606.03565		
+benchmarks		SkillHarm	2606.02540		
+benchmarks		MalSkillBench	2606.07131		
+benchmarks		SkillGenBench	2605.18693		
+benchmarks		SkillEvolBench	2605.24117		
+benchmarks		From Raw Experience to Skill Consumption	2605.23899		
+benchmarks		When Skills Don't Help	2605.20023		
+benchmarks		More Skills, Worse Agents?	2605.24050		
+benchmarks		Benchmarking Security Risk Detection and Verification in Open Agentic Skill Ecosystems	2606.00925		
+benchmarks		A Framework for Evaluating Agentic Skills at Scale	2606.17819		
+benchmarks		SkillCoach: Self-Evolving Rubrics for Evaluating and Enhancing Agentic Skill-Use	2607.01874		
