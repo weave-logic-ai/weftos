@@ -1027,6 +1027,9 @@ CARGO_AUDIT_IGNORES=(
     --ignore RUSTSEC-2026-0194   # quick-xml quadratic attrs (transitive); need >=0.41
     --ignore RUSTSEC-2026-0195   # quick-xml NsReader DoS (transitive); need >=0.41
     --ignore RUSTSEC-2026-0222   # wasmtime type indices; upgrade path post 0.8.0
+    --ignore RUSTSEC-2026-0269   # wasmtime FS trailing-slash escape; fix needs wasmtime 46 = Rust 1.94.
+                                 # Not reachable: the only WASI ctx (kernel wasm_runner) has no FS preopens.
+                                 # 0.8.1 residual; board ticket wasmtime-46-toolchain-1-94
     --ignore RUSTSEC-2020-0036   # failure unmaintained (transitive)
     --ignore RUSTSEC-2019-0036   # failure unsound (transitive)
     --ignore RUSTSEC-2026-0221   # event-listener unsound (transitive async stack)

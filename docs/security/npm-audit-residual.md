@@ -1,6 +1,8 @@
 # npm audit residual risk (WEFT-598)
 
-Last triage: 2026-07-31 on `release/0.8-staging` (branch `fix/weft-598-npm-audit`).
+Last triage: 2026-09-28 on `0.8-metaharness` (v0.8.1 release gate). Prior triage:
+2026-07-31 on `release/0.8-staging` (branch `fix/weft-598-npm-audit`) — see
+"2026-07-31 triage" below for that round's detail.
 
 ## Gate policy
 
@@ -15,24 +17,105 @@ Override with `NPM_AUDIT_LEVEL` (`critical` \| `high` \| `moderate` \| …) or
 
 Audited lockfiles (when present): `clawft-ui/`, repo root, `docs/src/`, `gui/`.
 
-## Post-triage scores
+## Post-triage scores (2026-09-28)
 
 | Lockfile | Critical | High | Moderate | Low | Notes |
 |----------|----------|------|----------|-----|-------|
-| `clawft-ui/` | 0 | 0 | 0 | 0 | Clean after vite/playwright bumps + overrides |
-| root | 0 | 0 | ~29 | 0 | Residual under ruflo pin (see below) |
-| `docs/src/` | 0 | 0 | 0 | 0 | sharp/postcss overrides |
-| `gui/` | 0 | 0 | 0 | 0 | esbuild + minimatch overrides |
+| `clawft-ui/` | 0 | 0 | 0 | 0 | js-yaml/nanoid/@humanfs regressed since 07-31 (deps drifted); recleared via `npm audit fix` |
+| root | 0 | 0 | 31 | 0 | Residual under ruflo pin (see below) — 29 OTEL-chain + 2 new (hono, qs) |
+| `docs/src/` | 0 | 0 | 0 | 2 low | next 16.2.12→16.3.6 (in-range) + sharp override bump clear crit/high; esbuild low left (fumadocs-mdx pin) |
+| `gui/` | 0 | 0 | 0 | 0 | js-yaml/nanoid/@humanfs recleared via `npm audit fix` |
 
-### Approximate fix counts (critical + high)
+### Fix counts (critical + high), this round
 
 | Surface | Before (crit/high) | After | Fixed |
 |---------|--------------------|-------|-------|
-| clawft-ui | 1 / 6 | 0 / 0 | **7** |
-| root | 1 / 13 | 0 / 0 | **14** |
-| docs/src | 0 / 4 | 0 / 0 | **4** |
-| gui | 0 / 5 | 0 / 0 | **5** |
-| **Total crit+high cleared** | **~30** | **0** | **~30** |
+| clawft-ui | 0 / 2 | 0 / 0 | **2** |
+| root | 0 / 10 | 0 / 0 | **10** |
+| docs/src | 1 / 5 | 0 / 0 | **6** |
+| gui | 0 / 2 | 0 / 0 | **2** |
+| **Total crit+high cleared** | **20** | **0** | **20** |
+
+Note: `clawft-ui` and `gui` were previously (07-31) triaged clean, but upstream
+dependency releases between 07-31 and 09-28 reintroduced js-yaml, nanoid and
+`@humanfs/node` findings (transitive via eslint tooling) — npm audit residual
+risk is not a one-time fix, it drifts with every upstream release, hence the
+gate runs every release.
+
+### 2026-09-28: what changed
+
+**root (`package.json` overrides)**
+
+| Package | Old pin | New pin | Reason |
+|---------|---------|---------|--------|
+| `adm-zip` | `0.6.0` | `0.6.1` | High: symlink-follow extraction + uncontrolled memory allocation |
+| `sharp` | `0.35.3` | `0.35.5` | High: libheif CVEs (GHSA-rgj7-g3m4-5g8c) |
+| `brace-expansion` | (none) | `5.0.12` | High: DoS via unbounded intermediate arrays |
+| `fast-uri` | (none) | `4.2.1` | High: host-confusion/SSRF cluster (4 advisories); no 3.x patch exists, verified no documented breaking API changes 3.x→4.x |
+| `toml` | (none) | `4.3.0` | High: uncontrolled recursion (fixed 4.2.0) + prototype pollution (fixed 4.1.2); no documented breaking changes vs 3.x |
+
+`agentic-flow` stays on `^2.1.0` (devDependency, unchanged) — it is direct
+because the 3-tier model-routing / metaharness tooling shells out to it. Its
+own `1.10.2` "fix" from `npm audit fix --force` is wrong-direction (major
+downgrade) and was rejected, same as 07-31; the adm-zip/sharp overrides above
+achieve the same CVE fix without touching agentic-flow's version, so the
+`--force` path is no longer needed for anything in the crit/high band.
+
+`@claude-flow/cli` / `ruflo` pin **unchanged at 3.42.4** (WEFT-684/669) — it
+only ever showed up in `npm audit` as a rollup of the vulnerable packages
+above; clearing those drops it (and `agentdb`, `agentic-flow`) back to
+moderate-only.
+
+**docs/src**
+
+- `next` `16.2.12` → `16.3.6` (still within declared `^16.2.1`, `npm audit fix`
+  picked the current in-range patch) — clears the critical (Windows RCE +
+  AVIF image-optimization RCE).
+- Override `sharp` `0.35.3` → `0.35.5` (same libheif CVE as root).
+- `npm audit fix` (non-force) cleared browserslist, image-size, js-yaml,
+  nanoid, postcss-selector-parser, baseline-browser-mapping.
+- Verified with `npm run build` (Next.js 16.3.6 / Turbopack) — 97 static pages
+  generated successfully, no errors.
+- Residual: 2 low (esbuild, pulled in by `fumadocs-mdx` pinned to
+  `14.2.7-14.2.11`; the only fix bumps `fumadocs-mdx` to `14.3.2`, outside the
+  declared range — deferred since it's `low`, not gated).
+
+**gui / clawft-ui**
+
+- Both had drifted since 07-31: `js-yaml` (high), `nanoid` (high),
+  `@humanfs/node` (moderate) via the eslint toolchain. `npm audit fix`
+  (non-force) cleared all three in both trees — 0 vulnerabilities now in
+  either lockfile.
+- Verified with each project's build script (`tsc -b && vite build`) — both
+  succeed.
+
+### Operational note: `npm --allow-remote`
+
+This environment's npm (12.0.2) defaults `allow-git`/`allow-remote` to `none`
+(a supply-chain hardening default), which makes `npm install` / `npm audit
+fix` refuse to re-fetch already-`resolved` registry tarballs during reify
+(`EALLOWREMOTE`, since pacote reclassifies an exact `resolved` URL as spec
+type `remote`). All fix commands in this triage were run with
+`--allow-remote=all`; this is safe here because every fetch involved is a
+plain npm-registry tarball for a package already pinned by exact version, not
+an untrusted git/URL dependency. CI running a fresh `npm ci` is unaffected
+(nothing to re-resolve).
+
+The repo root's `node_modules/` also carries a stray `.pnpm` store from some
+earlier `pnpm install` (unrelated to this task), which makes in-place `npm
+install`/`npm audit fix` fail with `ENOTDIR` on rename. The root lockfile fix
+above was done by regenerating `package-lock.json` in an isolated scratch
+copy (`npm install --package-lock-only`) and copying it back, without
+touching the live `node_modules/` tree. **Follow-up needed:** root
+`node_modules/` is now stale relative to `package-lock.json` for adm-zip,
+sharp, brace-expansion, fast-uri and toml — run a clean `npm install` (or
+`rm -rf node_modules && npm ci`) locally before relying on those exact
+versions at runtime. `docs/src`, `gui` and `clawft-ui` node_modules were
+updated in place and are in sync.
+
+---
+
+## 2026-07-31 triage
 
 (Exact Dependabot “142” total mixed severities/surfaces; this triage focused
 critical + high on the product npm trees.)
@@ -70,12 +153,16 @@ Overrides (keep `ruflo` / `@claude-flow/cli` pin **3.32.38**):
 
 ## Accepted residual risk (root moderates)
 
-~29 **moderate** findings remain on the root lockfile, almost entirely the
-OpenTelemetry resources/SDK chain pulled by:
+31 **moderate** findings remain on the root lockfile as of 2026-09-28 (see
+"2026-09-28 triage" above), almost entirely the OpenTelemetry resources/SDK
+chain pulled by:
 
 - `agentdb` → `@opentelemetry/*`
-- `@claude-flow/cli@3.32.38` / `ruflo@3.32.38` (schema pin — **WEFT-684 / WEFT-669**)
+- `@claude-flow/cli@3.42.4` / `ruflo@3.42.4` (schema pin — **WEFT-684 / WEFT-669**)
 - `agentic-flow@2.x`
+- plus `hono` (new since 07-31, via `@modelcontextprotocol/sdk` / `fastmcp` /
+  `@hono/node-server`) and `qs` (via `express`/`body-parser`) — same
+  dev-tooling MCP-server chain, ReDoS/ACL-bypass moderates only.
 
 ### Why not force-fixed
 

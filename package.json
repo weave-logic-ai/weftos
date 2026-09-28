@@ -38,23 +38,26 @@
     "metaharness:goal": "node scripts/metaharness/goal-check.mjs"
   },
   "devDependencies": {
-    "@claude-flow/cli": "3.38.20",
+    "@claude-flow/cli": "3.42.4",
     "@metaharness/flywheel": "^0.1.10",
     "agentic-flow": "^2.1.0",
-    "ruflo": "3.38.20",
+    "ruflo": "3.42.4",
     "typescript": "^6.0.3"
   },
   "overrides": {
-    "@claude-flow/cli": "3.38.20",
+    "@claude-flow/cli": "3.42.4",
     "protobufjs": "7.6.5",
     "undici": "7.29.0",
-    "adm-zip": "0.6.0",
-    "sharp": "0.35.3",
-    "@opentelemetry/propagator-jaeger": "2.9.0"
+    "adm-zip": "0.6.1",
+    "sharp": "0.35.5",
+    "@opentelemetry/propagator-jaeger": "2.9.0",
+    "brace-expansion": "5.0.12",
+    "fast-uri": "4.2.1",
+    "toml": "4.3.0"
   },
   "weftos": {
-    "rufloPin": "3.38.20",
-    "rufloPinNote": "REAL SOURCE IS THE LOCAL CHECKOUT at ~/dev/ruflo (weave-logic-ai/ruflo fork, branch feat/grok-host), consumed via npm-link -- scripts/use-local-ruflo.sh. The global `ruflo` bin symlinks to ~/dev/ruflo/ruflo, so this version string DOCUMENTS what the local build provides; it does not control it. Keep it in step with ~/dev/ruflo package.json after every upstream merge. Still the schema-bearing MCP owner of .swarm/agentdb-memory.db: back up .swarm/ and read the changelog before merging upstream, then re-run scripts/brain-embedded-rust-ingest.sh stores. See WEFT-684 / WEFT-669.",
+    "rufloPin": "3.42.4",
+    "rufloPinNote": "AUTHORITY is ~/dev/ruflo branch feat/grok-host (ADR-320 team_*, init --grok). Grok loads it via .grok/config.toml [mcp_servers.ruflo] → v3/@claude-flow/cli/bin/cli.js. The version string only documents that checkout (3.42.4 after merging ruvnet/main into grok-host 2026-09-19, cf8443898). Do not treat npm ruflo@3.42.4 as a substitute — published packages do not carry team_*. Relink: ~/dev/ruflo/scripts/use-local-ruflo.sh. AgentDB backup: .swarm/backups/2026-09-19-pre-ruflo-3.42.4/. WEFT-684 / WEFT-669: never npx ruflo@latest; never put ~/dev/ruflo in tracked .mcp.json.",
     "primaryLanguage": "rust",
     "product": "agent-operating-system",
     "harness": {

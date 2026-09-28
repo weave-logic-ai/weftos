@@ -9418,7 +9418,14 @@ mod tests {
 
         let pub_hit = events
             .iter()
-            .find(|e| e.kind == "ipc.publish" && e.source == "ipc")
+            // Match on our own topic: a kernel booted from the default config can
+            // share the chain with other publishers (e.g. host services), so the
+            // first ipc.publish event is not necessarily this test's.
+            .find(|e| {
+                e.kind == "ipc.publish"
+                    && e.source == "ipc"
+                    && e.payload.as_ref().is_some_and(|p| p["topic"] == topic)
+            })
             .expect("ipc.publish chain event");
         let pub_payload = pub_hit.payload.as_ref().expect("ipc.publish payload");
         assert_eq!(pub_payload["topic"], topic);
@@ -9472,7 +9479,11 @@ mod tests {
         let hit = cm
             .tail(0)
             .into_iter()
-            .find(|e| e.kind == "ipc.publish")
+            // Match on our own topic; see ipc_publish_leaf_push_lands_on_chain.
+            .find(|e| {
+                e.kind == "ipc.publish"
+                    && e.payload.as_ref().is_some_and(|p| p["topic"] == "hello")
+            })
             .expect("ipc.publish event");
         let p = hit.payload.as_ref().unwrap();
         assert_eq!(p["topic"], "hello");
