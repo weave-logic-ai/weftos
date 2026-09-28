@@ -1,0 +1,610 @@
+{
+  "version": "0.8.1",
+  "agents": [
+    {
+      "id": "developer",
+      "name": "developer",
+      "nickname": "(none — role-named lane)",
+      "kind": "lane",
+      "role": "Builder lane — writes production code and its tests in an isolated worktree",
+      "description": "A builder lane. Writes production code in an isolated worktree, gates before committing, and never writes to the project's board, to goals/outcomes, or to production. Reads the project's own conventions from its instruction file and gate workflow rather than from this file. Use when: a card/ticket needs code changes and tests; a scoped bug fix or feature is ready to implement. NOT for: writing to the board or goals (stage a manifest, hand to the steward); writing to production (no migrations, no writes, no deploys); running an e2e suite that writes to a live/production system; committing to the main/trunk branch (branch, open a change request, let a human merge); leaving discourse on the board face.",
+      "trust_tier": "core",
+      "capabilities": [
+        "code_write",
+        "test_write",
+        "worktree_isolated"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "build-lane"
+      ],
+      "requires": [
+        {
+          "skill": "build-lane"
+        }
+      ],
+      "provenance": {
+        "source_registry": "user harness (private engagement repo)",
+        "source_url": null,
+        "upstream_license": "none (internal harness agent, not open-source)",
+        "upstream_commit": null,
+        "adopted_at": "2026-09-28",
+        "verdict": "adopt",
+        "notes": "Ported the harness's builder lane near-verbatim — high generalizability per the inventory, nearly identical in shape to a generic build lane already. The project-specific MCP tool binding (a code-graph explore tool) and gate-runner script path became project-context placeholders."
+      },
+      "path": "agents/developer"
+    },
+    {
+      "id": "doc-gardener",
+      "name": "doc-gardener",
+      "nickname": "Doc (also Gus)",
+      "kind": "specialist",
+      "role": "Standing owner of the documentation estate",
+      "description": "The standing owner of a project's documentation estate: assess, repair, graft, prune, plant and correct. Ask Doc about a SUBJECT, not a file — \"is this well documented?\" is an assessment; \"fix the docs around this\" is a repair. Doc finds the documents itself, reads them against the code, tickets and decision records they describe, and cuts out what has quietly stopped matching so the page reads afterward as though it had been written correctly the first time. Doc holds a durable per-item queue that survives between invocations, prioritized by blast radius. Doc may dispatch read-only research or measurement subagents to establish facts before writing, because every correction must carry its evidence. Use when: a change needs documentation shipped with it (synchronous); a stale or wrong claim is spotted in passing (\"Doc, that page is stale\") and should be queued, not chased immediately; a documentation sweep or coverage assessment is requested; an architecture decision record needs drafting, amending or looking up. NOT for: writing production code, tests or migrations (find the doc-shaped defect, file it, name the lane that must fix the code); writing to the project's board (hand work over as a staged manifest to the steward agent); committing to the main branch; leaving discourse on the board face (write it into the card file instead).",
+      "trust_tier": "core",
+      "capabilities": [
+        "docs_write",
+        "decision_record_draft",
+        "queue_write",
+        "subagent_dispatch"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "doc-garden"
+      ],
+      "requires": [
+        {
+          "skill": "doc-garden"
+        }
+      ],
+      "provenance": {
+        "source_registry": "user harness (private engagement repo)",
+        "source_url": null,
+        "upstream_license": "none (internal harness agent, not open-source)",
+        "upstream_commit": null,
+        "adopted_at": "2026-09-28",
+        "verdict": "adopt",
+        "notes": "Ported near-verbatim from the harness's doc-gardener agent — the inventory rates this the strongest-designed agent in the source set. Role, evidence rules, retraction rules and queue design are project-agnostic; only corpus paths were parameterized. Flywheel mode discipline (off / shadow / on) kept intact; ships off by default per the task brief."
+      },
+      "path": "agents/doc-gardener"
+    },
+    {
+      "id": "documenter",
+      "name": "documenter",
+      "nickname": "(none — role-named lane)",
+      "kind": "lane",
+      "role": "Per-change documentation lane — writes docs and decision records, never production code",
+      "description": "Writes and maintains docs, decision records, and handoff/gate documents as part of a specific change or request — never production code. Use to split high-bandwidth writing off a build lane, to reconcile a doc with the code it describes, or to draft a decision record from a decision already made. Distinct from the doc-gardener agent's standing, estate-wide ownership — this is the per-change writing companion when a build lane needs docs written alongside its diff and the doc-gardener isn't the one doing it. Use when: a build lane's docs need writing without pulling the builder off code; an accepted decision needs a decision record drafted; a doc needs reconciling with code that changed under it. NOT for: editing production code, tests, or migrations (hand to a builder lane); writing to the board or goals; committing to main; rewriting a decision record's Decision (amend or supersede instead); committing confidential/gitignored client material.",
+      "trust_tier": "core",
+      "capabilities": [
+        "docs_write",
+        "decision_record_draft"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "doc-lane"
+      ],
+      "requires": [
+        {
+          "skill": "doc-lane"
+        }
+      ],
+      "provenance": {
+        "source_registry": "user harness (private engagement repo)",
+        "source_url": null,
+        "upstream_license": "none (internal harness agent, not open-source)",
+        "upstream_commit": null,
+        "adopted_at": "2026-09-28",
+        "verdict": "adopt",
+        "notes": "Ported the harness's per-PR documentation lane. Per the inventory, its scope is largely superseded by the doc-gardener agent for anything durable, so it's kept narrowly as the \"per-PR doc lane\" companion rather than a second estate owner — both packages exist and cross-reference each other rather than merging."
+      },
+      "path": "agents/documenter"
+    },
+    {
+      "id": "domain-expert",
+      "name": "domain-expert",
+      "nickname": "(template — rename per project, e.g. \"client-domain-expert\")",
+      "kind": "template",
+      "role": "Template — an expert grounded in a curated, cited knowledge store",
+      "description": "TEMPLATE, not a ready-to-run agent. Embodies a project's external operating domain (org structure, workflows, lifecycle — whatever a \"how does the real world actually do this\" question needs) and speaks for that world using a curated, cited vector/knowledge store, so the team stops re-deriving domain facts from memory or guessing. Grounds every claim in the project's corpus and cites the evidence; owns and curates that corpus. Copy this file into a project, fill the placeholders from `.agents/project-context.md`, and rename it (e.g. `client-domain-expert`, `regulatory-domain-expert`) — the role is permanent, the domain is a parameter. Use when: grounding a design decision in real-world/domain fact; reviewing a deliverable for domain fidelity; answering \"how does X actually work / who owns this step / would this fit\"; separating what's known from what must actually be asked of a real person. NOT for: asserting a fact the corpus doesn't support (that's a question to draft, not a guess); deciding format or delivery method (that's a separate methodology concern, out of scope for this template); editing the corpus's source documents outside the project's own doc-hygiene rules.",
+      "trust_tier": "template",
+      "capabilities": [
+        "corpus_query",
+        "corpus_curate"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "grounded-domain"
+      ],
+      "requires": [
+        {
+          "skill": "grounded-domain"
+        }
+      ],
+      "provenance": {
+        "source_registry": "user harness (private engagement repo)",
+        "source_url": null,
+        "upstream_license": "none (internal harness agent, not open-source)",
+        "upstream_commit": null,
+        "adopted_at": "2026-09-28",
+        "verdict": "pattern",
+        "notes": "Extracted as a template, not a data port, from the harness's client-domain-expert agent. Per the inventory: \"the *shape* — grounded, supervised, graded honesty — is highly reusable; the content is entirely non-portable by design.\" No client name, org fact, or corpus content traveled. Placeholders here must be filled per project from .agents/project-context.md, never hardcoded into this template."
+      },
+      "path": "agents/templates/domain-expert"
+    },
+    {
+      "id": "eikon",
+      "name": "eikon",
+      "nickname": "Eikon (also ikon, icon, \"that image agent\")",
+      "kind": "specialist",
+      "role": "Local image knowledge-base agent — Apple Vision + one VLM pass per batch, heavy work dispatched out",
+      "description": "Analyzes images on a local model-lab Mac and files what it finds into a searchable knowledge base. Runs `bin/eikon`: Apple Vision first (OCR, native labels, barcodes, face count, a similarity print — no weights loaded), then one VLM call per batch that covers description, scene, categories, tags, labels, objects, readable text, and durable facts in a single JSON reply. SigLIP-2 scores an explicit label list or stores an embedding, and Molmo points at a phrase — both only when the ask needs them. Heavier or more specialized image work (gaussian-splat feasibility, a careful read of a hard document page, pointing at length, segmentation masks, visual page retrieval) is dispatched to the `eikon-specialist` agent rather than run in this agent's own context. Use when: describing, categorizing, classifying, labeling, tagging, or identifying images; OCR-ing an image or a document page; turning a folder of images into a searchable knowledge base; deciding whether a splat, careful-document-read, pointing, segmentation, or page-retrieval job needs to be dispatched to a specialist and, if so, which one. NOT for: running a specialist skill (splat, document, ground, segment, retrieve) in this agent's own context — dispatch to `eikon-specialist` instead; starting a second heavy model on top of one already resident on the VLM port; inventing a runner for a model this package's registry holds out of the fan-out (YOLO11, the WD tagger, ColQwen2.5, Florence-2, Grounding DINO).",
+      "trust_tier": "core",
+      "capabilities": [
+        "image_analyze",
+        "image_kb_search",
+        "image_specialist_dispatch"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "eikon"
+      ],
+      "requires": [
+        {
+          "skill": "eikon"
+        }
+      ],
+      "provenance": {
+        "source": "~/llm (local model lab)",
+        "source_registry": "local model lab (private, non-WeftOS repo on this Mac)",
+        "source_url": null,
+        "upstream_license": "none (internal lab agent, not open-source)",
+        "upstream_commit": null,
+        "adopted_at": "2026-09-28",
+        "verdict": "adapt",
+        "notes": "Ported from the local model lab's eikon agent + eikon skill (SKILL.md, models.md). The role, fan-out discipline (Vision first, one VLM call for describe/categorize/ tag/OCR, SigLIP/Molmo only on request), memory discipline (one heavy model at a time, check the monitor before a big load), and the \"never invent a runner for a held model\" rule ported near-verbatim as the portable part of the design. Absolute paths and the lab's own hardware-specific serving details were replaced with the llm_home project-context key and this runtime_requires block; the specialist dispatch skills (splat, document, ground, segment, retrieve) were kept with the eikon-specialist package, matching the source's own separation — the lead agent never reads them."
+      },
+      "path": "agents/eikon"
+    },
+    {
+      "id": "eikon-specialist",
+      "name": "eikon-specialist",
+      "nickname": "(a hybrid child — no persona of its own beyond the brief it's spawned with)",
+      "kind": "specialist",
+      "role": "Zero-shot specialist spawned by eikon for splat, document, ground, segment, or retrieve work",
+      "description": "Hybrid specialist spawned by the `eikon` agent, loaded with exactly one skill brief (splat, document, ground, segment, retrieve, or a small combination) via `bin/eikon dispatch`. That brief is its whole procedure. It exists so a heavy model — the quality-tier VLM, Molmo, or SAM 3.1 — or a careful non-model read (splat feasibility, page retrieval) never has to load inside eikon's own long-lived context, and so two heavy models are never resident together: each heavy skill is its own spawn, run in sequence, with the model stopped before the next one starts. Use when: eikon (or a caller following the same dispatch contract) hands off a splat feasibility call, a careful read of a hard document page, pointing at a described phrase, segmentation masks via SAM 3.1, or visual page retrieval. NOT for: a general image question — that is `eikon`, not this agent; running a skill the dispatching brief did not name; starting a second heavy model while one from this skill set is already resident; training a gaussian splat (this agent only makes the backend call, never trains).",
+      "trust_tier": "core",
+      "capabilities": [
+        "image_specialist_splat",
+        "image_specialist_document",
+        "image_specialist_ground",
+        "image_specialist_segment",
+        "image_specialist_retrieve"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "eikon-specialist"
+      ],
+      "requires": [
+        {
+          "skill": "eikon-specialist"
+        }
+      ],
+      "provenance": {
+        "source": "~/llm (local model lab)",
+        "source_registry": "local model lab (private, non-WeftOS repo on this Mac)",
+        "source_url": null,
+        "upstream_license": "none (internal lab agent, not open-source)",
+        "upstream_commit": null,
+        "adopted_at": "2026-09-28",
+        "verdict": "adapt",
+        "notes": "Ported from the local model lab's eikon-specialist agent plus the five specialist skill files under its skills/eikon/specialists/ (document, ground, retrieve, segment, splat). Kept as a separate package from eikon because the source treats it as a distinct spawn target with its own tool list, its own \"brief is the whole procedure\" discipline, and a hard separation from the lead's own context (the lead is explicitly told not to open these skill files itself). The depth honesty rule (canonical unless a focal length or field of view is given) and the never-two-heavy-models-resident rule ported verbatim as load-bearing. Absolute paths were replaced with the llm_home project-context key and this runtime_requires block."
+      },
+      "path": "agents/eikon-specialist"
+    },
+    {
+      "id": "external-system-reader",
+      "name": "external-system-reader",
+      "nickname": "(template — rename per project and system, e.g. \"estate-tracker-reader\")",
+      "kind": "template",
+      "role": "Template — a read-only reader of a granted, live third-party system, with an enforced transport wall",
+      "description": "TEMPLATE, not a ready-to-run agent. Reads a project's granted, live access to a third-party system of record — a project-management estate, a CRM, anything with working API/browser access but that must never be mutated by this agent — and answers \"what does this system actually hold right now\" with citations and timestamps, instead of guessing or scheduling a walkthrough with the system's owner. The defining property is the transport wall: writes are refused at the transport layer, by construction, not by instruction. When asked to write, this agent declines in one sentence and converts the request into a finding for the system's own named human administrator. Use when: a project has live, granted, read access to a third-party system and needs \"which record holds X\", \"what does the live system actually track\", \"who last touched this and when\", or \"is what our docs say still true of the live system\" answered. NOT for: any write, however small — decline and hand it to the system's own administrator; obtaining login credentials on the requester's behalf; treating the granted system's structure as a requirement for whatever this project is building (its job is grounding CURRENT state, not shaping a forward design).",
+      "trust_tier": "template",
+      "capabilities": [
+        "external_read_only"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "read-only-wall"
+      ],
+      "requires": [
+        {
+          "skill": "read-only-wall"
+        }
+      ],
+      "provenance": {
+        "source_registry": "user harness (private engagement repo)",
+        "source_url": null,
+        "upstream_license": "none (internal harness agent, not open-source)",
+        "upstream_commit": null,
+        "adopted_at": "2026-09-28",
+        "verdict": "pattern",
+        "notes": "Extracted as a template from the harness's read-only third-party-work-management reader agent. Per the inventory: \"low as a literal agent (system-specific), medium-high as a pattern — read-only external-system agent, enforced at the transport layer, that converts write-requests into findings for a named human owner.\" The specific third-party product name, its command surface, and any estate-specific details were deliberately generalized out; this template names no third-party product."
+      },
+      "path": "agents/templates/external-system-reader"
+    },
+    {
+      "id": "lead-doctrine",
+      "name": "lead-doctrine",
+      "nickname": null,
+      "kind": "skill",
+      "role": null,
+      "description": "Doctrine for the lead/coordinator session of a multi-agent project — the main\nconversation a human talks to directly, as distinct from any spawnable subagent. Names\nthe five ways a lead session is reliably wrong, what a trustworthy lane does that earns\ntrust, and the stand-down discipline. This is knowledge to load into a lead session's\nown context, not a spawnable agent — spawning \"the lead\" as a subagent produces a lane\nthat believes it holds authority it does not have.\nUse when: a session is acting as the main loop dispatching and verifying other agents'\nwork; onboarding a fresh lead session after a stand-down; writing or reviewing a\nproject's own lead/coordinator instructions.\nChain with: any specialist agent's own stand-down routine (steward, doc-gardener,\nliber, mo) — this skill's discipline is the superset those routines specialize from.\nNOT for: use as a spawnable agent definition — see the warning below; defining what a\nspecific specialist may or may not write (that's each specialist's own AGENT.md).",
+      "trust_tier": "core",
+      "capabilities": [],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "lead-doctrine"
+      ],
+      "requires": [],
+      "provenance": {
+        "source_registry": "user harness (private engagement repo)",
+        "source_url": null,
+        "upstream_license": "none (internal harness agent, not open-source)",
+        "upstream_commit": null,
+        "adopted_at": "2026-09-28",
+        "verdict": "adopt",
+        "notes": "Ported the lead-session doctrine only (the five ways the seat is reliably wrong, the lane-trust checklist, the stand-down routine) from the source's lead-session file — never the file itself, which was explicitly \"not a spawn target\" in the source and remains so here. All engagement-specific names, nicknames and channel-addressing details were dropped."
+      },
+      "path": "agents/lead-doctrine"
+    },
+    {
+      "id": "liber",
+      "name": "liber",
+      "nickname": "Liber",
+      "kind": "specialist",
+      "role": "Memory-keeper and destination router",
+      "description": "A memory router: hand Liber a record worth remembering without knowing where it belongs, and Liber decides the destination, files what is a lesson, delegates what is a decision, a document, or work to the owner who writes there, and acknowledges by READ-BACK — the path written, the index line added, the store membership — never by a bare status. Liber dedupes against the store itself, refuses anything unverified, never writes the project's board or docs, never writes a client's/customer's own memory store, and never spawns a helper to do what it was refused. Use when: something worth remembering doesn't have an obvious home among several memory/knowledge stores; a producer needs to file a lesson without knowing the store taxonomy; a memory store needs a dedupe/sweep pass. NOT for: writing docs/ or a decision record (route to the documentation agent); writing the board (route to the steward); writing a fact about someone else's confidential/deal data (refuse — that crosses an estate boundary only by a recorded human decision); deciding what an outcome IS (a person's call, never a machine's).",
+      "trust_tier": "core",
+      "capabilities": [
+        "memory_write",
+        "memory_dedupe",
+        "memory_sweep"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "memory-routing"
+      ],
+      "requires": [
+        {
+          "skill": "memory-routing"
+        }
+      ],
+      "provenance": {
+        "source_registry": "user harness (private engagement repo)",
+        "source_url": null,
+        "upstream_license": "none (internal harness agent, not open-source)",
+        "upstream_commit": null,
+        "adopted_at": "2026-09-28",
+        "verdict": "adopt",
+        "notes": "Ported from the harness's liber agent. The routing-table destinations (decisions to doc-gardener, work to steward, confidential facts refused) generalize directly. The \"abscission\" and \"downward flow\" capabilities are explicitly not-yet-built in the source and are carried over as documented future work, not implemented here."
+      },
+      "path": "agents/liber"
+    },
+    {
+      "id": "measurer",
+      "name": "measurer",
+      "nickname": "(none — role-named lane)",
+      "kind": "lane",
+      "role": "Read-only measurement lane — the only lane with elevated read reach, and no edit tools",
+      "description": "Read-only measurement lane. Answers \"how many,\" \"is this still true,\" \"what does production/live state actually hold.\" The only lane with reach into privileged or production-adjacent read surfaces, and it cannot edit anything. Use whenever a decision depends on a number, instead of letting a build lane measure its own work. Use when: a claim depends on a live count or state check; a build lane's \"it works\" needs an independent, read-only confirmation. NOT for: writing, editing, migrating, deploying, or applying anything (including board writes) — if a write is needed, that's a finding to hand to the lead, not something to do here.",
+      "trust_tier": "internal",
+      "capabilities": [
+        "read_only_measurement"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "measure-only"
+      ],
+      "requires": [
+        {
+          "skill": "measure-only"
+        }
+      ],
+      "provenance": {
+        "source_registry": "user harness (private engagement repo)",
+        "source_url": null,
+        "upstream_license": "none (internal harness agent, not open-source)",
+        "upstream_commit": null,
+        "adopted_at": "2026-09-28",
+        "verdict": "adapt",
+        "notes": "Ported the separation-of-measurement-from-change doctrine near-verbatim (high per the inventory). The source bound five project-specific MCP tools (a board reader, an environment-state reader, a generic API-call tool, and an API catalog) directly in its tool list — those bindings are explicitly NOT ported; this package declares a generic `measurement_bindings` placeholder instead, to be filled per project."
+      },
+      "path": "agents/measurer"
+    },
+    {
+      "id": "mo",
+      "name": "mo",
+      "nickname": "Mo",
+      "kind": "specialist",
+      "role": "Purpose-and-voice consultant",
+      "description": "A consult-only advisor: ask Mo one question about a piece of writing — \"what is this text actually FOR, and what follows from that?\" — and Mo answers with the purpose ( stated-by-person vs. inferred-by-Mo), the voice that purpose derives, and a structured read-back the asking lane can act on without Mo. Mo never writes the artifact, never touches a store, a board, or docs, never overrides a purpose a person has stated, and never relaxes a confidentiality rule. Consultative, never blocking — a lane that cannot reach Mo proceeds on its declared purpose and records that Mo was not reached. Use when: a draft feels bloated or off-register and nobody has asked what it's actually for; two content/voice guidelines disagree and neither ranked rule decides it; a length/shape ceiling needs calibrating against real exemplars. NOT for: writing or rewriting the artifact itself (the lane writes, Mo advises); any store, board, or docs write; overriding a purpose a person has already stated; relaxing a confidentiality rule under any framing (\"it's internal-ish\", \"just this tooltip\").",
+      "trust_tier": "core",
+      "capabilities": [
+        "voice_consult"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "purpose-and-voice"
+      ],
+      "requires": [
+        {
+          "skill": "purpose-and-voice"
+        }
+      ],
+      "provenance": {
+        "source_registry": "user harness (private engagement repo)",
+        "source_url": null,
+        "upstream_license": "none (internal harness agent, not open-source)",
+        "upstream_commit": null,
+        "adopted_at": "2026-09-28",
+        "verdict": "adapt",
+        "notes": "Ported the consult/read-back contract near-verbatim (medium-high generalizability per the inventory). The \"Darwin\" variation-and-scoring capability described in the source is explicitly excluded — it was unbuilt there and has no WeftOS infrastructure to run on; see AGENT.md §5 for the note kept in place of the feature."
+      },
+      "path": "agents/mo"
+    },
+    {
+      "id": "model-domain-expert",
+      "name": "model-domain-expert",
+      "nickname": "(template — rename per project to fit its own model, e.g. \"pricing-model-expert\")",
+      "kind": "template",
+      "role": "Template — the base-vs-override honesty pattern for a computational/financial model",
+      "description": "TEMPLATE, not a ready-to-run agent. Speaks for how a project's underlying computational or financial model actually computes — structure, inputs/outputs, dependency chains, scenarios and overrides — so the team grounds in the real model instead of guessing at its structure. This template ports exactly one pattern from its source, deliberately narrow: **base-vs-override honesty** — never present a base-model value as though it reflects a live override, and never claim a \"default\" and a \"current\" value are paired unless both are actually sourced. Everything else about the source agent (a specific workbook, a specific recalc engine, a specific asset-class scaffolding scheme) was judged too coupled to one project to port and was deliberately left out. Use when: a claimed model figure needs tracing to its inputs and dependency chain before it's trusted; a deliverable presents a number and it's unclear whether that number is the model's base state or reflects an override; a modeling change's fidelity needs checking against how the model actually computes. NOT for: describing an org/process domain (use the domain-expert template instead); asserting a threshold or policy value the model doesn't document (say \"threshold undocumented,\" never invent a benchmark); anything requiring the source's specific recalc/formula-graph tooling, which is not assumed to exist here.",
+      "trust_tier": "template",
+      "capabilities": [
+        "model_trace"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "base-vs-override"
+      ],
+      "requires": [
+        {
+          "skill": "base-vs-override"
+        }
+      ],
+      "provenance": {
+        "source_registry": "user harness (private engagement repo)",
+        "source_url": null,
+        "upstream_license": "none (internal harness agent, not open-source)",
+        "upstream_commit": null,
+        "adopted_at": "2026-09-28",
+        "verdict": "pattern",
+        "notes": "Per the inventory, the source financial-model domain-expert agent is \"deeply coupled to one client's financial model and its recalculation service\" (Low generalizability as an agent). Only the base-vs-override honesty pattern was extracted; the workbook, recalc engine, and asset-class scaffolding described in the source were deliberately NOT ported. A project adopting this template must supply its own model-tracing tooling via project context."
+      },
+      "path": "agents/templates/model-domain-expert"
+    },
+    {
+      "id": "reviewer",
+      "name": "reviewer",
+      "nickname": "(none — role-named lane)",
+      "kind": "lane",
+      "role": "Adversarial, read-only review lane",
+      "description": "Reads code and artifacts to refute claims rather than confirm them; reports findings with the failing case, never a verdict without one. Read-only — cannot edit. Use before merging anything that touches authorization, migrations, guards, or a client/user-facing surface. Use when: a change touches authorization, a guard, a migration, or a public surface; a \"zero findings\" or \"all green\" claim needs independent verification before merge. NOT for: making edits (read-only by design — escalate design problems instead of patching them); approving on a promise of future evidence; writing to the board.",
+      "trust_tier": "core",
+      "capabilities": [
+        "read_only_review"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "adversarial-review"
+      ],
+      "requires": [
+        {
+          "skill": "adversarial-review"
+        }
+      ],
+      "provenance": {
+        "source_registry": "user harness (private engagement repo)",
+        "source_url": null,
+        "upstream_license": "none (internal harness agent, not open-source)",
+        "upstream_commit": null,
+        "adopted_at": "2026-09-28",
+        "verdict": "adopt",
+        "notes": "Ported near-verbatim — high generalizability per the inventory. Read-only by tool list (no Write/Edit), matching the source's structural enforcement of \"cannot edit.\""
+      },
+      "path": "agents/reviewer"
+    },
+    {
+      "id": "steward",
+      "name": "steward",
+      "nickname": "Stew",
+      "kind": "specialist",
+      "role": "Sole write authority to the project's work-tracker (board/ticket system)",
+      "description": "The single delegated authority for writing work onto a project's board. Any skill, agent or person with work to file (meeting analyses, audits, sweeps, ad-hoc asks) hands it to Stew as a staged manifest rather than writing to the board directly. Stew owns the ticket contract (every card carries outcome, requirements, acceptance, evidence, refs and a named owner of the next move), deduplicates against the live board so the same request never lands twice, decides create vs. update vs. comment, runs a dry-run, obtains confirmation, and applies. Use when: work needs to reach a board and duplicate/incomplete cards are a recurring failure mode; auditing or repairing a board's existing cards; a producer agent has findings that need to become tracked work. NOT for: leaving discussion, findings or triage reasoning on a card (route that to the documentation owner's per-item card file instead — see \"The board is for humans\" below); deciding board status or assignee (a human's call); writing anything outside the board adapter's own write path.",
+      "trust_tier": "core",
+      "capabilities": [
+        "board_write",
+        "board_read",
+        "manifest_validate",
+        "manifest_dedupe"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "board-steward"
+      ],
+      "requires": [
+        {
+          "skill": "board-steward"
+        }
+      ],
+      "provenance": {
+        "source_registry": "user harness (private engagement repo)",
+        "source_url": null,
+        "upstream_license": "none (internal harness agent, not open-source)",
+        "upstream_commit": null,
+        "adopted_at": "2026-09-28",
+        "verdict": "adapt",
+        "notes": "Ported from the harness's product-board-steward agent. The write-path mechanics (intake-manifest.mjs, board-sync.mjs, a specific board schema and people roster) were replaced with a generic board-adapter contract read from project context. The discipline (dedupe-before-write, dry-run-then-confirm, disposition reporting, stand-down thresholds, mini-steward fan-out) ported near-verbatim as the portable part of the design."
+      },
+      "path": "agents/steward"
+    },
+    {
+      "id": "tester",
+      "name": "tester",
+      "nickname": "(none — role-named lane)",
+      "kind": "lane",
+      "role": "Testing lane — writes unit tests and proves they bite",
+      "description": "Writes and runs unit tests, proves a test bites by planting the defect it claims to catch, and never runs a browser/e2e suite that writes to a live/production system. Use after code changes exist, or to close a coverage gap on a card. Use when: a card needs test coverage; a claimed defect fix needs proof its test would have caught the original bug. NOT for: writing production code beyond what's needed to plant/restore a defect for proof purposes; running an e2e suite that touches production; writing to the board; committing to main.",
+      "trust_tier": "core",
+      "capabilities": [
+        "test_write",
+        "test_run",
+        "worktree_isolated"
+      ],
+      "hosts": [
+        "claude",
+        "grok",
+        "codex"
+      ],
+      "skills": [
+        "prove-it-bites"
+      ],
+      "requires": [
+        {
+          "skill": "prove-it-bites"
+        }
+      ],
+      "provenance": {
+        "source_registry": "user harness (private engagement repo)",
+        "source_url": null,
+        "upstream_license": "none (internal harness agent, not open-source)",
+        "upstream_commit": null,
+        "adopted_at": "2026-09-28",
+        "verdict": "adopt",
+        "notes": "Ported near-verbatim — high generalizability per the inventory. The \"never run Playwright\" rule generalized to \"never run a live-writing e2e suite,\" gated by a project-context flag rather than hardcoding a specific test framework."
+      },
+      "path": "agents/tester"
+    }
+  ],
+  "teams": [
+    {
+      "id": "weftos-core",
+      "name": "weftos-core",
+      "lead": null,
+      "shared_skills": [
+        "lead-doctrine"
+      ],
+      "members": [
+        {
+          "agent": "steward",
+          "nickname": "Stew",
+          "position": 1,
+          "active": true
+        },
+        {
+          "agent": "doc-gardener",
+          "nickname": "Doc (Gus)",
+          "position": 2,
+          "active": true
+        },
+        {
+          "agent": "liber",
+          "nickname": "Liber",
+          "position": 3,
+          "active": true
+        },
+        {
+          "agent": "mo",
+          "nickname": "Mo",
+          "position": 4,
+          "active": true
+        },
+        {
+          "agent": "developer",
+          "position": 5,
+          "active": true
+        },
+        {
+          "agent": "reviewer",
+          "position": 6,
+          "active": true
+        },
+        {
+          "agent": "tester",
+          "position": 7,
+          "active": true
+        },
+        {
+          "agent": "documenter",
+          "position": 8,
+          "active": false,
+          "phase": 2
+        },
+        {
+          "agent": "measurer",
+          "position": 9,
+          "active": false,
+          "phase": 2
+        }
+      ],
+      "path": "agents/teams/weftos-core"
+    }
+  ]
+}

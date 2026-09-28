@@ -1,0 +1,52 @@
+name: weftos-core
+description: >
+  Base WeftOS team, ported from the private harness agent inventory (verdict
+  `adapt` for each member; see docs/research/agent-directory/design.md §6).
+  Lead doctrine loads as a shared skill into the lead/coordinator session
+  itself, never as a spawnable member. Stew, Doc, Liber and Mo are the
+  specialist lanes; developer, reviewer and tester are the three build
+  lanes. Documenter and measurer are phase 2 additions to this team and
+  ship inactive.
+
+# No spawnable lead — see agents/lead-doctrine/SKILL.md's warning: spawning
+# "the lead" as a subagent produces a lane that believes it holds authority
+# it does not have.
+lead: null
+
+shared_skills:
+  - lead-doctrine
+
+members:
+  - agent: steward
+    nickname: Stew
+    position: 1
+    active: true
+  - agent: doc-gardener
+    nickname: Doc (Gus)
+    position: 2
+    active: true
+  - agent: liber
+    nickname: Liber
+    position: 3
+    active: true
+  - agent: mo
+    nickname: Mo
+    position: 4
+    active: true
+  - agent: developer
+    position: 5
+    active: true
+  - agent: reviewer
+    position: 6
+    active: true
+  - agent: tester
+    position: 7
+    active: true
+  - agent: documenter
+    position: 8
+    active: false
+    phase: 2
+  - agent: measurer
+    position: 9
+    active: false
+    phase: 2

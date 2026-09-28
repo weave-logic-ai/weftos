@@ -45,6 +45,15 @@ declare -a RULES=(
   "email address|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|a real email address"
   "absolute home path|/Users/[A-Za-z0-9_.-]+|a local absolute path that can leak a username/machine"
   "client repo path|~/Clients|a reference to the private client-engagement checkout"
+  "roster entry (roster:)|^[[:space:]]*roster[[:space:]]*:[[:space:]]*\$|a literal roster key — verify no real personnel list follows (project rosters belong in project context, referenced by key name only, never embedded here)"
+  "roster entry (people:)|^[[:space:]]*people[[:space:]]*:[[:space:]]*\$|a literal people key — verify no real personnel list follows"
+  "roster entry (team_roster:)|^[[:space:]]*team_roster[[:space:]]*:[[:space:]]*\$|a literal team_roster key — verify no real personnel list follows"
+  "credential shape (board token)|\bwfb_[a-f0-9]{64}\b|a live WeftOS dashboard harness credential"
+  "credential shape (Anthropic key)|\bsk-ant-[A-Za-z0-9_-]{20,}\b|a live Anthropic API key"
+  "credential shape (generic sk- key)|\bsk-[A-Za-z0-9_-]{20,}\b|a generic secret-key-shaped token"
+  "credential shape (GitHub token)|\bgh[pousr]_[A-Za-z0-9]{20,}\b|a live GitHub token"
+  "credential shape (AWS access key)|\bAKIA[0-9A-Z]{16}\b|a live AWS access key id"
+  "credential shape (private key block)|-----BEGIN[ A-Z]*PRIVATE KEY-----|an embedded private key"
 )
 
 echo "agents-leak-check: scanning $TARGET_DIR"

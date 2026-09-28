@@ -719,6 +719,32 @@ jobs:
         run: scripts/build.sh npm-audit
 
   # -------------------------------------------------------------------
+  # Agent Directory (AD-1/AD-2): agents/ package standard, catalog, and
+  # confidentiality leak check. See
+  # docs/research/agent-directory/design.md and its ADR. Local twin:
+  # scripts/build.sh gate checks 17-19.
+  # -------------------------------------------------------------------
+  agents-gate:
+    name: Agent directory (validate, catalog, leak check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate agents/ packages (AD-1)
+        run: scripts/build.sh agents-validate
+
+      - name: agents/catalog.json is up to date (AD-1)
+        run: scripts/build.sh agents-catalog --check
+
+      - name: agents/ confidentiality leak check (AD-2)
+        run: scripts/build.sh agents-leak-check
+
+  # -------------------------------------------------------------------
   # Cargo Check: fast workspace-wide compilation check
   # -------------------------------------------------------------------
   check:

@@ -1,0 +1,113 @@
+#!/usr/bin/env node
+/**
+ * agents-catalog.mjs — AD-1 catalog generator.
+ *
+ * Regenerates `agents/catalog.json` from every validated package under
+ * `agents/` (see agents-validate.mjs) and every `agents/teams/<team>/team.yaml`.
+ * Deterministic: sorted output, no timestamps, no wall-clock or network
+ * input — the same source tree always produces the same bytes.
+ *
+ * Usage:
+ *   node scripts/agents-catalog.mjs           # regenerate and write
+ *   node scripts/agents-catalog.mjs --check    # exit 1 if catalog.json is stale
+ */
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { runValidation } from "./agents-validate.mjs";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(__dirname, "..");
+const CATALOG_PATH = join(ROOT, "agents", "catalog.json");
+const CHECK = process.argv.includes("--check");
+
+function workspaceVersion() {
+  const text = readFileSync(join(ROOT, "Cargo.toml"), "utf8");
+  const wsIdx = text.indexOf("[workspace.package]");
+  if (wsIdx === -1) {
+    throw new Error("Cargo.toml has no [workspace.package] section");
+  }
+  const after = text.slice(wsIdx);
+  const m = /\nversion\s*=\s*"([^"]+)"/.exec(after);
+  if (!m) throw new Error("Cargo.toml [workspace.package] has no version");
+  return m[1];
+}
+
+function buildCatalog(results, teams) {
+  const agents = results
+    .map((r) => {
+      const pkg = r.pkg;
+      const description = r.agentFrontmatter?.description ?? r.topSkillFrontmatter?.description ?? null;
+      const role = r.agentFrontmatter?.role ?? null;
+      const nickname = r.agentFrontmatter?.nickname ?? pkg.nickname ?? null;
+      const skills = r.skillDirs.length > 0
+        ? r.skillDirs
+        : (r.topSkillFrontmatter?.name ? [r.topSkillFrontmatter.name] : []);
+      return {
+        id: r.id,
+        name: pkg.name ?? r.id,
+        nickname,
+        kind: pkg.kind ?? null,
+        role,
+        description,
+        trust_tier: pkg.trust_tier ?? null,
+        capabilities: Array.isArray(pkg.capabilities) ? pkg.capabilities : [],
+        hosts: ["claude", "grok", "codex"],
+        skills,
+        requires: Array.isArray(pkg.requires) ? pkg.requires : [],
+        provenance: pkg.provenance ?? {},
+        path: `agents/${r.path}`,
+      };
+    })
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  const teamEntries = teams
+    .map((t) => ({
+      id: t.id,
+      name: t.team.name ?? t.id,
+      lead: t.team.lead ?? null,
+      shared_skills: Array.isArray(t.team.shared_skills) ? t.team.shared_skills : [],
+      members: Array.isArray(t.team.members) ? t.team.members : [],
+      path: t.path,
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  return {
+    version: workspaceVersion(),
+    agents,
+    teams: teamEntries,
+  };
+}
+
+function serialize(catalog) {
+  return JSON.stringify(catalog, null, 2) + "\n";
+}
+
+function main() {
+  const { errorCount, results, teams } = runValidation();
+  if (errorCount > 0) {
+    console.error(`\nRefusing to generate agents/catalog.json: ${errorCount} package validation error(s). Run "node scripts/agents-validate.mjs" for details.`);
+    process.exit(1);
+  }
+
+  const catalog = buildCatalog(results, teams);
+  const next = serialize(catalog);
+
+  if (CHECK) {
+    const current = existsSync(CATALOG_PATH) ? readFileSync(CATALOG_PATH, "utf8") : null;
+    if (current === next) {
+      console.log(`agents/catalog.json is up to date (${catalog.agents.length} agent(s), ${catalog.teams.length} team(s)).`);
+      process.exit(0);
+    }
+    console.error("agents/catalog.json is stale — run: node scripts/agents-catalog.mjs");
+    if (current === null) {
+      console.error("  (file does not exist yet)");
+    }
+    process.exit(1);
+  }
+
+  writeFileSync(CATALOG_PATH, next);
+  console.log(`Wrote agents/catalog.json (${catalog.agents.length} agent(s), ${catalog.teams.length} team(s), version ${catalog.version}).`);
+}
+
+main();

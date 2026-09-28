@@ -34,6 +34,8 @@ CLEAN_STALE_DAYS=""
 TEST_PACKAGES=()
 # WEFT-460: optional gate step — cargo-dist host-triple rehearsal
 WITH_RELEASE_DRY_RUN=false
+# agents-catalog: verify agents/catalog.json is up to date instead of writing it
+AGENTS_CATALOG_CHECK=false
 COMMAND=""
 
 # ── Reporting helpers ────────────────────────────────────────────────
@@ -1167,6 +1169,53 @@ cmd_npm_audit() {
     return 0
 }
 
+# ── Agent Directory (AD-1/AD-2, WEFT agent-directory design) ───────────
+cmd_agents_validate() {
+    header "Validating agents/ packages (AD-1)"
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   node scripts/agents-validate.mjs\n"
+        timer_end
+        return 0
+    fi
+    node "$ROOT/scripts/agents-validate.mjs"
+    local rc=$?
+    timer_end
+    return $rc
+}
+
+cmd_agents_catalog() {
+    header "agents/catalog.json (AD-1)"
+    timer_start
+    local args=()
+    if [ "$AGENTS_CATALOG_CHECK" = true ]; then
+        args+=(--check)
+    fi
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   node scripts/agents-catalog.mjs %s\n" "${args[*]:-}"
+        timer_end
+        return 0
+    fi
+    node "$ROOT/scripts/agents-catalog.mjs" "${args[@]}"
+    local rc=$?
+    timer_end
+    return $rc
+}
+
+cmd_agents_leak_check() {
+    header "agents/ confidentiality leak check (AD-2)"
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   scripts/agents-leak-check.sh\n"
+        timer_end
+        return 0
+    fi
+    bash "$ROOT/scripts/agents-leak-check.sh"
+    local rc=$?
+    timer_end
+    return $rc
+}
+
 # ── Gate check 13 helper: clawft-kernel diskann + bench feature matrix ──
 check_kernel_diskann_and_bench_matrix() {
     # --tests included deliberately: cfg-gated test modules rot separately
@@ -1228,7 +1277,7 @@ cmd_pipeline_pass() {
 #
 # Usage:
 #   scripts/build.sh release-dry-run
-#   scripts/build.sh gate --with-release-dry-run   # optional gate step 17
+#   scripts/build.sh gate --with-release-dry-run   # optional gate step 20
 #   GATE_RELEASE_DRY_RUN=1 scripts/build.sh gate
 
 # Resolve the cargo-dist CLI binary (`dist` preferred; `cargo dist` fallback).
@@ -1417,9 +1466,9 @@ cmd_gate() {
     if [ "${GATE_RELEASE_DRY_RUN:-}" = "1" ] || [ "${GATE_RELEASE_DRY_RUN:-}" = "true" ]; then
         WITH_RELEASE_DRY_RUN=true
     fi
-    local total=16
+    local total=19
     if [ "$WITH_RELEASE_DRY_RUN" = true ]; then
-        total=17
+        total=20
     fi
     header "Phase Gate — ${total} checks"
     local passed=0 failed=0 skipped=0
@@ -1579,12 +1628,33 @@ cmd_gate() {
     run_gate_check 16 "pipeline pass (clawft-core test(pipeline))" \
         cmd_pipeline_pass_impl
 
-    # 17. WEFT-460 — optional cargo-dist host-triple release rehearsal.
+    # 17-19. Agent Directory (AD-1/AD-2, docs/research/agent-directory/design.md):
+    # every agents/<pkg>/weftos-package.yaml validates, agents/catalog.json is
+    # up to date (checked, never written by the gate), and agents/ carries no
+    # client-identifying content (the repo is public). Soft when node/npm is
+    # missing locally; CI always has both.
+    if command -v node >/dev/null 2>&1; then
+        run_gate_check 17 "agents/ package validation (AD-1)" \
+            node "$ROOT/scripts/agents-validate.mjs" --quiet
+        run_gate_check 18 "agents/catalog.json up to date (AD-1)" \
+            node "$ROOT/scripts/agents-catalog.mjs" --check
+    else
+        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 17 "$total" "agents/ package validation (AD-1)"
+        skip "node not installed"
+        skipped=$((skipped + 1))
+        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 18 "$total" "agents/catalog.json up to date (AD-1)"
+        skip "node not installed"
+        skipped=$((skipped + 1))
+    fi
+    run_gate_check 19 "agents/ confidentiality leak check (AD-2)" \
+        bash "$ROOT/scripts/agents-leak-check.sh"
+
+    # 20. WEFT-460 — optional cargo-dist host-triple release rehearsal.
     # Off by default (multi-minute LTO build). Enable with:
     #   scripts/build.sh gate --with-release-dry-run
     #   GATE_RELEASE_DRY_RUN=1 scripts/build.sh gate
     if [ "$WITH_RELEASE_DRY_RUN" = true ]; then
-        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 17 "$total" "release-dry-run (cargo-dist host triple)"
+        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 20 "$total" "release-dry-run (cargo-dist host triple)"
         timer_start
         if [ "$DRY_RUN" = true ]; then
             printf "  ${YELLOW}DRY${NC}   scripts/build.sh release-dry-run\n"
@@ -1674,11 +1744,26 @@ ${BOLD}Commands:${NC}
                   (WEFT-598). Fails on critical/high by default
                   (NPM_AUDIT_LEVEL=high). Set NPM_AUDIT_SOFT=1 to report only.
                   Residual moderates under ruflo pin: docs/security/npm-audit-residual.md
-  gate            Run full phase gate (16 checks, includes cargo audit +
+  agents-validate Validate every agents/<pkg>/weftos-package.yaml (AD-1: required
+                  files, AGENT.md/SKILL.md frontmatter, no per-package version
+                  field, requires/dependencies resolve, references/ links
+                  resolve, 300-line SKILL cap, skill-smell lint) and every
+                  agents/teams/<team>/team.yaml. Legacy agents/ content with no
+                  weftos-package.yaml is ignored by construction.
+                  See docs/research/agent-directory/design.md
+  agents-catalog  Regenerate agents/catalog.json from every validated package
+                  (deterministic, sorted; version = workspace Cargo.toml).
+                  Pass --check to verify it's up to date instead of writing it.
+  agents-leak-check
+                  Scan agents/ for client-identifying content (AD-2): client/org
+                  names, client paths, roster entries, credential shapes. The
+                  repo is public — see scripts/agents-leak-check.sh.
+  gate            Run full phase gate (19 checks, includes cargo audit +
                   npm audit critical/high / WEFT-598 +
-                  kernel WASM no-mesh / WEFT-114 + pipeline pass / WEFT-56).
+                  kernel WASM no-mesh / WEFT-114 + pipeline pass / WEFT-56 +
+                  agents/ validate + catalog + leak-check / AD-1 + AD-2).
                   Pass --with-release-dry-run (or GATE_RELEASE_DRY_RUN=1)
-                  to add optional check 17: cargo-dist host-triple rehearsal.
+                  to add optional check 20: cargo-dist host-triple rehearsal.
   pipeline-pass   Fast clawft-core pipeline regression
                   (nextest -E 'test(pipeline)'; typically <5s). Also gate #15.
   release-dry-run Rehearse the cargo-dist release for the host triple only
@@ -1714,8 +1799,10 @@ ${BOLD}Options:${NC}
   --prefix <dir>  Install into <dir> instead of ~/.cargo/bin (install command)
   --days <n>      Age threshold in days (clean-stale command, default 7)
   --with-release-dry-run
-                  (gate only) Also run release-dry-run as check 17 (WEFT-460).
+                  (gate only) Also run release-dry-run as check 20 (WEFT-460).
                   Equivalent env: GATE_RELEASE_DRY_RUN=1
+  --check         (agents-catalog command only) Verify agents/catalog.json is
+                  up to date instead of writing it; exits non-zero if stale.
   --verbose       Show full cargo output
   --dry-run       Print commands without executing
   --help          Show this help
@@ -1823,6 +1910,10 @@ parse_args() {
                 WITH_RELEASE_DRY_RUN=true
                 shift
                 ;;
+            --check)
+                AGENTS_CATALOG_CHECK=true
+                shift
+                ;;
             --verbose)
                 VERBOSE=true
                 shift
@@ -1868,6 +1959,9 @@ main() {
         clippy)       cmd_clippy ;;
         audit)        cmd_audit ;;
         npm-audit)    cmd_npm_audit ;;
+        agents-validate)    cmd_agents_validate ;;
+        agents-catalog)     cmd_agents_catalog ;;
+        agents-leak-check)  cmd_agents_leak_check ;;
         gate)         cmd_gate ;;
         pipeline-pass) cmd_pipeline_pass ;;
         release-dry-run) cmd_release_dry_run ;;
