@@ -12,6 +12,7 @@
 //! - [`policies`] -- Security policy configurations (command execution, URL safety)
 
 pub mod adaptive_silence;
+pub mod chain_paths;
 pub mod channels;
 pub mod kernel;
 pub mod local_llm;

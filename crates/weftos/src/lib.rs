@@ -290,7 +290,21 @@ mod tests {
 
     #[tokio::test]
     async fn weftos_boots_and_reports_state() {
-        let os = WeftOs::boot_default().await.unwrap();
+        // Same defaults as `boot_default`, but the chain lives in a temp
+        // dir: shutdown persists the chain and must never touch ~/.clawft.
+        let chain_dir =
+            std::env::temp_dir().join(format!("weftos-lib-test-chain-{}", std::process::id()));
+        let kernel_config = clawft_types::config::KernelConfig {
+            chain: Some(clawft_types::config::ChainConfig::isolated_in(&chain_dir)),
+            ..clawft_types::config::KernelConfig::default()
+        };
+        let os = WeftOs::boot_with(
+            clawft_types::config::Config::default(),
+            kernel_config,
+            std::env::current_dir().unwrap(),
+        )
+        .await
+        .unwrap();
         assert!(matches!(os.state(), KernelState::Running));
         assert!(os.service_count() > 0);
         os.shutdown().await.unwrap();

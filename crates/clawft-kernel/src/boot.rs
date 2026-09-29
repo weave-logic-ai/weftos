@@ -188,17 +188,27 @@ impl<P: Platform> Kernel<P> {
     /// to initialize.
     pub async fn boot(
         config: Config,
-        kernel_config: KernelConfig,
+        mut kernel_config: KernelConfig,
         platform: Arc<P>,
     ) -> KernelResult<Self> {
         let boot_time = Instant::now();
         let mut boot_log = BootLog::new();
+        // Resolve the chain location once (explicit config, else
+        // $WEFTOS_RUNTIME_DIR, else ~/.clawft) so restore, verify and
+        // shutdown persistence all use the same, possibly isolated, files.
+        let pinned_chain = crate::chain_storage::pin_chain_storage(&mut kernel_config);
 
         info!("WeftOS kernel booting");
         boot_log.push(BootEvent::info(
             BootPhase::Init,
             format!("WeftOS v{} booting...", env!("CARGO_PKG_VERSION")),
         ));
+        if let Some(ref p) = pinned_chain {
+            boot_log.push(BootEvent::info(
+                BootPhase::Init,
+                format!("Chain storage: {}", p.display()),
+            ));
+        }
         boot_log.push(BootEvent::info(BootPhase::Init, "PID 0 (kernel)"));
         // WEFT-70: surface macOS / non-Linux OS-sandbox downgrade in boot
         // log (banner also prints this via console::boot_banner).
@@ -2811,8 +2821,9 @@ mod tests {
 
     // ── Full-stack integration helpers ─────────────────────────────
 
-    /// Kernel config with exochain + resource tree enabled (no checkpoint
-    /// path so everything stays in-memory).
+    /// Kernel config with exochain + resource tree enabled. No explicit
+    /// checkpoint path: `chain_storage` pins a fresh temp dir per boot in
+    /// unit tests, so the operator chain is never touched.
     #[cfg(all(feature = "exochain", feature = "ecc", feature = "wasm-sandbox"))]
     fn test_kernel_config_full_stack() -> KernelConfig {
         use clawft_types::config::{ChainConfig, ResourceTreeConfig};

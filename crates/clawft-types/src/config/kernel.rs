@@ -987,7 +987,8 @@ pub struct ChainConfig {
     pub chain_id: u32,
 
     /// Path to the chain checkpoint file for persistence across restarts.
-    /// If `None`, defaults to `~/.clawft/chain/local.json`.
+    /// If `None`, defaults to `$WEFTOS_RUNTIME_DIR/chain.json` when that
+    /// variable is set, else `~/.clawft/chain.json`.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -1122,19 +1123,21 @@ impl Default for ChainExternalAnchorConfig {
 
 impl ChainExternalAnchorConfig {
     /// Effective ledger path, expanding a missing path to the default location.
+    ///
+    /// Precedence: explicit `ledger_path`, then `$WEFTOS_RUNTIME_DIR/chain/`,
+    /// then `~/.clawft/chain/` (see [`super::chain_paths`]).
     pub fn effective_ledger_path(&self) -> Option<String> {
         if let Some(ref p) = self.ledger_path {
             return Some(p.clone());
         }
         #[cfg(feature = "native")]
         {
-            dirs::home_dir().map(|h| {
-                h.join(".clawft")
-                    .join("chain")
-                    .join("anchors.jsonl")
-                    .to_string_lossy()
-                    .into_owned()
-            })
+            super::chain_paths::resolve_anchor_ledger_path(
+                None,
+                super::chain_paths::runtime_dir_from_env().as_deref(),
+                dirs::home_dir().as_deref(),
+            )
+            .map(|p| p.to_string_lossy().into_owned())
         }
         #[cfg(not(feature = "native"))]
         {
@@ -1144,22 +1147,40 @@ impl ChainExternalAnchorConfig {
 }
 
 impl ChainConfig {
+    /// A default chain config whose checkpoint (and therefore RVF, signing
+    /// key and tree checkpoint) lives under `dir`. For tests, probes and
+    /// demos that must never touch the operator chain.
+    pub fn isolated_in(dir: &std::path::Path) -> Self {
+        Self {
+            checkpoint_path: Some(
+                dir.join(super::chain_paths::CHAIN_CHECKPOINT_FILE)
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            ..Self::default()
+        }
+    }
+
     /// Returns the effective checkpoint path.
     ///
-    /// If `checkpoint_path` is set, returns it. Otherwise falls back to
-    /// `~/.clawft/chain.json` (requires the `native` feature for `dirs`).
+    /// If `checkpoint_path` is set, returns it. Otherwise, when
+    /// `WEFTOS_RUNTIME_DIR` is set, returns `$WEFTOS_RUNTIME_DIR/chain.json`
+    /// so probe/demo/test daemons keep their own isolated chain; failing
+    /// that, `~/.clawft/chain.json` (requires the `native` feature for
+    /// `dirs`). The RVF file, signing key and tree checkpoint are derived
+    /// from this path by extension. See [`super::chain_paths`].
     pub fn effective_checkpoint_path(&self) -> Option<String> {
         if self.checkpoint_path.is_some() {
             return self.checkpoint_path.clone();
         }
         #[cfg(feature = "native")]
         {
-            dirs::home_dir().map(|h| {
-                h.join(".clawft")
-                    .join("chain.json")
-                    .to_string_lossy()
-                    .into_owned()
-            })
+            super::chain_paths::resolve_checkpoint_path(
+                None,
+                super::chain_paths::runtime_dir_from_env().as_deref(),
+                dirs::home_dir().as_deref(),
+            )
+            .map(|p| p.to_string_lossy().into_owned())
         }
         #[cfg(not(feature = "native"))]
         {

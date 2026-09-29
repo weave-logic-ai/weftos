@@ -37,7 +37,10 @@ fn minimal_kernel_config() -> KernelConfig {
         max_processes: 64,
         health_check_interval_secs: 5,
         cluster: None,
-        chain: None,
+        // Never the operator chain under ~/.clawft (isolated per boot).
+        chain: Some(clawft_types::config::ChainConfig::isolated_in(
+            &tempfile::tempdir().unwrap().keep(),
+        )),
         resource_tree: None,
         vector: None,
         spatial: None,
@@ -64,7 +67,10 @@ fn exochain_kernel_config() -> KernelConfig {
             enabled: true,
             checkpoint_interval: 10_000,
             chain_id: 0,
-            checkpoint_path: None,
+            // Isolated per boot: never the operator chain under ~/.clawft.
+            checkpoint_path: Some(
+                tempfile::tempdir().unwrap().keep().join("chain.json").to_string_lossy().into_owned(),
+            ),
             external_anchor: None,
         }),
         resource_tree: Some(ResourceTreeConfig {
