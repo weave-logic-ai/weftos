@@ -50,5 +50,5 @@ pub use store::{StoredPackage, store_package, verify_stored};
 pub use trust::{KeyOrigin, PinnedKey, TrustAnchors, TrustFile};
 pub use verify::{
     AcceptedSigner, DirSource, FileSource, VerifiedPackage, VerifyError, VerifyPolicy, verify_dir,
-    verify_with_source,
+    verify_manifest_signatures, verify_with_source,
 };

@@ -496,6 +496,17 @@ pub const EVENT_KIND_WORKLOAD_REVOKE: &str = "workload.revoke";
 /// Fleet identity bound to a mesh node.
 pub const EVENT_KIND_WORKLOAD_NODE_BIND: &str = "workload.node.bind";
 
+// ── Artifact transfer outcomes (ADR-099 section 6, mesh-placement-11) ──
+//
+// Outcomes only: individual piece transfers are never chained.
+
+/// A completed or failed artifact fetch (`result` = verified | failed).
+pub const EVENT_KIND_ARTIFACT_FETCH: &str = "artifact.fetch";
+/// A piece whose hash did not match, and the peer that sent it.
+pub const EVENT_KIND_ARTIFACT_PIECE_REJECTED: &str = "artifact.piece_rejected";
+/// First time an artifact is served to a given peer.
+pub const EVENT_KIND_ARTIFACT_SERVE: &str = "artifact.serve";
+
 /// Cron job added event.
 pub const EVENT_KIND_CRON_ADD: &str = "cron.add";
 

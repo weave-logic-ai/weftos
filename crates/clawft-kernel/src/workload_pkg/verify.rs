@@ -208,9 +208,7 @@ pub fn verify_with_source(
     anchors: &TrustAnchors,
     policy: &VerifyPolicy,
 ) -> Result<VerifiedPackage, VerifyError> {
-    let envelope = ManifestEnvelope::from_bytes(manifest)?;
-    let body = envelope.cog_body()?;
-    let mut signers = check_signatures(&envelope, anchors)?;
+    let (envelope, body, mut signers) = parse_and_check(manifest, anchors)?;
 
     if signers.is_empty()
         && policy.accept_cognitum_release
@@ -219,18 +217,7 @@ pub fn verify_with_source(
         signers.push(signer);
     }
     if signers.is_empty() {
-        return Err(if envelope.signatures.is_empty() {
-            VerifyError::MissingSignature
-        } else {
-            let key_ids: Vec<&str> = envelope
-                .signatures
-                .iter()
-                .map(|s| s.key_id.as_str())
-                .collect();
-            VerifyError::UntrustedSigner {
-                key_ids: key_ids.join(","),
-            }
-        });
+        return Err(no_signer_error(&envelope));
     }
 
     for file in body.files() {
@@ -242,6 +229,54 @@ pub fn verify_with_source(
         body,
         signers,
     })
+}
+
+/// Verify the manifest envelope and its signatures without reading any
+/// listed file (mesh-placement-11).
+///
+/// Used where file content is proven some other way: the artifact
+/// exchange checks every file's size and BLAKE3 while streaming it, so a
+/// multi-GB payload never has to sit in memory. Only pinned Ed25519
+/// signers count here; the Cognitum release-record path needs a binary
+/// and is only available through [`verify_with_source`].
+pub fn verify_manifest_signatures(
+    manifest: &[u8],
+    anchors: &TrustAnchors,
+) -> Result<VerifiedPackage, VerifyError> {
+    let (envelope, body, signers) = parse_and_check(manifest, anchors)?;
+    if signers.is_empty() {
+        return Err(no_signer_error(&envelope));
+    }
+    Ok(VerifiedPackage {
+        package_id: envelope.package_id()?,
+        envelope,
+        body,
+        signers,
+    })
+}
+
+type Checked = (ManifestEnvelope, CogPackageBody, Vec<AcceptedSigner>);
+
+fn parse_and_check(manifest: &[u8], anchors: &TrustAnchors) -> Result<Checked, VerifyError> {
+    let envelope = ManifestEnvelope::from_bytes(manifest)?;
+    let body = envelope.cog_body()?;
+    let signers = check_signatures(&envelope, anchors)?;
+    Ok((envelope, body, signers))
+}
+
+fn no_signer_error(envelope: &ManifestEnvelope) -> VerifyError {
+    if envelope.signatures.is_empty() {
+        VerifyError::MissingSignature
+    } else {
+        let key_ids: Vec<&str> = envelope
+            .signatures
+            .iter()
+            .map(|s| s.key_id.as_str())
+            .collect();
+        VerifyError::UntrustedSigner {
+            key_ids: key_ids.join(","),
+        }
+    }
 }
 
 /// Check one file's size and hash.

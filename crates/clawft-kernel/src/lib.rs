@@ -274,8 +274,25 @@ pub mod tree_view;
 pub mod mesh;
 #[cfg(feature = "mesh")]
 pub mod mesh_clock;
-#[cfg(feature = "mesh")]
+// mesh-placement-11: swarm-ready artifact piece protocol (ADR-099 section 6).
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
 pub mod mesh_artifact;
+#[cfg(all(test, feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+mod mesh_artifact_large_tests;
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod mesh_artifact_peers;
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod mesh_artifact_pkg;
+#[cfg(all(test, feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+mod mesh_artifact_tests;
+#[cfg(all(test, feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+mod mesh_artifact_rogue_tests;
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod mesh_artifact_transfer;
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod mesh_artifact_types;
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub mod mesh_artifact_wire;
 #[cfg(feature = "mesh")]
 pub mod mesh_assess;
 #[cfg(feature = "mesh")]
@@ -522,9 +539,17 @@ pub use mesh::{
 };
 #[cfg(feature = "mesh")]
 pub use mesh_clock::{Clock, MockClock, MonoTime, RealClock};
-#[cfg(feature = "mesh")]
-pub use mesh_artifact::{
-    ArtifactAnnouncement, ArtifactExchange, ArtifactRequest, ArtifactResponse,
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub use mesh_artifact::{ArtifactExchange, ExchangeConfig, ExchangeError};
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub use mesh_artifact_pkg::{ExchangedPackage, PackageExchangeError};
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub use mesh_artifact_transfer::{
+    FetchError, FetchOutcome, PeerLink, PeerSet, PieceScheduler, SequentialScheduler, ServeStats,
+};
+#[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+pub use mesh_artifact_wire::{
+    ArtifactDescriptor, ArtifactId, ArtifactKey, ArtifactMsg, Bitfield, WireError,
 };
 #[cfg(feature = "mesh")]
 pub use mesh_assess::{AssessmentEnvelope, AssessmentTransport};
