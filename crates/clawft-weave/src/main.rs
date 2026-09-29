@@ -50,6 +50,9 @@ enum Commands {
     /// Application management (install, start, stop, list).
     App(commands::app_cmd::AppArgs),
 
+    /// Governed workloads placed across the mesh (ADR-099).
+    Workload(commands::workload_cmd::WorkloadArgs),
+
     /// Cluster management (nodes, shards, health).
     Cluster(commands::cluster_cmd::ClusterArgs),
 
@@ -105,13 +108,6 @@ enum Commands {
         cmd: Option<commands::update_cmd::UpdateCmd>,
     },
 
-    /// Workload packages: pack, verify, keygen (mesh-placement-07).
-    #[cfg(all(feature = "ecc", feature = "exochain"))]
-    Workload {
-        #[command(subcommand)]
-        cmd: commands::workload_pack::WorkloadPackCmd,
-    },
-
     /// Show version and build info.
     Version,
 }
@@ -152,6 +148,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Kernel(args) => commands::kernel_cmd::run(args).await?,
         Commands::Agent(args) => commands::agent_cmd::run(args).await?,
         Commands::App(args) => commands::app_cmd::run(args).await?,
+        Commands::Workload(args) => commands::workload_cmd::run(args).await?,
         Commands::Cluster(args) => commands::cluster_cmd::run(args).await?,
         Commands::Chain(args) => commands::chain_cmd::run(args).await?,
         Commands::Custody(args) => commands::custody_cmd::run(args).await?,
@@ -172,8 +169,6 @@ async fn main() -> anyhow::Result<()> {
             None => commands::update_cmd::run_default().await?,
         },
         Commands::Init(args) => commands::init_cmd::run(args).await?,
-        #[cfg(all(feature = "ecc", feature = "exochain"))]
-        Commands::Workload { cmd } => commands::workload_pack::run(cmd)?,
         Commands::Version => {
             println!(
                 "weaver {} (WeftOS) · git {} · built {}",

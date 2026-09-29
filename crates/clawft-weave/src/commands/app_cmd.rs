@@ -49,7 +49,10 @@ pub async fn run(args: AppArgs) -> anyhow::Result<()> {
 
     match args.command {
         AppCommand::Install { path } => {
-            let params = serde_json::json!({"path": path});
+            // The daemon's cwd is not ours: send an absolute path.
+            let path = std::fs::canonicalize(&path)
+                .map_err(|e| anyhow::anyhow!("cannot resolve {path}: {e}"))?;
+            let params = serde_json::json!({"path": path.to_string_lossy()});
             let resp = client
                 .call(Request::with_params("app.install", params))
                 .await?;

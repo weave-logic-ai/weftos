@@ -968,6 +968,9 @@ pub async fn run(
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let daemon_identity = crate::node_identity::load_or_generate(&runtime_dir)
         .map_err(|e| anyhow::anyhow!("daemon identity bootstrap: {e}"))?;
+    // mesh-placement-06: persisted node-local workload catalog.
+    #[cfg(feature = "exochain")]
+    crate::workload_rpc::init_registry(&runtime_dir.join("workloads.json"));
     {
         let k = kernel.read().await;
         let pubkey: [u8; 32] = daemon_identity.signing_key.verifying_key().to_bytes();
@@ -8361,6 +8364,15 @@ async fn dispatch(
                 Ok(()) => Response::success(serde_json::json!({ "reset": true })),
                 Err(e) => Response::error(format!("failed to reset config: {e}")),
             }
+        }
+
+        // mesh-placement-06 / ADR-099: `weaver app` and `workload.*` families.
+        m if m.starts_with("app.") => crate::app_rpc::dispatch(m, params, kernel).await,
+        #[cfg(feature = "exochain")]
+        m if m.starts_with("workload.") => crate::workload_rpc::dispatch(m, params, kernel).await,
+        #[cfg(not(feature = "exochain"))]
+        m if m.starts_with("workload.") => {
+            Response::error(format!("{m} requires the exochain governance feature"))
         }
 
         other => Response::error(format!("unknown method: {other}")),

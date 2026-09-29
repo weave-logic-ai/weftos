@@ -21,6 +21,7 @@ pub mod soul_cmd;
 pub mod topology_cmd;
 pub mod update_cmd;
 pub mod vault_cmd;
+pub mod workload_cmd;
 #[cfg(all(feature = "ecc", feature = "exochain"))]
 pub mod workload_pack;
 

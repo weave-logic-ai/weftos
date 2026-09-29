@@ -1022,6 +1022,18 @@ impl AppManifest {
         validate_manifest(&manifest)?;
         Ok(manifest)
     }
+
+    /// Parse an [`AppManifest`] from a `weftapp.toml` string.
+    ///
+    /// Same validation as [`Self::from_json_str`]; parse errors are
+    /// returned as [`AppError::ManifestInvalid`].
+    pub fn from_toml_str(src: &str) -> Result<Self, AppError> {
+        let manifest: AppManifest = toml::from_str(src).map_err(|e| AppError::ManifestInvalid {
+            reason: format!("TOML parse error: {e}"),
+        })?;
+        validate_manifest(&manifest)?;
+        Ok(manifest)
+    }
 }
 
 #[cfg(test)]
@@ -1094,6 +1106,20 @@ mod tests {
         assert_eq!(restored.agents.len(), 2);
         assert_eq!(restored.tools.len(), 1);
         assert_eq!(restored.services.len(), 1);
+    }
+
+    #[test]
+    fn manifest_from_toml_str_parses_and_validates() {
+        let src = "name = \"toml-app\"\nversion = \"0.2.0\"\n\n[[agents]]\nid = \"worker\"\n";
+        let manifest = AppManifest::from_toml_str(src).unwrap();
+        assert_eq!(manifest.name, "toml-app");
+        assert_eq!(manifest.agents.len(), 1);
+        assert_eq!(manifest.agents[0].id, "worker");
+
+        let bad = AppManifest::from_toml_str("name = \"x\"").unwrap_err();
+        assert!(matches!(bad, AppError::ManifestInvalid { .. }), "{bad}");
+        let invalid = AppManifest::from_toml_str("name = \"\"\nversion = \"1\"").unwrap_err();
+        assert!(matches!(invalid, AppError::ManifestInvalid { .. }), "{invalid}");
     }
 
     #[test]
