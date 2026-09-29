@@ -138,7 +138,20 @@ Accelerator job kinds and the TPU / TSU / NPU adapters are **deferred until the 
 
 ### 6. Artifacts and large payloads
 
-- The manifest lists `{path, size, blake3, shard_index}`; large files are split into fixed-size chunks (proposal 64 MiB) with a chunk-hash list. Transfer is chunked, resumable, and size-limited; `ArtifactExchange` is finished for this (it is the piece that today is scaffolding).
+- The manifest lists `{path, size, blake3, shard_index}`. Large files are split into fixed-size pieces (proposal 64 MiB) with a piece-hash list.
+- **Swarm distribution (decided 2026-09-29).** Artifacts spread across the mesh the way a torrent does, though it doesn't have to be BitTorrent itself. The design has three parts:
+  - **Identity.** An artifact is identified by its content (the root hash over the piece list), not by the node it came from. Any node that holds verified pieces can serve them.
+  - **Exchange.** Nodes announce what they hold with a `have` bitfield, request individual pieces, and verify each piece's hash before accepting it. A node that finishes a download becomes a seeder.
+  - **Swarm behaviour.** Nodes fetch different pieces from several peers at once, prefer the rarest pieces, and choose peers by locality and measured link speed (NodeFacts). A seeder dropping out mid-transfer only means re-requesting its pieces from another peer.
+- **The work is split across two cards.** Card 11 builds the simple node-to-node version, on the swarm-ready protocol above. It is content-addressed and piece-based, resumes from the `have` bitfield, and can fetch from any holder, not only the node the artifact came from. Card 25 extends it:
+  - multi-source parallel fetch and rarest-first;
+  - seeding, and reseeding after a fetch;
+  - a cache with pinning and eviction policy, advertising held artifacts as capabilities;
+  - bandwidth limits;
+  - reliability when seeders drop out.
+
+  `ArtifactExchange` is finished on this basis (today it is scaffolding).
+- **Governance of distribution.** Only artifacts whose signed manifest verifies may be seeded or cached. Revocation of a package id, signer or artifact hash stops seeding it and evicts it from caches everywhere, and every seed, evict and revoke action is chained.
 - **Adopt in place**: a node may hash existing local files (for example an HF cache or Ollama blob store) and register them as artifacts without copying, so 20 GB of weights already on a node is never re-shipped. Adoption is recorded and the file is re-hashed lazily on use.
 - **Locality-aware fetch**: nodes advertise `model.present` (shard hashes held) and `store.tier.*` (with `mounted`). The placer prefers a node that already holds the payload; if none does, it chooses between fetching from a peer and placing where the bytes are, using size versus link estimate, and records the choice.
 - Signatures cover the manifest (hashes of everything), not the bytes; verification checks each shard hash on arrival or on adoption.

@@ -52,8 +52,22 @@ Source ADRs: `docs/adr/adr-099-governed-workload-placement.md`, `cog-001-cog-wor
 - Description: Node-local bridge implementing `POST /api/v1/store/ingest` (`{"vectors":[[id,[8 floats]]],"dedup":true}`): validate, rate-limit, per-instance tokens, forward as signed `MeshIpcEnvelope`s to the store owner, stdout JSON as evidence only; optional UDP forwarder into containers. Depends on: 09. Acceptance: fake feed to cog to bridge to store shows vectors and dedup; malformed and oversize rejected; a cog cannot reach anything else per the adapter network policy. Completion: vectors queryable in the WeftOS store from a different node than the one running the cog. Source: COG-001 section 4; mesh_ipc.rs:40-100,224.
 - Deps: 09
 
-### mesh-placement-11: Chunked large-artifact transfer over the mesh
-- Description: Finish `ArtifactExchange` (`mesh_artifact.rs:63`): wire to `ArtifactStore` and mesh listener for frames 0x0B/0x0C, chunked resumable streaming with chunk size limits (64 MiB chunk placeholder; no hard total-size ceiling in v1), announcements, per-chunk and per-file hash verification before write, and support for multi-GB payloads. Depends on: 07. Acceptance: node fetches a 10 MB package and a synthetic multi-GB file; corrupted chunk, oversize and mid-transfer disconnect handled; test over the in-tree mesh test support. Completion: two-node test where B fetches a signed package from A by hash, and a resumed large-file transfer. Source: ADR-099 section 6; mesh_artifact.rs:58-62; mesh_framing.rs:51-54.
+### mesh-placement-11: Swarm-ready artifact transfer, node to node (v1)
+- Description: Finish `ArtifactExchange` (`mesh_artifact.rs:63`) with a swarm-ready, content-addressed piece protocol. This is the v1 single-source version of the torrent-style distribution in ADR-099 section 6 (decided 2026-09-29).
+  - **Identity.** An artifact's id is the root hash over its ordered piece list, with fixed-size pieces (64 MiB placeholder) and a BLAKE3 hash per piece.
+  - **Frames.** Frames 0x0B and 0x0C carry `announce(have: artifact id + piece bitfield)`, `request(artifact id, piece indexes)` and `piece(data)`. Every piece's hash is checked before it is written to `ArtifactStore`, and the whole file's hash is checked at the end.
+  - **Resume and serving.** Resume works from the local `have` bitfield. Any node holding verified pieces can serve them, not only the node the artifact came from. The protocol keeps room for card 25's multi-source fetch (a peer list, and piece requests spread across peers), but v1 fetches from one peer at a time.
+  - **Sizes.** There's a per-frame size cap and no hard total-size ceiling in v1. It supports multi-GB payloads.
+  - **Governance.** Only artifacts whose signed manifest verifies (wave-1 `workload_pkg`) are served.
+
+  Depends on: 07. Acceptance, each tested over the in-tree mesh test support:
+  - a node fetches a 10 MB package and a synthetic multi-GB file;
+  - a corrupted piece is rejected and requested again;
+  - an oversize frame is refused;
+  - a transfer interrupted mid-way resumes from the bitfield without fetching verified pieces again;
+  - after A→B, node C fetches the artifact from B, which is not the origin.
+
+  Completion: a two-node test in which B fetches a signed package from A by hash; a resumed large-file transfer; and a three-node fetch from a non-origin holder. Multi-GB tests stay off the default test run. Source: ADR-099 section 6; mesh_artifact.rs:58-62; mesh_framing.rs:51-54.
 - Deps: 07
 
 ### mesh-placement-12: Placement control plane and weaver workload CLI
@@ -104,6 +118,27 @@ Source ADRs: `docs/adr/adr-099-governed-workload-placement.md`, `cog-001-cog-wor
 - Description: Goal A. A `remote.api` inventory adapter that calls the Cognitum cloud MCP (`POST https://api.cognitum.one/v1/mcp`, OAuth, read scope only) `fleet_status` tool. It lists cloud-registered Seeds as candidate nodes for card 22 binding, and never places or configures anything through the cloud. Capture and commit the real `fleet_status` output schema first; the user's account is signed in on the Seed, and the OAuth MCP server is set up in Claude. Depends on: 22. Acceptance: candidates list device id, firmware and online state; zero write or mutating MCP calls, enforced by a test that fails on any non-read tool; the OAuth token is held in the secret store and never logged or chained; for the paired Seed, the key from local pairing matches the key from the cloud inventory, or the mismatch is refused and chained. Completion: the candidate list matches the paired Seed seen via its local API, with a chain export of the inventory read. Source: docs/research/mesh-placement/fleet-compat.md sections 1b, 2(b2), 3.
 - Deps: 22
 
+### mesh-placement-25: Swarm artifact distribution: multi-source fetch, seeding, caching
+- Description: Goal A (it also feeds C: model weights). This extends card 11's swarm-ready protocol into torrent-style distribution across the mesh (ADR-099 section 6, decided 2026-09-29).
+  - **Swarm fetch.** Nodes fetch different pieces from several seeders at once, prefer the rarest pieces, and choose peers by locality and measured link speed from NodeFacts (card 03).
+  - **Seeding.** A node that completes a verified download becomes a seeder automatically. Nodes announce what they hold, and a lightweight "who has this artifact" lookup over the mesh (no central tracker) finds holders.
+  - **Caching.** A cache has pinned and evictable entries (LRU or size policy) and advertises held artifacts as capabilities (`model.present`, `store.artifact.*`) so the placer can prefer nodes that already have the bytes.
+  - **Bandwidth.** Per-node upload and download limits.
+  - **Reliability.** When a seeder drops out or a piece arrives corrupted, its pieces are requested from another peer, and a peer that serves bad pieces is banned.
+  - **Governance.** Only artifacts whose signed manifest verifies may be seeded or cached. Revoking a package id, signer or artifact hash stops seeding and evicts the artifact from caches everywhere, and every seed, evict and revoke action is chained.
+
+  Depends on: 11, 03, 05. Acceptance:
+  - three or more seeders serve one fetch in parallel, faster than a single source (measured);
+  - killing a seeder mid-transfer doesn't fail the fetch;
+  - a node that finished fetching serves pieces to a fourth node;
+  - a corrupt piece gets its sender banned and is fetched again elsewhere;
+  - the cache evicts per policy and never evicts a pinned entry;
+  - revocation evicts the artifact and stops seeding, with a chained event;
+  - bandwidth caps are enforced.
+
+  Completion: a four-node in-process swarm test suite, green, plus a documented throughput measurement comparing one source with several. Source: ADR-099 section 6; card 11.
+- Deps: 11, 03, 05
+
 ## Board-ready create commands (do not run; for the steward)
 
-Each is `node scripts/dashboard-board.mjs create <key> "<title>" "<description>" [url]` using the title and description above verbatim; keys are `mesh-placement-01` through `mesh-placement-23` (22 and 23 added 2026-09-29 from fleet-compat.md; the proposed 24 was dropped). Card 21 should be created in a deferred/backlog state (`move` after create).
+Each is `node scripts/dashboard-board.mjs create <key> "<title>" "<description>" [url]` using the title and description above verbatim; keys are `mesh-placement-01` through `mesh-placement-23`, plus `mesh-placement-25`. Cards 22 and 23 were added on 2026-09-29 from fleet-compat.md. The proposed card 24 was dropped, and its number is left unused so it stays distinct from the ruOS proposal. Card 25 (swarm distribution) was added on 2026-09-29. Card 21 should be created in a deferred/backlog state (`move` after create).
