@@ -279,6 +279,8 @@ pub mod mesh_artifact_peers;
 pub mod mesh_artifact_pkg;
 #[cfg(all(test, feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
 mod mesh_artifact_tests;
+#[cfg(all(test, feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
+mod mesh_artifact_rogue_tests;
 #[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
 pub mod mesh_artifact_transfer;
 #[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]

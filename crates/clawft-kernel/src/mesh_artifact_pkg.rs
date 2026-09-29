@@ -11,7 +11,9 @@
 //!   manifest by content hash, checks its signatures before fetching any
 //!   file, fetches each file by its pinned hash (piece checks plus a
 //!   whole-content check). Once the manifest verifies, this node may serve
-//!   the pieces it holds, even before the package is complete.
+//!   each listed file that it holds verified (pieces assembled to the
+//!   pinned hash here); a peer's descriptor alone never makes content
+//!   servable.
 
 use std::fs::File;
 use std::io::Read;
@@ -126,7 +128,8 @@ impl ArtifactExchange {
 
     /// Fetch a signed package by its manifest hash. Signatures are checked
     /// before any file is requested; each file must match its pinned size
-    /// and hash. Once the manifest verifies, this node may serve what it holds.
+    /// and hash. Once the manifest verifies, this node may serve the listed
+    /// files it holds verified.
     pub async fn fetch_package(
         &self,
         peers: &mut PeerSet,
@@ -143,7 +146,7 @@ impl ArtifactExchange {
         let manifest = self.read_all(&m.id)?;
         let verified = verify_manifest_signatures(&manifest, anchors)?;
         // The manifest verified: its pinned content may be served from here
-        // on, including pieces held before the package is complete.
+        // on, once each file is verified on this node.
         let grant = self.authorize(verified.clone(), mh, Vec::new());
 
         let mut files = Vec::new();

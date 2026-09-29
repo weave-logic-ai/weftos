@@ -14,8 +14,11 @@
 //!
 //! Every piece is hash-checked before it reaches `ArtifactStore`; a bad
 //! piece is chained (`artifact.piece_rejected`) and requested again. When
-//! all pieces are held the whole-content hash is checked, then the fetch
-//! outcome is chained (`artifact.fetch`).
+//! all pieces are held the whole-content hash is checked. A peer whose
+//! descriptor fails that check lied about the content: its descriptor and
+//! unshared pieces are discarded, the peer is dropped and the next peer is
+//! tried. The fetch outcome is chained once (`artifact.fetch`), listing any
+//! rejected descriptors.
 //!
 //! v1 fetches from one peer at a time, walking a [`PeerSet`] in order.
 //! Card 25 plugs a multi-source [`PieceScheduler`] and parallel peers into
@@ -52,6 +55,11 @@ struct Progress {
     bytes: u64,
     rejected: u32,
     sources: Vec<String>,
+    /// Descriptor of the attempt in flight (pending until verified).
+    current: Option<ArtifactDescriptor>,
+    /// `(peer, artifact id, reason)` for descriptors that failed the
+    /// whole-content check.
+    bad_descriptors: Vec<(String, String, String)>,
 }
 
 async fn send(stream: &mut dyn MeshStream, msg: &ArtifactMsg) -> Result<(), PeerError> {
@@ -175,9 +183,11 @@ impl ArtifactExchange {
     }
 
     /// Fetch `key`, trying each live peer in turn until every piece is
-    /// held and verified. Pieces already held are never requested, so a
-    /// repeated call resumes an interrupted transfer. The outcome
-    /// (verified or failed) is chained as `artifact.fetch`.
+    /// held and the whole content verifies. Pieces already held are never
+    /// requested, so a repeated call resumes an interrupted transfer. A
+    /// peer whose pieces do not assemble to its declared content is dropped
+    /// and its descriptor discarded. The outcome (verified or failed) is
+    /// chained as `artifact.fetch`.
     pub async fn fetch_with(
         &self,
         peers: &mut PeerSet,
@@ -187,43 +197,63 @@ impl ArtifactExchange {
         let mut progress = Progress::default();
         let mut last_error = String::from("no peers");
         let mut last_peer = String::new();
+        let mut verify_failed = false;
+        let mut done = self.resolve(&key).filter(|d| self.is_complete(d));
         for link in peers.links.iter_mut().filter(|l| !l.dead) {
-            if self.resolve(&key).is_some_and(|d| self.is_complete(&d)) {
+            if done.is_some() {
                 break;
             }
             last_peer = link.peer_id.clone();
-            if let Err(e) = self.fetch_from(link, key, scheduler, &mut progress).await {
-                last_error = e.to_string();
-                if !matches!(e, PeerError::Refused(_)) {
-                    link.dead = true;
-                    let _ = link.stream.close().await;
+            let before = (progress.pieces, progress.bytes);
+            let err = match self.fetch_from(link, key, scheduler, &mut progress).await {
+                Ok(d) if self.have_of(&d).is_complete() => match self.promote(&d) {
+                    Ok(()) => {
+                        done = Some(d);
+                        continue;
+                    }
+                    Err(e) => {
+                        // The liar's pieces were discarded: do not count them.
+                        (progress.pieces, progress.bytes) = before;
+                        progress.sources.retain(|p| *p != link.peer_id);
+                        progress.current = None;
+                        progress.bad_descriptors.push((
+                            link.peer_id.clone(),
+                            d.id().to_string(),
+                            e.to_string(),
+                        ));
+                        verify_failed = true;
+                        PeerError::Local(e)
+                    }
+                },
+                Ok(_) => {
+                    verify_failed = false;
+                    continue; // this peer has no more of what is missing
                 }
+                Err(e) => {
+                    verify_failed = false;
+                    e
+                }
+            };
+            last_error = err.to_string();
+            if !matches!(err, PeerError::Refused(_)) {
+                link.dead = true;
+                let _ = link.stream.close().await;
             }
         }
-        let Some(d) = self.resolve(&key) else {
-            return Err(self.fetch_failed(&key, None, &progress, &last_peer, last_error, 0));
-        };
-        let missing = self
-            .have(&d.id())
-            .map_or(d.piece_count(), |h| h.len() - h.count());
-        if missing > 0 {
-            return Err(self.fetch_failed(
-                &key,
-                Some(&d),
-                &progress,
-                &last_peer,
-                last_error,
-                missing,
-            ));
-        }
-        let id = d.id();
-        if let Err(e) = self.read_to(&id, &mut |_| Ok(())) {
-            let err = self.fetch_failed(&key, Some(&d), &progress, &last_peer, e.to_string(), 0);
+        let Some(d) = done else {
+            let missing = progress
+                .current
+                .as_ref()
+                .map_or(0, |d| d.piece_count() - self.have_of(d).count());
+            let err = self.fetch_failed(&key, &progress, &last_peer, last_error, missing);
             return Err(match err {
-                FetchError::Incomplete { last_error, .. } => FetchError::Verification(last_error),
+                FetchError::Incomplete { last_error, .. } if verify_failed => {
+                    FetchError::Verification(last_error)
+                }
                 other => other,
             });
-        }
+        };
+        let id = d.id();
         self.materialize(&id)?;
         self.chain_fetch(serde_json::json!({
             "artifact_id": id.to_string(),
@@ -234,6 +264,7 @@ impl ArtifactExchange {
             "total_size": d.total_size,
             "pieces_fetched": progress.pieces,
             "pieces_rejected": progress.rejected,
+            "descriptors_rejected": rejected_json(&progress),
             "result": "verified",
             "node": self.node_id(),
         }));
@@ -254,7 +285,6 @@ impl ArtifactExchange {
     fn fetch_failed(
         &self,
         key: &ArtifactKey,
-        d: Option<&ArtifactDescriptor>,
         progress: &Progress,
         last_peer: &str,
         last_error: String,
@@ -262,13 +292,14 @@ impl ArtifactExchange {
     ) -> FetchError {
         self.chain_fetch(serde_json::json!({
             "key": key.to_string(),
-            "artifact_id": d.map(|d| d.id().to_string()),
+            "artifact_id": progress.current.as_ref().map(|d| d.id().to_string()),
             "source_peer": last_peer,
             "sources": progress.sources,
             "bytes": progress.bytes,
             "pieces_fetched": progress.pieces,
             "pieces_rejected": progress.rejected,
             "missing_pieces": missing,
+            "descriptors_rejected": rejected_json(progress),
             "result": "failed",
             "error": last_error,
             "node": self.node_id(),
@@ -285,7 +316,7 @@ impl ArtifactExchange {
         key: ArtifactKey,
         scheduler: &mut dyn PieceScheduler,
         progress: &mut Progress,
-    ) -> Result<(), PeerError> {
+    ) -> Result<ArtifactDescriptor, PeerError> {
         let stream = link.stream.as_mut();
         let peer = link.peer_id.clone();
         send(stream, &ArtifactMsg::MetaRequest { key }).await?;
@@ -303,7 +334,10 @@ impl ArtifactExchange {
                 "descriptor does not match {key}"
             )));
         }
-        let id = self.register_descriptor(d.clone())?;
+        // Pending only: the content hash is the peer's claim until the
+        // assembled pieces prove it (see `promote`).
+        let id = self.note_pending(&d)?;
+        progress.current = Some(d.clone());
         let mut peer_has = match self.recv(stream).await? {
             ArtifactMsg::Announce { id: aid, have }
                 if aid == id && have.len() == d.piece_count() =>
@@ -312,16 +346,12 @@ impl ArtifactExchange {
             }
             other => return Err(unexpected(&other)),
         };
-        let mine = self
-            .have(&id)
-            .unwrap_or_else(|| Bitfield::new(d.piece_count()));
+        let mine = self.have_of(&d);
         send(stream, &ArtifactMsg::Announce { id, have: mine }).await?;
 
         let mut strikes: BTreeMap<u32, u32> = BTreeMap::new();
         loop {
-            let mut need = self
-                .have(&id)
-                .unwrap_or_else(|| Bitfield::new(d.piece_count()));
+            let mut need = self.have_of(&d);
             for (&i, &n) in &strikes {
                 if n >= self.config().max_piece_retries {
                     need.set(i, true); // given up on this piece from this peer
@@ -329,7 +359,7 @@ impl ArtifactExchange {
             }
             let batch = scheduler.next_batch(&need, &peer_has, self.config().request_window);
             if batch.is_empty() {
-                return Ok(());
+                return Ok(d);
             }
             send(
                 stream,
@@ -383,9 +413,8 @@ impl ArtifactExchange {
                     if buf.len() + data.len() > want {
                         return Err(PeerError::Protocol("piece longer than descriptor".into()));
                     }
-                    if buf.is_empty() {
-                        buf.reserve_exact(want);
-                    }
+                    // Grow with the bytes actually received: a descriptor
+                    // claiming a huge piece cannot make us pre-allocate it.
                     buf.extend_from_slice(&data);
                 }
                 ArtifactMsg::NoPiece { id, index: i } if id == d.id() && i == index => {
@@ -396,6 +425,16 @@ impl ArtifactExchange {
         }
         Ok(Some(buf))
     }
+}
+
+fn rejected_json(progress: &Progress) -> serde_json::Value {
+    progress
+        .bad_descriptors
+        .iter()
+        .map(|(peer, id, reason)| {
+            serde_json::json!({ "peer": peer, "artifact_id": id, "reason": reason })
+        })
+        .collect()
 }
 
 fn unexpected(msg: &ArtifactMsg) -> PeerError {

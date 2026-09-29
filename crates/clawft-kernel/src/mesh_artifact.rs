@@ -7,11 +7,18 @@
 //!
 //! - **Identity.** An artifact is its piece-list root
 //!   ([`ArtifactDescriptor::id`]). Pieces are stored in `ArtifactStore`
-//!   under their own BLAKE3, so any node holding verified pieces can serve
-//!   them, and a restart resumes from the pieces already on disk.
-//! - **Governance.** Only content listed by a signed manifest that
-//!   verified on this node is served ([`Self::is_servable`]); see
-//!   [`crate::mesh_artifact_pkg`].
+//!   under their own BLAKE3, so a node that holds a verified artifact can
+//!   serve it (origin or not), and a restart resumes from the pieces
+//!   already on disk.
+//! - **Trust.** A descriptor received from a peer is only *pending*: its
+//!   pieces are hash-checked against it, but its `content_hash` is the
+//!   peer's claim. It becomes *verified* only when the pieces assemble to
+//!   that hash on this node ([`Self::promote`]); if they do not, the
+//!   descriptor and its unshared pieces are discarded. Content keys
+//!   ([`ArtifactKey::Content`]) resolve to verified descriptors only.
+//! - **Governance.** Only verified artifacts whose content a signed
+//!   manifest lists (and that manifest verified here) are served
+//!   ([`Self::is_servable`]); see [`crate::mesh_artifact_pkg`].
 //! - **Audit.** Outcomes are chained (`artifact.fetch`,
 //!   `artifact.piece_rejected`, `artifact.serve` once per peer);
 //!   individual pieces are not.
@@ -37,7 +44,11 @@ pub struct ArtifactExchange {
     node_id: String,
     store: Arc<ArtifactStore>,
     config: ExchangeConfig,
+    /// Verified descriptors: pieces assemble to `content_hash`.
     descriptors: DashMap<ArtifactId, ArtifactDescriptor>,
+    /// Descriptors received from peers, not yet verified (resume state).
+    pending: DashMap<ArtifactId, ArtifactDescriptor>,
+    /// Content hash -> id, verified descriptors only.
     by_content: DashMap<[u8; 32], ArtifactId>,
     /// Content hash -> package id of the signed manifest that allows it.
     grants: DashMap<[u8; 32], String>,
@@ -61,6 +72,7 @@ impl ArtifactExchange {
             store,
             config,
             descriptors: DashMap::new(),
+            pending: DashMap::new(),
             by_content: DashMap::new(),
             grants: DashMap::new(),
             served: DashMap::new(),
@@ -133,7 +145,8 @@ impl ArtifactExchange {
                 descriptor.content_hex()
             )));
         }
-        self.register_descriptor(descriptor.clone())?;
+        // Built from the bytes just read: verified by construction.
+        self.register_verified(descriptor.clone())?;
         Ok(descriptor)
     }
 
@@ -142,21 +155,75 @@ impl ArtifactExchange {
         self.seed_reader(&mut &content[..], None)
     }
 
-    /// Remember a validated descriptor (pieces may still be missing).
-    pub fn register_descriptor(&self, d: ArtifactDescriptor) -> Result<ArtifactId, ExchangeError> {
+    /// Record a descriptor whose pieces are known to assemble to its
+    /// `content_hash`.
+    fn register_verified(&self, d: ArtifactDescriptor) -> Result<ArtifactId, ExchangeError> {
         d.validate()?;
         let id = d.id();
+        self.pending.remove(&id);
         self.by_content.insert(d.content_hash, id);
         self.descriptors.insert(id, d);
         Ok(id)
     }
 
-    /// Descriptor by id.
+    /// Remember a peer's descriptor as pending (resume state). It is not
+    /// resolvable by content and never served until [`Self::promote`]d.
+    pub(crate) fn note_pending(&self, d: &ArtifactDescriptor) -> Result<ArtifactId, ExchangeError> {
+        d.validate()?;
+        let id = d.id();
+        if !self.descriptors.contains_key(&id) {
+            self.pending.insert(id, d.clone());
+        }
+        Ok(id)
+    }
+
+    /// Check that `d`'s pieces (all held) assemble to its `content_hash`.
+    /// On success `d` becomes verified; on failure `d` is discarded with
+    /// every piece no other known artifact uses, and the error returned.
+    pub(crate) fn promote(&self, d: &ArtifactDescriptor) -> Result<(), ExchangeError> {
+        match self.check_whole(d, &mut |_| Ok(())) {
+            Ok(_) => self.register_verified(d.clone()).map(|_| ()),
+            Err(e) => {
+                self.discard(d);
+                Err(e)
+            }
+        }
+    }
+
+    /// Forget a descriptor that failed verification and drop its pieces,
+    /// except pieces (or whole blobs) that another known artifact uses.
+    fn discard(&self, d: &ArtifactDescriptor) {
+        let id = d.id();
+        if self.descriptors.get(&id).is_some_and(|v| *v == *d) {
+            return; // never discard verified state
+        }
+        self.pending.remove_if(&id, |_, p| p == d);
+        let mut keep = std::collections::HashSet::new();
+        for v in self.descriptors.iter() {
+            keep.insert(v.content_hash);
+            keep.extend(v.pieces.iter().copied());
+        }
+        for p in self.pending.iter() {
+            keep.extend(p.pieces.iter().copied());
+        }
+        for piece in &d.pieces {
+            if !keep.contains(piece) {
+                let _ = self.store.remove(&hex_encode(piece));
+            }
+        }
+    }
+
+    /// Verified descriptor by id.
     pub fn descriptor(&self, id: &ArtifactId) -> Option<ArtifactDescriptor> {
         self.descriptors.get(id).map(|d| d.clone())
     }
 
-    /// Descriptor by key.
+    /// True when `id` is verified on this node.
+    pub fn is_verified(&self, id: &ArtifactId) -> bool {
+        self.descriptors.contains_key(id)
+    }
+
+    /// Verified descriptor by key.
     pub fn resolve(&self, key: &ArtifactKey) -> Option<ArtifactDescriptor> {
         let id = match key {
             ArtifactKey::Root(id) => *id,
@@ -165,14 +232,22 @@ impl ArtifactExchange {
         self.descriptor(&id)
     }
 
-    /// Verified pieces held locally, derived from the store.
+    /// Pieces held locally for a verified or pending artifact, derived
+    /// from the store.
     pub fn have(&self, id: &ArtifactId) -> Option<Bitfield> {
-        let d = self.descriptors.get(id)?;
+        let d = self
+            .descriptor(id)
+            .or_else(|| self.pending.get(id).map(|d| d.clone()))?;
+        Some(self.have_of(&d))
+    }
+
+    /// Pieces of `d` held in the store.
+    pub(crate) fn have_of(&self, d: &ArtifactDescriptor) -> Bitfield {
         let mut b = Bitfield::new(d.piece_count());
         for (i, p) in d.pieces.iter().enumerate() {
             b.set(i as u32, self.store.contains(&hex_encode(p)));
         }
-        Some(b)
+        b
     }
 
     /// Stream the whole artifact through `sink` in piece order, checking
@@ -185,10 +260,19 @@ impl ArtifactExchange {
         let d = self
             .descriptor(id)
             .ok_or_else(|| ExchangeError::Unknown(id.to_string()))?;
+        self.check_whole(&d, sink)
+    }
+
+    fn check_whole(
+        &self,
+        d: &ArtifactDescriptor,
+        sink: &mut dyn FnMut(&[u8]) -> Result<(), ExchangeError>,
+    ) -> Result<u64, ExchangeError> {
+        let id = d.id();
         let mut whole = blake3::Hasher::new();
         let mut total = 0u64;
         for i in 0..d.piece_count() {
-            let data = self.load_piece(&d, i)?;
+            let data = self.load_piece(d, i)?;
             whole.update(&data);
             total += data.len() as u64;
             sink(&data)?;
@@ -225,9 +309,12 @@ impl ArtifactExchange {
         self.grants.insert(content_hash, package_id.to_string());
     }
 
-    /// Governance: served only when a verified signed manifest lists it.
+    /// Governance: served only when `d` is verified on this node (its
+    /// pieces assemble to its `content_hash`) and a signed manifest that
+    /// verified here lists that content hash.
     pub fn is_servable(&self, d: &ArtifactDescriptor) -> bool {
-        self.grants.contains_key(&d.content_hash)
+        self.descriptors.get(&d.id()).is_some_and(|v| *v == *d)
+            && self.grants.contains_key(&d.content_hash)
     }
 
     /// Record the `have` a peer announced.
@@ -353,80 +440,5 @@ fn read_full(r: &mut dyn Read, buf: &mut [u8]) -> Result<usize, ExchangeError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::mesh_artifact_wire::MAX_ARTIFACT_FRAME;
-
-    fn exchange(piece: u64) -> ArtifactExchange {
-        let cfg = ExchangeConfig {
-            piece_size: piece,
-            ..Default::default()
-        };
-        ArtifactExchange::new("n1", Arc::new(ArtifactStore::new_memory()), cfg).unwrap()
-    }
-
-    #[test]
-    fn seeding_splits_into_pieces_and_roundtrips() {
-        let x = exchange(1024);
-        let data: Vec<u8> = (0..5000u32).map(|i| (i % 251) as u8).collect();
-        let d = x.seed_bytes(&data).unwrap();
-        assert_eq!(d.piece_count(), 5);
-        assert_eq!(d.piece_len(4), 5000 - 4096);
-        assert_eq!(d.content_hash, *blake3::hash(&data).as_bytes());
-        assert!(x.have(&d.id()).unwrap().is_complete());
-        assert_eq!(x.read_all(&d.id()).unwrap(), data);
-        assert_eq!(
-            x.resolve(&ArtifactKey::Content(d.content_hash))
-                .unwrap()
-                .id(),
-            d.id()
-        );
-    }
-
-    #[test]
-    fn have_follows_the_store() {
-        let x = exchange(1024);
-        let d = x.seed_bytes(&[3u8; 3000]).unwrap();
-        // Pieces 0 and 1 are identical content (one store entry); drop the
-        // distinct last piece.
-        x.store().remove(&hex_encode(&d.pieces[2])).unwrap();
-        let have = x.have(&d.id()).unwrap();
-        assert_eq!(have.missing().collect::<Vec<_>>(), vec![2]);
-        assert!(x.read_all(&d.id()).is_err());
-    }
-
-    #[test]
-    fn seeding_with_wrong_expectation_registers_nothing() {
-        let x = exchange(1024);
-        let err = x.seed_reader(&mut &b"abc"[..], Some(([0; 32], 3)));
-        assert!(matches!(err, Err(ExchangeError::Mismatch(_))));
-        assert!(
-            x.resolve(&ArtifactKey::Content(*blake3::hash(b"abc").as_bytes()))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn nothing_is_servable_without_a_grant() {
-        let x = exchange(1024);
-        let d = x.seed_bytes(b"payload").unwrap();
-        assert!(!x.is_servable(&d));
-        x.grant(d.content_hash, "pkg");
-        assert!(x.is_servable(&d));
-    }
-
-    #[test]
-    fn config_limits_are_enforced() {
-        let store = Arc::new(ArtifactStore::new_memory());
-        let bad_block = ExchangeConfig {
-            block_size: MAX_ARTIFACT_FRAME,
-            ..Default::default()
-        };
-        assert!(ArtifactExchange::new("n", store.clone(), bad_block).is_err());
-        let bad_piece = ExchangeConfig {
-            piece_size: 10,
-            ..Default::default()
-        };
-        assert!(ArtifactExchange::new("n", store, bad_piece).is_err());
-    }
-}
+#[path = "mesh_artifact_unit_tests.rs"]
+mod tests;

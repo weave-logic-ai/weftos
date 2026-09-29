@@ -55,7 +55,7 @@ fn small_cfg(piece: u64, block: usize) -> ExchangeConfig {
     }
 }
 
-fn node(id: &str) -> Node {
+pub(crate) fn node(id: &str) -> Node {
     node_with(
         id,
         ArtifactStore::new_memory(),
@@ -107,7 +107,7 @@ pub(crate) fn anchors_for(k: &SigningKey) -> TrustAnchors {
 const COG_TOML: &str = "[cog]\nid = \"mesh-fetch-probe\"\nname = \"Probe\"\nversion = \"0.1.0\"\n";
 
 /// A signed cog package whose aarch64 binary is `binary_len` bytes.
-fn signed_package(root: &Path, binary_len: usize, k: &SigningKey) -> PathBuf {
+pub(crate) fn signed_package(root: &Path, binary_len: usize, k: &SigningKey) -> PathBuf {
     let cog_dir = root.join("cog");
     std::fs::create_dir_all(&cog_dir).unwrap();
     std::fs::write(cog_dir.join("cog.toml"), COG_TOML).unwrap();
@@ -431,7 +431,7 @@ async fn c_fetches_from_b_which_is_not_the_origin() {
 }
 
 #[tokio::test]
-async fn partial_holder_serves_its_pieces_and_the_next_peer_the_rest() {
+async fn partial_holder_does_not_serve_until_verified() {
     let cfg = || small_cfg(64 * 1024, 64 * 1024);
     let a = node_with("node-a", ArtifactStore::new_memory(), cfg());
     let b = node_with("node-b", ArtifactStore::new_memory(), cfg());
@@ -441,7 +441,8 @@ async fn partial_holder_serves_its_pieces_and_the_next_peer_the_rest() {
     for n in [&a, &b] {
         n.ex.grant(d.content_hash, "test-grant");
     }
-    // B holds only the first 4 pieces.
+    // B holds only the first 4 pieces: its descriptor is still the
+    // origin's unproven claim, so B must not serve it despite the grant.
     let (s, _t) = connect(&a, "node-b").await;
     let _ =
         b.ex.fetch(
@@ -450,6 +451,7 @@ async fn partial_holder_serves_its_pieces_and_the_next_peer_the_rest() {
         )
         .await;
     assert_eq!(b.ex.have(&d.id()).unwrap().count(), 4);
+    assert!(!b.ex.is_verified(&d.id()) && !b.ex.is_servable(&d));
 
     let (sb, from_b) = connect(&b, "node-c").await;
     let (sa, from_a) = connect(&a, "node-c").await;
@@ -461,11 +463,12 @@ async fn partial_holder_serves_its_pieces_and_the_next_peer_the_rest() {
             .await
             .unwrap();
     drop(peers);
-    assert_eq!(out.sources, ["node-b", "node-a"]);
-    assert_eq!(from_b.await.unwrap().unwrap().pieces_served, [0, 1, 2, 3]);
+    assert_eq!(out.sources, ["node-a"]);
+    assert!(from_b.await.unwrap().unwrap().pieces_served.is_empty());
     assert_eq!(
         from_a.await.unwrap().unwrap().pieces_served,
-        (4..10).collect::<Vec<_>>()
+        (0..10).collect::<Vec<_>>()
     );
+    assert!(events(&b.chain, EVENT_KIND_ARTIFACT_SERVE).is_empty());
     assert_eq!(c.ex.read_all(&d.id()).unwrap(), data);
 }
