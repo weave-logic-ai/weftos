@@ -69,6 +69,10 @@ pub fn required_capability(method: &str) -> Capability {
         "cluster.join" => Capability::Admin,
         "cluster.leave" => Capability::Admin,
         "chain.checkpoint" => Capability::Admin,
+        // ADR-099: revocation and device-to-node binding are trust-root
+        // changes, so Admin rather than Write.
+        "workload.revoke" => Capability::Admin,
+        "workload.node.bind" => Capability::Admin,
 
         // ── Write: state-mutating verbs ─────────────────────────────
         "agent.register" => Capability::Write,
@@ -104,6 +108,17 @@ pub fn required_capability(method: &str) -> Capability {
         "mcp.add" => Capability::Write,
         "mcp.remove" => Capability::Write,
         "mcp.reload" => Capability::Write,
+        // mesh-placement-06: `weaver app` lifecycle mutates the app catalog
+        // and spawns/stops agents.
+        "app.install" | "app.start" | "app.stop" | "app.remove" => Capability::Write,
+        // ADR-099 section 4 workload lifecycle actions.
+        "workload.install"
+        | "workload.place"
+        | "workload.load"
+        | "workload.start"
+        | "workload.stop"
+        | "workload.unload"
+        | "workload.migrate" => Capability::Write,
 
         // ── Chat: LLM-conversational verbs ──────────────────────────
         "agent.chat" => Capability::Chat,
@@ -145,7 +160,16 @@ pub fn required_capability(method: &str) -> Capability {
         | "llm.models"
         // WEFT-494: live MCP registry inspection (alias tools.mcp = mcp.list).
         | "mcp.list"
-        | "tools.mcp" => Capability::Read,
+        | "tools.mcp"
+        // mesh-placement-06: catalog inspection.
+        | "app.list"
+        | "app.inspect"
+        | "workload.list"
+        | "workload.inspect" => Capability::Read,
+
+        // ADR-099 default-deny posture: an unclassified `workload.*` verb
+        // is treated as a mutation, never as anonymous-callable Read.
+        m if m.starts_with("workload.") => Capability::Write,
 
         // Default for anything we haven't explicitly classified.
         // Read is the safest baseline — the verb still goes through
@@ -409,6 +433,39 @@ mod tests {
         assert!(write.allows_method("ipc.publish"));
         let admin = CallerCapabilities::from_scopes(["admin"]);
         assert!(admin.allows_method("ipc.publish"));
+    }
+
+    #[test]
+    fn app_and_workload_verbs_classified() {
+        // mesh-placement-06.
+        let anon = CallerCapabilities::anonymous();
+        let write = CallerCapabilities::from_scopes(["write"]);
+        for m in ["app.list", "app.inspect", "workload.list", "workload.inspect"] {
+            assert_eq!(required_capability(m), Capability::Read, "{m}");
+            assert!(anon.allows_method(m), "{m}");
+        }
+        for m in [
+            "app.install",
+            "app.start",
+            "app.stop",
+            "app.remove",
+            "workload.install",
+            "workload.place",
+            "workload.load",
+            "workload.start",
+            "workload.stop",
+            "workload.unload",
+            "workload.migrate",
+            "workload.some_future_verb",
+        ] {
+            assert_eq!(required_capability(m), Capability::Write, "{m}");
+            assert!(!anon.allows_method(m), "anonymous must not call {m}");
+            assert!(write.allows_method(m), "{m}");
+        }
+        for m in ["workload.revoke", "workload.node.bind"] {
+            assert_eq!(required_capability(m), Capability::Admin, "{m}");
+            assert!(!write.allows_method(m), "{m}");
+        }
     }
 
     #[test]

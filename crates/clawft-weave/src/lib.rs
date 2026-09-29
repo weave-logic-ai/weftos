@@ -7,6 +7,8 @@
 //! `pub(crate)` is the minimum change required to make integration
 //! tests link against them.
 
+/// `app.*` daemon RPC handlers (mesh-placement-06).
+pub mod app_rpc;
 pub mod capability;
 /// Tracing → pending-buffer bridge for ExoChain (WEFT-597).
 pub mod chain_bridge;
@@ -24,6 +26,8 @@ pub mod llm_service;
 pub mod mcp_rpc;
 pub mod node_identity;
 pub mod protocol;
+/// Governance-gate helper for daemon RPC families (mesh-placement-06).
+pub mod rpc_gate;
 // WEFT-720 residual: `spatial_rpc` dropped when BvhStore/CLI helpers
 // diverged; reattach via SpatialService before re-enabling spatial_cli_e2e.
 #[cfg(feature = "rvf-rpc")]
@@ -35,3 +39,8 @@ pub mod turn_ledger;
 pub mod voice_loop;
 pub mod voice_router;
 pub mod voice_trace;
+/// Node-local workload catalog (ADR-099, mesh-placement-06).
+pub mod workload_registry;
+/// `workload.*` daemon RPC family (ADR-099, mesh-placement-06).
+#[cfg(feature = "exochain")]
+pub mod workload_rpc;
