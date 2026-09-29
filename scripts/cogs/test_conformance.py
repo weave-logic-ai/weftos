@@ -339,6 +339,53 @@ class HarnessEndToEnd(unittest.TestCase):
         self.assertEqual((r["rc"], r["ingest_posts"]), (2, 0))
         self.assertEqual(classify.classify(r), "cli-error")
 
+    def test_launcher_wraps_the_cog_argv(self):
+        """A plan launcher runs the cog as `<launcher> -- <argv>` (the launcher
+        here is a pass-through shim standing in for cog_adapter_run)."""
+        with tempfile.TemporaryDirectory() as d:
+            shim = os.path.join(d, "launch")
+            with open(shim, "w") as f:
+                f.write("#!/bin/sh\n[ \"$1\" = --runtime ] && shift 2\n"
+                        "[ \"$1\" = -- ] || exit 9\nshift\necho launched >&2\nexec \"$@\"\n")
+            os.chmod(shim, 0o755)
+            udp, ingest = free_port(socket.SOCK_DGRAM), free_port(socket.SOCK_STREAM)
+            cog = os.path.join(d, "cog-fake-aarch64")
+            with open(cog, "w") as f:
+                f.write(FAKE_COG.format(py=sys.executable))
+            os.environ.update(FAKE_UDP=str(udp), FAKE_INGEST=str(ingest))
+            r = harness.run_plan({"timeout": 10, "udp_port": udp, "ingest_port": ingest,
+                                  "launcher": [shim, "--runtime", "native"],
+                                  "cogs": [{"id": "fake", "binary": cog}]})["results"][0]
+        self.assertEqual(classify.classify(r), "clean")
+        self.assertEqual(r["launcher"], ["launch", "--runtime", "native"])
+        self.assertIn("launched", r["stderr_tail"])
+        with self.assertRaises(ValueError):
+            harness.run_plan({"launcher": "not-a-list", "cogs": []})
+
+    def test_engine_args_precede_the_image(self):
+        ad = runtimes.make_adapter("docker", "aarch64", engine_args=["--net=host"])
+        cmd = ad.commands("/w1")[0]
+        self.assertLess(cmd.index("--net=host"), cmd.index(runtimes.DEFAULT_IMAGE))
+        with self.assertRaises(ValueError):
+            runtimes.make_adapter("docker", "aarch64", engine_args=[""])
+
+    def test_launcher_plan_arguments(self):
+        a = conformance.build_parser().parse_args(
+            ["sweep", "--launcher", "/x/cog_adapter_run", "--adapter-runtime", "docker",
+             "--adapter-base-image", "b@sha256:" + "0" * 64, "--adapter-network", "host",
+             "--timeout", "20"])
+        argv = conformance.launcher_plan(a, "/w")
+        self.assertEqual(argv[:5], ["/w/bin/cog_adapter_run", "--runtime", "docker",
+                                    "--arch", "aarch64"])
+        self.assertIn("--run-secs", argv)
+        self.assertEqual(argv[argv.index("--run-secs") + 1], "16")
+        self.assertEqual(argv[argv.index("--network") + 1], "host")
+        a.adapter_base_image = None
+        with self.assertRaises(SystemExit):
+            conformance.launcher_plan(a, "/w")
+        self.assertIsNone(conformance.launcher_plan(
+            conformance.build_parser().parse_args(["sweep"]), "/w"))
+
     def test_missing_binary(self):
         doc = harness.run_plan({"cogs": [{"id": "gone", "binary": "/nonexistent/cog"}],
                                 "ingest_port": free_port(socket.SOCK_STREAM)})

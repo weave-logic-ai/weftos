@@ -24,18 +24,30 @@ use super::types::RuntimeError;
 /// Workload kind used to govern firmware operations.
 pub const KIND_SEED_FIRMWARE: &str = "seed-firmware";
 
-/// A verified local backup of a Seed's API-visible state.
+/// A local backup of one Seed's API-visible state, bound to that Seed.
+///
+/// Only [`SeedApiRuntime::backup`] builds one. [`SeedBackup::verify`]
+/// re-reads `manifest.json` and every file, and the upgrade and recovery
+/// paths also check the backup belongs to the Seed being changed (same
+/// operator node id, device id and device public key).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeedBackup {
-    /// Backup directory.
-    pub dir: PathBuf,
-    /// Firmware version at backup time.
-    pub firmware: String,
-    /// `(file name, blake3)` for each captured file.
-    pub files: Vec<(String, String)>,
-    /// BLAKE3 of `manifest.json`.
-    pub manifest_blake3: String,
+    dir: PathBuf,
+    node_id: String,
+    device_id: String,
+    public_key: String,
+    firmware: String,
+    files: Vec<(String, String)>,
+    manifest_blake3: String,
 }
+
+/// Files every backup must hold.
+pub const REQUIRED_BACKUP_FILES: [&str; 4] = [
+    "status.json",
+    "identity.json",
+    "apps.json",
+    "witness-chain.json",
+];
 
 /// Result of an upgrade request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,35 +85,84 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), RuntimeError> {
 }
 
 impl SeedBackup {
-    /// Re-hash every file; fails if anything changed or went missing.
+    /// Backup directory.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+    /// Operator node id of the Seed it was taken from.
+    pub fn node_id(&self) -> &str {
+        &self.node_id
+    }
+    /// Seed device id at backup time.
+    pub fn device_id(&self) -> &str {
+        &self.device_id
+    }
+    /// Firmware version at backup time.
+    pub fn firmware(&self) -> &str {
+        &self.firmware
+    }
+    /// `(file name, blake3)` for each captured file.
+    pub fn files(&self) -> &[(String, String)] {
+        &self.files
+    }
+
+    /// Re-hash the manifest and every file, and check the manifest still
+    /// names this Seed and exactly these files (the required set included).
     pub fn verify(&self) -> Result<(), RuntimeError> {
+        let refuse = |m: String| RuntimeError::AdmissionRefused(m);
         let m = std::fs::read(self.dir.join("manifest.json"))
-            .map_err(|e| RuntimeError::AdmissionRefused(format!("backup manifest: {e}")))?;
+            .map_err(|e| refuse(format!("backup manifest: {e}")))?;
         if blake3::hash(&m).to_hex().as_str() != self.manifest_blake3 {
-            return Err(RuntimeError::AdmissionRefused(
-                "backup manifest changed".into(),
-            ));
+            return Err(refuse("backup manifest changed".into()));
+        }
+        let doc: Value = serde_json::from_slice(&m)
+            .map_err(|e| refuse(format!("backup manifest: {e}")))?;
+        if doc != self.manifest_doc() {
+            return Err(refuse("backup manifest does not match this backup".into()));
+        }
+        for req in REQUIRED_BACKUP_FILES {
+            if !self.files.iter().any(|(n, _)| n == req) {
+                return Err(refuse(format!("backup lacks {req}")));
+            }
         }
         for (name, hash) in &self.files {
             let b = std::fs::read(self.dir.join(name))
-                .map_err(|e| RuntimeError::AdmissionRefused(format!("backup file {name}: {e}")))?;
+                .map_err(|e| refuse(format!("backup file {name}: {e}")))?;
             if blake3::hash(&b).to_hex().as_str() != hash {
-                return Err(RuntimeError::AdmissionRefused(format!(
-                    "backup file {name} changed"
-                )));
+                return Err(refuse(format!("backup file {name} changed")));
             }
         }
         Ok(())
     }
 
+    fn manifest_doc(&self) -> Value {
+        json!({
+            "node_id": self.node_id,
+            "device_id": self.device_id,
+            "public_key": self.public_key,
+            "firmware": self.firmware,
+            "files": self.files,
+        })
+    }
+
     /// Chain-safe summary.
     pub fn audit(&self) -> Value {
         json!({
+            "node_id": self.node_id,
+            "device_id": self.device_id,
             "firmware": self.firmware,
             "files": self.files.len(),
             "manifest_blake3": self.manifest_blake3,
         })
     }
+}
+
+fn identity_field(v: &Value, key: &str) -> Result<String, RuntimeError> {
+    v.get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty() && s.len() <= 256)
+        .map(str::to_string)
+        .ok_or_else(|| RuntimeError::Backend(format!("seed /api/v1/identity: no {key}")))
 }
 
 impl SeedApiRuntime {
@@ -188,11 +249,14 @@ impl SeedApiRuntime {
                 .await?;
             docs.push((format!("config-{}.json", c.id), v));
         }
-        let firmware = docs
+        let identity = docs
             .iter()
             .find(|(n, _)| n == "identity.json")
-            .and_then(|(_, v)| v.get("firmware_version")?.as_str().map(str::to_string))
-            .unwrap_or_default();
+            .map(|(_, v)| v.clone())
+            .unwrap_or(Value::Null);
+        let device_id = identity_field(&identity, "device_id")?;
+        let public_key = identity_field(&identity, "public_key")?;
+        let firmware = identity_field(&identity, "firmware_version")?;
         {
             use std::os::unix::fs::DirBuilderExt;
             std::fs::DirBuilder::new()
@@ -206,28 +270,58 @@ impl SeedApiRuntime {
             write_private(&dir.join(name), &bytes)?;
             files.push((name.clone(), blake3::hash(&bytes).to_hex().to_string()));
         }
-        let manifest = serde_json::to_vec_pretty(&json!({
-            "node_id": self.cfg.node_id,
-            "firmware": firmware,
-            "files": files,
-        }))
-        .unwrap_or_default();
-        write_private(&dir.join("manifest.json"), &manifest)?;
-        Ok(SeedBackup {
+        let mut backup = SeedBackup {
             dir: dir.to_path_buf(),
+            node_id: self.cfg.node_id.clone(),
+            device_id,
+            public_key,
             firmware,
             files,
-            manifest_blake3: blake3::hash(&manifest).to_hex().to_string(),
-        })
+            manifest_blake3: String::new(),
+        };
+        let manifest = serde_json::to_vec_pretty(&backup.manifest_doc()).unwrap_or_default();
+        write_private(&dir.join("manifest.json"), &manifest)?;
+        backup.manifest_blake3 = blake3::hash(&manifest).to_hex().to_string();
+        Ok(backup)
+    }
+
+    /// Verify `backup` and check it was taken from this Seed: same operator
+    /// node id, and the Seed's current identity has the same device id and
+    /// public key. With `same_firmware`, the firmware must also be unchanged
+    /// (the backup reflects the state about to be upgraded). Returns the
+    /// current firmware version.
+    pub async fn check_backup(
+        &self,
+        backup: &SeedBackup,
+        same_firmware: bool,
+    ) -> Result<String, RuntimeError> {
+        backup.verify()?;
+        let refuse = |m: &str| Err(RuntimeError::AdmissionRefused(m.into()));
+        if backup.node_id != self.cfg.node_id {
+            return refuse("backup was taken from a different Seed node");
+        }
+        let id = self
+            .api(Method::Get, "/api/v1/identity", None, API_TIMEOUT)
+            .await?;
+        if identity_field(&id, "device_id")? != backup.device_id
+            || identity_field(&id, "public_key")? != backup.public_key
+        {
+            return refuse("backup device identity does not match this Seed");
+        }
+        let firmware = identity_field(&id, "firmware_version")?;
+        if same_firmware && firmware != backup.firmware {
+            return refuse("backup predates the current firmware; take a new backup");
+        }
+        Ok(firmware)
     }
 
     /// Apply a pending firmware upgrade. Refuses without a verified backup
-    /// or while writes are gated.
+    /// of this Seed at its current firmware, or while writes are gated.
     pub async fn upgrade_firmware(
         &self,
         backup: &SeedBackup,
     ) -> Result<UpgradeOutcome, RuntimeError> {
-        backup.verify()?;
+        self.check_backup(backup, true).await?;
         if self.writes_gated().await? {
             return Err(RuntimeError::InvalidState(
                 "writes are gated; recover (truncate-confirm after backup) before upgrading".into(),
@@ -256,7 +350,8 @@ impl SeedApiRuntime {
     /// Recover the witness-chain `writes_gated` state. Only runs when the
     /// Seed reports writes gated and `backup` still verifies.
     pub async fn recover_writes_gated(&self, backup: &SeedBackup) -> Result<(), RuntimeError> {
-        backup.verify()?;
+        // The backup may predate the upgrade that gated writes.
+        self.check_backup(backup, false).await?;
         if !self.writes_gated().await? {
             return Err(RuntimeError::InvalidState(
                 "writes are not gated; nothing to recover".into(),

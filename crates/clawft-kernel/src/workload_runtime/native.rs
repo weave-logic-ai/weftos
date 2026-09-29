@@ -14,6 +14,7 @@ use super::cog_spec::CogSpec;
 use super::evidence::RunEvidence;
 use super::host_contract::HostContract;
 use super::supervise::{LaunchSpec, ProcLimits, Supervised};
+use crate::workload_governance::NetworkPolicy;
 use super::types::{
     Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, RuntimeError,
     SignedPayload, VerifiedWorkload, WorkloadConfig, WorkloadRuntime,
@@ -280,6 +281,7 @@ impl WorkloadRuntime for NativeRuntime {
             runtime: NATIVE_ID.into(),
             instance_id: iid,
             workload_id: w.id.clone(),
+            store_installed: false,
         })
     }
 
@@ -356,6 +358,13 @@ impl WorkloadRuntime for NativeRuntime {
 
     fn control_mode(&self) -> ControlMode {
         ControlMode::Managed
+    }
+
+    /// A native process has the host's network: nothing here restricts
+    /// egress yet (nftables / landlock are deferred, COG-001 section 4),
+    /// so the gate is told `egress`.
+    fn network_exposure(&self) -> NetworkPolicy {
+        NetworkPolicy::Egress
     }
 
     async fn console(

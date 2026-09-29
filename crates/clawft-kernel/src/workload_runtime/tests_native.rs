@@ -78,6 +78,11 @@ fn provides_runtime_native_for_the_host_arch() {
     let json = serde_json::to_value(&caps[0]).unwrap();
     assert_eq!(json["attrs"]["arches_native"], serde_json::json!([arch()]));
     assert_eq!(json["provenance"], "probed");
+    // No egress restriction exists for native processes yet.
+    assert_eq!(
+        rt.network_exposure(),
+        crate::workload_governance::NetworkPolicy::Egress
+    );
 }
 
 #[tokio::test]

@@ -1,10 +1,10 @@
 //! HTTP transport and credential storage for the Cognitum Seed adapter.
 //!
 //! The per-Seed bearer token lives in the operator secret store
-//! ([`SeedCredentials`]); it is only ever placed in an `Authorization`
-//! header and never appears in errors, logs or chain payloads.
+//! ([`SeedCredentials`], persisted by [`super::seed_creds::FileCredentials`]);
+//! it is only ever placed in an `Authorization` header and never appears
+//! in errors, logs or chain payloads.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -12,8 +12,6 @@ use clawft_types::secret::SecretString;
 use serde_json::Value;
 
 use super::types::RuntimeError;
-use crate::config_service::ConfigService;
-use crate::process::Pid;
 
 /// HTTP method subset the Seed API uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,45 +152,4 @@ pub trait SeedCredentials: Send + Sync {
     fn get(&self, node_id: &str) -> Result<SecretString, RuntimeError>;
     /// Store a token for `node_id`.
     fn put(&self, node_id: &str, token: SecretString) -> Result<(), RuntimeError>;
-}
-
-/// Secret-store namespace for Seed tokens.
-pub const SECRET_NAMESPACE: &str = "workload.seed";
-
-/// [`SeedCredentials`] backed by the kernel [`ConfigService`] secret store.
-pub struct ConfigServiceCredentials {
-    svc: Arc<ConfigService>,
-    pid: Pid,
-}
-
-impl ConfigServiceCredentials {
-    /// Use `svc`, reading as `pid`.
-    pub fn new(svc: Arc<ConfigService>, pid: Pid) -> Self {
-        Self { svc, pid }
-    }
-}
-
-impl SeedCredentials for ConfigServiceCredentials {
-    fn get(&self, node_id: &str) -> Result<SecretString, RuntimeError> {
-        let bytes = self
-            .svc
-            .get_secret(SECRET_NAMESPACE, node_id, self.pid)
-            .map_err(|e| {
-                RuntimeError::InvalidConfig(format!("seed credential for {node_id}: {e}"))
-            })?;
-        String::from_utf8(bytes)
-            .map(SecretString::new)
-            .map_err(|_| RuntimeError::InvalidConfig("seed credential is not UTF-8".into()))
-    }
-
-    fn put(&self, node_id: &str, token: SecretString) -> Result<(), RuntimeError> {
-        self.svc
-            .set_secret(
-                SECRET_NAMESPACE,
-                node_id,
-                token.expose().as_bytes(),
-                vec![self.pid],
-            )
-            .map_err(|e| RuntimeError::Backend(format!("store seed credential: {e}")))
-    }
 }

@@ -89,10 +89,13 @@ def fetch_binary(cid, arch, cache_dir, base=BASE_URL, opener=None):
 class Adapter:
     name = "base"
 
-    def __init__(self, arch, image=DEFAULT_IMAGE, runner=subprocess.run):
+    def __init__(self, arch, image=DEFAULT_IMAGE, runner=subprocess.run, engine_args=()):
         if arch not in URL_ARCH:
             raise ValueError("arch must be one of %s" % sorted(URL_ARCH))
+        if not all(isinstance(a, str) and a and "\x00" not in a for a in engine_args):
+            raise ValueError("engine args must be non-empty strings")
         self.arch, self.image, self.runner = arch, image, runner
+        self.engine_args = list(engine_args)
 
     def binary_root(self, workdir):
         """Path prefix under which the target sees workdir."""
@@ -120,7 +123,8 @@ class DockerAdapter(Adapter):
 
     def commands(self, workdir):
         return [["docker", "run", "--rm", "--platform", DOCKER_PLATFORM[self.arch],
-                 "-v", "%s:/w" % os.path.abspath(workdir), self.image] + _in_target("/w")]
+                 "-v", "%s:/w" % os.path.abspath(workdir)] + self.engine_args
+                + [self.image] + _in_target("/w")]
 
 
 class AppleContainerAdapter(Adapter):
@@ -128,7 +132,8 @@ class AppleContainerAdapter(Adapter):
 
     def commands(self, workdir):
         return [["container", "run", "--rm", "--arch", CONTAINER_ARCH[self.arch],
-                 "-v", "%s:/w" % os.path.abspath(workdir), self.image] + _in_target("/w")]
+                 "-v", "%s:/w" % os.path.abspath(workdir)] + self.engine_args
+                + [self.image] + _in_target("/w")]
 
 
 class NativeAdapter(Adapter):
@@ -176,13 +181,15 @@ ADAPTERS = {"docker": DockerAdapter, "apple-container": AppleContainerAdapter,
 
 
 def make_adapter(runtime, arch, ssh_host=None, sudo=False, image=DEFAULT_IMAGE,
-                 runner=subprocess.run):
+                 runner=subprocess.run, engine_args=()):
+    """`engine_args` go into `docker run` / `container run` before the image
+    (e.g. `--net host` and a docker socket mount for adapter-driven runs)."""
     if runtime not in ADAPTERS:
         raise ValueError("runtime must be one of %s" % sorted(ADAPTERS))
     if runtime == "ssh":
         host = ssh_host or os.environ.get("COG_HARNESS_SSH_HOST")
         return SshAdapter(arch, host, sudo=sudo, image=image, runner=runner)
-    return ADAPTERS[runtime](arch, image=image, runner=runner)
+    return ADAPTERS[runtime](arch, image=image, runner=runner, engine_args=engine_args)
 
 
 def stage_workdir(workdir, harness_src, binaries):

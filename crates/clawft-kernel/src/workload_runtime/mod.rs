@@ -25,9 +25,12 @@ pub mod container;
 pub mod container_cmd;
 pub mod evidence;
 pub mod host;
+pub mod host_seed;
 pub mod host_contract;
 pub mod native;
 pub mod seed;
+pub mod seed_client;
+pub mod seed_creds;
 pub mod seed_http;
 pub mod seed_ops;
 pub mod seed_types;
@@ -46,6 +49,10 @@ mod tests_live;
 mod tests_native;
 #[cfg(test)]
 mod tests_seed;
+#[cfg(test)]
+mod tests_seed_host;
+#[cfg(test)]
+mod tests_seed_ops;
 
 pub use cog_spec::{CogSpec, ConsoleLimits, Resources};
 pub use container::{ContainerRuntime, ContainerRuntimeConfig};
@@ -55,9 +62,10 @@ pub use host::{RUNTIME_CHAIN_SOURCE, WorkloadHost};
 pub use host_contract::HostContract;
 pub use native::{NativeConfig, NativeRuntime};
 pub use seed::{SeedApiRuntime, SeedConfig, SeedPin};
-pub use seed_http::{ConfigServiceCredentials, HttpSeedTransport, SeedCredentials, SeedTransport};
+pub use seed_creds::FileCredentials;
+pub use seed_http::{HttpSeedTransport, SeedCredentials, SeedTransport};
 pub use seed_ops::{SeedBackup, UpgradeOutcome};
 pub use types::{
-    Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, RunMode, RuntimeError,
-    VerifiedWorkload, WorkloadConfig, WorkloadRuntime, WorkloadSource,
+    Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, Preemption, RunMode,
+    RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadRuntime, WorkloadSource,
 };

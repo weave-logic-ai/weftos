@@ -19,6 +19,7 @@ use super::container_cmd::{
 pub use super::container_cmd::{ENGINE_STARTUP_SECS, container_name};
 use super::evidence::RunEvidence;
 use super::native::{PayloadKind, classify, elf_machine, instance_id};
+use crate::workload_governance::NetworkPolicy;
 use super::types::{
     Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, RuntimeError,
     VerifiedWorkload, WorkloadConfig, WorkloadRuntime,
@@ -41,6 +42,10 @@ pub struct ContainerRuntimeConfig {
     pub allow_emulated: bool,
     /// Host UDP port to publish to the cog's feed port, if any.
     pub feed_host_port: Option<u16>,
+    /// Host address the feed port is published on. Loopback by default;
+    /// set a LAN address (or `0.0.0.0`) so an ESP32 elsewhere on the LAN
+    /// can reach a containerized cog.
+    pub feed_publish_ip: std::net::IpAddr,
     /// Network to attach, if not the engine default.
     pub network: Option<String>,
     /// Engine variant (`orbstack`, `engine`, `desktop`) for `provides()`.
@@ -66,6 +71,7 @@ impl ContainerRuntimeConfig {
             arches_emulated: Vec::new(),
             allow_emulated: false,
             feed_host_port: None,
+            feed_publish_ip: std::net::IpAddr::from([127, 0, 0, 1]),
             network: None,
             variant: None,
             version: None,
@@ -153,7 +159,10 @@ impl ContainerRuntime {
                 cpu_pct: inst.spec.resources.cpu_pct,
             },
             env_file: &inst.env_file,
-            feed_publish: self.cfg.feed_host_port.map(|h| (h, inst.csi_port)),
+            feed_publish: self
+                .cfg
+                .feed_host_port
+                .map(|h| (self.cfg.feed_publish_ip, h, inst.csi_port)),
             network: self.cfg.network.as_deref(),
             detach,
             args,
@@ -298,6 +307,7 @@ impl WorkloadRuntime for ContainerRuntime {
             runtime: self.id().into(),
             instance_id: iid,
             workload_id: w.id.clone(),
+            store_installed: false,
         })
     }
 
@@ -412,6 +422,16 @@ impl WorkloadRuntime for ContainerRuntime {
 
     fn control_mode(&self) -> ControlMode {
         ControlMode::Managed
+    }
+
+    /// `none` has no network. Every other network (the engine's default
+    /// bridge, `host`, or a named one) can reach the internet as far as
+    /// this adapter knows, so the gate is told `egress`.
+    fn network_exposure(&self) -> NetworkPolicy {
+        match self.cfg.network.as_deref() {
+            Some("none") => NetworkPolicy::None,
+            _ => NetworkPolicy::Egress,
+        }
     }
 
     async fn console(

@@ -186,20 +186,15 @@ async fn start_honors_the_concurrency_cap() {
 }
 
 #[tokio::test]
-async fn console_stops_every_running_cog_first_and_returns_one_cycle() {
+async fn console_refuses_while_any_cog_runs_and_never_stops_one_itself() {
     let (s, rt, _) = seed(vec![
-        app("fall-detect", "1.0.0", true),
+        app("fall-detect", "1.0.0", false),
         app("baby-cry", "1.0.0", true),
     ])
     .await;
-    post("/api/v1/apps/fall-detect/stop", 1).mount(&s).await;
-    post("/api/v1/apps/baby-cry/stop", 1).mount(&s).await;
     Mock::given(method("POST"))
-        .and(path("/api/v1/apps/fall-detect/console"))
-        .and(body_json(json!({"command": "--once"})))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "output": ["{\"status\":\"quiet\",\"z_impact\":0.7071067811865475}"], "exit_code": 0})))
-        .expect(1)
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
         .mount(&s)
         .await;
     let h = rt.load(&pin("fall-detect", "1.0.0"), &cfg()).await.unwrap();
@@ -207,10 +202,18 @@ async fn console_stops_every_running_cog_first_and_returns_one_cycle() {
         rt.console(&h, "--interval 1").await,
         Err(RuntimeError::InvalidConfig(_))
     ));
-    let ev = rt.console(&h, "--once").await.unwrap();
-    assert_eq!(ev.stopped_for_console, ["fall-detect", "baby-cry"]);
-    assert_eq!(ev.exit_code, Some(0));
-    assert_eq!(ev.json_lines()[0]["status"], "quiet");
+    let e = rt.console(&h, "--once").await.unwrap_err();
+    assert!(e.to_string().contains("baby-cry"), "{e}");
+    let pre = rt.console_preemptions(&h).await.unwrap();
+    assert_eq!(pre.len(), 1);
+    assert_eq!(
+        (pre[0].workload_id.as_str(), pre[0].version.as_str()),
+        ("baby-cry", "1.0.0")
+    );
+    assert_eq!(
+        rt.network_exposure(),
+        crate::workload_governance::NetworkPolicy::Egress
+    );
 }
 
 #[tokio::test]
@@ -290,6 +293,10 @@ async fn pairing_stores_the_token_in_the_secret_store() {
     );
 }
 
+fn identity(device: &str, fw: &str) -> Value {
+    json!({"device_id": device, "public_key": format!("pk-{device}"), "firmware_version": fw})
+}
+
 fn status(gated: bool) -> Value {
     json!({"integrity": {"writes_gated": gated}, "paired": true})
 }
@@ -300,7 +307,7 @@ async fn firmware_seed(gated: bool, pending: bool) -> (MockServer, SeedApiRuntim
         ("/api/v1/status", status(gated)),
         (
             "/api/v1/identity",
-            json!({"firmware_version": "0.24.2", "device_id": "d"}),
+            identity("dev-a", "0.24.2"),
         ),
         ("/api/v1/witness/chain", json!({"length": 3})),
         ("/api/v1/apps/fall-detect/config", json!({"interval": 1})),
@@ -325,8 +332,9 @@ async fn firmware_upgrade_needs_a_verified_backup_and_ungated_writes() {
     post("/api/v1/upgrade/apply", 1).mount(&s).await;
     post("/api/v1/store/truncate-confirm", 0).mount(&s).await;
     let b = rt.backup(&tmp.path().join("b1")).await.unwrap();
-    assert_eq!(b.firmware, "0.24.2");
-    assert_eq!(b.files.len(), 5);
+    assert_eq!(b.firmware(), "0.24.2");
+    assert_eq!((b.device_id(), b.node_id()), ("dev-a", NODE));
+    assert_eq!(b.files().len(), 5);
     assert_eq!(
         super::test_support::mode_of(&tmp.path().join("b1/identity.json")),
         0o600

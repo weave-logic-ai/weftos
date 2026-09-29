@@ -276,6 +276,11 @@ pub enum ContainerError {
     InvalidConfig(String),
 }
 
+/// Image namespace of cog workload images built by the container
+/// adapters (`crate::workload_runtime::container`). The simulated
+/// [`ContainerManager::start_container`] refuses these.
+pub const COG_IMAGE_PREFIX: &str = "weftos-cog/";
+
 /// Container lifecycle manager.
 ///
 /// When the `containers` feature is enabled, this uses bollard
@@ -400,6 +405,17 @@ impl ContainerManager {
                 .ok_or_else(|| ContainerError::ContainerNotFound {
                     name: name.to_owned(),
                 })?;
+
+        // A cog image must never be marked Running without running: its
+        // only start path is the governed engine adapter.
+        if entry.image.starts_with(COG_IMAGE_PREFIX) {
+            return Err(ContainerError::StartFailed {
+                name: name.to_owned(),
+                reason: "cog workloads start through workload_runtime::WorkloadHost \
+                         (governed, chained engine adapters), not the simulated manager"
+                    .into(),
+            });
+        }
 
         match &entry.state {
             ContainerState::Stopped | ContainerState::Creating | ContainerState::Failed(_) => {
@@ -662,6 +678,31 @@ mod tests {
             ContainerState::Failed("oom".into()).to_string(),
             "failed: oom"
         );
+    }
+
+    #[test]
+    fn simulated_start_refuses_cog_workload_images() {
+        let manager = ContainerManager::new(ContainerConfig::default());
+        manager.register(ManagedContainer {
+            name: "cog-anomaly-detect".into(),
+            image: format!("{COG_IMAGE_PREFIX}anomaly-detect:0123456789abcdef"),
+            container_id: None,
+            state: ContainerState::Stopped,
+            ports: Vec::new(),
+            env: HashMap::new(),
+            volumes: Vec::new(),
+            health_endpoint: None,
+            restart_policy: None,
+        });
+        let e = manager.start_container("cog-anomaly-detect").unwrap_err();
+        assert!(e.to_string().contains("WorkloadHost"), "{e}");
+        let state = manager
+            .list_containers()
+            .into_iter()
+            .find(|c| c.0 == "cog-anomaly-detect")
+            .unwrap()
+            .1;
+        assert_eq!(state, ContainerState::Stopped, "never faked Running");
     }
 
     #[test]

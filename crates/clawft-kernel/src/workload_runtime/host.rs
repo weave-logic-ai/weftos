@@ -14,10 +14,9 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use super::evidence::RunEvidence;
-use super::seed::SeedApiRuntime;
-use super::seed_ops::{KIND_SEED_FIRMWARE, SeedBackup, UpgradeOutcome};
+use super::cog_spec::valid_value;
 use super::types::{
-    InstanceHandle, InstanceStatus, RuntimeError, VerifiedWorkload, WorkloadConfig,
+    InstanceHandle, InstanceStatus, Preemption, RuntimeError, VerifiedWorkload, WorkloadConfig,
     WorkloadRuntime, WorkloadSource,
 };
 use crate::chain::{self, ChainManager};
@@ -34,7 +33,6 @@ pub struct WorkloadHost {
     chain: Option<Arc<ChainManager>>,
     agent_id: String,
     node_tier: NodeTrustTier,
-    network: NetworkPolicy,
     loaded: Mutex<HashMap<String, (VerifiedWorkload, bool)>>,
 }
 
@@ -52,7 +50,6 @@ impl WorkloadHost {
             chain: None,
             agent_id: agent_id.into(),
             node_tier,
-            network: NetworkPolicy::Lan,
             loaded: Mutex::new(HashMap::new()),
         }
     }
@@ -68,7 +65,13 @@ impl WorkloadHost {
         &self.runtime
     }
 
+    /// Governance context. `network` is what the adapter actually gives
+    /// instances ([`WorkloadRuntime::network_exposure`]). `secrets` is
+    /// false because no adapter delivers operator secrets: the only
+    /// credential an instance gets is its own `COGNITUM_COG_TOKEN`, minted
+    /// here for that instance's ingest bridge (COG-001 section 4).
     fn context(&self, w: &VerifiedWorkload, kind: &str, emulated: bool) -> Value {
+        let network: NetworkPolicy = self.runtime.network_exposure();
         let (trust, package_id, keys, hashes, cost) = match &w.source {
             WorkloadSource::SignedPackage(p) => (
                 "pinned_signer",
@@ -89,7 +92,7 @@ impl WorkloadHost {
             "kind": kind,
             "package_trust": trust,
             "node_tier": self.node_tier,
-            "network": self.network,
+            "network": network,
             "secrets": false,
             "emulated": emulated,
             "resource_cost": cost,
@@ -99,7 +102,7 @@ impl WorkloadHost {
         }})
     }
 
-    fn check(
+    pub(super) fn check(
         &self,
         action: &str,
         w: &VerifiedWorkload,
@@ -135,7 +138,7 @@ impl WorkloadHost {
         })
     }
 
-    fn outcome<T>(&self, kind: &str, mut payload: Value, r: &Result<T, RuntimeError>) {
+    pub(super) fn outcome<T>(&self, kind: &str, mut payload: Value, r: &Result<T, RuntimeError>) {
         match r {
             Ok(_) => {
                 payload["outcome"] = json!("ok");
@@ -190,7 +193,8 @@ impl WorkloadHost {
                 .lock()
                 .await
                 .insert(h.instance_id.clone(), (w.clone(), emulated));
-            if store {
+            // Chained only when something was actually installed.
+            if h.store_installed {
                 self.record(
                     chain::EVENT_KIND_WORKLOAD_INSTALL,
                     json!({
@@ -217,8 +221,15 @@ impl WorkloadHost {
         r
     }
 
-    /// Gate and run one console cycle (chained as `workload.start`, phase
-    /// `console`; instances stopped to free the feed as `workload.stop`).
+    /// Gate and run one console cycle, chained as `workload.start` with
+    /// phase `console`.
+    ///
+    /// Instances the adapter says must stop first (sensor feed contention,
+    /// including ones WeftOS did not load) are each gated as
+    /// `workload.stop`; if any is denied nothing is stopped. Each stop is
+    /// chained as it happens (so a failed console run still leaves the
+    /// record), and afterwards each stopped instance is restarted, gated
+    /// as `workload.start` and chained with phase `resume-after-console`.
     pub async fn console(
         &self,
         h: &InstanceHandle,
@@ -226,23 +237,93 @@ impl WorkloadHost {
     ) -> Result<RunEvidence, RuntimeError> {
         let (w, emu) = self.workload_of(h).await?;
         self.check("workload.start", &w, &w.kind, emu)?;
-        let r = self.runtime.console(h, command).await;
         let mut payload = self.base(&w, Some(&h.instance_id));
         payload["phase"] = json!("console");
-        if let Ok(ev) = &r {
-            for id in &ev.stopped_for_console {
-                self.record(
-                    chain::EVENT_KIND_WORKLOAD_STOP,
-                    json!({
-                        "runtime": self.runtime.id(), "workload_id": id, "outcome": "ok",
-                        "reason": "stopped before a console run (sensor feed contention)",
-                    }),
-                );
+        let pre = match self.preemptions_permitted(h).await {
+            Ok(p) => p,
+            Err(e) => {
+                self.outcome::<()>(chain::EVENT_KIND_WORKLOAD_START, payload, &Err(e.clone()));
+                return Err(e);
             }
+        };
+        let mut stopped = Vec::new();
+        let mut failed = None;
+        for (p, _) in &pre {
+            let r = self.runtime.preempt(p).await;
+            self.outcome(
+                chain::EVENT_KIND_WORKLOAD_STOP,
+                self.preempt_payload(p, h, "preempt-for-console"),
+                &r,
+            );
+            match r {
+                Ok(()) => stopped.push(p),
+                Err(e) => {
+                    failed = Some(e);
+                    break;
+                }
+            }
+        }
+        let mut r = match failed {
+            Some(e) => Err(e),
+            None => self.runtime.console(h, command).await,
+        };
+        let mut resumed = Vec::new();
+        for (p, pw) in pre.iter().filter(|(p, _)| stopped.contains(&p)) {
+            if self.check("workload.start", pw, &pw.kind, false).is_err() {
+                continue; // the gate chained its denial; the cog stays stopped
+            }
+            let rr = self.runtime.resume(p).await;
+            self.outcome(
+                chain::EVENT_KIND_WORKLOAD_START,
+                self.preempt_payload(p, h, "resume-after-console"),
+                &rr,
+            );
+            if rr.is_ok() {
+                resumed.push(p.workload_id.clone());
+            }
+        }
+        let ids: Vec<String> = stopped.iter().map(|p| p.workload_id.clone()).collect();
+        payload["preempted"] = json!(ids);
+        payload["resumed"] = json!(resumed);
+        if let Ok(ev) = &mut r {
+            ev.stopped_for_console = ids;
             payload["evidence"] = ev.audit();
         }
         self.outcome(chain::EVENT_KIND_WORKLOAD_START, payload, &r);
         r
+    }
+
+    /// The adapter's console preemptions, each gated as `workload.stop`.
+    async fn preemptions_permitted(
+        &self,
+        h: &InstanceHandle,
+    ) -> Result<Vec<(Preemption, VerifiedWorkload)>, RuntimeError> {
+        let mut out = Vec::new();
+        for p in self.runtime.console_preemptions(h).await? {
+            let version = if valid_value(&p.version) {
+                p.version.as_str()
+            } else {
+                "unknown"
+            };
+            let pw = VerifiedWorkload::store_pin(&p.registry, &p.workload_id, version, None)?;
+            self.check("workload.stop", &pw, &pw.kind, false)
+                .map_err(|e| RuntimeError::Governance(format!(
+                    "console run needs {} stopped: {e}",
+                    p.workload_id
+                )))?;
+            out.push((p, pw));
+        }
+        Ok(out)
+    }
+
+    fn preempt_payload(&self, p: &Preemption, h: &InstanceHandle, phase: &str) -> Value {
+        json!({
+            "runtime": self.runtime.id(),
+            "workload_id": p.workload_id,
+            "version": p.version,
+            "phase": phase,
+            "for_instance": h.instance_id,
+        })
     }
 
     /// Gate and stop.
@@ -280,44 +361,4 @@ impl WorkloadHost {
     pub async fn status(&self, h: &InstanceHandle) -> InstanceStatus {
         self.runtime.status(h).await
     }
-
-    /// Governed, backed-up Seed firmware upgrade: gated as
-    /// `workload.install` with kind `seed-firmware`, outcome chained.
-    pub async fn upgrade_seed_firmware(
-        &self,
-        seed: &SeedApiRuntime,
-        backup: &SeedBackup,
-    ) -> Result<UpgradeOutcome, RuntimeError> {
-        let w = VerifiedWorkload::store_pin("cognitum", "seed-firmware", "current", None)?;
-        self.check("workload.install", &w, KIND_SEED_FIRMWARE, false)?;
-        let r = seed.upgrade_firmware(backup).await;
-        let mut payload = json!({
-            "runtime": seed_id(), "phase": "firmware-upgrade", "backup": backup.audit(),
-        });
-        if let Ok(o) = &r {
-            payload["result"] = json!(format!("{o:?}"));
-        }
-        self.outcome(chain::EVENT_KIND_WORKLOAD_INSTALL, payload, &r);
-        r
-    }
-
-    /// Governed `writes_gated` recovery (truncate-confirm after a backup).
-    pub async fn recover_seed_writes(
-        &self,
-        seed: &SeedApiRuntime,
-        backup: &SeedBackup,
-    ) -> Result<(), RuntimeError> {
-        let w = VerifiedWorkload::store_pin("cognitum", "seed-firmware", "current", None)?;
-        self.check("workload.install", &w, KIND_SEED_FIRMWARE, false)?;
-        let r = seed.recover_writes_gated(backup).await;
-        let payload = json!({
-            "runtime": seed_id(), "phase": "writes-gated-recovery", "backup": backup.audit(),
-        });
-        self.outcome(chain::EVENT_KIND_WORKLOAD_INSTALL, payload, &r);
-        r
-    }
-}
-
-fn seed_id() -> &'static str {
-    super::seed::SEED_ID
 }

@@ -9,7 +9,9 @@
 //!   adapter with the same binary env var.
 //! - `COGNITUM_SEED_LIVE=1`: fall-detect on a real Seed at
 //!   `COGNITUM_SEED_BASE` with `COGNITUM_SEED_TOKEN`. Never installs a new
-//!   cog (fall-detect must already be installed); start, console, stop.
+//!   cog (fall-detect must already be installed; the install path is
+//!   covered against the mock Seed in `tests_seed_host`); start, console
+//!   (preempt, run, restore), stop.
 //!
 //! The chain is always an in-memory [`ChainManager`], never the operator's.
 
@@ -28,7 +30,9 @@ use super::seed_http::HttpSeedTransport;
 use super::test_support::{MemoryCredentials, signed_workload};
 use super::types::*;
 use crate::chain::ChainManager;
-use crate::workload_governance::{NodeTrustTier, PackageTrust, WorkloadGate, WorkloadPermitRule};
+use crate::workload_governance::{
+    NetworkPolicy, NodeTrustTier, PackageTrust, WorkloadGate, WorkloadPermitRule,
+};
 
 /// Upstream anomaly-detect `cog.toml` (identity, config surface, console).
 const ANOMALY_TOML: &str = r#"[cog]
@@ -137,10 +141,11 @@ fn runtime_kinds(chain: &ChainManager) -> Vec<String> {
 async fn anomaly_detect_cycle(rt: Arc<dyn WorkloadRuntime>, csi_bind: &str, feed_to: String) {
     let bin = std::env::var("WEFTOS_COG_AARCH64_BIN").expect("WEFTOS_COG_AARCH64_BIN");
     let fx = signed_workload(ANOMALY_TOML, &[("aarch64", &std::fs::read(bin).unwrap())]);
-    let (host, chain) = host_for(
-        rt.clone(),
-        WorkloadPermitRule::new("live", ["workload.*"], ["cog"]),
-    );
+    // Native and container instances can reach the internet (nothing
+    // restricts egress yet), so the operator permit has to allow it.
+    let mut permit = WorkloadPermitRule::new("live", ["workload.*"], ["cog"]);
+    permit.max_network = NetworkPolicy::Egress;
+    let (host, chain) = host_for(rt.clone(), permit);
     let _feed = Feed::start(feed_to);
     let mut cfg = WorkloadConfig {
         mode: RunMode::Interval { secs: 1 },
@@ -275,6 +280,7 @@ async fn live_seed_fall_detect() {
     );
     let mut permit = WorkloadPermitRule::new("seed-live", ["workload.*"], ["cog"]);
     permit.min_package_trust = PackageTrust::OperatorAttested;
+    permit.max_network = NetworkPolicy::Egress;
     let (host, chain) = host_for(seed.clone(), permit);
     let w = VerifiedWorkload::store_pin("cognitum", "fall-detect", "1.0.0", None).unwrap();
     let cfg = WorkloadConfig {
@@ -301,6 +307,8 @@ async fn live_seed_fall_detect() {
     );
     assert!(ev.stopped_for_console.contains(&"fall-detect".to_string()));
     assert!(!ev.stdout.is_empty());
+    // The host restarted what it preempted for the console run.
+    assert_eq!(host.status(&h).await.state, InstanceState::Running);
     let stop = host.stop(&h, Duration::from_secs(3)).await.expect("stop");
     eprintln!("[seed] stop evidence: {} log bytes", stop.stdout_bytes);
     for c in seed
@@ -328,8 +336,11 @@ async fn live_seed_fall_detect() {
     );
     let kinds = runtime_kinds(&chain);
     eprintln!("[seed] chain: {kinds:?}");
+    assert!(
+        !kinds.iter().any(|k| k == "workload.install"),
+        "fall-detect was already installed: no install may be chained"
+    );
     for k in [
-        "workload.install",
         "workload.load",
         "workload.start",
         "workload.stop",

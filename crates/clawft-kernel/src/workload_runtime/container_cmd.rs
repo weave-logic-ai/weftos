@@ -105,7 +105,11 @@ pub fn dockerfile(base_image: &str) -> String {
 
 /// Image tag for a binary: `weftos-cog/<id>:<16 hex of its BLAKE3>`.
 pub fn image_tag(cog_id: &str, blake3: &str) -> String {
-    format!("weftos-cog/{cog_id}:{}", &blake3[..16.min(blake3.len())])
+    format!(
+        "{}{cog_id}:{}",
+        crate::container::COG_IMAGE_PREFIX,
+        &blake3[..16.min(blake3.len())]
+    )
 }
 
 /// `build` command.
@@ -143,8 +147,8 @@ pub struct RunSpec<'a> {
     pub limits: RunLimits,
     /// Env file (0600, holds the token).
     pub env_file: &'a Path,
-    /// Host UDP port published to the container's feed port, if any.
-    pub feed_publish: Option<(u16, u16)>,
+    /// `(host address, host UDP port, container feed port)` to publish.
+    pub feed_publish: Option<(std::net::IpAddr, u16, u16)>,
     /// Network to attach, if not the engine default.
     pub network: Option<&'a str>,
     /// Detached (instances) or foreground (console runs).
@@ -186,8 +190,12 @@ pub fn run_cmd(engine: Engine, s: &RunSpec<'_>) -> Result<Vec<String>, RuntimeEr
             "no-new-privileges".into(),
         ]);
     }
-    if let Some((host, inner)) = s.feed_publish {
-        v.extend(["-p".into(), format!("127.0.0.1:{host}:{inner}/udp")]);
+    if let Some((ip, host, inner)) = s.feed_publish {
+        let addr = match ip {
+            std::net::IpAddr::V4(a) => a.to_string(),
+            std::net::IpAddr::V6(a) => format!("[{a}]"),
+        };
+        v.extend(["-p".into(), format!("{addr}:{host}:{inner}/udp")]);
     }
     if let Some(n) = s.network {
         v.extend(["--network".into(), n.into()]);

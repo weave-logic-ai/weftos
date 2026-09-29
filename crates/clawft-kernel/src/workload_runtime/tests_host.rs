@@ -15,13 +15,26 @@ use super::host_contract::HostContract;
 use super::test_support::signed_workload;
 use super::types::*;
 use crate::chain::{ChainEvent, ChainManager};
-use crate::workload_governance::{NodeTrustTier, PackageTrust, WorkloadGate, WorkloadPermitRule};
+use crate::workload_governance::{
+    NetworkPolicy, NodeTrustTier, PackageTrust, WorkloadGate, WorkloadPermitRule,
+};
 
 #[derive(Default)]
 struct MockRuntime {
     calls: Mutex<Vec<String>>,
     refuse_admission: bool,
-    stopped_for_console: Vec<String>,
+    preemptions: Vec<Preemption>,
+    fail_console: bool,
+    store_installed: bool,
+    egress: bool,
+}
+
+fn preemption(id: &str) -> Preemption {
+    Preemption {
+        registry: "cognitum".into(),
+        workload_id: id.into(),
+        version: "1.0.0".into(),
+    }
 }
 
 impl MockRuntime {
@@ -31,11 +44,12 @@ impl MockRuntime {
     fn note(&self, c: &str) {
         self.calls.lock().unwrap().push(c.into());
     }
-    fn handle(w: &VerifiedWorkload) -> InstanceHandle {
+    fn handle(&self, w: &VerifiedWorkload) -> InstanceHandle {
         InstanceHandle {
             runtime: "mock".into(),
             instance_id: format!("{}-i", w.id),
             workload_id: w.id.clone(),
+            store_installed: self.store_installed,
         }
     }
 }
@@ -68,7 +82,7 @@ impl WorkloadRuntime for MockRuntime {
         _c: &WorkloadConfig,
     ) -> Result<InstanceHandle, RuntimeError> {
         self.note("load");
-        Ok(Self::handle(w))
+        Ok(self.handle(w))
     }
     async fn start(&self, _h: &InstanceHandle) -> Result<(), RuntimeError> {
         self.note("start");
@@ -94,13 +108,36 @@ impl WorkloadRuntime for MockRuntime {
     fn control_mode(&self) -> ControlMode {
         ControlMode::Managed
     }
+    fn network_exposure(&self) -> NetworkPolicy {
+        if self.egress {
+            NetworkPolicy::Egress
+        } else {
+            NetworkPolicy::Lan
+        }
+    }
+    async fn console_preemptions(
+        &self,
+        _h: &InstanceHandle,
+    ) -> Result<Vec<Preemption>, RuntimeError> {
+        Ok(self.preemptions.clone())
+    }
+    async fn preempt(&self, p: &Preemption) -> Result<(), RuntimeError> {
+        self.note(&format!("preempt:{}", p.workload_id));
+        Ok(())
+    }
+    async fn resume(&self, p: &Preemption) -> Result<(), RuntimeError> {
+        self.note(&format!("resume:{}", p.workload_id));
+        Ok(())
+    }
     async fn console(&self, h: &InstanceHandle, _c: &str) -> Result<RunEvidence, RuntimeError> {
         self.note("console");
+        if self.fail_console {
+            return Err(RuntimeError::Backend("seed console: HTTP 500".into()));
+        }
         Ok(RunEvidence {
             runtime: "mock".into(),
             instance_id: h.instance_id.clone(),
             exit_code: Some(0),
-            stopped_for_console: self.stopped_for_console.clone(),
             ..RunEvidence::default()
         })
     }
@@ -171,20 +208,33 @@ async fn default_deny_stops_load_before_the_adapter_loads_and_chains_the_denial(
 async fn permitted_lifecycle_chains_every_transition_without_secrets_or_output() {
     let fx = signed_workload(TOML, &[("aarch64", b"\x7fELF")]);
     let rt = Arc::new(MockRuntime {
-        stopped_for_console: vec!["other-cog".into()],
+        preemptions: vec![preemption("other-cog")],
         ..MockRuntime::default()
     });
-    let (h, chain) = host(rt.clone(), &[all_cog()]);
+    let mut store = all_cog();
+    store.id = "permit-store".into();
+    store.min_package_trust = PackageTrust::OperatorAttested;
+    let (h, chain) = host(rt.clone(), &[all_cog(), store]);
     let c = cfg();
     let inst = h.load(&fx.workload, &c).await.unwrap();
     h.start(&inst).await.unwrap();
-    h.console(&inst, "--once").await.unwrap();
+    let cev = h.console(&inst, "--once").await.unwrap();
+    assert_eq!(cev.stopped_for_console, ["other-cog"]);
     let ev = h.stop(&inst, Duration::from_secs(1)).await.unwrap();
     assert_eq!(ev.exit_code, Some(0));
     assert!(h.unload(inst.clone()).await.is_err());
     assert_eq!(
         rt.calls(),
-        ["admit", "load", "start", "console", "stop", "unload"]
+        [
+            "admit",
+            "load",
+            "start",
+            "preempt:other-cog",
+            "console",
+            "resume:other-cog",
+            "stop",
+            "unload"
+        ]
     );
 
     assert_eq!(
@@ -193,6 +243,7 @@ async fn permitted_lifecycle_chains_every_transition_without_secrets_or_output()
             "workload.load",
             "workload.start",
             "workload.stop",
+            "workload.start",
             "workload.start",
             "workload.stop",
             "workload.refuse"
@@ -206,6 +257,8 @@ async fn permitted_lifecycle_chains_every_transition_without_secrets_or_output()
             "workload.start",
             "workload.start",
             "workload.stop",
+            "workload.start",
+            "workload.stop",
             "workload.unload"
         ]
     );
@@ -217,8 +270,16 @@ async fn permitted_lifecycle_chains_every_transition_without_secrets_or_output()
         load["host_contract"]["token_hash"],
         Value::String(c.host.token_hash())
     );
-    assert_eq!(rt_events[3].payload.as_ref().unwrap()["phase"], "console");
-    let refuse = rt_events[5].payload.as_ref().unwrap();
+    assert_eq!(
+        rt_events[2].payload.as_ref().unwrap()["phase"],
+        "preempt-for-console"
+    );
+    assert_eq!(
+        rt_events[3].payload.as_ref().unwrap()["phase"],
+        "resume-after-console"
+    );
+    assert_eq!(rt_events[4].payload.as_ref().unwrap()["phase"], "console");
+    let refuse = rt_events[6].payload.as_ref().unwrap();
     assert_eq!(refuse["failed_action"], "workload.unload");
     assert_eq!(refuse["error_code"], "backend");
 
@@ -264,8 +325,11 @@ async fn store_pins_are_gated_as_install_and_need_an_operator_attested_permit() 
 
     let mut store = WorkloadPermitRule::new("permit-store", ["workload.*"], ["cog"]);
     store.min_package_trust = PackageTrust::OperatorAttested;
-    let rt = Arc::new(MockRuntime::default());
-    let (h, chain) = host(rt.clone(), &[store]);
+    let rt = Arc::new(MockRuntime {
+        store_installed: true,
+        ..MockRuntime::default()
+    });
+    let (h, chain) = host(rt.clone(), &[store.clone()]);
     let inst = h.load(&w, &cfg()).await.unwrap();
     assert_eq!(
         kinds(&chain, RUNTIME_CHAIN_SOURCE),
@@ -276,6 +340,12 @@ async fn store_pins_are_gated_as_install_and_need_an_operator_attested_permit() 
         ["workload.install", "workload.load"]
     );
     h.start(&inst).await.unwrap();
+
+    // Already installed on the device: gated as install, but no install
+    // event is chained because nothing was installed.
+    let (h, chain) = host(Arc::new(MockRuntime::default()), &[store]);
+    h.load(&w, &cfg()).await.unwrap();
+    assert_eq!(kinds(&chain, RUNTIME_CHAIN_SOURCE), ["workload.load"]);
 }
 
 #[tokio::test]
@@ -286,10 +356,112 @@ async fn transitions_on_unknown_instances_fail_without_touching_the_adapter() {
         runtime: "mock".into(),
         instance_id: "ghost".into(),
         workload_id: "x".into(),
+        store_installed: false,
     };
     assert!(matches!(
         h.start(&ghost).await,
         Err(RuntimeError::UnknownInstance(_))
     ));
     assert!(rt.calls().is_empty());
+}
+
+#[tokio::test]
+async fn console_preemption_is_gated_as_stop_and_denial_stops_nothing() {
+    let fx = signed_workload(TOML, &[("aarch64", b"\x7fELF")]);
+    let rt = Arc::new(MockRuntime {
+        preemptions: vec![preemption("baby-cry")],
+        ..MockRuntime::default()
+    });
+    // Load and start are permitted, stop is not.
+    let rule = WorkloadPermitRule::new("no-stop", ["workload.load", "workload.start"], ["cog"]);
+    let (h, chain) = host(rt.clone(), &[rule]);
+    let inst = h.load(&fx.workload, &cfg()).await.unwrap();
+    let e = h.console(&inst, "--once").await.unwrap_err();
+    assert!(
+        matches!(e, RuntimeError::Governance(ref m) if m.contains("baby-cry")),
+        "{e}"
+    );
+    assert_eq!(rt.calls(), ["admit", "load"], "nothing stopped, no console");
+    assert_eq!(
+        kinds(&chain, RUNTIME_CHAIN_SOURCE),
+        ["workload.load", "workload.refuse"]
+    );
+    let gate = events(&chain, "workload");
+    let last = gate.last().unwrap();
+    assert_eq!(last.kind, "workload.stop");
+    assert_eq!(last.payload.as_ref().unwrap()["decision"], "deny");
+}
+
+#[tokio::test]
+async fn console_failure_still_chains_the_stops_and_restarts_what_it_stopped() {
+    let fx = signed_workload(TOML, &[("aarch64", b"\x7fELF")]);
+    let rt = Arc::new(MockRuntime {
+        preemptions: vec![preemption("fall-detect"), preemption("baby-cry")],
+        fail_console: true,
+        ..MockRuntime::default()
+    });
+    let mut store = all_cog();
+    store.id = "permit-store".into();
+    store.min_package_trust = PackageTrust::OperatorAttested;
+    let (h, chain) = host(rt.clone(), &[all_cog(), store]);
+    let inst = h.load(&fx.workload, &cfg()).await.unwrap();
+    assert!(h.console(&inst, "--once").await.is_err());
+    assert_eq!(
+        rt.calls(),
+        [
+            "admit",
+            "load",
+            "preempt:fall-detect",
+            "preempt:baby-cry",
+            "console",
+            "resume:fall-detect",
+            "resume:baby-cry"
+        ]
+    );
+    let ev = events(&chain, RUNTIME_CHAIN_SOURCE);
+    let summary: Vec<(String, String)> = ev
+        .iter()
+        .map(|e| {
+            let p = e.payload.as_ref().unwrap();
+            (
+                e.kind.clone(),
+                p["workload_id"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("workload.load".into(), "anomaly-detect".into()),
+            ("workload.stop".into(), "fall-detect".into()),
+            ("workload.stop".into(), "baby-cry".into()),
+            ("workload.start".into(), "fall-detect".into()),
+            ("workload.start".into(), "baby-cry".into()),
+            ("workload.refuse".into(), "anomaly-detect".into()),
+        ]
+    );
+    let refuse = ev.last().unwrap().payload.as_ref().unwrap();
+    assert_eq!(refuse["preempted"], serde_json::json!(["fall-detect", "baby-cry"]));
+    assert_eq!(refuse["resumed"], serde_json::json!(["fall-detect", "baby-cry"]));
+}
+
+#[tokio::test]
+async fn the_gate_sees_the_network_the_adapter_actually_gives() {
+    let fx = signed_workload(TOML, &[("aarch64", b"\x7fELF")]);
+    let rt = Arc::new(MockRuntime {
+        egress: true,
+        ..MockRuntime::default()
+    });
+    // Default permit: LAN at most (ADR-099 section 8).
+    let (h, chain) = host(rt.clone(), &[all_cog()]);
+    assert!(matches!(
+        h.load(&fx.workload, &cfg()).await,
+        Err(RuntimeError::Governance(_))
+    ));
+    let gate = events(&chain, "workload");
+    assert_eq!(gate[0].payload.as_ref().unwrap()["decision"], "deny");
+    let mut egress = all_cog();
+    egress.max_network = NetworkPolicy::Egress;
+    let (h, _) = host(rt, &[egress]);
+    h.load(&fx.workload, &cfg()).await.unwrap();
 }

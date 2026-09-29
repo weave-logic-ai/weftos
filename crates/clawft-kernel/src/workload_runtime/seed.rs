@@ -7,7 +7,9 @@
 //! - at most [`SEED_CONCURRENCY_CAP`] cogs run at once;
 //! - installed cogs auto-start, so `load` stops a cog it just installed and
 //!   `start` is the explicit transition;
-//! - running cogs are stopped before a console run (UDP 5006 contention);
+//! - a console run needs the feed to itself (UDP 5006 contention): the
+//!   adapter lists running cogs as [`Preemption`]s, the host gates and
+//!   stops each, runs the console cycle, then restarts them;
 //! - `unload` uninstalls only a cog this adapter installed.
 //!
 //! Governance runs in WeftOS at the adapter ([`super::WorkloadHost`]).
@@ -24,16 +26,17 @@ use tokio::sync::Mutex;
 use super::evidence::RunEvidence;
 use super::seed_http::{Method, SeedCredentials, SeedTransport};
 use super::types::{
-    Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, RuntimeError,
-    VerifiedWorkload, WorkloadConfig, WorkloadRuntime, WorkloadSource,
+    Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, Preemption,
+    RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadRuntime, WorkloadSource,
 };
+use crate::workload_governance::NetworkPolicy;
 use crate::workload_pkg::manifest::{valid_cog_id, valid_token};
 
 pub use super::seed_types::{
     API_TIMEOUT, CONSOLE_TIMEOUT, InstalledCog, LOG_LINES, SEED_CONCURRENCY_CAP, SEED_ID,
     SEED_REGISTRY, SeedConfig, SeedPin,
 };
-use super::seed_types::{backend, lines};
+use super::seed_types::lines;
 
 struct Instance {
     cog_id: String,
@@ -73,50 +76,6 @@ impl SeedApiRuntime {
         })
     }
 
-    /// Call the Seed API with the stored credential.
-    pub(super) async fn api(
-        &self,
-        method: Method,
-        path: &str,
-        body: Option<&Value>,
-        timeout: Duration,
-    ) -> Result<Value, RuntimeError> {
-        let token = self.creds.get(&self.cfg.node_id)?;
-        let (status, v) = self
-            .transport
-            .request(method, path, body, &token, timeout)
-            .await?;
-        if !(200..300).contains(&status) {
-            return Err(backend(path, status, &v));
-        }
-        Ok(v)
-    }
-
-    /// Installed cogs (`GET /api/v1/apps`).
-    pub async fn installed(&self) -> Result<Vec<InstalledCog>, RuntimeError> {
-        let v = self
-            .api(Method::Get, "/api/v1/apps", None, API_TIMEOUT)
-            .await?;
-        let list = v
-            .get("installed")
-            .and_then(Value::as_array)
-            .ok_or_else(|| RuntimeError::Backend("seed /api/v1/apps: no installed list".into()))?;
-        Ok(list
-            .iter()
-            .filter_map(|a| {
-                Some(InstalledCog {
-                    id: a.get("id")?.as_str()?.to_string(),
-                    version: a
-                        .get("version")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    running: a.get("running").and_then(Value::as_bool).unwrap_or(false),
-                })
-            })
-            .collect())
-    }
-
     fn pin_for(&self, w: &VerifiedWorkload) -> Result<&SeedPin, RuntimeError> {
         let WorkloadSource::StorePin { registry, sha256 } = &w.source else {
             return Err(RuntimeError::AdmissionRefused(
@@ -149,18 +108,6 @@ impl SeedApiRuntime {
             ));
         }
         Ok(pin)
-    }
-
-    /// Stop a cog by id (`POST /api/v1/apps/{id}/stop`).
-    pub async fn stop_cog(&self, id: &str) -> Result<(), RuntimeError> {
-        self.api(
-            Method::Post,
-            &format!("/api/v1/apps/{id}/stop"),
-            None,
-            API_TIMEOUT,
-        )
-        .await
-        .map(|_| ())
     }
 
     async fn instance_cog(&self, h: &InstanceHandle) -> Result<String, RuntimeError> {
@@ -293,6 +240,7 @@ impl WorkloadRuntime for SeedApiRuntime {
             runtime: SEED_ID.into(),
             instance_id: iid,
             workload_id: w.id.clone(),
+            store_installed: installed_here,
         })
     }
 
@@ -309,14 +257,7 @@ impl WorkloadRuntime for SeedApiRuntime {
                 self.cfg.concurrency_cap
             )));
         }
-        self.api(
-            Method::Post,
-            &format!("/api/v1/apps/{id}/start"),
-            None,
-            API_TIMEOUT,
-        )
-        .await?;
-        Ok(())
+        self.start_cog(&id).await
     }
 
     async fn stop(
@@ -394,6 +335,40 @@ impl WorkloadRuntime for SeedApiRuntime {
         ControlMode::Managed
     }
 
+    /// The Seed firmware, not WeftOS, decides what its cogs can reach; the
+    /// Seed has internet access, so the gate is told `egress`.
+    fn network_exposure(&self) -> NetworkPolicy {
+        NetworkPolicy::Egress
+    }
+
+    /// Every running cog, including ones WeftOS did not load (UDP 5006
+    /// contention: any listener on the Seed competes for the feed).
+    async fn console_preemptions(
+        &self,
+        h: &InstanceHandle,
+    ) -> Result<Vec<Preemption>, RuntimeError> {
+        self.instance_cog(h).await?;
+        Ok(self
+            .installed()
+            .await?
+            .into_iter()
+            .filter(|c| c.running)
+            .map(|c| Preemption {
+                registry: SEED_REGISTRY.into(),
+                workload_id: c.id,
+                version: c.version,
+            })
+            .collect())
+    }
+
+    async fn preempt(&self, p: &Preemption) -> Result<(), RuntimeError> {
+        self.stop_cog(&p.workload_id).await
+    }
+
+    async fn resume(&self, p: &Preemption) -> Result<(), RuntimeError> {
+        self.start_cog(&p.workload_id).await
+    }
+
     async fn console(
         &self,
         h: &InstanceHandle,
@@ -411,11 +386,20 @@ impl WorkloadRuntime for SeedApiRuntime {
                 "console command {command:?} is not pinned"
             )));
         }
-        // UDP 5006 contention: every running cog is stopped first.
-        let mut stopped = Vec::new();
-        for c in self.installed().await?.into_iter().filter(|c| c.running) {
-            self.stop_cog(&c.id).await?;
-            stopped.push(c.id);
+        // UDP 5006 contention: the host preempts running cogs (each gated
+        // as `workload.stop`) before calling this; never stop them here.
+        let running: Vec<String> = self
+            .installed()
+            .await?
+            .into_iter()
+            .filter(|c| c.running)
+            .map(|c| c.id)
+            .collect();
+        if !running.is_empty() {
+            return Err(RuntimeError::InvalidState(format!(
+                "cogs still running on the Seed ({}); a console run needs the feed to itself",
+                running.join(", ")
+            )));
         }
         let t0 = Instant::now();
         let v = self
@@ -450,7 +434,6 @@ impl WorkloadRuntime for SeedApiRuntime {
             stderr_bytes: err.len() as u64,
             stdout: out,
             stderr: err,
-            stopped_for_console: stopped,
             ..RunEvidence::default()
         })
     }

@@ -349,3 +349,42 @@ fn inspect_output_parses_for_each_engine_shape() {
     );
     assert_eq!(parse_inspect(Engine::Docker, "not json"), None);
 }
+
+#[tokio::test]
+async fn feed_publish_address_and_network_exposure_follow_the_config() {
+    use crate::workload_governance::NetworkPolicy;
+    let rec = Arc::new(Recorder::default());
+    let root = tempfile::tempdir().unwrap();
+    let fx = signed_workload(TOML, &[("aarch64", &aarch64_elf())]);
+    let mut c = ContainerRuntimeConfig::new(Engine::Docker, BASE, root.path());
+    c.feed_host_port = Some(25006);
+    c.feed_publish_ip = "192.0.2.20".parse().unwrap();
+    let r = ContainerRuntime::new(c.clone(), rec.clone());
+    // Default bridge network: the container can reach the internet.
+    assert_eq!(r.network_exposure(), NetworkPolicy::Egress);
+    let h = r.load(&fx.workload, &cfg()).await.unwrap();
+    r.start(&h).await.unwrap();
+    let s = rec.find("run").join(" ");
+    assert!(s.contains("-p 192.0.2.20:25006:5006/udp"), "{s}");
+
+    c.feed_publish_ip = "::".parse().unwrap();
+    c.network = Some("none".into());
+    let r6 = ContainerRuntime::new(c.clone(), rec.clone());
+    assert_eq!(r6.network_exposure(), NetworkPolicy::None);
+    c.network = Some("host".into());
+    assert_eq!(
+        ContainerRuntime::new(c, rec.clone()).network_exposure(),
+        NetworkPolicy::Egress
+    );
+    let mut c2 = cfg();
+    c2.node_id = "mac-2".into();
+    let h6 = r6.load(&fx.workload, &c2).await.unwrap();
+    r6.start(&h6).await.unwrap();
+    let runs: Vec<String> = rec
+        .calls()
+        .into_iter()
+        .filter(|c| c[0] == "run")
+        .map(|c| c.join(" "))
+        .collect();
+    assert!(runs[1].contains("-p [::]:25006:5006/udp"), "{}", runs[1]);
+}

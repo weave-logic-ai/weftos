@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::cog_spec::CogSpec;
 use super::evidence::RunEvidence;
 use super::host_contract::HostContract;
+use crate::workload_governance::NetworkPolicy;
 
 /// Whether the layer controls an instance or only observes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +151,23 @@ pub struct InstanceHandle {
     pub instance_id: String,
     /// Workload id.
     pub workload_id: String,
+    /// Whether `load` installed the payload into a device store (Seed
+    /// store path). False when it was already installed, and for adapters
+    /// that stage rather than install.
+    #[serde(default)]
+    pub store_installed: bool,
+}
+
+/// A running instance that must stop before a console run of another
+/// (sensor feed contention). The host gates each as `workload.stop`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Preemption {
+    /// Store registry the running cog came from.
+    pub registry: String,
+    /// Cog id.
+    pub workload_id: String,
+    /// Installed version.
+    pub version: String,
 }
 
 /// Lifecycle state of an instance.
@@ -262,6 +280,33 @@ pub trait WorkloadRuntime: Send + Sync {
     async fn status(&self, h: &InstanceHandle) -> InstanceStatus;
     /// Managed or adopted.
     fn control_mode(&self) -> ControlMode;
+    /// Network exposure instances of this adapter actually get, reported
+    /// to the gate as the request's `network` (never assumed).
+    fn network_exposure(&self) -> NetworkPolicy;
+    /// Instances that must stop before a console run of `h`. The host
+    /// gates each one as `workload.stop` before calling [`Self::preempt`].
+    async fn console_preemptions(
+        &self,
+        _h: &InstanceHandle,
+    ) -> Result<Vec<Preemption>, RuntimeError> {
+        Ok(Vec::new())
+    }
+    /// Stop one preempted instance.
+    async fn preempt(&self, p: &Preemption) -> Result<(), RuntimeError> {
+        Err(RuntimeError::Unsupported(format!(
+            "{} cannot preempt {}",
+            self.id(),
+            p.workload_id
+        )))
+    }
+    /// Restart one preempted instance after the console run.
+    async fn resume(&self, p: &Preemption) -> Result<(), RuntimeError> {
+        Err(RuntimeError::Unsupported(format!(
+            "{} cannot resume {}",
+            self.id(),
+            p.workload_id
+        )))
+    }
     /// Run one console cycle (`[console]` limits apply). `command` must be
     /// one of the cog's `[console].allowed_commands`.
     async fn console(&self, h: &InstanceHandle, command: &str)

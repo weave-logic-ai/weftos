@@ -166,3 +166,49 @@ On the node itself, `--runtime native` does the same without SSH.
 
 Cognitum Seeds are not driven by this mode. They run cogs through their own HTTP
 API (COG-001 section 5), and that adapter is card 09.
+
+## Adapter-driven runs (card 09)
+
+With `--launcher`, the harness does not spawn the cog itself. It runs
+`<launcher> -- <cog argv>`, where the launcher is `examples/cog_adapter_run.rs`:
+it packs and signs the binary with a throwaway operator key, verifies it, and
+runs it through a `WorkloadRuntime` adapter under `WorkloadHost` (governance on
+every transition, an in-memory chain, never operator data). `--runtime` still
+says where the harness runs; `--adapter-runtime` picks the adapter.
+
+```bash
+scripts/build.sh cogs-launcher --linux-arm64      # launcher for a Linux ARM node / container
+scripts/build.sh cogs-launcher                    # launcher for this host
+
+# native adapter, aarch64 container standing in for a Linux ARM node
+scripts/build.sh cogs-conformance sweep --runtime docker --cogs anomaly-detect \
+    --launcher target/linux-arm64/debug/examples/cog_adapter_run \
+    --adapter-runtime native --adapter-run-as 65534:65534 --label adapter-native-aarch64-container-once
+
+# docker adapter (OrbStack): harness and cog share the VM's host network, so the
+# cog reaches the harness ingest stub on 127.0.0.1:80. The harness container
+# gets the engine socket and a static Linux docker CLI.
+scripts/build.sh cogs-conformance sweep --runtime docker --cogs anomaly-detect \
+    --launcher target/linux-arm64/debug/examples/cog_adapter_run \
+    --adapter-runtime docker --adapter-network host --adapter-base-image python@sha256:<digest> \
+    --harness-engine-arg=--net=host \
+    --harness-engine-arg=-v --harness-engine-arg=/var/run/docker.sock:/var/run/docker.sock \
+    --harness-engine-arg=-v --harness-engine-arg=<linux docker cli>:/usr/local/bin/docker:ro \
+    --timeout 60 --label adapter-docker-aarch64-once
+
+# Apple container adapter, harness on the Mac, feed published to the container
+scripts/build.sh cogs-conformance sweep --runtime native --cogs anomaly-detect \
+    --launcher target/debug/examples/cog_adapter_run --adapter-runtime apple \
+    --adapter-feed-port 25006 --udp-port 25006 --ingest-port 18080 \
+    --adapter-base-image python@sha256:<digest> --timeout 60 --label adapter-apple-aarch64-once
+```
+
+Results (2026-09-29, `scripts/cogs/results/adapter-*`): native and docker are
+clean for anomaly-detect `--once`, and for anomaly-detect, fall-detect,
+sleep-apnea and health-monitor in their expected modes (the last two
+`--interval`, exercising start / stop). Apple container runs anomaly-detect to
+exit 0 with its JSON report and 8 anomalies found in the feed (so the published
+feed reached it), but classifies `no-output`: the cog posts to `127.0.0.1:80`
+inside its own VM, where nothing listens, and the Mac cannot give it a shared
+loopback. That needs the node-local ingest bridge (card 10); the card-08
+in-target run on Apple container stays the ingest evidence there.

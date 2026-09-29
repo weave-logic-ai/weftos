@@ -177,6 +177,10 @@ rand = { workspace = true }
 rand_chacha = "0.3"
 rand_distr = "0.4"
 
+[[example]]
+name = "cog_adapter_run"
+required-features = ["workload-runtime"]
+
 [[bench]]
 name = "vector_backend_bench"
 harness = false

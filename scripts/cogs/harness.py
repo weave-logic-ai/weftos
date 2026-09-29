@@ -13,7 +13,10 @@ For each cog it provides:
   * a stub Seed ingest endpoint on 127.0.0.1:<ingest-port> (default 80) that
     accepts POST /api/v1/store/ingest and answers 404 to everything else;
   * a supervised run of the cog with `--once` or `--interval N`, capturing
-    timestamped stdout / stderr lines and ingest POSTs.
+    timestamped stdout / stderr lines and ingest POSTs. With a plan
+    `launcher` (argv list), the cog is started as `<launcher> -- <cog argv>`,
+    so a WeftOS runtime adapter (examples/cog_adapter_run.rs) runs it under
+    governance instead of this process spawning it directly.
 
 It writes one JSON result per cog. Classification and summaries happen on
 the host (scripts/cogs/classify.py) so results stay raw evidence.
@@ -114,6 +117,16 @@ def cycle_stats(mode, elapsed_ms, rc, event_times_ms):
         return None, len(times)
     gaps = [b - a for a, b in zip(times, times[1:])]
     return round(statistics.median(gaps), 1), len(times)
+
+
+def launcher_argv(launcher, argv):
+    """Prefix a cog argv with an adapter launcher (`<launcher> -- <argv>`)."""
+    if not launcher:
+        return list(argv)
+    if not isinstance(launcher, list) or not all(
+            isinstance(a, str) and a and "\x00" not in a for a in launcher):
+        raise ValueError("launcher must be a list of non-empty strings")
+    return list(launcher) + ["--"] + list(argv)
 
 
 def build_argv(binary, mode, interval_s, extra_args):
@@ -268,6 +281,9 @@ def run_cog(spec, defaults):
               "interval_s": interval_s if mode == "interval" else None,
               "argv": [os.path.basename(argv[0])] + argv[1:], "timeout_s": timeout,
               "host_machine": platform.machine()}
+    launcher = defaults.get("launcher")
+    if launcher:
+        result["launcher"] = [os.path.basename(launcher[0])] + launcher[1:]
     if not os.path.isfile(binary):
         result.update(status="missing-binary", rc=None, timed_out=False)
         return result
@@ -279,7 +295,8 @@ def run_cog(spec, defaults):
         fx.state.t0 = t0
         out, err = [], []
         try:
-            proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            proc = subprocess.Popen(launcher_argv(launcher, argv),
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     stdin=subprocess.DEVNULL)
         except OSError as e:
             result.update(status="exec-error", rc=None, timed_out=False,
@@ -327,9 +344,11 @@ def run_plan(plan):
     defaults = {"timeout": float(plan.get("timeout", 15)),
                 "feed": plan.get("feed", "features"),
                 "udp_port": int(plan.get("udp_port", 5006)),
-                "ingest_port": int(plan.get("ingest_port", 80))}
+                "ingest_port": int(plan.get("ingest_port", 80)),
+                "launcher": plan.get("launcher")}
     if defaults["feed"] not in FEEDS:
         raise ValueError("bad feed")
+    launcher_argv(defaults["launcher"], [])  # validate once, up front
     results = []
     for spec in plan["cogs"]:
         r = run_cog(spec, defaults)
