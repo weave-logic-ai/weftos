@@ -105,6 +105,13 @@ enum Commands {
         cmd: Option<commands::update_cmd::UpdateCmd>,
     },
 
+    /// Workload packages: pack, verify, keygen (mesh-placement-07).
+    #[cfg(all(feature = "ecc", feature = "exochain"))]
+    Workload {
+        #[command(subcommand)]
+        cmd: commands::workload_pack::WorkloadPackCmd,
+    },
+
     /// Show version and build info.
     Version,
 }
@@ -165,6 +172,8 @@ async fn main() -> anyhow::Result<()> {
             None => commands::update_cmd::run_default().await?,
         },
         Commands::Init(args) => commands::init_cmd::run(args).await?,
+        #[cfg(all(feature = "ecc", feature = "exochain"))]
+        Commands::Workload { cmd } => commands::workload_pack::run(cmd)?,
         Commands::Version => {
             println!(
                 "weaver {} (WeftOS) · git {} · built {}",

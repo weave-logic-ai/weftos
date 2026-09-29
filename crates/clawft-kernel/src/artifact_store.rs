@@ -131,6 +131,47 @@ impl ArtifactStore {
         }
     }
 
+    /// Open a file-backed store, indexing artifacts already on disk
+    /// (`<base>/<2-hex>/<64-hex>`). Entries whose name is not a BLAKE3 hex
+    /// or that sit in the wrong shard are skipped; content is still
+    /// verified on every `load`. Indexed entries get type `Generic`.
+    pub fn open_file(base_path: PathBuf) -> Result<Self, KernelError> {
+        let store = Self::new_file(base_path.clone());
+        let io = |e: std::io::Error| KernelError::Service(format!("artifact index: {e}"));
+        let Ok(shards) = std::fs::read_dir(&base_path) else {
+            return Ok(store);
+        };
+        for shard in shards {
+            let shard = shard.map_err(io)?;
+            let prefix = shard.file_name().to_string_lossy().into_owned();
+            if prefix.len() != 2 || !shard.file_type().map_err(io)?.is_dir() {
+                continue;
+            }
+            for entry in std::fs::read_dir(shard.path()).map_err(io)? {
+                let entry = entry.map_err(io)?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let hex = name.len() == 64
+                    && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+                let meta = entry.metadata().map_err(io)?;
+                if !hex || !name.starts_with(&prefix) || !meta.is_file() {
+                    continue;
+                }
+                store.total_size.fetch_add(meta.len(), Ordering::Relaxed);
+                store.artifacts.insert(
+                    name.clone(),
+                    StoredArtifact {
+                        hash: name,
+                        size: meta.len(),
+                        content_type: ArtifactType::Generic,
+                        stored_at: Utc::now(),
+                        reference_count: AtomicU32::new(1),
+                    },
+                );
+            }
+        }
+        Ok(store)
+    }
+
     /// Set the chain manager for ExoChain event logging.
     #[cfg(feature = "exochain")]
     pub fn set_chain_manager(&mut self, cm: Arc<crate::chain::ChainManager>) {
