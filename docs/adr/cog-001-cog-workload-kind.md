@@ -14,7 +14,7 @@ Cognitum "cogs" (upstream `cognitum-one/cogs`, MIT; our vendored copy is 108 sta
 - Manifest: `[cog]` id / version / category / binary / `hardware_requirement`; typed `[config.*]` (some `secret = true`); `[console]` allowed_commands / max_runtime_secs / output_limit_bytes; optional `[api]`, `[resources]` ram_mb / cpu_pct, `[mcp]`, `[upstream]`, `[integrations.*]`. Entry is a CLI with `--once` / `--interval N`.
 - Host contract: input UDP `0.0.0.0:5006` ESP32 packets (magic `0xC5110003` = 48 bytes, 8 LE f32 at offset 16; `0xC5110002` = 32-byte vitals), override `COG_CSI_BIND`; fallback `GET 127.0.0.1:80/api/v1/sensor/stream` (`COG_SENSOR_URL`). Output: `POST 127.0.0.1:80/api/v1/store/ingest {"vectors":[[id,[8 floats]]],"dedup":true}` plus JSON on stdout. Env `COGNITUM_COG_TOKEN`, `COGNITUM_COG_DATA_DIR`, `COG_APP_DIR`.
 - Released binaries: aarch64 (107 of 108; `presence-field` missing) and armv7; no x86_64. Upstream ADR-001 rejected WASM for v1. Upstream signing: ADR-154/155 Ed25519 release records with a trust registry; only `anomaly-detect` is release-eligible today.
-- Sweep on Apple Silicon, all 107 aarch64 cogs with `--once` against a fake UDP feed and stub ingest in OrbStack: 93 clean, 5 persistent-listener health cogs need `--interval`, 7 need seed peers or other CLI (tailscale, cloud-inference, cognitive-pipeline, swarm-*).
+- Sweep on Apple Silicon, all 107 aarch64 cogs with `--once` against a fake UDP feed and stub ingest in OrbStack: 93 clean, 5 persistent-listener health cogs need `--interval`, 9 need seed peers, assets or other CLI (tailscale, cloud-inference, cognitive-pipeline, and six swarm-* cogs). Corrected 2026-09-29 from an earlier miscount of 7, per the committed conformance baseline in scripts/cogs/.
 - OrbStack (docker, linux/aarch64) runs aarch64 natively and armv7 emulated. Apple `container` 1.0 runs aarch64 only (armv7: Exec format error). The available x86_64 dev host is not an ARM target.
 - The sensor feed is UDP on the LAN of the sensors, so placement depends on data locality, not only CPU architecture.
 
@@ -50,7 +50,7 @@ Scoring adds the ADR-099 defaults: real ARM hardware over the Mac container over
 - Provide an **ingest bridge** speaking the `POST /api/v1/store/ingest` contract: validate shape and size, rate-limit, forward vectors to the WeftOS store over the mesh as signed `MeshIpcEnvelope`s to the store owner; capture stdout JSON as evidence and logs, never as control input.
 - Network policy: sensor feed in, ingest bridge out, nothing else. v1 relies on process user and bind discipline for native, and a restricted network for containers; nftables / landlock net rules are deferred.
 - `COGNITUM_COG_TOKEN` is a per-instance token accepted only by that instance's bridge.
-- Run mode is part of the kind spec: `once`, `interval N`, or `listener`; the catalog (from conformance results) records which of the 93 / 5 / 7 groups each cog belongs to.
+- Run mode is part of the kind spec: `once`, `interval N`, or `listener`; the catalog (from conformance results) records which of the 93 / 5 / 9 groups each cog belongs to.
 
 ### 5. Cognitum Seed strategy (Decided 2026-09-29; revised after real-hardware measurements)
 
