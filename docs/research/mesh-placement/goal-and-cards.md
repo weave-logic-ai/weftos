@@ -58,7 +58,10 @@ Source ADRs: `docs/adr/adr-099-governed-workload-placement.md`, `cog-001-cog-wor
   - **Frames.** Frames 0x0B and 0x0C carry `announce(have: artifact id + piece bitfield)`, `request(artifact id, piece indexes)` and `piece(data)`. Every piece's hash is checked before it is written to `ArtifactStore`, and the whole file's hash is checked at the end.
   - **Resume and serving.** Resume works from the local `have` bitfield. Any node holding verified pieces can serve them, not only the node the artifact came from. The protocol keeps room for card 25's multi-source fetch (a peer list, and piece requests spread across peers), but v1 fetches from one peer at a time.
   - **Sizes.** There's a per-frame size cap and no hard total-size ceiling in v1. It supports multi-GB payloads.
-  - **Governance.** Only artifacts whose signed manifest verifies (wave-1 `workload_pkg`) are served.
+  - **Governance and audit.** Only artifacts whose signed manifest verifies (wave-1 `workload_pkg`) are served. Transfer outcomes are chained, but not individual pieces:
+    - `artifact.fetch` (artifact id, source peer, bytes, result verified or failed);
+    - `artifact.piece_rejected` (artifact id, piece index, peer);
+    - `artifact.serve` (artifact id, requesting peer, the first time each peer is served).
 
   Depends on: 07. Acceptance, each tested over the in-tree mesh test support:
   - a node fetches a 10 MB package and a synthetic multi-GB file;
@@ -66,6 +69,7 @@ Source ADRs: `docs/adr/adr-099-governed-workload-placement.md`, `cog-001-cog-wor
   - an oversize frame is refused;
   - a transfer interrupted mid-way resumes from the bitfield without fetching verified pieces again;
   - after A→B, node C fetches the artifact from B, which is not the origin.
+  - the chain shows `artifact.fetch` for each completed or failed fetch, and `artifact.piece_rejected` for the corrupted piece. Tests use an isolated chain, never the operator's.
 
   Completion: a two-node test in which B fetches a signed package from A by hash; a resumed large-file transfer; and a three-node fetch from a non-origin holder. Multi-GB tests stay off the default test run. Source: ADR-099 section 6; mesh_artifact.rs:58-62; mesh_framing.rs:51-54.
 - Deps: 07

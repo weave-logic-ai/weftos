@@ -151,7 +151,7 @@ Accelerator job kinds and the TPU / TSU / NPU adapters are **deferred until the 
   - reliability when seeders drop out.
 
   `ArtifactExchange` is finished on this basis (today it is scaffolding).
-- **Governance of distribution.** Only artifacts whose signed manifest verifies may be seeded or cached. Revocation of a package id, signer or artifact hash stops seeding it and evicts it from caches everywhere, and every seed, evict and revoke action is chained.
+- **Governance of distribution.** Only artifacts whose signed manifest verifies may be seeded or cached. Revocation of a package id, signer or artifact hash stops seeding it and evicts it from caches everywhere, and every seed, evict and revoke action is chained. Transfer outcomes are chained as well: each completed or failed fetch (`artifact.fetch`), each rejected piece and the peer that sent it (`artifact.piece_rejected`), and the first time an artifact is served to each peer (`artifact.serve`). Individual piece transfers are not chained, because they would flood the chain.
 - **Adopt in place**: a node may hash existing local files (for example an HF cache or Ollama blob store) and register them as artifacts without copying, so 20 GB of weights already on a node is never re-shipped. Adoption is recorded and the file is re-hashed lazily on use.
 - **Locality-aware fetch**: nodes advertise `model.present` (shard hashes held) and `store.tier.*` (with `mounted`). The placer prefers a node that already holds the payload; if none does, it chooses between fetching from a peer and placing where the bytes are, using size versus link estimate, and records the choice.
 - Signatures cover the manifest (hashes of everything), not the bytes; verification checks each shard hash on arrival or on adoption.
