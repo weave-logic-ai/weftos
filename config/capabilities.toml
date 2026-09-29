@@ -1,0 +1,279 @@
+# Well-known capability vocabulary for governed workload placement.
+# Source: docs/adr/adr-099-governed-workload-placement.md section 2.
+#
+# ADVISORY ONLY. This file drives validation warnings, `weaver workload
+# explain` output and the generated reference table
+# (docs/reference/capability-vocabulary.md). It does NOT gate: a capability id
+# that is not listed here is still accepted, stored and matched. Experimental
+# ids use the `x.` prefix and draw no warning.
+#
+# GOVERNED FILE (ADR-099 decision 6). Do not edit freely. A change must bump
+# `meta.version`, and nodes load it only when its SHA-256 digest matches the
+# digest pinned through governance (clawft_types::placement::Vocabulary::
+# from_toml_pinned / change_to). After an approved change, regenerate the doc
+# table with: WEFTOS_REGEN_DOCS=1 scripts/build.sh test clawft-types
+#
+# Schema: [families.<first-segment>] { title, order }
+#         [ids."<dotted.id>"] { summary, attrs = { name = type }, min_provenance }
+# Attribute types: string, int, number, bool, list. `<name>` segments are
+# placeholders matching any one segment. Memory values are bytes.
+
+[meta]
+version = 1
+title = "WeftOS placement capability vocabulary"
+
+[families.cpu]
+title = "CPU"
+order = 1
+
+[families.os]
+title = "Operating system"
+order = 2
+
+[families.runtime]
+title = "Runtimes"
+order = 3
+
+[families.accel]
+title = "Accelerators (GPU, NPU, TPU, TSU, other)"
+order = 4
+
+[families.format]
+title = "Model and data formats"
+order = 5
+
+[families.mem]
+title = "Memory"
+order = 6
+
+[families.feed]
+title = "Feeds"
+order = 7
+
+[families.store]
+title = "Storage"
+order = 8
+
+[families.model]
+title = "Models"
+order = 9
+
+[families.perf]
+title = "Measured performance"
+order = 10
+
+[families.trust]
+title = "Trust"
+order = 11
+
+[families.node]
+title = "Node class (informational)"
+order = 12
+
+# ---------------------------------------------------------------- cpu / os
+
+[ids."cpu.arch.aarch64"]
+summary = "64-bit ARM"
+attrs = { cores = "int", model = "string" }
+
+[ids."cpu.arch.armv7"]
+summary = "32-bit ARM (armhf)"
+attrs = { cores = "int", model = "string" }
+
+[ids."cpu.arch.x86_64"]
+summary = "64-bit x86"
+attrs = { cores = "int", model = "string" }
+
+[ids."os.linux"]
+summary = "Linux"
+attrs = { distro = "string", kernel = "string" }
+
+[ids."os.macos"]
+summary = "macOS"
+attrs = { version = "string" }
+
+# ---------------------------------------------------------------- runtimes
+
+[ids."runtime.native"]
+summary = "Unprivileged native process"
+attrs = { arches_native = "list", arches_emulated = "list" }
+
+[ids."runtime.container.apple"]
+summary = "Apple container runtime"
+attrs = { version = "string", arches_native = "list", arches_emulated = "list" }
+
+[ids."runtime.container.docker"]
+summary = "Docker-compatible engine (variant: orbstack, engine, desktop)"
+attrs = { variant = "string", version = "string", arches_native = "list", arches_emulated = "list" }
+
+[ids."runtime.container.podman"]
+summary = "Podman"
+attrs = { version = "string", arches_native = "list", arches_emulated = "list" }
+
+[ids."runtime.wasm.wasmtime"]
+summary = "Wasmtime WASM host"
+attrs = { version = "string" }
+
+[ids."runtime.infer.llamacpp"]
+summary = "llama.cpp server"
+attrs = { version = "string", formats = "list", arches_native = "list" }
+
+[ids."runtime.infer.mlx-lm"]
+summary = "mlx-lm server"
+attrs = { version = "string", formats = "list", arches_native = "list" }
+
+[ids."runtime.infer.ollama"]
+summary = "Ollama"
+attrs = { version = "string", formats = "list", arches_native = "list" }
+
+# ---------------------------------------------------------------- accelerators
+
+[ids."accel.gpu.metal"]
+summary = "Apple Metal GPU"
+attrs = { vendor = "string", device = "string", sdk = "string", sdk_version = "string", cores = "int", mem_bytes = "int", mem_free_bytes = "int", unified = "bool", formats = "list", precisions = "list" }
+
+[ids."accel.gpu.cuda"]
+summary = "NVIDIA CUDA GPU"
+attrs = { vendor = "string", device = "string", sdk_version = "string", mem_bytes = "int", mem_free_bytes = "int", unified = "bool", formats = "list", precisions = "list" }
+
+[ids."accel.gpu.rocm"]
+summary = "AMD ROCm GPU"
+attrs = { vendor = "string", device = "string", sdk_version = "string", mem_bytes = "int", mem_free_bytes = "int", unified = "bool", formats = "list", precisions = "list" }
+
+[ids."accel.gpu.vulkan"]
+summary = "Vulkan compute GPU"
+attrs = { vendor = "string", device = "string", mem_bytes = "int", mem_free_bytes = "int", unified = "bool", formats = "list", precisions = "list" }
+
+[ids."accel.npu.ane"]
+summary = "Apple Neural Engine (via CoreML; no public utilisation API, so claimed or probed until measured)"
+attrs = { device = "string", unified = "bool", formats = "list", precisions = "list" }
+
+[ids."accel.npu.hailo"]
+summary = "Hailo NPU (HEF)"
+attrs = { device = "string", formats = "list", precisions = "list" }
+
+[ids."accel.npu.rknn"]
+summary = "Rockchip RKNN NPU"
+attrs = { device = "string", formats = "list", precisions = "list" }
+
+[ids."accel.npu.qualcomm"]
+summary = "Qualcomm NPU"
+attrs = { device = "string", formats = "list", precisions = "list" }
+
+[ids."accel.tpu.coral"]
+summary = "Coral Edge TPU (TFLite delegate)"
+attrs = { device = "string", formats = "list" }
+
+[ids."accel.tpu.cloud"]
+summary = "Cloud TPU"
+attrs = { device = "string", formats = "list", precisions = "list" }
+
+[ids."accel.tsu.<vendor>"]
+summary = "Thermodynamic sampling unit, per vendor"
+attrs = { device = "string", formats = "list" }
+
+[ids."accel.other.<name>"]
+summary = "Other accelerator class"
+attrs = { device = "string", formats = "list" }
+
+# ---------------------------------------------------------------- formats
+
+[ids."format.gguf"]
+summary = "GGUF weights"
+
+[ids."format.mlx"]
+summary = "MLX weights"
+
+[ids."format.safetensors"]
+summary = "safetensors weights"
+
+[ids."format.onnx"]
+summary = "ONNX model"
+
+[ids."format.tflite"]
+summary = "TensorFlow Lite model"
+
+[ids."format.coreml"]
+summary = "CoreML model"
+
+[ids."format.hef"]
+summary = "Hailo executable format"
+
+# ---------------------------------------------------------------- memory
+
+[ids."mem.system"]
+summary = "Host memory"
+attrs = { total = "int", free = "int" }
+
+[ids."mem.unified"]
+summary = "GPU and NPU share the system pool: count one pool, never add accelerator memory to it"
+attrs = { total = "int", free = "int" }
+
+[ids."mem.vram"]
+summary = "Discrete device memory (one entry per device)"
+attrs = { total = "int", free = "int", device = "string" }
+
+# ---------------------------------------------------------------- feeds / data
+
+[ids."feed.esp32-csi-udp"]
+summary = "ESP32 CSI UDP sensor feed"
+attrs = { lan_id = "string", bind = "string" }
+
+[ids."feed.http-sensor"]
+summary = "HTTP sensor endpoint"
+attrs = { url_hash = "string" }
+
+[ids."store.tier.internal"]
+summary = "Internal storage"
+attrs = { free = "int" }
+
+[ids."store.tier.external"]
+summary = "External storage (drive)"
+attrs = { mounted = "bool", free = "int" }
+
+[ids."model.present"]
+summary = "Model shards held on this node"
+attrs = { shards = "list" }
+
+# ---------------------------------------------------------------- measured performance
+
+[ids."perf.cog.cycle_ms"]
+summary = "Wall time of one cog cycle on a reference feed, per cog (param cog_id)"
+attrs = { cog_id = "string", value = "number" }
+min_provenance = "measured"
+
+[ids."perf.infer.tok_s"]
+summary = "Inference decode tokens per second, per model (param model)"
+attrs = { model = "string", value = "number" }
+min_provenance = "measured"
+
+[ids."perf.infer.prefill_tok_s"]
+summary = "Inference prefill tokens per second, per model (param model)"
+attrs = { model = "string", value = "number" }
+min_provenance = "measured"
+
+# ---------------------------------------------------------------- trust / class
+
+[ids."trust.tier.discovered"]
+summary = "Seen on the mesh, not paired"
+
+[ids."trust.tier.paired"]
+summary = "Paired through the operator pairing window"
+
+[ids."trust.tier.pinned"]
+summary = "Operator-pinned"
+
+[ids."node.class.dev-mac"]
+summary = "Developer Mac"
+
+[ids."node.class.cognitum-seed"]
+summary = "Cognitum Seed"
+
+[ids."node.class.pi5"]
+summary = "Raspberry Pi 5"
+
+[ids."node.class.arm-server"]
+summary = "ARM server"
+
+[ids."node.class.other"]
+summary = "Other"

@@ -51,6 +51,7 @@ pub mod delegation;
 pub mod error;
 pub mod event;
 pub mod goal;
+pub mod placement;
 pub mod provider;
 pub mod registry;
 pub mod routing;

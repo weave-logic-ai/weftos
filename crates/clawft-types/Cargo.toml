@@ -30,6 +30,9 @@ dirs = { workspace = true, optional = true }
 getrandom = { workspace = true, optional = true }
 # SC-2 / WEFT-223: SecureAudioBuffer / SecureAudioRing zeroize-on-drop.
 zeroize = { workspace = true }
+# mesh-placement-02: capability vocabulary file (TOML) and its governance digest.
+toml = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
