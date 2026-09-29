@@ -3,12 +3,23 @@
 //! Stores a JSON file at `.weftos/runtime/revoked_hosts.json` containing
 //! hosts that have been banned from joining the mesh. The ban list is
 //! loaded at kernel boot and checked during mesh peer handshake.
+//!
+//! The list also revokes package ids, signer keys and artifact hashes
+//! (ADR-099 section 7); see [`RevocationKind`] and
+//! [`RevocationList::revoke_subject`]. Those persist in a sibling file.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
+
+mod subjects;
+#[cfg(test)]
+mod subjects_tests;
+pub use subjects::{
+    MAX_PACKAGE_ID_LEN, RevocationError, RevocationKind, RevokedSubject, SUBJECTS_FILE_NAME,
+};
 
 /// A single revocation entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +43,7 @@ pub struct RevocationList {
 struct RevocationInner {
     hosts: Vec<RevokedHost>,
     path: PathBuf,
+    subjects: subjects::SubjectState,
 }
 
 impl RevocationList {
@@ -40,6 +52,7 @@ impl RevocationList {
         Self {
             inner: Mutex::new(RevocationInner {
                 hosts: Vec::new(),
+                subjects: subjects::SubjectState::empty(&path),
                 path,
             }),
         }
@@ -71,7 +84,11 @@ impl RevocationList {
         };
 
         Self {
-            inner: Mutex::new(RevocationInner { hosts, path }),
+            inner: Mutex::new(RevocationInner {
+                hosts,
+                subjects: subjects::SubjectState::load(&path),
+                path,
+            }),
         }
     }
 
