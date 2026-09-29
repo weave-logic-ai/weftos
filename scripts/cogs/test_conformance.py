@@ -386,6 +386,31 @@ class HarnessEndToEnd(unittest.TestCase):
         self.assertIsNone(conformance.launcher_plan(
             conformance.build_parser().parse_args(["sweep"]), "/w"))
 
+    def test_ingest_stub_binds_the_requested_address(self):
+        """The stub can bind a non-loopback address (for a container VM's
+        relay); the fake cog still reaches it over 127.0.0.1 via 0.0.0.0."""
+        udp, ingest = free_port(socket.SOCK_DGRAM), free_port(socket.SOCK_STREAM)
+        with tempfile.TemporaryDirectory() as d:
+            cog = os.path.join(d, "cog-fake-aarch64")
+            with open(cog, "w") as f:
+                f.write(FAKE_COG.format(py=sys.executable))
+            os.environ.update(FAKE_UDP=str(udp), FAKE_INGEST=str(ingest))
+            r = harness.run_plan({"timeout": 10, "udp_port": udp, "ingest_port": ingest,
+                                  "ingest_bind": "0.0.0.0",
+                                  "cogs": [{"id": "fake", "binary": cog}]})["results"][0]
+        self.assertEqual((classify.classify(r), r["ingest_posts"]), ("clean", 1))
+        with self.assertRaises(ValueError):
+            harness.run_plan({"ingest_bind": "not-an-ip", "cogs": []})
+
+    def test_launcher_plan_passes_the_ingest_upstream(self):
+        a = conformance.build_parser().parse_args(
+            ["sweep", "--launcher", "/x/cog_adapter_run", "--adapter-runtime", "apple",
+             "--adapter-base-image", "b@sha256:" + "0" * 64,
+             "--adapter-ingest-upstream", "192.0.2.10:18080", "--ingest-bind", "0.0.0.0"])
+        argv = conformance.launcher_plan(a, "/w")
+        self.assertEqual(argv[argv.index("--ingest-upstream") + 1], "192.0.2.10:18080")
+        self.assertEqual(a.ingest_bind, "0.0.0.0")
+
     def test_missing_binary(self):
         doc = harness.run_plan({"cogs": [{"id": "gone", "binary": "/nonexistent/cog"}],
                                 "ingest_port": free_port(socket.SOCK_STREAM)})

@@ -20,8 +20,14 @@ const TOKEN: &str = "seed-token-0123456789abcdef";
 async fn seed_at(node: &str, device: &str, fw: &str) -> (MockServer, SeedApiRuntime) {
     let s = MockServer::start().await;
     let docs: [(&str, Value); 6] = [
-        ("/api/v1/apps", json!({"installed": [{"id": "fall-detect", "version": "1.0.0"}]})),
-        ("/api/v1/status", json!({"integrity": {"writes_gated": false}})),
+        (
+            "/api/v1/apps",
+            json!({"installed": [{"id": "fall-detect", "version": "1.0.0"}]}),
+        ),
+        (
+            "/api/v1/status",
+            json!({"integrity": {"writes_gated": false}}),
+        ),
         (
             "/api/v1/identity",
             json!({"device_id": device, "public_key": format!("pk-{device}"), "firmware_version": fw}),
@@ -30,7 +36,7 @@ async fn seed_at(node: &str, device: &str, fw: &str) -> (MockServer, SeedApiRunt
         ("/api/v1/apps/fall-detect/config", json!({"interval": 1})),
         (
             "/api/v1/upgrade/check",
-            json!({"current_version": fw, "pending_update": true}),
+            json!({"current_version": fw, "pending_update": true, "target_version": "0.25.0"}),
         ),
     ];
     for (p, v) in docs {
@@ -72,26 +78,35 @@ async fn a_backup_only_authorizes_an_upgrade_of_the_seed_it_came_from() {
     // Another Seed under the same operator node id: device identity differs.
     let (b, seed_b) = seed_at("seed-a", "dev-b", "0.24.2").await;
     applies(&b, 0).await;
-    let e = seed_b.upgrade_firmware(&backup_a).await.unwrap_err();
+    let e = seed_b
+        .upgrade_firmware(&backup_a, "0.25.0")
+        .await
+        .unwrap_err();
     assert!(e.to_string().contains("device identity"), "{e}");
     assert!(seed_b.recover_writes_gated(&backup_a).await.is_err());
 
     // Another operator node id.
     let (c, seed_c) = seed_at("seed-c", "dev-a", "0.24.2").await;
     applies(&c, 0).await;
-    let e = seed_c.upgrade_firmware(&backup_a).await.unwrap_err();
+    let e = seed_c
+        .upgrade_firmware(&backup_a, "0.25.0")
+        .await
+        .unwrap_err();
     assert!(e.to_string().contains("different Seed node"), "{e}");
 
     // Same Seed after its firmware moved on: the backup is stale.
     let (d, seed_d) = seed_at("seed-a", "dev-a", "0.25.0").await;
     applies(&d, 0).await;
-    let e = seed_d.upgrade_firmware(&backup_a).await.unwrap_err();
+    let e = seed_d
+        .upgrade_firmware(&backup_a, "0.25.0")
+        .await
+        .unwrap_err();
     assert!(e.to_string().contains("predates"), "{e}");
 
     // The Seed it came from, unchanged: allowed.
     let (_a2, seed_a2) = seed_at("seed-a", "dev-a", "0.24.2").await;
     applies(&_a2, 1).await;
-    seed_a2.upgrade_firmware(&backup_a).await.unwrap();
+    seed_a2.upgrade_firmware(&backup_a, "0.25.0").await.unwrap();
 }
 
 #[tokio::test]
@@ -133,7 +148,11 @@ fn file_credentials_persist_privately_across_instances() {
     for bad in ["../x", ".hidden", "a b", ""] {
         assert!(again.put(bad, SecretString::new(TOKEN)).is_err(), "{bad}");
     }
-    assert!(again.put("seed-03", SecretString::new("bad token")).is_err());
+    assert!(
+        again
+            .put("seed-03", SecretString::new("bad token"))
+            .is_err()
+    );
 }
 
 #[test]
@@ -166,7 +185,8 @@ async fn pairing_persists_the_token_for_a_restarted_adapter() {
     Mock::given(method("POST"))
         .and(path("/api/v1/pair"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"token": "paired-token-abcdef0123456789"})),
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"token": "paired-token-abcdef0123456789"})),
         )
         .mount(&s)
         .await;
@@ -192,7 +212,84 @@ async fn pairing_persists_the_token_for_a_restarted_adapter() {
         )
         .unwrap()
     };
-    make().pair("weftos-mac", &SecretString::new("")).await.unwrap();
+    make()
+        .pair("weftos-mac", &SecretString::new(""))
+        .await
+        .unwrap();
     // A new adapter (new process) reads the stored token.
     assert!(make().installed().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_firmware_upgrade_is_gated_by_version_and_applies_only_the_pinned_one() {
+    use super::host::{RUNTIME_CHAIN_SOURCE, WorkloadHost};
+    use crate::chain::ChainManager;
+    use crate::workload_governance::{
+        NetworkPolicy, NodeTrustTier, PackageTrust, WorkloadGate, WorkloadPermitRule,
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let (s, seed) = seed_at("seed-a", "dev-a", "0.24.2").await;
+    applies(&s, 1).await;
+    let seed = Arc::new(seed);
+    let backup = seed.backup(&tmp.path().join("b")).await.unwrap();
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let mut rule = WorkloadPermitRule::new("fw", ["workload.install"], ["seed-firmware"]);
+    rule.min_package_trust = PackageTrust::OperatorAttested;
+    rule.max_network = NetworkPolicy::Egress;
+    let gate = WorkloadGate::new(0.8, false)
+        .with_chain(chain.clone())
+        .with_permit(rule)
+        .unwrap();
+    let host = WorkloadHost::new(
+        seed.clone(),
+        Arc::new(gate),
+        "operator",
+        NodeTrustTier::Paired,
+    )
+    .with_chain(chain.clone());
+
+    // The Seed has 0.25.0 pending; a pin of 0.26.0 must not apply it.
+    let e = host
+        .upgrade_seed_firmware(&seed, &backup, "0.26.0")
+        .await
+        .unwrap_err();
+    assert!(e.to_string().contains("operator pinned 0.26.0"), "{e}");
+    assert!(
+        host.upgrade_seed_firmware(&seed, &backup, "--latest")
+            .await
+            .is_err(),
+        "a malformed pin is refused before anything is applied"
+    );
+    host.upgrade_seed_firmware(&seed, &backup, "0.25.0")
+        .await
+        .unwrap();
+
+    // Each attempt is chained by the host with the version it targeted.
+    let attempts: Vec<(String, String)> = chain
+        .tail(0)
+        .into_iter()
+        .filter(|e| e.source == RUNTIME_CHAIN_SOURCE)
+        .map(|e| {
+            let p = e.payload.unwrap();
+            (
+                e.kind,
+                p["target_version"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+    let a = |k: &str, v: &str| (k.to_string(), v.to_string());
+    assert_eq!(
+        attempts,
+        [
+            a("workload.refuse", "0.26.0"),
+            a("workload.install", "0.25.0")
+        ]
+    );
+    let applied = chain
+        .tail(0)
+        .into_iter()
+        .rfind(|e| e.source == RUNTIME_CHAIN_SOURCE)
+        .unwrap();
+    assert_eq!(applied.payload.unwrap()["from_version"], "0.24.2");
+    // `applies(&s, 1)` verifies on drop that exactly one apply was sent.
 }

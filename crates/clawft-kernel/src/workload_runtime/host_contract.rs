@@ -32,6 +32,11 @@ pub struct HostContract {
     pub sensor_url: Option<SocketAddr>,
     /// Per-instance token.
     pub token: SecretString,
+    /// The node's ingest bridge as the instance's network sees it. A cog
+    /// always posts to its own `127.0.0.1:80`; container adapters relay
+    /// that port here ([`super::container_relay`]). `None` means the cog's
+    /// loopback already reaches the bridge (native, `network=host`).
+    pub ingest_upstream: Option<SocketAddr>,
 }
 
 impl HostContract {
@@ -41,6 +46,7 @@ impl HostContract {
             csi_bind,
             sensor_url: None,
             token: Self::fresh_token(),
+            ingest_upstream: None,
         }
     }
 
@@ -52,6 +58,12 @@ impl HostContract {
     /// Builder: HTTP sensor fallback.
     pub fn with_sensor(mut self, addr: SocketAddr) -> Self {
         self.sensor_url = Some(addr);
+        self
+    }
+
+    /// Builder: ingest bridge address as seen from inside the instance.
+    pub fn with_ingest_upstream(mut self, addr: SocketAddr) -> Self {
+        self.ingest_upstream = Some(addr);
         self
     }
 
@@ -101,6 +113,7 @@ impl HostContract {
             "csi_bind": self.csi_bind.to_string(),
             "sensor_url": self.sensor_url.map(|s| s.to_string()),
             "token_hash": self.token_hash(),
+            "ingest_upstream": self.ingest_upstream.map(|s| s.to_string()),
         })
     }
 }

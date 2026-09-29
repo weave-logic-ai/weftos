@@ -6,6 +6,7 @@
 //! ```text
 //! cog_adapter_run --runtime native|docker|apple|podman [--base-image REF]
 //!     [--csi-port 5006] [--feed-port N] [--feed-publish-ip IP] [--network NAME]
+//!     [--ingest-upstream IP:PORT]
 //!     [--run-as UID:GID] [--timeout-secs 15] [--run-secs N] [--arch aarch64]
 //!     -- <cog binary> <cog args...>
 //! ```
@@ -47,6 +48,7 @@ struct Opts {
     feed_port: Option<u16>,
     feed_publish_ip: Option<std::net::IpAddr>,
     network: Option<String>,
+    ingest_upstream: Option<std::net::SocketAddr>,
     run_as: Option<(u32, u32)>,
     timeout_secs: u64,
     run_secs: Option<u64>,
@@ -81,6 +83,13 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Opts, String> {
                 )
             }
             "--network" => o.network = it.next(),
+            "--ingest-upstream" => {
+                o.ingest_upstream = Some(
+                    it.next()
+                        .and_then(|v| v.parse().ok())
+                        .ok_or("--ingest-upstream needs IP:PORT")?,
+                )
+            }
             "--run-as" => {
                 let v = it.next().ok_or("--run-as needs UID:GID")?;
                 let (u, g) = v.split_once(':').ok_or("--run-as needs UID:GID")?;
@@ -111,10 +120,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Opts, String> {
 
 /// `cog-<id>-<arch>` -> `<id>`.
 fn cog_id(binary: &Path) -> String {
-    let name = binary
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("cog");
+    let name = binary.file_name().and_then(|n| n.to_str()).unwrap_or("cog");
     let name = name.strip_prefix("cog-").unwrap_or(name);
     ["-aarch64", "-arm", "-armv7"]
         .iter()
@@ -126,9 +132,8 @@ fn cog_id(binary: &Path) -> String {
 /// `cog.toml` whose `[config]` surface and `[console]` command match the
 /// harness's argv exactly (nothing wider).
 fn cog_toml(id: &str, args: &[String], timeout: u64) -> String {
-    let mut t = format!(
-        "[cog]\nid = \"{id}\"\nname = \"{id}\"\nversion = \"0.0.0-conformance\"\n\n"
-    );
+    let mut t =
+        format!("[cog]\nid = \"{id}\"\nname = \"{id}\"\nversion = \"0.0.0-conformance\"\n\n");
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
@@ -243,8 +248,13 @@ async fn run(o: Opts) -> Result<i32, String> {
         .with_chain(chain.clone())
         .with_permit(permit)
         .map_err(|e| e.to_string())?;
-    let host = WorkloadHost::new(rt.clone(), Arc::new(gate), "conformance", NodeTrustTier::Paired)
-        .with_chain(chain.clone());
+    let host = WorkloadHost::new(
+        rt.clone(),
+        Arc::new(gate),
+        "conformance",
+        NodeTrustTier::Paired,
+    )
+    .with_chain(chain.clone());
     let csi = std::net::SocketAddr::from(([0, 0, 0, 0], o.csi_port));
     let once = o.cog_args.iter().any(|a| a == "--once");
     let (mode, args) = match o.cog_args.iter().position(|a| a == "--interval") {
@@ -263,7 +273,11 @@ async fn run(o: Opts) -> Result<i32, String> {
     let cfg = WorkloadConfig {
         mode: mode.clone(),
         args,
-        host: HostContract::new(csi),
+        host: match o.ingest_upstream {
+            // The cog's 127.0.0.1:80 is relayed to the ingest bridge.
+            Some(up) => HostContract::new(csi).with_ingest_upstream(up),
+            None => HostContract::new(csi),
+        },
         node_id: "conformance".into(),
     };
     let h = host.load(&w, &cfg).await.map_err(|e| e.to_string())?;

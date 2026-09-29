@@ -1,0 +1,59 @@
+{
+ "host": {
+  "machine": "arm64",
+  "python": "3.14.7",
+  "release": "27.0.0",
+  "system": "Darwin"
+ },
+ "results": [
+  {
+   "argv": [
+    "cog-anomaly-detect-aarch64",
+    "--once"
+   ],
+   "cycle_ms": 2872.1,
+   "cycles": 1,
+   "elapsed_ms": 2872.1,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 2671.4,
+   "harness_version": "1.0.0",
+   "host_machine": "arm64",
+   "id": "anomaly-detect",
+   "ingest_posts": 1,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[0,[-3.5583280168793937e-6,0.2828782968715823,0.0,0.0,0.0,0.0,0.0,0.0]]]}"
+   ],
+   "ingest_vectors": 1,
+   "interval_s": null,
+   "launcher": [
+    "cog_adapter_run",
+    "--runtime",
+    "apple",
+    "--arch",
+    "aarch64",
+    "--timeout-secs",
+    "60",
+    "--run-secs",
+    "56",
+    "--base-image",
+    "python@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e",
+    "--feed-port",
+    "25006",
+    "--ingest-upstream",
+    "192.168.64.1:18080"
+   ],
+   "mode": "once",
+   "packets_sent": 127,
+   "rc": 0,
+   "sha256": "42154913cbb57fd58e010548a833221a2afe73cf1768aa1e0ab00e9441d6cb25",
+   "status": "ran",
+   "stderr_tail": "[0/6] [0s]\n[1/6] Fetching image [0s]\n[2/6] Unpacking image [0s]\n[3/6] Fetching kernel [0s]\n[4/6] Fetching init image [0s]\n[5/6] Unpacking init image [0s]\n[6/6] Starting container [0s]\n[6/6] Starting container [0s]\n[cog-anomaly-detect] starting (interval=10s, z_threshold=2.5)\n[adapter] runtime=container.apple provides=[\"runtime.container.apple\"] network=Egress chain=[\"workload.load\", \"workload.start\", \"workload.unload\"]",
+   "stdout_json_lines": 1,
+   "stdout_lines": 1,
+   "stdout_tail": "{\"anomalies\":[],\"stats\":{\"num_channels\":256,\"mean_amplitude\":-0.0003558328016879394,\"max_z_score\":1.4143914843579115,\"cusum_drift_detected\":false},\"timestamp\":1790716241}",
+   "timed_out": false,
+   "timeout_s": 60.0
+  }
+ ]
+}

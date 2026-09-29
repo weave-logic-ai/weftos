@@ -305,15 +305,12 @@ async fn firmware_seed(gated: bool, pending: bool) -> (MockServer, SeedApiRuntim
     let (s, rt, _) = seed(vec![app("fall-detect", "1.0.0", false)]).await;
     for (p, v) in [
         ("/api/v1/status", status(gated)),
-        (
-            "/api/v1/identity",
-            identity("dev-a", "0.24.2"),
-        ),
+        ("/api/v1/identity", identity("dev-a", "0.24.2")),
         ("/api/v1/witness/chain", json!({"length": 3})),
         ("/api/v1/apps/fall-detect/config", json!({"interval": 1})),
         (
             "/api/v1/upgrade/check",
-            json!({"current_version": "0.24.2", "pending_update": pending}),
+            json!({"current_version": "0.24.2", "pending_update": pending, "target_version": "0.25.0"}),
         ),
     ] {
         Mock::given(method("GET"))
@@ -343,7 +340,7 @@ async fn firmware_upgrade_needs_a_verified_backup_and_ungated_writes() {
         rt.recover_writes_gated(&b).await.is_err(),
         "nothing to recover"
     );
-    let out = rt.upgrade_firmware(&b).await.unwrap();
+    let out = rt.upgrade_firmware(&b, "0.25.0").await.unwrap();
     assert_eq!(
         out,
         super::seed_ops::UpgradeOutcome::Applied {
@@ -352,7 +349,10 @@ async fn firmware_upgrade_needs_a_verified_backup_and_ungated_writes() {
     );
 
     std::fs::write(tmp.path().join("b1/status.json"), b"{}").unwrap();
-    assert!(rt.upgrade_firmware(&b).await.is_err(), "tampered backup");
+    assert!(
+        rt.upgrade_firmware(&b, "0.25.0").await.is_err(),
+        "tampered backup"
+    );
 }
 
 #[tokio::test]
@@ -362,7 +362,7 @@ async fn gated_writes_block_upgrade_and_allow_recovery() {
     post("/api/v1/upgrade/apply", 0).mount(&s).await;
     post("/api/v1/store/truncate-confirm", 1).mount(&s).await;
     let b = rt.backup(&tmp.path().join("b")).await.unwrap();
-    let e = rt.upgrade_firmware(&b).await.unwrap_err();
+    let e = rt.upgrade_firmware(&b, "0.25.0").await.unwrap_err();
     assert!(e.to_string().contains("gated"), "{e}");
     rt.recover_writes_gated(&b).await.unwrap();
 }

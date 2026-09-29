@@ -115,8 +115,8 @@ impl SeedBackup {
         if blake3::hash(&m).to_hex().as_str() != self.manifest_blake3 {
             return Err(refuse("backup manifest changed".into()));
         }
-        let doc: Value = serde_json::from_slice(&m)
-            .map_err(|e| refuse(format!("backup manifest: {e}")))?;
+        let doc: Value =
+            serde_json::from_slice(&m).map_err(|e| refuse(format!("backup manifest: {e}")))?;
         if doc != self.manifest_doc() {
             return Err(refuse("backup manifest does not match this backup".into()));
         }
@@ -315,12 +315,20 @@ impl SeedApiRuntime {
         Ok(firmware)
     }
 
-    /// Apply a pending firmware upgrade. Refuses without a verified backup
-    /// of this Seed at its current firmware, or while writes are gated.
+    /// Apply the pending firmware upgrade, but only if it is the version
+    /// the operator pinned (`target_version`). Refuses without a verified
+    /// backup of this Seed at its current firmware, while writes are gated,
+    /// or when the Seed does not report which version is pending.
     pub async fn upgrade_firmware(
         &self,
         backup: &SeedBackup,
+        target_version: &str,
     ) -> Result<UpgradeOutcome, RuntimeError> {
+        if !super::cog_spec::valid_value(target_version) {
+            return Err(RuntimeError::InvalidConfig(
+                "firmware target version must be a plain version string".into(),
+            ));
+        }
         self.check_backup(backup, true).await?;
         if self.writes_gated().await? {
             return Err(RuntimeError::InvalidState(
@@ -341,6 +349,19 @@ impl SeedApiRuntime {
             .unwrap_or(false)
         {
             return Ok(UpgradeOutcome::UpToDate { version: current });
+        }
+        match check.get("target_version").and_then(Value::as_str) {
+            Some(t) if t == target_version => {}
+            Some(t) => {
+                return Err(RuntimeError::AdmissionRefused(format!(
+                    "pending firmware is {t}, the operator pinned {target_version}"
+                )));
+            }
+            None => {
+                return Err(RuntimeError::AdmissionRefused(
+                    "the Seed does not say which firmware is pending; refusing to apply it".into(),
+                ));
+            }
         }
         self.api(Method::Post, "/api/v1/upgrade/apply", None, API_TIMEOUT * 6)
             .await?;

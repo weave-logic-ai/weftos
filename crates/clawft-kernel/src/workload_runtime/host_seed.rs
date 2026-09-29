@@ -11,18 +11,23 @@ use super::types::{RuntimeError, VerifiedWorkload};
 use crate::chain;
 
 impl WorkloadHost {
-    /// Governed, backed-up Seed firmware upgrade: gated as
-    /// `workload.install` with kind `seed-firmware`, outcome chained.
+    /// Governed, backed-up Seed firmware upgrade to the operator-pinned
+    /// `target_version`: gated as `workload.install` of
+    /// `seed-firmware@<target_version>` (so the decision names the version),
+    /// applied only if that is the version the Seed has pending, outcome
+    /// chained.
     pub async fn upgrade_seed_firmware(
         &self,
         seed: &SeedApiRuntime,
         backup: &SeedBackup,
+        target_version: &str,
     ) -> Result<UpgradeOutcome, RuntimeError> {
-        let w = VerifiedWorkload::store_pin("cognitum", "seed-firmware", "current", None)?;
+        let w = VerifiedWorkload::store_pin("cognitum", "seed-firmware", target_version, None)?;
         self.check("workload.install", &w, KIND_SEED_FIRMWARE, false)?;
-        let r = seed.upgrade_firmware(backup).await;
+        let r = seed.upgrade_firmware(backup, target_version).await;
         let mut payload = json!({
             "runtime": SEED_ID, "phase": "firmware-upgrade", "backup": backup.audit(),
+            "from_version": backup.firmware(), "target_version": target_version,
         });
         if let Ok(o) = &r {
             payload["result"] = json!(format!("{o:?}"));
@@ -37,7 +42,8 @@ impl WorkloadHost {
         seed: &SeedApiRuntime,
         backup: &SeedBackup,
     ) -> Result<(), RuntimeError> {
-        let w = VerifiedWorkload::store_pin("cognitum", "seed-firmware", "current", None)?;
+        // Gated against the firmware the backup was taken at.
+        let w = VerifiedWorkload::store_pin("cognitum", "seed-firmware", backup.firmware(), None)?;
         self.check("workload.install", &w, KIND_SEED_FIRMWARE, false)?;
         let r = seed.recover_writes_gated(backup).await;
         let payload = json!({

@@ -83,6 +83,7 @@ def launcher_plan(args, root):
     for flag, value in (("--base-image", args.adapter_base_image),
                         ("--network", args.adapter_network),
                         ("--feed-port", args.adapter_feed_port),
+                        ("--ingest-upstream", args.adapter_ingest_upstream),
                         ("--run-as", args.adapter_run_as)):
         if value is not None:
             argv += [flag, str(value)]
@@ -119,7 +120,8 @@ def execute(args, expectations, ids, sweep_mode):
         for spec in specs:
             spec["binary"] = "%s/bin/%s" % (root, runtimes.binary_name(spec["id"], args.arch))
         plan = {"timeout": args.timeout, "feed": args.feed, "cogs": specs,
-                "udp_port": args.udp_port, "ingest_port": args.ingest_port}
+                "udp_port": args.udp_port, "ingest_port": args.ingest_port,
+                "ingest_bind": args.ingest_bind}
         launcher = launcher_plan(args, root)
         if launcher:
             dst = os.path.join(workdir, "bin", LAUNCHER_NAME)
@@ -237,12 +239,18 @@ def _runner_opts(p):
     p.add_argument("--adapter-base-image", help="digest-pinned base for container adapters")
     p.add_argument("--adapter-network", help="container network (e.g. host on OrbStack)")
     p.add_argument("--adapter-feed-port", type=int, help="host UDP port published to the feed")
+    p.add_argument("--adapter-ingest-upstream", metavar="IP:PORT",
+                   help="container adapters: relay the cog's 127.0.0.1:80 to this "
+                   "ingest address (e.g. the Apple container VM gateway and --ingest-port)")
     p.add_argument("--adapter-run-as", help="UID:GID for native when the harness runs as root")
     p.add_argument("--udp-port", type=int, default=5006,
                    help="port the harness feed sends to (a published port for "
                    "container adapters driven from the host)")
     p.add_argument("--ingest-port", type=int, default=80,
                    help="port of the harness ingest stub (cogs post to 80)")
+    p.add_argument("--ingest-bind", default="127.0.0.1",
+                   help="address the harness ingest stub binds (the VM gateway, or "
+                   "0.0.0.0, when a container relays ingest back to this host)")
     p.add_argument("--harness-engine-arg", action="append",
                    help="extra `docker run` / `container run` argument for the harness "
                    "container (repeatable), e.g. --net=host")

@@ -8,7 +8,9 @@
 //!   [`RunEvidence`].
 //! - [`container`]: Apple `container`, Docker / OrbStack and Podman,
 //!   running a one-binary image built locally from the verified artifact
-//!   over an operator-pinned base ([`container_cmd`]).
+//!   over an operator-pinned base ([`container_cmd`]), fronted by an
+//!   ingest relay when the cog's loopback is not the node's
+//!   ([`container_relay`]).
 //! - [`seed`] / [`seed_ops`]: the `remote.api` adapter for a Cognitum Seed
 //!   (its own HTTP API; pinned store cogs only; pairing; governed,
 //!   backed-up firmware upgrade), over [`seed_http`].
@@ -23,10 +25,11 @@
 pub mod cog_spec;
 pub mod container;
 pub mod container_cmd;
+pub mod container_relay;
 pub mod evidence;
 pub mod host;
-pub mod host_seed;
 pub mod host_contract;
+pub mod host_seed;
 pub mod native;
 pub mod seed;
 pub mod seed_client;
@@ -41,6 +44,8 @@ pub mod types;
 mod test_support;
 #[cfg(test)]
 mod tests_container;
+#[cfg(test)]
+mod tests_container_relay;
 #[cfg(test)]
 mod tests_host;
 #[cfg(test)]

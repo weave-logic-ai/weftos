@@ -30,6 +30,8 @@ struct SeedState {
     apps: Mutex<Vec<(String, bool)>>,
     calls: Mutex<Vec<String>>,
     console_fails: bool,
+    /// Operations (`stop`, `uninstall`, ...) that answer 500.
+    failing: Mutex<Vec<&'static str>>,
 }
 
 impl SeedState {
@@ -38,7 +40,11 @@ impl SeedState {
             apps: Mutex::new(apps.iter().map(|(a, r)| (a.to_string(), *r)).collect()),
             calls: Mutex::new(Vec::new()),
             console_fails,
+            failing: Mutex::new(Vec::new()),
         })
+    }
+    fn fail(&self, ops: &[&'static str]) {
+        *self.failing.lock().unwrap() = ops.to_vec();
     }
     fn running(&self) -> Vec<String> {
         let apps = self.apps.lock().unwrap();
@@ -64,8 +70,18 @@ impl Respond for Handler {
     fn respond(&self, r: &Request) -> ResponseTemplate {
         let st = &self.0;
         let ok = ResponseTemplate::new(200).set_body_json(json!({"ok": true}));
+        if st.failing.lock().unwrap().contains(&self.1) {
+            st.calls
+                .lock()
+                .unwrap()
+                .push(format!("failed-{}:{}", self.1, cog_of(r)));
+            return ResponseTemplate::new(500);
+        }
         if self.1 != "list" && self.1 != "install" {
-            st.calls.lock().unwrap().push(format!("{}:{}", self.1, cog_of(r)));
+            st.calls
+                .lock()
+                .unwrap()
+                .push(format!("{}:{}", self.1, cog_of(r)));
         }
         match self.1 {
             "list" => {
@@ -98,8 +114,9 @@ impl Respond for Handler {
                 ok
             }
             _ if st.console_fails => ResponseTemplate::new(500),
-            _ if !st.running().is_empty() => ResponseTemplate::new(409)
-                .set_body_json(json!({"error": "UDP 5006 in use"})),
+            _ if !st.running().is_empty() => {
+                ResponseTemplate::new(409).set_body_json(json!({"error": "UDP 5006 in use"}))
+            }
             _ => ResponseTemplate::new(200).set_body_json(json!({
                 "output": ["{\"status\":\"quiet\",\"z_impact\":0.7}"], "exit_code": 0})),
         }
@@ -219,13 +236,13 @@ async fn console_without_a_stop_permit_leaves_the_operators_cogs_running() {
     let e = h.console(&inst, "--once").await.unwrap_err();
     assert!(matches!(e, RuntimeError::Governance(_)), "{e}");
     assert_eq!(st.running(), ["baby-cry"], "baby-cry must keep running");
-    assert!(st.calls().is_empty(), "no stop, no console: {:?}", st.calls());
+    assert!(
+        st.calls().is_empty(),
+        "no stop, no console: {:?}",
+        st.calls()
+    );
     let gate = chain.tail(0);
-    let denial = gate
-        .iter()
-        .rev()
-        .find(|e| e.source == "workload")
-        .unwrap();
+    let denial = gate.iter().rev().find(|e| e.source == "workload").unwrap();
     assert_eq!(denial.kind, "workload.stop");
     assert_eq!(denial.payload.as_ref().unwrap()["decision"], "deny");
     assert!(
@@ -316,4 +333,145 @@ async fn a_failed_console_call_still_chains_its_stops_and_restores_the_cogs() {
         ],
         "no workload.install: it was already installed"
     );
+}
+
+#[tokio::test]
+async fn an_install_whose_stop_fails_is_rolled_back_and_chained() {
+    let st = SeedState::with(&[], false);
+    st.fail(&["stop"]);
+    let server = mock_seed(&st).await;
+    let (h, chain) = host(seed_rt(&server), rule(&["workload.*"]));
+    let e = h.load(&fall_detect(), &cfg()).await.unwrap_err();
+    assert!(
+        matches!(
+            e,
+            RuntimeError::StrandedInstall {
+                rolled_back: true,
+                ..
+            }
+        ),
+        "{e}"
+    );
+    assert!(
+        st.apps.lock().unwrap().is_empty(),
+        "install undone on the device"
+    );
+    assert_eq!(
+        st.calls(),
+        [
+            "installed:fall-detect",
+            "failed-stop:fall-detect",
+            "uninstall:fall-detect"
+        ]
+    );
+    let events: Vec<(String, String)> = chain
+        .tail(0)
+        .into_iter()
+        .filter(|e| e.source == RUNTIME_CHAIN_SOURCE)
+        .map(|e| {
+            (
+                e.kind,
+                e.payload.unwrap()["outcome"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let ev = |k: &str, o: &str| (k.to_string(), o.to_string());
+    assert_eq!(
+        events,
+        [
+            ev("workload.install", "rolled-back"),
+            ev("workload.refuse", "error")
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_install_that_cannot_be_undone_stays_recorded_and_unloadable() {
+    let st = SeedState::with(&[], false);
+    st.fail(&["stop", "uninstall"]);
+    let server = mock_seed(&st).await;
+    let (h, chain) = host(seed_rt(&server), rule(&["workload.*"]));
+    let e = h.load(&fall_detect(), &cfg()).await.unwrap_err();
+    let RuntimeError::StrandedInstall {
+        handle,
+        rolled_back: false,
+        ..
+    } = e
+    else {
+        panic!("expected a stranded install, got {e}");
+    };
+    assert_eq!(st.running(), ["fall-detect"], "still installed and running");
+    let install = chain
+        .tail(0)
+        .into_iter()
+        .find(|e| e.source == RUNTIME_CHAIN_SOURCE && e.kind == "workload.install")
+        .expect("the install is on the chain");
+    assert_eq!(install.payload.unwrap()["outcome"], "stranded");
+    // While the Seed still refuses, unload fails and the handle survives.
+    assert!(h.unload((*handle).clone()).await.is_err());
+    assert_eq!(st.running(), ["fall-detect"]);
+    // Once the Seed answers again, the operator removes it through the host.
+    st.fail(&[]);
+    h.unload(*handle).await.unwrap();
+    assert!(st.apps.lock().unwrap().is_empty(), "uninstalled by unload");
+    assert_eq!(
+        runtime_events(&chain).last().unwrap().0,
+        "workload.unload",
+        "unload is gated and chained"
+    );
+}
+
+#[tokio::test]
+async fn the_live_cycle_leaves_the_operators_cogs_as_it_found_them() {
+    // Operator state: fall-detect installed but stopped, baby-cry running.
+    let st = SeedState::with(&[("fall-detect", false), ("baby-cry", true)], false);
+    let server = mock_seed(&st).await;
+    let kinds = super::tests_live::seed_fall_detect_cycle(&server.uri(), TOKEN, false).await;
+    assert!(!kinds.iter().any(|k| k == "workload.install"));
+    // baby-cry was only stopped for the console run and resumed by the
+    // host; nothing else touched it.
+    let baby: Vec<String> = st
+        .calls()
+        .into_iter()
+        .filter(|c| c.ends_with(":baby-cry"))
+        .collect();
+    assert_eq!(baby, ["stop:baby-cry", "start:baby-cry"]);
+    let mut apps = st.apps.lock().unwrap().clone();
+    apps.sort();
+    assert_eq!(
+        apps,
+        [
+            ("baby-cry".to_string(), true),
+            ("fall-detect".to_string(), false)
+        ]
+    );
+}
+
+#[tokio::test]
+async fn the_live_cycle_installs_only_when_authorized_and_removes_what_it_installed() {
+    let st = SeedState::with(&[("baby-cry", false)], false);
+    let server = mock_seed(&st).await;
+    let uri = server.uri();
+    let refused =
+        tokio::spawn(
+            async move { super::tests_live::seed_fall_detect_cycle(&uri, TOKEN, false).await },
+        )
+        .await;
+    assert!(refused.is_err(), "no install without authorization");
+    assert!(
+        st.calls().is_empty(),
+        "nothing was changed: {:?}",
+        st.calls()
+    );
+    let kinds = super::tests_live::seed_fall_detect_cycle(&server.uri(), TOKEN, true).await;
+    assert_eq!(kinds.first().map(String::as_str), Some("workload.install"));
+    assert_eq!(
+        st.calls().first().map(String::as_str),
+        Some("installed:fall-detect")
+    );
+    assert_eq!(
+        st.calls().last().map(String::as_str),
+        Some("uninstall:fall-detect")
+    );
+    assert_eq!(*st.apps.lock().unwrap(), [("baby-cry".to_string(), false)]);
 }

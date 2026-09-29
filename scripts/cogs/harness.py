@@ -10,7 +10,8 @@ For each cog it provides:
       - ADR-069 MAGIC_FEATURES 0xC5110003: 48 bytes, 8 LE f32 at offset 16,
         50 Hz, a steady sine with a 0.95 spike every 40th packet;
       - optional MAGIC_VITALS 0xC5110002: 32 bytes (edge_vitals_pkt_t);
-  * a stub Seed ingest endpoint on 127.0.0.1:<ingest-port> (default 80) that
+  * a stub Seed ingest endpoint on <ingest-bind>:<ingest-port> (default
+    127.0.0.1:80; bind the VM gateway for Apple container relays) that
     accepts POST /api/v1/store/ingest and answers 404 to everything else;
   * a supervised run of the cog with `--once` or `--interval N`, capturing
     timestamped stdout / stderr lines and ingest POSTs. With a plan
@@ -28,6 +29,7 @@ Usage:
 import argparse
 import hashlib
 import http.server
+import ipaddress
 import json
 import math
 import os
@@ -202,15 +204,16 @@ def _handler_for(state):
 class Fixtures:
     """UDP feed plus ingest stub for the lifetime of one cog run."""
 
-    def __init__(self, feed, udp_port, ingest_port):
+    def __init__(self, feed, udp_port, ingest_port, ingest_bind="127.0.0.1"):
         self.feed, self.udp_port, self.ingest_port = feed, udp_port, ingest_port
+        self.ingest_bind = ingest_bind
         self.state = _IngestState(time.monotonic())
         self._stop = threading.Event()
         self.packets_sent = 0
 
     def __enter__(self):
         self.srv = http.server.ThreadingHTTPServer(
-            ("127.0.0.1", self.ingest_port), _handler_for(self.state))
+            (self.ingest_bind, self.ingest_port), _handler_for(self.state))
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.sender = threading.Thread(target=self._send, daemon=True)
         self.sender.start()
@@ -289,7 +292,8 @@ def run_cog(spec, defaults):
         return result
     os.chmod(binary, 0o755)
     result["sha256"] = _sha256(binary)
-    with Fixtures(feed, defaults["udp_port"], defaults["ingest_port"]) as fx:
+    with Fixtures(feed, defaults["udp_port"], defaults["ingest_port"],
+                  defaults["ingest_bind"]) as fx:
         time.sleep(0.1)  # let the feed and stub come up
         t0 = time.monotonic()
         fx.state.t0 = t0
@@ -345,6 +349,9 @@ def run_plan(plan):
                 "feed": plan.get("feed", "features"),
                 "udp_port": int(plan.get("udp_port", 5006)),
                 "ingest_port": int(plan.get("ingest_port", 80)),
+                # A container VM reaches the stub through its gateway, so the
+                # stub may bind that interface (or 0.0.0.0) instead.
+                "ingest_bind": str(ipaddress.ip_address(plan.get("ingest_bind", "127.0.0.1"))),
                 "launcher": plan.get("launcher")}
     if defaults["feed"] not in FEEDS:
         raise ValueError("bad feed")

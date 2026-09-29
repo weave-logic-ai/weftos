@@ -153,6 +153,10 @@ pub struct RunSpec<'a> {
     pub network: Option<&'a str>,
     /// Detached (instances) or foreground (console runs).
     pub detach: bool,
+    /// The image runs the ingest relay as entrypoint (starts as root with
+    /// only [`super::container_relay::RELAY_CAPS`]; the cog drops to
+    /// `nobody`).
+    pub ingest_relay: bool,
     /// Cog arguments.
     pub args: &'a [String],
 }
@@ -175,6 +179,13 @@ pub fn run_cmd(engine: Engine, s: &RunSpec<'_>) -> Result<Vec<String>, RuntimeEr
         "--read-only".into(),
         "--cap-drop".into(),
         "ALL".into(),
+    ]);
+    if s.ingest_relay {
+        for c in super::container_relay::RELAY_CAPS {
+            v.extend(["--cap-add".into(), c.into()]);
+        }
+    }
+    v.extend([
         "--tmpfs".into(),
         DATA_DIR.into(),
         "--env-file".into(),

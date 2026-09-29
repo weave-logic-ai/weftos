@@ -250,6 +250,15 @@ async fn live_native_anomaly_detect() {
     anomaly_detect_cycle(rt, &format!("0.0.0.0:{port}"), format!("127.0.0.1:{port}")).await;
 }
 
+/// Live Seed run (COGNITUM_SEED_LIVE=1, COGNITUM_SEED_BASE,
+/// COGNITUM_SEED_TOKEN). Every change to the Seed goes through
+/// [`WorkloadHost`] (gated and chained); nothing is stopped or started
+/// behind its back, and cogs end in the state they started in.
+///
+/// fall-detect already installed: load, start, one console cycle, stop,
+/// unload; no install happens or is chained. fall-detect not installed:
+/// the run refuses unless COGNITUM_SEED_LIVE_INSTALL=1 also authorizes the
+/// install, in which case load installs it (chained) and unload removes it.
 #[tokio::test]
 async fn live_seed_fall_detect() {
     if !flag("COGNITUM_SEED_LIVE") {
@@ -257,7 +266,18 @@ async fn live_seed_fall_detect() {
     }
     let base = std::env::var("COGNITUM_SEED_BASE").expect("COGNITUM_SEED_BASE");
     let token = std::env::var("COGNITUM_SEED_TOKEN").expect("COGNITUM_SEED_TOKEN");
-    let creds = Arc::new(MemoryCredentials::with("seed-live", &token));
+    let kinds = seed_fall_detect_cycle(&base, &token, flag("COGNITUM_SEED_LIVE_INSTALL")).await;
+    eprintln!("[seed] chain: {kinds:?}");
+}
+
+/// The live Seed cycle, also run hermetically against the stateful mock
+/// Seed (`tests_seed_host`). Returns the runtime chain kinds.
+pub(super) async fn seed_fall_detect_cycle(
+    base: &str,
+    token: &str,
+    allow_install: bool,
+) -> Vec<String> {
+    let creds = Arc::new(MemoryCredentials::with("seed-live", token));
     let seed = Arc::new(
         SeedApiRuntime::new(
             SeedConfig {
@@ -268,15 +288,18 @@ async fn live_seed_fall_detect() {
                 ],
                 concurrency_cap: 3,
             },
-            Arc::new(HttpSeedTransport::new(&base, base.starts_with("https://")).unwrap()),
+            Arc::new(HttpSeedTransport::new(base, base.starts_with("https://")).unwrap()),
             creds,
         )
         .unwrap(),
     );
+    // Read-only snapshot of what the operator has running.
     let before = seed.installed().await.expect("list apps");
+    let was = |id: &str| before.iter().find(|c| c.id == id).map(|c| c.running);
+    let preinstalled = was("fall-detect").is_some();
     assert!(
-        before.iter().any(|c| c.id == "fall-detect"),
-        "fall-detect must already be installed"
+        preinstalled || allow_install,
+        "fall-detect is not installed; set COGNITUM_SEED_LIVE_INSTALL=1 to authorize installing it"
     );
     let mut permit = WorkloadPermitRule::new("seed-live", ["workload.*"], ["cog"]);
     permit.min_package_trust = PackageTrust::OperatorAttested;
@@ -290,10 +313,8 @@ async fn live_seed_fall_detect() {
         node_id: "seed-live".into(),
     };
 
-    let h = host
-        .load(&w, &cfg)
-        .await
-        .expect("load (install path: already installed, no POST)");
+    let h = host.load(&w, &cfg).await.expect("load");
+    assert_eq!(h.store_installed, !preinstalled);
     host.start(&h).await.expect("start");
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert_eq!(host.status(&h).await.state, InstanceState::Running);
@@ -311,34 +332,33 @@ async fn live_seed_fall_detect() {
     assert_eq!(host.status(&h).await.state, InstanceState::Running);
     let stop = host.stop(&h, Duration::from_secs(3)).await.expect("stop");
     eprintln!("[seed] stop evidence: {} log bytes", stop.stdout_bytes);
-    for c in seed
-        .installed()
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|c| c.running)
-    {
-        let _ = seed.stop_cog(&c.id).await;
+    // Every other cog is back where the operator left it (the host resumed
+    // what it preempted); fall-detect is stopped by the governed stop.
+    let after = seed.installed().await.unwrap();
+    for c in &after {
+        match was(&c.id) {
+            _ if c.id == "fall-detect" => assert!(!c.running, "fall-detect stopped"),
+            Some(r) => assert_eq!(c.running, r, "{} changed state", c.id),
+            None => panic!("{} appeared during the run", c.id),
+        }
     }
-    assert!(
-        seed.installed().await.unwrap().iter().all(|c| !c.running),
-        "all cogs stopped afterwards"
+    host.unload(h).await.expect("unload");
+    let installed = seed.installed().await.unwrap();
+    assert_eq!(
+        installed.iter().any(|c| c.id == "fall-detect"),
+        preinstalled,
+        "unload removes only what this run installed"
     );
-    host.unload(h)
-        .await
-        .expect("unload keeps the operator's install");
-    assert!(
-        seed.installed()
-            .await
-            .unwrap()
-            .iter()
-            .any(|c| c.id == "fall-detect")
-    );
+    // Restore fall-detect's own state through the host, if it was running.
+    if was("fall-detect") == Some(true) {
+        let h = host.load(&w, &cfg).await.expect("reload");
+        host.start(&h).await.expect("restore fall-detect");
+    }
     let kinds = runtime_kinds(&chain);
-    eprintln!("[seed] chain: {kinds:?}");
-    assert!(
-        !kinds.iter().any(|k| k == "workload.install"),
-        "fall-detect was already installed: no install may be chained"
+    assert_eq!(
+        kinds.iter().any(|k| k == "workload.install"),
+        !preinstalled,
+        "an install is chained exactly when one happened"
     );
     for k in [
         "workload.load",
@@ -350,5 +370,6 @@ async fn live_seed_fall_detect() {
     }
     let dump = serde_json::to_string(&chain.tail(0).iter().map(|e| &e.payload).collect::<Vec<_>>())
         .unwrap();
-    assert!(!dump.contains(&token), "token in chain");
+    assert!(!dump.contains(token), "token in chain");
+    kinds
 }

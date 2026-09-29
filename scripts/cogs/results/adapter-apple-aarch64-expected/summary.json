@@ -32,12 +32,12 @@
   "release": "27.0.0",
   "system": "Darwin"
  },
- "measured_at": "2026-09-29T21:10:27Z",
+ "measured_at": "2026-09-29T21:10:42Z",
  "outcomes": {
   "anomaly-detect": "clean"
  },
  "runtime": "native",
- "sweep_mode": "once",
+ "sweep_mode": "expected",
  "swept": 1,
  "timeout_s": 60.0,
  "total": 1,

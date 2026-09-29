@@ -234,6 +234,23 @@ pub enum RuntimeError {
     /// The operation is not supported by this adapter.
     #[error("unsupported: {0}")]
     Unsupported(String),
+    /// A device-store install succeeded but `load` could not finish (the
+    /// auto-started cog would not stop). With `rolled_back` the adapter
+    /// uninstalled it again; otherwise the cog is still on the device and
+    /// `handle` stays loaded so an operator can unload it.
+    #[error(
+        "store install of {} then failed ({}): {reason}",
+        handle.workload_id,
+        if *rolled_back { "rolled back" } else { "stranded on the device" }
+    )]
+    StrandedInstall {
+        /// The instance the install created.
+        handle: Box<InstanceHandle>,
+        /// Whether the install was undone.
+        rolled_back: bool,
+        /// What failed.
+        reason: String,
+    },
 }
 
 /// Stable code for chain payloads.
@@ -248,6 +265,7 @@ impl RuntimeError {
             Self::Governance(_) => "governance",
             Self::Backend(_) => "backend",
             Self::Unsupported(_) => "unsupported",
+            Self::StrandedInstall { .. } => "stranded-install",
         }
     }
 }

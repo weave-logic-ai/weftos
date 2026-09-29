@@ -14,11 +14,11 @@ use super::cog_spec::CogSpec;
 use super::evidence::RunEvidence;
 use super::host_contract::HostContract;
 use super::supervise::{LaunchSpec, ProcLimits, Supervised};
-use crate::workload_governance::NetworkPolicy;
 use super::types::{
     Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, RuntimeError,
     SignedPayload, VerifiedWorkload, WorkloadConfig, WorkloadRuntime,
 };
+use crate::workload_governance::NetworkPolicy;
 
 /// Adapter id.
 pub const NATIVE_ID: &str = "native";
@@ -243,6 +243,17 @@ impl WorkloadRuntime for NativeRuntime {
         w: &VerifiedWorkload,
         cfg: &WorkloadConfig,
     ) -> Result<InstanceHandle, RuntimeError> {
+        // Checked before admission: a config error on any host.
+        if cfg
+            .host
+            .ingest_upstream
+            .is_some_and(|u| u.to_string() != super::container_relay::COG_INGEST_ADDR)
+        {
+            return Err(RuntimeError::InvalidConfig(
+                "a native cog posts to this node's 127.0.0.1:80; run the ingest bridge there"
+                    .into(),
+            ));
+        }
         let adm = self.admit(w).await?;
         let p = w.signed(NATIVE_ID)?;
         cfg.mode.validate()?;

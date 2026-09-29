@@ -12,8 +12,9 @@ use super::host_contract::HostContract;
 use super::test_support::{fake_elf, mode_of, signed_workload};
 use super::types::{InstanceState, RunMode, RuntimeError, WorkloadConfig, WorkloadRuntime};
 
-const BASE: &str = "python@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e";
-const TOML: &str = r#"[cog]
+pub(super) const BASE: &str =
+    "python@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e";
+pub(super) const TOML: &str = r#"[cog]
 id = "anomaly-detect"
 version = "1.2.0"
 
@@ -29,17 +30,17 @@ output_limit_bytes = 2048
 
 /// Records every call; answers by subcommand.
 #[derive(Default)]
-struct Recorder {
+pub(super) struct Recorder {
     calls: Mutex<Vec<Vec<String>>>,
     fail_build: bool,
     time_out_runs: bool,
 }
 
 impl Recorder {
-    fn calls(&self) -> Vec<Vec<String>> {
+    pub(super) fn calls(&self) -> Vec<Vec<String>> {
         self.calls.lock().unwrap().clone()
     }
-    fn find(&self, sub: &str) -> Vec<String> {
+    pub(super) fn find(&self, sub: &str) -> Vec<String> {
         self.calls()
             .into_iter()
             .find(|c| c[0] == sub)
@@ -81,11 +82,11 @@ impl CommandRunner for Recorder {
     }
 }
 
-fn aarch64_elf() -> Vec<u8> {
+pub(super) fn aarch64_elf() -> Vec<u8> {
     fake_elf(183)
 }
 
-fn rt(engine: Engine, root: &std::path::Path, rec: Arc<Recorder>) -> ContainerRuntime {
+pub(super) fn rt(engine: Engine, root: &std::path::Path, rec: Arc<Recorder>) -> ContainerRuntime {
     let mut c = ContainerRuntimeConfig::new(engine, BASE, root);
     c.arches_emulated = vec!["armv7".into()];
     c.feed_host_port = Some(25006);
@@ -93,7 +94,7 @@ fn rt(engine: Engine, root: &std::path::Path, rec: Arc<Recorder>) -> ContainerRu
     ContainerRuntime::new(c, rec)
 }
 
-fn cfg() -> WorkloadConfig {
+pub(super) fn cfg() -> WorkloadConfig {
     WorkloadConfig {
         mode: RunMode::Once,
         args: Vec::new(),

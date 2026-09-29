@@ -32,11 +32,11 @@ use super::types::{
 use crate::workload_governance::NetworkPolicy;
 use crate::workload_pkg::manifest::{valid_cog_id, valid_token};
 
+use super::seed_types::lines;
 pub use super::seed_types::{
     API_TIMEOUT, CONSOLE_TIMEOUT, InstalledCog, LOG_LINES, SEED_CONCURRENCY_CAP, SEED_ID,
     SEED_REGISTRY, SeedConfig, SeedPin,
 };
-use super::seed_types::lines;
 
 struct Instance {
     cog_id: String,
@@ -108,6 +108,48 @@ impl SeedApiRuntime {
             ));
         }
         Ok(pin)
+    }
+
+    /// `load` installed `w` but could not stop the auto-started cog: try to
+    /// uninstall it. If that fails too, keep the instance tracked (as
+    /// installed here) so `unload` can remove it later.
+    async fn undo_install(
+        &self,
+        w: &VerifiedWorkload,
+        iid: &str,
+        pin: &SeedPin,
+        cause: RuntimeError,
+    ) -> RuntimeError {
+        let handle = Box::new(InstanceHandle {
+            runtime: SEED_ID.into(),
+            instance_id: iid.into(),
+            workload_id: w.id.clone(),
+            store_installed: true,
+        });
+        let path = format!("/api/v1/apps/{}", w.id);
+        match self.api(Method::Delete, &path, None, API_TIMEOUT).await {
+            Ok(_) => RuntimeError::StrandedInstall {
+                handle,
+                rolled_back: true,
+                reason: format!("stop after install: {cause}"),
+            },
+            Err(undo) => {
+                self.instances.lock().await.insert(
+                    iid.to_string(),
+                    Instance {
+                        cog_id: w.id.clone(),
+                        installed_here: true,
+                        console_commands: pin.console_commands.clone(),
+                        last: None,
+                    },
+                );
+                RuntimeError::StrandedInstall {
+                    handle,
+                    rolled_back: false,
+                    reason: format!("stop after install: {cause}; uninstall: {undo}"),
+                }
+            }
+        }
     }
 
     async fn instance_cog(&self, h: &InstanceHandle) -> Result<String, RuntimeError> {
@@ -223,7 +265,9 @@ impl WorkloadRuntime for SeedApiRuntime {
                 )
                 .await?;
                 // Installed cogs auto-start; loading must not leave it running.
-                self.stop_cog(&w.id).await?;
+                if let Err(e) = self.stop_cog(&w.id).await {
+                    return Err(self.undo_install(w, &iid, &pin, e).await);
+                }
                 true
             }
         };
@@ -295,21 +339,25 @@ impl WorkloadRuntime for SeedApiRuntime {
     }
 
     async fn unload(&self, h: InstanceHandle) -> Result<(), RuntimeError> {
-        let inst = self
+        let (cog, installed_here) = self
             .instances
             .lock()
             .await
-            .remove(&h.instance_id)
+            .get(&h.instance_id)
+            .map(|i| (i.cog_id.clone(), i.installed_here))
             .ok_or_else(|| RuntimeError::UnknownInstance(h.instance_id.clone()))?;
-        if inst.installed_here {
+        if installed_here {
+            // Forgotten only once the uninstall succeeded, so a failed one
+            // can be retried.
             self.api(
                 Method::Delete,
-                &format!("/api/v1/apps/{}", inst.cog_id),
+                &format!("/api/v1/apps/{cog}"),
                 None,
                 API_TIMEOUT,
             )
             .await?;
         }
+        self.instances.lock().await.remove(&h.instance_id);
         Ok(())
     }
 

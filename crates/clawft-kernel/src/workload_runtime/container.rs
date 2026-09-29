@@ -17,13 +17,14 @@ use super::container_cmd::{
     self as cmd, CommandRunner, DATA_DIR, Engine, RunLimits, RunSpec, evidence_from, write_context,
 };
 pub use super::container_cmd::{ENGINE_STARTUP_SECS, container_name};
+use super::container_relay as relay;
 use super::evidence::RunEvidence;
 use super::native::{PayloadKind, classify, elf_machine, instance_id};
-use crate::workload_governance::NetworkPolicy;
 use super::types::{
     Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, RuntimeError,
     VerifiedWorkload, WorkloadConfig, WorkloadRuntime,
 };
+use crate::workload_governance::NetworkPolicy;
 
 /// Container adapter configuration.
 #[derive(Debug, Clone)]
@@ -89,6 +90,7 @@ struct Instance {
     spec: CogSpec,
     args: Vec<String>,
     csi_port: u16,
+    relay: bool,
     started: bool,
     last: Option<RunEvidence>,
 }
@@ -165,6 +167,7 @@ impl ContainerRuntime {
                 .map(|h| (self.cfg.feed_publish_ip, h, inst.csi_port)),
             network: self.cfg.network.as_deref(),
             detach,
+            ingest_relay: inst.relay,
             args,
         }
     }
@@ -270,11 +273,22 @@ impl WorkloadRuntime for ContainerRuntime {
         let ctx = dir.join("ctx");
         let env_file = dir.join("env");
         let env = cfg.host.env(DATA_DIR);
-        let (bytes, df) = (bin.bytes.clone(), cmd::dockerfile(&self.cfg.base_image));
-        let (c2, e2) = (ctx.clone(), env_file.clone());
-        tokio::task::spawn_blocking(move || write_context(&c2, &e2, &bytes, &df, &env))
-            .await
-            .map_err(|e| RuntimeError::Backend(e.to_string()))??;
+        let upstream = relay::relay_upstream(&cfg.host, self.cfg.network.as_deref())?;
+        let df = match upstream {
+            Some(up) => relay::dockerfile(&self.cfg.base_image, up),
+            None => cmd::dockerfile(&self.cfg.base_image),
+        };
+        let (bytes, c2, e2) = (bin.bytes.clone(), ctx.clone(), env_file.clone());
+        tokio::task::spawn_blocking(move || {
+            write_context(&c2, &e2, &bytes, &df, &env)?;
+            match upstream {
+                Some(_) => std::fs::write(c2.join(relay::RELAY_FILE), relay::RELAY_SCRIPT)
+                    .map_err(|e| RuntimeError::Backend(format!("build context: {e}"))),
+                None => Ok(()),
+            }
+        })
+        .await
+        .map_err(|e| RuntimeError::Backend(e.to_string()))??;
         let tag = cmd::image_tag(&w.id, &bin.blake3);
         let built = self
             .call_ok(
@@ -299,6 +313,7 @@ impl WorkloadRuntime for ContainerRuntime {
                 spec: p.spec.clone(),
                 args,
                 csi_port: cfg.host.csi_bind.port(),
+                relay: upstream.is_some(),
                 started: false,
                 last: None,
             },

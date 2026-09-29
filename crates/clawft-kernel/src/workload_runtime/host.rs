@@ -13,8 +13,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
-use super::evidence::RunEvidence;
 use super::cog_spec::valid_value;
+use super::evidence::RunEvidence;
 use super::types::{
     InstanceHandle, InstanceStatus, Preemption, RuntimeError, VerifiedWorkload, WorkloadConfig,
     WorkloadRuntime, WorkloadSource,
@@ -204,6 +204,29 @@ impl WorkloadHost {
                 );
             }
         }
+        if let Err(RuntimeError::StrandedInstall {
+            handle,
+            rolled_back,
+            ..
+        }) = &r
+        {
+            // The device store changed even though the load failed.
+            self.record(
+                chain::EVENT_KIND_WORKLOAD_INSTALL,
+                json!({
+                    "runtime": self.runtime.id(), "workload_id": w.id, "version": w.version,
+                    "instance_id": handle.instance_id, "source": "store_pin",
+                    "outcome": if *rolled_back { "rolled-back" } else { "stranded" },
+                }),
+            );
+            if !rolled_back {
+                // Still on the device: keep it unloadable through the host.
+                self.loaded
+                    .lock()
+                    .await
+                    .insert(handle.instance_id.clone(), (w.clone(), emulated));
+            }
+        }
         self.outcome(chain::EVENT_KIND_WORKLOAD_LOAD, payload, &r);
         r
     }
@@ -307,10 +330,12 @@ impl WorkloadHost {
             };
             let pw = VerifiedWorkload::store_pin(&p.registry, &p.workload_id, version, None)?;
             self.check("workload.stop", &pw, &pw.kind, false)
-                .map_err(|e| RuntimeError::Governance(format!(
-                    "console run needs {} stopped: {e}",
-                    p.workload_id
-                )))?;
+                .map_err(|e| {
+                    RuntimeError::Governance(format!(
+                        "console run needs {} stopped: {e}",
+                        p.workload_id
+                    ))
+                })?;
             out.push((p, pw));
         }
         Ok(out)
