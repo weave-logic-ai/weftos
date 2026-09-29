@@ -1,15 +1,17 @@
 //! Seed install bookkeeping for [`super::SeedApiRuntime::load`]: an install
 //! call whose outcome is uncertain is reconciled against the Seed's
-//! installed list, and an install whose follow-up stop fails is undone.
+//! installed list, an install whose follow-up stop or version check fails
+//! is undone, and a cog installed at any version but the pin is refused.
 
 use serde_json::json;
 
-use super::{API_TIMEOUT, Instance, SEED_ID, SeedApiRuntime, SeedPin};
+use super::{API_TIMEOUT, Instance, InstalledCog, SEED_ID, SeedApiRuntime, SeedPin};
 use crate::workload_runtime::seed_http::Method;
 use crate::workload_runtime::types::{InstanceHandle, RuntimeError, VerifiedWorkload};
 
 impl SeedApiRuntime {
-    /// `load` installed `w` but could not stop the auto-started cog: try to
+    /// `load` installed `w` but a follow-up `step` failed (stopping the
+    /// auto-started cog, or checking the installed version): try to
     /// uninstall it. If that fails too, keep the instance tracked (as
     /// installed here) so `unload` can remove it later.
     pub(super) async fn undo_install(
@@ -17,6 +19,7 @@ impl SeedApiRuntime {
         w: &VerifiedWorkload,
         iid: &str,
         pin: &SeedPin,
+        step: &str,
         cause: RuntimeError,
     ) -> RuntimeError {
         let handle = Box::new(InstanceHandle {
@@ -30,13 +33,14 @@ impl SeedApiRuntime {
             Ok(_) => RuntimeError::StrandedInstall {
                 handle,
                 rolled_back: true,
-                reason: format!("stop after install: {cause}"),
+                reason: format!("{step} after install: {cause}"),
             },
             Err(undo) => {
                 self.instances.lock().await.insert(
                     iid.to_string(),
                     Instance {
                         cog_id: w.id.clone(),
+                        version: pin.version.clone(),
                         installed_here: true,
                         console_commands: pin.console_commands.clone(),
                         last: None,
@@ -45,7 +49,7 @@ impl SeedApiRuntime {
                 RuntimeError::StrandedInstall {
                     handle,
                     rolled_back: false,
-                    reason: format!("stop after install: {cause}; uninstall: {undo}"),
+                    reason: format!("{step} after install: {cause}; uninstall: {undo}"),
                 }
             }
         }
@@ -75,5 +79,33 @@ impl SeedApiRuntime {
             }
             _ => Err(e),
         }
+    }
+
+    /// After an install: re-read the Seed and refuse unless `id` is
+    /// installed at the pinned `version`.
+    pub(super) async fn check_installed_pin(
+        &self,
+        id: &str,
+        version: &str,
+    ) -> Result<(), RuntimeError> {
+        pinned_on_seed(&self.installed().await?, id, version)
+    }
+}
+
+/// `id` must be installed on the Seed at exactly the pinned `version`.
+pub(super) fn pinned_on_seed(
+    installed: &[InstalledCog],
+    id: &str,
+    version: &str,
+) -> Result<(), RuntimeError> {
+    match installed.iter().find(|c| c.id == id) {
+        Some(c) if c.version == version => Ok(()),
+        Some(c) => Err(RuntimeError::AdmissionRefused(format!(
+            "the Seed has {id}@{} installed but the operator pinned {version}",
+            c.version
+        ))),
+        None => Err(RuntimeError::AdmissionRefused(format!(
+            "{id} is not installed on the Seed"
+        ))),
     }
 }

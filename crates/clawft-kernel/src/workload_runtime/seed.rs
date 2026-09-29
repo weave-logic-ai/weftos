@@ -36,6 +36,7 @@ use crate::workload_governance::NetworkPolicy;
 use crate::workload_pkg::manifest::{valid_cog_id, valid_token};
 
 use super::seed_types::lines;
+use install::pinned_on_seed;
 pub use super::seed_types::{
     API_TIMEOUT, CONSOLE_TIMEOUT, InstalledCog, LOG_LINES, SEED_CONCURRENCY_CAP, SEED_ID,
     SEED_REGISTRY, SeedConfig, SeedPin,
@@ -43,6 +44,8 @@ pub use super::seed_types::{
 
 struct Instance {
     cog_id: String,
+    /// The operator-pinned version this instance may run.
+    version: String,
     installed_here: bool,
     console_commands: Vec<String>,
     last: Option<RunEvidence>,
@@ -111,6 +114,15 @@ impl SeedApiRuntime {
             ));
         }
         Ok(pin)
+    }
+
+    async fn instance_pin(&self, h: &InstanceHandle) -> Result<(String, String), RuntimeError> {
+        self.instances
+            .lock()
+            .await
+            .get(&h.instance_id)
+            .map(|i| (i.cog_id.clone(), i.version.clone()))
+            .ok_or_else(|| RuntimeError::UnknownInstance(h.instance_id.clone()))
     }
 
     async fn instance_cog(&self, h: &InstanceHandle) -> Result<String, RuntimeError> {
@@ -231,7 +243,13 @@ impl WorkloadRuntime for SeedApiRuntime {
                 self.install_reconciled(&w.id).await?;
                 // Installed cogs auto-start; loading must not leave it running.
                 if let Err(e) = self.stop_cog(&w.id).await {
-                    return Err(self.undo_install(w, &iid, &pin, e).await);
+                    return Err(self.undo_install(w, &iid, &pin, "stop", e).await);
+                }
+                // The install call names only the id: check that the Seed
+                // installed the pinned version, not whatever the store
+                // serves now.
+                if let Err(e) = self.check_installed_pin(&w.id, &pin.version).await {
+                    return Err(self.undo_install(w, &iid, &pin, "version check", e).await);
                 }
                 true
             }
@@ -240,6 +258,7 @@ impl WorkloadRuntime for SeedApiRuntime {
             iid.clone(),
             Instance {
                 cog_id: w.id.clone(),
+                version: pin.version.clone(),
                 installed_here,
                 console_commands: pin.console_commands.clone(),
                 last: None,
@@ -254,8 +273,9 @@ impl WorkloadRuntime for SeedApiRuntime {
     }
 
     async fn start(&self, h: &InstanceHandle) -> Result<(), RuntimeError> {
-        let id = self.instance_cog(h).await?;
+        let (id, version) = self.instance_pin(h).await?;
         let installed = self.installed().await?;
+        pinned_on_seed(&installed, &id, &version)?;
         if installed.iter().any(|c| c.id == id && c.running) {
             return Ok(());
         }

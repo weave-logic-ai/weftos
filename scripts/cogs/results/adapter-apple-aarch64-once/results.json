@@ -41,7 +41,7 @@
     "--feed-port",
     "25006",
     "--ingest-upstream",
-    "192.168.64.1:18080"
+    "<host>:18080"
    ],
    "mode": "once",
    "packets_sent": 137,

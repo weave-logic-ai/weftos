@@ -131,6 +131,22 @@ async fn admission_takes_only_operator_pinned_store_cogs_the_store_lists() {
 #[tokio::test]
 async fn load_installs_a_missing_pinned_cog_then_stops_its_auto_start() {
     let (s, rt, _) = seed(vec![]).await;
+    // Missing on the first read; installed at the pin afterwards.
+    Mock::given(method("GET"))
+        .and(path("/api/v1/apps"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"installed": [], "count": 0})))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&s)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/apps"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"installed": [app("fall-detect", "1.0.0", false)], "count": 1}),
+        ))
+        .with_priority(2)
+        .mount(&s)
+        .await;
     Mock::given(method("POST"))
         .and(path("/api/v1/apps/install"))
         .and(body_json(json!({"id": "fall-detect"})))

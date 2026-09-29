@@ -9,12 +9,18 @@
 //!   adapter with the same binary env var.
 //! - `COGNITUM_SEED_LIVE=1`: fall-detect on a real Seed at
 //!   `COGNITUM_SEED_BASE` with `COGNITUM_SEED_TOKEN` (and, for an `https://`
-//!   base, the Seed's certificate pin in `COGNITUM_SEED_CERT_SHA256`). Never
-//!   installs a cog: fall-detect must already be installed, or the run
-//!   refuses. It loads, starts, runs one console cycle (preempt, run,
-//!   restore), stops and unloads through [`WorkloadHost`], and leaves every
-//!   cog in the state it found it. The install path is exercised against the
-//!   stateful mock Seed in `tests_seed_host` with the same cycle function.
+//!   base, the Seed's certificate pin in `COGNITUM_SEED_CERT_SHA256`). By
+//!   default it never installs a cog: fall-detect must already be
+//!   installed, or the run refuses. It loads, starts, runs one console
+//!   cycle (preempt, run, restore), stops and unloads through
+//!   [`WorkloadHost`], and leaves every cog in the state it found it.
+//!   `COGNITUM_SEED_LIVE_INSTALL=1` (operator opt-in, never set by the test
+//!   suite) lets the same run install fall-detect from the store when the
+//!   Seed does not have it, and uninstall it at the end; that is the full
+//!   install, start, console, stop cycle on real hardware.
+//!   `COGNITUM_SEED_FALL_DETECT_VERSION` overrides the pinned version
+//!   (default `1.0.0`). The install path also runs against the stateful
+//!   mock Seed in `tests_seed_host` with the same cycle function.
 //!
 //! The chain is always an in-memory [`ChainManager`], never the operator's.
 
@@ -259,8 +265,10 @@ async fn live_native_anomaly_detect() {
 /// [`WorkloadHost`] (gated and chained); nothing is stopped or started
 /// behind its back, and cogs end in the state they started in.
 ///
-/// fall-detect must already be installed (the live run never installs):
-/// load, start, one console cycle, stop, unload; no install happens or is
+/// Without `COGNITUM_SEED_LIVE_INSTALL=1`, fall-detect must already be
+/// installed: load, start, one console cycle, stop, unload; no install
+/// happens or is chained. With it, a Seed without fall-detect gets the
+/// pinned store package installed, run and uninstalled, and the install is
 /// chained. `https://` bases need `COGNITUM_SEED_CERT_SHA256`; certificate
 /// checking is never switched off.
 #[tokio::test]
@@ -277,13 +285,15 @@ async fn live_seed_fall_detect() {
     } else {
         SeedTls::WebPki
     };
-    let kinds = seed_fall_detect_cycle(&base, &token, tls, false).await;
+    let allow_install = flag("COGNITUM_SEED_LIVE_INSTALL");
+    let kinds = seed_fall_detect_cycle(&base, &token, tls, allow_install).await;
     eprintln!("[seed] chain: {kinds:?}");
 }
 
 /// The live Seed cycle, also run hermetically against the stateful mock
 /// Seed (`tests_seed_host`). Returns the runtime chain kinds.
-/// `allow_install` is only ever true against the mock Seed.
+/// `allow_install` is true against the mock Seed, and live only when the
+/// operator sets `COGNITUM_SEED_LIVE_INSTALL=1`.
 pub(super) async fn seed_fall_detect_cycle(
     base: &str,
     token: &str,
@@ -296,7 +306,7 @@ pub(super) async fn seed_fall_detect_cycle(
             SeedConfig {
                 node_id: "seed-live".into(),
                 pins: vec![
-                    SeedPin::new("fall-detect", "1.0.0"),
+                    SeedPin::new("fall-detect", &fall_detect_version()),
                     SeedPin::new("baby-cry", "1.0.0"),
                 ],
                 concurrency_cap: 3,
@@ -312,13 +322,14 @@ pub(super) async fn seed_fall_detect_cycle(
     let preinstalled = was("fall-detect").is_some();
     assert!(
         preinstalled || allow_install,
-        "fall-detect is not installed; the live run never installs cogs"
+        "fall-detect is not installed; set COGNITUM_SEED_LIVE_INSTALL=1 to let the run install it"
     );
     let mut permit = WorkloadPermitRule::new("seed-live", ["workload.*"], ["cog"]);
     permit.min_package_trust = PackageTrust::OperatorAttested;
     permit.max_network = NetworkPolicy::Egress;
     let (host, chain) = host_for(seed.clone(), permit);
-    let w = VerifiedWorkload::store_pin("cognitum", "fall-detect", "1.0.0", None).unwrap();
+    let w = VerifiedWorkload::store_pin("cognitum", "fall-detect", &fall_detect_version(), None)
+        .unwrap();
     let cfg = WorkloadConfig {
         mode: RunMode::Listener,
         args: vec![],
@@ -385,4 +396,9 @@ pub(super) async fn seed_fall_detect_cycle(
         .unwrap();
     assert!(!dump.contains(token), "token in chain");
     kinds
+}
+
+/// The fall-detect version the live run pins (the mock Seed serves 1.0.0).
+fn fall_detect_version() -> String {
+    std::env::var("COGNITUM_SEED_FALL_DETECT_VERSION").unwrap_or_else(|_| "1.0.0".into())
 }

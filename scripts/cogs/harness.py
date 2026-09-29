@@ -34,6 +34,7 @@ import json
 import math
 import os
 import platform
+import re
 import socket
 import statistics
 import struct
@@ -119,6 +120,21 @@ def cycle_stats(mode, elapsed_ms, rc, event_times_ms):
         return None, len(times)
     gaps = [b - a for a, b in zip(times, times[1:])]
     return round(statistics.median(gaps), 1), len(times)
+
+
+_IPV4 = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])")
+
+
+def public_arg(arg):
+    """Recorded results are committed to a public repo: replace any IPv4
+    address that is not loopback or unspecified with `<host>`."""
+    def sub(m):
+        try:
+            ip = ipaddress.ip_address(m.group(1))
+        except ValueError:
+            return m.group(0)
+        return m.group(0) if ip.is_loopback or ip.is_unspecified else "<host>"
+    return _IPV4.sub(sub, arg)
 
 
 def launcher_argv(launcher, argv):
@@ -286,7 +302,7 @@ def run_cog(spec, defaults):
               "host_machine": platform.machine()}
     launcher = defaults.get("launcher")
     if launcher:
-        result["launcher"] = [os.path.basename(launcher[0])] + launcher[1:]
+        result["launcher"] = [os.path.basename(launcher[0])] + [public_arg(a) for a in launcher[1:]]
     if not os.path.isfile(binary):
         result.update(status="missing-binary", rc=None, timed_out=False)
         return result

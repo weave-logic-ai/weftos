@@ -141,3 +141,97 @@ async fn an_install_is_refused_when_its_auto_start_would_pass_the_cap() {
     assert!(matches!(e, RuntimeError::AdmissionRefused(_)), "{e:?}");
     assert!(e.to_string().contains("concurrency cap"), "{e}");
 }
+
+fn app_at(id: &str, version: &str, running: bool) -> Value {
+    json!({"id": id, "version": version, "running": running, "has_binary": true})
+}
+
+fn delete_mock(status: u16, expect: u64) -> Mock {
+    Mock::given(method("DELETE"))
+        .and(path("/api/v1/apps/fall-detect"))
+        .respond_with(ResponseTemplate::new(status).set_body_json(json!({"ok": status == 200})))
+        .expect(expect)
+}
+
+fn start_mock(expect: u64) -> Mock {
+    Mock::given(method("POST"))
+        .and(path("/api/v1/apps/fall-detect/start"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
+        .expect(expect)
+}
+
+#[tokio::test]
+async fn an_install_that_lands_an_unpinned_version_is_stopped_and_rolled_back() {
+    // The store listed 1.0.0 (the pin) at admit, but the Seed installed
+    // 1.1.0: the install names only the id.
+    let (s, rt) = seed(
+        vec![],
+        1,
+        vec![app_at("fall-detect", "1.1.0", true)],
+        ResponseTemplate::new(200).set_body_json(json!({"ok": true})),
+        1,
+    )
+    .await;
+    stop_mock(1).mount(&s).await;
+    delete_mock(200, 1).mount(&s).await;
+    start_mock(0).mount(&s).await;
+    let e = rt.load(&fall_detect(), &cfg()).await.unwrap_err();
+    match &e {
+        RuntimeError::StrandedInstall {
+            rolled_back,
+            reason,
+            ..
+        } => {
+            assert!(*rolled_back, "the unpinned install is uninstalled");
+            assert!(reason.contains("1.1.0") && reason.contains("1.0.0"), "{reason}");
+        }
+        other => panic!("expected a rolled-back install, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn an_unpinned_install_that_cannot_be_removed_is_tracked_but_never_started() {
+    let (s, rt) = seed(
+        vec![],
+        1,
+        vec![app_at("fall-detect", "1.1.0", false)],
+        ResponseTemplate::new(200).set_body_json(json!({"ok": true})),
+        1,
+    )
+    .await;
+    stop_mock(1).mount(&s).await;
+    delete_mock(500, 1).mount(&s).await;
+    start_mock(0).mount(&s).await;
+    let e = rt.load(&fall_detect(), &cfg()).await.unwrap_err();
+    let RuntimeError::StrandedInstall {
+        handle,
+        rolled_back,
+        ..
+    } = e
+    else {
+        panic!("expected a stranded install, got {e:?}");
+    };
+    assert!(!rolled_back);
+    let e = rt.start(&handle).await.unwrap_err();
+    assert!(matches!(e, RuntimeError::AdmissionRefused(_)), "{e:?}");
+    assert!(e.to_string().contains("pinned 1.0.0"), "{e}");
+}
+
+#[tokio::test]
+async fn a_start_is_refused_once_the_seed_runs_a_different_version_than_the_pin() {
+    // fall-detect was installed at the pin when loaded; the Seed then
+    // upgraded it behind the adapter's back.
+    let (s, rt) = seed(
+        vec![app("fall-detect", false)],
+        1,
+        vec![app_at("fall-detect", "1.1.0", false)],
+        ResponseTemplate::new(200),
+        0,
+    )
+    .await;
+    start_mock(0).mount(&s).await;
+    let h = rt.load(&fall_detect(), &cfg()).await.expect("pinned load");
+    assert!(!h.store_installed);
+    let e = rt.start(&h).await.unwrap_err();
+    assert!(e.to_string().contains("1.1.0"), "{e}");
+}
