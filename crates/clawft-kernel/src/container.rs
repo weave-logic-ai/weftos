@@ -380,11 +380,13 @@ impl ContainerManager {
 
     /// Start a managed container by transitioning its state to Running.
     ///
-    /// In a production environment this would shell out to `docker run`
-    /// or `podman run`. The current implementation simulates the state
-    /// transition so the integration between ContainerManager and the
-    /// kernel ServiceRegistry / HealthSystem can be tested without a
-    /// container runtime installed.
+    /// This is a **simulated** transition, kept so the integration between
+    /// ContainerManager and the kernel ServiceRegistry / HealthSystem can be
+    /// tested without a container runtime installed. Workloads (cogs) do
+    /// not start here: they run through the real engine adapters in
+    /// `crate::workload_runtime::container` (Apple `container`, Docker /
+    /// OrbStack, Podman), governed and chained by `WorkloadHost`
+    /// (mesh-placement-09).
     ///
     /// # Errors
     ///

@@ -80,6 +80,9 @@ pub mod artifact_store;
 // mesh-placement-07: signed workload package manifests (COG-001 section 1).
 #[cfg(all(feature = "ecc", feature = "exochain"))]
 pub mod workload_pkg;
+// mesh-placement-09: WorkloadRuntime adapters (native, container, Seed API).
+#[cfg(all(feature = "workload-runtime", unix))]
+pub mod workload_runtime;
 #[cfg(feature = "ecc")]
 pub mod calibration;
 #[cfg(feature = "ecc")]
