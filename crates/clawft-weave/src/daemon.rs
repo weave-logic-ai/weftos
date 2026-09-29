@@ -971,6 +971,13 @@ pub async fn run(
     // mesh-placement-06: persisted node-local workload catalog.
     #[cfg(feature = "exochain")]
     crate::workload_rpc::init_registry(&runtime_dir.join("workloads.json"));
+    // mesh-placement-03: probe, sign and cache this node's facts.
+    #[cfg(any(feature = "mesh", feature = "exochain"))]
+    crate::node_facts_rpc::init(
+        daemon_identity.signing_key.clone(),
+        runtime_dir.clone(),
+        kernel.read().await.cluster_membership().clone(),
+    );
     {
         let k = kernel.read().await;
         let pubkey: [u8; 32] = daemon_identity.signing_key.verifying_key().to_bytes();
@@ -5901,6 +5908,9 @@ async fn dispatch(
                 .collect();
             Response::success(serde_json::to_value(nodes).unwrap())
         }
+        // mesh-placement-03: signed node facts (local + verified peers).
+        #[cfg(any(feature = "mesh", feature = "exochain"))]
+        "cluster.facts" => crate::node_facts_rpc::handle(params, kernel).await,
         "cluster.join" => {
             let join_params: ClusterJoinParams = match serde_json::from_value(params) {
                 Ok(p) => p,

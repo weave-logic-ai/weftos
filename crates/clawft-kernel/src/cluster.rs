@@ -458,6 +458,9 @@ pub struct ClusterMembership {
     /// Optional governance gate for policy enforcement.
     #[cfg(feature = "exochain")]
     gate: Option<Arc<crate::gate::GovernanceGate>>,
+    /// Verified, signed node facts with TTL (ADR-099 section 2).
+    #[cfg(all(feature = "native", any(feature = "mesh", feature = "exochain")))]
+    facts: crate::node_facts::NodeFactsCache,
 }
 
 impl ClusterMembership {
@@ -478,7 +481,15 @@ impl ClusterMembership {
             chain: None,
             #[cfg(feature = "exochain")]
             gate: None,
+            #[cfg(all(feature = "native", any(feature = "mesh", feature = "exochain")))]
+            facts: crate::node_facts::NodeFactsCache::new(),
         }
+    }
+
+    /// Verified node facts (local and peers) with TTL (card mesh-placement-03).
+    #[cfg(all(feature = "native", any(feature = "mesh", feature = "exochain")))]
+    pub fn facts(&self) -> &crate::node_facts::NodeFactsCache {
+        &self.facts
     }
 
     /// Attach a chain manager for audit logging (builder style).

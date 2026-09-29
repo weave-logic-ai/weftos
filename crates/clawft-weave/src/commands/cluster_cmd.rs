@@ -3,6 +3,7 @@
 //! Provides cluster management commands:
 //! - `weaver cluster status`  -- cluster node/shard summary
 //! - `weaver cluster nodes`   -- list all cluster nodes
+//!   (`--facts`: signed node facts with provenance, mesh-placement-03)
 //! - `weaver cluster join`    -- add a node to the cluster
 //! - `weaver cluster leave`   -- remove a node from the cluster
 //! - `weaver cluster health`  -- per-node health check
@@ -29,7 +30,20 @@ pub enum ClusterAction {
     Status,
 
     /// List all nodes in the cluster.
-    Nodes,
+    Nodes {
+        /// Show each node's signed facts (capabilities with provenance).
+        #[arg(long)]
+        facts: bool,
+        /// With --facts: re-probe the local node first.
+        #[arg(long, requires = "facts")]
+        refresh: bool,
+        /// With --facts: only this node id.
+        #[arg(long, requires = "facts")]
+        node: Option<String>,
+        /// With --facts: print raw JSON (includes signed envelopes).
+        #[arg(long, requires = "facts")]
+        json: bool,
+    },
 
     /// Add a node to the cluster.
     Join {
@@ -94,7 +108,20 @@ pub async fn run(args: ClusterArgs) -> anyhow::Result<()> {
                 eprintln!("error: {msg}");
             }
         }
-        ClusterAction::Nodes => {
+        #[cfg(any(feature = "mesh", feature = "exochain"))]
+        ClusterAction::Nodes {
+            facts: true,
+            refresh,
+            node,
+            json,
+        } => {
+            crate::commands::cluster_facts::run(&mut client, refresh, node, json).await?;
+        }
+        #[cfg(not(any(feature = "mesh", feature = "exochain")))]
+        ClusterAction::Nodes { facts: true, .. } => {
+            anyhow::bail!("--facts requires the mesh or exochain feature");
+        }
+        ClusterAction::Nodes { .. } => {
             let resp = client.simple_call("cluster.nodes").await?;
             if resp.ok {
                 let nodes: Vec<protocol::ClusterNodeInfo> =

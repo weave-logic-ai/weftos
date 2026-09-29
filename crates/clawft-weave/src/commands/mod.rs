@@ -6,6 +6,8 @@ pub mod bench_cmd;
 pub mod bench_eml;
 pub mod chain_cmd;
 pub mod cluster_cmd;
+#[cfg(any(feature = "mesh", feature = "exochain"))]
+pub mod cluster_facts;
 #[cfg(unix)]
 pub mod console_cmd;
 pub mod cron_cmd;

@@ -17,12 +17,16 @@
 //! - [`vocabulary_pin`]: the governance pin (`config/capabilities.pin.toml`)
 //!   that refuses free edits, and the change record a governed change
 //!   carries (gate + chain event: `clawft_kernel::placement_vocabulary`).
+//! - [`node_facts`]: [`NodeFacts`], the signed body a node advertises
+//!   (capabilities + identity + TTL + seq), live-state [`FactsDelta`]s and
+//!   the receiver-assigned [`TrustTier`] (card mesh-placement-03).
 //!
 //! Pure data and logic: no probing, no hardware access, no I/O.
 
 pub mod assign;
 pub mod capability;
 pub mod memory;
+pub mod node_facts;
 pub mod perf;
 pub mod requirement;
 pub mod vocabulary;
@@ -33,11 +37,16 @@ mod tests_assign;
 #[cfg(test)]
 mod tests_matching;
 #[cfg(test)]
+mod tests_node_facts;
+#[cfg(test)]
 mod tests_vocab;
 
 pub use assign::{Assignment, match_all};
 pub use capability::{AttrValue, Capability, CapabilityId, CapabilityState, Provenance};
 pub use memory::{MemoryDemand, MemoryLedger, MemoryPool, MemoryShortfall};
+pub use node_facts::{
+    FactsDelta, FactsError, NodeFacts, NodeLoad, ProbeNote, StateChange, TrustTier,
+};
 pub use requirement::{AttrPredicate, IdSelector, MatchFailure, PredicateOp, Requirement};
 pub use vocabulary::{VocabWarning, Vocabulary, VocabularyError};
 pub use vocabulary_pin::{
