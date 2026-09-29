@@ -1,6 +1,7 @@
-# ADR-100: The cog workload kind
+# COG-001: The cog workload kind
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-09-29; decisions settled 2026-09-29, implementation tracked on cards mesh-placement-01..23)
+- **Numbering**: Renumbered from ADR-100 on 2026-09-29. Records that define a cog, or the cog kind itself, use the separate COG-NNN series so they stay out of the main ADR numbering.
 - **Date**: 2026-09-28
 - **Deciders**: Platform / ops. Open questions settled 2026-09-29 (defaults accepted by user); status stays Proposed until implemented, but the decisions below are settled pending implementation.
 - **Depends-On**: ADR-099 (governed workload placement)
