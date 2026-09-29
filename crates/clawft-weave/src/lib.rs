@@ -25,6 +25,9 @@ pub mod llm_service;
 /// platforms so unit tests can exercise add/list/remove without UDS.
 pub mod mcp_rpc;
 pub mod node_identity;
+/// Node facts probe, signing, cache and `cluster.facts` (mesh-placement-03).
+#[cfg(any(feature = "mesh", feature = "exochain"))]
+pub mod node_facts_rpc;
 pub mod protocol;
 /// Governance-gate helper for daemon RPC families (mesh-placement-06).
 pub mod rpc_gate;

@@ -209,6 +209,12 @@ pub mod heartbeat;
 pub mod ipc;
 #[cfg(feature = "native")]
 pub mod node_registry;
+/// Node facts probes and TTL cache (ADR-099 section 2, card mesh-placement-03).
+#[cfg(feature = "native")]
+pub mod node_facts;
+/// Signed node facts, beside `capability_claim` (card mesh-placement-03).
+#[cfg(all(feature = "native", any(feature = "mesh", feature = "exochain")))]
+pub mod node_facts_advert;
 pub mod process;
 pub mod rate_limit;
 pub mod revocation;

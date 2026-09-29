@@ -140,6 +140,9 @@ pub fn required_capability(method: &str) -> Capability {
         | "kernel.logs_stream"
         | "cluster.status"
         | "cluster.nodes"
+        // mesh-placement-03: signed node facts (read-only; `refresh`
+        // re-probes the local node but changes no durable state).
+        | "cluster.facts"
         | "cluster.health"
         | "cluster.shards"
         | "chain.status"
