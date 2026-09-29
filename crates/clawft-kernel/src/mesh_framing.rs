@@ -48,9 +48,11 @@ pub enum FrameType {
     JoinResponse = 0x09,
     /// Sync state digest.
     SyncDigest = 0x0A,
-    /// Artifact request (K6-G1).
+    /// Artifact control (mesh-placement-11): `meta_request`, `announce`
+    /// (have bitfield), `request` (piece indexes). See `mesh_artifact_wire`.
     ArtifactRequest = 0x0B,
-    /// Artifact response (K6-G1).
+    /// Artifact data (mesh-placement-11): `meta` (piece list), `piece`
+    /// blocks, `no_piece`, `reject`. See `mesh_artifact_wire`.
     ArtifactResponse = 0x0C,
     /// Log aggregation (K6-G2).
     LogAggregation = 0x0D,
