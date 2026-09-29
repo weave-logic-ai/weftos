@@ -1,0 +1,696 @@
+{
+ "_comment": "Per-cog conformance expectations for aarch64 (COG-001 catalog groups). Derived from the 2026-09-28 --once sweep (baseline/). run_mode is how the cog must be run to be clean; once_outcome is what a plain --once run is expected to produce.",
+ "arch": "aarch64",
+ "cogs": {
+  "adversarial": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "air-quality-index": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "anomaly-attractor": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "anomaly-detect": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "audit-logger": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "baby-cry": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "beehive-monitor": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "behavioral-profiler": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "breathing-sync": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "cardiac-arrhythmia": {
+   "group": "needs-interval",
+   "interval": 1,
+   "needs": [],
+   "notes": "persistent-listener health cog: --once falls back to the Seed sensor stream; clean with --interval 1",
+   "once_outcome": "no-output",
+   "run_mode": "interval"
+  },
+  "clean-room": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "cloud-inference": {
+   "group": "needs-extra-cli",
+   "needs": [
+    "cli-args"
+   ],
+   "notes": "rejects --once (exit 2); runs as a long-lived service with its own flags",
+   "once_outcome": "cli-error",
+   "run_mode": "once"
+  },
+  "cognitive-pipeline": {
+   "group": "needs-extra-cli",
+   "needs": [
+    "model-assets",
+    "seed-agent"
+   ],
+   "notes": "--once is a dry-run until the agent sensor-feed wiring lands (ADR-095); serves an HTTP API with GGUF models",
+   "once_outcome": "no-output",
+   "run_mode": "once"
+  },
+  "coherence": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "coherence-gate": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "confined-space": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "cough-detect": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "customer-flow": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "dream-stage": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "dtw-gesture-learn": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "dwell-heatmap": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "elevator-count": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "emotion-detect": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "energy-audit": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "energy-harvester": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "ewc-lifelong": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "fall-detect": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "federated-learning": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "flash-attention": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "fleet-auth": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "forklift-proximity": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "frost-warning": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "gait-analysis": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "gesture": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "gesture-language": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "ghost-hunter": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "glass-break": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "goap-autonomy": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "gunshot-detect": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "happiness-score": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "health-monitor": {
+   "group": "needs-interval",
+   "interval": 1,
+   "needs": [],
+   "notes": "persistent-listener health cog: --once falls back to the Seed sensor stream; clean with --interval 1",
+   "once_outcome": "no-output",
+   "run_mode": "interval"
+  },
+  "hvac-presence": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "hyperbolic-space": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "interference-search": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "intrusion": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "intrusion-detect-ml": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "lighting-zones": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "livestock-monitor": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "loitering": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "meeting-room": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "meta-adapt": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "micro-hnsw": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "music-conductor": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "network-firewall": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "neural-trader": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "occupancy-zones": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "optimal-transport": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "package-detect": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "pagerank-influence": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "panic-motion": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "parking-occupancy": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "pattern-sequence": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "perimeter-breach": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "person-matching": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "plant-growth": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "ppe-compliance": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "predictive-maintenance": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "presence-field": {
+   "group": "no-build",
+   "needs": [],
+   "notes": "no aarch64 build published (404)",
+   "once_outcome": "missing-binary",
+   "run_mode": "once"
+  },
+  "prompt-shield": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "psycho-symbolic": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "quantum-coherence": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "queue-length": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "rag-local": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "rain-detect": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "respiratory-distress": {
+   "group": "needs-interval",
+   "interval": 1,
+   "needs": [],
+   "notes": "persistent-listener health cog: --once falls back to the Seed sensor stream; clean with --interval 1",
+   "once_outcome": "no-output",
+   "run_mode": "interval"
+  },
+  "ruview-densepose": {
+   "group": "needs-interval",
+   "interval": 1,
+   "needs": [],
+   "notes": "persistent-listener health cog: --once falls back to the Seed sensor stream; clean with --interval 1",
+   "once_outcome": "no-output",
+   "run_mode": "interval"
+  },
+  "seizure-detect": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "self-healing-mesh": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "shelf-engagement": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "sleep-apnea": {
+   "group": "needs-interval",
+   "interval": 1,
+   "needs": [],
+   "notes": "persistent-listener health cog: --once falls back to the Seed sensor stream; clean with --interval 1",
+   "once_outcome": "no-output",
+   "run_mode": "interval"
+  },
+  "slip-fall-zone": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "smoke-fire": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "snore-monitor": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "sound-classifier": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "sparse-recovery": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "spiking-tracker": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "structural-vibration": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "swarm-backup-restore": {
+   "group": "needs-extra-cli",
+   "needs": [
+    "seed-peers",
+    "seed-api"
+   ],
+   "notes": "queries the Seed store API; no JSON from the stub",
+   "once_outcome": "no-output",
+   "run_mode": "once"
+  },
+  "swarm-cluster-monitor": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "swarm-consensus": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "swarm-delta-sync": {
+   "group": "needs-extra-cli",
+   "needs": [
+    "seed-peers",
+    "seed-api"
+   ],
+   "notes": "needs seed peers to sync with; no ingest even with --interval",
+   "once_outcome": "no-output",
+   "run_mode": "once"
+  },
+  "swarm-deploy": {
+   "group": "needs-extra-cli",
+   "needs": [
+    "seed-api"
+   ],
+   "notes": "drives /api/v1/apps/install on a Seed; nothing to ingest",
+   "once_outcome": "no-output",
+   "run_mode": "once"
+  },
+  "swarm-distributed-store": {
+   "group": "needs-extra-cli",
+   "needs": [
+    "seed-peers",
+    "seed-api"
+   ],
+   "notes": "queries the Seed store API; no JSON from the stub",
+   "once_outcome": "no-output",
+   "run_mode": "once"
+  },
+  "swarm-edge-orchestrator": {
+   "group": "needs-extra-cli",
+   "needs": [
+    "seed-peers"
+   ],
+   "notes": "orchestrates peer Seeds; nothing to ingest alone",
+   "once_outcome": "no-output",
+   "run_mode": "once"
+  },
+  "swarm-load-balancer": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "swarm-mesh-manager": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "swarm-mqtt-bridge": {
+   "group": "needs-extra-cli",
+   "needs": [
+    "mqtt-broker"
+   ],
+   "notes": "bridges to an MQTT broker; nothing to ingest alone",
+   "once_outcome": "no-output",
+   "run_mode": "once"
+  },
+  "swarm-witness-federation": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "table-turnover": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "tailgating": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "tailscale": {
+   "group": "needs-extra-cli",
+   "needs": [
+    "tailscale-auth"
+   ],
+   "notes": "exits 3 without tailscaled state / auth key",
+   "once_outcome": "cli-error",
+   "run_mode": "once"
+  },
+  "temporal-compress": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "temporal-logic": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "time-crystal": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "time-series-forecast": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "vital-trend": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "water-leak": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  },
+  "weapon-detect": {
+   "group": "clean",
+   "needs": [],
+   "once_outcome": "clean",
+   "run_mode": "once"
+  }
+ }
+}

@@ -1,0 +1,206 @@
+{
+ "host": {
+  "machine": "aarch64",
+  "python": "3.11.2",
+  "release": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+  "system": "Linux"
+ },
+ "results": [
+  {
+   "argv": [
+    "cog-anomaly-detect-aarch64",
+    "--once"
+   ],
+   "cycle_ms": 749.5,
+   "cycles": 1,
+   "elapsed_ms": 749.5,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 703.2,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "anomaly-detect",
+   "ingest_posts": 1,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[0,[3.4898406192951593e-6,-0.2829427119532358,0.0,0.0,0.0,0.0,0.0,0.0]]]}"
+   ],
+   "ingest_vectors": 1,
+   "interval_s": null,
+   "mode": "once",
+   "packets_sent": 41,
+   "rc": 0,
+   "sha256": "42154913cbb57fd58e010548a833221a2afe73cf1768aa1e0ab00e9441d6cb25",
+   "status": "ran",
+   "stderr_tail": "[cog-anomaly-detect] starting (interval=10s, z_threshold=2.5)",
+   "stdout_json_lines": 1,
+   "stdout_lines": 1,
+   "stdout_tail": "{\"anomalies\":[],\"stats\":{\"num_channels\":256,\"mean_amplitude\":0.0003489840619295159,\"max_z_score\":-1.4147135597661789,\"cusum_drift_detected\":false},\"timestamp\":1790703567}",
+   "timed_out": false,
+   "timeout_s": 15.0
+  },
+  {
+   "argv": [
+    "cog-fall-detect-aarch64",
+    "--once"
+   ],
+   "cycle_ms": 770.9,
+   "cycles": 1,
+   "elapsed_ms": 770.9,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 716.9,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "fall-detect",
+   "ingest_posts": 1,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[2,[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]]}"
+   ],
+   "ingest_vectors": 1,
+   "interval_s": null,
+   "mode": "once",
+   "packets_sent": 41,
+   "rc": 0,
+   "sha256": "e8746a8d66373601b65451b32cb36242439bc54683adfe5f5ddec72a3d93f5c4",
+   "status": "ran",
+   "stderr_tail": "[cog-fall-detect] start (interval=1s, impact_threshold=6, stillness_window=8s, cooldown=30s, ruview=false)",
+   "stdout_json_lines": 1,
+   "stdout_lines": 1,
+   "stdout_tail": "{\"status\":\"quiet\",\"fall_detected\":false,\"confidence\":0.0,\"z_impact\":0.0,\"stillness_pct\":0.0,\"total_falls\":0,\"timestamp\":1790703568}",
+   "timed_out": false,
+   "timeout_s": 15.0
+  },
+  {
+   "argv": [
+    "cog-baby-cry-aarch64",
+    "--once"
+   ],
+   "cycle_ms": 775.0,
+   "cycles": 1,
+   "elapsed_ms": 775.0,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 746.8,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "baby-cry",
+   "ingest_posts": 1,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[4,[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]]}"
+   ],
+   "ingest_vectors": 1,
+   "interval_s": null,
+   "mode": "once",
+   "packets_sent": 40,
+   "rc": 0,
+   "sha256": "eff5ebd459104489136e1cd3b042af3546695739a66645d87bb81f928260b51a",
+   "status": "ran",
+   "stderr_tail": "[cog-baby-cry] start (interval=1s, z=2.5, min=2s, cooldown=15s)",
+   "stdout_json_lines": 1,
+   "stdout_lines": 1,
+   "stdout_tail": "{\"status\":\"quiet\",\"cry_detected\":false,\"sustained_secs\":0.0,\"midband_z\":0.0,\"total_cries\":0,\"timestamp\":1790703569}",
+   "timed_out": false,
+   "timeout_s": 15.0
+  },
+  {
+   "argv": [
+    "cog-sleep-apnea-aarch64",
+    "--interval",
+    "1"
+   ],
+   "cycle_ms": 1004.9,
+   "cycles": 14,
+   "elapsed_ms": 15009.6,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 1003.3,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "sleep-apnea",
+   "ingest_posts": 14,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[0,[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]]}"
+   ],
+   "ingest_vectors": 14,
+   "interval_s": 1,
+   "mode": "interval",
+   "packets_sent": 665,
+   "rc": null,
+   "sha256": "22b12fb380fa52ccee66f7e9fe6c7e4fade451acac1d59ea74aec83e04887a1a",
+   "status": "ran",
+   "stderr_tail": "[cog-sleep-apnea] starting (interval=1s)\n[cog-sleep-apnea] error: no JSON",
+   "stdout_json_lines": 14,
+   "stdout_lines": 14,
+   "stdout_tail": ":1790703576}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790703577}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790703578}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790703579}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790703580}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790703581}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790703582}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790703583}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790703584}",
+   "timed_out": true,
+   "timeout_s": 15.0
+  },
+  {
+   "argv": [
+    "cog-cardiac-arrhythmia-aarch64",
+    "--interval",
+    "1"
+   ],
+   "cycle_ms": 1003.0,
+   "cycles": 14,
+   "elapsed_ms": 15008.0,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 1004.7,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "cardiac-arrhythmia",
+   "ingest_posts": 14,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[0,[0.4268292682926829,0.8043996665398437,0.5294117647058824,0.2392510401554823,0.9,1.0,0.72,0.0]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[0.0,0.0,0.0,0.0,0.1,0.0,0.02,0.0]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[0.0,0.0,0.0,0.0,0.1,0.0,0.02,0.0]]]}"
+   ],
+   "ingest_vectors": 14,
+   "interval_s": 1,
+   "mode": "interval",
+   "packets_sent": 671,
+   "rc": null,
+   "sha256": "dd9cc7979f740b5b6998f6936daeb90811f72016bc494606d5b260963e6fa682",
+   "status": "ran",
+   "stderr_tail": "[cog-cardiac-arrhythmia] starting (interval=1s)\n[cog-cardiac-arrhythmia] error: no JSON\n[cog-cardiac-arrhythmia] ALERT: [\"AF_SUSPECTED: R-R CV=0.239 (>0.20)\"]\n[cog-cardiac-arrhythmia] ALERT: [\"AF_SUSPECTED: R-R CV=0.237 (>0.20)\"]",
+   "stdout_json_lines": 14,
+   "stdout_lines": 14,
+   "stdout_tail": "aks_detected\":1,\"rhythm\":\"insufficient_data\",\"alerts\":[],\"timestamp\":1790703590}\n{\"heart_rate_bpm\":0.0,\"rmssd_ms\":0.0,\"pnn50\":0.0,\"rr_cv\":0.0,\"r_peaks_detected\":1,\"rhythm\":\"insufficient_data\",\"alerts\":[],\"timestamp\":1790703591}\n{\"heart_rate_bpm\":0.0,\"rmssd_ms\":0.0,\"pnn50\":0.0,\"rr_cv\":0.0,\"r_peaks_detected\":1,\"rhythm\":\"insufficient_data\",\"alerts\":[],\"timestamp\":1790703592}\n{\"heart_rate_bpm\":0.0,\"rmssd_ms\":0.0,\"pnn50\":0.0,\"rr_cv\":0.0,\"r_peaks_detected\":1,\"rhythm\":\"insufficient_data\",\"alerts\":[],\"timestamp\":1790703593}\n{\"heart_rate_bpm\":0.0,\"rmssd_ms\":0.0,\"pnn50\":0.0,\"rr_cv\":0.0,\"r_peaks_detected\":1,\"rhythm\":\"insufficient_data\",\"alerts\":[],\"timestamp\":1790703594}\n{\"heart_rate_bpm\":84.6774193548387,\"rmssd_ms\":160.87993330796874,\"pnn50\":0.5294117647058824,\"rr_cv\":0.2370473944628881,\"r_peaks_detected\":36,\"rhythm\":\"atrial_fibrillation\",\"alerts\":[\"AF_SUSPECTED: R-R CV=0.237 (>0.20)\"],\"timestamp\":1790703595}\n{\"heart_rate_bpm\":0.0,\"rmssd_ms\":0.0,\"pnn50\":0.0,\"rr_cv\":0.0,\"r_peaks_detected\":1,\"rhythm\":\"insufficient_data\",\"alerts\":[],\"timestamp\":1790703596}\n{\"heart_rate_bpm\":0.0,\"rmssd_ms\":0.0,\"pnn50\":0.0,\"rr_cv\":0.0,\"r_peaks_detected\":1,\"rhythm\":\"insufficient_data\",\"alerts\":[],\"timestamp\":1790703597}\n{\"heart_rate_bpm\":0.0,\"rmssd_ms\":0.0,\"pnn50\":0.0,\"rr_cv\":0.0,\"r_peaks_detected\":1,\"rhythm\":\"insufficient_data\",\"alerts\":[],\"timestamp\":1790703598}\n{\"heart_rate_bpm\":0.0,\"rmssd_ms\":0.0,\"pnn50\":0.0,\"rr_cv\":0.0,\"r_peaks_detected\":1,\"rhythm\":\"insufficient_data\",\"alerts\":[],\"timestamp\":1790703599}",
+   "timed_out": true,
+   "timeout_s": 15.0
+  },
+  {
+   "argv": [
+    "cog-cloud-inference-aarch64",
+    "--once"
+   ],
+   "cycle_ms": null,
+   "cycles": 0,
+   "elapsed_ms": 4.9,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": null,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "cloud-inference",
+   "ingest_posts": 0,
+   "ingest_samples": [],
+   "ingest_vectors": 0,
+   "interval_s": null,
+   "mode": "once",
+   "packets_sent": 8,
+   "rc": 2,
+   "sha256": "9c3f4e5e11abe5c2402ff4a1027ae9e26767aca4de40e2ce4ebd04f408c19436",
+   "status": "ran",
+   "stderr_tail": "error: unexpected argument '--once' found\n\nUsage: cog-cloud-inference-aarch64 [OPTIONS]\n\nFor more information, try '--help'.",
+   "stdout_json_lines": 0,
+   "stdout_lines": 0,
+   "stdout_tail": "",
+   "timed_out": false,
+   "timeout_s": 15.0
+  }
+ ]
+}

@@ -1,0 +1,185 @@
+{
+ "host": {
+  "machine": "aarch64",
+  "python": "3.12.14",
+  "release": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+  "system": "Linux"
+ },
+ "results": [
+  {
+   "argv": [
+    "cog-cardiac-arrhythmia-aarch64",
+    "--interval",
+    "1"
+   ],
+   "cycle_ms": 1004.9,
+   "cycles": 14,
+   "elapsed_ms": 15004.9,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 1007.3,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "cardiac-arrhythmia",
+   "ingest_posts": 14,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[0,[0.4268292682926829,0.8043996665398437,0.5294117647058824,0.2392510401554823,0.9,1.0,0.72,0.0]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[0.0,0.0,0.0,0.0,0.1,0.0,0.02,0.0]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[0.0,0.0,0.0,0.0,0.1,0.0,0.02,0.0]]]}"
+   ],
+   "ingest_vectors": 14,
+   "interval_s": 1,
+   "mode": "interval",
+   "packets_sent": 661,
+   "rc": null,
+   "sha256": "dd9cc7979f740b5b6998f6936daeb90811f72016bc494606d5b260963e6fa682",
+   "status": "ran",
+   "stderr_tail": "[cog-cardiac-arrhythmia] starting (interval=1s)\n[cog-cardiac-arrhythmia] error: no JSON\n[cog-cardiac-arrhythmia] ALERT: [\"AF_SUSPECTED: R-R CV=0.239 (>0.20)\"]\n[cog-cardiac-arrhythmia] ALERT: [\"AF_SUSPECTED: R-R CV=0.232 (>0.20)\"]\n[cog-cardiac-arrhythmia] ALERT: [\"AF_SUSPECTED: R-R CV=0.237 (>0.20)\"]",
+   "stdout_json_lines": 14,
+   "stdout_lines": 14,
+   "stdout_tail": "0,\"rmssd_ms\":0.0,\"pnn50\":0.0,\"rr_cv\":0.0,\"r_peaks_detected\":1,\"rhythm\":\"insufficient_data\",\"alerts\":[],\"timestamp\":1790703795}\n{\"heart_rate_bpm\":0.0,\"rmssd_ms\":0.0,\"pnn50\":0.0,\"rr_cv\":0.0,\"r_peaks_detected\":1,\"rhythm\":\"insufficient_data\",\"alerts\":[],\"timestamp\":1790703796}\n{\"heart_rate_bpm\":0.0,\"rmssd_ms\":0.0,\"pnn50\":0.0,\"rr_cv\":0.0,\"r_peaks_detected\":1,\"rhythm\":\"insufficient_data\",\"alerts\":[],\"timestamp\":1790703797}\n{\"heart_rate_bpm\":0.0,\"rmssd_ms\":0.0,\"pnn50\":0.0,\"rr_cv\":0.0,\"r_peaks_detected\":1,\"rhythm\":\"insufficient_data\",\"alerts\":[],\"timestamp\":1790703798}\n{\"heart_rate_bpm\":0.0,\"rmssd_ms\":0.0,\"pnn50\":0.0,\"rr_cv\":0.0,\"r_peaks_detected\":1,\"rhythm\":\"insufficient_data\",\"alerts\":[],\"timestamp\":1790703799}\n{\"heart_rate_bpm\":85.36585365853658,\"rmssd_ms\":141.4213562373095,\"pnn50\":0.5588235294117647,\"rr_cv\":0.23188553978783186,\"r_peaks_detected\":36,\"rhythm\":\"atrial_fibrillation\",\"alerts\":[\"AF_SUSPECTED: R-R CV=0.232 (>0.20)\"],\"timestamp\":1790703800}\n{\"heart_rate_bpm\":84.33734939759036,\"rmssd_ms\":159.04124511289146,\"pnn50\":0.47058823529411764,\"rr_cv\":0.23704987250399528,\"r_peaks_detected\":36,\"rhythm\":\"atrial_fibrillation\",\"alerts\":[\"AF_SUSPECTED: R-R CV=0.237 (>0.20)\"],\"timestamp\":1790703801}\n{\"heart_rate_bpm\":0.0,\"rmssd_ms\":0.0,\"pnn50\":0.0,\"rr_cv\":0.0,\"r_peaks_detected\":1,\"rhythm\":\"insufficient_data\",\"alerts\":[],\"timestamp\":1790703802}\n{\"heart_rate_bpm\":0.0,\"rmssd_ms\":0.0,\"pnn50\":0.0,\"rr_cv\":0.0,\"r_peaks_detected\":1,\"rhythm\":\"insufficient_data\",\"alerts\":[],\"timestamp\":1790703803}",
+   "timed_out": true,
+   "timeout_s": 15.0
+  },
+  {
+   "argv": [
+    "cog-health-monitor-aarch64",
+    "--interval",
+    "1"
+   ],
+   "cycle_ms": 1004.3,
+   "cycles": 14,
+   "elapsed_ms": 15006.3,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 1008.0,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "health-monitor",
+   "ingest_posts": 14,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[0,[1.904296875,0.38671875,0.0,0.00005031302481802676,0.0,0.0,0.7,0.2]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[1.875,0.3984375,0.0,0.0003229263410537523,0.0,0.0,0.7,0.2]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[1.611328125,0.404296875,0.0,0.0003224233037462174,0.0,0.0,0.7,0.2]]]}"
+   ],
+   "ingest_vectors": 14,
+   "interval_s": 1,
+   "mode": "interval",
+   "packets_sent": 656,
+   "rc": null,
+   "sha256": "24cc4733d66ddb6e3e5ceba5b6d0a2f0dba4f193b1ae950d889d4043857eacde",
+   "status": "ran",
+   "stderr_tail": "[cog-health-monitor] starting (interval=1s source=auto window_ms=1000)\n[cog-health-monitor] error: no JSON\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 76 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 75 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 64 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 70 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 69 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 68 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 70 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 70 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 69 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 70 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 77 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 77 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 79 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 73 bpm\"]",
+   "stdout_json_lines": 14,
+   "stdout_lines": 14,
+   "stdout_tail": "etected\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 69 bpm\"],\"timestamp\":1790703813,\"source\":\"auto:esp32-udp\"}\n{\"breathing_bpm\":70.3125,\"heart_rate_bpm\":79.6875,\"presence_detected\":false,\"signal_variance\":0.032265545229153335,\"apnea_detected\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 70 bpm\"],\"timestamp\":1790703814,\"source\":\"auto:esp32-udp\"}\n{\"breathing_bpm\":77.34375,\"heart_rate_bpm\":78.515625,\"presence_detected\":false,\"signal_variance\":0.005013490835515332,\"apnea_detected\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 77 bpm\"],\"timestamp\":1790703815,\"source\":\"auto:esp32-udp\"}\n{\"breathing_bpm\":77.34375,\"heart_rate_bpm\":77.34375,\"presence_detected\":false,\"signal_variance\":0.005008033995493898,\"apnea_detected\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 77 bpm\"],\"timestamp\":1790703816,\"source\":\"auto:esp32-udp\"}\n{\"breathing_bpm\":78.515625,\"heart_rate_bpm\":77.34375,\"presence_detected\":false,\"signal_variance\":0.005027405309906045,\"apnea_detected\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 79 bpm\"],\"timestamp\":1790703817,\"source\":\"auto:esp32-udp\"}\n{\"breathing_bpm\":72.65625,\"heart_rate_bpm\":77.34375,\"presence_detected\":false,\"signal_variance\":0.032307939876443925,\"apnea_detected\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 73 bpm\"],\"timestamp\":1790703818,\"source\":\"auto:esp32-udp\"}",
+   "timed_out": true,
+   "timeout_s": 15.0
+  },
+  {
+   "argv": [
+    "cog-respiratory-distress-aarch64",
+    "--interval",
+    "1"
+   ],
+   "cycle_ms": 1003.9,
+   "cycles": 14,
+   "elapsed_ms": 15004.3,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 1007.0,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "respiratory-distress",
+   "ingest_posts": 14,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[0,[1.93359375,0.150054362772433,0.06845644380810316,0.150054362772433,0.5,0.0,1.0,0.0]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[1.845703125,1.0,0.08789504488377431,1.0,0.8,1.0,1.0,0.0]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[1.875,1.0,0.117960322203845,1.0,0.5,0.0,1.0,0.0]]]}"
+   ],
+   "ingest_vectors": 14,
+   "interval_s": 1,
+   "mode": "interval",
+   "packets_sent": 663,
+   "rc": null,
+   "sha256": "c116c97aa19b755c84bae950f00d494ed80ad7cf7c7ad9ed0acbfc3ea82b5760",
+   "status": "ran",
+   "stderr_tail": "tress] ALERT: [\"TACHYPNEA: breathing rate=77.3 bpm (>25)\"]\n[cog-respiratory-distress] ALERT: [\"CHEYNE_STOKES: modulation_depth=1.372\", \"HIGH_EFFORT: breathing_effort=1.00\"]\n[cog-respiratory-distress] ALERT: [\"TACHYPNEA: breathing rate=75.0 bpm (>25)\", \"HIGH_EFFORT: breathing_effort=1.00\"]\n[cog-respiratory-distress] ALERT: [\"TACHYPNEA: breathing rate=75.0 bpm (>25)\", \"HIGH_EFFORT: breathing_effort=1.00\"]\n[cog-respiratory-distress] ALERT: [\"TACHYPNEA: breathing rate=72.7 bpm (>25)\", \"HIGH_EFFORT: breathing_effort=1.00\"]\n[cog-respiratory-distress] ALERT: [\"TACHYPNEA: breathing rate=71.5 bpm (>25)\", \"HIGH_EFFORT: breathing_effort=1.00\"]\n[cog-respiratory-distress] ALERT: [\"TACHYPNEA: breathing rate=75.0 bpm (>25)\", \"HIGH_EFFORT: breathing_effort=1.00\"]\n[cog-respiratory-distress] ALERT: [\"TACHYPNEA: breathing rate=72.7 bpm (>25)\", \"HIGH_EFFORT: breathing_effort=1.00\"]\n[cog-respiratory-distress] ALERT: [\"TACHYPNEA: breathing rate=72.7 bpm (>25)\", \"HIGH_EFFORT: breathing_effort=1.00\"]\n[cog-respiratory-distress] ALERT: [\"TACHYPNEA: breathing rate=75.0 bpm (>25)\", \"HIGH_EFFORT: breathing_effort=1.00\"]\n[cog-respiratory-distress] ALERT: [\"TACHYPNEA: breathing rate=76.2 bpm (>25)\"]\n[cog-respiratory-distress] ALERT: [\"TACHYPNEA: breathing rate=77.3 bpm (>25)\"]\n[cog-respiratory-distress] ALERT: [\"TACHYPNEA: breathing rate=75.0 bpm (>25)\", \"HIGH_EFFORT: breathing_effort=1.00\"]\n[cog-respiratory-distress] ALERT: [\"TACHYPNEA: breathing rate=75.0 bpm (>25)\", \"HIGH_EFFORT: breathing_effort=1.00\"]",
+   "stdout_json_lines": 14,
+   "stdout_lines": 14,
+   "stdout_tail": "e_mean\":0.11780734409373578,\"cheyne_stokes_detected\":false,\"modulation_depth\":1.5544427753785346,\"status\":\"tachypnea\",\"alerts\":[\"TACHYPNEA: breathing rate=75.0 bpm (>25)\",\"HIGH_EFFORT: breathing_effort=1.00\"],\"timestamp\":1790703829}\n{\"breathing_rate_bpm\":76.171875,\"breathing_rate_source\":\"derived\",\"breathing_effort\":0.1581839510107671,\"amplitude_mean\":0.06829869181560864,\"cheyne_stokes_detected\":false,\"modulation_depth\":0.1581839510107671,\"status\":\"tachypnea\",\"alerts\":[\"TACHYPNEA: breathing rate=76.2 bpm (>25)\"],\"timestamp\":1790703830}\n{\"breathing_rate_bpm\":77.34375,\"breathing_rate_source\":\"derived\",\"breathing_effort\":0.1556254706956106,\"amplitude_mean\":0.06839792534964387,\"cheyne_stokes_detected\":false,\"modulation_depth\":0.1556254706956106,\"status\":\"tachypnea\",\"alerts\":[\"TACHYPNEA: breathing rate=77.3 bpm (>25)\"],\"timestamp\":1790703831}\n{\"breathing_rate_bpm\":75.0,\"breathing_rate_source\":\"derived\",\"breathing_effort\":1.0,\"amplitude_mean\":0.1179575764390868,\"cheyne_stokes_detected\":false,\"modulation_depth\":1.5540324278441944,\"status\":\"tachypnea\",\"alerts\":[\"TACHYPNEA: breathing rate=75.0 bpm (>25)\",\"HIGH_EFFORT: breathing_effort=1.00\"],\"timestamp\":1790703832}\n{\"breathing_rate_bpm\":75.0,\"breathing_rate_source\":\"derived\",\"breathing_effort\":1.0,\"amplitude_mean\":0.11665677992697478,\"cheyne_stokes_detected\":false,\"modulation_depth\":1.5725330196310134,\"status\":\"tachypnea\",\"alerts\":[\"TACHYPNEA: breathing rate=75.0 bpm (>25)\",\"HIGH_EFFORT: breathing_effort=1.00\"],\"timestamp\":1790703833}",
+   "timed_out": true,
+   "timeout_s": 15.0
+  },
+  {
+   "argv": [
+    "cog-ruview-densepose-aarch64",
+    "--interval",
+    "1"
+   ],
+   "cycle_ms": 1004.8,
+   "cycles": 14,
+   "elapsed_ms": 15004.0,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 1002.9,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "ruview-densepose",
+   "ingest_posts": 14,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[0,[0.39511209257575836,0.42695994714075647,0.06626279784322821,-0.3553560712438563,-0.4502622237533031,-0.1311993466170765,0.30848759760252975,0.4645524787615376]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[-0.3345228301855392,-0.46802279366853844,-0.17122475657797495,0.28299652411695075,0.4770321151320347,0.232486564920946,-0.22580605045777336,-0.4764936270344739]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[0.07801052174925818,0.4751845618856127,0.43547610102249823,-0.00460707315267653,-0.44045452106168326,-0.47135011278130584,-0.06888858577779773,0.39690878015496756]]]}"
+   ],
+   "ingest_vectors": 14,
+   "interval_s": 1,
+   "mode": "interval",
+   "packets_sent": 669,
+   "rc": null,
+   "sha256": "f8bdf84f3facb9425cc083c9a53412d064dfec080134d3d24a19aec0236c157f",
+   "status": "ran",
+   "stderr_tail": "[cog-ruview-densepose] starting (interval=1s source=auto window_ms=1000)\n[cog-ruview-densepose] error: no JSON",
+   "stdout_json_lines": 14,
+   "stdout_lines": 14,
+   "stdout_tail": "ence\":0.09988124685980924},{\"name\":\"right_ear\",\"x\":0.0796924551241344,\"y\":0.0667091980968159,\"confidence\":0.10004043659834462},{\"name\":\"left_shoulder\",\"x\":0.08720921485512266,\"y\":0.06639641136410827,\"confidence\":0.10301956914033858},{\"name\":\"right_shoulder\",\"x\":0.07784206735904492,\"y\":0.09231250566766198,\"confidence\":0.1074961588974681},{\"name\":\"left_elbow\",\"x\":0.099004279379145,\"y\":0.0869684828480261,\"confidence\":0.11268911234453383},{\"name\":\"right_elbow\",\"x\":0.08650479697509036,\"y\":0.101583971596369,\"confidence\":0.1128649762732672},{\"name\":\"left_wrist\",\"x\":0.1093993165541799,\"y\":0.095561751990388,\"confidence\":0.12139319414957539},{\"name\":\"right_wrist\",\"x\":0.5478548002326054,\"y\":0.6305327371849875,\"confidence\":0.735727635995567},{\"name\":\"left_hip\",\"x\":0.11169179178175678,\"y\":0.1206447637185489,\"confidence\":0.13354400106391592},{\"name\":\"right_hip\",\"x\":0.10981618751254985,\"y\":0.1247967646028993,\"confidence\":0.13529545216136707},{\"name\":\"left_knee\",\"x\":0.10586994246007703,\"y\":0.12260234900168043,\"confidence\":0.13310745075766522},{\"name\":\"right_knee\",\"x\":0.11403381786262483,\"y\":0.09958945407459932,\"confidence\":0.12675936821349776},{\"name\":\"left_ankle\",\"x\":0.0944608790565836,\"y\":0.10439164256754507,\"confidence\":0.11764561166925368},{\"name\":\"right_ankle\",\"x\":0.09477226335032242,\"y\":0.0862300640012021,\"confidence\":0.11481939445450211}],\"num_keypoints\":17,\"avg_confidence\":0.15170057020606184,\"source\":\"auto:esp32-udp\",\"raw_features\":256,\"hampel_corrections\":17,\"timestamp\":1790703849}",
+   "timed_out": true,
+   "timeout_s": 15.0
+  },
+  {
+   "argv": [
+    "cog-sleep-apnea-aarch64",
+    "--interval",
+    "1"
+   ],
+   "cycle_ms": 1003.7,
+   "cycles": 14,
+   "elapsed_ms": 15009.9,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 1006.5,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "sleep-apnea",
+   "ingest_posts": 14,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[0,[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]]}"
+   ],
+   "ingest_vectors": 14,
+   "interval_s": 1,
+   "mode": "interval",
+   "packets_sent": 663,
+   "rc": null,
+   "sha256": "22b12fb380fa52ccee66f7e9fe6c7e4fade451acac1d59ea74aec83e04887a1a",
+   "status": "ran",
+   "stderr_tail": "[cog-sleep-apnea] starting (interval=1s)\n[cog-sleep-apnea] error: no JSON",
+   "stdout_json_lines": 14,
+   "stdout_lines": 14,
+   "stdout_tail": ":1790703856}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790703857}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790703858}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790703859}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790703860}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790703861}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790703862}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790703863}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790703864}",
+   "timed_out": true,
+   "timeout_s": 15.0
+  }
+ ]
+}

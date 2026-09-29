@@ -1,0 +1,1769 @@
+[
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "adversarial",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "d94935d6c28bea98e54020f603b8a5ca3ecd3ed9cd051bd8fb845fa16120c275",
+   "value": 767.6
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "air-quality-index",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "2b30e7fea5ebdee02b08b5d503ec265778a92666a733e94b3a568b75c667c10d",
+   "value": 745.7
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "anomaly-attractor",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "0cfec15ed8f9718fa0bb7fb28779a1a7d115f7ad5de196cc1730dac0b4e7f279",
+   "value": 756.2
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "anomaly-detect",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "42154913cbb57fd58e010548a833221a2afe73cf1768aa1e0ab00e9441d6cb25",
+   "value": 759.4
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "audit-logger",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "beb684c7dcc484e36eb202693329b1ff379f69f9d86da6d15fd043669734eac7",
+   "value": 766.5
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "baby-cry",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "eff5ebd459104489136e1cd3b042af3546695739a66645d87bb81f928260b51a",
+   "value": 764.8
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "beehive-monitor",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "0bde33c16e05774204d778aeddaa337726534e4dc206102e17614ded58f2e027",
+   "value": 769.4
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "behavioral-profiler",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "f6eee756c20fee2d2d60ccf3843fb0b0ee9ad0c763ab0b4216c9f523099547ae",
+   "value": 753.3
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "breathing-sync",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "9d24f9f4f6fda678b5eb27a092cedf661b470287487627c5d5df2b26f96b1d64",
+   "value": 772.7
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "clean-room",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "48e4a61e86bbfa82bcacedcbec80952546be697b0a582028701b1753ac5061f1",
+   "value": 761.1
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "coherence",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "5af779c37c6d5b86f522ee3ef8fc6b7c1cfe22f19d4bcc4052b95aeee55c076d",
+   "value": 814.5
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "coherence-gate",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "0f440f22c26b564bab518fccc3d8fc093e04baea6048830d68d353ac23822fb1",
+   "value": 746.4
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "confined-space",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "7c89269e0a3adad685da9ae3746177923019fca335650cbaf6b60865a6c92c31",
+   "value": 770.1
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "cough-detect",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "4dd682e5d19e35d9f1ed0a579f5c0a9e35f7c00ccad6aa835a62d79fdd78ca5f",
+   "value": 823.4
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "customer-flow",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "d44a8cbb7e661ba44cba7bd148c439f349f00b8dce11e94aae4c31ba089b6f01",
+   "value": 759.5
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "dream-stage",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "38d2ba3cfb4085650bca34799b6f6a6907fe1d5bf770a4c3a738488ca211a4be",
+   "value": 793.5
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "dtw-gesture-learn",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "e287f647b5ff373bc0ebb05fcdd1379e28f17c80a2492adf9dba7c708e8ebf3a",
+   "value": 765.8
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "dwell-heatmap",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "d00e261c53ffacfe4660465312968f14f52fc5d35cd1a64f1689691ae8d7071a",
+   "value": 765.4
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "elevator-count",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "719630493e0dc9513d4c359161aea295ba1ca2e6ce1ae9149bfc55b7f8985d81",
+   "value": 776.4
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "emotion-detect",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "ccb455328b4dd90394f48426fd2cdbccb60ca9b3f52a6cf0f0b04b111000be7f",
+   "value": 761.2
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "energy-audit",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "6f816421ffa50c61011fa7bdb80b7e74474314bec2252582fda5fc36f1d54365",
+   "value": 781.6
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "energy-harvester",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "a649b734e1ad23dea05922a4300c15e63708e5a230e26112a39ffa03366162a3",
+   "value": 772.3
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "ewc-lifelong",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "d3b8a0b086fd9936595418d2a9d3050ec88f4b3639241bec4076ed6c6657b4d5",
+   "value": 756.9
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "fall-detect",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "e8746a8d66373601b65451b32cb36242439bc54683adfe5f5ddec72a3d93f5c4",
+   "value": 774.2
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "federated-learning",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "3fb19b5a7a33cf843be155c52b0cd3adf396232da9885536e74ec64e3c6587e6",
+   "value": 758.7
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "flash-attention",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "cdf9519985bbee7890251f067e4b86d06169bb2b75fbe8cde63fc64b607f1a0c",
+   "value": 763.4
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "fleet-auth",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "403bb356b7024ec9dd28e69e57ef0139e6676827d526add2a37a227b1f82a664",
+   "value": 763.8
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "forklift-proximity",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "6a39b6bb7e30412aeb7604cb3b23b1da88f01550dacf1b6eac5ac81ad71ae708",
+   "value": 761.6
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "frost-warning",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "58cca9355d1e3a71de7667e34c66ba13856c22242cf0f8c784c1c3293cc54743",
+   "value": 751.2
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "gait-analysis",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "307ac430efc60f4e4168cc0e9d3fe70314e0832087a4a63bfa84c8ddd045f41f",
+   "value": 759.2
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "gesture",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "b8c5aee4d4fd3c193625de06e7e50f7e490e682fa1d4117eda7bbb6fbfcd1a33",
+   "value": 761.7
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "gesture-language",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "ba8aa756fb0364cb8baea65a08ad8b552a70e2d6ba5b54da38d4245e7457fcab",
+   "value": 766.7
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "ghost-hunter",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "c8c7af011ce6606112231d3624e3c2848b97c22a6d6750a37e5ac5bae4e6c48e",
+   "value": 761.0
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "glass-break",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "13cf367ef7dc2efda5ef76bf658256fcb820852b75482e5a7e77b372ddf2d354",
+   "value": 759.7
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "goap-autonomy",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "4c08b326e3e0ec1909403c91facdec7881f561410ecffdb6da0c0e006013474c",
+   "value": 821.9
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "gunshot-detect",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "11b08c7b299f60f6fa87f85d24a03d8b24aca03561a157126228c7bd6d97ee8d",
+   "value": 766.7
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "happiness-score",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "c630e6d3eb427561e26a0ffbcda7afd34e240f113b87d989bda979eaf12d252c",
+   "value": 798.8
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "hvac-presence",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "abcbcf6f75023abba00c3924465a9e85af1c9021abd700d72e6a059e02715d53",
+   "value": 766.3
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "hyperbolic-space",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "724a8f7aa27a23e0213a85f8754c1f0704dfefc16c749beb3e72d90902d89ed0",
+   "value": 748.3
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "interference-search",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "274ecdf85900c3d32f7fc923489609da45b959594606de56d29a728a96128b63",
+   "value": 783.5
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "intrusion",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "edb478fbb2d8a15fc4bebd72612cf52f697cacf92a7c5822f780ecc71e70cd00",
+   "value": 769.4
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "intrusion-detect-ml",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "5b893f661f2e8195dd8e27ee7c1e6b0830291a94cdcb6fec7364812083a6d9f5",
+   "value": 774.3
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "lighting-zones",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "c1f20a4756d53eff0f8c83e5cb809750f4c56216ab7b16f4ca102f9256e3e63f",
+   "value": 763.6
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "livestock-monitor",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "62930dba489e07c70c4d6bfcd56f806010c83007ce94fac224e6a523b8361220",
+   "value": 758.6
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "loitering",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "b1c3e2e2dbd9fe441eb2e971d5a64f8caf6b7467c4fbecd6e2890933ddd81a08",
+   "value": 761.9
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "meeting-room",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "a115d7f44d69adbbce7fd43bceef94522c823fe9dc9a10b97def9204af7efcfb",
+   "value": 759.3
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "meta-adapt",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "f78afc40963ecb64269d1b88f6da45cbd5e045e1ac61cf581e00d501fae4e96e",
+   "value": 761.9
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "micro-hnsw",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "a7d31581a343ac60eead240a61deaabd1279e570b157dbeb91f5ab68f5fd14f8",
+   "value": 749.8
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "music-conductor",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "f80eadb07603ab00c95beda3e562dcdaedb82081ef9b7154b5b41332170476c7",
+   "value": 761.1
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "network-firewall",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "a0abec6fe709353358d93012d4c12f86e742f498e54fc15b4b09d93fa6ce08c6",
+   "value": 5.4
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "neural-trader",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "00f57091a323dcacc6b44e27e17ea10b03e461cf1ef971d1937e1b8114cc8d1b",
+   "value": 759.0
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "occupancy-zones",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "afc5f6fdd763f702c85d8cc0e9e4ca7d519a831fe63b732c2fc1ac1c690af70d",
+   "value": 748.5
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "optimal-transport",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "795453c8bccbc1604a1e4ad8001db98ff42071fb98f0217e94bf6d3fc797e351",
+   "value": 761.5
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "package-detect",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "a191d530dfb15786db1f46970a22b074cc2cb4d13972b76e3e2789b62a84906e",
+   "value": 759.8
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "pagerank-influence",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "0108bca47e772cf35c87235ba4b0165cf8c46506822c93ab8373e8cda9bde0d0",
+   "value": 750.9
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "panic-motion",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "fb7186e11166c69972379ba5607459d0c5b9a0f046919d0219f49b4aaa3939ce",
+   "value": 749.6
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "parking-occupancy",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "60025860f42d932bfa109a372eba513f85712aee0932685b4b65187ebb1278a7",
+   "value": 770.2
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "pattern-sequence",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "fde7aa0053081d90b042f3a159ea12b1cd813407c7ba58be9b1a800403389d9d",
+   "value": 762.0
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "perimeter-breach",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "9febbbe15fa21d8746abab1cb379afc594a469c0fc652e9631114801029201dd",
+   "value": 762.7
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "person-matching",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "c90dce6fd38bde780d120da1bc4023ba2d8291e127db14b4f05cd5bc339a2ef5",
+   "value": 744.8
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "plant-growth",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "203ea75e238b31949ea4d80d216c2547574583d88059386f03b0b5f6fac44ce5",
+   "value": 760.6
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "ppe-compliance",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "80cdb030de39aa5bce6e2037c69d90999a3ed5a4677827bbaf9b9c41b49243db",
+   "value": 4.7
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "predictive-maintenance",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "b7bab28611b2fbd9951d2dc174b026179df591fbce182ed9ce4cb1792ed34593",
+   "value": 756.6
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "prompt-shield",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "fc5eb7aba6c05e28a4c3cfd0c33127372cf0c0918763adbec482d3904f9208b5",
+   "value": 775.8
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "psycho-symbolic",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "8ef33920316f1b52128f2b9cb649656d2a7e08b6783b5b113c7c73c15cdef94d",
+   "value": 798.4
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "quantum-coherence",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "3f4454cf3ed65345f6eef3788e3ed65f323db649a097d7f4b1b3840239c144a4",
+   "value": 760.6
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "queue-length",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "5468b2f4ee6dcc18f4d6f0c15947d61420810011f63bdff065ebaefd3ce64301",
+   "value": 760.4
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "rag-local",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "53912d4ced9c660406ef98110683f0d4325a01b7204f175952a218ea9a1016a6",
+   "value": 758.9
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "rain-detect",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "59e6ea4d261f67b96c8a895977591c12968a14e6a05306d274d1bfeac523a2ca",
+   "value": 809.1
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "seizure-detect",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "0d94678c541fdf064f2658b3cb15a8ee5395d2d38de5d5b6e124f8c768f41505",
+   "value": 766.1
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "self-healing-mesh",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "20a61bc9514a5b111c27662cdc21713662b1438b6743390b1708b9f84250330e",
+   "value": 757.5
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "shelf-engagement",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "94acf966ec9a085ee5d7c2e45a4b453c825bc5ee254be638c74a225608db576a",
+   "value": 762.8
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "slip-fall-zone",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "223dd16aaa31b0eeb924952fe6ed25ba92c9bf2b32617f277a13077053a2ee4f",
+   "value": 754.8
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "smoke-fire",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "86b578b4e63cb463e36feb65da9dac8b9a368cda32ce84bd0ca441c9dc9e8b25",
+   "value": 765.7
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "snore-monitor",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "89b440b6ca7d487f412db7672232b39c1947a5f52489aa5cceb335895214e5c8",
+   "value": 762.4
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "sound-classifier",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "92cd793d2e9363ecb773cdc65b789a7f60b7534e8eaf36c38257e19545dbd200",
+   "value": 759.9
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "sparse-recovery",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "01789aaa4d866d8eef0f9294b0341059b50e094383a244397d18b4fe6c04d0e9",
+   "value": 757.6
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "spiking-tracker",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "571549026ae2800b729908648c7ef6fb0c8ef5c2dd4f3299e476d8a5692c3114",
+   "value": 754.6
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "structural-vibration",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "b0809f203e9c8954f5a119dca2f4eff7d722956ea8fd2fb7ea279111801d9d4b",
+   "value": 762.9
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "swarm-cluster-monitor",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "c6f626d07dbe8001d7ae0eebda1d51b37aeb8e75a8fec4cda89aa13b5e8325d0",
+   "value": 4.5
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "swarm-consensus",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "96dc2228c6a268386506292a82dfbbfe048d743caa02ba9aae4812eb2eaa65b5",
+   "value": 2.1
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "swarm-load-balancer",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "1589aeb6bb957e34ee65c61fba1ea48f87b6deda6a0c7ec923aa076a4d8e7c57",
+   "value": 4.4
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "swarm-mesh-manager",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "2b26baca94bb7da0d08edc2502b667745d4b12a11d2ab9d6ad87ec30b4b32a03",
+   "value": 1646.4
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "swarm-witness-federation",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "fb5b6ce639e4611dcb60c670cd7dde2196b6dbc118637288a542255a9bd29bda",
+   "value": 2.1
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "table-turnover",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "35272ab99ea20b36bae34de855c97d0e4f751e868b11d4cae6db95865f81aadd",
+   "value": 761.9
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "tailgating",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "db54c458d8af6d53be0428f8643891e7c302a1bdaebdf40767ecf8142dac14e1",
+   "value": 765.1
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "temporal-compress",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "213d77794ac09060fd526583c65a04fdc1526377d70bda5d94a0fa48982b46a8",
+   "value": 759.9
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "temporal-logic",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "bdf2d1380494b36d7e8ecfc977731824247d3f95198f52a608741918a6fa4270",
+   "value": 759.1
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "time-crystal",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "9113c1f6c797b909ba0e28b384aa85675134c5dcb161fa153846950f5e78a26f",
+   "value": 755.7
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "time-series-forecast",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "c19604d07ad337a5d805b66fdd248035a4245c87f58f3c68e8dbcc43fe03da34",
+   "value": 764.1
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "vital-trend",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "65973c53f0bb2ca6af7ef729edfdeb9c5a9842382644e1a53a6e0bd005a47f09",
+   "value": 756.7
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "water-leak",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "390b457f81fc4c5d40945d11672e924e3a2f50d206c1bacc06037f548074b5dd",
+   "value": 755.7
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "weapon-detect",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:43:03Z",
+   "mode": "once",
+   "runtime": "apple-container",
+   "samples": 1,
+   "sha256": "a6f56079a5ae96bafb3b7cde531ee5638f6409c50254f1e59fe385e64938a256",
+   "value": 758.0
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ }
+]

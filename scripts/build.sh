@@ -37,6 +37,8 @@ WITH_RELEASE_DRY_RUN=false
 # agents-catalog: verify agents/catalog.json is up to date instead of writing it
 AGENTS_CATALOG_CHECK=false
 COMMAND=""
+# cogs-conformance: everything after the subcommand is passed through
+COGS_ARGS=()
 
 # ── Reporting helpers ────────────────────────────────────────────────
 pass()  { printf "  ${GREEN}PASS${NC}  %s\n" "$*"; }
@@ -1216,6 +1218,21 @@ cmd_agents_leak_check() {
     return $rc
 }
 
+# ── Cog conformance harness (mesh-placement-08, COG-001) ──────────────
+cmd_cogs_conformance() {
+    header "Cog conformance harness (scripts/cogs)"
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   python3 scripts/cogs/conformance.py %s\n" "${COGS_ARGS[*]:-}"
+        timer_end
+        return 0
+    fi
+    local rc=0
+    python3 "$ROOT/scripts/cogs/conformance.py" "${COGS_ARGS[@]}" || rc=$?
+    timer_end
+    return $rc
+}
+
 # ── Gate check 13 helper: clawft-kernel diskann + bench feature matrix ──
 check_kernel_diskann_and_bench_matrix() {
     # --tests included deliberately: cfg-gated test modules rot separately
@@ -1758,6 +1775,11 @@ ${BOLD}Commands:${NC}
                   Scan agents/ for client-identifying content (AD-2): client/org
                   names, client paths, roster entries, credential shapes. The
                   repo is public — see scripts/agents-leak-check.sh.
+  cogs-conformance <sweep|probe|summarize|selftest> [opts]
+                  Cog conformance harness (COG-001, ADR-099): run cogs against
+                  a fake ESP32 UDP feed + stub ingest on docker, apple-container,
+                  native or a remote node over ssh; JSON results, baseline check,
+                  perf.cog.cycle_ms. See docs/cogs/conformance-harness.md
   gate            Run full phase gate (19 checks, includes cargo audit +
                   npm audit critical/high / WEFT-598 +
                   kernel WASM no-mesh / WEFT-114 + pipeline pass / WEFT-56 +
@@ -1834,6 +1856,17 @@ parse_args() {
 
     COMMAND="$1"
     shift
+
+    # cogs-conformance passes every remaining argument through to
+    # scripts/cogs/conformance.py (sweep | probe | summarize | selftest).
+    if [ "$COMMAND" = "cogs-conformance" ]; then
+        while [ $# -gt 0 ]; do
+            if [ "$1" = "--dry-run" ]; then DRY_RUN=true; else COGS_ARGS+=("$1"); fi
+            shift
+        done
+        [ ${#COGS_ARGS[@]} -gt 0 ] || COGS_ARGS=(--help)
+        return 0
+    fi
 
     # Capture positional arg for serve command (port number)
     if [ "$COMMAND" = "serve" ] && [ $# -gt 0 ] && [[ "$1" =~ ^[0-9]+$ ]]; then
@@ -1962,6 +1995,7 @@ main() {
         agents-validate)    cmd_agents_validate ;;
         agents-catalog)     cmd_agents_catalog ;;
         agents-leak-check)  cmd_agents_leak_check ;;
+        cogs-conformance)   cmd_cogs_conformance ;;
         gate)         cmd_gate ;;
         pipeline-pass) cmd_pipeline_pass ;;
         release-dry-run) cmd_release_dry_run ;;

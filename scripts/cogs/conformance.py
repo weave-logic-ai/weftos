@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""Cog conformance harness driver (card mesh-placement-08; COG-001; ADR-099 s2-s3).
+
+Entry point: `scripts/build.sh cogs-conformance <command> [options]`.
+
+Commands:
+  sweep     run many cogs on one runtime + arch; write results/<label>/
+            {results.json, summary.json, capabilities.json}
+  probe     admission probe for one cog: run it in its expected mode and emit
+            perf.cog.cycle_ms (provenance measured); with --node-facts, also
+            upgrade the exercised arch / runtime capabilities to measured
+  summarize re-classify an existing results.json against expectations
+  selftest  run the unit tests (no containers, no network)
+
+Docs: docs/cogs/conformance-harness.md
+"""
+import argparse
+import datetime
+import json
+import os
+import shutil
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+import classify  # noqa: E402
+import runtimes  # noqa: E402
+
+EXPECTATIONS = os.path.join(HERE, "expectations.json")
+BASELINE = os.path.join(HERE, "baseline", "aarch64-once-2026-09-28.json")
+RESULTS_DIR = os.path.join(HERE, "results")
+CACHE_DIR = os.path.join(HERE, ".cache")
+
+
+def _load_json(path):
+    with open(path) as f:
+        return json.load(f)
+
+
+def _write_json(path, doc):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(doc, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
+def _now():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def select_cogs(expectations, cogs_arg):
+    if not cogs_arg:
+        return sorted(expectations)
+    ids = [c.strip() for c in cogs_arg.split(",") if c.strip()]
+    bad = [c for c in ids if not classify.valid_cog_id(c)]
+    if bad:
+        raise SystemExit("invalid cog id(s): %s" % ", ".join(bad))
+    return ids
+
+
+def execute(args, expectations, ids, sweep_mode):
+    """Fetch binaries, stage, run through the adapter; return raw results."""
+    cache = os.path.join(args.cache_dir, args.arch)
+    specs, missing, binaries = [], [], []
+    for cid in ids:
+        path, why = None, "no local binary"
+        if args.binary_dir:
+            cand = os.path.join(args.binary_dir, runtimes.binary_name(cid, args.arch))
+            if os.path.isfile(cand):
+                path, why = cand, None
+        else:
+            path, why = runtimes.fetch_binary(cid, args.arch, cache)
+        if path is None:
+            missing.append({"id": cid, "status": "missing-binary", "rc": None,
+                            "timed_out": False, "mode": "once", "reason": why})
+            continue
+        binaries.append(path)
+        specs.append(classify.plan_spec(cid, expectations.get(cid, {}), sweep_mode))
+    adapter = runtimes.make_adapter(args.runtime, args.arch, ssh_host=args.ssh_host,
+                                    sudo=args.sudo, image=args.image)
+    workdir = tempfile.mkdtemp(prefix="run-", dir=_ensure(args.cache_dir))
+    try:
+        runtimes.stage_workdir(workdir, os.path.join(HERE, "harness.py"), binaries)
+        root = adapter.binary_root(workdir)
+        for spec in specs:
+            spec["binary"] = "%s/bin/%s" % (root, runtimes.binary_name(spec["id"], args.arch))
+        _write_json(os.path.join(workdir, "plan.json"), {
+            "timeout": args.timeout, "feed": args.feed, "cogs": specs})
+        doc = {"results": [], "host": None}
+        if specs:
+            out = adapter.run(workdir, timeout=args.timeout * len(specs) + 300)
+            doc = _load_json(out)
+    finally:
+        if not args.keep_workdir:
+            shutil.rmtree(workdir, ignore_errors=True)
+    by_id = {r["id"]: r for r in doc["results"] + missing}
+    return [by_id[c] for c in ids if c in by_id], doc.get("host")
+
+
+def _ensure(d):
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def cmd_sweep(args):
+    expectations = classify.validate_expectations(_load_json(args.expectations))
+    ids = select_cogs(expectations, args.cogs)
+    results, host = execute(args, expectations, ids, args.mode)
+    measured_at = _now()
+    summary = classify.summarize(results, expectations, args.mode)
+    summary.update(runtime=args.runtime, arch=args.arch, feed=args.feed,
+                   timeout_s=args.timeout, measured_at=measured_at, host=host)
+    label = args.label or "%s-%s-%s" % (args.runtime, args.arch, args.mode)
+    out_dir = os.path.join(args.results_dir, label)
+    caps = classify.cycle_capabilities(results, args.arch, args.runtime, measured_at)
+    _write_json(os.path.join(out_dir, "results.json"), {"results": results, "host": host})
+    _write_json(os.path.join(out_dir, "summary.json"), summary)
+    _write_json(os.path.join(out_dir, "capabilities.json"), caps)
+    print(json.dumps({"label": label, "group_counts": summary["group_counts"],
+                      "by_outcome": summary["by_outcome"],
+                      "unexpected": summary["unexpected"]}, indent=1))
+    rc = 0
+    if args.check_baseline:
+        problems = classify.compare_baseline(summary, _load_json(args.baseline))
+        for p in problems:
+            print("BASELINE MISMATCH: " + p)
+        print("baseline: %s" % ("MATCH" if not problems else "MISMATCH"))
+        rc = 1 if problems else 0
+    elif summary["unexpected"]:
+        rc = 1
+    return rc
+
+
+def cmd_probe(args):
+    expectations = classify.validate_expectations(_load_json(args.expectations))
+    if not classify.valid_cog_id(args.cog):
+        raise SystemExit("invalid cog id")
+    results, _ = execute(args, expectations, [args.cog], "expected")
+    measured_at = _now()
+    node_caps = []
+    if args.node_facts:
+        facts = _load_json(args.node_facts)
+        node_caps = facts.get("capabilities", []) if isinstance(facts, dict) else facts
+        if not isinstance(node_caps, list):
+            raise SystemExit("node facts: expected a list or {capabilities:[...]}")
+    caps = classify.upgrade_provenance(node_caps, results, args.arch, args.runtime,
+                                       measured_at)
+    doc = {"cog": args.cog, "outcome": classify.classify(results[0]),
+           "result": results[0], "capabilities": caps}
+    text = json.dumps(doc, indent=1, sort_keys=True)
+    if args.out:
+        with open(args.out, "w") as f:
+            f.write(text + "\n")
+    print(text)
+    return 0 if doc["outcome"] == "clean" else 1
+
+
+def cmd_summarize(args):
+    expectations = classify.validate_expectations(_load_json(args.expectations))
+    results = _load_json(args.results)["results"]
+    summary = classify.summarize(results, expectations, args.mode)
+    print(json.dumps(summary, indent=1, sort_keys=True))
+    if args.check_baseline:
+        problems = classify.compare_baseline(summary, _load_json(args.baseline))
+        for p in problems:
+            print("BASELINE MISMATCH: " + p)
+        return 1 if problems else 0
+    return 0
+
+
+def cmd_selftest(_args):
+    import unittest
+    suite = unittest.defaultTestLoader.discover(HERE, pattern="test_*.py")
+    ok = unittest.TextTestRunner(verbosity=1).run(suite).wasSuccessful()
+    return 0 if ok else 1
+
+
+def _runner_opts(p):
+    p.add_argument("--runtime", choices=sorted(runtimes.ADAPTERS), default="docker")
+    p.add_argument("--arch", choices=sorted(runtimes.URL_ARCH), default="aarch64")
+    p.add_argument("--feed", choices=("features", "vitals", "both"), default="features",
+                   help="UDP feed: features (0xC5110003, baseline), vitals (0xC5110002) or both")
+    p.add_argument("--timeout", type=float, default=15.0, help="per-cog cap in seconds")
+    p.add_argument("--image", default=runtimes.DEFAULT_IMAGE)
+    p.add_argument("--ssh-host", help="remote node for --runtime ssh "
+                   "(default $COG_HARNESS_SSH_HOST)")
+    p.add_argument("--sudo", action="store_true",
+                   help="ssh/native: run the harness via sudo -n (ingest stub binds :80)")
+    p.add_argument("--binary-dir", help="use local binaries instead of downloading")
+    p.add_argument("--cache-dir", default=CACHE_DIR)
+    p.add_argument("--expectations", default=EXPECTATIONS)
+    p.add_argument("--keep-workdir", action="store_true")
+
+
+def build_parser():
+    ap = argparse.ArgumentParser(prog="cogs-conformance", description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="command", required=True)
+    s = sub.add_parser("sweep", help="run many cogs on one runtime + arch")
+    _runner_opts(s)
+    s.add_argument("--mode", choices=("once", "expected"), default="once",
+                   help="once: every cog --once (baseline); expected: per-cog run mode")
+    s.add_argument("--cogs", help="comma-separated ids (default: all in expectations)")
+    s.add_argument("--label", help="results/<label>/ (default runtime-arch-mode)")
+    s.add_argument("--results-dir", default=RESULTS_DIR)
+    s.add_argument("--check-baseline", action="store_true")
+    s.add_argument("--baseline", default=BASELINE)
+    s.set_defaults(fn=cmd_sweep)
+    p = sub.add_parser("probe", help="admission probe for one cog")
+    _runner_opts(p)
+    p.add_argument("--cog", required=True)
+    p.add_argument("--node-facts", help="JSON capabilities to upgrade")
+    p.add_argument("--out")
+    p.set_defaults(fn=cmd_probe)
+    m = sub.add_parser("summarize", help="re-classify a results.json")
+    m.add_argument("results")
+    m.add_argument("--mode", choices=("once", "expected"), default="once")
+    m.add_argument("--expectations", default=EXPECTATIONS)
+    m.add_argument("--check-baseline", action="store_true")
+    m.add_argument("--baseline", default=BASELINE)
+    m.set_defaults(fn=cmd_summarize)
+    t = sub.add_parser("selftest", help="run unit tests")
+    t.set_defaults(fn=cmd_selftest)
+    return ap
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    if getattr(args, "timeout", 1) <= 0 or getattr(args, "timeout", 1) > 600:
+        raise SystemExit("--timeout must be in (0, 600]")
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
