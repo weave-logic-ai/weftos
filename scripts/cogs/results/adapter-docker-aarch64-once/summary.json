@@ -26,6 +26,7 @@
   "regressed": [],
   "unknown": []
  },
+ "harness_runtime": "docker",
  "host": {
   "machine": "aarch64",
   "python": "3.12.14",

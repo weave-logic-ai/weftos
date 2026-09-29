@@ -78,7 +78,7 @@ sensor = []
 containers = []
 # mesh-placement-09: WorkloadRuntime adapters (native process, container
 # engines, Cognitum Seed API). reqwest drives the Seed's HTTP API.
-workload-runtime = ["native", "ecc", "exochain", "dep:reqwest"]
+workload-runtime = ["native", "ecc", "exochain", "dep:reqwest", "dep:rustls"]
 http-api = []
 
 [dependencies]
@@ -170,6 +170,8 @@ clawft-types = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
 wiremock = "0.6"
+# Self-signed Seed certificates for the pinned-TLS transport tests.
+rcgen = { workspace = true }
 # WEFT-366 vector_backend_bench: clustered-gaussian synthetic corpus
 # generation (see benches/vector_backend_bench.rs). rand_chacha/rand_distr
 # pinned locally, matching the clawft-casestudy-gen-qsr precedent.

@@ -4,14 +4,15 @@
    "arch": "aarch64",
    "cog_id": "anomaly-detect",
    "feed": "reference-v1",
+   "harness_runtime": "native",
    "harness_version": "1.0.0",
    "interval_s": null,
-   "measured_at": "2026-09-29T21:10:27Z",
+   "measured_at": "2026-09-29T21:32:11Z",
    "mode": "once",
-   "runtime": "native",
+   "runtime": "apple-container",
    "samples": 1,
    "sha256": "42154913cbb57fd58e010548a833221a2afe73cf1768aa1e0ab00e9441d6cb25",
-   "value": 3011.2
+   "value": 3119.2
   },
   "exclusive": false,
   "id": "perf.cog.cycle_ms",

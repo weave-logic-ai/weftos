@@ -12,6 +12,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use super::seed::{SeedApiRuntime, SeedConfig, SeedPin};
 use super::seed_creds::FileCredentials;
 use super::seed_http::{HttpSeedTransport, SeedCredentials};
+use super::seed_tls::SeedTls;
 use super::test_support::{MemoryCredentials, mode_of};
 
 const TOKEN: &str = "seed-token-0123456789abcdef";
@@ -52,7 +53,7 @@ async fn seed_at(node: &str, device: &str, fw: &str) -> (MockServer, SeedApiRunt
             pins: vec![SeedPin::new("fall-detect", "1.0.0")],
             concurrency_cap: 3,
         },
-        Arc::new(HttpSeedTransport::new(&s.uri(), false).unwrap()),
+        Arc::new(HttpSeedTransport::new(&s.uri(), SeedTls::WebPki).unwrap()),
         Arc::new(MemoryCredentials::with(node, TOKEN)),
     )
     .unwrap();
@@ -207,7 +208,7 @@ async fn pairing_persists_the_token_for_a_restarted_adapter() {
                 pins: vec![],
                 concurrency_cap: 3,
             },
-            Arc::new(HttpSeedTransport::new(&s.uri(), false).unwrap()),
+            Arc::new(HttpSeedTransport::new(&s.uri(), SeedTls::WebPki).unwrap()),
             Arc::new(FileCredentials::new(&dir)),
         )
         .unwrap()

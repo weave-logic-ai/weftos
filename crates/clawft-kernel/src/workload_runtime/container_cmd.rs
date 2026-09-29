@@ -72,6 +72,8 @@ impl Engine {
 
 /// Unprivileged uid:gid inside the container (`nobody`).
 pub const CONTAINER_USER: &str = "65534:65534";
+/// Task (process + thread) cap for a cog container.
+pub const PIDS_LIMIT: u32 = 64;
 /// Where the binary lives in the image.
 pub const COG_PATH: &str = "/cog";
 /// Writable tmpfs for `COGNITUM_COG_DATA_DIR`.
@@ -193,13 +195,23 @@ pub fn run_cmd(engine: Engine, s: &RunSpec<'_>) -> Result<Vec<String>, RuntimeEr
         "--label".into(),
         "weftos.workload=cog".into(),
     ]);
-    if engine != Engine::Apple {
-        v.extend([
+    match engine {
+        // Apple `container` has neither `--pids-limit` nor
+        // `--security-opt`. The task cap is RLIMIT_NPROC instead: the cog
+        // runs as a non-root user alone in its VM, so the per-user limit
+        // caps its processes and threads. no_new_privs comes from the relay
+        // (when present); otherwise the cog runs as `nobody` with every
+        // capability dropped.
+        Engine::Apple => v.extend([
+            "--ulimit".into(),
+            format!("nproc={PIDS_LIMIT}:{PIDS_LIMIT}"),
+        ]),
+        _ => v.extend([
             "--pids-limit".into(),
-            "64".into(),
+            PIDS_LIMIT.to_string(),
             "--security-opt".into(),
             "no-new-privileges".into(),
-        ]);
+        ]),
     }
     if let Some((ip, host, inner)) = s.feed_publish {
         let addr = match ip {

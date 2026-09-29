@@ -29,6 +29,7 @@
   "regressed": [],
   "unknown": []
  },
+ "harness_runtime": "docker",
  "host": {
   "machine": "aarch64",
   "python": "3.12.14",
@@ -42,7 +43,7 @@
   "health-monitor": "clean",
   "sleep-apnea": "clean"
  },
- "runtime": "docker",
+ "runtime": "native",
  "sweep_mode": "expected",
  "swept": 4,
  "timeout_s": 20.0,

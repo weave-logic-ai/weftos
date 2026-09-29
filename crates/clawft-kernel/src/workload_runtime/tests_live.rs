@@ -8,10 +8,13 @@
 //! - `WEFTOS_NATIVE_LIVE=1` (Linux only): anomaly-detect under the native
 //!   adapter with the same binary env var.
 //! - `COGNITUM_SEED_LIVE=1`: fall-detect on a real Seed at
-//!   `COGNITUM_SEED_BASE` with `COGNITUM_SEED_TOKEN`. Never installs a new
-//!   cog (fall-detect must already be installed; the install path is
-//!   covered against the mock Seed in `tests_seed_host`); start, console
-//!   (preempt, run, restore), stop.
+//!   `COGNITUM_SEED_BASE` with `COGNITUM_SEED_TOKEN` (and, for an `https://`
+//!   base, the Seed's certificate pin in `COGNITUM_SEED_CERT_SHA256`). Never
+//!   installs a cog: fall-detect must already be installed, or the run
+//!   refuses. It loads, starts, runs one console cycle (preempt, run,
+//!   restore), stops and unloads through [`WorkloadHost`], and leaves every
+//!   cog in the state it found it. The install path is exercised against the
+//!   stateful mock Seed in `tests_seed_host` with the same cycle function.
 //!
 //! The chain is always an in-memory [`ChainManager`], never the operator's.
 
@@ -27,6 +30,7 @@ use super::host_contract::HostContract;
 use super::native::{NativeConfig, NativeRuntime};
 use super::seed::{SeedApiRuntime, SeedConfig, SeedPin};
 use super::seed_http::HttpSeedTransport;
+use super::seed_tls::SeedTls;
 use super::test_support::{MemoryCredentials, signed_workload};
 use super::types::*;
 use crate::chain::ChainManager;
@@ -255,10 +259,10 @@ async fn live_native_anomaly_detect() {
 /// [`WorkloadHost`] (gated and chained); nothing is stopped or started
 /// behind its back, and cogs end in the state they started in.
 ///
-/// fall-detect already installed: load, start, one console cycle, stop,
-/// unload; no install happens or is chained. fall-detect not installed:
-/// the run refuses unless COGNITUM_SEED_LIVE_INSTALL=1 also authorizes the
-/// install, in which case load installs it (chained) and unload removes it.
+/// fall-detect must already be installed (the live run never installs):
+/// load, start, one console cycle, stop, unload; no install happens or is
+/// chained. `https://` bases need `COGNITUM_SEED_CERT_SHA256`; certificate
+/// checking is never switched off.
 #[tokio::test]
 async fn live_seed_fall_detect() {
     if !flag("COGNITUM_SEED_LIVE") {
@@ -266,15 +270,24 @@ async fn live_seed_fall_detect() {
     }
     let base = std::env::var("COGNITUM_SEED_BASE").expect("COGNITUM_SEED_BASE");
     let token = std::env::var("COGNITUM_SEED_TOKEN").expect("COGNITUM_SEED_TOKEN");
-    let kinds = seed_fall_detect_cycle(&base, &token, flag("COGNITUM_SEED_LIVE_INSTALL")).await;
+    let tls = if base.starts_with("https://") {
+        let pin = std::env::var("COGNITUM_SEED_CERT_SHA256")
+            .expect("an https:// Seed needs COGNITUM_SEED_CERT_SHA256 (its certificate pin)");
+        SeedTls::pinned(&pin).expect("certificate pin (sha256:<hex>)")
+    } else {
+        SeedTls::WebPki
+    };
+    let kinds = seed_fall_detect_cycle(&base, &token, tls, false).await;
     eprintln!("[seed] chain: {kinds:?}");
 }
 
 /// The live Seed cycle, also run hermetically against the stateful mock
 /// Seed (`tests_seed_host`). Returns the runtime chain kinds.
+/// `allow_install` is only ever true against the mock Seed.
 pub(super) async fn seed_fall_detect_cycle(
     base: &str,
     token: &str,
+    tls: SeedTls,
     allow_install: bool,
 ) -> Vec<String> {
     let creds = Arc::new(MemoryCredentials::with("seed-live", token));
@@ -288,7 +301,7 @@ pub(super) async fn seed_fall_detect_cycle(
                 ],
                 concurrency_cap: 3,
             },
-            Arc::new(HttpSeedTransport::new(base, base.starts_with("https://")).unwrap()),
+            Arc::new(HttpSeedTransport::new(base, tls).unwrap()),
             creds,
         )
         .unwrap(),
@@ -299,7 +312,7 @@ pub(super) async fn seed_fall_detect_cycle(
     let preinstalled = was("fall-detect").is_some();
     assert!(
         preinstalled || allow_install,
-        "fall-detect is not installed; set COGNITUM_SEED_LIVE_INSTALL=1 to authorize installing it"
+        "fall-detect is not installed; the live run never installs cogs"
     );
     let mut permit = WorkloadPermitRule::new("seed-live", ["workload.*"], ["cog"]);
     permit.min_package_trust = PackageTrust::OperatorAttested;

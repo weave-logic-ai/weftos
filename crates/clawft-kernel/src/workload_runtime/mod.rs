@@ -36,6 +36,7 @@ pub mod seed_client;
 pub mod seed_creds;
 pub mod seed_http;
 pub mod seed_ops;
+pub mod seed_tls;
 pub mod seed_types;
 pub mod supervise;
 pub mod types;
@@ -57,7 +58,11 @@ mod tests_seed;
 #[cfg(test)]
 mod tests_seed_host;
 #[cfg(test)]
+mod tests_seed_install;
+#[cfg(test)]
 mod tests_seed_ops;
+#[cfg(test)]
+mod tests_seed_transport;
 
 pub use cog_spec::{CogSpec, ConsoleLimits, Resources};
 pub use container::{ContainerRuntime, ContainerRuntimeConfig};

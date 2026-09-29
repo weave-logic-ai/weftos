@@ -11,9 +11,11 @@
 //! 1. the relay binds `127.0.0.1:80` while still root (the only reason the
 //!    container starts as root, with every capability dropped except
 //!    `NET_BIND_SERVICE`, `SETUID` and `SETGID`);
-//! 2. it forks the cog, which drops to `nobody` before `exec`, so the cog
-//!    runs with no capabilities;
-//! 3. it drops to `nobody` itself and forwards each connection, byte for
+//! 2. it forks the cog, which drops to `nobody` and sets `no_new_privs`
+//!    before `exec`, so the cog runs with no capabilities and cannot regain
+//!    any through a setuid binary (Apple `container` has no
+//!    `--security-opt no-new-privileges`, so the relay sets it itself);
+//! 3. it drops to `nobody` (and `no_new_privs`) itself and forwards each connection, byte for
 //!    byte, to the upstream (bounded connections, bytes and time);
 //! 4. it forwards SIGTERM / SIGINT to the cog and exits with the cog's
 //!    status.
@@ -71,7 +73,7 @@ pub fn dockerfile(base_image: &str, upstream: SocketAddr) -> String {
         "FROM {base_image}\n\
          COPY cog {COG_PATH}\n\
          COPY {RELAY_FILE} {RELAY_PATH}\n\
-         RUN [\"python3\", \"-B\", \"-c\", \"import os, socket, threading\"]\n\
+         RUN [\"python3\", \"-B\", \"-c\", \"import ctypes, os, socket, threading\"]\n\
          USER 0:0\n\
          WORKDIR /\n\
          ENTRYPOINT [\"python3\", \"-B\", \"-u\", \"{RELAY_PATH}\", \"--listen\", \"{COG_INGEST_ADDR}\", \
@@ -113,6 +115,18 @@ def drop(uid, gid):
         os.setgroups([])
         os.setgid(gid)
         os.setuid(uid)
+    no_new_privs()
+
+
+def no_new_privs():
+    """prctl(PR_SET_NO_NEW_PRIVS): setuid/setgid bits and file capabilities
+    are ignored from here on (Linux only; a no-op elsewhere)."""
+    if not sys.platform.startswith("linux"):
+        return
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(38, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_NO_NEW_PRIVS)")
 
 
 def pump(src, dst):
@@ -173,9 +187,13 @@ def main():
     srv.listen(MAX_CONNS)
     pid = os.fork()
     if pid == 0:
-        srv.close()
-        drop(uid, gid)
-        os.execv(cmd[0], cmd)
+        try:
+            srv.close()
+            drop(uid, gid)
+            os.execv(cmd[0], cmd)
+        except BaseException as e:
+            log("cog exec failed: %s" % e)
+            os._exit(126)
     drop(uid, gid)
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda s, _f: os.kill(pid, s))

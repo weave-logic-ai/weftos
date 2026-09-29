@@ -44,8 +44,8 @@ async fn an_ingest_upstream_fronts_the_cog_with_the_relay_and_only_its_caps() {
         "{df}"
     );
     assert!(
-        df.contains("RUN [\"python3\""),
-        "the build checks for python3"
+        df.contains("RUN [\"python3\"") && df.contains("import ctypes"),
+        "the build checks for python3 and ctypes (no_new_privs)"
     );
     assert_eq!(
         std::fs::read_to_string(ctx.join(RELAY_FILE)).unwrap(),
@@ -210,4 +210,80 @@ fn the_relay_forwards_sigterm_to_the_cog() {
     let status = child.wait().unwrap();
     assert!(t0.elapsed() < Duration::from_secs(10), "cog did not stop");
     assert_eq!(status.code(), Some(128 + libc::SIGTERM), "{status:?}");
+}
+
+/// What the relayed cog sees: its uid and NoNewPrivs, from a child that
+/// reads `/proc/self/status` (Linux only).
+const PRIV_PROBE: &str = "import os\n\
+    st = open('/proc/self/status').read()\n\
+    nnp = st.split('NoNewPrivs:')[1].split()[0]\n\
+    print('uid=%d nnp=%s' % (os.getuid(), nnp))\n";
+
+/// On a Linux test host the relay sets no_new_privs for the cog even when
+/// it is not root (no uid drop happens then). Elsewhere prctl does not
+/// exist and the live container test below covers it.
+#[test]
+fn the_relay_sets_no_new_privs_for_the_cog() {
+    if !cfg!(target_os = "linux") || !python3() {
+        eprintln!("not Linux with python3: covered by live_relay_drops_privileges_in_a_container");
+        return;
+    }
+    let dead = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let out = relay(free_port(), dead, PRIV_PROBE).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("nnp=1"),
+        "{stdout} {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Live (WEFTOS_CONTAINER_LIVE=1, WEFTOS_COG_BASE_IMAGE, engines from
+/// WEFTOS_CONTAINER_ENGINES): run the relay as the image entrypoint would,
+/// as root with only the relay capabilities and the adapter's task cap, and
+/// check the cog runs as `nobody` with no_new_privs set.
+#[test]
+fn live_relay_drops_privileges_in_a_container() {
+    if std::env::var("WEFTOS_CONTAINER_LIVE").as_deref() != Ok("1") {
+        return;
+    }
+    let base = std::env::var("WEFTOS_COG_BASE_IMAGE").expect("WEFTOS_COG_BASE_IMAGE");
+    let engines =
+        std::env::var("WEFTOS_CONTAINER_ENGINES").unwrap_or_else(|_| "docker,apple".into());
+    for engine in engines.split(',') {
+        let (bin, extra): (&str, Vec<String>) = match engine {
+            "apple" => ("container", vec!["--ulimit".into(), "nproc=64:64".into()]),
+            other => (other, vec!["--pids-limit".into(), "64".into()]),
+        };
+        let mut c = Command::new(bin);
+        c.args(["run", "--rm", "--read-only", "--cap-drop", "ALL"]);
+        for cap in super::container_relay::RELAY_CAPS {
+            c.args(["--cap-add", cap]);
+        }
+        c.args(&extra)
+            .args(["--user", "0:0", &base, "python3", "-B", "-c", RELAY_SCRIPT])
+            .args(["--listen", "127.0.0.1:80", "--upstream", "192.0.2.1:9"])
+            .args([
+                "--uid",
+                "65534",
+                "--gid",
+                "65534",
+                "--",
+                "/usr/bin/env",
+                "python3",
+                "-c",
+                PRIV_PROBE,
+            ]);
+        let out = c.output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        eprintln!("[relay-privs] {engine}: {}", stdout.trim());
+        assert!(
+            stdout.contains("uid=65534 nnp=1"),
+            "{engine}: {stdout} {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }

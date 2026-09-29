@@ -11,6 +11,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use super::host_contract::HostContract;
 use super::seed::{SEED_CONCURRENCY_CAP, SeedApiRuntime, SeedConfig, SeedPin};
 use super::seed_http::{HttpSeedTransport, SeedCredentials, validate_base_url, validate_path};
+use super::seed_tls::SeedTls;
 use super::test_support::{MemoryCredentials, signed_workload};
 use super::types::{
     InstanceState, RunMode, RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadRuntime,
@@ -53,7 +54,7 @@ async fn seed(installed: Vec<Value>) -> (MockServer, SeedApiRuntime, Arc<MemoryC
             ],
             concurrency_cap: SEED_CONCURRENCY_CAP,
         },
-        Arc::new(HttpSeedTransport::new(&server.uri(), false).unwrap()),
+        Arc::new(HttpSeedTransport::new(&server.uri(), SeedTls::WebPki).unwrap()),
         creds.clone(),
     )
     .unwrap();
@@ -245,7 +246,7 @@ async fn http_errors_never_carry_the_token() {
             pins: vec![SeedPin::new("fall-detect", "1.0.0")],
             concurrency_cap: 3,
         },
-        Arc::new(HttpSeedTransport::new(&server.uri(), false).unwrap()),
+        Arc::new(HttpSeedTransport::new(&server.uri(), SeedTls::WebPki).unwrap()),
         Arc::new(MemoryCredentials::with(NODE, TOKEN)),
     )
     .unwrap();
@@ -257,7 +258,7 @@ async fn http_errors_never_carry_the_token() {
             pins: vec![],
             concurrency_cap: 3,
         },
-        Arc::new(HttpSeedTransport::new("http://127.0.0.1:1", false).unwrap()),
+        Arc::new(HttpSeedTransport::new("http://127.0.0.1:1", SeedTls::WebPki).unwrap()),
         Arc::new(MemoryCredentials::with(NODE, TOKEN)),
     )
     .unwrap();

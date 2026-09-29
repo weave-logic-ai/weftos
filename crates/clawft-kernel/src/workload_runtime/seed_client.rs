@@ -67,14 +67,14 @@ impl SeedApiRuntime {
     /// Stop a cog by id (`POST /api/v1/apps/{id}/stop`).
     pub async fn stop_cog(&self, id: &str) -> Result<(), RuntimeError> {
         self.api(Method::Post, &cog_path(id, "stop")?, None, API_TIMEOUT)
-        .await
-        .map(|_| ())
+            .await
+            .map(|_| ())
     }
 
     /// Start a cog by id (`POST /api/v1/apps/{id}/start`).
     pub async fn start_cog(&self, id: &str) -> Result<(), RuntimeError> {
         self.api(Method::Post, &cog_path(id, "start")?, None, API_TIMEOUT)
-        .await
-        .map(|_| ())
+            .await
+            .map(|_| ())
     }
 }

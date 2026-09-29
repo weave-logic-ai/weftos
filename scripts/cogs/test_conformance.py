@@ -5,6 +5,7 @@ No containers and no network: adapters are driven through an injected
 runner, downloads through an injected opener, and the end-to-end harness
 test runs a fake cog (a Python script) against the real feed and stub.
 """
+import contextlib
 import io
 import json
 import os
@@ -199,6 +200,89 @@ class Capabilities(unittest.TestCase):
         self.assertEqual(out, node)
         with self.assertRaises(ValueError):
             classify.upgrade_provenance(node, [], "sparc", "docker", "T")
+
+
+class AdapterAttribution(unittest.TestCase):
+    """Measurements belong to the adapter that ran the cog, not the runtime
+    the harness itself runs on."""
+
+    def _run(self, argv, node_caps=None):
+        real = conformance.execute
+        conformance.execute = lambda *_a, **_k: ([raw("anomaly-detect")], {"system": "Darwin"})
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                args = conformance.build_parser().parse_args(argv + (
+                    ["--node-facts", os.path.join(d, "f.json"), "--out", os.path.join(d, "o.json")]
+                    if argv[0] == "probe" else ["--results-dir", d, "--label", "x"]))
+                if node_caps is not None:
+                    with open(os.path.join(d, "f.json"), "w") as f:
+                        json.dump(node_caps, f)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    args.fn(args)
+                if argv[0] == "probe":
+                    with open(os.path.join(d, "o.json")) as f:
+                        return json.load(f)["capabilities"], None
+                with open(os.path.join(d, "x", "capabilities.json")) as f, \
+                        open(os.path.join(d, "x", "summary.json")) as g:
+                    return json.load(f), json.load(g)
+        finally:
+            conformance.execute = real
+
+    LAUNCH = ["--launcher", "/x/cog_adapter_run", "--adapter-base-image",
+              "b@sha256:" + "0" * 64]
+
+    def test_sweep_labels_the_adapter_runtime(self):
+        caps, summary = self._run(["sweep", "--runtime", "native", "--adapter-runtime", "apple"]
+                                  + self.LAUNCH)
+        self.assertEqual({c["attrs"]["runtime"] for c in caps}, {"apple-container"})
+        self.assertEqual({c["attrs"]["harness_runtime"] for c in caps}, {"native"})
+        self.assertEqual((summary["runtime"], summary["harness_runtime"]),
+                         ("apple-container", "native"))
+
+    def test_without_a_launcher_the_harness_runtime_is_the_measured_one(self):
+        caps, summary = self._run(["sweep", "--runtime", "docker"])
+        self.assertEqual({c["attrs"]["runtime"] for c in caps}, {"docker"})
+        self.assertNotIn("harness_runtime", caps[0]["attrs"])
+        self.assertEqual(summary["runtime"], "docker")
+
+    def test_probe_upgrades_the_adapter_capability_not_the_harness_one(self):
+        node = [{"id": "runtime.native", "provenance": "claimed"},
+                {"id": "runtime.container.apple", "provenance": "claimed"}]
+        caps, _ = self._run(["probe", "--cog", "anomaly-detect", "--runtime", "native",
+                             "--adapter-runtime", "apple"] + self.LAUNCH, node)
+        by = {c["id"]: c for c in caps if c["id"] != "perf.cog.cycle_ms"}
+        self.assertEqual(by["runtime.container.apple"]["provenance"], "measured")
+        self.assertEqual(by["runtime.native"]["provenance"], "claimed")
+
+    def test_podman_adapter_has_a_capability(self):
+        self.assertEqual(classify.RUNTIME_CAPABILITY[conformance.ADAPTER_RUNTIME["podman"]],
+                         "runtime.container.podman")
+
+
+class BuildScriptHelp(unittest.TestCase):
+    def test_build_sh_help_documents_the_cogs_commands(self):
+        """`scripts/build.sh --help` runs under `set -u`; an unescaped variable
+        in the usage text aborts it before printing anything."""
+        import subprocess
+        script = os.path.join(HERE, "..", "build.sh")
+        p = subprocess.run(["bash", script, "--help"], capture_output=True, text=True,
+                           timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("unbound variable", p.stderr)
+        self.assertIn("cogs-launcher", p.stdout)
+        self.assertIn("COG_LAUNCHER_BUILDER", p.stdout)
+
+
+class BuildScriptHelp(unittest.TestCase):
+    def test_help_does_not_trip_set_u(self):
+        """The cogs-launcher usage text must not expand unset variables."""
+        import subprocess
+        env = {k: v for k, v in os.environ.items() if k != "COG_LAUNCHER_BUILDER"}
+        p = subprocess.run(["bash", os.path.join(HERE, "..", "build.sh"), "--help"],
+                           capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("unbound variable", p.stderr)
+        self.assertIn("cogs-launcher", p.stdout)
 
 
 class Runtimes(unittest.TestCase):

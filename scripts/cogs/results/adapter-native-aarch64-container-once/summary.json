@@ -26,6 +26,7 @@
   "regressed": [],
   "unknown": []
  },
+ "harness_runtime": "docker",
  "host": {
   "machine": "aarch64",
   "python": "3.12.14",
@@ -36,7 +37,7 @@
  "outcomes": {
   "anomaly-detect": "clean"
  },
- "runtime": "docker",
+ "runtime": "native",
  "sweep_mode": "once",
  "swept": 1,
  "timeout_s": 15.0,

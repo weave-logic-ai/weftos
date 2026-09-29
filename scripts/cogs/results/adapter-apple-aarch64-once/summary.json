@@ -26,17 +26,18 @@
   "regressed": [],
   "unknown": []
  },
+ "harness_runtime": "native",
  "host": {
   "machine": "arm64",
   "python": "3.14.7",
   "release": "27.0.0",
   "system": "Darwin"
  },
- "measured_at": "2026-09-29T21:10:27Z",
+ "measured_at": "2026-09-29T21:32:11Z",
  "outcomes": {
   "anomaly-detect": "clean"
  },
- "runtime": "native",
+ "runtime": "apple-container",
  "sweep_mode": "once",
  "swept": 1,
  "timeout_s": 60.0,

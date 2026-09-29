@@ -117,7 +117,9 @@ impl SeedCredentials for FileCredentials {
         let path = self.path_for(node_id)?;
         let t = token.expose();
         if t.is_empty() || t.len() as u64 > MAX_TOKEN || !t.bytes().all(|b| b.is_ascii_graphic()) {
-            return Err(RuntimeError::InvalidConfig("refusing a malformed token".into()));
+            return Err(RuntimeError::InvalidConfig(
+                "refusing a malformed token".into(),
+            ));
         }
         self.ensure_dir()?;
         let tmp = self.dir.join(format!(".{node_id}.token.tmp"));

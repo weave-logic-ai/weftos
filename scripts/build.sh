@@ -1825,7 +1825,7 @@ ${BOLD}Commands:${NC}
                   Build the cog adapter launcher (examples/cog_adapter_run)
                   that cogs-conformance --launcher uses to run cogs through
                   the WorkloadRuntime adapters; --linux-arm64 builds it in an
-                  arm64 Rust container ($COG_LAUNCHER_BUILDER).
+                  arm64 Rust container (COG_LAUNCHER_BUILDER, default rust:1-bookworm).
   gate            Run full phase gate (19 checks, includes cargo audit +
                   npm audit critical/high / WEFT-598 +
                   kernel WASM no-mesh / WEFT-114 + pipeline pass / WEFT-56 +

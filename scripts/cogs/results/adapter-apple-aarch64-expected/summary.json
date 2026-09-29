@@ -26,6 +26,7 @@
   "regressed": [],
   "unknown": []
  },
+ "harness_runtime": "native",
  "host": {
   "machine": "arm64",
   "python": "3.14.7",
@@ -36,7 +37,7 @@
  "outcomes": {
   "anomaly-detect": "clean"
  },
- "runtime": "native",
+ "runtime": "apple-container",
  "sweep_mode": "expected",
  "swept": 1,
  "timeout_s": 60.0,

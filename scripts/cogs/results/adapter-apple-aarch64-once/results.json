@@ -11,18 +11,18 @@
     "cog-anomaly-detect-aarch64",
     "--once"
    ],
-   "cycle_ms": 3011.2,
+   "cycle_ms": 3119.2,
    "cycles": 1,
-   "elapsed_ms": 3011.2,
+   "elapsed_ms": 3119.2,
    "feed": "features",
    "feed_id": "reference-v1",
-   "first_event_ms": 2751.0,
+   "first_event_ms": 2839.8,
    "harness_version": "1.0.0",
    "host_machine": "arm64",
    "id": "anomaly-detect",
    "ingest_posts": 1,
    "ingest_samples": [
-    "{\"dedup\":true,\"vectors\":[[0,[0.0002990803687816879,1.02431974462211,0.0,0.8,0.0,0.0,0.0,0.0]]]}"
+    "{\"dedup\":true,\"vectors\":[[0,[0.0003007988257377292,1.0245239809452746,0.0,0.8,0.0,0.0,0.0,0.0]]]}"
    ],
    "ingest_vectors": 1,
    "interval_s": null,
@@ -44,14 +44,14 @@
     "192.168.64.1:18080"
    ],
    "mode": "once",
-   "packets_sent": 135,
+   "packets_sent": 137,
    "rc": 0,
    "sha256": "42154913cbb57fd58e010548a833221a2afe73cf1768aa1e0ab00e9441d6cb25",
    "status": "ran",
    "stderr_tail": "[0/6] [0s]\n[1/6] Fetching image [0s]\n[2/6] Unpacking image [0s]\n[3/6] Fetching kernel [0s]\n[4/6] Fetching init image [0s]\n[5/6] Unpacking init image [0s]\n[6/6] Starting container [0s]\n[6/6] Starting container [0s]\n[cog-anomaly-detect] starting (interval=10s, z_threshold=2.5)\n[cog-anomaly-detect] ALERT: 8 anomalies detected\n[adapter] runtime=container.apple provides=[\"runtime.container.apple\"] network=Egress chain=[\"workload.load\", \"workload.start\", \"workload.unload\"]",
    "stdout_json_lines": 1,
    "stdout_lines": 1,
-   "stdout_tail": "{\"anomalies\":[{\"type\":\"SPIKE\",\"channel\":248,\"value\":0.949999988079071,\"z_score\":5.12159872311055,\"description\":\"Channel 248 value 0.95 deviates 5.1 sigma from mean\"},{\"type\":\"SPIKE\",\"channel\":249,\"value\":0.949999988079071,\"z_score\":5.12159872311055,\"description\":\"Channel 249 value 0.95 deviates 5.1 sigma from mean\"},{\"type\":\"SPIKE\",\"channel\":250,\"value\":0.949999988079071,\"z_score\":5.12159872311055,\"description\":\"Channel 250 value 0.95 deviates 5.1 sigma from mean\"},{\"type\":\"SPIKE\",\"channel\":251,\"value\":0.949999988079071,\"z_score\":5.12159872311055,\"description\":\"Channel 251 value 0.95 deviates 5.1 sigma from mean\"},{\"type\":\"SPIKE\",\"channel\":252,\"value\":0.949999988079071,\"z_score\":5.12159872311055,\"description\":\"Channel 252 value 0.95 deviates 5.1 sigma from mean\"},{\"type\":\"SPIKE\",\"channel\":253,\"value\":0.949999988079071,\"z_score\":5.12159872311055,\"description\":\"Channel 253 value 0.95 deviates 5.1 sigma from mean\"},{\"type\":\"SPIKE\",\"channel\":254,\"value\":0.949999988079071,\"z_score\":5.12159872311055,\"description\":\"Channel 254 value 0.95 deviates 5.1 sigma from mean\"},{\"type\":\"SPIKE\",\"channel\":255,\"value\":0.949999988079071,\"z_score\":5.12159872311055,\"description\":\"Channel 255 value 0.95 deviates 5.1 sigma from mean\"}],\"stats\":{\"num_channels\":256,\"mean_amplitude\":0.02990803687816879,\"max_z_score\":5.12159872311055,\"cusum_drift_detected\":false},\"timestamp\":1790716226}",
+   "stdout_tail": "{\"anomalies\":[{\"type\":\"SPIKE\",\"channel\":224,\"value\":0.949999988079071,\"z_score\":5.122619904726373,\"description\":\"Channel 224 value 0.95 deviates 5.1 sigma from mean\"},{\"type\":\"SPIKE\",\"channel\":225,\"value\":0.949999988079071,\"z_score\":5.122619904726373,\"description\":\"Channel 225 value 0.95 deviates 5.1 sigma from mean\"},{\"type\":\"SPIKE\",\"channel\":226,\"value\":0.949999988079071,\"z_score\":5.122619904726373,\"description\":\"Channel 226 value 0.95 deviates 5.1 sigma from mean\"},{\"type\":\"SPIKE\",\"channel\":227,\"value\":0.949999988079071,\"z_score\":5.122619904726373,\"description\":\"Channel 227 value 0.95 deviates 5.1 sigma from mean\"},{\"type\":\"SPIKE\",\"channel\":228,\"value\":0.949999988079071,\"z_score\":5.122619904726373,\"description\":\"Channel 228 value 0.95 deviates 5.1 sigma from mean\"},{\"type\":\"SPIKE\",\"channel\":229,\"value\":0.949999988079071,\"z_score\":5.122619904726373,\"description\":\"Channel 229 value 0.95 deviates 5.1 sigma from mean\"},{\"type\":\"SPIKE\",\"channel\":230,\"value\":0.949999988079071,\"z_score\":5.122619904726373,\"description\":\"Channel 230 value 0.95 deviates 5.1 sigma from mean\"},{\"type\":\"SPIKE\",\"channel\":231,\"value\":0.949999988079071,\"z_score\":5.122619904726373,\"description\":\"Channel 231 value 0.95 deviates 5.1 sigma from mean\"}],\"stats\":{\"num_channels\":256,\"mean_amplitude\":0.03007988257377292,\"max_z_score\":5.122619904726373,\"cusum_drift_detected\":false},\"timestamp\":1790717531}",
    "timed_out": false,
    "timeout_s": 60.0
   }

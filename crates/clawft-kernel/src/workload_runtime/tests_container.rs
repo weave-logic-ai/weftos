@@ -239,6 +239,12 @@ async fn apple_uses_arch_and_whole_cpus() {
         s.contains("--arch arm64") && s.contains("--cpus 2") && !s.contains("--pids-limit"),
         "{s}"
     );
+    // Apple has no --pids-limit: the task cap is RLIMIT_NPROC for the
+    // non-root cog user.
+    assert!(
+        s.contains("--ulimit nproc=64:64"),
+        "no task cap on Apple: {s}"
+    );
     r.unload(h).await.unwrap();
     let calls = rec.calls();
     assert!(

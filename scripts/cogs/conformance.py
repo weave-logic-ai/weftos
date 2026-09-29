@@ -140,6 +140,19 @@ def execute(args, expectations, ids, sweep_mode):
     return [by_id[c] for c in ids if c in by_id], doc.get("host")
 
 
+# --adapter-runtime value -> classify runtime key (the runtime that ran the cog).
+ADAPTER_RUNTIME = {"native": "native", "docker": "docker", "apple": "apple-container",
+                   "podman": "podman"}
+
+
+def measured_runtime(args):
+    """The runtime a measurement belongs to: the WeftOS adapter that ran the
+    cog when --launcher is used, otherwise the harness runtime itself."""
+    if getattr(args, "launcher", None):
+        return ADAPTER_RUNTIME[args.adapter_runtime]
+    return args.runtime
+
+
 def _ensure(d):
     os.makedirs(d, exist_ok=True)
     return d
@@ -151,11 +164,12 @@ def cmd_sweep(args):
     results, host = execute(args, expectations, ids, args.mode)
     measured_at = _now()
     summary = classify.summarize(results, expectations, args.mode)
-    summary.update(runtime=args.runtime, arch=args.arch, feed=args.feed,
-                   timeout_s=args.timeout, measured_at=measured_at, host=host)
-    label = args.label or "%s-%s-%s" % (args.runtime, args.arch, args.mode)
+    runtime = measured_runtime(args)
+    summary.update(runtime=runtime, harness_runtime=args.runtime, arch=args.arch,
+                   feed=args.feed, timeout_s=args.timeout, measured_at=measured_at, host=host)
+    label = args.label or "%s-%s-%s" % (runtime, args.arch, args.mode)
     out_dir = os.path.join(args.results_dir, label)
-    caps = classify.cycle_capabilities(results, args.arch, args.runtime, measured_at)
+    caps = classify.cycle_capabilities(results, args.arch, runtime, measured_at, args.runtime)
     _write_json(os.path.join(out_dir, "results.json"), {"results": results, "host": host})
     _write_json(os.path.join(out_dir, "summary.json"), summary)
     _write_json(os.path.join(out_dir, "capabilities.json"), caps)
@@ -186,8 +200,8 @@ def cmd_probe(args):
         node_caps = facts.get("capabilities", []) if isinstance(facts, dict) else facts
         if not isinstance(node_caps, list):
             raise SystemExit("node facts: expected a list or {capabilities:[...]}")
-    caps = classify.upgrade_provenance(node_caps, results, args.arch, args.runtime,
-                                       measured_at)
+    caps = classify.upgrade_provenance(node_caps, results, args.arch, measured_runtime(args),
+                                       measured_at, args.runtime)
     doc = {"cog": args.cog, "outcome": classify.classify(results[0]),
            "result": results[0], "capabilities": caps}
     text = json.dumps(doc, indent=1, sort_keys=True)

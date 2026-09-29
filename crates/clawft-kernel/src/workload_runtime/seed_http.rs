@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use clawft_types::secret::SecretString;
 use serde_json::Value;
 
+use super::seed_tls::SeedTls;
 use super::types::RuntimeError;
 
 /// HTTP method subset the Seed API uses.
@@ -87,14 +88,28 @@ pub struct HttpSeedTransport {
 }
 
 impl HttpSeedTransport {
-    /// Transport for `base_url`. `accept_self_signed` allows the Seed's
-    /// self-signed TLS certificate (it has no CA-issued one); prefer the
-    /// USB `http://` address or a private overlay when using it.
-    pub fn new(base_url: &str, accept_self_signed: bool) -> Result<Self, RuntimeError> {
+    /// Transport for `base_url`.
+    ///
+    /// An `https://` Seed is trusted per `tls`: WebPKI, or exactly the
+    /// operator-pinned certificate ([`SeedTls::PinnedSha256`]; a Seed's own
+    /// certificate is self-signed). Certificate checking is never switched
+    /// off. A pin on an `http://` base is refused (it would protect nothing
+    /// while looking as if it did).
+    pub fn new(base_url: &str, tls: SeedTls) -> Result<Self, RuntimeError> {
         let base = validate_base_url(base_url)?;
-        let client = reqwest::Client::builder()
-            .danger_accept_invalid_certs(accept_self_signed)
-            .redirect(reqwest::redirect::Policy::none())
+        let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
+        if let SeedTls::PinnedSha256(_) = tls {
+            if !base.starts_with("https://") {
+                return Err(RuntimeError::InvalidConfig(
+                    "a seed TLS pin needs an https:// base URL".into(),
+                ));
+            }
+            let cfg = tls
+                .client_config()
+                .ok_or_else(|| RuntimeError::Backend("tls config for the pinned seed".into()))?;
+            builder = builder.use_preconfigured_tls(cfg);
+        }
+        let client = builder
             .build()
             .map_err(|e| RuntimeError::Backend(format!("http client: {e}")))?;
         Ok(Self { base, client })
@@ -132,14 +147,26 @@ impl SeedTransport for HttpSeedTransport {
             .await
             .map_err(|e| RuntimeError::Backend(format!("seed {path}: {}", e.without_url())))?;
         let status = resp.status().as_u16();
-        let bytes = resp
-            .bytes()
+        let too_large = || RuntimeError::Backend(format!("seed {path}: response too large"));
+        if resp
+            .content_length()
+            .is_some_and(|n| n > MAX_RESPONSE_BYTES as u64)
+        {
+            return Err(too_large());
+        }
+        // Read chunk by chunk so the cap bounds memory (a body without a
+        // Content-Length, or one that lies about it, is cut off at the cap).
+        let mut resp = resp;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = resp
+            .chunk()
             .await
-            .map_err(|e| RuntimeError::Backend(format!("seed {path}: {}", e.without_url())))?;
-        if bytes.len() > MAX_RESPONSE_BYTES {
-            return Err(RuntimeError::Backend(format!(
-                "seed {path}: response too large"
-            )));
+            .map_err(|e| RuntimeError::Backend(format!("seed {path}: {}", e.without_url())))?
+        {
+            if bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
+                return Err(too_large());
+            }
+            bytes.extend_from_slice(&chunk);
         }
         let v = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
         Ok((status, v))

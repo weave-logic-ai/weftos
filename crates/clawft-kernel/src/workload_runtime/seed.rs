@@ -23,6 +23,9 @@ use clawft_types::placement::{AttrValue, Capability, CapabilityId, Provenance};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
+#[path = "seed_install.rs"]
+mod install;
+
 use super::evidence::RunEvidence;
 use super::seed_http::{Method, SeedCredentials, SeedTransport};
 use super::types::{
@@ -108,48 +111,6 @@ impl SeedApiRuntime {
             ));
         }
         Ok(pin)
-    }
-
-    /// `load` installed `w` but could not stop the auto-started cog: try to
-    /// uninstall it. If that fails too, keep the instance tracked (as
-    /// installed here) so `unload` can remove it later.
-    async fn undo_install(
-        &self,
-        w: &VerifiedWorkload,
-        iid: &str,
-        pin: &SeedPin,
-        cause: RuntimeError,
-    ) -> RuntimeError {
-        let handle = Box::new(InstanceHandle {
-            runtime: SEED_ID.into(),
-            instance_id: iid.into(),
-            workload_id: w.id.clone(),
-            store_installed: true,
-        });
-        let path = format!("/api/v1/apps/{}", w.id);
-        match self.api(Method::Delete, &path, None, API_TIMEOUT).await {
-            Ok(_) => RuntimeError::StrandedInstall {
-                handle,
-                rolled_back: true,
-                reason: format!("stop after install: {cause}"),
-            },
-            Err(undo) => {
-                self.instances.lock().await.insert(
-                    iid.to_string(),
-                    Instance {
-                        cog_id: w.id.clone(),
-                        installed_here: true,
-                        console_commands: pin.console_commands.clone(),
-                        last: None,
-                    },
-                );
-                RuntimeError::StrandedInstall {
-                    handle,
-                    rolled_back: false,
-                    reason: format!("stop after install: {cause}; uninstall: {undo}"),
-                }
-            }
-        }
     }
 
     async fn instance_cog(&self, h: &InstanceHandle) -> Result<String, RuntimeError> {
@@ -257,13 +218,17 @@ impl WorkloadRuntime for SeedApiRuntime {
             }
             None => {
                 self.admit(w).await?;
-                self.api(
-                    Method::Post,
-                    "/api/v1/apps/install",
-                    Some(&json!({ "id": w.id })),
-                    API_TIMEOUT * 6,
-                )
-                .await?;
+                // Installed cogs auto-start, so an install is a start too:
+                // it must fit under the concurrency cap.
+                let running = installed.iter().filter(|c| c.running).count();
+                if running >= self.cfg.concurrency_cap {
+                    return Err(RuntimeError::AdmissionRefused(format!(
+                        "installing {} auto-starts it, but the Seed concurrency cap {} \
+                         is reached ({running} running)",
+                        w.id, self.cfg.concurrency_cap
+                    )));
+                }
+                self.install_reconciled(&w.id).await?;
                 // Installed cogs auto-start; loading must not leave it running.
                 if let Err(e) = self.stop_cog(&w.id).await {
                     return Err(self.undo_install(w, &iid, &pin, e).await);

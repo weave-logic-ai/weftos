@@ -441,8 +441,14 @@ async fn console_failure_still_chains_the_stops_and_restarts_what_it_stopped() {
         ]
     );
     let refuse = ev.last().unwrap().payload.as_ref().unwrap();
-    assert_eq!(refuse["preempted"], serde_json::json!(["fall-detect", "baby-cry"]));
-    assert_eq!(refuse["resumed"], serde_json::json!(["fall-detect", "baby-cry"]));
+    assert_eq!(
+        refuse["preempted"],
+        serde_json::json!(["fall-detect", "baby-cry"])
+    );
+    assert_eq!(
+        refuse["resumed"],
+        serde_json::json!(["fall-detect", "baby-cry"])
+    );
 }
 
 #[tokio::test]

@@ -14,6 +14,7 @@ use super::host::{RUNTIME_CHAIN_SOURCE, WorkloadHost};
 use super::host_contract::HostContract;
 use super::seed::{SEED_CONCURRENCY_CAP, SeedApiRuntime, SeedConfig, SeedPin};
 use super::seed_http::HttpSeedTransport;
+use super::seed_tls::SeedTls;
 use super::test_support::MemoryCredentials;
 use super::types::{RunMode, RuntimeError, VerifiedWorkload, WorkloadConfig};
 use crate::chain::ChainManager;
@@ -173,7 +174,7 @@ fn seed_rt(server: &MockServer) -> Arc<SeedApiRuntime> {
                 ],
                 concurrency_cap: SEED_CONCURRENCY_CAP,
             },
-            Arc::new(HttpSeedTransport::new(&server.uri(), false).unwrap()),
+            Arc::new(HttpSeedTransport::new(&server.uri(), SeedTls::WebPki).unwrap()),
             Arc::new(MemoryCredentials::with(NODE, TOKEN)),
         )
         .unwrap(),
@@ -426,7 +427,9 @@ async fn the_live_cycle_leaves_the_operators_cogs_as_it_found_them() {
     // Operator state: fall-detect installed but stopped, baby-cry running.
     let st = SeedState::with(&[("fall-detect", false), ("baby-cry", true)], false);
     let server = mock_seed(&st).await;
-    let kinds = super::tests_live::seed_fall_detect_cycle(&server.uri(), TOKEN, false).await;
+    let kinds =
+        super::tests_live::seed_fall_detect_cycle(&server.uri(), TOKEN, SeedTls::WebPki, false)
+            .await;
     assert!(!kinds.iter().any(|k| k == "workload.install"));
     // baby-cry was only stopped for the console run and resumed by the
     // host; nothing else touched it.
@@ -452,18 +455,19 @@ async fn the_live_cycle_installs_only_when_authorized_and_removes_what_it_instal
     let st = SeedState::with(&[("baby-cry", false)], false);
     let server = mock_seed(&st).await;
     let uri = server.uri();
-    let refused =
-        tokio::spawn(
-            async move { super::tests_live::seed_fall_detect_cycle(&uri, TOKEN, false).await },
-        )
-        .await;
+    let refused = tokio::spawn(async move {
+        super::tests_live::seed_fall_detect_cycle(&uri, TOKEN, SeedTls::WebPki, false).await
+    })
+    .await;
     assert!(refused.is_err(), "no install without authorization");
     assert!(
         st.calls().is_empty(),
         "nothing was changed: {:?}",
         st.calls()
     );
-    let kinds = super::tests_live::seed_fall_detect_cycle(&server.uri(), TOKEN, true).await;
+    let kinds =
+        super::tests_live::seed_fall_detect_cycle(&server.uri(), TOKEN, SeedTls::WebPki, true)
+            .await;
     assert_eq!(kinds.first().map(String::as_str), Some("workload.install"));
     assert_eq!(
         st.calls().first().map(String::as_str),
