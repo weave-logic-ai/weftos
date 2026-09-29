@@ -91,6 +91,9 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | [ADR-096](adr-096-metaharness-foundation.md) | MetaHarness as foundational agent/fusion evolution layer (flywheel; optional runtime) | Draft (Proposed) | Architecture / Integration | rUv MetaHarness + Grok/Ruflo; Graph View churn |
 | [ADR-097](adr-097-metaharness-data-governance.md) | Universal MetaHarness governance over all WeftOS data surfaces | Draft (Proposed) | Architecture / Security / Integration | WEFT-728; fs/DB/sensors/mesh/substrate |
 | [ADR-098](adr-098-environment-process-compose.md) | Per-project process-compose; environment pane planned only | Draft (Proposed) | Architecture / Integration | Triple loop; no raw yaml glob |
+| [ADR-099](adr-099-governed-workload-placement.md) | Governed workload placement across the mesh (open capability vocabulary, accelerators, runtime adapters) | Proposed | Architecture / Mesh | Cogs + local inference; docs/research/mesh-placement |
+| [ADR-100](adr-100-cog-workload-kind.md) | The cog workload kind (package, host contract, ingest bridge, Seed strategy) | Proposed | Architecture / Integration | Cognitum cogs; ADR-099 |
+| [ADR-101](adr-101-inference-workload-kind.md) | Inference workload kind; migrate local model hosting onto placement | Proposed | Architecture / Integration | ~/llm serving; ADR-060 / ADR-099 |
 
 ## Categories
 
