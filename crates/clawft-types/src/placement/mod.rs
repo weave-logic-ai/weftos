@@ -9,6 +9,8 @@
 //!   provenance) and matching. Unknown and `x.` ids match like any other.
 //! - [`assign`]: whole-workload matching ([`match_all`]); exclusive
 //!   requirements never share, independent of request order.
+//! - [`engine`]: `WorkloadSpec` and the pure `place()` engine (card
+//!   mesh-placement-04): hard constraints, scoring, pins, explain.
 //! - [`memory`]: the `mem.unified` shared-pool accounting rule.
 //! - [`perf`]: measured-performance capabilities (`perf.cog.cycle_ms`,
 //!   `perf.infer.tok_s`).
@@ -25,6 +27,7 @@
 
 pub mod assign;
 pub mod capability;
+pub mod engine;
 pub mod memory;
 pub mod node_facts;
 pub mod perf;

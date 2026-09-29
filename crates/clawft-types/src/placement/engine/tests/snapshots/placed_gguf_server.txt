@@ -1,0 +1,38 @@
+workload coder (kind inference)
+  allow_emulated: false   pin: -
+decision: PLACED on gpu-box via default (tier native, emulated false) score 117.00, accelerator accel.gpu.cuda
+candidates:
+  1. gpu-box eligible via default (tier native) score 117.00
+       execution 100.00 + locality 0.00 + accel_fit 10.00 + perf 0.00 + load 7.00 + stickiness 0.00
+  2. mac-dev eligible via default (tier dev_fallback) score 46.88
+       execution 40.00 + locality 0.00 + accel_fit 1.88 + perf 0.00 + load 5.00 + stickiness 0.00
+  -  coral rejected
+       memory: vram pool: need 21474836480 bytes, free 0 bytes
+       requirements: runtime.infer.llamacpp: not advertised
+       requirements: format.gguf: not advertised
+       requirements: accel.gpu: not advertised
+  -  pi5 rejected
+       memory: vram pool: need 21474836480 bytes, free 0 bytes
+       requirements: runtime.infer.llamacpp: not advertised
+       requirements: format.gguf: not advertised
+       requirements: accel.gpu: not advertised
+  -  seed rejected
+       memory: vram pool: need 21474836480 bytes, free 0 bytes
+       requirements: runtime.infer.llamacpp: not advertised
+       requirements: format.gguf: not advertised
+       requirements: accel.gpu: not advertised
+  -  tsu rejected
+       memory: vram pool: need 21474836480 bytes, free 0 bytes
+       requirements: runtime.infer.llamacpp: not advertised
+       requirements: format.gguf: not advertised
+       requirements: accel.gpu: not advertised
+  -  x86 rejected
+       memory: vram pool: need 21474836480 bytes, free 0 bytes
+       requirements: runtime.infer.llamacpp: not advertised
+       requirements: format.gguf: not advertised
+       requirements: accel.gpu: not advertised
+  -  zero rejected
+       memory: vram pool: need 21474836480 bytes, free 0 bytes
+       requirements: runtime.infer.llamacpp: not advertised
+       requirements: format.gguf: not advertised
+       requirements: accel.gpu: not advertised
