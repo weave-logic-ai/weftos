@@ -1,0 +1,168 @@
+# Cog conformance harness
+
+Card mesh-placement-08. Governing design: [COG-001](../adr/cog-001-cog-workload-kind.md)
+(cog workload kind, run modes, v1 scope) and
+[ADR-099](../adr/adr-099-governed-workload-placement.md) sections 2 and 3
+(capability provenance, `perf.cog.cycle_ms`, admission self-check).
+
+The harness runs Cognitum cog binaries against a synthetic ESP32 feed and a stub
+Seed ingest endpoint, classifies each run, and records measured cycle times. It is
+the committed replacement for the 2026-09-28 prototype sweep, and it doubles as an
+admission probe.
+
+## What a run does
+
+`scripts/cogs/harness.py` runs on the target (inside a container, or natively on a
+Linux ARM node). It needs only Python 3.8+ and the standard library. For each cog it:
+
+- sends a fake UDP feed to `127.0.0.1:5006`:
+  - `features` (default, the baseline feed): ADR-069 `MAGIC_FEATURES` `0xC5110003`,
+    48 bytes, 8 little-endian f32 at offset 16, 50 Hz, a small sine with a 0.95
+    spike every 40th packet;
+  - `vitals`: `MAGIC_VITALS` `0xC5110002`, the 32-byte `edge_vitals_pkt_t`
+    (presence, 15 bpm breathing, 72 bpm heart rate, one person) at 5 Hz;
+  - `both`: the two together.
+- serves `POST /api/v1/store/ingest` on `127.0.0.1:80` and answers 404 to
+  everything else;
+- runs the cog with `--once` or `--interval N`, with a per-cog cap (default 15 s),
+  and captures timestamped stdout, stderr and ingest POSTs;
+- writes a raw JSON result: exit code, ingest count, stdout/stderr tails, binary
+  sha256, and `cycle_ms`.
+
+`cycle_ms` is the wall time of the process for `--once` (only when it exits 0),
+and the median gap between consecutive cycle events (ingest POSTs, else stdout
+lines) for `--interval`.
+
+## Outcomes and groups
+
+`scripts/cogs/classify.py` maps a raw result to an outcome: `clean` (at least one
+ingest POST, and exit 0 for `--once` or still cycling at the cap for `--interval`),
+`no-output`, `cli-error` (non-zero exit), `missing-binary` or `exec-error`.
+
+`scripts/cogs/expectations.json` holds the per-cog COG-001 catalog group for
+aarch64: `clean`, `needs-interval` (with its `interval`), `needs-extra-cli` (with
+`needs` tags such as `seed-peers`, `seed-api`, `mqtt-broker`, `model-assets`,
+`tailscale-auth`, `cli-args`), or `no-build`. It also records `run_mode` (how the
+cog must be run to be clean) and `once_outcome` (what a plain `--once` produces).
+
+## Commands
+
+All commands go through `scripts/build.sh`:
+
+```bash
+# Baseline sweep: every aarch64 cog with --once on OrbStack, checked against the baseline
+scripts/build.sh cogs-conformance sweep --runtime docker --arch aarch64 --mode once \
+    --label orbstack-aarch64-once --check-baseline
+
+# Same on Apple container
+scripts/build.sh cogs-conformance sweep --runtime apple-container --arch aarch64 \
+    --mode once --label apple-container-aarch64-once --check-baseline
+
+# Each cog in its expected run mode (needs-interval cogs get --interval 1)
+scripts/build.sh cogs-conformance sweep --runtime docker --mode expected \
+    --cogs cardiac-arrhythmia,sleep-apnea,fall-detect
+
+# Admission probe: one cog, emit perf.cog.cycle_ms and upgrade node facts
+scripts/build.sh cogs-conformance probe --runtime docker --cog anomaly-detect \
+    --node-facts node-facts.json --out probed.json
+
+# Re-classify a results file; unit tests
+scripts/build.sh cogs-conformance summarize scripts/cogs/results/orbstack-aarch64-once/results.json
+scripts/build.sh cogs-conformance selftest
+```
+
+Options shared by `sweep` and `probe`:
+
+| Option | Meaning |
+|---|---|
+| `--runtime` | `docker` (OrbStack, Docker Engine or Desktop), `apple-container`, `native`, `ssh` |
+| `--arch` | `aarch64` (default) or `arm` (armv7; needs an emulating runtime on Apple Silicon, which has no AArch32) |
+| `--feed` | `features` (default, matches the baseline), `vitals`, `both` |
+| `--timeout` | per-cog cap in seconds (default 15) |
+| `--binary-dir` | use local binaries named `cog-<id>-<arch>` instead of downloading |
+| `--image` | container image (default `python:3.12-slim-bookworm`) |
+
+Binaries are downloaded on demand from the public Cognitum bucket
+(`cogs/arm64/cog-<id>-aarch64`, `cogs/arm/cog-<id>-arm`) into
+`scripts/cogs/.cache/<arch>/`, which is gitignored. A download must be an ELF for
+the requested machine, or it is rejected. Binaries are never committed.
+
+## Results
+
+`sweep` writes `scripts/cogs/results/<label>/`:
+
+- `results.json`: raw per-cog results plus the target's machine / kernel / Python;
+- `summary.json`: outcomes, group lists and counts, unexpected outcomes, runtime,
+  arch, feed, timestamp;
+- `capabilities.json`: one `perf.cog.cycle_ms` capability per clean cog, in the
+  ADR-099 section 2 shape with `provenance: "measured"`.
+
+With `--check-baseline`, the summary is compared per cog and per group with
+`scripts/cogs/baseline/aarch64-once-2026-09-28.json`, and the command exits
+non-zero on any difference. Without it, the command exits non-zero when any cog
+disagrees with its expectation.
+
+## Baseline
+
+The recorded baseline is the prototype sweep of 2026-09-28 (OrbStack linux/arm64,
+every aarch64 cog `--once`, 15 s cap, features feed). The raw prototype lines are in
+`baseline/aarch64-once-2026-09-28.summary.txt`. Of 107 cogs with an aarch64 build
+(`presence-field` has none):
+
+- 93 clean;
+- 5 need `--interval` (persistent-listener health cogs: cardiac-arrhythmia,
+  health-monitor, respiratory-distress, ruview-densepose, sleep-apnea). With
+  `--once` they fall back to the Seed sensor stream and print `error: no JSON`;
+  with `--interval 1` they ingest once per second;
+- 9 need seed peers or other CLI: cloud-inference (rejects `--once`), tailscale
+  (needs tailscaled auth), cognitive-pipeline (model assets and agent wiring), and
+  six swarm-* cogs (backup-restore, delta-sync, distributed-store, deploy,
+  edge-orchestrator, mqtt-bridge).
+
+COG-001 and the card text say "7 need seed peers or other CLI", but 93 + 5 + 7 is
+105, not 107. The raw results list nine, and the harness reports nine.
+
+## Admission probe and provenance
+
+`probe` runs one cog in its expected run mode. It emits a `perf.cog.cycle_ms`
+capability (`attrs.cog_id`, `value` in ms, `mode`, `interval_s`, `arch`,
+`runtime`, `feed`, binary `sha256`, `measured_at`) with `provenance: "measured"`.
+Given `--node-facts` (a JSON list of capabilities, or `{"capabilities": [...]}`),
+it returns the list with the exercised `cpu.arch.*` and runtime capability
+(`runtime.container.docker`, `runtime.container.apple`, `runtime.native`) upgraded
+to `measured`, but only when the cog ran clean. It never downgrades, leaves
+unexercised capabilities alone, and replaces any older cycle time for the same cog,
+arch and runtime. The exit code is 0 only for a clean run, so a placement admission
+step can gate on it.
+
+## Remote-node mode
+
+Use `--runtime ssh` to test a real ARM node, such as a Pi 5 or an ARM server,
+without installing WeftOS on it. The driver:
+
+1. stages `harness.py`, `plan.json` and the binaries locally;
+2. `ssh <host> 'rm -rf cog-conformance && mkdir -p cog-conformance'`;
+3. `scp`s them into `~/cog-conformance/` on the node;
+4. runs `python3 cog-conformance/harness.py --plan ... --out ...` there, prefixed
+   with `sudo -n` when you pass `--sudo`;
+5. copies `results.json` back and classifies it locally.
+
+Requirements on the node: Linux, the target arch, `python3`, key-based SSH, and
+the right to bind `127.0.0.1:80`, since cogs post to the Seed ingest port. Get
+that with `--sudo` (passwordless sudo for `python3`), by running as root, or by
+lowering `net.ipv4.ip_unprivileged_port_start`. UDP 5006 must be free, so stop
+any running cog or `presence-field` broker first (upstream cogs#14).
+
+The host comes from `--ssh-host` or `COG_HARNESS_SSH_HOST`. Use an alias from
+`~/.ssh/config`. It is never written into results, and labels should not name
+hosts:
+
+```bash
+COG_HARNESS_SSH_HOST=pi5 scripts/build.sh cogs-conformance sweep --runtime ssh \
+    --arch aarch64 --sudo --mode expected --label remote-aarch64-expected
+```
+
+On the node itself, `--runtime native` does the same without SSH.
+
+Cognitum Seeds are not driven by this mode. They run cogs through their own HTTP
+API (COG-001 section 5), and that adapter is card 09.

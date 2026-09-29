@@ -1,0 +1,56 @@
+{
+ "arch": "aarch64",
+ "by_outcome": {
+  "clean": 5,
+  "cli-error": 1,
+  "exec-error": 0,
+  "missing-binary": 0,
+  "no-output": 0
+ },
+ "feed": "features",
+ "group_counts": {
+  "clean": 5,
+  "needs-extra-cli": 1,
+  "needs-interval": 0,
+  "no-build": 0,
+  "regressed": 0,
+  "unknown": 0
+ },
+ "groups": {
+  "clean": [
+   "anomaly-detect",
+   "baby-cry",
+   "cardiac-arrhythmia",
+   "fall-detect",
+   "sleep-apnea"
+  ],
+  "needs-extra-cli": [
+   "cloud-inference"
+  ],
+  "needs-interval": [],
+  "no-build": [],
+  "regressed": [],
+  "unknown": []
+ },
+ "host": {
+  "machine": "aarch64",
+  "python": "3.11.2",
+  "release": "7.0.14-orbstack-00380-ga7e0a2dc9535",
+  "system": "Linux"
+ },
+ "measured_at": "2026-09-29T17:40:01Z",
+ "outcomes": {
+  "anomaly-detect": "clean",
+  "baby-cry": "clean",
+  "cardiac-arrhythmia": "clean",
+  "cloud-inference": "cli-error",
+  "fall-detect": "clean",
+  "sleep-apnea": "clean"
+ },
+ "runtime": "ssh",
+ "sweep_mode": "expected",
+ "swept": 6,
+ "timeout_s": 15.0,
+ "total": 6,
+ "unexpected": []
+}

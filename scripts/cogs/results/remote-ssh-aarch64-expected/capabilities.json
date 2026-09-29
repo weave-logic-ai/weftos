@@ -1,0 +1,97 @@
+[
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "anomaly-detect",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:40:01Z",
+   "mode": "once",
+   "runtime": "ssh",
+   "samples": 1,
+   "sha256": "42154913cbb57fd58e010548a833221a2afe73cf1768aa1e0ab00e9441d6cb25",
+   "value": 749.5
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "fall-detect",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:40:01Z",
+   "mode": "once",
+   "runtime": "ssh",
+   "samples": 1,
+   "sha256": "e8746a8d66373601b65451b32cb36242439bc54683adfe5f5ddec72a3d93f5c4",
+   "value": 770.9
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "baby-cry",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T17:40:01Z",
+   "mode": "once",
+   "runtime": "ssh",
+   "samples": 1,
+   "sha256": "eff5ebd459104489136e1cd3b042af3546695739a66645d87bb81f928260b51a",
+   "value": 775.0
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "sleep-apnea",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": 1,
+   "measured_at": "2026-09-29T17:40:01Z",
+   "mode": "interval",
+   "runtime": "ssh",
+   "samples": 14,
+   "sha256": "22b12fb380fa52ccee66f7e9fe6c7e4fade451acac1d59ea74aec83e04887a1a",
+   "value": 1004.9
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "cardiac-arrhythmia",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": 1,
+   "measured_at": "2026-09-29T17:40:01Z",
+   "mode": "interval",
+   "runtime": "ssh",
+   "samples": 14,
+   "sha256": "dd9cc7979f740b5b6998f6936daeb90811f72016bc494606d5b260963e6fa682",
+   "value": 1003.0
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ }
+]

@@ -1,0 +1,107 @@
+adversarial|0|ing=1|out=1|
+air-quality-index|0|ing=1|out=1|
+anomaly-attractor|0|ing=1|out=1|
+anomaly-detect|0|ing=1|out=1|
+audit-logger|0|ing=1|out=1|
+baby-cry|0|ing=1|out=1|
+beehive-monitor|0|ing=1|out=1|
+behavioral-profiler|0|ing=1|out=1|
+breathing-sync|0|ing=1|out=1|
+cardiac-arrhythmia|0|ing=0|out=1|[cog-cardiac-arrhythmia] error: no JSON
+clean-room|0|ing=1|out=1|
+cloud-inference|2|ing=0|out=1|error: unexpected argument '--once' found
+cognitive-pipeline|0|ing=0|out=1|
+coherence-gate|0|ing=1|out=1|
+coherence|0|ing=1|out=1|
+confined-space|0|ing=1|out=1|
+cough-detect|0|ing=1|out=1|
+customer-flow|0|ing=1|out=1|
+dream-stage|0|ing=1|out=1|
+dtw-gesture-learn|0|ing=2|out=1|
+dwell-heatmap|0|ing=1|out=1|
+elevator-count|0|ing=1|out=1|
+emotion-detect|0|ing=1|out=1|
+energy-audit|0|ing=1|out=1|
+energy-harvester|0|ing=1|out=1|
+ewc-lifelong|0|ing=1|out=1|
+fall-detect|0|ing=1|out=1|
+federated-learning|0|ing=2|out=1|
+flash-attention|0|ing=1|out=1|
+fleet-auth|0|ing=2|out=1|
+forklift-proximity|0|ing=1|out=1|
+frost-warning|0|ing=1|out=1|
+gait-analysis|0|ing=1|out=1|
+gesture-language|0|ing=1|out=1|
+gesture|0|ing=1|out=1|
+ghost-hunter|0|ing=1|out=1|
+glass-break|0|ing=1|out=1|
+goap-autonomy|0|ing=1|out=1|
+gunshot-detect|0|ing=1|out=1|
+happiness-score|0|ing=1|out=1|
+health-monitor|0|ing=0|out=1|[cog-health-monitor] error: no JSON
+hvac-presence|0|ing=1|out=1|
+hyperbolic-space|0|ing=1|out=1|
+interference-search|0|ing=1|out=1|
+intrusion-detect-ml|0|ing=1|out=1|
+intrusion|0|ing=1|out=1|
+lighting-zones|0|ing=1|out=1|
+livestock-monitor|0|ing=1|out=1|
+loitering|0|ing=1|out=1|
+meeting-room|0|ing=1|out=1|
+meta-adapt|0|ing=1|out=1|
+micro-hnsw|0|ing=2|out=1|
+music-conductor|0|ing=1|out=1|
+network-firewall|0|ing=1|out=1|
+neural-trader|0|ing=2|out=1|
+occupancy-zones|0|ing=1|out=1|
+optimal-transport|0|ing=1|out=1|
+package-detect|0|ing=1|out=1|
+pagerank-influence|0|ing=1|out=1|
+panic-motion|0|ing=1|out=1|[cog-panic-motion] starting (interval=1s)
+parking-occupancy|0|ing=1|out=1|
+pattern-sequence|0|ing=1|out=1|
+perimeter-breach|0|ing=1|out=1|
+person-matching|0|ing=1|out=1|
+plant-growth|0|ing=1|out=1|
+ppe-compliance|0|ing=3|out=1|
+predictive-maintenance|0|ing=1|out=1|
+prompt-shield|0|ing=1|out=1|
+psycho-symbolic|0|ing=1|out=1|
+quantum-coherence|0|ing=1|out=1|
+queue-length|0|ing=1|out=1|
+rag-local|0|ing=2|out=1|
+rain-detect|0|ing=1|out=1|
+respiratory-distress|0|ing=0|out=1|[cog-respiratory-distress] error: no JSON
+ruview-densepose|0|ing=0|out=1|[cog-ruview-densepose] error: no JSON
+seizure-detect|0|ing=1|out=1|
+self-healing-mesh|0|ing=1|out=1|
+shelf-engagement|0|ing=1|out=1|
+sleep-apnea|0|ing=0|out=1|[cog-sleep-apnea] error: no JSON
+slip-fall-zone|0|ing=1|out=1|
+smoke-fire|0|ing=1|out=1|
+snore-monitor|0|ing=1|out=1|
+sound-classifier|0|ing=1|out=1|
+sparse-recovery|0|ing=1|out=1|
+spiking-tracker|0|ing=1|out=1|
+structural-vibration|0|ing=1|out=1|
+swarm-backup-restore|0|ing=0|out=1|[cog-swarm-backup-restore] error: no JSON
+swarm-cluster-monitor|0|ing=1|out=1|
+swarm-consensus|0|ing=2|out=1|
+swarm-delta-sync|0|ing=0|out=1|[cog-swarm-delta-sync] error: no JSON
+swarm-deploy|0|ing=0|out=1|
+swarm-distributed-store|0|ing=0|out=1|[cog-swarm-distributed-store] error: no JSON
+swarm-edge-orchestrator|0|ing=0|out=1|
+swarm-load-balancer|0|ing=2|out=1|
+swarm-mesh-manager|0|ing=1|out=1|
+swarm-mqtt-bridge|0|ing=0|out=1|
+swarm-witness-federation|0|ing=1|out=1|
+table-turnover|0|ing=1|out=1|
+tailgating|0|ing=1|out=1|
+tailscale|3|ing=0|out=1|
+temporal-compress|0|ing=1|out=1|
+temporal-logic|0|ing=1|out=1|
+time-crystal|0|ing=1|out=1|
+time-series-forecast|0|ing=1|out=1|
+vital-trend|0|ing=1|out=1|
+water-leak|0|ing=1|out=1|
+weapon-detect|0|ing=1|out=1|

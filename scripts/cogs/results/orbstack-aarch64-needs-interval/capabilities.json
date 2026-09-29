@@ -1,0 +1,97 @@
+[
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "cardiac-arrhythmia",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": 1,
+   "measured_at": "2026-09-29T17:44:26Z",
+   "mode": "interval",
+   "runtime": "docker",
+   "samples": 14,
+   "sha256": "dd9cc7979f740b5b6998f6936daeb90811f72016bc494606d5b260963e6fa682",
+   "value": 1004.9
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "health-monitor",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": 1,
+   "measured_at": "2026-09-29T17:44:26Z",
+   "mode": "interval",
+   "runtime": "docker",
+   "samples": 14,
+   "sha256": "24cc4733d66ddb6e3e5ceba5b6d0a2f0dba4f193b1ae950d889d4043857eacde",
+   "value": 1004.3
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "respiratory-distress",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": 1,
+   "measured_at": "2026-09-29T17:44:26Z",
+   "mode": "interval",
+   "runtime": "docker",
+   "samples": 14,
+   "sha256": "c116c97aa19b755c84bae950f00d494ed80ad7cf7c7ad9ed0acbfc3ea82b5760",
+   "value": 1003.9
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "ruview-densepose",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": 1,
+   "measured_at": "2026-09-29T17:44:26Z",
+   "mode": "interval",
+   "runtime": "docker",
+   "samples": 14,
+   "sha256": "f8bdf84f3facb9425cc083c9a53412d064dfec080134d3d24a19aec0236c157f",
+   "value": 1004.8
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "sleep-apnea",
+   "feed": "reference-v1",
+   "harness_version": "1.0.0",
+   "interval_s": 1,
+   "measured_at": "2026-09-29T17:44:26Z",
+   "mode": "interval",
+   "runtime": "docker",
+   "samples": 14,
+   "sha256": "22b12fb380fa52ccee66f7e9fe6c7e4fade451acac1d59ea74aec83e04887a1a",
+   "value": 1003.7
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ }
+]
