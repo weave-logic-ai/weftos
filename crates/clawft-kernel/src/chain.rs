@@ -470,6 +470,32 @@ pub const EVENT_KIND_APP_STOP: &str = "app.stop";
 /// Application state transition event.
 pub const EVENT_KIND_APP_TRANSITION: &str = "app.transition";
 
+// ── Workload placement events (ADR-099 sections 4 and 7) ─────────
+//
+// Governance decisions on a `workload.*` action are chained under the
+// action's own kind with `payload.decision` = permit | deny | defer.
+
+/// Workload package install decision / event.
+pub const EVENT_KIND_WORKLOAD_INSTALL: &str = "workload.install";
+/// Workload placement decision / event.
+pub const EVENT_KIND_WORKLOAD_PLACE: &str = "workload.place";
+/// Workload load decision / event.
+pub const EVENT_KIND_WORKLOAD_LOAD: &str = "workload.load";
+/// Workload start decision / event.
+pub const EVENT_KIND_WORKLOAD_START: &str = "workload.start";
+/// Workload stop decision / event.
+pub const EVENT_KIND_WORKLOAD_STOP: &str = "workload.stop";
+/// Workload unload decision / event.
+pub const EVENT_KIND_WORKLOAD_UNLOAD: &str = "workload.unload";
+/// Workload migration decision / event.
+pub const EVENT_KIND_WORKLOAD_MIGRATE: &str = "workload.migrate";
+/// Workload refusal (node admission refusal or unknown workload action).
+pub const EVENT_KIND_WORKLOAD_REFUSE: &str = "workload.refuse";
+/// Package / signer key / artifact hash revocation.
+pub const EVENT_KIND_WORKLOAD_REVOKE: &str = "workload.revoke";
+/// Fleet identity bound to a mesh node.
+pub const EVENT_KIND_WORKLOAD_NODE_BIND: &str = "workload.node.bind";
+
 /// Cron job added event.
 pub const EVENT_KIND_CRON_ADD: &str = "cron.add";
 

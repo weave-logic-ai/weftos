@@ -1673,6 +1673,8 @@ impl<P: Platform> Kernel<P> {
                 .chain(crate::governance::browser_policy_default_rules())
                 // WEFT-342: soul.binding_thread_intact (binding-thread integrity)
                 .chain(crate::governance::binding_thread_default_rules())
+                // ADR-099 s4: default-deny for workload.* actions.
+                .chain(crate::workload_governance::default_rules())
                 .collect::<Vec<_>>();
 
                 // Anchor genesis rules to chain

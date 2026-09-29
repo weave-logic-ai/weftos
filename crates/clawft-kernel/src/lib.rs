@@ -206,6 +206,9 @@ pub mod node_registry;
 pub mod process;
 pub mod rate_limit;
 pub mod revocation;
+/// Governance actions, audit events and permits for placed workloads (ADR-099).
+#[cfg(feature = "exochain")]
+pub mod workload_governance;
 pub mod service;
 #[cfg(all(feature = "native", feature = "exochain"))]
 pub mod stream_anchor;
@@ -607,7 +610,9 @@ pub use quantum_state::{
 };
 #[cfg(feature = "os-patterns")]
 pub use reconciler::{DesiredAgentState, DriftEvent, ReconciliationController};
-pub use revocation::{RevocationList, RevokedHost};
+pub use revocation::{
+    RevocationError, RevocationKind, RevocationList, RevokedHost, RevokedSubject,
+};
 pub use service::{
     KernelServiceApi, McpAdapter, ServiceApi, ServiceAuditLevel, ServiceContract, ServiceEndpoint,
     ServiceEntry, ServiceInfo, ServiceRegistry, ServiceType, ShellAdapter, SystemService,

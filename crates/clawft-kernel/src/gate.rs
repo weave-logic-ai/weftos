@@ -128,6 +128,13 @@ impl GateBackend for CapabilityGate {
         } else if action.starts_with("service.") {
             let service_name = action.strip_prefix("service.").unwrap_or(action);
             checker.check_service_access(pid, service_name, None)
+        } else if action.starts_with("workload.") {
+            // ADR-099 s4: workload actions are default-deny. Only the
+            // workload gate (with explicit permit rules) may allow them.
+            return GateDecision::Deny {
+                reason: format!("'{action}' is default-deny; use the workload governance gate"),
+                receipt: None,
+            };
         } else {
             // Unknown action category: permit by default
             return GateDecision::Permit { token: None };
@@ -619,6 +626,16 @@ mod tests {
         let ctx = serde_json::json!({"pid": pid});
         let decision = gate.check("test-agent", "custom.action", &ctx);
         assert!(decision.is_permit());
+    }
+
+    #[test]
+    fn capability_gate_denies_workload_actions() {
+        let (gate, pid) = make_gate_with_agent(AgentCapabilities::default());
+        let ctx = serde_json::json!({"pid": pid});
+        for action in crate::workload_governance::GOVERNED_ACTIONS {
+            assert!(gate.check("test-agent", action, &ctx).is_deny(), "{action}");
+        }
+        assert!(gate.check("test-agent", "workload.bogus", &ctx).is_deny());
     }
 
     #[test]
