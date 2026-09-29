@@ -77,6 +77,9 @@ compile_error!(
 // ── ECC cognitive substrate modules (K3c) ────────────────────────
 #[cfg(feature = "ecc")]
 pub mod artifact_store;
+// mesh-placement-07: signed workload package manifests (COG-001 section 1).
+#[cfg(all(feature = "ecc", feature = "exochain"))]
+pub mod workload_pkg;
 #[cfg(feature = "ecc")]
 pub mod calibration;
 #[cfg(feature = "ecc")]
