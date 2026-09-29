@@ -1,0 +1,20 @@
+workload fall-detect (kind cog)
+  allow_emulated: false   pin: -
+decision: PLACED on pi5 via aarch64-native (tier native, emulated false) score 178.00
+candidates:
+  1. pi5 eligible via aarch64-native (tier native) score 178.00
+       execution 100.00 + locality 0.00 + accel_fit 10.00 + perf 60.00 + load 8.00 + stickiness 0.00
+  2. seed eligible via armv7-native (tier native) score 173.55
+       execution 100.00 + locality 0.00 + accel_fit 10.00 + perf 54.55 + load 9.00 + stickiness 0.00
+  -  coral rejected
+       requirements: feed.esp32-csi-udp: not advertised
+  -  gpu-box rejected
+       requirements: feed.esp32-csi-udp: not advertised
+  -  mac-dev rejected
+       requirements: feed.esp32-csi-udp: not advertised
+  -  tsu rejected
+       requirements: feed.esp32-csi-udp: not advertised
+  -  x86 rejected
+       requirements: feed.esp32-csi-udp: not advertised
+  -  zero rejected
+       perf_budget: measured perf.cog.cycle_ms 6000 misses budget 2000

@@ -1,0 +1,11 @@
+workload anomaly-detect (kind cog)
+  allow_emulated: true   pin: -
+decision: PLACED on x86 via aarch64-emulated (tier emulated, emulated true) score 39.00
+candidates:
+  1. x86 eligible via aarch64-emulated (tier emulated) score 39.00 [emulated]
+       execution 20.00 + locality 0.00 + accel_fit 10.00 + perf 0.00 + load 9.00 + stickiness 0.00
+  -  gpu-box rejected
+       requirements: variant aarch64-native: cpu.arch.aarch64: not advertised
+       requirements: variant aarch64-native: runtime.native: predicate `arches_native has` failed
+       requirements: variant aarch64-container: runtime.container: not advertised
+       requirements: variant aarch64-emulated: runtime.container: not advertised

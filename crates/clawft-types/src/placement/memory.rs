@@ -13,6 +13,8 @@
 //! device. Accelerator memory attributes are informational only here, so a
 //! discrete GPU advertising both `mem.vram` and `mem_bytes` is counted once.
 
+use serde::{Deserialize, Serialize};
+
 use super::capability::{AttrValue, Capability};
 
 /// Id marking a shared host/accelerator pool.
@@ -23,11 +25,13 @@ pub const MEM_SYSTEM: &str = "mem.system";
 pub const MEM_VRAM: &str = "mem.vram";
 
 /// Memory a workload asks for.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryDemand {
     /// Host memory (process heap, cog RAM, CPU-side buffers).
+    #[serde(default)]
     pub host_bytes: u64,
     /// Accelerator memory (weights plus KV budget on a GPU/NPU).
+    #[serde(default)]
     pub accel_bytes: u64,
 }
 
