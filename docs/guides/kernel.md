@@ -154,6 +154,23 @@ mesh-placement-06 was being built, a demo daemon started with
 `WEFTOS_RUNTIME_DIR` appended about 70 events to the operator chain at
 `~/.clawft/chain.rvf`.
 
+The same isolation work found a wider source of stray events. Until
+this fix, three tests booted a kernel with `chain: None`:
+
+- `crates/clawft-kernel/tests/feature_composition.rs`
+- `crates/clawft-kernel/tests/e2e_integration.rs` (through
+  `minimal_kernel_config()`)
+- `crates/weftos/src/lib.rs` (`weftos_boots_and_reports_state`)
+
+`chain: None` falls back to the default chain under `~/.clawft`, so
+each of those tests loaded the operator chain on shutdown, appended its
+own boot events, and saved it back (`chain.rvf` and `chain.tree.json`;
+`chain.key` was not changed). As a result, every
+`scripts/build.sh test clawft-kernel` or gate run on the machine before
+this fix added test boot events to the operator chain. That includes the
+runs on 2026-09-29, the last at about 15:48 local time. The tests now
+use an isolated chain (`ChainConfig::isolated_in(tempdir)`).
+
 The operator decided to **leave these events in place**. The chain is
 append-only and hash-linked, so removing entries would break
 verification for every later event. Do not try to rewrite or truncate
