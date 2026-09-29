@@ -1,7 +1,9 @@
 # Daemon topology: machine, user, project, and the places with none of them
 
-**Date:** 2026-09-29 (rev 2: adds machine mesh service, ESP32/WASM profiles,
-OpenShell, project boundary contract, nested WeftOS)
+**Date:** 2026-09-29 (rev 3: machine mesh service, ESP32/WASM profiles,
+OpenShell, project boundary contract, nested WeftOS; per-project kernels
+behind the machine service re-evaluated as the primary candidate, and the
+recommendation changed accordingly)
 **Branch reviewed:** 0.8-metaharness
 **Scope:** architecture review and recommendation only. No code, daemon, or
 dotfile was changed. Every claim about current code cites `file:line`.
@@ -18,22 +20,44 @@ WeftOS should be described as **four roles**, not a process count:
 | **Project tenant** | project key, project chain, governance overlay (tighten-only), workspace config, workload catalog, the project's own boundary | inside the user daemon by default; optionally an isolated child kernel inside a sandbox |
 | **Leaf / client** | one provisioned identity, one role, no chain (journal anchored upstream) | ESP32 firmware, browser tab, WASI component |
 
-The number of processes is a **profile**, not a rule. A Mac shared by
-several people runs three tiers; a Pi, a container or a server collapses
-all three roles into one process; an ESP32 runs the leaf role only and a
-browser tab runs a client role behind a gateway. What stays fixed across
-profiles is the layering of identity (machine certifies user certifies
-project certifies actor), the direction of chain anchoring (leaf → project
-→ user → machine journal), and the rule that governance decisions are made
-by a user daemon or project kernel, never by the mesh service and never by
-a leaf.
+**Recommendation, in one paragraph.** Take the owner's per-project design,
+put it behind the machine mesh service, and run it as three tiers: the
+machine service is the **node**; a thin per-user daemon holds what is
+per-user and cannot be per-project (user key and chain, ADR-102 tokens,
+secrets, the model/accelerator access path, shared heavy services such as
+embeddings and voice, the `~/.weftos/` manifest, and supervision of the
+projects); and **each project runs its own kernel process inside its own
+boundary by default**, with its own key, chain, governance overlay and
+workload catalog. That per-project kernel is simultaneously the owner's
+"per-project daemon", the ADR-099 `project` workload, and the process that
+lives inside the container-like boundary of section 6. Rev 1 of this
+document recommended in-process tenants by default; with a machine service
+in place and the sandbox boundary as a requirement, that default was wrong
+and is reversed here (section 3.1 has the re-evaluation, objection by
+objection).
 
-The owner's instinct that governance, chains and workloads are per project
-is right, and so is the container-like boundary. The step from "granular
-per project" to "an independent daemon that is also a mesh node per
-project" is the one to avoid: a project is a **tenant and a workload**
-(ADR-099 vocabulary), the machine is the **node**. Section 8 has the phased
-migration; section 10 what could not be verified.
+Where this still differs from the proposal as stated, plainly: (1) the
+per-user tier cannot be removed; without it there is no writer for the
+user/box chain, no token authority and no home for secrets, and the
+machine service is forbidden from holding those; (2) a project kernel is a
+tenant and a workload, never a mesh node with its own listener; (3) the
+services that are expensive to duplicate (embedding models, HNSW/DiskANN
+indexes, the voice pipeline, the loopback model proxy) belong in the user
+daemon and are reached by the project kernels over the boundary, or N
+projects load N copies; (4) `weft` finds a kernel through the manifest and
+a handshake, never by walking up from the CWD to a socket.
+
+The number of processes is a **profile**, not a rule. A shared Mac or a
+server runs the three tiers; a personal Mac runs the machine and user roles
+in one process with project kernels as children; a Pi, a container or a
+single-project server collapses all roles into one process; an ESP32 runs
+the leaf role only and a browser tab runs a client role behind a gateway.
+What stays fixed across profiles is the layering of identity (machine
+certifies user certifies project certifies actor), the direction of chain
+anchoring (leaf → project → user → machine journal), and the rule that
+governance decisions are made by a user daemon or project kernel, never by
+the mesh service and never by a leaf. Section 10 has the phased migration;
+section 11 what could not be verified.
 
 ## 2. What exists today (verified)
 
@@ -73,6 +97,15 @@ multi-tenant daemon behind one UDS is unacceptable without per-caller scoping
 (`docs/adr/adr-071-wasm-panel-auth.md:22-28`) and proposes scoped panel
 tokens (`:35-60`). Per-project process-compose is already the unit for a
 project's own processes (`docs/adr/adr-098-environment-process-compose.md:34-36`).
+The agents guide says a daemon "binds one root at boot" and tells operators
+to "run one daemon per workspace or restart with a new config"
+(`docs/guides/agents.md:73-75`); `release.md`'s rule of thumb is that daemon
+state lives "next to the project that owns the daemon" and that `.weftos/`
+"is not part of any install or deploy flow" (`docs/deployment/release.md:413-424`).
+So the operational model documented today is already one kernel per
+project, with a per-user chain and keys underneath it that the same docs do
+not mention; the ADRs (021, 022, 099, 101, 102) assume one daemon. Both are
+half right, which is why this document separates roles from processes.
 
 Ports and defaults: mesh off by default, `0.0.0.0:9470` TCP when on
 (`kernel.rs:823-825,858-864`; `docs/guides/kernel.md:389-391` still says
@@ -114,8 +147,9 @@ created today). Four node keys, one chain key, one live daemon.
 
 | Profile | Processes | Machine role | User role | Project role | Leaf/client role |
 |---|---|---|---|---|---|
-| **Full host** (shared Mac/Linux box, several humans) | mesh service + N user daemons (+ optional isolated project kernels) | OS service | one per user | tenant in user daemon, or child kernel in a sandbox | n/a |
-| **Single-tenant host** (personal Mac default, Pi 5, container, server) | one `weaver` process | in-process `MeshService` (`boot.rs:706`) | same process | tenants | n/a |
+| **Full host** (shared Mac/Linux box, server with several humans) | mesh service + N user daemons + one kernel per active project | OS service | one per user | own kernel process inside its boundary (default); `inproc` tenant only when the owner opts a small project in | n/a |
+| **Personal host** (one human, many projects: the owner's Mac) | one `weaver` running machine + user roles, plus one kernel per active project | in-process `MeshService` (`boot.rs:706`) | same process | own kernel process inside its boundary | n/a |
+| **Single-tenant host** (Pi 5 running one project, container, appliance) | one `weaver` process | in-process | same process | same process | n/a |
 | **Constrained leaf** (ESP32 S3/C3) | one firmware image | attaches to a parent node | owner user by provisioning | optional project binding by provisioning | node or actor identity, no chain |
 | **Browser tab** | page + WASM | none; reaches a gateway | the user who holds the token | project from the token scope | origin-scoped ephemeral key, no chain |
 | **WASI / edge component** | one component under wasmtime | attaches to a parent node (or runs collapsed if it has FS + sockets) | provisioned | provisioned | node identity, journal if no FS |
@@ -126,6 +160,35 @@ as a separate binary that speaks the same local registration protocol
 (section 4) is the only new code path. Profiles are selected in
 `weave.toml` (`profile = "node" | "edge"` already exists,
 `tiered-kernel-profiles.md:29-44`) plus `roles = ["mesh","user","project"]`.
+
+### 3.1 Per-project kernels behind a machine mesh service, re-evaluated
+
+Rev 1 argued against per-project daemons because "a daemon *is* the node".
+The machine mesh service removes that objection. Here is every objection
+from rev 1 against the owner's design as it now stands (machine service +
+`~/.weftos` manifest + per-project kernels + shared user/box chain +
+subscribable project chains + project governance):
+
+| Rev-1 objection | Status with a machine mesh service | What it turns into |
+|---|---|---|
+| N nodes per box, capacity double-counted (ADR-099) | **Removed.** The service is the one node and advertises the box once; project kernels are tenants/workloads under it. | Nothing. |
+| One 9470 per box; second daemon silently loses mesh | **Removed.** Project kernels never listen; they register over the local socket. | Nothing. |
+| Two daemons on one `chain.rvf`, no lock | **Removed by the design itself.** Each project kernel writes its own chain; the user/box chain has exactly one writer. | The user/box chain writer has to be *some* process: the per-user daemon. The service must not hold it (4.2). |
+| ADR-102: one token authority | **Moved.** Tokens are per user, not per project; the authority is the user daemon; tokens carry a `project_id` scope. | Requirement for the user tier. |
+| ADR-101: one loopback model proxy per node on `:8090` | **Moved.** The proxy is terminated by the user daemon and reached from inside each project boundary at a fixed address (6). | Requirement for the user tier plus the boundary's egress rule. |
+| Resource duplication (N embedding models, N indexes, N voice pipelines) | **Remains.** Project kernels are processes; whatever each loads is loaded N times. | Shared services live in the user daemon and are called across the boundary; project kernels start with them disabled. Idle projects are stopped by the manifest's `idle_stop_secs`. |
+| Discovery: `weft` finds the wrong socket | **Remains unless the manifest is authoritative.** | Manifest + handshake (7); CWD walk-up only to find the project id, never a socket. |
+| N processes to update, of possibly different versions | **Remains and is partly a feature.** A project kernel may deliberately run a different build (dev vs release). | Negotiated local protocols (4.5), installer receipt per tier, `weaver doctor install`. |
+| Lifecycle: launchd cannot express "one unit per directory" | **Remains, solved by the user tier.** The user daemon starts, stops and restarts project kernels from the manifest (systemd template units or its own supervisor). | Requirement for the user tier. |
+| Failure isolation was the *only* advantage | **Now a second advantage joins it:** the container-like boundary (6) needs a process to put inside it, and nested WeftOS (7) needs an inner kernel. Per-project kernels give both for free. | The reason the default flips. |
+
+Net: with the service in place the residual costs of per-project kernels
+are memory and process count, both bounded by putting shared services in
+the user tier and stopping idle projects; the benefits (failure isolation,
+version independence, a real sandbox boundary, nesting) are the owner's
+stated requirements. That is why this revision recommends per-project
+kernels by default and in-process tenancy only as an opt-in for small
+projects and collapsed profiles, the reverse of rev 1.
 
 ## 4. The machine mesh service
 
@@ -233,9 +296,13 @@ project's workload** (a new ADR-099 kind `project`: spec = root, driver,
 policy, resources); a project kernel runs **inside** it as the project's
 supervisor (the ADR-098 process-compose grows into it); the user daemon is
 the supervisor **outside** (create, policy, restart, audit), which is the
-OpenShell gateway+supervisor shape. In `inproc` mode the same contract is
-enforced logically (ACL, budgets, `project_id` on every call); the API is
-identical, only the enforcement primitive changes. Placing a `project`
+OpenShell gateway+supervisor shape. The kernel inside the boundary **is the
+per-project daemon the owner asked for**; it owns the project key, chain,
+overlay and workload catalog, supervises the project's agents and its
+ADR-098 processes, and registers its project address with the user daemon
+(which forwards it to the machine service). In `inproc` mode the same
+contract is enforced logically (ACL, budgets, `project_id` on every call);
+the API is identical, only the enforcement primitive changes. Placing a `project`
 workload on another node (Pi instead of Mac) is then the ordinary placement
 path.
 
@@ -308,27 +375,39 @@ overlay; the parent applies it to what they publish.
 ### 10.1 Recommendation
 
 Adopt the four-role model (section 1) with these defaults: the machine
-mesh service is **collapsed into the user daemon on single-user machines**
-and **installed as an OS service on shared boxes and servers**; projects are
-**tenants by default and sandboxed workloads on request**; a nested WeftOS
-is an **isolated project kernel, mesh-off by default**; leaves and browsers
-are **clients of a parent node**, never nodes with their own chain. Record
-it as an ADR ("daemon topology, roles and profiles") that supersedes the
-per-project runtime-dir fix `0955e5b0` and amends ADR-021/025/057/099/101/102
-where they say "the daemon" or "the node".
+mesh service is **the node**, installed as an OS service on shared boxes
+and servers and collapsed into the user daemon on personal machines; a
+**thin per-user daemon** holds the user key and chain, tokens, secrets,
+shared heavy services, the manifest and project supervision; **each
+project runs its own kernel process inside its boundary by default**
+(logical boundary first, sandbox drivers as they land), which is the
+owner's per-project daemon, the ADR-099 `project` workload and the thing a
+nested WeftOS is; in-process tenancy is an opt-in for small projects and
+the collapse for single-tenant hosts; a nested WeftOS is an isolated
+project kernel, mesh-off by default; leaves and browsers are clients of a
+parent node, never nodes with their own chain. Record it as an ADR ("daemon
+topology, roles and profiles") that supersedes the per-project runtime-dir
+fix `0955e5b0`, reconciles `release.md`/`agents.md`/the SOPs with ADR-021,
+and amends ADR-025/057/099/101/102 where they say "the daemon" or "the
+node".
 
-Reasons, in weight order: (1) five accepted ADRs model one node per
-machine; (2) the shared mutable state (node key, capacity facts, chain
-files, token table, model port) needs one writer per box; (3) the owner's
-real requirements (granular chains, governance, workloads, a clean
-container-like boundary, a machine-wide mesh) are all satisfied by roles
-and tenancy without N nodes per box; (4) ESP32 and browser profiles fit
-only if the layers are roles a process can lack.
+Reasons, in weight order: (1) the machine service is what makes one node
+per box true regardless of how many kernels run, so ADR-025/099/101/102
+hold and the per-project design stops contradicting them; (2) the sandbox
+boundary and nested WeftOS both need a process per project, so per-project
+kernels are the natural default rather than an option; (3) the per-user
+tier is the minimum that keeps chains single-writer, tokens single-
+authority and secrets out of both the machine service and the project
+boundary; (4) ESP32 and browser profiles fit only if the layers are roles a
+process can lack, which the collapse rule provides. What I would still push
+back on if asked to drop it: the per-user tier, project kernels as nodes,
+and CWD-based socket discovery.
 
 ### 10.2 Decisions the owner must make
 
 1. Mesh port number: `9421` (guide, owner) or `9470` (code). One number, everywhere.
 2. Is the OS mesh service mandatory or profile-dependent (recommended: profile-dependent, collapsed by default on personal machines)?
+2a. Project kernels as separate processes by default (recommended) with in-process tenancy as opt-in, or the reverse?
 3. `uid <-> user key` binding on shared boxes: TOFU or admin approval.
 4. Runtime roots: `~/.weftos/run/` and `/var/lib/weftos`, `/var/run/weftos` (recommended) vs keeping `~/.clawft/`.
 5. Project id: manifest ULID (recommended) vs hash of project pubkey.
@@ -344,7 +423,9 @@ only if the layers are roles a process can lack.
 
 - **Mesh service down**: every user on the box loses mesh; local work continues; daemons reconnect. Mitigate with `KeepAlive`/`Restart=always` and a health check the daemons expose in `weaver health`.
 - **Mesh service compromise**: attacker holds the machine key and can impersonate the box on the mesh, but not user chains, secrets or tokens; rotate via `governance.root.supersede` and user certs.
-- **One user daemon, all tenants**: a panic takes the user's projects down until restart; per-tenant task boundaries, `SpawnBudget` and rate limits are prerequisites, and sandboxed mode exists for the risky project.
+- **User daemon down**: project kernels keep running and keep chaining locally, but lose tokens, shared services and mesh delivery until it returns; they must degrade (queue anchors, fail closed on token validation) rather than exit.
+- **Process count**: five active projects means five kernels plus the user daemon; without shared services in the user tier and `idle_stop_secs` in the manifest this is five embedding models and five voice pipelines. Enforce "project kernels start with shared services disabled" in the profile, not by convention.
+- **In-process tenant mode (opt-in)**: a panic takes every in-process tenant down; per-tenant task boundaries, `SpawnBudget` and rate limits are prerequisites for enabling it.
 - **Tenant confusion**: mandatory `project_id` on tenant-scoped verbs and events; test that unscoped calls are refused.
 - **Version skew across three tiers**: negotiated local protocols with a stated support window; `daemon_guard` per connection; the installer receipt lists all three.
 - **Peer-credential gaps**: platforms without `SO_PEERCRED`/`getpeereid` semantics fall back to socket-directory ownership plus a registration secret in the user's runtime dir.
@@ -361,27 +442,41 @@ fallback; mesh node id from the Ed25519 key (`boot.rs:304-306`); one node-id
 hash; `kernel.md:389-391` port fix; operator housekeeping of the stale socket
 and the four node keys.
 
-**Phase 1, one user daemon with the mesh role inside it.** Runtime root
-`~/.weftos/run/`; refuse a second user daemon per machine; `weft` sends
-`project_root`/`project_id`; workspace overlay resolved per request; the
-existing `weave-coordinator` daemon becomes the first user daemon; launchd
-user agent; `weaver update` restarts it.
+**Phase 1, the user tier.** One user daemon per machine at `~/.weftos/run/`
+running the machine and user roles (mesh listener inside it for now); it
+refuses a second instance per uid; it owns the user chain (today's
+`~/.clawft/chain.rvf`, moved), the ADR-102 token authority and the
+manifest `~/.weftos/projects/<id>.toml` (seeded from `~/.clawft/workspaces.json`).
+The existing `weave-coordinator` daemon (PID 70730) is stopped and its
+project re-registered as the first manifest entry; the stale socket in
+`~/weftos/.weftos/runtime/` is removed. launchd user agent; `weaver update`
+restarts it. `weft` resolves the project id from the walk-up and the kernel
+from the manifest, then handshakes.
 
-**Phase 2, tenancy and the boundary contract v1.** Manifest, project keys and
-certs, per-project `ChainManager` and anchors, governance overlays,
-`project_id` in `GatePrincipal`, per-tenant budgets, ADR-102 token scope,
-control API for projects (inproc enforcement), `project` workload kind in
-ADR-099.
+**Phase 2, per-project kernels.** `weaver kernel start --project <id>`
+becomes a child of the user daemon: own runtime dir under `~/.weftos/run/<id>/`,
+own `node.key` replaced by a project key certified by the user key
+(`project.register` on the user chain), own chain with `project.anchor`
+events, governance overlay (tighten-only), `project_id` in `GatePrincipal`,
+shared services disabled in the project profile and reached via the user
+daemon, `idle_stop_secs`, `mesh-local/1` registration of the project
+address with the user daemon. `project` becomes an ADR-099 workload kind
+with the logical (non-sandboxed) driver. This is the owner's per-project
+daemon, done deliberately; it replaces today's CWD-based per-project
+runtime dir.
 
 **Phase 3, machine mesh service as an OS service.** Extract the mesh role
-into `weaver mesh serve`, `mesh-local/1` registration with peer
-credentials, user certificates, machine journal and its anchoring, LaunchDaemon
-and systemd units, installer tier. Personal machines stay collapsed.
+into `weaver mesh serve`: peer-credential registration, user certificates,
+machine journal and its anchoring, LaunchDaemon and systemd units, the
+installer tier. Personal machines may stay collapsed; project kernels are
+unaffected because they never talked to the listener directly.
 
-**Phase 4, sandboxed projects and nested WeftOS.** Sandbox drivers
-(OpenShell on Linux first, Seatbelt/Apple `container` on macOS), isolated
-project kernels with the parent/child protocol, nested-WeftOS registration
-levels, the CLI handshake.
+**Phase 4, sandbox drivers and nested WeftOS.** OpenShell on Linux first,
+Seatbelt/Apple `container` on macOS, wasmtime for WASM projects; the
+project kernel moves inside the driver's boundary with the same control
+API; nested-WeftOS registration levels and the CLI handshake are exercised
+by running this repo's own dev kernel as a project under the release user
+daemon.
 
 **Leaf track, in parallel from Phase 1.** Provisioned Ed25519 keys on ESP32
 (`JOURNALED-NODE-ESP32.md:57-81`), unified node id, signed publishes
