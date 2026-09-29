@@ -1,0 +1,5 @@
+# Governance pin for config/capabilities.toml (ADR-099 decision 6).
+# Issued only by an approved `config.set` on placement/capabilities.toml (clawft_kernel::placement_vocabulary).
+# Do not edit by hand: a vocabulary whose digest differs does not load.
+version = 1
+digest = "927ed3db1359a4d0193277bf53efb424280e49f18e204c295bb47b8a885ff4c5"

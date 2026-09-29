@@ -7,12 +7,9 @@
 //! warning. Nothing in [`super::requirement`] consults this module.
 //!
 //! Decision 6 of ADR-099: the file changes only through the governance path.
-//! This module supplies the pieces that path needs: a content digest
-//! ([`Vocabulary::digest`]), a loader that refuses a file whose digest is not
-//! the governance-pinned one ([`Vocabulary::from_toml_pinned`]), and a change
-//! record ([`Vocabulary::change_to`]) that must bump `meta.version`. Where
-//! the pin lives and which gate action approves it belong to the governance
-//! card, not here.
+//! The digest pin, pinned loader and change record live in
+//! [`super::vocabulary_pin`]; the gate check and chain event live in the
+//! kernel (`clawft_kernel::placement_vocabulary`).
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -189,20 +186,6 @@ impl fmt::Display for VocabWarning {
     }
 }
 
-/// A governed change from one vocabulary to another, for a governance
-/// request context and its chain event.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VocabularyChange {
-    /// Current digest.
-    pub from_digest: String,
-    /// Proposed digest.
-    pub to_digest: String,
-    /// Current version.
-    pub from_version: u32,
-    /// Proposed version.
-    pub to_version: u32,
-}
-
 /// A parsed, structurally valid vocabulary.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Vocabulary {
@@ -270,34 +253,6 @@ impl Vocabulary {
             families: file.families,
             ids: file.ids,
             digest: digest_of(text),
-        })
-    }
-
-    /// Parse, refusing a file whose digest is not the governance-pinned one.
-    pub fn from_toml_pinned(text: &str, pinned_digest: &str) -> Result<Self, VocabularyError> {
-        let actual = digest_of(text);
-        if !actual.eq_ignore_ascii_case(pinned_digest.trim()) {
-            return Err(VocabularyError::DigestMismatch {
-                expected: pinned_digest.trim().to_string(),
-                actual,
-            });
-        }
-        Self::from_toml_str(text)
-    }
-
-    /// Describe the change to `next`; the version must increase.
-    pub fn change_to(&self, next: &Vocabulary) -> Result<VocabularyChange, VocabularyError> {
-        if next.meta.version <= self.meta.version {
-            return Err(VocabularyError::VersionNotIncreased {
-                from: self.meta.version,
-                to: next.meta.version,
-            });
-        }
-        Ok(VocabularyChange {
-            from_digest: self.digest.clone(),
-            to_digest: next.digest.clone(),
-            from_version: self.meta.version,
-            to_version: next.meta.version,
         })
     }
 
@@ -396,12 +351,18 @@ impl Vocabulary {
                 out
             }
             IdSelector::Prefix(p) => {
-                let known = p == "x"
-                    || p.starts_with("x.")
+                // Segment-wise, with `<name>` placeholders matching any one
+                // segment, so `accel.tsu.extropic` is known as a prefix just
+                // as it is as an exact id (via `accel.tsu.<vendor>`).
+                let want: Vec<&str> = p.split('.').collect();
+                let known = want[0] == super::capability::EXPERIMENTAL_PREFIX
                     || self.ids.keys().any(|k| {
-                        k == p
-                            || (k.starts_with(p.as_str())
-                                && k.as_bytes().get(p.len()) == Some(&b'.'))
+                        let have: Vec<&str> = k.split('.').collect();
+                        have.len() >= want.len()
+                            && want
+                                .iter()
+                                .zip(&have)
+                                .all(|(w, h)| w == h || is_placeholder(h))
                     });
                 if known {
                     vec![]

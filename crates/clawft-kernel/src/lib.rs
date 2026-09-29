@@ -198,6 +198,8 @@ pub mod error;
 pub mod gate;
 pub mod governance;
 pub mod rule_distribution;
+#[cfg(feature = "exochain")]
+pub mod placement_vocabulary;
 pub mod health;
 pub mod heartbeat;
 pub mod ipc;

@@ -63,7 +63,8 @@ pub enum PredicateOp {
 }
 
 /// `attr op value`, for example `mem_bytes gte 8589934592`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Validated on deserialize and on serialize.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(try_from = "PredicateRaw")]
 pub struct AttrPredicate {
     /// Attribute name.
@@ -72,6 +73,25 @@ pub struct AttrPredicate {
     pub op: PredicateOp,
     /// Operand.
     pub value: AttrValue,
+}
+
+#[derive(Serialize)]
+struct PredicateOut<'a> {
+    attr: &'a str,
+    op: PredicateOp,
+    value: &'a AttrValue,
+}
+
+impl Serialize for AttrPredicate {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        PredicateOut {
+            attr: &self.attr,
+            op: self.op,
+            value: &self.value,
+        }
+        .serialize(s)
+    }
 }
 
 #[derive(Deserialize)]
@@ -170,9 +190,11 @@ fn cmp_num(a: &AttrValue, b: &AttrValue, f: impl Fn(f64, f64) -> bool) -> bool {
     matches!((a.as_f64(), b.as_f64()), (Some(x), Some(y)) if f(x, y))
 }
 
-/// What a workload needs from a node.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "RequirementRaw", into = "RequirementRaw")]
+/// What a workload needs from a node. Validated on deserialize and on
+/// serialize, so a requirement built in code that would not read back is
+/// refused when written.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(try_from = "RequirementRaw")]
 pub struct Requirement {
     /// Exact id or prefix.
     pub selector: IdSelector,
@@ -233,20 +255,22 @@ impl TryFrom<RequirementRaw> for Requirement {
     }
 }
 
-impl From<Requirement> for RequirementRaw {
-    fn from(r: Requirement) -> Self {
-        let (id, id_prefix) = match r.selector {
-            IdSelector::Exact(id) => (Some(id.into()), None),
-            IdSelector::Prefix(p) => (None, Some(p)),
+impl Serialize for Requirement {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let (id, id_prefix) = match &self.selector {
+            IdSelector::Exact(id) => (Some(id.to_string()), None),
+            IdSelector::Prefix(p) => (None, Some(p.clone())),
         };
         RequirementRaw {
             id,
             id_prefix,
-            where_: r.where_,
-            count: r.count,
-            exclusive: r.exclusive,
-            min_provenance: r.min_provenance,
+            where_: self.where_.clone(),
+            count: self.count,
+            exclusive: self.exclusive,
+            min_provenance: self.min_provenance,
         }
+        .serialize(s)
     }
 }
 
@@ -284,6 +308,13 @@ pub enum MatchFailure {
         /// Required.
         need: u32,
     },
+    /// Enough capabilities exist for this requirement alone, but no
+    /// assignment satisfies it together with the workload's exclusive
+    /// requirements (see [`super::assign::match_all`]).
+    Contended {
+        /// Required.
+        need: u32,
+    },
 }
 
 impl Requirement {
@@ -310,10 +341,18 @@ impl Requirement {
         })
     }
 
-    /// Builder: add a predicate.
+    /// Builder: add a predicate, unchecked. [`Self::validate`] and
+    /// serialization refuse an invalid one; [`Self::try_with_where`] fails
+    /// at the call site instead.
     pub fn with_where(mut self, p: AttrPredicate) -> Self {
         self.where_.push(p);
         self
+    }
+    /// Builder: add a predicate, validating it and the predicate count.
+    pub fn try_with_where(self, p: AttrPredicate) -> Result<Self, PlacementTypeError> {
+        let r = self.with_where(p);
+        r.validate()?;
+        Ok(r)
     }
     /// Builder: set the count.
     pub fn with_count(mut self, count: u32) -> Self {
@@ -331,8 +370,11 @@ impl Requirement {
         self
     }
 
-    /// Check bounds and every predicate.
+    /// Check the selector, bounds and every predicate.
     pub fn validate(&self) -> Result<(), PlacementTypeError> {
+        if let IdSelector::Prefix(p) = &self.selector {
+            validate_dotted(p, 1)?;
+        }
         if self.count == 0 || self.count > MAX_COUNT {
             return Err(PlacementTypeError::InvalidRequirement(format!(
                 "count must be 1..={MAX_COUNT}"
@@ -357,6 +399,21 @@ impl Requirement {
     /// Match against a node's capabilities. On success, returns the indices
     /// of the `count` capabilities chosen.
     pub fn match_caps(&self, caps: &[Capability]) -> Result<Vec<usize>, MatchFailure> {
+        let usable = self.candidates(caps)?;
+        let need = self.count as usize;
+        if usable.len() < need {
+            return Err(MatchFailure::InsufficientCount {
+                have: usable.len() as u32,
+                need: self.count,
+            });
+        }
+        Ok(usable.into_iter().take(need).collect())
+    }
+
+    /// Every capability this requirement could use, ignoring `count`.
+    /// Fails with the first stage (id, provenance, predicate, state) that
+    /// leaves nothing.
+    pub fn candidates(&self, caps: &[Capability]) -> Result<Vec<usize>, MatchFailure> {
         let by_id: Vec<usize> = (0..caps.len())
             .filter(|&i| self.selector.selects(&caps[i].id))
             .collect();
@@ -411,52 +468,11 @@ impl Requirement {
                 state: caps[by_attr[0]].state,
             });
         }
-        let need = self.count as usize;
-        if usable.len() < need {
-            return Err(MatchFailure::InsufficientCount {
-                have: usable.len() as u32,
-                need: self.count,
-            });
-        }
-        Ok(usable.into_iter().take(need).collect())
+        Ok(usable)
     }
 
     /// True if [`Self::match_caps`] succeeds.
     pub fn matches(&self, caps: &[Capability]) -> bool {
         self.match_caps(caps).is_ok()
-    }
-}
-
-/// Match every requirement; exclusive requirements never share a capability.
-/// Returns each failing requirement's index and reason.
-pub fn match_all(
-    reqs: &[Requirement],
-    caps: &[Capability],
-) -> Result<(), Vec<(usize, MatchFailure)>> {
-    let mut claimed = vec![false; caps.len()];
-    let mut failures = Vec::new();
-    for (ri, req) in reqs.iter().enumerate() {
-        // Hide capabilities already claimed exclusively by an earlier requirement.
-        let view: Vec<Capability> = caps
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                if claimed[i] {
-                    c.clone().with_state(CapabilityState::Reserved)
-                } else {
-                    c.clone()
-                }
-            })
-            .collect();
-        match req.match_caps(&view) {
-            Ok(chosen) if req.exclusive => chosen.into_iter().for_each(|i| claimed[i] = true),
-            Ok(_) => {}
-            Err(f) => failures.push((ri, f)),
-        }
-    }
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(failures)
     }
 }

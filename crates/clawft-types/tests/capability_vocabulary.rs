@@ -1,12 +1,17 @@
 //! The committed vocabulary file (`config/capabilities.toml`) and the doc
 //! table generated from it (card mesh-placement-02).
 //!
+//! The vocabulary loads only through its governance pin
+//! (`config/capabilities.pin.toml`, ADR-099 decision 6), so a free edit to
+//! the vocabulary fails every test here, including doc regeneration.
 //! `vocabulary_doc_is_current` fails when the committed table is stale.
 //! Regenerate with `WEFTOS_REGEN_DOCS=1 scripts/build.sh test clawft-types`.
 
 use std::path::PathBuf;
 
-use clawft_types::placement::{Capability, CapabilityId, Provenance, Vocabulary};
+use clawft_types::placement::{
+    Capability, CapabilityId, Provenance, Vocabulary, VocabularyError, VocabularyPin,
+};
 
 fn repo_path(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -14,10 +19,49 @@ fn repo_path(rel: &str) -> PathBuf {
         .join(rel)
 }
 
+fn read(rel: &str) -> String {
+    std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
+}
+
+fn pin() -> VocabularyPin {
+    VocabularyPin::from_toml_str(&read("config/capabilities.pin.toml")).expect("pin parses")
+}
+
+/// The only way the committed vocabulary is loaded: through its pin.
 fn load() -> Vocabulary {
-    let text =
-        std::fs::read_to_string(repo_path("config/capabilities.toml")).expect("read vocabulary");
-    Vocabulary::from_toml_str(&text).expect("committed vocabulary parses")
+    Vocabulary::from_toml_pinned(&read("config/capabilities.toml"), &pin()).expect(
+        "config/capabilities.toml does not match its governance pin; vocabulary changes go \
+         through the governed config.set path (ADR-099 decision 6), not free edits",
+    )
+}
+
+#[test]
+fn committed_vocabulary_matches_its_governance_pin() {
+    let v = load();
+    let p = pin();
+    assert_eq!(VocabularyPin::of(&v), p);
+    // The committed pin is exactly what the governor issues.
+    assert_eq!(read("config/capabilities.pin.toml"), p.to_toml_string());
+}
+
+#[test]
+fn free_edit_to_committed_vocabulary_does_not_load() {
+    let text = read("config/capabilities.toml");
+    let edited = format!("{text}\n[ids.\"accel.gpu.anything\"]\nsummary = \"added freely\"\n");
+    assert!(
+        Vocabulary::from_toml_str(&edited).is_ok(),
+        "the edit itself is well formed"
+    );
+    assert!(matches!(
+        Vocabulary::from_toml_pinned(&edited, &pin()),
+        Err(VocabularyError::DigestMismatch { .. })
+    ));
+    let bumped = text.replacen("version = 1", "version = 2", 1);
+    assert_ne!(bumped, text);
+    assert!(matches!(
+        Vocabulary::from_toml_pinned(&bumped, &pin()),
+        Err(VocabularyError::DigestMismatch { .. })
+    ));
 }
 
 #[test]

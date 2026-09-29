@@ -3,7 +3,7 @@
 use super::capability::{AttrValue as V, Capability, CapabilityId, CapabilityState, Provenance};
 use super::memory::{MemoryDemand, MemoryLedger, MemoryPool};
 use super::perf;
-use super::requirement::{AttrPredicate as P, MatchFailure, PredicateOp, Requirement, match_all};
+use super::requirement::{AttrPredicate as P, MatchFailure, PredicateOp, Requirement};
 
 const GIB: i64 = 1 << 30;
 
@@ -230,16 +230,6 @@ fn count_needs_distinct_capabilities() {
 }
 
 #[test]
-fn exclusive_requirements_do_not_share_a_capability() {
-    let one = vec![cap("accel.tpu.coral").exclusive()];
-    let r = req("accel.tpu.coral").exclusive();
-    assert!(match_all(std::slice::from_ref(&r), &one).is_ok());
-    let err = match_all(&[r.clone(), r], &one).unwrap_err();
-    assert_eq!(err.len(), 1);
-    assert_eq!(err[0].0, 1);
-}
-
-#[test]
 fn unified_memory_is_one_pool_not_double_counted() {
     let mut ledger = MemoryLedger::from_capabilities(&mac());
     assert!(ledger.is_unified());
@@ -362,6 +352,41 @@ fn serde_round_trip_json_and_toml() {
     };
     let t = toml::to_string(&doc).unwrap();
     assert_eq!(toml::from_str::<Doc>(&t).unwrap(), doc);
+}
+
+#[test]
+fn records_built_in_code_that_would_not_read_back_do_not_serialize() {
+    let base = || cap("mem.system");
+    for bad in [
+        base().with_attr("Bad Name", 1.0),
+        base().with_attr("free", f64::NAN),
+        base().with_attr("l", V::List(vec![V::List(vec![])])),
+    ] {
+        assert!(bad.validate().is_err());
+        assert!(serde_json::to_string(&bad).is_err(), "{bad:?} serialized");
+        assert!(toml::to_string(&bad).is_err(), "{bad:?} serialized");
+    }
+    assert!(base().try_with_attr("Bad Name", 1.0).is_err());
+    assert!(base().try_with_attr("free", f64::INFINITY).is_err());
+    let ok = base().try_with_attr("free", 1.0).unwrap();
+    let js = serde_json::to_string(&ok).unwrap();
+    assert_eq!(serde_json::from_str::<Capability>(&js).unwrap(), ok);
+
+    let bad_req = req("accel.gpu.metal").with_where(P::gte("mem", f64::NAN));
+    assert!(serde_json::to_string(&bad_req).is_err());
+    assert!(serde_json::to_string(&P::gte("Bad", 1.0)).is_err());
+    assert!(serde_json::to_string(&req("a.b").with_count(0)).is_err());
+    let bad_prefix = Requirement {
+        selector: super::requirement::IdSelector::Prefix("Not Valid".into()),
+        ..req("a.b")
+    };
+    assert!(serde_json::to_string(&bad_prefix).is_err());
+    assert!(
+        req("a.b")
+            .try_with_where(P::has("formats", V::List(vec![])))
+            .is_err()
+    );
+    assert!(req("a.b").try_with_where(P::has("formats", "gguf")).is_ok());
 }
 
 #[test]

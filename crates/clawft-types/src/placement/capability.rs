@@ -241,13 +241,18 @@ pub enum CapabilityState {
 }
 
 /// One advertised capability.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// Validated in both directions: deserializing an invalid record fails, and
+/// so does serializing one (for example a record built in code with
+/// [`Capability::with_attr`] and a NaN value), so anything that serializes
+/// also deserializes.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(try_from = "CapabilityRaw")]
 pub struct Capability {
     /// Dotted id, open vocabulary.
     pub id: CapabilityId,
     /// Typed attributes (sorted for deterministic signing and output).
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub attrs: BTreeMap<String, AttrValue>,
     /// How the node knows this.
     pub provenance: Provenance,
@@ -257,6 +262,30 @@ pub struct Capability {
     /// Only one workload may hold it at a time.
     #[serde(default)]
     pub exclusive: bool,
+}
+
+#[derive(Serialize)]
+struct CapabilityOut<'a> {
+    id: &'a CapabilityId,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    attrs: &'a BTreeMap<String, AttrValue>,
+    provenance: Provenance,
+    state: CapabilityState,
+    exclusive: bool,
+}
+
+impl Serialize for Capability {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        CapabilityOut {
+            id: &self.id,
+            attrs: &self.attrs,
+            provenance: self.provenance,
+            state: self.state,
+            exclusive: self.exclusive,
+        }
+        .serialize(s)
+    }
 }
 
 #[derive(Deserialize)]
@@ -298,10 +327,24 @@ impl Capability {
         }
     }
 
-    /// Builder: set one attribute.
+    /// Builder: set one attribute, unchecked. An invalid name or value is
+    /// caught by [`Self::validate`] and refused by serialization; use
+    /// [`Self::try_with_attr`] to fail at the call site instead.
     pub fn with_attr(mut self, name: &str, value: impl Into<AttrValue>) -> Self {
         self.attrs.insert(name.to_string(), value.into());
         self
+    }
+
+    /// Builder: set one attribute, validating the name, the value and the
+    /// attribute count.
+    pub fn try_with_attr(
+        self,
+        name: &str,
+        value: impl Into<AttrValue>,
+    ) -> Result<Self, PlacementTypeError> {
+        let cap = self.with_attr(name, value);
+        cap.validate()?;
+        Ok(cap)
     }
 
     /// Builder: set the state.

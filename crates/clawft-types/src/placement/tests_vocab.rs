@@ -4,6 +4,7 @@ use super::capability::{Capability, CapabilityId, Provenance};
 use super::perf;
 use super::requirement::{AttrPredicate as P, Requirement};
 use super::vocabulary::{VocabWarning, Vocabulary, VocabularyError, digest_of};
+use super::vocabulary_pin::VocabularyPin;
 
 const SMALL: &str = r#"
 [meta]
@@ -84,6 +85,23 @@ fn placeholder_patterns_cover_vendor_ids() {
         v.validate_capability(&cap("accel.tsu.extropic", Provenance::Probed))
             .is_empty()
     );
+    // Exact and prefix treat a placeholder-covered id the same way.
+    let exact = Requirement::exact(CapabilityId::new("accel.tsu.extropic").unwrap());
+    assert!(v.validate_requirement(&exact).is_empty());
+    for known in ["accel.tsu.extropic", "accel.tsu", "accel"] {
+        assert!(
+            v.validate_requirement(&Requirement::prefix(known).unwrap())
+                .is_empty(),
+            "{known} should be known"
+        );
+    }
+    // Too deep for any entry, or a wrong segment: still warned.
+    for unknown in ["accel.tsu.extropic.v2", "accel.xpu"] {
+        assert_eq!(
+            v.validate_requirement(&Requirement::prefix(unknown).unwrap()),
+            vec![VocabWarning::UnknownPrefix(unknown.into())]
+        );
+    }
 }
 
 #[test]
@@ -148,18 +166,51 @@ fn malformed_vocabulary_files_are_rejected() {
 
 #[test]
 fn governance_pin_refuses_free_edits() {
-    let pinned = digest_of(SMALL);
-    assert_eq!(pinned.len(), 64);
+    let pin = VocabularyPin::of(&vocab());
+    assert_eq!((pin.version, pin.digest.len()), (3, 64));
+    assert_eq!(pin.digest, digest_of(SMALL));
     assert_eq!(
-        Vocabulary::from_toml_pinned(SMALL, &pinned)
-            .unwrap()
-            .digest(),
-        pinned
+        Vocabulary::from_toml_pinned(SMALL, &pin).unwrap().digest(),
+        pin.digest
     );
-    let edited = SMALL.replace("summary = \"TSU\"", "summary = \"TSU edited\"");
+    // A free edit, even one that bumps the version, does not load.
+    for edited in [
+        SMALL.replace("summary = \"TSU\"", "summary = \"TSU edited\""),
+        SMALL.replace("version = 3", "version = 4"),
+    ] {
+        assert!(matches!(
+            Vocabulary::from_toml_pinned(&edited, &pin),
+            Err(VocabularyError::DigestMismatch { .. })
+        ));
+    }
+    // A pin whose version disagrees with the file is refused too.
+    let wrong_version = VocabularyPin {
+        version: 2,
+        ..pin.clone()
+    };
     assert!(matches!(
-        Vocabulary::from_toml_pinned(&edited, &pinned),
-        Err(VocabularyError::DigestMismatch { .. })
+        Vocabulary::from_toml_pinned(SMALL, &wrong_version),
+        Err(VocabularyError::Invalid { .. })
+    ));
+}
+
+#[test]
+fn pin_file_round_trips_and_is_validated() {
+    let pin = VocabularyPin::of(&vocab());
+    let text = pin.to_toml_string();
+    assert!(text.starts_with("# Governance pin"));
+    assert_eq!(VocabularyPin::from_toml_str(&text).unwrap(), pin);
+    for bad in [
+        "version = 1\ndigest = \"abc\"\n",
+        &format!("version = 1\ndigest = \"{}\"\n", pin.digest.to_uppercase()),
+        &format!("version = 1\ndigest = \"{}\"\nextra = 1\n", pin.digest),
+        "version = -1\ndigest = \"\"\n",
+    ] {
+        assert!(VocabularyPin::from_toml_str(bad).is_err(), "{bad:?}");
+    }
+    assert!(matches!(
+        VocabularyPin::from_toml_str(&"#".repeat(5000)),
+        Err(VocabularyError::TooLarge(_))
     ));
 }
 

@@ -4,7 +4,7 @@
 
 WeftOS placement capability vocabulary (version 1). Advisory only: ids not listed here are accepted and matched; experimental ids use the `x.` prefix. Source: ADR-099 section 2.
 
-Vocabulary digest (SHA-256): `97785a67d5a9581b32aabc402e686efb5598570c0688f3841e44d4f4ff8b4380`
+Vocabulary digest (SHA-256): `927ed3db1359a4d0193277bf53efb424280e49f18e204c295bb47b8a885ff4c5`
 
 ## CPU (`cpu`)
 

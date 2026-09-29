@@ -8,10 +8,13 @@
 # ids use the `x.` prefix and draw no warning.
 #
 # GOVERNED FILE (ADR-099 decision 6). Do not edit freely. A change must bump
-# `meta.version`, and nodes load it only when its SHA-256 digest matches the
-# digest pinned through governance (clawft_types::placement::Vocabulary::
-# from_toml_pinned / change_to). After an approved change, regenerate the doc
-# table with: WEFTOS_REGEN_DOCS=1 scripts/build.sh test clawft-types
+# `meta.version` and be approved as a `config.set` on placement/
+# capabilities.toml (clawft_kernel::placement_vocabulary::VocabularyGovernor),
+# which writes the chain event and issues the new digest pin in
+# config/capabilities.pin.toml. A file whose SHA-256 digest differs from the
+# pin does not load, and the clawft-types committed-vocabulary tests fail.
+# After an approved change, regenerate the doc table with:
+# WEFTOS_REGEN_DOCS=1 scripts/build.sh test clawft-types
 #
 # Schema: [families.<first-segment>] { title, order }
 #         [ids."<dotted.id>"] { summary, attrs = { name = type }, min_provenance }
