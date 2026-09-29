@@ -46,7 +46,10 @@ fn kernel_config_with_chain() -> KernelConfig {
             enabled: true,
             checkpoint_interval: 10_000,
             chain_id: 0,
-            checkpoint_path: None,
+            // Isolated per boot: never the operator chain under ~/.clawft.
+            checkpoint_path: Some(
+                tempfile::tempdir().unwrap().keep().join("chain.json").to_string_lossy().into_owned(),
+            ),
             external_anchor: None,
         }),
         resource_tree: Some(ResourceTreeConfig {

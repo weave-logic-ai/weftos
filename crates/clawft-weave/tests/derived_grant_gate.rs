@@ -44,7 +44,10 @@ fn minimal_kernel_config() -> KernelConfig {
         health_check_interval_secs: 5,
         brand: "WeftOS".to_string(),
         cluster: None,
-        chain: None,
+        // Never the operator chain under ~/.clawft (isolated per boot).
+        chain: Some(clawft_types::config::ChainConfig::isolated_in(
+            &tempfile::tempdir().unwrap().keep(),
+        )),
         resource_tree: None,
         vector: None,
         spatial: None,

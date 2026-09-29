@@ -8481,6 +8481,18 @@ mod tests {
     #[allow(unused_imports)]
     use super::*;
 
+    /// Kernel config whose chain (RVF, key, tree checkpoint) lives in a
+    /// fresh temp dir, so unit tests never load or touch `~/.clawft`.
+    #[allow(dead_code)]
+    fn isolated_kcfg() -> KernelConfig {
+        KernelConfig {
+            chain: Some(clawft_types::config::ChainConfig::isolated_in(
+                &tempfile::tempdir().unwrap().keep(),
+            )),
+            ..KernelConfig::default()
+        }
+    }
+
     #[test]
     fn socket_path_resolves() {
         let path = crate::protocol::socket_path();
@@ -8528,7 +8540,7 @@ mod tests {
         }
 
         let platform = Arc::new(NativePlatform::new());
-        let kernel = Kernel::boot(Config::default(), KernelConfig::default(), platform)
+        let kernel = Kernel::boot(Config::default(), isolated_kcfg(), platform)
             .await
             .expect("kernel boots");
         let causal = kernel.ecc_causal().expect("causal graph present").clone();
@@ -8717,7 +8729,7 @@ mod tests {
         use std::sync::Arc;
 
         let platform = Arc::new(NativePlatform::new());
-        let mut kconfig = KernelConfig::default();
+        let mut kconfig = isolated_kcfg();
         kconfig.vector = Some(VectorConfig {
             backend: VectorBackendKind::Hnsw,
             strict: false,
@@ -8779,7 +8791,7 @@ mod tests {
         use std::sync::Arc;
 
         let platform = Arc::new(NativePlatform::new());
-        let kernel = Kernel::boot(Config::default(), KernelConfig::default(), platform)
+        let kernel = Kernel::boot(Config::default(), isolated_kcfg(), platform)
             .await
             .expect("kernel boots");
         let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
@@ -8811,7 +8823,7 @@ mod tests {
         use std::sync::Arc;
 
         let platform = Arc::new(NativePlatform::new());
-        let kernel = Kernel::boot(Config::default(), KernelConfig::default(), platform)
+        let kernel = Kernel::boot(Config::default(), isolated_kcfg(), platform)
             .await
             .expect("kernel boots");
         let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
@@ -8840,7 +8852,7 @@ mod tests {
         use std::sync::Arc;
 
         let platform = Arc::new(NativePlatform::new());
-        let kernel = Kernel::boot(Config::default(), KernelConfig::default(), platform)
+        let kernel = Kernel::boot(Config::default(), isolated_kcfg(), platform)
             .await
             .expect("kernel boots");
         let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
@@ -8877,7 +8889,7 @@ mod tests {
         use std::sync::Arc;
 
         let platform = Arc::new(NativePlatform::new());
-        let kernel = Kernel::boot(Config::default(), KernelConfig::default(), platform)
+        let kernel = Kernel::boot(Config::default(), isolated_kcfg(), platform)
             .await
             .expect("kernel boots");
         let causal = kernel.ecc_causal().expect("causal graph present").clone();
@@ -8982,7 +8994,7 @@ mod tests {
         use std::sync::Arc;
 
         let platform = Arc::new(NativePlatform::new());
-        let kernel = Kernel::boot(Config::default(), KernelConfig::default(), platform)
+        let kernel = Kernel::boot(Config::default(), isolated_kcfg(), platform)
             .await
             .expect("kernel boots");
         let causal = kernel.ecc_causal().expect("causal graph present").clone();
@@ -9254,7 +9266,7 @@ mod tests {
         // every `agent.proposal.*` arm must surface a typed error rather
         // than panic.
         let platform = Arc::new(NativePlatform::new());
-        let kernel = Kernel::boot(Config::default(), KernelConfig::default(), platform)
+        let kernel = Kernel::boot(Config::default(), isolated_kcfg(), platform)
             .await
             .expect("kernel boots");
         let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
@@ -9294,7 +9306,8 @@ mod tests {
             enabled: true,
             checkpoint_interval: 1000,
             chain_id: 0,
-            checkpoint_path: None,
+            checkpoint_path: ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())
+                .checkpoint_path,
             external_anchor: None,
         });
         let kernel = Kernel::boot(Config::default(), kcfg, platform)
@@ -9371,7 +9384,8 @@ mod tests {
             enabled: true,
             checkpoint_interval: 1000,
             chain_id: 0,
-            checkpoint_path: None,
+            checkpoint_path: ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())
+                .checkpoint_path,
             external_anchor: None,
         });
         let kernel = Kernel::boot(Config::default(), kcfg, platform)
@@ -9465,7 +9479,8 @@ mod tests {
             enabled: true,
             checkpoint_interval: 1000,
             chain_id: 0,
-            checkpoint_path: None,
+            checkpoint_path: ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())
+                .checkpoint_path,
             external_anchor: None,
         });
         let kernel = Kernel::boot(Config::default(), kcfg, platform)
@@ -9513,7 +9528,8 @@ mod tests {
             enabled: true,
             checkpoint_interval: 1000,
             chain_id: 0,
-            checkpoint_path: None,
+            checkpoint_path: ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())
+                .checkpoint_path,
             external_anchor: None,
         });
         let kernel = Kernel::boot(Config::default(), kcfg, platform)

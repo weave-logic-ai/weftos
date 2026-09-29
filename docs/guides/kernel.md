@@ -91,8 +91,9 @@ lives in [`docs/weftos/k-phases.md`](../weftos/k-phases.md).
 
 ExoChain is the tamper-evident, hash-chained audit log behind every
 state-changing operation in the kernel. It is enabled by default in
-the 0.7.0 native binary; the chain file lives under
-`~/.clawft/chain/` (or the workspace overlay). Operator commands:
+the 0.7.0 native binary. By default the chain lives at
+`~/.clawft/chain.rvf`, signed with `~/.clawft/chain.key` (see
+"Chain storage location" below). Operator commands:
 
 ```bash
 weaver chain status          # current chain head, length, last entry kind
@@ -103,6 +104,93 @@ weaver chain export <path>   # export to JSON for offline review
 Per ADR-022 (ExoChain Mandatory Audit), every privileged operation
 should produce a chain entry. If you run an action and `weaver chain
 status` does not show a new entry, that is a regression — file it.
+
+#### Chain storage location (isolated runtimes)
+
+The kernel resolves the chain checkpoint path once at boot and derives
+the other chain files from it by extension:
+
+| File | Purpose |
+|------|---------|
+| `chain.json` | JSON checkpoint (fallback format) |
+| `chain.rvf` | RVF checkpoint (primary, signed) |
+| `chain.key` | Ed25519 chain signing key (created on first boot) |
+| `chain.tree.json` | Resource-tree checkpoint |
+| `chain/anchors.jsonl` | External-anchor ledger, when anchoring is on |
+
+Resolution order, highest first:
+
+1. An explicit path in config: `kernel.chain.checkpoint_path` (and
+   `kernel.chain.external_anchor.ledger_path` for the anchor ledger).
+2. `$WEFTOS_RUNTIME_DIR`, when set and non-empty: the files go in
+   `$WEFTOS_RUNTIME_DIR/chain.json`, `$WEFTOS_RUNTIME_DIR/chain.rvf`
+   and so on.
+3. `~/.clawft/`, the operator chain. Nothing changes for operators who
+   set neither of the above.
+
+Probe, demo and test daemons must run with `WEFTOS_RUNTIME_DIR`
+pointing at a scratch directory. They still chain every action, but to
+their own chain file and signing key under that directory, never to the
+operator chain. The boot log shows the location that was picked:
+
+```bash
+WEFTOS_RUNTIME_DIR="$(mktemp -d)" weaver kernel start
+weaver kernel logs | grep 'Chain storage'
+```
+
+Test code gets the same isolation: kernel unit tests pin a fresh temp
+dir per boot, and integration tests build their config with
+`ChainConfig::isolated_in(<tempdir>)`. The regression test is
+`crates/clawft-kernel/tests/chain_runtime_isolation.rs`. It boots a
+kernel with a fake `HOME` and `WEFTOS_RUNTIME_DIR` set, then checks
+that the fake operator `chain.rvf` and `chain.key` are byte-identical
+afterwards and that the isolated chain holds the new events.
+
+#### Operator note: stray demo events from 2026-09-29
+
+Before this isolation landed, `WEFTOS_RUNTIME_DIR` moved the daemon's
+socket, PID file and log but not its chain. While card
+mesh-placement-06 was being built, a demo daemon started with
+`WEFTOS_RUNTIME_DIR` appended about 70 events to the operator chain at
+`~/.clawft/chain.rvf`.
+
+The operator decided to **leave these events in place**. The chain is
+append-only and hash-linked, so removing entries would break
+verification for every later event. Do not try to rewrite or truncate
+the chain to get rid of them. They are real entries recording demo
+activity, not corruption.
+
+To tell them apart from operator activity, look for events that are
+all timestamped 2026-09-29 (the mesh-placement-06 build window) and
+match these patterns:
+
+- source `app`, kinds `app.install`, `app.start`, `app.stop` and
+  `app.remove`, with payload `app_name` set to the demo app (`demo-app`
+  in the card's fixtures);
+- source `workload`, kinds `workload.*` (for example `workload.install`
+  and `workload.start`), from the same demo run;
+- the boot, governance-gate and shutdown events the demo daemon itself
+  wrote in the same time window, next to the `app` and `workload`
+  events.
+
+To review them without changing anything, export the chain and filter
+the export. The JSON export is a top-level array of
+`{sequence, chain_id, timestamp, source, kind, hash}` records, with
+timestamps in RFC 3339 UTC. Widen the date filter by a few hours if
+your local day straddles midnight UTC:
+
+```bash
+weaver chain export --format json --output chain-review.json
+jq '.[] | select(.timestamp | startswith("2026-09-29"))
+    | select(.source == "app" or .source == "workload")
+    | {sequence, timestamp, source, kind}' chain-review.json
+```
+
+The JSON export does not include payloads. To confirm that an `app.*`
+event names the demo app, look it up by sequence in
+`weaver chain local --count 200`. The stray events form contiguous
+sequence runs, so the boot and gate events around them belong to the
+same demo daemon.
 
 ### Governance (three-branch)
 
