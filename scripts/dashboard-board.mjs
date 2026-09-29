@@ -15,6 +15,7 @@ function usage() {
   dashboard-board.mjs goals [--json]
   dashboard-board.mjs show <ticket UUID|WEFT-N> [--json]
   dashboard-board.mjs create <stable-source-key> <title> <description> [source URL]
+  dashboard-board.mjs update <ticket UUID|WEFT-N> [--title "<t>"] [--description "<d>" | --description-file <path>] [--dry-run]
   dashboard-board.mjs claim <ticket UUID|WEFT-N>
   dashboard-board.mjs move <ticket UUID|WEFT-N> <status>
   dashboard-board.mjs note <ticket UUID|WEFT-N> <comment>
@@ -79,6 +80,42 @@ async function resolve(token, ref) {
   return issue;
 }
 
+// Pulls `--name value` pairs (and bare `--dry-run`) out of argv so the
+// remaining positional words keep their existing meaning.
+function takeFlags(args) {
+  const flags = {};
+  const words = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--json' || arg === '--dry-run') flags[arg.slice(2)] = true;
+    else if (arg === '--title' || arg === '--description' || arg === '--description-file') {
+      if (i + 1 >= args.length) throw new Error(`${arg} requires a value`);
+      flags[arg.slice(2)] = args[++i];
+    } else words.push(arg);
+  }
+  return { flags, words };
+}
+
+async function updateFields(flags) {
+  if (flags.description !== undefined && flags['description-file'] !== undefined) {
+    throw new Error('Use --description or --description-file, not both');
+  }
+  const description = flags['description-file'] !== undefined
+    ? await readFile(flags['description-file'], 'utf8')
+    : flags.description;
+  const fields = {};
+  if (flags.title !== undefined) fields.title = flags.title;
+  if (description !== undefined) fields.description = description;
+  if (Object.keys(fields).length === 0) throw new Error('update requires --title and/or --description');
+  if (fields.title !== undefined && (fields.title.trim().length < 1 || fields.title.length > 300)) {
+    throw new Error('title must be 1-300 characters');
+  }
+  if (fields.description !== undefined && (fields.description.trim().length < 20 || fields.description.length > 30_000)) {
+    throw new Error('description must be 20-30000 characters');
+  }
+  return fields;
+}
+
 function printList(items) {
   for (const ticket of items) {
     console.log(`${shortRef(ticket).padEnd(12)} ${ticket.status.padEnd(11)} ${ticket.priority.padEnd(7)} ${ticket.title}`);
@@ -88,8 +125,8 @@ function printList(items) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const json = args.includes('--json');
-  const words = args.filter((arg) => arg !== '--json');
+  const { flags, words } = takeFlags(args);
+  const json = flags.json === true;
   const [command, ref, ...rest] = words;
   if (!command || command === 'help' || command === '--help') return usage();
   const token = await boardToken();
@@ -118,6 +155,15 @@ async function main() {
   }
   const ticket = await resolve(token, ref);
   if (command === 'show') return console.log(json ? JSON.stringify(ticket, null, 2) : `${shortRef(ticket)} · ${ticket.status}\n${ticket.title}\n${ticket.description}\n${ticket.source_url ?? ''}`);
+  if (command === 'update') {
+    const fields = await updateFields(flags);
+    const changed = Object.keys(fields).join(', ');
+    if (flags['dry-run']) {
+      return console.log(json ? JSON.stringify({ id: ticket.id, dry_run: true, fields }, null, 2) : `${ticket.id} · dry run, would update ${changed}`);
+    }
+    const updated = await request(token, 'POST', '/api/harness/tickets', { action: 'update', ticket_id: ticket.id, ...fields });
+    return console.log(json ? JSON.stringify(updated, null, 2) : `${updated.id} · updated ${changed}`);
+  }
   if (command === 'link' || command === 'unlink') {
     const goalId = command === 'unlink' ? null : rest[0];
     if (command === 'link' && !uuidPattern.test(goalId ?? '')) {
