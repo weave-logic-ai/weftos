@@ -24,7 +24,7 @@
 //! Card 25 plugs a multi-source [`PieceScheduler`] and parallel peers into
 //! the same types.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::mesh::{MeshError, MeshStream};
 use crate::mesh_artifact::{ArtifactExchange, ExchangeError};
@@ -60,6 +60,9 @@ struct Progress {
     /// `(peer, artifact id, reason)` for descriptors that failed the
     /// whole-content check.
     bad_descriptors: Vec<(String, String, String)>,
+    /// Piece blobs this fetch created in the store: the only blobs a
+    /// failed promotion may roll back.
+    written: HashSet<[u8; 32]>,
 }
 
 async fn send(stream: &mut dyn MeshStream, msg: &ArtifactMsg) -> Result<(), PeerError> {
@@ -77,7 +80,8 @@ impl ArtifactExchange {
 
     /// Serve one peer until it closes the stream. Only pieces of servable
     /// artifacts ([`Self::is_servable`]) are sent. An oversize or
-    /// malformed frame ends the session with an error.
+    /// malformed frame ends the session with an error, and so does a peer
+    /// that sends nothing for `serve_idle_timeout`.
     pub async fn serve(
         &self,
         stream: &mut dyn MeshStream,
@@ -85,10 +89,17 @@ impl ArtifactExchange {
     ) -> Result<ServeStats, ExchangeError> {
         let mut stats = ServeStats::default();
         loop {
-            let raw = match stream.recv().await {
-                Ok(raw) => raw,
-                Err(MeshError::ConnectionClosed) => return Ok(stats),
-                Err(e) => return Err(ExchangeError::Io(e.to_string())),
+            let idle = self.config().serve_idle_timeout;
+            let raw = match tokio::time::timeout(idle, stream.recv()).await {
+                Ok(Ok(raw)) => raw,
+                Ok(Err(MeshError::ConnectionClosed)) => return Ok(stats),
+                Ok(Err(e)) => return Err(ExchangeError::Io(e.to_string())),
+                Err(_) => {
+                    let _ = stream.close().await;
+                    return Err(ExchangeError::Io(format!(
+                        "peer {peer} idle for {idle:?}; serve session closed"
+                    )));
+                }
             };
             let msg = match ArtifactMsg::from_wire(&raw) {
                 Ok(m) => m,
@@ -206,25 +217,27 @@ impl ArtifactExchange {
             last_peer = link.peer_id.clone();
             let before = (progress.pieces, progress.bytes);
             let err = match self.fetch_from(link, key, scheduler, &mut progress).await {
-                Ok(d) if self.have_of(&d).is_complete() => match self.promote(&d) {
-                    Ok(()) => {
-                        done = Some(d);
-                        continue;
+                Ok(d) if self.have_of(&d).is_complete() => {
+                    match self.promote(&d, &progress.written) {
+                        Ok(()) => {
+                            done = Some(d);
+                            continue;
+                        }
+                        Err(e) => {
+                            // The liar's pieces were discarded: do not count them.
+                            (progress.pieces, progress.bytes) = before;
+                            progress.sources.retain(|p| *p != link.peer_id);
+                            progress.current = None;
+                            progress.bad_descriptors.push((
+                                link.peer_id.clone(),
+                                d.id().to_string(),
+                                e.to_string(),
+                            ));
+                            verify_failed = true;
+                            PeerError::Local(e)
+                        }
                     }
-                    Err(e) => {
-                        // The liar's pieces were discarded: do not count them.
-                        (progress.pieces, progress.bytes) = before;
-                        progress.sources.retain(|p| *p != link.peer_id);
-                        progress.current = None;
-                        progress.bad_descriptors.push((
-                            link.peer_id.clone(),
-                            d.id().to_string(),
-                            e.to_string(),
-                        ));
-                        verify_failed = true;
-                        PeerError::Local(e)
-                    }
-                },
+                }
                 Ok(_) => {
                     verify_failed = false;
                     continue; // this peer has no more of what is missing
@@ -379,7 +392,9 @@ impl ArtifactExchange {
                             self.chain_piece_rejected(&id, index, &peer, "hash mismatch");
                             continue;
                         }
-                        self.store_piece(&data, &hash)?;
+                        if self.store_piece(&data, &hash)? {
+                            progress.written.insert(hash);
+                        }
                         progress.pieces += 1;
                         progress.bytes += data.len() as u64;
                         if !progress.sources.contains(&peer) {

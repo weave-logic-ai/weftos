@@ -111,9 +111,14 @@ fn failed_promotion_discards_the_descriptor_and_unshared_pieces() {
     d.pieces.push(honest.pieces[0]);
     d.total_size = 2048;
     x.note_pending(&d).unwrap();
-    x.store_piece(&junk, &d.pieces[0]).unwrap();
+    assert!(x.store_piece(&junk, &d.pieces[0]).unwrap(), "newly written");
+    // This fetch wrote the junk piece; the honest piece was already held.
+    let written = HashSet::from([d.pieces[0]]);
 
-    assert!(matches!(x.promote(&d), Err(ExchangeError::Mismatch(_))));
+    assert!(matches!(
+        x.promote(&d, &written),
+        Err(ExchangeError::Mismatch(_))
+    ));
     assert!(x.have(&d.id()).is_none(), "pending descriptor dropped");
     assert!(
         !x.store().contains(&hex_encode(&d.pieces[0])),
@@ -129,14 +134,28 @@ fn failed_promotion_discards_the_descriptor_and_unshared_pieces() {
 fn a_peer_descriptor_cannot_replace_a_verified_one() {
     let x = exchange(1024);
     let honest = x.seed_bytes(&[5u8; 2000]).unwrap();
-    // Same id (same piece list) but a false content hash.
+    // Same piece list but a false content hash: a different id.
     let forged = ArtifactDescriptor {
         content_hash: [1; 32],
         ..honest.clone()
     };
-    assert_eq!(forged.id(), honest.id());
+    assert_ne!(forged.id(), honest.id());
     x.note_pending(&forged).unwrap();
-    assert!(x.promote(&forged).is_err());
+    assert!(x.promote(&forged, &HashSet::new()).is_err());
     assert_eq!(x.descriptor(&honest.id()).unwrap(), honest);
     assert!(x.have(&honest.id()).unwrap().is_complete());
+}
+
+#[test]
+fn failed_promotion_never_removes_blobs_it_did_not_write() {
+    let x = exchange(1024);
+    // Held before the fetch, owned by nobody the exchange knows about.
+    let blob = [0x42u8; 900];
+    let k = x.store().store(&blob, ArtifactType::Generic).unwrap();
+    let d = liar([8; 32], &blob);
+    x.note_pending(&d).unwrap();
+    assert!(!x.store_piece(&blob, &d.pieces[0]).unwrap(), "already held");
+    assert!(x.promote(&d, &HashSet::new()).is_err());
+    assert!(x.have(&d.id()).is_none(), "pending descriptor dropped");
+    assert!(x.store().contains(&k), "pre-existing blob kept");
 }

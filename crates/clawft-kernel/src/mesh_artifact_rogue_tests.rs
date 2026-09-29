@@ -2,7 +2,13 @@
 //! an artifact's pieces assemble to. Nodes are paired in-process; every
 //! node has its own in-memory chain, never the operator's.
 
+use std::sync::Arc;
+
 use tokio::task::JoinHandle;
+
+use crate::artifact_store::{ArtifactStore, ArtifactType};
+use crate::chain::ChainManager;
+use crate::mesh_artifact::{ArtifactExchange, ExchangeConfig};
 
 use crate::chain::{EVENT_KIND_ARTIFACT_FETCH, EVENT_KIND_ARTIFACT_SERVE};
 use crate::mesh::MeshStream;
@@ -16,24 +22,21 @@ use crate::workload_pkg::codec::{hex_decode_exact, hex_encode};
 
 const JUNK: [u8; 1024] = [0xAA; 1024];
 
-/// A peer that answers any meta request with a self-consistent descriptor
-/// claiming `claimed` as its content hash, whose one piece is junk.
-async fn spawn_liar(claimed: [u8; 32]) -> (InMemoryStream, JoinHandle<()>) {
+/// A peer that answers any meta request with `d` (announcing every
+/// piece) and any request with `pieces[i]` as piece `i`, in one block.
+async fn spawn_rogue(
+    d: ArtifactDescriptor,
+    pieces: Vec<Vec<u8>>,
+) -> (InMemoryStream, JoinHandle<()>) {
     let (client, mut srv) = connected_pair().await.unwrap();
     let task = tokio::spawn(async move {
-        let d = ArtifactDescriptor {
-            piece_size: 1024,
-            total_size: JUNK.len() as u64,
-            content_hash: claimed,
-            pieces: vec![*blake3::hash(&JUNK).as_bytes()],
-        };
         let id = d.id();
         let tx = |m: ArtifactMsg| m.to_wire().unwrap();
         while let Ok(raw) = srv.recv().await {
             let reply = match ArtifactMsg::from_wire(&raw) {
                 Ok(ArtifactMsg::MetaRequest { .. }) => {
-                    let mut have = Bitfield::new(1);
-                    have.set(0, true);
+                    let mut have = Bitfield::new(d.piece_count());
+                    (0..d.piece_count()).for_each(|i| have.set(i, true));
                     vec![
                         tx(ArtifactMsg::Meta {
                             descriptor: d.clone(),
@@ -41,12 +44,17 @@ async fn spawn_liar(claimed: [u8; 32]) -> (InMemoryStream, JoinHandle<()>) {
                         tx(ArtifactMsg::Announce { id, have }),
                     ]
                 }
-                Ok(ArtifactMsg::Request { .. }) => vec![tx(ArtifactMsg::Piece {
-                    id,
-                    index: 0,
-                    offset: 0,
-                    data: JUNK.to_vec(),
-                })],
+                Ok(ArtifactMsg::Request { pieces: want, .. }) => want
+                    .into_iter()
+                    .map(|index| {
+                        tx(ArtifactMsg::Piece {
+                            id,
+                            index,
+                            offset: 0,
+                            data: pieces[index as usize].clone(),
+                        })
+                    })
+                    .collect(),
                 _ => vec![],
             };
             for frame in reply {
@@ -57,6 +65,29 @@ async fn spawn_liar(claimed: [u8; 32]) -> (InMemoryStream, JoinHandle<()>) {
         }
     });
     (client, task)
+}
+
+/// A peer claiming `claimed` as the content hash of one junk piece.
+async fn spawn_liar(claimed: [u8; 32]) -> (InMemoryStream, JoinHandle<()>) {
+    let d = ArtifactDescriptor {
+        piece_size: 1024,
+        total_size: JUNK.len() as u64,
+        content_hash: claimed,
+        pieces: vec![*blake3::hash(&JUNK).as_bytes()],
+    };
+    spawn_rogue(d, vec![JUNK.to_vec()]).await
+}
+
+/// An exchange over a caller-owned store, with its own in-memory chain.
+fn exchange_over(id: &str, store: &Arc<ArtifactStore>) -> ArtifactExchange {
+    let cfg = ExchangeConfig {
+        piece_size: 1024 * 1024,
+        block_size: 256 * 1024,
+        ..Default::default()
+    };
+    let mut ex = ArtifactExchange::new(id, store.clone(), cfg).unwrap();
+    ex.set_chain_manager(Arc::new(ChainManager::new(0, 1000)));
+    ex
 }
 
 /// A seeded package at `a`; returns (manifest hash, binary content hash).
@@ -145,4 +176,129 @@ async fn liar_then_honest_peer_in_one_fetch_recovers() {
     assert_eq!(fetches[0]["source_peer"], "node-a");
     assert_eq!(fetches[0]["descriptors_rejected"][0]["peer"], "rogue");
     assert_eq!(fetches[0]["bytes"], 4096);
+}
+
+// ── a liar must not delete blobs it did not send (round-2 findings) ──
+
+#[tokio::test]
+async fn liar_cannot_delete_an_unrelated_store_blob() {
+    let store = Arc::new(ArtifactStore::new_memory());
+    let b = exchange_over("node-b", &store);
+    // Another subsystem's blob, in the same store.
+    let blob = vec![0x5A; 700];
+    let k = store.store(&blob, ArtifactType::Generic).unwrap();
+    // The liar names it as its only piece, with a false content hash, and
+    // never sends a byte (B already "has" everything).
+    let d = ArtifactDescriptor {
+        piece_size: 1024,
+        total_size: 700,
+        content_hash: [7; 32],
+        pieces: vec![*blake3::hash(&blob).as_bytes()],
+    };
+    let (s, _rogue) = spawn_rogue(d, vec![blob.clone()]).await;
+    let err = b
+        .fetch(&mut link("rogue", s), ArtifactKey::Content([7; 32]))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, FetchError::Verification(_)), "{err:?}");
+    assert!(
+        store.contains(&k),
+        "liar deleted an unrelated blob it never sent"
+    );
+    assert_eq!(store.load(&k).unwrap(), blob);
+}
+
+#[tokio::test]
+async fn liar_cannot_delete_pieces_held_before_a_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = node("node-a");
+    let (_, h) = seeded(&a, tmp.path());
+    let store = Arc::new(ArtifactStore::new_memory());
+    let b1 = exchange_over("node-b", &store);
+    let (s, _a) = connect(&a, "node-b").await;
+    let real = b1
+        .fetch(&mut link("node-a", s), ArtifactKey::Content(h))
+        .await
+        .unwrap()
+        .descriptor;
+    drop(b1);
+
+    // Restart: a fresh exchange over the same store knows no descriptors.
+    let b2 = exchange_over("node-b", &store);
+    let forged = ArtifactDescriptor {
+        content_hash: [9; 32],
+        ..real.clone()
+    };
+    let (s, _rogue) = spawn_rogue(forged, vec![]).await;
+    let err = b2
+        .fetch(&mut link("rogue", s), ArtifactKey::Content([9; 32]))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, FetchError::Verification(_)), "{err:?}");
+    for p in &real.pieces {
+        assert!(
+            store.contains(&hex_encode(p)),
+            "liar deleted an honest piece"
+        );
+    }
+    assert!(store.contains(&real.content_hex()), "whole blob kept");
+}
+
+#[tokio::test]
+async fn root_key_liar_cannot_reuse_the_honest_id_or_wipe_resume_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (a, b) = (node("node-a"), node("node-b"));
+    let (_, h) = seeded(&a, tmp.path());
+    let real = a.ex.resolve(&ArtifactKey::Content(h)).unwrap();
+    // B holds every genuine piece but has not verified the artifact yet.
+    b.ex.note_pending(&real).unwrap();
+    for i in 0..real.piece_count() {
+        let data = a.ex.load_piece(&real, i).unwrap();
+        b.ex.store_piece(&data, &real.pieces[i as usize]).unwrap();
+    }
+    // The liar answers Root(real id) with the real pieces, false hash.
+    let forged = ArtifactDescriptor {
+        content_hash: [3; 32],
+        ..real.clone()
+    };
+    assert_ne!(forged.id(), real.id(), "the id binds the content hash");
+    let (s, _rogue) = spawn_rogue(forged, vec![]).await;
+    let err =
+        b.ex.fetch(&mut link("rogue", s), ArtifactKey::Root(real.id()))
+            .await
+            .unwrap_err();
+    assert!(err.to_string().contains("does not match"), "{err}");
+    for p in &real.pieces {
+        assert!(b.ex.store().contains(&hex_encode(p)), "resume state wiped");
+    }
+    // Resume from the honest origin: nothing is fetched again.
+    let (s, _a) = connect(&a, "node-b").await;
+    let out =
+        b.ex.fetch(&mut link("node-a", s), ArtifactKey::Root(real.id()))
+            .await
+            .unwrap();
+    assert_eq!(out.pieces_fetched, 0);
+    assert_eq!(
+        b.ex.read_all(&out.id).unwrap(),
+        a.ex.read_all(&out.id).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn an_idle_fetcher_does_not_hold_a_serve_session_open() {
+    let cfg = ExchangeConfig {
+        serve_idle_timeout: std::time::Duration::from_millis(100),
+        ..Default::default()
+    };
+    let a = ArtifactExchange::new("node-a", Arc::new(ArtifactStore::new_memory()), cfg).unwrap();
+    let (_client, mut srv) = connected_pair().await.unwrap();
+    // The client connects, sends nothing and never closes.
+    let served = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        a.serve(&mut srv, "idle-peer"),
+    )
+    .await
+    .expect("serve returned on its own");
+    let err = served.unwrap_err();
+    assert!(err.to_string().contains("idle"), "{err}");
 }

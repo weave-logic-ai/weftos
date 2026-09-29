@@ -54,7 +54,8 @@ pub(crate) fn bad(msg: impl Into<String>) -> WireError {
     WireError::Malformed(msg.into())
 }
 
-/// Content-derived artifact id: root hash over the ordered piece list.
+/// Content-derived artifact id: root hash over the ordered piece list
+/// (see [`ArtifactDescriptor::id`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ArtifactId(pub [u8; 32]);
 
@@ -164,12 +165,16 @@ pub struct ArtifactDescriptor {
 }
 
 impl ArtifactDescriptor {
-    /// Root hash over `(piece_size, total_size, piece hashes)`.
+    /// Root hash over `(piece_size, total_size, content_hash, piece
+    /// hashes)`. The content hash is bound in so that one id names exactly
+    /// one claim about what the pieces assemble to: a peer cannot reuse an
+    /// honest id with a false content hash.
     pub fn id(&self) -> ArtifactId {
         let mut h = blake3::Hasher::new();
         h.update(ROOT_DOMAIN);
         h.update(&self.piece_size.to_be_bytes());
         h.update(&self.total_size.to_be_bytes());
+        h.update(&self.content_hash);
         for p in &self.pieces {
             h.update(p);
         }
@@ -229,6 +234,9 @@ pub struct ExchangeConfig {
     pub materialize_limit: u64,
     /// Longest wait for one frame from a peer.
     pub recv_timeout: Duration,
+    /// Longest a serve session waits for the fetcher's next request
+    /// before closing the stream.
+    pub serve_idle_timeout: Duration,
 }
 
 impl Default for ExchangeConfig {
@@ -240,6 +248,7 @@ impl Default for ExchangeConfig {
             max_piece_retries: 3,
             materialize_limit: MAX_FILE_BYTES,
             recv_timeout: Duration::from_secs(30),
+            serve_idle_timeout: Duration::from_secs(120),
         }
     }
 }
@@ -259,6 +268,9 @@ impl ExchangeConfig {
             return Err(ExchangeError::Config(
                 "request_window and max_piece_retries must be > 0".into(),
             ));
+        }
+        if self.recv_timeout.is_zero() || self.serve_idle_timeout.is_zero() {
+            return Err(ExchangeError::Config("timeouts must be > 0".into()));
         }
         Ok(())
     }
@@ -292,7 +304,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn id_binds_piece_list_and_sizes() {
+    fn id_binds_piece_list_sizes_and_content_hash() {
         let d = ArtifactDescriptor {
             piece_size: 1024,
             total_size: 1500,
@@ -303,8 +315,11 @@ mod tests {
         swapped.pieces.swap(0, 1);
         let mut shorter = d.clone();
         shorter.total_size = 1400;
+        let mut other_claim = d.clone();
+        other_claim.content_hash = [9; 32];
         assert_ne!(d.id(), swapped.id());
         assert_ne!(d.id(), shorter.id());
+        assert_ne!(d.id(), other_claim.id(), "id binds the content hash");
         assert_eq!(d.piece_len(0), 1024);
         assert_eq!(d.piece_len(1), 476);
         assert_eq!(ArtifactId::from_hex(&d.id().to_string()), Some(d.id()));

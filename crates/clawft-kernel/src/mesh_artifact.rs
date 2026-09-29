@@ -14,7 +14,8 @@
 //!   pieces are hash-checked against it, but its `content_hash` is the
 //!   peer's claim. It becomes *verified* only when the pieces assemble to
 //!   that hash on this node ([`Self::promote`]); if they do not, the
-//!   descriptor and its unshared pieces are discarded. Content keys
+//!   descriptor is discarded and the pieces that fetch wrote are rolled
+//!   back. Blobs already in the store are never removed on a peer's word. Content keys
 //!   ([`ArtifactKey::Content`]) resolve to verified descriptors only.
 //! - **Governance.** Only verified artifacts whose content a signed
 //!   manifest lists (and that manifest verified here) are served
@@ -28,6 +29,7 @@
 //! rarest-first, seeding policy, caching and bandwidth limits on top of
 //! the same types.
 
+use std::collections::HashSet;
 use std::io::Read;
 use std::sync::Arc;
 
@@ -178,27 +180,39 @@ impl ArtifactExchange {
     }
 
     /// Check that `d`'s pieces (all held) assemble to its `content_hash`.
-    /// On success `d` becomes verified; on failure `d` is discarded with
-    /// every piece no other known artifact uses, and the error returned.
-    pub(crate) fn promote(&self, d: &ArtifactDescriptor) -> Result<(), ExchangeError> {
+    /// On success `d` becomes verified. On failure `d` is discarded along
+    /// with the pieces in `written` (blobs this fetch created) that no
+    /// other known artifact uses, and the error returned.
+    pub(crate) fn promote(
+        &self,
+        d: &ArtifactDescriptor,
+        written: &HashSet<[u8; 32]>,
+    ) -> Result<(), ExchangeError> {
         match self.check_whole(d, &mut |_| Ok(())) {
             Ok(_) => self.register_verified(d.clone()).map(|_| ()),
             Err(e) => {
-                self.discard(d);
+                self.discard(d, written);
                 Err(e)
             }
         }
     }
 
-    /// Forget a descriptor that failed verification and drop its pieces,
-    /// except pieces (or whole blobs) that another known artifact uses.
-    fn discard(&self, d: &ArtifactDescriptor) {
+    /// Forget a descriptor that failed verification and roll back the
+    /// pieces this fetch wrote for it.
+    ///
+    /// Only blobs in `written` are candidates: the descriptor came from an
+    /// unauthenticated peer, so the piece hashes it lists say nothing about
+    /// who owns blobs that were already in the store (other subsystems'
+    /// data, pieces from before a restart, honest resume state). Of those
+    /// candidates, pieces another verified or pending artifact lists are
+    /// kept.
+    fn discard(&self, d: &ArtifactDescriptor, written: &HashSet<[u8; 32]>) {
         let id = d.id();
         if self.descriptors.get(&id).is_some_and(|v| *v == *d) {
             return; // never discard verified state
         }
         self.pending.remove_if(&id, |_, p| p == d);
-        let mut keep = std::collections::HashSet::new();
+        let mut keep = HashSet::new();
         for v in self.descriptors.iter() {
             keep.insert(v.content_hash);
             keep.extend(v.pieces.iter().copied());
@@ -206,7 +220,7 @@ impl ArtifactExchange {
         for p in self.pending.iter() {
             keep.extend(p.pieces.iter().copied());
         }
-        for piece in &d.pieces {
+        for piece in d.pieces.iter().filter(|p| written.contains(*p)) {
             if !keep.contains(piece) {
                 let _ = self.store.remove(&hex_encode(piece));
             }
@@ -344,11 +358,12 @@ impl ArtifactExchange {
             .map_err(|e| ExchangeError::Store(e.to_string()))
     }
 
-    /// Store a piece whose hash the caller has already checked.
-    pub(crate) fn store_piece(&self, data: &[u8], hash: &[u8; 32]) -> Result<(), ExchangeError> {
+    /// Store a piece whose hash the caller has already checked. Returns
+    /// `true` when this call created the blob, `false` when it was held.
+    pub(crate) fn store_piece(&self, data: &[u8], hash: &[u8; 32]) -> Result<bool, ExchangeError> {
         let key = hex_encode(hash);
         if self.store.contains(&key) {
-            return Ok(());
+            return Ok(false);
         }
         let stored = self
             .store
@@ -359,7 +374,7 @@ impl ArtifactExchange {
                 "piece stored as {stored}, expected {key}"
             )));
         }
-        Ok(())
+        Ok(true)
     }
 
     /// After a verified fetch, keep small artifacts whole as well.
