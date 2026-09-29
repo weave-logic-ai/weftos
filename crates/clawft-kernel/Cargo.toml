@@ -16,7 +16,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = ["native", "exochain", "cluster", "tilezero", "ecc", "mesh", "quic"]
+default = ["native", "exochain", "cluster", "tilezero", "ecc", "mesh", "quic", "workload-runtime"]
 native = [
     "dep:tokio",
     "dep:tokio-util",
@@ -76,6 +76,9 @@ os-patterns = ["exochain"]
 treesitter = ["dep:clawft-plugin-treesitter"]
 sensor = []
 containers = []
+# mesh-placement-09: WorkloadRuntime adapters (native process, container
+# engines, Cognitum Seed API). reqwest drives the Seed's HTTP API.
+workload-runtime = ["native", "ecc", "exochain", "dep:reqwest", "dep:rustls"]
 http-api = []
 
 [dependencies]
@@ -154,6 +157,10 @@ uuid = { workspace = true }
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 uuid = { workspace = true, features = ["js"] }
 
+[target.'cfg(unix)'.dependencies]
+# mesh-placement-09: rlimits / signals for the native workload adapter.
+libc = "0.2"
+
 [dev-dependencies]
 tokio = { workspace = true }
 serde_json = { workspace = true }
@@ -163,12 +170,18 @@ clawft-types = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
 wiremock = "0.6"
+# Self-signed Seed certificates for the pinned-TLS transport tests.
+rcgen = { workspace = true }
 # WEFT-366 vector_backend_bench: clustered-gaussian synthetic corpus
 # generation (see benches/vector_backend_bench.rs). rand_chacha/rand_distr
 # pinned locally, matching the clawft-casestudy-gen-qsr precedent.
 rand = { workspace = true }
 rand_chacha = "0.3"
 rand_distr = "0.4"
+
+[[example]]
+name = "cog_adapter_run"
+required-features = ["workload-runtime"]
 
 [[bench]]
 name = "vector_backend_bench"

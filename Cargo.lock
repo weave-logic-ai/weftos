@@ -1572,6 +1572,7 @@ dependencies = [
  "futures-util",
  "half",
  "insta",
+ "libc",
  "ndarray 0.16.1",
  "ort",
  "parking_lot",

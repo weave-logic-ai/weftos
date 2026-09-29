@@ -39,6 +39,8 @@ AGENTS_CATALOG_CHECK=false
 COMMAND=""
 # cogs-conformance: everything after the subcommand is passed through
 COGS_ARGS=()
+# cogs-launcher: --linux-arm64 builds the launcher in an arm64 Linux container
+LAUNCHER_LINUX=false
 
 # ── Reporting helpers ────────────────────────────────────────────────
 pass()  { printf "  ${GREEN}PASS${NC}  %s\n" "$*"; }
@@ -1233,6 +1235,45 @@ cmd_cogs_conformance() {
     return $rc
 }
 
+# ── Cog adapter launcher (mesh-placement-09) ──────────────────────────
+# Builds examples/cog_adapter_run.rs, which the conformance harness runs as
+# a plan `launcher` (cogs-conformance --launcher) so cogs go through the
+# WorkloadRuntime adapters. --linux-arm64 builds it inside an arm64 Rust
+# container (image: $COG_LAUNCHER_BUILDER) for a Linux ARM node or an
+# aarch64 container standing in for one; output under target/linux-arm64/.
+cmd_cogs_launcher() {
+    header "Cog adapter launcher (examples/cog_adapter_run)"
+    timer_start
+    local feats=(--no-default-features --features workload-runtime)
+    local rc=0
+    if [ "$LAUNCHER_LINUX" = true ]; then
+        local image="${COG_LAUNCHER_BUILDER:-rust:1-bookworm}"
+        local out="$ROOT/target/linux-arm64"
+        if [ "$DRY_RUN" = true ]; then
+            printf "  ${YELLOW}DRY${NC}   docker run --platform linux/arm64 %s cargo build -p clawft-kernel %s --example cog_adapter_run\n" "$image" "${feats[*]}"
+            timer_end
+            return 0
+        fi
+        mkdir -p "$out/cargo-registry"
+        docker run --rm --platform linux/arm64 \
+            -v "$ROOT":/src:ro -v "$out":/target \
+            -v "$out/cargo-registry":/usr/local/cargo/registry \
+            -w /src -e CARGO_TARGET_DIR=/target "$image" \
+            cargo build -p clawft-kernel "${feats[@]}" --example cog_adapter_run || rc=$?
+        [ $rc -eq 0 ] && pass "launcher: $out/debug/examples/cog_adapter_run"
+    else
+        if [ "$DRY_RUN" = true ]; then
+            printf "  ${YELLOW}DRY${NC}   cargo build -p clawft-kernel %s --example cog_adapter_run\n" "${feats[*]}"
+            timer_end
+            return 0
+        fi
+        cargo build -p clawft-kernel "${feats[@]}" --example cog_adapter_run || rc=$?
+        [ $rc -eq 0 ] && pass "launcher: $ROOT/target/debug/examples/cog_adapter_run"
+    fi
+    timer_end
+    return $rc
+}
+
 # ── Gate check 13 helper: clawft-kernel diskann + bench feature matrix ──
 check_kernel_diskann_and_bench_matrix() {
     # --tests included deliberately: cfg-gated test modules rot separately
@@ -1780,6 +1821,11 @@ ${BOLD}Commands:${NC}
                   a fake ESP32 UDP feed + stub ingest on docker, apple-container,
                   native or a remote node over ssh; JSON results, baseline check,
                   perf.cog.cycle_ms. See docs/cogs/conformance-harness.md
+  cogs-launcher [--linux-arm64]
+                  Build the cog adapter launcher (examples/cog_adapter_run)
+                  that cogs-conformance --launcher uses to run cogs through
+                  the WorkloadRuntime adapters; --linux-arm64 builds it in an
+                  arm64 Rust container (COG_LAUNCHER_BUILDER, default rust:1-bookworm).
   gate            Run full phase gate (19 checks, includes cargo audit +
                   npm audit critical/high / WEFT-598 +
                   kernel WASM no-mesh / WEFT-114 + pipeline pass / WEFT-56 +
@@ -1865,6 +1911,18 @@ parse_args() {
             shift
         done
         [ ${#COGS_ARGS[@]} -gt 0 ] || COGS_ARGS=(--help)
+        return 0
+    fi
+
+    if [ "$COMMAND" = "cogs-launcher" ]; then
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --linux-arm64) LAUNCHER_LINUX=true ;;
+                --dry-run) DRY_RUN=true ;;
+                *) echo "cogs-launcher: unknown option $1" >&2; exit 1 ;;
+            esac
+            shift
+        done
         return 0
     fi
 
@@ -1996,6 +2054,7 @@ main() {
         agents-catalog)     cmd_agents_catalog ;;
         agents-leak-check)  cmd_agents_leak_check ;;
         cogs-conformance)   cmd_cogs_conformance ;;
+        cogs-launcher)      cmd_cogs_launcher ;;
         gate)         cmd_gate ;;
         pipeline-pass) cmd_pipeline_pass ;;
         release-dry-run) cmd_release_dry_run ;;

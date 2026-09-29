@@ -26,6 +26,7 @@ ARCH_CAPABILITY = {"aarch64": "cpu.arch.aarch64", "arm": "cpu.arch.armv7"}
 RUNTIME_CAPABILITY = {
     "docker": "runtime.container.docker",
     "apple-container": "runtime.container.apple",
+    "podman": "runtime.container.podman",
     "native": "runtime.native",
     "ssh": "runtime.native",
 }
@@ -179,8 +180,13 @@ def parse_legacy_summary(text):
 
 # ── Capabilities (ADR-099 section 2 shape) ──────────────────────────────────
 
-def cycle_capabilities(results, arch, runtime, measured_at):
-    """perf.cog.cycle_ms capabilities (provenance measured) for clean results."""
+def cycle_capabilities(results, arch, runtime, measured_at, harness_runtime=None):
+    """perf.cog.cycle_ms capabilities (provenance measured) for clean results.
+
+    `runtime` is the runtime that ran the cog (the WeftOS adapter when a
+    launcher was used); `harness_runtime`, when it differs, records where the
+    harness itself ran (e.g. an aarch64 container standing in for a Linux node).
+    """
     caps = []
     for r in results:
         if classify(r) != "clean" or r.get("cycle_ms") is None:
@@ -191,12 +197,14 @@ def cycle_capabilities(results, arch, runtime, measured_at):
                       "interval_s": r.get("interval_s"), "samples": r.get("cycles"),
                       "feed": r.get("feed_id"), "arch": arch, "runtime": runtime,
                       "harness_version": r.get("harness_version"),
+                      **({"harness_runtime": harness_runtime}
+                         if harness_runtime and harness_runtime != runtime else {}),
                       "sha256": r.get("sha256"), "measured_at": measured_at},
             "provenance": "measured", "state": "available", "exclusive": False})
     return caps
 
 
-def upgrade_provenance(node_caps, results, arch, runtime, measured_at):
+def upgrade_provenance(node_caps, results, arch, runtime, measured_at, harness_runtime=None):
     """Return node capabilities with the exercised arch/runtime ids upgraded.
 
     Only upgrades when at least one cog ran clean on that arch + runtime, and
@@ -208,7 +216,7 @@ def upgrade_provenance(node_caps, results, arch, runtime, measured_at):
         raise ValueError("unknown arch or runtime")
     exercised = {ARCH_CAPABILITY[arch], RUNTIME_CAPABILITY[runtime]}
     any_clean = any(classify(r) == "clean" for r in results)
-    fresh = cycle_capabilities(results, arch, runtime, measured_at)
+    fresh = cycle_capabilities(results, arch, runtime, measured_at, harness_runtime)
     fresh_keys = {(c["attrs"]["cog_id"], arch, runtime) for c in fresh}
     out = []
     for cap in node_caps:

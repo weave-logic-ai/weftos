@@ -276,6 +276,11 @@ pub enum ContainerError {
     InvalidConfig(String),
 }
 
+/// Image namespace of cog workload images built by the container
+/// adapters (`crate::workload_runtime::container`). The simulated
+/// [`ContainerManager::start_container`] refuses these.
+pub const COG_IMAGE_PREFIX: &str = "weftos-cog/";
+
 /// Container lifecycle manager.
 ///
 /// When the `containers` feature is enabled, this uses bollard
@@ -284,6 +289,9 @@ pub enum ContainerError {
 pub struct ContainerManager {
     config: ContainerConfig,
     managed: DashMap<String, ManagedContainer>,
+    /// Whether `start_container` may mark entries Running without an
+    /// engine (tests of the ServiceRegistry / HealthSystem wiring only).
+    simulated: bool,
     #[cfg(feature = "exochain")]
     chain_manager: Option<Arc<crate::chain::ChainManager>>,
 }
@@ -297,9 +305,25 @@ impl ContainerManager {
         Self {
             config,
             managed: DashMap::new(),
+            simulated: false,
             #[cfg(feature = "exochain")]
             chain_manager: None,
         }
+    }
+
+    /// A manager whose `start_container` is a **simulated** transition
+    /// (no engine runs anything). For tests of the registry / health
+    /// wiring only; [`ContainerManager::new`] refuses to start.
+    pub fn simulated(config: ContainerConfig) -> Self {
+        Self {
+            simulated: true,
+            ..Self::new(config)
+        }
+    }
+
+    /// Whether this manager fakes starts ([`ContainerManager::simulated`]).
+    pub fn is_simulated(&self) -> bool {
+        self.simulated
     }
 
     /// Attach a chain manager for exochain event logging.
@@ -380,15 +404,20 @@ impl ContainerManager {
 
     /// Start a managed container by transitioning its state to Running.
     ///
-    /// In a production environment this would shell out to `docker run`
-    /// or `podman run`. The current implementation simulates the state
-    /// transition so the integration between ContainerManager and the
-    /// kernel ServiceRegistry / HealthSystem can be tested without a
-    /// container runtime installed.
+    /// Only a [`ContainerManager::simulated`] manager starts anything, and
+    /// that is a **simulated** transition, kept so the integration between
+    /// ContainerManager and the kernel ServiceRegistry / HealthSystem can be
+    /// tested without a container runtime installed. Workloads (cogs) do
+    /// not start here: they run through the real engine adapters in
+    /// `crate::workload_runtime::container` (Apple `container`, Docker /
+    /// OrbStack, Podman), governed and chained by `WorkloadHost`
+    /// (mesh-placement-09).
     ///
     /// # Errors
     ///
-    /// Returns [`ContainerError::ContainerNotFound`] if the name is
+    /// Returns [`ContainerError::DockerNotAvailable`] on a manager built
+    /// with [`ContainerManager::new`] (no engine is wired),
+    /// [`ContainerError::ContainerNotFound`] if the name is
     /// not registered, or [`ContainerError::StartFailed`] if the
     /// container is in a state that cannot be started.
     pub fn start_container(&self, name: &str) -> Result<(), ContainerError> {
@@ -398,6 +427,25 @@ impl ContainerManager {
                 .ok_or_else(|| ContainerError::ContainerNotFound {
                     name: name.to_owned(),
                 })?;
+
+        // A cog image must never be marked Running without running: its
+        // only start path is the governed engine adapter.
+        if entry.image.starts_with(COG_IMAGE_PREFIX) {
+            return Err(ContainerError::StartFailed {
+                name: name.to_owned(),
+                reason: "cog workloads start through workload_runtime::WorkloadHost \
+                         (governed, chained engine adapters), not the simulated manager"
+                    .into(),
+            });
+        }
+        // No engine is wired here: outside the simulated test mode nothing
+        // may be marked Running, whatever its image.
+        if !self.simulated {
+            return Err(ContainerError::DockerNotAvailable(format!(
+                "{name}: ContainerManager has no container engine; workloads run through \
+                 workload_runtime::WorkloadHost engine adapters"
+            )));
+        }
 
         match &entry.state {
             ContainerState::Stopped | ContainerState::Creating | ContainerState::Failed(_) => {
@@ -663,8 +711,58 @@ mod tests {
     }
 
     #[test]
-    fn register_and_list() {
+    fn engineless_manager_never_marks_any_image_running() {
         let manager = ContainerManager::new(ContainerConfig::default());
+        assert!(!manager.is_simulated());
+        manager.register(ManagedContainer {
+            name: "cog-elsewhere".into(),
+            image: "ghcr.io/x/cog-anomaly-detect:1".into(),
+            container_id: None,
+            state: ContainerState::Stopped,
+            ports: Vec::new(),
+            env: HashMap::new(),
+            volumes: Vec::new(),
+            health_endpoint: None,
+            restart_policy: None,
+        });
+        let e = manager.start_container("cog-elsewhere").unwrap_err();
+        assert!(matches!(e, ContainerError::DockerNotAvailable(_)), "{e}");
+        let (_, state) = manager
+            .list_containers()
+            .into_iter()
+            .find(|c| c.0 == "cog-elsewhere")
+            .unwrap();
+        assert_eq!(state, ContainerState::Stopped, "never faked Running");
+    }
+
+    #[test]
+    fn simulated_start_refuses_cog_workload_images() {
+        let manager = ContainerManager::simulated(ContainerConfig::default());
+        manager.register(ManagedContainer {
+            name: "cog-anomaly-detect".into(),
+            image: format!("{COG_IMAGE_PREFIX}anomaly-detect:0123456789abcdef"),
+            container_id: None,
+            state: ContainerState::Stopped,
+            ports: Vec::new(),
+            env: HashMap::new(),
+            volumes: Vec::new(),
+            health_endpoint: None,
+            restart_policy: None,
+        });
+        let e = manager.start_container("cog-anomaly-detect").unwrap_err();
+        assert!(e.to_string().contains("WorkloadHost"), "{e}");
+        let state = manager
+            .list_containers()
+            .into_iter()
+            .find(|c| c.0 == "cog-anomaly-detect")
+            .unwrap()
+            .1;
+        assert_eq!(state, ContainerState::Stopped, "never faked Running");
+    }
+
+    #[test]
+    fn register_and_list() {
+        let manager = ContainerManager::simulated(ContainerConfig::default());
         manager.register(ManagedContainer {
             name: "redis".into(),
             image: "redis:7-alpine".into(),
@@ -688,7 +786,7 @@ mod tests {
 
     #[test]
     fn stop_container() {
-        let manager = ContainerManager::new(ContainerConfig::default());
+        let manager = ContainerManager::simulated(ContainerConfig::default());
         manager.register(ManagedContainer {
             name: "redis".into(),
             image: "redis:7-alpine".into(),
@@ -710,7 +808,7 @@ mod tests {
 
     #[test]
     fn stop_nonexistent_fails() {
-        let manager = ContainerManager::new(ContainerConfig::default());
+        let manager = ContainerManager::simulated(ContainerConfig::default());
         let result = manager.stop_container("nonexistent");
         assert!(matches!(
             result,
@@ -720,7 +818,7 @@ mod tests {
 
     #[test]
     fn health_check_running() {
-        let manager = ContainerManager::new(ContainerConfig::default());
+        let manager = ContainerManager::simulated(ContainerConfig::default());
         manager.register(ManagedContainer {
             name: "redis".into(),
             image: "redis:7-alpine".into(),
@@ -739,7 +837,7 @@ mod tests {
 
     #[test]
     fn health_check_stopped() {
-        let manager = ContainerManager::new(ContainerConfig::default());
+        let manager = ContainerManager::simulated(ContainerConfig::default());
         manager.register(ManagedContainer {
             name: "redis".into(),
             image: "redis:7-alpine".into(),
@@ -758,13 +856,13 @@ mod tests {
 
     #[test]
     fn health_check_nonexistent() {
-        let manager = ContainerManager::new(ContainerConfig::default());
+        let manager = ContainerManager::simulated(ContainerConfig::default());
         assert!(manager.health_check("nope").is_err());
     }
 
     #[test]
     fn stop_all() {
-        let manager = ContainerManager::new(ContainerConfig::default());
+        let manager = ContainerManager::simulated(ContainerConfig::default());
         for name in &["redis", "postgres", "memcached"] {
             manager.register(ManagedContainer {
                 name: (*name).into(),
@@ -788,7 +886,7 @@ mod tests {
 
     #[test]
     fn start_container_transitions_to_running() {
-        let manager = ContainerManager::new(ContainerConfig::default());
+        let manager = ContainerManager::simulated(ContainerConfig::default());
         manager.register(ManagedContainer {
             name: "redis".into(),
             image: "redis:7-alpine".into(),
@@ -810,7 +908,7 @@ mod tests {
 
     #[test]
     fn start_container_assigns_id() {
-        let manager = ContainerManager::new(ContainerConfig::default());
+        let manager = ContainerManager::simulated(ContainerConfig::default());
         manager.register(ManagedContainer {
             name: "pg".into(),
             image: "postgres:16".into(),
@@ -831,7 +929,7 @@ mod tests {
 
     #[test]
     fn start_already_running_is_idempotent() {
-        let manager = ContainerManager::new(ContainerConfig::default());
+        let manager = ContainerManager::simulated(ContainerConfig::default());
         manager.register(ManagedContainer {
             name: "redis".into(),
             image: "redis:7-alpine".into(),
@@ -914,7 +1012,7 @@ mod tests {
 
     #[test]
     fn container_service_implements_system_service() {
-        let mgr = std::sync::Arc::new(ContainerManager::new(ContainerConfig::default()));
+        let mgr = std::sync::Arc::new(ContainerManager::simulated(ContainerConfig::default()));
         let svc = ContainerService::new(mgr);
         assert_eq!(svc.name(), "containers");
         assert_eq!(svc.service_type(), ServiceType::Custom("containers".into()));
@@ -922,7 +1020,7 @@ mod tests {
 
     #[tokio::test]
     async fn container_service_health_empty_is_healthy() {
-        let mgr = std::sync::Arc::new(ContainerManager::new(ContainerConfig::default()));
+        let mgr = std::sync::Arc::new(ContainerManager::simulated(ContainerConfig::default()));
         let svc = ContainerService::new(mgr);
         let health = svc.health_check().await;
         assert!(matches!(health, HealthStatus::Healthy));
@@ -930,7 +1028,7 @@ mod tests {
 
     #[tokio::test]
     async fn container_service_health_propagates() {
-        let mgr = std::sync::Arc::new(ContainerManager::new(ContainerConfig::default()));
+        let mgr = std::sync::Arc::new(ContainerManager::simulated(ContainerConfig::default()));
         mgr.register(ManagedContainer {
             name: "redis".into(),
             image: "redis:7-alpine".into(),
@@ -961,7 +1059,7 @@ mod tests {
 
     #[tokio::test]
     async fn container_service_stop_halts_all() {
-        let mgr = std::sync::Arc::new(ContainerManager::new(ContainerConfig::default()));
+        let mgr = std::sync::Arc::new(ContainerManager::simulated(ContainerConfig::default()));
         mgr.register(ManagedContainer {
             name: "redis".into(),
             image: "redis:7-alpine".into(),
@@ -982,7 +1080,7 @@ mod tests {
 
     #[test]
     fn container_config_validates() {
-        let manager = ContainerManager::new(ContainerConfig::default());
+        let manager = ContainerManager::simulated(ContainerConfig::default());
         let spec = ManagedContainer {
             name: "alpine-test".into(),
             image: "alpine:latest".into(),
@@ -1009,7 +1107,7 @@ mod tests {
 
     #[test]
     fn container_invalid_config_empty_image_rejected() {
-        let manager = ContainerManager::new(ContainerConfig::default());
+        let manager = ContainerManager::simulated(ContainerConfig::default());
         let spec = ManagedContainer {
             name: "bad".into(),
             image: "".into(),
@@ -1027,7 +1125,7 @@ mod tests {
 
     #[test]
     fn container_invalid_config_empty_name_rejected() {
-        let manager = ContainerManager::new(ContainerConfig::default());
+        let manager = ContainerManager::simulated(ContainerConfig::default());
         let spec = ManagedContainer {
             name: "".into(),
             image: "alpine:latest".into(),
@@ -1045,7 +1143,7 @@ mod tests {
 
     #[test]
     fn container_invalid_config_zero_port_rejected() {
-        let manager = ContainerManager::new(ContainerConfig::default());
+        let manager = ContainerManager::simulated(ContainerConfig::default());
         let spec = ManagedContainer {
             name: "bad-port".into(),
             image: "alpine:latest".into(),
@@ -1067,7 +1165,7 @@ mod tests {
 
     #[test]
     fn container_lifecycle_configure_start_stop() {
-        let manager = ContainerManager::new(ContainerConfig::default());
+        let manager = ContainerManager::simulated(ContainerConfig::default());
 
         // Configure
         let spec = ManagedContainer {
@@ -1108,7 +1206,7 @@ mod tests {
 
     #[test]
     fn container_health_report_detail() {
-        let manager = ContainerManager::new(ContainerConfig::default());
+        let manager = ContainerManager::simulated(ContainerConfig::default());
         manager.register(ManagedContainer {
             name: "detail".into(),
             image: "alpine:latest".into(),
@@ -1139,7 +1237,7 @@ mod tests {
         use crate::health::HealthSystem;
         use crate::service::ServiceRegistry;
 
-        let mgr = std::sync::Arc::new(ContainerManager::new(ContainerConfig::default()));
+        let mgr = std::sync::Arc::new(ContainerManager::simulated(ContainerConfig::default()));
 
         // Configure and start a container
         let spec = ManagedContainer {
@@ -1359,7 +1457,7 @@ mod tests {
 
     #[test]
     fn configure_multiple_containers_succeeds() {
-        let manager = ContainerManager::new(ContainerConfig::default());
+        let manager = ContainerManager::simulated(ContainerConfig::default());
         let spec1 = ManagedContainer {
             name: "svc-a".into(),
             image: "alpine:latest".into(),

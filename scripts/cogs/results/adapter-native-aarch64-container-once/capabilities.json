@@ -1,0 +1,22 @@
+[
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "anomaly-detect",
+   "feed": "reference-v1",
+   "harness_runtime": "docker",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-29T20:51:52Z",
+   "mode": "once",
+   "runtime": "native",
+   "samples": 1,
+   "sha256": "42154913cbb57fd58e010548a833221a2afe73cf1768aa1e0ab00e9441d6cb25",
+   "value": 754.6
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ }
+]

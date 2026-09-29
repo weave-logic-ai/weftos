@@ -12,6 +12,11 @@ Commands:
   summarize re-classify an existing results.json against expectations
   selftest  run the unit tests (no containers, no network)
 
+With --launcher (the `cog_adapter_run` example binary) and --adapter-runtime,
+each cog runs through a WeftOS WorkloadRuntime adapter (native, docker, apple,
+podman) under WorkloadHost governance instead of being spawned by the harness;
+--runtime still says where the harness itself runs.
+
 Docs: docs/cogs/conformance-harness.md
 """
 import argparse
@@ -60,6 +65,33 @@ def select_cogs(expectations, cogs_arg):
     return ids
 
 
+ADAPTER_ARCH = {"aarch64": "aarch64", "arm": "armv7"}
+LAUNCHER_NAME = "cog_adapter_run"
+
+
+def launcher_plan(args, root):
+    """Launcher argv for the plan (None without --launcher). The launcher
+    binary is staged at <root>/bin/cog_adapter_run."""
+    if not getattr(args, "launcher", None):
+        return None
+    if not args.adapter_runtime:
+        raise SystemExit("--launcher needs --adapter-runtime")
+    argv = ["%s/bin/%s" % (root, LAUNCHER_NAME), "--runtime", args.adapter_runtime,
+            "--arch", ADAPTER_ARCH[args.arch], "--timeout-secs", str(int(args.timeout)),
+            # interval runs stop themselves before the harness deadline
+            "--run-secs", str(max(1, int(args.timeout) - 4))]
+    for flag, value in (("--base-image", args.adapter_base_image),
+                        ("--network", args.adapter_network),
+                        ("--feed-port", args.adapter_feed_port),
+                        ("--ingest-upstream", args.adapter_ingest_upstream),
+                        ("--run-as", args.adapter_run_as)):
+        if value is not None:
+            argv += [flag, str(value)]
+    if args.adapter_runtime != "native" and not args.adapter_base_image:
+        raise SystemExit("container adapters need --adapter-base-image name@sha256:...")
+    return argv
+
+
 def execute(args, expectations, ids, sweep_mode):
     """Fetch binaries, stage, run through the adapter; return raw results."""
     cache = os.path.join(args.cache_dir, args.arch)
@@ -79,15 +111,24 @@ def execute(args, expectations, ids, sweep_mode):
         binaries.append(path)
         specs.append(classify.plan_spec(cid, expectations.get(cid, {}), sweep_mode))
     adapter = runtimes.make_adapter(args.runtime, args.arch, ssh_host=args.ssh_host,
-                                    sudo=args.sudo, image=args.image)
+                                    sudo=args.sudo, image=args.image,
+                                    engine_args=args.harness_engine_arg or ())
     workdir = tempfile.mkdtemp(prefix="run-", dir=_ensure(args.cache_dir))
     try:
         runtimes.stage_workdir(workdir, os.path.join(HERE, "harness.py"), binaries)
         root = adapter.binary_root(workdir)
         for spec in specs:
             spec["binary"] = "%s/bin/%s" % (root, runtimes.binary_name(spec["id"], args.arch))
-        _write_json(os.path.join(workdir, "plan.json"), {
-            "timeout": args.timeout, "feed": args.feed, "cogs": specs})
+        plan = {"timeout": args.timeout, "feed": args.feed, "cogs": specs,
+                "udp_port": args.udp_port, "ingest_port": args.ingest_port,
+                "ingest_bind": args.ingest_bind}
+        launcher = launcher_plan(args, root)
+        if launcher:
+            dst = os.path.join(workdir, "bin", LAUNCHER_NAME)
+            shutil.copy2(args.launcher, dst)
+            os.chmod(dst, 0o755)
+            plan["launcher"] = launcher
+        _write_json(os.path.join(workdir, "plan.json"), plan)
         doc = {"results": [], "host": None}
         if specs:
             out = adapter.run(workdir, timeout=args.timeout * len(specs) + 300)
@@ -97,6 +138,19 @@ def execute(args, expectations, ids, sweep_mode):
             shutil.rmtree(workdir, ignore_errors=True)
     by_id = {r["id"]: r for r in doc["results"] + missing}
     return [by_id[c] for c in ids if c in by_id], doc.get("host")
+
+
+# --adapter-runtime value -> classify runtime key (the runtime that ran the cog).
+ADAPTER_RUNTIME = {"native": "native", "docker": "docker", "apple": "apple-container",
+                   "podman": "podman"}
+
+
+def measured_runtime(args):
+    """The runtime a measurement belongs to: the WeftOS adapter that ran the
+    cog when --launcher is used, otherwise the harness runtime itself."""
+    if getattr(args, "launcher", None):
+        return ADAPTER_RUNTIME[args.adapter_runtime]
+    return args.runtime
 
 
 def _ensure(d):
@@ -110,11 +164,12 @@ def cmd_sweep(args):
     results, host = execute(args, expectations, ids, args.mode)
     measured_at = _now()
     summary = classify.summarize(results, expectations, args.mode)
-    summary.update(runtime=args.runtime, arch=args.arch, feed=args.feed,
-                   timeout_s=args.timeout, measured_at=measured_at, host=host)
-    label = args.label or "%s-%s-%s" % (args.runtime, args.arch, args.mode)
+    runtime = measured_runtime(args)
+    summary.update(runtime=runtime, harness_runtime=args.runtime, arch=args.arch,
+                   feed=args.feed, timeout_s=args.timeout, measured_at=measured_at, host=host)
+    label = args.label or "%s-%s-%s" % (runtime, args.arch, args.mode)
     out_dir = os.path.join(args.results_dir, label)
-    caps = classify.cycle_capabilities(results, args.arch, args.runtime, measured_at)
+    caps = classify.cycle_capabilities(results, args.arch, runtime, measured_at, args.runtime)
     _write_json(os.path.join(out_dir, "results.json"), {"results": results, "host": host})
     _write_json(os.path.join(out_dir, "summary.json"), summary)
     _write_json(os.path.join(out_dir, "capabilities.json"), caps)
@@ -145,8 +200,8 @@ def cmd_probe(args):
         node_caps = facts.get("capabilities", []) if isinstance(facts, dict) else facts
         if not isinstance(node_caps, list):
             raise SystemExit("node facts: expected a list or {capabilities:[...]}")
-    caps = classify.upgrade_provenance(node_caps, results, args.arch, args.runtime,
-                                       measured_at)
+    caps = classify.upgrade_provenance(node_caps, results, args.arch, measured_runtime(args),
+                                       measured_at, args.runtime)
     doc = {"cog": args.cog, "outcome": classify.classify(results[0]),
            "result": results[0], "capabilities": caps}
     text = json.dumps(doc, indent=1, sort_keys=True)
@@ -192,6 +247,27 @@ def _runner_opts(p):
     p.add_argument("--cache-dir", default=CACHE_DIR)
     p.add_argument("--expectations", default=EXPECTATIONS)
     p.add_argument("--keep-workdir", action="store_true")
+    p.add_argument("--launcher", help="cog_adapter_run binary: run cogs through a WeftOS "
+                   "runtime adapter (built for the node the harness runs on)")
+    p.add_argument("--adapter-runtime", choices=("native", "docker", "apple", "podman"))
+    p.add_argument("--adapter-base-image", help="digest-pinned base for container adapters")
+    p.add_argument("--adapter-network", help="container network (e.g. host on OrbStack)")
+    p.add_argument("--adapter-feed-port", type=int, help="host UDP port published to the feed")
+    p.add_argument("--adapter-ingest-upstream", metavar="IP:PORT",
+                   help="container adapters: relay the cog's 127.0.0.1:80 to this "
+                   "ingest address (e.g. the Apple container VM gateway and --ingest-port)")
+    p.add_argument("--adapter-run-as", help="UID:GID for native when the harness runs as root")
+    p.add_argument("--udp-port", type=int, default=5006,
+                   help="port the harness feed sends to (a published port for "
+                   "container adapters driven from the host)")
+    p.add_argument("--ingest-port", type=int, default=80,
+                   help="port of the harness ingest stub (cogs post to 80)")
+    p.add_argument("--ingest-bind", default="127.0.0.1",
+                   help="address the harness ingest stub binds (the VM gateway, or "
+                   "0.0.0.0, when a container relays ingest back to this host)")
+    p.add_argument("--harness-engine-arg", action="append",
+                   help="extra `docker run` / `container run` argument for the harness "
+                   "container (repeatable), e.g. --net=host")
 
 
 def build_parser():

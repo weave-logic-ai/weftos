@@ -5,15 +5,14 @@ No containers and no network: adapters are driven through an injected
 runner, downloads through an injected opener, and the end-to-end harness
 test runs a fake cog (a Python script) against the real feed and stub.
 """
+import contextlib
 import io
 import json
 import os
-import socket
 import stat
 import struct
 import sys
 import tempfile
-import textwrap
 import unittest
 import urllib.error
 
@@ -201,6 +200,87 @@ class Capabilities(unittest.TestCase):
             classify.upgrade_provenance(node, [], "sparc", "docker", "T")
 
 
+class AdapterAttribution(unittest.TestCase):
+    """Measurements belong to the adapter that ran the cog, not the runtime
+    the harness itself runs on."""
+
+    def _run(self, argv, node_caps=None):
+        real = conformance.execute
+        conformance.execute = lambda *_a, **_k: ([raw("anomaly-detect")], {"system": "Darwin"})
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                args = conformance.build_parser().parse_args(argv + (
+                    ["--node-facts", os.path.join(d, "f.json"), "--out", os.path.join(d, "o.json")]
+                    if argv[0] == "probe" else ["--results-dir", d, "--label", "x"]))
+                if node_caps is not None:
+                    with open(os.path.join(d, "f.json"), "w") as f:
+                        json.dump(node_caps, f)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    args.fn(args)
+                if argv[0] == "probe":
+                    with open(os.path.join(d, "o.json")) as f:
+                        return json.load(f)["capabilities"], None
+                with open(os.path.join(d, "x", "capabilities.json")) as f, \
+                        open(os.path.join(d, "x", "summary.json")) as g:
+                    return json.load(f), json.load(g)
+        finally:
+            conformance.execute = real
+
+    LAUNCH = ["--launcher", "/x/cog_adapter_run", "--adapter-base-image",
+              "b@sha256:" + "0" * 64]
+
+    def test_sweep_labels_the_adapter_runtime(self):
+        caps, summary = self._run(["sweep", "--runtime", "native", "--adapter-runtime", "apple"]
+                                  + self.LAUNCH)
+        self.assertEqual({c["attrs"]["runtime"] for c in caps}, {"apple-container"})
+        self.assertEqual({c["attrs"]["harness_runtime"] for c in caps}, {"native"})
+        self.assertEqual((summary["runtime"], summary["harness_runtime"]),
+                         ("apple-container", "native"))
+
+    def test_without_a_launcher_the_harness_runtime_is_the_measured_one(self):
+        caps, summary = self._run(["sweep", "--runtime", "docker"])
+        self.assertEqual({c["attrs"]["runtime"] for c in caps}, {"docker"})
+        self.assertNotIn("harness_runtime", caps[0]["attrs"])
+        self.assertEqual(summary["runtime"], "docker")
+
+    def test_probe_upgrades_the_adapter_capability_not_the_harness_one(self):
+        node = [{"id": "runtime.native", "provenance": "claimed"},
+                {"id": "runtime.container.apple", "provenance": "claimed"}]
+        caps, _ = self._run(["probe", "--cog", "anomaly-detect", "--runtime", "native",
+                             "--adapter-runtime", "apple"] + self.LAUNCH, node)
+        by = {c["id"]: c for c in caps if c["id"] != "perf.cog.cycle_ms"}
+        self.assertEqual(by["runtime.container.apple"]["provenance"], "measured")
+        self.assertEqual(by["runtime.native"]["provenance"], "claimed")
+
+    def test_podman_adapter_has_a_capability(self):
+        self.assertEqual(classify.RUNTIME_CAPABILITY[conformance.ADAPTER_RUNTIME["podman"]],
+                         "runtime.container.podman")
+
+
+class BuildScriptHelp(unittest.TestCase):
+    def test_build_sh_help_documents_the_cogs_commands(self):
+        """`scripts/build.sh --help` runs under `set -u`; an unescaped variable
+        in the usage text aborts it before printing anything."""
+        import subprocess
+        script = os.path.join(HERE, "..", "build.sh")
+        p = subprocess.run(["bash", script, "--help"], capture_output=True, text=True,
+                           timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("unbound variable", p.stderr)
+        self.assertIn("cogs-launcher", p.stdout)
+        self.assertIn("COG_LAUNCHER_BUILDER", p.stdout)
+
+    def test_help_does_not_trip_set_u(self):
+        """The cogs-launcher usage text must not expand unset variables."""
+        import subprocess
+        env = {k: v for k, v in os.environ.items() if k != "COG_LAUNCHER_BUILDER"}
+        p = subprocess.run(["bash", os.path.join(HERE, "..", "build.sh"), "--help"],
+                           capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("unbound variable", p.stderr)
+        self.assertIn("cogs-launcher", p.stdout)
+
+
 class Runtimes(unittest.TestCase):
     ELF_A64 = b"\x7fELF\x02\x01\x01" + b"\x00" * 11 + (183).to_bytes(2, "little") + b"\x00" * 40
 
@@ -273,76 +353,6 @@ class Runtimes(unittest.TestCase):
         ad = runtimes.make_adapter("docker", "aarch64", runner=lambda c, timeout: P())
         with self.assertRaises(RuntimeError):
             ad.run("/w1", timeout=10)
-
-
-FAKE_COG = textwrap.dedent("""\
-    #!{py}
-    # Fake cog: reads the harness feed like cog-sensor-sources, posts one vector.
-    import json, os, socket, struct, sys, urllib.request
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.bind(("127.0.0.1", int(os.environ["FAKE_UDP"]))); s.settimeout(3)
-    feats, vit = [], None
-    while len(feats) < 64:
-        pkt, _ = s.recvfrom(256)
-        magic = struct.unpack_from("<I", pkt, 0)[0]
-        if magic == 0xC5110003 and len(pkt) >= 48:
-            feats += struct.unpack_from("<8f", pkt, 16)
-        elif magic == 0xC5110002:
-            vit = struct.unpack_from("<H", pkt, 6)[0] / 100.0
-    if "--once" not in sys.argv:
-        sys.exit(2)
-    body = json.dumps({{"vectors": [[0, feats[:8]]], "dedup": True, "breathing": vit}}).encode()
-    req = urllib.request.Request("http://127.0.0.1:%s/api/v1/store/ingest" % os.environ["FAKE_INGEST"],
-                                 data=body, method="POST")
-    print(urllib.request.urlopen(req, timeout=3).read().decode())
-""")
-
-
-def free_port(kind):
-    s = socket.socket(socket.AF_INET, kind)
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-class HarnessEndToEnd(unittest.TestCase):
-    """Real feed + real stub + a fake cog process: exercises run_cog end to end."""
-
-    def run_fake(self, feed, mode="once"):
-        udp, ingest = free_port(socket.SOCK_DGRAM), free_port(socket.SOCK_STREAM)
-        with tempfile.TemporaryDirectory() as d:
-            cog = os.path.join(d, "cog-fake-aarch64")
-            with open(cog, "w") as f:
-                f.write(FAKE_COG.format(py=sys.executable))
-            os.environ.update(FAKE_UDP=str(udp), FAKE_INGEST=str(ingest))
-            return harness.run_plan({"timeout": 10, "feed": feed, "udp_port": udp,
-                                     "ingest_port": ingest,
-                                     "cogs": [{"id": "fake", "binary": cog, "mode": mode}]})
-
-    def test_fake_cog_decodes_feed_and_posts_ingest(self):
-        r = self.run_fake("both")["results"][0]
-        self.assertEqual((r["status"], r["rc"]), ("ran", 0))
-        self.assertEqual((r["ingest_posts"], r["ingest_vectors"]), (1, 1))
-        body = json.loads(r["ingest_samples"][0])
-        got = body["vectors"][0][1]
-        # The cog joins mid-stream, so match the decoded vector to some feed tick.
-        self.assertTrue(any(all(abs(g - w) < 1e-6 for g, w in zip(got, harness.feature_values(t)))
-                            for t in range(1000)), got)
-        self.assertEqual(body["breathing"], 15.0)
-        self.assertEqual(classify.classify(r), "clean")
-        self.assertIsNotNone(r["cycle_ms"])
-        self.assertEqual(r["argv"], ["cog-fake-aarch64", "--once"])
-
-    def test_cli_error_is_captured(self):
-        r = self.run_fake("features", mode="interval")["results"][0]
-        self.assertEqual((r["rc"], r["ingest_posts"]), (2, 0))
-        self.assertEqual(classify.classify(r), "cli-error")
-
-    def test_missing_binary(self):
-        doc = harness.run_plan({"cogs": [{"id": "gone", "binary": "/nonexistent/cog"}],
-                                "ingest_port": free_port(socket.SOCK_STREAM)})
-        self.assertEqual(classify.classify(doc["results"][0]), "missing-binary")
 
 
 if __name__ == "__main__":

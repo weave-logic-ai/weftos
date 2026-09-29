@@ -666,7 +666,9 @@ impl<P: Platform> AgentSupervisor<P> {
             Some(SpawnBackend::Container { .. }) => {
                 return Err(KernelError::BackendNotAvailable {
                     backend: "container".into(),
-                    reason: "container runtime requires K4 (Docker/Podman integration)".into(),
+                    reason: "agents do not run in containers yet; cog workloads run in \
+                             containers through workload_runtime::WorkloadHost (ADR-099 s5)"
+                        .into(),
                 });
             }
             Some(SpawnBackend::Tee { .. }) => {
@@ -678,7 +680,9 @@ impl<P: Platform> AgentSupervisor<P> {
             Some(SpawnBackend::Remote { .. }) => {
                 return Err(KernelError::BackendNotAvailable {
                     backend: "remote".into(),
-                    reason: "remote delegation requires K6 (cluster networking)".into(),
+                    reason: "remote agent delegation requires K6; remote workloads run \
+                             through workload_runtime adapters (remote.api, ADR-099 s5)"
+                        .into(),
                 });
             }
         }
