@@ -26,11 +26,11 @@ use serde_json::json;
 
 use super::*;
 
-fn cap(id: &str) -> Capability {
+pub(crate) fn cap(id: &str) -> Capability {
     Capability::new(CapabilityId::new(id).unwrap(), Provenance::Probed)
 }
 
-fn anchors(k: &SigningKey) -> TrustAnchors {
+pub(crate) fn anchors(k: &SigningKey) -> TrustAnchors {
     let pk = k.verifying_key().to_bytes();
     let mut a = TrustAnchors::default();
     a.push_signer(&key_id_for(&pk), &hex_encode(&pk), KeyOrigin::Operator)
@@ -38,7 +38,7 @@ fn anchors(k: &SigningKey) -> TrustAnchors {
     a
 }
 
-fn gate(chain: &Arc<ChainManager>) -> Arc<WorkloadGate> {
+pub(crate) fn gate(chain: &Arc<ChainManager>) -> Arc<WorkloadGate> {
     let mut p = WorkloadPermitRule::new("t", ["workload.*"], ["cog"]);
     p.max_network = NetworkPolicy::Egress;
     Arc::new(
@@ -49,7 +49,7 @@ fn gate(chain: &Arc<ChainManager>) -> Arc<WorkloadGate> {
     )
 }
 
-fn exchange(chain: &Arc<ChainManager>) -> Arc<ArtifactExchange> {
+pub(crate) fn exchange(chain: &Arc<ChainManager>) -> Arc<ArtifactExchange> {
     let mut ex = ArtifactExchange::new(
         "t",
         Arc::new(ArtifactStore::new_memory()),
@@ -60,7 +60,7 @@ fn exchange(chain: &Arc<ChainManager>) -> Arc<ArtifactExchange> {
     Arc::new(ex)
 }
 
-fn package(dir: &std::path::Path, k: &SigningKey) -> std::path::PathBuf {
+pub(crate) fn package(dir: &std::path::Path, k: &SigningKey) -> std::path::PathBuf {
     let src = dir.join("src");
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(
@@ -243,4 +243,38 @@ async fn explain_decides_without_dispatch_and_place_runs_the_instance() {
 
 fn pkg_missing() -> String {
     std::env::temp_dir().to_string_lossy().into_owned()
+}
+
+#[tokio::test]
+async fn a_caller_cannot_assign_trust_or_use_a_relative_package_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (p, _chain, _ctl) = plane(tmp.path()).await;
+    let board = p.targets()[0].clone();
+    assert_eq!(board.tier, TrustTier::Paired);
+
+    // Relative paths are refused (the daemon's cwd is not the caller's).
+    let rel = route(&p, "workload.explain", json!({ "package_dir": "pkg" })).await;
+    assert!(rel.error.unwrap().contains("must be absolute"));
+
+    // A known peer named again keeps its operator-assigned tier ...
+    let pkg = package(&tmp.path().join("pkgsrc"), &SigningKey::from_bytes(&[3; 32]));
+    let r = route(
+        &p,
+        "workload.explain",
+        json!({ "package_dir": pkg, "peers": [board.addr], "mode": "listener" }),
+    )
+    .await;
+    assert!(r.ok, "{:?}", r.error);
+    assert_eq!(p.targets()[0].tier, TrustTier::Paired);
+
+    // ... and an unknown one can never be more than discovered: here it is
+    // not reachable, so it is not added at all.
+    let r = route(
+        &p,
+        "workload.explain",
+        json!({ "package_dir": pkg, "peers": ["127.0.0.1:9"], "mode": "listener" }),
+    )
+    .await;
+    assert!(r.error.unwrap().contains("peer 127.0.0.1:9"));
+    assert_eq!(p.targets().len(), 1);
 }

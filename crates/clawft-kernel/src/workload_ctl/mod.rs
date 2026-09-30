@@ -23,9 +23,11 @@
 pub mod cog_kind;
 pub mod facts;
 pub mod host_service;
+mod host_instances;
 pub mod msg;
 pub mod plane;
 pub mod plane_place;
+mod plane_reconcile;
 pub mod plane_seed;
 pub mod session;
 pub mod transport;
@@ -35,13 +37,15 @@ mod test_support;
 #[cfg(test)]
 mod tests_facts;
 #[cfg(test)]
+mod tests_reconcile;
+#[cfg(test)]
 mod tests_seed;
 #[cfg(test)]
 mod tests_two_node;
 
 pub use cog_kind::cog_workload_spec;
 pub use facts::{LiveNodeFacts, engine_tier, governance_tier, liveness_of, placement_view};
-pub use host_service::{CtlConfig, HOST_CHAIN_SOURCE, WorkloadHostService};
+pub use host_service::{CtlConfig, FactsSource, HOST_CHAIN_SOURCE, WorkloadHostService};
 pub use msg::{
     CtlRequest, CtlResponse, NonceGuard, Refusal, RefusalCode, SignedCtl, WORKLOAD_HOST_SERVICE,
 };

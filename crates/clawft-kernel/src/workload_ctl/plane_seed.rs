@@ -18,8 +18,13 @@ use serde_json::{Value, json};
 use crate::chain;
 use crate::gate::GateDecision;
 use crate::workload_pkg::codec::hex_encode;
-use crate::workload_runtime::{HostContract, VerifiedWorkload, WorkloadConfig, WorkloadHost};
+use crate::workload_runtime::{
+    HostContract, InstanceHandle, VerifiedWorkload, WorkloadConfig, WorkloadHost,
+};
 
+use clawft_types::placement::TrustTier;
+
+use super::facts::governance_tier;
 use super::host_service::CtlConfig;
 use super::msg::method;
 use super::plane::{PLANE_CHAIN_SOURCE, PlacementControlPlane, PlacementRecord, PlaneError};
@@ -49,20 +54,26 @@ pub struct StorePinOrder {
 }
 
 impl PlacementControlPlane {
-    /// Register a Seed adapter under its operator-assigned node id.
-    pub fn add_seed(&self, node_id: &str, host: Arc<WorkloadHost>) -> Result<(), PlaneError> {
+    /// Register a Seed adapter under its operator-assigned node id and
+    /// trust tier (governance sees that tier, not a default).
+    pub fn add_seed(
+        &self,
+        node_id: &str,
+        host: Arc<WorkloadHost>,
+        tier: TrustTier,
+    ) -> Result<(), PlaneError> {
         if !crate::workload_pkg::manifest::valid_token(node_id, 64) {
             return Err(PlaneError::Invalid(
                 "seed node id must be a plain token".into(),
             ));
         }
         if let Ok(mut s) = self.seeds.write() {
-            s.insert(node_id.to_string(), host);
+            s.insert(node_id.to_string(), (host, tier));
         }
         Ok(())
     }
 
-    fn seed(&self, node_id: &str) -> Option<Arc<WorkloadHost>> {
+    fn seed(&self, node_id: &str) -> Option<(Arc<WorkloadHost>, TrustTier)> {
         self.seeds.read().ok().and_then(|s| s.get(node_id).cloned())
     }
 
@@ -78,13 +89,13 @@ impl PlacementControlPlane {
     /// Place an operator-pinned store cog on a Seed. Pinned by
     /// construction: the node is the operator-assigned id.
     pub async fn place_store_pin(&self, o: &StorePinOrder) -> Result<PlacementRecord, PlaneError> {
-        let host = self
+        let (host, tier) = self
             .seed(&o.node_id)
             .ok_or_else(|| PlaneError::Unknown(format!("no Seed adapter for {}", o.node_id)))?;
         let w = VerifiedWorkload::store_pin(&o.registry, &o.id, &o.version, o.sha256.as_deref())
             .map_err(|e| PlaneError::Invalid(e.to_string()))?;
         let ctx = json!({ "node_id": o.node_id, "workload": {
-            "kind": w.kind, "package_trust": "operator_attested", "node_tier": "paired",
+            "kind": w.kind, "package_trust": "operator_attested", "node_tier": governance_tier(tier),
             "network": host.runtime().network_exposure(), "secrets": false, "emulated": false,
             "resource_cost": 0.25, "package_id": format!("store.{}.{}", w.id, w.version),
         }});
@@ -128,30 +139,59 @@ impl PlacementControlPlane {
         if o.start
             && let Err(e) = host.start(&h).await
         {
-            refuse("start", &e);
+            // Not placed: forget the loaded instance so nothing is left
+            // that the controller does not track.
+            let rolled = host.unload(h.clone()).await;
+            let why = match &rolled {
+                Ok(()) => format!("start failed: {e}; loaded instance unloaded"),
+                Err(u) => format!("start failed: {e}; unload failed too: {u}"),
+            };
+            refuse("start", &why);
+            if rolled.is_err() {
+                // Still loaded: keep it addressable (status / unload).
+                self.track_seed(self.seed_record(o, &w, &h, &decision_id), h)
+                    .await;
+            }
+            return Err(PlaneError::Call(super::plane::CallFailure::Refused(
+                super::msg::Refusal::new(super::msg::RefusalCode::Runtime, why),
+            )));
         }
-        let rec = PlacementRecord {
-            instance_id: h.instance_id.clone(),
-            node_id: o.node_id.clone(),
-            kind: w.kind.clone(),
-            workload: w.id.clone(),
-            variant: SEED_ROUTE.to_string(),
-            decision_id: decision_id.clone(),
-            manifest_hash: String::new(),
-        };
+        let rec = self.seed_record(o, &w, &h, &decision_id);
         self.chain_here(
             chain::EVENT_KIND_WORKLOAD_PLACE,
             json!({ "phase": "placed", "decision_id": decision_id, "node": o.node_id,
                     "route": SEED_ROUTE, "instance_id": h.instance_id }),
         );
+        self.track_seed(rec.clone(), h).await;
+        Ok(rec)
+    }
+
+    fn seed_record(
+        &self,
+        o: &StorePinOrder,
+        w: &VerifiedWorkload,
+        h: &InstanceHandle,
+        decision_id: &str,
+    ) -> PlacementRecord {
+        PlacementRecord {
+            instance_id: h.instance_id.clone(),
+            node_id: o.node_id.clone(),
+            kind: w.kind.clone(),
+            workload: w.id.clone(),
+            variant: SEED_ROUTE.to_string(),
+            decision_id: decision_id.to_string(),
+            manifest_hash: String::new(),
+        }
+    }
+
+    async fn track_seed(&self, rec: PlacementRecord, h: InstanceHandle) {
         self.seed_handles
             .lock()
             .await
             .insert(h.instance_id.clone(), h);
         if let Ok(mut p) = self.placements.lock() {
-            p.insert(rec.instance_id.clone(), rec.clone());
+            p.insert(rec.instance_id.clone(), rec);
         }
-        Ok(rec)
     }
 
     /// Instance verbs on a Seed placement (gated and chained by its host).
@@ -160,7 +200,7 @@ impl PlacementControlPlane {
         rec: &PlacementRecord,
         m: &str,
     ) -> Option<Result<Value, PlaneError>> {
-        let host = self.seed(&rec.node_id)?;
+        let (host, _) = self.seed(&rec.node_id)?;
         let mut handles = self.seed_handles.lock().await;
         let Some(h) = handles.get(&rec.instance_id).cloned() else {
             return Some(Err(PlaneError::Unknown(rec.instance_id.clone())));

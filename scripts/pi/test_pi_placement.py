@@ -25,21 +25,46 @@ GOOD_CHAIN = [
 ]
 
 
+READY = ('==STATUS==\n' + json.dumps({"served_on": "0.0.0.0:9471", "targets": [{"tier": "pinned"}],
+                                        "workload_host": {"node_id": NODE, "name": "workload-host"}},
+                                       indent=2))
+GOOD_CTL = "PEER %s (paired)\n" % NODE + GOOD_CTL
+
+
 class Helpers(unittest.TestCase):
-    def test_serve_command_is_isolated_detached_and_on_the_test_port(self):
-        line = plan.placement_serve_command("/home/u/weftos-test-pi", "/home/u/weftos-test-pi/bin/workload_node", PUB)
+    S = "/home/u/weftos-test-pi"
+
+    def test_weaver_starts_isolated_detached_and_never_on_the_system_port(self):
+        line = plan.weaver_start_command(self.S, self.S + "/bin/weaver")
         self.assertIn("env -i", line)
         self.assertIn("WEFTOS_RUNTIME_DIR=/home/u/weftos-test-pi/runtime", line)
         self.assertIn("HOME=/home/u/weftos-test-pi/home", line)
-        self.assertIn("--listen 0.0.0.0:9471", line)
+        self.assertIn("/home/u/weftos-test-pi/bin/weaver kernel start --foreground", line)
         self.assertNotIn("9470", line)
-        self.assertIn("--noise", line)
+        self.assertNotIn("/usr/local/bin/weaver", line)
         self.assertTrue(line.endswith("& echo $!"))
-        # Only the node is backgrounded (a backgrounded `cd && ...` list keeps
-        # ssh's stdout open and the ssh call hangs).
+        # Only the daemon is backgrounded (a backgrounded `cd && ...` list
+        # keeps ssh's stdout open and the ssh call hangs).
         self.assertIn("|| exit 1; nohup env -i", line)
+        feed = plan.feed_start_command(self.S)
+        self.assertIn("csi_feed.py --port 15006", feed)
+        self.assertIn("env -i", feed)
+
+    def test_ready_waits_for_the_served_host_and_parses_its_status(self):
+        line = plan.weaver_ready_command(self.S, self.S + "/bin/weaver")
+        self.assertIn("workload status --json", line)
+        self.assertIn('0.0.0.0:9471', line)
+        self.assertIn("env -i", line)
+        self.assertEqual(plan.parse_ready("noise\n" + READY), (NODE, "0.0.0.0:9471"))
+        self.assertEqual(plan.parse_ready("==STATUS==\n{}"), (None, None))
+        self.assertEqual(plan.parse_ready("no marker"), (None, None))
+
+    def test_stop_exports_the_daemon_chain_then_stops_daemon_and_feed(self):
+        line = plan.weaver_stop_command(self.S, self.S + "/bin/weaver", 4242, 4343)
+        self.assertLess(line.index("chain export --format json"), line.index("kill -TERM 4242 4343"))
+        self.assertIn("==CHAIN==", line)
         with self.assertRaises(ValueError):
-            plan.placement_serve_command("/s", "/s/bin/x", "not-a-key; rm -rf ~")
+            plan.weaver_stop_command(self.S, "w", "1; rm -rf ~")
 
     def test_hostname_and_kill_backstop(self):
         self.assertEqual(plan.ssh_hostname("user@pi5.local"), "pi5.local")
@@ -47,10 +72,14 @@ class Helpers(unittest.TestCase):
         with self.assertRaises(ValueError):
             plan.ssh_hostname("-oProxyCommand=x")
         kill = plan.placement_kill_all_command("weftos-test-pi")
-        # The pattern must not match the ssh shell that runs it.
-        pat = kill.split("'")[1]
-        self.assertIsNotNone(re.search(pat, "/home/u/weftos-test-pi/bin/workload_node serve --noise"))
-        self.assertIsNone(re.search(pat, "bash -c " + kill))
+        pats = [p for i, p in enumerate(kill.split("'")) if i % 2]
+        self.assertEqual(len(pats), 2)
+        self.assertIsNotNone(re.search(pats[0], "/home/u/weftos-test-pi/bin/weaver kernel start --foreground"))
+        self.assertIsNone(re.search(pats[0], "/usr/local/bin/weaver kernel start --foreground"),
+                          "never the system weaver")
+        self.assertIsNotNone(re.search(pats[1], "python3 /home/u/weftos-test-pi/src/scripts/pi/csi_feed.py"))
+        for p in pats:   # the patterns never match the ssh shell that runs them
+            self.assertIsNone(re.search(p, "bash -c " + kill))
         with self.assertRaises(ValueError):
             plan.placement_kill_all_command("../x")
 
@@ -79,43 +108,62 @@ class Helpers(unittest.TestCase):
 
 
 class PlacementLane(unittest.TestCase):
-    def hook(self, stop_out):
+    def hook(self, stop_out, ready=READY, peer=True):
         def h(line):
             if "workload_node keygen" in line:
                 return 0, PUB + "\n"
-            if " serve --listen" in line:
+            if "kernel start --foreground" in line:
                 return 0, "4242\n"
-            if "grep -q LISTENING" in line:
-                return 0, "NODE_ID %s\nLISTENING 0.0.0.0:9471\n" % NODE
+            if "csi_feed.py" in line and "nohup" in line:
+                return 0, "4343\n"
+            if "workload status --json" in line:
+                return 0, ready
             if " place --key" in line:
-                return 0, GOOD_CTL
-            if "kill -TERM 4242" in line:
+                return 0, GOOD_CTL if peer else GOOD_CTL.replace("PEER", "NOPE")
+            if "kill -TERM 4242 4343" in line:
                 return 0, stop_out
             return None
         return h
 
-    def run_lane(self, stop_out):
-        runner = FakeRunner(hook=self.hook(stop_out))
+    def run_lane(self, stop_out, **kw):
+        runner = FakeRunner(hook=self.hook(stop_out, **kw))
         with mock.patch.object(pi_lane.Lane, "fetch_cog", return_value="/cache/cog-anomaly-detect"):
             rc, out = LaneBehaviour.run_main(LaneBehaviour(), ["--placement"], runner)
         return rc, out, runner
 
-    def test_green_placement_run_stops_the_node_and_cleans_up(self):
-        rc, out, runner = self.run_lane("NODE_ID x\n==CHAIN==" + json.dumps(GOOD_CHAIN))
+    def test_green_run_places_onto_the_pi_weaver_daemon_and_cleans_up(self):
+        rc, out, runner = self.run_lane("log\n==CHAIN==" + json.dumps(GOOD_CHAIN))
         self.assertEqual(rc, 0, out)
         self.assertIn("PASS  placement", out)
         lines = [" ".join(c) for c in runner.calls]
-        self.assertTrue(any("workload_node" in l and "--example" in l for l in lines))
-        self.assertTrue(any("kill -TERM 4242" in l for l in lines))
-        self.assertTrue(any("pkill -TERM -f '[w]eftos-test-pi/bin/workload_node serve'" in l for l in lines))
+        self.assertTrue(any("-p clawft-weave --bin weaver" in l for l in lines),
+                        "the real weaver is cross-built for the Pi")
+        self.assertTrue(any("daemon-files --controller " + PUB in l for l in lines))
+        self.assertTrue(any("rsync" in l and "workload-host.json" in l
+                            and l.endswith("/home/u/weftos-test-pi/runtime/") for l in lines))
+        self.assertTrue(any("rsync" in l and "debug/weaver" in l for l in lines))
+        self.assertTrue(any("kill -TERM 4242 4343" in l for l in lines))
+        self.assertTrue(any("[w]eftos-test-pi/bin/weaver kernel start" in l for l in lines))
         self.assertTrue(any("rm -rf weftos-test-pi" in l for l in lines))
         # The cog binary is not rsynced to the Pi: it travels over the mesh.
         self.assertFalse(any("rsync" in l and "cog-anomaly-detect" in l for l in lines))
 
     def test_missing_pi_side_evidence_fails_the_lane(self):
-        rc, out, _ = self.run_lane("NODE_ID x\n==CHAIN==[]")
+        rc, out, _ = self.run_lane("log\n==CHAIN==[]")
         self.assertEqual(rc, 1, out)
         self.assertIn("Pi chain lacks", out)
+
+    def test_a_daemon_that_never_serves_aborts_and_is_stopped(self):
+        rc, out, runner = self.run_lane("", ready="==STATUS==\n{}")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("did not serve workload-host", out)
+        lines = [" ".join(c) for c in runner.calls]
+        self.assertTrue(any("[w]eftos-test-pi/bin/weaver kernel start" in l for l in lines))
+
+    def test_placing_elsewhere_than_the_pi_daemon_fails(self):
+        rc, out, _ = self.run_lane("log\n==CHAIN==" + json.dumps(GOOD_CHAIN), peer=False)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("did not reach the Pi daemon", out)
 
 
 if __name__ == "__main__":

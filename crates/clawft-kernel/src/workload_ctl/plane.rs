@@ -66,9 +66,15 @@ pub enum CallFailure {
     /// The target answered with a signed refusal.
     #[error("{0}")]
     Refused(Refusal),
-    /// No valid answer (transport, timeout, bad signature).
+    /// No valid answer, and the request never left this node (connect
+    /// failed), or it did not change state. Safe to try elsewhere.
     #[error("unreachable: {0}")]
     Unreachable(String),
+    /// A state-changing request was sent but no valid answer came back
+    /// (timeout, dropped connection, bad signature): the target may have
+    /// acted on it. Never retried elsewhere before reconciling.
+    #[error("indeterminate: {0}")]
+    Indeterminate(String),
 }
 
 /// Controller-level errors.
@@ -154,8 +160,9 @@ pub struct PlacementControlPlane {
     pub(super) services: Mutex<ClusterServiceRegistry>,
     pub(super) membership: Option<Arc<ClusterMembership>>,
     pub(super) placements: Mutex<BTreeMap<String, PlacementRecord>>,
-    /// Seed adapters by operator-assigned node id (card 09's `remote.api`).
-    pub(super) seeds: RwLock<BTreeMap<String, Arc<WorkloadHost>>>,
+    /// Seed adapters by operator-assigned node id (card 09's `remote.api`),
+    /// with the trust tier the operator assigned.
+    pub(super) seeds: RwLock<BTreeMap<String, (Arc<WorkloadHost>, FactsTier)>>,
     /// Handles of instances placed on Seeds.
     pub(super) seed_handles: tokio::sync::Mutex<BTreeMap<String, InstanceHandle>>,
     pub(super) cfg: PlaneConfig,
@@ -297,9 +304,17 @@ impl PlacementControlPlane {
         let exchange = serve.then_some(self.exchange.as_ref());
         let r = conn.call(target, m, &signed, exchange, timeout).await;
         conn.close().await;
-        let resp_signed = r.map_err(|e| CallFailure::Unreachable(e.to_string()))?;
+        // Past this point the request may have reached the target.
+        let lost = |why: String| {
+            if method::mutates(m) {
+                CallFailure::Indeterminate(why)
+            } else {
+                CallFailure::Unreachable(why)
+            }
+        };
+        let resp_signed = r.map_err(|e| lost(e.to_string()))?;
         let (resp, pk) = verify_response(&resp_signed, &req, expect.as_ref())
-            .map_err(|e| CallFailure::Unreachable(format!("bad response: {e}")))?;
+            .map_err(|e| lost(format!("bad response: {e}")))?;
         match resp.outcome {
             CtlOutcome::Ok { result } => Ok((result, pk)),
             CtlOutcome::Refused { refusal } => Err(CallFailure::Refused(refusal)),

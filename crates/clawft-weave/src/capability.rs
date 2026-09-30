@@ -118,7 +118,13 @@ pub fn required_capability(method: &str) -> Capability {
         | "workload.start"
         | "workload.stop"
         | "workload.unload"
-        | "workload.migrate" => Capability::Write,
+        | "workload.migrate"
+        // mesh-placement-12: `explain` verifies and seeds a caller-named
+        // package, contacts caller-named peers and chains a (dry-run)
+        // decision; `logs` returns a cog's captured output. Neither is
+        // anonymous.
+        | "workload.explain"
+        | "workload.logs" => Capability::Write,
 
         // ── Chat: LLM-conversational verbs ──────────────────────────
         "agent.chat" => Capability::Chat,
@@ -169,9 +175,7 @@ pub fn required_capability(method: &str) -> Capability {
         | "app.inspect"
         | "workload.list"
         | "workload.inspect"
-        | "workload.explain"
-        | "workload.status"
-        | "workload.logs" => Capability::Read,
+        | "workload.status" => Capability::Read,
 
         // ADR-099 default-deny posture: an unclassified `workload.*` verb
         // is treated as a mutation, never as anonymous-callable Read.
@@ -451,9 +455,7 @@ mod tests {
             "app.inspect",
             "workload.list",
             "workload.inspect",
-            "workload.explain",
             "workload.status",
-            "workload.logs",
         ] {
             assert_eq!(required_capability(m), Capability::Read, "{m}");
             assert!(anon.allows_method(m), "{m}");
@@ -465,6 +467,8 @@ mod tests {
             "app.remove",
             "workload.install",
             "workload.place",
+            "workload.explain",
+            "workload.logs",
             "workload.load",
             "workload.start",
             "workload.stop",

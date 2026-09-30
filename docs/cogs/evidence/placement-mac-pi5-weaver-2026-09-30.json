@@ -1,0 +1,229 @@
+{
+  "card": "mesh-placement-12",
+  "ok": true,
+  "controller": "n-df664d",
+  "mac_node": "n-df664d",
+  "pi_node": {
+    "runtime": "weaver daemon (isolated)",
+    "workload_host_served_on": "0.0.0.0:9471"
+  },
+  "explain": "workload anomaly-detect (kind cog)\n  allow_emulated: false   pin: -\n  tier order (strict): native > emulated > dev_fallback (candidates rank by tier, then score)\ndecision: PLACED on n-f52127 via aarch64-native (tier native, emulated false) score 120.00\ncandidates:\n  1. n-f52127 eligible via aarch64-native (tier native) score 120.00\n       execution 100.00 + locality 0.00 + accel_fit 10.00 + perf 0.00 + load 10.00 + stickiness 0.00\n  2. n-df664d eligible via aarch64-container (tier dev_fallback) score 30.00\n       execution 20.00 + locality 0.00 + accel_fit 0.00 + perf 0.00 + load 10.00 + stickiness 0.00\ndecision_id: c4a07a2a997fa1c0f5df07229ef8412733d6c265683d9f62d42e67c17134941d\ndispatch:\n  1. n-f52127 via aarch64-native: placed\n",
+  "attempts": [
+    {
+      "node_id": "n-f52127",
+      "outcome": "placed",
+      "variant": "aarch64-native"
+    }
+  ],
+  "placed": {
+    "decision_id": "c4a07a2a997fa1c0f5df07229ef8412733d6c265683d9f62d42e67c17134941d",
+    "instance_id": "anomaly-detect-d53c3d06-n-f52127",
+    "kind": "cog",
+    "manifest_hash": "a0b407c938084f325e2a933b685856fed1ce846b27e332aa452299b88667439f",
+    "node_id": "n-f52127",
+    "variant": "aarch64-native",
+    "workload": "anomaly-detect"
+  },
+  "run": {
+    "reports": 8,
+    "first_report": {
+      "anomalies": [
+        {
+          "channel": 248,
+          "description": "Channel 248 value 0.95 deviates 5.1 sigma from mean",
+          "type": "SPIKE",
+          "value": 0.949999988079071,
+          "z_score": 5.1214958483756226
+        },
+        {
+          "channel": 249,
+          "description": "Channel 249 value 0.95 deviates 5.1 sigma from mean",
+          "type": "SPIKE",
+          "value": 0.949999988079071,
+          "z_score": 5.1214958483756226
+        },
+        {
+          "channel": 250,
+          "description": "Channel 250 value 0.95 deviates 5.1 sigma from mean",
+          "type": "SPIKE",
+          "value": 0.949999988079071,
+          "z_score": 5.1214958483756226
+        },
+        {
+          "channel": 251,
+          "description": "Channel 251 value 0.95 deviates 5.1 sigma from mean",
+          "type": "SPIKE",
+          "value": 0.949999988079071,
+          "z_score": 5.1214958483756226
+        },
+        {
+          "channel": 252,
+          "description": "Channel 252 value 0.95 deviates 5.1 sigma from mean",
+          "type": "SPIKE",
+          "value": 0.949999988079071,
+          "z_score": 5.1214958483756226
+        },
+        {
+          "channel": 253,
+          "description": "Channel 253 value 0.95 deviates 5.1 sigma from mean",
+          "type": "SPIKE",
+          "value": 0.949999988079071,
+          "z_score": 5.1214958483756226
+        },
+        {
+          "channel": 254,
+          "description": "Channel 254 value 0.95 deviates 5.1 sigma from mean",
+          "type": "SPIKE",
+          "value": 0.949999988079071,
+          "z_score": 5.1214958483756226
+        },
+        {
+          "channel": 255,
+          "description": "Channel 255 value 0.95 deviates 5.1 sigma from mean",
+          "type": "SPIKE",
+          "value": 0.949999988079071,
+          "z_score": 5.1214958483756226
+        }
+      ],
+      "stats": {
+        "cusum_drift_detected": false,
+        "max_z_score": 5.1214958483756226,
+        "mean_amplitude": 0.02951419236796937,
+        "num_channels": 256
+      },
+      "timestamp": 1790737171
+    }
+  },
+  "pin_mac": {
+    "explain": "workload anomaly-detect (kind cog)\n  allow_emulated: false   pin: n-df664d\n  tier order (strict): native > emulated > dev_fallback (candidates rank by tier, then score)\ndecision: PLACED on n-df664d via aarch64-container (tier dev_fallback, emulated false) score 30.00\ncandidates:\n  1. n-f52127 eligible via aarch64-native (tier native) score 120.00\n       execution 100.00 + locality 0.00 + accel_fit 10.00 + perf 0.00 + load 10.00 + stickiness 0.00\n  2. n-df664d eligible via aarch64-container (tier dev_fallback) score 30.00 [pinned]\n       execution 20.00 + locality 0.00 + accel_fit 0.00 + perf 0.00 + load 10.00 + stickiness 0.00\ndecision_id: 0d92ab01a579e690e551883fb3e9fb39f2ac50d9149db199c38668b5f611b8a1\ndispatch:\n  1. n-df664d via aarch64-container: refused (admission: no container adapter on this node for aarch64-container)\n",
+    "attempts": [
+      {
+        "code": "admission",
+        "node_id": "n-df664d",
+        "outcome": "refused",
+        "reason": "no container adapter on this node for aarch64-container",
+        "variant": "aarch64-container"
+      }
+    ]
+  },
+  "controller_chain": [
+    [
+      "chain",
+      "genesis"
+    ],
+    [
+      "workload",
+      "workload.place"
+    ],
+    [
+      "workload",
+      "workload.place"
+    ],
+    [
+      "workload.placement",
+      "workload.place"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.serve"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.serve"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.serve"
+    ],
+    [
+      "workload.placement",
+      "workload.place"
+    ],
+    [
+      "workload",
+      "workload.stop"
+    ],
+    [
+      "workload.placement",
+      "workload.stop"
+    ],
+    [
+      "workload",
+      "workload.unload"
+    ],
+    [
+      "workload.placement",
+      "workload.unload"
+    ],
+    [
+      "workload",
+      "workload.place"
+    ],
+    [
+      "workload",
+      "workload.place"
+    ],
+    [
+      "workload.placement",
+      "workload.place"
+    ],
+    [
+      "workload.host",
+      "workload.refuse"
+    ],
+    [
+      "workload.placement",
+      "workload.refuse"
+    ]
+  ],
+  "pi_chain": [
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "workload",
+      "workload.load"
+    ],
+    [
+      "workload.runtime",
+      "workload.load"
+    ],
+    [
+      "workload",
+      "workload.start"
+    ],
+    [
+      "workload.runtime",
+      "workload.start"
+    ],
+    [
+      "workload.host",
+      "workload.place"
+    ],
+    [
+      "workload",
+      "workload.stop"
+    ],
+    [
+      "workload.runtime",
+      "workload.stop"
+    ],
+    [
+      "workload",
+      "workload.unload"
+    ],
+    [
+      "workload.runtime",
+      "workload.unload"
+    ]
+  ]
+}

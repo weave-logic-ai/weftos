@@ -981,6 +981,19 @@ pub async fn run(
         runtime_dir.clone(),
         kernel.read().await.cluster_membership().clone(),
     );
+    // mesh-placement-12: serve this node's workload-host to the controllers
+    // named in <runtime>/workload-host.json (off when the file is absent).
+    #[cfg(all(feature = "placement", unix))]
+    {
+        let k = kernel.clone();
+        tokio::spawn(async move {
+            match crate::workload_place_rpc::start_serving(k).await {
+                Ok(Some(addr)) => info!(%addr, "workload-host serving"),
+                Ok(None) => {}
+                Err(e) => error!(error = %e, "workload-host not served"),
+            }
+        });
+    }
     {
         let k = kernel.read().await;
         let pubkey: [u8; 32] = daemon_identity.signing_key.verifying_key().to_bytes();

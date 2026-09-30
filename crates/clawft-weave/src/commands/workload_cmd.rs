@@ -119,15 +119,19 @@ pub async fn run(args: WorkloadArgs) -> anyhow::Result<()> {
         WorkloadCommand::Package(_) => unreachable!("package commands are handled before connecting"),
         #[cfg(all(feature = "placement", unix))]
         WorkloadCommand::Placement(cmd) => {
-            let (method, params) = super::workload_place_cmd::request(&cmd);
+            let cwd = std::env::current_dir()?;
+            let (method, params) =
+                super::workload_place_cmd::request(&cmd, &cwd).map_err(anyhow::Error::msg)?;
             let resp = client.call(Request::with_params(method, params)).await?;
             if !resp.ok {
                 anyhow::bail!("{}", resp.error.unwrap_or_default());
             }
-            print!(
-                "{}",
-                super::workload_place_cmd::render(&cmd, &resp.result.unwrap_or_default())
-            );
+            let result = resp.result.unwrap_or_default();
+            print!("{}", super::workload_place_cmd::render(&cmd, &result));
+            // A place that placed nothing exits non-zero.
+            if let Some(why) = super::workload_place_cmd::failure(&cmd, &result) {
+                anyhow::bail!("{why}");
+            }
         }
     }
     Ok(())

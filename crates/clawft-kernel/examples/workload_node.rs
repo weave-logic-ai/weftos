@@ -8,10 +8,17 @@
 //! workload_node keygen <key-file>                  # prints the public key
 //! workload_node serve --listen ADDR --dir DIR --controller PUBHEX
 //!     [--trust PUBHEX] [--noise] [--secs N] [--feed-port P]
+//! workload_node daemon-files --controller PUBHEX --listen ADDR --out DIR
 //! workload_node place --key FILE --peer ADDR --cog-toml FILE
 //!     --binary ARCH=PATH [--binary ...] --dir DIR [--noise]
 //!     [--interval N] [--run-secs N] [--pin-local] [--out FILE] [--release-url URL]
 //! ```
+//!
+//! `daemon-files` writes the policy files a real `weaver` daemon needs to
+//! serve its `workload-host` to this controller (`workload-host.json`,
+//! `workload-trust.json`, `workload-permits.json`, for its runtime dir):
+//! that is how the Pi lane places onto a WeftOS node. `serve` is the bare
+//! host without a daemon.
 //!
 //! The controller's key signs the package (operator key) and the control
 //! requests; the node pins it for both. Chains are in memory and are
@@ -183,6 +190,32 @@ fn start_feed(port: u16) {
             std::thread::sleep(Duration::from_millis(20));
         }
     });
+}
+
+/// Policy files for a `weaver` daemon's runtime dir: serve `workload-host`
+/// on `--listen` to this controller, pin it as the package signer, permit
+/// cog workloads (with the host network a native cog has).
+fn daemon_files(args: &[String]) -> R<()> {
+    let hex = need(args, "--controller")?;
+    let pk = hex_decode_exact::<32>(&hex).ok_or("--controller must be 64 hex")?;
+    let out = PathBuf::from(need(args, "--out")?);
+    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+    let host = json!({ "listen": need(args, "--listen")?, "noise": true, "controllers": [hex] });
+    let trust = json!({ "schema": "weftos.workload-trust.v1",
+        "operator_keys": [{ "key_id": key_id_for(&pk), "public_key": hex_encode(&pk) }] });
+    let mut permit = WorkloadPermitRule::new("operator-cog", ["workload.*"], ["cog"]);
+    permit.max_network = NetworkPolicy::Egress;
+    for (name, v) in [
+        ("workload-host.json", host),
+        ("workload-trust.json", trust),
+        ("workload-permits.json", json!([permit])),
+    ] {
+        std::fs::write(out.join(name), serde_json::to_vec_pretty(&v).unwrap_or_default())
+            .map_err(|e| format!("{name}: {e}"))?;
+    }
+    // The files must load the way the daemon loads them.
+    TrustAnchors::from_trust_json(&std::fs::read(out.join("workload-trust.json")).unwrap_or_default())?;
+    Ok(())
 }
 
 async fn serve(args: &[String]) -> R<()> {
@@ -402,8 +435,9 @@ async fn main() {
             Ok(true)
         })(),
         Some("serve") => serve(&args[1..]).await.map(|_| true),
+        Some("daemon-files") => daemon_files(&args[1..]).map(|_| true),
         Some("place") => place_cmd(&args[1..]).await,
-        _ => Err("usage: workload_node keygen|serve|place (see the file header)".to_string()),
+        _ => Err("usage: workload_node keygen|serve|daemon-files|place (see the file header)".to_string()),
     };
     match r {
         Ok(true) => {}

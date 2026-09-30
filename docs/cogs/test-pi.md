@@ -78,27 +78,40 @@ them with `python3 -m unittest discover -s scripts/pi`.
    `scripts/cogs/results/pi5-adapter-native-aarch64-expected/`. `--sudo` is
    needed only because the harness ingest stub binds `127.0.0.1:80`.
 7. **Two-node placement (`--placement`, card mesh-placement-12).** The lane
-   cross-builds the `workload_node` example for the Pi and builds it natively
-   for the Mac. On the Pi it starts `workload_node serve` detached under the
-   same `env -i` isolation, from `~/weftos-test-pi/runtime`, listening on mesh
-   port **9471** with Noise XX (the system weaver keeps `:9470`), trusting only
-   a throwaway controller key generated for the run, with a synthetic ADR-069
-   feature feed on `127.0.0.1:15006`. On the Mac, `workload_node place` signs
-   the released anomaly-detect binary as an operator package, learns the Pi
-   over a signed `workload.describe` (its probed, signed facts) and runs the
-   placement control plane: the engine must choose the Pi
-   (`aarch64-native`, tier `native`) over the Mac (`aarch64-container`, tier
-   `dev_fallback`); the Pi fetches the package from the Mac over the same
-   connection before loading, admits it and runs it; after a few seconds the
-   Mac reads its status, stops it, reads its output (anomaly reports) and
-   unloads it. Then it pins the Mac, whose host has no container adapter, and
-   the admission refusal must be chained. The node is stopped with SIGTERM
-   (it writes its in-memory chain to the scratch dir) and the stage passes
-   only if both sides' evidence agrees (`pi_plan.judge_placement`).
+   cross-builds the real `weaver` daemon for the Pi and builds the
+   `workload_node` example natively for the Mac (the controller). It
+   generates a throwaway controller key and, with `workload_node
+   daemon-files`, the Pi daemon's operator policy: `workload-host.json`
+   (serve `workload-host` on **9471** with Noise XX to that controller only),
+   `workload-trust.json` (pin that key as the package signer) and
+   `workload-permits.json` (permit cog workloads). These go into
+   `~/weftos-test-pi/runtime`, which is the isolated daemon's
+   `WEFTOS_RUNTIME_DIR`. The lane then starts `weaver kernel start
+   --foreground` under the same `env -i` isolation, so it gets its own HOME,
+   chain and socket, and the system weaver keeps `:9470` and `~/.clawft`. It
+   also starts a synthetic ADR-069 feature feed (`scripts/pi/csi_feed.py`) on
+   `127.0.0.1:15006`, and waits until `weaver workload status` shows the host
+   served with the daemon's own signed facts. On the Mac, `workload_node
+   place` signs the released anomaly-detect binary as an operator package,
+   learns the Pi daemon over a signed `workload.describe` (its re-probed,
+   signed facts and its `workload-host` advertisement), and runs the
+   placement control plane. The engine must choose the Pi (`aarch64-native`,
+   tier `native`) over the Mac (`aarch64-container`, tier `dev_fallback`).
+   The Pi daemon fetches the package from the Mac over the same connection
+   before loading, admits it and runs it. After a few seconds the Mac reads
+   its status, stops it, reads its output (anomaly reports) and unloads it.
+   Then it pins the Mac, whose host has no container adapter, and the
+   admission refusal must be chained. The lane exports the Pi daemon's chain
+   (`weaver chain export`), then stops the daemon and the feed with SIGTERM.
+   The stage passes only if both sides' evidence agrees
+   (`pi_plan.judge_placement`).
    `--placement-evidence <file>` writes the decision, explain output,
-   attempts and both chains' event kinds, refusing to write anything that
-   looks like an address or a home path. The committed run is
-   `docs/cogs/evidence/placement-mac-pi5-2026-09-29.json`.
+   attempts and the placement-related event kinds of both chains, and
+   refuses to write anything that looks like an address or a home path. The
+   committed run against the Pi weaver daemon is
+   `docs/cogs/evidence/placement-mac-pi5-weaver-2026-09-30.json`. The earlier
+   run against the bare `workload_node serve` host is
+   `placement-mac-pi5-2026-09-29.json`.
 8. **Clean up.** It removes `~/weftos-test-pi`, including the root-owned
    harness output (with `sudo -n` when needed), unless you pass `--keep`. The
    removal runs even when a stage fails or the lane aborts (a failed build,

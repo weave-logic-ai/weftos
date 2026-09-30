@@ -11,7 +11,7 @@ under `env -i` with an isolated HOME and WEFTOS_RUNTIME_DIR, streams the output
 back and removes the scratch dir. With no crate and no stage flag it runs the
 full lane: clawft-kernel tests, the native adapter live test (anomaly-detect),
 the scripts/cogs conformance harness in remote (ssh) mode, and the two-node
-placement run (Mac controller, isolated workload-host on the Pi, pi_placement).
+placement run (Mac controller, an isolated weaver daemon on the Pi, pi_placement).
 
 The Pi comes from WEFTOS_PI_HOST ([user@]host, never committed); unset means
 the lane is skipped (exit 0). It never touches the Pi's ~/.clawft or its
@@ -155,10 +155,10 @@ class Lane:
             if rc != 0:
                 raise SystemExit("test-pi: launcher build failed (rc %d)" % rc)
         if node:
-            print("── Cross-building workload_node (placement stage)")
-            rc, _ = self.run(mk(plan.placement_cargo_args()))
+            print("── Cross-building the weaver daemon (placement stage)")
+            rc, _ = self.run(mk(plan.weaver_cargo_args()))
             if rc != 0:
-                raise SystemExit("test-pi: workload_node build failed (rc %d)" % rc)
+                raise SystemExit("test-pi: weaver build failed (rc %d)" % rc)
             placement.build_mac(self.run)
         return arts
 
@@ -185,6 +185,16 @@ class Lane:
         if rc == 0 and bins:
             rc, _ = self.run(["rsync", "-a", "-e", rsh] + bins
                              + ["%s:%s/bin/" % (self.host, s)], capture="quiet")
+        if rc != 0:
+            raise SystemExit("test-pi: rsync to the Pi failed (rc %d)" % rc)
+
+    def rsync_to(self, paths, remote_dir):
+        """Copy local files into a directory under the Pi scratch dir."""
+        if not remote_dir.startswith(self.scratch + "/"):
+            raise SystemExit("test-pi: refusing to copy outside the scratch dir")
+        rsh = "ssh " + " ".join(SSH_OPTS)
+        rc, _ = self.run(["rsync", "-a", "-e", rsh] + list(paths)
+                         + ["%s:%s" % (self.host, remote_dir)], capture="quiet")
         if rc != 0:
             raise SystemExit("test-pi: rsync to the Pi failed (rc %d)" % rc)
 
@@ -273,7 +283,7 @@ class Lane:
         arts = self.build(list(dict.fromkeys(build)), launcher=a.cogs, node=a.placement)
         cog = self.fetch_cog() if (a.live_native or a.placement) else None
         extra = [cog] if a.live_native else []
-        if a.placement:   # only the node binary goes; the cog travels over the mesh
+        if a.placement:   # only the weaver daemon goes; the cog travels over the mesh
             extra.append(placement.pi_binary(TARGET))
         self.stage_remote(arts, extra)
         if a.crates:
@@ -315,7 +325,7 @@ def parse_args(argv):
     ap.add_argument("--cogs", action="store_true",
                     help="scripts/cogs conformance in remote mode (harness + native adapter)")
     ap.add_argument("--placement", action="store_true",
-                    help="two-node placement: Mac controller -> isolated workload-host on the Pi")
+                    help="two-node placement: Mac controller -> isolated weaver daemon on the Pi")
     ap.add_argument("--placement-evidence", help="write the placement evidence JSON here")
     ap.add_argument("--full", action="store_true",
                     help="clawft-kernel + --live-native + --cogs + --placement (default, no args)")

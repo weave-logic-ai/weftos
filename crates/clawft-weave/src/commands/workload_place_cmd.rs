@@ -5,7 +5,7 @@
 //! `workload.*` RPC family in `workload_place_rpc`). The daemon decides,
 //! chains and dispatches; this module only builds params and renders.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
 use serde_json::{Value, json};
@@ -50,7 +50,9 @@ pub enum WorkloadPlaceCmd {
 pub struct PlaceArgs {
     /// Unpacked signed package directory (`weaver workload pack --out`).
     pub package: PathBuf,
-    /// `workload-host` address (`host:port`) to consider, as a paired node (repeat).
+    /// `workload-host` address (`host:port`) to also consider (repeat). A
+    /// peer named here is only `discovered`; assign trust tiers in the
+    /// daemon's workload-peers.json.
     #[arg(long = "peer")]
     pub peers: Vec<String>,
     /// Place on this node id or fail naming the constraint.
@@ -85,9 +87,27 @@ pub struct PlaceArgs {
     pub json: bool,
 }
 
-/// RPC method and params for a placement verb.
-pub fn request(cmd: &WorkloadPlaceCmd) -> (&'static str, Value) {
-    match cmd {
+/// The package directory as an absolute, canonical path (`cwd` resolves a
+/// relative one): the daemon runs elsewhere and must see the same dir.
+pub fn resolve_package(package: &Path, cwd: &Path) -> Result<PathBuf, String> {
+    let p = if package.is_absolute() {
+        package.to_path_buf()
+    } else {
+        cwd.join(package)
+    };
+    let c = p
+        .canonicalize()
+        .map_err(|e| format!("package {}: {e}", package.display()))?;
+    if !c.is_dir() {
+        return Err(format!("package {} is not a directory", package.display()));
+    }
+    Ok(c)
+}
+
+/// RPC method and params for a placement verb (`cwd` resolves a relative
+/// package path).
+pub fn request(cmd: &WorkloadPlaceCmd, cwd: &Path) -> Result<(&'static str, Value), String> {
+    Ok(match cmd {
         WorkloadPlaceCmd::Place(a) | WorkloadPlaceCmd::Explain(a) => {
             let m = if matches!(cmd, WorkloadPlaceCmd::Place(_)) {
                 "workload.place"
@@ -95,7 +115,7 @@ pub fn request(cmd: &WorkloadPlaceCmd) -> (&'static str, Value) {
                 "workload.explain"
             };
             let mut p = json!({
-                "package_dir": a.package, "peers": a.peers, "prefer": a.prefer, "avoid": a.avoid,
+                "package_dir": resolve_package(&a.package, cwd)?, "peers": a.peers, "prefer": a.prefer, "avoid": a.avoid,
                 "allow_emulated": a.allow_emulated, "mode": a.mode, "interval": a.interval,
                 "csi_port": a.csi_port, "start": !a.no_start,
             });
@@ -124,6 +144,21 @@ pub fn request(cmd: &WorkloadPlaceCmd) -> (&'static str, Value) {
             target,
             catalog: false,
         } => ("workload.unload", json!({ "instance_id": target })),
+    })
+}
+
+/// Why a verb's result is a failure for the exit code (`place` that
+/// placed nothing), or `None`.
+pub fn failure(cmd: &WorkloadPlaceCmd, result: &Value) -> Option<String> {
+    match cmd {
+        WorkloadPlaceCmd::Place(_) if result.get("placed").is_none_or(Value::is_null) => {
+            Some(if result["decision"]["placement"].is_null() {
+                "unplaceable: no eligible node".to_string()
+            } else {
+                "not placed: no candidate accepted it".to_string()
+            })
+        }
+        _ => None,
     }
 }
 
@@ -231,29 +266,58 @@ mod tests {
         }
     }
 
+    fn req(cmd: &WorkloadPlaceCmd) -> (&'static str, Value) {
+        request(cmd, Path::new("/")).unwrap()
+    }
+
+    #[test]
+    fn a_relative_package_is_resolved_against_the_callers_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("work/pkg")).unwrap();
+        let cwd = tmp.path().join("work");
+        let (_, p) = request(&WorkloadPlaceCmd::Place(args("./pkg")), &cwd).unwrap();
+        let sent = PathBuf::from(p["package_dir"].as_str().unwrap());
+        assert!(sent.is_absolute());
+        assert_eq!(sent, cwd.join("pkg").canonicalize().unwrap());
+        let err = request(&WorkloadPlaceCmd::Place(args("./missing")), &cwd).unwrap_err();
+        assert!(err.contains("missing"), "{err}");
+    }
+
+    #[test]
+    fn place_that_placed_nothing_is_a_failure() {
+        let place = WorkloadPlaceCmd::Place(args("/"));
+        let refused = json!({"decision": {"placement": {"node_id": "n"}}, "placed": null});
+        assert!(failure(&place, &refused).unwrap().contains("not placed"));
+        let none = json!({"decision": {"placement": null}});
+        assert!(failure(&place, &none).unwrap().contains("unplaceable"));
+        let ok = json!({"decision": {"placement": {"node_id": "n"}}, "placed": {"node_id": "n"}});
+        assert!(failure(&place, &ok).is_none());
+        assert!(failure(&WorkloadPlaceCmd::Explain(args("/")), &refused).is_none());
+    }
+
     #[test]
     fn verbs_map_to_the_workload_rpc_family() {
-        let (m, p) = request(&WorkloadPlaceCmd::Place(args("/p")));
+        let (m, p) = req(&WorkloadPlaceCmd::Place(args("/")));
         assert_eq!(m, "workload.place");
         assert_eq!(p["peers"][0], "pi5:9471");
         assert_eq!(p["start"], true);
         assert!(p.get("pin").is_none());
-        let mut pinned = args("/p");
+        let mut pinned = args("/");
         pinned.pin = Some("n-1".into());
-        let (m, p) = request(&WorkloadPlaceCmd::Explain(pinned));
+        let (m, p) = req(&WorkloadPlaceCmd::Explain(pinned));
         assert_eq!((m, p["pin"].as_str()), ("workload.explain", Some("n-1")));
         let unload = WorkloadPlaceCmd::Unload {
             target: "i-1".into(),
             catalog: false,
         };
-        assert_eq!(request(&unload).1, json!({"instance_id": "i-1"}));
+        assert_eq!(req(&unload).1, json!({"instance_id": "i-1"}));
         let cat = WorkloadPlaceCmd::Unload {
             target: "w".into(),
             catalog: true,
         };
-        assert_eq!(request(&cat).1, json!({"name": "w"}));
+        assert_eq!(req(&cat).1, json!({"name": "w"}));
         assert_eq!(
-            request(&WorkloadPlaceCmd::Status {
+            req(&WorkloadPlaceCmd::Status {
                 instance_id: None,
                 json: false
             })

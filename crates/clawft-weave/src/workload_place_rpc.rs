@@ -13,12 +13,16 @@
 //!   operator-pinned package signers; missing means only the compiled-in
 //!   WeftOS signer set (so operator-signed packages are refused);
 //! - `workload-peers.json`: `[{"addr": "host:port", "tier": "paired"}]`,
-//!   the `workload-host`s this daemon may place on (a request can add
-//!   `peers`, which are treated as `paired`).
+//!   the `workload-host`s this daemon may place on, with the trust tier the
+//!   operator assigns (a request can name more `peers`; they are only ever
+//!   `discovered`);
+//! - `workload-host.json`: serve this node's `workload-host` to other
+//!   controllers (see `workload_host_serve`).
 //!
-//! This node is a candidate too, through an in-process `workload-host`
-//! with the native adapter and the node's signed facts.
+//! This node is a candidate too, through its own `workload-host` (native
+//! adapter, the node's re-probed signed facts), in process.
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -28,11 +32,11 @@ use clawft_kernel::chain::ChainManager;
 use clawft_kernel::mesh_artifact::{ArtifactExchange, ExchangeConfig};
 use clawft_kernel::workload_ctl::msg::method;
 use clawft_kernel::workload_ctl::{
-    CtlConfig, MeshConnector, PlaceOrder, PlacementControlPlane, WorkloadHostService,
+    CtlConfig, FactsSource, MeshConnector, PlaceOrder, PlacementControlPlane, WorkloadHostService,
 };
-use clawft_kernel::workload_governance::{NodeTrustTier, WorkloadGate, WorkloadPermitRule};
+use clawft_kernel::workload_governance::{WorkloadGate, WorkloadPermitRule};
 use clawft_kernel::workload_pkg::TrustAnchors;
-use clawft_kernel::workload_runtime::{NativeConfig, NativeRuntime, RunMode, WorkloadHost};
+use clawft_kernel::workload_runtime::RunMode;
 use clawft_platform::NativePlatform;
 use clawft_rpc::Response;
 use clawft_types::placement::TrustTier;
@@ -40,6 +44,8 @@ use ed25519_dalek::SigningKey;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{OnceCell, RwLock};
+
+use crate::workload_host_serve::{HostParts, load_host_config, local_host, serve};
 
 /// Methods served here (the rest of `workload.*` is in `workload_rpc`).
 pub const METHODS: &[&str] = &[
@@ -65,6 +71,12 @@ struct Boot {
 
 static BOOT: OnceLock<Boot> = OnceLock::new();
 static PLANE: OnceCell<Arc<PlacementControlPlane>> = OnceCell::const_new();
+/// This node's `workload-host` (in-process target and, when configured,
+/// served to other nodes).
+static HOST: OnceLock<Arc<WorkloadHostService>> = OnceLock::new();
+/// Where it is served, once serving started.
+static SERVED: OnceLock<SocketAddr> = OnceLock::new();
+const LOCAL_ADDR: &str = "mem://local";
 
 /// Record the daemon key and runtime dir (call once at daemon boot).
 pub fn init(key: SigningKey, runtime_dir: PathBuf) {
@@ -152,34 +164,30 @@ async fn build(
         .map_err(|e| e.to_string())?;
     ex.set_chain_manager(chain.clone());
     let ex = Arc::new(ex);
-    // This node's own workload-host (native adapter, its signed facts).
-    let native = NativeRuntime::new(NativeConfig {
-        root: dir.join("workload-instances"),
-        run_as: None,
-        allow_interpreted: false,
+    let serving = load_host_config(dir)?;
+    // `describe` always answers with the facts the daemon re-probes.
+    let (fm, fid) = (membership.clone(), id.clone());
+    let facts: FactsSource = Arc::new(move || {
+        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        fm.facts().get(&fid, now).map(|c| c.signed)
     });
-    let host = WorkloadHost::new(
-        Arc::new(native),
-        gate.clone(),
-        id.clone(),
-        NodeTrustTier::Pinned,
-    )
-    .with_chain(chain.clone());
-    let local =
-        WorkloadHostService::new(boot.key.clone(), ex.clone(), anchors.clone(), gate.clone())
-            .with_route("native", Arc::new(host))
-            .with_controllers(vec![pk])
-            .with_chain(chain.clone());
-    let now = chrono::Utc::now().timestamp().max(0) as u64;
-    if let Some(f) = membership.facts().get(&id, now) {
-        local.set_facts(f.signed);
-    }
+    let local = Arc::new(local_host(HostParts {
+        key: &boot.key,
+        dir,
+        chain: &chain,
+        gate: gate.clone(),
+        exchange: ex.clone(),
+        anchors: anchors.clone(),
+        facts,
+        serving: serving.as_ref(),
+    })?);
+    let _ = HOST.set(local.clone());
     let conn = Arc::new(MeshConnector::new(true));
-    let local_addr = conn.register_local("local", Arc::new(local));
+    let local_addr = conn.register_local("local", local);
     let plane = PlacementControlPlane::new(boot.key.clone(), gate, chain, ex, anchors, conn)
         .with_membership(membership);
     if let Err(e) = plane.add_target(&local_addr, TrustTier::Pinned).await {
-        tracing::warn!(error = %e, "this node is not a placement candidate (no signed facts yet?)");
+        tracing::warn!(error = %e, "this node is not a placement candidate yet (no signed facts?)");
     }
     Ok(Arc::new(plane))
 }
@@ -220,6 +228,12 @@ fn order(p: PlaceParams, dry_run: bool) -> Result<(PlaceOrder, Vec<String>), Str
         },
         Some(other) => return Err(format!("unknown mode {other:?} (once|interval|listener)")),
     };
+    if !p.package_dir.is_absolute() {
+        return Err(format!(
+            "package_dir {} must be absolute (the daemon does not share the caller's working directory)",
+            p.package_dir.display()
+        ));
+    }
     if !p.package_dir.is_dir() {
         return Err(format!(
             "package_dir {} is not a directory",
@@ -260,8 +274,12 @@ pub async fn route(plane: &PlacementControlPlane, m: &str, params: Value) -> Res
             "workload.place" | "workload.explain" => {
                 let p: PlaceParams = serde_json::from_value(params).map_err(|e| format!("invalid {m} params: {e}"))?;
                 let (o, peers) = order(p, m == "workload.explain")?;
-                for addr in peers {
-                    plane.add_target(&addr, TrustTier::Paired).await.map_err(|e| format!("peer {addr}: {e}"))?;
+                // A caller cannot assign trust: a peer named in a request
+                // is `discovered` unless the operator already knows it
+                // (workload-peers.json assigns the tier).
+                let known: Vec<String> = plane.targets().into_iter().map(|t| t.addr).collect();
+                for addr in peers.into_iter().filter(|a| !known.contains(a)) {
+                    plane.add_target(&addr, TrustTier::Discovered).await.map_err(|e| format!("peer {addr}: {e}"))?;
                 }
                 plane.refresh().await;
                 let r = plane.place(&o).await.map_err(|e| e.to_string())?;
@@ -273,7 +291,9 @@ pub async fn route(plane: &PlacementControlPlane, m: &str, params: Value) -> Res
                     let st = plane.instance(method::STATUS, &rec.instance_id).await;
                     rows.push(json!({ "placement": rec, "status": st.map_err(|e| e.to_string()) }));
                 }
-                Ok(json!({ "controller": plane.node_id(), "targets": plane.targets(), "instances": rows }))
+                let host = HOST.get().map(|h| h.advertisement());
+                Ok(json!({ "controller": plane.node_id(), "targets": plane.targets(), "instances": rows,
+                           "workload_host": host, "served_on": SERVED.get().map(|a| a.to_string()) }))
             }
             "workload.status" | "workload.stop" | "workload.logs" | "workload.unload" => {
                 let id = instance_id(&params, m)?;
@@ -299,6 +319,10 @@ pub async fn dispatch(
         Ok(p) => p.clone(),
         Err(e) => return Response::error(format!("placement unavailable: {e}")),
     };
+    if HOST.get().is_some() && !plane.targets().iter().any(|t| t.addr == LOCAL_ADDR) {
+        // Facts were not probed yet when the plane was built.
+        let _ = plane.add_target(LOCAL_ADDR, TrustTier::Pinned).await;
+    }
     if let Some(dir) = BOOT.get().map(|b| b.runtime_dir.clone()) {
         match load_peers(&dir) {
             Ok(peers) => {
@@ -315,6 +339,29 @@ pub async fn dispatch(
     route(&plane, m, params).await
 }
 
+/// Daemon boot: when `workload-host.json` is present, build the control
+/// plane (and with it this node's `workload-host`) and serve the host to
+/// the configured controllers. Returns where it is served.
+pub async fn start_serving(
+    kernel: Arc<RwLock<Kernel<NativePlatform>>>,
+) -> Result<Option<SocketAddr>, String> {
+    let dir = BOOT
+        .get()
+        .map(|b| b.runtime_dir.clone())
+        .ok_or("placement not initialised (no daemon key)")?;
+    let Some(cfg) = load_host_config(&dir)? else {
+        return Ok(None);
+    };
+    PLANE.get_or_try_init(|| build(&kernel)).await?;
+    let host = HOST.get().cloned().ok_or("workload-host was not built")?;
+    let adv = host.advertisement();
+    let bound = serve(&cfg, host).await?;
+    let _ = SERVED.set(bound);
+    tracing::info!(addr = %bound, advertise = %cfg.advertised(), node = %adv.node_id,
+        methods = adv.methods.len(), "workload-host served");
+    Ok(Some(bound))
+}
+
 #[cfg(test)]
 #[path = "workload_place_rpc_tests.rs"]
-mod tests;
+pub(crate) mod tests;

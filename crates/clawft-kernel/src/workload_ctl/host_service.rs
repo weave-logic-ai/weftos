@@ -16,10 +16,9 @@
 //! Unknown `workload.*` methods go to the governance gate, which denies
 //! and chains them (default deny, ADR-099 section 4).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
@@ -50,8 +49,6 @@ use super::msg::{
 
 /// Chain source for target-side placement records.
 pub const HOST_CHAIN_SOURCE: &str = "workload.host";
-/// Largest captured output a `logs` answer carries.
-const MAX_LOG_BYTES: usize = 64 * 1024;
 
 /// Place-time configuration sent with `place` / `load`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -100,14 +97,17 @@ pub struct InstanceBody {
     pub grace_ms: Option<u64>,
 }
 
-struct Placed {
-    handle: InstanceHandle,
-    route: String,
-    name: String,
-    variant: String,
-    decision_id: Option<String>,
-    last: Option<RunEvidence>,
+pub(super) struct Placed {
+    pub(super) handle: InstanceHandle,
+    pub(super) route: String,
+    pub(super) name: String,
+    pub(super) variant: String,
+    pub(super) decision_id: Option<String>,
+    pub(super) last: Option<RunEvidence>,
 }
+
+/// Fresh signed facts on demand (a daemon re-probes before the TTL ends).
+pub type FactsSource = Arc<dyn Fn() -> Option<SignedNodeFacts> + Send + Sync>;
 
 /// A node's `workload-host`.
 pub struct WorkloadHostService {
@@ -116,24 +116,52 @@ pub struct WorkloadHostService {
     anchors: TrustAnchors,
     controllers: Box<dyn ControllerPolicy>,
     nonces: NonceGuard,
-    routes: BTreeMap<String, Arc<WorkloadHost>>,
+    pub(super) routes: BTreeMap<String, Arc<WorkloadHost>>,
     exchange: Arc<ArtifactExchange>,
     gate: Arc<dyn GateBackend>,
     chain: Option<Arc<ChainManager>>,
     facts: Mutex<Option<SignedNodeFacts>>,
+    facts_source: Option<FactsSource>,
     address: Option<String>,
-    instances: tokio::sync::Mutex<HashMap<String, Placed>>,
+    pub(super) instances: tokio::sync::Mutex<HashMap<String, Placed>>,
+    /// Decision ids of `place` / `load` requests being handled. A
+    /// controller that lost a response reconciles against this and the
+    /// instance list (see `plane_reconcile`).
+    pub(super) in_flight: Mutex<HashSet<String>>,
+}
+
+/// Marks a decision in flight for the life of one `place` / `load`.
+struct InFlight<'a> {
+    set: &'a Mutex<HashSet<String>>,
+    id: Option<String>,
+}
+
+impl<'a> InFlight<'a> {
+    fn enter(set: &'a Mutex<HashSet<String>>, id: Option<String>) -> Self {
+        if let (Some(d), Ok(mut s)) = (&id, set.lock()) {
+            s.insert(d.clone());
+        }
+        Self { set, id }
+    }
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        if let (Some(d), Ok(mut s)) = (&self.id, self.set.lock()) {
+            s.remove(d);
+        }
+    }
 }
 
 fn now_ms() -> u64 {
     chrono::Utc::now().timestamp_millis().max(0) as u64
 }
 
-fn refuse(code: RefusalCode, reason: impl Into<String>) -> Refusal {
+pub(super) fn refuse(code: RefusalCode, reason: impl Into<String>) -> Refusal {
     Refusal::new(code, reason)
 }
 
-fn runtime_refusal(e: &RuntimeError) -> Refusal {
+pub(super) fn runtime_refusal(e: &RuntimeError) -> Refusal {
     let code = match e {
         RuntimeError::AdmissionRefused(_) => RefusalCode::Admission,
         RuntimeError::Governance(_) => RefusalCode::Governance,
@@ -164,8 +192,10 @@ impl WorkloadHostService {
             gate,
             chain: None,
             facts: Mutex::new(None),
+            facts_source: None,
             address: None,
             instances: tokio::sync::Mutex::new(HashMap::new()),
+            in_flight: Mutex::new(HashSet::new()),
         }
     }
 
@@ -198,6 +228,20 @@ impl WorkloadHostService {
         if let Ok(mut f) = self.facts.lock() {
             *f = Some(facts);
         }
+    }
+
+    /// Read the signed facts from `source` on every `describe` (falling
+    /// back to [`Self::set_facts`] when it has none).
+    pub fn with_facts_source(mut self, source: FactsSource) -> Self {
+        self.facts_source = Some(source);
+        self
+    }
+
+    fn current_facts(&self) -> Option<SignedNodeFacts> {
+        self.facts_source
+            .as_ref()
+            .and_then(|f| f())
+            .or_else(|| self.facts.lock().ok().and_then(|f| f.clone()))
     }
 
     /// This node's id.
@@ -315,8 +359,7 @@ impl WorkloadHostService {
         }
         match req.method.as_str() {
             method::DESCRIBE => {
-                let facts = self.facts.lock().ok().and_then(|f| f.clone());
-                Ok(json!({ "facts": facts, "advertisement": self.advertisement() }))
+                Ok(json!({ "facts": self.current_facts(), "advertisement": self.advertisement() }))
             }
             method::PLACE | method::LOAD => self.place(req, fetch).await,
             method::START | method::STOP | method::UNLOAD | method::STATUS | method::LOGS => {
@@ -340,6 +383,7 @@ impl WorkloadHostService {
     }
 
     async fn place(&self, req: &CtlRequest, fetch: Option<&mut PeerSet>) -> Result<Value, Refusal> {
+        let _in_flight = InFlight::enter(&self.in_flight, req.decision_id.clone());
         let b: PlaceBody = serde_json::from_value(req.body.clone())
             .map_err(|e| refuse(RefusalCode::InvalidRequest, format!("place body: {e}")))?;
         if !valid_token(&b.name, 64)
@@ -395,8 +439,8 @@ impl WorkloadHostService {
             },
         );
         let started = req.method == method::PLACE && b.start;
-        if started {
-            host.start(&h).await.map_err(|e| runtime_refusal(&e))?;
+        if started && let Err(e) = host.start(&h).await {
+            return Err(self.roll_back(&host, &h, &e).await);
         }
         let status = host.status(&h).await;
         self.record(
@@ -414,66 +458,25 @@ impl WorkloadHostService {
         }))
     }
 
-    async fn instance_op(&self, req: &CtlRequest) -> Result<Value, Refusal> {
-        let b: InstanceBody = serde_json::from_value(req.body.clone())
-            .map_err(|e| refuse(RefusalCode::InvalidRequest, format!("instance body: {e}")))?;
-        let mut map = self.instances.lock().await;
-        let Some(iid) = b.instance_id else {
-            if req.method != method::STATUS {
-                return Err(refuse(RefusalCode::InvalidRequest, "instance_id required"));
+    /// A start that failed after load: unload, so the target keeps no
+    /// instance the controller was told was refused. If the unload fails
+    /// too, the instance stays listed (and reconcilable) and the refusal
+    /// says so.
+    async fn roll_back(&self, host: &WorkloadHost, h: &InstanceHandle, e: &RuntimeError) -> Refusal {
+        let mut r = runtime_refusal(e);
+        let iid = h.instance_id.clone();
+        match host.unload(h.clone()).await {
+            Ok(()) => {
+                self.instances.lock().await.remove(&iid);
+                r.reason = format!("start failed: {}; loaded instance {iid} unloaded", r.reason);
             }
-            let mut all = Vec::new();
-            for (id, p) in map.iter() {
-                let host = &self.routes[&p.route];
-                all.push(json!({
-                    "instance_id": id, "workload": p.name, "variant": p.variant,
-                    "decision_id": p.decision_id, "status": host.status(&p.handle).await,
-                }));
+            Err(u) => {
+                r.reason = format!(
+                    "start failed: {}; unload of {iid} failed too ({u}), it stays listed",
+                    r.reason
+                );
             }
-            return Ok(Value::Array(all));
-        };
-        let p = map
-            .get_mut(&iid)
-            .ok_or_else(|| refuse(RefusalCode::UnknownInstance, format!("no instance {iid}")))?;
-        let host = self.routes[&p.route].clone();
-        match req.method.as_str() {
-            method::START => host.start(&p.handle).await.map(|_| json!({"started": iid})),
-            method::STOP => {
-                let grace = Duration::from_millis(b.grace_ms.unwrap_or(2_000).min(60_000));
-                host.stop(&p.handle, grace).await.map(|ev| {
-                    let audit = ev.audit();
-                    p.last = Some(ev);
-                    json!({ "stopped": iid, "evidence": audit })
-                })
-            }
-            method::UNLOAD => {
-                let h = p.handle.clone();
-                let r = host.unload(h).await.map(|_| json!({ "unloaded": iid }));
-                if r.is_ok() {
-                    map.remove(&iid);
-                }
-                r
-            }
-            method::STATUS => {
-                Ok(json!({ "instance_id": iid, "status": host.status(&p.handle).await }))
-            }
-            _ => Ok(match &p.last {
-                Some(ev) => json!({
-                    "instance_id": iid,
-                    "stdout": clip(&ev.stdout), "stderr": clip(&ev.stderr),
-                    "exit_code": ev.exit_code, "truncated": ev.truncated,
-                }),
-                None => json!({ "instance_id": iid, "note": "no captured run yet (stop first)" }),
-            }),
         }
-        .map_err(|e| runtime_refusal(&e))
+        r
     }
-}
-
-fn clip(s: &str) -> &str {
-    let mut end = s.len().min(MAX_LOG_BYTES);
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
 }

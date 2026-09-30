@@ -78,7 +78,7 @@ pub struct Attempt {
     pub node_id: String,
     /// Variant sent.
     pub variant: String,
-    /// `placed`, `refused`, `unreachable` or `gate_denied`.
+    /// `placed`, `refused`, `unreachable`, `indeterminate` or `gate_denied`.
     pub outcome: String,
     /// Refusal code, if refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -341,6 +341,24 @@ impl PlacementControlPlane {
                     report.placed = Some(rec);
                     return;
                 }
+                Err(CallFailure::Indeterminate(why)) => {
+                    // The target may have placed it: reconcile before any
+                    // other candidate, or stop (never two instances).
+                    let (settled, note) = self.reconcile(&node, &report.decision_id).await;
+                    self.chain_event(
+                        chain::EVENT_KIND_WORKLOAD_REFUSE,
+                        json!({ "phase": "dispatch", "decision_id": report.decision_id, "node": node,
+                                "variant": variant, "outcome": "indeterminate", "reason": why,
+                                "reconcile": note, "next": if settled { "trying the next candidate" }
+                                else { "stopped: the target may hold the instance" } }),
+                    );
+                    report
+                        .attempts
+                        .push(attempt("indeterminate", None, Some(format!("{why}; {note}"))));
+                    if !settled {
+                        return;
+                    }
+                }
                 Err(f) => {
                     let (outcome, code, reason) = match &f {
                         CallFailure::Refused(r) => (
@@ -348,7 +366,9 @@ impl PlacementControlPlane {
                             Some(r.code.as_str().to_string()),
                             r.reason.clone(),
                         ),
-                        CallFailure::Unreachable(e) => ("unreachable", None, e.clone()),
+                        CallFailure::Unreachable(e) | CallFailure::Indeterminate(e) => {
+                            ("unreachable", None, e.clone())
+                        }
                     };
                     self.chain_event(
                         chain::EVENT_KIND_WORKLOAD_REFUSE,

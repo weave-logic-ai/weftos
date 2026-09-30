@@ -26,7 +26,7 @@ use crate::workload_runtime::{NativeConfig, NativeRuntime, WorkloadHost};
 
 use super::host_service::WorkloadHostService;
 use super::plane::PlacementControlPlane;
-use super::transport::MeshConnector;
+use super::transport::CtlConnector;
 
 /// The package signer (operator key) every node pins.
 pub fn signer() -> SigningKey {
@@ -150,11 +150,22 @@ pub fn host_node(
     scripts: bool,
     controller: &SigningKey,
 ) -> HostNode {
+    host_node_with(seed, caps, scripts, controller, gate)
+}
+
+/// [`host_node`] with its own governance (`make_gate` gets the node's chain).
+pub fn host_node_with(
+    seed: u8,
+    caps: Vec<Capability>,
+    scripts: bool,
+    controller: &SigningKey,
+    make_gate: impl FnOnce(&Arc<ChainManager>) -> Arc<WorkloadGate>,
+) -> HostNode {
     let key = SigningKey::from_bytes(&[seed; 32]);
     let id = node_id_from_pubkey(&key.verifying_key().to_bytes());
     let chain = Arc::new(ChainManager::new(0, 1000));
     let tmp = tempfile::tempdir().unwrap();
-    let gate = gate(&chain);
+    let gate = make_gate(&chain);
     let native = NativeRuntime::new(NativeConfig {
         root: tmp.path().join("instances"),
         run_as: None,
@@ -189,7 +200,7 @@ pub fn host_node(
 /// The controller with its own chain and gate.
 pub fn controller(
     key: &SigningKey,
-    connector: Arc<MeshConnector>,
+    connector: Arc<dyn CtlConnector>,
 ) -> (PlacementControlPlane, Arc<ChainManager>) {
     let chain = Arc::new(ChainManager::new(0, 1000));
     let id = node_id_from_pubkey(&key.verifying_key().to_bytes());

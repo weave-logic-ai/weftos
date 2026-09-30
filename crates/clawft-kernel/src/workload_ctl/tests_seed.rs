@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use clawft_types::placement::TrustTier;
 use clawft_types::secret::SecretString;
 use serde_json::json;
 use wiremock::matchers::{method, path, path_regex};
@@ -10,11 +11,14 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::host_service::CtlConfig;
 use super::msg::method as ctl;
-use super::plane::PlacementControlPlane;
+use super::plane::{PlacementControlPlane, PlaneError};
 use super::plane_seed::{SEED_ROUTE, StorePinOrder};
 use super::test_support::{anchors, events, exchange};
 use super::transport::MeshConnector;
-use crate::chain::{ChainManager, EVENT_KIND_WORKLOAD_PLACE, EVENT_KIND_WORKLOAD_START};
+use crate::chain::{
+    ChainManager, EVENT_KIND_WORKLOAD_PLACE, EVENT_KIND_WORKLOAD_REFUSE, EVENT_KIND_WORKLOAD_START,
+    EVENT_KIND_WORKLOAD_UNLOAD,
+};
 use crate::workload_governance::{
     NetworkPolicy, NodeTrustTier, PackageTrust, WorkloadGate, WorkloadPermitRule,
 };
@@ -37,6 +41,10 @@ impl SeedCredentials for Creds {
 }
 
 async fn mock_seed() -> MockServer {
+    mock_seed_start(200, 1).await
+}
+
+async fn mock_seed_start(start_status: u16, starts: u64) -> MockServer {
     let s = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/apps"))
@@ -54,8 +62,8 @@ async fn mock_seed() -> MockServer {
         .await;
     Mock::given(method("POST"))
         .and(path_regex(r"^/api/v1/apps/fall-detect/start$"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
-        .expect(1)
+        .respond_with(ResponseTemplate::new(start_status).set_body_json(json!({"ok": true})))
+        .expect(starts)
         .mount(&s)
         .await;
     s
@@ -108,8 +116,12 @@ async fn store_pin_goes_to_the_seed_adapter_on_its_operator_assigned_id() {
         anchors(),
         Arc::new(MeshConnector::new(false)),
     );
-    plane.add_seed(NODE, host).unwrap();
-    assert!(plane.add_seed("bad id!", plane_host_placeholder()).is_err());
+    plane.add_seed(NODE, host, TrustTier::Paired).unwrap();
+    assert!(
+        plane
+            .add_seed("bad id!", plane_host_placeholder(), TrustTier::Paired)
+            .is_err()
+    );
 
     let rec = plane
         .place_store_pin(&StorePinOrder {
@@ -183,4 +195,108 @@ fn plane_host_placeholder() -> Arc<WorkloadHost> {
         )
         .with_chain(chain),
     )
+}
+
+/// A plane with the Seed adapter registered at `tier`; permits need Paired.
+async fn seed_plane(
+    server: &MockServer,
+    tier: TrustTier,
+) -> (PlacementControlPlane, Arc<ChainManager>, Arc<ChainManager>) {
+    let rt = SeedApiRuntime::new(
+        SeedConfig {
+            node_id: NODE.into(),
+            pins: vec![SeedPin::new("fall-detect", "1.0.0")],
+            concurrency_cap: 3,
+        },
+        Arc::new(HttpSeedTransport::new(&server.uri(), SeedTls::WebPki).unwrap()),
+        Arc::new(Creds),
+    )
+    .unwrap();
+    let seed_chain = Arc::new(ChainManager::new(0, 1000));
+    let mut permit = WorkloadPermitRule::new("seed", ["workload.*"], ["cog"]);
+    permit.min_package_trust = PackageTrust::OperatorAttested;
+    permit.max_network = NetworkPolicy::Egress;
+    let host = Arc::new(
+        WorkloadHost::new(
+            Arc::new(rt),
+            Arc::new(
+                WorkloadGate::new(0.95, false)
+                    .with_chain(seed_chain.clone())
+                    .with_permit(permit.clone())
+                    .unwrap(),
+            ),
+            "operator",
+            NodeTrustTier::Paired,
+        )
+        .with_chain(seed_chain.clone()),
+    );
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let plane = PlacementControlPlane::new(
+        ed25519_dalek::SigningKey::from_bytes(&[10; 32]),
+        Arc::new(
+            WorkloadGate::new(0.95, false)
+                .with_chain(chain.clone())
+                .with_permit(permit)
+                .unwrap(),
+        ),
+        chain.clone(),
+        exchange("ctl", &chain),
+        anchors(),
+        Arc::new(MeshConnector::new(false)),
+    );
+    plane.add_seed(NODE, host, tier).unwrap();
+    (plane, chain, seed_chain)
+}
+
+fn pin_order(start: bool) -> StorePinOrder {
+    StorePinOrder {
+        node_id: NODE.into(),
+        registry: "cognitum".into(),
+        id: "fall-detect".into(),
+        version: "1.0.0".into(),
+        sha256: None,
+        config: CtlConfig {
+            mode: RunMode::Listener,
+            args: vec![],
+            csi_port: 5006,
+        },
+        start,
+    }
+}
+
+#[tokio::test]
+async fn governance_sees_the_operator_assigned_seed_tier() {
+    let server = mock_seed_start(200, 0).await;
+    let (plane, chain, _) = seed_plane(&server, TrustTier::Discovered).await;
+    let err = plane.place_store_pin(&pin_order(false)).await.unwrap_err();
+    assert!(matches!(err, PlaneError::Governance(_)), "{err}");
+    let gate = events(&chain, EVENT_KIND_WORKLOAD_PLACE);
+    assert!(
+        gate.iter().any(|(s, p)| s == "workload"
+            && p["decision"] == "deny"
+            && p.to_string().contains("\"discovered\"")),
+        "the gate saw the discovered tier: {gate:?}"
+    );
+    assert!(plane.placements().is_empty());
+}
+
+#[tokio::test]
+async fn a_seed_start_failure_is_not_a_placement_and_is_rolled_back() {
+    let server = mock_seed_start(500, 1).await;
+    let (plane, chain, seed_chain) = seed_plane(&server, TrustTier::Paired).await;
+    let err = plane.place_store_pin(&pin_order(true)).await.unwrap_err();
+    assert!(err.to_string().contains("start failed"), "{err}");
+    assert!(err.to_string().contains("unloaded"), "{err}");
+    assert!(plane.placements().is_empty(), "nothing recorded as placed");
+    assert!(
+        events(&chain, EVENT_KIND_WORKLOAD_PLACE)
+            .iter()
+            .all(|(_, p)| p["phase"] != "placed")
+    );
+    assert!(
+        events(&chain, EVENT_KIND_WORKLOAD_REFUSE)
+            .iter()
+            .any(|(_, p)| p["phase"] == "start")
+    );
+    assert!(!events(&seed_chain, EVENT_KIND_WORKLOAD_UNLOAD).is_empty());
 }
