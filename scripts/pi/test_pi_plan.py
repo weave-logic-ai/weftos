@@ -113,7 +113,7 @@ class Results(unittest.TestCase):
         self.assertFalse(plan.stage_ok(0, plan.parse_results(self.NONE), require_ran=True))
 
 
-def pi_state_out(chain_mtime, weaver="active"):
+def pi_state_out(chain_mtime, weaver="active pid=812 since=4200"):
     rows = ["%s 32 5" % f for f in plan.OPERATOR_FILES if f != ".clawft/chain.rvf"]
     rows.append(".clawft/chain.rvf 468733 %s" % chain_mtime)
     return "\n".join(rows + ["weaver " + weaver, plan.STATE_END]) + "\n"
@@ -124,7 +124,7 @@ class Guard(unittest.TestCase):
         full = pi_state_out("100")
         st = plan.parse_pi_state(0, full)
         self.assertEqual(st[".clawft/chain.rvf"], "468733 100")
-        self.assertEqual(st["weaver"], "active")
+        self.assertEqual(st["weaver"], "active pid=812 since=4200")
         self.assertIsNone(plan.parse_pi_state(255, full))
         self.assertIsNone(plan.parse_pi_state(0, ""))
         self.assertIsNone(plan.parse_pi_state(0, full.replace(plan.STATE_END, "")))
@@ -181,6 +181,47 @@ class Guard(unittest.TestCase):
                                  check=True).stdout.split(b"\0")
         self.assertIn(b"crates/x/lib.rs", out)
         self.assertNotIn(b"crates/x/local-notes.txt", out)
+
+    def test_weaver_restart_during_run_is_a_change(self):
+        line = plan.pi_state_command()
+        self.assertIn("-p MainPID", line)
+        self.assertIn("-p ActiveEnterTimestampMonotonic", line)
+        before = plan.parse_pi_state(0, pi_state_out("100"))
+        after = plan.parse_pi_state(0, pi_state_out("100", "active pid=913 since=9900"))
+        g = plan.operator_guard(before, after, 7, 7)
+        self.assertFalse(g["pi_weaver_unchanged"])
+        self.assertFalse(g["ok"])
+        self.assertTrue(plan.operator_guard(before, dict(before), 7, 7)["ok"])
+
+    def test_locally_deleted_tracked_file_does_not_break_rsync(self):
+        import shutil
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            src, dst = os.path.join(d, "src"), os.path.join(d, "dst")
+            os.makedirs(os.path.join(src, "crates", "x"))
+            git = lambda *a: subprocess.run(["git", "-C", src] + list(a), check=True,
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            git("init", "-q")
+            for f in ("crates/x/lib.rs", "crates/x/gone.rs"):
+                open(os.path.join(src, f), "w").close()
+            git("add", "crates")
+            os.remove(os.path.join(src, "crates/x/gone.rs"))   # deleted, not committed
+            listing = subprocess.run(plan.sync_files_command(src), stdout=subprocess.PIPE,
+                                     check=True).stdout
+            kept, missing = plan.present_files(src, listing)
+            self.assertEqual(missing, ["crates/x/gone.rs"])
+            lst = os.path.join(d, "files.lst")
+            if shutil.which("rsync") is None:
+                self.skipTest("rsync not installed")
+            for data, want in ((kept, 0), (listing, 23)):   # 23: the unfiltered list fails
+                with open(lst, "wb") as f:
+                    f.write(data)
+                rc = subprocess.run(["rsync", "-a", "--from0", "--files-from=" + lst,
+                                     src + "/", dst + "/"], stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE).returncode
+                self.assertEqual(rc, want)
+            self.assertTrue(os.path.exists(os.path.join(dst, "crates/x/lib.rs")))
 
     def test_remote_timeout_runs_on_the_pi(self):
         line = plan.remote_test_command("/h/s", "/h/s/bin/t", "/h/s/src/c", [], timeout=60)
@@ -248,7 +289,7 @@ class LaneBehaviour(unittest.TestCase):
                 mock.patch.object(pi_lane, "local_chain_mtime", return_value=7), \
                 mock.patch.object(pi_lane.subprocess, "run") as git, \
                 redirect_stdout(out):
-            git.return_value.stdout = b"crates/x\0"
+            git.return_value.stdout = b"Cargo.toml\0"
             if "WEFTOS_PI_HOST" not in env:
                 os.environ.pop("WEFTOS_PI_HOST", None)
             rc = pi_lane.main(argv)
@@ -336,6 +377,32 @@ class LaneBehaviour(unittest.TestCase):
         self.assertEqual(rc, 1, out)
         self.assertIn("interrupted by signal %d" % signal.SIGTERM, out)
         self.assertIn("INFO  operator data:", out)
+
+    def test_sigterm_during_cleanup_still_guards_and_reports(self):
+        import signal
+        import tempfile
+
+        def hook(line):
+            if "rm -rf" in line and "mkdir" not in line:      # the cleanup call
+                os.kill(os.getpid(), signal.SIGTERM)
+            return None
+        runner = FakeRunner(hook=hook)
+        saved = {s: signal.getsignal(s) for s in pi_lane.LANE_SIGNALS}
+        with tempfile.TemporaryDirectory() as d:
+            report = os.path.join(d, "r.json")
+            try:
+                rc, out = self.run_main(["clawft-kernel", "--report", report], runner)
+            finally:
+                for s, h in saved.items():
+                    signal.signal(s, h)
+            with open(report) as f:
+                rep = json.load(f)
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.probes(runner), 2)
+        self.assertIn("INFO  operator data:", out)
+        self.assertIn("signal %d during cleanup" % signal.SIGTERM, out)
+        self.assertFalse(rep["ok"])
+        self.assertTrue(rep["guard"]["ok"])
 
     def test_staging_first_removes_a_stale_scratch_dir(self):
         runner = FakeRunner()

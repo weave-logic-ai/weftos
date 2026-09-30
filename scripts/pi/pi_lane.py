@@ -160,8 +160,11 @@ class Lane:
                          % ((plan.remove_scratch_command(rd),) + (rd,) * 5), capture="quiet")
         if rc != 0:
             raise SystemExit("test-pi: cannot create the Pi scratch dir")
-        files = subprocess.run(plan.sync_files_command(ROOT),
-                               stdout=subprocess.PIPE, check=True).stdout
+        files, missing = plan.present_files(ROOT, subprocess.run(
+            plan.sync_files_command(ROOT), stdout=subprocess.PIPE, check=True).stdout)
+        if missing:
+            print("  NOTE  %d tracked file(s) deleted locally are not synced, e.g. %s"
+                  % (len(missing), missing[0]))
         rsh = "ssh " + " ".join(SSH_OPTS)
         with tempfile.NamedTemporaryFile(suffix=".lst") as lst:
             lst.write(files)
@@ -274,8 +277,18 @@ class Lane:
         print("  FAIL  lane aborted: %s" % why)
 
 
+LANE_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+
+
 def _raise_on_signal(signum, _frame):
     raise SystemExit("test-pi: interrupted by signal %d" % signum)
+
+
+def _defer_signals(deferred):
+    """From cleanup on, a signal is recorded, not raised, so cleanup, the
+    after-probe, the guard and the report always finish."""
+    for sig in LANE_SIGNALS:
+        signal.signal(sig, lambda signum, _f: deferred.append(signum))
 
 
 def parse_args(argv):
@@ -334,7 +347,8 @@ def main(argv=None):
         ",".join(a.crates) or "-", a.live_native, a.cogs, a.filter or "-"))
     # SIGTERM/SIGHUP become SystemExit so cleanup and the guard still run
     # (SIGKILL cannot be caught; the next run removes the stale scratch dir).
-    for sig in (signal.SIGTERM, signal.SIGHUP):
+    deferred = []
+    for sig in LANE_SIGNALS:
         signal.signal(sig, _raise_on_signal)
     try:
         lane.stages()
@@ -342,8 +356,11 @@ def main(argv=None):
         code = getattr(e, "code", None)
         lane.abort(code if isinstance(code, str) else "interrupted (%s)" % type(e).__name__)
     finally:
+        _defer_signals(deferred)
         lane.cleanup()
     pi_after, mac_after = lane.pi_state(), local_chain_mtime()
+    if deferred:
+        lane.abort("signal %d during cleanup; cleanup and guard completed" % deferred[0])
     guard = plan.operator_guard(pi_before, pi_after, mac_before, mac_after)
     rc = 0 if lane.results and all(r["ok"] for r in lane.results) else 1
     print("\n── test-pi summary")

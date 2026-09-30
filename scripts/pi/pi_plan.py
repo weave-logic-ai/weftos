@@ -6,6 +6,7 @@ builder container command, cargo artifact parsing, the isolated remote
 environment, and libtest result parsing.
 """
 import json
+import os
 import re
 import shlex
 
@@ -183,11 +184,14 @@ STATE_END = "weftos-pi-state-end"
 
 def pi_state_command():
     """One ssh line: `<file> <size> <mtime>` (or `<file> absent`) per operator
-    file, the weaver.service state, then an end marker so a truncated or
-    failed probe is detectable."""
+    file, the weaver.service state with its MainPID and ActiveEnterTimestamp
+    (so a restart during the run is a change, not `active -> active`), then an
+    end marker so a truncated or failed probe is detectable."""
+    show = "systemctl show -p %s --value weaver.service 2>/dev/null"
     parts = ["for f in %s; do stat -c '%%n %%s %%Y' \"$f\" 2>/dev/null || echo \"$f absent\"; done"
              % " ".join(OPERATOR_FILES),
-             "echo \"weaver $(systemctl is-active weaver.service 2>/dev/null || true)\"",
+             "echo \"weaver $(systemctl is-active weaver.service 2>/dev/null || true)"
+             " pid=$(%s) since=$(%s)\"" % (show % "MainPID", show % "ActiveEnterTimestampMonotonic"),
              "echo %s" % STATE_END]
     return "cd && " + "; ".join(parts)
 
@@ -238,6 +242,17 @@ def remove_scratch_command(scratch_rel):
         raise ValueError("invalid scratch dir %r" % scratch_rel)
     rd = scratch_rel
     return "cd && { rm -rf %s 2>/dev/null || sudo -n rm -rf %s; } && test ! -e %s" % (rd, rd, rd)
+
+
+def present_files(root, listing):
+    """Split a NUL-separated `git ls-files` listing into (bytes of the paths
+    that exist in the worktree, [missing paths]). A tracked file deleted but
+    not committed is left out instead of failing rsync with rc 23."""
+    keep, missing = [], []
+    for p in (listing or b"").split(b"\0"):
+        if p:
+            (keep if os.path.lexists(os.path.join(root.encode(), p)) else missing).append(p)
+    return b"".join(p + b"\0" for p in keep), [m.decode(errors="replace") for m in missing]
 
 
 def sync_files_command(root):

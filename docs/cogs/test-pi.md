@@ -30,7 +30,8 @@ them with `python3 -m unittest discover -s scripts/pi`.
 1. **Preflight.** It checks over SSH that the Pi is `aarch64`, reads its glibc
    and `$HOME`, and records the size and mtime of the Pi's operator files
    (`~/.clawft/chain.rvf`, `chain.key`, `chain.tree.json`, `config.json`,
-   `node.key`) and the state of `weaver.service`. On the Mac it records the
+   `node.key`) and the state of `weaver.service` with its `MainPID` and
+   `ActiveEnterTimestampMonotonic`, so a restart counts as a change. On the Mac it records the
    mtime of `~/.clawft/chain.rvf`. If the Pi probe fails or comes back
    incomplete, the lane stops before building anything.
 2. **Cross-build.** It runs `cargo test --no-run` inside
@@ -48,7 +49,8 @@ them with `python3 -m unittest discover -s scripts/pi`.
    `~/weftos-test-pi/{bin,src,home,runtime,tmp}` on the Pi, rsyncs only the
    git-tracked files under `crates/`, `config/` and `assets/` (plus the workspace
    manifests) into `src/`, and puts the test binaries in `bin/`. Untracked local
-   files never leave the Mac.
+   files never leave the Mac. A tracked file deleted locally but not committed
+   is left out of the list (with a NOTE), so it does not fail rsync.
 4. **Run.** Each binary runs from its crate directory, as `cargo test` would, as
    `env -i PATH=… HOME=~/weftos-test-pi/home WEFTOS_RUNTIME_DIR=~/weftos-test-pi/runtime
    TMPDIR=… XDG_*=… CARGO_MANIFEST_DIR=… <bin> [filter]`. Nothing from the login
@@ -78,7 +80,9 @@ them with `python3 -m unittest discover -s scripts/pi`.
    harness output (with `sudo -n` when needed), unless you pass `--keep`. The
    removal runs even when a stage fails or the lane aborts (a failed build,
    rsync or fetch, Ctrl-C, SIGTERM or SIGHUP); the abort becomes a FAIL row in
-   the summary. SIGKILL cannot be caught, so step 3 of the next run removes
+   the summary. From cleanup on, SIGTERM and SIGHUP are recorded instead of
+   raised, so cleanup, the guard and the report always finish; such a signal
+   still fails the run. SIGKILL cannot be caught, so step 3 of the next run removes
    whatever such a run left.
 8. **Guard.** It runs after every run that got past the before-probe, aborted
    or not, and re-reads the Pi operator files, `weaver.service` and the Mac
