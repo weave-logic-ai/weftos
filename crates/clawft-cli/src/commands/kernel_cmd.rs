@@ -23,6 +23,10 @@ pub struct KernelArgs {
     /// Config file path (overrides auto-discovery).
     #[arg(short, long, global = true)]
     pub config: Option<String>,
+
+    /// Print daemon results as raw JSON instead of text.
+    #[arg(long, global = true)]
+    pub json: bool,
 }
 
 /// Kernel subcommands.
@@ -45,24 +49,60 @@ pub enum KernelAction {
     },
 }
 
-/// Ask a running daemon (if any) for `method` and print its JSON result.
+/// Render a daemon JSON result as text: an object becomes `key: value`
+/// lines, an array of objects becomes a table, anything else prints as-is.
+fn render_json_text(value: &serde_json::Value) -> String {
+    use serde_json::Value;
+    fn cell(v: &Value) -> String {
+        match v {
+            Value::String(s) => s.clone(),
+            Value::Null => "-".into(),
+            other => other.to_string(),
+        }
+    }
+    match value {
+        Value::Object(map) => map
+            .iter()
+            .map(|(k, v)| format!("{k}: {}", cell(v)))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Value::Array(rows) if rows.iter().all(Value::is_object) && !rows.is_empty() => {
+            let cols: Vec<String> = rows[0].as_object().unwrap().keys().cloned().collect();
+            let mut table = Table::new();
+            table.load_preset(presets::NOTHING);
+            table.set_header(cols.clone());
+            for row in rows {
+                table.add_row(cols.iter().map(|c| cell(&row[c.as_str()])).collect::<Vec<_>>());
+            }
+            table.to_string()
+        }
+        other => cell(other),
+    }
+}
+
+/// Ask a running daemon (if any) for `method` and print its result.
 ///
-/// Returns `true` when a daemon answered, so the caller skips the local
-/// ephemeral boot (which would otherwise contend with the daemon's
-/// listeners).
-async fn print_from_daemon(method: &str) -> anyhow::Result<bool> {
+/// Returns `Ok(true)` when a daemon answered successfully, so the caller
+/// skips the local ephemeral boot; `Ok(false)` when no daemon is running.
+/// A daemon that answers with an error is a failure: the message goes to
+/// stderr and the process exits non-zero.
+async fn print_from_daemon(method: &str, json: bool) -> anyhow::Result<bool> {
     let Some(mut client) = clawft_rpc::DaemonClient::connect().await else {
         return Ok(false);
     };
     let resp = client.simple_call(method).await?;
-    if resp.ok {
-        let value = resp.result.unwrap_or(serde_json::Value::Null);
-        println!("(daemon)\n{}", serde_json::to_string_pretty(&value)?);
-    } else {
+    if !resp.ok {
         eprintln!(
             "daemon error: {}",
             resp.error.unwrap_or_else(|| "unknown error".into())
         );
+        std::process::exit(1);
+    }
+    let value = resp.result.unwrap_or(serde_json::Value::Null);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&value)?);
+    } else {
+        println!("(daemon)\n{}", render_json_text(&value));
     }
     Ok(true)
 }
@@ -90,21 +130,21 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
 
     match args.action {
         KernelAction::Status => {
-            if print_from_daemon("kernel.status").await? {
+            if print_from_daemon("kernel.status", args.json).await? {
                 return Ok(());
             }
             let kernel = boot_for_inspection(config, kernel_config, platform).await;
             print_status(&kernel);
         }
         KernelAction::Services => {
-            if print_from_daemon("kernel.services").await? {
+            if print_from_daemon("kernel.services", args.json).await? {
                 return Ok(());
             }
             let kernel = boot_for_inspection(config, kernel_config, platform).await;
             print_services(&kernel).await;
         }
         KernelAction::Ps => {
-            if print_from_daemon("kernel.ps").await? {
+            if print_from_daemon("kernel.ps", args.json).await? {
                 return Ok(());
             }
             let kernel = boot_for_inspection(config, kernel_config, platform).await;
@@ -114,6 +154,15 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
             let kernel = if foreground {
                 // A long-lived kernel: full config, and the same persisted
                 // node.key the daemon uses so its node id is stable.
+                // A second kernel would share the daemon's node id and key.
+                if clawft_rpc::is_daemon_running().await {
+                    eprintln!(
+                        "a daemon is already running for this runtime dir; refusing to boot a \
+                         second kernel with the same node identity (stop it first, or set \
+                         WEFTOS_RUNTIME_DIR to an isolated directory)"
+                    );
+                    std::process::exit(1);
+                }
                 let runtime_dir = clawft_rpc::socket_path()
                     .parent()
                     .map(|p| p.to_path_buf())

@@ -47,6 +47,14 @@ pub struct VoiceConfig {
     #[serde(default)]
     pub tts: TtsConfig,
 
+    /// Operator pin for the microphone node whose audio feeds whisper and
+    /// the classifier (a node id, 32 hex chars). The `WHISPER_INPUT_NODE_ID`
+    /// env var overrides it. When unset the daemon auto-selects only if
+    /// exactly one registered node publishes `sensor/mic`, and refuses
+    /// (with a warning naming the candidates) when there are several.
+    #[serde(default, alias = "micNodeId", skip_serializing_if = "Option::is_none")]
+    pub mic_node_id: Option<String>,
+
     /// Voice activity detection settings.
     #[serde(default)]
     pub vad: VadConfig,

@@ -947,6 +947,7 @@ pub async fn run(
     // survives `Kernel::boot` taking ownership of `config`. The voice
     // consumer wires further below, after the agent service is up.
     let voice_consumer_cfg = config.voice.consumer.clone();
+    let voice_mic_pin = config.voice.mic_node_id.clone();
 
     // WEFT-616 Phase 2: snapshot the per-turn COW memory config; wired
     // onto the agent loop after `build_daemon_agent_loop` (late set —
@@ -1109,218 +1110,19 @@ pub async fn run(
         }));
     }
 
-    // Spawn the whisper STT service. Subscribes to the configured
-    // ESP32-side mic pcm_chunk path, transcribes via the local
-    // whisper.cpp HTTP service, publishes transcripts under the
-    // daemon's own node prefix.
-    //
-    // Pre-register control flags before spawn so the service holds
-    // shared `Arc<AtomicBool>` handles to flags the RPC handler can
-    // flip.
-    // The mic source node is NOT hard-coded. `WHISPER_INPUT_NODE_ID` is an
-    // explicit override; otherwise the pipeline waits for a registered node
-    // that publishes `sensor/mic` (crate::mic_source), re-checking as nodes
-    // register, and warns loudly while nothing matches.
+    // Whisper STT + audio classifier. The mic source is chosen by
+    // `crate::mic_source::supervise`: the operator pin (`WHISPER_INPUT_NODE_ID`
+    // or `voice.mic_node_id`) wins; otherwise only a unique `sensor/mic`
+    // publisher is auto-selected; several candidates are refused with a
+    // warning. There is no hard-coded node id.
     let (mic_node_tx, mic_node_rx) = watch::channel(None::<String>);
-    let whisper_service_flag = control_flags.register(ControlKind::Service, "whisper", true);
-    let classify_service_flag = control_flags.register(ControlKind::Service, "classify", true);
-    {
-        let kernel = kernel.clone();
-        let control_flags = control_flags.clone();
-        let daemon_node_id = daemon_identity.node_id.clone();
-        tokio::spawn(async move {
-            let source_node_id = crate::mic_source::wait_for_mic_node(
-                std::env::var(crate::mic_source::MIC_NODE_ENV).ok(),
-                &kernel,
-            )
-            .await;
-            let _ = mic_node_tx.send(Some(source_node_id.clone()));
-            let pcm_chunk_target = format!("{source_node_id}/mic/pcm_chunk");
-            let rms_target = format!("{source_node_id}/mic/rms");
-            let whisper_source_flag =
-                control_flags.register(ControlKind::Sensor, &pcm_chunk_target, true);
-            // RMS sensor isn't consumed by anything in-process today; the
-            // flag still lives here so toggling it from the GUI publishes
-            // the intent that the firmware will eventually subscribe to.
-            let _rms_sensor_flag = control_flags.register(ControlKind::Sensor, &rms_target, true);
-            {
-                let k = kernel.read().await;
-                let substrate = k.substrate_service();
-                for (target, label) in [
-                    (&pcm_chunk_target, "Mic PCM chunks"),
-                    (&rms_target, "Mic RMS summary"),
-                ] {
-                    let intent = ControlIntent {
-                        enabled: true,
-                        kind: ControlKind::Sensor,
-                        target: target.clone(),
-                        label: label.to_string(),
-                        updated_at_ms: crate::control::now_ms(),
-                    };
-                    let path = crate::control::intent_path(
-                        &daemon_node_id,
-                        ControlKind::Sensor,
-                        target,
-                    );
-                    if let Err(e) =
-                        substrate.publish_gated(Some(&daemon_node_id), &path, intent.to_value())
-                    {
-                        warn!(error = %e, path = %path, "control: mic intent publish failed");
-                    }
-                }
-            }
-        let whisper_source_flag = control_flags.register(ControlKind::Sensor, &pcm_chunk_target, true);
-        // RMS sensor isn't consumed by anything in-process today; the
-        // flag still lives here so toggling it from the GUI publishes
-        // the intent that the firmware will eventually subscribe to.
-        let _rms_sensor_flag = control_flags.register(ControlKind::Sensor, &rms_target, true);
-
-        // The classifier publishes one `Classification` per pcm_chunk
-        // under the daemon's prefix. We compute its path here so the
-        // whisper service can subscribe to it for its gate. Mesh-canonical
-        // `_derived/...` is the eventual home (R3.0 / R3.2); for now we
-        // single-tier under the daemon prefix and the mesh-gate agent
-        // will move all derived paths together at integration time.
-        let classify_output_path = format!(
-            "substrate/{daemon}/derived/classify/{source}/mic",
-            daemon = daemon_node_id,
-            source = source_node_id,
-        );
-
-        let _whisper_handle: Option<clawft_service_whisper::WhisperService> = {
-            let whisper_url = std::env::var(clawft_service_whisper::WHISPER_SERVICE_URL_ENV)
-                .unwrap_or_else(|_| "http://127.0.0.1:8123".to_string());
-            let input_path = format!("substrate/{source_node_id}/sensor/mic/pcm_chunk");
-            // Mesh-canonical transcript path (R3.2). Source node is part
-            // of the path so subscribers see one stable subtree across
-            // leader handoff. The daemon issued itself a `transcript`
-            // grant above; the gate consults the registry handed to the
-            // service via config.
-            // Mesh-canonical only (WEFT-236): Phase-4 dual-publish to the
-            // legacy node-private path is gone. Consumers must read
-            // `substrate/_derived/transcript/<source>/mic`.
-            let output_path_derived = format!("substrate/_derived/transcript/{source_node_id}/mic",);
-            let node_registry = {
-                let k = kernel.read().await;
-                k.node_registry().clone()
-            };
-            let cfg = clawft_service_whisper::WhisperServiceConfig {
-                window_ms: 2_000,
-                retry_backoff: std::time::Duration::from_millis(500),
-                node_id: daemon_node_id.clone(),
-                input_path: input_path.clone(),
-                output_path_derived: output_path_derived.clone(),
-                service_enabled: Arc::clone(&whisper_service_flag),
-                source_enabled: Arc::clone(&whisper_source_flag),
-                node_registry,
-                // Gate whisper on the classifier's output. The classifier
-                // is spawned just below; we point the subscription at the
-                // path the classifier will publish to. If the classifier
-                // fails to spawn (or hasn't published yet), the gate
-                // stays closed and no chunks are transcribed — that's
-                // the safe default for a "speech detected" filter.
-                classifier_input: Some(classify_output_path.clone()),
-                gate_window_ms: 1_500,
-                // SC-9 audit row context. Until manifest verify is wired
-                // into daemon boot we log a fixed model identifier; once
-                // `verify_model_dir` runs at startup the report's
-                // `manifest.model_id` will replace this.
-                model_id: "whisper-cpp/unverified".to_string(),
-                source_node_hint: source_node_id.clone(),
-            };
-            let client_cfg = clawft_service_whisper::WhisperConfig {
-                base_url: whisper_url.clone(),
-                ..clawft_service_whisper::WhisperConfig::default()
-            };
-            let client = match clawft_service_whisper::WhisperClient::new(client_cfg) {
-                Ok(c) => c,
-                Err(e) => {
-                    warn!(
-                        error = %e,
-                        "whisper client init failed (continuing without STT)"
-                    );
-                    return;
-                }
-            };
-            let substrate = {
-                let k = kernel.read().await;
-                k.substrate_service().clone()
-            };
-            match clawft_service_whisper::WhisperService::spawn(substrate, client, cfg) {
-                Ok(svc) => {
-                    info!(
-                        input = %input_path,
-                        output = %output_path_derived,
-                        whisper_url = %whisper_url,
-                        "whisper service spawned (mesh-canonical transcript path)"
-                    );
-                    Some(svc)
-                }
-                Err(e) => {
-                    warn!(error = %e, "whisper service failed to spawn (continuing without STT)");
-                    None
-                }
-            }
-        };
-
-        // Spawn the audio-classifier Stage. Subscribes to the same
-        // ESP32-side mic pcm_chunk path the whisper service consumes,
-        // runs each window through an `EnergyClassifier` (RMS-threshold
-        // VAD), and republishes a `Classification` value under the
-        // daemon's prefix at `classify_output_path`. The whisper service
-        // (configured above) subscribes to that path and uses it as a
-        // speech-vs-silence gate so inference only runs on speech.
-        //
-        // The `ClassifierBackend` trait is the seam for the future
-        // llama.cpp-hosted multi-class classifier (music / noise /
-        // speech / silence / ...) — swapping the backend doesn't change
-        // the wire shape, so neither the whisper gate nor any GUI
-        // subscriber needs a code change.
-        let _classify_handle: Option<clawft_service_classify::ClassifierService> = {
-            let input_path = format!("substrate/{source_node_id}/sensor/mic/pcm_chunk");
-            let cfg = clawft_service_classify::ClassifierServiceConfig {
-                node_id: daemon_node_id.clone(),
-                source_node: source_node_id.clone(),
-                input_path: input_path.clone(),
-                output_path: classify_output_path.clone(),
-                service_enabled: Arc::clone(&classify_service_flag),
-                // Reuse the whisper-side source flag — the user's mental
-                // model is "the mic source"; toggling that off should
-                // disable both the classifier and the transcription path
-                // since they consume the same source.
-                source_enabled: Arc::clone(&whisper_source_flag),
-            };
-            let backend: Arc<dyn clawft_service_classify::ClassifierBackend> =
-                Arc::new(clawft_service_classify::EnergyClassifier::from_env());
-            let substrate = {
-                let k = kernel.read().await;
-                k.substrate_service().clone()
-            };
-            match clawft_service_classify::ClassifierService::spawn(substrate, backend, cfg) {
-                Ok(svc) => {
-                    info!(
-                        input = %input_path,
-                        output = %classify_output_path,
-                        "classifier service spawned (energy VAD)"
-                    );
-                    Some(svc)
-                }
-                Err(e) => {
-                    warn!(
-                        error = %e,
-                        "classifier service failed to spawn (whisper gate will \
-                         stay closed and transcription will not run until the \
-                         classifier publishes)"
-                    );
-                    None
-                }
-            }
-        };
-            // Keep the services alive for the life of the daemon.
-            let _keep = (_whisper_handle, _classify_handle);
-            std::future::pending::<()>().await;
-        });
-    }
+    tokio::spawn(crate::mic_source::supervise(
+        crate::mic_source::pin_from(voice_mic_pin.as_deref()),
+        kernel.clone(),
+        control_flags.clone(),
+        daemon_identity.node_id.clone(),
+        mic_node_tx,
+    ));
 
     // Spawn the LLM service handle. Unlike whisper this is a
     // request/response client — there's no background tokio task to
@@ -2659,13 +2461,7 @@ pub async fn run(
         let k = kernel.read().await;
         let substrate = k.substrate_service();
         let initial = [
-            (ControlKind::Service, "whisper".to_string(), "Whisper STT"),
             (ControlKind::Service, "llm".to_string(), "Local LLM"),
-            (
-                ControlKind::Service,
-                "classify".to_string(),
-                "Audio classifier",
-            ),
             (ControlKind::Service, "agent".to_string(), "Agent service"),
         ];
         for (kind, target, label) in &initial {

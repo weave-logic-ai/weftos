@@ -368,6 +368,19 @@ impl SubstrateService {
         entry.sensitivity = sensitivity;
     }
 
+    /// Daemon-internal existence check: has anything been published at or
+    /// under `prefix`? Acts as no principal and reads no values, so callers
+    /// (discovery, health) need not impersonate a node to ask. It is not an
+    /// egress path and must not be exposed over RPC.
+    pub fn has_published_under(&self, prefix: &str) -> bool {
+        let norm = normalize_prefix(prefix);
+        let child = format!("{norm}/");
+        self.inner
+            .entries
+            .iter()
+            .any(|r| r.value.is_some() && (*r.key() == norm || r.key().starts_with(&child)))
+    }
+
     /// Egress gate: ADR-057 path ACL then sensitivity tier.
     ///
     /// This is intentionally the *one* seam the policy will gate, so
