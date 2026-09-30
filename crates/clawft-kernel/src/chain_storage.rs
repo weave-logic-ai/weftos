@@ -1,4 +1,4 @@
-//! Pin the chain storage location once at boot.
+//! Pin the chain storage location once at boot, and guard it with a lock.
 //!
 //! The kernel reads the chain checkpoint path in several places: boot
 //! (signing key, RVF restore, tree checkpoint), the daemon's `chain.verify`
@@ -6,13 +6,24 @@
 //! single time and writes it into the kernel config, so all of them agree
 //! even if the environment changes after boot.
 //!
-//! Resolution follows [`clawft_types::runtime_paths::RuntimePaths`]: an
-//! explicit config path wins, then `chain.json` under the runtime root
-//! (`$WEFTOS_RUNTIME_DIR`, else the project's `.weftos/runtime`, else legacy
-//! `~/.clawft`). In this crate's own unit tests the default is a fresh temp
-//! dir per boot, so `cargo test` never touches the operator chain.
+//! Resolution, highest first:
+//!
+//! 1. an explicit `kernel.chain.checkpoint_path`;
+//! 2. `chain.json` under the runtime root
+//!    ([`clawft_types::runtime_paths::RuntimePaths`]: `$WEFTOS_RUNTIME_DIR`,
+//!    else the project's `.weftos/runtime`, else legacy `~/.clawft`);
+//! 3. a project root with no chain yet, while `~/.clawft/chain.*` exists
+//!    (and no `--new-chain`): keep using the legacy chain and key. Booting a
+//!    fresh genesis here would silently fork the operator's history, so the
+//!    legacy chain stays in use (WARN) until `weaver migrate user-chain`
+//!    (ADR-103 Phase 1) moves it.
+//!
+//! Whichever chain is in use is guarded by [`ChainLock`] (`chain.lock` beside
+//! it) for the kernel's lifetime, so two kernels can never append to one
+//! chain. In this crate's own unit tests the default is a fresh temp dir per
+//! boot, so `cargo test` never touches the operator chain.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clawft_types::config::KernelConfig;
 use clawft_types::runtime_paths::{RuntimePaths, legacy_chain_left_behind};
@@ -23,33 +34,99 @@ use clawft_types::runtime_paths::{RuntimePaths, legacy_chain_left_behind};
 /// Production: the one shared resolver. Unit tests: the directory holding
 /// the pinned per-boot temp chain, so nothing lands in the operator's
 /// runtime dir.
-pub fn boot_runtime_paths(pinned_chain: Option<&std::path::Path>) -> RuntimePaths {
+pub fn boot_runtime_paths(pinned_chain: Option<&Path>) -> RuntimePaths {
     #[cfg(test)]
-    if let Some(dir) = pinned_chain.and_then(std::path::Path::parent) {
+    if let Some(dir) = pinned_chain.and_then(Path::parent) {
         return RuntimePaths::at(dir);
     }
     let _ = pinned_chain;
     RuntimePaths::resolve()
 }
 
-/// WARN text when a project-rooted boot leaves the legacy `~/.clawft` chain
-/// behind (ADR-103 D4 behavior change). `None` when nothing is stranded.
-///
-/// Only meaningful for a chain path that came from the resolver, not from an
-/// explicit `kernel.chain.checkpoint_path`.
-pub fn legacy_chain_warning(
+/// A runtime file's path, preferring an existing pre-ADR-103 cwd-relative
+/// file (`<cwd>/.weftos/runtime/<name>`) over a missing new-path one, with a
+/// WARN. Keeps revocation lists, peers and apps from silently vanishing when
+/// the resolved root differs from where an older kernel kept them. Never
+/// moves the file.
+pub fn runtime_file(new: PathBuf, name: &str) -> PathBuf {
+    #[cfg(not(test))]
+    {
+        let cwd = std::env::current_dir().ok();
+        if let Some(legacy) =
+            clawft_types::runtime_paths::legacy_cwd_file(&new, name, cwd.as_deref())
+        {
+            tracing::warn!(
+                legacy = %legacy.display(),
+                resolved = %new.display(),
+                "using legacy cwd-relative runtime file {name}; it will not be moved automatically"
+            );
+            return legacy;
+        }
+    }
+    let _ = name;
+    new
+}
+
+static NEW_CHAIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Ask the next boot to start a fresh chain at the resolved path instead of
+/// adopting the legacy `~/.clawft` chain (`weaver kernel start --new-chain`).
+/// Process-wide on purpose: it is an operator flag, not a config-file field.
+pub fn request_new_chain(on: bool) {
+    NEW_CHAIN.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Which chain a default-path boot should use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainChoice {
+    /// Checkpoint path to pin (RVF, key and tree derive from it).
+    pub checkpoint: PathBuf,
+    /// True when this is the legacy `~/.clawft` chain, not the resolved one.
+    pub legacy_in_use: bool,
+    /// WARN text for the operator, when the choice needs explaining.
+    pub warning: Option<String>,
+}
+
+/// Choose the default chain for `paths` (see module docs, rule 2 and 3).
+pub fn choose_default_chain(
     paths: &RuntimePaths,
-    home: Option<&std::path::Path>,
-) -> Option<String> {
-    legacy_chain_left_behind(paths, home).map(|legacy| {
-        format!(
-            "chain not found at {} but a legacy chain exists at {}; \
-             continuing with a fresh chain at the resolved path (nothing was moved). \
-             Copy chain.* there to keep the old history, or set kernel.chain.checkpoint_path.",
-            paths.chain_checkpoint().display(),
+    home: Option<&Path>,
+    new_chain: bool,
+) -> ChainChoice {
+    let resolved = paths.chain_checkpoint();
+    let Some(legacy) = legacy_chain_left_behind(paths, home) else {
+        return ChainChoice {
+            checkpoint: resolved,
+            legacy_in_use: false,
+            warning: None,
+        };
+    };
+    if new_chain {
+        let warning = format!(
+            "starting a fresh chain at {} (--new-chain); the legacy chain at {} is untouched \
+             and this kernel will not append to it",
+            resolved.display(),
             legacy.display()
-        )
-    })
+        );
+        return ChainChoice {
+            checkpoint: resolved,
+            legacy_in_use: false,
+            warning: Some(warning),
+        };
+    }
+    let warning = format!(
+        "no chain at {} but a legacy chain exists at {}; continuing on the legacy chain \
+         and its key so history is not forked (nothing was moved). Phase 1 \
+         `weaver migrate user-chain` will move it. Pass --new-chain to start a fresh \
+         chain at the resolved path instead, or set kernel.chain.checkpoint_path.",
+        resolved.display(),
+        legacy.display()
+    );
+    ChainChoice {
+        checkpoint: legacy,
+        legacy_in_use: true,
+        warning: Some(warning),
+    }
 }
 
 /// Resolve the chain checkpoint path and pin it into `kernel_config.chain`.
@@ -57,19 +134,32 @@ pub fn legacy_chain_warning(
 /// Returns the pinned checkpoint path, or `None` when the chain is disabled
 /// or no location can be resolved (no home dir, no runtime dir).
 pub fn pin_chain_storage(kernel_config: &mut KernelConfig) -> Option<PathBuf> {
+    pin_chain_storage_noted(kernel_config).0
+}
+
+/// [`pin_chain_storage`] plus the WARN text explaining a non-obvious choice.
+pub fn pin_chain_storage_noted(
+    kernel_config: &mut KernelConfig,
+) -> (Option<PathBuf>, Option<String>) {
     let mut chain = kernel_config.chain.clone().unwrap_or_default();
     if !chain.enabled {
-        return None;
+        return (None, None);
     }
+    let mut warning = None;
+    let mut legacy_in_use = false;
     if chain.checkpoint_path.is_none() {
-        chain.checkpoint_path = default_checkpoint_path(&chain);
+        let (path, w, legacy) = default_checkpoint_path(&chain);
+        chain.checkpoint_path = path;
+        warning = w;
+        legacy_in_use = legacy;
     }
-    #[cfg(test)]
     if let (Some(anchor), Some(ckpt)) = (chain.external_anchor.as_mut(), &chain.checkpoint_path)
         && anchor.ledger_path.is_none()
+        && (cfg!(test) || legacy_in_use)
     {
+        // Keep the anchor ledger beside the chain in use.
         let dir = PathBuf::from(ckpt);
-        let dir = dir.parent().unwrap_or(std::path::Path::new("."));
+        let dir = dir.parent().unwrap_or(Path::new("."));
         anchor.ledger_path = Some(
             dir.join("chain")
                 .join("anchors.jsonl")
@@ -79,17 +169,29 @@ pub fn pin_chain_storage(kernel_config: &mut KernelConfig) -> Option<PathBuf> {
     }
     let pinned = chain.checkpoint_path.clone().map(PathBuf::from);
     kernel_config.chain = Some(chain);
-    pinned
+    (pinned, warning)
 }
 
 #[cfg(not(test))]
-fn default_checkpoint_path(chain: &clawft_types::config::ChainConfig) -> Option<String> {
-    chain.effective_checkpoint_path()
+fn default_checkpoint_path(
+    _chain: &clawft_types::config::ChainConfig,
+) -> (Option<String>, Option<String>, bool) {
+    let paths = RuntimePaths::resolve();
+    let home = clawft_types::runtime_paths::home_dir();
+    let new_chain = NEW_CHAIN.load(std::sync::atomic::Ordering::SeqCst);
+    let choice = choose_default_chain(&paths, home.as_deref(), new_chain);
+    (
+        Some(choice.checkpoint.to_string_lossy().into_owned()),
+        choice.warning,
+        choice.legacy_in_use,
+    )
 }
 
 /// Unit-test default: a fresh temp dir per boot, never `~/.clawft`.
 #[cfg(test)]
-fn default_checkpoint_path(_chain: &clawft_types::config::ChainConfig) -> Option<String> {
+fn default_checkpoint_path(
+    _chain: &clawft_types::config::ChainConfig,
+) -> (Option<String>, Option<String>, bool) {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -97,11 +199,118 @@ fn default_checkpoint_path(_chain: &clawft_types::config::ChainConfig) -> Option
         "weftos-kernel-unit-chain-{}-{n}",
         std::process::id()
     ));
-    Some(
-        dir.join(clawft_types::runtime_paths::CHAIN_CHECKPOINT_FILE)
-            .to_string_lossy()
-            .into_owned(),
+    (
+        Some(
+            dir.join(clawft_types::runtime_paths::CHAIN_CHECKPOINT_FILE)
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        None,
+        false,
     )
+}
+
+/// Exclusive advisory lock on `chain.lock` beside the chain in use.
+///
+/// Held for the kernel's lifetime (the OS drops it on any exit, including a
+/// crash). A second kernel on the same chain is refused with the holder's
+/// PID instead of appending to the chain concurrently.
+#[derive(Debug)]
+pub struct ChainLock {
+    _file: std::fs::File,
+    path: PathBuf,
+}
+
+impl ChainLock {
+    /// Lock file path for a chain checkpoint (`chain.json` -> `chain.lock`).
+    pub fn lock_path(checkpoint: &Path) -> PathBuf {
+        checkpoint.with_extension("lock")
+    }
+
+    /// Take the lock for the chain at `checkpoint`.
+    ///
+    /// # Errors
+    ///
+    /// The message names the holder PID and the ways out (`--new-chain`,
+    /// `kernel.chain.checkpoint_path`).
+    pub fn acquire(checkpoint: &Path) -> Result<Self, String> {
+        let path = Self::lock_path(checkpoint);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| format!("cannot create chain dir {}: {e}", dir.display()))?;
+        }
+        let mut file = open_lock_file(&path)
+            .map_err(|e| format!("cannot open chain lock {}: {e}", path.display()))?;
+        match try_lock(&file) {
+            Ok(true) => {
+                record_pid(&mut file);
+                Ok(Self { _file: file, path })
+            }
+            Ok(false) => Err(format!(
+                "chain {} is in use by another kernel (pid {}); refusing to share a chain. \
+                 Give this kernel its own: start with --new-chain or set \
+                 kernel.chain.checkpoint_path",
+                checkpoint.display(),
+                holder_pid(&path)
+            )),
+            Err(e) => Err(format!("cannot lock {}: {e}", path.display())),
+        }
+    }
+
+    /// The lock file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut o = std::fs::OpenOptions::new();
+    o.read(true).write(true).create(true).truncate(false);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        o.share_mode(0);
+    }
+    o.open(path)
+}
+
+/// `Ok(true)` when locked, `Ok(false)` when another holder has it.
+#[cfg(unix)]
+fn try_lock(file: &std::fs::File) -> std::io::Result<bool> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: flock on a valid, open file descriptor owned by `file`.
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc == 0 {
+        return Ok(true);
+    }
+    let err = std::io::Error::last_os_error();
+    if err.kind() == std::io::ErrorKind::WouldBlock {
+        Ok(false)
+    } else {
+        Err(err)
+    }
+}
+
+/// Windows holds the lock through the no-sharing open; other targets have
+/// no advisory lock.
+#[cfg(not(unix))]
+fn try_lock(_file: &std::fs::File) -> std::io::Result<bool> {
+    Ok(true)
+}
+
+fn record_pid(file: &mut std::fs::File) {
+    use std::io::{Seek, Write};
+    let _ = file.set_len(0);
+    let _ = file.rewind();
+    let _ = write!(file, "{}", std::process::id());
+    let _ = file.flush();
+}
+
+fn holder_pid(lock: &Path) -> String {
+    std::fs::read_to_string(lock)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .map_or_else(|| "?".into(), |p| p.to_string())
 }
 
 #[cfg(test)]
@@ -109,21 +318,87 @@ mod tests {
     use super::*;
     use clawft_types::config::ChainConfig;
 
-    #[test]
-    fn legacy_chain_warning_names_both_paths() {
-        let t = tempfile::tempdir().unwrap();
+    /// A fake home holding a legacy chain, and a project without one.
+    fn legacy_fixture(t: &tempfile::TempDir) -> (PathBuf, PathBuf) {
         let home = t.path().join("home");
         std::fs::create_dir_all(home.join(".clawft")).unwrap();
         std::fs::write(home.join(".clawft/chain.json"), "{}").unwrap();
         let proj = t.path().join("proj");
         std::fs::create_dir_all(proj.join(".weftos")).unwrap();
         std::fs::write(proj.join(".weftos/project.toml"), "").unwrap();
+        (home, proj)
+    }
+
+    #[test]
+    fn legacy_present_and_project_missing_uses_legacy_chain() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, proj) = legacy_fixture(&t);
         let paths = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
-        let w = legacy_chain_warning(&paths, Some(&home)).expect("warns");
+        let c = choose_default_chain(&paths, Some(&home), false);
+        assert!(c.legacy_in_use);
+        assert_eq!(c.checkpoint, home.join(".clawft/chain.json"));
+        let w = c.warning.expect("warns");
         assert!(w.contains(".weftos/runtime/chain.json"), "{w}");
         assert!(w.contains(".clawft/chain.json"), "{w}");
+        assert!(w.contains("weaver migrate user-chain"), "{w}");
+        assert!(w.contains("--new-chain"), "{w}");
+    }
+
+    #[test]
+    fn new_chain_flag_starts_fresh_at_the_resolved_path() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, proj) = legacy_fixture(&t);
+        let paths = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
+        let c = choose_default_chain(&paths, Some(&home), true);
+        assert!(!c.legacy_in_use);
+        assert_eq!(c.checkpoint, proj.join(".weftos/runtime/chain.json"));
+        assert!(c.warning.unwrap().contains("--new-chain"));
+    }
+
+    #[test]
+    fn fresh_chain_when_no_chain_exists_anywhere() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path().join("home");
+        let proj = t.path().join("proj");
+        std::fs::create_dir_all(proj.join(".weftos")).unwrap();
+        std::fs::write(proj.join(".weftos/project.toml"), "").unwrap();
+        let paths = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
+        let c = choose_default_chain(&paths, Some(&home), false);
+        assert!(!c.legacy_in_use && c.warning.is_none());
+        assert_eq!(c.checkpoint, proj.join(".weftos/runtime/chain.json"));
+    }
+
+    #[test]
+    fn existing_project_chain_wins_and_isolated_runs_never_adopt_legacy() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, proj) = legacy_fixture(&t);
+        std::fs::create_dir_all(proj.join(".weftos/runtime")).unwrap();
+        std::fs::write(proj.join(".weftos/runtime/chain.json"), "{}").unwrap();
+        let paths = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
+        let c = choose_default_chain(&paths, Some(&home), false);
+        assert!(!c.legacy_in_use);
         let iso = RuntimePaths::resolve_with(Some("/x"), Some(&proj), Some(&home));
-        assert!(legacy_chain_warning(&iso, Some(&home)).is_none());
+        let c = choose_default_chain(&iso, Some(&home), false);
+        assert_eq!(c.checkpoint, PathBuf::from("/x/chain.json"));
+        assert!(!c.legacy_in_use);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn second_kernel_on_one_chain_is_refused_with_holder_pid() {
+        let t = tempfile::tempdir().unwrap();
+        let ckpt = t.path().join("chain.json");
+        let first = ChainLock::acquire(&ckpt).expect("first lock");
+        assert_eq!(first.path(), t.path().join("chain.lock"));
+        let err = ChainLock::acquire(&ckpt).expect_err("second must fail");
+        assert!(
+            err.contains(&format!("pid {}", std::process::id())),
+            "{err}"
+        );
+        assert!(err.contains("--new-chain"), "{err}");
+        assert!(err.contains("kernel.chain.checkpoint_path"), "{err}");
+        drop(first);
+        ChainLock::acquire(&ckpt).expect("free after drop");
     }
 
     #[test]
@@ -135,7 +410,10 @@ mod tests {
             }),
             ..KernelConfig::default()
         };
-        assert_eq!(pin_chain_storage(&mut k), Some(PathBuf::from("/data/c.json")));
+        assert_eq!(
+            pin_chain_storage(&mut k),
+            Some(PathBuf::from("/data/c.json"))
+        );
     }
 
     #[test]

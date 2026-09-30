@@ -636,7 +636,7 @@ use crate::protocol::{
 ///
 /// Works on Unix and Windows (WEFT-559). On Windows the child is created
 /// detached so closing the parent console does not kill the daemon.
-pub fn daemonize(config_override: Option<&str>) -> anyhow::Result<()> {
+pub fn daemonize(config_override: Option<&str>, new_chain: bool) -> anyhow::Result<()> {
     use std::process::Command;
 
     let runtime_dir = protocol::runtime_dir();
@@ -669,6 +669,9 @@ pub fn daemonize(config_override: Option<&str>) -> anyhow::Result<()> {
     if let Some(cfg) = config_override {
         cmd.args(["--config", cfg]);
     }
+    if new_chain {
+        cmd.arg("--new-chain");
+    }
 
     // Windows: detach so the daemon outlives the spawning console.
     #[cfg(windows)]
@@ -679,14 +682,16 @@ pub fn daemonize(config_override: Option<&str>) -> anyhow::Result<()> {
         cmd.creation_flags(FLAGS);
     }
 
-    let child = cmd
+    let mut child = cmd
         .stdout(log_file)
         .stderr(log_err)
         .stdin(std::process::Stdio::null())
         .spawn()?;
 
     let pid = child.id();
-    std::fs::write(&pid_path, pid.to_string())?;
+    // The child writes kernel.pid itself once it owns the runtime lock; the
+    // parent writing it first would name a process that may lose the lock.
+    wait_for_child_pid(&mut child, &pid_path, &log_path)?;
 
     println!("WeftOS kernel started (pid {pid})");
     #[cfg(unix)]
@@ -702,6 +707,35 @@ pub fn daemonize(config_override: Option<&str>) -> anyhow::Result<()> {
     println!("Use 'weaver kernel status' to check, 'weaver kernel attach' to view logs.");
     println!("Use 'weaver kernel stop' to shut down.");
 
+    Ok(())
+}
+
+/// Wait (bounded) for the freshly spawned daemon to record its PID, failing
+/// early with a pointer to the log if it exits during startup (for example
+/// because another kernel owns the runtime dir).
+fn wait_for_child_pid(
+    child: &mut std::process::Child,
+    pid_path: &std::path::Path,
+    log_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    let want = child.id().to_string();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if let Some(status) = child.try_wait()? {
+            anyhow::bail!(
+                "kernel exited during startup ({status}); see {} for the reason",
+                log_path.display()
+            );
+        }
+        if std::fs::read_to_string(pid_path).is_ok_and(|s| s.trim() == want) {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    eprintln!(
+        "warning: kernel (pid {want}) has not recorded its PID yet; still starting, see {}",
+        log_path.display()
+    );
     Ok(())
 }
 
@@ -7091,6 +7125,36 @@ async fn dispatch(
                 }
                 Ok(None) => Response::error(format!("cron job not found: {}", remove_params.id)),
                 Err(e) => Response::error(format!("cron remove denied: {e}")),
+            }
+        }
+        "cron.enable" | "cron.disable" => {
+            let enabled = method == "cron.enable";
+            let p: CronRemoveParams = match serde_json::from_value(params) {
+                Ok(p) => p,
+                Err(e) => return Response::error(format!("invalid params: {e}")),
+            };
+            let k = kernel.read().await;
+            match k.cron_service().set_enabled(&p.id, enabled) {
+                Some(job) => {
+                    #[cfg(feature = "exochain")]
+                    if let Some(cm) = k.chain_manager() {
+                        cm.append(
+                            "cron",
+                            &method,
+                            Some(serde_json::json!({"job_id": job.id, "name": job.name})),
+                        );
+                    }
+                    k.event_log().info(
+                        "cron",
+                        format!(
+                            "job {}: {}",
+                            if enabled { "enabled" } else { "disabled" },
+                            job.name
+                        ),
+                    );
+                    Response::success(serde_json::json!({"job_id": job.id, "enabled": job.enabled}))
+                }
+                None => Response::error(format!("cron job not found: {}", p.id)),
             }
         }
         // WEFT-494 / ADR-070: live MCP registry (shared McpServerManager).

@@ -119,20 +119,35 @@ Root resolution, highest first:
 1. `$WEFTOS_RUNTIME_DIR`, when set and non-empty (full isolation for
    tests, probes and nested instances).
 2. `<project>/.weftos/runtime`, where `<project>` is the nearest ancestor
-   of the working directory holding `.weftos/project.toml`,
-   `.weftos/weave.toml`, or a `weave.toml` next to a `.weftos/`
-   directory (what `weaver init` creates). A bare `.weftos/` is not a
-   project, and the walk never returns `$HOME`, so the `~/.weftos/` that
-   holds apps and models is ignored.
+   of the working directory that is a project root: it has
+   `.weftos/project.toml`, or `.weftos/weave.toml`, or `weave.toml` next
+   to a `.weftos/` directory (what `weaver init` creates), or an existing
+   `.weftos/runtime/` directory, or a `.weftos/` directory in a git
+   top-level (a `.git` file or directory, which covers git worktrees, so
+   each worktree gets its own kernel). A bare `.weftos/` is not a project,
+   and the walk never returns `$HOME`, so the `~/.weftos/` that holds apps
+   and models is ignored.
 3. `~/.clawft/` (legacy).
 
-Behavior change: the chain used to resolve from `$WEFTOS_RUNTIME_DIR` or
-`~/.clawft` only, even for a project-local daemon. It now follows the
-project root, so a per-project daemon starts a fresh chain under
-`<project>/.weftos/runtime/`. Nothing is moved or deleted. If the
-resolved chain does not exist but `~/.clawft/chain.*` does, boot logs a
-WARN naming both paths; copy `chain.*` across to keep the history, or pin
-`kernel.chain.checkpoint_path`.
+Legacy chain: the chain used to resolve from `$WEFTOS_RUNTIME_DIR` or
+`~/.clawft` only, even for a project-local daemon. A kernel that resolves
+to a project root with no chain yet, while `~/.clawft/chain.*` exists,
+keeps using the legacy chain and its key and logs a WARN naming both
+paths; starting a fresh genesis there would fork the history. Nothing is
+moved: Phase 1's `weaver migrate user-chain` will do that. To start a
+fresh chain at the project path instead, run
+`weaver kernel start --new-chain` (the legacy chain is left untouched), or
+pin `kernel.chain.checkpoint_path`. A fresh chain is otherwise created
+only when no chain exists at all.
+
+Files that older kernels kept cwd-relative (`cluster_peers.json`,
+`apps.json`, `revoked_hosts.json`) and the Seed token store under
+`~/.clawft/secrets/` are read from their old location, with a WARN, when
+the new path does not exist yet. They are never moved automatically.
+
+Chain lock: whichever chain is in use is guarded by an exclusive lock
+(`chain.lock` beside it) for the kernel's lifetime. A second kernel on the
+same chain refuses to boot, naming the holder's PID.
 
 Single instance: the daemon holds an exclusive advisory lock on
 `<root>/kernel.lock` for its lifetime. A second kernel on the same root
@@ -144,7 +159,8 @@ When the CLI cannot reach a kernel it names the socket it tried and
 whether there is no socket file, a stale socket (connection refused) or a
 permission problem. State-changing commands do not fall back silently:
 `weft agent` requires `--local` to run in-process, and `weft cron
-add/remove/enable/run` fail without a daemon.
+add/remove/enable/disable` fail without a daemon (`weft cron run` is not
+implemented by the kernel).
 Read-only commands may still read local files and say so on stderr.
 
 #### Chain storage location (isolated runtimes)

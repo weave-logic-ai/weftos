@@ -46,6 +46,11 @@ pub enum KernelAction {
         /// Run in foreground instead of backgrounding.
         #[arg(long)]
         foreground: bool,
+
+        /// Start a fresh chain at the resolved path instead of adopting the
+        /// legacy `~/.clawft` chain (the legacy chain is left untouched).
+        #[arg(long)]
+        new_chain: bool,
     },
 
     /// Stop a running kernel daemon (sends SIGTERM).
@@ -125,13 +130,17 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
 
     match args.action {
         #[cfg(any(unix, windows))]
-        KernelAction::Start { foreground } => {
+        KernelAction::Start {
+            foreground,
+            new_chain,
+        } => {
             if foreground {
                 // Run in foreground (blocking)
                 let platform = NativePlatform::new();
                 let loaded =
                     super::load_config_layered(&platform, args.config.as_deref()).await?;
                 let kernel_config = loaded.config.kernel.clone();
+                clawft_kernel::chain_storage::request_new_chain(new_chain);
                 crate::daemon::run(
                     loaded.config,
                     kernel_config,
@@ -141,7 +150,7 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
                 .await?;
             } else {
                 // Background (default) — spawn detached child
-                crate::daemon::daemonize(args.config.as_deref())?;
+                crate::daemon::daemonize(args.config.as_deref(), new_chain)?;
             }
         }
         #[cfg(unix)]
@@ -188,7 +197,7 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
         KernelAction::Restart => {
             println!("Restarting daemon (stop + start)...");
             let _ = stop_windows(true).await;
-            crate::daemon::daemonize(args.config.as_deref())?;
+            crate::daemon::daemonize(args.config.as_deref(), false)?;
         }
         #[cfg(not(any(unix, windows)))]
         KernelAction::Start { .. } | KernelAction::Stop { .. } | KernelAction::Restart => {

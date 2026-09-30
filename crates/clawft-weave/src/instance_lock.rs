@@ -160,7 +160,8 @@ fn held(paths: &RuntimePaths, lock: &Path) -> LockError {
 /// With the instance lock held, make the socket path bindable.
 ///
 /// A socket file that refuses connections (or vanished) is stale: nobody
-/// serves it, so it is unlinked. One that accepts connections belongs to a
+/// serves it, so it is unlinked. Permission errors and other failures are
+/// never treated as stale. One that accepts connections belongs to a
 /// server that does not hold our lock; it is never taken over.
 #[cfg(unix)]
 pub async fn reclaim_stale_socket(paths: &RuntimePaths) -> anyhow::Result<()> {
@@ -176,12 +177,21 @@ pub async fn reclaim_stale_socket(paths: &RuntimePaths) -> anyhow::Result<()> {
             socket.display(),
             paths.lock().display()
         ),
-        // ECONNREFUSED / ENOENT / anything else unusable: nobody serves it.
-        _ => {
+        // ECONNREFUSED / ENOENT: nobody serves it, so it is stale.
+        SocketState::Stale | SocketState::NoSocketFile => {
             std::fs::remove_file(&socket)?;
             tracing::warn!(socket = %socket.display(), "removed stale socket file");
             Ok(())
         }
+        // Not ours to judge: another user's socket, or an unexpected error.
+        SocketState::PermissionDenied => anyhow::bail!(
+            "cannot probe {}: permission denied; it belongs to another user, leaving it alone",
+            socket.display()
+        ),
+        SocketState::Other(e) => anyhow::bail!(
+            "cannot tell whether {} is stale ({e}); leaving it alone",
+            socket.display()
+        ),
     }
 }
 

@@ -94,6 +94,8 @@ pub struct ChainSubsystem {
     pub(crate) governance_gate: Option<Arc<dyn crate::gate::GateBackend>>,
     /// External chain-head anchoring controller (file ledger / external stub).
     pub(crate) chain_anchor: Option<Arc<crate::chain_anchor::AnchoringController>>,
+    /// Exclusive lock on the chain in use; released when the kernel drops.
+    pub(crate) _chain_lock: Option<crate::chain_storage::ChainLock>,
 }
 
 /// ECC cognitive substrate: HNSW, causal graph, cognitive tick,
@@ -196,11 +198,17 @@ impl<P: Platform> Kernel<P> {
         // Resolve the chain location once (explicit config, else
         // runtime root: $WEFTOS_RUNTIME_DIR, project, or ~/.clawft) so restore, verify and
         // shutdown persistence all use the same, possibly isolated, files.
-        let chain_path_was_defaulted = kernel_config
-            .chain
-            .as_ref()
-            .is_none_or(|c| c.checkpoint_path.is_none());
-        let pinned_chain = crate::chain_storage::pin_chain_storage(&mut kernel_config);
+        let (pinned_chain, chain_note) =
+            crate::chain_storage::pin_chain_storage_noted(&mut kernel_config);
+        // One kernel per chain: hold chain.lock beside the chain in use for
+        // the kernel's lifetime (released when the kernel is dropped).
+        #[cfg(feature = "exochain")]
+        let chain_lock = match pinned_chain.as_deref() {
+            Some(ckpt) => Some(
+                crate::chain_storage::ChainLock::acquire(ckpt).map_err(KernelError::Boot)?,
+            ),
+            None => None,
+        };
 
         info!("WeftOS kernel booting");
         boot_log.push(BootEvent::info(
@@ -220,12 +228,7 @@ impl<P: Platform> Kernel<P> {
             BootPhase::Init,
             format!("Runtime dir: {}", runtime_paths.root().display()),
         ));
-        if chain_path_was_defaulted
-            && let Some(w) = crate::chain_storage::legacy_chain_warning(
-                &runtime_paths,
-                clawft_types::runtime_paths::home_dir().as_deref(),
-            )
-        {
+        if let Some(w) = chain_note {
             warn!("{w}");
             boot_log.push(BootEvent::warn(BootPhase::Init, w));
         }
@@ -773,7 +776,10 @@ impl<P: Platform> Kernel<P> {
             ..ClusterConfig::default()
         };
         // Cluster peer membership persists to disk so joins survive restarts.
-        let cluster_peers_path = runtime_paths.cluster_peers();
+        let cluster_peers_path = crate::chain_storage::runtime_file(
+            runtime_paths.cluster_peers(),
+            "cluster_peers.json",
+        );
         let cluster_membership =
             Arc::new(ClusterMembership::new(cluster_config).with_persist_path(&cluster_peers_path));
 
@@ -788,7 +794,8 @@ impl<P: Platform> Kernel<P> {
 
         // 6a. AppManager with on-disk manifest store (WEFT-136).
         // Installs survive kernel restarts via atomic apps.json (mirrors cluster_peers).
-        let apps_persist_path = runtime_paths.apps();
+        let apps_persist_path =
+            crate::chain_storage::runtime_file(runtime_paths.apps(), "apps.json");
         let app_manager = Arc::new(AppManager::new().with_persist_path(&apps_persist_path));
         boot_log.push(BootEvent::info(
             BootPhase::Services,
@@ -800,7 +807,10 @@ impl<P: Platform> Kernel<P> {
         ));
 
         // 6b. Load host revocation list (persistent ban list)
-        let revocation_path = runtime_paths.revoked_hosts();
+        let revocation_path = crate::chain_storage::runtime_file(
+            runtime_paths.revoked_hosts(),
+            "revoked_hosts.json",
+        );
         let revocation_list = Arc::new(crate::revocation::RevocationList::load(revocation_path));
         {
             let count = revocation_list.len();
@@ -2257,6 +2267,7 @@ impl<P: Platform> Kernel<P> {
                 tree_manager,
                 governance_gate,
                 chain_anchor,
+                _chain_lock: chain_lock,
             },
             #[cfg(feature = "ecc")]
             ecc: EccSubsystem {
@@ -3347,6 +3358,25 @@ mod tests {
             agent: None,
             brand: ::clawft_types::config::DEFAULT_BRAND.to_string(),
         }
+    }
+
+    /// A second kernel on a chain another kernel holds is refused at boot.
+    #[cfg(all(feature = "exochain", unix))]
+    #[tokio::test]
+    async fn boot_refuses_a_chain_held_by_another_kernel() {
+        let dir = tempfile::tempdir().unwrap();
+        let ckpt = dir.path().join("chain.json");
+        let _holder = crate::chain_storage::ChainLock::acquire(&ckpt).unwrap();
+        let mut kc = test_kernel_config_exochain();
+        kc.chain.as_mut().unwrap().checkpoint_path = Some(ckpt.to_string_lossy().into_owned());
+        let platform = Arc::new(NativePlatform::new());
+        let err = Kernel::boot(test_config(), kc, platform)
+            .await
+            .err()
+            .expect("boot must refuse a held chain");
+        let msg = err.to_string();
+        assert!(msg.contains("in use by another kernel"), "{msg}");
+        assert!(msg.contains("--new-chain"), "{msg}");
     }
 
     #[cfg(feature = "exochain")]
