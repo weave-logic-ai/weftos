@@ -3586,6 +3586,51 @@ async fn resolve_caller_capabilities(
     crate::capability::CallerCapabilities::denied()
 }
 
+/// Resolve the caller's capabilities, then run the capability check and
+/// extension gates (ADR-103 D0). `Err` is the refusal response.
+async fn authorize_caller(
+    caller: &crate::rpc_ext::CallerCtx,
+    method: &str,
+    params: &serde_json::Value,
+    kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Result<crate::capability::CallerCapabilities, Response> {
+    let caps = resolve_caller_capabilities(caller.auth.as_deref(), kernel).await;
+    crate::rpc_ext::authorize(caller, &caps, method, params, kernel).await?;
+    Ok(caps)
+}
+
+/// Dispatch a request that already passed [`authorize_caller`]: extension
+/// routes first, then the legacy `match` in [`dispatch`].
+async fn dispatch_after_auth(
+    caller: &crate::rpc_ext::CallerCtx,
+    caps: &crate::capability::CallerCapabilities,
+    method: String,
+    params: serde_json::Value,
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+    shutdown_tx: watch::Sender<bool>,
+) -> Response {
+    if let Some(r) = crate::rpc_ext::dispatch_ext(caller, caps, &method, &params, &kernel).await {
+        return r;
+    }
+    dispatch(method, params, kernel, shutdown_tx).await
+}
+
+/// Authorize then dispatch. Used by entry paths without streaming
+/// intercepts (RVF frames, the in-process voice consumer).
+async fn dispatch_authorized(
+    caller: &crate::rpc_ext::CallerCtx,
+    method: String,
+    params: serde_json::Value,
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+    shutdown_tx: watch::Sender<bool>,
+) -> Response {
+    let caps = match authorize_caller(caller, &method, &params, &kernel).await {
+        Ok(caps) => caps,
+        Err(denied) => return denied,
+    };
+    dispatch_after_auth(caller, &caps, method, params, kernel, shutdown_tx).await
+}
+
 async fn dispatch_json_line<W>(
     line: &str,
     kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
@@ -3613,20 +3658,17 @@ where
             // token is validated against the kernel's AuthService;
             // unknown tokens map to the empty (denied) set so a
             // typo'd token can't silently fall back to anonymous.
-            let caller_caps = resolve_caller_capabilities(req.auth.as_deref(), kernel).await;
-            if !caller_caps.allows_method(&req.method) {
-                let cap_required = crate::capability::required_capability(&req.method);
-                tracing::warn!(
-                    method = %req.method,
-                    required = ?cap_required,
-                    "rpc capability check failed; rejecting"
-                );
-                let resp = Response::error(format!(
-                    "permission denied: method '{}' requires capability {:?}",
-                    req.method, cap_required
-                ))
-                .with_id(id);
-                (resp, None)
+            // ADR-103 D0: one authorization point (capability check, then
+            // extension gates) for every entry path, before any streaming
+            // intercept or dispatch.
+            let caller = crate::rpc_ext::CallerCtx::from_auth(req.auth.clone());
+            let (caps, denial) =
+                match authorize_caller(&caller, &req.method, &req.params, kernel).await {
+                    Ok(caps) => (caps, None),
+                    Err(denied) => (crate::capability::CallerCapabilities::denied(), Some(denied)),
+                };
+            if let Some(denied) = denial {
+                (denied.with_id(id), None)
             } else
             // `*.subscribe_stream` methods take over the connection: the
             // daemon registers an external sink with the router and
@@ -3656,7 +3698,9 @@ where
                 }
             } else {
                 (
-                    dispatch(
+                    dispatch_after_auth(
+                        &caller,
+                        &caps,
                         req.method,
                         req.params,
                         Arc::clone(kernel),
@@ -4323,7 +4367,9 @@ async fn handle_rvf_connection<S>(
         let response = match rvf_rpc::decode_request(&frame) {
             Ok(req) => {
                 let id = req.id.clone();
-                dispatch(
+                let caller = crate::rpc_ext::CallerCtx::from_auth(req.auth.clone());
+                dispatch_authorized(
+                    &caller,
                     req.method,
                     req.params,
                     Arc::clone(&kernel),
@@ -8487,7 +8533,10 @@ impl crate::voice_router::CommandHandler for DaemonCommandHandler {
         method: String,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        let resp = dispatch(
+        // Internal principal with capped capabilities (no Admin); see
+        // `CallerCtx::internal_voice`.
+        let resp = dispatch_authorized(
+            &crate::rpc_ext::CallerCtx::internal_voice(),
             method,
             params,
             Arc::clone(&self.kernel),
@@ -8517,6 +8566,40 @@ mod tests {
             )),
             ..KernelConfig::default()
         }
+    }
+
+    /// The voice consumer must dispatch as a capped internal principal:
+    /// Admin verbs are refused, and a raw `dispatch` regression would let
+    /// `kernel.shutdown` through.
+    #[tokio::test]
+    async fn voice_command_handler_denies_admin_verbs() {
+        use crate::voice_router::CommandHandler;
+        let kernel = Kernel::boot(
+            clawft_types::config::Config::default(),
+            isolated_kcfg(),
+            Arc::new(NativePlatform::new()),
+        )
+        .await
+        .expect("kernel boots");
+        let (tx, rx) = watch::channel(false);
+        let handler = DaemonCommandHandler {
+            kernel: Arc::new(tokio::sync::RwLock::new(kernel)),
+            shutdown_tx: tx,
+            _control: ControlFlags::new(),
+        };
+        let err = handler
+            .dispatch_command("kernel.shutdown".into(), serde_json::Value::Null)
+            .await
+            .unwrap_err();
+        assert!(err.contains("permission denied"), "{err}");
+        assert!(!*rx.borrow(), "shutdown must not have been signalled");
+        // Non-admin verbs still work for the voice principal.
+        assert!(
+            handler
+                .dispatch_command("kernel.status".into(), serde_json::Value::Null)
+                .await
+                .is_ok()
+        );
     }
 
     #[test]
