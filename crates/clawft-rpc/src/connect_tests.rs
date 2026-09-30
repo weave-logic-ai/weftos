@@ -183,21 +183,65 @@ async fn handshake_reporting_a_range_without_us_is_a_proto_mismatch() {
     assert!(err.to_string().contains("update this `weft`"), "{err}");
 }
 
-#[tokio::test]
-async fn old_daemon_degrades_with_warning_instead_of_failing() {
-    let d = tempfile::tempdir().unwrap();
-    serve(d.path(), |req| {
+fn old_daemon(dir: &Path) {
+    serve(dir, |req| {
         if req.method == "kernel.status" {
             Response::success(serde_json::json!({"build": {"sha": "old12345", "version": "0.7"}}))
         } else {
-            Response::error("unknown method: kernel.handshake")
+            Response::error(format!("unknown method: {}", req.method))
         }
     });
-    let c = connect(&resolution(d.path(), Some(ID_A))).await.unwrap();
+}
+
+#[tokio::test]
+async fn old_daemon_on_default_endpoint_degrades_with_warning() {
+    let d = tempfile::tempdir().unwrap();
+    old_daemon(d.path());
+    let mut res = resolution(d.path(), Some(ID_A));
+    res.source = ResolveSource::Default;
+    let c = connect(&res).await.unwrap();
     assert_eq!(c.handshake.sha, "old12345");
     assert_eq!(c.handshake.proto, ProtoRange { current: 0, min: 0 });
     assert_eq!(c.warnings.len(), 1);
     assert!(c.warnings[0].contains("weaver kernel restart"), "{:?}", c.warnings);
+}
+
+#[tokio::test]
+async fn old_daemon_on_explicit_endpoint_is_an_error() {
+    let d = tempfile::tempdir().unwrap();
+    old_daemon(d.path());
+    // resolution() is flag-level.
+    let err = connect(&resolution(d.path(), Some(ID_A))).await.err().unwrap();
+    assert!(matches!(err, ConnectError::NoHandshake { .. }), "{err}");
+    assert!(err.to_string().contains("weaver kernel restart"), "{err}");
+}
+
+#[tokio::test]
+async fn old_daemon_with_node_pin_is_an_error_even_on_default() {
+    let d = tempfile::tempdir().unwrap();
+    old_daemon(d.path());
+    let mut res = resolution(d.path(), None).expect_node("wanted");
+    res.source = ResolveSource::Default;
+    let err = connect(&res).await.err().unwrap();
+    assert!(matches!(err, ConnectError::NoHandshake { .. }), "{err}");
+}
+
+#[tokio::test]
+async fn non_unknown_method_handshake_errors_never_downgrade() {
+    for (kind, msg) in [
+        (None, "permission denied: method 'kernel.handshake' requires capability Read"),
+        (Some("scope_denied"), "unknown method: nope"),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        serve(d.path(), move |_| match kind {
+            Some(k) => Response::error_with_kind(k, msg),
+            None => Response::error(msg),
+        });
+        let mut res = resolution(d.path(), None);
+        res.source = ResolveSource::Default;
+        let err = connect(&res).await.err().unwrap();
+        assert!(matches!(err, ConnectError::HandshakeRefused { .. }), "{err}");
+    }
 }
 
 #[tokio::test]

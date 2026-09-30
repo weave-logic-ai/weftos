@@ -38,6 +38,8 @@ pub struct BoundProject {
 }
 
 static BOUND: RwLock<Option<BoundProject>> = RwLock::new(None);
+/// Runtime root the daemon booted with (handshake `runtime_dir`).
+static RUNTIME_ROOT: RwLock<Option<PathBuf>> = RwLock::new(None);
 
 fn canon(p: &Path) -> PathBuf {
     p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
@@ -80,7 +82,15 @@ pub fn compute_bound(paths: &RuntimePaths, manifests_dir: Option<&Path>) -> Boun
             project_id: Some(one.clone()),
             via: BoundVia::Manifest,
         },
-        _ => BoundProject::default(),
+        [] => BoundProject::default(),
+        many => {
+            tracing::warn!(
+                runtime_dir = %root.display(),
+                projects = ?many,
+                "several project manifests claim this runtime_dir; daemon stays unbound"
+            );
+            BoundProject::default()
+        }
     }
 }
 
@@ -88,6 +98,7 @@ pub fn compute_bound(paths: &RuntimePaths, manifests_dir: Option<&Path>) -> Boun
 pub fn init_bound(paths: &RuntimePaths, manifests_dir: Option<&Path>) {
     let b = compute_bound(paths, manifests_dir);
     tracing::info!(project = ?b.project_id, via = ?b.via, "daemon project binding");
+    *RUNTIME_ROOT.write().unwrap_or_else(|e| e.into_inner()) = Some(paths.root().to_path_buf());
     set_bound(b);
 }
 
@@ -140,7 +151,11 @@ pub fn handle(call: ExtCall) -> ExtFuture {
             .to_owned();
         let h = build_handshake(
             node_id,
-            &RuntimePaths::resolve(),
+            &RUNTIME_ROOT
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+                .map_or_else(RuntimePaths::resolve, RuntimePaths::at),
             std::env::current_exe().ok(),
             &bound(),
         );
@@ -150,7 +165,8 @@ pub fn handle(call: ExtCall) -> ExtFuture {
 
 /// Refuse a request with an unsupported `proto`, a malformed `project`, or
 /// a `project` other than the daemon's bound one. `kernel.handshake` is
-/// never refused.
+/// exempt from the proto and mismatch refusals only; its claim must still
+/// be a ULID (the `ClaimedProject` invariant).
 ///
 /// A missing `proto` is a legacy client: accepted in Phase 1 with one
 /// warning per process.
@@ -165,20 +181,22 @@ pub fn envelope_refusal_with(
     proto: Option<u32>,
     project: Option<&str>,
 ) -> Option<Response> {
-    if method == HANDSHAKE_METHOD {
-        return None;
-    }
-    match check_proto(proto) {
-        ProtoCheck::Supported => {}
-        ProtoCheck::Legacy => warn_legacy_once(),
-        ProtoCheck::Unsupported(p) => {
-            return Some(proto_mismatch_response(
-                p,
-                DaemonBuild {
-                    sha: BUILD_SHA,
-                    version: VERSION,
-                },
-            ));
+    // The discovery call is exempt from the proto and mismatch refusals,
+    // but its claimed project must still be well-formed.
+    let discovery = method == HANDSHAKE_METHOD;
+    if !discovery {
+        match check_proto(proto) {
+            ProtoCheck::Supported => {}
+            ProtoCheck::Legacy => warn_legacy_once(),
+            ProtoCheck::Unsupported(p) => {
+                return Some(proto_mismatch_response(
+                    p,
+                    DaemonBuild {
+                        sha: BUILD_SHA,
+                        version: VERSION,
+                    },
+                ));
+            }
         }
     }
     let id = project?;
@@ -188,7 +206,8 @@ pub fn envelope_refusal_with(
             format!("invalid project id {id:?}: expected a 26-character ULID"),
         ));
     }
-    if let Some(mine) = &bound.project_id
+    if !discovery
+        && let Some(mine) = &bound.project_id
         && mine != id
     {
         return Some(Response::error_with_kind(
@@ -247,10 +266,11 @@ mod tests {
     }
 
     #[test]
-    fn handshake_is_exempt_from_every_refusal() {
+    fn handshake_is_exempt_from_proto_and_mismatch_but_not_syntax() {
         let b = bound_a();
         assert!(envelope_refusal_with(&b, "kernel.handshake", Some(99), Some(B)).is_none());
-        assert!(envelope_refusal_with(&b, "kernel.handshake", Some(1), Some("../x")).is_none());
+        let r = envelope_refusal_with(&b, "kernel.handshake", Some(1), Some("../x")).unwrap();
+        assert_eq!(r.error_kind.as_deref(), Some("invalid_project"));
     }
 
     #[test]

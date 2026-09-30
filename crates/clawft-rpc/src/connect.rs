@@ -82,8 +82,12 @@ pub enum ConnectError {
         daemon_sha: String,
         client_too_old: bool,
     },
-    /// The daemon's handshake reply was unusable.
+    /// The daemon does not know `kernel.handshake` (an older build) and
+    /// the endpoint cannot be trusted without it.
     NoHandshake { detail: String },
+    /// The daemon answered the handshake with an error (auth denial,
+    /// malformed reply, ...). Never downgraded.
+    HandshakeRefused { detail: String },
     /// The daemon serves a different project than the resolver expected.
     ProjectMismatch { expected: String, actual: String },
     /// A project was expected but the daemon is bound to none, and the
@@ -123,7 +127,9 @@ impl ConnectError {
                 expected: expected.clone(),
                 actual: actual.clone(),
             },
-            Self::NoHandshake { .. } | Self::Transport(_) => return None,
+            Self::NoHandshake { .. } | Self::HandshakeRefused { .. } | Self::Transport(_) => {
+                return None;
+            }
         })
     }
 }
@@ -141,9 +147,12 @@ impl fmt::Display for ConnectError {
             Self::ProtoMismatch { message, .. } => write!(f, "{message}"),
             Self::NoHandshake { detail } => write!(
                 f,
-                "daemon handshake unusable ({detail}); {}",
+                "daemon has no kernel.handshake ({detail}) so the endpoint cannot be verified; {}",
                 remedy("unknown", false)
             ),
+            Self::HandshakeRefused { detail } => {
+                write!(f, "daemon refused the handshake: {detail}")
+            }
             Self::ProjectMismatch { expected, actual } => next(
                 f,
                 format!("wrong daemon: expected project {expected} but the daemon serves {actual}"),
@@ -237,10 +246,14 @@ fn parse_handshake(resp: Response) -> Result<Handshake, ConnectError> {
                 client_too_old: u64::from(PROTO_VERSION) < min,
             });
         }
-        return Err(ConnectError::NoHandshake { detail: message });
+        // Only the daemon's own unknown-method reply means "older build".
+        if resp.error_kind.is_none() && message.starts_with("unknown method") {
+            return Err(ConnectError::NoHandshake { detail: message });
+        }
+        return Err(ConnectError::HandshakeRefused { detail: message });
     }
     serde_json::from_value(resp.result.unwrap_or_default()).map_err(|e| {
-        ConnectError::NoHandshake {
+        ConnectError::HandshakeRefused {
             detail: format!("malformed handshake: {e}"),
         }
     })
@@ -277,9 +290,11 @@ impl DaemonClient {
     /// Connect to the endpoint in `res`, handshake, and verify the daemon
     /// is the expected one. The client carries the resolved project id.
     ///
-    /// A daemon that predates `kernel.handshake` yields a degraded
-    /// handshake (proto `0..=0`, unverified) plus a warning instead of an
-    /// error, so `weaver kernel restart` stays reachable.
+    /// A daemon that answers `unknown method: kernel.handshake` yields a
+    /// degraded handshake (proto `0..=0`, unverified) plus a warning, but
+    /// only on the default endpoint with no node pin; otherwise it is an
+    /// error, since nothing could be verified. Other handshake errors
+    /// never downgrade.
     pub async fn connect_resolved(res: &Resolution) -> Result<Connected, ConnectError> {
         let Some(client) = Self::connect_path(&res.socket).await else {
             let state = probe_socket(&res.socket).await;
@@ -299,6 +314,11 @@ impl DaemonClient {
         let handshake = match parse_handshake(resp) {
             Ok(h) => h,
             Err(ConnectError::NoHandshake { detail }) => {
+                // Nothing can be verified against an old daemon, so only
+                // the user-daemon default endpoint may proceed.
+                if res.expected_node.is_some() || res.source != ResolveSource::Default {
+                    return Err(ConnectError::NoHandshake { detail });
+                }
                 let status = client
                     .call(Request::new("kernel.status"))
                     .await

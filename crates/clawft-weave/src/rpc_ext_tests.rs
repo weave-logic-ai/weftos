@@ -288,6 +288,14 @@ async fn wire_handshake_answers_unsupported_proto_with_ranges() {
 async fn wire_bound_daemon_reports_project_and_refuses_others() {
     use crate::handshake_rpc::{BoundProject, set_bound};
     use clawft_rpc::handshake::BoundVia;
+    /// Unbinds on drop so the process-global cannot leak past this test.
+    struct Unbind;
+    impl Drop for Unbind {
+        fn drop(&mut self) {
+            set_bound(BoundProject::default());
+        }
+    }
+    let _unbind = Unbind;
     set_bound(BoundProject {
         project_id: Some(PROJECT_A.into()),
         via: BoundVia::Manifest,
@@ -311,6 +319,13 @@ async fn wire_malformed_project_is_refused() {
     let r = json_roundtrip(
         &kernel,
         r#"{"method":"kernel.status","params":null,"proto":1,"project":"../x"}"#,
+    )
+    .await;
+    assert_eq!(r.error_kind.as_deref(), Some("invalid_project"));
+    // The discovery call keeps the syntax check too.
+    let r = json_roundtrip(
+        &kernel,
+        r#"{"method":"kernel.handshake","params":null,"proto":1,"project":"../x"}"#,
     )
     .await;
     assert_eq!(r.error_kind.as_deref(), Some("invalid_project"));
