@@ -1,53 +1,17 @@
-//! `weft doctor` — environment and multi-agent readiness checks (WEFT-197).
-//!
-//! Reports:
-//! - `claude` binary on PATH (needed for Claude Code MCP bridge / CLI)
-//! - auto-delegation feature + config (`claude_enabled`, rule count)
-//! - agent routes configured (≥1 explicit route, or catch-all only)
-//!
-//! Exit code is `0` when no **fail** findings; **warn** findings still exit 0
-//! so CI can use doctor as advisory. Use `--strict` to treat warnings as
-//! failures.
+//! Multi-agent readiness checks for `weft doctor` (WEFT-197): `claude` on
+//! PATH, auto-delegation config, agent routes. Pure functions over
+//! [`Config`] so they unit-test without a machine.
 
 use std::path::PathBuf;
 use std::process::Command;
 
-use clap::Args;
-
-use clawft_platform::NativePlatform;
+use clawft_rpc::doctor::{Component, Finding};
 use clawft_types::agent_routing::AgentRoutingConfig;
 use clawft_types::config::Config;
 use clawft_types::delegation::DelegationConfig;
 
-use super::{discover_config_path, load_config};
-
-/// Arguments for the `weft doctor` subcommand.
-#[derive(Args, Debug, Default)]
-pub struct DoctorArgs {
-    /// Config file path (overrides auto-discovery).
-    #[arg(short, long)]
-    pub config: Option<String>,
-
-    /// Treat warnings as failures (non-zero exit).
-    #[arg(long, default_value_t = false)]
-    pub strict: bool,
-
-    /// Only run multi-agent related checks.
-    #[arg(long, default_value_t = false)]
-    pub multi_agent: bool,
-}
-
-/// Severity of a doctor finding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CheckSeverity {
-    /// Healthy.
-    Ok,
-    /// Advisory; default exit still 0.
-    Warn,
-    /// Hard problem (reserved for future hard gates; used by [`worst_severity`]).
-    #[allow(dead_code)]
-    Fail,
-}
+/// Severity of a doctor finding (shared with the system checks).
+pub use clawft_rpc::doctor::Severity as CheckSeverity;
 
 /// One doctor check result.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,6 +208,15 @@ fn which_on_path(program: &str) -> Option<PathBuf> {
     None
 }
 
+impl DoctorFinding {
+    /// Convert into the shared report format under `component`.
+    pub fn into_finding(self, component: Component) -> Finding {
+        let mut f = Finding::new(component, self.id, self.severity, self.message);
+        f.remedy = self.hint;
+        f
+    }
+}
+
 /// Aggregate severity: Fail > Warn > Ok.
 pub fn worst_severity(findings: &[DoctorFinding]) -> CheckSeverity {
     let mut worst = CheckSeverity::Ok;
@@ -255,79 +228,6 @@ pub fn worst_severity(findings: &[DoctorFinding]) -> CheckSeverity {
         }
     }
     worst
-}
-
-/// Run the doctor command.
-pub async fn run(args: DoctorArgs) -> anyhow::Result<()> {
-    let platform = NativePlatform::new();
-    let config = load_config(&platform, args.config.as_deref()).await?;
-
-    println!("weft doctor");
-    println!("===========");
-    println!();
-
-    if let Some(path) = discover_config_path(&platform) {
-        println!("Config: {}", path.display());
-    } else {
-        println!("Config: not found (using defaults)");
-    }
-    println!();
-
-    let mut findings = Vec::new();
-
-    if !args.multi_agent {
-        // Lightweight general checks.
-        findings.push(DoctorFinding {
-            id: "config_loaded",
-            severity: CheckSeverity::Ok,
-            message: format!(
-                "config loaded (model={}, brand={})",
-                config.agents.defaults.model,
-                config.brand()
-            ),
-            hint: None,
-        });
-    }
-
-    let delegate_feature = cfg!(feature = "delegate");
-    findings.extend(multi_agent_findings(
-        &config,
-        claude_binary_on_path(),
-        delegate_feature,
-    ));
-
-    println!("Multi-agent checks (WEFT-197):");
-    for f in &findings {
-        if args.multi_agent && matches!(f.id, "config_loaded") {
-            continue;
-        }
-        let tag = match f.severity {
-            CheckSeverity::Ok => "OK  ",
-            CheckSeverity::Warn => "WARN",
-            CheckSeverity::Fail => "FAIL",
-        };
-        println!("  [{tag}] {}: {}", f.id, f.message);
-        if let Some(ref hint) = f.hint {
-            println!("         → {hint}");
-        }
-    }
-
-    println!();
-    let worst = worst_severity(&findings);
-    match worst {
-        CheckSeverity::Ok => println!("Summary: all checks passed"),
-        CheckSeverity::Warn => {
-            println!("Summary: warnings present (exit 0; use --strict to fail)");
-        }
-        CheckSeverity::Fail => println!("Summary: failures present"),
-    }
-
-    let should_fail = matches!(worst, CheckSeverity::Fail)
-        || (args.strict && matches!(worst, CheckSeverity::Warn));
-    if should_fail {
-        std::process::exit(1);
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -442,13 +342,5 @@ mod tests {
             },
         ];
         assert_eq!(worst_severity(&findings), CheckSeverity::Fail);
-    }
-
-    #[test]
-    fn doctor_args_defaults() {
-        let args = DoctorArgs::default();
-        assert!(args.config.is_none());
-        assert!(!args.strict);
-        assert!(!args.multi_agent);
     }
 }

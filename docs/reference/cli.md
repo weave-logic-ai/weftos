@@ -140,6 +140,63 @@ weft status --detailed
 
 ---
 
+## weft doctor / weaver doctor
+
+Grouped health checks for the install, the running kernel daemon, the runtime
+directory, MCP wiring, config and multi-agent readiness. `weaver doctor` runs
+the same engine (`clawft_rpc::doctor`) minus `config` and `agents`, which need
+the agent config and stay in `weft doctor`.
+
+Each check reports PASS, WARN or FAIL, and every non-pass line carries a
+one-line `fix:` command. Doctor is read-only unless `--fix` is given.
+
+### Usage
+
+```
+weft doctor [COMPONENT...] [OPTIONS]
+weaver doctor [COMPONENT...] [OPTIONS]
+```
+
+### Options
+
+| Flag / Option | Description |
+|---------------|-------------|
+| `COMPONENT`, `--component <LIST>` | Limit to `install`, `daemon`, `runtime`, `config`, `mcp`, `agents` (comma-separated or repeated). `weft doctor install` and `weft doctor --component install` are the same. |
+| `--json` | Machine-readable output: `summary`, `exit_code`, `findings[]`, and an inventory under `data`. |
+| `--strict` | Exit non-zero on WARN as well as FAIL. |
+| `--fix` | Remove provably stale `kernel.sock` / `kernel.pid` files and print exactly what changed. Nothing else is modified. |
+| `--multi-agent` | Same as `--component agents` (kept for WEFT-197 users). |
+| `--config`, `-c` `<PATH>` | (weft only) config file path. |
+
+Exit code is 1 on any FAIL, or on any WARN with `--strict`; otherwise 0.
+
+### Checks
+
+| Component | What it looks at |
+|-----------|------------------|
+| `install` | Every copy of `weft`, `weaver`, `weftos` on `PATH` and in `~/.cargo/bin`, `/usr/local/bin`, `/opt/homebrew/bin`, `~/.local/bin`: path, version, sha256, dirty flag, owning channel (Homebrew Cellar, cargo-dist receipt in `~/.config/*/*receipt*.json`, `~/.config/weftos/dev-install.json`, a `-dirty` build, cargo ledger `~/.cargo/.crates2.json`), which copy wins on `PATH`. WARN when the winner is dirty or a shadowed copy is newer, and on duplicates. FAIL when `weft` or `weaver` is missing or does not run. |
+| `daemon` | Kernel processes from `ps` (`weaver kernel start`, `weftos boot`): pid, executable (`/proc/<pid>/exe` or `lsof`), version (from `kernel.status` when the socket is tied to the pid, else `<exe> --version`). WARN when the executable is outside any known install location, differs from the `PATH` winner, or the CLI and daemon versions differ. Never starts or signals a process. |
+| `runtime` | The resolved runtime dir and how it was resolved; `kernel.sock` connect test (refused means stale), `kernel.pid` liveness, every `node.key` under `~/.clawft`, `~/.weftos/runtime` and project `.weftos/runtime` dirs (paths and permissions only; contents are never read, keys are never deleted). |
+| `mcp` | Each stdio server in the nearest `.mcp.json` resolves on `PATH`. |
+| `config`, `agents` | (weft) config loads; `claude` on `PATH`, auto-delegation rules, agent routes. |
+
+`--fix` is deliberately narrow: a socket is removed only when a connect is
+refused and its recorded pid is not running; a pid file only when that pid is
+not running. Live sockets, keys and binaries are never touched. Copies of a
+binary are never removed by doctor; the `fix:` line for a duplicate is a
+command for you to run.
+
+### Examples
+
+```
+weft doctor                       # everything
+weaver doctor install             # just the binary inventory
+weaver doctor --component runtime --fix
+weft doctor --json --strict       # for CI
+```
+
+---
+
 ## weft agents
 
 Manage agent definitions. Agents are discovered from workspace

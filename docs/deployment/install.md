@@ -83,6 +83,14 @@ step, and replace the binaries in place. If `weaver kernel status`
 reports a running daemon, the installer stops it before swapping the
 binary and starts it again afterwards.
 
+## Checking what is installed
+
+`weaver doctor install` (or `weft doctor install`) lists every copy of
+`weft`, `weaver` and `weftos`, which install channel owns each, which
+one wins on `$PATH`, and any running daemon whose binary is a different
+file. It is read-only. See the
+[CLI reference](../reference/cli.md#weft-doctor--weaver-doctor).
+
 ## Uninstall
 
 There is no separate uninstall script. Remove the three binaries from

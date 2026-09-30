@@ -27,6 +27,7 @@
 //! ```
 
 mod client;
+pub mod doctor;
 pub mod named_pipe;
 mod protocol;
 pub mod version_check;
