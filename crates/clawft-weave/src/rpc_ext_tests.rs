@@ -8,6 +8,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 async fn test_kernel() -> KernelRef {
     use clawft_types::config::{ChainConfig, Config, KernelConfig};
     let kcfg = KernelConfig {
+        // The scope gate has its own tests (`scope_gate_tests`); these
+        // exercise the seam with unscoped probe methods.
+        governance: clawft_types::config::GovernanceConfig {
+            outside_project: clawft_types::config::OutsideProjectPolicy::AllowAll,
+        },
         chain: Some(ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())),
         ..KernelConfig::default()
     };
@@ -40,6 +45,7 @@ async fn prefix_handler_receives_method_params_and_caller() {
     let caller = CallerCtx {
         auth: Some("write".into()),
         project: Some("p1".into()),
+        ..CallerCtx::default()
     };
     let caps = CallerCapabilities::from_scopes(["write"]);
     let r = dispatch_ext_with(&reg, &caller, &caps, "project.list", &params, &kernel)
@@ -288,6 +294,7 @@ async fn wire_handshake_answers_unsupported_proto_with_ranges() {
 async fn wire_bound_daemon_reports_project_and_refuses_others() {
     use crate::handshake_rpc::{BoundProject, set_bound};
     use clawft_rpc::handshake::BoundVia;
+    let _serial = crate::scope_gate::TEST_BOUND_LOCK.lock().await;
     /// Unbinds on drop so the process-global cannot leak past this test.
     struct Unbind;
     impl Drop for Unbind {

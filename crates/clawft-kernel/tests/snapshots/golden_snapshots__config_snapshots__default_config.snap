@@ -165,6 +165,9 @@ expression: json
   "kernel": {
     "brand": "WeftOS",
     "enabled": true,
+    "governance": {
+      "outside_project": "read_only"
+    },
     "health_check_interval_secs": 30,
     "max_processes": 64
   },

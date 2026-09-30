@@ -1144,3 +1144,33 @@ seed_peers = ["quic://10.0.0.2:9489"]
 ```
 
 Full guide: [mesh-quic.md](./mesh-quic.md). Kernel overview: [kernel.md](./kernel.md#mesh-k6).
+
+## Outside-project policy (`kernel.governance.outside_project`)
+
+ADR-103 D12. A request is *outside any project* when it claims no project and
+the daemon is not bound to one, or when the project it claims does not verify
+(it differs from the daemon's binding, or has no active manifest in
+`~/.weftos/projects/<id>.toml`). The claim itself is never trusted.
+
+```toml
+[kernel.governance]
+outside_project = "read_only"   # read_only (default) | deny_all | allow_all
+```
+
+| Value | Outside a project |
+|-------|-------------------|
+| `read_only` | Only an explicit allow-list of read methods (`kernel.status`, `kernel.ps`, `kernel.services`, `kernel.logs`, `kernel.handshake`, `ping`, `cluster.status\|nodes\|health`, `chain.status\|verify`, `agent.list\|inspect`, `control.list`, `llm.models`, `mcp.list`, `project.list\|show`). Everything else, including methods added later, fails with `error_kind = "scope_denied"`: "not in a project; run `weft project init` or pass `--project`". |
+| `deny_all` | Only `kernel.status`, `kernel.handshake`, `project.list`, `project.show`. |
+| `allow_all` | No restriction (pre-ADR-103 behaviour). |
+
+Inside a project every method falls through to the usual capability check.
+
+Limit: `project` is declared by the client, so verification proves the project
+is registered, not that the caller belongs to it. In Phase 1 this guards
+against working in the wrong place by accident; it is not an authorisation
+boundary between local processes of one user.
+
+Independently of this setting, the daemon's in-process voice principal can
+never call the cron mutations (`cron.add`, `cron.remove`, `cron.enable`,
+`cron.disable`): a spoken command must not be able to schedule recurring
+unattended agent jobs (`error_kind = "voice_denied"`).

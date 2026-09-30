@@ -85,9 +85,22 @@ impl From<&str> for ClaimedProject {
     }
 }
 
+/// The kind of principal behind a request, set by the entry path (never by
+/// the client). Gates use it for per-principal deny-lists.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Principal {
+    /// A socket / RVF caller.
+    #[default]
+    External,
+    /// The daemon's in-process voice consumer ([`CallerCtx::internal_voice`]).
+    InternalVoice,
+}
+
 /// Who is calling, as established by the entry path before dispatch.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CallerCtx {
+    /// Set by the entry path; see [`Principal`].
+    pub principal: Principal,
     /// Bearer / scope token from the request envelope, if any.
     pub auth: Option<String>,
     /// Project the client claims the request is scoped to
@@ -99,6 +112,7 @@ impl CallerCtx {
     /// A caller presenting `auth` (or none).
     pub fn from_auth(auth: Option<String>) -> Self {
         Self {
+            principal: Principal::External,
             auth,
             project: None,
         }
@@ -107,6 +121,7 @@ impl CallerCtx {
     /// Caller context for a wire request: its `auth` and `project`.
     pub fn from_request(req: &clawft_rpc::Request) -> Self {
         Self {
+            principal: Principal::External,
             auth: req.auth.clone(),
             project: req.project.clone().map(ClaimedProject::from),
         }
@@ -120,8 +135,14 @@ impl CallerCtx {
     /// (`kernel.shutdown`, `kernel.kill-process`, `cluster.*`,
     /// `workload.revoke`, `chain.checkpoint`) stay out of reach of speech.
     /// Before this the voice path dispatched with no check at all.
+    ///
+    /// The scope gate additionally denies this principal the cron
+    /// mutations (`cron.*` writes), see `scope_gate::VOICE_DENIED`.
     pub fn internal_voice() -> Self {
-        Self::from_auth(Some("read,chat,write".to_owned()))
+        Self {
+            principal: Principal::InternalVoice,
+            ..Self::from_auth(Some("read,chat,write".to_owned()))
+        }
     }
 }
 
@@ -170,6 +191,8 @@ impl ExtRoute {
 
 /// What a gate sees. Borrowed so running gates never clones params.
 pub struct GateRequest<'a> {
+    /// Who is calling (set by the entry path, not the client).
+    pub principal: Principal,
     pub method: &'a str,
     pub params: &'a Value,
     pub auth: Option<&'a str>,
@@ -228,11 +251,19 @@ const ROUTES: &[ExtRoute] = &[
 
 /// Registered gates, run in order; the first denial wins.
 ///
-/// Package G adds the D12 scope gate here.
+/// The D12 scope gates (package G): the voice deny-list, then the
+/// outside-project policy.
 #[cfg(not(test))]
-const GATES: &[GateFn] = &[];
+const GATES: &[GateFn] = &[
+    crate::scope_gate::voice_gate,
+    crate::scope_gate::scope_gate,
+];
 #[cfg(test)]
-const GATES: &[GateFn] = &[test_deny_gate];
+const GATES: &[GateFn] = &[
+    test_deny_gate,
+    crate::scope_gate::voice_gate,
+    crate::scope_gate::scope_gate,
+];
 
 /// Unit-test-only route: proves extension dispatch on the real wire path.
 #[cfg(test)]
@@ -344,6 +375,7 @@ pub async fn authorize_with(
         )));
     }
     let req = GateRequest {
+        principal: caller.principal,
         method,
         params,
         auth: caller.auth.as_deref(),

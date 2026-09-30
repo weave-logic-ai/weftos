@@ -30,6 +30,9 @@ pub mod handshake_rpc;
 /// Daemon RPC extension seam: method-prefix routes + pre-dispatch gates (ADR-103 D0).
 #[cfg(any(unix, windows))]
 pub mod rpc_ext;
+/// D12 scope gate: outside-project policy and the voice deny-list (ADR-103).
+#[cfg(any(unix, windows))]
+pub mod scope_gate;
 /// Live MCP registry RPC handlers (WEFT-494 / ADR-070). Available on all
 /// platforms so unit tests can exercise add/list/remove without UDS.
 pub mod mcp_rpc;

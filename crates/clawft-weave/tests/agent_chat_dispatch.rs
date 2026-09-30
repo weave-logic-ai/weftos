@@ -60,6 +60,11 @@ fn base_config() -> Config {
 
 fn minimal_kernel_config() -> KernelConfig {
     KernelConfig {
+        // These tests drive the wire without a project; scope policy is
+        // covered in `scope_gate_tests`.
+        governance: clawft_types::config::GovernanceConfig {
+            outside_project: clawft_types::config::OutsideProjectPolicy::AllowAll,
+        },
         enabled: true,
         max_processes: 64,
         health_check_interval_secs: 5,

@@ -26,6 +26,11 @@ async fn spawn_daemon(tmp: &std::path::Path) -> (std::path::PathBuf, watch::Send
     let kcfg = KernelConfig {
         enabled: true,
         max_processes: 64,
+        // Drives the wire without a project; scope policy is covered in
+        // `scope_gate_tests`.
+        governance: clawft_types::config::GovernanceConfig {
+            outside_project: clawft_types::config::OutsideProjectPolicy::AllowAll,
+        },
         chain: Some(ChainConfig {
             checkpoint_path: Some(tmp.join("chain.json").to_string_lossy().into_owned()),
             ..ChainConfig::default()

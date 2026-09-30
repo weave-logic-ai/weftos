@@ -107,6 +107,11 @@ pub fn set_bound(b: BoundProject) {
     *BOUND.write().unwrap_or_else(|e| e.into_inner()) = Some(b);
 }
 
+/// The project id this daemon is bound to, if any (scope gate, ADR-103 D12).
+pub fn bound_project_id() -> Option<String> {
+    bound().project_id
+}
+
 fn bound() -> BoundProject {
     BOUND
         .read()
