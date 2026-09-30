@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""In-target cog conformance runner (card mesh-placement-08, COG-001, ADR-099 s2/s3).
+"""In-target cog conformance runner (card mesh-placement-08, ADR-100, ADR-099 s2/s3).
 
 Runs on the node being tested (inside a container, natively on a Linux ARM
 node, or over SSH). Standard library only, Python 3.8+, so it runs in a stock

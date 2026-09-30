@@ -1,5 +1,5 @@
 //! Workload runtime adapters (mesh-placement-09; ADR-099 section 5,
-//! COG-001 sections 3-5).
+//! ADR-100 sections 3-5).
 //!
 //! - [`types`]: the [`WorkloadRuntime`] trait (id, provides, admit, load,
 //!   start, stop, unload, status, control_mode, console) and its values.

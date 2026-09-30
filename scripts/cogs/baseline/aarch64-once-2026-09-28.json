@@ -1,5 +1,5 @@
 {
- "_comment": "Recorded baseline: prototype sweep of 2026-09-28, OrbStack linux/arm64, python:3.12-slim-bookworm, every aarch64 cog with --once, 15 s cap, features-only feed. Raw lines in aarch64-once-2026-09-28.summary.txt. COG-001 text says 93/5/7; the raw results give 93/5/9 (the 7 miscounts swarm-*).",
+ "_comment": "Recorded baseline: prototype sweep of 2026-09-28, OrbStack linux/arm64, python:3.12-slim-bookworm, every aarch64 cog with --once, 15 s cap, features-only feed. Raw lines in aarch64-once-2026-09-28.summary.txt. ADR-100 text says 93/5/7; the raw results give 93/5/9 (the 7 miscounts swarm-*).",
  "arch": "aarch64",
  "sweep_mode": "once",
  "group_counts": {

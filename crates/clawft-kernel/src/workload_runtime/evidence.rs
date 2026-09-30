@@ -1,6 +1,6 @@
 //! Run evidence: what an instance did, captured under its output limit.
 //!
-//! Stdout is evidence and logs, never control input (COG-001 section 4).
+//! Stdout is evidence and logs, never control input (ADR-100 section 4).
 //! Chain payloads carry [`RunEvidence::audit`], which has counts and hashes
 //! but no output content.
 

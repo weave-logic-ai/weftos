@@ -1,10 +1,10 @@
 # ADR-099: Governed workload placement across the mesh
 
 - **Status**: Accepted (2026-09-29; decisions settled 2026-09-29, implementation tracked on cards mesh-placement-01..23)
-- **Date**: 2026-09-28 (rewritten same day; supersedes the earlier draft titled "Cog workloads and mesh placement", which is now COG-001 plus this ADR)
+- **Date**: 2026-09-28 (rewritten same day; supersedes the earlier draft titled "Cog workloads and mesh placement", which is now ADR-100 plus this ADR)
 - **Deciders**: Platform / ops. Open questions settled 2026-09-29 (defaults accepted by user); status stays Proposed until implemented, but the decisions below are settled pending implementation.
 - **Depends-On**: ADR-022 (mandatory ExoChain audit), ADR-024 (Noise), ADR-025 (Ed25519 node identity), ADR-031 (rvf-wire mesh format), ADR-033 (three-branch governance), ADR-092 (governance rule distribution), ADR-094 (spawn permission)
-- **Relates-To**: COG-001 (cog workload kind), ADR-101 (inference workload kind), ADR-060 / ADR-018 (local model serving, which ADR-101 migrates), ADR-044 (wasip2), `~/llm` ADR-0004 (open capability vocabulary), 0016 (local serving), 0022 (storage tiers)
+- **Relates-To**: ADR-100 (cog workload kind), ADR-101 (inference workload kind), ADR-060 / ADR-018 (local model serving, which ADR-101 migrates), ADR-044 (wasip2), `~/llm` ADR-0004 (open capability vocabulary), 0016 (local serving), 0022 (storage tiers)
 - **Amends**: none. Fills the reserved `SpawnBackend::Remote / Container / Wasm` slots (`crates/clawft-kernel/src/supervisor.rs:298-322`). No earlier ADR covers workload placement or remote backends (searched `docs/adr`, `docs/architecture`, `.planning`; `docs/architecture/swarm-topology.md` covers claude-flow prompt roles and the flat `SwarmCoordinator`, not node placement).
 
 ## Context
@@ -15,7 +15,7 @@ Three requirements arrived together:
 2. "The same for NPU workloads, or TPU, or even a TSU if we had one": accelerators are first-class placement targets.
 3. "This really should be the same way local inference is hosted long term": model servers (today `llama-server` on :8090, Ollama on :11434, controlled from `~/llm`) become placed workloads.
 
-Placement therefore cannot be a cog feature. It is a general layer; cogs and inference servers are two **workload kinds** on it, and future accelerator jobs are more. This ADR defines the layer. Kind-specific decisions are in COG-001 (cogs) and ADR-101 (inference).
+Placement therefore cannot be a cog feature. It is a general layer; cogs and inference servers are two **workload kinds** on it, and future accelerator jobs are more. This ADR defines the layer. Kind-specific decisions are in ADR-100 (cogs) and ADR-101 (inference).
 
 ### What the WeftOS mesh gives us today (verified in source)
 
@@ -110,7 +110,7 @@ A placement request is `(workload, config, pins/affinity, allow_emulated?)`. The
 
 **Verification of claims.** The target node runs an admission self-check (binary arch, runtime dry-run, free memory, accelerator device open) and refuses on disagreement; the refusal is chained and the placer tries the next candidate. Conformance runs can upgrade a capability's provenance to `measured`.
 
-**Validated on hardware (2026-09-29).** The native ARM path is proven on a Pi 5 that already runs weaver v0.8.1 as a mesh member: released aarch64 cogs `anomaly-detect`, `fall-detect`, `baby-cry` and `sleep-apnea` ingest natively there. A Cognitum Seed was driven successfully through its own HTTP API (COG-001 section 5). Placement itself is still unimplemented; these results validate the target nodes and the native adapter's premise, not the layer.
+**Validated on hardware (2026-09-29).** The native ARM path is proven on a Pi 5 that already runs weaver v0.8.1 as a mesh member: released aarch64 cogs `anomaly-detect`, `fall-detect`, `baby-cry` and `sleep-apnea` ingest natively there. A Cognitum Seed was driven successfully through its own HTTP API (ADR-100 section 5). Placement itself is still unimplemented; these results validate the target nodes and the native adapter's premise, not the layer.
 
 ### 4. Governance
 
@@ -132,7 +132,7 @@ trait WorkloadRuntime {
 }
 ```
 
-Adapters: `native` process (cog-runner-style limits, later landlock / seccomp), `container.*` (apple-container, docker/OrbStack, podman), `wasm` (later; **decided 2026-09-29: unify on `clawft-wasm-host`** and retire or wrap the kernel `wasm_runner` module for cogs, so there is one WASM sandbox and one permission store), a **`remote.api`** family for nodes that expose their own management API instead of running WeftOS (the Cognitum Seed, COG-001), and **inference-server** adapters (`infer.llamacpp`, `infer.mlx-lm`, `infer.ollama`) that wrap a server process or an already-running server. Accelerator-specific adapters (Hailo HEF runner, Coral TFLite delegate, RKNN, Qualcomm, TSU) implement the same trait and simply add their capability ids. **`ControlMode::Adopted`** lets the layer register and health-check a server the operator started by hand (as today) without controlling it, which is the first migration step for inference.
+Adapters: `native` process (cog-runner-style limits, later landlock / seccomp), `container.*` (apple-container, docker/OrbStack, podman), `wasm` (later; **decided 2026-09-29: unify on `clawft-wasm-host`** and retire or wrap the kernel `wasm_runner` module for cogs, so there is one WASM sandbox and one permission store), a **`remote.api`** family for nodes that expose their own management API instead of running WeftOS (the Cognitum Seed, ADR-100), and **inference-server** adapters (`infer.llamacpp`, `infer.mlx-lm`, `infer.ollama`) that wrap a server process or an already-running server. Accelerator-specific adapters (Hailo HEF runner, Coral TFLite delegate, RKNN, Qualcomm, TSU) implement the same trait and simply add their capability ids. **`ControlMode::Adopted`** lets the layer register and health-check a server the operator started by hand (as today) without controlling it, which is the first migration step for inference.
 
 Accelerator job kinds and the TPU / TSU / NPU adapters are **deferred until the hardware exists**; the vocabulary and trait ship now.
 
@@ -170,10 +170,10 @@ State machine per instance: `Requested -> Placed -> Fetching -> Verified -> Load
 ### 8. Trust (Decided 2026-09-29, defaults accepted by user)
 
 1. Package and manifest signatures are Ed25519 (ADR-025) from a **pinned WeftOS signer set plus operator-pinned keys** in governance config (ADR-092). Rationale: one anchor we control, rotated through the existing governance distribution. At least one valid signature from a pinned signer is required to install or place. ML-DSA-65 dual signing (ADR-028) is a follow-up.
-2. Kind-specific external verifiers (Cognitum release records for cogs) are optional additional signatures (COG-001). **Model trust is operator attestation over a hash manifest** (ADR-101), because upstream publishers of weights rarely sign.
+2. Kind-specific external verifiers (Cognitum release records for cogs) are optional additional signatures (ADR-100). **Model trust is operator attestation over a hash manifest** (ADR-101), because upstream publishers of weights rarely sign.
 3. Node trust tiers gate what may run there: `discovered` nothing by default; `paired` operator-signed workloads; `pinned` workloads that carry secrets.
 4. Commercial terms (Cognitum's 30% per cog) are **contractual, not enforced in code**. Rationale: enforcement code is not a substitute for the agreement.
-5. Our cogs fork is the source of truth and is ahead of upstream until our PRs merge (COG-001).
+5. Our cogs fork is the source of truth and is ahead of upstream until our PRs merge (ADR-100).
 
 ### 9. Security and deferred
 
@@ -198,4 +198,4 @@ Risks: scope creep into a general scheduler (mitigation: pure constraint plus sc
 4. **WASM stack**: unify on `clawft-wasm-host`; retire or wrap the kernel `wasm_runner` for cogs. Rationale: one sandbox, one permission store.
 5. **Adopt-in-place and weight transfer**: no hard transfer-size ceiling in v1; adopt-in-place is allowed on removable drives, and a detached drive marks the workload Degraded (never silently broken). Chunk size 64 MiB remains a tunable placeholder.
 6. **Vocabulary file** (`config/capabilities.toml`): changed only through the governance path, not freely editable. It remains advisory (does not gate matching).
-7. Other decisions on inference (proxy, `~/llm`, exposure, first slice) are recorded in ADR-101; cog scope and Seed strategy in COG-001.
+7. Other decisions on inference (proxy, `~/llm`, exposure, first slice) are recorded in ADR-101; cog scope and Seed strategy in ADR-100.

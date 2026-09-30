@@ -23,7 +23,7 @@ pub enum ControlMode {
     Adopted,
 }
 
-/// How a cog runs (COG-001 section 4).
+/// How a cog runs (ADR-100 section 4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "mode")]
 pub enum RunMode {

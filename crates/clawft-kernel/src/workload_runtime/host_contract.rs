@@ -1,4 +1,4 @@
-//! Host contract common to every cog runtime (COG-001 section 4):
+//! Host contract common to every cog runtime (ADR-100 section 4):
 //! `COG_CSI_BIND`, `COG_SENSOR_URL`, a per-instance `COGNITUM_COG_TOKEN`
 //! and `COGNITUM_COG_DATA_DIR`.
 //!

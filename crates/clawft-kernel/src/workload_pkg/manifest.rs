@@ -1,4 +1,4 @@
-//! Manifest envelope and the cog package body (COG-001 section 1).
+//! Manifest envelope and the cog package body (ADR-100 section 1).
 
 use std::collections::BTreeMap;
 
@@ -20,7 +20,7 @@ pub const MANIFEST_FILE: &str = "cogpkg.json";
 pub const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 /// Most signature entries accepted on one envelope.
 pub const MAX_SIGNATURES: usize = 16;
-/// Architectures a cog package may carry (COG-001 section 1).
+/// Architectures a cog package may carry (ADR-100 section 1).
 pub const COG_ARCHES: &[&str] = &["aarch64", "armv7", "x86_64", "wasm"];
 
 /// Manifest parse / validation failure.
@@ -175,7 +175,7 @@ impl FileRef {
     }
 }
 
-/// Where the package content came from (COG-001 section 6.3).
+/// Where the package content came from (ADR-100 section 6.3).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageSource {

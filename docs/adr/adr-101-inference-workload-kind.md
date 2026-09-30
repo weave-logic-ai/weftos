@@ -4,7 +4,7 @@
 - **Date**: 2026-09-28
 - **Deciders**: Platform / ops. Open questions settled 2026-09-29 (defaults accepted by user); status stays Proposed until implemented, but the decisions below are settled pending implementation.
 - **Depends-On**: ADR-099 (governed workload placement)
-- **Relates-To**: ADR-060 (local Hermes serving and KV management), ADR-018 (Hermes as clawft-llm provider), COG-001, `~/llm` ADR-0004 (open capability vocabulary), 0016 (local model serving), 0022 (model storage tiers), 0025 (ruflo local models across hosts; title only, not read)
+- **Relates-To**: ADR-060 (local Hermes serving and KV management), ADR-018 (Hermes as clawft-llm provider), ADR-100, `~/llm` ADR-0004 (open capability vocabulary), 0016 (local model serving), 0022 (model storage tiers), 0025 (ruflo local models across hosts; title only, not read)
 - **Amends**: how ADR-060 / ADR-018 endpoints are configured (static URLs become placement-resolved). Does not change their model, KV, or provider-protocol decisions.
 
 ## Context

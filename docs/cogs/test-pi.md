@@ -4,7 +4,7 @@ Card mesh-placement-fu-pi-test-lane. Decision (2026-09-29): anything that has to
 prove it runs on ARM is tested on the real Raspberry Pi 5, not on the Mac or in a
 container standing in for it. Governing design:
 [ADR-099](../adr/adr-099-governed-workload-placement.md),
-[COG-001](../adr/cog-001-cog-workload-kind.md); the harness it drives is
+[ADR-100](../adr/adr-100-cog-workload-kind.md); the harness it drives is
 described in [conformance-harness.md](conformance-harness.md).
 
 ```bash

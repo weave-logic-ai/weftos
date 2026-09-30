@@ -1,6 +1,6 @@
 //! `weaver workload pack | verify | keygen` (mesh-placement-07).
 //!
-//! Builds and verifies signed cog packages (`cogpkg.json`, COG-001 sec. 1)
+//! Builds and verifies signed cog packages (`cogpkg.json`, ADR-100 sec. 1)
 //! with the trust rules of ADR-099 sec. 8. The rest of the `weaver workload`
 //! group (list / inspect / daemon RPCs) lives in `workload_cmd`, and
 //! [`WorkloadPackCmd`] is designed to be flattened into it with

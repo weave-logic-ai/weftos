@@ -11,7 +11,7 @@ Outcomes (per raw harness result):
   missing-binary no binary for this arch (e.g. registry 404)
   exec-error     the binary could not be executed on this runtime / arch
 
-Groups (the COG-001 catalog taxonomy, from expectations.json):
+Groups (the ADR-100 catalog taxonomy, from expectations.json):
   clean | needs-interval | needs-extra-cli | no-build
 """
 import json

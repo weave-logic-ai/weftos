@@ -1,6 +1,6 @@
 //! Trust anchors: the pinned WeftOS signer set plus operator-pinned keys
 //! (ADR-099 section 8.1), and optionally pinned Cognitum release keys
-//! (COG-001 section 6.2).
+//! (ADR-100 section 6.2).
 
 use serde::{Deserialize, Serialize};
 

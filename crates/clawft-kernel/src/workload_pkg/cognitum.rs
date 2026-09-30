@@ -1,4 +1,4 @@
-//! Optional Cognitum ADR-154/155 release-record verifier (COG-001 section
+//! Optional Cognitum ADR-154/155 release-record verifier (ADR-100 section
 //! 6.2). Off unless [`super::VerifyPolicy::accept_cognitum_release`] is set.
 //!
 //! The record's detached signature is Ed25519 (PureEdDSA) over the canonical

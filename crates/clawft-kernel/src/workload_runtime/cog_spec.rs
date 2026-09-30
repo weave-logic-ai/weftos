@@ -1,4 +1,4 @@
-//! The parts of a cog's `cog.toml` the runtime enforces (COG-001 sections
+//! The parts of a cog's `cog.toml` the runtime enforces (ADR-100 sections
 //! 2-4): `[console]` limits, `[resources]` and the `[config]` CLI surface,
 //! plus building a [`VerifiedWorkload`] from a verified package.
 

@@ -1,4 +1,4 @@
-//! cog-runner-style process supervision (COG-001 section 3): a cleared
+//! cog-runner-style process supervision (ADR-100 section 3): a cleared
 //! environment, rlimits applied in the child before exec, an unprivileged
 //! user, a wall-clock cap, capped output capture, and terminate-then-kill.
 

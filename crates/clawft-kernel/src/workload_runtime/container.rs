@@ -1,5 +1,5 @@
 //! Container adapters: Apple `container`, Docker / OrbStack and Podman
-//! (COG-001 section 3). This is the real start path for cog workloads; the
+//! (ADR-100 section 3). This is the real start path for cog workloads; the
 //! simulated start in [`crate::container::ContainerManager`] remains for
 //! service-registry tests only.
 

@@ -1,4 +1,4 @@
-//! `remote.api` adapter for a Cognitum Seed (COG-001 section 5, option b):
+//! `remote.api` adapter for a Cognitum Seed (ADR-100 section 5, option b):
 //! drives the Seed's own HTTP API instead of running WeftOS on it.
 //!
 //! Seed constraints honored here:

@@ -1,6 +1,8 @@
 # Cog conformance harness
 
-Card mesh-placement-08. Governing design: [COG-001](../adr/cog-001-cog-workload-kind.md)
+> **Cogs project:** the operational detail for Cognitum Seeds, the Pi 5, fleets, tooling, testing on hardware and upstream work lives in the private cogs repo (`weave-logic-ai/cognitum-cogs`, `docs/`; locally `~/Clients/cognitum/cogs-main`). Its decision records are the COG-NNN series. This WeftOS doc keeps only what WeftOS implements.
+
+Card mesh-placement-08. Governing design: [ADR-100](../adr/adr-100-cog-workload-kind.md)
 (cog workload kind, run modes, v1 scope) and
 [ADR-099](../adr/adr-099-governed-workload-placement.md) sections 2 and 3
 (capability provenance, `perf.cog.cycle_ms`, admission self-check).
@@ -39,7 +41,7 @@ lines) for `--interval`.
 ingest POST, and exit 0 for `--once` or still cycling at the cap for `--interval`),
 `no-output`, `cli-error` (non-zero exit), `missing-binary` or `exec-error`.
 
-`scripts/cogs/expectations.json` holds the per-cog COG-001 catalog group for
+`scripts/cogs/expectations.json` holds the per-cog ADR-100 catalog group for
 aarch64: `clean`, `needs-interval` (with its `interval`), `needs-extra-cli` (with
 `needs` tags such as `seed-peers`, `seed-api`, `mqtt-broker`, `model-assets`,
 `tailscale-auth`, `cli-args`), or `no-build`. It also records `run_mode` (how the
@@ -119,7 +121,7 @@ every aarch64 cog `--once`, 15 s cap, features feed). The raw prototype lines ar
   six swarm-* cogs (backup-restore, delta-sync, distributed-store, deploy,
   edge-orchestrator, mqtt-bridge).
 
-COG-001 and the card text say "7 need seed peers or other CLI", but 93 + 5 + 7 is
+ADR-100 and the card text say "7 need seed peers or other CLI", but 93 + 5 + 7 is
 105, not 107. The raw results list nine, and the harness reports nine.
 
 ## Admission probe and provenance
@@ -172,7 +174,7 @@ adapter) together with the kernel tests and the native adapter live test. That
 replaces the aarch64 container standing in for a Linux ARM node below.
 
 Cognitum Seeds are not driven by this mode. They run cogs through their own HTTP
-API (COG-001 section 5), and that adapter is card 09.
+API (ADR-100 section 5), and that adapter is card 09.
 
 ## Adapter-driven runs (card 09)
 

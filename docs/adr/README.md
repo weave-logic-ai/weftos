@@ -92,15 +92,9 @@ This directory contains Architecture Decision Records (ADRs) for the WeftOS + cl
 | [ADR-097](adr-097-metaharness-data-governance.md) | Universal MetaHarness governance over all WeftOS data surfaces | Draft (Proposed) | Architecture / Security / Integration | WEFT-728; fs/DB/sensors/mesh/substrate |
 | [ADR-098](adr-098-environment-process-compose.md) | Per-project process-compose; environment pane planned only | Draft (Proposed) | Architecture / Integration | Triple loop; no raw yaml glob |
 | [ADR-099](adr-099-governed-workload-placement.md) | Governed workload placement across the mesh (open capability vocabulary, accelerators, runtime adapters) | Accepted | Architecture / Mesh | Cogs + local inference; docs/research/mesh-placement |
+| [ADR-100](adr-100-cog-workload-kind.md) | The cog workload kind (package, host contract, ingest bridge, Seed strategy) | Accepted | Architecture / Integration | Cognitum cogs; ADR-099. Cog-project decisions (COG-NNN) live in the private cogs repo |
 | [ADR-101](adr-101-inference-workload-kind.md) | Inference workload kind; migrate local model hosting onto placement | Accepted | Architecture / Integration | ~/llm serving; ADR-060 / ADR-099 |
 
-## Cog Records (COG-NNN)
-
-Records that define a cog, or the cog workload kind, use their own COG-NNN series so they stay out of the main ADR numbering. ADR-100 is intentionally unused, because COG-001 was first drafted under that number.
-
-| COG | Title | Status | Category | Source |
-|-----|-------|--------|----------|--------|
-| [COG-001](cog-001-cog-workload-kind.md) | The cog workload kind (package, host contract, ingest bridge, Seed strategy) | Accepted | Architecture / Integration | Cognitum cogs; ADR-099 |
 
 ## Categories
 

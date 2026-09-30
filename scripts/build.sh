@@ -1222,7 +1222,7 @@ cmd_agents_leak_check() {
     return $rc
 }
 
-# ── Cog conformance harness (mesh-placement-08, COG-001) ──────────────
+# ── Cog conformance harness (mesh-placement-08, ADR-100) ──────────────
 cmd_cogs_conformance() {
     header "Cog conformance harness (scripts/cogs)"
     timer_start
@@ -1845,7 +1845,7 @@ ${BOLD}Commands:${NC}
                   names, client paths, roster entries, credential shapes. The
                   repo is public — see scripts/agents-leak-check.sh.
   cogs-conformance <sweep|probe|summarize|selftest> [opts]
-                  Cog conformance harness (COG-001, ADR-099): run cogs against
+                  Cog conformance harness (ADR-100, ADR-099): run cogs against
                   a fake ESP32 UDP feed + stub ingest on docker, apple-container,
                   native or a remote node over ssh; JSON results, baseline check,
                   perf.cog.cycle_ms. See docs/cogs/conformance-harness.md

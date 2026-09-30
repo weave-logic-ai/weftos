@@ -1,4 +1,4 @@
-//! Native-process adapter (COG-001 section 3): the verified binary is
+//! Native-process adapter (ADR-100 section 3): the verified binary is
 //! written under the adapter's data root and run unprivileged under
 //! `[console]` / `[resources]` limits by [`super::supervise`].
 
@@ -372,7 +372,7 @@ impl WorkloadRuntime for NativeRuntime {
     }
 
     /// A native process has the host's network: nothing here restricts
-    /// egress yet (nftables / landlock are deferred, COG-001 section 4),
+    /// egress yet (nftables / landlock are deferred, ADR-100 section 4),
     /// so the gate is told `egress`.
     fn network_exposure(&self) -> NetworkPolicy {
         NetworkPolicy::Egress

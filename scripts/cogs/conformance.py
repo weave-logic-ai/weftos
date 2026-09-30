@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cog conformance harness driver (card mesh-placement-08; COG-001; ADR-099 s2-s3).
+"""Cog conformance harness driver (card mesh-placement-08; ADR-100; ADR-099 s2-s3).
 
 Entry point: `scripts/build.sh cogs-conformance <command> [options]`.
 

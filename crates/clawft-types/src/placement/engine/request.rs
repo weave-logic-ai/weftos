@@ -9,7 +9,7 @@ use super::super::PlacementTypeError;
 use super::spec::{MAX_LIST, MAX_NAME_LEN, WorkloadSpec};
 
 /// Vocabulary id marking a developer machine: native routes there score as
-/// the dev fallback, not as real hardware (ADR-099 section 3; COG-001 s2).
+/// the dev fallback, not as real hardware (ADR-099 section 3; ADR-100 s2).
 pub const DEV_FALLBACK_CLASS: &str = "node.class.dev-mac";
 
 /// One `workload.place` gate verdict for one node.

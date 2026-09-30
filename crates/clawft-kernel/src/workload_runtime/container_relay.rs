@@ -1,4 +1,4 @@
-//! In-container ingest relay (COG-001 section 4).
+//! In-container ingest relay (ADR-100 section 4).
 //!
 //! A cog always posts its vectors to `127.0.0.1:80/api/v1/store/ingest`
 //! (the address is compiled into the released binaries). Inside a

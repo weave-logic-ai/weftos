@@ -1,7 +1,8 @@
-# COG-001: The cog workload kind
+# ADR-100: The cog workload kind
 
 - **Status**: Accepted (2026-09-29; decisions settled 2026-09-29, implementation tracked on cards mesh-placement-01..23)
-- **Numbering**: Renumbered from ADR-100 on 2026-09-29. Records that define a cog, or the cog kind itself, use the separate COG-NNN series so they stay out of the main ADR numbering.
+- **Numbering**: This ADR was briefly filed as "COG-001" on 2026-09-29 and moved back to ADR-100 the same day. The COG-NNN series now belongs to the cogs project repo, which is private (`weave-logic-ai/cognitum-cogs`; its `docs/decisions/`), and holds cog-project decisions. This ADR stays in WeftOS because it defines how WeftOS hosts cogs.
+- **Cogs project**: operational detail on Seeds, the Pi 5, fleets, tooling and upstream work now lives in the cogs repo (`docs/devices/`, `docs/testing.md`, `docs/upstream.md`). This ADR keeps only what WeftOS implements.
 - **Date**: 2026-09-28
 - **Deciders**: Platform / ops. Open questions settled 2026-09-29 (defaults accepted by user); status stays Proposed until implemented, but the decisions below are settled pending implementation.
 - **Depends-On**: ADR-099 (governed workload placement)

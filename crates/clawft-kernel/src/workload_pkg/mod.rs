@@ -1,4 +1,4 @@
-//! Signed workload package manifests (mesh-placement-07; COG-001 section 1,
+//! Signed workload package manifests (mesh-placement-07; ADR-100 section 1,
 //! ADR-099 section 8).
 //!
 //! A workload package is a directory holding a signed manifest envelope
@@ -10,7 +10,7 @@
 //! Trust (ADR-099 section 8): at least one valid Ed25519 signature from the
 //! pinned WeftOS signer set or an operator-pinned key is required. A
 //! Cognitum ADR-154/155 release record is an optional, opt-in additional
-//! verifier (COG-001 section 6.2): when enabled and its registry key is
+//! verifier (ADR-100 section 6.2): when enabled and its registry key is
 //! pinned, a valid record bound to one of the package binaries counts as a
 //! signature.
 //!

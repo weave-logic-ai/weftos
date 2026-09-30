@@ -1,128 +1,148 @@
-# Handoff — WeftOS — 2026-09-26
+# Handoff — WeftOS — 2026-09-28
 
-WeftOS is a Rust agent OS (BVH + HNSW + chain) with a sparse planetary twin (**Urth**; rename candidate **uvRTH**). This session was **research + docs**, not hardware or crate work: 2026 spatial-intelligence survey, a `/urth-spatial` scrollyteller, rUv crosswalk, and a **copper-only** towed-array / 3-buoy plan (no Wi‑Fi). Nothing was committed; nothing was flashed.
+WeftOS is a Rust agent OS (kernel, chain, BVH/HNSW spatial, Urth twin) with a WeftOS dashboard
+(`~/dev/weftos-dashboard`, Next.js on Vercel + Supabase) as its work board and portfolio view. This
+session shipped **v0.8.1** with an agent directory: agent packages authored in `agents/`, rendered
+into Claude, Grok and Codex by `weftos init`, and shown in the dashboard's AI org tab. It also
+answered review feedback on four upstream ruflo PRs. Everything is committed and pushed; nothing is
+running.
+
+Topic handoffs: [`handoff-urth-spatial.md`](handoff-urth-spatial.md) (sonobuoy/copper research,
+dead ends), `handoff-voice-talk.md`, `handoff-oil-rig.md` (confidential, local only),
+`handoff-tracker-ci-memory.md`, `handoff-local-llm-config.md`.
 
 ## Current state
 
-- Branch `0.8-metaharness` @ `a6ab662e`, **dirty** — large pre-existing 0.8-metaharness tree **plus** this session’s untracked research/docs. Do not treat `git status` as one ticket.
-- **This session’s files (untracked unless noted):**
-  - `docs/research/spatial-intelligence-2026/` (survey + scrolly storyboard)
-  - `docs/research/copper-bus-timing-grounding/` (papers + range + braid)
-  - `docs/research/sonobuoy-min-test-and-copper-tow.md`
-  - `docs/research/pzsdr-p047-and-fiber-towline.md`
-  - `docs/research/uvrth-name-candidate.md`, `docs/research/uvrth-tessellation-scales.md`
-  - `docs/src/app/urth-spatial/`, `docs/src/public/urth-spatial/`, `docs/src/content/docs/weftos/research/`, `docs/src/content/docs/weftos/vision/urth.mdx`
-  - **Tracked edit:** `docs/adr/adr-079-urth-digital-twin.md` (uvRTH callout + tessellation pointer only)
-- Docs Next on `:4010` was used for scrolly verify; **dead** (runtime cap). Forge `:3000`/`:3333` — do not touch.
-- `scripts/build.sh` **not** run for this work. No cargo/test claim.
-- Never commit to `master`. Ruflo MCP is still project `[mcp_servers.ruflo]` (`ruflo__*`).
+- WeftOS: branch `0.8-metaharness` @ `a9ddcf90`, clean, one worktree, equal to `origin`. This branch
+  stays open; all current work lands here and is pushed at checkpoints (see memory).
+- **v0.8.1 is released** (tag on `2cd752e1`, 87 assets, Release/KB/SBOM/WASM green). `a9ddcf90` is
+  the first 0.8.2 commit (CHANGELOG `[Unreleased]`).
+- Gate: `scripts/build.sh gate` **19/19 green** on `a9ddcf90`'s content (run 2026-09-28 ~17:24).
+  `scripts/build.sh clippy` **fails** on pre-existing debt the gate does not run (ticket `8dfd7ed5`).
+- Dashboard: `~/dev/weftos-dashboard` `main`, clean; production auto-deploys from `main`.
+- Nothing is running. `~/dev/ruflo-pr-teambus` is a kept, built ruflo checkout for testing (below).
 
 ## What's working (verified)
 
 | Thing | State | Verified how |
 |---|---|---|
-| `/urth-spatial` scrolly | Renders, cards expand, desktop + 390px | Playwright vs `npx next dev --port 4010` this session (server now down) |
-| `/docs/weftos/vision/urth`, `/docs/weftos/research/spatial-intelligence` | HTTP 200 then | same |
-| SVGs | well-formed | `xmllint --noout` on storyboard diagrams |
-| Spatial Plane tickets | all Done (A–F BVH); **no open spatial items** | prior inventory + this session’s board read |
-| Copper/sonar plan | **on paper only** | literature agents + Urick/P1 numbers; **no lake, no hose, no TWAI firmware** |
+| `weftos init --claude --grok --codex` | renders the `weftos-core` team: 61 files, re-run is a no-op | released arm64 binary: `--plan` in a scratch repo showed `source: embedded (weftos 0.8.1 @ 2cd752e1)` |
+| Hosts load rendered agents | Claude, Grok and Codex all load them (project must be trusted in Codex/Grok) | agent ran `claude -p`, `grok inspect`, codex with decoy names |
+| Agent package gate | `agents-validate`, `agents-catalog --check`, `agents-leak-check` = gate checks 17–19 | gate run; 9 seeded validator failures and 4 leak cases fail correctly |
+| Dashboard AI org tab | live, reads `agents/catalog.json` from GitHub (15 agents, 1 team) | `curl https://weftos-dashboard.vercel.app/api/agents/catalog` → `source: weftos` |
+| Dashboard agent-directory harness routes | **not working yet** | migration `202609280001_agent_directory.sql` not applied to live Supabase |
+| Ruflo team bus via WeftOS shim | works against the reviewed ruflo build | scratch project: create → spawn (`reviewer:reviewer@demo`) → per-team mailbox → shutdown |
+| BakeOS → dashboard publishing | Vercel Cron `*/5` runs a Workflow; host loop stopped | Vercel logs: cron 202 + 5 steps 200; dashboard POST 200 at :15 and :20 |
+| FlipsOS | auto-deploys production from `dev`; daily sync cron on the new deploy | PR #2 merge deployed; Vercel project crons |
 
 ## Done this session
 
-- **Spatial index story is closed as a decision:** BVH geometry, HNSW features, optional VectorRef, Graph Views F9 promote. Residuals (live BVH publish, `spatial_rpc`, Urth E1/E2) are docs, not Plane.
-- **2026 survey** (Marble/Atlas, Genie/Cosmos/WBench, VGGT/SpatialLM, HOV-SG, CityGaussian/Octree-GS, V-JEPA) in `docs/research/spatial-intelligence-2026/`.
-- **rUv two-way** in `ruv-parallels-and-gaps.md` (learn SuperSplat+provenance; offer BVH sibling + DiskANN bench).
-- **Copper-only sonobuoy/tow (user constraint: no Wi‑Fi):** power + CAN/TWAI + RS-422 PPS on CAT5/7; USB-CAN gateway to WeftOS; ESP32 radio **off**.
-- **Min test:** 3 Class A, lake **15–30 m**; copper-first 4 phones @ **0.40–0.45 m**.
-- **Twin CAT5 in one Dyneema/Kevlar 4-plait** (parallel, not helix; loop at tail; not IBM Token Ring).
-- **Range numbers written** (were missing until the user called it): see Measurements.
-- **uvRTH** = Region Tessellated Holograph + rUv+Earth letter-play. Tessellation ranks nano→…→inf mapped to L0–L5. **ADR-079 still named Urth.**
+- **v0.8.1**: Ruflo agent-team host (ADR-402), `weft agent -m --session <id>` with failure exit
+  codes, ObservationPack (tool-result archive + `obs_recall`), build-kb from repo docs, Urth docs
+  pages, cargo + npm audit clean, and the agent directory below.
+- **Agent directory (AD-1…AD-7)**: design + ADR (Accepted, D1–D6) in
+  `docs/research/agent-directory/`. `agents/` holds the base team (steward, doc-gardener, liber, mo,
+  lead-doctrine, 5 lanes, 3 templates) and eikon/eikon-specialist; versioned by weftos release (D3);
+  merged PR = approval (D4). AD-1/2/4/5/6 done; AD-7 in review (Shasta draft PR #4); AD-3 partial.
+- **Ruflo PRs** (Dragan's review, all addressed, replies posted): #3521 `3574f10ca`, #3512
+  `19c1afe17`, #3513 `040e0f1b0` (#3512 + one commit), new #3526 (memory tag filter + provider
+  precedence, split out of #3512). #3513 was *ported* onto #3512's single `.mjs` store.
+- **WeftOS team bus synced** to the reviewed store (`a9ddcf90`): no API keys in `passEnv`, stale
+  stop hook replaced, interop test on the reviewed protocol.
+- **Research** (committed, `docs/research/`): Skill-3D Rust plan + 100-reference analysis
+  (`skill-3d/`), Episteme STEM pack review (`episteme/`), agent-skill design research and skill
+  registries (`agent-skills-design/`).
+- **Other repos**: dashboard split into components, migrations for companies/agent directory, AI org
+  tab; BakeOS goal export + Vercel Workflow publisher (PRs #99/#126/#127/#128 merged); FlipsOS goals
+  + Git auto-deploy; Shasta base-team delivery PR #4 (draft).
 
 ## Measurements & calibration
 
-*Paper budgets, not tank data. Do not re-derive; do measure the disc SL before quoting active range at sea.*
-
 | Quantity | Value | Source |
-|----------|-------|--------|
-| TDoA clock budget | **~10 µs** ≈ 1.5 cm in water | architecture / RANGING |
-| CAT5 delay | **~5 ns/m** (VF≈0.66); 30 m ≈ **159 ns** ≈ 0.24 mm sound | cal, then subtract |
-| Software CAN time (Luckinger TII 2022) | **~50 µs** | **fails** 10 µs → PPS pair required |
-| GPS SPS | **2–5 m** horiz | RANGING.md — **not** coherent BF geometry |
-| 1.8 kHz λ | **0.82 m**; λ/10 = **8 cm** | c=1480 m/s |
-| 4-el hose L=1.2 m HPBW | **~35°** at 1.8 kHz; array gain **+6 dB** | λ/L |
-| Vocal school SL=120 dB, DI=0, SE=0 | **~1 km** | phase-economics §5.1 / Mode F |
-| Same, 4-el DI≈6 dB | **~2 km** detect | scale 10^(DI/20) |
-| 20-el / 100 m tow DI≈23 dB | **~14 km** detect | same notes |
-| Triangle **(x,y)** | **~50–150 m** useful (few× 30 m baseline); 0.1–1 m in-frame if loud/direct | geometry, not clock |
-| Cheap 35 mm **active** echo | **~50–200 m** if SL 130–150 dB | **not** JANUS 185–195 dB |
-| Mesh BPF | **~300 Hz @ 1.8 kHz** | ranging hole, not PAM taxonomy |
-| α(1.8 kHz) | **~0.06 dB/km** | spreading-limited until tens of km |
-| Twin `d⊥` tight plait | **~1–1.5 cm** (~5° phase @ 1.8 kHz) | L/R weak until 8–12 cm spacers |
+|---|---|---|
+| Workspace tests | 9,350 run / 9,350 pass / 24 skipped | `scripts/build.sh test` |
+| Gate | 19/19 (16 before agent checks) | `scripts/build.sh gate` |
+| v0.8.1 release | 87 assets (same as v0.8.0) | `gh release view v0.8.1` |
+| `weftos init` weftos-core | 61 files + project-context seed | `--plan` output |
+| Pi3 reconstruction | ~21 s per 7 frames vs ~1 s for other experts | Skill-3D paper App. B (shared GPU) |
+| `bin/depth` (DA3METRIC-LARGE) | canonical depth for f=300 px @ 504×504; meters = canonical × f_504/300 | ~/llm session |
 
 ## Dead ends — do not retry
 
-- **Wi‑Fi as backhaul or time base** — user: copper **replaces** Wi‑Fi. Radio off (also jittered RX ADC).
-- **CAN SOF / CanTSyn software as PPS** — AUTOSAR exists because arbitration wrecks “now”; ~50 µs software vs 10 µs budget.
-- **LoRa on a CAT5 pair as the bus** — CSS-as-PLC is seconds-scale, not PPS, not PCM. Optional later radio only.
-- **IBM Token Ring PHYs** — tail loop = failover + 2L/v_prop length; token = CAN poll.
-- **Helix two CAT5s / nylon as acoustic-section load** — helix kills L/R; nylon stretch walks geometry. Dyn/Kev load, nylon spacer/VIM only.
-- **Two tows / paravanes for v1 L/R** — L/R is **inside one 4-plait**. Twinline is later.
-- **Aiming piezos L/R at 1.8 kHz** — omni; λ ≫ jacket. Spatial `d⊥` is the trick.
-- **SPS GPS as coherent array geometry** — 2–5 m ≫ 8 cm. GPS georeferences; hose/taut/RTK is `D_ij`.
-- **Passive 2 km mahi** — 120 dB is **vocal chorus** (Ramcharitar), not mahi. Mahi = active/resonance cue.
-- **Dolphin clicks on mesh BPF** — 20–150 kHz; detection range **0** until HF RX.
-- **35 kHz imaging on 0.4 m spacing** — ~10 λ, grating lobes.
-- **35 mm disc = 185 dB JANUS projector** — different transducer. Measure SL.
-- **P047 RFSoC as buoy ADC or hydrophone sampler** — 1 MHz floor, $8.7k, dry-end/USV only. Fiber later.
-- **I²C over the hose** — Class B 1–3 m only.
-- **Merge WorldGraph into BVH / CSI occupancy as geometry SoT** — complementary stacks.
-- **Mass-rename Urth → uvRTH** — candidate only until product says go.
-- **Re-bake spatial index (R-tree, kd-tree)** — ADR-056 stands.
-- **Docs `:4010` still up** — it died. Restart if you need the scrolly.
-- **Assume Plane has spatial tickets** — empty. Residuals unfiled.
+- **Publishing a local-DB snapshot to the live dashboard** — BakeOS's local script used the live
+  `wfs_` token and replaced 30 real tickets with a 5+2 seed. It now refuses the production dashboard
+  without `--i-am-publishing-production-source`.
+- **`git checkout Cargo.toml Cargo.lock` to back out one change** — it reverts every change in those
+  files; back out the specific edit instead.
+- **zsh word-splitting** — `$VAR` holding `node script` or `set -- $r` does not split in zsh; use a
+  function, `${=VAR}`, or `bash -c`.
+- **`gh pr create` from the weave-logic-ai/ruflo fork** — failed with "Head sha can't be blank"; the
+  GraphQL `createPullRequest` mutation with explicit repository ids worked.
+- **`~/dev/ruflo-wt-team-bus-hosts` (feat/team-bus-codex-weftos, e4d732e42)** — the PRE-review team
+  bus (v0 format, schemaVersion). Test against `~/dev/ruflo-pr-teambus` (#3513 head) instead.
+- **Absolute local paths in tracked files** (e.g. `.grok/config.toml` MCP) — the repo is public and
+  WEFT-684/669 forbid it; local overrides go in gitignored `.claude-flow/ruflo-cli-path`.
+- **Tagging while fixes are still landing** — v0.8.1 was tagged and cancelled twice; confirm the
+  tree and every worktree is settled before tagging.
+- **wasmtime 46 for RUSTSEC-2026-0269** — needs Rust 1.94 (toolchain pinned 1.93); ignored with
+  rationale (no FS preopens) pending ticket `8f1794da`.
+- **`npm ci` at repo root** — fails on the committed lockfile too (npm 12, empty-version optional
+  bindings); no CI job runs it. Use `npm install --allow-remote=all`.
+- **Grounding DINO in Eikon / own SAM stack in WeftOS** — SAM 3.1 is served by `~/llm` (`bin/sam`);
+  DINO stays an unbuilt catalog fallback.
 
 ## Open threads
 
-1. **First physical:** 3× Class A, pool ~8 m then lake **15–30 m** (events over **USB-CAN**, radio off). Done = `AcousticEvent` on shore with PPS capture. **Not filed on Plane.**
-2. **4-phone copper hose** 8–15 m, 0.4 m taps, optional twin CAT5 4-plait. Done = dry ping then bucket.
-3. **Measure 35 mm TX SL** before any open-ocean active range claim.
-4. **Optional Plane:** live BVH publish, `spatial_rpc` e2e, VGGT/SpatialLM adapters, DiskANN WEFT-660/661 upstream.
-5. **uvRTH:** freeze name or leave Urth; tessellation ranks not on the wire yet.
-6. **Wide RX (0.5–8 kHz)** before species/PAM taxonomy.
-7. **Vercel deploy** of `/urth-spatial` not done.
+1. **Apply the dashboard migration** `supabase/migrations/202609280001_agent_directory.sql` to live
+   Supabase project `tjmgczbialndijqwewws` (SQL editor or a DB connection; this repo has no linked CLI).
+   Done = `/api/harness/agents/*` stop erroring.
+2. **Review/merge Shasta PR #4** (base team). Done = AD-7 closed.
+3. **Test WeftOS 0.8.1 against ruflo** using `~/dev/ruflo-pr-teambus` (see Resume). Trust command
+   hosts once: `ruflo team trust-host weft`.
+4. **AD-3 evals**: run each base-team member's `evals/scenarios.md` on Claude, Grok, Codex; record
+   score/completion/tokens per host. **Eikon** (`7f2ea05d`): one test image per host.
+5. **Ruflo PRs** #3512/#3513/#3521/#3526 await maintainer review and fork-CI approval. After #3512
+   lands, stack `split/3512-memory-provider`'s Grok bench/README commit on it.
+6. **0.8.2**: clippy debt (`8dfd7ed5`), Rust 1.94 + wasmtime 46 (`8f1794da`), then cut 0.8.2.
+7. **Skill-3D Rust rewrite**: start at R0.2 (Python reference fixtures, ticket `dc295594`); training
+   is on hold (`65f8a922` collects training needs). **Episteme**: EP-1 sync, EP-2 router.
+8. **User actions**: trust projects in Codex/Grok; top up or unset the empty `ANTHROPIC_API_KEY`.
 
 ## Resume here
 
 ```bash
 cd /Users/mathewbeane/weftos
-git branch --show-current   # 0.8-metaharness
-# doctrine, newest first
-less docs/research/copper-bus-timing-grounding/README.md
-less docs/research/copper-bus-timing-grounding/sonar-range.md
-less docs/research/sonobuoy-min-test-and-copper-tow.md
-less docs/research/uvrth-name-candidate.md
-# scrolly (optional)
-cd docs/src && npx next dev --port 4010 --hostname 127.0.0.1
-# open http://127.0.0.1:4010/urth-spatial
+git branch --show-current            # 0.8-metaharness
+git status --short                   # expect clean
+node scripts/dashboard-board.mjs ready
+scripts/build.sh agents-validate && scripts/build.sh agents-catalog --check
+# render agents into a project (plan first, then --apply; --global targets ~/.claude, ~/.grok, ~/.codex)
+./target/release/weftos init . --claude --grok --codex --plan    # or the released weftos binary
+# ruflo testing build (reviewed PR head); WeftOS's gitignored .claude-flow/ruflo-cli-path points here
+node ~/dev/ruflo-pr-teambus/v3/@claude-flow/cli/bin/cli.js team --help
 ```
-
-Do **not** start with W5500, LoRa-on-copper, P047, or fiber. Next build is **CAN + PPS + 12 V on CAT5**, radio off, USB-CAN into WeftOS.
 
 ## Key paths
 
-- `docs/handoff.md` — this file
-- `docs/research/copper-bus-timing-grounding/` — **start here** for sonar/copper
-- `docs/research/sonobuoy-min-test-and-copper-tow.md` — 3 buoys, CAT5 pair map, CAN/PPS
-- `docs/research/spatial-intelligence-2026/` — 2026 papers + STORYBOARD
-- `docs/src/app/urth-spatial/` — scrollyteller
-- `docs/adr/adr-079-urth-digital-twin.md` — Urth; uvRTH callout
-- `.planning/sonobuoy/` — original build/RANGING (Wi‑Fi/TWTT in architecture.md is what copper **replaces**)
-- Ruflo patterns: `pattern-copper-bus-no-wifi-pps-can`, `pattern-spatial-intelligence-2026-urth-survey`, `pattern-ruv-urth-parallels-gaps-2026-09-21`
+- `agents/` — agent packages; `agents/teams/weftos-core/team.yaml`; generated `agents/catalog.json`
+- `crates/weftos/src/init/` — the host renderer; `crates/weftos/build.rs` embeds `agents/`
+- `scripts/agents-{validate,catalog}.mjs`, `scripts/agents-leak-check.sh` — gate checks 17–19
+- `docs/research/agent-directory/` — design + Accepted ADR; `private/` is local-only (gitignored)
+- `docs/research/skill-3d/README.md` — Skill-3D index and conclusions
+- `~/dev/weftos-dashboard` — board, AI org tab, `supabase/migrations/`
+- `~/llm` — owns local models (eikon, `bin/sam`, `bin/depth`, `bin/vlm`)
+- `~/.claude/skills/skill-builder/references/skill-sources.md` — skill registries to search first
 
 ## Gotchas
 
-- **architecture.md still says Wi‑Fi gossip + TWTT.** User overrode: copper is the network and the clock. Don’t “fix” the plan back to Wi‑Fi.
-- Call MCP `ruflo__*`, never `claude-flow__*`. Lead still `team_on_stop` until matched idle is proven (prior handoff).
-- Don’t take down Forge `:3000`/`:3333`.
-- Dirty tree is mixed 0.8 work + this research — commit only what the user names.
-- `ruvnet-brain` search failed once this session (`tokenizer.json` missing under `local_files_only`). Grounding for rUv crosswalk was earlier in the session when it worked.
+- **The repo is public.** Run `scripts/agents-leak-check.sh`; confidential oil-rig/Deck Twin files are
+  excluded via `.git/info/exclude` (local), not `.gitignore`.
+- **Upstream ruflo PRs are one squashed commit on upstream main** (`git commit-tree`), force-pushed with
+  `--force-with-lease=refs/heads/<branch>:<old>`; RuFlo attribution comes from ruflo's own settings.
+- **`~/dev/ruflo` main checkout has ~145 uncommitted files** on `feat/grok-host` — not ours; never touch
+  it. Use separate worktrees.
+- **Agents renamed/new in this session appear as subagent types** (steward, doc-gardener, liber, mo,
+  developer) because the base team is installed globally.
+- **Shasta's main checkout has uncommitted work on `feat/wave`**; deliver via a temporary worktree.
+- Memory: `~/.claude/projects/-Users-mathewbeane-weftos/memory/` (release state, branch workflow,
+  search-skill-registries-first).

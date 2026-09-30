@@ -69,7 +69,7 @@ impl WorkloadHost {
     /// instances ([`WorkloadRuntime::network_exposure`]). `secrets` is
     /// false because no adapter delivers operator secrets: the only
     /// credential an instance gets is its own `COGNITUM_COG_TOKEN`, minted
-    /// here for that instance's ingest bridge (COG-001 section 4).
+    /// here for that instance's ingest bridge (ADR-100 section 4).
     fn context(&self, w: &VerifiedWorkload, kind: &str, emulated: bool) -> Value {
         let network: NetworkPolicy = self.runtime.network_exposure();
         let (trust, package_id, keys, hashes, cost) = match &w.source {

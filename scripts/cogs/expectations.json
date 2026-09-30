@@ -1,5 +1,5 @@
 {
- "_comment": "Per-cog conformance expectations for aarch64 (COG-001 catalog groups). Derived from the 2026-09-28 --once sweep (baseline/). run_mode is how the cog must be run to be clean; once_outcome is what a plain --once run is expected to produce.",
+ "_comment": "Per-cog conformance expectations for aarch64 (ADR-100 catalog groups). Derived from the 2026-09-28 --once sweep (baseline/). run_mode is how the cog must be run to be clean; once_outcome is what a plain --once run is expected to produce.",
  "arch": "aarch64",
  "cogs": {
   "adversarial": {

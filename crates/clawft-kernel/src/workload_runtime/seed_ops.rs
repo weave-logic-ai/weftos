@@ -1,6 +1,6 @@
 //! Seed operations outside the cog lifecycle: pairing and firmware upgrade.
 //!
-//! Firmware upgrade is a governed, backed-up operation (COG-001 section 5):
+//! Firmware upgrade is a governed, backed-up operation (ADR-100 section 5):
 //! a 0.10.x upgrade hit the witness-chain `writes_gated` state, recovered
 //! with `/api/v1/store/truncate-confirm` after a backup. So:
 //! 1. [`SeedApiRuntime::backup`] snapshots what the API exposes;
