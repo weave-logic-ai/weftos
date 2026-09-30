@@ -16,6 +16,7 @@ pub mod channels;
 pub mod config_cmd;
 pub mod cron;
 pub mod doctor;
+pub mod daemon_fallback;
 pub mod daemon_guard;
 pub mod delegate_cmd;
 pub mod gateway;

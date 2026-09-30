@@ -174,9 +174,7 @@ async fn run_benchmark(
     endurance: bool,
     learned: bool,
 ) -> anyhow::Result<()> {
-    let mut client = DaemonClient::connect()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("no kernel running — start with: weaver kernel start"))?;
+    let mut client = clawft_rpc::connect_or_bail().await?;
 
     let platform = collect_platform_info();
 

@@ -868,28 +868,22 @@ pub async fn run(
     // WEFT-10: workspace overlay routing, when present.
     workspace_routing: Option<clawft_types::routing::RoutingConfig>,
 ) -> anyhow::Result<()> {
-    let socket_path = protocol::socket_path();
+    let paths = protocol::runtime_paths();
+    let socket_path = paths.socket();
+
+    // ADR-103 P0b: one kernel per runtime dir. Hold the advisory lock for
+    // the daemon's whole lifetime; with it held nobody else is serving the
+    // socket, so a leftover socket file can be reclaimed safely.
+    let _instance_lock = crate::instance_lock::InstanceLock::acquire(&paths)?;
+    info!(root = %paths.root().display(), "runtime dir locked");
 
     // WEFT-39: persist shared LLM RetryModel learned weights so the next
     // daemon start restores the curve instead of resetting to untrained.
     clawft_core::pipeline::persist_shared_retry_model();
 
-    // Already-running / stale-endpoint probe (platform-specific).
+    // Endpoint probe, with the lock held (platform-specific).
     #[cfg(unix)]
-    {
-        if socket_path.exists() {
-            // Try connecting to see if a daemon is already running
-            if UnixStream::connect(&socket_path).await.is_ok() {
-                anyhow::bail!(
-                    "daemon already running (socket exists and is accepting connections: {})",
-                    socket_path.display()
-                );
-            }
-            // Stale socket — remove it
-            std::fs::remove_file(&socket_path)?;
-            debug!("removed stale socket file");
-        }
-    }
+    crate::instance_lock::reclaim_stale_socket(&paths).await?;
     #[cfg(windows)]
     {
         // Named pipes have no filesystem node; dial the derived pipe name.
@@ -962,15 +956,12 @@ pub async fn run(
     // daemon's pubkey with the kernel's NodeRegistry so the substrate
     // publish gate can verify signatures and enforce the
     // `substrate/<node-id>/...` write prefix.
-    let runtime_dir = socket_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let runtime_dir = paths.root().to_path_buf();
     let daemon_identity = crate::node_identity::load_or_generate(&runtime_dir)
         .map_err(|e| anyhow::anyhow!("daemon identity bootstrap: {e}"))?;
     // mesh-placement-06: persisted node-local workload catalog.
     #[cfg(feature = "exochain")]
-    crate::workload_rpc::init_registry(&runtime_dir.join("workloads.json"));
+    crate::workload_rpc::init_registry(&paths.workloads());
     // mesh-placement-12: the placement control plane signs with the node key.
     #[cfg(all(feature = "placement", unix))]
     crate::workload_place_rpc::init(daemon_identity.signing_key.clone(), runtime_dir.clone());
@@ -6170,7 +6161,7 @@ async fn dispatch(
                     match export_params.format.as_str() {
                         "rvf" => {
                             let default_path =
-                                protocol::runtime_dir().join("chain").join("export.rvf");
+                                protocol::runtime_paths().chain_dir().join("export.rvf");
                             let output_path = export_params
                                 .output
                                 .map(std::path::PathBuf::from)

@@ -92,8 +92,9 @@ lives in [`docs/weftos/k-phases.md`](../weftos/k-phases.md).
 ExoChain is the tamper-evident, hash-chained audit log behind every
 state-changing operation in the kernel. It is enabled by default in
 the 0.7.0 native binary. By default the chain lives at
-`~/.clawft/chain.rvf`, signed with `~/.clawft/chain.key` (see
-"Chain storage location" below). Operator commands:
+`chain.rvf` in the kernel's runtime directory, signed with `chain.key`
+next to it (see "Runtime directory" and "Chain storage location"
+below). Operator commands:
 
 ```bash
 weaver chain status          # current chain head, length, last entry kind
@@ -104,6 +105,47 @@ weaver chain export <path>   # export to JSON for offline review
 Per ADR-022 (ExoChain Mandatory Audit), every privileged operation
 should produce a chain entry. If you run an action and `weaver chain
 status` does not show a new entry, that is a regression — file it.
+
+#### Runtime directory
+
+Every runtime file of a kernel hangs off one root, resolved by one
+function (`clawft_types::runtime_paths::RuntimePaths`, ADR-103 D4). The
+socket, PID file, log, lock, `node.key`, chain files, anchor ledger,
+`workloads.json`, `cluster_peers.json`, `apps.json` and
+`revoked_hosts.json` all live directly under it.
+
+Root resolution, highest first:
+
+1. `$WEFTOS_RUNTIME_DIR`, when set and non-empty (full isolation for
+   tests, probes and nested instances).
+2. `<project>/.weftos/runtime`, where `<project>` is the nearest ancestor
+   of the working directory holding `.weftos/project.toml`,
+   `.weftos/weave.toml`, or a `weave.toml` next to a `.weftos/`
+   directory (what `weaver init` creates). A bare `.weftos/` is not a
+   project, and the walk never returns `$HOME`, so the `~/.weftos/` that
+   holds apps and models is ignored.
+3. `~/.clawft/` (legacy).
+
+Behavior change: the chain used to resolve from `$WEFTOS_RUNTIME_DIR` or
+`~/.clawft` only, even for a project-local daemon. It now follows the
+project root, so a per-project daemon starts a fresh chain under
+`<project>/.weftos/runtime/`. Nothing is moved or deleted. If the
+resolved chain does not exist but `~/.clawft/chain.*` does, boot logs a
+WARN naming both paths; copy `chain.*` across to keep the history, or pin
+`kernel.chain.checkpoint_path`.
+
+Single instance: the daemon holds an exclusive advisory lock on
+`<root>/kernel.lock` for its lifetime. A second kernel on the same root
+exits non-zero with `another kernel owns <root> (pid N)`. With the lock
+held, a leftover `kernel.sock` that refuses connections is unlinked and
+rebound; one that accepts connections is never taken over.
+
+When the CLI cannot reach a kernel it names the socket it tried and
+whether there is no socket file, a stale socket (connection refused) or a
+permission problem. State-changing commands do not fall back silently:
+`weft agent` requires `--local` to run in-process, and `weft cron
+add/remove/enable/run` fail without a daemon.
+Read-only commands may still read local files and say so on stderr.
 
 #### Chain storage location (isolated runtimes)
 
@@ -122,11 +164,9 @@ Resolution order, highest first:
 
 1. An explicit path in config: `kernel.chain.checkpoint_path` (and
    `kernel.chain.external_anchor.ledger_path` for the anchor ledger).
-2. `$WEFTOS_RUNTIME_DIR`, when set and non-empty: the files go in
-   `$WEFTOS_RUNTIME_DIR/chain.json`, `$WEFTOS_RUNTIME_DIR/chain.rvf`
-   and so on.
-3. `~/.clawft/`, the operator chain. Nothing changes for operators who
-   set neither of the above.
+2. The runtime root (see "Runtime directory"): `$WEFTOS_RUNTIME_DIR`
+   when set, else the project's `.weftos/runtime`, else `~/.clawft/`.
+   The files go in `<root>/chain.json`, `<root>/chain.rvf` and so on.
 
 Probe, demo and test daemons must run with `WEFTOS_RUNTIME_DIR`
 pointing at a scratch directory. They still chain every action, but to

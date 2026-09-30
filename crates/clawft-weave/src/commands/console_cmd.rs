@@ -69,9 +69,7 @@ pub async fn run(args: ConsoleArgs) -> anyhow::Result<()> {
 }
 
 async fn connect_or_fail() -> anyhow::Result<DaemonClient> {
-    DaemonClient::connect()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("no daemon running -- start with 'weaver kernel start'"))
+    clawft_rpc::connect_or_bail().await
 }
 
 async fn replay_boot_log(client: &mut DaemonClient) -> anyhow::Result<()> {

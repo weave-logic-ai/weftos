@@ -236,8 +236,9 @@ pub async fn run(args: AssessArgs) -> anyhow::Result<()> {
 // Daemon-first wrappers (ADR-021)
 // ---------------------------------------------------------------------------
 
-const NO_DAEMON_WARNING: &str = "Warning: running without kernel daemon. Assessment not logged to ExoChain. \
-     Start daemon with: weaver kernel start";
+async fn no_daemon_warning() -> String {
+    super::daemon_fallback::local_note("assessment not logged to ExoChain").await
+}
 
 /// Try daemon RPC for `assess.run`; fall back to local execution.
 async fn run_assessment_with_daemon(
@@ -273,7 +274,7 @@ async fn run_assessment_with_daemon(
             anyhow::bail!("{err}");
         }
     } else {
-        eprintln!("{NO_DAEMON_WARNING}");
+        eprintln!("{}", no_daemon_warning().await);
     }
 
     run_assessment(scope, format, dir, pr_number)
@@ -304,7 +305,7 @@ async fn run_link_with_daemon(name: &str, location: &str, dir: Option<&str>) -> 
             anyhow::bail!("{err}");
         }
     } else {
-        eprintln!("{NO_DAEMON_WARNING}");
+        eprintln!("{}", no_daemon_warning().await);
     }
 
     run_link(name, location, dir)
@@ -334,7 +335,7 @@ async fn run_compare_with_daemon(peer_name: &str, dir: Option<&str>) -> anyhow::
             anyhow::bail!("{err}");
         }
     } else {
-        eprintln!("{NO_DAEMON_WARNING}");
+        eprintln!("{}", no_daemon_warning().await);
     }
 
     run_compare(peer_name, dir)
@@ -364,7 +365,7 @@ async fn run_review_with_daemon(history: usize, dir: Option<&str>) -> anyhow::Re
             anyhow::bail!("{err}");
         }
     } else {
-        eprintln!("{NO_DAEMON_WARNING}");
+        eprintln!("{}", no_daemon_warning().await);
     }
 
     run_review(history, dir)
@@ -393,7 +394,7 @@ async fn run_mesh_status(as_json: bool) -> anyhow::Result<()> {
         }
         eprintln!("Warning: daemon returned no mesh status payload.");
     } else {
-        eprintln!("{NO_DAEMON_WARNING}");
+        eprintln!("{}", no_daemon_warning().await);
     }
 
     // Offline fallback — mesh coordination requires a running daemon.

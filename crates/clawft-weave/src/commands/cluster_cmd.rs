@@ -12,7 +12,6 @@
 use clap::{Parser, Subcommand};
 use comfy_table::{Table, presets};
 
-use crate::client::DaemonClient;
 use crate::protocol;
 
 /// Cluster management subcommand.
@@ -75,9 +74,7 @@ pub enum ClusterAction {
 
 /// Run the cluster subcommand.
 pub async fn run(args: ClusterArgs) -> anyhow::Result<()> {
-    let mut client = DaemonClient::connect()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("no daemon running (use 'weaver kernel start' first)"))?;
+    let mut client = clawft_rpc::connect_or_bail().await?;
 
     match args.action {
         ClusterAction::Status => {

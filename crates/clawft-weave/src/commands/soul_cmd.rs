@@ -156,9 +156,7 @@ impl DaemonRpc {
     /// error (rather than `Option`) so the calling command can bail
     /// with a clear "no daemon running" message.
     pub async fn connect() -> anyhow::Result<Self> {
-        let client = DaemonClient::connect().await.ok_or_else(|| {
-            anyhow::anyhow!("no daemon running — start with 'weaver kernel start'")
-        })?;
+        let client = clawft_rpc::connect_or_bail().await?;
         Ok(Self { client })
     }
 }
