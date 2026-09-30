@@ -138,12 +138,18 @@ moved: Phase 1's `weaver migrate user-chain` will do that. To start a
 fresh chain at the project path instead, run
 `weaver kernel start --new-chain` (the legacy chain is left untouched), or
 pin `kernel.chain.checkpoint_path`. A fresh chain is otherwise created
-only when no chain exists at all.
+only when no chain exists at all. `weaver kernel start` reports success
+only once the daemon serves; if boot fails (for example the chain lock is
+held) it prints the last log lines and exits non-zero.
 
-Files that older kernels kept cwd-relative (`cluster_peers.json`,
-`apps.json`, `revoked_hosts.json`) and the Seed token store under
-`~/.clawft/secrets/` are read from their old location, with a WARN, when
-the new path does not exist yet. They are never moved automatically.
+The Seed token store under `~/.clawft/secrets/` is read from there, with
+a WARN, when the project has none yet; it is never moved automatically.
+
+Mixed versions: older kernels take no `chain.lock`. If the legacy chain
+was modified in the last 120 seconds and no `chain.lock` exists beside it,
+an older kernel may still be writing it, so a new kernel refuses to adopt
+it ("the legacy chain looks in use by an older kernel ... stop it first or
+use --new-chain").
 
 Chain lock: whichever chain is in use is guarded by an exclusive lock
 (`chain.lock` beside it) for the kernel's lifetime. A second kernel on the

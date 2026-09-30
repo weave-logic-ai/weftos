@@ -689,9 +689,9 @@ pub fn daemonize(config_override: Option<&str>, new_chain: bool) -> anyhow::Resu
         .spawn()?;
 
     let pid = child.id();
-    // The child writes kernel.pid itself once it owns the runtime lock; the
-    // parent writing it first would name a process that may lose the lock.
-    wait_for_child_pid(&mut child, &pid_path, &log_path)?;
+    // The child writes kernel.pid itself once boot (runtime and chain locks)
+    // succeeded; success is reported only when it serves.
+    wait_for_daemon_ready(&mut child, &protocol::socket_path(), &pid_path, &log_path)?;
 
     println!("WeftOS kernel started (pid {pid})");
     #[cfg(unix)]
@@ -710,30 +710,59 @@ pub fn daemonize(config_override: Option<&str>, new_chain: bool) -> anyhow::Resu
     Ok(())
 }
 
-/// Wait (bounded) for the freshly spawned daemon to record its PID, failing
-/// early with a pointer to the log if it exits during startup (for example
-/// because another kernel owns the runtime dir).
-fn wait_for_child_pid(
+/// Last few non-empty lines of the daemon log, for failure messages.
+fn log_tail(log_path: &std::path::Path) -> String {
+    let Ok(text) = std::fs::read(log_path) else {
+        return String::new();
+    };
+    let text = String::from_utf8_lossy(&text[text.len().saturating_sub(4096)..]).into_owned();
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    lines[lines.len().saturating_sub(8)..].join("\n")
+}
+
+/// True once the daemon's endpoint accepts connections.
+fn daemon_ready(socket: &std::path::Path, pid_path: &std::path::Path, want_pid: &str) -> bool {
+    #[cfg(unix)]
+    {
+        let _ = (pid_path, want_pid);
+        std::os::unix::net::UnixStream::connect(socket).is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        // Named pipes have no sync probe here; the PID file is written only
+        // after a successful boot, so it is the readiness marker.
+        let _ = socket;
+        std::fs::read_to_string(pid_path).is_ok_and(|s| s.trim() == want_pid)
+    }
+}
+
+/// Wait for the freshly spawned daemon to become reachable, failing with the
+/// tail of its log if it exits first (for example because another kernel
+/// owns the runtime dir or the chain). Success is only reported once the
+/// daemon actually serves.
+fn wait_for_daemon_ready(
     child: &mut std::process::Child,
+    socket: &std::path::Path,
     pid_path: &std::path::Path,
     log_path: &std::path::Path,
 ) -> anyhow::Result<()> {
     let want = child.id().to_string();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
     while std::time::Instant::now() < deadline {
         if let Some(status) = child.try_wait()? {
             anyhow::bail!(
-                "kernel exited during startup ({status}); see {} for the reason",
-                log_path.display()
+                "kernel exited during startup ({status}); last log lines from {}:\n{}",
+                log_path.display(),
+                log_tail(log_path)
             );
         }
-        if std::fs::read_to_string(pid_path).is_ok_and(|s| s.trim() == want) {
+        if daemon_ready(socket, pid_path, &want) {
             return Ok(());
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
     eprintln!(
-        "warning: kernel (pid {want}) has not recorded its PID yet; still starting, see {}",
+        "warning: kernel (pid {want}) is still starting after 90s and is not serving yet; see {}",
         log_path.display()
     );
     Ok(())
@@ -937,10 +966,6 @@ pub async fn run(
         std::fs::create_dir_all(parent)?;
     }
 
-    // Record this process as the live daemon (background daemonize also
-    // writes the child PID before spawn returns; overwriting here is fine).
-    let _ = std::fs::write(protocol::pid_path(), std::process::id().to_string());
-
     // agent-core-v1 Phase E1: snapshot the ContextRouter selector
     // before `config` moves into `Kernel::boot`. The agent-service
     // wiring further below reads this to pick between v0 NullRouter
@@ -976,7 +1001,12 @@ pub async fn run(
     // Boot kernel
     let platform = NativePlatform::new();
     let kernel = Kernel::boot(config, kernel_config, Arc::new(platform)).await?;
+    // The one-shot --new-chain request has been consumed by boot.
+    clawft_kernel::chain_storage::request_new_chain(false);
     let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
+    // Record this process as the live daemon only now that boot (which takes
+    // the chain lock) has succeeded, so a refused boot leaves no stale pid.
+    let _ = std::fs::write(protocol::pid_path(), std::process::id().to_string());
 
     // WEFT-494: seed live MCP registry + remember best-effort config path
     // for path-less mcp.reload (CLI after weft mcp add).

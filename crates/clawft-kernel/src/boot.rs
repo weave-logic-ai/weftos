@@ -198,8 +198,13 @@ impl<P: Platform> Kernel<P> {
         // Resolve the chain location once (explicit config, else
         // runtime root: $WEFTOS_RUNTIME_DIR, project, or ~/.clawft) so restore, verify and
         // shutdown persistence all use the same, possibly isolated, files.
-        let (pinned_chain, chain_note) =
-            crate::chain_storage::pin_chain_storage_noted(&mut kernel_config);
+        let pin = crate::chain_storage::pin_chain_storage_noted(&mut kernel_config);
+        // An older, lock-unaware kernel may still be writing the legacy
+        // chain: refuse before taking any lock or touching the chain.
+        if let Some(msg) = pin.refusal {
+            return Err(KernelError::Boot(msg));
+        }
+        let (pinned_chain, chain_note) = (pin.path, pin.warning);
         // One kernel per chain: hold chain.lock beside the chain in use for
         // the kernel's lifetime (released when the kernel is dropped).
         #[cfg(feature = "exochain")]
@@ -776,10 +781,7 @@ impl<P: Platform> Kernel<P> {
             ..ClusterConfig::default()
         };
         // Cluster peer membership persists to disk so joins survive restarts.
-        let cluster_peers_path = crate::chain_storage::runtime_file(
-            runtime_paths.cluster_peers(),
-            "cluster_peers.json",
-        );
+        let cluster_peers_path = runtime_paths.cluster_peers();
         let cluster_membership =
             Arc::new(ClusterMembership::new(cluster_config).with_persist_path(&cluster_peers_path));
 
@@ -795,7 +797,7 @@ impl<P: Platform> Kernel<P> {
         // 6a. AppManager with on-disk manifest store (WEFT-136).
         // Installs survive kernel restarts via atomic apps.json (mirrors cluster_peers).
         let apps_persist_path =
-            crate::chain_storage::runtime_file(runtime_paths.apps(), "apps.json");
+            runtime_paths.apps();
         let app_manager = Arc::new(AppManager::new().with_persist_path(&apps_persist_path));
         boot_log.push(BootEvent::info(
             BootPhase::Services,
@@ -807,10 +809,7 @@ impl<P: Platform> Kernel<P> {
         ));
 
         // 6b. Load host revocation list (persistent ban list)
-        let revocation_path = crate::chain_storage::runtime_file(
-            runtime_paths.revoked_hosts(),
-            "revoked_hosts.json",
-        );
+        let revocation_path = runtime_paths.revoked_hosts();
         let revocation_list = Arc::new(crate::revocation::RevocationList::load(revocation_path));
         {
             let count = revocation_list.len();

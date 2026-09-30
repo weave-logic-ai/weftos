@@ -567,6 +567,8 @@ isolate_test_runtime() {
     if [ -z "${WEFTOS_RUNTIME_DIR:-}" ]; then
         WEFTOS_RUNTIME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/weftos-test-runtime.XXXXXX")"
         export WEFTOS_RUNTIME_DIR
+        # shellcheck disable=SC2064
+        trap "rm -rf '$WEFTOS_RUNTIME_DIR'" EXIT
     fi
 }
 

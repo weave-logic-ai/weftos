@@ -220,17 +220,6 @@ impl RuntimePaths {
     }
 }
 
-/// Pre-ADR-103 files were cwd-relative (`<cwd>/.weftos/runtime/<name>`). When
-/// `new` does not exist but that legacy file does (and is a different path),
-/// return it so the caller can keep using it instead of forking state.
-pub fn legacy_cwd_file(new: &Path, name: &str, cwd: Option<&Path>) -> Option<PathBuf> {
-    if new.exists() {
-        return None;
-    }
-    let legacy = cwd?.join(".weftos").join("runtime").join(name);
-    (legacy != new && legacy.exists()).then_some(legacy)
-}
-
 /// The user's home directory (the `$HOME` the project walk refuses to return).
 ///
 /// Uses `dirs` when the `native` feature is on; otherwise `$HOME` /
@@ -357,29 +346,6 @@ mod tests {
         fs::create_dir_all(t.path().join("repo/.git")).unwrap();
         let p = RuntimePaths::resolve_with(None, Some(&t.path().join("repo")), Some(&home));
         assert_eq!(p.source(), &RootSource::LegacyHome);
-    }
-
-    #[test]
-    fn legacy_cwd_file_is_used_only_when_new_is_absent() {
-        let t = tempfile::tempdir().unwrap();
-        let cwd = t.path().join("proj/sub");
-        mk(&cwd, ".weftos/runtime/revoked_hosts.json");
-        let new = t.path().join("proj/.weftos/runtime/revoked_hosts.json");
-        assert_eq!(
-            legacy_cwd_file(&new, "revoked_hosts.json", Some(&cwd)),
-            Some(cwd.join(".weftos/runtime/revoked_hosts.json"))
-        );
-        mk(t.path(), "proj/.weftos/runtime/revoked_hosts.json");
-        assert_eq!(
-            legacy_cwd_file(&new, "revoked_hosts.json", Some(&cwd)),
-            None
-        );
-        // Same path: nothing to fall back to.
-        let same = cwd.join(".weftos/runtime/revoked_hosts.json");
-        assert_eq!(
-            legacy_cwd_file(&same, "revoked_hosts.json", Some(&cwd)),
-            None
-        );
     }
 
     #[test]
