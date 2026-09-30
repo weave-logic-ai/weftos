@@ -1,0 +1,144 @@
+{
+ "host": {
+  "machine": "aarch64",
+  "python": "3.13.5",
+  "release": "6.12.47+rpt-rpi-2712",
+  "system": "Linux"
+ },
+ "results": [
+  {
+   "argv": [
+    "cog-anomaly-detect-aarch64",
+    "--once"
+   ],
+   "cycle_ms": 664.8,
+   "cycles": 1,
+   "elapsed_ms": 664.8,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 644.7,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "anomaly-detect",
+   "ingest_posts": 1,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[0,[3.600254221964897e-6,-0.28292826934040305,0.0,0.0,0.0,0.0,0.0,0.0]]]}"
+   ],
+   "ingest_vectors": 1,
+   "interval_s": null,
+   "mode": "once",
+   "packets_sent": 41,
+   "rc": 0,
+   "sha256": "42154913cbb57fd58e010548a833221a2afe73cf1768aa1e0ab00e9441d6cb25",
+   "status": "ran",
+   "stderr_tail": "[cog-anomaly-detect] starting (interval=10s, z_threshold=2.5)",
+   "stdout_json_lines": 1,
+   "stdout_lines": 1,
+   "stdout_tail": "{\"anomalies\":[],\"stats\":{\"num_channels\":256,\"mean_amplitude\":0.0003600254221964897,\"max_z_score\":-1.4146413467020151,\"cusum_drift_detected\":false},\"timestamp\":1790732425}",
+   "timed_out": false,
+   "timeout_s": 15.0
+  },
+  {
+   "argv": [
+    "cog-fall-detect-aarch64",
+    "--once"
+   ],
+   "cycle_ms": 664.5,
+   "cycles": 1,
+   "elapsed_ms": 664.5,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 643.8,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "fall-detect",
+   "ingest_posts": 1,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[2,[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]]}"
+   ],
+   "ingest_vectors": 1,
+   "interval_s": null,
+   "mode": "once",
+   "packets_sent": 41,
+   "rc": 0,
+   "sha256": "e8746a8d66373601b65451b32cb36242439bc54683adfe5f5ddec72a3d93f5c4",
+   "status": "ran",
+   "stderr_tail": "[cog-fall-detect] start (interval=1s, impact_threshold=6, stillness_window=8s, cooldown=30s, ruview=false)",
+   "stdout_json_lines": 1,
+   "stdout_lines": 1,
+   "stdout_tail": "{\"status\":\"quiet\",\"fall_detected\":false,\"confidence\":0.0,\"z_impact\":0.0,\"stillness_pct\":0.0,\"total_falls\":0,\"timestamp\":1790732426}",
+   "timed_out": false,
+   "timeout_s": 15.0
+  },
+  {
+   "argv": [
+    "cog-sleep-apnea-aarch64",
+    "--interval",
+    "1"
+   ],
+   "cycle_ms": 1000.1,
+   "cycles": 14,
+   "elapsed_ms": 15001.6,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 1001.9,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "sleep-apnea",
+   "ingest_posts": 14,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[0,[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]]}"
+   ],
+   "ingest_vectors": 14,
+   "interval_s": 1,
+   "mode": "interval",
+   "packets_sent": 755,
+   "rc": null,
+   "sha256": "22b12fb380fa52ccee66f7e9fe6c7e4fade451acac1d59ea74aec83e04887a1a",
+   "status": "ran",
+   "stderr_tail": "[cog-sleep-apnea] starting (interval=1s)\n[cog-sleep-apnea] error: no JSON",
+   "stdout_json_lines": 14,
+   "stdout_lines": 14,
+   "stdout_tail": ":1790732433}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790732434}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790732435}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790732436}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790732437}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790732438}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790732439}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790732440}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790732441}",
+   "timed_out": true,
+   "timeout_s": 15.0
+  },
+  {
+   "argv": [
+    "cog-health-monitor-aarch64",
+    "--interval",
+    "1"
+   ],
+   "cycle_ms": 1000.1,
+   "cycles": 14,
+   "elapsed_ms": 15001.8,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 1001.7,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "health-monitor",
+   "ingest_posts": 14,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[0,[1.904296875,0.38671875,0.0,0.00005032923529128045,0.0,0.0,0.7,0.2]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[1.69921875,0.3984375,0.0,0.0003232119299235443,0.0,0.0,0.7,0.2]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[1.787109375,0.3984375,0.0,0.0003223581016603044,0.0,0.0,0.7,0.2]]]}"
+   ],
+   "ingest_vectors": 14,
+   "interval_s": 1,
+   "mode": "interval",
+   "packets_sent": 755,
+   "rc": null,
+   "sha256": "24cc4733d66ddb6e3e5ceba5b6d0a2f0dba4f193b1ae950d889d4043857eacde",
+   "status": "ran",
+   "stderr_tail": "[cog-health-monitor] starting (interval=1s source=auto window_ms=1000)\n[cog-health-monitor] error: no JSON\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 76 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 68 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 71 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 69 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 76 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 69 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 69 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 68 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 79 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 71 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 67 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 69 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 77 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 68 bpm\"]",
+   "stdout_json_lines": 14,
+   "stdout_lines": 14,
+   "stdout_tail": "cted\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 79 bpm\"],\"timestamp\":1790732452,\"source\":\"auto:esp32-udp\"}\n{\"breathing_bpm\":71.484375,\"heart_rate_bpm\":78.515625,\"presence_detected\":false,\"signal_variance\":0.03229475179898928,\"apnea_detected\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 71 bpm\"],\"timestamp\":1790732453,\"source\":\"auto:esp32-udp\"}\n{\"breathing_bpm\":66.796875,\"heart_rate_bpm\":80.859375,\"presence_detected\":false,\"signal_variance\":0.03226954070715153,\"apnea_detected\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 67 bpm\"],\"timestamp\":1790732454,\"source\":\"auto:esp32-udp\"}\n{\"breathing_bpm\":69.140625,\"heart_rate_bpm\":80.859375,\"presence_detected\":false,\"signal_variance\":0.03227727127017311,\"apnea_detected\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 69 bpm\"],\"timestamp\":1790732455,\"source\":\"auto:esp32-udp\"}\n{\"breathing_bpm\":77.34375,\"heart_rate_bpm\":78.515625,\"presence_detected\":false,\"signal_variance\":0.0050329698956427344,\"apnea_detected\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 77 bpm\"],\"timestamp\":1790732456,\"source\":\"auto:esp32-udp\"}\n{\"breathing_bpm\":67.96875,\"heart_rate_bpm\":79.6875,\"presence_detected\":false,\"signal_variance\":0.03227173206755672,\"apnea_detected\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 68 bpm\"],\"timestamp\":1790732457,\"source\":\"auto:esp32-udp\"}",
+   "timed_out": true,
+   "timeout_s": 15.0
+  }
+ ]
+}

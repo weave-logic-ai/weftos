@@ -162,7 +162,14 @@ COG_HARNESS_SSH_HOST=pi5 scripts/build.sh cogs-conformance sweep --runtime ssh \
     --arch aarch64 --sudo --mode expected --label remote-aarch64-expected
 ```
 
-On the node itself, `--runtime native` does the same without SSH.
+On the node itself, `--runtime native` does the same without SSH. `--remote-dir`
+sets the work dir (relative to the remote login directory, default
+`cog-conformance`); it is removed and recreated on every run.
+
+The real Pi 5 lane, `scripts/build.sh test-pi` ([test-pi.md](test-pi.md)), runs
+this mode twice (plain harness, and the Pi-built launcher with the native
+adapter) together with the kernel tests and the native adapter live test. That
+replaces the aarch64 container standing in for a Linux ARM node below.
 
 Cognitum Seeds are not driven by this mode. They run cogs through their own HTTP
 API (COG-001 section 5), and that adapter is card 09.

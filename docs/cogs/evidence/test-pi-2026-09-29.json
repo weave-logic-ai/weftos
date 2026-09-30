@@ -1,0 +1,140 @@
+{
+  "facts": {
+    "arch": "aarch64",
+    "pi_glibc": [
+      2,
+      41
+    ],
+    "builder_glibc": [
+      2,
+      36
+    ],
+    "builder_image": "rust:1.93-bookworm"
+  },
+  "guard": {
+    "pi_probe_ok": true,
+    "pi_operator_files_unchanged": true,
+    "pi_changed": [],
+    "pi_weaver_service": "active pid=1499 since=19269514 -> active pid=1499 since=19269514",
+    "pi_weaver_unchanged": true,
+    "mac_chain_unchanged": true,
+    "ok": true
+  },
+  "results": [
+    {
+      "stage": "test",
+      "name": "clawft-kernel[test:feature_composition]",
+      "rc": 0,
+      "ok": true,
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0,
+      "suites": 1
+    },
+    {
+      "stage": "test",
+      "name": "clawft-kernel[test:pasqal_live]",
+      "rc": 0,
+      "ok": true,
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "suites": 1
+    },
+    {
+      "stage": "test",
+      "name": "clawft-kernel[test:e2e_integration]",
+      "rc": 0,
+      "ok": true,
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "suites": 1
+    },
+    {
+      "stage": "test",
+      "name": "clawft-kernel[test:spatial_bvh_phase_c]",
+      "rc": 0,
+      "ok": true,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "suites": 1
+    },
+    {
+      "stage": "test",
+      "name": "clawft-kernel[test:stream_anchor_test]",
+      "rc": 0,
+      "ok": true,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "suites": 1
+    },
+    {
+      "stage": "test",
+      "name": "clawft-kernel[lib:clawft_kernel]",
+      "rc": 0,
+      "ok": true,
+      "passed": 2436,
+      "failed": 0,
+      "ignored": 3,
+      "suites": 1
+    },
+    {
+      "stage": "test",
+      "name": "clawft-kernel[test:golden_snapshots]",
+      "rc": 0,
+      "ok": true,
+      "passed": 14,
+      "failed": 0,
+      "ignored": 0,
+      "suites": 1
+    },
+    {
+      "stage": "test",
+      "name": "clawft-kernel[test:chain_runtime_isolation]",
+      "rc": 0,
+      "ok": true,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "suites": 1
+    },
+    {
+      "stage": "live-native",
+      "name": "anomaly-detect",
+      "rc": 0,
+      "ok": true,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "suites": 1
+    },
+    {
+      "stage": "cogs",
+      "name": "harness",
+      "rc": 0,
+      "ok": true,
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "suites": 1
+    },
+    {
+      "stage": "cogs",
+      "name": "adapter-native",
+      "rc": 0,
+      "ok": true,
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "suites": 1
+    }
+  ],
+  "crates": [
+    "clawft-kernel"
+  ],
+  "filter": null,
+  "ok": true
+}
