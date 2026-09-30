@@ -26,7 +26,7 @@
 use std::path::{Path, PathBuf};
 
 use clawft_types::config::KernelConfig;
-use clawft_types::runtime_paths::{RuntimePaths, legacy_chain_left_behind};
+use clawft_types::runtime_paths::{RootSource, RuntimePaths, legacy_chain_left_behind};
 
 /// The runtime paths this boot uses for every non-chain runtime file
 /// (cluster peers, apps, revoked hosts).
@@ -96,6 +96,36 @@ fn lock_unaware_writer_age(checkpoint: &Path, now: std::time::SystemTime) -> Opt
         .map(|age| age.as_secs())
 }
 
+fn has_chain(checkpoint: &Path) -> bool {
+    checkpoint.exists() || checkpoint.with_extension("rvf").exists()
+}
+
+/// Refusal for adopting a legacy chain that only lock-unaware kernels have
+/// written. With no `chain.lock` beside it an older daemon may still be
+/// running, so the first adoption must be explicit; even then a very recent
+/// write is refused.
+fn legacy_adoption_refusal(
+    legacy: &Path,
+    adopt_legacy: bool,
+    now: std::time::SystemTime,
+) -> Option<String> {
+    if !ChainLock::lock_path(legacy).exists() && !adopt_legacy {
+        return Some(format!(
+            "The legacy chain at {} has never been used by a lock-aware kernel. Stop every \
+             older weaver daemon (check `ps`/`weaver doctor daemon`) and then run \
+             `weaver kernel start --adopt-legacy-chain` once. Or use --new-chain.",
+            legacy.display()
+        ));
+    }
+    lock_unaware_writer_age(legacy, now).map(|age| {
+        format!(
+            "the legacy chain at {} looks in use by an older kernel (modified {age}s ago); \
+             stop it first or use --new-chain",
+            legacy.display()
+        )
+    })
+}
+
 /// Choose the default chain for `paths` (see module docs, rule 2 and 3).
 pub fn choose_default_chain(
     paths: &RuntimePaths,
@@ -106,6 +136,28 @@ pub fn choose_default_chain(
 ) -> ChainChoice {
     let resolved = paths.chain_checkpoint();
     let Some(legacy) = legacy_chain_left_behind(paths, home) else {
+        // Rooted at ~/.clawft itself (any non-project cwd, e.g. $HOME): the
+        // resolved chain IS the legacy chain, so the same first-adoption guard
+        // applies (Phase 0 review R1). `--new-chain` cannot start a fresh
+        // chain in place of it: its first checkpoint would overwrite history.
+        if matches!(paths.source(), RootSource::LegacyHome) && has_chain(&resolved) {
+            let refusal = if new_chain {
+                Some(format!(
+                    "--new-chain cannot start a fresh chain at {} because the legacy chain \
+                     lives there; start the kernel from a project, or set \
+                     kernel.chain.checkpoint_path to a new location",
+                    resolved.display()
+                ))
+            } else {
+                legacy_adoption_refusal(&resolved, adopt_legacy, now)
+            };
+            return ChainChoice {
+                checkpoint: resolved,
+                legacy_in_use: true,
+                warning: None,
+                refusal,
+            };
+        }
         return ChainChoice {
             checkpoint: resolved,
             legacy_in_use: false,
@@ -127,25 +179,7 @@ pub fn choose_default_chain(
             refusal: None,
         };
     }
-    // No chain.lock beside the legacy chain: only lock-unaware (older)
-    // kernels have written it, and one may still be running. The first
-    // adoption must be explicit; even then a very recent write is refused.
-    let refusal = if !ChainLock::lock_path(&legacy).exists() && !adopt_legacy {
-        Some(format!(
-            "The legacy chain at {} has never been used by a lock-aware kernel. Stop every \
-             older weaver daemon (check `ps`/`weaver doctor daemon`) and then run \
-             `weaver kernel start --adopt-legacy-chain` once. Or use --new-chain.",
-            legacy.display()
-        ))
-    } else {
-        lock_unaware_writer_age(&legacy, now).map(|age| {
-            format!(
-                "the legacy chain at {} looks in use by an older kernel (modified {age}s ago); \
-                 stop it first or use --new-chain",
-                legacy.display()
-            )
-        })
-    };
+    let refusal = legacy_adoption_refusal(&legacy, adopt_legacy, now);
     let warning = format!(
         "no chain at {} but a legacy chain exists at {}; continuing on the legacy chain \
          and its key so history is not forked (nothing was moved). Phase 1 \
@@ -404,6 +438,49 @@ mod tests {
         assert!(w.contains(".clawft/chain.json"), "{w}");
         assert!(w.contains("weaver migrate user-chain"), "{w}");
         assert!(w.contains("--new-chain"), "{w}");
+    }
+
+    /// Phase 0 review R1: a kernel rooted at ~/.clawft itself (any
+    /// non-project cwd, e.g. $HOME) gets the same first-adoption guard.
+    #[test]
+    fn legacy_home_root_requires_explicit_first_adoption() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, _proj) = legacy_fixture(&t);
+        let paths = RuntimePaths::resolve_with(None, Some(&home), Some(&home));
+        assert_eq!(paths.source(), &RootSource::LegacyHome);
+        let legacy = home.join(".clawft/chain.json");
+
+        let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
+        assert_eq!(c.checkpoint, legacy);
+        let r = c.refusal.expect("refused without --adopt-legacy-chain");
+        assert!(r.contains("--adopt-legacy-chain"), "{r}");
+
+        let c = choose_default_chain(&paths, Some(&home), false, true, far_future());
+        assert!(c.refusal.is_none() && c.legacy_in_use);
+
+        std::fs::write(ChainLock::lock_path(&legacy), "").unwrap();
+        let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
+        assert!(c.refusal.is_none(), "a lock-aware kernel already used it");
+    }
+
+    #[test]
+    fn legacy_home_root_refuses_new_chain_over_the_legacy_chain() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, _proj) = legacy_fixture(&t);
+        let paths = RuntimePaths::resolve_with(None, Some(&home), Some(&home));
+        let c = choose_default_chain(&paths, Some(&home), true, false, far_future());
+        let r = c.refusal.expect("--new-chain would overwrite the legacy chain");
+        assert!(r.contains("checkpoint_path"), "{r}");
+    }
+
+    #[test]
+    fn legacy_home_root_without_a_chain_starts_fresh() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let paths = RuntimePaths::resolve_with(None, Some(&home), Some(&home));
+        let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
+        assert!(c.refusal.is_none() && !c.legacy_in_use);
     }
 
     #[test]
