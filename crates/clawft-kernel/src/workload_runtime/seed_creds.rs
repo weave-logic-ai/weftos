@@ -15,7 +15,7 @@ use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use clawft_types::runtime_paths::RuntimePaths;
+use clawft_types::runtime_paths::{RootSource, RuntimePaths};
 use clawft_types::secret::SecretString;
 
 use super::seed_http::SeedCredentials;
@@ -37,6 +37,19 @@ fn io(what: &str, e: std::io::Error) -> RuntimeError {
     RuntimeError::Backend(format!("seed credential {what}: {e}"))
 }
 
+/// Operator store directory for `paths`, and whether it is the legacy one.
+fn operator_dir(paths: &RuntimePaths, home: Option<&Path>) -> (PathBuf, bool) {
+    let new = paths.root().join(SEED_SECRETS_SUBDIR);
+    if !new.exists()
+        && matches!(paths.source(), RootSource::Project(_))
+        && let Some(legacy) = home.map(|h| h.join(".clawft").join(SEED_SECRETS_SUBDIR))
+        && legacy.is_dir()
+    {
+        return (legacy, true);
+    }
+    (new, false)
+}
+
 impl FileCredentials {
     /// Store in `dir` (created `0700` on first write).
     pub fn new(dir: impl Into<PathBuf>) -> Self {
@@ -45,8 +58,20 @@ impl FileCredentials {
 
     /// The operator store: the resolved runtime root (see
     /// [`RuntimePaths`]), then [`SEED_SECRETS_SUBDIR`].
+    ///
+    /// Tokens used to live under `~/.clawft` regardless of project. When a
+    /// project root has no store yet but the legacy one exists, the legacy
+    /// store is used (WARN); secrets are never moved automatically.
     pub fn operator_default() -> Result<Self, RuntimeError> {
-        Ok(Self::new(RuntimePaths::resolve().root().join(SEED_SECRETS_SUBDIR)))
+        let home = clawft_types::runtime_paths::home_dir();
+        let (dir, legacy) = operator_dir(&RuntimePaths::resolve(), home.as_deref());
+        if legacy {
+            tracing::warn!(
+                dir = %dir.display(),
+                "using the legacy ~/.clawft seed token store; it is not moved automatically"
+            );
+        }
+        Ok(Self::new(dir))
     }
 
     /// Directory holding the tokens.
@@ -131,5 +156,34 @@ impl SeedCredentials for FileCredentials {
             .and_then(|_| f.sync_all())
             .map_err(|e| io("write", e))?;
         fs::rename(&tmp, &path).map_err(|e| io("rename", e))
+    }
+}
+
+#[cfg(test)]
+mod operator_dir_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_store_is_used_only_when_the_project_has_none() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path().join("home");
+        fs::create_dir_all(home.join(".clawft").join(SEED_SECRETS_SUBDIR)).unwrap();
+        let proj = t.path().join("proj");
+        fs::create_dir_all(proj.join(".weftos")).unwrap();
+        fs::write(proj.join(".weftos/project.toml"), "").unwrap();
+        let paths = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
+
+        let (dir, legacy) = operator_dir(&paths, Some(&home));
+        assert!(legacy);
+        assert_eq!(dir, home.join(".clawft").join(SEED_SECRETS_SUBDIR));
+
+        fs::create_dir_all(proj.join(".weftos/runtime").join(SEED_SECRETS_SUBDIR)).unwrap();
+        let (dir, legacy) = operator_dir(&paths, Some(&home));
+        assert!(!legacy);
+        assert_eq!(dir, proj.join(".weftos/runtime").join(SEED_SECRETS_SUBDIR));
+
+        // Isolated runs never read the operator's tokens.
+        let iso = RuntimePaths::resolve_with(Some("/x"), Some(&proj), Some(&home));
+        assert!(!operator_dir(&iso, Some(&home)).1);
     }
 }

@@ -10,11 +10,14 @@
 //! 1. `$WEFTOS_RUNTIME_DIR` when set and non-empty (full-isolation override
 //!    for tests, probes and nested instances).
 //! 2. `<project>/.weftos/runtime`, where `<project>` is the nearest ancestor
-//!    of the working directory that carries a real project marker:
-//!    `.weftos/project.toml`, `.weftos/weave.toml`, or a `weave.toml` next to
-//!    an existing `.weftos/` directory (what `weaver init` writes). The walk
-//!    never returns `$HOME` and stops when it reaches it, so a stray
-//!    `~/.weftos/` (apps, models) is not mistaken for a project.
+//!    of the working directory that is a project root. A directory is one
+//!    when it has `.weftos/project.toml`, or `.weftos/weave.toml`, or
+//!    `weave.toml` next to a `.weftos/` directory (what `weaver init`
+//!    writes), or an existing `.weftos/runtime/` directory (a kernel has run
+//!    there), or a `.weftos/` directory in a git top-level (a `.git` file or
+//!    directory; covers git worktrees). The walk never returns `$HOME` and
+//!    stops when it reaches it, so the `~/.weftos/` that holds apps and
+//!    models is not mistaken for a project.
 //! 3. `~/.clawft` (legacy).
 //!
 //! Phase 1 of ADR-103 changes the root; keep that change inside
@@ -63,12 +66,17 @@ fn same_dir(a: &Path, b: &Path) -> bool {
         }
 }
 
-/// True when `dir` carries a real project marker (see module docs).
+/// True when `dir` is a project root (see module docs).
 fn is_project_dir(dir: &Path) -> bool {
     let weftos = dir.join(".weftos");
+    if !weftos.is_dir() {
+        return false;
+    }
     weftos.join("project.toml").is_file()
         || weftos.join("weave.toml").is_file()
-        || (weftos.is_dir() && dir.join("weave.toml").is_file())
+        || dir.join("weave.toml").is_file()
+        || weftos.join("runtime").is_dir()
+        || dir.join(".git").exists()
 }
 
 /// Nearest project directory at or above `cwd`, never `home` or above it.
@@ -212,6 +220,17 @@ impl RuntimePaths {
     }
 }
 
+/// Pre-ADR-103 files were cwd-relative (`<cwd>/.weftos/runtime/<name>`). When
+/// `new` does not exist but that legacy file does (and is a different path),
+/// return it so the caller can keep using it instead of forking state.
+pub fn legacy_cwd_file(new: &Path, name: &str, cwd: Option<&Path>) -> Option<PathBuf> {
+    if new.exists() {
+        return None;
+    }
+    let legacy = cwd?.join(".weftos").join("runtime").join(name);
+    (legacy != new && legacy.exists()).then_some(legacy)
+}
+
 /// The user's home directory (the `$HOME` the project walk refuses to return).
 ///
 /// Uses `dirs` when the `native` feature is on; otherwise `$HOME` /
@@ -298,13 +317,69 @@ mod tests {
     }
 
     #[test]
-    fn bare_weftos_dir_is_not_a_project() {
+    fn existing_runtime_dir_marks_a_project() {
         let t = tempfile::tempdir().unwrap();
         fs::create_dir_all(t.path().join("proj/.weftos/runtime")).unwrap();
+        fs::create_dir_all(t.path().join("proj/src")).unwrap();
+        let home = t.path().join("home");
+        let p = RuntimePaths::resolve_with(None, Some(&t.path().join("proj/src")), Some(&home));
+        assert_eq!(p.root(), t.path().join("proj/.weftos/runtime"));
+    }
+
+    #[test]
+    fn git_worktree_with_tracked_weftos_is_its_own_project() {
+        let t = tempfile::tempdir().unwrap();
+        // Main checkout: .git directory + .weftos.
+        fs::create_dir_all(t.path().join("main/.git")).unwrap();
+        mk(t.path(), "main/.weftos/SESSION_HANDOFF.md");
+        // Worktree inside it: `.git` is a file, .weftos is tracked content.
+        mk(t.path(), "main/.claude/worktrees/w1/.git");
+        mk(
+            t.path(),
+            "main/.claude/worktrees/w1/.weftos/SESSION_HANDOFF.md",
+        );
+        let cwd = t.path().join("main/.claude/worktrees/w1");
+        let p = RuntimePaths::resolve_with(None, Some(&cwd), None);
+        assert_eq!(p.root(), cwd.join(".weftos/runtime"));
+        let main = RuntimePaths::resolve_with(None, Some(&t.path().join("main")), None);
+        assert_eq!(main.root(), t.path().join("main/.weftos/runtime"));
+        assert_ne!(p.root(), main.root());
+    }
+
+    #[test]
+    fn bare_weftos_dir_without_any_marker_is_not_a_project() {
+        let t = tempfile::tempdir().unwrap();
+        mk(t.path(), "proj/.weftos/notes.md");
         let home = t.path().join("home");
         let p = RuntimePaths::resolve_with(None, Some(&t.path().join("proj")), Some(&home));
         assert_eq!(p.source(), &RootSource::LegacyHome);
-        assert_eq!(p.root(), home.join(".clawft"));
+        // A .git without .weftos is not one either.
+        fs::create_dir_all(t.path().join("repo/.git")).unwrap();
+        let p = RuntimePaths::resolve_with(None, Some(&t.path().join("repo")), Some(&home));
+        assert_eq!(p.source(), &RootSource::LegacyHome);
+    }
+
+    #[test]
+    fn legacy_cwd_file_is_used_only_when_new_is_absent() {
+        let t = tempfile::tempdir().unwrap();
+        let cwd = t.path().join("proj/sub");
+        mk(&cwd, ".weftos/runtime/revoked_hosts.json");
+        let new = t.path().join("proj/.weftos/runtime/revoked_hosts.json");
+        assert_eq!(
+            legacy_cwd_file(&new, "revoked_hosts.json", Some(&cwd)),
+            Some(cwd.join(".weftos/runtime/revoked_hosts.json"))
+        );
+        mk(t.path(), "proj/.weftos/runtime/revoked_hosts.json");
+        assert_eq!(
+            legacy_cwd_file(&new, "revoked_hosts.json", Some(&cwd)),
+            None
+        );
+        // Same path: nothing to fall back to.
+        let same = cwd.join(".weftos/runtime/revoked_hosts.json");
+        assert_eq!(
+            legacy_cwd_file(&same, "revoked_hosts.json", Some(&cwd)),
+            None
+        );
     }
 
     #[test]
