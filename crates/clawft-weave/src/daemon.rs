@@ -3613,8 +3613,21 @@ where
             // token is validated against the kernel's AuthService;
             // unknown tokens map to the empty (denied) set so a
             // typo'd token can't silently fall back to anonymous.
+            // ADR-103 D0: extension gates see every request first and may
+            // deny it with a structured error (D12 scope gate lands here).
+            let gate_denial = crate::rpc_ext::check_gates(&crate::rpc_ext::GateRequest {
+                method: &req.method,
+                params: &req.params,
+                auth: req.auth.as_deref(),
+                project: None,
+                transport: crate::rpc_ext::Transport::Local,
+                kernel,
+            })
+            .await;
             let caller_caps = resolve_caller_capabilities(req.auth.as_deref(), kernel).await;
-            if !caller_caps.allows_method(&req.method) {
+            if let Some(denied) = gate_denial {
+                (denied.with_id(id), None)
+            } else if !caller_caps.allows_method(&req.method) {
                 let cap_required = crate::capability::required_capability(&req.method);
                 tracing::warn!(
                     method = %req.method,
@@ -5490,6 +5503,10 @@ async fn dispatch(
     kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
     shutdown_tx: watch::Sender<bool>,
 ) -> Response {
+    // ADR-103 D0: extension routes are consulted before the legacy match.
+    if let Some(r) = crate::rpc_ext::dispatch_ext(&method, &params, &kernel).await {
+        return r;
+    }
     match method.as_str() {
         "kernel.status" => {
             let k = kernel.read().await;
