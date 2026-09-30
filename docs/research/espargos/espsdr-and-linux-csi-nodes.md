@@ -62,6 +62,12 @@ Nothing here needs code yet. This is where a capture workload would ask for it. 
 - **BFI needs no Nexmon.** RuView's `tools/bfi` (upstream `aac41555`, 2026-09-29) captures beamforming feedback in plain monitor mode. Either M4 Zero variant could serve as a BFI node if its driver supports 5 GHz monitor mode. Untested. [I]
 - **Check the revision before buying.** Buy only boards confirmed to carry the CYW43455 if Nexmon matters. `lsusb` showing a Realtek device means the USB variant. [I]
 
+### Rejected: BPI-WiFi6 router ($30)
+
+- The router is a Triductor TR6560 SoC (2x Cortex-A9) with a TR5220 radio. Wi-Fi 6 is 2x2 on 2.4 and 5 GHz, and the software is a vendor fork of OpenWrt on Linux 5.10. The advertised memory is 512 MB DDR3 and 128 MB NAND. ([CNX](https://www.cnx-software.com/2024/03/12/banana-pi-30-wifi-6-router-triductor-tr6560-openwrt/)) [V]
+- The Wi-Fi driver is a closed binary. `iw list` shows only `managed` and `AP` modes, with **no monitor mode**. There is no Triductor code in mainline, so upstream OpenWrt support is unlikely. One teardown reported 128 MB RAM, not 512 MB. ([OpenWrt forum](https://forum.openwrt.org/t/bpi-wifi6-git-repo/169574)) [V, forum reports]
+- The consequence: no CSI, no BFI sniffing, and no Nexmon-style patching. The most it could do is act as an ordinary AP that generates traffic, which any AP can do. For a sensing-capable router, look at MediaTek boards on the open `mt76` driver instead, such as the BPI-R3 or R3 Mini (MT7986), which have monitor mode and upstream OpenWrt. That is unverified for sensing. [I]
+
 ### The Pi Zero 2 W (Cognitum Seed) can't do this
 
 The Seed's Wi-Fi is the 43430/43436 family, and Nexmon CSI does not list it. The Seed takes CSI from ESP32 nodes over UDP 5006 instead. We confirmed the board on 2026-09-30 from `/proc/device-tree/model`: "Raspberry Pi Zero 2 W Rev 1.0", CPU part 0xd03. [V for the board; I for the chip-support inference from the nexmon_csi support list]
