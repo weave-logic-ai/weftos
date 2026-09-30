@@ -1,0 +1,289 @@
+//! In-process nodes for control-plane tests: real signed packages, real
+//! signed facts, real native adapters under `WorkloadGate`, and the real
+//! wire (envelopes + artifact frames over in-memory streams). Every node
+//! gets its own in-memory chain (never the operator's chain.rvf).
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use clawft_types::placement::{AttrValue, Capability, CapabilityId, NodeFacts, Provenance};
+use ed25519_dalek::SigningKey;
+use serde_json::Value;
+
+use crate::artifact_store::ArtifactStore;
+use crate::chain::ChainManager;
+use crate::mesh_artifact::{ArtifactExchange, ExchangeConfig};
+use crate::node_facts_advert::sign_node_facts;
+use crate::node_registry::node_id_from_pubkey;
+use crate::workload_governance::{NetworkPolicy, WorkloadGate, WorkloadPermitRule};
+use crate::workload_pkg::codec::hex_encode;
+use crate::workload_pkg::{
+    CogPackInput, KeyOrigin, PackageSource, TrustAnchors, key_id_for, pack_cog, sign_envelope,
+    write_manifest,
+};
+use crate::workload_runtime::native::host_arch;
+use crate::workload_runtime::container_cmd::CmdOutput;
+use crate::workload_runtime::{
+    CommandRunner, ContainerRuntime, ContainerRuntimeConfig, Engine, NativeConfig, NativeRuntime,
+    RuntimeError, WorkloadHost,
+};
+
+use super::host_service::WorkloadHostService;
+use super::plane::PlacementControlPlane;
+use super::transport::CtlConnector;
+
+/// The package signer (operator key) every node pins.
+pub fn signer() -> SigningKey {
+    SigningKey::from_bytes(&[42; 32])
+}
+
+pub fn anchors() -> TrustAnchors {
+    let pk = signer().verifying_key().to_bytes();
+    let mut a = TrustAnchors::default();
+    a.push_signer(&key_id_for(&pk), &hex_encode(&pk), KeyOrigin::Operator)
+        .unwrap();
+    a
+}
+
+/// This host's arch (the arch the test package ships and nodes advertise).
+pub fn arch() -> &'static str {
+    host_arch().expect("tests run on a supported arch")
+}
+
+/// A signed cog package whose binary (for this host's arch) is `script`.
+pub fn package(root: &Path, id: &str, script: &str, arches: &[&str]) -> PathBuf {
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(
+        src.join("cog.toml"),
+        format!("[cog]\nid = \"{id}\"\nname = \"T\"\nversion = \"0.1.0\"\n"),
+    )
+    .unwrap();
+    let mut bins = Vec::new();
+    for a in arches {
+        let p = root.join(format!("bin-{a}"));
+        std::fs::write(&p, script).unwrap();
+        bins.push((a.to_string(), p));
+    }
+    let input = CogPackInput {
+        cog_dir: src,
+        binaries: bins,
+        source: PackageSource {
+            repo: Some("cogs-fork".into()),
+            commit: Some("0000000".into()),
+            release_url: None,
+        },
+        cognitum_record: None,
+    };
+    let pkg = root.join("pkg");
+    let mut env = pack_cog(&input, &pkg).unwrap();
+    let k = signer();
+    sign_envelope(&mut env, &k, &key_id_for(&k.verifying_key().to_bytes())).unwrap();
+    write_manifest(&pkg, &env).unwrap();
+    pkg
+}
+
+pub fn cap(id: &str) -> Capability {
+    Capability::new(CapabilityId::new(id).unwrap(), Provenance::Probed)
+}
+
+pub fn list(items: &[&str]) -> AttrValue {
+    AttrValue::List(items.iter().map(|s| AttrValue::from(*s)).collect())
+}
+
+/// Facts of a Linux ARM-class board (a Pi 5).
+pub fn board_caps(class: &str) -> Vec<Capability> {
+    vec![
+        cap(&format!("cpu.arch.{}", arch())),
+        cap("os.linux"),
+        cap(&format!("node.class.{class}")),
+        cap("runtime.native").with_attr("arches_native", list(&[arch()])),
+        cap("mem.system").with_attr("free", 4i64 << 30),
+    ]
+}
+
+/// Facts of the dev Mac (as the macOS probe reports it with OrbStack).
+pub fn mac_caps() -> Vec<Capability> {
+    vec![
+        cap(&format!("cpu.arch.{}", arch())),
+        cap("os.macos"),
+        cap("node.class.dev-mac"),
+        cap("runtime.native").with_attr("arches_native", list(&[arch()])),
+        cap("runtime.container.docker")
+            .with_attr("arches_native", list(&[arch()]))
+            .with_attr("arches_emulated", list(&["armv7", "x86_64"])),
+        cap("mem.unified").with_attr("free", 64i64 << 30),
+    ]
+}
+
+pub fn gate(chain: &Arc<ChainManager>) -> Arc<WorkloadGate> {
+    let mut permit = WorkloadPermitRule::new("test-cog", ["workload.*"], ["cog"]);
+    permit.max_network = NetworkPolicy::Egress;
+    Arc::new(
+        WorkloadGate::new(0.95, false)
+            .with_permit(permit)
+            .unwrap()
+            .with_chain(chain.clone()),
+    )
+}
+
+pub fn exchange(id: &str, chain: &Arc<ChainManager>) -> Arc<ArtifactExchange> {
+    let mut ex = ArtifactExchange::new(
+        id,
+        Arc::new(ArtifactStore::new_memory()),
+        ExchangeConfig::default(),
+    )
+    .unwrap();
+    ex.set_chain_manager(chain.clone());
+    Arc::new(ex)
+}
+
+/// A container engine that is not there (tests never run a real engine):
+/// every CLI call fails, so a dispatched container variant is refused by
+/// the adapter itself.
+pub struct NoEngine;
+
+#[async_trait::async_trait]
+impl CommandRunner for NoEngine {
+    async fn run(
+        &self,
+        program: &str,
+        _: &[String],
+        _: std::time::Duration,
+        _: usize,
+    ) -> Result<CmdOutput, RuntimeError> {
+        Err(RuntimeError::Backend(format!("{program}: no engine in tests")))
+    }
+}
+
+/// One node's `workload-host`.
+pub struct HostNode {
+    pub svc: Arc<WorkloadHostService>,
+    pub chain: Arc<ChainManager>,
+    pub id: String,
+    pub _tmp: tempfile::TempDir,
+}
+
+/// A node with `caps`, a native adapter (`scripts` allows interpreted
+/// payloads), accepting requests from `controller`.
+pub fn host_node(
+    seed: u8,
+    caps: Vec<Capability>,
+    scripts: bool,
+    controller: &SigningKey,
+) -> HostNode {
+    host_node_with(seed, caps, scripts, controller, gate)
+}
+
+/// [`host_node`] with its own governance (`make_gate` gets the node's chain).
+pub fn host_node_with(
+    seed: u8,
+    caps: Vec<Capability>,
+    scripts: bool,
+    controller: &SigningKey,
+    make_gate: impl FnOnce(&Arc<ChainManager>) -> Arc<WorkloadGate>,
+) -> HostNode {
+    let container = caps
+        .iter()
+        .any(|c| c.id.as_str().starts_with("runtime.container"));
+    host_node_routes(seed, caps, scripts, controller, make_gate, container)
+}
+
+/// [`host_node`] serving only its native adapter, whatever its facts say.
+pub fn host_node_native_only(
+    seed: u8,
+    caps: Vec<Capability>,
+    scripts: bool,
+    controller: &SigningKey,
+) -> HostNode {
+    host_node_routes(seed, caps, scripts, controller, gate, false)
+}
+
+fn host_node_routes(
+    seed: u8,
+    caps: Vec<Capability>,
+    scripts: bool,
+    controller: &SigningKey,
+    make_gate: impl FnOnce(&Arc<ChainManager>) -> Arc<WorkloadGate>,
+    container: bool,
+) -> HostNode {
+    let key = SigningKey::from_bytes(&[seed; 32]);
+    let id = node_id_from_pubkey(&key.verifying_key().to_bytes());
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let tmp = tempfile::tempdir().unwrap();
+    let gate = make_gate(&chain);
+    let native = NativeRuntime::new(NativeConfig {
+        root: tmp.path().join("instances"),
+        run_as: None,
+        allow_interpreted: scripts,
+    });
+    let host = Arc::new(
+        WorkloadHost::new(
+            Arc::new(native),
+            gate.clone(),
+            id.clone(),
+            crate::workload_governance::NodeTrustTier::Paired,
+        )
+        .with_chain(chain.clone()),
+    );
+    let now = chrono::Utc::now().timestamp() as u64;
+    let mut facts = NodeFacts::new(id.clone(), now, 600, 1);
+    facts.capabilities = caps.clone();
+    let signed = sign_node_facts(&facts, &key).unwrap();
+    let mut svc = WorkloadHostService::new(key, exchange(&id, &chain), anchors(), gate.clone())
+        .with_route("native", host);
+    if container {
+        let cfg = ContainerRuntimeConfig::new(
+            Engine::Docker,
+            format!("debian@sha256:{}", "0".repeat(64)),
+            tmp.path().join("containers"),
+        );
+        let rt = ContainerRuntime::new(cfg, Arc::new(NoEngine));
+        let h = WorkloadHost::new(
+            Arc::new(rt),
+            gate,
+            id.clone(),
+            crate::workload_governance::NodeTrustTier::Paired,
+        )
+        .with_chain(chain.clone());
+        svc = svc.with_route("container", Arc::new(h));
+    }
+    let svc = svc
+        .with_controllers(vec![controller.verifying_key().to_bytes()])
+        .with_chain(chain.clone());
+    svc.set_facts(signed);
+    HostNode {
+        svc: Arc::new(svc),
+        chain,
+        id,
+        _tmp: tmp,
+    }
+}
+
+/// The controller with its own chain and gate.
+pub fn controller(
+    key: &SigningKey,
+    connector: Arc<dyn CtlConnector>,
+) -> (PlacementControlPlane, Arc<ChainManager>) {
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let id = node_id_from_pubkey(&key.verifying_key().to_bytes());
+    let plane = PlacementControlPlane::new(
+        key.clone(),
+        gate(&chain),
+        chain.clone(),
+        exchange(&id, &chain),
+        anchors(),
+        connector,
+    );
+    (plane, chain)
+}
+
+/// Payloads of chain events of `kind`.
+pub fn events(chain: &ChainManager, kind: &str) -> Vec<(String, Value)> {
+    chain
+        .tail(chain.len())
+        .into_iter()
+        .filter(|e| e.kind == kind)
+        .map(|e| (e.source, e.payload.unwrap_or(Value::Null)))
+        .collect()
+}

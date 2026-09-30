@@ -26,6 +26,8 @@ pub mod vault_cmd;
 pub mod workload_cmd;
 #[cfg(all(feature = "ecc", feature = "exochain"))]
 pub mod workload_pack;
+#[cfg(all(feature = "placement", unix))]
+pub mod workload_place_cmd;
 
 use std::path::Path;
 

@@ -19,7 +19,8 @@ RESULT_RE = re.compile(
     r"test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored")
 # Tracked files the tests may read at runtime (CARGO_MANIFEST_DIR-relative
 # fixtures, ../../config, ../../assets). Synced to the Pi next to the binaries.
-SYNC_ROOTS = ("Cargo.toml", "Cargo.lock", "crates", "config", "assets")
+# scripts/pi/csi_feed.py: the placement stage runs it on the Pi.
+SYNC_ROOTS = ("Cargo.toml", "Cargo.lock", "crates", "config", "assets", "scripts/pi/csi_feed.py")
 RUSTUP_VOLUME = "weftos-pi-rustup"
 PATH_ENV = "/usr/local/bin:/usr/bin:/bin"
 
@@ -279,3 +280,121 @@ def stage_ok(rc, totals, require_ran=False):
     if rc != 0 or totals["suites"] == 0 or totals["failed"]:
         return False
     return totals["passed"] > 0 if require_ran else True
+
+
+# ── two-node placement stage (card mesh-placement-12) ────────────────────
+# The Pi runs an isolated `weaver` daemon (its own HOME and runtime dir
+# under the scratch dir) serving its workload-host on a non-default port;
+# the system weaver keeps :9470 and ~/.clawft.
+PLACEMENT_PORT = 9471
+PLACEMENT_FEED_PORT = 15006
+PUBKEY_RE = re.compile(r"^[0-9a-f]{64}$")
+STATUS_MARK = "==STATUS=="
+# Evidence must not carry addresses or local paths (public repo).
+LEAK_RE = re.compile(r"(?:\b(?!0\.0\.0\.0\b)(?!127\.0\.0\.1\b)\d{1,3}(?:\.\d{1,3}){3}\b|/Users/|/home/)")
+
+
+def placement_cargo_args():
+    """workload_node, the Mac-side policy-file tool (`daemon-files`, host target)."""
+    return ["cargo", "build", "--locked", "-p", "clawft-kernel", "--no-default-features",
+            "--features", "workload-runtime,mesh", "--example", "workload_node"]
+
+
+def weaver_cargo_args():
+    """The real `weaver` daemon for the Pi (default features incl. placement)."""
+    return ["cargo", "build", "--locked", "-p", "clawft-weave", "--bin", "weaver"]
+
+
+def ssh_hostname(host):
+    """The address part of a validated [user@]host (the Pi's mesh address)."""
+    if not valid_host(host):
+        raise ValueError("invalid host")
+    return host.rsplit("@", 1)[-1]
+
+
+def _isolated(scratch_abs, argv):
+    env = isolated_env(scratch_abs)
+    return "env -i %s %s" % (shlex.join("%s=%s" % kv for kv in sorted(env.items())),
+                             shlex.join(argv))
+
+
+def weaver_start_command(scratch_abs, binary):
+    """Start `weaver kernel start --foreground` detached under `env -i` (its
+    runtime dir, chain and sockets under the scratch dir) and print its PID.
+    Its policy files (workload-host.json etc.) are already in the runtime dir."""
+    run = scratch_abs + "/runtime"
+    # `cd || exit;` rather than `cd &&`: `&` must background only the daemon,
+    # or the whole list (holding ssh's stdout) is backgrounded and ssh hangs.
+    return "cd %s || exit 1; nohup %s > %s 2>&1 < /dev/null & echo $!" % (
+        shlex.quote(run), _isolated(scratch_abs, [binary, "kernel", "start", "--foreground"]),
+        shlex.quote(run + "/placement.log"))
+
+
+def feed_start_command(scratch_abs, port=PLACEMENT_FEED_PORT, secs=900):
+    """Start the synthetic sensor feed (python3, from the synced sources)."""
+    run = scratch_abs + "/runtime"
+    feed = scratch_abs + "/src/scripts/pi/csi_feed.py"
+    return "cd %s || exit 1; nohup %s > %s 2>&1 < /dev/null & echo $!" % (
+        shlex.quote(run), _isolated(scratch_abs, ["python3", feed, "--port", str(int(port)),
+                                                   "--secs", str(int(secs))]),
+        shlex.quote(run + "/feed.log"))
+
+
+def weaver_ready_command(scratch_abs, binary, port=PLACEMENT_PORT, secs=120):
+    """Wait until the daemon serves workload-host on `port` with its own
+    signed facts (a pinned local target), then print its workload status."""
+    status = _isolated(scratch_abs, [binary, "workload", "status", "--json"])
+    return ("for i in $(seq 1 %d); do OUT=$(%s 2>/dev/null); "
+            "echo \"$OUT\" | grep -q '\"served_on\": \"0.0.0.0:%d\"' "
+            "&& echo \"$OUT\" | grep -q '\"tier\": \"pinned\"' && break; sleep 1; done; "
+            "echo %s; echo \"$OUT\"" % (int(secs), status, int(port), STATUS_MARK))
+
+
+def parse_ready(out):
+    """(node id, served_on) from weaver_ready_command output, or (None, None)."""
+    _, _, text = (out or "").partition(STATUS_MARK)
+    try:
+        st = json.loads(text)
+    except ValueError:
+        return None, None
+    host = st.get("workload_host") or {}
+    served = st.get("served_on")
+    if not isinstance(host, dict) or not served:
+        return None, None
+    return host.get("node_id"), served
+
+
+def weaver_stop_command(scratch_abs, binary, pid, feed_pid=None):
+    """Export the daemon's chain (JSON source/kind rows), SIGTERM daemon and
+    feed, wait, then print the daemon log and the chain."""
+    run = scratch_abs + "/runtime"
+    chain = run + "/pi-chain.json"
+    pids = " ".join(str(int(p)) for p in (pid, feed_pid) if p)
+    export = _isolated(scratch_abs, [binary, "chain", "export", "--format", "json"])
+    return ("%s > %s 2>/dev/null; kill -TERM %s 2>/dev/null; for i in $(seq 1 20); do "
+            "kill -0 %d 2>/dev/null || break; sleep 1; done; kill -KILL %s 2>/dev/null; "
+            "cat %s; echo ==CHAIN==; cat %s 2>/dev/null" % (
+                export, shlex.quote(chain), pids, int(pid), pids,
+                shlex.quote(run + "/placement.log"), shlex.quote(chain)))
+
+
+def placement_kill_all_command(scratch_rel):
+    """Cleanup backstop: stop an isolated weaver or feed left running from the
+    scratch dir (never the system weaver, which runs from /usr/local/bin)."""
+    if not valid_scratch(scratch_rel):
+        raise ValueError("invalid scratch dir %r" % scratch_rel)
+    # `[w]...` so the pattern never matches this ssh shell's own command line.
+    head = "[%s]%s" % (scratch_rel[0], scratch_rel[1:])
+    return "pkill -TERM -f %s; pkill -TERM -f %s; true" % (
+        shlex.quote(head + "/bin/weaver kernel start"),
+        shlex.quote(head + "/src/scripts/pi/csi_feed.py"))
+
+
+def split_node_output(text):
+    """(log text, chain events list or None) from weaver_stop_command output."""
+    log, _, chain = (text or "").partition("==CHAIN==")
+    try:
+        events = json.loads(chain) if chain.strip() else None
+    except ValueError:
+        events = None
+    return log, events if isinstance(events, list) else None

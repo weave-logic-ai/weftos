@@ -1,0 +1,172 @@
+{
+  "card": "mesh-placement-12",
+  "ok": true,
+  "controller": "n-a6ff31",
+  "mac_node": "n-a6ff31",
+  "explain": "workload anomaly-detect (kind cog)\n  allow_emulated: false   pin: -\n  tier order (strict): native > emulated > dev_fallback (candidates rank by tier, then score)\ndecision: PLACED on n-f057cb via aarch64-native (tier native, emulated false) score 120.00\ncandidates:\n  1. n-f057cb eligible via aarch64-native (tier native) score 120.00\n       execution 100.00 + locality 0.00 + accel_fit 10.00 + perf 0.00 + load 10.00 + stickiness 0.00\n  2. n-a6ff31 eligible via aarch64-container (tier dev_fallback) score 30.00\n       execution 20.00 + locality 0.00 + accel_fit 0.00 + perf 0.00 + load 10.00 + stickiness 0.00\ndecision_id: 1d5b88b903718fcf7edc4f94e5e0df133697245883ac7fca3cdbd62783b2ff92\ndispatch:\n  1. n-f057cb via aarch64-native: placed\n",
+  "attempts": [
+    {
+      "node_id": "n-f057cb",
+      "outcome": "placed",
+      "variant": "aarch64-native"
+    }
+  ],
+  "placed": {
+    "decision_id": "1d5b88b903718fcf7edc4f94e5e0df133697245883ac7fca3cdbd62783b2ff92",
+    "instance_id": "anomaly-detect-d53c3d06-n-f057cb",
+    "kind": "cog",
+    "manifest_hash": "17c674ceb0d622ac0080ff33a27a4f5d930eb3cb274bc999079256a6268bf51e",
+    "node_id": "n-f057cb",
+    "variant": "aarch64-native",
+    "workload": "anomaly-detect"
+  },
+  "run": {
+    "reports": 8,
+    "first_report": {
+      "anomalies": [],
+      "stats": {
+        "cusum_drift_detected": false,
+        "max_z_score": -1.412720438582968,
+        "mean_amplitude": 6.599452262889436e-05,
+        "num_channels": 256
+      },
+      "timestamp": 1790735888
+    }
+  },
+  "pin_mac": {
+    "explain": "workload anomaly-detect (kind cog)\n  allow_emulated: false   pin: n-a6ff31\n  tier order (strict): native > emulated > dev_fallback (candidates rank by tier, then score)\ndecision: PLACED on n-a6ff31 via aarch64-container (tier dev_fallback, emulated false) score 30.00\ncandidates:\n  1. n-f057cb eligible via aarch64-native (tier native) score 120.00\n       execution 100.00 + locality 0.00 + accel_fit 10.00 + perf 0.00 + load 10.00 + stickiness 0.00\n  2. n-a6ff31 eligible via aarch64-container (tier dev_fallback) score 30.00 [pinned]\n       execution 20.00 + locality 0.00 + accel_fit 0.00 + perf 0.00 + load 10.00 + stickiness 0.00\ndecision_id: 88114cafb34da629f6670d1f73341b0f5ed0668319b263ed5190db5bfa419ad6\ndispatch:\n  1. n-a6ff31 via aarch64-container: refused (admission: no container adapter on this node for aarch64-container)\n",
+    "attempts": [
+      {
+        "code": "admission",
+        "node_id": "n-a6ff31",
+        "outcome": "refused",
+        "reason": "no container adapter on this node for aarch64-container",
+        "variant": "aarch64-container"
+      }
+    ]
+  },
+  "controller_chain": [
+    [
+      "chain",
+      "genesis"
+    ],
+    [
+      "workload",
+      "workload.place"
+    ],
+    [
+      "workload",
+      "workload.place"
+    ],
+    [
+      "workload.placement",
+      "workload.place"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.serve"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.serve"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.serve"
+    ],
+    [
+      "workload.placement",
+      "workload.place"
+    ],
+    [
+      "workload",
+      "workload.stop"
+    ],
+    [
+      "workload.placement",
+      "workload.stop"
+    ],
+    [
+      "workload",
+      "workload.unload"
+    ],
+    [
+      "workload.placement",
+      "workload.unload"
+    ],
+    [
+      "workload",
+      "workload.place"
+    ],
+    [
+      "workload",
+      "workload.place"
+    ],
+    [
+      "workload.placement",
+      "workload.place"
+    ],
+    [
+      "workload.host",
+      "workload.refuse"
+    ],
+    [
+      "workload.placement",
+      "workload.refuse"
+    ]
+  ],
+  "pi_chain": [
+    [
+      "chain",
+      "genesis"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "workload",
+      "workload.load"
+    ],
+    [
+      "workload.runtime",
+      "workload.load"
+    ],
+    [
+      "workload",
+      "workload.start"
+    ],
+    [
+      "workload.runtime",
+      "workload.start"
+    ],
+    [
+      "workload.host",
+      "workload.place"
+    ],
+    [
+      "workload",
+      "workload.stop"
+    ],
+    [
+      "workload.runtime",
+      "workload.stop"
+    ],
+    [
+      "workload",
+      "workload.unload"
+    ],
+    [
+      "workload.runtime",
+      "workload.unload"
+    ]
+  ]
+}

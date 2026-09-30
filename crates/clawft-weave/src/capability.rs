@@ -118,7 +118,11 @@ pub fn required_capability(method: &str) -> Capability {
         | "workload.start"
         | "workload.stop"
         | "workload.unload"
-        | "workload.migrate" => Capability::Write,
+        | "workload.migrate"
+        // mesh-placement-12: these sign/contact peers or expose cog output.
+        | "workload.explain"
+        | "workload.status"
+        | "workload.logs" => Capability::Write,
 
         // ── Chat: LLM-conversational verbs ──────────────────────────
         "agent.chat" => Capability::Chat,
@@ -295,19 +299,13 @@ mod tests {
         assert!(caps.allows_method("agent.chat"));
         // WEFT-253: progressive chat shares Chat capability.
         assert!(caps.allows_method("agent.chat_stream"));
-        assert_eq!(
-            required_capability("agent.chat_stream"),
-            Capability::Chat
-        );
+        assert_eq!(required_capability("agent.chat_stream"), Capability::Chat);
         // WEFT-256: model enumeration is Read (anonymous-safe).
         assert!(caps.allows_method("llm.models"));
         assert_eq!(required_capability("llm.models"), Capability::Read);
         // WEFT-125: vector backend introspection is Read (anonymous-safe).
         assert!(caps.allows_method("ecc.vector-config"));
-        assert_eq!(
-            required_capability("ecc.vector-config"),
-            Capability::Read
-        );
+        assert_eq!(required_capability("ecc.vector-config"), Capability::Read);
         // WEFT-331: interactive defer decision (panel allow/deny/cancel).
         assert!(caps.allows_method("agent.chat.defer_decide"));
         assert_eq!(
@@ -443,7 +441,12 @@ mod tests {
         // mesh-placement-06.
         let anon = CallerCapabilities::anonymous();
         let write = CallerCapabilities::from_scopes(["write"]);
-        for m in ["app.list", "app.inspect", "workload.list", "workload.inspect"] {
+        for m in [
+            "app.list",
+            "app.inspect",
+            "workload.list",
+            "workload.inspect",
+        ] {
             assert_eq!(required_capability(m), Capability::Read, "{m}");
             assert!(anon.allows_method(m), "{m}");
         }
@@ -454,6 +457,9 @@ mod tests {
             "app.remove",
             "workload.install",
             "workload.place",
+            "workload.explain",
+            "workload.status",
+            "workload.logs",
             "workload.load",
             "workload.start",
             "workload.stop",

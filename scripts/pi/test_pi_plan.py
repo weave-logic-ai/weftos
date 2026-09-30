@@ -250,12 +250,33 @@ class BuildShWiring(unittest.TestCase):
         self.assertNotIn("unbound variable", p.stdout)
 
 
+class FakeProc:
+    """A background process that stops when asked."""
+
+    def __init__(self):
+        self.stopped = False
+
+    def terminate(self):
+        self.stopped = True
+
+    def kill(self):
+        self.stopped = True
+
+    def wait(self, timeout=None):
+        return 0
+
+
 class FakeRunner:
     """Scripted Pi: ssh/docker/rsync calls answered from `script`."""
 
     def __init__(self, fail_on=None, chain=("100", "100"), output=None, hook=None):
         self.dry_run, self.calls, self.fail_on = False, [], fail_on
         self.chain, self.output, self.hook = list(chain), output, hook
+        self.spawned = []
+
+    def spawn(self, cmd, log_path, cwd):
+        self.spawned.append(cmd)
+        return FakeProc()
 
     def __call__(self, cmd, capture="all", timeout=None):
         self.calls.append(cmd)

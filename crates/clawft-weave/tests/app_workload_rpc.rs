@@ -210,8 +210,18 @@ async fn workload_rpcs_against_live_daemon() {
         assert!(kinds.iter().any(|k| k == "workload.refuse"), "{kinds:?}");
     }
 
-    // Verbs owned by later cards answer explicitly instead of "unknown method".
+    // Placement (card 12) is routed to the control plane, which fails
+    // closed here: this harness gives it no daemon key, and `{}` is not a
+    // valid order anyway. Never "unknown method", never a placement.
     let place = call(&sock, "workload.place", json!({})).await;
-    assert!(place["error"].as_str().unwrap().contains("not available"), "{place}");
+    assert_eq!(place["ok"], false, "{place}");
+    assert!(!place["error"].as_str().unwrap().starts_with("unknown method"), "{place}");
+    // Verbs owned by later cards answer explicitly.
+    let mig = call(&sock, "workload.migrate", json!({})).await;
+    assert!(mig["error"].as_str().unwrap().contains("not available"), "{mig}");
+    // An unknown workload.* verb is refused and chained (default deny).
+    let bogus = call(&sock, "workload.frobnicate", json!({})).await;
+    assert_eq!(bogus["ok"], false, "{bogus}");
+    assert!(chain_kinds(&kernel).await.iter().any(|k| k == "workload.refuse"));
     let _ = shutdown.send(true);
 }

@@ -971,6 +971,9 @@ pub async fn run(
     // mesh-placement-06: persisted node-local workload catalog.
     #[cfg(feature = "exochain")]
     crate::workload_rpc::init_registry(&runtime_dir.join("workloads.json"));
+    // mesh-placement-12: the placement control plane signs with the node key.
+    #[cfg(all(feature = "placement", unix))]
+    crate::workload_place_rpc::init(daemon_identity.signing_key.clone(), runtime_dir.clone());
     // mesh-placement-03: probe, sign and cache this node's facts.
     #[cfg(any(feature = "mesh", feature = "exochain"))]
     crate::node_facts_rpc::init(
@@ -978,6 +981,19 @@ pub async fn run(
         runtime_dir.clone(),
         kernel.read().await.cluster_membership().clone(),
     );
+    // mesh-placement-12: serve this node's workload-host to the controllers
+    // named in <runtime>/workload-host.json (off when the file is absent).
+    #[cfg(all(feature = "placement", unix))]
+    {
+        let k = kernel.clone();
+        tokio::spawn(async move {
+            match crate::workload_place_rpc::start_serving(k).await {
+                Ok(Some(addr)) => info!(%addr, "workload-host serving"),
+                Ok(None) => {}
+                Err(e) => error!(error = %e, "workload-host not served"),
+            }
+        });
+    }
     {
         let k = kernel.read().await;
         let pubkey: [u8; 32] = daemon_identity.signing_key.verifying_key().to_bytes();

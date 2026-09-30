@@ -183,6 +183,10 @@ rand_distr = "0.4"
 name = "cog_adapter_run"
 required-features = ["workload-runtime"]
 
+[[example]]
+name = "workload_node"
+required-features = ["workload-runtime", "mesh"]
+
 [[bench]]
 name = "vector_backend_bench"
 harness = false
