@@ -18,6 +18,8 @@ use clawft_rpc::handshake::{
     BoundVia, DaemonBuild, Handshake, INVALID_PROJECT_KIND, PROJECT_MISMATCH_KIND, ProtoCheck,
     ProtoRange, check_proto, handshake_value, proto_mismatch_response,
 };
+use clawft_kernel::boot::Kernel;
+use clawft_platform::NativePlatform;
 use clawft_rpc::Response;
 use clawft_types::project::{list_manifests, read_project_toml, validate_id};
 use clawft_types::runtime_paths::{RootSource, RuntimePaths};
@@ -126,6 +128,9 @@ pub fn build_handshake(
         proto: ProtoRange::supported(),
         node_id,
         user_id: None,
+        user_key_id: None,
+        profile: None,
+        roles: Vec::new(),
         project_id: bound.project_id.clone(),
         bound_via: bound.via,
         depth: 0,
@@ -138,27 +143,57 @@ pub fn build_handshake(
     }
 }
 
+/// Apply the user-daemon fields: profile, roles, local uid and user key id.
+/// A default (project/legacy) daemon leaves all four empty.
+pub fn with_user_profile(mut h: Handshake, user_key_id: Option<String>) -> Handshake {
+    if let Some((profile, roles)) = crate::user_daemon::handshake_profile() {
+        h.profile = Some(profile);
+        h.roles = roles;
+        h.user_id = crate::user_daemon::local_uid();
+        h.user_key_id = user_key_id;
+    }
+    h
+}
+
+/// Id of the user key: the node-id-style hash of the chain verifying key
+/// (plan D-1; becomes `~/.weftos/user.key` in Phase 3). `None` for a daemon
+/// that is not the user daemon, or has no chain signing key.
+pub fn user_key_id(kernel: &Kernel<NativePlatform>) -> Option<String> {
+    if !crate::user_daemon::is_active() {
+        return None;
+    }
+    #[cfg(feature = "exochain")]
+    {
+        let vk = kernel.chain_manager()?.verifying_key()?;
+        Some(clawft_kernel::node_id_from_pubkey(&vk.to_bytes()))
+    }
+    #[cfg(not(feature = "exochain"))]
+    {
+        let _ = kernel;
+        None
+    }
+}
+
+/// The handshake of this running daemon, from its booted state.
+pub fn current_handshake(kernel: &Kernel<NativePlatform>) -> Handshake {
+    let node_id = kernel.cluster_membership().local_node_id().to_owned();
+    let h = build_handshake(
+        node_id,
+        &RUNTIME_ROOT
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .map_or_else(RuntimePaths::resolve, RuntimePaths::at),
+        std::env::current_exe().ok(),
+        &bound(),
+    );
+    with_user_profile(h, user_key_id(kernel))
+}
+
 /// `kernel.handshake` handler (registered in `rpc_ext::ROUTES`, `Read`).
 pub fn handle(call: ExtCall) -> ExtFuture {
     Box::pin(async move {
-        let node_id = call
-            .ctx
-            .kernel
-            .read()
-            .await
-            .cluster_membership()
-            .local_node_id()
-            .to_owned();
-        let h = build_handshake(
-            node_id,
-            &RUNTIME_ROOT
-                .read()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone()
-                .map_or_else(RuntimePaths::resolve, RuntimePaths::at),
-            std::env::current_exe().ok(),
-            &bound(),
-        );
+        let h = current_handshake(&*call.ctx.kernel.read().await);
         Response::success(handshake_value(&h))
     })
 }

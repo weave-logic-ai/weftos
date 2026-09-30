@@ -22,8 +22,17 @@
 //!
 //! Phase 1 of ADR-103 changes the root; keep that change inside
 //! [`resolve_root`].
+//!
+//! # User profile
+//!
+//! `weaver kernel start --profile user` runs the per-user daemon, whose
+//! root is `~/.weftos/run` ([`RootSource::User`]) and never the project
+//! walk-up. The profile is process state ([`set_user_profile`]), set once
+//! by the CLI, so every later [`RuntimePaths::resolve`] (socket, pid,
+//! kernel boot, chain choice) agrees. `$WEFTOS_RUNTIME_DIR` still wins.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Environment variable that points a daemon at an isolated runtime dir.
 pub const RUNTIME_DIR_ENV: &str = "WEFTOS_RUNTIME_DIR";
@@ -49,6 +58,38 @@ pub enum RootSource {
     Project(PathBuf),
     /// The legacy `~/.clawft` directory.
     LegacyHome,
+    /// The per-user daemon root, `~/.weftos/run` (`--profile user`).
+    User,
+}
+
+static USER_PROFILE: AtomicBool = AtomicBool::new(false);
+
+/// Make [`RuntimePaths::resolve`] return the user root for this process.
+pub fn set_user_profile(on: bool) {
+    USER_PROFILE.store(on, Ordering::SeqCst);
+}
+
+/// True when this process runs (or addresses) the user daemon.
+pub fn user_profile_active() -> bool {
+    USER_PROFILE.load(Ordering::SeqCst)
+}
+
+/// `<home>/.weftos`, the per-user state directory (ADR-103 D4).
+pub fn user_weftos_dir(home: &Path) -> PathBuf {
+    home.join(".weftos")
+}
+
+/// `<home>/.weftos/run`, the user daemon's runtime root.
+pub fn user_runtime_root(home: &Path) -> PathBuf {
+    user_weftos_dir(home).join("run")
+}
+
+/// `<home>/.weftos/chain/chain.json`, where the user chain lives once
+/// `weaver migrate user-chain` has moved it (Phase 1 package E).
+pub fn user_chain_checkpoint(home: &Path) -> PathBuf {
+    user_weftos_dir(home)
+        .join("chain")
+        .join(CHAIN_CHECKPOINT_FILE)
 }
 
 /// Every runtime file location, derived from one root.
@@ -132,9 +173,32 @@ impl RuntimePaths {
         Self { root, source }
     }
 
+    /// The user daemon's paths: `$WEFTOS_RUNTIME_DIR` when set, else
+    /// `<home>/.weftos/run`. Never walks up to a project. Without a home
+    /// directory the root falls back to a temp dir, as the legacy one does.
+    pub fn user_with(env: Option<&str>, home: Option<&Path>) -> Self {
+        if let Some(dir) = env.map(str::trim).filter(|d| !d.is_empty()) {
+            return Self {
+                root: PathBuf::from(dir),
+                source: RootSource::User,
+            };
+        }
+        let home = home
+            .map(Path::to_path_buf)
+            .unwrap_or_else(std::env::temp_dir);
+        Self {
+            root: user_runtime_root(&home),
+            source: RootSource::User,
+        }
+    }
+
     /// Resolve from the process environment, working directory and home.
+    /// Honours [`set_user_profile`].
     pub fn resolve() -> Self {
         let env = std::env::var(RUNTIME_DIR_ENV).ok();
+        if user_profile_active() {
+            return Self::user_with(env.as_deref(), home_dir().as_deref());
+        }
         let cwd = std::env::current_dir().ok();
         let home = home_dir();
         Self::resolve_with(env.as_deref(), cwd.as_deref(), home.as_deref())
@@ -261,6 +325,31 @@ mod tests {
         let p = dir.join(rel);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, "").unwrap();
+    }
+
+    #[test]
+    fn user_root_is_weftos_run_and_ignores_projects() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path().join("home");
+        let p = RuntimePaths::user_with(None, Some(&home));
+        assert_eq!(p.root(), home.join(".weftos/run"));
+        assert_eq!(p.source(), &RootSource::User);
+        assert_eq!(p.socket(), home.join(".weftos/run/kernel.sock"));
+        assert_eq!(p.lock(), home.join(".weftos/run/kernel.lock"));
+        assert_eq!(
+            user_chain_checkpoint(&home),
+            home.join(".weftos/chain/chain.json")
+        );
+    }
+
+    #[test]
+    fn user_root_env_override_and_blank_env() {
+        let home = Path::new("/h");
+        let p = RuntimePaths::user_with(Some("/run/probe"), Some(home));
+        assert_eq!(p.root(), Path::new("/run/probe"));
+        assert_eq!(p.source(), &RootSource::User);
+        let p = RuntimePaths::user_with(Some("  "), Some(home));
+        assert_eq!(p.root(), Path::new("/h/.weftos/run"));
     }
 
     #[test]

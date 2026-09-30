@@ -679,6 +679,9 @@ pub fn daemonize(
     if adopt_legacy_chain {
         cmd.arg("--adopt-legacy-chain");
     }
+    if crate::user_daemon::is_active() {
+        cmd.args(["--profile", crate::user_daemon::PROFILE_USER]);
+    }
 
     // Windows: detach so the daemon outlives the spawning console.
     #[cfg(windows)]
@@ -947,6 +950,28 @@ pub(crate) async fn boot_kernel_with_identity(
     .await
 }
 
+/// User daemon only: seed `~/.weftos/projects` from the legacy
+/// `~/.clawft/workspaces.json` (idempotent; a missing file seeds nothing).
+fn seed_user_projects() {
+    let Some(home) = clawft_types::runtime_paths::home_dir() else {
+        return;
+    };
+    match clawft_types::project::seed_from_workspaces(
+        &home.join(".clawft").join("workspaces.json"),
+        &crate::user_daemon::manifests_dir(&home),
+    ) {
+        Ok(r) => info!(
+            created = r.created.len(),
+            adopted = r.adopted.len(),
+            missing = r.missing.len(),
+            unchanged = r.unchanged.len(),
+            skipped = r.skipped.len(),
+            "seeded project manifests from workspaces.json"
+        ),
+        Err(e) => warn!(error = %e, "could not seed project manifests from workspaces.json"),
+    }
+}
+
 /// Run the kernel daemon.
 ///
 /// Boots the kernel, binds the platform-local RPC transport (Unix socket
@@ -1058,6 +1083,9 @@ pub async fn run(
     // Record this process as the live daemon only now that boot (which takes
     // the chain lock) has succeeded, so a refused boot leaves no stale pid.
     let _ = std::fs::write(protocol::pid_path(), std::process::id().to_string());
+    if crate::user_daemon::is_active() {
+        seed_user_projects();
+    }
 
     // WEFT-494: seed live MCP registry + remember best-effort config path
     // for path-less mcp.reload (CLI after weft mcp add).
@@ -5552,6 +5580,7 @@ async fn dispatch(
                     timestamp: env!("BUILD_TIMESTAMP").to_owned(),
                     version: env!("CARGO_PKG_VERSION").to_owned(),
                 },
+                handshake: Some(crate::handshake_rpc::current_handshake(&k)),
             };
             Response::success(serde_json::to_value(result).unwrap())
         }
