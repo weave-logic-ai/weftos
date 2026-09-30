@@ -1,23 +1,25 @@
 //! `connect_resolved` against fake daemons on temp sockets.
 
 use super::*;
-use crate::handshake::{ProtoRange, handshake_value, proto_mismatch_response, DaemonBuild};
-use crate::resolve::{ResolveInputs, resolve_with};
+use crate::handshake::{DaemonBuild, handshake_value, proto_mismatch_response};
+use crate::resolve::{ResolveFlags, ResolveInputs, resolve_with};
+use std::path::{Path, PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 
 const ID_A: &str = "01J0000000000000000000000A";
 const ID_B: &str = "01J0000000000000000000000B";
 
-fn hs(project: Option<&str>, node: &str) -> Handshake {
+fn hs(dir: &Path, project: Option<&str>, node: &str) -> Handshake {
     Handshake {
         proto: ProtoRange::supported(),
         node_id: node.into(),
         user_id: None,
         project_id: project.map(String::from),
+        bound_via: if project.is_some() { BoundVia::Project } else { BoundVia::None },
         depth: 0,
         parent: None,
-        runtime_dir: "/r".into(),
+        runtime_dir: dir.display().to_string(),
         pid: 1,
         version: "0.8.1".into(),
         sha: "abcd1234".into(),
@@ -26,7 +28,7 @@ fn hs(project: Option<&str>, node: &str) -> Handshake {
 }
 
 /// Serve one connection: answer every line with `reply(request)`.
-fn serve(dir: &std::path::Path, reply: fn(&Request) -> Response) {
+fn serve(dir: &Path, reply: impl Fn(&Request) -> Response + Send + 'static) {
     let l = UnixListener::bind(dir.join("kernel.sock")).unwrap();
     tokio::spawn(async move {
         let (s, _) = l.accept().await.unwrap();
@@ -41,9 +43,9 @@ fn serve(dir: &std::path::Path, reply: fn(&Request) -> Response) {
     });
 }
 
-fn resolution(dir: &std::path::Path, project: Option<&str>) -> Resolution {
+fn resolution(dir: &Path, project: Option<&str>) -> Resolution {
     resolve_with(&ResolveInputs {
-        flags: crate::resolve::ResolveFlags {
+        flags: ResolveFlags {
             runtime: Some(dir.to_path_buf()),
             project: project.map(String::from),
         },
@@ -52,30 +54,33 @@ fn resolution(dir: &std::path::Path, project: Option<&str>) -> Resolution {
     .unwrap()
 }
 
+async fn connect(res: &Resolution) -> Result<Connected, ConnectError> {
+    DaemonClient::connect_resolved(res).await
+}
+
 #[tokio::test]
-async fn happy_path_returns_handshake_and_sends_proto() {
+async fn happy_path_returns_handshake_and_sends_proto_and_project() {
     let d = tempfile::tempdir().unwrap();
-    serve(d.path(), |req| {
+    let dir = d.path().to_path_buf();
+    serve(d.path(), move |req| {
         assert_eq!(req.method, "kernel.handshake");
         assert_eq!(req.proto, Some(PROTO_VERSION));
-        Response::success(handshake_value(&hs(Some(ID_A), "node1")))
+        assert_eq!(req.project.as_deref(), Some(ID_A));
+        Response::success(handshake_value(&hs(&dir, Some(ID_A), "node1")))
     });
-    let (_c, h) = DaemonClient::connect_resolved(&resolution(d.path(), Some(ID_A)))
-        .await
-        .unwrap();
-    assert_eq!(h.node_id, "node1");
+    let c = connect(&resolution(d.path(), Some(ID_A))).await.unwrap();
+    assert_eq!(c.handshake.node_id, "node1");
+    assert!(c.warnings.is_empty(), "{:?}", c.warnings);
 }
 
 #[tokio::test]
 async fn project_mismatch_is_a_hard_error_with_remedy() {
     let d = tempfile::tempdir().unwrap();
-    serve(d.path(), |_| {
-        Response::success(handshake_value(&hs(Some(ID_B), "node1")))
+    let dir = d.path().to_path_buf();
+    serve(d.path(), move |_| {
+        Response::success(handshake_value(&hs(&dir, Some(ID_B), "n")))
     });
-    let err = DaemonClient::connect_resolved(&resolution(d.path(), Some(ID_A)))
-        .await
-        .err()
-        .expect("must fail");
+    let err = connect(&resolution(d.path(), Some(ID_A))).await.err().unwrap();
     assert!(matches!(err, ConnectError::ProjectMismatch { .. }), "{err}");
     let text = err.to_string();
     assert!(text.contains(ID_A) && text.contains(ID_B), "{text}");
@@ -83,65 +88,122 @@ async fn project_mismatch_is_a_hard_error_with_remedy() {
 }
 
 #[tokio::test]
-async fn daemon_without_project_does_not_conflict() {
+async fn unbound_daemon_on_explicit_endpoint_is_an_error() {
     let d = tempfile::tempdir().unwrap();
-    serve(d.path(), |_| Response::success(handshake_value(&hs(None, "n"))));
-    assert!(
-        DaemonClient::connect_resolved(&resolution(d.path(), Some(ID_A)))
-            .await
-            .is_ok()
-    );
+    let dir = d.path().to_path_buf();
+    serve(d.path(), move |_| {
+        Response::success(handshake_value(&hs(&dir, None, "n")))
+    });
+    let err = connect(&resolution(d.path(), Some(ID_A))).await.err().unwrap();
+    assert!(matches!(err, ConnectError::ProjectUnbound { .. }), "{err}");
+    assert!(err.to_string().contains("serves none"), "{err}");
+}
+
+#[tokio::test]
+async fn unbound_daemon_on_default_endpoint_is_a_warning() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().to_path_buf();
+    serve(d.path(), move |_| {
+        Response::success(handshake_value(&hs(&dir, None, "n")))
+    });
+    let mut res = resolution(d.path(), Some(ID_A));
+    res.source = ResolveSource::Default;
+    let c = connect(&res).await.unwrap();
+    assert!(c.warnings.iter().any(|w| w.contains("not bound")), "{:?}", c.warnings);
 }
 
 #[tokio::test]
 async fn node_mismatch_is_a_hard_error() {
     let d = tempfile::tempdir().unwrap();
-    serve(d.path(), |_| Response::success(handshake_value(&hs(None, "other"))));
+    let dir = d.path().to_path_buf();
+    serve(d.path(), move |_| {
+        Response::success(handshake_value(&hs(&dir, None, "other")))
+    });
     let res = resolution(d.path(), None).expect_node("wanted");
-    let err = DaemonClient::connect_resolved(&res).await.err().unwrap();
+    let err = connect(&res).await.err().unwrap();
     assert!(matches!(err, ConnectError::NodeMismatch { .. }), "{err}");
-    assert!(err.to_string().contains("wanted"));
 }
 
 #[tokio::test]
-async fn proto_mismatch_response_surfaces_remedy() {
+async fn runtime_dir_disagreement_warns() {
     let d = tempfile::tempdir().unwrap();
     serve(d.path(), |_| {
-        proto_mismatch_response(
-            99,
+        Response::success(handshake_value(&hs(Path::new("/elsewhere"), None, "n")))
+    });
+    let c = connect(&resolution(d.path(), None)).await.unwrap();
+    assert!(c.warnings.iter().any(|w| w.contains("/elsewhere")), "{:?}", c.warnings);
+}
+
+#[tokio::test]
+async fn proto_mismatch_response_sets_client_too_old_from_daemon_min() {
+    let d = tempfile::tempdir().unwrap();
+    serve(d.path(), |_| {
+        let mut r = proto_mismatch_response(
+            0,
             DaemonBuild {
                 sha: "abcd1234",
                 version: "0.8.1",
-                exe: None,
             },
-        )
+        );
+        // A daemon whose minimum is above this client.
+        r.data = Some(serde_json::json!({"daemon": {"sha": "abcd1234", "min": PROTO_VERSION + 1}}));
+        r
     });
-    let err = DaemonClient::connect_resolved(&resolution(d.path(), None))
-        .await
-        .err()
-        .unwrap();
-    assert!(matches!(err, ConnectError::ProtoMismatch { .. }), "{err}");
-    assert!(err.to_string().contains("weaver"), "{err}");
+    let err = connect(&resolution(d.path(), None)).await.err().unwrap();
+    match &err {
+        ConnectError::ProtoMismatch { client_too_old, .. } => assert!(*client_too_old),
+        other => panic!("{other}"),
+    }
+    assert_eq!(
+        err.failure(),
+        Some(Failure::ProtoMismatch {
+            daemon_sha: "abcd1234".into(),
+            client_too_old: true
+        })
+    );
 }
 
 #[tokio::test]
-async fn old_daemon_without_handshake_is_reported() {
+async fn handshake_reporting_a_range_without_us_is_a_proto_mismatch() {
     let d = tempfile::tempdir().unwrap();
-    serve(d.path(), |_| Response::error("unknown method: kernel.handshake"));
-    let err = DaemonClient::connect_resolved(&resolution(d.path(), None))
-        .await
-        .err()
-        .unwrap();
-    assert!(matches!(err, ConnectError::NoHandshake { .. }), "{err}");
+    let dir = d.path().to_path_buf();
+    serve(d.path(), move |_| {
+        let mut h = hs(&dir, None, "n");
+        h.proto = ProtoRange {
+            current: PROTO_VERSION + 3,
+            min: PROTO_VERSION + 2,
+        };
+        Response::success(handshake_value(&h))
+    });
+    let err = connect(&resolution(d.path(), None)).await.err().unwrap();
+    match &err {
+        ConnectError::ProtoMismatch { client_too_old, .. } => assert!(*client_too_old),
+        other => panic!("{other}"),
+    }
+    assert!(err.to_string().contains("update this `weft`"), "{err}");
+}
+
+#[tokio::test]
+async fn old_daemon_degrades_with_warning_instead_of_failing() {
+    let d = tempfile::tempdir().unwrap();
+    serve(d.path(), |req| {
+        if req.method == "kernel.status" {
+            Response::success(serde_json::json!({"build": {"sha": "old12345", "version": "0.7"}}))
+        } else {
+            Response::error("unknown method: kernel.handshake")
+        }
+    });
+    let c = connect(&resolution(d.path(), Some(ID_A))).await.unwrap();
+    assert_eq!(c.handshake.sha, "old12345");
+    assert_eq!(c.handshake.proto, ProtoRange { current: 0, min: 0 });
+    assert_eq!(c.warnings.len(), 1);
+    assert!(c.warnings[0].contains("weaver kernel restart"), "{:?}", c.warnings);
 }
 
 #[tokio::test]
 async fn unreachable_prints_what_was_tried() {
     let d = tempfile::tempdir().unwrap();
-    let err = DaemonClient::connect_resolved(&resolution(d.path(), None))
-        .await
-        .err()
-        .unwrap();
+    let err = connect(&resolution(d.path(), None)).await.err().unwrap();
     assert_eq!(err.failure(), Some(Failure::NoSocket));
     let text = err.to_string();
     assert!(text.contains("no socket file"), "{text}");
@@ -151,14 +213,43 @@ async fn unreachable_prints_what_was_tried() {
 #[test]
 fn stamp_defaults_proto_and_keeps_explicit_fields() {
     let mut r = Request::new("x");
-    stamp_request(&mut r);
+    stamp_request(&mut r, None);
     assert_eq!(r.auth.as_deref(), Some("admin"));
     assert_eq!(r.proto, Some(PROTO_VERSION));
     let mut r = Request::new("x").with_auth("read");
     r.proto = Some(7);
     r.project = Some("P".into());
-    stamp_request(&mut r);
+    stamp_request(&mut r, None);
     assert_eq!(r.auth.as_deref(), Some("read"));
     assert_eq!(r.proto, Some(7));
     assert_eq!(r.project.as_deref(), Some("P"));
+}
+
+/// Two clients with different contexts never share stamps (the gateway
+/// case), and a per-client context wins over the process default.
+#[tokio::test]
+async fn contexts_are_per_client() {
+    let seen = |dir: PathBuf, want: Option<&'static str>| {
+        serve(&dir, move |req| {
+            assert_eq!(req.project.as_deref(), want);
+            Response::success(serde_json::json!({}))
+        });
+    };
+    let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    seen(a.path().to_path_buf(), Some(ID_A));
+    seen(b.path().to_path_buf(), Some(ID_B));
+    let ctx = |p: &str| ClientContext {
+        project: Some(p.into()),
+        proto: PROTO_VERSION,
+    };
+    let mut ca = DaemonClient::connect_path(a.path().join("kernel.sock"))
+        .await
+        .unwrap()
+        .with_context(ctx(ID_A));
+    let mut cb = DaemonClient::connect_path(b.path().join("kernel.sock"))
+        .await
+        .unwrap()
+        .with_context(ctx(ID_B));
+    assert!(ca.simple_call("x").await.unwrap().ok);
+    assert!(cb.simple_call("x").await.unwrap().ok);
 }

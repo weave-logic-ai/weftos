@@ -181,3 +181,68 @@ fn display_lists_every_level_tried() {
     assert!(msg.contains("tried, in order"), "{msg}");
     assert!(msg.contains("weaver kernel start"), "{msg}");
 }
+
+/// Write a manifest for `ID_A` rooted at `root` with `[serve] runtime_dir`.
+fn write_manifest_for(w: &World, root: &Path, rt: &str) {
+    let mdir = manifests_dir(&w.home);
+    fs::create_dir_all(&mdir).unwrap();
+    fs::write(
+        mdir.join(format!("{ID_A}.toml")),
+        format!(
+            "schema = 1\nid = \"{ID_A}\"\nname = \"app\"\nroot = \"{}\"\n\
+             created = 2026-01-01T00:00:00Z\nlast_seen = 2026-01-01T00:00:00Z\n\
+             [serve]\nruntime_dir = \"{rt}\"\n",
+            root.display()
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn clone_in_another_dir_does_not_reuse_the_original_kernel() {
+    // Manifest root is the original; the clone has the same project.toml id.
+    let w = world(Some("/rt/manifest"));
+    let clone = w.home.join("work").join("app-clone");
+    fs::create_dir_all(clone.join(".weftos")).unwrap();
+    fs::copy(w.proj.join(".weftos/project.toml"), clone.join(".weftos/project.toml")).unwrap();
+    let mut i = inputs(&w);
+    i.cwd = Some(clone);
+    let r = resolve_with(&i).unwrap();
+    assert_eq!(r.source, ResolveSource::Default, "override must not apply");
+    let note = &r.tried.iter().find(|a| a.level == ResolveSource::Manifest).unwrap().detail;
+    assert!(note.contains("ignored runtime_dir override"), "{note}");
+    // The original still gets its override.
+    assert_eq!(resolve_with(&inputs(&w)).unwrap().source, ResolveSource::Manifest);
+}
+
+#[test]
+fn relative_manifest_runtime_dir_is_rejected() {
+    let w = world(None);
+    write_manifest_for(&w, &w.proj, "rel/run");
+    let r = resolve_with(&inputs(&w)).unwrap();
+    assert_eq!(r.source, ResolveSource::Default);
+    let note = &r.tried.iter().find(|a| a.level == ResolveSource::Manifest).unwrap().detail;
+    assert!(note.contains("relative"), "{note}");
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_home_still_stops_the_walk() {
+    let w = world(None);
+    // HOME itself carries a project.toml; it is reached through a symlink
+    // while the injected home is the real path.
+    fs::create_dir_all(w.home.join(".weftos")).unwrap();
+    fs::write(
+        w.home.join(".weftos/project.toml"),
+        format!("schema = 1\nid = \"{ID_B}\"\nname = \"home\"\ncreated = 2026-01-01T00:00:00Z\n"),
+    )
+    .unwrap();
+    let link = w._dir.path().join("homelink");
+    std::os::unix::fs::symlink(&w.home, &link).unwrap();
+    let i = ResolveInputs {
+        cwd: Some(link.join("elsewhere")),
+        home: Some(w.home.clone()),
+        ..ResolveInputs::default()
+    };
+    assert_eq!(resolve_with(&i).unwrap().project_id, None);
+}

@@ -24,9 +24,11 @@ pub mod daemon;
 pub mod instance_lock;
 #[cfg(any(unix, windows))]
 pub mod llm_service;
-/// Daemon RPC extension seam: method-prefix routes + pre-dispatch gates (ADR-103 D0).
+/// `kernel.handshake` and the request-envelope gate (ADR-103 D14).
 #[cfg(any(unix, windows))]
 pub mod handshake_rpc;
+/// Daemon RPC extension seam: method-prefix routes + pre-dispatch gates (ADR-103 D0).
+#[cfg(any(unix, windows))]
 pub mod rpc_ext;
 /// Live MCP registry RPC handlers (WEFT-494 / ADR-070). Available on all
 /// platforms so unit tests can exercise add/list/remove without UDS.

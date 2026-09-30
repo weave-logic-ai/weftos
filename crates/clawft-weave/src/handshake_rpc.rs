@@ -3,16 +3,23 @@
 //! The handshake tells a client which daemon it reached (node, project,
 //! runtime dir, build) so a stale socket pointing at the wrong daemon is
 //! caught before any real call. [`envelope_refusal`] rejects requests whose
-//! `proto` is outside the supported range or whose `project` is not a ULID.
+//! `proto` is outside the supported range, whose `project` is not a ULID,
+//! or whose `project` differs from the project this daemon is bound to.
+//! `kernel.handshake` itself is exempt: it is how a client discovers the
+//! accepted range and the bound project.
+//!
+//! The bound project is decided once at startup ([`init_bound`]) from the
+//! paths the daemon booted with, never re-resolved per call.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 use clawft_rpc::handshake::{
-    DaemonBuild, Handshake, INVALID_PROJECT_KIND, ProtoCheck, ProtoRange, check_proto,
-    handshake_value, proto_mismatch_response,
+    BoundVia, DaemonBuild, Handshake, INVALID_PROJECT_KIND, PROJECT_MISMATCH_KIND, ProtoCheck,
+    ProtoRange, check_proto, handshake_value, proto_mismatch_response,
 };
 use clawft_rpc::Response;
-use clawft_types::project::{read_project_toml, validate_id};
+use clawft_types::project::{list_manifests, read_project_toml, validate_id};
 use clawft_types::runtime_paths::{RootSource, RuntimePaths};
 
 use crate::rpc_ext::{ExtCall, ExtFuture};
@@ -20,23 +27,96 @@ use crate::rpc_ext::{ExtCall, ExtFuture};
 const BUILD_SHA: &str = env!("BUILD_GIT_HASH");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Project ULID this runtime is bound to: the `project.toml` id when the
-/// root was resolved from a project directory, else `None` (the user-level
-/// daemon serves no single project in Phase 1).
-pub fn bound_project_id(paths: &RuntimePaths) -> Option<String> {
-    match paths.source() {
-        RootSource::Project(dir) => read_project_toml(dir).ok().flatten().map(|p| p.id),
-        _ => None,
+/// The discovery call, exempt from the envelope refusal.
+const HANDSHAKE_METHOD: &str = "kernel.handshake";
+
+/// The project a daemon is bound to, and how that was decided.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BoundProject {
+    pub project_id: Option<String>,
+    pub via: BoundVia,
+}
+
+static BOUND: RwLock<Option<BoundProject>> = RwLock::new(None);
+
+fn canon(p: &Path) -> PathBuf {
+    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+}
+
+/// Decide the bound project for a daemon owning `paths`.
+///
+/// - root resolved from a project directory: that `project.toml` id
+///   (`BoundVia::Project`);
+/// - otherwise: the one manifest in `manifests_dir` whose `[serve]
+///   runtime_dir` canonicalizes to the root, if exactly one
+///   (`BoundVia::Manifest`);
+/// - else unbound.
+pub fn compute_bound(paths: &RuntimePaths, manifests_dir: Option<&Path>) -> BoundProject {
+    if let RootSource::Project(dir) = paths.source() {
+        if let Some(pt) = read_project_toml(dir).ok().flatten() {
+            return BoundProject {
+                project_id: Some(pt.id),
+                via: BoundVia::Project,
+            };
+        }
+        return BoundProject::default();
+    }
+    let Some(mdir) = manifests_dir else {
+        return BoundProject::default();
+    };
+    let root = canon(paths.root());
+    let matches: Vec<String> = list_manifests(mdir)
+        .map(|l| l.manifests)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| {
+            m.runtime_dir_override()
+                .is_some_and(|rt| rt.is_absolute() && canon(rt) == root)
+        })
+        .map(|m| m.id)
+        .collect();
+    match matches.as_slice() {
+        [one] => BoundProject {
+            project_id: Some(one.clone()),
+            via: BoundVia::Manifest,
+        },
+        _ => BoundProject::default(),
     }
 }
 
+/// Record the bound project at daemon startup.
+pub fn init_bound(paths: &RuntimePaths, manifests_dir: Option<&Path>) {
+    let b = compute_bound(paths, manifests_dir);
+    tracing::info!(project = ?b.project_id, via = ?b.via, "daemon project binding");
+    set_bound(b);
+}
+
+/// Replace the recorded binding (startup and tests).
+pub fn set_bound(b: BoundProject) {
+    *BOUND.write().unwrap_or_else(|e| e.into_inner()) = Some(b);
+}
+
+fn bound() -> BoundProject {
+    BOUND
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_default()
+}
+
 /// Assemble the handshake for a daemon owning `paths`.
-pub fn build_handshake(node_id: String, paths: &RuntimePaths, binary: Option<PathBuf>) -> Handshake {
+pub fn build_handshake(
+    node_id: String,
+    paths: &RuntimePaths,
+    binary: Option<PathBuf>,
+    bound: &BoundProject,
+) -> Handshake {
     Handshake {
         proto: ProtoRange::supported(),
         node_id,
         user_id: None,
-        project_id: bound_project_id(paths),
+        project_id: bound.project_id.clone(),
+        bound_via: bound.via,
         depth: 0,
         parent: None,
         runtime_dir: paths.root().display().to_string(),
@@ -58,37 +138,65 @@ pub fn handle(call: ExtCall) -> ExtFuture {
             .cluster_membership()
             .local_node_id()
             .to_owned();
-        let h = build_handshake(node_id, &RuntimePaths::resolve(), std::env::current_exe().ok());
+        let h = build_handshake(
+            node_id,
+            &RuntimePaths::resolve(),
+            std::env::current_exe().ok(),
+            &bound(),
+        );
         Response::success(handshake_value(&h))
     })
 }
 
-/// Refuse a request with an unsupported `proto` or malformed `project`.
+/// Refuse a request with an unsupported `proto`, a malformed `project`, or
+/// a `project` other than the daemon's bound one. `kernel.handshake` is
+/// never refused.
 ///
 /// A missing `proto` is a legacy client: accepted in Phase 1 with one
 /// warning per process.
-pub fn envelope_refusal(proto: Option<u32>, project: Option<&str>) -> Option<Response> {
+pub fn envelope_refusal(method: &str, proto: Option<u32>, project: Option<&str>) -> Option<Response> {
+    envelope_refusal_with(&bound(), method, proto, project)
+}
+
+/// [`envelope_refusal`] against an explicit binding.
+pub fn envelope_refusal_with(
+    bound: &BoundProject,
+    method: &str,
+    proto: Option<u32>,
+    project: Option<&str>,
+) -> Option<Response> {
+    if method == HANDSHAKE_METHOD {
+        return None;
+    }
     match check_proto(proto) {
         ProtoCheck::Supported => {}
         ProtoCheck::Legacy => warn_legacy_once(),
         ProtoCheck::Unsupported(p) => {
-            let exe = std::env::current_exe().ok().map(|p| p.display().to_string());
             return Some(proto_mismatch_response(
                 p,
                 DaemonBuild {
                     sha: BUILD_SHA,
                     version: VERSION,
-                    exe: exe.as_deref(),
                 },
             ));
         }
     }
-    if let Some(id) = project
-        && validate_id(id).is_err()
-    {
+    let id = project?;
+    if validate_id(id).is_err() {
         return Some(Response::error_with_kind(
             INVALID_PROJECT_KIND,
             format!("invalid project id {id:?}: expected a 26-character ULID"),
+        ));
+    }
+    if let Some(mine) = &bound.project_id
+        && mine != id
+    {
+        return Some(Response::error_with_kind(
+            PROJECT_MISMATCH_KIND,
+            format!(
+                "this daemon serves project {mine}, not {id}; \
+                 unset WEFTOS_RUNTIME_DIR or pass `--project {id}` to reach its own kernel"
+            ),
         ));
     }
     None
@@ -108,44 +216,114 @@ fn warn_legacy_once() {
 mod tests {
     use super::*;
 
-    #[test]
-    fn envelope_accepts_legacy_and_current() {
-        assert!(envelope_refusal(None, None).is_none());
-        assert!(envelope_refusal(Some(clawft_rpc::PROTO_VERSION), None).is_none());
+    const A: &str = "01J0000000000000000000000A";
+    const B: &str = "01J0000000000000000000000B";
+
+    fn unbound() -> BoundProject {
+        BoundProject::default()
+    }
+
+    fn bound_a() -> BoundProject {
+        BoundProject {
+            project_id: Some(A.into()),
+            via: BoundVia::Project,
+        }
     }
 
     #[test]
-    fn envelope_refuses_unsupported_proto_with_data() {
-        let r = envelope_refusal(Some(clawft_rpc::PROTO_VERSION + 1), None).unwrap();
+    fn envelope_accepts_legacy_and_current() {
+        assert!(envelope_refusal_with(&unbound(), "x", None, None).is_none());
+        assert!(envelope_refusal_with(&unbound(), "x", Some(clawft_rpc::PROTO_VERSION), None).is_none());
+    }
+
+    #[test]
+    fn envelope_refuses_unsupported_proto_without_exe() {
+        let r = envelope_refusal_with(&unbound(), "x", Some(clawft_rpc::PROTO_VERSION + 1), None).unwrap();
         assert_eq!(r.error_kind.as_deref(), Some("proto_mismatch"));
-        assert_eq!(r.data.unwrap()["daemon"]["proto"], clawft_rpc::PROTO_VERSION);
-        assert!(envelope_refusal(Some(0), None).is_some());
+        let d = r.data.unwrap();
+        assert_eq!(d["daemon"]["proto"], clawft_rpc::PROTO_VERSION);
+        assert!(d["daemon"].get("exe").is_none());
+        assert!(envelope_refusal_with(&unbound(), "x", Some(0), None).is_some());
+    }
+
+    #[test]
+    fn handshake_is_exempt_from_every_refusal() {
+        let b = bound_a();
+        assert!(envelope_refusal_with(&b, "kernel.handshake", Some(99), Some(B)).is_none());
+        assert!(envelope_refusal_with(&b, "kernel.handshake", Some(1), Some("../x")).is_none());
     }
 
     #[test]
     fn envelope_refuses_malformed_project() {
-        let r = envelope_refusal(Some(1), Some("../x")).unwrap();
+        let r = envelope_refusal_with(&unbound(), "x", Some(1), Some("../x")).unwrap();
         assert_eq!(r.error_kind.as_deref(), Some("invalid_project"));
-        assert!(envelope_refusal(Some(1), Some("01J0000000000000000000000A")).is_none());
+        assert!(envelope_refusal_with(&unbound(), "x", Some(1), Some(A)).is_none());
     }
 
     #[test]
-    fn handshake_binds_project_from_project_toml() {
-        let d = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(d.path().join(".weftos")).unwrap();
+    fn bound_daemon_refuses_other_projects_only() {
+        let b = bound_a();
+        let r = envelope_refusal_with(&b, "x", Some(1), Some(B)).unwrap();
+        assert_eq!(r.error_kind.as_deref(), Some("project_mismatch"));
+        assert!(envelope_refusal_with(&b, "x", Some(1), Some(A)).is_none());
+        assert!(envelope_refusal_with(&b, "x", Some(1), None).is_none());
+    }
+
+    fn write_project(dir: &Path, id: &str) {
+        std::fs::create_dir_all(dir.join(".weftos")).unwrap();
         std::fs::write(
-            d.path().join(".weftos/project.toml"),
-            "schema = 1\nid = \"01J0000000000000000000000A\"\nname = \"p\"\n\
-             created = 2026-01-01T00:00:00Z\n",
+            dir.join(".weftos/project.toml"),
+            format!("schema = 1\nid = \"{id}\"\nname = \"p\"\ncreated = 2026-01-01T00:00:00Z\n"),
         )
         .unwrap();
+    }
+
+    fn write_manifest(mdir: &Path, id: &str, rt: &Path) {
+        std::fs::create_dir_all(mdir).unwrap();
+        std::fs::write(
+            mdir.join(format!("{id}.toml")),
+            format!(
+                "schema = 1\nid = \"{id}\"\nname = \"p\"\nroot = \"/x\"\n\
+                 created = 2026-01-01T00:00:00Z\nlast_seen = 2026-01-01T00:00:00Z\n\
+                 [serve]\nruntime_dir = \"{}\"\n",
+                rt.display()
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn bound_from_project_toml() {
+        let d = tempfile::tempdir().unwrap();
+        write_project(d.path(), A);
         let paths = RuntimePaths::resolve_with(None, Some(d.path()), None);
-        let h = build_handshake("node".into(), &paths, None);
-        assert_eq!(h.project_id.as_deref(), Some("01J0000000000000000000000A"));
+        let b = compute_bound(&paths, None);
+        assert_eq!((b.project_id.as_deref(), b.via), (Some(A), BoundVia::Project));
+        let h = build_handshake("node".into(), &paths, None, &b);
+        assert_eq!(h.project_id.as_deref(), Some(A));
+        assert_eq!(h.bound_via, BoundVia::Project);
         assert_eq!((h.depth, h.parent), (0, None));
-        assert_eq!(h.node_id, "node");
-        // An isolated (env) runtime is not bound to a project.
-        let iso = RuntimePaths::at(d.path().join("rt"));
-        assert_eq!(build_handshake("n".into(), &iso, None).project_id, None);
+    }
+
+    #[test]
+    fn bound_from_unique_manifest_runtime_dir() {
+        let d = tempfile::tempdir().unwrap();
+        let rt = d.path().join("rt");
+        std::fs::create_dir_all(&rt).unwrap();
+        let mdir = d.path().join("projects");
+        write_manifest(&mdir, A, &rt);
+        let paths = RuntimePaths::at(&rt);
+        let b = compute_bound(&paths, Some(&mdir));
+        assert_eq!((b.project_id.as_deref(), b.via), (Some(A), BoundVia::Manifest));
+        // Two manifests claiming the same runtime dir: ambiguous, unbound.
+        write_manifest(&mdir, B, &rt);
+        assert_eq!(compute_bound(&paths, Some(&mdir)), BoundProject::default());
+        // Different root: unbound.
+        assert_eq!(
+            compute_bound(&RuntimePaths::at(d.path().join("other")), Some(&mdir)),
+            BoundProject::default()
+        );
+        // No manifests dir: unbound.
+        assert_eq!(compute_bound(&paths, None), BoundProject::default());
     }
 }

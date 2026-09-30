@@ -121,8 +121,11 @@ pub struct Request {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proto: Option<u32>,
 
-    /// Project ULID the request is scoped to. The daemon copies it into
-    /// the caller context; absent means unscoped.
+    /// Project ULID the request is scoped to: an UNVERIFIED claim by the
+    /// client. The daemon only checks it is a ULID and, when the daemon is
+    /// bound to a project, that it equals that project. It is not proof of
+    /// membership; authorization must verify it against the project
+    /// registry (package G). Absent means unscoped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
 }

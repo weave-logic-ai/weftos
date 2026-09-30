@@ -169,6 +169,10 @@ pub fn manifests_dir(home: &Path) -> PathBuf {
     home.join(".weftos").join("projects")
 }
 
+fn canon(p: &Path) -> PathBuf {
+    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+}
+
 fn nonempty(v: &Option<String>) -> Option<&str> {
     v.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
@@ -199,6 +203,9 @@ pub fn resolve_with(i: &ResolveInputs) -> Result<Resolution, ResolveError> {
         }
     }
     let mut manifest_note = String::from("no project.toml above the working directory");
+    // The project directory when the id came from `project.toml`; the
+    // manifest's recorded root must match it before its override applies.
+    let mut found_root: Option<PathBuf> = None;
     if project.is_none()
         && let Some(root) = i.cwd.as_deref().and_then(|c| find_project_toml(c, home))
     {
@@ -206,6 +213,7 @@ pub fn resolve_with(i: &ResolveInputs) -> Result<Resolution, ResolveError> {
             Ok(Some(pt)) => {
                 manifest_note = format!("project {} at {}", pt.id, root.display());
                 project = Some((pt.id, ResolveSource::Manifest));
+                found_root = Some(root);
             }
             Ok(None) => {}
             Err(e) => manifest_note = format!("unreadable project.toml: {e}"),
@@ -217,10 +225,31 @@ pub fn resolve_with(i: &ResolveInputs) -> Result<Resolution, ResolveError> {
         (Some((id, _)), Some(h)) => match read_manifest(&manifests_dir(h), id) {
             Ok(Some(m)) => {
                 let over = m.runtime_dir_override().map(Path::to_path_buf);
-                if over.is_none() {
-                    manifest_note = format!("{manifest_note}; manifest has no [serve] runtime_dir");
+                match (&over, &found_root) {
+                    (None, _) => {
+                        manifest_note =
+                            format!("{manifest_note}; manifest has no [serve] runtime_dir");
+                        None
+                    }
+                    (Some(rt), _) if rt.is_relative() => {
+                        manifest_note = format!(
+                            "{manifest_note}; ignored relative [serve] runtime_dir {}",
+                            rt.display()
+                        );
+                        None
+                    }
+                    (Some(_), Some(root)) if canon(&m.root) != canon(root) => {
+                        manifest_note = format!(
+                            "{manifest_note}; ignored runtime_dir override: manifest root {} \
+                             is not this project's root {} (a copy must not reuse the \
+                             original's kernel)",
+                            m.root.display(),
+                            root.display()
+                        );
+                        None
+                    }
+                    _ => over,
                 }
-                over
             }
             Ok(None) => {
                 manifest_note = format!("{manifest_note}; no manifest in {}", manifests_dir(h).display());

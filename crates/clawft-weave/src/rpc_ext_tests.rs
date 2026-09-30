@@ -23,7 +23,7 @@ fn echo(call: ExtCall) -> ExtFuture {
             "method": call.method,
             "params": call.params,
             "auth": call.ctx.auth,
-            "project": call.ctx.project,
+            "project": call.ctx.project.as_ref().map(ClaimedProject::as_str),
         }))
     })
 }
@@ -50,6 +50,7 @@ async fn prefix_handler_receives_method_params_and_caller() {
     assert_eq!(v["params"], params);
     assert_eq!(v["auth"], "write");
     assert_eq!(v["project"], "p1");
+    assert_eq!(caller.project.as_ref().unwrap().as_str(), "p1");
 }
 
 #[tokio::test]
@@ -254,7 +255,7 @@ async fn wire_old_client_without_proto_or_project_still_works() {
 async fn wire_unsupported_proto_is_refused_with_remedy_and_data() {
     let kernel = test_kernel().await;
     for bad in [0u32, clawft_rpc::PROTO_VERSION + 1] {
-        let line = format!(r#"{{"method":"kernel.handshake","params":null,"proto":{bad},"id":"9"}}"#);
+        let line = format!(r#"{{"method":"kernel.status","params":null,"proto":{bad},"id":"9"}}"#);
         let r = json_roundtrip(&kernel, &line).await;
         assert!(!r.ok);
         assert_eq!(r.error_kind.as_deref(), Some("proto_mismatch"));
@@ -268,12 +269,48 @@ async fn wire_unsupported_proto_is_refused_with_remedy_and_data() {
     }
 }
 
+/// The discovery call still answers a client whose proto the daemon
+/// refuses everywhere else, and reports the accepted range.
+#[tokio::test]
+async fn wire_handshake_answers_unsupported_proto_with_ranges() {
+    let kernel = test_kernel().await;
+    let bad = clawft_rpc::PROTO_VERSION + 5;
+    let line = format!(r#"{{"method":"kernel.handshake","params":null,"proto":{bad}}}"#);
+    let r = json_roundtrip(&kernel, &line).await;
+    assert!(r.ok, "{:?}", r.error);
+    let h: clawft_rpc::Handshake = serde_json::from_value(r.result.unwrap()).unwrap();
+    assert_eq!(h.proto, clawft_rpc::ProtoRange::supported());
+}
+
+/// A bound daemon reports its project and refuses other claimed projects
+/// on the real wire path; its own project passes.
+#[tokio::test]
+async fn wire_bound_daemon_reports_project_and_refuses_others() {
+    use crate::handshake_rpc::{BoundProject, set_bound};
+    use clawft_rpc::handshake::BoundVia;
+    set_bound(BoundProject {
+        project_id: Some(PROJECT_A.into()),
+        via: BoundVia::Manifest,
+    });
+    let kernel = test_kernel().await;
+    let h = json_roundtrip(&kernel, r#"{"method":"kernel.handshake","params":null,"proto":1}"#).await;
+    let h: clawft_rpc::Handshake = serde_json::from_value(h.result.unwrap()).unwrap();
+    assert_eq!(h.project_id.as_deref(), Some(PROJECT_A));
+    assert_eq!(h.bound_via, BoundVia::Manifest);
+    let other = "01J0000000000000000000000B";
+    let line = format!(r#"{{"method":"kernel.status","params":null,"proto":1,"project":"{other}"}}"#);
+    let r = json_roundtrip(&kernel, &line).await;
+    assert_eq!(r.error_kind.as_deref(), Some("project_mismatch"));
+    let line = format!(r#"{{"method":"kernel.status","params":null,"proto":1,"project":"{PROJECT_A}"}}"#);
+    assert!(json_roundtrip(&kernel, &line).await.ok);
+}
+
 #[tokio::test]
 async fn wire_malformed_project_is_refused() {
     let kernel = test_kernel().await;
     let r = json_roundtrip(
         &kernel,
-        r#"{"method":"kernel.handshake","params":null,"proto":1,"project":"../x"}"#,
+        r#"{"method":"kernel.status","params":null,"proto":1,"project":"../x"}"#,
     )
     .await;
     assert_eq!(r.error_kind.as_deref(), Some("invalid_project"));
@@ -321,7 +358,7 @@ async fn wire_rvf_enforces_capabilities_and_gates() {
     scoped.project = Some(PROJECT_A.into());
     let r = rvf_roundtrip(&kernel, scoped).await;
     assert_eq!(r.result.unwrap()["project"], PROJECT_A);
-    let mut bad = req("kernel.handshake", None);
+    let mut bad = req("kernel.status", None);
     bad.proto = Some(clawft_rpc::PROTO_VERSION + 1);
     let r = rvf_roundtrip(&kernel, bad).await;
     assert_eq!(r.error_kind.as_deref(), Some("proto_mismatch"));

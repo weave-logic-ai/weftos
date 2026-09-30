@@ -403,9 +403,14 @@ pub fn find_by_root(
 /// project root. `stop_at` (typically `$HOME`, injected) is exclusive: it
 /// and its ancestors are never examined.
 pub fn find_project_toml(start: &Path, stop_at: Option<&Path>) -> Option<PathBuf> {
+    // Compare canonical forms too, so a symlinked HOME (or cwd) still stops
+    // the walk at HOME.
+    let stop_canon = stop_at.and_then(|s| s.canonicalize().ok());
     let mut cur = Some(start);
     while let Some(dir) = cur {
-        if stop_at.is_some_and(|s| s == dir) {
+        if let Some(s) = stop_at
+            && (s == dir || stop_canon.is_some() && dir.canonicalize().ok() == stop_canon)
+        {
             return None;
         }
         if project_toml_path(dir).is_file() {

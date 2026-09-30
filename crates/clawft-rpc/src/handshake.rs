@@ -3,6 +3,12 @@
 //!
 //! One definition shared by the daemon (which builds [`Handshake`]) and the
 //! client (which checks it), so the wire shape cannot drift.
+//!
+//! Deviation from the Phase 1 plan: a request with no `proto` (a legacy
+//! client) is accepted for ALL methods in Phase 1, not only read-only ones,
+//! so existing clients keep working. Phase 2 may restrict or refuse it.
+//! `kernel.handshake` is exempt from the proto refusal: it is the discovery
+//! call that tells a client which range the daemon accepts.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -18,6 +24,8 @@ pub const PROTO_MIN: u32 = 1;
 pub const PROTO_MISMATCH_KIND: &str = "proto_mismatch";
 /// `error_kind` of a malformed `Request.project`.
 pub const INVALID_PROJECT_KIND: &str = "invalid_project";
+/// `error_kind` of a `Request.project` that is not the daemon's project.
+pub const PROJECT_MISMATCH_KIND: &str = "project_mismatch";
 
 /// Range of client protocols a daemon accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +51,19 @@ impl ProtoRange {
     }
 }
 
+/// How a daemon came to be bound to its project.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BoundVia {
+    /// Runtime root resolved from a project directory (`project.toml` id).
+    Project,
+    /// Runtime root matched exactly one manifest's `[serve] runtime_dir`.
+    Manifest,
+    /// Not bound to a project.
+    #[default]
+    None,
+}
+
 /// Identity a daemon reports from `kernel.handshake`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Handshake {
@@ -56,6 +77,9 @@ pub struct Handshake {
     /// Project ULID the daemon serves, when it is bound to one.
     #[serde(default)]
     pub project_id: Option<String>,
+    /// How `project_id` was determined (decided once at daemon startup).
+    #[serde(default)]
+    pub bound_via: BoundVia,
     /// Nesting depth (0 for a top-level daemon; nested instances: Phase 4).
     #[serde(default)]
     pub depth: u32,
@@ -103,13 +127,13 @@ pub fn check_proto(proto: Option<u32>) -> ProtoCheck {
 pub struct DaemonBuild<'a> {
     pub sha: &'a str,
     pub version: &'a str,
-    pub exe: Option<&'a str>,
 }
 
 /// The refusal for an unsupported `proto` (`error_kind = "proto_mismatch"`).
 ///
 /// `error` is one line ending in the remedy; `data` is
-/// `{client:{proto}, daemon:{proto,min,version,sha,exe}}`.
+/// `{client:{proto}, daemon:{proto,min,version,sha}}`. The binary path is
+/// deliberately absent: this response is sent before authorization.
 pub fn proto_mismatch_response(client: u32, daemon: DaemonBuild<'_>) -> Response {
     let range = ProtoRange::supported();
     let msg = format!(
@@ -127,7 +151,6 @@ pub fn proto_mismatch_response(client: u32, daemon: DaemonBuild<'_>) -> Response
             "min": range.min,
             "version": daemon.version,
             "sha": daemon.sha,
-            "exe": daemon.exe,
         },
     }));
     resp
@@ -174,6 +197,8 @@ pub enum Failure {
     ProtoMismatch { daemon_sha: String, client_too_old: bool },
     /// The daemon serves a different project than expected.
     ProjectMismatch { expected: String, actual: String },
+    /// The daemon is bound to no project but one was expected.
+    ProjectUnbound { expected: String },
     /// The daemon's node id is not the expected one.
     NodeMismatch { expected: String, actual: String },
     /// Client and daemon builds differ (warning-level).
@@ -198,6 +223,11 @@ pub fn remedy_for(failure: &Failure) -> String {
         Failure::ProjectMismatch { expected, actual } => format!(
             "this socket serves project {actual}, not {expected}; \
              unset WEFTOS_RUNTIME_DIR or pass `--project {expected}`"
+        ),
+        Failure::ProjectUnbound { expected } => format!(
+            "the daemon on this socket serves no project, but {expected} was expected; \
+             run `weaver kernel start` inside that project, or drop --runtime / \
+             WEFTOS_RUNTIME_DIR to use the user daemon"
         ),
         Failure::NodeMismatch { expected, actual } => format!(
             "this socket belongs to node {actual}, not {expected}; \
@@ -239,7 +269,6 @@ mod tests {
             DaemonBuild {
                 sha: "abcd1234",
                 version: "0.8.1",
-                exe: Some("/bin/weaver"),
             },
         );
         assert!(!r.ok);
@@ -253,7 +282,7 @@ mod tests {
         assert_eq!(d["daemon"]["proto"], PROTO_VERSION);
         assert_eq!(d["daemon"]["min"], PROTO_MIN);
         assert_eq!(d["daemon"]["sha"], "abcd1234");
-        assert_eq!(d["daemon"]["exe"], "/bin/weaver");
+        assert!(d["daemon"].get("exe").is_none());
     }
 
     #[test]
@@ -263,7 +292,6 @@ mod tests {
             DaemonBuild {
                 sha: "abcd1234",
                 version: "0.8.1",
-                exe: None,
             },
         );
         assert!(r.error.unwrap().contains("update this `weft`"));
@@ -302,6 +330,7 @@ mod tests {
             node_id: "n".into(),
             user_id: None,
             project_id: Some("P".into()),
+            bound_via: BoundVia::Manifest,
             depth: 0,
             parent: None,
             runtime_dir: "/r".into(),
