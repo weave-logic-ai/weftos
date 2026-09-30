@@ -16,7 +16,9 @@ use super::plane_place::PlaceOrder;
 use super::session::{ctl_payload, is_envelope};
 use super::test_support::*;
 use super::transport::{CtlConnector, MeshConnector};
-use crate::chain::{EVENT_KIND_WORKLOAD_REFUSE, EVENT_KIND_WORKLOAD_UNLOAD};
+use crate::chain::{
+    EVENT_KIND_WORKLOAD_PLACE, EVENT_KIND_WORKLOAD_REFUSE, EVENT_KIND_WORKLOAD_UNLOAD,
+};
 use crate::mesh::{MeshError, MeshStream};
 use crate::mesh_ipc::MeshIpcEnvelope;
 use crate::workload_governance::{NetworkPolicy, WorkloadGate, WorkloadPermitRule};
@@ -84,8 +86,15 @@ async fn a_start_failure_after_load_unloads_and_the_next_candidate_places() {
     assert_eq!(r.attempts[0].outcome, "refused");
     assert_eq!(r.attempts[0].code.as_deref(), Some("governance"));
     let why = r.attempts[0].reason.as_deref().unwrap();
-    assert!(why.contains("start failed") && why.contains("unloaded"), "{why}");
-    assert_eq!(instance_count(&bad).await, 0, "no instance left on the refusing node");
+    assert!(
+        why.contains("start failed") && why.contains("unloaded"),
+        "{why}"
+    );
+    assert_eq!(
+        instance_count(&bad).await,
+        0,
+        "no instance left on the refusing node"
+    );
     assert!(
         events(&bad.chain, EVENT_KIND_WORKLOAD_UNLOAD)
             .iter()
@@ -173,6 +182,7 @@ struct Pair {
     second: HostNode,
     plane: super::plane::PlacementControlPlane,
     chain: Arc<crate::chain::ChainManager>,
+    cut: Arc<AtomicBool>,
 }
 
 async fn lossy_pair(partition: bool) -> Pair {
@@ -198,6 +208,7 @@ async fn lossy_pair(partition: bool) -> Pair {
         second,
         plane,
         chain,
+        cut: conn.cut.clone(),
     }
 }
 
@@ -258,8 +269,41 @@ async fn an_unreconcilable_lost_answer_stops_placement_instead_of_duplicating() 
             .any(|(_, e)| e["outcome"] == "indeterminate"
                 && e["next"] == "stopped: the target may hold the instance")
     );
-    let left: Vec<_> = p.first.svc.instances.lock().await.drain().collect();
-    for (_, placed) in left {
-        let _ = p.first.svc.routes[&placed.route].unload(placed.handle).await;
-    }
+    // Still partitioned: the decision stays unsettled, nothing adopted.
+    assert_eq!(p.plane.unsettled().len(), 1);
+    assert_eq!(p.plane.settle_unsettled().await, 0);
+    assert!(p.plane.placements().is_empty());
+
+    // The partition heals: the instance the lost answer left is adopted
+    // and managed from the controller like any other placement.
+    p.cut.store(false, Ordering::SeqCst);
+    let iid = p
+        .first
+        .svc
+        .instances
+        .lock()
+        .await
+        .keys()
+        .next()
+        .cloned()
+        .unwrap();
+    let st = p.plane.instance(method::STATUS, &iid).await.unwrap();
+    assert_eq!(st["status"]["state"], "running");
+    assert!(p.plane.unsettled().is_empty());
+    let rec = &p.plane.placements()[0];
+    assert_eq!(
+        (rec.node_id.as_str(), rec.decision_id.as_str()),
+        (p.first.id.as_str(), r.decision_id.as_str())
+    );
+    assert!(
+        events(&p.chain, EVENT_KIND_WORKLOAD_PLACE)
+            .iter()
+            .any(|(_, e)| e["phase"] == "adopted" && e["instance_id"] == iid.as_str())
+    );
+    p.plane.instance(method::UNLOAD, &iid).await.unwrap();
+    assert_eq!(
+        instance_count(&p.first).await,
+        0,
+        "unloaded through the controller"
+    );
 }

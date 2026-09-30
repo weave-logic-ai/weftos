@@ -160,6 +160,9 @@ pub struct PlacementControlPlane {
     pub(super) services: Mutex<ClusterServiceRegistry>,
     pub(super) membership: Option<Arc<ClusterMembership>>,
     pub(super) placements: Mutex<BTreeMap<String, PlacementRecord>>,
+    /// Decisions whose `place` answer was lost and could not be reconciled,
+    /// by decision id (instance id empty until adopted).
+    pub(super) unsettled: Mutex<BTreeMap<String, PlacementRecord>>,
     /// Seed adapters by operator-assigned node id (card 09's `remote.api`),
     /// with the trust tier the operator assigned.
     pub(super) seeds: RwLock<BTreeMap<String, (Arc<WorkloadHost>, FactsTier)>>,
@@ -195,6 +198,7 @@ impl PlacementControlPlane {
             services: Mutex::new(ClusterServiceRegistry::new()),
             membership: None,
             placements: Mutex::new(BTreeMap::new()),
+            unsettled: Mutex::new(BTreeMap::new()),
             seeds: RwLock::new(BTreeMap::new()),
             seed_handles: tokio::sync::Mutex::new(BTreeMap::new()),
             cfg: PlaneConfig::default(),
@@ -349,6 +353,8 @@ impl PlacementControlPlane {
             Ok(_) | Err(crate::node_facts::CacheError::Stale { .. }) => {}
             Err(e) => return Err(PlaneError::Invalid(format!("{node_id} facts refused: {e}"))),
         }
+        // Unchanged facts keep the held tier; the tier given here wins.
+        self.facts.set_trust_tier(&node_id, tier);
         if let Ok(adv) =
             serde_json::from_value::<ServiceAdvertisement>(result["advertisement"].clone())
             && adv.node_id == node_id

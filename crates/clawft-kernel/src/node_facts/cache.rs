@@ -180,6 +180,18 @@ impl NodeFactsCache {
         Ok(())
     }
 
+    /// Re-assign the receiver-side trust tier of a held node (an operator
+    /// changed it; the signed facts are unchanged). False if not held.
+    pub fn set_trust_tier(&self, node_id: &str, trust_tier: TrustTier) -> bool {
+        match self.entries.get_mut(node_id) {
+            Some(mut e) => {
+                e.trust_tier = trust_tier;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Fresh facts for one node.
     pub fn get(&self, node_id: &str, now: u64) -> Option<CachedNodeFacts> {
         self.entries

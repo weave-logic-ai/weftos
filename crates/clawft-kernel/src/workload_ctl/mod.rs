@@ -22,13 +22,15 @@
 
 pub mod cog_kind;
 pub mod facts;
-pub mod host_service;
 mod host_instances;
+pub mod host_service;
 pub mod msg;
 pub mod plane;
+pub mod plane_peers;
 pub mod plane_place;
 mod plane_reconcile;
 pub mod plane_seed;
+pub mod refusal_budget;
 pub mod session;
 pub mod transport;
 
@@ -36,6 +38,10 @@ pub mod transport;
 mod test_support;
 #[cfg(test)]
 mod tests_facts;
+#[cfg(test)]
+mod tests_flood;
+#[cfg(test)]
+mod tests_peers;
 #[cfg(test)]
 mod tests_reconcile;
 #[cfg(test)]
@@ -55,4 +61,8 @@ pub use plane::{
 };
 pub use plane_place::{Attempt, PlaceOrder, PlaceReport, render};
 pub use plane_seed::{SEED_ROUTE, StorePinOrder};
-pub use transport::{CtlConnector, MEM_SCHEME, MeshConnector, listen_tcp, serve_listener};
+pub use refusal_budget::RefusalBudget;
+pub use transport::{
+    CtlConnector, MAX_SESSIONS, MEM_SCHEME, MeshConnector, listen_tcp, serve_listener,
+    serve_listener_with,
+};

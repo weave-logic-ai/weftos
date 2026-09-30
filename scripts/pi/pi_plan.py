@@ -289,14 +289,13 @@ def stage_ok(rc, totals, require_ran=False):
 PLACEMENT_PORT = 9471
 PLACEMENT_FEED_PORT = 15006
 PUBKEY_RE = re.compile(r"^[0-9a-f]{64}$")
-PEER_RE = re.compile(r"^PEER ([A-Za-z0-9._:-]+) \(paired\)$", re.M)
 STATUS_MARK = "==STATUS=="
 # Evidence must not carry addresses or local paths (public repo).
 LEAK_RE = re.compile(r"(?:\b(?!0\.0\.0\.0\b)(?!127\.0\.0\.1\b)\d{1,3}(?:\.\d{1,3}){3}\b|/Users/|/home/)")
 
 
 def placement_cargo_args():
-    """workload_node, the Mac-side controller (host target)."""
+    """workload_node, the Mac-side policy-file tool (`daemon-files`, host target)."""
     return ["cargo", "build", "--locked", "-p", "clawft-kernel", "--no-default-features",
             "--features", "workload-runtime,mesh", "--example", "workload_node"]
 
@@ -399,21 +398,3 @@ def split_node_output(text):
     except ValueError:
         events = None
     return log, events if isinstance(events, list) else None
-
-
-def judge_placement(ctl_rc, ctl_out, node_id, events):
-    """The two-node acceptance, from both sides' evidence: the controller
-    placed on the Pi (not the Mac) with the cog reporting and a pinned Mac
-    refusal, and the Pi's own chain shows the fetch, the placement and the
-    adapter start. Returns (ok, [reasons])."""
-    why = []
-    if ctl_rc != 0 or "RESULT ok" not in (ctl_out or ""):
-        why.append("controller did not report RESULT ok (rc %s)" % ctl_rc)
-    if not node_id or ("PLACED on %s via aarch64-native (tier native" % node_id) not in (ctl_out or ""):
-        why.append("decision did not place on the Pi natively")
-    kinds = [(e.get("source"), e.get("kind")) for e in (events or [])]
-    for need in (("mesh_artifact", "artifact.fetch"), ("workload.host", "workload.place"),
-                 ("workload.runtime", "workload.start"), ("workload.runtime", "workload.stop")):
-        if not any(k == need[1] and (need[0] == "mesh_artifact" or s == need[0]) for s, k in kinds):
-            why.append("Pi chain lacks %s/%s" % need)
-    return not why, why

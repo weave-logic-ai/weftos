@@ -172,7 +172,7 @@ pub async fn serve_connection(
             Err(e) => return Err(MeshError::Transport(e)),
         };
         peers.links_mut()[0].peer_id = reply_to.clone();
-        let resp = svc.handle(&method, &signed, Some(&mut peers)).await;
+        let (resp, authenticated) = svc.handle_checked(&method, &signed, Some(&mut peers)).await;
         let mut msg = KernelMessage::new(
             0,
             MessageTarget::ServiceMethod {
@@ -191,6 +191,11 @@ pub async fn serve_connection(
             return Ok(()); // a failed fetch closed the stream
         }
         link.stream.send(&bytes).await?;
+        if !authenticated {
+            // One signed refusal per unauthenticated connection, then drop it.
+            let _ = link.stream.close().await;
+            return Ok(());
+        }
     }
 }
 

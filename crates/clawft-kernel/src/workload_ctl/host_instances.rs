@@ -3,12 +3,37 @@
 //! instance with its decision id, plus the decisions still in flight, so a
 //! controller that lost a `place` response can reconcile.
 
+use std::collections::HashSet;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde_json::{Value, json};
 
 use super::host_service::{InstanceBody, WorkloadHostService, refuse, runtime_refusal};
 use super::msg::{CtlRequest, Refusal, RefusalCode, method};
+
+/// Marks a decision in flight for the life of one `place` / `load`.
+pub(super) struct InFlight<'a> {
+    set: &'a Mutex<HashSet<String>>,
+    id: Option<String>,
+}
+
+impl<'a> InFlight<'a> {
+    pub(super) fn enter(set: &'a Mutex<HashSet<String>>, id: Option<String>) -> Self {
+        if let (Some(d), Ok(mut s)) = (&id, set.lock()) {
+            s.insert(d.clone());
+        }
+        Self { set, id }
+    }
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        if let (Some(d), Ok(mut s)) = (&self.id, self.set.lock()) {
+            s.remove(d);
+        }
+    }
+}
 
 /// Largest captured output a `logs` answer carries.
 const MAX_LOG_BYTES: usize = 64 * 1024;

@@ -400,12 +400,31 @@ async fn mutations_without_a_chained_decision_id_are_refused() {
     let conn = MeshConnector::new(false);
     let addr = conn.register_local("h", host.svc.clone());
     for decision in [None, Some("not-a-chain-hash".to_string())] {
-        let req = CtlRequest::new(&key, method::STOP, &host.id, now(), 60_000, decision, json!({"instance_id": "x"}));
+        let req = CtlRequest::new(
+            &key,
+            method::STOP,
+            &host.id,
+            now(),
+            60_000,
+            decision,
+            json!({"instance_id": "x"}),
+        );
         let signed = req.sign(&key).unwrap();
         let mut c = CtlConnection::new(conn.connect(&addr).await.unwrap(), "ctl");
-        let resp = c.call(&host.id, method::STOP, &signed, None, Duration::from_secs(10)).await.unwrap();
+        let resp = c
+            .call(
+                &host.id,
+                method::STOP,
+                &signed,
+                None,
+                Duration::from_secs(10),
+            )
+            .await
+            .unwrap();
         match verify_response(&resp, &req, None).unwrap().0.outcome {
-            CtlOutcome::Refused { refusal } => assert_eq!(refusal.code, RefusalCode::InvalidRequest),
+            CtlOutcome::Refused { refusal } => {
+                assert_eq!(refusal.code, RefusalCode::InvalidRequest)
+            }
             other => panic!("served without a decision: {other:?}"),
         }
     }

@@ -149,3 +149,24 @@ fn deltas_update_state_in_order_and_only_from_the_node_key() {
         Err(CacheError::UnknownNode(_))
     ));
 }
+
+#[test]
+fn an_operator_tier_change_applies_even_when_the_facts_are_unchanged() {
+    let (c, k) = (NodeFactsCache::new(), key());
+    let s = signed(&k, 1, 1_000);
+    c.insert(s.clone(), TrustTier::Paired, 1_000).unwrap();
+    let id = node_id_from_pubkey(&k.verifying_key().to_bytes());
+    // Re-inserting the same facts is `Unchanged` and keeps the held tier ...
+    assert_eq!(
+        c.insert(s, TrustTier::Discovered, 1_001),
+        Ok(InsertOutcome::Unchanged)
+    );
+    assert_eq!(c.get(&id, 1_001).unwrap().trust_tier(), TrustTier::Paired);
+    // ... so a demotion must be applied explicitly.
+    assert!(c.set_trust_tier(&id, TrustTier::Discovered));
+    assert_eq!(
+        c.get(&id, 1_001).unwrap().trust_tier(),
+        TrustTier::Discovered
+    );
+    assert!(!c.set_trust_tier("n-unknown", TrustTier::Pinned));
+}

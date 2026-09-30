@@ -119,11 +119,9 @@ pub fn required_capability(method: &str) -> Capability {
         | "workload.stop"
         | "workload.unload"
         | "workload.migrate"
-        // mesh-placement-12: `explain` verifies and seeds a caller-named
-        // package, contacts caller-named peers and chains a (dry-run)
-        // decision; `logs` returns a cog's captured output. Neither is
-        // anonymous.
+        // mesh-placement-12: these sign/contact peers or expose cog output.
         | "workload.explain"
+        | "workload.status"
         | "workload.logs" => Capability::Write,
 
         // ── Chat: LLM-conversational verbs ──────────────────────────
@@ -174,8 +172,7 @@ pub fn required_capability(method: &str) -> Capability {
         | "app.list"
         | "app.inspect"
         | "workload.list"
-        | "workload.inspect"
-        | "workload.status" => Capability::Read,
+        | "workload.inspect" => Capability::Read,
 
         // ADR-099 default-deny posture: an unclassified `workload.*` verb
         // is treated as a mutation, never as anonymous-callable Read.
@@ -302,19 +299,13 @@ mod tests {
         assert!(caps.allows_method("agent.chat"));
         // WEFT-253: progressive chat shares Chat capability.
         assert!(caps.allows_method("agent.chat_stream"));
-        assert_eq!(
-            required_capability("agent.chat_stream"),
-            Capability::Chat
-        );
+        assert_eq!(required_capability("agent.chat_stream"), Capability::Chat);
         // WEFT-256: model enumeration is Read (anonymous-safe).
         assert!(caps.allows_method("llm.models"));
         assert_eq!(required_capability("llm.models"), Capability::Read);
         // WEFT-125: vector backend introspection is Read (anonymous-safe).
         assert!(caps.allows_method("ecc.vector-config"));
-        assert_eq!(
-            required_capability("ecc.vector-config"),
-            Capability::Read
-        );
+        assert_eq!(required_capability("ecc.vector-config"), Capability::Read);
         // WEFT-331: interactive defer decision (panel allow/deny/cancel).
         assert!(caps.allows_method("agent.chat.defer_decide"));
         assert_eq!(
@@ -455,7 +446,6 @@ mod tests {
             "app.inspect",
             "workload.list",
             "workload.inspect",
-            "workload.status",
         ] {
             assert_eq!(required_capability(m), Capability::Read, "{m}");
             assert!(anon.allows_method(m), "{m}");
@@ -468,6 +458,7 @@ mod tests {
             "workload.install",
             "workload.place",
             "workload.explain",
+            "workload.status",
             "workload.logs",
             "workload.load",
             "workload.start",

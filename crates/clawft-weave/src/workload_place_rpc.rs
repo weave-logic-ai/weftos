@@ -15,7 +15,8 @@
 //! - `workload-peers.json`: `[{"addr": "host:port", "tier": "paired"}]`,
 //!   the `workload-host`s this daemon may place on, with the trust tier the
 //!   operator assigns (a request can name more `peers`; they are only ever
-//!   `discovered`);
+//!   `discovered`). Read on every call: a peer removed or lowered here is
+//!   demoted to `discovered` at once;
 //! - `workload-host.json`: serve this node's `workload-host` to other
 //!   controllers (see `workload_host_serve`).
 //!
@@ -126,11 +127,40 @@ fn paired() -> TrustTier {
     TrustTier::Paired
 }
 
-fn load_peers(dir: &Path) -> Result<Vec<PeerEntry>, String> {
-    match read_policy(&dir.join(PEERS_FILE))? {
-        None => Ok(Vec::new()),
-        Some(t) => serde_json::from_str(&t).map_err(|e| format!("{PEERS_FILE}: {e}")),
+const MAX_PEERS: usize = 256;
+
+/// Operator peers from the runtime dir (none if the file is absent).
+pub fn load_peers(dir: &Path) -> Result<Vec<(String, TrustTier)>, String> {
+    let peers: Vec<PeerEntry> = match read_policy(&dir.join(PEERS_FILE))? {
+        None => return Ok(Vec::new()),
+        Some(t) => serde_json::from_str(&t).map_err(|e| format!("{PEERS_FILE}: {e}"))?,
+    };
+    if peers.len() > MAX_PEERS {
+        return Err(format!("{PEERS_FILE}: more than {MAX_PEERS} peers"));
     }
+    peers
+        .into_iter()
+        .map(|p| {
+            let ok = !p.addr.is_empty()
+                && p.addr.len() <= 260
+                && p.addr.contains(':')
+                && !p.addr.starts_with(clawft_kernel::workload_ctl::MEM_SCHEME)
+                && p.addr.chars().all(|c| c.is_ascii_alphanumeric() || ".-:[]_".contains(c));
+            ok.then_some((p.addr.clone(), p.tier))
+                .ok_or_else(|| format!("{PEERS_FILE}: {:?} is not host:port", p.addr))
+        })
+        .collect()
+}
+
+/// Make `plane`'s remote targets match `workload-peers.json` (read on
+/// every call, so removing a peer or lowering its tier takes effect
+/// without a restart; see `apply_operator_peers`).
+pub async fn sync_peers(plane: &PlacementControlPlane, dir: &Path) -> Result<(), String> {
+    let peers = load_peers(dir)?;
+    for (addr, e) in plane.apply_operator_peers(&peers, &[LOCAL_ADDR]).await {
+        tracing::warn!(peer = %addr, error = %e, "workload peer not reachable");
+    }
+    Ok(())
 }
 
 fn gate(dir: &Path, chain: &Arc<ChainManager>) -> Result<Arc<WorkloadGate>, String> {
@@ -286,6 +316,7 @@ pub async fn route(plane: &PlacementControlPlane, m: &str, params: Value) -> Res
                 serde_json::to_value(r).map_err(|e| e.to_string())
             }
             "workload.status" if params.get("instance_id").is_none() => {
+                plane.settle_unsettled().await;
                 let mut rows = Vec::new();
                 for rec in plane.placements() {
                     let st = plane.instance(method::STATUS, &rec.instance_id).await;
@@ -293,6 +324,7 @@ pub async fn route(plane: &PlacementControlPlane, m: &str, params: Value) -> Res
                 }
                 let host = HOST.get().map(|h| h.advertisement());
                 Ok(json!({ "controller": plane.node_id(), "targets": plane.targets(), "instances": rows,
+                           "unsettled": plane.unsettled(),
                            "workload_host": host, "served_on": SERVED.get().map(|a| a.to_string()) }))
             }
             "workload.status" | "workload.stop" | "workload.logs" | "workload.unload" => {
@@ -323,18 +355,12 @@ pub async fn dispatch(
         // Facts were not probed yet when the plane was built.
         let _ = plane.add_target(LOCAL_ADDR, TrustTier::Pinned).await;
     }
-    if let Some(dir) = BOOT.get().map(|b| b.runtime_dir.clone()) {
-        match load_peers(&dir) {
-            Ok(peers) => {
-                let known: Vec<String> = plane.targets().into_iter().map(|t| t.addr).collect();
-                for p in peers.into_iter().filter(|p| !known.contains(&p.addr)) {
-                    if let Err(e) = plane.add_target(&p.addr, p.tier).await {
-                        tracing::warn!(peer = %p.addr, error = %e, "workload peer not reachable");
-                    }
-                }
-            }
-            Err(e) => return Response::error(e),
-        }
+    if let Some(dir) = BOOT.get().map(|b| b.runtime_dir.clone())
+        && let Err(e) = sync_peers(&plane, &dir).await
+    {
+        // Fail closed: a broken peers file places nowhere remote.
+        let _ = plane.apply_operator_peers(&[], &[LOCAL_ADDR]).await;
+        return Response::error(e);
     }
     route(&plane, m, params).await
 }
@@ -365,3 +391,7 @@ pub async fn start_serving(
 #[cfg(test)]
 #[path = "workload_place_rpc_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "workload_place_rpc_daemon_tests.rs"]
+mod daemon_tests;

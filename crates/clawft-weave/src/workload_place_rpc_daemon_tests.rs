@@ -1,0 +1,254 @@
+//! The daemon-as-controller path end to end (review round 2): a booted
+//! kernel (chain in a temp dir), `init`, the operator's policy files in a
+//! temp runtime dir, and a second node's `workload-host` served over Noise
+//! TCP. Everything goes through `dispatch`, as `weaver workload
+//! place|explain|status` does: `build`, `workload-peers.json` tiers read on
+//! every call, placement on the remote node, and revocation by editing the
+//! peers file without a restart.
+//!
+//! This is the only test that initialises the module's process-wide state.
+
+use std::path::Path;
+use std::sync::Arc;
+
+use clawft_kernel::Kernel;
+use clawft_kernel::chain::ChainManager;
+use clawft_kernel::node_facts_advert::sign_node_facts;
+use clawft_kernel::workload_ctl::{WorkloadHostService, listen_tcp, serve_listener};
+use clawft_kernel::workload_governance::{NetworkPolicy, NodeTrustTier, WorkloadPermitRule};
+use clawft_kernel::workload_pkg::codec::hex_encode;
+use clawft_kernel::workload_pkg::key_id_for;
+use clawft_kernel::workload_runtime::native::host_arch;
+use clawft_kernel::workload_runtime::{NativeConfig, NativeRuntime, WorkloadHost};
+use clawft_platform::NativePlatform;
+use clawft_types::config::{ChainConfig, Config, KernelConfig};
+use clawft_types::placement::{AttrValue, Capability, NodeFacts};
+use ed25519_dalek::SigningKey;
+use serde_json::{Value, json};
+use tokio::sync::RwLock;
+
+use super::tests::{anchors, cap, exchange, gate, package};
+use super::*;
+
+fn native_caps(os: &str, class: &str) -> Vec<Capability> {
+    let arch = host_arch().unwrap();
+    vec![
+        cap(&format!("cpu.arch.{arch}")),
+        cap(&format!("os.{os}")),
+        cap(&format!("node.class.{class}")),
+        cap("runtime.native").with_attr(
+            "arches_native",
+            AttrValue::List(vec![AttrValue::from(arch)]),
+        ),
+        cap("mem.system").with_attr("free", 1i64 << 32),
+    ]
+}
+
+fn signed_facts(
+    key: &SigningKey,
+    caps: Vec<Capability>,
+) -> clawft_kernel::node_facts_advert::SignedNodeFacts {
+    let id = clawft_kernel::node_id_from_pubkey(&key.verifying_key().to_bytes());
+    let mut f = NodeFacts::new(id, chrono::Utc::now().timestamp() as u64, 600, 1);
+    f.capabilities = caps;
+    sign_node_facts(&f, key).unwrap()
+}
+
+/// A Linux board serving `workload-host` over Noise TCP to `controller`,
+/// trusting packages from `signer`. Returns (node id, address, its chain).
+async fn board(
+    root: &Path,
+    controller: &SigningKey,
+    signer: &SigningKey,
+) -> (String, String, Arc<ChainManager>) {
+    let key = SigningKey::from_bytes(&[7; 32]);
+    let id = clawft_kernel::node_id_from_pubkey(&key.verifying_key().to_bytes());
+    let chain = Arc::new(ChainManager::new(0, 1000));
+    let g = gate(&chain);
+    let rt = NativeRuntime::new(NativeConfig {
+        root: root.join("board-inst"),
+        run_as: None,
+        allow_interpreted: true,
+    });
+    let host = WorkloadHost::new(Arc::new(rt), g.clone(), id.clone(), NodeTrustTier::Paired)
+        .with_chain(chain.clone());
+    let svc = WorkloadHostService::new(key.clone(), exchange(&chain), anchors(signer), g)
+        .with_route("native", Arc::new(host))
+        .with_controllers(vec![controller.verifying_key().to_bytes()])
+        .with_chain(chain.clone());
+    svc.set_facts(signed_facts(&key, native_caps("linux", "pi5")));
+    let listener = listen_tcp("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    tokio::spawn(serve_listener(listener, Arc::new(svc), true));
+    (id, addr, chain)
+}
+
+fn write(dir: &Path, name: &str, v: &Value) {
+    std::fs::write(dir.join(name), serde_json::to_vec(v).unwrap()).unwrap();
+}
+
+async fn call(
+    kernel: &Arc<RwLock<Kernel<NativePlatform>>>,
+    m: &str,
+    p: Value,
+) -> Result<Value, String> {
+    let r = dispatch(m, p, kernel.clone()).await;
+    if r.ok {
+        Ok(r.result.unwrap_or(Value::Null))
+    } else {
+        Err(r.error.unwrap_or_default())
+    }
+}
+
+fn tier_of(status: &Value, node: &str) -> String {
+    status["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["node_id"] == node)
+        .map(|t| t["tier"].as_str().unwrap().to_string())
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let runtime = tmp.path().join("runtime");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let kcfg = KernelConfig {
+        chain: Some(ChainConfig::isolated_in(&tmp.path().join("chain"))),
+        ..KernelConfig::default()
+    };
+    let kernel = Kernel::boot(Config::default(), kcfg, Arc::new(NativePlatform::new()))
+        .await
+        .expect("kernel boots");
+    let node_key = SigningKey::from_bytes(&[5; 32]);
+    let signer = SigningKey::from_bytes(&[6; 32]);
+    let me = clawft_kernel::node_id_from_pubkey(&node_key.verifying_key().to_bytes());
+    // This node is the dev Mac: its own re-probed signed facts.
+    kernel
+        .cluster_membership()
+        .facts()
+        .insert(
+            signed_facts(&node_key, native_caps("macos", "dev-mac")),
+            TrustTier::Pinned,
+            chrono::Utc::now().timestamp() as u64,
+        )
+        .unwrap();
+    let kernel = Arc::new(RwLock::new(kernel));
+
+    // Operator policy, as an operator writes it into the runtime dir.
+    let mut permit = WorkloadPermitRule::new("operator-cog", ["workload.*"], ["cog"]);
+    permit.max_network = NetworkPolicy::Egress;
+    write(&runtime, PERMITS_FILE, &json!([permit]));
+    let spk = signer.verifying_key().to_bytes();
+    write(
+        &runtime,
+        TRUST_FILE,
+        &json!({ "schema": "weftos.workload-trust.v1",
+        "operator_keys": [{ "key_id": key_id_for(&spk), "public_key": hex_encode(&spk) }] }),
+    );
+    let (pi, pi_addr, pi_chain) = board(tmp.path(), &node_key, &signer).await;
+    let paired = json!([{ "addr": pi_addr, "tier": "paired" }]);
+    write(&runtime, PEERS_FILE, &paired);
+    init(node_key.clone(), runtime.clone());
+
+    let pkg = package(&tmp.path().join("pkgsrc"), &signer);
+    let params = json!({ "package_dir": pkg, "mode": "listener", "csi_port": 15027 });
+
+    // explain: the ARM board over this Mac, and why.
+    let v = call(&kernel, "workload.explain", params.clone())
+        .await
+        .unwrap();
+    let explain = v["explain"].as_str().unwrap();
+    assert!(explain.contains(&format!("PLACED on {pi}")), "{explain}");
+    assert!(explain.contains(&me), "the Mac was considered: {explain}");
+    let st = call(&kernel, "workload.status", json!({})).await.unwrap();
+    assert_eq!(tier_of(&st, &pi), "paired");
+    assert_eq!(tier_of(&st, &me), "pinned");
+
+    // The operator drops the peer: revoked on the next call, no restart.
+    write(&runtime, PEERS_FILE, &json!([]));
+    let v = call(&kernel, "workload.explain", params.clone())
+        .await
+        .unwrap();
+    assert!(
+        !v["explain"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("PLACED on {pi}"))
+    );
+    let st = call(&kernel, "workload.status", json!({})).await.unwrap();
+    assert_eq!(tier_of(&st, &pi), "discovered");
+
+    // A request naming it cannot raise it back.
+    let mut named = params.clone();
+    named["peers"] = json!([pi_addr]);
+    let v = call(&kernel, "workload.explain", named).await.unwrap();
+    assert!(
+        !v["explain"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("PLACED on {pi}"))
+    );
+
+    // A broken peers file fails closed.
+    std::fs::write(runtime.join(PEERS_FILE), "{broken").unwrap();
+    assert!(
+        call(&kernel, "workload.explain", params.clone())
+            .await
+            .unwrap_err()
+            .contains(PEERS_FILE)
+    );
+
+    // Listed as paired again: place runs the cog on the board.
+    write(&runtime, PEERS_FILE, &paired);
+    let v = call(&kernel, "workload.place", params).await.unwrap();
+    assert_eq!(v["placed"]["node_id"], pi.as_str(), "{}", v["explain"]);
+    let iid = v["placed"]["instance_id"].as_str().unwrap().to_string();
+    let st = call(&kernel, "workload.status", json!({ "instance_id": iid }))
+        .await
+        .unwrap();
+    assert_eq!(st["status"]["state"], "running");
+    assert!(
+        pi_chain
+            .tail(pi_chain.len())
+            .iter()
+            .any(|e| e.kind == "workload.place"),
+        "placed on the board's own chain"
+    );
+    call(&kernel, "workload.stop", json!({ "instance_id": iid }))
+        .await
+        .unwrap();
+    call(&kernel, "workload.unload", json!({ "instance_id": iid }))
+        .await
+        .unwrap();
+}
+
+#[test]
+fn peer_entries_are_validated_at_the_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(load_peers(dir.path()).unwrap().is_empty());
+    for bad in [
+        json!([{ "addr": "mem://local", "tier": "paired" }]),
+        json!([{ "addr": "no-port", "tier": "paired" }]),
+        json!([{ "addr": "a b:1", "tier": "paired" }]),
+        json!([{ "addr": "h:1", "tier": "paired", "extra": 1 }]),
+        json!([{ "addr": "h:1", "tier": "root" }]),
+    ] {
+        write(dir.path(), PEERS_FILE, &bad);
+        assert!(load_peers(dir.path()).is_err(), "{bad}");
+    }
+    write(
+        dir.path(),
+        PEERS_FILE,
+        &json!([{ "addr": "h:1" }, { "addr": "[::1]:2", "tier": "discovered" }]),
+    );
+    assert_eq!(
+        load_peers(dir.path()).unwrap(),
+        vec![
+            ("h:1".to_string(), TrustTier::Paired),
+            ("[::1]:2".to_string(), TrustTier::Discovered)
+        ]
+    );
+}

@@ -158,7 +158,7 @@ impl PlacementControlPlane {
         }
     }
 
-    fn chain_event(&self, kind: &str, payload: Value) -> String {
+    pub(super) fn chain_event(&self, kind: &str, payload: Value) -> String {
         hex_encode(
             &self
                 .chain
@@ -313,19 +313,21 @@ impl PlacementControlPlane {
                     serve: true,
                 })
                 .await;
+            let template = PlacementRecord {
+                instance_id: String::new(),
+                node_id: node.clone(),
+                kind: w.kind.clone(),
+                workload: w.id.clone(),
+                variant: variant.clone(),
+                decision_id: report.decision_id.clone(),
+                manifest_hash: manifest.to_string(),
+            };
             match r {
                 Ok((result, _)) => {
+                    let iid = result["instance_id"].as_str().unwrap_or_default();
                     let rec = PlacementRecord {
-                        instance_id: result["instance_id"]
-                            .as_str()
-                            .unwrap_or_default()
-                            .to_string(),
-                        node_id: node.clone(),
-                        kind: w.kind.clone(),
-                        workload: w.id.clone(),
-                        variant: variant.clone(),
-                        decision_id: report.decision_id.clone(),
-                        manifest_hash: manifest.to_string(),
+                        instance_id: iid.to_string(),
+                        ..template
                     };
                     self.chain_event(
                         chain::EVENT_KIND_WORKLOAD_PLACE,
@@ -352,10 +354,14 @@ impl PlacementControlPlane {
                                 "reconcile": note, "next": if settled { "trying the next candidate" }
                                 else { "stopped: the target may hold the instance" } }),
                     );
-                    report
-                        .attempts
-                        .push(attempt("indeterminate", None, Some(format!("{why}; {note}"))));
+                    report.attempts.push(attempt(
+                        "indeterminate",
+                        None,
+                        Some(format!("{why}; {note}")),
+                    ));
                     if !settled {
+                        // Adopted later if the target turns out to hold it.
+                        self.remember_unsettled(template);
                         return;
                     }
                 }
@@ -384,11 +390,21 @@ impl PlacementControlPlane {
 
     /// Gate an instance transition on the controller (chained) and send it.
     pub async fn instance(&self, m: &str, instance_id: &str) -> Result<Value, PlaneError> {
-        let rec = self
-            .placements()
-            .into_iter()
-            .find(|r| r.instance_id == instance_id)
-            .ok_or_else(|| PlaneError::Unknown(format!("no placed instance {instance_id}")))?;
+        let find = || {
+            self.placements()
+                .into_iter()
+                .find(|r| r.instance_id == instance_id)
+        };
+        let rec = match find() {
+            Some(r) => r,
+            None => {
+                // It may come from a lost `place` answer: adopt, then retry.
+                self.settle_unsettled().await;
+                find().ok_or_else(|| {
+                    PlaneError::Unknown(format!("no placed instance {instance_id}"))
+                })?
+            }
+        };
         if let Some(r) = self.seed_instance(&rec, m).await {
             if m == method::UNLOAD
                 && r.is_ok()

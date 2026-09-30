@@ -42,10 +42,12 @@ use crate::workload_runtime::{
 };
 
 use super::cog_kind::route_of;
+use super::host_instances::InFlight;
 use super::msg::{
     CTL_VERSION, ControllerPolicy, CtlOutcome, CtlRequest, CtlResponse, NonceGuard, Refusal,
     RefusalCode, SignedCtl, WORKLOAD_HOST_SERVICE, method, verify_request,
 };
+use super::refusal_budget::RefusalBudget;
 
 /// Chain source for target-side placement records.
 pub const HOST_CHAIN_SOURCE: &str = "workload.host";
@@ -128,29 +130,8 @@ pub struct WorkloadHostService {
     /// controller that lost a response reconciles against this and the
     /// instance list (see `plane_reconcile`).
     pub(super) in_flight: Mutex<HashSet<String>>,
-}
-
-/// Marks a decision in flight for the life of one `place` / `load`.
-struct InFlight<'a> {
-    set: &'a Mutex<HashSet<String>>,
-    id: Option<String>,
-}
-
-impl<'a> InFlight<'a> {
-    fn enter(set: &'a Mutex<HashSet<String>>, id: Option<String>) -> Self {
-        if let (Some(d), Ok(mut s)) = (&id, set.lock()) {
-            s.insert(d.clone());
-        }
-        Self { set, id }
-    }
-}
-
-impl Drop for InFlight<'_> {
-    fn drop(&mut self) {
-        if let (Some(d), Ok(mut s)) = (&self.id, self.set.lock()) {
-            s.remove(d);
-        }
-    }
+    /// Bounds chain writes for requests that failed verification.
+    verify_budget: RefusalBudget,
 }
 
 fn now_ms() -> u64 {
@@ -196,7 +177,14 @@ impl WorkloadHostService {
             address: None,
             instances: tokio::sync::Mutex::new(HashMap::new()),
             in_flight: Mutex::new(HashSet::new()),
+            verify_budget: RefusalBudget::default(),
         }
+    }
+
+    /// Replace the bound on chained refusals of unverified requests.
+    pub fn with_refusal_budget(mut self, b: RefusalBudget) -> Self {
+        self.verify_budget = b;
+        self
     }
 
     /// Adapter (under governance) for one route kind (`native`, ...).
@@ -276,6 +264,14 @@ impl WorkloadHostService {
     }
 
     fn refused(&self, req: Option<&CtlRequest>, phase: &str, r: &Refusal) {
+        // Unauthenticated refusals are chained within a budget only.
+        let suppressed = match req {
+            Some(_) => 0,
+            None => match self.verify_budget.take() {
+                Some(n) => n,
+                None => return,
+            },
+        };
         self.record(
             chain::EVENT_KIND_WORKLOAD_REFUSE,
             json!({
@@ -283,6 +279,7 @@ impl WorkloadHostService {
                 "reason": r.reason, "method": req.map(|q| q.method.as_str()),
                 "requester": req.map(|q| q.requester.as_str()),
                 "decision_id": req.and_then(|q| q.decision_id.as_deref()),
+                "suppressed": suppressed,
             }),
         );
     }
@@ -295,6 +292,17 @@ impl WorkloadHostService {
         signed: &SignedCtl,
         fetch: Option<&mut PeerSet>,
     ) -> SignedCtl {
+        self.handle_checked(header_method, signed, fetch).await.0
+    }
+
+    /// [`Self::handle`], also saying whether the request was authenticated
+    /// (a session drops a peer after an unauthenticated request).
+    pub async fn handle_checked(
+        &self,
+        header_method: &str,
+        signed: &SignedCtl,
+        fetch: Option<&mut PeerSet>,
+    ) -> (SignedCtl, bool) {
         let verified = verify_request(
             signed,
             &self.node_id,
@@ -312,6 +320,7 @@ impl WorkloadHostService {
                 ))
             }
         });
+        let authenticated = verified.is_ok();
         let (nonce, method_name, outcome) = match verified {
             Err(r) => {
                 self.refused(None, "verify", &r);
@@ -328,7 +337,7 @@ impl WorkloadHostService {
                 (req.nonce, req.method, out)
             }
         };
-        CtlResponse {
+        let resp = CtlResponse {
             version: CTL_VERSION,
             method: method_name,
             responder: self.node_id.clone(),
@@ -338,7 +347,8 @@ impl WorkloadHostService {
                 Err(refusal) => CtlOutcome::Refused { refusal },
             },
         }
-        .sign(&self.key)
+        .sign(&self.key);
+        (resp, authenticated)
     }
 
     async fn dispatch(
@@ -462,7 +472,12 @@ impl WorkloadHostService {
     /// instance the controller was told was refused. If the unload fails
     /// too, the instance stays listed (and reconcilable) and the refusal
     /// says so.
-    async fn roll_back(&self, host: &WorkloadHost, h: &InstanceHandle, e: &RuntimeError) -> Refusal {
+    async fn roll_back(
+        &self,
+        host: &WorkloadHost,
+        h: &InstanceHandle,
+        e: &RuntimeError,
+    ) -> Refusal {
         let mut r = runtime_refusal(e);
         let iid = h.instance_id.clone();
         match host.unload(h.clone()).await {

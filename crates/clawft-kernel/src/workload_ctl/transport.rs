@@ -90,18 +90,38 @@ impl CtlConnector for MeshConnector {
     }
 }
 
+/// Most concurrent `workload-host` sessions a listener serves.
+pub const MAX_SESSIONS: usize = 32;
+
 /// Accept connections on `listener` and serve each as a `workload-host`
 /// session (Noise XX responder when `noise` is set). Runs until the
-/// listener fails.
+/// listener fails. At most [`MAX_SESSIONS`] at once; more are closed.
 pub async fn serve_listener(
-    mut listener: Box<dyn TransportListener>,
+    listener: Box<dyn TransportListener>,
     svc: Arc<WorkloadHostService>,
     noise: bool,
 ) -> Result<(), MeshError> {
+    serve_listener_with(listener, svc, noise, MAX_SESSIONS).await
+}
+
+/// [`serve_listener`] with an explicit session cap.
+pub async fn serve_listener_with(
+    mut listener: Box<dyn TransportListener>,
+    svc: Arc<WorkloadHostService>,
+    noise: bool,
+    max_sessions: usize,
+) -> Result<(), MeshError> {
+    let slots = Arc::new(tokio::sync::Semaphore::new(max_sessions));
     loop {
-        let (stream, peer) = listener.accept().await?;
+        let (mut stream, peer) = listener.accept().await?;
+        let Ok(slot) = slots.clone().try_acquire_owned() else {
+            tracing::debug!(%peer, "workload-host session limit reached; connection closed");
+            let _ = stream.close().await;
+            continue;
+        };
         let svc = svc.clone();
         tokio::spawn(async move {
+            let _slot = slot;
             let stream: Box<dyn MeshStream> = if noise {
                 match NoiseChannel::respond(stream, &noise_config()).await {
                     Ok(ch) => Box::new(NoiseStream::new(Box::new(ch))),

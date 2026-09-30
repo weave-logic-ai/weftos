@@ -11,7 +11,7 @@ under `env -i` with an isolated HOME and WEFTOS_RUNTIME_DIR, streams the output
 back and removes the scratch dir. With no crate and no stage flag it runs the
 full lane: clawft-kernel tests, the native adapter live test (anomaly-detect),
 the scripts/cogs conformance harness in remote (ssh) mode, and the two-node
-placement run (Mac controller, an isolated weaver daemon on the Pi, pi_placement).
+placement run (isolated weaver daemons on the Mac and the Pi, pi_placement).
 
 The Pi comes from WEFTOS_PI_HOST ([user@]host, never committed); unset means
 the lane is skipped (exit 0). It never touches the Pi's ~/.clawft or its
@@ -71,6 +71,16 @@ class Runner:
         if timer:
             timer.cancel()
         return rc, "".join(chunks)
+
+    def spawn(self, cmd, log_path, cwd):
+        """Start a long-running local process (its output to `log_path`);
+        returns the Popen, or None on a dry run."""
+        if self.dry_run:
+            print("  DRY   (background) " + " ".join(cmd))
+            return None
+        with open(log_path, "w") as log:
+            return subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL, cwd=cwd, start_new_session=True)
 
 
 def local_chain_mtime():
@@ -325,7 +335,7 @@ def parse_args(argv):
     ap.add_argument("--cogs", action="store_true",
                     help="scripts/cogs conformance in remote mode (harness + native adapter)")
     ap.add_argument("--placement", action="store_true",
-                    help="two-node placement: Mac controller -> isolated weaver daemon on the Pi")
+                    help="two-node placement: Mac weaver daemon + CLI -> isolated weaver daemon on the Pi")
     ap.add_argument("--placement-evidence", help="write the placement evidence JSON here")
     ap.add_argument("--full", action="store_true",
                     help="clawft-kernel + --live-native + --cogs + --placement (default, no args)")
