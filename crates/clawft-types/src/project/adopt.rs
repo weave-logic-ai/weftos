@@ -172,19 +172,19 @@ pub fn reinit_fork(
     reap_orphans(manifests_dir);
 
     let old = read_project_toml(&root)?;
-    if let Some(o) = &old {
-        if let Some(mut home) = read_manifest(manifests_dir, &o.id)? {
-            if home.root == root && home.state != ProjectState::Archived {
-                if !force {
-                    return Err(ProjectError::RegisteredHome {
-                        id: o.id.clone(),
-                        root,
-                    });
-                }
-                home.state = ProjectState::Archived;
-                write_manifest(manifests_dir, &home)?;
-            }
+    if let Some(o) = &old
+        && let Some(mut home) = read_manifest(manifests_dir, &o.id)?
+        && home.root == root
+        && home.state != ProjectState::Archived
+    {
+        if !force {
+            return Err(ProjectError::RegisteredHome {
+                id: o.id.clone(),
+                root,
+            });
         }
+        home.state = ProjectState::Archived;
+        write_manifest(manifests_dir, &home)?;
     }
     let mut pt = old.clone().unwrap_or_else(|| ProjectToml {
         schema_version: SCHEMA_VERSION,
