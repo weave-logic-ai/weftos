@@ -584,7 +584,8 @@ impl AudioRetention {
 /// transcripts into the daemon's agent / command surfaces.
 ///
 /// Defaults match the daemon's ESP32-source whisper wiring at boot
-/// (`WHISPER_INPUT_NODE_ID` env var, falling back to `n-bfc4cd`). The
+/// (`WHISPER_INPUT_NODE_ID` env var, else the registered node that publishes
+/// `sensor/mic`; there is no baked-in node id). The
 /// `enabled` flag defaults to `false` — voice routing is opt-in until
 /// the 5 P0 voice security controls (WEFT-207/208/209/210/211) ship.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -697,8 +698,11 @@ impl Default for VoicePermissionConfig {
     }
 }
 
+/// Empty means "auto": the daemon subscribes to
+/// `substrate/_derived/transcript/<mic source node>/mic`, resolving the
+/// mic node at runtime. Set an explicit path to pin it.
 fn default_transcript_topic() -> String {
-    "substrate/_derived/transcript/n-bfc4cd/mic".into()
+    String::new()
 }
 
 fn default_chat_target_agent() -> String {

@@ -45,6 +45,43 @@ pub enum KernelAction {
     },
 }
 
+/// Ask a running daemon (if any) for `method` and print its JSON result.
+///
+/// Returns `true` when a daemon answered, so the caller skips the local
+/// ephemeral boot (which would otherwise contend with the daemon's
+/// listeners).
+async fn print_from_daemon(method: &str) -> anyhow::Result<bool> {
+    let Some(mut client) = clawft_rpc::DaemonClient::connect().await else {
+        return Ok(false);
+    };
+    let resp = client.simple_call(method).await?;
+    if resp.ok {
+        let value = resp.result.unwrap_or(serde_json::Value::Null);
+        println!("(daemon)\n{}", serde_json::to_string_pretty(&value)?);
+    } else {
+        eprintln!(
+            "daemon error: {}",
+            resp.error.unwrap_or_else(|| "unknown error".into())
+        );
+    }
+    Ok(true)
+}
+
+/// Boot an ephemeral kernel for inspection: no listeners are bound.
+async fn boot_for_inspection(
+    config: clawft_types::config::Config,
+    kernel_config: clawft_types::config::KernelConfig,
+    platform: NativePlatform,
+) -> Kernel<NativePlatform> {
+    match Kernel::boot(config, kernel_config.for_inspection(), Arc::new(platform)).await {
+        Ok(kernel) => kernel,
+        Err(e) => {
+            eprintln!("kernel boot failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Run the kernel subcommand.
 pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
     let platform = NativePlatform::new();
@@ -53,44 +90,46 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
 
     match args.action {
         KernelAction::Status => {
-            // Boot the kernel briefly to get status
-            let kernel = Kernel::boot(config, kernel_config, Arc::new(platform)).await;
-            match kernel {
-                Ok(kernel) => {
-                    print_status(&kernel);
-                }
-                Err(e) => {
-                    eprintln!("kernel boot failed: {e}");
-                    std::process::exit(1);
-                }
+            if print_from_daemon("kernel.status").await? {
+                return Ok(());
             }
+            let kernel = boot_for_inspection(config, kernel_config, platform).await;
+            print_status(&kernel);
         }
         KernelAction::Services => {
-            let kernel = Kernel::boot(config, kernel_config, Arc::new(platform)).await;
-            match kernel {
-                Ok(kernel) => {
-                    print_services(&kernel).await;
-                }
-                Err(e) => {
-                    eprintln!("kernel boot failed: {e}");
-                    std::process::exit(1);
-                }
+            if print_from_daemon("kernel.services").await? {
+                return Ok(());
             }
+            let kernel = boot_for_inspection(config, kernel_config, platform).await;
+            print_services(&kernel).await;
         }
         KernelAction::Ps => {
-            let kernel = Kernel::boot(config, kernel_config, Arc::new(platform)).await;
-            match kernel {
-                Ok(kernel) => {
-                    print_ps(&kernel);
-                }
-                Err(e) => {
-                    eprintln!("kernel boot failed: {e}");
-                    std::process::exit(1);
-                }
+            if print_from_daemon("kernel.ps").await? {
+                return Ok(());
             }
+            let kernel = boot_for_inspection(config, kernel_config, platform).await;
+            print_ps(&kernel);
         }
         KernelAction::Boot { foreground } => {
-            let kernel = Kernel::boot(config, kernel_config, Arc::new(platform)).await;
+            let kernel = if foreground {
+                // A long-lived kernel: full config, and the same persisted
+                // node.key the daemon uses so its node id is stable.
+                let runtime_dir = clawft_rpc::socket_path()
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                let key = clawft_kernel::load_or_generate_node_key(&runtime_dir)
+                    .map_err(|e| anyhow::anyhow!("node key bootstrap: {e}"))?;
+                Kernel::boot_with_node_key(
+                    config,
+                    kernel_config,
+                    Arc::new(platform),
+                    Some(key.to_bytes()),
+                )
+                .await
+            } else {
+                Ok(boot_for_inspection(config, kernel_config, platform).await)
+            };
             match kernel {
                 Ok(kernel) => {
                     // Print boot log

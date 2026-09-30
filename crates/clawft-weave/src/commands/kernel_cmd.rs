@@ -602,7 +602,8 @@ async fn boot_or_exit(
     kernel_config: clawft_types::config::KernelConfig,
     platform: NativePlatform,
 ) -> Kernel<NativePlatform> {
-    match Kernel::boot(config, kernel_config, Arc::new(platform)).await {
+    // Ephemeral inspection boot: bind no listeners (a daemon may hold the port).
+    match Kernel::boot(config, kernel_config.for_inspection(), Arc::new(platform)).await {
         Ok(kernel) => kernel,
         Err(e) => {
             eprintln!("kernel boot failed: {e}");

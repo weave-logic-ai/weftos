@@ -1068,6 +1068,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_bare_32_hex_node_id() {
+        let id = "66687aadf862bd776c8fc18b8e9f8e20";
+        let parsed = CallerIdentity::parse(Some(id));
+        assert_eq!(parsed.node_id.as_deref(), Some(id));
+        assert!(parsed.actor_id.is_none());
+        assert_eq!(parsed.display(), format!("node:{id}"));
+        // Wrong length or uppercase is an opaque actor-ish id, not a node.
+        for bad in ["66687aadf862bd776c8fc18b8e9f8e2", "66687AADF862BD776C8FC18B8E9F8E20"] {
+            assert!(CallerIdentity::parse(Some(bad)).node_id.is_none(), "{bad}");
+        }
+    }
+
+    #[test]
     fn integration_subscriber_cannot_see_mic_but_can_see_meta() {
         // ADR-057 MUST-HAVE: subscriber Actor with no allow rule cannot
         // see sensor/mic/pcm_chunk even though it can see meta.

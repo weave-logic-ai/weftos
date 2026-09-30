@@ -300,6 +300,17 @@ impl Default for KernelConfig {
 }
 
 impl KernelConfig {
+    /// Config for a one-shot inspection boot (`kernel status|ps|services|boot`
+    /// without `--foreground`): identical, but no network listener is bound,
+    /// so it cannot collide with a running daemon's mesh port.
+    #[must_use]
+    pub fn for_inspection(mut self) -> Self {
+        if let Some(mesh) = self.mesh.as_mut() {
+            mesh.enabled = false;
+        }
+        self
+    }
+
     /// Display brand token; empty / whitespace values fall back to
     /// [`DEFAULT_BRAND`].
     pub fn brand(&self) -> &str {
@@ -1568,6 +1579,20 @@ pub struct SimdDistanceStubConfig {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn for_inspection_disables_mesh_listener() {
+        let kc = super::KernelConfig {
+            mesh: Some(super::MeshConfig {
+                enabled: true,
+                ..super::MeshConfig::default()
+            }),
+            ..super::KernelConfig::default()
+        }
+        .for_inspection();
+        assert!(!kc.mesh.unwrap().enabled);
+        assert!(super::KernelConfig::default().for_inspection().mesh.is_none());
+    }
+
     use super::*;
 
     #[test]

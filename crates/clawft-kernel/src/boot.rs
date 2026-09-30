@@ -333,8 +333,16 @@ impl<P: Platform> Kernel<P> {
             }
             #[cfg(not(any(feature = "mesh", feature = "exochain")))]
             {
-                let _ = node_key_seed;
-                uuid::Uuid::new_v4().to_string()
+                // No ed25519 in this build: hash the seed (or fresh random
+                // bytes) with the same SHA-256 derivation so the id shape
+                // is identical.
+                let seed = node_key_seed.unwrap_or_else(|| {
+                    let mut b = [0u8; 32];
+                    b[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+                    b[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+                    b
+                });
+                crate::node_id::node_id_from_pubkey(&seed)
             }
         };
 
@@ -2812,6 +2820,37 @@ mod tests {
             assert_eq!(kernel.cluster_membership().local_node_id(), expected);
             kernel.shutdown().await.unwrap();
         }
+    }
+
+    /// The mesh runtime id (handshake) equals the cluster membership id.
+    #[cfg(all(feature = "native", feature = "mesh"))]
+    #[tokio::test]
+    async fn mesh_node_id_equals_cluster_node_id() {
+        use clawft_types::config::MeshConfig;
+
+        let mut kconfig = test_kernel_config();
+        kconfig.mesh = Some(MeshConfig {
+            enabled: true,
+            listen_addr: "127.0.0.1:0".into(),
+            ..MeshConfig::default()
+        });
+        let mut kernel = Kernel::boot_with_node_key(
+            test_config(),
+            kconfig,
+            Arc::new(NativePlatform::new()),
+            Some([3u8; 32]),
+        )
+        .await
+        .expect("boot with mesh");
+        let mesh_id = kernel
+            .a2a_router()
+            .mesh_runtime()
+            .expect("mesh runtime attached")
+            .node_id()
+            .to_owned();
+        assert_eq!(mesh_id, kernel.cluster_membership().local_node_id());
+        assert!(crate::node_id::is_node_id(&mesh_id));
+        kernel.shutdown().await.unwrap();
     }
 
     #[tokio::test]
