@@ -10,6 +10,7 @@ pub mod channels_api;
 pub mod chat;
 pub mod config_api;
 pub mod cron_api;
+pub mod daemon_facade;
 pub mod delegation;
 pub mod handlers;
 pub mod http_facade_api;
@@ -26,6 +27,7 @@ use std::sync::Arc;
 use axum::Router;
 use tower_http::trace::TraceLayer;
 
+pub use daemon_facade::DaemonKernelFacade;
 pub use http_facade_api::{InMemoryKernelFacade, KernelFacadeBackend};
 pub use voice_status::{
     VoicePipelineUpdate, VoiceStatusEvent, VoiceStatusHub, VOICE_STATUS_TOPIC,

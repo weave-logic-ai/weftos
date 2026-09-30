@@ -26,6 +26,7 @@ api = [
     "dep:clawft-core",
     "dep:clawft-platform",
     "dep:clawft-kernel",
+    "dep:clawft-rpc",
     "clawft-kernel/http-api",
 ]
 
@@ -52,12 +53,15 @@ clawft-core = { workspace = true, features = ["native"], optional = true }
 clawft-platform = { workspace = true, optional = true }
 # WEFT-122: http_facade types + KernelEventLog for SSE poll_events loop.
 clawft-kernel = { workspace = true, optional = true, default-features = false, features = ["http-api"] }
+# ADR-102 D6: DaemonKernelFacade forwards facade routes to the daemon.
+clawft-rpc = { workspace = true, optional = true }
 # WEFT-187: clawft.toml / config.json hot-reload for tools.mcp_servers.
 notify = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+tempfile = { workspace = true }
 regex = { workspace = true }
 mockito = "1"
 tower = { version = "0.5", features = ["util"] }
