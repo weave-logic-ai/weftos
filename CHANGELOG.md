@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.1 cut.
 
+### Changed — Weave topology Phase 0 (ADR-103) — read before upgrading
+
+- **Stop every pre-0.8.2 daemon before first running the new build, and check
+  it is gone** (`ps`, `weaver doctor daemon`). Older daemons take no
+  `chain.lock`, so the new build cannot see them; the 120 s recency guard is a
+  heuristic and turns off once a `chain.lock` exists.
+- **One runtime resolver.** Socket, PID, log, `node.key`, chain, workloads,
+  cluster peers and revocations all resolve from one root:
+  `WEFTOS_RUNTIME_DIR`, else the nearest project marker above the working
+  directory, else `~/.clawft`. `$HOME` is never a project. A project marker is
+  `.weftos/` plus one of `project.toml`, `.weftos/weave.toml`, a `weave.toml`
+  beside it, an existing `.weftos/runtime/`, or a `.git` (worktrees get their
+  own kernel). The fallback to `.weftos/runtime/` files in the working
+  directory is gone.
+- **Chains are no longer forked or shared by accident.** A kernel with no chain
+  of its own keeps using the legacy `~/.clawft` chain and its key, guarded by
+  `chain.lock`. The first adoption of a legacy chain that no lock-aware kernel
+  has used needs `weaver kernel start --adopt-legacy-chain`; `--new-chain`
+  starts a fresh chain instead (refused when it would overwrite the legacy
+  chain in `~/.clawft`). A second kernel on the same runtime root or chain is
+  refused with the holder's PID. `kernel.lock` and `chain.lock` files appear.
+- **Mesh node ids are now 32 hex characters**, `hex(SHA-256(pubkey)[..16])`,
+  stable across restarts. They change on upgrade: re-pin peers, ACL rules and
+  the mic node (`WHISPER_INPUT_NODE_ID` or `voice.mic_node_id`).
+- **Mesh port 9489** by default (was 9470 in code, 9421 in docs). Update
+  `listen_addr`, `seed_peers` and firewalls; the deployed Pi weaver stays on
+  9470 until it is redeployed. A failed mesh bind now stops boot.
+- **Mic source is fail-closed.** An operator pin wins; otherwise the single
+  node publishing `sensor/mic` is used; two or more candidates stop
+  speech-to-text until a node is pinned.
+- **CLI.** `weft agent` needs `--local` when no daemon is running.
+  `weft cron add/remove/enable/disable` need a daemon; `weft cron run` reports
+  it is not implemented. `weft kernel status|ps|services` ask the daemon
+  first and exit non-zero on a daemon error. `weaver kernel start` waits up
+  to 90 s for the daemon socket and exits non-zero if boot fails.
+- **New: `weft doctor` / `weaver doctor`** (install, daemon, runtime, config,
+  mcp, agents). Read-only by default; `--fix` removes only provably stale
+  socket and PID files in the active runtime directory.
+- **Security:** voice commands now go through the authorization chokepoint as
+  a read/chat/write principal (never admin); RVF requests are authorized;
+  `undici` 7.30.0 and `brace-expansion` 5.0.12; new wasmtime advisories are
+  ignored with enforced expiries (see `docs/security/cargo-audit-residual.md`).
+
 ### Fixed (0.8.2)
 
 - **Ruflo team bus synced to the fixed ADR-402 store** (upstream `ruvnet/ruflo` PR
