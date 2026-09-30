@@ -78,6 +78,12 @@ pub fn load_or_generate(runtime_dir: &Path) -> Result<DaemonIdentity, IdentityEr
             clawft_kernel::NodeKeyError::Malformed { path, got } => {
                 IdentityError::Malformed { path, got }
             }
+            clawft_kernel::NodeKeyError::Insecure { path, reason } => {
+                IdentityError::Io(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("{path:?}: {reason}"),
+                ))
+            }
         })?;
     let pubkey_bytes: [u8; 32] = signing_key.verifying_key().to_bytes();
     let node_id = clawft_kernel::node_id_from_pubkey(&pubkey_bytes);

@@ -174,10 +174,12 @@ async fn start_pipeline(
 ) -> MicPipeline {
     let pcm_chunk_target = format!("{source}/mic/pcm_chunk");
     let rms_target = format!("{source}/mic/rms");
-    let source_flag = control_flags.register(ControlKind::Sensor, &pcm_chunk_target, true);
-    let _rms_flag = control_flags.register(ControlKind::Sensor, &rms_target, true);
-    let whisper_flag = control_flags.register(ControlKind::Service, "whisper", true);
-    let classify_flag = control_flags.register(ControlKind::Service, "classify", true);
+    // `recover`: a flag cleared by an earlier failed start comes back on,
+    // unless the operator explicitly switched it off.
+    let source_flag = control_flags.recover(ControlKind::Sensor, &pcm_chunk_target);
+    let _rms_flag = control_flags.recover(ControlKind::Sensor, &rms_target);
+    let whisper_flag = control_flags.recover(ControlKind::Service, "whisper");
+    let classify_flag = control_flags.recover(ControlKind::Service, "classify");
 
     let classify_output_path =
         format!("substrate/{daemon_node_id}/derived/classify/{source}/mic");
@@ -294,20 +296,163 @@ async fn publish_waiting(kernel: &SharedKernel, daemon_node_id: &str) {
     }
 }
 
+#[derive(Debug)]
 struct WarnGate(Option<Instant>);
 
 impl WarnGate {
-    fn warn(&mut self, msg: &str) {
+    /// Emit `msg` through `sink` at most once per [`WARN_EVERY`].
+    fn warn(&mut self, msg: &str, sink: &mut (dyn FnMut(&str) + Send)) {
         if self.0.is_none_or(|t| t.elapsed() >= WARN_EVERY) {
-            warn!("{msg}");
+            sink(msg);
             self.0 = Some(Instant::now());
         }
     }
 }
 
+/// What the supervisor is currently running and why.
+#[derive(Debug, Default)]
+pub struct SupState {
+    /// `(node id, chosen by operator pin)`.
+    current: Option<(String, bool)>,
+    /// An auto-selection was stopped because a second candidate appeared.
+    /// Sticky: only an operator pin restarts the pipeline.
+    halted: bool,
+    gate: Option<WarnGate>,
+}
+
+impl SupState {
+    /// Node id currently selected, if any.
+    pub fn current(&self) -> Option<&str> {
+        self.current.as_ref().map(|(id, _)| id.as_str())
+    }
+}
+
+/// Starts and stops the pipeline for a mic source (real or a test fake).
+#[async_trait::async_trait]
+pub trait PipelineHost: Send {
+    /// Start whisper + classify (and the transcript subscription) for `id`.
+    async fn start(&mut self, id: &str);
+    /// Stop everything started for `id` and show "waiting for mic source".
+    async fn stop(&mut self, id: &str);
+}
+
+/// One supervisor iteration. Fails closed: once an AUTO selection exists,
+/// any second candidate stops the pipeline and it stays stopped until the
+/// operator pins a node. Pinned selections are never disturbed by
+/// candidates. `warn` receives every warning text.
+pub async fn supervise_step(
+    host: &mut dyn PipelineHost,
+    state: &mut SupState,
+    pin: Option<&str>,
+    registry: &NodeRegistry,
+    substrate: &SubstrateService,
+    warn: &mut (dyn FnMut(&str) + Send),
+) {
+    let decision = decide(pin, registry, substrate);
+    let gate = state.gate.get_or_insert(WarnGate(None));
+
+    match &decision {
+        Decision::Pinned { id, .. } => {
+            state.halted = false;
+            if let Some(msg) = decision.warning() {
+                gate.warn(&msg, warn);
+            }
+            match state.current.clone() {
+                Some((cur, true)) if cur == *id => {}
+                prior => {
+                    if let Some((old, _)) = prior {
+                        host.stop(&old).await;
+                    }
+                    host.start(id).await;
+                    state.current = Some((id.clone(), true));
+                }
+            }
+        }
+        Decision::Ambiguous(c) => {
+            let msg = decision.warning().unwrap_or_default();
+            if let Some((cur, false)) = state.current.clone() {
+                // The auto-selected node may be the attacker: fail closed.
+                warn(&format!(
+                    "second mic candidate appeared after auto-selecting {cur}; stopping whisper and classify. {msg}"
+                ));
+                host.stop(&cur).await;
+                state.current = None;
+                state.halted = true;
+            } else if state.halted {
+                gate.warn(&format!("mic auto-selection is halted until the operator pins one. {msg}"), warn);
+            } else {
+                gate.warn(&msg, warn);
+            }
+            let _ = c;
+        }
+        Decision::Single(id) => {
+            if state.halted {
+                gate.warn(
+                    &format!(
+                        "mic auto-selection is halted (an earlier second candidate); not restarting for {id}. \
+                         Pin the mic with {MIC_NODE_ENV}=<node-id> (or voice.mic_node_id)"
+                    ),
+                    warn,
+                );
+            } else {
+                match state.current.clone() {
+                    Some((cur, _)) if cur == *id => {}
+                    prior => {
+                        // The chosen node stopped being a candidate and a
+                        // single new one took its place: re-resolve.
+                        if let Some((old, _)) = prior {
+                            host.stop(&old).await;
+                        }
+                        host.start(id).await;
+                        state.current = Some((id.clone(), false));
+                    }
+                }
+            }
+        }
+        Decision::NoCandidate => {
+            if let Some((cur, false)) = state.current.clone() {
+                warn(&format!("auto-selected mic node {cur} is no longer a candidate; stopping whisper and classify"));
+                host.stop(&cur).await;
+                state.current = None;
+            }
+            if let Some(msg) = decision.warning() {
+                gate.warn(&msg, warn);
+            }
+        }
+    }
+}
+
+/// The real pipeline host: whisper + classify under the daemon node.
+struct RealHost {
+    kernel: SharedKernel,
+    control_flags: ControlFlags,
+    daemon_node_id: String,
+    mic_node_tx: watch::Sender<Option<String>>,
+    pipeline: Option<MicPipeline>,
+}
+
+#[async_trait::async_trait]
+impl PipelineHost for RealHost {
+    async fn start(&mut self, id: &str) {
+        let p = start_pipeline(&self.kernel, &self.control_flags, &self.daemon_node_id, id).await;
+        info!(node = %id, "mic source selected");
+        let _ = self.mic_node_tx.send(Some(id.to_string()));
+        self.pipeline = Some(p);
+    }
+
+    async fn stop(&mut self, id: &str) {
+        if let Some(p) = self.pipeline.take() {
+            warn!(node = %id, "stopping whisper and classify (mic source no longer valid)");
+            p.stop().await;
+        }
+        let _ = self.mic_node_tx.send(None);
+        publish_waiting(&self.kernel, &self.daemon_node_id).await;
+    }
+}
+
 /// Long-running supervisor: selects the mic, runs the pipeline for it, and
-/// keeps re-evaluating. Publishes the chosen node id on `mic_node_tx`
-/// (`None` while nothing is selected).
+/// keeps re-evaluating (see [`supervise_step`]). Publishes the chosen node
+/// id on `mic_node_tx` (`None` while nothing is selected).
 pub async fn supervise(
     pin: Option<String>,
     kernel: SharedKernel,
@@ -316,58 +461,28 @@ pub async fn supervise(
     mic_node_tx: watch::Sender<Option<String>>,
 ) {
     publish_waiting(&kernel, &daemon_node_id).await;
-    let mut current: Option<MicPipeline> = None;
-    let mut gate = WarnGate(None);
+    let mut host = RealHost {
+        kernel: kernel.clone(),
+        control_flags,
+        daemon_node_id,
+        mic_node_tx,
+        pipeline: None,
+    };
+    let mut state = SupState::default();
     loop {
-        let (decision, still_registered) = {
+        let (registry, substrate) = {
             let k = kernel.read().await;
-            let d = decide(pin.as_deref(), k.node_registry(), k.substrate_service());
-            let reg = current
-                .as_ref()
-                .is_some_and(|c| k.node_registry().contains(&c.source));
-            (d, reg)
+            (k.node_registry().clone(), k.substrate_service().clone())
         };
-        if let Some(msg) = decision.warning() {
-            gate.warn(&msg);
-        }
-        // What (if anything) should be running after this pass.
-        let want: Option<String> = match &decision {
-            Decision::Pinned { id, .. } => Some(id.clone()),
-            Decision::Single(id) => Some(id.clone()),
-            Decision::Ambiguous(c) => match &current {
-                // Keep a running auto-selection, but the warning above fires.
-                Some(cur) if pin.is_none() && still_registered && c.contains(&cur.source) => {
-                    Some(cur.source.clone())
-                }
-                _ => None,
-            },
-            Decision::NoCandidate => None,
-        };
-        // A selected node that is no longer registered is dropped (auto only).
-        let want = match (&want, &current, pin.is_none(), still_registered) {
-            (Some(w), Some(cur), true, false) if *w == cur.source => None,
-            _ => want,
-        };
-        match (want, current.take()) {
-            (Some(w), Some(cur)) if cur.source == w => current = Some(cur),
-            (Some(w), old) => {
-                if let Some(old) = old {
-                    info!(old = %old.source, new = %w, "mic source changed; restarting pipeline");
-                    old.stop().await;
-                }
-                let p = start_pipeline(&kernel, &control_flags, &daemon_node_id, &w).await;
-                info!(node = %w, "mic source selected");
-                let _ = mic_node_tx.send(Some(w));
-                current = Some(p);
-            }
-            (None, Some(old)) => {
-                warn!(node = %old.source, "mic source no longer valid; stopping whisper and classify");
-                old.stop().await;
-                let _ = mic_node_tx.send(None);
-                publish_waiting(&kernel, &daemon_node_id).await;
-            }
-            (None, None) => {}
-        }
+        supervise_step(
+            &mut host,
+            &mut state,
+            pin.as_deref(),
+            &registry,
+            &substrate,
+            &mut |m| warn!("{m}"),
+        )
+        .await;
         tokio::time::sleep(POLL).await;
     }
 }
@@ -451,5 +566,116 @@ mod tests {
         let _daemon = node(&reg, 1);
         publish_mic(&sub, &"0".repeat(32));
         assert_eq!(decide(None, &reg, &sub), Decision::NoCandidate);
+    }
+
+    // ── supervise_step ────────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct FakeHost {
+        running: Option<String>,
+        log: Vec<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl PipelineHost for FakeHost {
+        async fn start(&mut self, id: &str) {
+            self.running = Some(id.to_string());
+            self.log.push(format!("start {id}"));
+        }
+        async fn stop(&mut self, id: &str) {
+            self.running = None;
+            self.log.push(format!("stop {id}"));
+        }
+    }
+
+    async fn step(
+        host: &mut FakeHost,
+        st: &mut SupState,
+        pin: Option<&str>,
+        reg: &NodeRegistry,
+        sub: &SubstrateService,
+    ) -> Vec<String> {
+        let mut warns = Vec::new();
+        supervise_step(host, st, pin, reg, sub, &mut |m| warns.push(m.to_string())).await;
+        warns
+    }
+
+    #[tokio::test]
+    async fn attacker_first_then_real_mic_stops_the_pipeline_and_stays_stopped() {
+        let reg = NodeRegistry::new();
+        let sub = SubstrateService::new();
+        let (mut host, mut st) = (FakeHost::default(), SupState::default());
+        let attacker = node(&reg, 1);
+        publish_mic(&sub, &attacker);
+        step(&mut host, &mut st, None, &reg, &sub).await;
+        assert_eq!(host.running.as_deref(), Some(attacker.as_str()), "single candidate runs");
+
+        let real = node(&reg, 2);
+        publish_mic(&sub, &real);
+        let warns = step(&mut host, &mut st, None, &reg, &sub).await;
+        assert_eq!(host.running, None, "second candidate must stop the pipeline");
+        let all = warns.join("\n");
+        assert!(all.contains(&attacker) && all.contains(&real), "names all candidates: {all}");
+        assert!(all.contains(MIC_NODE_ENV));
+
+        // Stays stopped, even if the attacker later vanishes from the picture.
+        for _ in 0..3 {
+            step(&mut host, &mut st, None, &reg, &sub).await;
+        }
+        assert_eq!(host.running, None);
+        assert_eq!(host.log, vec![format!("start {attacker}"), format!("stop {attacker}")]);
+
+        // Only an operator pin restarts it.
+        step(&mut host, &mut st, Some(&real), &reg, &sub).await;
+        assert_eq!(host.running.as_deref(), Some(real.as_str()));
+    }
+
+    #[tokio::test]
+    async fn single_candidate_keeps_running() {
+        let reg = NodeRegistry::new();
+        let sub = SubstrateService::new();
+        let (mut host, mut st) = (FakeHost::default(), SupState::default());
+        let mic = node(&reg, 1);
+        publish_mic(&sub, &mic);
+        for _ in 0..3 {
+            step(&mut host, &mut st, None, &reg, &sub).await;
+        }
+        assert_eq!(host.running.as_deref(), Some(mic.as_str()));
+        assert_eq!(host.log, vec![format!("start {mic}")], "started exactly once");
+    }
+
+    #[tokio::test]
+    async fn pinned_id_stays_on_the_pin_when_a_second_candidate_appears() {
+        let reg = NodeRegistry::new();
+        let sub = SubstrateService::new();
+        let (mut host, mut st) = (FakeHost::default(), SupState::default());
+        let pinned = node(&reg, 1);
+        publish_mic(&sub, &pinned);
+        step(&mut host, &mut st, Some(&pinned), &reg, &sub).await;
+        let other = node(&reg, 2);
+        publish_mic(&sub, &other);
+        for _ in 0..3 {
+            step(&mut host, &mut st, Some(&pinned), &reg, &sub).await;
+        }
+        assert_eq!(host.running.as_deref(), Some(pinned.as_str()));
+        assert_eq!(host.log, vec![format!("start {pinned}")]);
+    }
+
+    #[tokio::test]
+    async fn chosen_node_no_longer_a_candidate_is_dropped() {
+        let reg = NodeRegistry::new();
+        let sub = SubstrateService::new();
+        let (mut host, mut st) = (FakeHost::default(), SupState::default());
+        let a = node(&reg, 1);
+        publish_mic(&sub, &a);
+        step(&mut host, &mut st, None, &reg, &sub).await;
+        assert_eq!(st.current(), Some(a.as_str()));
+        // A different registry view where `a` is gone and `b` is the only mic.
+        let reg2 = NodeRegistry::new();
+        let b = node(&reg2, 2);
+        publish_mic(&sub, &b);
+        step(&mut host, &mut st, None, &reg2, &sub).await;
+        assert_eq!(host.running.as_deref(), Some(b.as_str()));
+        assert_eq!(host.log, vec![format!("start {a}"), format!("stop {a}"), format!("start {b}")]);
     }
 }
