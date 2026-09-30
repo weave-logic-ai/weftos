@@ -410,9 +410,7 @@ pub fn validate_manifest(manifest: &AppManifest) -> Result<(), AppError> {
 
 // ── On-disk manifest store ──────────────────────────────────────────
 
-/// Default relative path for the installed-apps manifest store
-/// (mirrors `.weftos/runtime/cluster_peers.json`).
-pub const DEFAULT_APPS_PERSIST_PATH: &str = ".weftos/runtime/apps.json";
+// The store lives at `RuntimePaths::apps()` (`<runtime root>/apps.json`).
 
 fn default_apps_file_version() -> u32 {
     1

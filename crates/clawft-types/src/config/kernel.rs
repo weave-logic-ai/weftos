@@ -987,8 +987,8 @@ pub struct ChainConfig {
     pub chain_id: u32,
 
     /// Path to the chain checkpoint file for persistence across restarts.
-    /// If `None`, defaults to `$WEFTOS_RUNTIME_DIR/chain.json` when that
-    /// variable is set, else `~/.clawft/chain.json`.
+    /// If `None`, defaults to `chain.json` under the resolved runtime root
+    /// (see [`crate::runtime_paths`]).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -1070,7 +1070,7 @@ pub struct ChainExternalAnchorConfig {
     /// Path for the file ledger (File) or intent log (External).
     ///
     /// When `None` and backend is `File`/`External`, the kernel derives
-    /// `~/.clawft/chain/anchors.jsonl` (native) or fails closed (no home).
+    /// `chain/anchors.jsonl` under the resolved runtime root (native).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -1124,20 +1124,20 @@ impl Default for ChainExternalAnchorConfig {
 impl ChainExternalAnchorConfig {
     /// Effective ledger path, expanding a missing path to the default location.
     ///
-    /// Precedence: explicit `ledger_path`, then `$WEFTOS_RUNTIME_DIR/chain/`,
-    /// then `~/.clawft/chain/` (see [`super::chain_paths`]).
+    /// Precedence: explicit `ledger_path`, then the resolved runtime root's
+    /// `chain/` (see [`crate::runtime_paths`]).
     pub fn effective_ledger_path(&self) -> Option<String> {
         if let Some(ref p) = self.ledger_path {
             return Some(p.clone());
         }
         #[cfg(feature = "native")]
         {
-            super::chain_paths::resolve_anchor_ledger_path(
-                None,
-                super::chain_paths::runtime_dir_from_env().as_deref(),
-                dirs::home_dir().as_deref(),
+            Some(
+                crate::runtime_paths::RuntimePaths::resolve()
+                    .anchors_ledger()
+                    .to_string_lossy()
+                    .into_owned(),
             )
-            .map(|p| p.to_string_lossy().into_owned())
         }
         #[cfg(not(feature = "native"))]
         {
@@ -1164,23 +1164,23 @@ impl ChainConfig {
     /// Returns the effective checkpoint path.
     ///
     /// If `checkpoint_path` is set, returns it. Otherwise, when
-    /// `WEFTOS_RUNTIME_DIR` is set, returns `$WEFTOS_RUNTIME_DIR/chain.json`
-    /// so probe/demo/test daemons keep their own isolated chain; failing
-    /// that, `~/.clawft/chain.json` (requires the `native` feature for
-    /// `dirs`). The RVF file, signing key and tree checkpoint are derived
-    /// from this path by extension. See [`super::chain_paths`].
+    /// `chain.json` under the resolved runtime root (`WEFTOS_RUNTIME_DIR`,
+    /// else the project's `.weftos/runtime`, else legacy `~/.clawft`;
+    /// requires the `native` feature). The RVF file, signing key and tree
+    /// checkpoint are derived from this path by extension. See
+    /// [`crate::runtime_paths`].
     pub fn effective_checkpoint_path(&self) -> Option<String> {
         if self.checkpoint_path.is_some() {
             return self.checkpoint_path.clone();
         }
         #[cfg(feature = "native")]
         {
-            super::chain_paths::resolve_checkpoint_path(
-                None,
-                super::chain_paths::runtime_dir_from_env().as_deref(),
-                dirs::home_dir().as_deref(),
+            Some(
+                crate::runtime_paths::RuntimePaths::resolve()
+                    .chain_checkpoint()
+                    .to_string_lossy()
+                    .into_owned(),
             )
-            .map(|p| p.to_string_lossy().into_owned())
         }
         #[cfg(not(feature = "native"))]
         {

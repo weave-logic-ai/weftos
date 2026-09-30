@@ -366,7 +366,7 @@ pub use agent_registry::{
 };
 pub use app::{
     AgentSpec, AppCapabilities, AppError, AppHooks, AppManager, AppManifest, AppState, AppsFile,
-    DEFAULT_APPS_PERSIST_PATH, InstalledApp, ServiceSpec, ToolSource, ToolSpec,
+    InstalledApp, ServiceSpec, ToolSource, ToolSpec,
 };
 #[cfg(feature = "ecc")]
 pub use artifact_store::{ArtifactBackend, ArtifactStore, ArtifactType, StoredArtifact};

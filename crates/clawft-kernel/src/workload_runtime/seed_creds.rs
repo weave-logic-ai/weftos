@@ -15,7 +15,7 @@ use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use clawft_types::config::chain_paths::{chain_root, runtime_dir_from_env};
+use clawft_types::runtime_paths::RuntimePaths;
 use clawft_types::secret::SecretString;
 
 use super::seed_http::SeedCredentials;
@@ -43,13 +43,10 @@ impl FileCredentials {
         Self { dir: dir.into() }
     }
 
-    /// The operator store: `$WEFTOS_RUNTIME_DIR` or `~/.clawft`, then
-    /// [`SEED_SECRETS_SUBDIR`].
+    /// The operator store: the resolved runtime root (see
+    /// [`RuntimePaths`]), then [`SEED_SECRETS_SUBDIR`].
     pub fn operator_default() -> Result<Self, RuntimeError> {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        let root = chain_root(runtime_dir_from_env().as_deref(), home.as_deref())
-            .ok_or_else(|| RuntimeError::InvalidConfig("no runtime dir or home".into()))?;
-        Ok(Self::new(root.join(SEED_SECRETS_SUBDIR)))
+        Ok(Self::new(RuntimePaths::resolve().root().join(SEED_SECRETS_SUBDIR)))
     }
 
     /// Directory holding the tokens.

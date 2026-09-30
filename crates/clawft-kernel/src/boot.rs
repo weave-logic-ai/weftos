@@ -17,7 +17,7 @@ use clawft_types::config::Config;
 
 #[cfg(feature = "native")]
 use crate::a2a::A2ARouter;
-use crate::app::{AppManager, DEFAULT_APPS_PERSIST_PATH};
+use crate::app::AppManager;
 use crate::capability::AgentCapabilities;
 #[cfg(feature = "native")]
 use crate::capability::CapabilityChecker;
@@ -194,8 +194,12 @@ impl<P: Platform> Kernel<P> {
         let boot_time = Instant::now();
         let mut boot_log = BootLog::new();
         // Resolve the chain location once (explicit config, else
-        // $WEFTOS_RUNTIME_DIR, else ~/.clawft) so restore, verify and
+        // runtime root: $WEFTOS_RUNTIME_DIR, project, or ~/.clawft) so restore, verify and
         // shutdown persistence all use the same, possibly isolated, files.
+        let chain_path_was_defaulted = kernel_config
+            .chain
+            .as_ref()
+            .is_none_or(|c| c.checkpoint_path.is_none());
         let pinned_chain = crate::chain_storage::pin_chain_storage(&mut kernel_config);
 
         info!("WeftOS kernel booting");
@@ -208,6 +212,22 @@ impl<P: Platform> Kernel<P> {
                 BootPhase::Init,
                 format!("Chain storage: {}", p.display()),
             ));
+        }
+        // One resolver for every runtime file (cluster peers, apps, revoked
+        // hosts); the chain, socket and node key use the same root.
+        let runtime_paths = crate::chain_storage::boot_runtime_paths(pinned_chain.as_deref());
+        boot_log.push(BootEvent::info(
+            BootPhase::Init,
+            format!("Runtime dir: {}", runtime_paths.root().display()),
+        ));
+        if chain_path_was_defaulted
+            && let Some(w) = crate::chain_storage::legacy_chain_warning(
+                &runtime_paths,
+                clawft_types::runtime_paths::home_dir().as_deref(),
+            )
+        {
+            warn!("{w}");
+            boot_log.push(BootEvent::warn(BootPhase::Init, w));
         }
         boot_log.push(BootEvent::info(BootPhase::Init, "PID 0 (kernel)"));
         // WEFT-70: surface macOS / non-Linux OS-sandbox downgrade in boot
@@ -753,7 +773,7 @@ impl<P: Platform> Kernel<P> {
             ..ClusterConfig::default()
         };
         // Cluster peer membership persists to disk so joins survive restarts.
-        let cluster_peers_path = std::path::PathBuf::from(".weftos/runtime/cluster_peers.json");
+        let cluster_peers_path = runtime_paths.cluster_peers();
         let cluster_membership =
             Arc::new(ClusterMembership::new(cluster_config).with_persist_path(&cluster_peers_path));
 
@@ -768,7 +788,7 @@ impl<P: Platform> Kernel<P> {
 
         // 6a. AppManager with on-disk manifest store (WEFT-136).
         // Installs survive kernel restarts via atomic apps.json (mirrors cluster_peers).
-        let apps_persist_path = std::path::PathBuf::from(DEFAULT_APPS_PERSIST_PATH);
+        let apps_persist_path = runtime_paths.apps();
         let app_manager = Arc::new(AppManager::new().with_persist_path(&apps_persist_path));
         boot_log.push(BootEvent::info(
             BootPhase::Services,
@@ -780,8 +800,7 @@ impl<P: Platform> Kernel<P> {
         ));
 
         // 6b. Load host revocation list (persistent ban list)
-        let revocation_path =
-            crate::revocation::RevocationList::default_path(std::path::Path::new("."));
+        let revocation_path = runtime_paths.revoked_hosts();
         let revocation_list = Arc::new(crate::revocation::RevocationList::load(revocation_path));
         {
             let count = revocation_list.len();

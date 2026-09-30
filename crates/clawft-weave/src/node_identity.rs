@@ -23,12 +23,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use clawft_types::runtime_paths::RuntimePaths;
 use ed25519_dalek::SigningKey;
 use rand::RngCore;
 use rand::rngs::OsRng;
-
-/// Filename of the node keypair under the runtime directory.
-const KEYFILE_NAME: &str = "node.key";
 
 /// Loaded daemon identity: signing key + derived node-id.
 ///
@@ -75,7 +73,7 @@ pub enum IdentityError {
 /// exist for the write to succeed).
 pub fn load_or_generate(runtime_dir: &Path) -> Result<DaemonIdentity, IdentityError> {
     fs::create_dir_all(runtime_dir)?;
-    let path = runtime_dir.join(KEYFILE_NAME);
+    let path = RuntimePaths::at(runtime_dir).node_key();
     let signing_key = if path.exists() {
         load_existing(&path)?
     } else {
@@ -139,6 +137,9 @@ fn set_keyfile_perms(_path: &Path) -> Result<(), IdentityError> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// The on-disk name is a stable contract (`RuntimePaths::node_key`).
+    const KEYFILE_NAME: &str = "node.key";
 
     #[test]
     fn first_run_generates_and_persists_keyfile() {
