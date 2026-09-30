@@ -17,7 +17,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["native"]
-native = ["dep:dirs"]
+native = ["dep:dirs", "dep:ulid"]
 browser = ["uuid/js", "dep:getrandom"]
 
 [dependencies]
@@ -33,6 +33,13 @@ zeroize = { workspace = true }
 # mesh-placement-02: capability vocabulary file (TOML) and its governance digest.
 toml = { workspace = true }
 sha2 = { workspace = true }
+# Phase 1 package B: project ids are ULIDs. Native only: ulid pulls rand 0.9 ->
+# getrandom 0.3, which does not build for wasm32-unknown-unknown without cfg flags.
+ulid = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+# flock on the manifest dir (project model); same crate the kernel uses.
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }

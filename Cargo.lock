@@ -1965,6 +1965,7 @@ dependencies = [
  "chrono",
  "dirs",
  "getrandom 0.2.17",
+ "libc",
  "serde",
  "serde_json",
  "sha2",
@@ -1972,6 +1973,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml 0.8.23",
+ "ulid",
  "uuid",
  "zeroize",
 ]
