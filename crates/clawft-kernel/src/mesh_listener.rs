@@ -217,7 +217,7 @@ mod tests {
         MeshPeer {
             node_id: node_id.into(),
             handshake: make_handshake(node_id),
-            address: "127.0.0.1:9470".parse::<SocketAddr>().unwrap(),
+            address: "127.0.0.1:9489".parse::<SocketAddr>().unwrap(),
         }
     }
 
@@ -276,12 +276,12 @@ mod tests {
 
         // Re-registering with the same node_id overwrites
         let mut peer2 = make_peer("node-1");
-        peer2.address = "10.0.0.1:9470".parse().unwrap();
+        peer2.address = "10.0.0.1:9489".parse().unwrap();
         assert!(pool.register(peer2));
 
         assert_eq!(pool.len(), 1);
         let conn = pool.get("node-1").unwrap();
-        assert_eq!(conn.peer.address.to_string(), "10.0.0.1:9470");
+        assert_eq!(conn.peer.address.to_string(), "10.0.0.1:9489");
     }
 
     #[test]
@@ -324,12 +324,12 @@ mod tests {
             peer_list: vec![
                 PeerInfo {
                     node_id: "peer-a".into(),
-                    address: "10.0.0.1:9470".into(),
+                    address: "10.0.0.1:9489".into(),
                     platform: "cloud-native".into(),
                 },
                 PeerInfo {
                     node_id: "peer-b".into(),
-                    address: "10.0.0.2:9470".into(),
+                    address: "10.0.0.2:9489".into(),
                     platform: "edge".into(),
                 },
             ],
@@ -394,13 +394,13 @@ mod tests {
     fn peer_info_serde() {
         let info = PeerInfo {
             node_id: "node-x".into(),
-            address: "192.168.1.1:9470".into(),
+            address: "192.168.1.1:9489".into(),
             platform: "wasi".into(),
         };
         let json = serde_json::to_string(&info).unwrap();
         let restored: PeerInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.node_id, "node-x");
-        assert_eq!(restored.address, "192.168.1.1:9470");
+        assert_eq!(restored.address, "192.168.1.1:9489");
         assert_eq!(restored.platform, "wasi");
     }
 }

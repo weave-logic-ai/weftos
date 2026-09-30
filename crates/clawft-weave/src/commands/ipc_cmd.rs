@@ -3,7 +3,6 @@
 use clap::{Args, Subcommand};
 use comfy_table::{Cell, Table};
 
-use crate::client::DaemonClient;
 use crate::protocol::{IpcPublishParams, IpcSubscribeParams, IpcTopicInfo, Request};
 
 #[derive(Args)]
@@ -33,9 +32,7 @@ pub enum IpcCommand {
 }
 
 pub async fn run(args: IpcArgs) -> anyhow::Result<()> {
-    let mut client = DaemonClient::connect()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("no daemon running — start with 'weaver kernel start'"))?;
+    let mut client = clawft_rpc::connect_or_bail().await?;
 
     match args.command {
         IpcCommand::Topics => {

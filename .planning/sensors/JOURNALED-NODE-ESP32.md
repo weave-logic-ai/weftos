@@ -83,31 +83,37 @@ key-regen + rename-migration, not an ontology change.
 
 ### 2.2 Node ID derivation
 
-- Compute BLAKE3 hash of the raw public key (32 bytes).
-- Take the first 3 bytes → 6 hex chars.
-- Prefix with `n-` for scannability in paths and logs.
-- **Example**: `n-6f3a9c`.
+Amended by ADR-103 D11: one node-id derivation for the whole system.
 
-Collision probability: with 3-byte truncation the birthday bound is ~4000
-nodes for 1% collision probability. That's comfortably above any plausible
-mesh size for the near horizon. If we ever hit mesh scale where that bound
-squeezes, we extend to 4 or 5 bytes — the `n-` prefix makes the format
-forward-extensible (just longer hex suffix).
+- Compute SHA-256 of the raw public key (32 bytes).
+- Take the first 16 bytes → 32 lowercase hex chars.
+- **Example**: `66687aadf862bd776c8fc18b8e9f8e20` (the id of the all-zero key).
+
+`node_id = hex(SHA-256(pubkey)[..16])`, identical to `cluster.rs`
+`NodeIdentity`, ADR-099 and `clawft_kernel::node_id_from_pubkey`. The earlier
+draft of this section (`n-` + 3 bytes of BLAKE3) is withdrawn.
+
+Collision probability: 128 bits of hash, no practical collision risk at any
+mesh size. The cost is a longer path segment (`substrate/<32-hex>/...`),
+accepted so the mesh, cluster, substrate and leaf firmware share one id. A
+32-hex segment cannot equal a reserved word such as `_derived` or `meta`, so
+the old `n-` prefix is no longer needed for namespace safety.
 
 Alternatives considered:
 
-- Full pubkey (44 chars base58 or 64 hex): correct but noisy in paths.
-  Every substrate path would start with `substrate/<64-hex-chars>/...`.
-  UX tax is real.
+- Full pubkey (44 chars base58 or 64 hex): correct but noisier in paths.
 - UUID-v4: zero collision risk, but doesn't bind to the key — you'd need
   a separate mapping from uuid → pubkey, adding an indirection layer the
   write-gate has to consult.
 - DNS-like names (`mic-kitchen-1.local`): confuses label with identity.
   The whole point of separating these is to make the label mutable.
+- Short BLAKE3 with `n-` prefix (the withdrawn draft): compact, but a second
+  derivation nobody else used.
 
-**Picked: `n-<6-hex>` truncated BLAKE3 of pubkey.** Compact, stable,
-self-authenticating (anyone can verify a publish's signature against
-the claimed node-id by hashing the key).
+**Picked: `hex(SHA-256(pubkey)[..16])`.** Stable and self-authenticating
+(anyone can verify a publish's signature against the claimed node-id by
+hashing the key). Firmware needs a no_std SHA-256 (`sha2` with
+`default-features = false`).
 
 ## 3. Paths this node owns
 
@@ -184,7 +190,7 @@ Shape:
 
 ```json
 {
-  "node_id": "n-6f3a9c",
+  "node_id": "66687aadf862bd776c8fc18b8e9f8e20",
   "label": "kitchen-esp32",
   "hardware": {
     "soc": "ESP32-S3",
@@ -196,7 +202,7 @@ Shape:
   "capabilities": {
     "sensors": ["mic"],
     "radios": ["wifi-2g4", "ble5"],
-    "crypto": ["ed25519-sign", "blake3-hash"]
+    "crypto": ["ed25519-sign", "sha256-hash"]
   },
   "provisioned_at": 1710000000000,
   "pubkey": "<64-hex-chars>"
@@ -349,7 +355,7 @@ parameterization.
   has hard-coded `KERNEL_HOST` / `KERNEL_PORT` constants and publishes
   to a flat path. The refactor:
   1. Load / generate ed25519 keypair from NVS at boot.
-  2. Compute node-id from pubkey (BLAKE3 → truncate → hex-prefix).
+  2. Compute node-id from pubkey (SHA-256 → first 16 bytes → hex; ADR-103 D11).
   3. Derive all substrate paths by prefixing with
      `substrate/<node-id>/...`.
   4. Sign every publish with the private key; carry the signature in
@@ -397,8 +403,8 @@ baked-in way.
 
 ## 8. Open questions
 
-1. **Node-id length and format final sign-off.** `n-<6-hex>` truncated
-   BLAKE3 of pubkey — confirm or adjust. Sign-off needed.
+1. ~~Node-id length and format final sign-off.~~ Settled by ADR-103 D11:
+   `hex(SHA-256(pubkey)[..16])`.
 2. **Key-storage tier for first journaled node.** Plain NVS vs NVS-
    encrypted vs eFuse for provisioning-grade. Proposal: plain NVS,
    upgrade later. Sign-off needed.

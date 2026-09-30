@@ -46,6 +46,17 @@ pub enum KernelAction {
         /// Run in foreground instead of backgrounding.
         #[arg(long)]
         foreground: bool,
+
+        /// Start a fresh chain at the resolved path instead of adopting the
+        /// legacy `~/.clawft` chain (the legacy chain is left untouched).
+        #[arg(long)]
+        new_chain: bool,
+
+        /// Adopt the legacy `~/.clawft` chain for the first time. Required
+        /// once, after stopping every older weaver daemon, while no
+        /// `chain.lock` exists beside that chain.
+        #[arg(long, conflicts_with = "new_chain")]
+        adopt_legacy_chain: bool,
     },
 
     /// Stop a running kernel daemon (sends SIGTERM).
@@ -125,13 +136,19 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
 
     match args.action {
         #[cfg(any(unix, windows))]
-        KernelAction::Start { foreground } => {
+        KernelAction::Start {
+            foreground,
+            new_chain,
+            adopt_legacy_chain,
+        } => {
             if foreground {
                 // Run in foreground (blocking)
                 let platform = NativePlatform::new();
                 let loaded =
                     super::load_config_layered(&platform, args.config.as_deref()).await?;
                 let kernel_config = loaded.config.kernel.clone();
+                clawft_kernel::chain_storage::request_new_chain(new_chain);
+                clawft_kernel::chain_storage::request_adopt_legacy_chain(adopt_legacy_chain);
                 crate::daemon::run(
                     loaded.config,
                     kernel_config,
@@ -141,7 +158,7 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
                 .await?;
             } else {
                 // Background (default) — spawn detached child
-                crate::daemon::daemonize(args.config.as_deref())?;
+                crate::daemon::daemonize(args.config.as_deref(), new_chain, adopt_legacy_chain)?;
             }
         }
         #[cfg(unix)]
@@ -188,7 +205,7 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
         KernelAction::Restart => {
             println!("Restarting daemon (stop + start)...");
             let _ = stop_windows(true).await;
-            crate::daemon::daemonize(args.config.as_deref())?;
+            crate::daemon::daemonize(args.config.as_deref(), false, false)?;
         }
         #[cfg(not(any(unix, windows)))]
         KernelAction::Start { .. } | KernelAction::Stop { .. } | KernelAction::Restart => {
@@ -265,9 +282,7 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
             run_rotate_key(grace_period_secs, dry_run)?;
         }
         KernelAction::Attach { tail, level } => {
-            let mut client = DaemonClient::connect().await.ok_or_else(|| {
-                anyhow::anyhow!("no daemon running (use 'weaver kernel start' first)")
-            })?;
+            let mut client = clawft_rpc::connect_or_bail().await?;
 
             // Get the total event count to seed our cursor, then show recent tail
             let all_params = protocol::LogsParams {
@@ -398,9 +413,9 @@ fn run_rotate_key(grace_period_secs: u64, dry_run: bool) -> anyhow::Result<()> {
         grace_period_secs
     };
 
-    let runtime_dir = protocol::runtime_dir();
-    fs::create_dir_all(&runtime_dir)?;
-    let key_path: PathBuf = runtime_dir.join("node.key");
+    let paths = protocol::runtime_paths();
+    fs::create_dir_all(paths.root())?;
+    let key_path: PathBuf = paths.node_key();
 
     // Load or generate current identity (same layout as node_identity).
     let old_key = if key_path.exists() {
@@ -452,7 +467,7 @@ fn run_rotate_key(grace_period_secs: u64, dry_run: bool) -> anyhow::Result<()> {
     }
 
     // Append rotation event to local chain export (best-effort).
-    let chain_dir = runtime_dir.join("chain");
+    let chain_dir = paths.chain_dir();
     fs::create_dir_all(&chain_dir)?;
     let chain_path = chain_dir.join("local.jsonl");
     if let Err(e) = chain.save_to_file(&chain_path) {
@@ -602,7 +617,8 @@ async fn boot_or_exit(
     kernel_config: clawft_types::config::KernelConfig,
     platform: NativePlatform,
 ) -> Kernel<NativePlatform> {
-    match Kernel::boot(config, kernel_config, Arc::new(platform)).await {
+    // Ephemeral inspection boot: bind no listeners (a daemon may hold the port).
+    match Kernel::boot(config, kernel_config.for_inspection(), Arc::new(platform)).await {
         Ok(kernel) => kernel,
         Err(e) => {
             eprintln!("kernel boot failed: {e}");
@@ -749,7 +765,7 @@ fn print_event_log<P: clawft_platform::Platform>(
 // ── Signal / PID helpers ────────────────────────────────────────
 
 #[cfg(unix)]
-/// Read the daemon PID from `~/.clawft/kernel.pid` and validate the process exists.
+/// Read the daemon PID from `<runtime>/kernel.pid` and validate the process exists.
 fn read_daemon_pid() -> anyhow::Result<i32> {
     let pid_path = protocol::pid_path();
     let pid_str = std::fs::read_to_string(&pid_path)

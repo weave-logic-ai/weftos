@@ -559,7 +559,21 @@ cmd_all() {
 # honest full-suite verdict on a dev box where a known-environmental failure
 # (e.g. the clawft-rpc no-daemon tests while a daemon is running) would
 # otherwise fail-fast and mask the remaining tests.
+# Tests link the non-test kernel lib, which resolves runtime files (cluster
+# peers, apps, revoked hosts, node key) through RuntimePaths::resolve().
+# Point that at a throwaway dir unless the caller already chose one, so a
+# test run never touches a real project's .weftos/runtime or ~/.clawft.
+isolate_test_runtime() {
+    if [ -z "${WEFTOS_RUNTIME_DIR:-}" ]; then
+        WEFTOS_RUNTIME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/weftos-test-runtime.XXXXXX")"
+        export WEFTOS_RUNTIME_DIR
+        # shellcheck disable=SC2064
+        trap "rm -rf '$WEFTOS_RUNTIME_DIR'" EXIT
+    fi
+}
+
 workspace_test() {
+    isolate_test_runtime
     local extra=()
     [ "$NO_FAIL_FAST" = true ] && extra+=(--no-fail-fast)
     # Honor `--features <f>` so feature-gated adapters (matrix, email, …)
@@ -856,17 +870,26 @@ cmd_check() {
 }
 
 cmd_clippy() {
-    header "Running clippy (warnings as errors)${FEATURES:+ --features $FEATURES}"
+    # `clippy <pkg>…` scopes to the named packages; none means the workspace.
+    local scope=(--workspace)
+    if [ ${#TEST_PACKAGES[@]} -gt 0 ]; then
+        scope=()
+        local pkg
+        for pkg in "${TEST_PACKAGES[@]}"; do scope+=(-p "$pkg"); done
+        # Scoped runs lint only the named packages, not their workspace deps.
+        scope+=(--no-deps)
+    fi
+    header "Running clippy (warnings as errors) ${scope[*]}${FEATURES:+ --features $FEATURES}"
     timer_start
     if [ "$DRY_RUN" = true ]; then
-        printf "  ${YELLOW}DRY${NC}   cargo clippy --workspace%s -- -D warnings\n" \
-            "${FEATURES:+ --features $FEATURES}"
+        printf "  ${YELLOW}DRY${NC}   cargo clippy %s%s -- -D warnings\n" \
+            "${scope[*]}" "${FEATURES:+ --features $FEATURES}"
     else
         # Always show full output — tail -5 hides warnings
         if [ -n "$FEATURES" ]; then
-            cargo clippy --workspace --features "$FEATURES" -- -D warnings 2>&1
+            cargo clippy "${scope[@]}" --features "$FEATURES" -- -D warnings 2>&1
         else
-            cargo clippy --workspace -- -D warnings 2>&1
+            cargo clippy "${scope[@]}" -- -D warnings 2>&1
         fi
     fi
     timer_end
@@ -1034,10 +1057,17 @@ CARGO_AUDIT_IGNORES=(
     # 0.8.0 residual — tracked post-tag; do not expand silently without Plane note
     --ignore RUSTSEC-2026-0194   # quick-xml quadratic attrs (transitive); need >=0.41
     --ignore RUSTSEC-2026-0195   # quick-xml NsReader DoS (transitive); need >=0.41
-    --ignore RUSTSEC-2026-0222   # wasmtime type indices; upgrade path post 0.8.0
-    --ignore RUSTSEC-2026-0269   # wasmtime FS trailing-slash escape; fix needs wasmtime 46 = Rust 1.94.
+    --ignore RUSTSEC-2026-0222   # wasmtime type indices mixed between engines; ticket toolchain-wasmtime-bump.
+                                 # Needs two engines sharing a store; kernel uses one engine per runner.
+                                 # Not fully audited. Expiry in CARGO_AUDIT_EXPIRIES.
+    --ignore RUSTSEC-2026-0269   # wasmtime FS trailing-slash escape; ticket toolchain-wasmtime-bump.
                                  # Not reachable: the only WASI ctx (kernel wasm_runner) has no FS preopens.
-                                 # 0.8.1 residual; board ticket wasmtime-46-toolchain-1-94
+    --ignore RUSTSEC-2026-0314   # wasmtime-wasi FS datetime overflow panic; fixed in wasmtime 48.0.3+ (Rust 1.95+).
+                                 # Not reachable: no FS preopens, so guests have no filesystem. toolchain-wasmtime-bump.
+    --ignore RUSTSEC-2026-0316   # wasmtime dynamic record lifting fuel bypass (component model; low severity).
+                                 # component-model IS enabled (feature unification via wasmtime-wasi p2), but nothing
+                                 # instantiates a component: only core Module::new and p1::add_to_linker_async.
+                                 # Re-check if anyone adds Component::, bindgen! or a p2/component host.
     --ignore RUSTSEC-2020-0036   # failure unmaintained (transitive)
     --ignore RUSTSEC-2019-0036   # failure unsound (transitive)
     --ignore RUSTSEC-2026-0221   # event-listener unsound (transitive async stack)
@@ -1047,6 +1077,41 @@ CARGO_AUDIT_IGNORES=(
     --no-yanked
 )
 
+# Expiry dates for time-boxed ignores (docs/security/cargo-audit-residual.md).
+# The audit step fails once a date has passed, forcing a re-triage.
+CARGO_AUDIT_EXPIRIES=(
+    "RUSTSEC-2026-0222 2026-12-31"
+    "RUSTSEC-2026-0269 2026-12-31"
+    "RUSTSEC-2026-0314 2026-12-31"
+    "RUSTSEC-2026-0316 2026-12-31"
+)
+
+# The wasmtime ignores are justified by how we use wasmtime. Fail if the source
+# starts using the features that would make them reachable.
+audit_guard_wasmtime_usage() {
+    local hits
+    hits=$(grep -rnE 'wasmtime::component|Component::new|bindgen!|preopened_dir|\.preopen\(' \
+        "$ROOT/crates" --include='*.rs' 2>/dev/null | grep -vE '^[^:]+:[0-9]+:\s*//' || true)
+    if [ -n "$hits" ]; then
+        fail "wasmtime ignores (0269/0314/0316) assume no components and no FS preopens; found:"
+        printf '%s\n' "$hits"
+        return 1
+    fi
+}
+
+audit_check_expiries() {
+    local today entry id date rc=0
+    today=$(date +%Y-%m-%d)
+    for entry in "${CARGO_AUDIT_EXPIRIES[@]}"; do
+        id=${entry% *}; date=${entry#* }
+        if [[ "$today" > "$date" ]]; then
+            fail "cargo-audit ignore $id expired on $date — re-triage or upgrade"
+            rc=1
+        fi
+    done
+    return $rc
+}
+
 cmd_audit() {
     header "Running cargo audit (with 0.7.0 ignore-list)"
     if ! command -v cargo-audit >/dev/null 2>&1; then
@@ -1054,6 +1119,8 @@ cmd_audit() {
         return 1
     fi
     timer_start
+    audit_check_expiries || return 1
+    audit_guard_wasmtime_usage || return 1
     if [ "$DRY_RUN" = true ]; then
         printf "  ${YELLOW}DRY${NC}   cargo audit %s\n" "${CARGO_AUDIT_IGNORES[*]}"
     else
@@ -1310,6 +1377,7 @@ check_kernel_diskann_and_bench_matrix() {
 # pipeline:: plus related integration names (e.g. compress_pipeline).
 # Typical runtime: <5s after compile; AC target <60s.
 cmd_pipeline_pass_impl() {
+    isolate_test_runtime
     if cargo nextest --version >/dev/null 2>&1; then
         cargo nextest run -p clawft-core -E 'test(pipeline)'
     else
@@ -1971,7 +2039,8 @@ parse_args() {
 
     # Capture positional args for test command (package scoping):
     #   scripts/build.sh test [<package>…]
-    if [ "$COMMAND" = "test" ]; then
+    #   scripts/build.sh clippy [<package>…]
+    if [ "$COMMAND" = "test" ] || [ "$COMMAND" = "clippy" ]; then
         while [ $# -gt 0 ] && [[ "$1" != --* ]]; do
             TEST_PACKAGES+=("$1")
             shift

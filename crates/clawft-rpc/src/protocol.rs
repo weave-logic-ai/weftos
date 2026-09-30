@@ -12,14 +12,10 @@
 
 use std::path::{Path, PathBuf};
 
+use clawft_types::runtime_paths::RuntimePaths;
 use serde::{Deserialize, Serialize};
 
-/// Default socket path (relative to config dir).
-///
-/// On Unix this is a real filesystem path component. On Windows it is
-/// the *logical* name used to derive the named-pipe path via
-/// [`pipe_name_for_path`]; PID/log files still live on the filesystem.
-pub const SOCKET_NAME: &str = "kernel.sock";
+pub use clawft_types::runtime_paths::{LOG_FILE_NAME, PID_FILE_NAME, SOCKET_NAME};
 
 /// Windows named-pipe name prefix (WEFT-11).
 ///
@@ -28,47 +24,18 @@ pub const SOCKET_NAME: &str = "kernel.sock";
 /// runtimes stay isolated the same way UDS paths do on Unix.
 pub const PIPE_NAME_PREFIX: &str = r"\\.\pipe\clawft-kernel";
 
-/// PID file name.
-pub const PID_FILE_NAME: &str = "kernel.pid";
-
-/// Log file name.
-pub const LOG_FILE_NAME: &str = "kernel.log";
-
-/// Resolve the WeftOS runtime directory.
+/// Resolve the WeftOS runtime paths (one resolver for every runtime file).
 ///
-/// Resolution order:
-/// 1. `WEFTOS_RUNTIME_DIR` environment variable (explicit override)
-/// 2. `.weftos/runtime/` in the nearest ancestor with a `.weftos/` directory
-///    (project-local kernel — allows multiple kernels per machine)
-/// 3. `~/.clawft/` global fallback (single shared kernel)
-///
-/// This enables per-project kernels: each project with a `.weftos/` directory
-/// gets its own socket, PID file, and log file.
+/// See [`clawft_types::runtime_paths`] for the resolution order:
+/// `WEFTOS_RUNTIME_DIR`, then the nearest project (`.weftos/project.toml` or
+/// `.weftos/weave.toml`, never `$HOME`), then legacy `~/.clawft`.
+pub fn runtime_paths() -> RuntimePaths {
+    RuntimePaths::resolve()
+}
+
+/// Resolve the WeftOS runtime directory (root of [`runtime_paths`]).
 pub fn runtime_dir() -> PathBuf {
-    // 1. Explicit override
-    if let Ok(dir) = std::env::var("WEFTOS_RUNTIME_DIR") {
-        return PathBuf::from(dir);
-    }
-
-    // 2. Walk up from CWD looking for .weftos/
-    if let Ok(cwd) = std::env::current_dir() {
-        let mut dir = cwd.as_path();
-        loop {
-            let candidate = dir.join(".weftos");
-            if candidate.is_dir() {
-                return candidate.join("runtime");
-            }
-            match dir.parent() {
-                Some(parent) => dir = parent,
-                None => break,
-            }
-        }
-    }
-
-    // 3. Global fallback
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join(".clawft")
+    runtime_paths().root().to_path_buf()
 }
 
 /// Resolve the full *logical* socket path.
@@ -78,7 +45,7 @@ pub fn runtime_dir() -> PathBuf {
 /// tests); the client maps it to a named-pipe name via
 /// [`pipe_name_for_path`] before dialing.
 pub fn socket_path() -> PathBuf {
-    runtime_dir().join(SOCKET_NAME)
+    runtime_paths().socket()
 }
 
 /// Map a logical socket path to a Windows named-pipe path (WEFT-11).
@@ -111,12 +78,12 @@ pub fn default_pipe_name() -> String {
 
 /// Resolve the PID file path.
 pub fn pid_path() -> PathBuf {
-    runtime_dir().join(PID_FILE_NAME)
+    runtime_paths().pid()
 }
 
 /// Resolve the log file path.
 pub fn log_path() -> PathBuf {
-    runtime_dir().join(LOG_FILE_NAME)
+    runtime_paths().log()
 }
 
 // ── Requests ───────────────────────────────────────────────

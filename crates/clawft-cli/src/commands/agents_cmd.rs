@@ -46,10 +46,6 @@ pub enum AgentsAction {
     },
 }
 
-/// Warning printed when no daemon is available.
-const NO_DAEMON_WARNING: &str =
-    "Warning: running without kernel daemon. Start daemon with: weaver kernel start";
-
 /// Run the agents subcommand.
 pub async fn run(args: AgentsArgs) -> anyhow::Result<()> {
     match args.action {
@@ -89,7 +85,10 @@ async fn agents_list_rpc() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    eprintln!("{NO_DAEMON_WARNING}");
+    eprintln!(
+        "{}",
+        super::daemon_fallback::local_note("listing the local registry").await
+    );
     agents_list_local()
 }
 
@@ -103,7 +102,10 @@ async fn agents_show_rpc(name: &str) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    eprintln!("{NO_DAEMON_WARNING}");
+    eprintln!(
+        "{}",
+        super::daemon_fallback::local_note("showing the local registry").await
+    );
     agents_show_local(name)
 }
 
@@ -127,7 +129,10 @@ async fn agents_use_rpc(name: &str) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    eprintln!("{NO_DAEMON_WARNING}");
+    eprintln!(
+        "{}",
+        super::daemon_fallback::local_note("validating against the local registry (nothing is persisted)").await
+    );
     agents_use_local(name)
 }
 

@@ -1,6 +1,6 @@
 //! Persistent host revocation (ban list).
 //!
-//! Stores a JSON file at `.weftos/runtime/revoked_hosts.json` containing
+//! Stores a JSON file at `RuntimePaths::revoked_hosts()` containing
 //! hosts that have been banned from joining the mesh. The ban list is
 //! loaded at kernel boot and checked during mesh peer handshake.
 //!
@@ -8,7 +8,7 @@
 //! (ADR-099 section 7); see [`RevocationKind`] and
 //! [`RevocationList::revoke_subject`]. Those persist in a sibling file.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -174,13 +174,6 @@ impl RevocationList {
             }
         }
     }
-
-    /// Default path for the revocation file relative to a base directory.
-    pub fn default_path(base: &Path) -> PathBuf {
-        base.join(".weftos")
-            .join("runtime")
-            .join("revoked_hosts.json")
-    }
 }
 
 #[cfg(test)]
@@ -272,13 +265,5 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].host_id, "a");
         assert_eq!(entries[1].host_id, "b");
-    }
-
-    #[test]
-    fn default_path() {
-        let base = Path::new("/tmp/test");
-        let p = RevocationList::default_path(base);
-        assert!(p.to_string_lossy().contains("revoked_hosts.json"));
-        assert!(p.to_string_lossy().contains(".weftos/runtime"));
     }
 }

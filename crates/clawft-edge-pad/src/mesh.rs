@@ -60,7 +60,7 @@ use crate::drivers::dpi_surface::DpiSurface;
 
 // ── Connection constants (spike: hardcoded) ──────────────────────────
 const DAEMON_IP: Ipv4Address = Ipv4Address::new(192, 168, 1, 73);
-const DAEMON_MESH_PORT: u16 = 9470;
+const DAEMON_MESH_PORT: u16 = 9489;
 /// Device-MAC-derived leaf identity. `weaver leaf scene push --target
 /// 3cdc75fabc7c …` targets this leaf. (MAC 3c:dc:75:fa:bc:7c.)
 const LEAF_ID: &str = "3cdc75fabc7c";

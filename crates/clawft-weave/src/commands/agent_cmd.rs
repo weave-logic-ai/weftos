@@ -3,7 +3,6 @@
 use clap::{Args, Subcommand};
 use comfy_table::{Cell, Table};
 
-use crate::client::DaemonClient;
 use crate::protocol::{
     AgentInspectResult, AgentRestartParams, AgentSendParams, AgentSpawnParams, AgentSpawnResult,
     AgentStopParams, ProcessInfo, Request,
@@ -60,9 +59,7 @@ pub enum AgentCommand {
 }
 
 pub async fn run(args: AgentArgs) -> anyhow::Result<()> {
-    let mut client = DaemonClient::connect()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("no daemon running — start with 'weaver kernel start'"))?;
+    let mut client = clawft_rpc::connect_or_bail().await?;
 
     match args.command {
         AgentCommand::Spawn { agent_id, parent } => {

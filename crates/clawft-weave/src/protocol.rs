@@ -7,7 +7,9 @@
 use serde::{Deserialize, Serialize};
 
 // Re-export core protocol types from clawft-rpc.
-pub use clawft_rpc::{Request, Response, log_path, pid_path, runtime_dir, socket_path};
+pub use clawft_rpc::{
+    Request, Response, log_path, pid_path, runtime_dir, runtime_paths, socket_path,
+};
 
 // ── Typed result structs ───────────────────────────────────
 
@@ -592,8 +594,8 @@ pub struct NodeIdentityParams {}
 /// own node identity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeIdentityResult {
-    /// The daemon's deterministic node-id (`n-<6-hex>` BLAKE3 prefix
-    /// of the daemon's pubkey).
+    /// The daemon's deterministic node-id (`hex(SHA-256(pubkey)[..16])`,
+    /// ADR-103 D11).
     pub node_id: String,
     /// Friendly label (always `"daemon"` for this implementation).
     pub label: String,
@@ -1129,8 +1131,8 @@ pub struct AgentRegisterResult {
 /// hostile client cannot register someone else's key.
 ///
 /// The node-id is **derived deterministically** from the pubkey
-/// (`n-<6-hex>` BLAKE3 prefix per
-/// `.planning/sensors/JOURNALED-NODE-ESP32.md` §2.2), so re-running
+/// (`hex(SHA-256(pubkey)[..16])` per
+/// ADR-103 D11), so re-running
 /// the registration with the same key returns the same id. Distinct
 /// from `agent.register` whose `agent_id` is a fresh UUID.
 ///

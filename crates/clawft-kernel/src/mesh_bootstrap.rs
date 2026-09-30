@@ -23,7 +23,7 @@ use async_trait::async_trait;
 
 /// Bootstrap discovery from static seed peers.
 pub struct BootstrapDiscovery {
-    /// Seed peer addresses (e.g., "quic://192.168.1.100:9470").
+    /// Seed peer addresses (e.g., "quic://192.168.1.100:9489").
     seed_addresses: Vec<String>,
     /// Peers discovered from seed connections.
     discovered: Vec<DiscoveredPeer>,
@@ -144,8 +144,8 @@ mod tests {
     #[tokio::test]
     async fn bootstrap_start_produces_peers() {
         let seeds = vec![
-            "quic://10.0.0.1:9470".to_string(),
-            "quic://10.0.0.2:9470".to_string(),
+            "quic://10.0.0.1:9489".to_string(),
+            "quic://10.0.0.2:9489".to_string(),
         ];
         let mut disc = BootstrapDiscovery::new(seeds);
         disc.start().await.unwrap();
@@ -153,7 +153,7 @@ mod tests {
         let peers = disc.poll().await;
         assert_eq!(peers.len(), 2);
         assert_eq!(peers[0].node_id, "seed-0");
-        assert_eq!(peers[0].address, "quic://10.0.0.1:9470");
+        assert_eq!(peers[0].address, "quic://10.0.0.1:9489");
         assert_eq!(peers[0].source, DiscoverySource::SeedPeer);
         assert_eq!(peers[1].node_id, "seed-1");
     }
@@ -207,7 +207,7 @@ mod tests {
 
         let incoming = vec![DiscoveredPeer {
             node_id: "remote-1".into(),
-            address: "quic://192.168.1.50:9470".into(),
+            address: "quic://192.168.1.50:9489".into(),
             platform: "darwin".into(),
             source: DiscoverySource::Manual, // will be overwritten
         }];

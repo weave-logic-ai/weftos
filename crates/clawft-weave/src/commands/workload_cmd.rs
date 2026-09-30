@@ -8,7 +8,6 @@
 use clap::{Args, Subcommand};
 use serde_json::Value;
 
-use crate::client::DaemonClient;
 use crate::protocol::Request;
 
 /// `weaver workload` arguments.
@@ -90,9 +89,7 @@ pub async fn run(args: WorkloadArgs) -> anyhow::Result<()> {
     if let WorkloadCommand::Package(cmd) = args.command {
         return super::workload_pack::run(cmd);
     }
-    let mut client = DaemonClient::connect()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("no daemon running — start with 'weaver kernel start'"))?;
+    let mut client = clawft_rpc::connect_or_bail().await?;
     match args.command {
         WorkloadCommand::List { json } => {
             let resp = client.simple_call("workload.list").await?;

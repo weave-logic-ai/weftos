@@ -9,6 +9,7 @@ use crate::hex_util::{bytes_to_hex, hex_to_bytes};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use zeroize::Zeroize;
@@ -19,9 +20,10 @@ const IDENTITY_FILE: &str = "node_identity.json";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct NodeIdentity {
-    /// 32-byte verifying key as lowercase hex (canonical node id).
+    /// Canonical node id: `hex(SHA-256(pubkey)[..16])` (ADR-103 D11), the
+    /// same derivation as `clawft_kernel::node_id_from_pubkey`.
     pub node_id_hex: String,
-    /// Same as `node_id_hex` today; kept for future multi-key schemes.
+    /// 32-byte verifying key as lowercase hex.
     pub public_key_hex: String,
 }
 
@@ -32,6 +34,12 @@ struct IdentityFile {
     public_key_hex: String,
     /// Schema marker for forward compatibility.
     version: u32,
+}
+
+/// `hex(SHA-256(pubkey)[..16])`. Kept in step with the kernel's
+/// `node_id_from_pubkey` (this crate does not depend on the kernel).
+fn node_id_from_pubkey(pubkey: &[u8; 32]) -> String {
+    bytes_to_hex(&Sha256::digest(pubkey)[..16])
 }
 
 /// Load an existing identity or create + persist a new Ed25519 keypair.
@@ -68,7 +76,7 @@ pub fn load(path: &Path) -> Result<NodeIdentity, EdgeError> {
         ));
     }
     Ok(NodeIdentity {
-        node_id_hex: public_hex.clone(),
+        node_id_hex: node_id_from_pubkey(verifying.as_bytes()),
         public_key_hex: public_hex,
     })
 }
@@ -89,7 +97,7 @@ fn create_and_store(path: &Path) -> Result<NodeIdentity, EdgeError> {
     write_private(path, json.as_bytes())?;
     let _ = seed_hex; // dropped (string); seed already in file
     Ok(NodeIdentity {
-        node_id_hex: public_key_hex.clone(),
+        node_id_hex: node_id_from_pubkey(verifying.as_bytes()),
         public_key_hex,
     })
 }
@@ -166,8 +174,18 @@ mod tests {
         let a = load_or_create(dir.path()).unwrap();
         let b = load_or_create(dir.path()).unwrap();
         assert_eq!(a.node_id_hex, b.node_id_hex);
-        assert_eq!(a.node_id_hex.len(), 64);
-        assert_eq!(a.public_key_hex, a.node_id_hex);
+        assert_eq!(a.node_id_hex.len(), 32);
+        assert_eq!(a.public_key_hex.len(), 64);
+        assert_ne!(a.public_key_hex, a.node_id_hex);
+    }
+
+    #[test]
+    fn node_id_matches_kernel_vector() {
+        // Same vector as clawft-kernel node_id tests: SHA-256 of 32 zero bytes.
+        assert_eq!(
+            node_id_from_pubkey(&[0u8; 32]),
+            "66687aadf862bd776c8fc18b8e9f8e20"
+        );
     }
 
     #[test]

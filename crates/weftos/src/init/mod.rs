@@ -146,7 +146,7 @@ risk_threshold = 0.9
 
 [mesh]
 enabled = false
-bind_address = "0.0.0.0:9470"
+bind_address = "0.0.0.0:9489"
 seed_peers = []
 "#
     )

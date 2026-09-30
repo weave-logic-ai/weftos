@@ -325,9 +325,7 @@ async fn run_scene_ps(
     use crate::protocol;
 
     // 1. Fetch the process table via the daemon.
-    let mut client = clawft_rpc::DaemonClient::connect().await.ok_or_else(|| {
-        anyhow::anyhow!("cannot connect to kernel daemon.\nIs `weaver kernel start` running?")
-    })?;
+    let mut client = clawft_rpc::connect_or_bail().await?;
     let resp = client.simple_call("kernel.ps").await?;
     if !resp.ok {
         anyhow::bail!("kernel.ps failed: {}", resp.error.unwrap_or_default());
@@ -502,9 +500,7 @@ async fn publish_cbor(
     println!("Topic:   {topic}");
     println!("Payload: {} bytes CBOR ({wire_kind})", cbor_bytes.len());
 
-    let mut client = clawft_rpc::DaemonClient::connect().await.ok_or_else(|| {
-        anyhow::anyhow!("cannot connect to kernel daemon.\nIs `weaver kernel start` running?")
-    })?;
+    let mut client = clawft_rpc::connect_or_bail().await?;
 
     let params = serde_json::to_value(IpcPublishParams {
         topic: topic.to_string(),

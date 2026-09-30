@@ -636,7 +636,11 @@ use crate::protocol::{
 ///
 /// Works on Unix and Windows (WEFT-559). On Windows the child is created
 /// detached so closing the parent console does not kill the daemon.
-pub fn daemonize(config_override: Option<&str>) -> anyhow::Result<()> {
+pub fn daemonize(
+    config_override: Option<&str>,
+    new_chain: bool,
+    adopt_legacy_chain: bool,
+) -> anyhow::Result<()> {
     use std::process::Command;
 
     let runtime_dir = protocol::runtime_dir();
@@ -669,6 +673,12 @@ pub fn daemonize(config_override: Option<&str>) -> anyhow::Result<()> {
     if let Some(cfg) = config_override {
         cmd.args(["--config", cfg]);
     }
+    if new_chain {
+        cmd.arg("--new-chain");
+    }
+    if adopt_legacy_chain {
+        cmd.arg("--adopt-legacy-chain");
+    }
 
     // Windows: detach so the daemon outlives the spawning console.
     #[cfg(windows)]
@@ -679,14 +689,27 @@ pub fn daemonize(config_override: Option<&str>) -> anyhow::Result<()> {
         cmd.creation_flags(FLAGS);
     }
 
-    let child = cmd
+    let mut child = cmd
         .stdout(log_file)
         .stderr(log_err)
         .stdin(std::process::Stdio::null())
         .spawn()?;
 
     let pid = child.id();
-    std::fs::write(&pid_path, pid.to_string())?;
+    // The child writes kernel.pid itself once boot (runtime and chain locks)
+    // succeeded; success is reported only when it serves.
+    let ready =
+        wait_for_daemon_ready(&mut child, &protocol::socket_path(), &pid_path, &log_path)?;
+    if !ready {
+        // Exit status 0: the daemon is alive and booting (a big chain can
+        // take minutes); it is not a failure, but nothing is serving yet.
+        println!(
+            "WeftOS kernel still starting (pid {pid}); check `weaver kernel status` \
+             (log: {})",
+            log_path.display()
+        );
+        return Ok(());
+    }
 
     println!("WeftOS kernel started (pid {pid})");
     #[cfg(unix)]
@@ -703,6 +726,62 @@ pub fn daemonize(config_override: Option<&str>) -> anyhow::Result<()> {
     println!("Use 'weaver kernel stop' to shut down.");
 
     Ok(())
+}
+
+/// Last few non-empty lines of the daemon log, for failure messages.
+fn log_tail(log_path: &std::path::Path) -> String {
+    let Ok(text) = std::fs::read(log_path) else {
+        return String::new();
+    };
+    let text = String::from_utf8_lossy(&text[text.len().saturating_sub(4096)..]).into_owned();
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    lines[lines.len().saturating_sub(8)..].join("\n")
+}
+
+/// True once the daemon's endpoint accepts connections.
+fn daemon_ready(socket: &std::path::Path, pid_path: &std::path::Path, want_pid: &str) -> bool {
+    #[cfg(unix)]
+    {
+        // The child writes kernel.pid after boot; requiring our child's pid
+        // keeps another live daemon's socket from counting as ours.
+        std::fs::read_to_string(pid_path).is_ok_and(|s| s.trim() == want_pid)
+            && std::os::unix::net::UnixStream::connect(socket).is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        // Named pipes have no sync probe here; the PID file is written only
+        // after a successful boot, so it is the readiness marker.
+        let _ = socket;
+        std::fs::read_to_string(pid_path).is_ok_and(|s| s.trim() == want_pid)
+    }
+}
+
+/// Wait for the freshly spawned daemon to become reachable, failing with the
+/// tail of its log if it exits first (for example because another kernel
+/// owns the runtime dir or the chain). Returns `true` once the daemon
+/// serves and `false` if it is still starting after the timeout.
+fn wait_for_daemon_ready(
+    child: &mut std::process::Child,
+    socket: &std::path::Path,
+    pid_path: &std::path::Path,
+    log_path: &std::path::Path,
+) -> anyhow::Result<bool> {
+    let want = child.id().to_string();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    while std::time::Instant::now() < deadline {
+        if let Some(status) = child.try_wait()? {
+            anyhow::bail!(
+                "kernel exited during startup ({status}); last log lines from {}:\n{}",
+                log_path.display(),
+                log_tail(log_path)
+            );
+        }
+        if daemon_ready(socket, pid_path, &want) {
+            return Ok(true);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Ok(false)
 }
 
 /// Return true if a process with the given PID appears to be alive.
@@ -851,6 +930,23 @@ fn open_or_create_cow_memory(
     }
 }
 
+/// Boot the kernel with the daemon's persisted node key so its mesh /
+/// cluster node id equals `identity.node_id` (ADR-103 D11).
+pub(crate) async fn boot_kernel_with_identity(
+    config: Config,
+    kernel_config: KernelConfig,
+    platform: Arc<NativePlatform>,
+    identity: &crate::node_identity::DaemonIdentity,
+) -> clawft_kernel::KernelResult<Kernel<NativePlatform>> {
+    Kernel::boot_with_node_key(
+        config,
+        kernel_config,
+        platform,
+        Some(identity.signing_key.to_bytes()),
+    )
+    .await
+}
+
 /// Run the kernel daemon.
 ///
 /// Boots the kernel, binds the platform-local RPC transport (Unix socket
@@ -868,28 +964,22 @@ pub async fn run(
     // WEFT-10: workspace overlay routing, when present.
     workspace_routing: Option<clawft_types::routing::RoutingConfig>,
 ) -> anyhow::Result<()> {
-    let socket_path = protocol::socket_path();
+    let paths = protocol::runtime_paths();
+    let socket_path = paths.socket();
+
+    // ADR-103 P0b: one kernel per runtime dir. Hold the advisory lock for
+    // the daemon's whole lifetime; with it held nobody else is serving the
+    // socket, so a leftover socket file can be reclaimed safely.
+    let _instance_lock = crate::instance_lock::InstanceLock::acquire(&paths)?;
+    info!(root = %paths.root().display(), "runtime dir locked");
 
     // WEFT-39: persist shared LLM RetryModel learned weights so the next
     // daemon start restores the curve instead of resetting to untrained.
     clawft_core::pipeline::persist_shared_retry_model();
 
-    // Already-running / stale-endpoint probe (platform-specific).
+    // Endpoint probe, with the lock held (platform-specific).
     #[cfg(unix)]
-    {
-        if socket_path.exists() {
-            // Try connecting to see if a daemon is already running
-            if UnixStream::connect(&socket_path).await.is_ok() {
-                anyhow::bail!(
-                    "daemon already running (socket exists and is accepting connections: {})",
-                    socket_path.display()
-                );
-            }
-            // Stale socket — remove it
-            std::fs::remove_file(&socket_path)?;
-            debug!("removed stale socket file");
-        }
-    }
+    crate::instance_lock::reclaim_stale_socket(&paths).await?;
     #[cfg(windows)]
     {
         // Named pipes have no filesystem node; dial the derived pipe name.
@@ -909,10 +999,6 @@ pub async fn run(
         std::fs::create_dir_all(parent)?;
     }
 
-    // Record this process as the live daemon (background daemonize also
-    // writes the child PID before spawn returns; overwriting here is fine).
-    let _ = std::fs::write(protocol::pid_path(), std::process::id().to_string());
-
     // agent-core-v1 Phase E1: snapshot the ContextRouter selector
     // before `config` moves into `Kernel::boot`. The agent-service
     // wiring further below reads this to pick between v0 NullRouter
@@ -930,6 +1016,7 @@ pub async fn run(
     // survives `Kernel::boot` taking ownership of `config`. The voice
     // consumer wires further below, after the agent service is up.
     let voice_consumer_cfg = config.voice.consumer.clone();
+    let voice_mic_pin = config.voice.mic_node_id.clone();
 
     // WEFT-616 Phase 2: snapshot the per-turn COW memory config; wired
     // onto the agent loop after `build_daemon_agent_loop` (late set —
@@ -947,8 +1034,22 @@ pub async fn run(
 
     // Boot kernel
     let platform = NativePlatform::new();
-    let kernel = Kernel::boot(config, kernel_config, Arc::new(platform)).await?;
+    // The node key is loaded before boot so the kernel derives its mesh /
+    // cluster node id from it (ADR-103 D11) instead of a per-boot UUID.
+    let runtime_dir = paths.root().to_path_buf();
+    let daemon_identity = crate::node_identity::load_or_generate(&runtime_dir)
+        .map_err(|e| anyhow::anyhow!("daemon identity bootstrap: {e}"))?;
+    let kernel =
+        boot_kernel_with_identity(config, kernel_config, Arc::new(platform), &daemon_identity)
+            .await?;
+    // The one-shot --new-chain / --adopt-legacy-chain requests have been
+    // consumed by boot.
+    clawft_kernel::chain_storage::request_new_chain(false);
+    clawft_kernel::chain_storage::request_adopt_legacy_chain(false);
     let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
+    // Record this process as the live daemon only now that boot (which takes
+    // the chain lock) has succeeded, so a refused boot leaves no stale pid.
+    let _ = std::fs::write(protocol::pid_path(), std::process::id().to_string());
 
     // WEFT-494: seed live MCP registry + remember best-effort config path
     // for path-less mcp.reload (CLI after weft mcp add).
@@ -962,15 +1063,9 @@ pub async fn run(
     // daemon's pubkey with the kernel's NodeRegistry so the substrate
     // publish gate can verify signatures and enforce the
     // `substrate/<node-id>/...` write prefix.
-    let runtime_dir = socket_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let daemon_identity = crate::node_identity::load_or_generate(&runtime_dir)
-        .map_err(|e| anyhow::anyhow!("daemon identity bootstrap: {e}"))?;
     // mesh-placement-06: persisted node-local workload catalog.
     #[cfg(feature = "exochain")]
-    crate::workload_rpc::init_registry(&runtime_dir.join("workloads.json"));
+    crate::workload_rpc::init_registry(&paths.workloads());
     // mesh-placement-12: the placement control plane signs with the node key.
     #[cfg(all(feature = "placement", unix))]
     crate::workload_place_rpc::init(daemon_identity.signing_key.clone(), runtime_dir.clone());
@@ -1088,167 +1183,19 @@ pub async fn run(
         }));
     }
 
-    // Spawn the whisper STT service. Subscribes to the configured
-    // ESP32-side mic pcm_chunk path, transcribes via the local
-    // whisper.cpp HTTP service, publishes transcripts under the
-    // daemon's own node prefix.
-    //
-    // Pre-register control flags before spawn so the service holds
-    // shared `Arc<AtomicBool>` handles to flags the RPC handler can
-    // flip.
-    let source_node_id =
-        std::env::var("WHISPER_INPUT_NODE_ID").unwrap_or_else(|_| "n-bfc4cd".to_string());
-    let pcm_chunk_target = format!("{source_node_id}/mic/pcm_chunk");
-    let rms_target = format!("{source_node_id}/mic/rms");
-    let whisper_service_flag = control_flags.register(ControlKind::Service, "whisper", true);
-    let whisper_source_flag = control_flags.register(ControlKind::Sensor, &pcm_chunk_target, true);
-    // RMS sensor isn't consumed by anything in-process today; the
-    // flag still lives here so toggling it from the GUI publishes
-    // the intent that the firmware will eventually subscribe to.
-    let _rms_sensor_flag = control_flags.register(ControlKind::Sensor, &rms_target, true);
-
-    // The classifier publishes one `Classification` per pcm_chunk
-    // under the daemon's prefix. We compute its path here so the
-    // whisper service can subscribe to it for its gate. Mesh-canonical
-    // `_derived/...` is the eventual home (R3.0 / R3.2); for now we
-    // single-tier under the daemon prefix and the mesh-gate agent
-    // will move all derived paths together at integration time.
-    let classify_output_path = format!(
-        "substrate/{daemon}/derived/classify/{source}/mic",
-        daemon = daemon_identity.node_id,
-        source = source_node_id,
-    );
-    let classify_service_flag = control_flags.register(ControlKind::Service, "classify", true);
-
-    let _whisper_handle: Option<clawft_service_whisper::WhisperService> = {
-        let whisper_url = std::env::var(clawft_service_whisper::WHISPER_SERVICE_URL_ENV)
-            .unwrap_or_else(|_| "http://127.0.0.1:8123".to_string());
-        let input_path = format!("substrate/{source_node_id}/sensor/mic/pcm_chunk");
-        // Mesh-canonical transcript path (R3.2). Source node is part
-        // of the path so subscribers see one stable subtree across
-        // leader handoff. The daemon issued itself a `transcript`
-        // grant above; the gate consults the registry handed to the
-        // service via config.
-        // Mesh-canonical only (WEFT-236): Phase-4 dual-publish to the
-        // legacy node-private path is gone. Consumers must read
-        // `substrate/_derived/transcript/<source>/mic`.
-        let output_path_derived = format!("substrate/_derived/transcript/{source_node_id}/mic",);
-        let node_registry = {
-            let k = kernel.read().await;
-            k.node_registry().clone()
-        };
-        let cfg = clawft_service_whisper::WhisperServiceConfig {
-            window_ms: 2_000,
-            retry_backoff: std::time::Duration::from_millis(500),
-            node_id: daemon_identity.node_id.clone(),
-            input_path: input_path.clone(),
-            output_path_derived: output_path_derived.clone(),
-            service_enabled: Arc::clone(&whisper_service_flag),
-            source_enabled: Arc::clone(&whisper_source_flag),
-            node_registry,
-            // Gate whisper on the classifier's output. The classifier
-            // is spawned just below; we point the subscription at the
-            // path the classifier will publish to. If the classifier
-            // fails to spawn (or hasn't published yet), the gate
-            // stays closed and no chunks are transcribed — that's
-            // the safe default for a "speech detected" filter.
-            classifier_input: Some(classify_output_path.clone()),
-            gate_window_ms: 1_500,
-            // SC-9 audit row context. Until manifest verify is wired
-            // into daemon boot we log a fixed model identifier; once
-            // `verify_model_dir` runs at startup the report's
-            // `manifest.model_id` will replace this.
-            model_id: "whisper-cpp/unverified".to_string(),
-            source_node_hint: source_node_id.clone(),
-        };
-        let client_cfg = clawft_service_whisper::WhisperConfig {
-            base_url: whisper_url.clone(),
-            ..clawft_service_whisper::WhisperConfig::default()
-        };
-        let client = match clawft_service_whisper::WhisperClient::new(client_cfg) {
-            Ok(c) => c,
-            Err(e) => {
-                warn!(
-                    error = %e,
-                    "whisper client init failed (continuing without STT)"
-                );
-                return Err(anyhow::anyhow!("whisper client init: {e}"));
-            }
-        };
-        let substrate = {
-            let k = kernel.read().await;
-            k.substrate_service().clone()
-        };
-        match clawft_service_whisper::WhisperService::spawn(substrate, client, cfg) {
-            Ok(svc) => {
-                info!(
-                    input = %input_path,
-                    output = %output_path_derived,
-                    whisper_url = %whisper_url,
-                    "whisper service spawned (mesh-canonical transcript path)"
-                );
-                Some(svc)
-            }
-            Err(e) => {
-                warn!(error = %e, "whisper service failed to spawn (continuing without STT)");
-                None
-            }
-        }
-    };
-
-    // Spawn the audio-classifier Stage. Subscribes to the same
-    // ESP32-side mic pcm_chunk path the whisper service consumes,
-    // runs each window through an `EnergyClassifier` (RMS-threshold
-    // VAD), and republishes a `Classification` value under the
-    // daemon's prefix at `classify_output_path`. The whisper service
-    // (configured above) subscribes to that path and uses it as a
-    // speech-vs-silence gate so inference only runs on speech.
-    //
-    // The `ClassifierBackend` trait is the seam for the future
-    // llama.cpp-hosted multi-class classifier (music / noise /
-    // speech / silence / ...) — swapping the backend doesn't change
-    // the wire shape, so neither the whisper gate nor any GUI
-    // subscriber needs a code change.
-    let _classify_handle: Option<clawft_service_classify::ClassifierService> = {
-        let input_path = format!("substrate/{source_node_id}/sensor/mic/pcm_chunk");
-        let cfg = clawft_service_classify::ClassifierServiceConfig {
-            node_id: daemon_identity.node_id.clone(),
-            source_node: source_node_id.clone(),
-            input_path: input_path.clone(),
-            output_path: classify_output_path.clone(),
-            service_enabled: Arc::clone(&classify_service_flag),
-            // Reuse the whisper-side source flag — the user's mental
-            // model is "the mic source"; toggling that off should
-            // disable both the classifier and the transcription path
-            // since they consume the same source.
-            source_enabled: Arc::clone(&whisper_source_flag),
-        };
-        let backend: Arc<dyn clawft_service_classify::ClassifierBackend> =
-            Arc::new(clawft_service_classify::EnergyClassifier::from_env());
-        let substrate = {
-            let k = kernel.read().await;
-            k.substrate_service().clone()
-        };
-        match clawft_service_classify::ClassifierService::spawn(substrate, backend, cfg) {
-            Ok(svc) => {
-                info!(
-                    input = %input_path,
-                    output = %classify_output_path,
-                    "classifier service spawned (energy VAD)"
-                );
-                Some(svc)
-            }
-            Err(e) => {
-                warn!(
-                    error = %e,
-                    "classifier service failed to spawn (whisper gate will \
-                     stay closed and transcription will not run until the \
-                     classifier publishes)"
-                );
-                None
-            }
-        }
-    };
+    // Whisper STT + audio classifier. The mic source is chosen by
+    // `crate::mic_source::supervise`: the operator pin (`WHISPER_INPUT_NODE_ID`
+    // or `voice.mic_node_id`) wins; otherwise only a unique `sensor/mic`
+    // publisher is auto-selected; several candidates are refused with a
+    // warning. There is no hard-coded node id.
+    let (mic_node_tx, mic_node_rx) = watch::channel(None::<String>);
+    tokio::spawn(crate::mic_source::supervise(
+        crate::mic_source::pin_from(voice_mic_pin.as_deref()),
+        kernel.clone(),
+        control_flags.clone(),
+        daemon_identity.node_id.clone(),
+        mic_node_tx,
+    ));
 
     // Spawn the LLM service handle. Unlike whisper this is a
     // request/response client — there's no background tokio task to
@@ -2441,84 +2388,119 @@ pub async fn run(
     // Disabled by default; voice routing is opt-in via the config flag
     // until the 5 P0 voice security controls (WEFT-207..211) ship.
     let _voice_router_handle: Option<crate::voice_router::VoiceRouter> = {
-        if !voice_consumer_cfg.enabled {
-            info!("voice consumer: disabled by config (voice.consumer.enabled=false)");
-            None
-        } else if DAEMON_AGENT.get().is_none() {
-            warn!(
-                "voice consumer: requested but agent service not wired; \
-                 transcripts would have nowhere to land — skipping spawn"
-            );
-            None
-        } else {
-            let substrate = {
-                let k = kernel.read().await;
-                k.substrate_service().clone()
-            };
-            let subscriber_id = daemon_identity.node_id.clone();
-            // SC-4: translate the config-side permission grid into the
-            // router's typed VoicePermissions table. Out-of-range raw
-            // levels (anything > 2) are clamped to Level 0 by
-            // VoicePermissions::from_raw — a defensive default so a bad
-            // YAML / TOML edit can never accidentally privilege a
-            // principal.
-            let perms_cfg = &voice_consumer_cfg.permissions;
-            let permissions = crate::voice_router::VoicePermissions::from_raw(
-                perms_cfg.default_level,
-                perms_cfg
-                    .principal_levels
-                    .iter()
-                    .map(|(k, v)| (k.clone(), *v)),
-                perms_cfg.safe_commands.iter().cloned(),
-            );
-            let router_cfg = crate::voice_router::VoiceRouterConfig {
-                transcript_topic: voice_consumer_cfg.transcript_topic.clone(),
-                chat_target_agent: voice_consumer_cfg.chat_target_agent.clone(),
-                conv_id: voice_consumer_cfg.conv_id.clone(),
-                command_prefix: voice_consumer_cfg.command_prefix.clone(),
-                subscriber_id: Some(subscriber_id.clone()),
-                permissions,
-            };
-            let chat_handler: Arc<dyn crate::voice_router::ChatHandler> =
-                Arc::new(DaemonAgentChatHandler);
-            let cmd_kernel = Arc::clone(&kernel);
-            let cmd_shutdown = control_flags.clone();
-            let cmd_handler: Arc<dyn crate::voice_router::CommandHandler> =
-                Arc::new(DaemonCommandHandler {
-                    kernel: cmd_kernel,
-                    // Voice-routed commands cannot trigger daemon
-                    // shutdown — the kernel.shutdown verb requires a
-                    // separate control intent. Hand the handler a
-                    // throwaway watch channel so its signature
-                    // matches the daemon's `dispatch` arity.
-                    shutdown_tx: watch::channel(false).0,
-                    _control: cmd_shutdown,
-                });
-            match crate::voice_router::VoiceRouter::spawn(
-                router_cfg,
-                |caller, path| {
-                    substrate
-                        .subscribe(caller, path)
-                        .map(|(_id, rx)| rx)
-                        .map_err(|e| format!("substrate subscribe: {e}"))
-                },
-                chat_handler,
-                cmd_handler,
-            ) {
-                Ok(svc) => {
-                    info!(
-                        topic = %voice_consumer_cfg.transcript_topic,
-                        chat_target = %voice_consumer_cfg.chat_target_agent,
-                        command_prefix = %voice_consumer_cfg.command_prefix,
-                        "voice consumer spawned"
-                    );
-                    Some(svc)
+        let kernel = Arc::clone(&kernel);
+        let control_flags = control_flags.clone();
+        let mut voice_consumer_cfg = voice_consumer_cfg.clone();
+        let daemon_node_id = daemon_identity.node_id.clone();
+        let mut mic_node_rx = mic_node_rx.clone();
+        let auto_topic = voice_consumer_cfg.enabled && voice_consumer_cfg.transcript_topic.trim().is_empty();
+        let build = async move {
+            if !voice_consumer_cfg.enabled {
+                info!("voice consumer: disabled by config (voice.consumer.enabled=false)");
+                None
+            } else if DAEMON_AGENT.get().is_none() {
+                warn!(
+                    "voice consumer: requested but agent service not wired; \
+                     transcripts would have nowhere to land — skipping spawn"
+                );
+                None
+            } else {
+                // Empty topic = auto: follow the mic source node (env override or
+                // the registered sensor/mic publisher), never a baked-in id.
+                if voice_consumer_cfg.transcript_topic.trim().is_empty() {
+                    let id = loop {
+                        if let Some(id) = mic_node_rx.borrow().clone() {
+                            break id;
+                        }
+                        if mic_node_rx.changed().await.is_err() {
+                            return None;
+                        }
+                    };
+                    voice_consumer_cfg.transcript_topic =
+                        format!("substrate/_derived/transcript/{id}/mic");
+                    info!(topic = %voice_consumer_cfg.transcript_topic, "voice consumer: topic resolved from mic source");
                 }
-                Err(e) => {
-                    warn!(error = %e, "voice consumer failed to spawn");
-                    None
+                let substrate = {
+                    let k = kernel.read().await;
+                    k.substrate_service().clone()
+                };
+                let subscriber_id = daemon_node_id.clone();
+                // SC-4: translate the config-side permission grid into the
+                // router's typed VoicePermissions table. Out-of-range raw
+                // levels (anything > 2) are clamped to Level 0 by
+                // VoicePermissions::from_raw — a defensive default so a bad
+                // YAML / TOML edit can never accidentally privilege a
+                // principal.
+                let perms_cfg = &voice_consumer_cfg.permissions;
+                let permissions = crate::voice_router::VoicePermissions::from_raw(
+                    perms_cfg.default_level,
+                    perms_cfg
+                        .principal_levels
+                        .iter()
+                        .map(|(k, v)| (k.clone(), *v)),
+                    perms_cfg.safe_commands.iter().cloned(),
+                );
+                let router_cfg = crate::voice_router::VoiceRouterConfig {
+                    transcript_topic: voice_consumer_cfg.transcript_topic.clone(),
+                    chat_target_agent: voice_consumer_cfg.chat_target_agent.clone(),
+                    conv_id: voice_consumer_cfg.conv_id.clone(),
+                    command_prefix: voice_consumer_cfg.command_prefix.clone(),
+                    subscriber_id: Some(subscriber_id.clone()),
+                    permissions,
+                };
+                let chat_handler: Arc<dyn crate::voice_router::ChatHandler> =
+                    Arc::new(DaemonAgentChatHandler);
+                let cmd_kernel = Arc::clone(&kernel);
+                let cmd_shutdown = control_flags.clone();
+                let cmd_handler: Arc<dyn crate::voice_router::CommandHandler> =
+                    Arc::new(DaemonCommandHandler {
+                        kernel: cmd_kernel,
+                        // Voice-routed commands cannot trigger daemon
+                        // shutdown — the kernel.shutdown verb requires a
+                        // separate control intent. Hand the handler a
+                        // throwaway watch channel so its signature
+                        // matches the daemon's `dispatch` arity.
+                        shutdown_tx: watch::channel(false).0,
+                        _control: cmd_shutdown,
+                    });
+                match crate::voice_router::VoiceRouter::spawn(
+                    router_cfg,
+                    |caller, path| {
+                        substrate
+                            .subscribe(caller, path)
+                            .map(|(_id, rx)| rx)
+                            .map_err(|e| format!("substrate subscribe: {e}"))
+                    },
+                    chat_handler,
+                    cmd_handler,
+                ) {
+                    Ok(svc) => {
+                        info!(
+                            topic = %voice_consumer_cfg.transcript_topic,
+                            chat_target = %voice_consumer_cfg.chat_target_agent,
+                            command_prefix = %voice_consumer_cfg.command_prefix,
+                            "voice consumer spawned"
+                        );
+                        Some(svc)
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "voice consumer failed to spawn");
+                        None
+                    }
                 }
             }
+        };
+        if auto_topic {
+            // Do not hold up boot waiting for a mic node to appear.
+            tokio::spawn(async move {
+                if let Some(router) = build.await {
+                    let _router = router;
+                    std::future::pending::<()>().await;
+                }
+            });
+            None
+        } else {
+            build.await
         }
     };
 
@@ -2552,20 +2534,8 @@ pub async fn run(
         let k = kernel.read().await;
         let substrate = k.substrate_service();
         let initial = [
-            (ControlKind::Service, "whisper".to_string(), "Whisper STT"),
             (ControlKind::Service, "llm".to_string(), "Local LLM"),
-            (
-                ControlKind::Service,
-                "classify".to_string(),
-                "Audio classifier",
-            ),
             (ControlKind::Service, "agent".to_string(), "Agent service"),
-            (
-                ControlKind::Sensor,
-                pcm_chunk_target.clone(),
-                "Mic PCM chunks",
-            ),
-            (ControlKind::Sensor, rms_target.clone(), "Mic RMS summary"),
         ];
         for (kind, target, label) in &initial {
             let intent = ControlIntent {
@@ -3586,6 +3556,51 @@ async fn resolve_caller_capabilities(
     crate::capability::CallerCapabilities::denied()
 }
 
+/// Resolve the caller's capabilities, then run the capability check and
+/// extension gates (ADR-103 D0). `Err` is the refusal response.
+async fn authorize_caller(
+    caller: &crate::rpc_ext::CallerCtx,
+    method: &str,
+    params: &serde_json::Value,
+    kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> Result<crate::capability::CallerCapabilities, Response> {
+    let caps = resolve_caller_capabilities(caller.auth.as_deref(), kernel).await;
+    crate::rpc_ext::authorize(caller, &caps, method, params, kernel).await?;
+    Ok(caps)
+}
+
+/// Dispatch a request that already passed [`authorize_caller`]: extension
+/// routes first, then the legacy `match` in [`dispatch`].
+async fn dispatch_after_auth(
+    caller: &crate::rpc_ext::CallerCtx,
+    caps: &crate::capability::CallerCapabilities,
+    method: String,
+    params: serde_json::Value,
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+    shutdown_tx: watch::Sender<bool>,
+) -> Response {
+    if let Some(r) = crate::rpc_ext::dispatch_ext(caller, caps, &method, &params, &kernel).await {
+        return r;
+    }
+    dispatch(method, params, kernel, shutdown_tx).await
+}
+
+/// Authorize then dispatch. Used by entry paths without streaming
+/// intercepts (RVF frames, the in-process voice consumer).
+async fn dispatch_authorized(
+    caller: &crate::rpc_ext::CallerCtx,
+    method: String,
+    params: serde_json::Value,
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+    shutdown_tx: watch::Sender<bool>,
+) -> Response {
+    let caps = match authorize_caller(caller, &method, &params, &kernel).await {
+        Ok(caps) => caps,
+        Err(denied) => return denied,
+    };
+    dispatch_after_auth(caller, &caps, method, params, kernel, shutdown_tx).await
+}
+
 async fn dispatch_json_line<W>(
     line: &str,
     kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
@@ -3613,20 +3628,17 @@ where
             // token is validated against the kernel's AuthService;
             // unknown tokens map to the empty (denied) set so a
             // typo'd token can't silently fall back to anonymous.
-            let caller_caps = resolve_caller_capabilities(req.auth.as_deref(), kernel).await;
-            if !caller_caps.allows_method(&req.method) {
-                let cap_required = crate::capability::required_capability(&req.method);
-                tracing::warn!(
-                    method = %req.method,
-                    required = ?cap_required,
-                    "rpc capability check failed; rejecting"
-                );
-                let resp = Response::error(format!(
-                    "permission denied: method '{}' requires capability {:?}",
-                    req.method, cap_required
-                ))
-                .with_id(id);
-                (resp, None)
+            // ADR-103 D0: one authorization point (capability check, then
+            // extension gates) for every entry path, before any streaming
+            // intercept or dispatch.
+            let caller = crate::rpc_ext::CallerCtx::from_auth(req.auth.clone());
+            let (caps, denial) =
+                match authorize_caller(&caller, &req.method, &req.params, kernel).await {
+                    Ok(caps) => (caps, None),
+                    Err(denied) => (crate::capability::CallerCapabilities::denied(), Some(denied)),
+                };
+            if let Some(denied) = denial {
+                (denied.with_id(id), None)
             } else
             // `*.subscribe_stream` methods take over the connection: the
             // daemon registers an external sink with the router and
@@ -3656,7 +3668,9 @@ where
                 }
             } else {
                 (
-                    dispatch(
+                    dispatch_after_auth(
+                        &caller,
+                        &caps,
                         req.method,
                         req.params,
                         Arc::clone(kernel),
@@ -4323,7 +4337,9 @@ async fn handle_rvf_connection<S>(
         let response = match rvf_rpc::decode_request(&frame) {
             Ok(req) => {
                 let id = req.id.clone();
-                dispatch(
+                let caller = crate::rpc_ext::CallerCtx::from_auth(req.auth.clone());
+                dispatch_authorized(
+                    &caller,
                     req.method,
                     req.params,
                     Arc::clone(&kernel),
@@ -6170,7 +6186,7 @@ async fn dispatch(
                     match export_params.format.as_str() {
                         "rvf" => {
                             let default_path =
-                                protocol::runtime_dir().join("chain").join("export.rvf");
+                                protocol::runtime_paths().chain_dir().join("export.rvf");
                             let output_path = export_params
                                 .output
                                 .map(std::path::PathBuf::from)
@@ -7100,6 +7116,36 @@ async fn dispatch(
                 }
                 Ok(None) => Response::error(format!("cron job not found: {}", remove_params.id)),
                 Err(e) => Response::error(format!("cron remove denied: {e}")),
+            }
+        }
+        "cron.enable" | "cron.disable" => {
+            let enabled = method == "cron.enable";
+            let p: CronRemoveParams = match serde_json::from_value(params) {
+                Ok(p) => p,
+                Err(e) => return Response::error(format!("invalid params: {e}")),
+            };
+            let k = kernel.read().await;
+            match k.cron_service().set_enabled(&p.id, enabled) {
+                Some(job) => {
+                    #[cfg(feature = "exochain")]
+                    if let Some(cm) = k.chain_manager() {
+                        cm.append(
+                            "cron",
+                            &method,
+                            Some(serde_json::json!({"job_id": job.id, "name": job.name})),
+                        );
+                    }
+                    k.event_log().info(
+                        "cron",
+                        format!(
+                            "job {}: {}",
+                            if enabled { "enabled" } else { "disabled" },
+                            job.name
+                        ),
+                    );
+                    Response::success(serde_json::json!({"job_id": job.id, "enabled": job.enabled}))
+                }
+                None => Response::error(format!("cron job not found: {}", p.id)),
             }
         }
         // WEFT-494 / ADR-070: live MCP registry (shared McpServerManager).
@@ -8487,7 +8533,10 @@ impl crate::voice_router::CommandHandler for DaemonCommandHandler {
         method: String,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        let resp = dispatch(
+        // Internal principal with capped capabilities (no Admin); see
+        // `CallerCtx::internal_voice`.
+        let resp = dispatch_authorized(
+            &crate::rpc_ext::CallerCtx::internal_voice(),
             method,
             params,
             Arc::clone(&self.kernel),
@@ -8516,6 +8565,61 @@ mod tests {
                 &tempfile::tempdir().unwrap().keep(),
             )),
             ..KernelConfig::default()
+        }
+    }
+
+    /// The voice consumer must dispatch as a capped internal principal:
+    /// Admin verbs are refused, and a raw `dispatch` regression would let
+    /// `kernel.shutdown` through.
+    #[tokio::test]
+    async fn voice_command_handler_denies_admin_verbs() {
+        use crate::voice_router::CommandHandler;
+        let kernel = Kernel::boot(
+            clawft_types::config::Config::default(),
+            isolated_kcfg(),
+            Arc::new(NativePlatform::new()),
+        )
+        .await
+        .expect("kernel boots");
+        let (tx, rx) = watch::channel(false);
+        let handler = DaemonCommandHandler {
+            kernel: Arc::new(tokio::sync::RwLock::new(kernel)),
+            shutdown_tx: tx,
+            _control: ControlFlags::new(),
+        };
+        let err = handler
+            .dispatch_command("kernel.shutdown".into(), serde_json::Value::Null)
+            .await
+            .unwrap_err();
+        assert!(err.contains("permission denied"), "{err}");
+        assert!(!*rx.borrow(), "shutdown must not have been signalled");
+        // Non-admin verbs still work for the voice principal.
+        assert!(
+            handler
+                .dispatch_command("kernel.status".into(), serde_json::Value::Null)
+                .await
+                .is_ok()
+        );
+    }
+
+    /// The daemon boots the kernel with its `node.key`: the kernel's cluster
+    /// node id is the identity's node id and is stable across reboots.
+    #[cfg(feature = "mesh")]
+    #[tokio::test]
+    async fn daemon_boot_passes_node_key_into_kernel() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = crate::node_identity::load_or_generate(dir.path()).unwrap();
+        for _ in 0..2 {
+            let mut kernel = boot_kernel_with_identity(
+                Config::default(),
+                isolated_kcfg(),
+                Arc::new(NativePlatform::new()),
+                &identity,
+            )
+            .await
+            .expect("boot");
+            assert_eq!(kernel.cluster_membership().local_node_id(), identity.node_id);
+            kernel.shutdown().await.unwrap();
         }
     }
 

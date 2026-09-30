@@ -477,14 +477,14 @@ mod tests {
 
         let mut peer_key = [0u8; 32];
         peer_key[0] = 0x01;
-        let entry = make_entry("peer-1", "10.0.0.1:9470");
+        let entry = make_entry("peer-1", "10.0.0.1:9489");
 
         table.add_peer(peer_key, entry.clone());
         assert_eq!(table.peer_count(), 1);
 
         // Stored in records by node_id.
         let found = table.get("peer-1").unwrap();
-        assert_eq!(found.address, "10.0.0.1:9470");
+        assert_eq!(found.address, "10.0.0.1:9489");
     }
 
     #[test]
@@ -512,7 +512,7 @@ mod tests {
             pk[0] = i + 1;
             table.add_peer(
                 pk,
-                make_entry(&format!("n-{i}"), &format!("10.0.0.{i}:9470")),
+                make_entry(&format!("n-{i}"), &format!("10.0.0.{i}:9489")),
             );
         }
 
@@ -542,7 +542,7 @@ mod tests {
             pk[1] = i as u8; // different keys
             table.add_peer(
                 pk,
-                make_entry(&format!("peer-{i}"), &format!("10.0.0.{i}:9470")),
+                make_entry(&format!("peer-{i}"), &format!("10.0.0.{i}:9489")),
             );
         }
 
@@ -612,7 +612,7 @@ mod tests {
         let mut disc = KademliaDiscovery::new(
             [0u8; 32],
             "kad-node-1".into(),
-            "10.0.0.1:9470".into(),
+            "10.0.0.1:9489".into(),
             "linux".into(),
             "deadbeef01234567abcdef".into(),
         );
@@ -636,7 +636,7 @@ mod tests {
         let mut disc = KademliaDiscovery::new(
             [0u8; 32],
             "node-1".into(),
-            "10.0.0.1:9470".into(),
+            "10.0.0.1:9489".into(),
             "linux".into(),
             "aabbccdd00112233".into(),
         );
@@ -665,7 +665,7 @@ mod tests {
         let mut disc = KademliaDiscovery::new(
             [0u8; 32],
             "local".into(),
-            "127.0.0.1:9470".into(),
+            "127.0.0.1:9489".into(),
             "linux".into(),
             "0000".into(),
         );
@@ -673,7 +673,7 @@ mod tests {
 
         let mut pk = [0u8; 32];
         pk[0] = 0x42;
-        disc.inject_peer(pk, make_entry("remote-peer", "10.0.0.9:9470"));
+        disc.inject_peer(pk, make_entry("remote-peer", "10.0.0.9:9489"));
 
         let peers = disc.poll().await;
         assert_eq!(peers.len(), 1);
@@ -696,7 +696,7 @@ mod tests {
 
     #[test]
     fn dht_entry_serde_roundtrip() {
-        let entry = make_entry("serde-node", "10.0.0.1:9470");
+        let entry = make_entry("serde-node", "10.0.0.1:9489");
         let json = serde_json::to_string(&entry).unwrap();
         let back: DhtEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(entry, back);

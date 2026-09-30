@@ -381,9 +381,9 @@ mod tests {
     #[test]
     fn tcp_transport_supports() {
         let t = TcpTransport;
-        assert!(t.supports("127.0.0.1:9470"));
-        assert!(t.supports("tcp://127.0.0.1:9470"));
-        assert!(!t.supports("quic://127.0.0.1:9470"));
+        assert!(t.supports("127.0.0.1:9489"));
+        assert!(t.supports("tcp://127.0.0.1:9489"));
+        assert!(!t.supports("quic://127.0.0.1:9489"));
     }
 
     /// WEFT-18: race `recv` against another arm; the peer must still decode

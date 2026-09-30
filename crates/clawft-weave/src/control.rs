@@ -139,6 +139,9 @@ pub fn intent_path(authority_node: &str, kind: ControlKind, target: &str) -> Str
 #[derive(Debug, Default, Clone)]
 pub struct ControlFlags {
     inner: Arc<DashMap<(ControlKind, String), Arc<AtomicBool>>>,
+    /// Last value the operator explicitly set through [`Self::set`] (the
+    /// `control.set` RPC path). Daemon-internal flips never land here.
+    operator: Arc<DashMap<(ControlKind, String), bool>>,
 }
 
 impl ControlFlags {
@@ -166,6 +169,22 @@ impl ControlFlags {
             .clone()
     }
 
+    /// The flag for a service/sensor that has just (re)started successfully:
+    /// registered enabled, and set true again unless the operator explicitly
+    /// toggled it off. Without this a flag cleared by a failed start would
+    /// stay false after a recovered start ([`Self::register`] never resets).
+    pub fn recover(&self, kind: ControlKind, target: &str) -> Arc<AtomicBool> {
+        let flag = self.register(kind, target, true);
+        let operator_off = self
+            .operator
+            .get(&(kind, target.to_string()))
+            .is_some_and(|v| !*v);
+        if !operator_off {
+            flag.store(true, Ordering::SeqCst);
+        }
+        flag
+    }
+
     /// Look up an existing flag without inserting.
     pub fn get(&self, kind: ControlKind, target: &str) -> Option<Arc<AtomicBool>> {
         self.inner
@@ -177,6 +196,7 @@ impl ControlFlags {
     /// `None` if the flag isn't registered.
     pub fn set(&self, kind: ControlKind, target: &str, enabled: bool) -> Option<bool> {
         let flag = self.get(kind, target)?;
+        self.operator.insert((kind, target.to_string()), enabled);
         let prior = flag.swap(enabled, Ordering::SeqCst);
         Some(prior)
     }
@@ -285,5 +305,23 @@ mod tests {
         assert_eq!(ControlKind::parse("service"), Some(ControlKind::Service));
         assert_eq!(ControlKind::parse("sensor"), Some(ControlKind::Sensor));
         assert_eq!(ControlKind::parse("nope"), None);
+    }
+
+    #[test]
+    fn recover_reenables_after_internal_clear_but_respects_operator_off() {
+        let flags = ControlFlags::new();
+        let f = flags.register(ControlKind::Service, "whisper", true);
+        // A failed start clears the flag internally (not an operator act).
+        f.store(false, Ordering::SeqCst);
+        let f2 = flags.recover(ControlKind::Service, "whisper");
+        assert!(f2.load(Ordering::SeqCst), "recovered start must re-enable");
+        assert!(Arc::ptr_eq(&f, &f2));
+        // The operator switches it off: a later restart must not undo that.
+        flags.set(ControlKind::Service, "whisper", false);
+        let f3 = flags.recover(ControlKind::Service, "whisper");
+        assert!(!f3.load(Ordering::SeqCst));
+        // And back on, explicitly.
+        flags.set(ControlKind::Service, "whisper", true);
+        assert!(flags.recover(ControlKind::Service, "whisper").load(Ordering::SeqCst));
     }
 }

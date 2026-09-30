@@ -92,8 +92,9 @@ lives in [`docs/weftos/k-phases.md`](../weftos/k-phases.md).
 ExoChain is the tamper-evident, hash-chained audit log behind every
 state-changing operation in the kernel. It is enabled by default in
 the 0.7.0 native binary. By default the chain lives at
-`~/.clawft/chain.rvf`, signed with `~/.clawft/chain.key` (see
-"Chain storage location" below). Operator commands:
+`chain.rvf` in the kernel's runtime directory, signed with `chain.key`
+next to it (see "Runtime directory" and "Chain storage location"
+below). Operator commands:
 
 ```bash
 weaver chain status          # current chain head, length, last entry kind
@@ -104,6 +105,82 @@ weaver chain export <path>   # export to JSON for offline review
 Per ADR-022 (ExoChain Mandatory Audit), every privileged operation
 should produce a chain entry. If you run an action and `weaver chain
 status` does not show a new entry, that is a regression — file it.
+
+#### Runtime directory
+
+Every runtime file of a kernel hangs off one root, resolved by one
+function (`clawft_types::runtime_paths::RuntimePaths`, ADR-103 D4). The
+socket, PID file, log, lock, `node.key`, chain files, anchor ledger,
+`workloads.json`, `cluster_peers.json`, `apps.json` and
+`revoked_hosts.json` all live directly under it.
+
+Root resolution, highest first:
+
+1. `$WEFTOS_RUNTIME_DIR`, when set and non-empty (full isolation for
+   tests, probes and nested instances).
+2. `<project>/.weftos/runtime`, where `<project>` is the nearest ancestor
+   of the working directory that is a project root: it has
+   `.weftos/project.toml`, or `.weftos/weave.toml`, or `weave.toml` next
+   to a `.weftos/` directory (what `weaver init` creates), or an existing
+   `.weftos/runtime/` directory, or a `.weftos/` directory in a git
+   top-level (a `.git` file or directory, which covers git worktrees, so
+   each worktree gets its own kernel). A bare `.weftos/` is not a project,
+   and the walk never returns `$HOME`, so the `~/.weftos/` that holds apps
+   and models is ignored.
+3. `~/.clawft/` (legacy).
+
+Legacy chain: the chain used to resolve from `$WEFTOS_RUNTIME_DIR` or
+`~/.clawft` only, even for a project-local daemon. A kernel that resolves
+to a project root with no chain yet, while `~/.clawft/chain.*` exists,
+keeps using the legacy chain and its key and logs a WARN naming both
+paths; starting a fresh genesis there would fork the history. Nothing is
+moved: Phase 1's `weaver migrate user-chain` will do that. To start a
+fresh chain at the project path instead, run
+`weaver kernel start --new-chain` (the legacy chain is left untouched), or
+pin `kernel.chain.checkpoint_path`. A fresh chain is otherwise created
+only when no chain exists at all. `weaver kernel start` reports success
+only once the daemon serves (its socket accepts connections and
+`kernel.pid` holds the spawned child's pid); if boot fails (for example the
+chain lock is held) it prints the last log lines and exits non-zero. If the
+daemon is still booting after 90 s (a large chain can take longer), it
+prints "still starting (pid N); check `weaver kernel status`" and exits 0
+without the started banner.
+
+The Seed token store under `~/.clawft/secrets/` is read from there, with
+a WARN, when the project has none yet; it is never moved automatically.
+
+Migrating to the legacy chain safely: older kernels take no `chain.lock`,
+so a new kernel cannot tell whether one is still writing
+`~/.clawft/chain.*`. The first adoption is therefore explicit:
+
+1. Stop every older weaver daemon (check `ps` or `weaver doctor daemon`).
+2. Run `weaver kernel start --adopt-legacy-chain` once. It adopts the
+   legacy chain and creates `chain.lock` beside it; later starts adopt it
+   normally without the flag.
+3. Or run `weaver kernel start --new-chain` for a fresh chain at the
+   project path.
+
+Without the flag (and with no `chain.lock` yet) the start is refused. Even
+with the flag it is refused if the chain was modified within the last 120
+seconds ("looks in use by an older kernel").
+
+Chain lock: whichever chain is in use is guarded by an exclusive lock
+(`chain.lock` beside it) for the kernel's lifetime. A second kernel on the
+same chain refuses to boot, naming the holder's PID.
+
+Single instance: the daemon holds an exclusive advisory lock on
+`<root>/kernel.lock` for its lifetime. A second kernel on the same root
+exits non-zero with `another kernel owns <root> (pid N)`. With the lock
+held, a leftover `kernel.sock` that refuses connections is unlinked and
+rebound; one that accepts connections is never taken over.
+
+When the CLI cannot reach a kernel it names the socket it tried and
+whether there is no socket file, a stale socket (connection refused) or a
+permission problem. State-changing commands do not fall back silently:
+`weft agent` requires `--local` to run in-process, and `weft cron
+add/remove/enable/disable` fail without a daemon (`weft cron run` is not
+implemented by the kernel).
+Read-only commands may still read local files and say so on stderr.
 
 #### Chain storage location (isolated runtimes)
 
@@ -122,11 +199,9 @@ Resolution order, highest first:
 
 1. An explicit path in config: `kernel.chain.checkpoint_path` (and
    `kernel.chain.external_anchor.ledger_path` for the anchor ledger).
-2. `$WEFTOS_RUNTIME_DIR`, when set and non-empty: the files go in
-   `$WEFTOS_RUNTIME_DIR/chain.json`, `$WEFTOS_RUNTIME_DIR/chain.rvf`
-   and so on.
-3. `~/.clawft/`, the operator chain. Nothing changes for operators who
-   set neither of the above.
+2. The runtime root (see "Runtime directory"): `$WEFTOS_RUNTIME_DIR`
+   when set, else the project's `.weftos/runtime`, else `~/.clawft/`.
+   The files go in `<root>/chain.json`, `<root>/chain.rvf` and so on.
 
 Probe, demo and test daemons must run with `WEFTOS_RUNTIME_DIR`
 pointing at a scratch directory. They still chain every action, but to
@@ -387,8 +462,10 @@ project-level overlays per the
   "kernel": {
     "features": ["exochain", "ecc", "mesh"],
     "mesh": {
-      "listen": "tcp://0.0.0.0:9421",
-      "seed_peers": ["tcp://10.0.0.2:9421"]
+      "enabled": true,
+      "transport": "tcp",
+      "listen_addr": "0.0.0.0:9489",
+      "seed_peers": ["10.0.0.2:9489"]
     },
     "chain": {
       "path": "~/.clawft/chain"
@@ -408,6 +485,19 @@ project-level overlays per the
   }
 }
 ```
+
+The mesh listener defaults to port **9489** ("the weave"; ADR-103 D1) and
+`listen_addr` is the configurable address (`listen` is accepted as an
+alias). When `mesh.enabled` is true and the address cannot be bound, for
+example because another kernel on the same machine already holds the port,
+boot fails with an error naming the address. With `mesh.enabled = false`
+nothing is bound and nothing fails.
+
+A node's id is derived from its Ed25519 node key, not generated per boot:
+`node_id = hex(SHA-256(pubkey)[..16])`, 32 hex characters (ADR-025, ADR-103
+D11). The same id appears in the mesh handshake, cluster membership,
+heartbeats and `kernel.status`, and it is stable across restarts while
+`<runtime>/node.key` is kept.
 
 See [`docs/weftos/kernel-modules.md`](../weftos/kernel-modules.md)
 for the full per-module reference and `kernel-modules.md` for

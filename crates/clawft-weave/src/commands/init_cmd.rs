@@ -251,7 +251,7 @@ ignore = ["target", "node_modules", "dist", ".git"]
 [kernel.mesh]
 enabled = true
 transport = "tcp"
-listen_addr = "0.0.0.0:9470"
+listen_addr = "0.0.0.0:9489"
 discovery = false
 seed_peers = []
 "#,

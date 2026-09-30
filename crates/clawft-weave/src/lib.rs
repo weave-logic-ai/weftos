@@ -19,12 +19,20 @@ pub mod conv_postmortem;
 // Local RPC daemon: Unix UDS + Windows named pipes (WEFT-559).
 #[cfg(any(unix, windows))]
 pub mod daemon;
+/// Single-instance advisory lock on `<runtime>/kernel.lock` (ADR-103 P0b).
+#[cfg(any(unix, windows))]
+pub mod instance_lock;
 #[cfg(any(unix, windows))]
 pub mod llm_service;
+/// Daemon RPC extension seam: method-prefix routes + pre-dispatch gates (ADR-103 D0).
+#[cfg(any(unix, windows))]
+pub mod rpc_ext;
 /// Live MCP registry RPC handlers (WEFT-494 / ADR-070). Available on all
 /// platforms so unit tests can exercise add/list/remove without UDS.
 pub mod mcp_rpc;
 pub mod node_identity;
+/// Mic source node discovery for whisper / classify (ADR-103 D11 follow-up).
+pub mod mic_source;
 /// Node facts probe, signing, cache and `cluster.facts` (mesh-placement-03).
 #[cfg(any(feature = "mesh", feature = "exochain"))]
 pub mod node_facts_rpc;

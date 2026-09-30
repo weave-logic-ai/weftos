@@ -1,6 +1,7 @@
 # ADR-103: The Weave topology: roles, project kernels, instances and environments
 
 - **Status**: Accepted (2026-09-30; decisions D1–D14 set by the owner 2026-09-30; implementation tracked on cards weave-topology-P0..P4, leaf track, cog-boundary audit)
+- **Updated**: 2026-09-30. Phase 0 implemented (integrate/p0, Fable phase review `docs/research/daemon-topology/phase-0-review.md`). D11 implemented. Amendments A1–A5 below record what Phase 0 added beyond the original text.
 - **Date**: 2026-09-30
 - **Deciders**: Owner / platform
 - **Depends-On**: ADR-022 (mandatory chain audit), ADR-025 (Ed25519 node identity), ADR-033 (three-branch governance), ADR-057 (substrate read ACLs), ADR-092 (rule distribution), ADR-094 (spawn permission), ADR-098 (process-compose), ADR-099 (governed workload placement), ADR-101 (inference kind), ADR-100 (cog kind)
@@ -41,7 +42,7 @@ Profiles: full shared host (service + a user daemon per user + a kernel per acti
 - **D8 Governance overlays** are **tighten-only**: a project (and a nested instance) may add denies and lower limits, never relax the parent's rules. Every chain event records the effective-rule hash.
 - **D9 `project` is an ADR-099 workload kind** with pluggable sandbox drivers: `logical` (no sandbox, Phase 2), OpenShell or containers on Linux, Seatbelt or Apple `container` on macOS, wasmtime for WASM projects. The sandbox is the workload; the project kernel runs inside it as its supervisor; the user daemon supervises from outside (§6). *(Owner did not answer D9 explicitly; recorded as the analysis recommendation, reversible until Phase 4.)*
 - **D10 Nested WeftOS** is isolated by default. A toggle, `weave.master = true`, marks an instance as the master of the WeftOS instances nested under it; the master manages their config (ports, registration level, governance cap). An inner instance never joins the outer mesh unless its master registers it.
-- **D11 Node-id hash: SHA-256**, `node_id = hex(SHA-256(pubkey)[..16])`, as the code (`cluster.rs:323`) and ADR-099 already use. ADR-025 (SHAKE-256) and the ESP32 journal (BLAKE3) are corrected to match. *(Owner was unsure; SHA-256 chosen because it changes the fewest live ids. Reversible until leaf keys are provisioned.)*
+- **D11 Node-id hash: SHA-256**, `node_id = hex(SHA-256(pubkey)[..16])`, as the code (`cluster.rs:323`) and ADR-099 already use. ADR-025 (SHAKE-256) and the ESP32 journal (BLAKE3) are corrected to match. *(Owner was unsure; SHA-256 chosen because it changes the fewest live ids.)* **Implemented in Phase 0**: one `node_id_from_pubkey` (`crates/clawft-kernel/src/node_id.rs`) used by mesh, cluster, registry and substrate; the substrate ACL still parses stored legacy `n-` ids.
 - **D12 Commands outside any project** are decided by **governance**. The shipped default rule allows read-only commands (`status`, `doctor`, `health`, `version`, `project list`) against the user daemon and denies state-changing commands with "not in a project; run `weft project init` or pass `--project`". Operators may change the rule.
 - **D13 Project kernels are processes by default.** In-process tenancy is the opt-in for small projects and the collapse for single-tenant hosts.
 - **D14 Resolution.** `weft` finds a kernel by flag → env → manifest → user default, then confirms with a `kernel.status` handshake returning `{node_id, user_id, project_id, depth, parent}`. It never maps CWD straight to a socket, never falls back silently to an in-process kernel, and prints what it tried.
@@ -64,6 +65,14 @@ Promotion is a governed, chain-recorded hand-off between instances, not a mode o
 
 Staging-as-a-gate, CI/CD, sensor fusion and similar purpose-specific behavior are **cogs** built on the OS primitives (ADR-100), not kernel features. The kernel keeps what every instance needs: identity and certification, chains, governance, placement, IPC and mesh, supervision, the token authority. A separate audit (card cog-boundary-01) lists everything in the WeftOS tree today that should have been a cog on those primitives. That audit is **advisory**: nothing is removed because it is listed; each item gets a keep, move later, or move now verdict with its cost, and core pieces that are correctly core are fixed in place rather than extracted.
 
+## Amendments
+
+- **A1 (Phase 0, legacy chain).** A kernel with no chain of its own keeps using the legacy `~/.clawft` chain and key rather than forking history. `chain.lock` guards every chain in use. While no `chain.lock` exists beside a legacy chain, the first adoption needs `weaver kernel start --adopt-legacy-chain` (also when the kernel is rooted at `~/.clawft` itself); a write within 120 s is refused as a probable lock-unaware writer. `--new-chain` starts fresh, and is refused where it would overwrite the legacy chain. Phase 1 `weaver migrate user-chain` reuses this flag family and lives beside `choose_default_chain`.
+- **A2 (mic source policy).** The voice pipeline's input node is: an operator pin (`WHISPER_INPUT_NODE_ID` or `voice.mic_node_id`), else the single registered node publishing `sensor/mic`; two or more candidates, including one appearing after an automatic choice, stop speech-to-text until a pin is set. `node.register` carries no capability declaration yet; requiring a declared mic capability is on the leaf track.
+- **A3 (voice principal).** Voice commands dispatch through the authorization chokepoint as an internal principal with `read, chat, write`, never `admin`. Whether cron mutations stay reachable by voice is decided in Phase 1 package G.
+- **A4 (D14 scope).** Phase 0 delivered the "prints what it tried, no silent fallback" half of D14. Manifest resolution and the `kernel.status` handshake are Phase 1 packages A and D.
+- **A5 (gateway bind).** The gateway's `0.0.0.0` default is changed to loopback with ADR-102 card 03; LAN exposure is an explicit choice.
+
 ## Consequences
 
 - One resolver for every runtime file; a second daemon for the same scope refuses to start; `$HOME` is never a project; the mesh node id is stable and derived from the node key.
@@ -77,7 +86,7 @@ Staging-as-a-gate, CI/CD, sensor fusion and similar purpose-specific behavior ar
 
 | Phase | Scope | Card |
 |---|---|---|
-| 0 | One resolver (node key, chain, workloads, cluster peers, socket, PID, log); walk-up stops at `project.toml`/`weave.toml`, never `$HOME`; single-instance lock and stale-socket recovery; `weft` prints the socket and stops silent fallback; node id from the Ed25519 key with SHA-256; mesh port 9489 and bind failure fatal; docs port fix | weave-topology-P0a..c |
+| 0 | One resolver (node key, chain, workloads, cluster peers, socket, PID, log); walk-up stops at a project marker (`.weftos/` plus `project.toml`, `.weftos/weave.toml`, `weave.toml` beside it, an existing `.weftos/runtime/`, or `.git`), never `$HOME`; `kernel.lock` single instance, `chain.lock` per chain, explicit first adoption of the legacy chain (`--adopt-legacy-chain`, `--new-chain`) and stale-socket recovery; `weft` prints the socket and stops silent fallback; node id from the Ed25519 key with SHA-256; mesh port 9489 and bind failure fatal; docs port fix | weave-topology-P0a..c |
 | 1 | User daemon at `~/.weftos/run/` with machine and user roles collapsed; user chain migration from `~/.clawft/`; token authority; project manifest seeded from `~/.clawft/workspaces.json`; `weft project init/list`; resolution + handshake (D14); governance rule for D12; launchd/systemd user unit | weave-topology-P1 |
 | 2 | Project kernels as children: project key certified on the user chain, project chain with anchors, tighten-only overlay, `project_id` in `GatePrincipal`, shared services via the user daemon, idle stop, `project` workload kind with the `logical` driver | weave-topology-P2 |
 | 3 | `weaver mesh serve` as an OS service: peer-credential registration and user binding (D3), user certificates, machine journal, LaunchDaemon/systemd units, installer tier | weave-topology-P3 |
