@@ -7,7 +7,9 @@
 use serde::{Deserialize, Serialize};
 
 // Re-export core protocol types from clawft-rpc.
-pub use clawft_rpc::{Request, Response, log_path, pid_path, runtime_dir, socket_path};
+pub use clawft_rpc::{
+    Request, Response, log_path, pid_path, runtime_dir, runtime_paths, socket_path,
+};
 
 // ── Typed result structs ───────────────────────────────────
 

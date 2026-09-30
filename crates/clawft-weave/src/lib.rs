@@ -19,6 +19,9 @@ pub mod conv_postmortem;
 // Local RPC daemon: Unix UDS + Windows named pipes (WEFT-559).
 #[cfg(any(unix, windows))]
 pub mod daemon;
+/// Single-instance advisory lock on `<runtime>/kernel.lock` (ADR-103 P0b).
+#[cfg(any(unix, windows))]
+pub mod instance_lock;
 #[cfg(any(unix, windows))]
 pub mod llm_service;
 /// Daemon RPC extension seam: method-prefix routes + pre-dispatch gates (ADR-103 D0).

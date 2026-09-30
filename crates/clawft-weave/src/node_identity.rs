@@ -99,6 +99,9 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    /// The on-disk name is a stable contract (`RuntimePaths::node_key`).
+    const KEYFILE_NAME: &str = "node.key";
+
     #[test]
     fn first_run_generates_and_persists_keyfile() {
         let dir = TempDir::new().unwrap();

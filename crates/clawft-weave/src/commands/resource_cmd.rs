@@ -7,7 +7,6 @@
 use clap::{Args, Subcommand};
 use comfy_table::{Cell, Table};
 
-use crate::client::DaemonClient;
 use crate::protocol::{
     Request, ResourceInspectParams, ResourceNodeInfo, ResourceRankEntry, ResourceRankParams,
     ResourceScoreParams, ResourceScoreResult, ResourceStatsResult,
@@ -97,9 +96,7 @@ pub async fn run(args: ResourceArgs) -> anyhow::Result<()> {
         _ => {}
     }
 
-    let mut client = DaemonClient::connect()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("no daemon running — start with 'weaver kernel start'"))?;
+    let mut client = clawft_rpc::connect_or_bail().await?;
 
     match args.command {
         ResourceCommand::Tree => {

@@ -559,7 +559,21 @@ cmd_all() {
 # honest full-suite verdict on a dev box where a known-environmental failure
 # (e.g. the clawft-rpc no-daemon tests while a daemon is running) would
 # otherwise fail-fast and mask the remaining tests.
+# Tests link the non-test kernel lib, which resolves runtime files (cluster
+# peers, apps, revoked hosts, node key) through RuntimePaths::resolve().
+# Point that at a throwaway dir unless the caller already chose one, so a
+# test run never touches a real project's .weftos/runtime or ~/.clawft.
+isolate_test_runtime() {
+    if [ -z "${WEFTOS_RUNTIME_DIR:-}" ]; then
+        WEFTOS_RUNTIME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/weftos-test-runtime.XXXXXX")"
+        export WEFTOS_RUNTIME_DIR
+        # shellcheck disable=SC2064
+        trap "rm -rf '$WEFTOS_RUNTIME_DIR'" EXIT
+    fi
+}
+
 workspace_test() {
+    isolate_test_runtime
     local extra=()
     [ "$NO_FAIL_FAST" = true ] && extra+=(--no-fail-fast)
     # Honor `--features <f>` so feature-gated adapters (matrix, email, …)
@@ -1363,6 +1377,7 @@ check_kernel_diskann_and_bench_matrix() {
 # pipeline:: plus related integration names (e.g. compress_pipeline).
 # Typical runtime: <5s after compile; AC target <60s.
 cmd_pipeline_pass_impl() {
+    isolate_test_runtime
     if cargo nextest --version >/dev/null 2>&1; then
         cargo nextest run -p clawft-core -E 'test(pipeline)'
     else

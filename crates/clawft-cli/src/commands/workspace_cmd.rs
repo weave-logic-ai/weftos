@@ -109,9 +109,10 @@ pub enum WorkspaceConfigAction {
     Reset,
 }
 
-/// Warning printed when no daemon is available.
-const NO_DAEMON_WARNING: &str =
-    "Warning: running without kernel daemon. Start daemon with: weaver kernel start";
+/// Stderr note for the local-registry fallback: names the socket tried.
+async fn no_daemon_note() -> String {
+    super::daemon_fallback::local_note("using the local workspace registry only").await
+}
 
 /// Run the workspace command.
 pub async fn run(args: WorkspaceArgs) -> anyhow::Result<()> {
@@ -148,7 +149,7 @@ async fn ws_create_rpc(name: &str, dir: Option<&str>) -> anyhow::Result<()> {
         }
         return Ok(());
     }
-    eprintln!("{NO_DAEMON_WARNING}");
+    eprintln!("{}", no_daemon_note().await);
     workspace_create(name, dir)
 }
 
@@ -181,7 +182,7 @@ async fn ws_list_rpc(show_all: bool) -> anyhow::Result<()> {
         }
         return Ok(());
     }
-    eprintln!("{NO_DAEMON_WARNING}");
+    eprintln!("{}", no_daemon_note().await);
     workspace_list(show_all)
 }
 
@@ -198,7 +199,7 @@ async fn ws_load_rpc(name_or_path: &str) -> anyhow::Result<()> {
         }
         return Ok(());
     }
-    eprintln!("{NO_DAEMON_WARNING}");
+    eprintln!("{}", no_daemon_note().await);
     workspace_load(name_or_path)
 }
 
@@ -225,7 +226,7 @@ async fn ws_status_rpc() -> anyhow::Result<()> {
         }
         return Ok(());
     }
-    eprintln!("{NO_DAEMON_WARNING}");
+    eprintln!("{}", no_daemon_note().await);
     workspace_status()
 }
 
@@ -256,7 +257,7 @@ async fn ws_delete_rpc(name: &str, skip_confirm: bool, keep_data: bool) -> anyho
         print_workspace_deleted(name, keep_data);
         return Ok(());
     }
-    eprintln!("{NO_DAEMON_WARNING}");
+    eprintln!("{}", no_daemon_note().await);
     workspace_delete_local(name, keep_data)
 }
 
@@ -269,7 +270,7 @@ async fn ws_config_set_rpc(key: &str, value: &str) -> anyhow::Result<()> {
         println!("Set {key} = {value}");
         return Ok(());
     }
-    eprintln!("{NO_DAEMON_WARNING}");
+    eprintln!("{}", no_daemon_note().await);
     workspace_config_set(key, value)
 }
 
@@ -288,7 +289,7 @@ async fn ws_config_get_rpc(key: &str) -> anyhow::Result<()> {
         }
         return Ok(());
     }
-    eprintln!("{NO_DAEMON_WARNING}");
+    eprintln!("{}", no_daemon_note().await);
     workspace_config_get(key)
 }
 
@@ -299,7 +300,7 @@ async fn ws_config_reset_rpc() -> anyhow::Result<()> {
         println!("Workspace configuration reset to defaults.");
         return Ok(());
     }
-    eprintln!("{NO_DAEMON_WARNING}");
+    eprintln!("{}", no_daemon_note().await);
     workspace_config_reset()
 }
 

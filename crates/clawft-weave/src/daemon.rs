@@ -636,7 +636,11 @@ use crate::protocol::{
 ///
 /// Works on Unix and Windows (WEFT-559). On Windows the child is created
 /// detached so closing the parent console does not kill the daemon.
-pub fn daemonize(config_override: Option<&str>) -> anyhow::Result<()> {
+pub fn daemonize(
+    config_override: Option<&str>,
+    new_chain: bool,
+    adopt_legacy_chain: bool,
+) -> anyhow::Result<()> {
     use std::process::Command;
 
     let runtime_dir = protocol::runtime_dir();
@@ -669,6 +673,12 @@ pub fn daemonize(config_override: Option<&str>) -> anyhow::Result<()> {
     if let Some(cfg) = config_override {
         cmd.args(["--config", cfg]);
     }
+    if new_chain {
+        cmd.arg("--new-chain");
+    }
+    if adopt_legacy_chain {
+        cmd.arg("--adopt-legacy-chain");
+    }
 
     // Windows: detach so the daemon outlives the spawning console.
     #[cfg(windows)]
@@ -679,14 +689,27 @@ pub fn daemonize(config_override: Option<&str>) -> anyhow::Result<()> {
         cmd.creation_flags(FLAGS);
     }
 
-    let child = cmd
+    let mut child = cmd
         .stdout(log_file)
         .stderr(log_err)
         .stdin(std::process::Stdio::null())
         .spawn()?;
 
     let pid = child.id();
-    std::fs::write(&pid_path, pid.to_string())?;
+    // The child writes kernel.pid itself once boot (runtime and chain locks)
+    // succeeded; success is reported only when it serves.
+    let ready =
+        wait_for_daemon_ready(&mut child, &protocol::socket_path(), &pid_path, &log_path)?;
+    if !ready {
+        // Exit status 0: the daemon is alive and booting (a big chain can
+        // take minutes); it is not a failure, but nothing is serving yet.
+        println!(
+            "WeftOS kernel still starting (pid {pid}); check `weaver kernel status` \
+             (log: {})",
+            log_path.display()
+        );
+        return Ok(());
+    }
 
     println!("WeftOS kernel started (pid {pid})");
     #[cfg(unix)]
@@ -703,6 +726,62 @@ pub fn daemonize(config_override: Option<&str>) -> anyhow::Result<()> {
     println!("Use 'weaver kernel stop' to shut down.");
 
     Ok(())
+}
+
+/// Last few non-empty lines of the daemon log, for failure messages.
+fn log_tail(log_path: &std::path::Path) -> String {
+    let Ok(text) = std::fs::read(log_path) else {
+        return String::new();
+    };
+    let text = String::from_utf8_lossy(&text[text.len().saturating_sub(4096)..]).into_owned();
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    lines[lines.len().saturating_sub(8)..].join("\n")
+}
+
+/// True once the daemon's endpoint accepts connections.
+fn daemon_ready(socket: &std::path::Path, pid_path: &std::path::Path, want_pid: &str) -> bool {
+    #[cfg(unix)]
+    {
+        // The child writes kernel.pid after boot; requiring our child's pid
+        // keeps another live daemon's socket from counting as ours.
+        std::fs::read_to_string(pid_path).is_ok_and(|s| s.trim() == want_pid)
+            && std::os::unix::net::UnixStream::connect(socket).is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        // Named pipes have no sync probe here; the PID file is written only
+        // after a successful boot, so it is the readiness marker.
+        let _ = socket;
+        std::fs::read_to_string(pid_path).is_ok_and(|s| s.trim() == want_pid)
+    }
+}
+
+/// Wait for the freshly spawned daemon to become reachable, failing with the
+/// tail of its log if it exits first (for example because another kernel
+/// owns the runtime dir or the chain). Returns `true` once the daemon
+/// serves and `false` if it is still starting after the timeout.
+fn wait_for_daemon_ready(
+    child: &mut std::process::Child,
+    socket: &std::path::Path,
+    pid_path: &std::path::Path,
+    log_path: &std::path::Path,
+) -> anyhow::Result<bool> {
+    let want = child.id().to_string();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    while std::time::Instant::now() < deadline {
+        if let Some(status) = child.try_wait()? {
+            anyhow::bail!(
+                "kernel exited during startup ({status}); last log lines from {}:\n{}",
+                log_path.display(),
+                log_tail(log_path)
+            );
+        }
+        if daemon_ready(socket, pid_path, &want) {
+            return Ok(true);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Ok(false)
 }
 
 /// Return true if a process with the given PID appears to be alive.
@@ -885,28 +964,22 @@ pub async fn run(
     // WEFT-10: workspace overlay routing, when present.
     workspace_routing: Option<clawft_types::routing::RoutingConfig>,
 ) -> anyhow::Result<()> {
-    let socket_path = protocol::socket_path();
+    let paths = protocol::runtime_paths();
+    let socket_path = paths.socket();
+
+    // ADR-103 P0b: one kernel per runtime dir. Hold the advisory lock for
+    // the daemon's whole lifetime; with it held nobody else is serving the
+    // socket, so a leftover socket file can be reclaimed safely.
+    let _instance_lock = crate::instance_lock::InstanceLock::acquire(&paths)?;
+    info!(root = %paths.root().display(), "runtime dir locked");
 
     // WEFT-39: persist shared LLM RetryModel learned weights so the next
     // daemon start restores the curve instead of resetting to untrained.
     clawft_core::pipeline::persist_shared_retry_model();
 
-    // Already-running / stale-endpoint probe (platform-specific).
+    // Endpoint probe, with the lock held (platform-specific).
     #[cfg(unix)]
-    {
-        if socket_path.exists() {
-            // Try connecting to see if a daemon is already running
-            if UnixStream::connect(&socket_path).await.is_ok() {
-                anyhow::bail!(
-                    "daemon already running (socket exists and is accepting connections: {})",
-                    socket_path.display()
-                );
-            }
-            // Stale socket — remove it
-            std::fs::remove_file(&socket_path)?;
-            debug!("removed stale socket file");
-        }
-    }
+    crate::instance_lock::reclaim_stale_socket(&paths).await?;
     #[cfg(windows)]
     {
         // Named pipes have no filesystem node; dial the derived pipe name.
@@ -925,10 +998,6 @@ pub async fn run(
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-
-    // Record this process as the live daemon (background daemonize also
-    // writes the child PID before spawn returns; overwriting here is fine).
-    let _ = std::fs::write(protocol::pid_path(), std::process::id().to_string());
 
     // agent-core-v1 Phase E1: snapshot the ContextRouter selector
     // before `config` moves into `Kernel::boot`. The agent-service
@@ -967,16 +1036,20 @@ pub async fn run(
     let platform = NativePlatform::new();
     // The node key is loaded before boot so the kernel derives its mesh /
     // cluster node id from it (ADR-103 D11) instead of a per-boot UUID.
-    let runtime_dir = socket_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let runtime_dir = paths.root().to_path_buf();
     let daemon_identity = crate::node_identity::load_or_generate(&runtime_dir)
         .map_err(|e| anyhow::anyhow!("daemon identity bootstrap: {e}"))?;
     let kernel =
         boot_kernel_with_identity(config, kernel_config, Arc::new(platform), &daemon_identity)
             .await?;
+    // The one-shot --new-chain / --adopt-legacy-chain requests have been
+    // consumed by boot.
+    clawft_kernel::chain_storage::request_new_chain(false);
+    clawft_kernel::chain_storage::request_adopt_legacy_chain(false);
     let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
+    // Record this process as the live daemon only now that boot (which takes
+    // the chain lock) has succeeded, so a refused boot leaves no stale pid.
+    let _ = std::fs::write(protocol::pid_path(), std::process::id().to_string());
 
     // WEFT-494: seed live MCP registry + remember best-effort config path
     // for path-less mcp.reload (CLI after weft mcp add).
@@ -992,7 +1065,7 @@ pub async fn run(
     // `substrate/<node-id>/...` write prefix.
     // mesh-placement-06: persisted node-local workload catalog.
     #[cfg(feature = "exochain")]
-    crate::workload_rpc::init_registry(&runtime_dir.join("workloads.json"));
+    crate::workload_rpc::init_registry(&paths.workloads());
     // mesh-placement-12: the placement control plane signs with the node key.
     #[cfg(all(feature = "placement", unix))]
     crate::workload_place_rpc::init(daemon_identity.signing_key.clone(), runtime_dir.clone());
@@ -6113,7 +6186,7 @@ async fn dispatch(
                     match export_params.format.as_str() {
                         "rvf" => {
                             let default_path =
-                                protocol::runtime_dir().join("chain").join("export.rvf");
+                                protocol::runtime_paths().chain_dir().join("export.rvf");
                             let output_path = export_params
                                 .output
                                 .map(std::path::PathBuf::from)
@@ -7043,6 +7116,36 @@ async fn dispatch(
                 }
                 Ok(None) => Response::error(format!("cron job not found: {}", remove_params.id)),
                 Err(e) => Response::error(format!("cron remove denied: {e}")),
+            }
+        }
+        "cron.enable" | "cron.disable" => {
+            let enabled = method == "cron.enable";
+            let p: CronRemoveParams = match serde_json::from_value(params) {
+                Ok(p) => p,
+                Err(e) => return Response::error(format!("invalid params: {e}")),
+            };
+            let k = kernel.read().await;
+            match k.cron_service().set_enabled(&p.id, enabled) {
+                Some(job) => {
+                    #[cfg(feature = "exochain")]
+                    if let Some(cm) = k.chain_manager() {
+                        cm.append(
+                            "cron",
+                            &method,
+                            Some(serde_json::json!({"job_id": job.id, "name": job.name})),
+                        );
+                    }
+                    k.event_log().info(
+                        "cron",
+                        format!(
+                            "job {}: {}",
+                            if enabled { "enabled" } else { "disabled" },
+                            job.name
+                        ),
+                    );
+                    Response::success(serde_json::json!({"job_id": job.id, "enabled": job.enabled}))
+                }
+                None => Response::error(format!("cron job not found: {}", p.id)),
             }
         }
         // WEFT-494 / ADR-070: live MCP registry (shared McpServerManager).

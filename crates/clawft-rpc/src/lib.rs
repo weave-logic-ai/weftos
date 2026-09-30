@@ -29,37 +29,22 @@
 mod client;
 pub mod doctor;
 pub mod named_pipe;
+pub mod probe;
 mod protocol;
 pub mod version_check;
 
 pub use client::{DaemonClient, StreamSession, is_daemon_running, is_daemon_running_at};
 pub use protocol::{
     LOG_FILE_NAME, PID_FILE_NAME, PIPE_NAME_PREFIX, Request, Response, SOCKET_NAME,
-    default_pipe_name, log_path, pid_path, pipe_name_for_path, runtime_dir, socket_path,
+    default_pipe_name, log_path, pid_path, pipe_name_for_path, runtime_dir, runtime_paths, socket_path,
 };
 
 /// Connect to the daemon or bail with a helpful error message.
 ///
 /// This is a convenience for CLI commands that require a running daemon.
 pub async fn connect_or_bail() -> anyhow::Result<DaemonClient> {
-    DaemonClient::connect().await.ok_or_else(|| {
-        #[cfg(windows)]
-        {
-            anyhow::anyhow!(
-                "no kernel daemon running (Windows named-pipe transport).\n\
-                 Start the daemon with: weaver kernel start\n\
-                 Or run: weaver kernel start --foreground\n\
-                 Client dials `{}`.",
-                default_pipe_name()
-            )
-        }
-        #[cfg(not(windows))]
-        {
-            anyhow::anyhow!(
-                "no kernel daemon running.\n\
-                 Start the daemon with: weaver kernel start\n\
-                 Or run: weaver console"
-            )
-        }
-    })
+    match DaemonClient::connect().await {
+        Some(client) => Ok(client),
+        None => Err(anyhow::anyhow!(probe::unreachable_message().await)),
+    }
 }

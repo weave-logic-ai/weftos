@@ -122,7 +122,12 @@ pub fn required_capability(method: &str) -> Capability {
         // mesh-placement-12: these sign/contact peers or expose cog output.
         | "workload.explain"
         | "workload.status"
-        | "workload.logs" => Capability::Write,
+        | "workload.logs"
+        // Cron mutations change what the kernel will run on its own.
+        | "cron.add"
+        | "cron.remove"
+        | "cron.enable"
+        | "cron.disable" => Capability::Write,
 
         // ── Chat: LLM-conversational verbs ──────────────────────────
         "agent.chat" => Capability::Chat,

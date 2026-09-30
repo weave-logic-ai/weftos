@@ -55,6 +55,7 @@ pub mod placement;
 pub mod provider;
 pub mod registry;
 pub mod routing;
+pub mod runtime_paths;
 pub mod secret;
 pub mod security;
 pub mod session;
