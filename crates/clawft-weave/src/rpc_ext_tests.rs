@@ -40,6 +40,7 @@ async fn prefix_handler_receives_method_params_and_caller() {
     let caller = CallerCtx {
         auth: Some("write".into()),
         project: Some("p1".into()),
+        ..Default::default()
     };
     let caps = CallerCapabilities::from_scopes(["write"]);
     let r = dispatch_ext_with(&reg, &caller, &caps, "project.list", &params, &kernel)

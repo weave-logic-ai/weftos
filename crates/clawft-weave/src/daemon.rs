@@ -3126,7 +3126,14 @@ pub async fn run(
                             Ok((stream, _addr)) => {
                                 let k = Arc::clone(&accept_kernel);
                                 let tx = rpc_shutdown_tx.clone();
-                                tokio::spawn(handle_connection(stream, k, tx));
+                                // ADR-070 owner model, now verified: literal
+                                // scopes only work for a peer with our uid.
+                                // Unknown credentials fail closed.
+                                let peer_untrusted = stream
+                                    .peer_cred()
+                                    .map(|c| c.uid() != nix::unistd::geteuid().as_raw())
+                                    .unwrap_or(true);
+                                tokio::spawn(handle_connection_peer(stream, k, tx, peer_untrusted));
                             }
                             Err(e) => {
                                 error!("accept error: {e}");
@@ -3194,9 +3201,10 @@ pub async fn run(
     };
 
     // Optional TCP relay (Unix only). When `[kernel.ipc_tcp]` is enabled,
-    // every accepted TCP connection is transparently byte-copied to a
-    // fresh connection on the unix socket. All auth / JSON dispatch stays
-    // in the unix path — the TCP side is a dumb conduit so cross-boundary
+    // every accepted TCP connection is relayed to a fresh connection on
+    // the unix socket, with self-asserted literal scope strings stripped
+    // from requests (`relay_auth`). All auth / JSON dispatch stays in the
+    // unix path — the TCP side is a conduit so cross-boundary
     // callers (Windows side of WSL, remote bridges) can reach the RPC
     // without speaking `AF_UNIX`. On Windows the daemon *is* the named
     // pipe endpoint, so the relay is unnecessary.
@@ -3288,10 +3296,12 @@ pub async fn run(
                                                 }
 
                                                 match UnixStream::connect(&sock).await {
-                                                    Ok(mut unix_stream) => {
-                                                        let (a, b) = match tokio::io::copy_bidirectional(
-                                                            &mut tcp_stream,
-                                                            &mut unix_stream,
+                                                    Ok(unix_stream) => {
+                                                        // Sanitised relay: self-asserted literal
+                                                        // scopes from TCP are dropped (R3).
+                                                        let (a, b) = match crate::relay_auth::relay(
+                                                            tcp_stream,
+                                                            unix_stream,
                                                         )
                                                         .await
                                                         {
@@ -3466,9 +3476,22 @@ pub async fn run(
 /// Exposed `pub` so integration tests can drive a preassembled kernel
 /// directly without the signal-handler plumbing in [`run`].
 pub async fn handle_connection<S>(
+    stream: S,
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+    shutdown_tx: watch::Sender<bool>,
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    handle_connection_peer(stream, kernel, shutdown_tx, false).await;
+}
+
+/// [`handle_connection`] with the peer-credential verdict: `true` when the
+/// peer is known not to be the daemon's uid (see `CallerCtx::peer_untrusted`).
+pub async fn handle_connection_peer<S>(
     mut stream: S,
     kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
     shutdown_tx: watch::Sender<bool>,
+    peer_untrusted: bool,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -3480,11 +3503,11 @@ pub async fn handle_connection<S>(
 
     #[cfg(feature = "rvf-rpc")]
     if &header == b"RVFS" {
-        return handle_rvf_connection(stream, kernel, shutdown_tx).await;
+        return handle_rvf_connection(stream, kernel, shutdown_tx, peer_untrusted).await;
     }
 
     // JSON mode: the 4 header bytes are the start of the first JSON line.
-    handle_json_connection(header, stream, kernel, shutdown_tx).await;
+    handle_json_connection(header, stream, kernel, shutdown_tx, peer_untrusted).await;
 }
 
 /// Outcome of dispatching a single JSON-line request.
@@ -3519,49 +3542,49 @@ enum DispatchOutcome {
 /// Resolve the effective [`crate::capability::CallerCapabilities`]
 /// for an RPC caller from the optional `auth` field on the request.
 ///
-/// WEFT-479. Posture today:
+/// WEFT-479, amended by ADR-102 D3 / Phase 0 review R3:
 ///
 /// - **Absent / empty**: anonymous (`{Read, Chat}`).
-/// - **Literal scope tokens**: a development convenience — the
-///   reserved literal strings `"admin"`, `"write"`, `"chat"`,
-///   `"read"` (or comma-separated combos like `"write,chat"`) are
-///   accepted as direct scope hints. This lets local automation and
-///   tests opt in to higher capability without round-tripping the
-///   kernel's [`AuthService`](clawft_kernel::AuthService) yet.
-/// - **Anything else**: looked up against the kernel's
-///   `AuthService`. **Currently stubbed**: until the AuthService
-///   service-registry plumbing lands, an unrecognised non-empty
-///   token resolves to [`crate::capability::CallerCapabilities::denied`]
-///   so a misconfigured client gets a hard error instead of silently
-///   downgrading to anonymous.
-///
-/// The full AuthService wiring is tracked as a 0.8.x followup.
+/// - **Token secret** (`wft_...`, issued by `auth.token.issue`): validated
+///   against the kernel's [`clawft_kernel::token_authority::TokenAuthority`];
+///   a live token grants the owner scope (ADR-102 D4: full surface). An
+///   unknown, expired or revoked token is denied, never downgraded.
+/// - **Literal scope strings** (`"admin"`, `"write,chat"`, ...): the
+///   ADR-070 local-owner shortcut the CLI relies on. Honoured only when
+///   the unix-socket peer has the daemon's uid (`peer_untrusted == false`).
+///   The TCP relay strips them before they reach the socket
+///   (`relay_auth`), so they grant nothing from a network transport.
+/// - **Anything else**: denied.
 async fn resolve_caller_capabilities(
-    auth: Option<&str>,
-    _kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+    caller: &crate::rpc_ext::CallerCtx,
+    kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
 ) -> crate::capability::CallerCapabilities {
-    let token = match auth {
-        None => return crate::capability::CallerCapabilities::anonymous(),
-        Some(t) if t.trim().is_empty() => {
-            return crate::capability::CallerCapabilities::anonymous();
-        }
-        Some(t) => t.trim().to_string(),
+    use crate::capability::{CallerCapabilities, is_literal_scope};
+    let token = match caller.auth.as_deref().map(str::trim) {
+        None | Some("") => return CallerCapabilities::anonymous(),
+        Some(t) => t,
     };
 
-    // Recognised literal scope tokens (development convenience).
-    let known = ["admin", "write", "chat", "read"];
-    let parts: Vec<&str> = token.split(',').map(str::trim).collect();
-    if parts.iter().all(|p| known.contains(p)) {
-        return crate::capability::CallerCapabilities::from_scopes(parts);
+    if token.starts_with(clawft_kernel::token_authority::SECRET_PREFIX) {
+        if let Some(authority) = crate::token_rpc::authority_for(kernel).await
+            && authority.validate(token).is_some()
+        {
+            return CallerCapabilities::from_scopes(["admin"]);
+        }
+        tracing::warn!("rpc auth: token rejected (unknown, expired or revoked)");
+        return CallerCapabilities::denied();
     }
 
-    // Token doesn't match the literal-scope shortcut. The proper
-    // path is `kernel.read().await.auth_service().validate_auth_token(...)`,
-    // but that accessor doesn't exist on `Kernel<P>` yet. Until it
-    // lands, deny. This is the safer default — a typo'd token must
-    // never silently fall back to anonymous.
+    if is_literal_scope(token) {
+        if caller.peer_untrusted {
+            tracing::warn!("rpc auth: literal scope from a peer that is not the daemon uid; denying");
+            return CallerCapabilities::denied();
+        }
+        return CallerCapabilities::from_scopes(token.split(',').map(str::trim));
+    }
+
     tracing::warn!("rpc auth: presented token did not match any recognised shape; denying");
-    crate::capability::CallerCapabilities::denied()
+    CallerCapabilities::denied()
 }
 
 /// Resolve the caller's capabilities, then run the capability check and
@@ -3572,7 +3595,7 @@ async fn authorize_caller(
     params: &serde_json::Value,
     kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
 ) -> Result<crate::capability::CallerCapabilities, Response> {
-    let caps = resolve_caller_capabilities(caller.auth.as_deref(), kernel).await;
+    let caps = resolve_caller_capabilities(caller, kernel).await;
     crate::rpc_ext::authorize(caller, &caps, method, params, kernel).await?;
     Ok(caps)
 }
@@ -3614,6 +3637,7 @@ async fn dispatch_json_line<W>(
     kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
     shutdown_tx: &watch::Sender<bool>,
     writer: &mut W,
+    peer_untrusted: bool,
 ) -> DispatchOutcome
 where
     W: AsyncWriteExt + Unpin,
@@ -3639,7 +3663,8 @@ where
             // ADR-103 D0: one authorization point (capability check, then
             // extension gates) for every entry path, before any streaming
             // intercept or dispatch.
-            let caller = crate::rpc_ext::CallerCtx::from_request(&req);
+            let caller =
+                crate::rpc_ext::CallerCtx::from_request(&req).with_peer_untrusted(peer_untrusted);
             // ADR-103 D14: refuse an unsupported `proto` / malformed
             // `project` before anything else looks at the request.
             let (caps, denial) = if let Some(refusal) =
@@ -3733,6 +3758,7 @@ async fn handle_json_connection<S>(
     stream: S,
     kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
     shutdown_tx: watch::Sender<bool>,
+    peer_untrusted: bool,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -3745,7 +3771,7 @@ async fn handle_json_connection<S>(
         return;
     }
     let first_line = format!("{}{}", String::from_utf8_lossy(&prefix), rest_of_first);
-    match dispatch_json_line(&first_line, &kernel, &shutdown_tx, &mut writer).await {
+    match dispatch_json_line(&first_line, &kernel, &shutdown_tx, &mut writer, peer_untrusted).await {
         DispatchOutcome::Continue => {}
         DispatchOutcome::Stop => return,
         DispatchOutcome::StreamSubscribe {
@@ -3766,7 +3792,7 @@ async fn handle_json_connection<S>(
             Ok(_) => {}
             Err(_) => break,
         }
-        match dispatch_json_line(&line, &kernel, &shutdown_tx, &mut writer).await {
+        match dispatch_json_line(&line, &kernel, &shutdown_tx, &mut writer, peer_untrusted).await {
             DispatchOutcome::Continue => {}
             DispatchOutcome::Stop => break,
             DispatchOutcome::StreamSubscribe {
@@ -4328,6 +4354,7 @@ async fn handle_rvf_connection<S>(
     stream: S,
     kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
     shutdown_tx: watch::Sender<bool>,
+    peer_untrusted: bool,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -4352,7 +4379,8 @@ async fn handle_rvf_connection<S>(
         let response = match rvf_rpc::decode_request(&frame) {
             Ok(req) => {
                 let id = req.id.clone();
-                let caller = crate::rpc_ext::CallerCtx::from_request(&req);
+                let caller = crate::rpc_ext::CallerCtx::from_request(&req)
+                    .with_peer_untrusted(peer_untrusted);
                 if let Some(refusal) =
                     crate::handshake_rpc::envelope_refusal(&req.method, req.proto, req.project.as_deref())
                 {
