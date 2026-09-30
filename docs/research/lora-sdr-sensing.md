@@ -47,6 +47,10 @@ The 4πd/λ figure is the monostatic upper bound. For a bistatic link it depends
 | Hardware we have | none | none | TEL0122 cover |
 
 - **433 MHz** goes through walls best and lights up the widest zone. That is useful for "is anyone in the house". But breathing sensitivity halves, antennas double in size, and the legal route needs a ham licence. Worth it only for through-several-walls presence with a licensed operator. [I]
+- **433 MHz at a low duty cycle.** FCC 15.231(e) does allow any kind of transmission, but each burst is capped at **1 s**, followed by a silent period of **at least 30× the burst length and never less than 10 s**. The limit is 4,383 µV/m average at 3 m, about −22 dBm EIRP (43,833 µV/m peak). ([eCFR via Cornell](https://www.law.cornell.edu/cfr/text/47/15.231)) [V for the limits; EIRP is arithmetic]
+  - At most that allows a 1 s look every 31 s, or a 0.33 s look every 10 s. A breathing cycle lasts 2-10 s, so it can't be measured this way. Presence and motion snapshots ("is this 1 s window steadier or busier than baseline?") are possible.
+  - Canada's RSS-210 has a similar provision; check its current text.
+  - Unlicensed 433 therefore means a slow presence probe only. [I]
 - **868 MHz** is physically almost the same as 915. It's the right answer in Europe and the wrong one here. [I]
 - **All three** are within the RTL-SDR's range, so the receiver doesn't decide it. [V, datasheet coverage]
 - **Check the regulations before a long unattended run.** The legal column is inference from the band plans, not a reading of the current FCC/ISED text.
