@@ -223,14 +223,14 @@ feature gate.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable mesh networking |
-| `bind_address` | string | `"0.0.0.0:9470"` | Address and port to bind the mesh listener |
+| `bind_address` | string | `"0.0.0.0:9489"` | Address and port to bind the mesh listener |
 | `seed_peers` | string[] | `[]` | Initial peer addresses for mesh discovery |
 
 ```toml
 [mesh]
 enabled = true
-bind_address = "0.0.0.0:9470"
-seed_peers = ["192.168.1.10:9470"]
+bind_address = "0.0.0.0:9489"
+seed_peers = ["192.168.1.10:9489"]
 ```
 
 ---
@@ -329,7 +329,7 @@ heartbeat_interval_secs = 3
 node_timeout_secs = 15
 enable_consensus = true
 min_quorum_size = 2
-seed_nodes = ["10.0.0.1:9470", "10.0.0.2:9470"]
+seed_nodes = ["10.0.0.1:9489", "10.0.0.2:9489"]
 node_name = "node-1"
 
 [tick]
@@ -356,8 +356,8 @@ risk_threshold = 0.8
 
 [mesh]
 enabled = true
-bind_address = "0.0.0.0:9470"
-seed_peers = ["10.0.0.1:9470", "10.0.0.2:9470"]
+bind_address = "0.0.0.0:9489"
+seed_peers = ["10.0.0.1:9489", "10.0.0.2:9489"]
 ```
 
 ## See Also

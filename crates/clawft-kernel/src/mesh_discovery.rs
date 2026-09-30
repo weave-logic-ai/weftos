@@ -409,7 +409,7 @@ mod tests {
     fn mesh_peer_event_serde_roundtrip() {
         let e = MeshPeerEvent::Recovered {
             node_id: "r1".into(),
-            address: Some("10.0.0.2:9470".into()),
+            address: Some("10.0.0.2:9489".into()),
         };
         let json = serde_json::to_string(&e).unwrap();
         let back: MeshPeerEvent = serde_json::from_str(&json).unwrap();

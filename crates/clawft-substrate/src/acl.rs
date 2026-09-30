@@ -35,12 +35,17 @@ pub const READ_DENIED_EVENT: &str = "substrate.read.denied";
 
 /// Literal identity string forms accepted in allow/deny lists.
 pub const ID_PUBLIC: &str = "public";
-/// Prefix for node identities: `node:n-<hex>`.
+/// Prefix for node identities: `node:<32-hex node id>`.
 pub const ID_NODE_PREFIX: &str = "node:";
 /// Prefix for actor identities: `actor:a-<hex>`.
 pub const ID_ACTOR_PREFIX: &str = "actor:";
 /// Prefix for capability-token scopes: `scope:<name>`.
 pub const ID_SCOPE_PREFIX: &str = "scope:";
+
+/// True for a bare node id: 32 lowercase hex chars (ADR-103 D11).
+fn is_node_id_shape(s: &str) -> bool {
+    s.len() == 32 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
 
 // ── Caller identity ─────────────────────────────────────────────────
 
@@ -148,7 +153,9 @@ impl CallerIdentity {
             };
         }
         // Bare node / actor ids follow the JOURNALED-NODE convention.
-        if raw.starts_with("n-") {
+        // Node ids are `hex(SHA-256(pubkey)[..16])` (ADR-103 D11); the
+        // legacy `n-<hex>` form is still recognised for stored rules.
+        if raw.starts_with("n-") || is_node_id_shape(raw) {
             return Self::node(raw);
         }
         if raw.starts_with("a-") {
@@ -1058,6 +1065,19 @@ mod tests {
                 .any(|s| s == "admin")
         );
         assert!(CallerIdentity::parse(Some("admin")).scopes.iter().any(|s| s == "admin"));
+    }
+
+    #[test]
+    fn parse_bare_32_hex_node_id() {
+        let id = "66687aadf862bd776c8fc18b8e9f8e20";
+        let parsed = CallerIdentity::parse(Some(id));
+        assert_eq!(parsed.node_id.as_deref(), Some(id));
+        assert!(parsed.actor_id.is_none());
+        assert_eq!(parsed.display(), format!("node:{id}"));
+        // Wrong length or uppercase is an opaque actor-ish id, not a node.
+        for bad in ["66687aadf862bd776c8fc18b8e9f8e2", "66687AADF862BD776C8FC18B8E9F8E20"] {
+            assert!(CallerIdentity::parse(Some(bad)).node_id.is_none(), "{bad}");
+        }
     }
 
     #[test]

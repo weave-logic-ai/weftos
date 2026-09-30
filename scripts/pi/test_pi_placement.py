@@ -77,7 +77,10 @@ class Helpers(unittest.TestCase):
         self.assertIn("WEFTOS_RUNTIME_DIR=/home/u/weftos-test-pi/runtime", line)
         self.assertIn("HOME=/home/u/weftos-test-pi/home", line)
         self.assertIn("/home/u/weftos-test-pi/bin/weaver kernel start --foreground", line)
-        self.assertNotIn("9470", line)
+        for port in plan.SYSTEM_MESH_PORTS:
+            self.assertNotIn(str(port), line)
+        self.assertEqual(plan.SYSTEM_MESH_PORT, 9489)
+        self.assertNotIn(plan.PLACEMENT_PORT, plan.SYSTEM_MESH_PORTS)
         self.assertNotIn("/usr/local/bin/weaver", line)
         self.assertTrue(line.endswith("& echo $!"))
         # Only the daemon is backgrounded (a backgrounded `cd && ...` list

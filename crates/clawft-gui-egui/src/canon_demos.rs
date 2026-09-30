@@ -653,7 +653,7 @@ fn show_tabs(ui: &mut egui::Ui, state: &mut CanonDemoState) {
     const BODIES: &[&str] = &[
         "3 peers • 12 topics • uptime 4h13m",
         "cpu 18%  mem 32%  fps 59",
-        "[INFO] mesh listener on 0.0.0.0:9470\n[INFO] peer connected: leaf-abc",
+        "[INFO] mesh listener on 0.0.0.0:9489\n[INFO] peer connected: leaf-abc",
     ];
     Tabs::new(
         "demo.tabs",

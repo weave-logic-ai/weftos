@@ -17,8 +17,8 @@
 //!
 //! 1. Generates a fresh ephemeral ed25519 keypair (one per process —
 //!    no on-disk persistence, this is a developer tool).
-//! 2. Computes the deterministic node-id (`n-<6-hex>` BLAKE3 prefix
-//!    of the pubkey) per `clawft_kernel::node_id_from_pubkey`.
+//! 2. Computes the deterministic node-id (`hex(SHA-256(pubkey)[..16])`,
+//!    ADR-103 D11) per `clawft_kernel::node_id_from_pubkey`.
 //! 3. Calls `node.register` with the canonical proof-of-possession
 //!    over `node_register_payload(pubkey, ts, label)`.
 //! 4. Optionally runs a one-shot diff against

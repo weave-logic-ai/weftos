@@ -387,8 +387,10 @@ project-level overlays per the
   "kernel": {
     "features": ["exochain", "ecc", "mesh"],
     "mesh": {
-      "listen": "tcp://0.0.0.0:9421",
-      "seed_peers": ["tcp://10.0.0.2:9421"]
+      "enabled": true,
+      "transport": "tcp",
+      "listen_addr": "0.0.0.0:9489",
+      "seed_peers": ["10.0.0.2:9489"]
     },
     "chain": {
       "path": "~/.clawft/chain"
@@ -408,6 +410,19 @@ project-level overlays per the
   }
 }
 ```
+
+The mesh listener defaults to port **9489** ("the weave"; ADR-103 D1) and
+`listen_addr` is the configurable address (`listen` is accepted as an
+alias). When `mesh.enabled` is true and the address cannot be bound, for
+example because another kernel on the same machine already holds the port,
+boot fails with an error naming the address. With `mesh.enabled = false`
+nothing is bound and nothing fails.
+
+A node's id is derived from its Ed25519 node key, not generated per boot:
+`node_id = hex(SHA-256(pubkey)[..16])`, 32 hex characters (ADR-025, ADR-103
+D11). The same id appears in the mesh handshake, cluster membership,
+heartbeats and `kernel.status`, and it is stable across restarts while
+`<runtime>/node.key` is kept.
 
 See [`docs/weftos/kernel-modules.md`](../weftos/kernel-modules.md)
 for the full per-module reference and `kernel-modules.md` for

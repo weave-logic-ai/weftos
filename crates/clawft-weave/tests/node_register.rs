@@ -2,7 +2,7 @@
 //!
 //! Spins up a test daemon, calls `node.register` with a valid
 //! Ed25519 proof-of-possession, asserts the returned node-id is
-//! the deterministic `n-<6-hex>` BLAKE3 derivation, and that
+//! the deterministic `hex(SHA-256(pubkey)[..16])` derivation (ADR-103 D11), and that
 //! re-registering the same key yields the same id (idempotent).
 //!
 //! Mirrors `agent_register_and_sign.rs` but for nodes: a node is a
@@ -159,8 +159,8 @@ async fn register_returns_deterministic_node_id() {
     assert_eq!(resp["result"]["node_id"], expected_id);
     assert_eq!(resp["result"]["label"], label);
     assert!(
-        expected_id.starts_with("n-"),
-        "expected n-<hex>, got {expected_id}"
+        clawft_kernel::is_node_id(&expected_id),
+        "expected 32 hex chars, got {expected_id}"
     );
 
     let _ = shutdown_tx.send(true);

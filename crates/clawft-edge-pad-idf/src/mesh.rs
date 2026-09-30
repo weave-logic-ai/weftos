@@ -27,7 +27,7 @@ use crate::display::DpiDisplay;
 
 // ── Connection constants (spike: hardcoded — same as bare-metal port) ──
 const DAEMON_IP: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 73);
-const DAEMON_MESH_PORT: u16 = 9470;
+const DAEMON_MESH_PORT: u16 = 9489;
 /// Device-MAC-derived leaf identity. Identical to the bare-metal port.
 const LEAF_ID: &str = "3cdc75fabc7c";
 

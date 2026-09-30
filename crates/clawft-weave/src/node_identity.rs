@@ -19,16 +19,13 @@
 //! encrypted-NVS / eFuse-style key custody as the upgrade path
 //! (see `.planning/sensors/JOURNALED-NODE-ESP32.md` §2.4).
 
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use ed25519_dalek::SigningKey;
-use rand::RngCore;
-use rand::rngs::OsRng;
 
-/// Filename of the node keypair under the runtime directory.
-const KEYFILE_NAME: &str = "node.key";
+#[cfg(test)]
+use clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME;
 
 /// Loaded daemon identity: signing key + derived node-id.
 ///
@@ -71,18 +68,23 @@ pub enum IdentityError {
 /// keypair if `<runtime_dir>/node.key` does not exist yet.
 ///
 /// `runtime_dir` is the daemon's runtime directory — typically
-/// `.weftos/runtime/`. Created if absent (the keyfile parent must
-/// exist for the write to succeed).
+/// `.weftos/runtime/`. Created if absent. The file is created with
+/// mode 0600 atomically (shared implementation:
+/// [`clawft_kernel::load_or_generate_node_key`]).
 pub fn load_or_generate(runtime_dir: &Path) -> Result<DaemonIdentity, IdentityError> {
-    fs::create_dir_all(runtime_dir)?;
-    let path = runtime_dir.join(KEYFILE_NAME);
-    let signing_key = if path.exists() {
-        load_existing(&path)?
-    } else {
-        let key = generate()?;
-        write_keyfile(&path, &key)?;
-        key
-    };
+    let signing_key =
+        clawft_kernel::load_or_generate_node_key(runtime_dir).map_err(|e| match e {
+            clawft_kernel::NodeKeyError::Io(e) => IdentityError::Io(e),
+            clawft_kernel::NodeKeyError::Malformed { path, got } => {
+                IdentityError::Malformed { path, got }
+            }
+            clawft_kernel::NodeKeyError::Insecure { path, reason } => {
+                IdentityError::Io(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("{path:?}: {reason}"),
+                ))
+            }
+        })?;
     let pubkey_bytes: [u8; 32] = signing_key.verifying_key().to_bytes();
     let node_id = clawft_kernel::node_id_from_pubkey(&pubkey_bytes);
     Ok(DaemonIdentity {
@@ -91,53 +93,10 @@ pub fn load_or_generate(runtime_dir: &Path) -> Result<DaemonIdentity, IdentityEr
     })
 }
 
-fn generate() -> Result<SigningKey, IdentityError> {
-    let mut seed = [0u8; 32];
-    // OsRng.fill_bytes is infallible — taps the OS CSPRNG.
-    OsRng.fill_bytes(&mut seed);
-    Ok(SigningKey::from_bytes(&seed))
-}
-
-fn load_existing(path: &Path) -> Result<SigningKey, IdentityError> {
-    let bytes = fs::read(path)?;
-    if bytes.len() != 32 {
-        return Err(IdentityError::Malformed {
-            path: path.to_path_buf(),
-            got: bytes.len(),
-        });
-    }
-    let mut seed = [0u8; 32];
-    seed.copy_from_slice(&bytes);
-    Ok(SigningKey::from_bytes(&seed))
-}
-
-fn write_keyfile(path: &Path, key: &SigningKey) -> Result<(), IdentityError> {
-    let seed = key.to_bytes();
-    fs::write(path, seed)?;
-    set_keyfile_perms(path)?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_keyfile_perms(path: &Path) -> Result<(), IdentityError> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = fs::metadata(path)?.permissions();
-    perms.set_mode(0o600);
-    fs::set_permissions(path, perms)?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn set_keyfile_perms(_path: &Path) -> Result<(), IdentityError> {
-    // Non-unix platforms (the daemon doesn't support these today,
-    // but stubbed for portability). Future Windows-style ACL is a
-    // separate workstream.
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     #[test]
@@ -147,7 +106,7 @@ mod tests {
         let keyfile = dir.path().join(KEYFILE_NAME);
         assert!(keyfile.exists());
         assert_eq!(fs::read(&keyfile).unwrap().len(), 32);
-        assert!(id.node_id.starts_with("n-"));
+        assert!(clawft_kernel::is_node_id(&id.node_id));
     }
 
     #[test]

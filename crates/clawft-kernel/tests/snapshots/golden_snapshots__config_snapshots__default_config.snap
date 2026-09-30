@@ -455,7 +455,7 @@ expression: json
           "help"
         ]
       },
-      "transcript_topic": "substrate/_derived/transcript/n-bfc4cd/mic"
+      "transcript_topic": ""
     },
     "enabled": false,
     "mode": "xai_s2s",

@@ -1138,9 +1138,9 @@ JSON `kernel.mesh`). Transports: `tcp` (default), `ws`, `quic` (WEFT-118).
 [kernel.mesh]
 enabled = true
 transport = "quic"
-listen_addr = "0.0.0.0:9470"
+listen_addr = "0.0.0.0:9489"
 noise = true
-seed_peers = ["quic://10.0.0.2:9470"]
+seed_peers = ["quic://10.0.0.2:9489"]
 ```
 
 Full guide: [mesh-quic.md](./mesh-quic.md). Kernel overview: [kernel.md](./kernel.md#mesh-k6).

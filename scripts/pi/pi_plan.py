@@ -285,8 +285,15 @@ def stage_ok(rc, totals, require_ran=False):
 # ── two-node placement stage (card mesh-placement-12) ────────────────────
 # The Pi runs an isolated `weaver` daemon (its own HOME and runtime dir
 # under the scratch dir) serving its workload-host on a non-default port;
-# the system weaver keeps :9470 and ~/.clawft.
-PLACEMENT_PORT = 9471
+# the system weaver keeps its mesh port and ~/.clawft. The system mesh port is
+# 9489 (ADR-103 D1); a Pi weaver deployed before that change still listens on
+# 9470 until it is redeployed, so the lane guards both.
+SYSTEM_MESH_PORT = 9489
+LEGACY_SYSTEM_MESH_PORT = 9470
+SYSTEM_MESH_PORTS = (SYSTEM_MESH_PORT, LEGACY_SYSTEM_MESH_PORT)
+# Override with WEFTOS_PI_PLACEMENT_PORT; it must not be a system mesh port.
+PLACEMENT_PORT = int(os.environ.get("WEFTOS_PI_PLACEMENT_PORT", "9471"))
+assert PLACEMENT_PORT not in SYSTEM_MESH_PORTS, "placement port collides with the system mesh port"
 PLACEMENT_FEED_PORT = 15006
 PUBKEY_RE = re.compile(r"^[0-9a-f]{64}$")
 STATUS_MARK = "==STATUS=="

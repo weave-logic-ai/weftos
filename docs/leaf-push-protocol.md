@@ -38,7 +38,7 @@ Helpers: `push_topic(pubkey_hex)` / `announce_topic(pubkey_hex)` in
 ## 3. Transport
 
 - **Mesh transport** — plaintext TCP to the daemon's `[kernel.mesh]`
-  `listen_addr` (default `0.0.0.0:9470`) when `noise = false`. Noise-
+  `listen_addr` (default `0.0.0.0:9489`) when `noise = false`. Noise-
   encrypted once leaf peers are provisioned with their own keys; for
   bring-up the config ships `noise = false` so leaf firmware can be
   brought up without the handshake first.

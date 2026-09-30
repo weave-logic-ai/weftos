@@ -282,10 +282,10 @@ mod tests {
     #[test]
     fn ws_transport_supports() {
         let t = WsTransport;
-        assert!(t.supports("ws://127.0.0.1:9470"));
+        assert!(t.supports("ws://127.0.0.1:9489"));
         assert!(t.supports("wss://example.com:443"));
-        assert!(!t.supports("tcp://127.0.0.1:9470"));
-        assert!(!t.supports("127.0.0.1:9470"));
+        assert!(!t.supports("tcp://127.0.0.1:9489"));
+        assert!(!t.supports("127.0.0.1:9489"));
     }
 
     #[tokio::test]

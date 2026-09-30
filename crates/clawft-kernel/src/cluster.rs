@@ -146,7 +146,7 @@ pub struct ClusterConfig {
     #[serde(default)]
     pub max_nodes: u32,
 
-    /// Address to bind the mesh listener (e.g., "0.0.0.0:9470").
+    /// Address to bind the mesh listener (e.g., "0.0.0.0:9489").
     #[serde(default)]
     pub bind_address: Option<String>,
 
@@ -299,7 +299,7 @@ pub struct NodeEccCapability {
 
 /// Node identity derived from Ed25519 keypair.
 ///
-/// The `node_id` is derived as `hex(SHA-256(pubkey)[0..16])`,
+/// The `node_id` is derived as `hex(SHA-256(pubkey)[0..16])` (ADR-103 D11),
 /// providing a stable, compact identifier tied to the cryptographic key.
 #[cfg(any(feature = "mesh", feature = "exochain"))]
 pub struct NodeIdentity {
@@ -313,21 +313,15 @@ pub struct NodeIdentity {
 impl NodeIdentity {
     /// Generate a new random identity.
     pub fn generate() -> Self {
-        use sha2::Digest;
-
         let mut csprng = rand::thread_rng();
-        let keypair = ed25519_dalek::SigningKey::generate(&mut csprng);
-        let pubkey_bytes = keypair.verifying_key().to_bytes();
+        Self::from_signing_key(ed25519_dalek::SigningKey::generate(&mut csprng))
+    }
 
-        let hash = sha2::Sha256::digest(pubkey_bytes);
-        let node_id = hash[..16]
-            .iter()
-            .fold(String::with_capacity(32), |mut s, b| {
-                use std::fmt::Write;
-                let _ = write!(s, "{b:02x}");
-                s
-            });
-
+    /// Build an identity from an existing Ed25519 signing key (for
+    /// example the persisted `<runtime>/node.key`). The node id comes
+    /// from [`crate::node_id::node_id_from_pubkey`], the one derivation.
+    pub fn from_signing_key(keypair: ed25519_dalek::SigningKey) -> Self {
+        let node_id = crate::node_id::node_id_from_pubkey(&keypair.verifying_key().to_bytes());
         Self { keypair, node_id }
     }
 
@@ -1938,10 +1932,10 @@ mod tests {
     #[test]
     fn rate_limit_source_key_prefers_address() {
         let mut peer = make_peer("node-1", "alpha");
-        peer.address = Some("192.168.1.5:9470".into());
+        peer.address = Some("192.168.1.5:9489".into());
         assert_eq!(
             ClusterMembership::peer_add_source_key(&peer),
-            "192.168.1.5:9470"
+            "192.168.1.5:9489"
         );
         peer.address = None;
         assert_eq!(ClusterMembership::peer_add_source_key(&peer), "node-1");
@@ -2218,14 +2212,14 @@ mod tests {
             let changed = cluster
                 .apply_mesh_peer_event(&MeshPeerEvent::Joined {
                     node_id: "peer-a".into(),
-                    address: Some("10.0.0.5:9470".into()),
+                    address: Some("10.0.0.5:9489".into()),
                     platform: Some("edge".into()),
                 })
                 .unwrap();
             assert!(changed);
             let peer = cluster.get_peer("peer-a").expect("joined peer");
             assert_eq!(peer.state, NodeState::Active);
-            assert_eq!(peer.address.as_deref(), Some("10.0.0.5:9470"));
+            assert_eq!(peer.address.as_deref(), Some("10.0.0.5:9489"));
             assert_eq!(peer.platform, NodePlatform::Edge);
             assert!(peer.capabilities.contains(&"mesh".into()));
         }
@@ -2258,7 +2252,7 @@ mod tests {
             cluster
                 .apply_mesh_peer_event(&MeshPeerEvent::Joined {
                     node_id: "peer-p".into(),
-                    address: Some("10.1.0.1:9470".into()),
+                    address: Some("10.1.0.1:9489".into()),
                     platform: None,
                 })
                 .unwrap();
@@ -2277,7 +2271,7 @@ mod tests {
             cluster
                 .apply_mesh_peer_event(&MeshPeerEvent::Recovered {
                     node_id: "peer-p".into(),
-                    address: Some("10.1.0.1:9470".into()),
+                    address: Some("10.1.0.1:9489".into()),
                 })
                 .unwrap();
             let peer = cluster.get_peer("peer-p").unwrap();
@@ -2423,7 +2417,7 @@ mod tests {
 
             bus.emit(MeshPeerEvent::Joined {
                 node_id: "stream-peer".into(),
-                address: Some("10.0.0.9:9470".into()),
+                address: Some("10.0.0.9:9489".into()),
                 platform: None,
             });
             tokio::time::sleep(std::time::Duration::from_millis(80)).await;
@@ -2444,7 +2438,7 @@ mod tests {
 
             bus.emit(MeshPeerEvent::Recovered {
                 node_id: "stream-peer".into(),
-                address: Some("10.0.0.9:9470".into()),
+                address: Some("10.0.0.9:9489".into()),
             });
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             assert_eq!(

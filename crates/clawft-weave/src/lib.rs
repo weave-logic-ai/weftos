@@ -28,6 +28,8 @@ pub mod rpc_ext;
 /// platforms so unit tests can exercise add/list/remove without UDS.
 pub mod mcp_rpc;
 pub mod node_identity;
+/// Mic source node discovery for whisper / classify (ADR-103 D11 follow-up).
+pub mod mic_source;
 /// Node facts probe, signing, cache and `cluster.facts` (mesh-placement-03).
 #[cfg(any(feature = "mesh", feature = "exochain"))]
 pub mod node_facts_rpc;

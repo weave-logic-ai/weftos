@@ -300,6 +300,17 @@ impl Default for KernelConfig {
 }
 
 impl KernelConfig {
+    /// Config for a one-shot inspection boot (`kernel status|ps|services|boot`
+    /// without `--foreground`): identical, but no network listener is bound,
+    /// so it cannot collide with a running daemon's mesh port.
+    #[must_use]
+    pub fn for_inspection(mut self) -> Self {
+        if let Some(mesh) = self.mesh.as_mut() {
+            mesh.enabled = false;
+        }
+        self
+    }
+
     /// Display brand token; empty / whitespace values fall back to
     /// [`DEFAULT_BRAND`].
     pub fn brand(&self) -> &str {
@@ -814,9 +825,9 @@ impl Default for AnchorConfig {
 /// [kernel.mesh]
 /// enabled = true
 /// transport = "quic"          # "tcp" | "ws" | "quic" (WEFT-118 / ADR-026)
-/// listen_addr = "0.0.0.0:9470"
+/// listen_addr = "0.0.0.0:9489"
 /// noise = true                # Noise XX over the transport (snow)
-/// seed_peers = ["quic://10.0.0.2:9470"]
+/// seed_peers = ["quic://10.0.0.2:9489"]
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeshConfig {
@@ -831,8 +842,10 @@ pub struct MeshConfig {
     #[serde(default = "default_mesh_transport")]
     pub transport: String,
 
-    /// Address to bind the mesh listener on.
-    #[serde(default = "default_mesh_listen_addr")]
+    /// Address to bind the mesh listener on (default port
+    /// [`DEFAULT_MESH_PORT`], "the weave"; ADR-103 D1). `listen` is
+    /// accepted as an alias. When `enabled`, a failed bind aborts boot.
+    #[serde(default = "default_mesh_listen_addr", alias = "listen")]
     pub listen_addr: String,
 
     /// Enable peer discovery via Kademlia DHT.
@@ -859,8 +872,11 @@ fn default_mesh_transport() -> String {
     "tcp".to_owned()
 }
 
+/// Default mesh listener port ("the weave", ADR-103 D1).
+pub const DEFAULT_MESH_PORT: u16 = 9489;
+
 fn default_mesh_listen_addr() -> String {
-    "0.0.0.0:9470".to_owned()
+    format!("0.0.0.0:{DEFAULT_MESH_PORT}")
 }
 
 impl Default for MeshConfig {
@@ -1563,6 +1579,20 @@ pub struct SimdDistanceStubConfig {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn for_inspection_disables_mesh_listener() {
+        let kc = super::KernelConfig {
+            mesh: Some(super::MeshConfig {
+                enabled: true,
+                ..super::MeshConfig::default()
+            }),
+            ..super::KernelConfig::default()
+        }
+        .for_inspection();
+        assert!(!kc.mesh.unwrap().enabled);
+        assert!(super::KernelConfig::default().for_inspection().mesh.is_none());
+    }
+
     use super::*;
 
     #[test]
