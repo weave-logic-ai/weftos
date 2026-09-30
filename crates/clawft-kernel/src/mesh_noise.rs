@@ -609,7 +609,7 @@ mod tests {
             pattern: NoisePattern::XX,
             kem_upgraded: true,
             established_at_unix_us: 1_700_000_000_000_000,
-            address: Some("127.0.0.1:9470".into()),
+            address: Some("127.0.0.1:9489".into()),
         };
         let json = serde_json::to_string(&peer).unwrap();
         let restored: EncryptedPeer = serde_json::from_str(&json).unwrap();
@@ -618,7 +618,7 @@ mod tests {
         assert_eq!(restored.pattern, NoisePattern::XX);
         assert!(restored.kem_upgraded);
         assert_eq!(restored.established_at_unix_us, 1_700_000_000_000_000);
-        assert_eq!(restored.address.as_deref(), Some("127.0.0.1:9470"));
+        assert_eq!(restored.address.as_deref(), Some("127.0.0.1:9489"));
     }
 
     #[test]

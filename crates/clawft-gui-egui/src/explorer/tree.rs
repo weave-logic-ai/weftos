@@ -13,7 +13,7 @@ use serde_json::Value;
 use super::{ACTIVITY_WINDOW, Explorer, TreeNode};
 
 /// The substrate root — children at depth-1 below this are
-/// **node-ids** (`n-<6-hex>` BLAKE3 prefixes per the node-identity
+/// **node-ids** (32-hex `SHA-256(pubkey)[..16]` ids per the node-identity
 /// gate). The Explorer's tree starts here; there is no synthetic
 /// header above it. The `ui.heading("Substrate")` painted by
 /// [`Explorer::show`](crate::explorer::Explorer::show) already

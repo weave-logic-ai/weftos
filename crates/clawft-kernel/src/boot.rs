@@ -188,8 +188,30 @@ impl<P: Platform> Kernel<P> {
     /// to initialize.
     pub async fn boot(
         config: Config,
+        kernel_config: KernelConfig,
+        platform: Arc<P>,
+    ) -> KernelResult<Self> {
+        Self::boot_with_node_key(config, kernel_config, platform, None).await
+    }
+
+    /// Boot the kernel with a persisted node identity.
+    ///
+    /// `node_key_seed` is the 32-byte Ed25519 seed of this node's key
+    /// (the daemon's `<runtime>/node.key`). The mesh, cluster and status
+    /// node id is derived from it with
+    /// [`crate::node_id::node_id_from_pubkey`], so the id is stable across
+    /// restarts. With `None` (tests, one-shot CLI boots) an ephemeral
+    /// key is generated and the id lasts for this process only.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Kernel::boot`]; additionally fails when mesh is enabled
+    /// and its listener cannot bind (ADR-103 D2).
+    pub async fn boot_with_node_key(
+        config: Config,
         mut kernel_config: KernelConfig,
         platform: Arc<P>,
+        node_key_seed: Option<[u8; 32]>,
     ) -> KernelResult<Self> {
         let boot_time = Instant::now();
         let mut boot_log = BootLog::new();
@@ -292,9 +314,33 @@ impl<P: Platform> Kernel<P> {
             ));
         }
 
+        // Node identity (ADR-025 / ADR-103 D11): the node id is derived from
+        // the Ed25519 node key, never allocated per boot. Mesh handshake,
+        // cluster membership, heartbeats and status all use this one id.
+        let node_id: String = {
+            #[cfg(any(feature = "mesh", feature = "exochain"))]
+            {
+                let identity = match node_key_seed {
+                    Some(seed) => crate::cluster::NodeIdentity::from_signing_key(
+                        ed25519_dalek::SigningKey::from_bytes(&seed),
+                    ),
+                    None => {
+                        warn!("no persisted node key supplied; using an ephemeral node identity");
+                        crate::cluster::NodeIdentity::generate()
+                    }
+                };
+                identity.node_id().to_owned()
+            }
+            #[cfg(not(any(feature = "mesh", feature = "exochain")))]
+            {
+                let _ = node_key_seed;
+                uuid::Uuid::new_v4().to_string()
+            }
+        };
+
         // 5b½ / 5d prep — mesh-aware assessment service (WEFT-117).
         //
-        // When mesh is enabled we allocate a stable node_id up front and
+        // When mesh is enabled we share the key-derived node_id up front and
         // share one MeshCoordinator between AssessmentService and
         // AssessmentTransport. Assessment is registered after that
         // decision so `assess.mesh.status` sees a live coordinator.
@@ -302,7 +348,7 @@ impl<P: Platform> Kernel<P> {
         let mesh_config_early = kernel_config.mesh.clone().unwrap_or_default();
         #[cfg(all(feature = "native", feature = "mesh"))]
         let mesh_node_id: Option<String> = if mesh_config_early.enabled {
-            Some(uuid::Uuid::new_v4().to_string())
+            Some(node_id.clone())
         } else {
             None
         };
@@ -496,134 +542,134 @@ impl<P: Platform> Kernel<P> {
                 // Spawn the mesh listener on the configured transport.
                 let listen_addr = mesh_config.listen_addr.clone();
                 let rt = Arc::clone(&runtime);
+                use crate::mesh::MeshTransport;
+                let transport: Box<dyn MeshTransport> = match mesh_config.transport.as_str() {
+                    "ws" | "websocket" => Box::new(crate::mesh_ws::WsTransport),
+                    #[cfg(feature = "quic")]
+                    "quic" => Box::new(crate::mesh_quic::QuicTransport),
+                    #[cfg(not(feature = "quic"))]
+                    "quic" => {
+                        tracing::error!(
+                            "mesh transport=quic requested but clawft-kernel built without `quic` feature; falling back to tcp"
+                        );
+                        Box::new(crate::mesh_tcp::TcpTransport)
+                    }
+                    _ => Box::new(crate::mesh_tcp::TcpTransport),
+                };
+
+                // Bind synchronously so a taken port fails boot loudly instead of
+                // leaving a kernel that silently has no mesh (ADR-103 D1/D2).
+                // Disabled mesh never reaches this block, so mesh-off cannot fail here.
+                let mut listener = transport.listen(&listen_addr).await.map_err(|e| {
+                    KernelError::Boot(format!(
+                        "mesh enabled but the listener could not bind {listen_addr} ({e}); \
+                         another kernel on this machine is probably already using that port. \
+                         Stop it, set kernel.mesh.listen_addr to a free address, or set \
+                         kernel.mesh.enabled = false"
+                    ))
+                })?;
+
                 tokio::spawn(async move {
-                    use crate::mesh::MeshTransport;
+                    let bind = listener
+                        .local_addr()
+                        .map(|a| a.to_string())
+                        .unwrap_or_else(|_| listen_addr.clone());
+                    tracing::info!(
+                        transport = transport.name(),
+                        addr = %bind,
+                        noise = noise_config.is_some(),
+                        "mesh listener started"
+                    );
 
-                    let transport: Box<dyn MeshTransport> = match mesh_config.transport.as_str() {
-                        "ws" | "websocket" => Box::new(crate::mesh_ws::WsTransport),
-                        #[cfg(feature = "quic")]
-                        "quic" => Box::new(crate::mesh_quic::QuicTransport),
-                        #[cfg(not(feature = "quic"))]
-                        "quic" => {
-                            tracing::error!(
-                                "mesh transport=quic requested but clawft-kernel built without `quic` feature; falling back to tcp"
-                            );
-                            Box::new(crate::mesh_tcp::TcpTransport)
-                        }
-                        _ => Box::new(crate::mesh_tcp::TcpTransport),
-                    };
+                    loop {
+                        match listener.accept().await {
+                            Ok((stream, peer_addr)) => {
+                                let rt2 = Arc::clone(&rt);
+                                let nc = noise_config.clone();
+                                tokio::spawn(async move {
+                                    tracing::info!(
+                                        peer = %peer_addr,
+                                        noise = nc.is_some(),
+                                        "mesh peer connected"
+                                    );
 
-                    match transport.listen(&listen_addr).await {
-                        Ok(mut listener) => {
-                            let bind = listener
-                                .local_addr()
-                                .map(|a| a.to_string())
-                                .unwrap_or_else(|_| listen_addr.clone());
-                            tracing::info!(
-                                transport = transport.name(),
-                                addr = %bind,
-                                noise = noise_config.is_some(),
-                                "mesh listener started"
-                            );
-
-                            loop {
-                                match listener.accept().await {
-                                    Ok((stream, peer_addr)) => {
-                                        let rt2 = Arc::clone(&rt);
-                                        let nc = noise_config.clone();
-                                        tokio::spawn(async move {
-                                            tracing::info!(
-                                                peer = %peer_addr,
-                                                noise = nc.is_some(),
-                                                "mesh peer connected"
-                                            );
-
-                                            // Optionally wrap in Noise encryption.
-                                            let mut channel: Box<
-                                                dyn crate::mesh_noise::EncryptedChannel,
-                                            > = match &nc {
-                                                Some(cfg) => {
-                                                    match crate::mesh_noise::NoiseChannel::respond(
-                                                        stream, cfg,
-                                                    )
-                                                    .await
-                                                    {
-                                                        Ok(ch) => {
-                                                            tracing::info!(peer = %peer_addr, "noise handshake complete");
-                                                            Box::new(ch)
-                                                        }
-                                                        Err(e) => {
-                                                            tracing::warn!(peer = %peer_addr, error = %e, "noise handshake failed, dropping");
-                                                            return;
-                                                        }
-                                                    }
+                                    // Optionally wrap in Noise encryption.
+                                    let mut channel: Box<
+                                        dyn crate::mesh_noise::EncryptedChannel,
+                                    > = match &nc {
+                                        Some(cfg) => {
+                                            match crate::mesh_noise::NoiseChannel::respond(
+                                                stream, cfg,
+                                            )
+                                            .await
+                                            {
+                                                Ok(ch) => {
+                                                    tracing::info!(peer = %peer_addr, "noise handshake complete");
+                                                    Box::new(ch)
                                                 }
-                                                None => Box::new(
-                                                    crate::mesh_noise::PassthroughChannel::new(
-                                                        stream,
-                                                    ),
-                                                ),
-                                            };
-
-                                            // Outbound channel: the kernel pushes frames into
-                                            // `out_tx` (via `MeshRuntime::send_to_peer`) and this
-                                            // task drains `out_rx` back through the encrypted
-                                            // stream. This is what lets the topic forwarder in
-                                            // `A2ARouter` deliver pushes to inbound leaf peers that
-                                            // subscribed via `mesh.subscribe`.
-                                            let (out_tx, mut out_rx) =
-                                                tokio::sync::mpsc::channel::<Vec<u8>>(256);
-
-                                            // Bidirectional loop. `handle_incoming_from` auto-
-                                            // registers the peer by `envelope.source_node` on first
-                                            // arrival so the kernel can route back.
-                                            //
-                                            // Cancel-safety (ADR-010 / WEFT-18): both racing
-                                            // futures must be cancel-safe.
-                                            // - `out_rx.recv()` — tokio mpsc, cancel-safe.
-                                            // - `channel.recv_encrypted()` → `MeshStream::recv` —
-                                            //   contract on `MeshStream` requires cancel-safe
-                                            //   framing (`TcpMeshStream` keeps partial progress).
-                                            // Losing either race must not drop a complete message
-                                            // already removed from its source, and must not desync
-                                            // the TCP length-prefix stream.
-                                            loop {
-                                                tokio::select! {
-                                                    inbound = channel.recv_encrypted() => match inbound {
-                                                        Ok(data) => {
-                                                            if let Err(e) = rt2
-                                                                .handle_incoming_from(&data, out_tx.clone())
-                                                                .await
-                                                            {
-                                                                tracing::debug!(error = %e, "mesh message handling error");
-                                                            }
-                                                        }
-                                                        Err(_) => break,
-                                                    },
-                                                    outbound = out_rx.recv() => match outbound {
-                                                        Some(data) => {
-                                                            if channel.send_encrypted(&data).await.is_err() {
-                                                                break;
-                                                            }
-                                                        }
-                                                        None => break,
-                                                    },
+                                                Err(e) => {
+                                                    tracing::warn!(peer = %peer_addr, error = %e, "noise handshake failed, dropping");
+                                                    return;
                                                 }
                                             }
-                                        });
+                                        }
+                                        None => Box::new(
+                                            crate::mesh_noise::PassthroughChannel::new(
+                                                stream,
+                                            ),
+                                        ),
+                                    };
+
+                                    // Outbound channel: the kernel pushes frames into
+                                    // `out_tx` (via `MeshRuntime::send_to_peer`) and this
+                                    // task drains `out_rx` back through the encrypted
+                                    // stream. This is what lets the topic forwarder in
+                                    // `A2ARouter` deliver pushes to inbound leaf peers that
+                                    // subscribed via `mesh.subscribe`.
+                                    let (out_tx, mut out_rx) =
+                                        tokio::sync::mpsc::channel::<Vec<u8>>(256);
+
+                                    // Bidirectional loop. `handle_incoming_from` auto-
+                                    // registers the peer by `envelope.source_node` on first
+                                    // arrival so the kernel can route back.
+                                    //
+                                    // Cancel-safety (ADR-010 / WEFT-18): both racing
+                                    // futures must be cancel-safe.
+                                    // - `out_rx.recv()` — tokio mpsc, cancel-safe.
+                                    // - `channel.recv_encrypted()` → `MeshStream::recv` —
+                                    //   contract on `MeshStream` requires cancel-safe
+                                    //   framing (`TcpMeshStream` keeps partial progress).
+                                    // Losing either race must not drop a complete message
+                                    // already removed from its source, and must not desync
+                                    // the TCP length-prefix stream.
+                                    loop {
+                                        tokio::select! {
+                                            inbound = channel.recv_encrypted() => match inbound {
+                                                Ok(data) => {
+                                                    if let Err(e) = rt2
+                                                        .handle_incoming_from(&data, out_tx.clone())
+                                                        .await
+                                                    {
+                                                        tracing::debug!(error = %e, "mesh message handling error");
+                                                    }
+                                                }
+                                                Err(_) => break,
+                                            },
+                                            outbound = out_rx.recv() => match outbound {
+                                                Some(data) => {
+                                                    if channel.send_encrypted(&data).await.is_err() {
+                                                        break;
+                                                    }
+                                                }
+                                                None => break,
+                                            },
+                                        }
                                     }
-                                    Err(e) => {
-                                        tracing::warn!(error = %e, "mesh accept error");
-                                    }
-                                }
+                                });
                             }
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                error = %e,
-                                addr = %listen_addr,
-                                "failed to start mesh listener"
-                            );
+                            Err(e) => {
+                                tracing::warn!(error = %e, "mesh accept error");
+                            }
                         }
                     }
                 });
@@ -739,7 +785,7 @@ impl<P: Platform> Kernel<P> {
 
         // 6. Create cluster membership (universal, always present)
         let cluster_config = ClusterConfig {
-            node_id: uuid::Uuid::new_v4().to_string(),
+            node_id: node_id.clone(),
             node_name: kernel_config
                 .cluster
                 .as_ref()
@@ -2701,6 +2747,73 @@ mod tests {
         );
     }
 
+    /// ADR-103 D2: enabled mesh + unbindable listener fails boot, naming the address.
+    #[cfg(all(feature = "native", feature = "mesh"))]
+    #[tokio::test]
+    async fn boot_fails_when_mesh_listener_cannot_bind() {
+        use clawft_types::config::MeshConfig;
+
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = taken.local_addr().unwrap().to_string();
+
+        let mut kconfig = test_kernel_config();
+        kconfig.mesh = Some(MeshConfig {
+            enabled: true,
+            listen_addr: addr.clone(),
+            ..MeshConfig::default()
+        });
+        let err = Kernel::boot(test_config(), kconfig, Arc::new(NativePlatform::new()))
+            .await
+            .err()
+            .expect("boot must fail when the mesh port is taken");
+        let msg = err.to_string();
+        assert!(msg.contains(&addr), "error should name the address: {msg}");
+        assert!(msg.contains("another kernel"), "error should name the cause: {msg}");
+    }
+
+    /// Mesh off means no bind and no error, even if the address is taken.
+    #[cfg(all(feature = "native", feature = "mesh"))]
+    #[tokio::test]
+    async fn boot_with_mesh_disabled_never_binds() {
+        use clawft_types::config::MeshConfig;
+
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut kconfig = test_kernel_config();
+        kconfig.mesh = Some(MeshConfig {
+            enabled: false,
+            listen_addr: taken.local_addr().unwrap().to_string(),
+            ..MeshConfig::default()
+        });
+        let mut kernel = Kernel::boot(test_config(), kconfig, Arc::new(NativePlatform::new()))
+            .await
+            .expect("mesh-off boot must not touch the listener");
+        kernel.shutdown().await.unwrap();
+    }
+
+    /// The node id comes from the node key: same key, same id across boots.
+    #[cfg(all(feature = "native", feature = "mesh"))]
+    #[tokio::test]
+    async fn node_id_derives_from_node_key_and_survives_reboot() {
+        let seed = [9u8; 32];
+        let expected = crate::node_id::node_id_from_pubkey(
+            &ed25519_dalek::SigningKey::from_bytes(&seed)
+                .verifying_key()
+                .to_bytes(),
+        );
+        for _ in 0..2 {
+            let mut kernel = Kernel::boot_with_node_key(
+                test_config(),
+                test_kernel_config(),
+                Arc::new(NativePlatform::new()),
+                Some(seed),
+            )
+            .await
+            .expect("boot with node key");
+            assert_eq!(kernel.cluster_membership().local_node_id(), expected);
+            kernel.shutdown().await.unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn boot_and_shutdown() {
         let platform = Arc::new(NativePlatform::new());
@@ -3946,7 +4059,10 @@ mod tests {
         let node_id = kernel.cluster_membership().local_node_id();
         assert!(!node_id.is_empty(), "cluster node ID should not be empty");
         // UUID v4 format: 8-4-4-4-12 = 36 chars
-        assert_eq!(node_id.len(), 36, "node ID should be UUID format");
+        assert!(
+            crate::node_id::is_node_id(node_id),
+            "node ID should be hex(SHA-256(pubkey)[..16]), got {node_id}"
+        );
     }
 
     #[tokio::test]

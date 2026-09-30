@@ -1265,16 +1265,16 @@ mod tests {
     #[test]
     fn discover_peers_returns_registered_addresses() {
         let rt = MeshRuntime::with_discovery("node-x".into(), [0u8; 32]);
-        rt.register_peer_address("peer-1", "10.0.0.1:9470");
-        rt.register_peer_address("peer-2", "10.0.0.2:9470");
-        rt.register_peer_address("peer-3", "10.0.0.3:9470");
+        rt.register_peer_address("peer-1", "10.0.0.1:9489");
+        rt.register_peer_address("peer-2", "10.0.0.2:9489");
+        rt.register_peer_address("peer-3", "10.0.0.3:9489");
 
         let mut peers = rt.discover_peers();
         peers.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(peers.len(), 3);
-        assert_eq!(peers[0], ("peer-1".into(), "10.0.0.1:9470".into()));
-        assert_eq!(peers[1], ("peer-2".into(), "10.0.0.2:9470".into()));
-        assert_eq!(peers[2], ("peer-3".into(), "10.0.0.3:9470".into()));
+        assert_eq!(peers[0], ("peer-1".into(), "10.0.0.1:9489".into()));
+        assert_eq!(peers[1], ("peer-2".into(), "10.0.0.2:9489".into()));
+        assert_eq!(peers[2], ("peer-3".into(), "10.0.0.3:9489".into()));
     }
 
     // ── Test 15: heartbeat tracking detects suspect peer ─────────
@@ -1320,7 +1320,7 @@ mod tests {
         // Add a peer connection.
         let (tx, _rx) = tokio::sync::mpsc::channel(16);
         rt.add_peer("dead-peer".into(), tx);
-        rt.register_peer_address("dead-peer", "10.0.0.99:9470");
+        rt.register_peer_address("dead-peer", "10.0.0.99:9489");
 
         // Force the peer into Dead state.
         {
@@ -1359,7 +1359,7 @@ mod tests {
                 crate::mesh_kad::DhtEntry {
                     key: format!("peer-{i}"),
                     node_id: format!("peer-{i}"),
-                    address: format!("10.0.0.{i}:9470"),
+                    address: format!("10.0.0.{i}:9489"),
                     platform: "linux".into(),
                     last_seen: 1000,
                     governance_genesis_prefix: "0000000000000000".into(),

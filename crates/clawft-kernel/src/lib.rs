@@ -213,6 +213,8 @@ pub mod placement_vocabulary;
 pub mod health;
 pub mod heartbeat;
 pub mod ipc;
+/// The one node-id derivation (ADR-103 D11).
+pub mod node_id;
 #[cfg(feature = "native")]
 pub mod node_registry;
 /// Node facts probes and TTL cache (ADR-099 section 2, card mesh-placement-03).
@@ -628,9 +630,9 @@ pub use monitor::{ExitReason, MonitorRegistry, ProcessDown, ProcessLink, Process
 #[cfg(feature = "native")]
 pub use node_registry::{
     DerivedGrantError, DerivedWriteGrant, GrantScope, MESH_CANONICAL_PREFIX, NodeRegistry,
-    RegisteredNode, node_id_from_pubkey, node_publish_payload, path_belongs_to,
-    required_path_prefix,
+    RegisteredNode, node_publish_payload, path_belongs_to, required_path_prefix,
 };
+pub use node_id::{is_node_id, node_id_from_pubkey};
 #[cfg(feature = "ecc")]
 pub use persistence::PersistenceConfig;
 pub use process::{Pid, ProcessEntry, ProcessState, ProcessTable, ResourceUsage};

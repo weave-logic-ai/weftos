@@ -188,7 +188,7 @@ mod tests {
             service: WEFTOS_SERVICE_NAME.to_string(),
             node_id: "node-abc".into(),
             address: "192.168.1.42".into(),
-            port: 9470,
+            port: 9489,
             platform: "linux".into(),
             governance_genesis: "deadbeef01234567".into(),
         };
@@ -202,7 +202,7 @@ mod tests {
         let mut disc = MdnsDiscovery::new(
             "test-node".into(),
             "127.0.0.1".into(),
-            9470,
+            9489,
             "linux".into(),
             "0000000000000000".into(),
         );
@@ -224,7 +224,7 @@ mod tests {
         let mut disc = MdnsDiscovery::new(
             "self-node".into(),
             "127.0.0.1".into(),
-            9470,
+            9489,
             "linux".into(),
             "aabbccdd".into(),
         );
@@ -251,7 +251,7 @@ mod tests {
         let mut disc = MdnsDiscovery::new(
             "local".into(),
             "127.0.0.1".into(),
-            9470,
+            9489,
             "linux".into(),
             "aabb".into(),
         );
@@ -270,7 +270,7 @@ mod tests {
         let mut disc = MdnsDiscovery::new(
             "n".into(),
             "127.0.0.1".into(),
-            9470,
+            9489,
             "linux".into(),
             "aa".into(),
         );
@@ -284,14 +284,14 @@ mod tests {
         let mut disc = MdnsDiscovery::new(
             "n".into(),
             "127.0.0.1".into(),
-            9470,
+            9489,
             "linux".into(),
             "aa".into(),
         );
         disc.active = true;
         disc.pending.push(DiscoveredPeer {
             node_id: "injected".into(),
-            address: "10.0.0.1:9470".into(),
+            address: "10.0.0.1:9489".into(),
             platform: "darwin".into(),
             source: DiscoverySource::Mdns,
         });

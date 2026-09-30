@@ -947,7 +947,21 @@ pub async fn run(
 
     // Boot kernel
     let platform = NativePlatform::new();
-    let kernel = Kernel::boot(config, kernel_config, Arc::new(platform)).await?;
+    // The node key is loaded before boot so the kernel derives its mesh /
+    // cluster node id from it (ADR-103 D11) instead of a per-boot UUID.
+    let runtime_dir = socket_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let daemon_identity = crate::node_identity::load_or_generate(&runtime_dir)
+        .map_err(|e| anyhow::anyhow!("daemon identity bootstrap: {e}"))?;
+    let kernel = Kernel::boot_with_node_key(
+        config,
+        kernel_config,
+        Arc::new(platform),
+        Some(daemon_identity.signing_key.to_bytes()),
+    )
+    .await?;
     let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
 
     // WEFT-494: seed live MCP registry + remember best-effort config path
@@ -962,12 +976,6 @@ pub async fn run(
     // daemon's pubkey with the kernel's NodeRegistry so the substrate
     // publish gate can verify signatures and enforce the
     // `substrate/<node-id>/...` write prefix.
-    let runtime_dir = socket_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let daemon_identity = crate::node_identity::load_or_generate(&runtime_dir)
-        .map_err(|e| anyhow::anyhow!("daemon identity bootstrap: {e}"))?;
     // mesh-placement-06: persisted node-local workload catalog.
     #[cfg(feature = "exochain")]
     crate::workload_rpc::init_registry(&runtime_dir.join("workloads.json"));

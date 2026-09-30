@@ -814,9 +814,9 @@ impl Default for AnchorConfig {
 /// [kernel.mesh]
 /// enabled = true
 /// transport = "quic"          # "tcp" | "ws" | "quic" (WEFT-118 / ADR-026)
-/// listen_addr = "0.0.0.0:9470"
+/// listen_addr = "0.0.0.0:9489"
 /// noise = true                # Noise XX over the transport (snow)
-/// seed_peers = ["quic://10.0.0.2:9470"]
+/// seed_peers = ["quic://10.0.0.2:9489"]
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeshConfig {
@@ -831,8 +831,10 @@ pub struct MeshConfig {
     #[serde(default = "default_mesh_transport")]
     pub transport: String,
 
-    /// Address to bind the mesh listener on.
-    #[serde(default = "default_mesh_listen_addr")]
+    /// Address to bind the mesh listener on (default port
+    /// [`DEFAULT_MESH_PORT`], "the weave"; ADR-103 D1). `listen` is
+    /// accepted as an alias. When `enabled`, a failed bind aborts boot.
+    #[serde(default = "default_mesh_listen_addr", alias = "listen")]
     pub listen_addr: String,
 
     /// Enable peer discovery via Kademlia DHT.
@@ -859,8 +861,11 @@ fn default_mesh_transport() -> String {
     "tcp".to_owned()
 }
 
+/// Default mesh listener port ("the weave", ADR-103 D1).
+pub const DEFAULT_MESH_PORT: u16 = 9489;
+
 fn default_mesh_listen_addr() -> String {
-    "0.0.0.0:9470".to_owned()
+    format!("0.0.0.0:{DEFAULT_MESH_PORT}")
 }
 
 impl Default for MeshConfig {

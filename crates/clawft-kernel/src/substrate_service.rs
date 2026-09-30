@@ -675,9 +675,9 @@ impl SubstrateService {
         // Tier detection. Mesh-canonical paths get the grant check;
         // anything else falls through to the legacy per-node-prefix
         // rule. Note that `_derived/` is the *only* reserved word
-        // under `substrate/` — node-ids carry a leading `n-` exactly
-        // so they cannot collide with this segment (see
-        // `node_registry::node_id_from_pubkey`).
+        // under `substrate/` — node-ids are 32 hex chars, so they
+        // cannot collide with this segment (see
+        // `node_id::node_id_from_pubkey`).
         if path.starts_with(crate::node_registry::MESH_CANONICAL_PREFIX) {
             if !node_registry.has_derived_grant(node_id, path) {
                 return Err(GateDenied::MissingDerivedGrant {

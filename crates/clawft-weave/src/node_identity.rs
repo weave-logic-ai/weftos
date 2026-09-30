@@ -147,7 +147,7 @@ mod tests {
         let keyfile = dir.path().join(KEYFILE_NAME);
         assert!(keyfile.exists());
         assert_eq!(fs::read(&keyfile).unwrap().len(), 32);
-        assert!(id.node_id.starts_with("n-"));
+        assert!(clawft_kernel::is_node_id(&id.node_id));
     }
 
     #[test]

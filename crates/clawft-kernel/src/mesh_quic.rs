@@ -534,10 +534,10 @@ mod tests {
     #[test]
     fn quic_transport_supports() {
         let t = QuicTransport;
-        assert!(t.supports("quic://127.0.0.1:9470"));
-        assert!(!t.supports("tcp://127.0.0.1:9470"));
-        assert!(!t.supports("ws://127.0.0.1:9470"));
-        assert!(!t.supports("127.0.0.1:9470"));
+        assert!(t.supports("quic://127.0.0.1:9489"));
+        assert!(!t.supports("tcp://127.0.0.1:9489"));
+        assert!(!t.supports("ws://127.0.0.1:9489"));
+        assert!(!t.supports("127.0.0.1:9489"));
     }
 
     #[tokio::test]

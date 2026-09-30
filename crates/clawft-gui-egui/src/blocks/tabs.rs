@@ -17,7 +17,7 @@ const TABS: &[(&str, &str)] = &[
     ),
     (
         "Logs",
-        "[INFO] mesh listener on 0.0.0.0:9470\n[INFO] peer connected: leaf-abc",
+        "[INFO] mesh listener on 0.0.0.0:9489\n[INFO] peer connected: leaf-abc",
     ),
 ];
 

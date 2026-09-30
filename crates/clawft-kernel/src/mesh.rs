@@ -258,13 +258,13 @@ mod tests {
             chain_seq: 0,
             supported_sync_streams: vec![],
         };
-        let addr: SocketAddr = "127.0.0.1:9470".parse().unwrap();
+        let addr: SocketAddr = "127.0.0.1:9489".parse().unwrap();
         let peer = MeshPeer {
             node_id: "peer-1".into(),
             handshake: hs,
             address: addr,
         };
         assert_eq!(peer.node_id, "peer-1");
-        assert_eq!(peer.address.port(), 9470);
+        assert_eq!(peer.address.port(), 9489);
     }
 }
