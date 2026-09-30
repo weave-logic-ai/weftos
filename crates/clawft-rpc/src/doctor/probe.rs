@@ -35,6 +35,74 @@ pub fn parse_version(text: &str) -> Option<VersionInfo> {
     })
 }
 
+/// Semver precedence value: `major.minor.patch` plus optional prerelease.
+/// Build metadata, `-dirty` and git-describe suffixes are dropped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Semver {
+    /// `[major, minor, patch]`.
+    pub core: [u64; 3],
+    /// Dot-separated prerelease identifiers (`rc1` -> `["rc1"]`); empty for a release.
+    pub pre: Vec<String>,
+}
+
+/// Parse a version token into [`Semver`]; `None` when unparseable.
+pub fn parse_semver(v: &str) -> Option<Semver> {
+    let v = v.trim().trim_start_matches('v');
+    let v = v.split('+').next()?;
+    let (core, pre) = match v.split_once('-') {
+        Some((c, p)) => (c, Some(p)),
+        None => (v, None),
+    };
+    let nums: Vec<u64> = core.split('.').map(|p| p.parse::<u64>().ok()).collect::<Option<_>>()?;
+    if nums.len() < 2 || nums.len() > 3 {
+        return None;
+    }
+    let mut c = [0u64; 3];
+    c[..nums.len()].copy_from_slice(&nums);
+    let mut segs: Vec<&str> = pre.map(|p| p.split('-').collect()).unwrap_or_default();
+    segs.retain(|s| *s != "dirty");
+    // git describe: `<n>-g<hash>` at the end is not a prerelease.
+    if segs.len() >= 2
+        && segs[segs.len() - 2].chars().all(|c| c.is_ascii_digit())
+        && segs[segs.len() - 1].starts_with('g')
+    {
+        segs.truncate(segs.len() - 2);
+    }
+    let pre = segs.join("-").split('.').filter(|s| !s.is_empty()).map(str::to_owned).collect();
+    Some(Semver { core: c, pre })
+}
+
+impl Ord for Semver {
+    fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering::*;
+        self.core.cmp(&o.core).then_with(|| match (self.pre.is_empty(), o.pre.is_empty()) {
+            (true, true) => Equal,
+            (true, false) => Greater, // release > prerelease
+            (false, true) => Less,
+            (false, false) => {
+                for (a, b) in self.pre.iter().zip(&o.pre) {
+                    let ord = match (a.parse::<u64>(), b.parse::<u64>()) {
+                        (Ok(x), Ok(y)) => x.cmp(&y),
+                        (Ok(_), Err(_)) => Less,
+                        (Err(_), Ok(_)) => Greater,
+                        (Err(_), Err(_)) => a.cmp(b),
+                    };
+                    if ord != Equal {
+                        return ord;
+                    }
+                }
+                self.pre.len().cmp(&o.pre.len())
+            }
+        })
+    }
+}
+
+impl PartialOrd for Semver {
+    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(o))
+    }
+}
+
 /// Numeric components of a version, for ordering (`0.8.1` -> `[0, 8, 1]`).
 pub fn version_key(v: &str) -> Vec<u64> {
     v.split(['.', '-', '+'])
@@ -160,6 +228,21 @@ mod tests {
         let e = d.path().join("elf");
         std::fs::write(&e, [0x7f, b'E', b'L', b'F', 0]).unwrap();
         assert!(is_native_executable(&e));
+    }
+
+    #[test]
+    fn semver_precedence() {
+        let p = |s| parse_semver(s).unwrap();
+        assert!(p("0.8.1") > p("0.8.1-rc1"), "release beats prerelease");
+        assert!(p("0.8.1-rc2") > p("0.8.1-rc1"));
+        assert!(p("0.8.1-rc1") > p("0.8.0"));
+        assert!(p("0.10.0") > p("0.9.9"));
+        // -dirty, git-describe and build metadata do not count as newer.
+        assert_eq!(p("0.8.1-dirty"), p("0.8.1"));
+        assert_eq!(p("0.8.1+abc"), p("0.8.1"));
+        assert_eq!(p("0.8.1-3-gdeadbee-dirty"), p("0.8.1"));
+        assert_eq!(p("0.8.1-rc1-dirty"), p("0.8.1-rc1"));
+        assert!(parse_semver("unknown").is_none() && parse_semver("1").is_none() && parse_semver("a.b.c").is_none());
     }
 
     #[test]

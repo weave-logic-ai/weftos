@@ -125,7 +125,17 @@ pub struct DaemonProc {
 pub fn daemon_kind(command: &str) -> Option<&'static str> {
     let mut it = command.split_whitespace();
     let base = Path::new(it.next()?).file_name()?.to_str()?.to_string();
-    let positionals: Vec<&str> = it.filter(|a| !a.starts_with('-')).collect();
+    // Skip flags, and the separate value of the value-taking ones. The only
+    // value flag on the weaver CLI before the subcommand is `-c/--config`
+    // (`kernel --config x start`); `-v` and `--foreground` take none.
+    let mut positionals: Vec<&str> = Vec::new();
+    while let Some(a) = it.next() {
+        if a == "-c" || a == "--config" {
+            it.next();
+        } else if !a.starts_with('-') {
+            positionals.push(a);
+        }
+    }
     match base.as_str() {
         "weaver" if positionals.first() == Some(&"kernel") && positionals.get(1) == Some(&"start") => Some("weaver"),
         "weftos" if positionals.first() == Some(&"boot") => Some("weftos"),
@@ -319,6 +329,10 @@ mod tests {
         assert_eq!(daemon_kind("/usr/local/bin/weaver kernel status"), None);
         assert_eq!(daemon_kind("grep weaver kernel start"), None);
         assert_eq!(daemon_kind("/x/weftos boot"), Some("weftos"));
+        assert_eq!(daemon_kind("/x/weaver kernel --config /x.toml start --foreground"), Some("weaver"));
+        assert_eq!(daemon_kind("weaver -v kernel -c /x.toml start"), Some("weaver"));
+        assert_eq!(daemon_kind("weaver kernel --config=/x.toml start"), Some("weaver"));
+        assert_eq!(daemon_kind("weaver kernel --config /x.toml status"), None);
         // `kernel` and `start` merely appearing in argv is not a daemon.
         assert_eq!(daemon_kind("weaver ask how to start the kernel"), None);
         assert_eq!(daemon_kind("weaver kernel status start"), None);

@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use super::channel::{remedy_for, Channel, ChannelKind, Sources};
 use super::env::DoctorEnv;
-use super::probe::{probe_binary, sha256_file, version_key};
+use super::probe::{parse_semver, probe_binary, sha256_file, Semver};
 use super::{Component, Finding, Severity};
 
 /// Binaries doctor inventories.
@@ -152,21 +152,51 @@ fn channel_rank(k: ChannelKind) -> u8 {
     }
 }
 
-/// Quality of a copy: newer version, then clean over dirty, then channel.
-/// Higher is better; the ranking rule for every duplicate/shadow decision.
-fn rank(c: &BinCopy) -> (Vec<u64>, bool, u8) {
-    (version_key(c.version.as_deref().unwrap_or("")), !c.dirty, channel_rank(c.channel.kind))
+fn semver_of(c: &BinCopy) -> Option<Semver> {
+    c.version.as_deref().and_then(parse_semver)
 }
 
-/// The copy to keep: highest rank, PATH winner on ties.
+/// Quality ordering, higher is better: probed before unprobed, clean before
+/// dirty (a dirty dev build is never the copy to keep over a clean one), then
+/// semver precedence with unknown lowest, then channel.
+fn cmp_quality(a: &BinCopy, b: &BinCopy) -> std::cmp::Ordering {
+    let key = |c: &BinCopy| (c.probe_note.is_none(), !c.dirty, semver_of(c), channel_rank(c.channel.kind));
+    key(a).cmp(&key(b))
+}
+
+/// The copy to keep: highest quality, PATH winner on ties.
 fn best<'a>(group: &[&'a BinCopy]) -> &'a BinCopy {
     let mut best = group.iter().find(|x| x.winner).copied().unwrap_or(group[0]);
     for x in group {
-        if rank(x) > rank(best) {
+        if cmp_quality(x, best) == std::cmp::Ordering::Greater {
             best = x;
         }
     }
     best
+}
+
+/// May doctor tell the user to `rm` `x` given they keep `keep`?
+///
+/// Only when (a) the bytes are identical, or (b) both were probed with
+/// parseable versions, neither is dirty, `x` is strictly older, they are not a
+/// prerelease-vs-release mix, and `x` is not better managed than `keep`.
+/// A copy that was never probed is never removable.
+fn removable(x: &BinCopy, keep: &BinCopy) -> bool {
+    if x.path == keep.path || x.probe_note.is_some() {
+        return false;
+    }
+    if same_bytes(x, keep) {
+        return true;
+    }
+    if x.dirty || keep.dirty {
+        return false;
+    }
+    let (Some(sx), Some(sk)) = (semver_of(x), semver_of(keep)) else {
+        return false;
+    };
+    sx.pre.is_empty() == sk.pre.is_empty()
+        && sx < sk
+        && channel_rank(x.channel.kind) <= channel_rank(keep.channel.kind)
 }
 
 fn same_bytes(a: &BinCopy, b: &BinCopy) -> bool {
@@ -181,40 +211,40 @@ fn dir_of(x: &BinCopy) -> String {
     x.path.parent().map(|p| p.display().to_string()).unwrap_or_default()
 }
 
-/// One-line remedy for a set of copies. Only ever names an `rm` for a copy
-/// that is byte-identical to the best copy or strictly lower ranked; never
-/// for the best copy.
+/// One-line remedy for a set of copies. Emits `rm` only for copies that pass
+/// [`removable`]; otherwise advice with both copies named.
 fn duplicates_remedy(group: &[&BinCopy]) -> String {
     let keep = best(group);
-    let removable: Vec<&&BinCopy> = group
-        .iter()
-        .filter(|x| x.path != keep.path && (same_bytes(x, keep) || rank(x) < rank(keep)))
-        .collect();
-    let rms = removable.iter().map(|x| rm_cmd(x)).collect::<Vec<_>>().join("; ");
+    let removable_list: Vec<&&BinCopy> = group.iter().filter(|x| removable(x, keep)).collect();
+    let rms = removable_list.iter().map(|x| rm_cmd(x)).collect::<Vec<_>>().join("; ");
     let winner = group.iter().find(|x| x.winner).copied();
     match winner {
         Some(w) if w.path != keep.path => {
-            if keep.on_path {
-                format!(
-                    "keep {}: put {} ahead of {} on PATH, or remove the lower-ranked copies: {rms}",
-                    keep.path.display(),
-                    dir_of(keep),
-                    dir_of(w)
-                )
+            let update = if w.dirty {
+                "scripts/build.sh install".to_string()
             } else {
-                format!(
-                    "best copy {} is not on PATH: add {} to PATH ahead of {}, or update the winner ({})",
-                    keep.path.display(),
-                    dir_of(keep),
-                    dir_of(w),
-                    remedy_for(&w.channel, &w.name)
-                )
+                remedy_for(&w.channel, &w.name)
+            };
+            let mut r = format!(
+                "{} wins on PATH over better copy {}: put {} ahead of {} on PATH, or run: {update}",
+                w.path.display(),
+                keep.path.display(),
+                dir_of(keep),
+                dir_of(w)
+            );
+            if !removable_list.is_empty() {
+                r.push_str(&format!("; or remove the lower-ranked copies: {rms}"));
             }
+            r
         }
-        _ if removable.is_empty() => {
-            "copies differ and none is clearly lower ranked: compare them (weaver doctor --json lists sha256) and remove one by hand".into()
+        _ if !removable_list.is_empty() => format!("keep {}: {rms}", keep.path.display()),
+        _ => {
+            let list = group.iter().map(|x| x.label()).collect::<Vec<_>>().join(" vs ");
+            format!(
+                "no rm suggested (copies differ or cannot be safely ranked): {list}; fix PATH order or run the channel's update command ({})",
+                remedy_for(&keep.channel, &keep.name)
+            )
         }
-        _ => format!("keep {}: {rms}", keep.path.display()),
     }
 }
 
@@ -247,17 +277,18 @@ fn name_findings(name: &str, group: &[&BinCopy]) -> Vec<Finding> {
     };
 
     let mut out = Vec::new();
-    let better: Vec<&&BinCopy> = group.iter().filter(|x| !x.winner && rank(x) > rank(winner)).collect();
+    let keep = best(group);
     let (sev, msg, remedy) = if let (None, Some(note)) = (&winner.version, &winner.probe_note) {
         (Severity::Warn, format!("{} wins on PATH but was not probed: {note}", winner.path.display()), None)
     } else if winner.version.is_none() {
         (Severity::Fail, format!("{} did not report a version (does it run?)", winner.path.display()), Some(remedy_for(&winner.channel, name)))
-    } else if let Some(n) = better.first() {
-        (
-            Severity::Warn,
-            format!("{} wins on PATH but shadowed copy {} is newer or better managed", winner.label(), n.label()),
-            Some(duplicates_remedy(group)),
-        )
+    } else if keep.path != winner.path {
+        let msg = if winner.dirty && !keep.dirty && channel_rank(keep.channel.kind) >= 2 {
+            format!("dev build {} shadows managed copy {}", winner.label(), keep.label())
+        } else {
+            format!("{} wins on PATH but shadowed copy {} is newer or better managed", winner.label(), keep.label())
+        };
+        (Severity::Warn, msg, Some(duplicates_remedy(group)))
     } else if winner.dirty {
         (
             Severity::Warn,
@@ -341,7 +372,7 @@ mod tests {
         let f = findings(&scan(&env));
         let r = remedy_of(&f, "duplicates:weft");
         assert!(!r.contains(&format!("rm {}", pb.display())), "{r}");
-        assert!(r.contains(&format!("keep {}", pb.display())), "{r}");
+        assert!(r.contains(&format!("better copy {}", pb.display())), "{r}");
         assert!(r.contains("PATH"), "{r}");
         assert!(r.contains(&format!("rm {}", pa.display())), "the lower-ranked winner may be removed: {r}");
         // The winner finding carries a remedy too and is a WARN.
@@ -372,7 +403,7 @@ mod tests {
         let r = remedy_of(&f, "duplicates:weftos");
         assert!(r.contains(&format!("rm {}", pu.display())), "{r}");
         assert!(!r.contains(&format!("rm {}", pc.display())), "{r}");
-        assert!(r.contains(&format!("keep {}", pc.display())), "{r}");
+        assert!(r.contains(&format!("better copy {}", pc.display())), "{r}");
     }
 
     #[test]
@@ -413,6 +444,88 @@ mod tests {
         let wf = f.iter().find(|x| x.id == "winner:weft").unwrap();
         assert_eq!(wf.severity, Severity::Warn);
         assert!(wf.message.contains("not probed"));
+    }
+
+    fn mk(path: &str, ver: Option<&str>, dirty: bool, kind: ChannelKind, winner: bool, sha: &str, note: bool) -> BinCopy {
+        BinCopy {
+            name: "weft".into(),
+            path: PathBuf::from(path),
+            canonical: PathBuf::from(path),
+            on_path: true,
+            path_rank: Some(if winner { 0 } else { 1 }),
+            version: ver.map(str::to_owned),
+            build: None,
+            dirty,
+            sha256: Some(sha.into()),
+            channel: Channel { kind, detail: None },
+            winner,
+            foreign_owner: false,
+            probe_note: note.then(|| "not a native executable (script?); not run".to_string()),
+        }
+    }
+
+    #[test]
+    fn prerelease_never_causes_rm_of_the_release_or_vice_versa() {
+        for rc_wins in [true, false] {
+            let rc = mk("/a/weft", Some("0.8.1-rc1"), false, ChannelKind::Unknown, rc_wins, "s1", false);
+            let rel = mk("/b/weft", Some("0.8.1"), false, ChannelKind::Unknown, !rc_wins, "s2", false);
+            let r = duplicates_remedy(&[&rc, &rel]);
+            assert!(!r.contains("rm /"), "{r}");
+        }
+        // The release is the kept copy: the rc-winner message recommends PATH/update.
+        let rc = mk("/a/weft", Some("0.8.1-rc1"), false, ChannelKind::Unknown, true, "s1", false);
+        let rel = mk("/b/weft", Some("0.8.1"), false, ChannelKind::Unknown, false, "s2", false);
+        assert_eq!(best(&[&rc, &rel]).path, rel.path);
+    }
+
+    #[test]
+    fn dirty_newer_build_never_beats_or_deletes_a_clean_managed_copy() {
+        let dirty = mk("/a/weft", Some("0.8.2"), true, ChannelKind::DevBuild, true, "s1", false);
+        let managed = mk("/b/weft", Some("0.8.0"), false, ChannelKind::CargoDist, false, "s2", false);
+        assert_eq!(best(&[&dirty, &managed]).path, managed.path);
+        let r = duplicates_remedy(&[&dirty, &managed]);
+        assert!(!r.contains("rm /"), "{r}");
+        assert!(r.contains("scripts/build.sh install") && r.contains("PATH"), "{r}");
+        // And through the findings: WARN naming the shadowed managed copy.
+        let f = name_findings("weft", &[&dirty, &managed]);
+        let w = f.iter().find(|x| x.id == "winner:weft").unwrap();
+        assert_eq!(w.severity, Severity::Warn);
+        assert!(w.message.contains("dev build") && w.message.contains("shadows managed copy"), "{}", w.message);
+    }
+
+    #[test]
+    fn unprobed_copies_are_never_removable_or_kept() {
+        let shim = mk("/a/weft", None, false, ChannelKind::Unknown, true, "s1", true);
+        let real = mk("/b/weft", Some("0.8.1"), false, ChannelKind::Unknown, false, "s2", false);
+        assert_eq!(best(&[&shim, &real]).path, real.path);
+        assert!(!duplicates_remedy(&[&shim, &real]).contains("rm /"));
+        // Even the PATH winner being real and the shim shadowed: no rm of the shim.
+        let real_w = mk("/b/weft", Some("0.8.1"), false, ChannelKind::Unknown, true, "s2", false);
+        let shim_s = mk("/a/weft", None, false, ChannelKind::Unknown, false, "s1", true);
+        assert!(!duplicates_remedy(&[&real_w, &shim_s]).contains("rm /"));
+        // Not even when byte-identical to the kept copy.
+        let shim_same = mk("/a/weft", None, false, ChannelKind::Unknown, false, "s2", true);
+        assert!(!removable(&shim_same, &real_w));
+    }
+
+    #[test]
+    fn rm_only_for_identical_or_strictly_older_not_better_managed() {
+        let keep = mk("/k/weft", Some("0.8.1"), false, ChannelKind::Unknown, true, "k", false);
+        let older = mk("/o/weft", Some("0.8.0"), false, ChannelKind::Unknown, false, "o", false);
+        let older_managed = mk("/m/weft", Some("0.8.0"), false, ChannelKind::CargoDist, false, "m", false);
+        let identical = mk("/i/weft", Some("0.8.1"), false, ChannelKind::Unknown, false, "k", false);
+        let same_ver_other_bytes = mk("/d/weft", Some("0.8.1"), false, ChannelKind::Unknown, false, "d", false);
+        let unknown_ver = mk("/u/weft", Some("weird"), false, ChannelKind::Unknown, false, "u", false);
+        assert!(removable(&older, &keep));
+        assert!(removable(&identical, &keep));
+        assert!(!removable(&older_managed, &keep), "better managed than the kept copy");
+        assert!(!removable(&same_ver_other_bytes, &keep), "not strictly older");
+        assert!(!removable(&unknown_ver, &keep), "unparseable version");
+        let r = duplicates_remedy(&[&keep, &older, &identical]);
+        assert!(r.contains("rm /o/weft") && r.contains("rm /i/weft") && !r.contains("rm /k/weft"), "{r}");
+        // A dirty copy is removable only when byte-identical.
+        let dirty_old = mk("/x/weft", Some("0.7.0"), true, ChannelKind::DevBuild, false, "x", false);
+        assert!(!removable(&dirty_old, &keep));
     }
 
     #[test]

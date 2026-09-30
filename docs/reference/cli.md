@@ -191,11 +191,19 @@ would use from this directory); `--all-runtimes` widens that. Setting
 how to sandbox a doctor run. Live sockets, keys and binaries are never
 touched.
 
-Duplicate copies are ranked by newer version, then clean over dirty, then
-channel (cargo-dist or Homebrew, then `cargo install`, then `build.sh`, then
-unknown). The `fix:` line names `rm` only for copies that are byte-identical
-to the best copy or strictly lower ranked, and never for the best one; when
-the `PATH` winner is the lower-ranked copy it suggests reordering `PATH`.
+Duplicate copies are ranked probed before unprobed, clean before dirty, then
+by semver precedence (a prerelease is older than its release; `-dirty`,
+git-describe and build suffixes do not count as newer), then by channel
+(cargo-dist or Homebrew, then `cargo install`, then `build.sh`, then
+unknown). A dirty build is never the copy to keep over a clean one. The
+`fix:` line names `rm` only for a copy that is byte-identical to the kept
+copy, or that was probed, parses, is strictly older, is not a
+prerelease-versus-release mix, involves no dirty build, and is not better
+managed than the kept copy. Every other case is advice only, naming both
+copies, which one wins on `PATH`, and the fix (reorder `PATH`, or the
+channel's update command, or `scripts/build.sh install` when a dev build
+shadows a managed copy). A copy that was not probed is never offered for
+removal.
 
 Doctor runs `--version` only on files that are native executables (Mach-O,
 ELF, PE) named weft, weaver or weftos; a script with that name is reported
