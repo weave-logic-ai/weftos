@@ -111,6 +111,9 @@ enum Commands {
     /// Check install, daemon, runtime and MCP health (read-only; `--fix` for stale files).
     Doctor(commands::doctor_cmd::DoctorArgs),
 
+    /// Migrate WeftOS state (user chain).
+    Migrate(commands::migrate_cmd::MigrateArgs),
+
     /// Show version and build info.
     Version,
 }
@@ -173,6 +176,7 @@ async fn main() -> anyhow::Result<()> {
         },
         Commands::Init(args) => commands::init_cmd::run(args).await?,
         Commands::Doctor(args) => commands::doctor_cmd::run(args).await?,
+        Commands::Migrate(args) => commands::migrate_cmd::run(args)?,
         Commands::Version => {
             println!(
                 "weaver {} (WeftOS) · git {} · built {}",

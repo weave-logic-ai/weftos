@@ -12,4 +12,7 @@
 //! The RVF file, signing key and resource-tree checkpoint are derived from the
 //! checkpoint path by extension (`chain.rvf`, `chain.key`, `chain.tree.json`).
 
-pub use crate::runtime_paths::{CHAIN_CHECKPOINT_FILE, RUNTIME_DIR_ENV};
+pub use crate::runtime_paths::{
+    CHAIN_CHECKPOINT_FILE, LEGACY_MIGRATED_MARKER, MIGRATED_FROM_FILE, RUNTIME_DIR_ENV,
+    migrated_user_chain, user_chain_root,
+};

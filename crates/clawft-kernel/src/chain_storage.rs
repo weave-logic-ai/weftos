@@ -18,6 +18,12 @@
 //!    legacy chain stays in use (WARN) until `weaver migrate user-chain`
 //!    (ADR-103 Phase 1) moves it.
 //!
+//! A migrated user chain (`weaver migrate user-chain`, `~/.weftos/chain`) beats
+//! rule 3: a project with no chain of its own uses it. Once the legacy chain
+//! carries a `MIGRATED-TO-WEFTOS.txt` marker, a boot that would still land on
+//! it is refused (it would fork history) unless `WEFTOS_RUNTIME_DIR` isolates
+//! it or `--adopt-legacy-chain` is passed (with a WARN).
+//!
 //! Whichever chain is in use is guarded by [`ChainLock`] (`chain.lock` beside
 //! it) for the kernel's lifetime, so two kernels can never append to one
 //! chain. In this crate's own unit tests the default is a fresh temp dir per
@@ -26,7 +32,10 @@
 use std::path::{Path, PathBuf};
 
 use clawft_types::config::KernelConfig;
-use clawft_types::runtime_paths::{RuntimePaths, legacy_chain_left_behind};
+use clawft_types::runtime_paths::{
+    RootSource, RuntimePaths, legacy_chain_left_behind, legacy_migration_marker,
+    migrated_user_chain,
+};
 
 /// The runtime paths this boot uses for every non-chain runtime file
 /// (cluster peers, apps, revoked hosts).
@@ -68,6 +77,8 @@ pub struct ChainChoice {
     pub checkpoint: PathBuf,
     /// True when this is the legacy `~/.clawft` chain, not the resolved one.
     pub legacy_in_use: bool,
+    /// True when this is the migrated user chain (`~/.weftos/chain`).
+    pub user_chain_in_use: bool,
     /// WARN text for the operator, when the choice needs explaining.
     pub warning: Option<String>,
     /// Set when adopting the legacy chain looks unsafe: boot must refuse.
@@ -83,7 +94,7 @@ pub const LEGACY_ACTIVE_WINDOW: std::time::Duration = std::time::Duration::from_
 /// Kernels that know about the lock create `chain.lock` the first time they
 /// use a chain, so its absence means the last writer was an older,
 /// lock-unaware build that may still be running.
-fn lock_unaware_writer_age(checkpoint: &Path, now: std::time::SystemTime) -> Option<u64> {
+pub(crate) fn lock_unaware_writer_age(checkpoint: &Path, now: std::time::SystemTime) -> Option<u64> {
     if ChainLock::lock_path(checkpoint).exists() {
         return None;
     }
@@ -105,13 +116,59 @@ pub fn choose_default_chain(
     now: std::time::SystemTime,
 ) -> ChainChoice {
     let resolved = paths.chain_checkpoint();
-    let Some(legacy) = legacy_chain_left_behind(paths, home) else {
-        return ChainChoice {
-            checkpoint: resolved,
+    let plain = |checkpoint: PathBuf, warning: Option<String>, refusal: Option<String>| {
+        ChainChoice {
+            checkpoint,
             legacy_in_use: false,
-            warning: None,
-            refusal: None,
+            user_chain_in_use: false,
+            warning,
+            refusal,
+        }
+    };
+    let has_chain = |p: &Path| p.exists() || p.with_extension("rvf").exists();
+    // Rule 2b: a migrated user chain beats legacy adoption.
+    if matches!(paths.source(), RootSource::Project(_))
+        && !has_chain(&resolved)
+        && !new_chain
+        && let Some(user) = migrated_user_chain(home)
+    {
+        return ChainChoice {
+            user_chain_in_use: true,
+            warning: Some(format!(
+                "no chain at {}; using the migrated user chain at {} (migrated from the \
+                 legacy ~/.clawft chain by `weaver migrate user-chain`)",
+                resolved.display(),
+                user.display()
+            )),
+            ..plain(user, None, None)
         };
+    }
+    // Fork hazard: the legacy chain was migrated, and this boot would still
+    // append to it.
+    let migrated_refusal = |dir: &Path| {
+        let (marker, dest) = legacy_migration_marker(dir)?;
+        if adopt_legacy {
+            tracing::warn!(
+                marker = %marker.display(),
+                "--adopt-legacy-chain overrides a migration marker: this kernel appends to the \
+                 legacy chain and forks history from the migrated user chain"
+            );
+            return None;
+        }
+        Some(format!(
+            "the legacy chain in {} was migrated to {} (see {}); booting on it would fork \
+             history. Use the migrated chain, isolate this run with WEFTOS_RUNTIME_DIR, or \
+             pass --adopt-legacy-chain to knowingly continue on the legacy copy",
+            dir.display(),
+            dest.as_deref().unwrap_or("~/.weftos/chain"),
+            marker.display()
+        ))
+    };
+    if matches!(paths.source(), RootSource::LegacyHome) {
+        return plain(resolved, None, migrated_refusal(paths.root()));
+    }
+    let Some(legacy) = legacy_chain_left_behind(paths, home) else {
+        return plain(resolved, None, None);
     };
     if new_chain {
         let warning = format!(
@@ -120,17 +177,15 @@ pub fn choose_default_chain(
             resolved.display(),
             legacy.display()
         );
-        return ChainChoice {
-            checkpoint: resolved,
-            legacy_in_use: false,
-            warning: Some(warning),
-            refusal: None,
-        };
+        return plain(resolved, Some(warning), None);
     }
     // No chain.lock beside the legacy chain: only lock-unaware (older)
     // kernels have written it, and one may still be running. The first
     // adoption must be explicit; even then a very recent write is refused.
-    let refusal = if !ChainLock::lock_path(&legacy).exists() && !adopt_legacy {
+    let legacy_dir = legacy.parent().unwrap_or(Path::new("."));
+    let refusal = if let Some(r) = migrated_refusal(legacy_dir) {
+        Some(r)
+    } else if !ChainLock::lock_path(&legacy).exists() && !adopt_legacy {
         Some(format!(
             "The legacy chain at {} has never been used by a lock-aware kernel. Stop every \
              older weaver daemon (check `ps`/`weaver doctor daemon`) and then run \
@@ -157,6 +212,7 @@ pub fn choose_default_chain(
     ChainChoice {
         checkpoint: legacy,
         legacy_in_use: true,
+        user_chain_in_use: false,
         warning: Some(warning),
         refusal,
     }
@@ -235,10 +291,13 @@ fn default_checkpoint_path(
         adopt,
         std::time::SystemTime::now(),
     );
+    if choice.user_chain_in_use {
+        tracing::info!(chain = %choice.checkpoint.display(), "using migrated user chain");
+    }
     (
         Some(choice.checkpoint.to_string_lossy().into_owned()),
         choice.warning,
-        choice.legacy_in_use,
+        choice.legacy_in_use || choice.user_chain_in_use,
         choice.refusal,
     )
 }
@@ -311,6 +370,29 @@ impl ChainLock {
                 holder_pid(&path)
             )),
             Err(e) => Err(format!("cannot lock {}: {e}", path.display())),
+        }
+    }
+
+    /// Check that `checkpoint`'s chain is not locked, without creating or
+    /// writing the lock file. `Ok` when no lock file exists or it is free.
+    pub fn probe(checkpoint: &Path) -> Result<(), String> {
+        let path = Self::lock_path(checkpoint);
+        if !path.exists() {
+            return Ok(());
+        }
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(|e| format!("cannot open chain lock {}: {e}", path.display()))?;
+        match try_lock(&file) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(format!(
+                "chain {} is in use by another kernel (pid {})",
+                checkpoint.display(),
+                holder_pid(&path)
+            )),
+            Err(e) => Err(format!("cannot probe {}: {e}", path.display())),
         }
     }
 

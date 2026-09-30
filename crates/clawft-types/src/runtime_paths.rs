@@ -238,6 +238,39 @@ pub fn home_dir() -> Option<PathBuf> {
     }
 }
 
+/// Marker written in a migrated chain directory (`weaver migrate user-chain`).
+pub const MIGRATED_FROM_FILE: &str = "MIGRATED_FROM.json";
+
+/// Marker written beside a legacy chain once it has been migrated. Boot reads
+/// it to refuse a daemon that would fall back onto the stale legacy copy.
+pub const LEGACY_MIGRATED_MARKER: &str = "MIGRATED-TO-WEFTOS.txt";
+
+/// The Phase 1 user chain directory (`~/.weftos/chain`, ADR-103 D4).
+pub fn user_chain_root(home: &Path) -> PathBuf {
+    home.join(".weftos").join("chain")
+}
+
+/// The migrated user chain checkpoint path, when `home` has one: the
+/// `MIGRATED_FROM.json` marker and a chain file are both present.
+pub fn migrated_user_chain(home: Option<&Path>) -> Option<PathBuf> {
+    let root = user_chain_root(home?);
+    let paths = RuntimePaths::at(&root);
+    let has_chain = paths.chain_checkpoint().exists() || paths.chain_rvf().exists();
+    (root.join(MIGRATED_FROM_FILE).is_file() && has_chain).then(|| paths.chain_checkpoint())
+}
+
+/// The migration marker beside the legacy chain in `legacy_root`, if any, and
+/// the destination it names (`migrated-to: <dir>` line).
+pub fn legacy_migration_marker(legacy_root: &Path) -> Option<(PathBuf, Option<String>)> {
+    let marker = legacy_root.join(LEGACY_MIGRATED_MARKER);
+    let text = std::fs::read_to_string(&marker).ok()?;
+    let dest = text
+        .lines()
+        .find_map(|l| l.strip_prefix("migrated-to:"))
+        .map(|d| d.trim().to_string());
+    Some((marker, dest))
+}
+
 /// The pre-ADR-103 chain checkpoint (`~/.clawft/chain.json`) when `paths`
 /// resolved to a project root and that legacy chain exists on disk while the
 /// resolved one does not. `None` for isolated (`WEFTOS_RUNTIME_DIR`) runs,

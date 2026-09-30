@@ -193,6 +193,8 @@ pub mod capability_claim;
 pub mod chain;
 #[cfg(feature = "exochain")]
 pub mod chain_anchor;
+#[cfg(feature = "exochain")]
+pub mod chain_migrate;
 pub mod chain_storage;
 // S10 key rotation needs Clock (mesh) + ChainManager (exochain). WEFT-107.
 #[cfg(all(feature = "exochain", feature = "mesh"))]
