@@ -25,6 +25,7 @@ import sys
 import tempfile
 import threading
 
+import pi_ctl_plan as ctl
 import pi_placement as placement
 import pi_plan as plan
 
@@ -337,6 +338,9 @@ def parse_args(argv):
     ap.add_argument("--placement", action="store_true",
                     help="two-node placement: Mac weaver daemon + CLI -> isolated weaver daemon on the Pi")
     ap.add_argument("--placement-evidence", help="write the placement evidence JSON here")
+    ap.add_argument("--mac-container", metavar="IMAGE@sha256:DIGEST",
+                    help="placement: the Mac daemon also serves a Docker adapter with this "
+                         "local, operator-pinned base image")
     ap.add_argument("--full", action="store_true",
                     help="clawft-kernel + --live-native + --cogs + --placement (default, no args)")
     ap.add_argument("--cogs-ids", default=DEFAULT_COGS, help="cogs for --cogs (comma-separated)")
@@ -356,6 +360,8 @@ def parse_args(argv):
             ap.error("invalid crate name %r" % c)
     if a.filter is not None and not plan.valid_filter(a.filter):
         ap.error("--filter must match [A-Za-z0-9_:.-]+")
+    if a.mac_container and not ctl.IMAGE_RE.match(a.mac_container):
+        ap.error("--mac-container must be name@sha256:<64 hex>")
     if not plan.valid_scratch(a.scratch):
         ap.error("--scratch must be a relative path of [A-Za-z0-9._-] parts")
     if not all(plan.valid_crate(c) for c in a.cogs_ids.split(",")):

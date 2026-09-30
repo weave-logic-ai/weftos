@@ -390,7 +390,34 @@ async fn a_node_replaced_at_its_address_stops_being_a_placement_target() {
             .map(|v| v.liveness())
     };
     assert_eq!(live(&old.id), Some(Liveness::Suspect));
-    assert_eq!(live(&new.id), Some(Liveness::Alive));
+    // The new key is not learned under the old identity's tier (trust is
+    // bound to the key; the operator pins the new key to trust it).
+    assert_eq!(live(&new.id), None);
+    assert!(plane.targets().iter().all(|t| t.node_id != new.id));
+}
+
+#[tokio::test]
+async fn a_node_without_a_container_adapter_is_not_offered_a_container_variant() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = package(tmp.path(), "probe-cog", SCRIPT, &[arch()]);
+    let key = ctl_key();
+    // The Mac probes a container engine but serves only its native adapter
+    // (review round 3: it was offered aarch64-container and always refused).
+    let mac = host_node_native_only(91, mac_caps(), false, &key);
+    let conn = Arc::new(MeshConnector::new(false));
+    let addr = conn.register_local("mac", mac.svc.clone());
+    let (plane, _chain) = controller(&key, conn);
+    plane.add_target(&addr, TrustTier::Pinned).await.unwrap();
+    let r = plane.place(&order(&pkg)).await.unwrap();
+    assert!(r.decision.placement.is_none(), "{}", r.explain);
+    let row = r
+        .decision
+        .candidates
+        .iter()
+        .find(|c| c.node_id == mac.id)
+        .unwrap();
+    assert!(!row.eligible(), "{}", r.explain);
+    assert!(r.attempts.is_empty(), "nothing dispatched to a route miss");
 }
 
 #[tokio::test]

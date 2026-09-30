@@ -227,6 +227,8 @@ pub mod revocation;
 /// Governance actions, audit events and permits for placed workloads (ADR-099).
 #[cfg(feature = "exochain")]
 pub mod workload_governance;
+/// Bound on chain writes caused by unauthenticated requests.
+pub mod refusal_budget;
 pub mod service;
 #[cfg(all(feature = "native", feature = "exochain"))]
 pub mod stream_anchor;

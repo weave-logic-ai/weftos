@@ -22,7 +22,11 @@ use crate::workload_pkg::{
     write_manifest,
 };
 use crate::workload_runtime::native::host_arch;
-use crate::workload_runtime::{NativeConfig, NativeRuntime, WorkloadHost};
+use crate::workload_runtime::container_cmd::CmdOutput;
+use crate::workload_runtime::{
+    CommandRunner, ContainerRuntime, ContainerRuntimeConfig, Engine, NativeConfig, NativeRuntime,
+    RuntimeError, WorkloadHost,
+};
 
 use super::host_service::WorkloadHostService;
 use super::plane::PlacementControlPlane;
@@ -134,6 +138,24 @@ pub fn exchange(id: &str, chain: &Arc<ChainManager>) -> Arc<ArtifactExchange> {
     Arc::new(ex)
 }
 
+/// A container engine that is not there (tests never run a real engine):
+/// every CLI call fails, so a dispatched container variant is refused by
+/// the adapter itself.
+pub struct NoEngine;
+
+#[async_trait::async_trait]
+impl CommandRunner for NoEngine {
+    async fn run(
+        &self,
+        program: &str,
+        _: &[String],
+        _: std::time::Duration,
+        _: usize,
+    ) -> Result<CmdOutput, RuntimeError> {
+        Err(RuntimeError::Backend(format!("{program}: no engine in tests")))
+    }
+}
+
 /// One node's `workload-host`.
 pub struct HostNode {
     pub svc: Arc<WorkloadHostService>,
@@ -161,6 +183,30 @@ pub fn host_node_with(
     controller: &SigningKey,
     make_gate: impl FnOnce(&Arc<ChainManager>) -> Arc<WorkloadGate>,
 ) -> HostNode {
+    let container = caps
+        .iter()
+        .any(|c| c.id.as_str().starts_with("runtime.container"));
+    host_node_routes(seed, caps, scripts, controller, make_gate, container)
+}
+
+/// [`host_node`] serving only its native adapter, whatever its facts say.
+pub fn host_node_native_only(
+    seed: u8,
+    caps: Vec<Capability>,
+    scripts: bool,
+    controller: &SigningKey,
+) -> HostNode {
+    host_node_routes(seed, caps, scripts, controller, gate, false)
+}
+
+fn host_node_routes(
+    seed: u8,
+    caps: Vec<Capability>,
+    scripts: bool,
+    controller: &SigningKey,
+    make_gate: impl FnOnce(&Arc<ChainManager>) -> Arc<WorkloadGate>,
+    container: bool,
+) -> HostNode {
     let key = SigningKey::from_bytes(&[seed; 32]);
     let id = node_id_from_pubkey(&key.verifying_key().to_bytes());
     let chain = Arc::new(ChainManager::new(0, 1000));
@@ -182,10 +228,27 @@ pub fn host_node_with(
     );
     let now = chrono::Utc::now().timestamp() as u64;
     let mut facts = NodeFacts::new(id.clone(), now, 600, 1);
-    facts.capabilities = caps;
+    facts.capabilities = caps.clone();
     let signed = sign_node_facts(&facts, &key).unwrap();
-    let svc = WorkloadHostService::new(key, exchange(&id, &chain), anchors(), gate)
-        .with_route("native", host)
+    let mut svc = WorkloadHostService::new(key, exchange(&id, &chain), anchors(), gate.clone())
+        .with_route("native", host);
+    if container {
+        let cfg = ContainerRuntimeConfig::new(
+            Engine::Docker,
+            format!("debian@sha256:{}", "0".repeat(64)),
+            tmp.path().join("containers"),
+        );
+        let rt = ContainerRuntime::new(cfg, Arc::new(NoEngine));
+        let h = WorkloadHost::new(
+            Arc::new(rt),
+            gate,
+            id.clone(),
+            crate::workload_governance::NodeTrustTier::Paired,
+        )
+        .with_chain(chain.clone());
+        svc = svc.with_route("container", Arc::new(h));
+    }
+    let svc = svc
         .with_controllers(vec![controller.verifying_key().to_bytes()])
         .with_chain(chain.clone());
     svc.set_facts(signed);

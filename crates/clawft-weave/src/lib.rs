@@ -50,6 +50,9 @@ pub mod workload_rpc;
 /// Placement control plane RPCs (ADR-099, mesh-placement-12).
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_place_rpc;
+/// Operator policy files for placement (mesh-placement-12).
+#[cfg(all(feature = "placement", unix))]
+pub mod workload_place_policy;
 /// This node's `workload-host`, served to other controllers (mesh-placement-12).
 #[cfg(all(feature = "placement", unix))]
 pub mod workload_host_serve;

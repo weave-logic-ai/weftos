@@ -28,6 +28,7 @@ impl PlacementControlPlane {
         if let Ok(mut u) = self.unsettled.lock() {
             u.insert(template.decision_id.clone(), template);
         }
+        self.persist();
     }
 
     /// Decisions still unsettled.
@@ -74,6 +75,7 @@ impl PlacementControlPlane {
             if let Ok(mut u) = self.unsettled.lock() {
                 u.remove(&t.decision_id);
             }
+            self.persist();
         }
         adopted
     }

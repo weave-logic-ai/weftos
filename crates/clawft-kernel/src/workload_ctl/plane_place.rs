@@ -339,6 +339,7 @@ impl PlacementControlPlane {
                     if let Ok(mut p) = self.placements.lock() {
                         p.insert(rec.instance_id.clone(), rec.clone());
                     }
+                    self.persist();
                     report.attempts.push(attempt("placed", None, None));
                     report.placed = Some(rec);
                     return;
@@ -414,6 +415,7 @@ impl PlacementControlPlane {
             }
             return r;
         }
+        self.ensure_described(&rec.node_id).await;
         let decision_id = if method::mutates(m) {
             let ctx = json!({ "workload": {
                 "kind": rec.kind, "package_trust": "pinned_signer",
@@ -445,6 +447,9 @@ impl PlacementControlPlane {
             && let Ok(mut p) = self.placements.lock()
         {
             p.remove(instance_id);
+        }
+        if m == method::UNLOAD {
+            self.persist();
         }
         Ok(out)
     }

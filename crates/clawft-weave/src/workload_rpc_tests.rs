@@ -140,3 +140,25 @@ fn route_dispatches_and_reports_unbuilt_verbs() {
     let other = route("bogus.method", json!({}), &reg, "n", None, &rec.sink());
     assert!(other.error.unwrap().starts_with("unknown method"));
 }
+
+/// Review round 3 (low): an anonymous local caller looping unknown
+/// `workload.*` names must not grow the chain without bound, nor put its
+/// text on the chain verbatim.
+#[test]
+fn unknown_method_refusals_are_budgeted_and_the_name_is_cut() {
+    let rec = Recorder::default();
+    let budget = RefusalBudget::new(4, std::time::Duration::from_secs(3600));
+    let long = format!("workload.{}", "x".repeat(10_000));
+    for _ in 0..50 {
+        let r = deny_unknown(&rec.sink(), &long, &budget);
+        assert!(!r.ok);
+        assert!(r.error.unwrap().len() < 200, "the reply does not echo 10 KB");
+    }
+    let chained = rec.0.lock().unwrap().clone();
+    assert_eq!(chained.len(), 4, "only the budget is chained");
+    for (k, p) in &chained {
+        assert_eq!(k, WORKLOAD_REFUSE);
+        assert_eq!(p["action"].as_str().unwrap().chars().count(), MAX_SHOWN_METHOD);
+        assert_eq!(p["method_bytes"], long.len());
+    }
+}

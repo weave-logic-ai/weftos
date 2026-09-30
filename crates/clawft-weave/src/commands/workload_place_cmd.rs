@@ -17,6 +17,23 @@ pub enum WorkloadPlaceCmd {
     Place(PlaceArgs),
     /// Decide and explain a placement without dispatching it.
     Explain(PlaceArgs),
+    /// Place an operator-pinned store cog on a Cognitum Seed, addressed by
+    /// its operator-assigned node id (from the daemon's workload-seeds.json).
+    PlaceSeed {
+        /// Operator-assigned Seed node id.
+        node_id: String,
+        /// Store cog as `<id>@<version>` (must be pinned for that Seed).
+        cog: String,
+        /// Expected SHA-256 of the store binary.
+        #[arg(long)]
+        sha256: Option<String>,
+        /// Run mode: once, interval, listener.
+        #[arg(long, default_value = "interval")]
+        mode: String,
+        /// Install and load without starting.
+        #[arg(long)]
+        no_start: bool,
+    },
     /// Placed instances and their live status (or one instance).
     Status {
         /// Instance id (omit for all placements).
@@ -123,6 +140,24 @@ pub fn request(cmd: &WorkloadPlaceCmd, cwd: &Path) -> Result<(&'static str, Valu
                 p["pin"] = json!(pin);
             }
             (m, p)
+        }
+        WorkloadPlaceCmd::PlaceSeed {
+            node_id,
+            cog,
+            sha256,
+            mode,
+            no_start,
+        } => {
+            let (id, version) = cog
+                .split_once('@')
+                .filter(|(i, v)| !i.is_empty() && !v.is_empty())
+                .ok_or_else(|| format!("store cog {cog:?} must be <id>@<version>"))?;
+            let mut pin = json!({ "node_id": node_id, "id": id, "version": version,
+                                  "mode": mode, "start": !no_start });
+            if let Some(h) = sha256 {
+                pin["sha256"] = json!(h);
+            }
+            ("workload.place", json!({ "store_pin": pin }))
         }
         WorkloadPlaceCmd::Status { instance_id, .. } => (
             "workload.status",
@@ -311,6 +346,26 @@ mod tests {
             catalog: false,
         };
         assert_eq!(req(&unload).1, json!({"instance_id": "i-1"}));
+        let seed = WorkloadPlaceCmd::PlaceSeed {
+            node_id: "seed-lab".into(),
+            cog: "fall-detect@1.0.0".into(),
+            sha256: None,
+            mode: "once".into(),
+            no_start: false,
+        };
+        let (m, p) = req(&seed);
+        assert_eq!(m, "workload.place");
+        assert_eq!(p["store_pin"]["node_id"], "seed-lab");
+        assert_eq!(p["store_pin"]["id"], "fall-detect");
+        assert_eq!(p["store_pin"]["version"], "1.0.0");
+        let bad = WorkloadPlaceCmd::PlaceSeed {
+            node_id: "s".into(),
+            cog: "fall-detect".into(),
+            sha256: None,
+            mode: "once".into(),
+            no_start: false,
+        };
+        assert!(request(&bad, Path::new("/")).is_err());
         let cat = WorkloadPlaceCmd::Unload {
             target: "w".into(),
             catalog: true,

@@ -1,0 +1,405 @@
+{
+  "card": "mesh-placement-12",
+  "ok": true,
+  "controller": {
+    "runtime": "weaver daemon (isolated) via `weaver workload` CLI",
+    "node": "n-9649e8",
+    "adapters": [
+      "native",
+      "container (docker)"
+    ]
+  },
+  "pi_peer_bound_to_key": true,
+  "pi_node": {
+    "runtime": "weaver daemon (isolated)",
+    "node": "n-a908d3",
+    "workload_host_served_on": "0.0.0.0:9471"
+  },
+  "explain": "workload anomaly-detect (kind cog)\n  allow_emulated: false   pin: -\n  tier order (strict): native > emulated > dev_fallback (candidates rank by tier, then score)\ndecision: PLACED on n-a908d3 via aarch64-native (tier native, emulated false) score 120.00\ncandidates:\n  1. n-a908d3 eligible via aarch64-native (tier native) score 120.00\n       execution 100.00 + locality 0.00 + accel_fit 10.00 + perf 0.00 + load 10.00 + stickiness 0.00\n  2. n-9649e8 eligible via aarch64-container (tier dev_fallback) score 30.00\n       execution 20.00 + locality 0.00 + accel_fit 0.00 + perf 0.00 + load 10.00 + stickiness 0.00\ndecision_id: 9bdced862b5180760601387456e67834178b2b331d3faab0466f02a2a0248f4e\n",
+  "place": {
+    "explain": "workload anomaly-detect (kind cog)\n  allow_emulated: false   pin: -\n  tier order (strict): native > emulated > dev_fallback (candidates rank by tier, then score)\ndecision: PLACED on n-a908d3 via aarch64-native (tier native, emulated false) score 120.00\ncandidates:\n  1. n-a908d3 eligible via aarch64-native (tier native) score 120.00\n       execution 100.00 + locality 0.00 + accel_fit 10.00 + perf 0.00 + load 10.00 + stickiness 0.00\n  2. n-9649e8 eligible via aarch64-container (tier dev_fallback) score 30.00\n       execution 20.00 + locality 0.00 + accel_fit 0.00 + perf 0.00 + load 10.00 + stickiness 0.00\ndecision_id: c217ff97bd19073d715b777553e8faac6567bd75df7b970732aa84f3764f9315\ndispatch:\n  1. n-a908d3 via aarch64-native: placed\n",
+    "attempts": [
+      {
+        "node_id": "n-a908d3",
+        "outcome": "placed",
+        "variant": "aarch64-native"
+      }
+    ],
+    "placed": {
+      "decision_id": "c217ff97bd19073d715b777553e8faac6567bd75df7b970732aa84f3764f9315",
+      "instance_id": "anomaly-detect-d53c3d06-n-a908d3",
+      "kind": "cog",
+      "manifest_hash": "f87371f74ff86e64b32034be710bc6889e6f3df3b7e78ae0899700edd1f6885b",
+      "node_id": "n-a908d3",
+      "variant": "aarch64-native",
+      "workload": "anomaly-detect"
+    }
+  },
+  "run": {
+    "state": "running",
+    "reports": 8,
+    "first_report": {
+      "anomalies": [
+        {
+          "type": "SPIKE",
+          "channel": 232,
+          "value": 0.949999988079071,
+          "z_score": 5.120977295634072,
+          "description": "Channel 232 value 0.95 deviates 5.1 sigma from mean"
+        },
+        {
+          "type": "SPIKE",
+          "channel": 233,
+          "value": 0.949999988079071,
+          "z_score": 5.120977295634072,
+          "description": "Channel 233 value 0.95 deviates 5.1 sigma from mean"
+        },
+        {
+          "type": "SPIKE",
+          "channel": 234,
+          "value": 0.949999988079071,
+          "z_score": 5.120977295634072,
+          "description": "Channel 234 value 0.95 deviates 5.1 sigma from mean"
+        },
+        {
+          "type": "SPIKE",
+          "channel": 235,
+          "value": 0.949999988079071,
+          "z_score": 5.120977295634072,
+          "description": "Channel 235 value 0.95 deviates 5.1 sigma from mean"
+        },
+        {
+          "type": "SPIKE",
+          "channel": 236,
+          "value": 0.949999988079071,
+          "z_score": 5.120977295634072,
+          "description": "Channel 236 value 0.95 deviates 5.1 sigma from mean"
+        },
+        {
+          "type": "SPIKE",
+          "channel": 237,
+          "value": 0.949999988079071,
+          "z_score": 5.120977295634072,
+          "description": "Channel 237 value 0.95 deviates 5.1 sigma from mean"
+        },
+        {
+          "type": "SPIKE",
+          "channel": 238,
+          "value": 0.949999988079071,
+          "z_score": 5.120977295634072,
+          "description": "Channel 238 value 0.95 deviates 5.1 sigma from mean"
+        },
+        {
+          "type": "SPIKE",
+          "channel": 239,
+          "value": 0.949999988079071,
+          "z_score": 5.120977295634072,
+          "description": "Channel 239 value 0.95 deviates 5.1 sigma from mean"
+        }
+      ],
+      "stats": {
+        "num_channels": 256,
+        "mean_amplitude": 0.029940581670416574,
+        "max_z_score": 5.120977295634072,
+        "cusum_drift_detected": false
+      },
+      "timestamp": 1790739772
+    }
+  },
+  "admission_mismatch": {
+    "explain": "workload anomaly-detect (kind cog)\n  allow_emulated: false   pin: -\n  tier order (strict): native > emulated > dev_fallback (candidates rank by tier, then score)\ndecision: PLACED on n-a908d3 via aarch64-native (tier native, emulated false) score 120.00\ncandidates:\n  1. n-a908d3 eligible via aarch64-native (tier native) score 120.00\n       execution 100.00 + locality 0.00 + accel_fit 10.00 + perf 0.00 + load 10.00 + stickiness 0.00\n  2. n-9649e8 eligible via aarch64-container (tier dev_fallback) score 30.00\n       execution 20.00 + locality 0.00 + accel_fit 0.00 + perf 0.00 + load 10.00 + stickiness 0.00\ndecision_id: 336b0bc96eea1856d3daa4fa7c9608218765a592d00c80b16705974d82dbf8f9\ndispatch:\n  1. n-a908d3 via aarch64-native: refused (admission: admission refused: ELF machine 62 is not aarch64)\n  2. n-9649e8 via aarch64-container: refused (admission: admission refused: aarch64 payload is not a matching Linux ELF (Elf(62)))\n",
+    "attempts": [
+      {
+        "code": "admission",
+        "node_id": "n-a908d3",
+        "outcome": "refused",
+        "reason": "admission refused: ELF machine 62 is not aarch64",
+        "variant": "aarch64-native"
+      },
+      {
+        "code": "admission",
+        "node_id": "n-9649e8",
+        "outcome": "refused",
+        "reason": "admission refused: aarch64 payload is not a matching Linux ELF (Elf(62))",
+        "variant": "aarch64-container"
+      }
+    ],
+    "placed": null
+  },
+  "pin_mac": {
+    "explain": "workload anomaly-detect (kind cog)\n  allow_emulated: false   pin: n-9649e8\n  tier order (strict): native > emulated > dev_fallback (candidates rank by tier, then score)\ndecision: PLACED on n-9649e8 via aarch64-container (tier dev_fallback, emulated false) score 30.00\ncandidates:\n  1. n-a908d3 eligible via aarch64-native (tier native) score 120.00\n       execution 100.00 + locality 0.00 + accel_fit 10.00 + perf 0.00 + load 10.00 + stickiness 0.00\n  2. n-9649e8 eligible via aarch64-container (tier dev_fallback) score 30.00 [pinned]\n       execution 20.00 + locality 0.00 + accel_fit 0.00 + perf 0.00 + load 10.00 + stickiness 0.00\ndecision_id: 10793ea31cbd786fcd54d649033c088bbf5937af2626805374a778db45346ada\ndispatch:\n  1. n-9649e8 via aarch64-container: placed\n",
+    "attempts": [
+      {
+        "node_id": "n-9649e8",
+        "outcome": "placed",
+        "variant": "aarch64-container"
+      }
+    ],
+    "placed": {
+      "decision_id": "10793ea31cbd786fcd54d649033c088bbf5937af2626805374a778db45346ada",
+      "instance_id": "anomaly-detect-d53c3d06-n-9649e8",
+      "kind": "cog",
+      "manifest_hash": "f87371f74ff86e64b32034be710bc6889e6f3df3b7e78ae0899700edd1f6885b",
+      "node_id": "n-9649e8",
+      "variant": "aarch64-container",
+      "workload": "anomaly-detect"
+    }
+  },
+  "pin_mac_run": "running",
+  "controller_chain": [
+    [
+      "workload",
+      "workload.place"
+    ],
+    [
+      "workload",
+      "workload.place"
+    ],
+    [
+      "workload.placement",
+      "workload.place"
+    ],
+    [
+      "workload",
+      "workload.place"
+    ],
+    [
+      "workload",
+      "workload.place"
+    ],
+    [
+      "workload.placement",
+      "workload.place"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.serve"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.serve"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.serve"
+    ],
+    [
+      "workload.placement",
+      "workload.place"
+    ],
+    [
+      "workload",
+      "workload.stop"
+    ],
+    [
+      "workload.placement",
+      "workload.stop"
+    ],
+    [
+      "workload",
+      "workload.unload"
+    ],
+    [
+      "workload.placement",
+      "workload.unload"
+    ],
+    [
+      "workload",
+      "workload.place"
+    ],
+    [
+      "workload",
+      "workload.place"
+    ],
+    [
+      "workload.placement",
+      "workload.place"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.serve"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.serve"
+    ],
+    [
+      "workload.placement",
+      "workload.refuse"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "workload.runtime",
+      "workload.refuse"
+    ],
+    [
+      "workload.host",
+      "workload.refuse"
+    ],
+    [
+      "workload.placement",
+      "workload.refuse"
+    ],
+    [
+      "workload",
+      "workload.place"
+    ],
+    [
+      "workload",
+      "workload.place"
+    ],
+    [
+      "workload.placement",
+      "workload.place"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "workload",
+      "workload.load"
+    ],
+    [
+      "workload.runtime",
+      "workload.load"
+    ],
+    [
+      "workload",
+      "workload.start"
+    ],
+    [
+      "workload.runtime",
+      "workload.start"
+    ],
+    [
+      "workload.host",
+      "workload.place"
+    ],
+    [
+      "workload.placement",
+      "workload.place"
+    ],
+    [
+      "workload",
+      "workload.stop"
+    ],
+    [
+      "workload.placement",
+      "workload.stop"
+    ],
+    [
+      "workload",
+      "workload.stop"
+    ],
+    [
+      "workload.runtime",
+      "workload.stop"
+    ],
+    [
+      "workload",
+      "workload.unload"
+    ],
+    [
+      "workload.placement",
+      "workload.unload"
+    ],
+    [
+      "workload",
+      "workload.unload"
+    ],
+    [
+      "workload.runtime",
+      "workload.unload"
+    ]
+  ],
+  "pi_chain": [
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "workload",
+      "workload.load"
+    ],
+    [
+      "workload.runtime",
+      "workload.load"
+    ],
+    [
+      "workload",
+      "workload.start"
+    ],
+    [
+      "workload.runtime",
+      "workload.start"
+    ],
+    [
+      "workload.host",
+      "workload.place"
+    ],
+    [
+      "workload",
+      "workload.stop"
+    ],
+    [
+      "workload.runtime",
+      "workload.stop"
+    ],
+    [
+      "workload",
+      "workload.unload"
+    ],
+    [
+      "workload.runtime",
+      "workload.unload"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "mesh_artifact",
+      "artifact.fetch"
+    ],
+    [
+      "workload.runtime",
+      "workload.refuse"
+    ],
+    [
+      "workload.host",
+      "workload.refuse"
+    ]
+  ]
+}

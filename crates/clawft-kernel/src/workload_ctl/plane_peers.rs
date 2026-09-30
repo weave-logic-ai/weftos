@@ -6,10 +6,65 @@
 //! never places on. Demoted targets stay known so their placed instances
 //! can still be stopped and unloaded. Addresses in `keep` (this node's own
 //! in-process host, Seeds) are not touched.
+//!
+//! Trust is bound to a node key, not to an address. A listed peer with a
+//! `key` gets its tier only for that key: a known target at the address
+//! with another key is demoted, and the pinned key is learned by a
+//! `describe` that refuses any other signer. A listed peer without a key
+//! gives its tier to the key first seen at the address; a different key
+//! answering there later is never learned under it (`refresh` requires
+//! the stored key).
 
 use clawft_types::placement::TrustTier as FactsTier;
 
-use super::plane::{PlacementControlPlane, PlaneError};
+use super::plane::{PlacementControlPlane, PlaneError, TargetInfo};
+use crate::workload_pkg::codec::hex_decode_exact;
+
+/// One operator-listed `workload-host`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperatorPeer {
+    /// Where it listens.
+    pub addr: String,
+    /// Operator-assigned tier.
+    pub tier: FactsTier,
+    /// The node key the tier is for; `None` trusts the key first seen at
+    /// `addr`.
+    pub key: Option<[u8; 32]>,
+}
+
+impl OperatorPeer {
+    /// A peer trusted on first use.
+    pub fn new(addr: impl Into<String>, tier: FactsTier) -> Self {
+        Self {
+            addr: addr.into(),
+            tier,
+            key: None,
+        }
+    }
+
+    /// Only the node with `key` gets the tier.
+    pub fn with_key(mut self, key: [u8; 32]) -> Self {
+        self.key = Some(key);
+        self
+    }
+
+    /// Whether this entry covers the known target `t` (`known` is every
+    /// known target): a pinned entry covers its key at its address; an
+    /// unpinned one only the first key learned at its address.
+    fn covers(&self, t: &TargetInfo, known: &[TargetInfo]) -> bool {
+        if self.addr != t.addr {
+            return false;
+        }
+        match self.key {
+            Some(k) => hex_decode_exact::<32>(&t.public_key) == Some(k),
+            None => known
+                .iter()
+                .filter(|o| o.addr == self.addr)
+                .min_by_key(|o| (o.learned_ms, o.node_id.clone()))
+                .is_some_and(|first| first.node_id == t.node_id),
+        }
+    }
+}
 
 impl PlacementControlPlane {
     /// Set the operator-assigned tier of a known target (targets map and
@@ -22,24 +77,22 @@ impl PlacementControlPlane {
             .and_then(|mut t| t.get_mut(node_id).map(|e| e.tier = tier))
             .is_some();
         self.facts.set_trust_tier(node_id, tier);
+        self.persist();
         known
     }
 
-    /// Make the known targets match the operator's `peers` (address, tier).
-    /// Returns one message per peer that could not be reached (it is
-    /// retried on the next sync).
+    /// Make the known targets match the operator's `peers`. Returns one
+    /// error per peer that could not be learned (it is retried on the next
+    /// sync).
     pub async fn apply_operator_peers(
         &self,
-        peers: &[(String, FactsTier)],
+        peers: &[OperatorPeer],
         keep: &[&str],
     ) -> Vec<(String, PlaneError)> {
-        for t in self.targets() {
-            let listed = peers
-                .iter()
-                .find(|(a, _)| *a == t.addr)
-                .map(|(_, tier)| *tier);
-            let want = match listed {
-                Some(tier) => tier,
+        let known = self.targets();
+        for t in &known {
+            let want = match peers.iter().find(|p| p.covers(t, &known)) {
+                Some(p) => p.tier,
                 None if keep.contains(&t.addr.as_str()) => continue,
                 None => FactsTier::Discovered,
             };
@@ -49,11 +102,15 @@ impl PlacementControlPlane {
                 self.set_tier(&t.node_id, want);
             }
         }
-        let known: Vec<String> = self.targets().into_iter().map(|t| t.addr).collect();
         let mut failed = Vec::new();
-        for (addr, tier) in peers.iter().filter(|(a, _)| !known.contains(a)) {
-            if let Err(e) = self.add_target(addr, *tier).await {
-                failed.push((addr.clone(), e));
+        for p in peers {
+            // Satisfied by the first key learned at the address (unpinned)
+            // or by the pinned key; otherwise learn it (a pinned key only).
+            if known.iter().any(|t| p.covers(t, &known)) {
+                continue;
+            }
+            if let Err(e) = self.add_target_expecting(&p.addr, p.tier, p.key).await {
+                failed.push((p.addr.clone(), e));
             }
         }
         failed

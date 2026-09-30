@@ -37,23 +37,35 @@ READY = ('==STATUS==\n' + json.dumps({"served_on": "0.0.0.0:9471", "targets": [{
                                        indent=2))
 MAC_STATUS = {"controller": MAC, "targets": [
     {"node_id": MAC, "tier": "pinned", "reachable": True},
-    {"node_id": NODE, "tier": "paired", "reachable": True}]}
+    {"node_id": NODE, "tier": "paired", "reachable": True, "public_key": "ef" * 32}]}
 EXPLAIN = {"explain": "PLACED on %s via aarch64-native (tier native, emulated false)\n"
-                      "  %s eligible via aarch64-container (tier dev_fallback)\n" % (NODE, MAC)}
+                      "  %s rejected: no variant fits\n" % (NODE, MAC)}
 PLACE = dict(EXPLAIN, placed={"node_id": NODE, "instance_id": "i-1", "variant": "aarch64-native"},
              attempts=[{"node_id": NODE, "outcome": "placed"}])
-BAD = {"placed": None, "attempts": [
-    {"node_id": NODE, "outcome": "refused", "code": "admission",
-     "reason": "admission refused: ELF machine 62 is not aarch64"},
-    {"node_id": MAC, "outcome": "refused", "code": "admission", "reason": "no container adapter"}]}
-PIN = {"placed": None, "attempts": [{"node_id": MAC, "outcome": "refused", "code": "admission",
-                                     "reason": "no container adapter on this node"}]}
+REFUSED_BY_PI = {"node_id": NODE, "outcome": "refused", "code": "admission",
+                 "reason": "admission refused: ELF machine 62 is not aarch64"}
+BAD = {"placed": None, "attempts": [REFUSED_BY_PI]}
+PIN = {"placed": None, "attempts": [], "decision": {"placement": None}}
+# With --mac-container: the Mac's Docker adapter is a real next candidate.
+BAD_CONTAINER = {"placed": None, "attempts": [REFUSED_BY_PI, {
+    "node_id": MAC, "outcome": "refused", "code": "admission",
+    "reason": "admission refused: ELF machine 62 is not aarch64"}]}
+PIN_CONTAINER = {"placed": {"node_id": MAC, "instance_id": "m-1", "variant": "aarch64-container"},
+                 "attempts": [{"node_id": MAC, "outcome": "placed"}]}
 
 
 def good_result():
     return {"explain": EXPLAIN, "place": PLACE, "place_rc": 0,
             "status": {"status": {"state": "running"}}, "reports": 3, "bad": BAD, "bad_rc": 1,
-            "pin": PIN, "pin_rc": 1, "mac_chain": MAC_CHAIN, "pi_chain": GOOD_CHAIN}
+            "pin": PIN, "pin_rc": 1, "mac_chain": MAC_CHAIN, "pi_chain": GOOD_CHAIN,
+            "peer_key_pinned": True}
+
+
+def good_container_result():
+    r = good_result()
+    r.update(bad=BAD_CONTAINER, pin=PIN_CONTAINER, pin_rc=0,
+             pin_status={"status": {"state": "running"}})
+    return r
 
 
 class Helpers(unittest.TestCase):
@@ -162,8 +174,9 @@ class CtlHelpers(unittest.TestCase):
             "running": lambda r: r.update(status={"status": {"state": "exited"}}),
             "reports": lambda r: r.update(reports=0),
             "self-check": lambda r: r["bad"]["attempts"][0].update(reason="no native adapter"),
-            "next candidate": lambda r: r.update(bad=dict(BAD, attempts=BAD["attempts"][:1])),
-            "pinning": lambda r: r.update(pin_rc=0),
+            "without a container adapter was dispatched": lambda r: r.update(bad=BAD_CONTAINER),
+            "pinning this Mac without a container adapter": lambda r: r.update(pin=PIN_CONTAINER),
+            "not by its pinned key": lambda r: r.update(peer_key_pinned=False),
             "Pi chain lacks workload.host/workload.refuse": lambda r: r.update(pi_chain=GOOD_CHAIN[:4]),
             "Mac chain lacks": lambda r: r.update(mac_chain=None),
         }
@@ -173,6 +186,44 @@ class CtlHelpers(unittest.TestCase):
             ok, why = ctl.judge(r, NODE, MAC)
             self.assertFalse(ok, want)
             self.assertTrue(any(want in w for w in why), (want, why))
+
+    def test_a_native_only_mac_host_never_refuses_on_its_own_chain(self):
+        r = good_result()
+        r["mac_chain"] = MAC_CHAIN[:2]
+        self.assertEqual(ctl.judge(r, NODE, MAC), (True, []))
+
+    def test_judge_with_the_mac_container_adapter(self):
+        self.assertEqual(ctl.judge(good_container_result(), NODE, MAC, True), (True, []))
+        cases = {
+            "next candidate was not tried": lambda r: r.update(bad=BAD),
+            "did not run the cog in its container": lambda r: r.update(pin=PIN, pin_rc=1),
+            "not running in its container": lambda r: r.update(pin_status={}),
+            "Mac chain lacks workload.host/workload.refuse": lambda r: r.update(
+                mac_chain=MAC_CHAIN[:2]),
+        }
+        for want, spoil in cases.items():
+            r = json.loads(json.dumps(good_container_result()))
+            spoil(r)
+            ok, why = ctl.judge(r, NODE, MAC, True)
+            self.assertFalse(ok, want)
+            self.assertTrue(any(want in w for w in why), (want, why))
+
+    def test_peer_key_and_container_config(self):
+        self.assertEqual(ctl.pi_key(MAC_STATUS, NODE), "ef" * 32)
+        self.assertIsNone(ctl.pi_key(MAC_STATUS, "n-other"))
+        self.assertEqual(ctl.peers_json("pi5", 9471, "ef" * 32)[0]["key"], "ef" * 32)
+        with self.assertRaises(ValueError):
+            ctl.peers_json("pi5", 9471, "zz")
+        img = "debian@sha256:" + "a" * 64
+        self.assertEqual(ctl.container_json(img)["base_image"], img)
+        for bad in ("debian:trixie", "debian@sha256:abc", "Debian@sha256:" + "a" * 64):
+            with self.assertRaises(ValueError):
+                ctl.container_json(bad)
+        self.assertEqual(ctl.container_name("cog.A_1"), "weftos-cog-a-1")
+        env = ctl.mac_env("/w", ("/opt/d/bin", "unix:///d.sock"))
+        self.assertTrue(env["PATH"].startswith("/opt/d/bin:"))
+        self.assertEqual(env["DOCKER_HOST"], "unix:///d.sock")
+        self.assertNotIn("DOCKER_HOST", ctl.mac_env("/w"))
 
 
 class PlacementLane(unittest.TestCase):

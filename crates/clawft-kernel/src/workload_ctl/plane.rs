@@ -113,6 +113,10 @@ pub struct TargetInfo {
     pub public_key: String,
     /// Last `describe` succeeded.
     pub reachable: bool,
+    /// When this key was first learned (ms): an operator peer listed
+    /// without a key trusts the first key learned at its address only.
+    #[serde(default)]
+    pub learned_ms: u64,
 }
 
 /// One placed instance, as the controller knows it.
@@ -169,6 +173,9 @@ pub struct PlacementControlPlane {
     /// Handles of instances placed on Seeds.
     pub(super) seed_handles: tokio::sync::Mutex<BTreeMap<String, InstanceHandle>>,
     pub(super) cfg: PlaneConfig,
+    /// Where targets and placements are persisted (see `plane_state`).
+    pub(super) state_file: Option<std::path::PathBuf>,
+    pub(super) state_lock: Mutex<()>,
 }
 
 pub(super) fn now_ms() -> u64 {
@@ -202,6 +209,8 @@ impl PlacementControlPlane {
             seeds: RwLock::new(BTreeMap::new()),
             seed_handles: tokio::sync::Mutex::new(BTreeMap::new()),
             cfg: PlaneConfig::default(),
+            state_file: None,
+            state_lock: Mutex::new(()),
         }
     }
 
@@ -251,7 +260,29 @@ impl PlacementControlPlane {
             .unwrap_or_default()
     }
 
-    /// The verified facts the engine will see, with liveness.
+    /// Adapter routes each `workload-host` advertises, by node id.
+    fn advertised_routes(&self) -> BTreeMap<String, Vec<String>> {
+        self.hosts()
+            .into_iter()
+            .map(|a| {
+                let routes = a
+                    .metadata
+                    .get("routes")
+                    .map(|r| {
+                        r.split(',')
+                            .filter(|x| !x.is_empty())
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (a.node_id, routes)
+            })
+            .collect()
+    }
+
+    /// The verified facts the engine will see, with liveness. Runtimes a
+    /// node has no adapter route for are hidden (a node without a
+    /// `workload-host` advertisement offers none).
     pub fn view(&self) -> Vec<LiveNodeFacts> {
         let targets = self.targets.read().map(|t| t.clone()).unwrap_or_default();
         let contact = |id: &str| {
@@ -263,13 +294,19 @@ impl PlacementControlPlane {
                 }
             })
         };
-        placement_view(
+        let routes = self.advertised_routes();
+        let mut view = placement_view(
             &self.facts,
             now_ms() / 1000,
             None,
             self.membership.as_deref(),
             &contact,
-        )
+        );
+        for v in &mut view {
+            let r = routes.get(v.cached.node_id()).map(Vec::as_slice);
+            v.restrict_to_routes(r.unwrap_or(&[]));
+        }
+        view
     }
 
     /// One signed round trip to `addr`. `expect` is the target's key when
@@ -327,13 +364,27 @@ impl PlacementControlPlane {
 
     /// Learn (or refresh) the target at `addr`: signed `describe`, verify
     /// and cache its signed facts under `tier`, merge its advertisement.
-    /// Returns its node id.
+    /// Returns its node id. Whatever key answers is accepted (first use);
+    /// see [`Self::add_target_expecting`] to require a key.
     pub async fn add_target(&self, addr: &str, tier: FactsTier) -> Result<String, PlaneError> {
+        self.add_target_expecting(addr, tier, None).await
+    }
+
+    /// [`Self::add_target`], refusing any answer not signed by `expect`
+    /// when given. Trust is bound to the node key: an operator tier is only
+    /// ever given to the key the operator pinned, or to the key first seen
+    /// at that address, never to whoever answers there later.
+    pub async fn add_target_expecting(
+        &self,
+        addr: &str,
+        tier: FactsTier,
+        expect: Option<[u8; 32]>,
+    ) -> Result<String, PlaneError> {
         let (result, pk) = self
             .round_trip(Call {
                 addr,
                 target: ANY_TARGET,
-                expect: None,
+                expect,
                 method: method::DESCRIBE,
                 decision_id: None,
                 body: json!({}),
@@ -363,6 +414,7 @@ impl PlacementControlPlane {
             s.merge(adv);
         }
         if let Ok(mut t) = self.targets.write() {
+            let learned_ms = t.get(&node_id).map_or_else(now_ms, |e| e.learned_ms);
             t.insert(
                 node_id.clone(),
                 TargetInfo {
@@ -371,19 +423,26 @@ impl PlacementControlPlane {
                     tier,
                     public_key: crate::workload_pkg::codec::hex_encode(&pk),
                     reachable: true,
+                    learned_ms,
                 },
             );
         }
+        self.persist();
         Ok(node_id)
     }
 
-    /// Re-describe every known target; unreachable ones are marked so the
-    /// engine sees them as not alive.
-    /// A node whose address now answers as another node (it was replaced)
-    /// is marked unreachable too.
+    /// Re-describe every known target, requiring the key it was learned
+    /// with; unreachable ones are marked so the engine sees them as not
+    /// alive. A node whose address now answers with another key (it was
+    /// replaced, or someone else took the address) is marked unreachable
+    /// and the new key is not learned: it gets no tier until the operator
+    /// pins it (`OperatorPeer::key`).
     pub async fn refresh(&self) {
         for t in self.targets() {
-            let same = matches!(self.add_target(&t.addr, t.tier).await, Ok(id) if id == t.node_id);
+            let pk = crate::workload_pkg::codec::hex_decode_exact::<32>(&t.public_key);
+            let same = pk.is_some()
+                && matches!(self.add_target_expecting(&t.addr, t.tier, pk).await,
+                            Ok(id) if id == t.node_id);
             if !same
                 && let Ok(mut map) = self.targets.write()
                 && let Some(e) = map.get_mut(&t.node_id)

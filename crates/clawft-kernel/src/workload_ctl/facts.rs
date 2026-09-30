@@ -22,6 +22,45 @@ pub struct LiveNodeFacts {
     pub cached: CachedNodeFacts,
     /// Liveness from membership or the last direct contact.
     pub liveness: Liveness,
+    /// The capabilities the engine sees: the verified ones, less any
+    /// runtime the node's `workload-host` has no adapter route for.
+    caps: Vec<Capability>,
+}
+
+/// The adapter route a `runtime.*` capability needs on the target
+/// (`None` for capabilities that are not runtimes).
+fn route_for(cap: &Capability) -> Option<&'static [&'static str]> {
+    let id = cap.id.as_str();
+    if id == "runtime.native" || id.starts_with("runtime.native.") {
+        Some(&["native"])
+    } else if id == "runtime.container" || id.starts_with("runtime.container.") {
+        Some(&["container", "emulated"])
+    } else {
+        None
+    }
+}
+
+impl LiveNodeFacts {
+    /// Facts as verified, with `liveness`.
+    pub fn new(cached: CachedNodeFacts, liveness: Liveness) -> Self {
+        let caps = cached.capabilities().to_vec();
+        Self {
+            cached,
+            liveness,
+            caps,
+        }
+    }
+
+    /// Hide every runtime capability whose adapter route is not in
+    /// `routes` (the routes the node's `workload-host` advertises). A node
+    /// that probes a container engine but serves no container adapter is
+    /// then not offered a container variant it would always refuse.
+    pub fn restrict_to_routes(&mut self, routes: &[String]) {
+        self.caps.retain(|c| match route_for(c) {
+            None => true,
+            Some(need) => need.iter().any(|r| routes.iter().any(|x| x == r)),
+        });
+    }
 }
 
 /// Receiver-assigned facts tier as the engine's tier.
@@ -58,7 +97,7 @@ impl PlacementFacts for LiveNodeFacts {
     }
 
     fn capabilities(&self) -> &[Capability] {
-        self.cached.capabilities()
+        &self.caps
     }
 
     fn liveness(&self) -> Liveness {
@@ -102,7 +141,7 @@ pub fn placement_view(
             } else {
                 contact(&id).unwrap_or(Liveness::Unknown)
             };
-            LiveNodeFacts { cached, liveness }
+            LiveNodeFacts::new(cached, liveness)
         })
         .collect()
 }

@@ -10,6 +10,7 @@ use ed25519_dalek::SigningKey;
 
 use super::host_service::CtlConfig;
 use super::plane::PlacementControlPlane;
+use super::plane_peers::OperatorPeer;
 use super::plane_place::PlaceOrder;
 use super::test_support::*;
 use super::transport::MeshConnector;
@@ -64,7 +65,7 @@ async fn operator_peer_policy_is_reapplied_on_every_sync() {
 
     // Listed as paired: added and chosen.
     let failed = plane
-        .apply_operator_peers(&[(pi_addr.clone(), TrustTier::Paired)], &keep)
+        .apply_operator_peers(&[OperatorPeer::new(pi_addr.clone(), TrustTier::Paired)], &keep)
         .await;
     assert!(failed.is_empty());
     assert_eq!(tier_of(&plane, &pi.id), TrustTier::Paired);
@@ -84,14 +85,14 @@ async fn operator_peer_policy_is_reapplied_on_every_sync() {
 
     // Listed again as paired: raised and chosen again.
     plane
-        .apply_operator_peers(&[(pi_addr.clone(), TrustTier::Paired)], &keep)
+        .apply_operator_peers(&[OperatorPeer::new(pi_addr.clone(), TrustTier::Paired)], &keep)
         .await;
     assert_eq!(tier_of(&plane, &pi.id), TrustTier::Paired);
     assert_eq!(chosen(&plane, &pkg).await.as_deref(), Some(pi.id.as_str()));
 
     // Listed but lowered to discovered: demoted in place.
     plane
-        .apply_operator_peers(&[(pi_addr, TrustTier::Discovered)], &keep)
+        .apply_operator_peers(&[OperatorPeer::new(pi_addr, TrustTier::Discovered)], &keep)
         .await;
     assert_eq!(tier_of(&plane, &pi.id), TrustTier::Discovered);
     assert_ne!(chosen(&plane, &pkg).await.as_deref(), Some(pi.id.as_str()));
@@ -116,8 +117,8 @@ async fn a_discovered_peer_later_listed_as_paired_is_raised_and_unreachable_ones
     let failed = plane
         .apply_operator_peers(
             &[
-                (pi_addr, TrustTier::Paired),
-                ("mem://gone".into(), TrustTier::Paired),
+                OperatorPeer::new(pi_addr, TrustTier::Paired),
+                OperatorPeer::new("mem://gone", TrustTier::Paired),
             ],
             &[],
         )
@@ -126,4 +127,89 @@ async fn a_discovered_peer_later_listed_as_paired_is_raised_and_unreachable_ones
     assert_eq!(chosen(&plane, &pkg).await.as_deref(), Some(pi.id.as_str()));
     assert_eq!(failed.len(), 1);
     assert_eq!(failed[0].0, "mem://gone");
+}
+
+fn known(plane: &PlacementControlPlane, id: &str) -> Option<TrustTier> {
+    plane
+        .targets()
+        .into_iter()
+        .find(|t| t.node_id == id)
+        .map(|t| t.tier)
+}
+
+/// Review round 3 (high): trust was bound to the address. A different key
+/// answering at a listed address must never inherit the listed tier.
+#[tokio::test]
+async fn another_key_at_a_listed_address_never_inherits_its_tier() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = package(tmp.path(), "peers-cog", SCRIPT, &[arch()]);
+    let key = SigningKey::from_bytes(&[25; 32]);
+    let pi = host_node(26, board_caps("pi5"), true, &key);
+    let imposter = host_node(27, board_caps("pi5"), true, &key);
+    let conn = Arc::new(MeshConnector::new(false));
+    let addr = conn.register_local("pi5", pi.svc.clone());
+    let (plane, _chain) = controller(&key, conn.clone());
+    let peers = [OperatorPeer::new(addr.clone(), TrustTier::Pinned)];
+    assert!(plane.apply_operator_peers(&peers, &[]).await.is_empty());
+    assert_eq!(known(&plane, &pi.id), Some(TrustTier::Pinned));
+
+    // Another host with a fresh key takes the address (DHCP reuse, mDNS
+    // spoof, reflashed board).
+    conn.register_local("pi5", imposter.svc.clone());
+    for _ in 0..2 {
+        plane.refresh().await;
+        plane.apply_operator_peers(&peers, &[]).await;
+    }
+    assert_eq!(known(&plane, &imposter.id), None, "never learned at all");
+    assert!(
+        plane
+            .view()
+            .iter()
+            .all(|v| clawft_types::placement::engine::PlacementFacts::node_id(v) != imposter.id)
+    );
+    assert_ne!(
+        chosen(&plane, &pkg).await.as_deref(),
+        Some(imposter.id.as_str())
+    );
+    // A request naming the address directly gets it only as discovered.
+    plane
+        .add_target(&addr, TrustTier::Discovered)
+        .await
+        .unwrap();
+    plane.apply_operator_peers(&peers, &[]).await;
+    assert_eq!(known(&plane, &imposter.id), Some(TrustTier::Discovered));
+    assert_eq!(chosen(&plane, &pkg).await, None);
+}
+
+/// A key pinned in the peer list gets the tier only for that key; the
+/// node previously known at the address is demoted.
+#[tokio::test]
+async fn a_pinned_key_gets_the_tier_and_the_old_key_at_the_address_is_demoted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = package(tmp.path(), "peers-cog", SCRIPT, &[arch()]);
+    let key = SigningKey::from_bytes(&[28; 32]);
+    let old = host_node(29, board_caps("pi5"), true, &key);
+    let new = host_node(30, board_caps("pi5"), true, &key);
+    let new_pk = SigningKey::from_bytes(&[30; 32]).verifying_key().to_bytes();
+    let conn = Arc::new(MeshConnector::new(false));
+    let addr = conn.register_local("pi5", old.svc.clone());
+    let (plane, _chain) = controller(&key, conn.clone());
+    plane
+        .apply_operator_peers(&[OperatorPeer::new(addr.clone(), TrustTier::Paired)], &[])
+        .await;
+    assert_eq!(known(&plane, &old.id), Some(TrustTier::Paired));
+
+    // Pinned to the new key while the old one still answers: refused.
+    let pinned = [OperatorPeer::new(addr.clone(), TrustTier::Paired).with_key(new_pk)];
+    let failed = plane.apply_operator_peers(&pinned, &[]).await;
+    assert_eq!(failed.len(), 1, "the old key's answer is refused");
+    assert_eq!(known(&plane, &old.id), Some(TrustTier::Discovered));
+    assert_eq!(known(&plane, &new.id), None);
+
+    // The reflashed board answers with the pinned key: learned and chosen.
+    conn.register_local("pi5", new.svc.clone());
+    assert!(plane.apply_operator_peers(&pinned, &[]).await.is_empty());
+    assert_eq!(known(&plane, &new.id), Some(TrustTier::Paired));
+    assert_eq!(known(&plane, &old.id), Some(TrustTier::Discovered));
+    assert_eq!(chosen(&plane, &pkg).await.as_deref(), Some(new.id.as_str()));
 }

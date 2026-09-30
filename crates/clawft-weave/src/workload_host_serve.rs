@@ -27,7 +27,11 @@ use clawft_kernel::workload_ctl::{FactsSource, WorkloadHostService, listen_tcp, 
 use clawft_kernel::workload_governance::{NodeTrustTier, WorkloadGate};
 use clawft_kernel::workload_pkg::TrustAnchors;
 use clawft_kernel::workload_pkg::codec::hex_decode_exact;
-use clawft_kernel::workload_runtime::{NativeConfig, NativeRuntime, WorkloadHost};
+use clawft_kernel::workload_runtime::{
+    ContainerRuntimeConfig, NativeConfig, NativeRuntime, WorkloadHost,
+};
+
+use crate::workload_place_policy::container_host;
 use ed25519_dalek::SigningKey;
 use serde::Deserialize;
 
@@ -125,10 +129,15 @@ pub struct HostParts<'a> {
     pub facts: FactsSource,
     /// Serving config (adds remote controllers and the advertised address).
     pub serving: Option<&'a HostConfig>,
+    /// Container adapter (`workload-container.json`); none serves native only.
+    pub container: Option<ContainerRuntimeConfig>,
 }
 
-/// This node's `workload-host`: the native adapter under this node's
-/// governance, answering this node and the configured controllers.
+/// This node's `workload-host`: the native adapter (and the container
+/// adapter when the operator configured one) under this node's governance,
+/// answering this node and the configured controllers. Its advertisement
+/// lists exactly these routes, so controllers never offer it a runtime it
+/// has no adapter for.
 pub fn local_host(p: HostParts<'_>) -> Result<WorkloadHostService, String> {
     let pk = p.key.verifying_key().to_bytes();
     let id = clawft_kernel::node_id_from_pubkey(&pk);
@@ -140,10 +149,13 @@ pub fn local_host(p: HostParts<'_>) -> Result<WorkloadHostService, String> {
     let host = WorkloadHost::new(
         Arc::new(native),
         p.gate.clone(),
-        id,
+        id.clone(),
         NodeTrustTier::Pinned,
     )
     .with_chain(p.chain.clone());
+    let container = p
+        .container
+        .map(|cfg| container_host(cfg, p.gate.clone(), &id, p.chain));
     let mut controllers = vec![pk];
     if let Some(cfg) = p.serving {
         controllers.extend(cfg.validate()?);
@@ -153,6 +165,11 @@ pub fn local_host(p: HostParts<'_>) -> Result<WorkloadHostService, String> {
         .with_controllers(controllers)
         .with_chain(p.chain.clone())
         .with_facts_source(p.facts);
+    if let Some((h, routes)) = container {
+        for r in routes {
+            svc = svc.with_route(r, h.clone());
+        }
+    }
     if let Some(cfg) = p.serving {
         svc = svc.with_address(cfg.advertised());
     }

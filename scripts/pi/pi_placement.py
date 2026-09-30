@@ -16,8 +16,12 @@ The Mac places the released anomaly-detect cog: explain shows why the Pi
 wins, the package is fetched from the Mac over the placement connection,
 admitted by the Pi daemon's native adapter and run against a synthetic
 feed. A package whose `aarch64` binary is really x86-64 is then refused by
-the Pi adapter's admission self-check and retried on the next candidate,
-and pinning the Mac is refused; all of it chained on both daemons. Pure
+the Pi adapter's admission self-check and retried on the next candidate
+(the Mac's Docker adapter with `--mac-container`, whose own self-check
+refuses it too); pinning the Mac runs the cog in that container, or, without
+a container adapter, is refused by the engine (the Mac is never offered a
+runtime it has no adapter for). The Pi's paired tier is bound to its node
+key once learned. All of it is chained on both daemons. Pure
 helpers are in pi_plan (Pi side) and pi_ctl_plan (Mac side).
 """
 import json
@@ -53,6 +57,22 @@ def build_mac(run):
             raise SystemExit("test-pi: Mac build failed (rc %d)" % rc)
 
 
+def docker_env(run):
+    """(docker CLI dir, DOCKER_HOST of the current context) for the Mac
+    daemon's container adapter."""
+    cli = shutil.which("docker")
+    if not cli:
+        raise SystemExit("test-pi: --mac-container needs the docker CLI")
+    rc, host = run(["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
+                   capture="stdout", timeout=30)
+    host = (host or "").strip()
+    if run.dry_run:
+        host = host or "unix:///var/run/docker.sock"
+    if rc != 0 or not host.startswith("unix://"):
+        raise SystemExit("test-pi: could not read the docker context endpoint")
+    return os.path.dirname(cli), host
+
+
 def _pid(rc, out, what):
     pid = (out or "").strip().splitlines()[-1:] or ["0"]
     if rc != 0 or not pid[0].isdigit():
@@ -63,14 +83,15 @@ def _pid(rc, out, what):
 class MacController:
     """The isolated Mac weaver daemon and its CLI."""
 
-    def __init__(self, run, work):
-        self.run, self.work, self.proc = run, work, None
+    def __init__(self, run, work, docker=None):
+        self.run, self.work, self.proc, self.docker = run, work, None, docker
+        self.containers = []   # instances placed in this Mac's Docker adapter
         for d in ("home", "runtime", "tmp"):
             os.makedirs(os.path.join(work, d), exist_ok=True)
         self.runtime = os.path.join(work, "runtime")
 
     def cli(self, *argv, timeout=300):
-        rc, out = self.run(ctl.env_cmd(self.work, [MAC_WEAVER] + list(argv)),
+        rc, out = self.run(ctl.env_cmd(self.work, [MAC_WEAVER] + list(argv), self.docker),
                            capture="stdout", timeout=timeout)
         return rc, out or ""
 
@@ -79,7 +100,7 @@ class MacController:
         return rc, ctl.load_json(out) or {}
 
     def start(self):
-        cmd = ctl.env_cmd(self.work, [MAC_WEAVER, "kernel", "start", "--foreground"])
+        cmd = ctl.env_cmd(self.work, [MAC_WEAVER, "kernel", "start", "--foreground"], self.docker)
         self.proc = self.run.spawn(cmd, os.path.join(self.runtime, "mac.log"), self.runtime)
 
     def wait_ready(self, pi_node, secs=120):
@@ -90,6 +111,12 @@ class MacController:
                 return me or "n-000000"
             time.sleep(1)
         return None
+
+    def remove_containers(self):
+        """Backstop: containers this run placed on the Mac are removed."""
+        for iid in self.containers:
+            self.run(["docker", "rm", "-f", ctl.container_name(iid)], capture="quiet", timeout=60)
+        self.containers = []
 
     def stop(self):
         if self.proc is not None:
@@ -122,10 +149,33 @@ def _keys_and_policy(lane, mac, work):
     if not lane.run.dry_run:
         for f in ("workload-trust.json", "workload-permits.json"):
             shutil.copy(os.path.join(policy, f), mac.runtime)
-        peers = ctl.peers_json(plan.ssh_hostname(lane.host), plan.PLACEMENT_PORT)
-        with open(os.path.join(mac.runtime, "workload-peers.json"), "w") as f:
-            json.dump(peers, f)
+        write_peers(lane, mac)
+        if lane.a.mac_container:
+            with open(os.path.join(mac.runtime, "workload-container.json"), "w") as f:
+                json.dump(ctl.container_json(lane.a.mac_container), f)
     return hexkey, policy
+
+
+def write_peers(lane, mac, key=None):
+    """The Mac's workload-peers.json (the Pi paired; bound to `key` once known)."""
+    peers = ctl.peers_json(plan.ssh_hostname(lane.host), plan.PLACEMENT_PORT, key)
+    with open(os.path.join(mac.runtime, "workload-peers.json"), "w") as f:
+        json.dump(peers, f)
+
+
+def pin_pi_key(lane, mac, pi_node):
+    """Bind the Pi's paired tier to the key the Mac learned for it (first
+    use), then check the daemon still pairs it under that key."""
+    _, st = mac.json("workload", "status", "--json", timeout=60)
+    key = ctl.pi_key(st, pi_node)
+    if lane.run.dry_run:
+        return True
+    if not key:
+        return False
+    write_peers(lane, mac, key)
+    _, st = mac.json("workload", "status", "--json", timeout=60)
+    print("  INFO  the Pi's paired tier is now bound to its node key")
+    return ctl.mac_ready(st, pi_node) is not None
 
 
 def _pack(mac, work, key, name, binary):
@@ -170,6 +220,14 @@ def _drive(mac, work, key, cog_bin, pi_node, mac_node):
     print((r["bad"].get("explain") or "").rstrip())
     print("── weaver workload place --pin <this Mac>")
     r["pin_rc"], r["pin"] = mac.json("workload", "place", pkg, "--pin", mac_node, *run)
+    print((r["pin"].get("explain") or "").rstrip())
+    mid = (r["pin"].get("placed") or {}).get("instance_id")
+    if mid:   # the Mac's container adapter ran it
+        mac.containers.append(mid)
+        time.sleep(0 if mac.run.dry_run else RUN_SECS)
+        _, r["pin_status"] = mac.json("workload", "status", mid, "--json")
+        mac.cli("workload", "stop", mid)
+        mac.cli("workload", "unload", mid)
     rc, out = mac.cli("chain", "export", "--format", "json")
     try:
         r["mac_chain"] = json.loads(out) if rc == 0 else None
@@ -183,7 +241,7 @@ def run_placement(lane, cog_bin):
     run, s = lane.run, lane.scratch
     weaver = s + "/bin/weaver"
     work = tempfile.mkdtemp(prefix="wfp-")
-    mac = MacController(run, work)
+    mac = MacController(run, work, docker_env(run) if lane.a.mac_container else None)
     lane.mac_controller = mac
     try:
         if not ctl.socket_fits(work):
@@ -212,14 +270,16 @@ def run_placement(lane, cog_bin):
         if not mac_node:
             raise SystemExit("test-pi: the Mac weaver daemon never saw the Pi as a paired target")
         print("  INFO  Mac weaver daemon %s lists the Pi as paired" % mac_node)
+        key_pinned = pin_pi_key(lane, mac, pi_node)
         r = _drive(mac, work, key, cog_bin, pi_node, mac_node)
+        r["peer_key_pinned"] = key_pinned
         mac.stop()
         rc, out = lane.ssh(plan.weaver_stop_command(s, weaver, lane.placement_pid, lane.feed_pid),
                            capture="stdout", timeout=90)
         lane.placement_pid = lane.feed_pid = None
         log, r["pi_chain"] = plan.split_node_output(out)
         print("── Pi weaver daemon log (tail)\n" + "\n".join(log.strip().splitlines()[-25:]))
-        ok, why = ctl.judge(r, pi_node, mac_node)
+        ok, why = ctl.judge(r, pi_node, mac_node, bool(lane.a.mac_container))
         if run.dry_run:
             ok, why = True, []
         for w in why:
@@ -230,13 +290,15 @@ def run_placement(lane, cog_bin):
         print("  %s  placement mac weaver -> pi5 weaver (%d Pi chain events)" % (
             "PASS" if ok else "FAIL", len(r["pi_chain"] or [])))
         if lane.a.placement_evidence and not run.dry_run:
-            write_evidence(lane.a.placement_evidence, r, ok, served, pi_node, mac_node)
+            write_evidence(lane.a.placement_evidence, r, ok, served, pi_node, mac_node,
+                           bool(lane.a.mac_container))
     finally:
         mac.stop()
+        mac.remove_containers()
         shutil.rmtree(work, ignore_errors=True)
 
 
-def write_evidence(path, r, ok, served, pi_node, mac_node):
+def write_evidence(path, r, ok, served, pi_node, mac_node, mac_container=False):
     """Committed evidence: decisions, explains, attempts and chain kinds only,
     refused if anything address-like or path-like slipped in."""
     pick = lambda d: {k: (d or {}).get(k) for k in ("explain", "attempts", "placed")}
@@ -244,7 +306,9 @@ def write_evidence(path, r, ok, served, pi_node, mac_node):
         "card": "mesh-placement-12",
         "ok": ok,
         "controller": {"runtime": "weaver daemon (isolated) via `weaver workload` CLI",
-                       "node": mac_node},
+                       "node": mac_node,
+                       "adapters": ["native", "container (docker)"] if mac_container else ["native"]},
+        "pi_peer_bound_to_key": bool(r.get("peer_key_pinned")),
         "pi_node": {"runtime": "weaver daemon (isolated)", "node": pi_node,
                     "workload_host_served_on": served},
         "explain": (r.get("explain") or {}).get("explain"),
@@ -253,6 +317,7 @@ def write_evidence(path, r, ok, served, pi_node, mac_node):
                 "reports": r.get("reports"), "first_report": r.get("first_report")},
         "admission_mismatch": pick(r.get("bad")),
         "pin_mac": pick(r.get("pin")),
+        "pin_mac_run": ((r.get("pin_status") or {}).get("status") or {}).get("state"),
         "controller_chain": ctl.chain_rows(r.get("mac_chain")),
         "pi_chain": ctl.chain_rows(r.get("pi_chain")),
     }

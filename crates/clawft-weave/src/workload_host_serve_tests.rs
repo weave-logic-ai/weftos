@@ -88,6 +88,7 @@ async fn served_daemon(controller: &SigningKey) -> Daemon {
         anchors: anchors(controller),
         facts: source,
         serving: Some(&serving),
+        container: None,
     })
     .unwrap();
     let bound = serve(&serving, Arc::new(svc)).await.unwrap();

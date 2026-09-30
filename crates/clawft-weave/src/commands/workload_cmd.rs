@@ -70,6 +70,20 @@ pub fn render_table(rows: &[Value]) -> String {
     out
 }
 
+/// `weaver workload list`: the node-local catalog, then the instances this
+/// node's control plane placed (anywhere in the mesh), when it has one.
+pub fn render_list(catalog: &[Value], placed: Option<&Value>) -> String {
+    let mut out = render_table(catalog);
+    #[cfg(all(feature = "placement", unix))]
+    if let Some(p) = placed {
+        out.push('\n');
+        out.push_str(&super::workload_place_cmd::render_placements(p));
+    }
+    #[cfg(not(all(feature = "placement", unix)))]
+    let _ = placed;
+    out
+}
+
 /// Run a `weaver workload` subcommand against the daemon.
 pub async fn run(args: WorkloadArgs) -> anyhow::Result<()> {
     #[cfg(all(feature = "ecc", feature = "exochain"))]
@@ -89,20 +103,22 @@ pub async fn run(args: WorkloadArgs) -> anyhow::Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
-                print!("{}", render_table(result.as_array().map(Vec::as_slice).unwrap_or(&[])));
                 // Placed instances (mesh-placement-12), when the daemon has a
                 // placement control plane.
+                #[allow(unused_mut)]
+                let mut placed: Option<Value> = None;
                 #[cfg(all(feature = "placement", unix))]
                 if let Ok(r) = client
                     .call(Request::with_params("workload.status", serde_json::json!({})))
                     .await
                     && r.ok
                 {
-                    print!(
-                        "\n{}",
-                        super::workload_place_cmd::render_placements(&r.result.unwrap_or_default())
-                    );
+                    placed = r.result;
                 }
+                print!(
+                    "{}",
+                    render_list(result.as_array().map(Vec::as_slice).unwrap_or(&[]), placed.as_ref())
+                );
             }
         }
         WorkloadCommand::Inspect { name } => {
@@ -152,5 +168,19 @@ mod tests {
         assert!(t.starts_with("NAME"));
         assert!(t.contains("anomaly-detect"));
         assert!(t.contains("sha256:0123456789ab\n"));
+    }
+
+    /// Review round 3: `list` must show instances placed on other nodes.
+    #[cfg(all(feature = "placement", unix))]
+    #[test]
+    fn list_shows_placed_instances_after_the_catalog() {
+        let placed = serde_json::json!({"instances": [
+            {"placement": {"instance_id": "cog-a1", "node_id": "n-pi5", "variant": "aarch64-native"},
+             "status": {"Ok": {"status": {"state": "running"}}}}]});
+        let out = render_list(&[], Some(&placed));
+        assert!(out.starts_with("No workloads installed\n"));
+        let row = out.lines().find(|l| l.starts_with("cog-a1")).expect("placed row");
+        assert!(row.contains("n-pi5") && row.contains("running"), "{out}");
+        assert!(!render_list(&[], None).contains("cog-a1"));
     }
 }

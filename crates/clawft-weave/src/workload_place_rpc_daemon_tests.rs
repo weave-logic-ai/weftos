@@ -6,6 +6,11 @@
 //! every call, placement on the remote node, and revocation by editing the
 //! peers file without a restart.
 //!
+//! Review round 3 adds, on the same path: peer trust bound to the node key,
+//! no container variant for a node without a container adapter, the
+//! persisted placement state, and a Seed on its operator-assigned node id
+//! (`workload-seeds.json`, `workload.place {store_pin}`).
+//!
 //! This is the only test that initialises the module's process-wide state.
 
 use std::path::Path;
@@ -15,7 +20,10 @@ use clawft_kernel::Kernel;
 use clawft_kernel::chain::ChainManager;
 use clawft_kernel::node_facts_advert::sign_node_facts;
 use clawft_kernel::workload_ctl::{WorkloadHostService, listen_tcp, serve_listener};
-use clawft_kernel::workload_governance::{NetworkPolicy, NodeTrustTier, WorkloadPermitRule};
+use clawft_kernel::workload_ctl::OperatorPeer;
+use clawft_kernel::workload_governance::{
+    NetworkPolicy, NodeTrustTier, PackageTrust, WorkloadPermitRule,
+};
 use clawft_kernel::workload_pkg::codec::hex_encode;
 use clawft_kernel::workload_pkg::key_id_for;
 use clawft_kernel::workload_runtime::native::host_arch;
@@ -29,6 +37,7 @@ use tokio::sync::RwLock;
 
 use super::tests::{anchors, cap, exchange, gate, package};
 use super::*;
+use crate::workload_place_policy::SEEDS_FILE;
 
 fn native_caps(os: &str, class: &str) -> Vec<Capability> {
     let arch = host_arch().unwrap();
@@ -83,6 +92,63 @@ async fn board(
     (id, addr, chain)
 }
 
+/// A stand-in Cognitum Seed HTTP API (`fall-detect` 1.0.0 installed,
+/// stopped). Returns its base URL and the count of `start` calls.
+async fn fake_seed() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let n = starts.clone();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            let mut buf = vec![0u8; 8192];
+            let len = s.read(&mut buf).await.unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..len]).to_string();
+            let line = req.lines().next().unwrap_or("").to_string();
+            let (code, body) = if line.starts_with("GET /api/v1/apps/available") {
+                (200, json!({"cogs": [{"id": "fall-detect", "version": "1.0.0"}]}))
+            } else if line.starts_with("GET /api/v1/apps ") {
+                (200, json!({"installed": [{"id": "fall-detect", "version": "1.0.0", "running": false}]}))
+            } else if line.starts_with("POST /api/v1/apps/fall-detect/start") {
+                n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                (200, json!({"ok": true}))
+            } else {
+                (404, json!({"error": "not found"}))
+            };
+            let b = body.to_string();
+            let resp = format!(
+                "HTTP/1.1 {code} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{b}",
+                b.len()
+            );
+            let _ = s.write_all(resp.as_bytes()).await;
+        }
+    });
+    (url, starts)
+}
+
+fn seed_token(runtime: &Path, node: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let d = runtime.join("secrets/workload.seed");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::set_permissions(runtime.join("secrets"), std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let f = d.join(format!("{node}.token"));
+    std::fs::write(&f, "seed-token-0123456789abcdef").unwrap();
+    std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+fn placed_ids(runtime: &Path) -> Vec<String> {
+    let v: Value =
+        serde_json::from_slice(&std::fs::read(runtime.join(STATE_FILE)).unwrap()).unwrap();
+    v["placements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["instance_id"].as_str().unwrap().to_string())
+        .collect()
+}
+
 fn write(dir: &Path, name: &str, v: &Value) {
     std::fs::write(dir.join(name), serde_json::to_vec(v).unwrap()).unwrap();
 }
@@ -130,7 +196,15 @@ async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
         .cluster_membership()
         .facts()
         .insert(
-            signed_facts(&node_key, native_caps("macos", "dev-mac")),
+            signed_facts(&node_key, {
+                // As the macOS probe reports it with Docker installed.
+                let mut c = native_caps("macos", "dev-mac");
+                c.push(cap("runtime.container.docker").with_attr(
+                    "arches_native",
+                    AttrValue::List(vec![AttrValue::from(host_arch().unwrap())]),
+                ));
+                c
+            }),
             TrustTier::Pinned,
             chrono::Utc::now().timestamp() as u64,
         )
@@ -140,7 +214,18 @@ async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
     // Operator policy, as an operator writes it into the runtime dir.
     let mut permit = WorkloadPermitRule::new("operator-cog", ["workload.*"], ["cog"]);
     permit.max_network = NetworkPolicy::Egress;
-    write(&runtime, PERMITS_FILE, &json!([permit]));
+    let mut seed_permit = WorkloadPermitRule::new("operator-seed", ["workload.*"], ["cog"]);
+    seed_permit.min_package_trust = PackageTrust::OperatorAttested;
+    seed_permit.max_network = NetworkPolicy::Egress;
+    write(&runtime, PERMITS_FILE, &json!([permit, seed_permit]));
+    let (seed_url, seed_starts) = fake_seed().await;
+    write(
+        &runtime,
+        SEEDS_FILE,
+        &json!([{ "node_id": "seed-lab", "url": seed_url, "tier": "paired",
+                  "pins": [{ "id": "fall-detect", "version": "1.0.0" }] }]),
+    );
+    seed_token(&runtime, "seed-lab");
     let spk = signer.verifying_key().to_bytes();
     write(
         &runtime,
@@ -163,9 +248,24 @@ async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
     let explain = v["explain"].as_str().unwrap();
     assert!(explain.contains(&format!("PLACED on {pi}")), "{explain}");
     assert!(explain.contains(&me), "the Mac was considered: {explain}");
+    // The Mac probes Docker but serves no container adapter (no
+    // workload-container.json): it is not offered a container variant.
+    assert!(!explain.contains(&format!("{me} eligible via")), "{explain}");
     let st = call(&kernel, "workload.status", json!({})).await.unwrap();
     assert_eq!(tier_of(&st, &pi), "paired");
     assert_eq!(tier_of(&st, &me), "pinned");
+    assert_eq!(st["workload_host"]["metadata"]["routes"], "native");
+
+    // Trust is bound to the key: the peer listed for another key loses
+    // its tier, and the listed key is not learned (nobody holds it here).
+    let other = hex_encode(&SigningKey::from_bytes(&[8; 32]).verifying_key().to_bytes());
+    write(&runtime, PEERS_FILE, &json!([{ "addr": pi_addr, "tier": "paired", "key": other }]));
+    let st = call(&kernel, "workload.status", json!({})).await.unwrap();
+    assert_eq!(tier_of(&st, &pi), "discovered");
+    let pi_key = hex_encode(&SigningKey::from_bytes(&[7; 32]).verifying_key().to_bytes());
+    write(&runtime, PEERS_FILE, &json!([{ "addr": pi_addr, "tier": "paired", "key": pi_key }]));
+    let st = call(&kernel, "workload.status", json!({})).await.unwrap();
+    assert_eq!(tier_of(&st, &pi), "paired");
 
     // The operator drops the peer: revoked on the next call, no restart.
     write(&runtime, PEERS_FILE, &json!([]));
@@ -210,6 +310,7 @@ async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
         .await
         .unwrap();
     assert_eq!(st["status"]["state"], "running");
+    assert_eq!(placed_ids(&runtime), vec![iid.clone()], "persisted");
     assert!(
         pi_chain
             .tail(pi_chain.len())
@@ -223,6 +324,28 @@ async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
     call(&kernel, "workload.unload", json!({ "instance_id": iid }))
         .await
         .unwrap();
+    assert!(placed_ids(&runtime).is_empty(), "the unload is persisted");
+
+    // A Seed on its operator-assigned node id, through the daemon.
+    let pin = json!({ "store_pin": { "node_id": "seed-lab", "id": "fall-detect",
+                                     "version": "1.0.0", "mode": "interval" } });
+    let v = call(&kernel, "workload.place", pin).await.unwrap();
+    assert_eq!(v["route"], "remote.api");
+    assert_eq!(v["placed"]["node_id"], "seed-lab");
+    assert_eq!(seed_starts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let st = call(&kernel, "workload.status", json!({})).await.unwrap();
+    assert!(
+        st["instances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["placement"]["node_id"] == "seed-lab"),
+        "{st}"
+    );
+    let unknown = json!({ "store_pin": { "node_id": "seed-nowhere", "id": "fall-detect",
+                                         "version": "1.0.0" } });
+    let e = call(&kernel, "workload.place", unknown).await.unwrap_err();
+    assert!(e.contains("no Seed adapter"), "{e}");
 }
 
 #[test]
@@ -247,8 +370,50 @@ fn peer_entries_are_validated_at_the_boundary() {
     assert_eq!(
         load_peers(dir.path()).unwrap(),
         vec![
-            ("h:1".to_string(), TrustTier::Paired),
-            ("[::1]:2".to_string(), TrustTier::Discovered)
+            OperatorPeer::new("h:1", TrustTier::Paired),
+            OperatorPeer::new("[::1]:2", TrustTier::Discovered)
         ]
     );
+    let k = [9u8; 32];
+    write(dir.path(), PEERS_FILE, &json!([{ "addr": "h:1", "key": hex_encode(&k) }]));
+    assert_eq!(
+        load_peers(dir.path()).unwrap(),
+        vec![OperatorPeer::new("h:1", TrustTier::Paired).with_key(k)]
+    );
+    write(dir.path(), PEERS_FILE, &json!([{ "addr": "h:1", "key": "abc" }]));
+    assert!(load_peers(dir.path()).is_err());
+}
+
+#[test]
+fn container_and_seed_files_are_validated_at_the_boundary() {
+    use crate::workload_place_policy::{CONTAINER_FILE, load_container};
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("w");
+    assert!(load_container(dir.path(), &work).unwrap().is_none());
+    let digest = format!("debian@sha256:{}", "a".repeat(64));
+    for bad in [
+        json!({ "engine": "lxc", "base_image": digest }),
+        json!({ "engine": "docker", "base_image": "debian:latest" }),
+        json!({ "engine": "docker", "base_image": digest, "arches_native": ["mips"] }),
+        json!({ "engine": "docker", "base_image": digest, "extra": 1 }),
+    ] {
+        write(dir.path(), CONTAINER_FILE, &bad);
+        assert!(load_container(dir.path(), &work).is_err(), "{bad}");
+    }
+    write(dir.path(), CONTAINER_FILE, &json!({ "engine": "docker", "base_image": digest }));
+    let cfg = load_container(dir.path(), &work).unwrap().unwrap();
+    assert_eq!(cfg.arches_native, vec!["aarch64".to_string()]);
+    assert!(!cfg.allow_emulated);
+
+    let chain = Arc::new(ChainManager::new(0, 10));
+    let g = gate(&chain);
+    for bad in [
+        json!([{ "node_id": "bad id", "url": "http://s:1", "pins": [] }]),
+        json!([{ "node_id": "s", "url": "ftp://s", "pins": [] }]),
+        json!([{ "node_id": "s", "url": "http://s:1", "tls_sha256": "sha256:00", "pins": [] }]),
+        json!([{ "node_id": "s", "url": "http://s:1", "pins": [{ "id": "x", "version": "" }] }]),
+    ] {
+        write(dir.path(), SEEDS_FILE, &bad);
+        assert!(crate::workload_place_policy::load_seeds(dir.path(), g.clone(), &chain).is_err(), "{bad}");
+    }
 }

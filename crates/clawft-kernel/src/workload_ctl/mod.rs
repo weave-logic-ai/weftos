@@ -30,7 +30,8 @@ pub mod plane_peers;
 pub mod plane_place;
 mod plane_reconcile;
 pub mod plane_seed;
-pub mod refusal_budget;
+mod plane_state;
+pub use crate::refusal_budget;
 pub mod session;
 pub mod transport;
 
@@ -47,6 +48,8 @@ mod tests_reconcile;
 #[cfg(test)]
 mod tests_seed;
 #[cfg(test)]
+mod tests_state;
+#[cfg(test)]
 mod tests_two_node;
 
 pub use cog_kind::cog_workload_spec;
@@ -59,6 +62,7 @@ pub use plane::{
     CallFailure, PLANE_CHAIN_SOURCE, PlacementControlPlane, PlacementRecord, PlaneConfig,
     PlaneError, TargetInfo,
 };
+pub use plane_peers::OperatorPeer;
 pub use plane_place::{Attempt, PlaceOrder, PlaceReport, render};
 pub use plane_seed::{SEED_ROUTE, StorePinOrder};
 pub use refusal_budget::RefusalBudget;

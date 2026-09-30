@@ -5,20 +5,11 @@
 //!
 //! The daemon is the controller. It signs with its node key
 //! (`<runtime>/node.key`), chains every decision on the kernel chain, and
-//! reads operator policy from the runtime directory:
-//!
-//! - `workload-permits.json`: `[WorkloadPermitRule, ...]`; missing means no
-//!   permits, so every `workload.*` action is denied (default deny);
-//! - `workload-trust.json`: a `weftos.workload-trust.v1` trust file with the
-//!   operator-pinned package signers; missing means only the compiled-in
-//!   WeftOS signer set (so operator-signed packages are refused);
-//! - `workload-peers.json`: `[{"addr": "host:port", "tier": "paired"}]`,
-//!   the `workload-host`s this daemon may place on, with the trust tier the
-//!   operator assigns (a request can name more `peers`; they are only ever
-//!   `discovered`). Read on every call: a peer removed or lowered here is
-//!   demoted to `discovered` at once;
-//! - `workload-host.json`: serve this node's `workload-host` to other
-//!   controllers (see `workload_host_serve`).
+//! reads operator policy from the runtime directory (see
+//! `workload_place_policy`: permits, trust, peers bound to node keys, the
+//! optional container adapter and Seeds). Known targets and placements are
+//! persisted in `workload-placements.json`, so instances stay manageable
+//! across a daemon restart.
 //!
 //! This node is a candidate too, through its own `workload-host` (native
 //! adapter, the node's re-probed signed facts), in process.
@@ -33,10 +24,10 @@ use clawft_kernel::chain::ChainManager;
 use clawft_kernel::mesh_artifact::{ArtifactExchange, ExchangeConfig};
 use clawft_kernel::workload_ctl::msg::method;
 use clawft_kernel::workload_ctl::{
-    CtlConfig, FactsSource, MeshConnector, PlaceOrder, PlacementControlPlane, WorkloadHostService,
+    CtlConfig, FactsSource, MeshConnector, PlaceOrder, PlacementControlPlane, StorePinOrder,
+    WorkloadHostService,
 };
-use clawft_kernel::workload_governance::{WorkloadGate, WorkloadPermitRule};
-use clawft_kernel::workload_pkg::TrustAnchors;
+use clawft_kernel::workload_governance::WorkloadGate;
 use clawft_kernel::workload_runtime::RunMode;
 use clawft_platform::NativePlatform;
 use clawft_rpc::Response;
@@ -47,6 +38,10 @@ use serde_json::{Value, json};
 use tokio::sync::{OnceCell, RwLock};
 
 use crate::workload_host_serve::{HostParts, load_host_config, local_host, serve};
+pub use crate::workload_place_policy::{
+    PEERS_FILE, PERMITS_FILE, STATE_FILE, TRUST_FILE, load_anchors, load_peers, load_permits,
+};
+use crate::workload_place_policy::{load_container, load_seeds};
 
 /// Methods served here (the rest of `workload.*` is in `workload_rpc`).
 pub const METHODS: &[&str] = &[
@@ -56,14 +51,6 @@ pub const METHODS: &[&str] = &[
     "workload.stop",
     "workload.logs",
 ];
-
-/// Permit file under the runtime dir.
-pub const PERMITS_FILE: &str = "workload-permits.json";
-/// Trust file under the runtime dir.
-pub const TRUST_FILE: &str = "workload-trust.json";
-/// Peers file under the runtime dir.
-pub const PEERS_FILE: &str = "workload-peers.json";
-const MAX_POLICY_BYTES: u64 = 256 * 1024;
 
 struct Boot {
     key: SigningKey,
@@ -87,69 +74,6 @@ pub fn init(key: SigningKey, runtime_dir: PathBuf) {
 /// True for the methods this module serves (`unload` only with an instance id).
 pub fn handles(m: &str, params: &Value) -> bool {
     METHODS.contains(&m) || (m == "workload.unload" && params.get("instance_id").is_some())
-}
-
-fn read_policy(path: &Path) -> Result<Option<String>, String> {
-    match std::fs::metadata(path) {
-        Err(_) => Ok(None),
-        Ok(m) if m.len() > MAX_POLICY_BYTES => Err(format!("{} is too large", path.display())),
-        Ok(_) => std::fs::read_to_string(path)
-            .map(Some)
-            .map_err(|e| e.to_string()),
-    }
-}
-
-/// Permits from the runtime dir (none if the file is absent).
-pub fn load_permits(dir: &Path) -> Result<Vec<WorkloadPermitRule>, String> {
-    match read_policy(&dir.join(PERMITS_FILE))? {
-        None => Ok(Vec::new()),
-        Some(t) => serde_json::from_str(&t).map_err(|e| format!("{PERMITS_FILE}: {e}")),
-    }
-}
-
-/// Trust anchors from the runtime dir (WeftOS defaults if absent).
-pub fn load_anchors(dir: &Path) -> Result<TrustAnchors, String> {
-    match read_policy(&dir.join(TRUST_FILE))? {
-        None => TrustAnchors::weftos_default(),
-        Some(t) => TrustAnchors::from_trust_json(t.as_bytes()),
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PeerEntry {
-    addr: String,
-    #[serde(default = "paired")]
-    tier: TrustTier,
-}
-
-fn paired() -> TrustTier {
-    TrustTier::Paired
-}
-
-const MAX_PEERS: usize = 256;
-
-/// Operator peers from the runtime dir (none if the file is absent).
-pub fn load_peers(dir: &Path) -> Result<Vec<(String, TrustTier)>, String> {
-    let peers: Vec<PeerEntry> = match read_policy(&dir.join(PEERS_FILE))? {
-        None => return Ok(Vec::new()),
-        Some(t) => serde_json::from_str(&t).map_err(|e| format!("{PEERS_FILE}: {e}"))?,
-    };
-    if peers.len() > MAX_PEERS {
-        return Err(format!("{PEERS_FILE}: more than {MAX_PEERS} peers"));
-    }
-    peers
-        .into_iter()
-        .map(|p| {
-            let ok = !p.addr.is_empty()
-                && p.addr.len() <= 260
-                && p.addr.contains(':')
-                && !p.addr.starts_with(clawft_kernel::workload_ctl::MEM_SCHEME)
-                && p.addr.chars().all(|c| c.is_ascii_alphanumeric() || ".-:[]_".contains(c));
-            ok.then_some((p.addr.clone(), p.tier))
-                .ok_or_else(|| format!("{PEERS_FILE}: {:?} is not host:port", p.addr))
-        })
-        .collect()
 }
 
 /// Make `plane`'s remote targets match `workload-peers.json` (read on
@@ -195,6 +119,7 @@ async fn build(
     ex.set_chain_manager(chain.clone());
     let ex = Arc::new(ex);
     let serving = load_host_config(dir)?;
+    let container = load_container(dir, &dir.join("workload-containers"))?;
     // `describe` always answers with the facts the daemon re-probes.
     let (fm, fid) = (membership.clone(), id.clone());
     let facts: FactsSource = Arc::new(move || {
@@ -210,15 +135,28 @@ async fn build(
         anchors: anchors.clone(),
         facts,
         serving: serving.as_ref(),
+        container,
     })?);
     let _ = HOST.set(local.clone());
     let conn = Arc::new(MeshConnector::new(true));
     let local_addr = conn.register_local("local", local);
-    let plane = PlacementControlPlane::new(boot.key.clone(), gate, chain, ex, anchors, conn)
-        .with_membership(membership);
+    let seeds = load_seeds(dir, gate.clone(), &chain)?;
+    let plane =
+        PlacementControlPlane::new(boot.key.clone(), gate, chain, ex, anchors, conn)
+            .with_membership(membership)
+            .with_state_file(dir.join(STATE_FILE))
+            .map_err(|e| format!("placement state: {e}"))?;
+    for s in seeds {
+        plane
+            .add_seed(&s.node_id, s.host, s.tier)
+            .map_err(|e| format!("seed {}: {e}", s.node_id))?;
+    }
     if let Err(e) = plane.add_target(&local_addr, TrustTier::Pinned).await {
         tracing::warn!(error = %e, "this node is not a placement candidate yet (no signed facts?)");
     }
+    // Targets restored from the state file are re-described with the key
+    // each was learned with.
+    plane.refresh().await;
     Ok(Arc::new(plane))
 }
 
@@ -249,15 +187,63 @@ struct PlaceParams {
     start: Option<bool>,
 }
 
-fn order(p: PlaceParams, dry_run: bool) -> Result<(PlaceOrder, Vec<String>), String> {
-    let mode = match p.mode.as_deref() {
+/// `workload.place {store_pin: ...}`: an operator-pinned store cog on a
+/// Seed's operator-assigned node id (COG-001 section 5).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StorePinParams {
+    node_id: String,
+    #[serde(default = "cognitum")]
+    registry: String,
+    id: String,
+    version: String,
+    #[serde(default)]
+    sha256: Option<String>,
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    interval: Option<u32>,
+    #[serde(default)]
+    csi_port: Option<u16>,
+    #[serde(default)]
+    start: Option<bool>,
+}
+
+fn cognitum() -> String {
+    "cognitum".into()
+}
+
+fn run_mode(mode: Option<&str>, interval: Option<u32>) -> Result<RunMode, String> {
+    Ok(match mode {
         Some("once") => RunMode::Once,
         Some("listener") => RunMode::Listener,
         None | Some("interval") => RunMode::Interval {
-            secs: p.interval.unwrap_or(10),
+            secs: interval.unwrap_or(10),
         },
         Some(other) => return Err(format!("unknown mode {other:?} (once|interval|listener)")),
-    };
+    })
+}
+
+fn store_pin_order(v: Value) -> Result<StorePinOrder, String> {
+    let p: StorePinParams =
+        serde_json::from_value(v).map_err(|e| format!("invalid store_pin: {e}"))?;
+    Ok(StorePinOrder {
+        node_id: p.node_id,
+        registry: p.registry,
+        id: p.id,
+        version: p.version,
+        sha256: p.sha256,
+        config: CtlConfig {
+            mode: run_mode(p.mode.as_deref(), p.interval)?,
+            args: Vec::new(),
+            csi_port: p.csi_port.unwrap_or(5006),
+        },
+        start: p.start.unwrap_or(true),
+    })
+}
+
+fn order(p: PlaceParams, dry_run: bool) -> Result<(PlaceOrder, Vec<String>), String> {
+    let mode = run_mode(p.mode.as_deref(), p.interval)?;
     if !p.package_dir.is_absolute() {
         return Err(format!(
             "package_dir {} must be absolute (the daemon does not share the caller's working directory)",
@@ -301,6 +287,11 @@ fn instance_id(params: &Value, m: &str) -> Result<String, String> {
 pub async fn route(plane: &PlacementControlPlane, m: &str, params: Value) -> Response {
     let res: Result<Value, String> = async {
         match m {
+            "workload.place" if params.get("store_pin").is_some() => {
+                let o = store_pin_order(params["store_pin"].clone())?;
+                let rec = plane.place_store_pin(&o).await.map_err(|e| e.to_string())?;
+                Ok(json!({ "placed": rec, "route": clawft_kernel::workload_ctl::SEED_ROUTE }))
+            }
             "workload.place" | "workload.explain" => {
                 let p: PlaceParams = serde_json::from_value(params).map_err(|e| format!("invalid {m} params: {e}"))?;
                 let (o, peers) = order(p, m == "workload.explain")?;

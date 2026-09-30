@@ -23,6 +23,7 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use clawft_kernel::GateBackend;
+use clawft_kernel::refusal_budget::RefusalBudget;
 use clawft_rpc::Response;
 use serde_json::{Value, json};
 
@@ -193,6 +194,27 @@ pub fn handle_unload(
     }
 }
 
+/// Longest method name chained or echoed for an unknown `workload.*`.
+pub const MAX_SHOWN_METHOD: usize = 64;
+
+/// Deny an unknown `workload.*` method (default deny, ADR-099 section 4).
+/// The caller picks the name and may be anonymous, so the name is cut to
+/// [`MAX_SHOWN_METHOD`] characters and the refusal is chained only within
+/// `budget`; the rest are counted and the count rides on the next one
+/// chained (`suppressed`).
+pub fn deny_unknown(audit: Audit<'_>, method: &str, budget: &RefusalBudget) -> Response {
+    let shown: String = method.chars().take(MAX_SHOWN_METHOD).collect();
+    let reason = format!("{shown}: not a workload method; denied by default (ADR-099 section 4)");
+    if let Some(suppressed) = budget.take() {
+        audit(
+            WORKLOAD_REFUSE,
+            json!({ "action": shown, "name": "", "reason": &reason,
+                    "method_bytes": method.len(), "suppressed": suppressed }),
+        );
+    }
+    Response::error(reason)
+}
+
 /// Route one `workload.*` call. `gate`/`audit` come from the kernel.
 pub fn route(
     method: &str,
@@ -211,12 +233,10 @@ pub fn route(
             "{m} is not available on this node yet (ADR-099: needs runtime adapters / \
              mesh control plane)"
         )),
-        other if other.starts_with("workload.") => refuse(
-            audit,
-            other,
-            "",
-            format!("{other}: not a workload method; denied by default (ADR-099 section 4)"),
-        ),
+        other if other.starts_with("workload.") => {
+            static BUDGET: OnceLock<RefusalBudget> = OnceLock::new();
+            deny_unknown(audit, other, BUDGET.get_or_init(RefusalBudget::default))
+        }
         other => Response::error(format!("unknown method: {other}")),
     }
 }
