@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::capability::Capability;
 use super::super::memory::MemoryDemand;
+use super::spec::WorkloadSpec;
 
 /// Node trust tier (ADR-099 section 8.3), ordered least to most trusted.
 ///
@@ -89,11 +90,46 @@ pub trait PlacementFacts {
     }
 }
 
+/// Which workload an instance belongs to: the spec's `(kind, name)`.
+///
+/// ADR-099 section 1 keys an instance by `(manifest, config, node)`, so a
+/// workload has at most one instance per node; an instance on a node that
+/// carries the same identity as the request is the request's own instance
+/// (a re-placement), not a neighbour.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct WorkloadRef {
+    /// Workload kind.
+    pub kind: String,
+    /// Workload name.
+    pub name: String,
+}
+
+impl WorkloadRef {
+    /// The identity of `spec`.
+    pub fn of(spec: &WorkloadSpec) -> Self {
+        Self {
+            kind: spec.kind.clone(),
+            name: spec.name.clone(),
+        }
+    }
+
+    /// True if this is `spec`'s identity.
+    pub fn is(&self, spec: &WorkloadSpec) -> bool {
+        // Identity equality only; the engine never branches on the kind.
+        *self == Self::of(spec)
+    }
+}
+
 /// An instance already placed (or being placed) somewhere in the cluster.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstanceRecord {
     /// Node it runs on.
     pub node_id: String,
+    /// The workload it is an instance of. `None` for an instance the
+    /// control plane cannot attribute; such an instance is always treated
+    /// as a neighbour (never skipped as the request's own).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload: Option<WorkloadRef>,
     /// Its co-residency labels (for example `role:planner`).
     #[serde(default)]
     pub labels: Vec<String>,
@@ -124,6 +160,16 @@ pub struct ClusterState {
 }
 
 impl ClusterState {
+    /// Instances on `node_id`, excluding `spec`'s own instance there.
+    pub fn neighbours_on<'a>(
+        &'a self,
+        node_id: &'a str,
+        spec: &'a WorkloadSpec,
+    ) -> impl Iterator<Item = &'a InstanceRecord> {
+        self.instances_on(node_id)
+            .filter(move |i| !i.workload.as_ref().is_some_and(|w| w.is(spec)))
+    }
+
     /// Instances on `node_id`.
     pub fn instances_on<'a>(
         &'a self,

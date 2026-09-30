@@ -1,5 +1,6 @@
 workload anomaly-detect (kind cog)
   allow_emulated: false   pin: -
+  tier order (strict): native > emulated > dev_fallback (candidates rank by tier, then score)
 decision: UNPLACEABLE (no eligible node)
 candidates:
   -  gpu-box rejected

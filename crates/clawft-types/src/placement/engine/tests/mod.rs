@@ -1,10 +1,12 @@
 //! Engine tests: table-driven over a synthetic fleet (see [`fixtures`]).
 
 mod fixtures;
+mod tests_bad_inputs;
 mod tests_constraints;
 mod tests_explain;
 mod tests_pins;
 mod tests_scoring;
+mod tests_tiers;
 
 use super::{ClusterState, Constraint, Decision, PlacementRequest, place};
 use fixtures::TestNode;

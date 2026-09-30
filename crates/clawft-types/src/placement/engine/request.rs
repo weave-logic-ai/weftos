@@ -79,9 +79,11 @@ pub struct Affinity {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ScoringWeights {
-    /// Native route on real hardware.
+    /// Native route on real target hardware.
     pub native: f64,
     /// Native route on a dev-fallback node ([`DEV_FALLBACK_CLASS`]).
+    /// The tier order is strict whatever the weights (see
+    /// [`Tier::rank`](super::Tier::rank)); weights only feed the score.
     pub dev_fallback: f64,
     /// Emulated route.
     pub emulated: f64,
@@ -106,8 +108,10 @@ impl Default for ScoringWeights {
     fn default() -> Self {
         Self {
             native: 100.0,
-            dev_fallback: 40.0,
-            emulated: 20.0,
+            // ADR-099 s3 example weights 100 / 40 / 20: native target,
+            // emulated, dev fallback.
+            dev_fallback: 20.0,
+            emulated: 40.0,
             dev_fallback_class: DEV_FALLBACK_CLASS.to_string(),
             accel_fit: 10.0,
             perf: 30.0,

@@ -122,8 +122,17 @@ fn emulation_is_a_fallback_even_when_it_would_outscore_native() {
         weight: 500.0,
     }];
     let d = run(&req, &[x86(), pi5()]);
-    assert_eq!(d.candidates[0].node_id, "x86", "x86 ranks first by score");
-    assert_eq!(placed_on(&d), Some("pi5"), "but a native route wins");
+    let score = |n: &str| {
+        d.candidates
+            .iter()
+            .find(|c| c.node_id == n)
+            .and_then(|c| c.score.as_ref())
+            .unwrap()
+            .total()
+    };
+    assert!(score("x86") > score("pi5"), "x86 has the higher score");
+    assert_eq!(d.candidates[0].node_id, "pi5", "but tiers rank first");
+    assert_eq!(placed_on(&d), Some("pi5"), "and a native route wins");
 }
 
 #[test]

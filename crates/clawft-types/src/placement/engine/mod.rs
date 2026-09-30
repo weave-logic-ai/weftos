@@ -8,15 +8,20 @@
 //! 1. **Phase A, hard constraints** ([`constraints`]): requirements (wave 1
 //!    [`match_all`](super::match_all)), provenance, memory (`mem.unified`
 //!    rule), trust tier, liveness, fact TTL, node and workload revocation,
-//!    co-residency `excludes`, emulation opt-in, gate. All failures recorded.
-//! 2. **Phase B, scoring** ([`score`]): native over dev fallback over
-//!    emulated; preferences (locality); accelerator fit; measured
-//!    performance with a budget filter; load; stickiness.
+//!    co-residency `excludes` (never against the workload's own instance),
+//!    emulation opt-in, gate. All failures recorded.
+//! 2. **Phase B, scoring** ([`score`]): execution tier; preferences
+//!    (locality); accelerator fit; measured performance with a budget
+//!    filter (non-finite or negative measurements count as unmeasured);
+//!    load; stickiness.
 //! 3. **Selection**: an operator pin wins if the node is eligible and is a
-//!    hard error naming the failed constraints otherwise. Emulated routes are
-//!    only a fallback: considered only when the operator set
-//!    `allow_emulated` **and** no native route is eligible anywhere.
-//!    Affinity (`prefer`, `avoid`) then overrides score. Ties break by node id.
+//!    hard error naming the failed constraints otherwise. Otherwise tiers
+//!    are strict (ADR-099 section 3, decided 2026-09-29): native on real
+//!    target hardware, then emulated, then the dev-mac fallback. Only the
+//!    best tier present is considered, so no score component or affinity
+//!    lifts a lower tier over a higher one. Emulated routes exist only when
+//!    the operator set `allow_emulated`. Within the tier, affinity
+//!    (`prefer`, `avoid`) overrides score. Ties break by node id.
 //!
 //! No code here branches on the workload kind: kinds speak only through
 //! capabilities, variants, preferences and policy.
@@ -39,7 +44,7 @@ pub use decision::{
     Tier,
 };
 pub use explain::explain;
-pub use facts::{ClusterState, InstanceRecord, Liveness, PlacementFacts, TrustTier};
+pub use facts::{ClusterState, InstanceRecord, Liveness, PlacementFacts, TrustTier, WorkloadRef};
 pub use request::{
     Affinity, DEV_FALLBACK_CLASS, GateInput, GateVerdict, PlacementRequest, ScoringWeights,
 };
@@ -116,9 +121,11 @@ pub fn place<F: PlacementFacts>(
             Err(r) => rejected.push(report(node.node_id(), vec![r])),
         }
     }
+    // Strict tiers first, then score, then node id.
     eligible.sort_by(|a, b| {
-        total(b)
-            .total_cmp(&total(a))
+        tier_rank(a)
+            .cmp(&tier_rank(b))
+            .then_with(|| total(b).total_cmp(&total(a)))
             .then_with(|| a.node_id.cmp(&b.node_id))
     });
     rejected.sort_by(|a, b| a.node_id.cmp(&b.node_id));
@@ -168,6 +175,10 @@ fn report(node_id: &str, rejections: Vec<Rejection>) -> NodeReport {
     }
 }
 
+fn tier_rank(r: &NodeReport) -> u8 {
+    r.tier.map_or(u8::MAX, Tier::rank)
+}
+
 fn total(r: &NodeReport) -> f64 {
     r.score.as_ref().map_or(0.0, ScoreBreakdown::total)
 }
@@ -199,15 +210,12 @@ fn select(
         add_flag(&mut eligible[i], Flag::Pinned);
         return Ok(Some(i));
     }
-    // Emulation is a fallback only: native routes first, everywhere.
-    let native: Vec<usize> = (0..eligible.len())
-        .filter(|&i| eligible[i].tier != Some(Tier::Emulated))
+    // Strict tiers: only the best tier present is a candidate pool
+    // (`eligible` is ranked tier first).
+    let best = eligible.first().map(tier_rank);
+    let pool: Vec<usize> = (0..eligible.len())
+        .filter(|&i| Some(tier_rank(&eligible[i])) == best)
         .collect();
-    let pool = if native.is_empty() {
-        (0..eligible.len()).collect()
-    } else {
-        native
-    };
     let base = pool.first().copied();
     let aff = &request.affinity;
     let preferred: Vec<usize> = pool
