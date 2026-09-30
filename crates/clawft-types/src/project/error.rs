@@ -34,9 +34,17 @@ pub enum ProjectError {
     /// Root directory could not be canonicalised or is not a directory.
     #[error("{0}: project root is not an existing directory")]
     BadRoot(PathBuf),
-    /// The id is already registered for a different root.
-    #[error("project {id} is already registered for {existing}")]
-    RootConflict { id: String, existing: PathBuf },
+    /// The id is already registered for a different live root (a clone or
+    /// copy of a project tree, or a stale copy left after a move).
+    #[error(
+        "project {id} at {root} is already registered for {existing}; \
+         if {root} is a copy, run `weft project init --fork` there to give it its own identity"
+    )]
+    RootConflict {
+        id: String,
+        root: PathBuf,
+        existing: PathBuf,
+    },
 }
 
 impl ProjectError {

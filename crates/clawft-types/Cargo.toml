@@ -37,6 +37,10 @@ sha2 = { workspace = true }
 # getrandom 0.3, which does not build for wasm32-unknown-unknown without cfg flags.
 ulid = { workspace = true, optional = true }
 
+[target.'cfg(unix)'.dependencies]
+# flock on the manifest dir (project model); same crate the kernel uses.
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }

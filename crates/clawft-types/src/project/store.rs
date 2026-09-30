@@ -50,13 +50,66 @@ fn atomic_write(path: &Path, contents: &str, mode: u32) -> Result<(), ProjectErr
         let mut f = opts.open(&tmp)?;
         f.write_all(contents.as_bytes())?;
         f.sync_all()?;
-        std::fs::rename(&tmp, path)
+        std::fs::rename(&tmp, path)?;
+        sync_dir(dir);
+        Ok::<(), std::io::Error>(())
     })();
     if let Err(e) = result {
         let _ = std::fs::remove_file(&tmp);
         return Err(ProjectError::io(path, e));
     }
     Ok(())
+}
+
+/// Best-effort fsync of a directory so a rename survives a crash.
+fn sync_dir(dir: &Path) {
+    #[cfg(unix)]
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
+/// Publish `contents` at `path` only if nothing is there yet. Complete or
+/// absent, never partial: written to a temp file, then hard-linked into
+/// place (fails with `AlreadyExists` if another writer got there first).
+/// Returns `Ok(true)` when this call created the file.
+fn publish_new(path: &Path, contents: &str, mode: u32) -> Result<bool, ProjectError> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| ProjectError::BadRoot(path.to_path_buf()))?;
+    std::fs::create_dir_all(dir).map_err(|e| ProjectError::io(dir, e))?;
+    let tmp = dir.join(format!(
+        ".{}.tmp.{}.{}",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("file"),
+        std::process::id(),
+        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(mode);
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+        let mut f = opts.open(&tmp)?;
+        f.write_all(contents.as_bytes())?;
+        f.sync_all()?;
+        match std::fs::hard_link(&tmp, path) {
+            Ok(()) => {
+                sync_dir(dir);
+                Ok(true)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(e) => Err(e),
+        }
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    result.map_err(|e| ProjectError::io(path, e))
 }
 
 fn read_optional(path: &Path) -> Result<Option<String>, ProjectError> {
@@ -104,6 +157,19 @@ pub fn write_project_toml(root: &Path, pt: &ProjectToml) -> Result<(), ProjectEr
     atomic_write(&path, &text, 0o644)
 }
 
+/// Create `<root>/.weftos/project.toml` only if absent (mode 0644).
+/// `Ok(false)` means another writer already created it; the caller must
+/// re-read it and adopt its id. This is the cross-process arbiter.
+pub(super) fn create_project_toml(root: &Path, pt: &ProjectToml) -> Result<bool, ProjectError> {
+    validate_id(&pt.id)?;
+    let path = project_toml_path(root);
+    let text = toml::to_string_pretty(pt).map_err(|e| ProjectError::Serialize {
+        path: path.clone(),
+        message: e.to_string(),
+    })?;
+    publish_new(&path, &text, 0o644)
+}
+
 fn parse_manifest(path: &Path, text: &str) -> Result<ProjectManifest, ProjectError> {
     let m: ProjectManifest = toml::from_str(text).map_err(|e| ProjectError::Parse {
         path: path.to_path_buf(),
@@ -140,6 +206,84 @@ pub fn write_manifest(manifests_dir: &Path, m: &ProjectManifest) -> Result<(), P
     atomic_write(&path, &text, 0o600)
 }
 
+/// Canonicalise even when the leaf is gone: resolve the deepest existing
+/// ancestor and re-append the rest, so `/tmp/x` and `/private/tmp/x` agree.
+pub(super) fn canonical_lenient(path: &Path) -> PathBuf {
+    if let Ok(c) = std::fs::canonicalize(path) {
+        return c;
+    }
+    let mut tail = Vec::new();
+    let mut cur = path;
+    while let Some(parent) = cur.parent() {
+        if let Some(name) = cur.file_name() {
+            tail.push(name.to_os_string());
+        }
+        if let Ok(mut c) = std::fs::canonicalize(parent) {
+            c.extend(tail.iter().rev());
+            return c;
+        }
+        cur = parent;
+    }
+    path.to_path_buf()
+}
+
+/// Exclusive advisory lock on `<manifests_dir>/.lock`, held until dropped.
+/// Serialises manifest read-modify-write across processes (and threads:
+/// each guard opens its own file description). No-op off unix.
+pub(super) struct ManifestLock {
+    _file: std::fs::File,
+}
+
+pub(super) fn lock_manifests(manifests_dir: &Path) -> Result<ManifestLock, ProjectError> {
+    std::fs::create_dir_all(manifests_dir).map_err(|e| ProjectError::io(manifests_dir, e))?;
+    let path = manifests_dir.join(".lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|e| ProjectError::io(&path, e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        loop {
+            // SAFETY: flock on a valid fd owned by `file`.
+            let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+            if rc == 0 {
+                break;
+            }
+            let err = std::io::Error::last_os_error();
+            if err.kind() != std::io::ErrorKind::Interrupted {
+                return Err(ProjectError::io(&path, err));
+            }
+        }
+    }
+    Ok(ManifestLock { _file: file })
+}
+
+/// Remove `.*.tmp.*` leftovers from crashed writers once they are stale.
+pub(super) fn reap_orphans(dir: &Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        if !(name.starts_with('.') && name.contains(".tmp.")) {
+            continue;
+        }
+        let stale = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > std::time::Duration::from_secs(60));
+        if stale {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
 /// Result of scanning a manifest directory.
 #[derive(Debug, Default)]
 pub struct ManifestListing {
@@ -152,6 +296,7 @@ pub struct ManifestListing {
 /// A missing directory yields an empty listing.
 pub fn list_manifests(manifests_dir: &Path) -> Result<ManifestListing, ProjectError> {
     let mut out = ManifestListing::default();
+    reap_orphans(manifests_dir);
     let rd = match std::fs::read_dir(manifests_dir) {
         Ok(rd) => rd,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
@@ -200,7 +345,7 @@ pub fn find_by_root(
     manifests_dir: &Path,
     root: &Path,
 ) -> Result<Option<ProjectManifest>, ProjectError> {
-    let want = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let want = canonical_lenient(root);
     Ok(list_manifests(manifests_dir)?
         .manifests
         .into_iter()

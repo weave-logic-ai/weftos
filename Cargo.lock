@@ -1963,6 +1963,7 @@ dependencies = [
  "chrono",
  "dirs",
  "getrandom 0.2.17",
+ "libc",
  "serde",
  "serde_json",
  "sha2",

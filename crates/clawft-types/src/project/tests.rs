@@ -3,13 +3,13 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::workspace::{WorkspaceEntry, WorkspaceRegistry};
 
-const GOLDEN_TOML: &str = r#"schema = 1
+pub(super) const GOLDEN_TOML: &str = r#"schema = 1
 id = "01JB8Z3Q0V6X9KQ4M2N7T5R1WD"
 name = "example-project"
 created = "2026-10-01T09:30:00Z"
 "#;
 
-const GOLDEN_MANIFEST: &str = r#"schema = 1
+pub(super) const GOLDEN_MANIFEST: &str = r#"schema = 1
 id = "01JB8Z3Q0V6X9KQ4M2N7T5R1WD"
 name = "example-project"
 root = "/Users/x/src/example-project"
@@ -34,7 +34,7 @@ sha = ""
 version = ""
 "#;
 
-const ID: &str = "01JB8Z3Q0V6X9KQ4M2N7T5R1WD";
+pub(super) const ID: &str = "01JB8Z3Q0V6X9KQ4M2N7T5R1WD";
 
 fn ws(name: &str, path: &Path) -> WorkspaceEntry {
     WorkspaceEntry {
@@ -51,7 +51,7 @@ fn registry(entries: Vec<WorkspaceEntry>) -> WorkspaceRegistry {
     }
 }
 
-fn mkdir(base: &Path, name: &str) -> PathBuf {
+pub(super) fn mkdir(base: &Path, name: &str) -> PathBuf {
     let p = base.join(name);
     std::fs::create_dir_all(&p).unwrap();
     std::fs::canonicalize(p).unwrap()
@@ -184,7 +184,7 @@ fn file_modes() {
             .unwrap()
             .file_name()
             .to_string_lossy()
-            .starts_with('.')
+            .contains(".tmp.")
     });
     assert_eq!(leftovers.count(), 0);
 }

@@ -19,7 +19,7 @@ mod schema;
 mod seed;
 mod store;
 
-pub use adopt::adopt_or_init;
+pub use adopt::{adopt_or_init, reinit_fork};
 pub use error::ProjectError;
 pub use ids::{new_id, validate_id};
 pub use schema::{
@@ -35,3 +35,5 @@ pub use store::{
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_identity;

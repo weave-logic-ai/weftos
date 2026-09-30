@@ -12,6 +12,34 @@ fn schema_v1() -> u32 {
     SCHEMA_VERSION
 }
 
+/// Accept both quoted RFC 3339 strings and native (unquoted) TOML offset
+/// datetimes. Serialization stays a quoted string for stability.
+fn de_datetime<'de, D: serde::Deserializer<'de>>(d: D) -> Result<DateTime<Utc>, D::Error> {
+    use serde::de::{Error, MapAccess, Visitor};
+
+    struct V;
+    impl<'de> Visitor<'de> for V {
+        type Value = DateTime<Utc>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("an RFC 3339 timestamp (quoted or a native TOML datetime)")
+        }
+        fn visit_str<E: Error>(self, v: &str) -> Result<Self::Value, E> {
+            DateTime::parse_from_rfc3339(v)
+                .map(|t| t.with_timezone(&Utc))
+                .map_err(E::custom)
+        }
+        // toml hands native datetimes over as a one-entry map whose value is
+        // the RFC 3339 text.
+        fn visit_map<A: MapAccess<'de>>(self, mut m: A) -> Result<Self::Value, A::Error> {
+            let (_k, v): (String, String) = m
+                .next_entry()?
+                .ok_or_else(|| A::Error::custom("empty datetime"))?;
+            self.visit_str(&v)
+        }
+    }
+    d.deserialize_any(V)
+}
+
 /// `[weave]` section of `project.toml` (ADR-103 D10).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WeaveSection {
@@ -31,6 +59,7 @@ pub struct ProjectToml {
     /// Human-readable name.
     pub name: String,
     /// When the identity was minted.
+    #[serde(deserialize_with = "de_datetime")]
     pub created: DateTime<Utc>,
     /// Optional parent project ULID (nesting, D10); unused in Phase 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -144,7 +173,9 @@ pub struct ProjectManifest {
     pub root: PathBuf,
     #[serde(default)]
     pub state: ProjectState,
+    #[serde(deserialize_with = "de_datetime")]
     pub created: DateTime<Utc>,
+    #[serde(deserialize_with = "de_datetime")]
     pub last_seen: DateTime<Utc>,
     #[serde(default)]
     pub project_toml: ProjectTomlPresence,

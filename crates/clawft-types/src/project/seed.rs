@@ -10,7 +10,10 @@ use crate::workspace::{WorkspaceEntry, WorkspaceRegistry};
 
 use super::adopt::{WRITE_LOCK, default_name, now};
 use super::schema::SCHEMA_VERSION;
-use super::store::{find_by_root, read_manifest, read_project_toml, write_manifest};
+use super::store::{
+    canonical_lenient, find_by_root, lock_manifests, read_manifest, read_project_toml,
+    reap_orphans, write_manifest,
+};
 use super::{
     LegacySection, ProjectError, ProjectManifest, ProjectState, ProjectTomlPresence, SeedSection,
     ServeSection, new_id,
@@ -51,6 +54,8 @@ pub fn seed_from_registry(
     manifests_dir: &Path,
 ) -> Result<SeedReport, ProjectError> {
     let _guard = WRITE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _flock = lock_manifests(manifests_dir)?;
+    reap_orphans(manifests_dir);
     let mut report = SeedReport::default();
     for entry in &registry.workspaces {
         if let Err(e) = seed_entry(entry, manifests_dir, &mut report) {
@@ -58,27 +63,6 @@ pub fn seed_from_registry(
         }
     }
     Ok(report)
-}
-
-/// Canonicalise even when the leaf is gone: resolve the deepest existing
-/// ancestor and re-append the rest, so `/tmp/x` and `/private/tmp/x` agree.
-fn canonical_lenient(path: &Path) -> PathBuf {
-    if let Ok(c) = std::fs::canonicalize(path) {
-        return c;
-    }
-    let mut tail = Vec::new();
-    let mut cur = path;
-    while let Some(parent) = cur.parent() {
-        if let Some(name) = cur.file_name() {
-            tail.push(name.to_os_string());
-        }
-        if let Ok(mut c) = std::fs::canonicalize(parent) {
-            c.extend(tail.iter().rev());
-            return c;
-        }
-        cur = parent;
-    }
-    path.to_path_buf()
 }
 
 fn seed_entry(
@@ -127,6 +111,7 @@ fn seed_entry(
     if let Some(other) = read_manifest(dir, &id)? {
         return Err(ProjectError::RootConflict {
             id,
+            root,
             existing: other.root,
         });
     }
