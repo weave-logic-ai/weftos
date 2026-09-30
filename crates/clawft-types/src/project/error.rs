@@ -34,6 +34,12 @@ pub enum ProjectError {
     /// Root directory could not be canonicalised or is not a directory.
     #[error("{0}: project root is not an existing directory")]
     BadRoot(PathBuf),
+    /// `reinit_fork` was asked to re-identify the registered home of an id.
+    #[error(
+        "{root} is the registered home of project {id}; fork the copy instead \
+         (or pass force to archive this manifest and mint a new identity here)"
+    )]
+    RegisteredHome { id: String, root: PathBuf },
     /// The id is already registered for a different live root (a clone or
     /// copy of a project tree, or a stale copy left after a move).
     #[error(

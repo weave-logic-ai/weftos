@@ -155,10 +155,16 @@ fn register(
 /// This is the remedy for [`ProjectError::RootConflict`] (a clone, or a stale
 /// copy left behind by a move). The original's manifest is never touched.
 /// With no `project.toml` present it simply initialises a fresh identity.
+///
+/// Refuses ([`ProjectError::RegisteredHome`]) when the tree's current id is
+/// registered with a manifest whose root is this very tree, since that is the
+/// original, not a copy. With `force` that manifest is archived first so
+/// `find_by_root` stays unambiguous.
 pub fn reinit_fork(
     project_root: &Path,
     manifests_dir: &Path,
     name: Option<&str>,
+    force: bool,
 ) -> Result<ProjectManifest, ProjectError> {
     let root = canonical_root(project_root)?;
     let _guard = WRITE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -166,6 +172,20 @@ pub fn reinit_fork(
     reap_orphans(manifests_dir);
 
     let old = read_project_toml(&root)?;
+    if let Some(o) = &old {
+        if let Some(mut home) = read_manifest(manifests_dir, &o.id)? {
+            if home.root == root && home.state != ProjectState::Archived {
+                if !force {
+                    return Err(ProjectError::RegisteredHome {
+                        id: o.id.clone(),
+                        root,
+                    });
+                }
+                home.state = ProjectState::Archived;
+                write_manifest(manifests_dir, &home)?;
+            }
+        }
+    }
     let mut pt = old.clone().unwrap_or_else(|| ProjectToml {
         schema_version: SCHEMA_VERSION,
         id: String::new(),

@@ -54,7 +54,7 @@ fn reinit_fork_gives_a_copy_its_own_identity() {
     std::fs::copy(project_toml_path(&a), project_toml_path(&b)).unwrap();
     let orig_manifest_before = std::fs::read(manifest_path(&dir, &orig.id).unwrap()).unwrap();
 
-    let fork = reinit_fork(&b, &dir, Some("copy")).unwrap();
+    let fork = reinit_fork(&b, &dir, Some("copy"), false).unwrap();
     assert_ne!(fork.id, orig.id);
     assert_eq!(fork.name, "copy");
     assert_eq!(fork.root, b);
@@ -78,14 +78,14 @@ fn reinit_fork_preserves_unknown_keys_and_inits_bare_dirs() {
     let b = mkdir(tmp.path(), "copy");
     std::fs::create_dir_all(b.join(".weftos")).unwrap();
     std::fs::write(project_toml_path(&b), format!("{GOLDEN_TOML}keep = 1\n")).unwrap();
-    reinit_fork(&b, &dir, None).unwrap();
+    reinit_fork(&b, &dir, None, false).unwrap();
     assert!(
         std::fs::read_to_string(project_toml_path(&b))
             .unwrap()
             .contains("keep = 1")
     );
     let bare = mkdir(tmp.path(), "bare");
-    let m = reinit_fork(&bare, &dir, None).unwrap();
+    let m = reinit_fork(&bare, &dir, None, false).unwrap();
     assert_eq!(read_project_toml(&bare).unwrap().unwrap().parent, None);
     assert_eq!(m.root, bare);
 }
@@ -174,7 +174,11 @@ fn adopt_races_across_processes() {
         let children: Vec<_> = (0..6)
             .map(|_| {
                 std::process::Command::new(&exe)
-                    .args(["--exact", "project::tests_identity::mp_adopt_child", "--nocapture"])
+                    .args([
+                        "--exact",
+                        "project::tests_identity::mp_adopt_child",
+                        "--nocapture",
+                    ])
                     .env("P1B_ROOT", &root)
                     .env("P1B_DIR", &dir)
                     .env("P1B_GO", &go)
@@ -210,4 +214,74 @@ fn adopt_races_across_processes() {
             listing.manifests[0].id
         );
     }
+}
+
+#[test]
+fn reinit_fork_refuses_the_registered_home_unless_forced() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("manifests");
+    let a = mkdir(tmp.path(), "orig");
+    let orig = adopt_or_init(&a, &dir, None).unwrap();
+    let toml_before = std::fs::read(project_toml_path(&a)).unwrap();
+    let err = reinit_fork(&a, &dir, None, false).unwrap_err();
+    assert!(matches!(err, ProjectError::RegisteredHome { .. }));
+    assert!(err.to_string().contains("registered home"), "{err}");
+    assert_eq!(toml_before, std::fs::read(project_toml_path(&a)).unwrap());
+    assert_eq!(list_manifests(&dir).unwrap().manifests.len(), 1);
+
+    let forked = reinit_fork(&a, &dir, None, true).unwrap();
+    assert_ne!(forked.id, orig.id);
+    assert_eq!(
+        read_manifest(&dir, &orig.id).unwrap().unwrap().state,
+        ProjectState::Archived
+    );
+    // Unambiguous: the root resolves to the new, active identity.
+    let found = find_by_root(&dir, &a).unwrap().unwrap();
+    assert_eq!(found.id, forked.id);
+    assert_eq!(found.state, ProjectState::Active);
+    assert_eq!(adopt_or_init(&a, &dir, None).unwrap().id, forked.id);
+}
+
+#[test]
+fn publish_falls_back_when_hard_links_are_unsupported() {
+    use super::store::publish_new_with;
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("sub").join("project.toml");
+    let no_links = |_: &Path, _: &Path| Err(std::io::Error::from(std::io::ErrorKind::Unsupported));
+    assert!(publish_new_with(&target, "a = 1\n", 0o644, no_links).unwrap());
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "a = 1\n");
+    // Second publisher loses, does not clobber, and leaves no temp files.
+    assert!(!publish_new_with(&target, "a = 2\n", 0o644, no_links).unwrap());
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "a = 1\n");
+    let leftovers = std::fs::read_dir(target.parent().unwrap())
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".tmp.")
+        });
+    assert_eq!(leftovers.count(), 0);
+    // EPERM-style failures take the same path.
+    let eperm =
+        |_: &Path, _: &Path| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+    let other = tmp.path().join("other.toml");
+    assert!(publish_new_with(&other, "b = 1\n", 0o644, eperm).unwrap());
+}
+
+#[test]
+fn readers_ride_out_a_momentarily_empty_project_toml() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".weftos")).unwrap();
+    let path = project_toml_path(tmp.path());
+    std::fs::write(&path, "").unwrap();
+    let p2 = path.clone();
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        std::fs::write(p2, GOLDEN_TOML).unwrap();
+    });
+    let pt = read_project_toml(tmp.path()).unwrap().unwrap();
+    writer.join().unwrap();
+    assert_eq!(pt.id, ID);
 }

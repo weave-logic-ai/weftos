@@ -8,6 +8,9 @@
 //!   `~/.weftos/projects/`): the user-level index entry the daemon and CLI
 //!   resolve against.
 //!
+//! Cross-process manifest locking is unix-only (flock); `project.toml` ids stay
+//! consistent everywhere through its exclusive hard-link publish.
+//!
 //! Everything here is pure over injected paths; nothing reads `HOME` or the
 //! environment. Callers (the daemon, CLI, resolver) pass `~/.weftos/projects`
 //! and `~/.clawft/workspaces.json` in.

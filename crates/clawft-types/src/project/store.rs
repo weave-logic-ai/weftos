@@ -71,11 +71,28 @@ fn sync_dir(dir: &Path) {
     let _ = dir;
 }
 
-/// Publish `contents` at `path` only if nothing is there yet. Complete or
-/// absent, never partial: written to a temp file, then hard-linked into
-/// place (fails with `AlreadyExists` if another writer got there first).
+/// Publish `contents` at `path` only if nothing is there yet. Normally
+/// complete-or-absent: written to a temp file, then hard-linked into place
+/// (fails with `AlreadyExists` if another writer got there first).
 /// Returns `Ok(true)` when this call created the file.
+///
+/// Filesystems without hard links (FAT, some network mounts) fall back to
+/// `create_new` on the final path plus write and fsync. That leaves a short
+/// window where the file exists but is empty; same-host callers are covered
+/// by the manifests flock and readers retry on an empty `project.toml`.
 fn publish_new(path: &Path, contents: &str, mode: u32) -> Result<bool, ProjectError> {
+    publish_new_with(path, contents, mode, |from, to| {
+        std::fs::hard_link(from, to)
+    })
+}
+
+/// [`publish_new`] with an injectable link step (test seam).
+pub(super) fn publish_new_with(
+    path: &Path,
+    contents: &str,
+    mode: u32,
+    link: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> Result<bool, ProjectError> {
     let dir = path
         .parent()
         .ok_or_else(|| ProjectError::BadRoot(path.to_path_buf()))?;
@@ -86,7 +103,7 @@ fn publish_new(path: &Path, contents: &str, mode: u32) -> Result<bool, ProjectEr
         std::process::id(),
         TMP_SEQ.fetch_add(1, Ordering::Relaxed)
     ));
-    let result = (|| {
+    let open = |p: &Path| {
         let mut opts = std::fs::OpenOptions::new();
         opts.write(true).create_new(true);
         #[cfg(unix)]
@@ -96,16 +113,32 @@ fn publish_new(path: &Path, contents: &str, mode: u32) -> Result<bool, ProjectEr
         }
         #[cfg(not(unix))]
         let _ = mode;
-        let mut f = opts.open(&tmp)?;
+        opts.open(p)
+    };
+    let result = (|| {
+        let mut f = open(&tmp)?;
         f.write_all(contents.as_bytes())?;
         f.sync_all()?;
-        match std::fs::hard_link(&tmp, path) {
+        match link(&tmp, path) {
             Ok(()) => {
                 sync_dir(dir);
                 Ok(true)
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-            Err(e) => Err(e),
+            // ENOTSUP / EPERM / anything else: no hard links here.
+            Err(_) => match open(path) {
+                Ok(mut f) => {
+                    let written = f.write_all(contents.as_bytes()).and_then(|()| f.sync_all());
+                    if let Err(e) = written {
+                        let _ = std::fs::remove_file(path);
+                        return Err(e);
+                    }
+                    sync_dir(dir);
+                    Ok(true)
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+                Err(e) => Err(e),
+            },
         }
     })();
     let _ = std::fs::remove_file(&tmp);
@@ -134,7 +167,16 @@ fn check_schema(path: &Path, found: u32) -> Result<(), ProjectError> {
 /// Read `<root>/.weftos/project.toml`; `Ok(None)` when absent.
 pub fn read_project_toml(root: &Path) -> Result<Option<ProjectToml>, ProjectError> {
     let path = project_toml_path(root);
-    let Some(text) = read_optional(&path)? else {
+    // A no-hard-link filesystem publishes non-atomically: ride out a
+    // momentarily empty file instead of reporting a parse error.
+    let mut text = read_optional(&path)?;
+    for _ in 0..20 {
+        if text.as_deref().is_some_and(|t| t.trim().is_empty()) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            text = read_optional(&path)?;
+        }
+    }
+    let Some(text) = text else {
         return Ok(None);
     };
     let pt: ProjectToml = toml::from_str(&text).map_err(|e| ProjectError::Parse {
@@ -228,6 +270,8 @@ pub(super) fn canonical_lenient(path: &Path) -> PathBuf {
 }
 
 /// Exclusive advisory lock on `<manifests_dir>/.lock`, held until dropped.
+/// Cross-process manifest locking is unix-only; elsewhere `project.toml`
+/// ids stay consistent through the exclusive publish alone.
 /// Serialises manifest read-modify-write across processes (and threads:
 /// each guard opens its own file description). No-op off unix.
 pub(super) struct ManifestLock {
@@ -346,10 +390,13 @@ pub fn find_by_root(
     root: &Path,
 ) -> Result<Option<ProjectManifest>, ProjectError> {
     let want = canonical_lenient(root);
+    // Prefer a live entry; an archived one (left by `reinit_fork --force`)
+    // is only returned when nothing else claims the root.
     Ok(list_manifests(manifests_dir)?
         .manifests
         .into_iter()
-        .find(|m| m.root == want))
+        .filter(|m| m.root == want)
+        .min_by_key(|m| m.state == super::ProjectState::Archived))
 }
 
 /// Walk up from `start` looking for `.weftos/project.toml`; returns the
