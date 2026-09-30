@@ -52,6 +52,9 @@ pub mod error;
 pub mod event;
 pub mod goal;
 pub mod placement;
+/// Project identity model (ADR-103, Phase 1 package B). Native only (ULID/fs).
+#[cfg(feature = "native")]
+pub mod project;
 pub mod provider;
 pub mod registry;
 pub mod routing;
