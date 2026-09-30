@@ -47,3 +47,6 @@ pub mod workload_registry;
 /// `workload.*` daemon RPC family (ADR-099, mesh-placement-06).
 #[cfg(feature = "exochain")]
 pub mod workload_rpc;
+/// Placement control plane RPCs (ADR-099, mesh-placement-12).
+#[cfg(all(feature = "placement", unix))]
+pub mod workload_place_rpc;

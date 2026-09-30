@@ -1,0 +1,23 @@
+# Upstream anomaly-detect cog.toml (identity, config surface, console), used
+# by the test-pi placement stage to sign the released aarch64 binary.
+[cog]
+id = "anomaly-detect"
+name = "Anomaly Detection"
+version = "1.2.0"
+category = "health"
+binary = "cog-anomaly-detect-arm"
+
+[config.interval]
+type = "integer"
+default = 10
+cli_arg = "--interval"
+
+[config.threshold]
+type = "float"
+default = 2.5
+cli_arg = "--threshold"
+
+[console]
+allowed_commands = ["--once", "--once --threshold 1.5", "--once --threshold 3.0"]
+max_runtime_secs = 15
+output_limit_bytes = 65536

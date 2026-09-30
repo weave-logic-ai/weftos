@@ -168,7 +168,10 @@ pub fn required_capability(method: &str) -> Capability {
         | "app.list"
         | "app.inspect"
         | "workload.list"
-        | "workload.inspect" => Capability::Read,
+        | "workload.inspect"
+        | "workload.explain"
+        | "workload.status"
+        | "workload.logs" => Capability::Read,
 
         // ADR-099 default-deny posture: an unclassified `workload.*` verb
         // is treated as a mutation, never as anonymous-callable Read.
@@ -443,7 +446,15 @@ mod tests {
         // mesh-placement-06.
         let anon = CallerCapabilities::anonymous();
         let write = CallerCapabilities::from_scopes(["write"]);
-        for m in ["app.list", "app.inspect", "workload.list", "workload.inspect"] {
+        for m in [
+            "app.list",
+            "app.inspect",
+            "workload.list",
+            "workload.inspect",
+            "workload.explain",
+            "workload.status",
+            "workload.logs",
+        ] {
             assert_eq!(required_capability(m), Capability::Read, "{m}");
             assert!(anon.allows_method(m), "{m}");
         }

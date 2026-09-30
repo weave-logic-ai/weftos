@@ -1,0 +1,54 @@
+//! Placement control plane (ADR-099 sections 3 and 7; card
+//! mesh-placement-12): the pure engine (card 04) wired to the mesh.
+//!
+//! - [`facts`]: card 03's cached, verified [`NodeFacts`] as card 04's
+//!   `PlacementFacts` (liveness from membership or direct contact,
+//!   receiver-assigned trust tier, load from live state, measured `perf.*`).
+//! - [`cog_kind`]: the cog kind's requirements (COG-001 section 2).
+//! - [`msg`]: the signed `workload.ctl` message set (nonce, expiry,
+//!   decision id; unknown methods denied).
+//! - [`session`]: the message set on the wire as `MeshIpcEnvelope` /
+//!   `MeshRequest`, with the artifact piece protocol (card 11) multiplexed
+//!   for fetch-before-load.
+//! - [`host_service`]: a node's `workload-host` (advertised through
+//!   `ServiceAdvertisement`), driving card 09's adapters under governance.
+//! - [`plane`] / [`plane_place`]: the controller: learn targets, decide,
+//!   chain, dispatch, retry the next candidate on refusal.
+//! - [`transport`]: mesh TCP (Noise XX) and in-process connections; the
+//!   in-process path serves this node's own host and Seed adapters on an
+//!   operator-assigned node id.
+//!
+//! [`NodeFacts`]: clawft_types::placement::NodeFacts
+
+pub mod cog_kind;
+pub mod facts;
+pub mod host_service;
+pub mod msg;
+pub mod plane;
+pub mod plane_place;
+pub mod plane_seed;
+pub mod session;
+pub mod transport;
+
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+mod tests_facts;
+#[cfg(test)]
+mod tests_seed;
+#[cfg(test)]
+mod tests_two_node;
+
+pub use cog_kind::cog_workload_spec;
+pub use facts::{LiveNodeFacts, engine_tier, governance_tier, liveness_of, placement_view};
+pub use host_service::{CtlConfig, HOST_CHAIN_SOURCE, WorkloadHostService};
+pub use msg::{
+    CtlRequest, CtlResponse, NonceGuard, Refusal, RefusalCode, SignedCtl, WORKLOAD_HOST_SERVICE,
+};
+pub use plane::{
+    CallFailure, PLANE_CHAIN_SOURCE, PlacementControlPlane, PlacementRecord, PlaneConfig,
+    PlaneError, TargetInfo,
+};
+pub use plane_place::{Attempt, PlaceOrder, PlaceReport, render};
+pub use plane_seed::{SEED_ROUTE, StorePinOrder};
+pub use transport::{CtlConnector, MEM_SCHEME, MeshConnector, listen_tcp, serve_listener};

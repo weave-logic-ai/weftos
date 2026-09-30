@@ -12,10 +12,12 @@
 //!
 //! A refused mutation is chained as `workload.refuse`. Every `workload.*`
 //! mutation fails closed when no governance gate is configured (ADR-099
-//! section 4 default-deny). The remaining verbs (`place`, `load`, `start`,
-//! `stop`, `migrate`, `revoke`, `node.bind`) are classified in
-//! `capability.rs` but answered "not available on this node" until the
-//! runtime adapters and mesh control plane land (cards 09 and 12).
+//! section 4 default-deny). The placement family (`place`, `explain`,
+//! `status`, `stop`, `logs`, `unload {instance_id}`) is served by
+//! `workload_place_rpc` (card 12). `load` and `start` are target-side
+//! `workload.ctl` methods, and `migrate`, `revoke`, `node.bind` belong to
+//! later cards: they answer "not available on this node". Any other
+//! `workload.*` method is refused and the refusal chained (default deny).
 
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
@@ -41,10 +43,8 @@ pub const WORKLOAD_REFUSE: &str = "workload.refuse";
 
 /// Verbs named by ADR-099 whose handlers belong to later cards.
 const NOT_YET: &[&str] = &[
-    "workload.place",
     "workload.load",
     "workload.start",
-    "workload.stop",
     "workload.migrate",
     "workload.revoke",
     "workload.node.bind",
@@ -211,6 +211,12 @@ pub fn route(
             "{m} is not available on this node yet (ADR-099: needs runtime adapters / \
              mesh control plane)"
         )),
+        other if other.starts_with("workload.") => refuse(
+            audit,
+            other,
+            "",
+            format!("{other}: not a workload method; denied by default (ADR-099 section 4)"),
+        ),
         other => Response::error(format!("unknown method: {other}")),
     }
 }
@@ -224,6 +230,10 @@ pub async fn dispatch(
         tokio::sync::RwLock<clawft_kernel::boot::Kernel<clawft_platform::NativePlatform>>,
     >,
 ) -> Response {
+    #[cfg(all(feature = "placement", unix))]
+    if crate::workload_place_rpc::handles(method, &params) {
+        return crate::workload_place_rpc::dispatch(method, params, kernel).await;
+    }
     let k = kernel.read().await;
     let node_id = k.cluster_membership().local_node_id().to_owned();
     let gate = k.governance_gate().cloned();

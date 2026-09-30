@@ -134,5 +134,9 @@ fn route_dispatches_and_reports_unbuilt_verbs() {
         assert!(r.error.unwrap().contains("not available"), "{m}");
     }
     let unknown = route("workload.bogus", json!({}), &reg, "n", None, &rec.sink());
-    assert!(unknown.error.unwrap().starts_with("unknown method"));
+    assert!(unknown.error.unwrap().contains("denied by default"));
+    let refused = rec.0.lock().unwrap().iter().any(|(k, p)| k == WORKLOAD_REFUSE && p["action"] == "workload.bogus");
+    assert!(refused, "unknown workload.* refusal is chained");
+    let other = route("bogus.method", json!({}), &reg, "n", None, &rec.sink());
+    assert!(other.error.unwrap().starts_with("unknown method"));
 }

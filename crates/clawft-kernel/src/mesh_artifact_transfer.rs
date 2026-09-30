@@ -118,6 +118,26 @@ impl ArtifactExchange {
         }
     }
 
+    /// Serve one frame already read from `stream`, for sessions that carry
+    /// the piece protocol beside other traffic on one stream (the
+    /// `workload.ctl` fetch-before-load, mesh-placement-12). Same rules as
+    /// [`Self::serve`]: only servable artifacts are sent.
+    pub async fn serve_frame(
+        &self,
+        stream: &mut dyn MeshStream,
+        peer: &str,
+        raw: &[u8],
+        stats: &mut ServeStats,
+    ) -> Result<(), ExchangeError> {
+        let msg = ArtifactMsg::from_wire(raw)?;
+        self.serve_one(stream, peer, msg, stats)
+            .await
+            .map_err(|e| match e {
+                PeerError::Local(l) => l,
+                other => ExchangeError::Io(other.to_string()),
+            })
+    }
+
     async fn serve_one(
         &self,
         stream: &mut dyn MeshStream,

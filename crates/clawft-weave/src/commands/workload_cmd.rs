@@ -37,6 +37,10 @@ pub enum WorkloadCommand {
     #[cfg(all(feature = "ecc", feature = "exochain"))]
     #[command(flatten)]
     Package(super::workload_pack::WorkloadPackCmd),
+    /// Placement commands (place, explain, status, stop, logs, unload).
+    #[cfg(all(feature = "placement", unix))]
+    #[command(flatten)]
+    Placement(super::workload_place_cmd::WorkloadPlaceCmd),
 }
 
 fn short_hash(h: &str) -> String {
@@ -86,6 +90,19 @@ pub async fn run(args: WorkloadArgs) -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 print!("{}", render_table(result.as_array().map(Vec::as_slice).unwrap_or(&[])));
+                // Placed instances (mesh-placement-12), when the daemon has a
+                // placement control plane.
+                #[cfg(all(feature = "placement", unix))]
+                if let Ok(r) = client
+                    .call(Request::with_params("workload.status", serde_json::json!({})))
+                    .await
+                    && r.ok
+                {
+                    print!(
+                        "\n{}",
+                        super::workload_place_cmd::render_placements(&r.result.unwrap_or_default())
+                    );
+                }
             }
         }
         WorkloadCommand::Inspect { name } => {
@@ -100,6 +117,18 @@ pub async fn run(args: WorkloadArgs) -> anyhow::Result<()> {
         }
         #[cfg(all(feature = "ecc", feature = "exochain"))]
         WorkloadCommand::Package(_) => unreachable!("package commands are handled before connecting"),
+        #[cfg(all(feature = "placement", unix))]
+        WorkloadCommand::Placement(cmd) => {
+            let (method, params) = super::workload_place_cmd::request(&cmd);
+            let resp = client.call(Request::with_params(method, params)).await?;
+            if !resp.ok {
+                anyhow::bail!("{}", resp.error.unwrap_or_default());
+            }
+            print!(
+                "{}",
+                super::workload_place_cmd::render(&cmd, &resp.result.unwrap_or_default())
+            );
+        }
     }
     Ok(())
 }

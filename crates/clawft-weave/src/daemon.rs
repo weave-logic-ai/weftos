@@ -971,6 +971,9 @@ pub async fn run(
     // mesh-placement-06: persisted node-local workload catalog.
     #[cfg(feature = "exochain")]
     crate::workload_rpc::init_registry(&runtime_dir.join("workloads.json"));
+    // mesh-placement-12: the placement control plane signs with the node key.
+    #[cfg(all(feature = "placement", unix))]
+    crate::workload_place_rpc::init(daemon_identity.signing_key.clone(), runtime_dir.clone());
     // mesh-placement-03: probe, sign and cache this node's facts.
     #[cfg(any(feature = "mesh", feature = "exochain"))]
     crate::node_facts_rpc::init(

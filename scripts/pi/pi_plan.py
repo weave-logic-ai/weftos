@@ -279,3 +279,93 @@ def stage_ok(rc, totals, require_ran=False):
     if rc != 0 or totals["suites"] == 0 or totals["failed"]:
         return False
     return totals["passed"] > 0 if require_ran else True
+
+
+# ── two-node placement stage (card mesh-placement-12) ────────────────────
+# The Pi runs an isolated `workload_node serve` from the scratch dir on a
+# non-default mesh port; the system weaver keeps :9470.
+PLACEMENT_PORT = 9471
+PLACEMENT_FEED_PORT = 15006
+PUBKEY_RE = re.compile(r"^[0-9a-f]{64}$")
+NODE_ID_RE = re.compile(r"^NODE_ID ([A-Za-z0-9._:-]+)$", re.M)
+# Evidence must not carry addresses or local paths (public repo).
+LEAK_RE = re.compile(r"(?:\b(?!0\.0\.0\.0\b)(?!127\.0\.0\.1\b)\d{1,3}(?:\.\d{1,3}){3}\b|/Users/|/home/)")
+
+
+def placement_cargo_args():
+    """workload_node: the Pi-side `serve` and the Mac-side `place`."""
+    return ["cargo", "build", "--locked", "-p", "clawft-kernel", "--no-default-features",
+            "--features", "workload-runtime,mesh", "--example", "workload_node"]
+
+
+def ssh_hostname(host):
+    """The address part of a validated [user@]host (the Pi's mesh address)."""
+    if not valid_host(host):
+        raise ValueError("invalid host")
+    return host.rsplit("@", 1)[-1]
+
+
+def placement_serve_command(scratch_abs, binary, controller_pub, port=PLACEMENT_PORT,
+                            feed_port=PLACEMENT_FEED_PORT, secs=900):
+    """Start `workload_node serve` detached under `env -i` in the scratch dir
+    and print its PID. Its log and chain dump stay under the scratch dir."""
+    if not PUBKEY_RE.match(controller_pub or ""):
+        raise ValueError("controller key must be 64 lower-case hex")
+    env = isolated_env(scratch_abs)
+    run = scratch_abs + "/runtime"
+    assigns = ["%s=%s" % (k, v) for k, v in sorted(env.items())]
+    argv = [binary, "serve", "--listen", "0.0.0.0:%d" % int(port), "--dir", run + "/placement",
+            "--controller", controller_pub, "--noise", "--secs", str(int(secs)),
+            "--feed-port", str(int(feed_port))]
+    # `cd || exit;` rather than `cd &&`: `&` must background only the node,
+    # or the whole list (holding ssh's stdout) is backgrounded and ssh hangs.
+    return "cd %s || exit 1; nohup env -i %s %s > %s 2>&1 < /dev/null & echo $!" % (
+        shlex.quote(run), shlex.join(assigns), shlex.join(argv),
+        shlex.quote(run + "/placement.log"))
+
+
+def placement_stop_command(scratch_abs, pid):
+    """SIGTERM the node (it dumps its chain), wait, then print log and chain."""
+    run = scratch_abs + "/runtime"
+    return ("kill -TERM %d 2>/dev/null; for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 %d 2>/dev/null "
+            "|| break; sleep 1; done; kill -KILL %d 2>/dev/null; cat %s; echo ==CHAIN==; "
+            "cat %s 2>/dev/null" % (int(pid), int(pid), int(pid),
+                                    shlex.quote(run + "/placement.log"),
+                                    shlex.quote(run + "/placement/node-chain.json")))
+
+
+def placement_kill_all_command(scratch_rel):
+    """Cleanup backstop: stop any workload_node left running from the scratch dir."""
+    if not valid_scratch(scratch_rel):
+        raise ValueError("invalid scratch dir %r" % scratch_rel)
+    # `[w]...` so the pattern never matches this ssh shell's own command line.
+    return "pkill -TERM -f %s || true" % shlex.quote("[%s]%s/bin/workload_node serve"
+                                                      % (scratch_rel[0], scratch_rel[1:]))
+
+
+def split_node_output(text):
+    """(log text, chain events list or None) from placement_stop_command output."""
+    log, _, chain = (text or "").partition("==CHAIN==")
+    try:
+        events = json.loads(chain) if chain.strip() else None
+    except ValueError:
+        events = None
+    return log, events if isinstance(events, list) else None
+
+
+def judge_placement(ctl_rc, ctl_out, node_id, events):
+    """The two-node acceptance, from both sides' evidence: the controller
+    placed on the Pi (not the Mac) with the cog reporting and a pinned Mac
+    refusal, and the Pi's own chain shows the fetch, the placement and the
+    adapter start. Returns (ok, [reasons])."""
+    why = []
+    if ctl_rc != 0 or "RESULT ok" not in (ctl_out or ""):
+        why.append("controller did not report RESULT ok (rc %s)" % ctl_rc)
+    if not node_id or ("PLACED on %s via aarch64-native (tier native" % node_id) not in (ctl_out or ""):
+        why.append("decision did not place on the Pi natively")
+    kinds = [(e.get("source"), e.get("kind")) for e in (events or [])]
+    for need in (("mesh_artifact", "artifact.fetch"), ("workload.host", "workload.place"),
+                 ("workload.runtime", "workload.start"), ("workload.runtime", "workload.stop")):
+        if not any(k == need[1] and (need[0] == "mesh_artifact" or s == need[0]) for s, k in kinds):
+            why.append("Pi chain lacks %s/%s" % need)
+    return not why, why

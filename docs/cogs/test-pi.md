@@ -14,6 +14,7 @@ scripts/build.sh test-pi clawft-kernel                 # one crate's tests on th
 scripts/build.sh test-pi clawft-kernel --filter chain  # libtest name filter
 scripts/build.sh test-pi --live-native                 # native adapter live test only
 scripts/build.sh test-pi --cogs                        # cog conformance (ssh mode) only
+scripts/build.sh test-pi --placement                   # two-node placement, Mac -> Pi (card 12)
 scripts/build.sh test-pi --dry-run                     # print the plan, touch nothing
 scripts/build.sh test-pi --help
 ```
@@ -76,7 +77,29 @@ them with `python3 -m unittest discover -s scripts/pi`.
    `scripts/cogs/results/pi5-ssh-aarch64-expected/` and
    `scripts/cogs/results/pi5-adapter-native-aarch64-expected/`. `--sudo` is
    needed only because the harness ingest stub binds `127.0.0.1:80`.
-7. **Clean up.** It removes `~/weftos-test-pi`, including the root-owned
+7. **Two-node placement (`--placement`, card mesh-placement-12).** The lane
+   cross-builds the `workload_node` example for the Pi and builds it natively
+   for the Mac. On the Pi it starts `workload_node serve` detached under the
+   same `env -i` isolation, from `~/weftos-test-pi/runtime`, listening on mesh
+   port **9471** with Noise XX (the system weaver keeps `:9470`), trusting only
+   a throwaway controller key generated for the run, with a synthetic ADR-069
+   feature feed on `127.0.0.1:15006`. On the Mac, `workload_node place` signs
+   the released anomaly-detect binary as an operator package, learns the Pi
+   over a signed `workload.describe` (its probed, signed facts) and runs the
+   placement control plane: the engine must choose the Pi
+   (`aarch64-native`, tier `native`) over the Mac (`aarch64-container`, tier
+   `dev_fallback`); the Pi fetches the package from the Mac over the same
+   connection before loading, admits it and runs it; after a few seconds the
+   Mac reads its status, stops it, reads its output (anomaly reports) and
+   unloads it. Then it pins the Mac, whose host has no container adapter, and
+   the admission refusal must be chained. The node is stopped with SIGTERM
+   (it writes its in-memory chain to the scratch dir) and the stage passes
+   only if both sides' evidence agrees (`pi_plan.judge_placement`).
+   `--placement-evidence <file>` writes the decision, explain output,
+   attempts and both chains' event kinds, refusing to write anything that
+   looks like an address or a home path. The committed run is
+   `docs/cogs/evidence/placement-mac-pi5-2026-09-29.json`.
+8. **Clean up.** It removes `~/weftos-test-pi`, including the root-owned
    harness output (with `sudo -n` when needed), unless you pass `--keep`. The
    removal runs even when a stage fails or the lane aborts (a failed build,
    rsync or fetch, Ctrl-C, SIGTERM or SIGHUP); the abort becomes a FAIL row in
@@ -84,7 +107,7 @@ them with `python3 -m unittest discover -s scripts/pi`.
    raised, so cleanup, the guard and the report always finish; such a signal
    still fails the run. SIGKILL cannot be caught, so step 3 of the next run removes
    whatever such a run left.
-8. **Guard.** It runs after every run that got past the before-probe, aborted
+9. **Guard.** It runs after every run that got past the before-probe, aborted
    or not, and re-reads the Pi operator files, `weaver.service` and the Mac
    chain mtime. If any of them changed, or the Pi can no longer be probed (an
    unknown state is never counted as unchanged), the lane prints `CRITICAL` and
