@@ -113,28 +113,100 @@ class Results(unittest.TestCase):
         self.assertFalse(plan.stage_ok(0, plan.parse_results(self.NONE), require_ran=True))
 
 
+def pi_state_out(chain_mtime, weaver="active"):
+    rows = ["%s 32 5" % f for f in plan.OPERATOR_FILES if f != ".clawft/chain.rvf"]
+    rows.append(".clawft/chain.rvf 468733 %s" % chain_mtime)
+    return "\n".join(rows + ["weaver " + weaver, plan.STATE_END]) + "\n"
+
+
+class Guard(unittest.TestCase):
+    def test_probe_parsing_rejects_failed_or_truncated_output(self):
+        full = pi_state_out("100")
+        st = plan.parse_pi_state(0, full)
+        self.assertEqual(st[".clawft/chain.rvf"], "468733 100")
+        self.assertEqual(st["weaver"], "active")
+        self.assertIsNone(plan.parse_pi_state(255, full))
+        self.assertIsNone(plan.parse_pi_state(0, ""))
+        self.assertIsNone(plan.parse_pi_state(0, full.replace(plan.STATE_END, "")))
+        dropped = "\n".join(l for l in full.splitlines() if "chain.key" not in l)
+        self.assertIsNone(plan.parse_pi_state(0, dropped))
+
+    def test_unknown_state_is_not_unchanged(self):
+        st = plan.parse_pi_state(0, pi_state_out("100"))
+        self.assertTrue(plan.operator_guard(st, dict(st), 7, 7)["ok"])
+        for before, after in [(None, None), (st, None), (None, st)]:
+            g = plan.operator_guard(before, after, 7, 7)
+            self.assertFalse(g["ok"])
+            self.assertFalse(g["pi_probe_ok"])
+
+    def test_any_operator_file_change_is_caught(self):
+        st = plan.parse_pi_state(0, pi_state_out("100"))
+        for f in plan.OPERATOR_FILES:
+            after = dict(st, **{f: "1 999"})
+            g = plan.operator_guard(st, after, 7, 7)
+            self.assertFalse(g["ok"], f)
+            self.assertEqual(g["pi_changed"], [f])
+        self.assertFalse(plan.operator_guard(st, dict(st, weaver="inactive"), 7, 7)["ok"])
+        self.assertFalse(plan.operator_guard(st, dict(st), 7, 8)["ok"])
+
+    def test_filter_must_match_something(self):
+        r = lambda n: {"stage": "test", "passed": n}
+        self.assertFalse(plan.filter_matched([r(0), r(0)]))
+        self.assertFalse(plan.filter_matched([{"stage": "live-native", "passed": 1}]))
+        self.assertTrue(plan.filter_matched([r(0), r(3)]))
+
+    def test_remote_timeout_runs_on_the_pi(self):
+        line = plan.remote_test_command("/h/s", "/h/s/bin/t", "/h/s/src/c", [], timeout=60)
+        self.assertIn("exec timeout -k 10 60 env -i ", line)
+        self.assertNotIn("timeout", plan.remote_test_command("/h/s", "/h/s/bin/t", "/h/c", []))
+
+
+class RunnerTimeout(unittest.TestCase):
+    def test_captured_command_timeout_is_a_clean_failure(self):
+        rc, _ = pi_lane.Runner()(["sleep", "5"], capture="stdout", timeout=0.3)
+        self.assertEqual(rc, -9)
+
+
+class BuildShWiring(unittest.TestCase):
+    """scripts/build.sh itself, under the Mac's /bin/bash 3.2 + set -u."""
+
+    def test_bare_test_pi_skips_cleanly_without_host(self):
+        import subprocess
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        env = {k: v for k, v in os.environ.items() if k != "WEFTOS_PI_HOST"}
+        p = subprocess.run(["/bin/bash", os.path.join(root, "scripts", "build.sh"), "test-pi"],
+                           env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           text=True, timeout=120)
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn("SKIP", p.stdout)
+        self.assertNotIn("unbound variable", p.stdout)
+
+
 class FakeRunner:
     """Scripted Pi: ssh/docker/rsync calls answered from `script`."""
 
-    def __init__(self, fail_on=None, chain=("100", "100")):
+    def __init__(self, fail_on=None, chain=("100", "100"), output=None):
         self.dry_run, self.calls, self.fail_on = False, [], fail_on
-        self.chain = list(chain)
+        self.chain, self.output = list(chain), output
 
     def __call__(self, cmd, capture="all", timeout=None):
         self.calls.append(cmd)
         line = " ".join(cmd)
-        if "stat -c %Y" in line:
-            return 0, "%s active\n" % self.chain.pop(0)
+        if plan.STATE_END in line:
+            mt = self.chain.pop(0)
+            if mt is None:                       # probe failed (Pi dropped off)
+                return 255, ""
+            return 0, pi_state_out(mt)
         if "uname -m" in line:
             return 0, "aarch64\nldd (Debian GLIBC 2.41-12) 2.41\n/home/u\n"
         if "ldd --version" in line:
             return 0, "ldd (Debian GLIBC 2.36-9) 2.36\n"
         if "--no-run" in line:
             return 0, artifact("test", "e2e", "/target/debug/deps/e2e-2") + "\n"
-        if "exec env -i" in line:
+        if " env -i " in line:
             if self.fail_on and self.fail_on in line:
                 return 101, Results.BAD
-            return 0, Results.OK
+            return 0, self.output or Results.OK
         return 0, ""
 
 
@@ -164,7 +236,7 @@ class LaneBehaviour(unittest.TestCase):
         runner = FakeRunner()
         rc, out = self.run_main(["clawft-kernel", "--filter", "chain"], runner)
         self.assertEqual(rc, 0, out)
-        test_calls = [c for c in runner.calls if "exec env -i" in " ".join(c)]
+        test_calls = [c for c in runner.calls if " env -i " in " ".join(c)]
         self.assertEqual(len(test_calls), 1)
         self.assertTrue(test_calls[0][-1].endswith("/home/u/weftos-test-pi/bin/e2e-2 chain"))
         self.assertIn("rm -rf weftos-test-pi", " ".join(runner.calls[-2]))
@@ -181,6 +253,24 @@ class LaneBehaviour(unittest.TestCase):
         rc, out = self.run_main(["clawft-kernel"], runner)
         self.assertEqual(rc, 3)
         self.assertIn("CRITICAL", out)
+
+    def test_failed_after_probe_is_critical_not_unchanged(self):
+        runner = FakeRunner(chain=("100", None))
+        rc, out = self.run_main(["clawft-kernel"], runner)
+        self.assertEqual(rc, 3)
+        self.assertIn("CRITICAL", out)
+
+    def test_failed_before_probe_refuses_to_run(self):
+        runner = FakeRunner(chain=(None,))
+        with self.assertRaises(SystemExit):
+            self.run_main(["clawft-kernel"], runner)
+        self.assertFalse(any(" env -i " in " ".join(c) for c in runner.calls))
+
+    def test_filter_matching_nothing_fails_the_lane(self):
+        runner = FakeRunner(output=Results.NONE)
+        rc, out = self.run_main(["clawft-kernel", "--filter", "typo_name"], runner)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("matched no test", out)
 
     def test_no_args_means_full_lane(self):
         a = pi_lane.parse_args([])

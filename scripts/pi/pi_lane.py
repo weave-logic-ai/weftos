@@ -32,7 +32,7 @@ SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15"]
 LIVE_TEST = "workload_runtime::tests_live::live_native_anomaly_detect"
 LIVE_MARK = "interval run:"
 DEFAULT_COGS = "anomaly-detect,fall-detect,sleep-apnea,health-monitor"
-CHAIN = ".clawft/chain.rvf"
+CHAIN = ".clawft/chain.rvf"   # Mac side; Pi side: pi_plan.OPERATOR_FILES
 
 
 class Runner:
@@ -46,7 +46,11 @@ class Runner:
             print("  DRY   " + " ".join(cmd))
             return 0, ""
         if capture == "stdout":   # stdout captured quietly, stderr streamed
-            p = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, timeout=timeout)
+            try:
+                p = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, timeout=timeout)
+            except subprocess.TimeoutExpired as e:   # clean failure, not a traceback
+                out = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else ""
+                return -9, out or ""
             return p.returncode, p.stdout
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              text=True, errors="replace")
@@ -93,12 +97,12 @@ class Lane:
         return ok
 
     def pi_state(self):
-        """(chain mtime or 'absent', weaver.service state) on the Pi."""
-        rc, out = self.ssh("stat -c %%Y %s 2>/dev/null || echo absent; "
-                           "systemctl is-active weaver.service 2>/dev/null || true" % CHAIN,
-                           capture="quiet")
-        lines = (out or "").split()
-        return (lines[0] if lines else "?"), (lines[1] if len(lines) > 1 else "?")
+        """Operator files + weaver.service on the Pi, or None if the probe failed."""
+        rc, out = self.ssh(plan.pi_state_command(), capture="quiet", timeout=60)
+        if self.run.dry_run:
+            out = "".join("%s absent\n" % f for f in plan.OPERATOR_FILES)
+            out += "weaver dry-run\n%s\n" % plan.STATE_END
+        return plan.parse_pi_state(rc, out)
 
     # ── stages ─────────────────────────────────────────────────────────
     def preflight(self):
@@ -180,9 +184,14 @@ class Lane:
             name = "%s[%s:%s]" % (art["crate"], art["kind"], art["name"])
             print("── Running %s on the Pi" % name)
             line = plan.remote_test_command(self.scratch, self.remote_bin(art),
-                                            art["manifest_dir"], test_args)
-            rc, out = self.ssh(line, timeout=self.a.timeout)
+                                            art["manifest_dir"], test_args,
+                                            timeout=self.a.timeout)
+            rc, out = self.ssh(line, timeout=self.a.timeout + 30)
             self.record("test", name, rc, out)
+        if self.a.filter and not self.run.dry_run and not plan.filter_matched(self.results):
+            self.results.append(dict(stage="test", name="--filter %s" % self.a.filter, rc=1,
+                                     ok=False, passed=0, failed=0, ignored=0, suites=0))
+            print("  FAIL  test --filter %s matched no test on the Pi" % self.a.filter)
 
     def run_live_native(self, arts):
         lib = next((a for a in arts if a["crate"] == "clawft-kernel" and a["kind"] == "lib"), None)
@@ -195,8 +204,9 @@ class Lane:
         env = {"WEFTOS_NATIVE_LIVE": "1",
                "WEFTOS_COG_AARCH64_BIN": "%s/bin/%s" % (self.scratch, self.cog_bin_name)}
         line = plan.remote_test_command(self.scratch, self.remote_bin(lib), lib["manifest_dir"],
-                                        [LIVE_TEST, "--exact", "--nocapture"], env)
-        rc, out = self.ssh(line, timeout=self.a.timeout)
+                                        [LIVE_TEST, "--exact", "--nocapture"], env,
+                                        timeout=self.a.timeout)
+        rc, out = self.ssh(line, timeout=self.a.timeout + 30)
         self.record("live-native", "anomaly-detect", rc, out, require_ran=True, marker=LIVE_MARK)
 
     def run_cogs(self):
@@ -290,6 +300,9 @@ def main(argv=None):
     lane = Lane(a, host, Runner(a.dry_run))
     mac_before = local_chain_mtime()
     pi_before = lane.pi_state()
+    if pi_before is None:
+        raise SystemExit("test-pi: cannot read the Pi's operator state; not running "
+                         "without a before-snapshot")
     print("── test-pi: crates=%s live-native=%s cogs=%s filter=%s" % (
         ",".join(a.crates) or "-", a.live_native, a.cogs, a.filter or "-"))
     lane.preflight()
@@ -307,18 +320,16 @@ def main(argv=None):
     finally:
         lane.cleanup()
     pi_after, mac_after = lane.pi_state(), local_chain_mtime()
-    guard = {"pi_chain_unchanged": pi_before[0] == pi_after[0],
-             "pi_weaver_service": "%s -> %s" % (pi_before[1], pi_after[1]),
-             "pi_weaver_unchanged": pi_before[1] == pi_after[1],
-             "mac_chain_unchanged": mac_before == mac_after}
+    guard = plan.operator_guard(pi_before, pi_after, mac_before, mac_after)
     rc = 0 if lane.results and all(r["ok"] for r in lane.results) else 1
     print("\n── test-pi summary")
     for r in lane.results:
         print("  %s  %-12s %s" % ("PASS" if r["ok"] else "FAIL", r["stage"], r["name"]))
     print("  INFO  operator data: %s" % guard)
-    if not (guard["pi_chain_unchanged"] and guard["mac_chain_unchanged"]
-            and guard["pi_weaver_unchanged"]) and not a.dry_run:
-        print("  CRITICAL  operator chain or weaver.service changed during the run")
+    if not guard["ok"] and not a.dry_run:
+        print("  CRITICAL  %s" % ("operator files or weaver.service changed during the run"
+                                  if guard["pi_probe_ok"] else
+                                  "could not re-read the Pi's operator state; unverified"))
         rc = 3
     if a.report:
         import json

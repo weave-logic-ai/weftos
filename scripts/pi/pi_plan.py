@@ -159,14 +159,73 @@ def isolated_env(scratch_abs, extra=None):
     return env
 
 
-def remote_test_command(scratch_abs, binary, manifest_dir, test_args, extra_env=None):
+def remote_test_command(scratch_abs, binary, manifest_dir, test_args, extra_env=None,
+                        timeout=None):
     """Shell line run over ssh: cd to the crate dir (as cargo test would) and
-    exec the test binary under `env -i` with only the isolated environment."""
+    exec the test binary under `env -i` with only the isolated environment.
+    With `timeout` the Pi's coreutils `timeout` bounds it, so a hung test is
+    killed on the Pi itself, not only the local ssh client."""
     env = isolated_env(scratch_abs, extra_env)
     env["CARGO_MANIFEST_DIR"] = manifest_dir
     assigns = ["%s=%s" % (k, v) for k, v in sorted(env.items())]
-    return "cd %s && exec env -i %s %s" % (
-        shlex.quote(manifest_dir), shlex.join(assigns), shlex.join([binary] + list(test_args)))
+    cap = "timeout -k 10 %d " % int(timeout) if timeout else ""
+    return "cd %s && exec %senv -i %s %s" % (
+        shlex.quote(manifest_dir), cap, shlex.join(assigns),
+        shlex.join([binary] + list(test_args)))
+
+
+# Operator files on the Pi the lane must never change (relative to $HOME).
+# sessions/ and kernel.log are left out: the Pi's own weaver writes them.
+OPERATOR_FILES = (".clawft/chain.rvf", ".clawft/chain.key", ".clawft/chain.tree.json",
+                  ".clawft/config.json", ".clawft/node.key")
+STATE_END = "weftos-pi-state-end"
+
+
+def pi_state_command():
+    """One ssh line: `<file> <size> <mtime>` (or `<file> absent`) per operator
+    file, the weaver.service state, then an end marker so a truncated or
+    failed probe is detectable."""
+    parts = ["for f in %s; do stat -c '%%n %%s %%Y' \"$f\" 2>/dev/null || echo \"$f absent\"; done"
+             % " ".join(OPERATOR_FILES),
+             "echo \"weaver $(systemctl is-active weaver.service 2>/dev/null || true)\"",
+             "echo %s" % STATE_END]
+    return "cd && " + "; ".join(parts)
+
+
+def parse_pi_state(rc, out):
+    """{file: 'size mtime'|'absent', 'weaver': state} or None when the probe
+    failed or is incomplete (never guessed)."""
+    lines = (out or "").strip().splitlines()
+    if rc != 0 or not lines or lines[-1].strip() != STATE_END:
+        return None
+    state = {}
+    for line in lines[:-1]:
+        name, _, rest = line.strip().partition(" ")
+        state[name] = rest.strip() or "?"
+    want = set(OPERATOR_FILES) | {"weaver"}
+    return state if want <= set(state) else None
+
+
+def operator_guard(pi_before, pi_after, mac_before, mac_after):
+    """Guard verdict. An unknown Pi state (failed probe) is NOT unchanged."""
+    known = pi_before is not None and pi_after is not None
+    changed = sorted(k for k in OPERATOR_FILES if known and pi_before[k] != pi_after[k])
+    g = {"pi_probe_ok": known,
+         "pi_operator_files_unchanged": known and not changed,
+         "pi_changed": changed,
+         "pi_weaver_service": "%s -> %s" % ((pi_before or {}).get("weaver", "?"),
+                                            (pi_after or {}).get("weaver", "?")),
+         "pi_weaver_unchanged": known and pi_before["weaver"] == pi_after["weaver"],
+         "mac_chain_unchanged": mac_before == mac_after}
+    g["ok"] = (g["pi_operator_files_unchanged"] and g["pi_weaver_unchanged"]
+               and g["mac_chain_unchanged"])
+    return g
+
+
+def filter_matched(results):
+    """With --filter, the test stage must run at least one test in total;
+    otherwise a typo'd filter would report green without testing anything."""
+    return sum(r["passed"] for r in results if r["stage"] == "test") > 0
 
 
 def parse_results(text):

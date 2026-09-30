@@ -28,8 +28,11 @@ The orchestrator is `scripts/pi/pi_lane.py`, and its pure helpers are in
 them with `python3 -m unittest discover -s scripts/pi`.
 
 1. **Preflight.** It checks over SSH that the Pi is `aarch64`, reads its glibc
-   and `$HOME`, and records the mtime of the Pi's `~/.clawft/chain.rvf` and the
-   state of `weaver.service`. On the Mac it records the mtime of `~/.clawft/chain.rvf`.
+   and `$HOME`, and records the size and mtime of the Pi's operator files
+   (`~/.clawft/chain.rvf`, `chain.key`, `chain.tree.json`, `config.json`,
+   `node.key`) and the state of `weaver.service`. On the Mac it records the
+   mtime of `~/.clawft/chain.rvf`. If the Pi probe fails or comes back
+   incomplete, the lane stops before building anything.
 2. **Cross-build.** It runs `cargo test --no-run` inside
    `rust:<rust-toolchain.toml channel>-bookworm` with `--platform linux/arm64`
    (OrbStack). Bookworm has glibc 2.36, and the lane refuses to run if the
@@ -49,7 +52,10 @@ them with `python3 -m unittest discover -s scripts/pi`.
    TMPDIR=… XDG_*=… CARGO_MANIFEST_DIR=… <bin> [filter]`. Nothing from the login
    environment leaks in, and nothing can reach `~/.clawft` or the system weaver on
    `:9470`. Output streams back live. A binary passes when it exits 0, libtest
-   printed a `test result:` line, and no test failed.
+   printed a `test result:` line, and no test failed. With `--filter`, the stage
+   also fails if the filter ran zero tests across all binaries, so a typo cannot
+   report green. Each binary runs under the Pi's `timeout -k 10 <--timeout>`, so
+   a hung test is killed on the Pi, not only the local ssh client.
 5. **Native adapter live test.** The clawft-kernel lib test binary runs
    `workload_runtime::tests_live::live_native_anomaly_detect` with
    `WEFTOS_NATIVE_LIVE=1`, using the released `cog-anomaly-detect-aarch64` (fetched
@@ -69,8 +75,11 @@ them with `python3 -m unittest discover -s scripts/pi`.
 7. **Clean up.** It removes `~/weftos-test-pi`, including the root-owned
    harness output (with `sudo -n` when needed), unless you pass `--keep`. The
    removal runs even when a stage fails.
-8. **Guard.** It re-reads both chain mtimes and `weaver.service`. If any of them
-   changed, the lane prints `CRITICAL` and exits 3.
+8. **Guard.** It re-reads the Pi operator files, `weaver.service` and the Mac
+   chain mtime. If any of them changed, or the Pi can no longer be probed (an
+   unknown state is never counted as unchanged), the lane prints `CRITICAL` and
+   exits 3. `sessions/` and `kernel.log` are not compared, because the Pi's own
+   weaver writes them.
 
 `--report <file>` writes a JSON summary with the glibc versions, builder
 image, per-stage counts and the guard result. It holds no host names. The

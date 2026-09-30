@@ -1285,7 +1285,9 @@ cmd_test_pi() {
     header "ARM tests on the real Pi 5 (scripts/pi/pi_lane.py)"
     timer_start
     local rc=0
-    python3 -u "$ROOT/scripts/pi/pi_lane.py" "${PI_ARGS[@]}" || rc=$?
+    # ${arr[@]+…} guard: bare `test-pi` (the full lane) leaves PI_ARGS empty,
+    # which macOS bash 3.2 + `set -u` rejects as unbound.
+    python3 -u "$ROOT/scripts/pi/pi_lane.py" ${PI_ARGS[@]+"${PI_ARGS[@]}"} || rc=$?
     timer_end
     return $rc
 }
