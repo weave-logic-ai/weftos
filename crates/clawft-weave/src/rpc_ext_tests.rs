@@ -217,6 +217,68 @@ async fn wire_json_ext_route_enforces_capability_and_passes_auth() {
     assert_eq!(ok.result.unwrap()["auth"], "write");
 }
 
+const PROJECT_A: &str = "01J0000000000000000000000A";
+
+/// D0 note said `CallerCtx.project` was always None; it now follows
+/// `Request.project` on the JSON path.
+#[tokio::test]
+async fn wire_json_propagates_project_into_caller_ctx() {
+    let kernel = test_kernel().await;
+    let line = format!(
+        r#"{{"method":"rpc_ext.test.echo","params":null,"auth":"write","proto":1,"project":"{PROJECT_A}"}}"#
+    );
+    let ok = json_roundtrip(&kernel, &line).await;
+    assert!(ok.ok, "{:?}", ok.error);
+    assert_eq!(ok.result.unwrap()["project"], PROJECT_A);
+    let none = json_roundtrip(
+        &kernel,
+        r#"{"method":"rpc_ext.test.echo","params":null,"auth":"write"}"#,
+    )
+    .await;
+    assert!(none.result.unwrap()["project"].is_null());
+}
+
+#[tokio::test]
+async fn wire_old_client_without_proto_or_project_still_works() {
+    let kernel = test_kernel().await;
+    let r = json_roundtrip(&kernel, r#"{"method":"kernel.handshake","params":null}"#).await;
+    assert!(r.ok, "{:?}", r.error);
+    let h: clawft_rpc::Handshake = serde_json::from_value(r.result.unwrap()).unwrap();
+    assert_eq!(h.depth, 0);
+    assert_eq!(h.proto.current, clawft_rpc::PROTO_VERSION);
+    assert!(!h.node_id.is_empty());
+    assert_eq!(h.pid, std::process::id());
+}
+
+#[tokio::test]
+async fn wire_unsupported_proto_is_refused_with_remedy_and_data() {
+    let kernel = test_kernel().await;
+    for bad in [0u32, clawft_rpc::PROTO_VERSION + 1] {
+        let line = format!(r#"{{"method":"kernel.handshake","params":null,"proto":{bad},"id":"9"}}"#);
+        let r = json_roundtrip(&kernel, &line).await;
+        assert!(!r.ok);
+        assert_eq!(r.error_kind.as_deref(), Some("proto_mismatch"));
+        assert_eq!(r.id.as_deref(), Some("9"));
+        let line = r.error.unwrap();
+        let want = if bad == 0 { "update this `weft`" } else { "`weaver kernel restart`" };
+        assert!(line.contains(want), "{line}");
+        let d = r.data.unwrap();
+        assert_eq!(d["client"]["proto"], bad);
+        assert_eq!(d["daemon"]["min"], clawft_rpc::PROTO_MIN);
+    }
+}
+
+#[tokio::test]
+async fn wire_malformed_project_is_refused() {
+    let kernel = test_kernel().await;
+    let r = json_roundtrip(
+        &kernel,
+        r#"{"method":"kernel.handshake","params":null,"proto":1,"project":"../x"}"#,
+    )
+    .await;
+    assert_eq!(r.error_kind.as_deref(), Some("invalid_project"));
+}
+
 #[cfg(feature = "rvf-rpc")]
 async fn rvf_roundtrip(kernel: &KernelRef, req: clawft_rpc::Request) -> Response {
     use crate::rvf_codec::{RvfFrameReader, RvfFrameWriter};
@@ -243,6 +305,8 @@ async fn wire_rvf_enforces_capabilities_and_gates() {
         params: Value::Null,
         id: Some("1".into()),
         auth: auth.map(String::from),
+        proto: None,
+        project: None,
     };
     let r = rvf_roundtrip(&kernel, req("kernel.shutdown", None)).await;
     assert!(!r.ok);
@@ -251,6 +315,16 @@ async fn wire_rvf_enforces_capabilities_and_gates() {
     assert_eq!(r.error_kind.as_deref(), Some("scope_denied"));
     let r = rvf_roundtrip(&kernel, req("rpc_ext.test.echo", Some("write"))).await;
     assert!(r.ok, "{:?}", r.error);
+    // Project and proto ride the RVF path too.
+    let mut scoped = req("rpc_ext.test.echo", Some("write"));
+    scoped.proto = Some(clawft_rpc::PROTO_VERSION);
+    scoped.project = Some(PROJECT_A.into());
+    let r = rvf_roundtrip(&kernel, scoped).await;
+    assert_eq!(r.result.unwrap()["project"], PROJECT_A);
+    let mut bad = req("kernel.handshake", None);
+    bad.proto = Some(clawft_rpc::PROTO_VERSION + 1);
+    let r = rvf_roundtrip(&kernel, bad).await;
+    assert_eq!(r.error_kind.as_deref(), Some("proto_mismatch"));
 }
 
 #[test]

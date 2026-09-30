@@ -3631,12 +3631,19 @@ where
             // ADR-103 D0: one authorization point (capability check, then
             // extension gates) for every entry path, before any streaming
             // intercept or dispatch.
-            let caller = crate::rpc_ext::CallerCtx::from_auth(req.auth.clone());
-            let (caps, denial) =
+            let caller = crate::rpc_ext::CallerCtx::from_request(&req);
+            // ADR-103 D14: refuse an unsupported `proto` / malformed
+            // `project` before anything else looks at the request.
+            let (caps, denial) = if let Some(refusal) =
+                crate::handshake_rpc::envelope_refusal(req.proto, req.project.as_deref())
+            {
+                (crate::capability::CallerCapabilities::denied(), Some(refusal))
+            } else {
                 match authorize_caller(&caller, &req.method, &req.params, kernel).await {
                     Ok(caps) => (caps, None),
                     Err(denied) => (crate::capability::CallerCapabilities::denied(), Some(denied)),
-                };
+                }
+            };
             if let Some(denied) = denial {
                 (denied.with_id(id), None)
             } else
@@ -4337,16 +4344,22 @@ async fn handle_rvf_connection<S>(
         let response = match rvf_rpc::decode_request(&frame) {
             Ok(req) => {
                 let id = req.id.clone();
-                let caller = crate::rpc_ext::CallerCtx::from_auth(req.auth.clone());
-                dispatch_authorized(
-                    &caller,
-                    req.method,
-                    req.params,
-                    Arc::clone(&kernel),
-                    shutdown_tx.clone(),
-                )
-                .await
-                .with_id(id)
+                let caller = crate::rpc_ext::CallerCtx::from_request(&req);
+                if let Some(refusal) =
+                    crate::handshake_rpc::envelope_refusal(req.proto, req.project.as_deref())
+                {
+                    refusal.with_id(id)
+                } else {
+                    dispatch_authorized(
+                        &caller,
+                        req.method,
+                        req.params,
+                        Arc::clone(&kernel),
+                        shutdown_tx.clone(),
+                    )
+                    .await
+                    .with_id(id)
+                }
             }
             Err(e) => Response::error(format!("invalid RVF request: {e}")),
         };

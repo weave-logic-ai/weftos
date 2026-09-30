@@ -114,6 +114,17 @@ pub struct Request {
     /// serde default so existing clients remain wire-compatible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<String>,
+
+    /// Protocol version the client speaks (ADR-103 D14). Absent means a
+    /// legacy client (treated as protocol 0; accepted in Phase 1).
+    /// `DaemonClient::call` stamps [`crate::PROTO_VERSION`] when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proto: Option<u32>,
+
+    /// Project ULID the request is scoped to. The daemon copies it into
+    /// the caller context; absent means unscoped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 impl Request {
@@ -124,6 +135,8 @@ impl Request {
             params: serde_json::Value::Null,
             id: None,
             auth: None,
+            proto: None,
+            project: None,
         }
     }
 
@@ -134,6 +147,8 @@ impl Request {
             params,
             id: None,
             auth: None,
+            proto: None,
+            project: None,
         }
     }
 
@@ -179,6 +194,11 @@ pub struct Response {
     /// Echoed request ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+
+    /// Structured error detail (e.g. the `proto_mismatch` payload).
+    /// Omitted when absent so older clients see the same JSON as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
 }
 
 impl Response {
@@ -190,6 +210,7 @@ impl Response {
             error: None,
             error_kind: None,
             id: None,
+            data: None,
         }
     }
 
@@ -204,6 +225,7 @@ impl Response {
             error: Some(msg.into()),
             error_kind: None,
             id: None,
+            data: None,
         }
     }
 
@@ -221,6 +243,7 @@ impl Response {
             error: Some(msg.into()),
             error_kind: Some(kind.into()),
             id: None,
+            data: None,
         }
     }
 
@@ -256,6 +279,44 @@ mod tests {
         let req = Request::with_params("agent.spawn", serde_json::json!({"agent_id": "test"}));
         assert_eq!(req.method, "agent.spawn");
         assert_eq!(req.params["agent_id"], "test");
+    }
+
+    #[test]
+    fn old_request_json_parses_without_new_fields() {
+        let req: Request = serde_json::from_str(r#"{"method":"kernel.status"}"#).unwrap();
+        assert_eq!(req.proto, None);
+        assert_eq!(req.project, None);
+        // None fields are not serialised, so old daemons see the old shape.
+        let v = serde_json::to_value(Request::new("kernel.status")).unwrap();
+        assert!(v.get("proto").is_none() && v.get("project").is_none());
+    }
+
+    #[test]
+    fn new_request_json_parses_on_the_old_struct() {
+        #[derive(serde::Deserialize)]
+        struct OldRequest {
+            method: String,
+            #[serde(default)]
+            auth: Option<String>,
+        }
+        let mut req = Request::new("kernel.status").with_auth("read");
+        req.proto = Some(1);
+        req.project = Some("01J0000000000000000000000A".into());
+        let old: OldRequest = serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        assert_eq!(old.method, "kernel.status");
+        assert_eq!(old.auth.as_deref(), Some("read"));
+    }
+
+    #[test]
+    fn response_data_is_optional_both_ways() {
+        let old: Response = serde_json::from_str(r#"{"ok":true,"result":1}"#).unwrap();
+        assert!(old.data.is_none());
+        let v = serde_json::to_value(Response::success(serde_json::json!(1))).unwrap();
+        assert!(v.get("data").is_none());
+        let mut r = Response::error("x");
+        r.data = Some(serde_json::json!({"k": 1}));
+        let back: Response = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(back.data.unwrap()["k"], 1);
     }
 
     #[test]

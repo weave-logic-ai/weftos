@@ -78,9 +78,7 @@ mod imp {
         /// keeps that scope; only an absent token gets the implicit
         /// upgrade.
         pub async fn call(&mut self, mut request: Request) -> anyhow::Result<Response> {
-            if request.auth.is_none() {
-                request.auth = Some("admin".to_string());
-            }
+            crate::connect::stamp_request(&mut request);
             let mut json = serde_json::to_string(&request)?;
             json.push('\n');
 
@@ -116,9 +114,7 @@ mod imp {
             mut self,
             mut request: Request,
         ) -> anyhow::Result<(Response, StreamSession)> {
-            if request.auth.is_none() {
-                request.auth = Some("admin".to_string());
-            }
+            crate::connect::stamp_request(&mut request);
             let mut json = serde_json::to_string(&request)?;
             json.push('\n');
             self.stream.write_all(json.as_bytes()).await?;
@@ -210,9 +206,7 @@ mod imp {
         /// ACL-gated by the creating process (same trust model as UDS
         /// filesystem permissions on Unix).
         pub async fn call(&mut self, mut request: Request) -> anyhow::Result<Response> {
-            if request.auth.is_none() {
-                request.auth = Some("admin".to_string());
-            }
+            crate::connect::stamp_request(&mut request);
             let mut json = serde_json::to_string(&request)?;
             json.push('\n');
 
@@ -245,9 +239,7 @@ mod imp {
             mut self,
             mut request: Request,
         ) -> anyhow::Result<(Response, StreamSession)> {
-            if request.auth.is_none() {
-                request.auth = Some("admin".to_string());
-            }
+            crate::connect::stamp_request(&mut request);
             let mut json = serde_json::to_string(&request)?;
             json.push('\n');
             self.stream.write_all(json.as_bytes()).await?;

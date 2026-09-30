@@ -62,7 +62,7 @@ pub type KernelRef = Arc<RwLock<Kernel<NativePlatform>>>;
 pub struct CallerCtx {
     /// Bearer / scope token from the request envelope, if any.
     pub auth: Option<String>,
-    /// Project the request is scoped to, once the envelope carries one.
+    /// Project the request is scoped to (`Request.project`).
     pub project: Option<String>,
 }
 
@@ -72,6 +72,14 @@ impl CallerCtx {
         Self {
             auth,
             project: None,
+        }
+    }
+
+    /// Caller context for a wire request: its `auth` and `project`.
+    pub fn from_request(req: &clawft_rpc::Request) -> Self {
+        Self {
+            auth: req.auth.clone(),
+            project: req.project.clone(),
         }
     }
 
@@ -168,13 +176,24 @@ pub type GateFn = for<'a> fn(&'a GateRequest<'a>) -> GateFuture<'a>;
 /// `ExtRoute { prefix: "project.", capability: Capability::Read,
 /// handler: crate::project_rpc::handle }`.
 #[cfg(not(test))]
-const ROUTES: &[ExtRoute] = &[];
-#[cfg(test)]
 const ROUTES: &[ExtRoute] = &[ExtRoute {
-    prefix: "rpc_ext.test.",
-    capability: Capability::Write,
-    handler: test_probe,
+    prefix: "kernel.handshake",
+    capability: Capability::Read,
+    handler: crate::handshake_rpc::handle,
 }];
+#[cfg(test)]
+const ROUTES: &[ExtRoute] = &[
+    ExtRoute {
+        prefix: "kernel.handshake",
+        capability: Capability::Read,
+        handler: crate::handshake_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "rpc_ext.test.",
+        capability: Capability::Write,
+        handler: test_probe,
+    },
+];
 
 /// Registered gates, run in order; the first denial wins.
 ///
@@ -191,6 +210,7 @@ fn test_probe(call: ExtCall) -> ExtFuture {
         Response::success(serde_json::json!({
             "method": call.method,
             "auth": call.ctx.auth,
+            "project": call.ctx.project,
         }))
     })
 }

@@ -27,12 +27,20 @@
 //! ```
 
 mod client;
+mod connect;
 pub mod doctor;
+pub mod handshake;
 pub mod named_pipe;
 pub mod probe;
 mod protocol;
+pub mod resolve;
 pub mod version_check;
 
+pub use connect::{ClientContext, ConnectError, set_context};
+pub use handshake::{
+    DaemonBuild, Failure, Handshake, PROTO_MIN, PROTO_VERSION, ProtoCheck, ProtoRange, check_proto,
+    proto_mismatch_response, remedy, remedy_for,
+};
 pub use client::{DaemonClient, StreamSession, is_daemon_running, is_daemon_running_at};
 pub use protocol::{
     LOG_FILE_NAME, PID_FILE_NAME, PIPE_NAME_PREFIX, Request, Response, SOCKET_NAME,
