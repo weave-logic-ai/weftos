@@ -1038,6 +1038,12 @@ CARGO_AUDIT_IGNORES=(
     --ignore RUSTSEC-2026-0269   # wasmtime FS trailing-slash escape; fix needs wasmtime 46 = Rust 1.94.
                                  # Not reachable: the only WASI ctx (kernel wasm_runner) has no FS preopens.
                                  # 0.8.1 residual; board ticket wasmtime-46-toolchain-1-94
+    --ignore RUSTSEC-2026-0314   # wasmtime-wasi FS datetime overflow panic; fixed only in wasmtime 48.0.3+ (Rust 1.95+).
+                                 # Not reachable: kernel wasm_runner WasiCtx has no FS preopens, so no guest FS calls.
+                                 # Expires 2026-12-31; see docs/security/cargo-audit-residual.md
+    --ignore RUSTSEC-2026-0316   # wasmtime dynamic record lifting fuel bypass (component model only; low severity).
+                                 # Not reachable: wasmtime built without the component-model feature (core modules only).
+                                 # Expires 2026-12-31; see docs/security/cargo-audit-residual.md
     --ignore RUSTSEC-2020-0036   # failure unmaintained (transitive)
     --ignore RUSTSEC-2019-0036   # failure unsound (transitive)
     --ignore RUSTSEC-2026-0221   # event-listener unsound (transitive async stack)
