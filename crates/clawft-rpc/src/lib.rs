@@ -36,7 +36,7 @@ mod protocol;
 pub mod resolve;
 pub mod version_check;
 
-pub use connect::{ClientContext, ConnectError, set_context};
+pub use connect::{ClientContext, ConnectError, Connected, set_context};
 pub use handshake::{
     DaemonBuild, Failure, Handshake, PROTO_MIN, PROTO_VERSION, ProtoCheck, ProtoRange, check_proto,
     proto_mismatch_response, remedy, remedy_for,

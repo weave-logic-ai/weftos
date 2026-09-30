@@ -87,7 +87,7 @@ fn render_json_text(value: &serde_json::Value) -> String {
 /// A daemon that answers with an error is a failure: the message goes to
 /// stderr and the process exits non-zero.
 async fn print_from_daemon(method: &str, json: bool) -> anyhow::Result<bool> {
-    let Some(mut client) = clawft_rpc::DaemonClient::connect().await else {
+    let Some(mut client) = crate::commands::daemon_conn::connect_opt().await else {
         return Ok(false);
     };
     let resp = client.simple_call(method).await?;

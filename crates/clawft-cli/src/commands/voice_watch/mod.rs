@@ -52,7 +52,7 @@ use render::{fmt_ms, render_graph_updates, render_trace_events, render_voice_ana
 /// node to the terminal until Ctrl+C. `json` switches to one-record-per-line
 /// JSON; `interval_ms` is the committed-state poll cadence.
 pub async fn handle_watch(conv_id: String, json: bool, interval_ms: u64) -> anyhow::Result<()> {
-    let mut client = DaemonClient::connect().await.ok_or_else(|| {
+    let mut client = crate::commands::daemon_conn::connect_opt().await.ok_or_else(|| {
         anyhow::anyhow!(
             "no kernel daemon reachable — start one with `weaver kernel start` \
              (and enable [kernel.agent.classification] mode = \"keyword\")"
@@ -116,7 +116,7 @@ pub async fn handle_watch(conv_id: String, json: bool, interval_ms: u64) -> anyh
                         },
                         Err(e) => {
                             eprintln!("daemon transport error: {e}; reconnecting…");
-                            match DaemonClient::connect().await {
+                            match crate::commands::daemon_conn::connect_opt().await {
                                 Some(c) => { client = c; continue; }
                                 None => {
                                     eprintln!("kernel daemon gone — watch stopped.");
@@ -138,7 +138,7 @@ pub async fn handle_watch(conv_id: String, json: bool, interval_ms: u64) -> anyh
                     Err(e) => {
                         // One reconnect attempt; a stopped daemon ends the watch.
                         eprintln!("daemon transport error: {e}; reconnecting…");
-                        match DaemonClient::connect().await {
+                        match crate::commands::daemon_conn::connect_opt().await {
                             Some(c) => client = c,
                             None => {
                                 eprintln!("kernel daemon gone — watch stopped.");

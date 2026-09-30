@@ -81,7 +81,7 @@ impl DaemonAttachFacade {
     pub async fn connect_path(socket_path: Option<PathBuf>) -> Result<Self, String> {
         let client = match &socket_path {
             Some(p) => DaemonClient::connect_path(p).await,
-            None => DaemonClient::connect().await,
+            None => crate::commands::daemon_conn::connect_opt().await,
         }
         .ok_or_else(daemon_unavailable_error)?;
 
@@ -106,7 +106,7 @@ impl DaemonAttachFacade {
         }
         let client = match &self.socket_path {
             Some(p) => DaemonClient::connect_path(p).await,
-            None => DaemonClient::connect().await,
+            None => crate::commands::daemon_conn::connect_opt().await,
         }
         .ok_or_else(daemon_unavailable_error)?;
         *guard = Some(client);
