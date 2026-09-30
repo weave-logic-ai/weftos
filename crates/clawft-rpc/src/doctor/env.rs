@@ -52,6 +52,8 @@ pub struct DoctorEnv {
     pub ps_override: Option<String>,
     /// Timeout for each `--version` probe.
     pub probe_timeout: Duration,
+    /// Run `--version` on non-native (script) files. Tests only.
+    pub probe_scripts: bool,
 }
 
 impl DoctorEnv {
@@ -95,13 +97,19 @@ impl DoctorEnv {
             runtime_source,
             ps_override: None,
             probe_timeout: Duration::from_secs(5),
+            probe_scripts: false,
         }
     }
 
     /// Every runtime directory doctor should inspect: the resolved one, then
     /// `~/.clawft`, `~/.weftos/runtime`, and each ancestor `.weftos/runtime`.
+    /// When `WEFTOS_RUNTIME_DIR` is set it is the ONLY candidate, so tests and
+    /// sandboxes can isolate doctor from the real machine.
     pub fn runtime_dir_candidates(&self) -> Vec<PathBuf> {
         let mut out = vec![self.runtime_dir.clone()];
+        if self.runtime_source == RuntimeSource::EnvOverride {
+            return out;
+        }
         let mut push = |p: PathBuf| {
             if !out.contains(&p) {
                 out.push(p);
@@ -153,5 +161,6 @@ pub fn test_env(root: &Path) -> DoctorEnv {
         home,
         ps_override: Some(String::new()),
         probe_timeout: Duration::from_secs(5),
+        probe_scripts: true,
     }
 }

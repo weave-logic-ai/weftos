@@ -217,19 +217,6 @@ impl DoctorFinding {
     }
 }
 
-/// Aggregate severity: Fail > Warn > Ok.
-pub fn worst_severity(findings: &[DoctorFinding]) -> CheckSeverity {
-    let mut worst = CheckSeverity::Ok;
-    for f in findings {
-        match (worst, f.severity) {
-            (_, CheckSeverity::Fail) => return CheckSeverity::Fail,
-            (CheckSeverity::Ok, CheckSeverity::Warn) => worst = CheckSeverity::Warn,
-            _ => {}
-        }
-    }
-    worst
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,30 +304,5 @@ mod tests {
         let f = agent_routes_finding(&routing);
         assert_eq!(f.severity, CheckSeverity::Ok);
         assert!(f.message.contains("1 route"));
-    }
-
-    #[test]
-    fn worst_severity_prefers_fail() {
-        let findings = vec![
-            DoctorFinding {
-                id: "a",
-                severity: CheckSeverity::Ok,
-                message: "ok".into(),
-                hint: None,
-            },
-            DoctorFinding {
-                id: "b",
-                severity: CheckSeverity::Warn,
-                message: "w".into(),
-                hint: None,
-            },
-            DoctorFinding {
-                id: "c",
-                severity: CheckSeverity::Fail,
-                message: "f".into(),
-                hint: None,
-            },
-        ];
-        assert_eq!(worst_severity(&findings), CheckSeverity::Fail);
     }
 }

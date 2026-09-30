@@ -164,7 +164,8 @@ weaver doctor [COMPONENT...] [OPTIONS]
 | `COMPONENT`, `--component <LIST>` | Limit to `install`, `daemon`, `runtime`, `config`, `mcp`, `agents` (comma-separated or repeated). `weft doctor install` and `weft doctor --component install` are the same. |
 | `--json` | Machine-readable output: `summary`, `exit_code`, `findings[]`, and an inventory under `data`. |
 | `--strict` | Exit non-zero on WARN as well as FAIL. |
-| `--fix` | Remove provably stale `kernel.sock` / `kernel.pid` files and print exactly what changed. Nothing else is modified. |
+| `--fix` | Remove provably stale `kernel.sock` / `kernel.pid` files in the ACTIVE runtime dir and print exactly what changed. Nothing else is modified. |
+| `--all-runtimes` | With `--fix`, also repair every runtime dir doctor can see (`~/.clawft`, `~/.weftos/runtime`, ancestor `.weftos/runtime`). |
 | `--multi-agent` | Same as `--component agents` (kept for WEFT-197 users). |
 | `--config`, `-c` `<PATH>` | (weft only) config file path. |
 
@@ -182,7 +183,24 @@ Exit code is 1 on any FAIL, or on any WARN with `--strict`; otherwise 0.
 
 `--fix` is deliberately narrow: a socket is removed only when a connect is
 refused and its recorded pid is not running; a pid file only when that pid is
-not running. Live sockets, keys and binaries are never touched. Copies of a
+not running. Both conditions are re-checked immediately before each unlink.
+If `ps` fails (sandbox), liveness is unknown and `--fix` removes nothing. By
+default only the active runtime dir is repaired (the one `weaver kernel`
+would use from this directory); `--all-runtimes` widens that. Setting
+`WEFTOS_RUNTIME_DIR` makes it the only directory doctor looks at, which is
+how to sandbox a doctor run. Live sockets, keys and binaries are never
+touched.
+
+Duplicate copies are ranked by newer version, then clean over dirty, then
+channel (cargo-dist or Homebrew, then `cargo install`, then `build.sh`, then
+unknown). The `fix:` line names `rm` only for copies that are byte-identical
+to the best copy or strictly lower ranked, and never for the best one; when
+the `PATH` winner is the lower-ranked copy it suggests reordering `PATH`.
+
+Doctor runs `--version` only on files that are native executables (Mach-O,
+ELF, PE) named weft, weaver or weftos; a script with that name is reported
+as not probed rather than executed. `--json` daemon entries carry only the
+binary and subcommand, never the full command line. Copies of a
 binary are never removed by doctor; the `fix:` line for a duplicate is a
 command for you to run.
 

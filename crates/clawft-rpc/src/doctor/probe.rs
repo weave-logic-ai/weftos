@@ -44,8 +44,11 @@ pub fn version_key(v: &str) -> Vec<u64> {
 
 /// Run `cmd args` with a timeout and no stdin; stdout on success.
 ///
-/// Only ever used with the fixed side-effect-free probes (`--version`,
-/// `version`) on weft/weaver/weftos. The update nag is disabled for the child.
+/// This EXECUTES `cmd`. `--version` is only side-effect free for our real
+/// binaries; a same-named script earlier on `PATH` would run arbitrary code.
+/// Callers therefore go through [`probe_binary`], which refuses files that
+/// are not native executables unless the env opts in (tests). The update
+/// nag is disabled for the child.
 pub fn run_capture(cmd: &Path, args: &[&str], timeout: Duration) -> Option<String> {
     let mut child = Command::new(cmd)
         .args(args)
@@ -83,6 +86,33 @@ pub fn probe_version(path: &Path, timeout: Duration) -> Option<VersionInfo> {
         .and_then(|t| parse_version(&t))
 }
 
+/// True when the file starts with a Mach-O, ELF or PE magic number.
+pub fn is_native_executable(path: &Path) -> bool {
+    let mut magic = [0u8; 4];
+    let Ok(mut f) = std::fs::File::open(path) else { return false };
+    if f.read_exact(&mut magic).is_err() {
+        return false;
+    }
+    matches!(
+        magic,
+        [0x7f, b'E', b'L', b'F']
+            | [0xfe, 0xed, 0xfa, 0xce | 0xcf]
+            | [0xce | 0xcf, 0xfa, 0xed, 0xfe]
+            | [0xca, 0xfe, 0xba, 0xbe]
+    ) || magic[..2] == *b"MZ"
+}
+
+/// Probe a binary's version, but only run native executables.
+///
+/// Returns `(version, note)`. `note` explains why nothing ran: a script is
+/// never executed unless `allow_scripts` is set (unit tests use scripts).
+pub fn probe_binary(path: &Path, timeout: Duration, allow_scripts: bool) -> (Option<VersionInfo>, Option<String>) {
+    if !allow_scripts && !is_native_executable(path) {
+        return (None, Some("not a native executable (script?); not run".into()));
+    }
+    (probe_version(path, timeout), None)
+}
+
 /// Hex SHA-256 of a file.
 pub fn sha256_file(path: &Path) -> Option<String> {
     let mut f = std::fs::File::open(path).ok()?;
@@ -117,6 +147,19 @@ mod tests {
         let v = parse_version("0.8.1 (2cd752e1 2026-09-28T14:25Z)").unwrap();
         assert_eq!(v.version, "0.8.1");
         assert!(parse_version("no version here").is_none());
+    }
+
+    #[test]
+    fn scripts_are_not_native_and_are_not_run() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("weaver");
+        std::fs::write(&p, "#!/bin/sh\ntouch ran\n").unwrap();
+        assert!(!is_native_executable(&p));
+        let (v, note) = probe_binary(&p, Duration::from_secs(2), false);
+        assert!(v.is_none() && note.is_some());
+        let e = d.path().join("elf");
+        std::fs::write(&e, [0x7f, b'E', b'L', b'F', 0]).unwrap();
+        assert!(is_native_executable(&e));
     }
 
     #[test]

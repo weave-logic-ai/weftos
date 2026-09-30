@@ -26,10 +26,16 @@ pub struct DoctorArgs {
     #[arg(long, default_value_t = false)]
     pub json: bool,
 
-    /// Apply safe local repairs (remove provably stale socket/pid files) and
-    /// report exactly what changed. Off by default.
+    /// Apply safe local repairs (remove provably stale socket/pid files in the
+    /// ACTIVE runtime dir) and report exactly what changed. Off by default.
     #[arg(long, default_value_t = false)]
     pub fix: bool,
+
+    /// With --fix, also repair every runtime dir doctor can see (~/.clawft,
+    /// ~/.weftos/runtime, ancestor .weftos/runtime), not just the active one.
+    /// Setting WEFTOS_RUNTIME_DIR restricts doctor to that single dir.
+    #[arg(long, default_value_t = false)]
+    pub all_runtimes: bool,
 }
 
 impl DoctorArgs {
@@ -49,6 +55,7 @@ pub async fn run(args: DoctorArgs) -> anyhow::Result<()> {
     let opts = Options {
         components: args.components()?,
         fix: args.fix,
+        all_runtimes: args.all_runtimes,
         self_version: env!("BUILD_VERSION").to_string(),
     };
     let env = DoctorEnv::detect();

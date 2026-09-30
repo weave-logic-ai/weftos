@@ -13,7 +13,7 @@ use serde::Serialize;
 
 use super::env::{project_runtime_dirs, DoctorEnv};
 use super::install::BinCopy;
-use super::probe::{parse_version, probe_version, sha256_file};
+use super::probe::{parse_version, probe_binary, sha256_file};
 use super::{Component, Finding, Severity};
 
 /// One `ps` row.
@@ -30,20 +30,50 @@ pub struct PsRow {
 pub struct ProcTable {
     /// All rows.
     pub rows: Vec<PsRow>,
+    /// `ps` ran and returned rows. False means liveness is UNKNOWN (sandbox,
+    /// missing `ps`), which is not the same as "no processes".
+    pub ok: bool,
+}
+
+/// Whether a pid is running, as far as we could tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Liveness {
+    /// Running.
+    Alive,
+    /// Not running.
+    Dead,
+    /// Could not determine (`ps` unavailable).
+    Unknown,
+}
+
+/// Fresh liveness check for one pid (used immediately before any unlink).
+/// Honors the canned `ps_override` table in tests.
+pub fn pid_liveness(env: &DoctorEnv, pid: u32) -> Liveness {
+    if let Some(t) = &env.ps_override {
+        return if ProcTable::parse(t).alive(pid) { Liveness::Alive } else { Liveness::Dead };
+    }
+    match Command::new("ps").args(["-p", &pid.to_string(), "-o", "pid="]).output() {
+        Ok(o) if o.status.success() && !o.stdout.is_empty() => Liveness::Alive,
+        Ok(o) if o.status.code() == Some(1) && o.stdout.is_empty() => Liveness::Dead,
+        _ => Liveness::Unknown,
+    }
 }
 
 impl ProcTable {
     /// Read via `ps` (or the canned override in `env`).
     pub fn load(env: &DoctorEnv) -> Self {
-        let text = match &env.ps_override {
-            Some(t) => t.clone(),
-            None => Command::new("ps")
-                .args(["-axo", "pid=,command="])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-                .unwrap_or_default(),
+        let (text, ok) = match &env.ps_override {
+            Some(t) => (t.clone(), true),
+            None => match Command::new("ps").args(["-axo", "pid=,command="]).output() {
+                Ok(o) if o.status.success() && !o.stdout.is_empty() => {
+                    (String::from_utf8_lossy(&o.stdout).into_owned(), true)
+                }
+                _ => (String::new(), false),
+            },
         };
-        Self::parse(&text)
+        let mut t = Self::parse(&text);
+        t.ok = ok;
+        t
     }
 
     /// Parse `pid command...` lines.
@@ -56,7 +86,7 @@ impl ProcTable {
                 Some(PsRow { pid: pid.parse().ok()?, command: rest.trim().to_string() })
             })
             .collect();
-        Self { rows }
+        Self { rows, ok: true }
     }
 
     /// Whether a pid is in the table.
@@ -70,7 +100,8 @@ impl ProcTable {
 pub struct DaemonProc {
     /// Process id.
     pub pid: u32,
-    /// Command line as reported by `ps`.
+    /// Binary and subcommand only (`weaver kernel start`). Full argv is never
+    /// kept: it can carry tokens and API keys.
     pub command: String,
     /// Resolved executable.
     pub exe: Option<PathBuf>,
@@ -87,13 +118,17 @@ pub struct DaemonProc {
 }
 
 /// Is this command line a kernel daemon? Returns the binary name.
+///
+/// The subcommand sequence must be exactly `kernel start` (weaver) or `boot`
+/// (weftos) as the first positional arguments, after any `-flags`, so
+/// `weaver ask how to start the kernel` is not a daemon.
 pub fn daemon_kind(command: &str) -> Option<&'static str> {
     let mut it = command.split_whitespace();
     let base = Path::new(it.next()?).file_name()?.to_str()?.to_string();
-    let args: Vec<&str> = it.collect();
+    let positionals: Vec<&str> = it.filter(|a| !a.starts_with('-')).collect();
     match base.as_str() {
-        "weaver" if args.contains(&"kernel") && args.contains(&"start") => Some("weaver"),
-        "weftos" if args.contains(&"boot") => Some("weftos"),
+        "weaver" if positionals.first() == Some(&"kernel") && positionals.get(1) == Some(&"start") => Some("weaver"),
+        "weftos" if positionals.first() == Some(&"boot") => Some("weftos"),
         _ => None,
     }
 }
@@ -195,13 +230,17 @@ pub fn discover_with(
                 let dirty = sha.ends_with("-dirty");
                 version = Some((v, dirty));
                 source = Some("rpc");
-            } else if let Some(i) = exe.as_deref().filter(|_| kind == "weaver").and_then(|e| probe_version(e, env.probe_timeout)) {
+            } else if let Some(i) = exe
+                .as_deref()
+                .filter(|_| kind == "weaver")
+                .and_then(|e| probe_binary(e, env.probe_timeout, env.probe_scripts).0)
+            {
                 version = Some((i.version, i.dirty));
                 source = Some("exe --version");
             }
             DaemonProc {
                 pid: r.pid,
-                command: r.command.clone(),
+                command: if kind == "weaver" { "weaver kernel start".into() } else { "weftos boot".into() },
                 exe_sha256: exe.as_deref().and_then(sha256_file),
                 dirty: version.as_ref().is_some_and(|v| v.1),
                 version: version.map(|v| v.0),
@@ -229,18 +268,18 @@ pub fn findings(env: &DoctorEnv, copies: &[BinCopy], daemons: &[DaemonProc], sel
         };
         let exe = d.exe.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "unknown exe".into());
         out.push(Finding::new(c, format!("process:{}", d.pid), Severity::Ok, format!("pid {} {ver} from {exe}", d.pid)));
-        if let Some(exe_path) = &d.exe {
-            if let Some(f) = binary_finding(env, copies, d, exe_path) {
-                out.push(f);
-            }
+        if let Some(exe_path) = &d.exe
+            && let Some(f) = binary_finding(env, copies, d, exe_path)
+        {
+            out.push(f);
         }
-        if let (Some(dv), Some(m)) = (&d.version, &me) {
-            if *dv != m.version {
-                out.push(
-                    Finding::new(c, format!("skew:{}", d.pid), Severity::Warn, format!("CLI {} but daemon pid {} runs {dv}", m.version, d.pid))
-                        .remedy("update the older side, then restart the daemon: weaver kernel stop && weaver kernel start"),
-                );
-            }
+        if let (Some(dv), Some(m)) = (&d.version, &me)
+            && *dv != m.version
+        {
+            out.push(
+                Finding::new(c, format!("skew:{}", d.pid), Severity::Warn, format!("CLI {} but daemon pid {} runs {dv}", m.version, d.pid))
+                    .remedy("update the older side, then restart the daemon: weaver kernel stop && weaver kernel start"),
+            );
         }
     }
     out
@@ -280,6 +319,37 @@ mod tests {
         assert_eq!(daemon_kind("/usr/local/bin/weaver kernel status"), None);
         assert_eq!(daemon_kind("grep weaver kernel start"), None);
         assert_eq!(daemon_kind("/x/weftos boot"), Some("weftos"));
+        // `kernel` and `start` merely appearing in argv is not a daemon.
+        assert_eq!(daemon_kind("weaver ask how to start the kernel"), None);
+        assert_eq!(daemon_kind("weaver kernel status start"), None);
+        assert_eq!(daemon_kind("weaver chat kernel start"), None);
+        assert_eq!(daemon_kind("weftos status boot-log"), None);
+    }
+
+    #[test]
+    fn json_never_carries_argv_secrets() {
+        let d = tempfile::tempdir().unwrap();
+        let mut env = test_env(d.path());
+        env.ps_override = Some("4242 weaver kernel start --token SECRET123 --api-key sk-abc\n".into());
+        let procs = ProcTable::load(&env);
+        let daemons = discover_with(&env, &procs, &|_| (None, None));
+        assert_eq!(daemons.len(), 1);
+        let j = serde_json::to_string(&daemons).unwrap();
+        assert!(!j.contains("SECRET123") && !j.contains("sk-abc"), "{j}");
+        assert_eq!(daemons[0].command, "weaver kernel start");
+    }
+
+    #[test]
+    fn liveness_uses_the_table_and_ps_failure_is_flagged() {
+        let d = tempfile::tempdir().unwrap();
+        let mut env = test_env(d.path());
+        env.ps_override = Some("777 weaver kernel start\n".into());
+        assert_eq!(pid_liveness(&env, 777), Liveness::Alive);
+        assert_eq!(pid_liveness(&env, 778), Liveness::Dead);
+        // A real `ps` result of nothing is not "no processes": ok=false.
+        let t = ProcTable { rows: vec![], ok: false };
+        assert!(!t.ok);
+        assert!(ProcTable::parse("1 init").ok);
     }
 
     #[test]

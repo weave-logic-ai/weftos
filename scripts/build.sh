@@ -856,17 +856,26 @@ cmd_check() {
 }
 
 cmd_clippy() {
-    header "Running clippy (warnings as errors)${FEATURES:+ --features $FEATURES}"
+    # `clippy <pkg>…` scopes to the named packages; none means the workspace.
+    local scope=(--workspace)
+    if [ ${#TEST_PACKAGES[@]} -gt 0 ]; then
+        scope=()
+        local pkg
+        for pkg in "${TEST_PACKAGES[@]}"; do scope+=(-p "$pkg"); done
+        # Scoped runs lint only the named packages, not their workspace deps.
+        scope+=(--no-deps)
+    fi
+    header "Running clippy (warnings as errors) ${scope[*]}${FEATURES:+ --features $FEATURES}"
     timer_start
     if [ "$DRY_RUN" = true ]; then
-        printf "  ${YELLOW}DRY${NC}   cargo clippy --workspace%s -- -D warnings\n" \
-            "${FEATURES:+ --features $FEATURES}"
+        printf "  ${YELLOW}DRY${NC}   cargo clippy %s%s -- -D warnings\n" \
+            "${scope[*]}" "${FEATURES:+ --features $FEATURES}"
     else
         # Always show full output — tail -5 hides warnings
         if [ -n "$FEATURES" ]; then
-            cargo clippy --workspace --features "$FEATURES" -- -D warnings 2>&1
+            cargo clippy "${scope[@]}" --features "$FEATURES" -- -D warnings 2>&1
         else
-            cargo clippy --workspace -- -D warnings 2>&1
+            cargo clippy "${scope[@]}" -- -D warnings 2>&1
         fi
     fi
     timer_end
@@ -1971,7 +1980,8 @@ parse_args() {
 
     # Capture positional args for test command (package scoping):
     #   scripts/build.sh test [<package>…]
-    if [ "$COMMAND" = "test" ]; then
+    #   scripts/build.sh clippy [<package>…]
+    if [ "$COMMAND" = "test" ] || [ "$COMMAND" = "clippy" ]; then
         while [ $# -gt 0 ] && [[ "$1" != --* ]]; do
             TEST_PACKAGES+=("$1")
             shift

@@ -66,10 +66,11 @@ impl Sources {
                 let Ok(files) = std::fs::read_dir(app.path()) else { continue };
                 for f in files.flatten() {
                     let name = f.file_name().to_string_lossy().into_owned();
-                    if name.contains("receipt") && name.ends_with(".json") {
-                        if let Some(r) = parse_receipt(&f.path(), &app.file_name().to_string_lossy()) {
-                            s.receipts.push(r);
-                        }
+                    if name.contains("receipt")
+                        && name.ends_with(".json")
+                        && let Some(r) = parse_receipt(&f.path(), &app.file_name().to_string_lossy())
+                    {
+                        s.receipts.push(r);
                     }
                 }
             }
@@ -99,10 +100,10 @@ impl Sources {
         if dirty {
             return Channel { kind: ChannelKind::DevBuild, detail: Some("inferred: -dirty build".into()) };
         }
-        if in_cargo {
-            if let Some((krate, _)) = self.ledger.iter().find(|(_, bins)| bins.iter().any(|b| b == name)) {
-                return Channel { kind: ChannelKind::CargoInstall, detail: Some(krate.clone()) };
-            }
+        if in_cargo
+            && let Some((krate, _)) = self.ledger.iter().find(|(_, bins)| bins.iter().any(|b| b == name))
+        {
+            return Channel { kind: ChannelKind::CargoInstall, detail: Some(krate.clone()) };
         }
         Channel { kind: ChannelKind::Unknown, detail: None }
     }

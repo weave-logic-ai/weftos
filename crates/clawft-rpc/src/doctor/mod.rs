@@ -165,6 +165,8 @@ pub struct Options {
     pub components: Vec<Component>,
     /// Apply safe local repairs.
     pub fix: bool,
+    /// Extend `fix` from the active runtime dir to every candidate dir.
+    pub all_runtimes: bool,
     /// Full version stamp of the calling binary (`0.8.1 (2cd752e1 ...)`).
     pub self_version: String,
 }
@@ -280,12 +282,18 @@ pub fn run_system(env: &DoctorEnv, opts: &Options) -> Report {
         daemon::ProcTable::default()
     };
     if opts.wants(Component::Daemon) {
+        if !procs.ok {
+            report.findings.push(
+                Finding::new(Component::Daemon, "ps", Severity::Warn, "could not list processes (ps failed or sandboxed); daemon state is unknown")
+                    .remedy("run doctor outside the sandbox"),
+            );
+        }
         let daemons = daemon::discover(env, &procs);
         report.findings.extend(daemon::findings(env, &copies, &daemons, &opts.self_version));
         report.data.insert("daemon".into(), serde_json::to_value(&daemons).unwrap_or_default());
     }
     if opts.wants(Component::Runtime) {
-        let (f, data) = runtime::check(env, &procs, opts.fix);
+        let (f, data) = runtime::check(env, &procs, opts.fix, opts.all_runtimes);
         report.findings.extend(f);
         report.data.insert("runtime".into(), data);
     }
