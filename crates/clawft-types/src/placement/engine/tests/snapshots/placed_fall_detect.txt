@@ -1,5 +1,6 @@
 workload fall-detect (kind cog)
   allow_emulated: false   pin: -
+  tier order (strict): native > emulated > dev_fallback (candidates rank by tier, then score)
 decision: PLACED on pi5 via aarch64-native (tier native, emulated false) score 178.00
 candidates:
   1. pi5 eligible via aarch64-native (tier native) score 178.00

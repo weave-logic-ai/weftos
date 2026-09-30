@@ -207,7 +207,8 @@ fn check_co_residency<F: PlacementFacts>(
 ) -> Vec<Rejection> {
     let policy = &req.spec.policy;
     let mut out = Vec::new();
-    for inst in cluster.instances_on(node.node_id()) {
+    // The workload's own instance (a re-placement) never excludes itself.
+    for inst in cluster.neighbours_on(node.node_id(), &req.spec) {
         if let Some(l) = inst.labels.iter().find(|l| policy.excludes.contains(l)) {
             out.push(rej(
                 Constraint::CoResidency,

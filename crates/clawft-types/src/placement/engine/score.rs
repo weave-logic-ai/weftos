@@ -1,8 +1,9 @@
 //! Phase B: preference scoring among phase A survivors (ADR-099 section 3).
 //!
-//! Components: execution tier (native over dev fallback over emulated),
-//! preferences (data locality), accelerator fit, measured performance (with
-//! a budget filter), load and stickiness. Every component is computed from
+//! Components: execution tier weight (the strict tier order itself is
+//! applied by ranking, see [`Tier::rank`]), preferences (data locality),
+//! accelerator fit, measured performance (with a budget filter), load and
+//! stickiness. Every component is computed from
 //! capabilities and policy, never from the workload kind. Relative
 //! components (accelerator fit, performance) are normalised against the
 //! best survivor, so they depend on the candidate set but not on its order.
@@ -23,7 +24,18 @@ const ACCEL_MEM_ATTR: &str = "mem_bytes";
 /// A survivor's score, or its phase B rejection.
 pub(super) type Scored = Result<(ScoreBreakdown, Vec<Flag>), Rejection>;
 
-/// Best measured value of `t` on a node (`measured` provenance only).
+/// A measurement the engine may score: finite and non-negative, the same
+/// rule the [`perf`](super::super::perf) constructors enforce. Facts built
+/// or deserialized any other way are checked here, so a NaN, infinite or
+/// negative value cannot earn credit (NaN compares false against every
+/// guard in [`ratio`] and would otherwise score as the best node).
+fn valid_measurement(v: f64) -> bool {
+    v.is_finite() && v >= 0.0
+}
+
+/// Best valid measured value of `t` on a node (`measured` provenance only).
+/// `None` when the node has no valid measurement: it is then scored as
+/// unmeasured (conservatively, and flagged).
 pub(super) fn measured(caps: &[Capability], t: &PerfTarget) -> Option<f64> {
     let want = AttrValue::Str(t.param_value.clone());
     let vals = caps.iter().filter(|c| {
@@ -31,7 +43,9 @@ pub(super) fn measured(caps: &[Capability], t: &PerfTarget) -> Option<f64> {
             && c.provenance == Provenance::Measured
             && c.attrs.get(&t.param).is_some_and(|v| v.loose_eq(&want))
     });
-    let nums = vals.filter_map(|c| c.attrs.get(VALUE_ATTR).and_then(AttrValue::as_f64));
+    let nums = vals
+        .filter_map(|c| c.attrs.get(VALUE_ATTR).and_then(AttrValue::as_f64))
+        .filter(|v| valid_measurement(*v));
     match t.better {
         Better::Lower => nums.reduce(f64::min),
         Better::Higher => nums.reduce(f64::max),

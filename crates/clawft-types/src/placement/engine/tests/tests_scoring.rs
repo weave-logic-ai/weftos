@@ -22,7 +22,7 @@ fn score_of(d: &crate::placement::engine::Decision, node: &str) -> f64 {
 }
 
 #[test]
-fn native_beats_dev_fallback_beats_emulated() {
+fn native_beats_emulated_beats_dev_fallback() {
     let mut req = PlacementRequest::new(sensor_spec("cog", "anomaly-detect", &["aarch64"], None));
     req.allow_emulated = true;
     let d = run(&req, &[pi5(), mac(), x86()]);
@@ -41,12 +41,12 @@ fn native_beats_dev_fallback_beats_emulated() {
     };
     assert_eq!(
         (exec("pi5"), exec("mac-dev"), exec("x86")),
-        (100.0, 40.0, 20.0)
+        (100.0, 20.0, 40.0)
     );
     assert_eq!(placed_on(&d), Some("pi5"));
-    // Without real hardware, the dev Mac beats emulation.
+    // Without real hardware, the opted-in emulated route beats the dev Mac.
     let d = run(&req, &[mac(), x86()]);
-    assert_eq!(placed_on(&d), Some("mac-dev"));
+    assert_eq!(placed_on(&d), Some("x86"));
 }
 
 #[test]
@@ -146,26 +146,36 @@ fn smallest_sufficient_accelerator_wins_and_cpu_work_avoids_accelerators() {
 }
 
 #[test]
-fn locality_preference_moves_the_choice() {
-    let mut with_weights = mac();
+fn locality_preference_moves_the_choice_within_a_tier() {
+    let mut other = gpu();
+    other.id = "gpu-box-b".into();
+    let base = run(
+        &PlacementRequest::new(gguf_server("coder", 20)),
+        &[other.clone(), gpu()],
+    );
+    assert_eq!(placed_on(&base), Some("gpu-box"), "tie breaks by node id");
+    let mut with_weights = other;
     with_weights
         .caps
         .push(cap("model.present").with_attr("shards", list(&["blake3-model-a"])));
-    let base = run(
-        &PlacementRequest::new(gguf_server("coder", 20)),
-        &[mac(), gpu()],
-    );
-    assert_eq!(placed_on(&base), Some("gpu-box"));
     let mut spec = gguf_server("coder", 20);
     spec.policy.preferences[0].weight = 100.0;
-    let d = run(&PlacementRequest::new(spec), &[with_weights, gpu()]);
+    let d = run(&PlacementRequest::new(spec.clone()), &[with_weights, gpu()]);
     let loc = d
         .candidates
         .iter()
-        .find(|c| c.node_id == "mac-dev")
+        .find(|c| c.node_id == "gpu-box-b")
         .unwrap();
     assert_eq!(loc.score.as_ref().unwrap().locality, 100.0);
-    assert_eq!(placed_on(&d), Some("mac-dev"));
+    assert_eq!(placed_on(&d), Some("gpu-box-b"));
+
+    // Locality never lifts the dev Mac over real hardware (strict tiers).
+    let mut mac_weights = mac();
+    mac_weights
+        .caps
+        .push(cap("model.present").with_attr("shards", list(&["blake3-model-a"])));
+    let d = run(&PlacementRequest::new(spec), &[mac_weights, gpu()]);
+    assert_eq!(placed_on(&d), Some("gpu-box"));
 }
 
 #[test]

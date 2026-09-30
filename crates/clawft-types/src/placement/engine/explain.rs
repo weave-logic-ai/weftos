@@ -1,11 +1,13 @@
 //! Human-readable explanation of a [`Decision`] (the `--explain` output).
 //!
+//! Shows the execution tier of the placement and of every eligible
+//! candidate, and the strict tier order ranking applies first.
 //! Deterministic: candidates are already ranked, numbers use two decimals,
 //! flags are sorted. Snapshot tests pin the format.
 
 use std::fmt::Write as _;
 
-use super::decision::{Decision, NodeReport, ScoreBreakdown};
+use super::decision::{Decision, NodeReport, ScoreBreakdown, Tier};
 
 fn score_line(s: &ScoreBreakdown) -> String {
     format!(
@@ -32,6 +34,12 @@ pub fn explain(d: &Decision) -> String {
         "  allow_emulated: {}   pin: {}",
         d.allow_emulated,
         d.pin.as_deref().unwrap_or("-")
+    );
+    let order: Vec<&str> = Tier::ORDER.iter().map(|t| t.as_str()).collect();
+    let _ = writeln!(
+        out,
+        "  tier order (strict): {} (candidates rank by tier, then score)",
+        order.join(" > ")
     );
     match &d.placement {
         Some(p) => {

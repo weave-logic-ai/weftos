@@ -69,7 +69,8 @@ pub struct Rejection {
 /// Per-component score, so the decision explains itself.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ScoreBreakdown {
-    /// Native / dev fallback / emulated tier.
+    /// Execution tier weight (native / emulated / dev fallback). Shown for
+    /// explanation; ranking orders by [`Tier::rank`] first.
     pub execution: f64,
     /// Preferences met (data locality and similar).
     pub locality: f64,
@@ -91,14 +92,20 @@ impl ScoreBreakdown {
 }
 
 /// Execution tier a node earns for its chosen route.
+///
+/// Tiers are strict (ADR-099 section 3, decided 2026-09-29): native on real
+/// target hardware, then emulated, then the dev-mac fallback. A lower tier
+/// never outranks a higher one, whatever its other score components; see
+/// [`Tier::rank`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tier {
     /// Native on real hardware.
     Native,
-    /// Native on a dev-fallback node.
+    /// Native on a dev-fallback node. Last resort.
     DevFallback,
-    /// Emulated (operator opt-in only).
+    /// Emulated (operator opt-in only). Below target hardware, above the
+    /// dev fallback.
     Emulated,
 }
 
@@ -111,6 +118,19 @@ impl Tier {
             Tier::Emulated => "emulated",
         }
     }
+
+    /// Strict preference order: 0 is best. Ranking compares this before
+    /// any score, so no weight or bonus can lift a lower tier.
+    pub fn rank(self) -> u8 {
+        match self {
+            Tier::Native => 0,
+            Tier::Emulated => 1,
+            Tier::DevFallback => 2,
+        }
+    }
+
+    /// Every tier, best first.
+    pub const ORDER: [Tier; 3] = [Tier::Native, Tier::Emulated, Tier::DevFallback];
 }
 
 /// A note attached to a candidate that did not reject it.
