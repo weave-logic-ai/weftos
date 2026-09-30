@@ -8568,6 +8568,40 @@ mod tests {
         }
     }
 
+    /// The voice consumer must dispatch as a capped internal principal:
+    /// Admin verbs are refused, and a raw `dispatch` regression would let
+    /// `kernel.shutdown` through.
+    #[tokio::test]
+    async fn voice_command_handler_denies_admin_verbs() {
+        use crate::voice_router::CommandHandler;
+        let kernel = Kernel::boot(
+            clawft_types::config::Config::default(),
+            isolated_kcfg(),
+            Arc::new(NativePlatform::new()),
+        )
+        .await
+        .expect("kernel boots");
+        let (tx, rx) = watch::channel(false);
+        let handler = DaemonCommandHandler {
+            kernel: Arc::new(tokio::sync::RwLock::new(kernel)),
+            shutdown_tx: tx,
+            _control: ControlFlags::new(),
+        };
+        let err = handler
+            .dispatch_command("kernel.shutdown".into(), serde_json::Value::Null)
+            .await
+            .unwrap_err();
+        assert!(err.contains("permission denied"), "{err}");
+        assert!(!*rx.borrow(), "shutdown must not have been signalled");
+        // Non-admin verbs still work for the voice principal.
+        assert!(
+            handler
+                .dispatch_command("kernel.status".into(), serde_json::Value::Null)
+                .await
+                .is_ok()
+        );
+    }
+
     #[test]
     fn socket_path_resolves() {
         let path = crate::protocol::socket_path();

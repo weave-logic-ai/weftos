@@ -27,6 +27,10 @@
 //! `kernel.logs_stream`): those take over the connection and are matched
 //! before routes are consulted. They are still authorized and gated.
 //!
+//! A route whose prefix covers an intercepted method would change that
+//! method's required capability while its handler never runs, so routes
+//! must not cover them (a test asserts this for `ROUTES`).
+//!
 //! There is no transport marker: the TCP relay byte-copies into the unix
 //! socket, so a relayed caller is indistinguishable from a local one and
 //! no gate may rely on the difference. (The relay checks its bearer

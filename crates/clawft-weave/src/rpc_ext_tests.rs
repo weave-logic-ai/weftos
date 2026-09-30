@@ -261,3 +261,33 @@ fn voice_principal_is_not_admin() {
     assert!(caps.allows(Capability::Write));
     assert!(!caps.allows(Capability::Admin));
 }
+
+/// The intercepted stream methods are authorized before they take over the
+/// connection. Fails if `authorize_caller` moves after the intercepts.
+#[tokio::test]
+async fn wire_streaming_intercepts_are_authorized() {
+    let kernel = test_kernel().await;
+    for method in ["ipc.subscribe_stream", "substrate.subscribe", "kernel.logs_stream"] {
+        // An unrecognised token resolves to empty (denied) capabilities.
+        let line = format!(r#"{{"method":"{method}","params":{{}},"auth":"bogus-token"}}"#);
+        let resp = json_roundtrip(&kernel, &line).await;
+        assert!(!resp.ok, "{method}");
+        assert!(
+            resp.error.as_deref().unwrap_or("").contains("permission denied"),
+            "{method}: {:?}",
+            resp.error
+        );
+    }
+}
+
+/// A route covering a streaming-intercept method would change its required
+/// capability while its handler never ran (intercepts match first).
+#[test]
+fn no_route_covers_the_streaming_intercepts() {
+    for method in ["ipc.subscribe_stream", "substrate.subscribe", "kernel.logs_stream"] {
+        assert!(
+            !super::ROUTES.iter().any(|r| r.matches(method)),
+            "a ROUTES prefix covers intercepted method {method}"
+        );
+    }
+}
