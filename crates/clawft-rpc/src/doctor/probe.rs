@@ -85,7 +85,7 @@ impl Ord for Semver {
                         (Ok(x), Ok(y)) => x.cmp(&y),
                         (Ok(_), Err(_)) => Less,
                         (Err(_), Ok(_)) => Greater,
-                        (Err(_), Err(_)) => a.cmp(b),
+                        (Err(_), Err(_)) => natural_cmp(a, b),
                     };
                     if ord != Equal {
                         return ord;
@@ -95,6 +95,45 @@ impl Ord for Semver {
             }
         })
     }
+}
+
+/// Split into digit and non-digit runs: `rc10` -> `[(false,"rc"),(true,"10")]`.
+fn chunks(s: &str) -> Vec<(bool, &str)> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let bytes = s.as_bytes();
+    for i in 1..=bytes.len() {
+        if i == bytes.len() || bytes[i].is_ascii_digit() != bytes[start].is_ascii_digit() {
+            out.push((bytes[start].is_ascii_digit(), &s[start..i]));
+            start = i;
+        }
+    }
+    out
+}
+
+/// Natural order for alphanumeric identifiers: numeric runs compare as
+/// numbers, so `rc9 < rc10`. A numeric run sorts before text.
+fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering::*;
+    if a.is_empty() || b.is_empty() {
+        return a.len().cmp(&b.len());
+    }
+    let (ca, cb) = (chunks(a), chunks(b));
+    for (x, y) in ca.iter().zip(&cb) {
+        let ord = match (x.0, y.0) {
+            (true, true) => {
+                let (nx, ny) = (x.1.trim_start_matches('0'), y.1.trim_start_matches('0'));
+                nx.len().cmp(&ny.len()).then_with(|| nx.cmp(ny))
+            }
+            (true, false) => Less,
+            (false, true) => Greater,
+            (false, false) => x.1.cmp(y.1),
+        };
+        if ord != Equal {
+            return ord;
+        }
+    }
+    ca.len().cmp(&cb.len())
 }
 
 impl PartialOrd for Semver {
@@ -118,14 +157,21 @@ pub fn version_key(v: &str) -> Vec<u64> {
 /// are not native executables unless the env opts in (tests). The update
 /// nag is disabled for the child.
 pub fn run_capture(cmd: &Path, args: &[&str], timeout: Duration) -> Option<String> {
-    let mut child = Command::new(cmd)
-        .args(args)
-        .env("WEFTOS_NO_UPDATE_CHECK", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    let spawned = {
+        // Tests bind and drop unix sockets; a fork in another test thread
+        // would briefly inherit a listener fd and make a dropped socket look
+        // live. Serialize spawns against those tests.
+        #[cfg(test)]
+        let _serial = super::env::serial();
+        Command::new(cmd)
+            .args(args)
+            .env("WEFTOS_NO_UPDATE_CHECK", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+    };
+    let mut child = spawned.ok()?;
     let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait().ok()? {
@@ -242,6 +288,10 @@ mod tests {
         assert_eq!(p("0.8.1+abc"), p("0.8.1"));
         assert_eq!(p("0.8.1-3-gdeadbee-dirty"), p("0.8.1"));
         assert_eq!(p("0.8.1-rc1-dirty"), p("0.8.1-rc1"));
+        // Natural order inside prerelease identifiers: rc9 < rc10.
+        assert!(p("0.8.1-rc10") > p("0.8.1-rc9"));
+        assert!(p("0.8.1-beta1") < p("0.8.1-rc1"));
+        assert!(p("0.8.1-rc.10") > p("0.8.1-rc.9"));
         assert!(parse_semver("unknown").is_none() && parse_semver("1").is_none() && parse_semver("a.b.c").is_none());
     }
 

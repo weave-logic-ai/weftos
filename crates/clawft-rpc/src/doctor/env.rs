@@ -145,6 +145,14 @@ pub fn project_runtime_dirs(start: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Test-only process-wide lock: serializes tests that create unix sockets
+/// against any code path that forks (see `probe::run_capture`).
+#[cfg(test)]
+pub fn serial() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Test helper: an env rooted entirely in `root` with an empty `PATH`.
 #[cfg(test)]
 pub fn test_env(root: &Path) -> DoctorEnv {

@@ -259,6 +259,7 @@ mod tests {
 
     #[test]
     fn stale_socket_and_pid_reported_and_left_alone_without_fix() {
+        let _serial = crate::doctor::env::serial();
         let d = tempfile::tempdir().unwrap();
         let (env, rt) = setup(d.path());
         stale_socket(&rt);
@@ -272,6 +273,7 @@ mod tests {
 
     #[test]
     fn fix_removes_only_provably_stale_files_and_reports_it() {
+        let _serial = crate::doctor::env::serial();
         let d = tempfile::tempdir().unwrap();
         let (env, rt) = setup(d.path());
         stale_socket(&rt);
@@ -285,6 +287,7 @@ mod tests {
 
     #[test]
     fn live_socket_is_never_touched_even_with_fix() {
+        let _serial = crate::doctor::env::serial();
         let d = tempfile::tempdir().unwrap();
         let (env, rt) = setup(d.path());
         let _l = UnixListener::bind(rt.join("kernel.sock")).unwrap();
@@ -298,6 +301,7 @@ mod tests {
 
     #[test]
     fn stale_socket_kept_when_recorded_pid_is_running() {
+        let _serial = crate::doctor::env::serial();
         let d = tempfile::tempdir().unwrap();
         let (env, rt) = setup(d.path());
         stale_socket(&rt);
@@ -312,6 +316,7 @@ mod tests {
 
     #[test]
     fn multiple_node_keys_warn_without_reading_or_deleting() {
+        let _serial = crate::doctor::env::serial();
         let d = tempfile::tempdir().unwrap();
         let (env, rt) = setup(d.path());
         let home_rt = env.home.join(".clawft");
@@ -329,6 +334,7 @@ mod tests {
 
     #[test]
     fn loose_key_permissions_warn() {
+        let _serial = crate::doctor::env::serial();
         let d = tempfile::tempdir().unwrap();
         let (env, rt) = setup(d.path());
         let p = rt.join("node.key");
@@ -340,6 +346,7 @@ mod tests {
 
     #[test]
     fn fix_defaults_to_the_active_runtime_dir_only() {
+        let _serial = crate::doctor::env::serial();
         let d = tempfile::tempdir().unwrap();
         let (env, rt) = setup(d.path());
         let other = env.home.join(".clawft");
@@ -356,6 +363,7 @@ mod tests {
 
     #[test]
     fn env_override_is_the_only_candidate_even_with_project_dirs_above() {
+        let _serial = crate::doctor::env::serial();
         let d = tempfile::tempdir().unwrap();
         let (mut env, rt) = setup(d.path());
         let sandbox = d.path().join("sandbox-rt");
@@ -370,6 +378,7 @@ mod tests {
 
     #[test]
     fn fix_refuses_when_ps_failed() {
+        let _serial = crate::doctor::env::serial();
         let d = tempfile::tempdir().unwrap();
         let (env, rt) = setup(d.path());
         stale_socket(&rt);
@@ -383,6 +392,7 @@ mod tests {
 
     #[test]
     fn unlink_rechecks_immediately_before_removal() {
+        let _serial = crate::doctor::env::serial();
         let d = tempfile::tempdir().unwrap();
         let (env, rt) = setup(d.path());
         // The socket went live after the scan: the re-check must keep it.

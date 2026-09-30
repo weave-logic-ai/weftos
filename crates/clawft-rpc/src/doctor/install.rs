@@ -185,6 +185,11 @@ fn removable(x: &BinCopy, keep: &BinCopy) -> bool {
     if x.path == keep.path || x.probe_note.is_some() {
         return false;
     }
+    // Two managed installs (Homebrew and cargo-dist, say): the user picks a
+    // channel; doctor never names either copy for removal.
+    if channel_rank(x.channel.kind) >= 3 && channel_rank(keep.channel.kind) >= 3 {
+        return false;
+    }
     if same_bytes(x, keep) {
         return true;
     }
@@ -194,7 +199,10 @@ fn removable(x: &BinCopy, keep: &BinCopy) -> bool {
     let (Some(sx), Some(sk)) = (semver_of(x), semver_of(keep)) else {
         return false;
     };
-    sx.pre.is_empty() == sk.pre.is_empty()
+    // Never rm when either is a prerelease: rc-vs-release and rc-vs-rc are both
+    // advice only.
+    sx.pre.is_empty()
+        && sk.pre.is_empty()
         && sx < sk
         && channel_rank(x.channel.kind) <= channel_rank(keep.channel.kind)
 }
@@ -238,6 +246,12 @@ fn duplicates_remedy(group: &[&BinCopy]) -> String {
             r
         }
         _ if !removable_list.is_empty() => format!("keep {}: {rms}", keep.path.display()),
+        _ if group.iter().filter(|x| channel_rank(x.channel.kind) >= 3).count() >= 2 => {
+            let list = group.iter().map(|x| x.label()).collect::<Vec<_>>().join(" vs ");
+            format!(
+                "no rm suggested (two managed installs: {list}); pick one channel and uninstall the other with its own tool (brew uninstall <formula>, or remove the cargo-dist install)"
+            )
+        }
         _ => {
             let list = group.iter().map(|x| x.label()).collect::<Vec<_>>().join(" vs ");
             format!(
@@ -526,6 +540,27 @@ mod tests {
         // A dirty copy is removable only when byte-identical.
         let dirty_old = mk("/x/weft", Some("0.7.0"), true, ChannelKind::DevBuild, false, "x", false);
         assert!(!removable(&dirty_old, &keep));
+    }
+
+    #[test]
+    fn rc9_vs_rc10_and_any_prerelease_pair_never_gets_rm() {
+        let rc9 = mk("/a/weft", Some("0.8.1-rc9"), false, ChannelKind::Unknown, true, "s9", false);
+        let rc10 = mk("/b/weft", Some("0.8.1-rc10"), false, ChannelKind::Unknown, false, "s10", false);
+        assert_eq!(best(&[&rc9, &rc10]).path, rc10.path, "rc10 is newer than rc9");
+        assert!(!removable(&rc9, &rc10) && !removable(&rc10, &rc9));
+        assert!(!duplicates_remedy(&[&rc9, &rc10]).contains("rm /"));
+    }
+
+    #[test]
+    fn identical_homebrew_and_cargo_dist_copies_get_advice_only() {
+        let brew = mk("/opt/homebrew/bin/weft", Some("0.8.1"), false, ChannelKind::Homebrew, true, "same", false);
+        let dist = mk("/h/.cargo/bin/weft", Some("0.8.1"), false, ChannelKind::CargoDist, false, "same", false);
+        assert!(!removable(&brew, &dist) && !removable(&dist, &brew));
+        let r = duplicates_remedy(&[&brew, &dist]);
+        assert!(!r.contains("rm /") && r.contains("two managed installs"), "{r}");
+        // An unmanaged identical copy next to a managed one is still removable.
+        let stray = mk("/usr/local/bin/weft", Some("0.8.1"), false, ChannelKind::Unknown, false, "same", false);
+        assert!(removable(&stray, &brew));
     }
 
     #[test]
