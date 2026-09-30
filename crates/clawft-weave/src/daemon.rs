@@ -636,7 +636,11 @@ use crate::protocol::{
 ///
 /// Works on Unix and Windows (WEFT-559). On Windows the child is created
 /// detached so closing the parent console does not kill the daemon.
-pub fn daemonize(config_override: Option<&str>, new_chain: bool) -> anyhow::Result<()> {
+pub fn daemonize(
+    config_override: Option<&str>,
+    new_chain: bool,
+    adopt_legacy_chain: bool,
+) -> anyhow::Result<()> {
     use std::process::Command;
 
     let runtime_dir = protocol::runtime_dir();
@@ -672,6 +676,9 @@ pub fn daemonize(config_override: Option<&str>, new_chain: bool) -> anyhow::Resu
     if new_chain {
         cmd.arg("--new-chain");
     }
+    if adopt_legacy_chain {
+        cmd.arg("--adopt-legacy-chain");
+    }
 
     // Windows: detach so the daemon outlives the spawning console.
     #[cfg(windows)]
@@ -691,7 +698,18 @@ pub fn daemonize(config_override: Option<&str>, new_chain: bool) -> anyhow::Resu
     let pid = child.id();
     // The child writes kernel.pid itself once boot (runtime and chain locks)
     // succeeded; success is reported only when it serves.
-    wait_for_daemon_ready(&mut child, &protocol::socket_path(), &pid_path, &log_path)?;
+    let ready =
+        wait_for_daemon_ready(&mut child, &protocol::socket_path(), &pid_path, &log_path)?;
+    if !ready {
+        // Exit status 0: the daemon is alive and booting (a big chain can
+        // take minutes); it is not a failure, but nothing is serving yet.
+        println!(
+            "WeftOS kernel still starting (pid {pid}); check `weaver kernel status` \
+             (log: {})",
+            log_path.display()
+        );
+        return Ok(());
+    }
 
     println!("WeftOS kernel started (pid {pid})");
     #[cfg(unix)]
@@ -724,8 +742,10 @@ fn log_tail(log_path: &std::path::Path) -> String {
 fn daemon_ready(socket: &std::path::Path, pid_path: &std::path::Path, want_pid: &str) -> bool {
     #[cfg(unix)]
     {
-        let _ = (pid_path, want_pid);
-        std::os::unix::net::UnixStream::connect(socket).is_ok()
+        // The child writes kernel.pid after boot; requiring our child's pid
+        // keeps another live daemon's socket from counting as ours.
+        std::fs::read_to_string(pid_path).is_ok_and(|s| s.trim() == want_pid)
+            && std::os::unix::net::UnixStream::connect(socket).is_ok()
     }
     #[cfg(not(unix))]
     {
@@ -738,14 +758,14 @@ fn daemon_ready(socket: &std::path::Path, pid_path: &std::path::Path, want_pid: 
 
 /// Wait for the freshly spawned daemon to become reachable, failing with the
 /// tail of its log if it exits first (for example because another kernel
-/// owns the runtime dir or the chain). Success is only reported once the
-/// daemon actually serves.
+/// owns the runtime dir or the chain). Returns `true` once the daemon
+/// serves and `false` if it is still starting after the timeout.
 fn wait_for_daemon_ready(
     child: &mut std::process::Child,
     socket: &std::path::Path,
     pid_path: &std::path::Path,
     log_path: &std::path::Path,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let want = child.id().to_string();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
     while std::time::Instant::now() < deadline {
@@ -757,15 +777,11 @@ fn wait_for_daemon_ready(
             );
         }
         if daemon_ready(socket, pid_path, &want) {
-            return Ok(());
+            return Ok(true);
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    eprintln!(
-        "warning: kernel (pid {want}) is still starting after 90s and is not serving yet; see {}",
-        log_path.display()
-    );
-    Ok(())
+    Ok(false)
 }
 
 /// Return true if a process with the given PID appears to be alive.
@@ -1003,6 +1019,7 @@ pub async fn run(
     let kernel = Kernel::boot(config, kernel_config, Arc::new(platform)).await?;
     // The one-shot --new-chain request has been consumed by boot.
     clawft_kernel::chain_storage::request_new_chain(false);
+    clawft_kernel::chain_storage::request_adopt_legacy_chain(false);
     let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
     // Record this process as the live daemon only now that boot (which takes
     // the chain lock) has succeeded, so a refused boot leaves no stale pid.

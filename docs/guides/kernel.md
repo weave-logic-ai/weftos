@@ -139,17 +139,30 @@ fresh chain at the project path instead, run
 `weaver kernel start --new-chain` (the legacy chain is left untouched), or
 pin `kernel.chain.checkpoint_path`. A fresh chain is otherwise created
 only when no chain exists at all. `weaver kernel start` reports success
-only once the daemon serves; if boot fails (for example the chain lock is
-held) it prints the last log lines and exits non-zero.
+only once the daemon serves (its socket accepts connections and
+`kernel.pid` holds the spawned child's pid); if boot fails (for example the
+chain lock is held) it prints the last log lines and exits non-zero. If the
+daemon is still booting after 90 s (a large chain can take longer), it
+prints "still starting (pid N); check `weaver kernel status`" and exits 0
+without the started banner.
 
 The Seed token store under `~/.clawft/secrets/` is read from there, with
 a WARN, when the project has none yet; it is never moved automatically.
 
-Mixed versions: older kernels take no `chain.lock`. If the legacy chain
-was modified in the last 120 seconds and no `chain.lock` exists beside it,
-an older kernel may still be writing it, so a new kernel refuses to adopt
-it ("the legacy chain looks in use by an older kernel ... stop it first or
-use --new-chain").
+Migrating to the legacy chain safely: older kernels take no `chain.lock`,
+so a new kernel cannot tell whether one is still writing
+`~/.clawft/chain.*`. The first adoption is therefore explicit:
+
+1. Stop every older weaver daemon (check `ps` or `weaver doctor daemon`).
+2. Run `weaver kernel start --adopt-legacy-chain` once. It adopts the
+   legacy chain and creates `chain.lock` beside it; later starts adopt it
+   normally without the flag.
+3. Or run `weaver kernel start --new-chain` for a fresh chain at the
+   project path.
+
+Without the flag (and with no `chain.lock` yet) the start is refused. Even
+with the flag it is refused if the chain was modified within the last 120
+seconds ("looks in use by an older kernel").
 
 Chain lock: whichever chain is in use is guarded by an exclusive lock
 (`chain.lock` beside it) for the kernel's lifetime. A second kernel on the

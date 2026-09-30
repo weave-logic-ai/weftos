@@ -49,7 +49,7 @@ pub async fn run(args: ConsoleArgs) -> anyhow::Result<()> {
             println!("Kernel already running -- attaching.");
         } else {
             // Start the daemon in the background
-            crate::daemon::daemonize(args.config.as_deref(), false)?;
+            crate::daemon::daemonize(args.config.as_deref(), false, false)?;
             // Wait briefly for it to start
             for _ in 0..20 {
                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;

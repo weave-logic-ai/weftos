@@ -45,6 +45,15 @@ pub fn boot_runtime_paths(pinned_chain: Option<&Path>) -> RuntimePaths {
 
 static NEW_CHAIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+static ADOPT_LEGACY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Allow the next boot to adopt the legacy `~/.clawft` chain for the first
+/// time (`weaver kernel start --adopt-legacy-chain`). Needed only while no
+/// `chain.lock` exists beside it, i.e. no lock-aware kernel has used it yet.
+pub fn request_adopt_legacy_chain(on: bool) {
+    ADOPT_LEGACY.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// Ask the next boot to start a fresh chain at the resolved path instead of
 /// adopting the legacy `~/.clawft` chain (`weaver kernel start --new-chain`).
 /// Process-wide on purpose: it is an operator flag, not a config-file field.
@@ -92,6 +101,7 @@ pub fn choose_default_chain(
     paths: &RuntimePaths,
     home: Option<&Path>,
     new_chain: bool,
+    adopt_legacy: bool,
     now: std::time::SystemTime,
 ) -> ChainChoice {
     let resolved = paths.chain_checkpoint();
@@ -117,13 +127,25 @@ pub fn choose_default_chain(
             refusal: None,
         };
     }
-    let refusal = lock_unaware_writer_age(&legacy, now).map(|age| {
-        format!(
-            "the legacy chain at {} looks in use by an older kernel (modified {age}s ago); \
-             stop it first or use --new-chain",
+    // No chain.lock beside the legacy chain: only lock-unaware (older)
+    // kernels have written it, and one may still be running. The first
+    // adoption must be explicit; even then a very recent write is refused.
+    let refusal = if !ChainLock::lock_path(&legacy).exists() && !adopt_legacy {
+        Some(format!(
+            "The legacy chain at {} has never been used by a lock-aware kernel. Stop every \
+             older weaver daemon (check `ps`/`weaver doctor daemon`) and then run \
+             `weaver kernel start --adopt-legacy-chain` once. Or use --new-chain.",
             legacy.display()
-        )
-    });
+        ))
+    } else {
+        lock_unaware_writer_age(&legacy, now).map(|age| {
+            format!(
+                "the legacy chain at {} looks in use by an older kernel (modified {age}s ago); \
+                 stop it first or use --new-chain",
+                legacy.display()
+            )
+        })
+    };
     let warning = format!(
         "no chain at {} but a legacy chain exists at {}; continuing on the legacy chain \
          and its key so history is not forked (nothing was moved). Phase 1 \
@@ -205,10 +227,12 @@ fn default_checkpoint_path(
     let paths = RuntimePaths::resolve();
     let home = clawft_types::runtime_paths::home_dir();
     let new_chain = NEW_CHAIN.load(std::sync::atomic::Ordering::SeqCst);
+    let adopt = ADOPT_LEGACY.load(std::sync::atomic::Ordering::SeqCst);
     let choice = choose_default_chain(
         &paths,
         home.as_deref(),
         new_chain,
+        adopt,
         std::time::SystemTime::now(),
     );
     (
@@ -372,7 +396,7 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let (home, proj) = legacy_fixture(&t);
         let paths = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
-        let c = choose_default_chain(&paths, Some(&home), false, far_future());
+        let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
         assert!(c.legacy_in_use);
         assert_eq!(c.checkpoint, home.join(".clawft/chain.json"));
         let w = c.warning.expect("warns");
@@ -387,7 +411,7 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let (home, proj) = legacy_fixture(&t);
         let paths = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
-        let c = choose_default_chain(&paths, Some(&home), true, far_future());
+        let c = choose_default_chain(&paths, Some(&home), true, false, far_future());
         assert!(!c.legacy_in_use);
         assert_eq!(c.checkpoint, proj.join(".weftos/runtime/chain.json"));
         assert!(c.warning.unwrap().contains("--new-chain"));
@@ -401,7 +425,7 @@ mod tests {
         std::fs::create_dir_all(proj.join(".weftos")).unwrap();
         std::fs::write(proj.join(".weftos/project.toml"), "").unwrap();
         let paths = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
-        let c = choose_default_chain(&paths, Some(&home), false, far_future());
+        let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
         assert!(!c.legacy_in_use && c.warning.is_none());
         assert_eq!(c.checkpoint, proj.join(".weftos/runtime/chain.json"));
     }
@@ -413,49 +437,73 @@ mod tests {
         std::fs::create_dir_all(proj.join(".weftos/runtime")).unwrap();
         std::fs::write(proj.join(".weftos/runtime/chain.json"), "{}").unwrap();
         let paths = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
-        let c = choose_default_chain(&paths, Some(&home), false, far_future());
+        let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
         assert!(!c.legacy_in_use);
         let iso = RuntimePaths::resolve_with(Some("/x"), Some(&proj), Some(&home));
-        let c = choose_default_chain(&iso, Some(&home), false, far_future());
+        let c = choose_default_chain(&iso, Some(&home), false, false, far_future());
         assert_eq!(c.checkpoint, PathBuf::from("/x/chain.json"));
         assert!(!c.legacy_in_use);
     }
 
     #[test]
-    fn recently_written_lock_unaware_legacy_chain_is_refused() {
+    fn first_legacy_adoption_needs_the_flag_then_becomes_normal() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, proj) = legacy_fixture(&t);
+        let paths = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
+        let quiet = far_future();
+
+        // No chain.lock and no flag: refused, with the operator recipe.
+        let c = choose_default_chain(&paths, Some(&home), false, false, quiet);
+        let r = c.refusal.expect("first adoption must be explicit");
+        assert!(r.contains("never been used by a lock-aware kernel"), "{r}");
+        assert!(r.contains("--adopt-legacy-chain"), "{r}");
+        assert!(r.contains("--new-chain"), "{r}");
+
+        // With the flag: adopted; booting creates chain.lock.
+        let c = choose_default_chain(&paths, Some(&home), false, true, quiet);
+        assert!(c.refusal.is_none() && c.legacy_in_use);
+        drop(ChainLock::acquire(&c.checkpoint).unwrap());
+        assert!(home.join(".clawft/chain.lock").exists());
+
+        // Next boot without the flag: adopted normally.
+        let c = choose_default_chain(&paths, Some(&home), false, false, quiet);
+        assert!(c.refusal.is_none() && c.legacy_in_use);
+
+        // --new-chain never needs the flag.
+        let fresh = tempfile::tempdir().unwrap();
+        let (home2, proj2) = legacy_fixture(&fresh);
+        let p2 = RuntimePaths::resolve_with(None, Some(&proj2), Some(&home2));
+        assert!(
+            choose_default_chain(&p2, Some(&home2), true, false, quiet)
+                .refusal
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn flag_does_not_override_a_very_recent_write() {
         let t = tempfile::tempdir().unwrap();
         let (home, proj) = legacy_fixture(&t);
         let paths = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
         let now = std::time::SystemTime::now();
 
-        // Just written, no chain.lock: an older kernel may still be running.
-        let c = choose_default_chain(&paths, Some(&home), false, now);
-        let r = c
+        let r = choose_default_chain(&paths, Some(&home), false, true, now)
             .refusal
-            .expect("recent lock-unaware chain must be refused");
+            .expect("recent write must be refused even with the flag");
         assert!(r.contains("older kernel"), "{r}");
         assert!(r.contains("--new-chain"), "{r}");
 
-        // --new-chain is the way out.
-        assert!(
-            choose_default_chain(&paths, Some(&home), true, now)
-                .refusal
-                .is_none()
-        );
-
-        // Quiet for longer than the window: fine.
         let later = now + LEGACY_ACTIVE_WINDOW + std::time::Duration::from_secs(5);
         assert!(
-            choose_default_chain(&paths, Some(&home), false, later)
+            choose_default_chain(&paths, Some(&home), false, true, later)
                 .refusal
                 .is_none()
         );
 
-        // A lock file means lock-aware kernels used it (a quick restart is
-        // fine; a live holder is stopped by ChainLock itself).
+        // Once a lock exists, a quick restart is fine.
         std::fs::write(home.join(".clawft/chain.lock"), "1").unwrap();
         assert!(
-            choose_default_chain(&paths, Some(&home), false, now)
+            choose_default_chain(&paths, Some(&home), false, false, now)
                 .refusal
                 .is_none()
         );

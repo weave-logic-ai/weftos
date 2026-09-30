@@ -51,6 +51,12 @@ pub enum KernelAction {
         /// legacy `~/.clawft` chain (the legacy chain is left untouched).
         #[arg(long)]
         new_chain: bool,
+
+        /// Adopt the legacy `~/.clawft` chain for the first time. Required
+        /// once, after stopping every older weaver daemon, while no
+        /// `chain.lock` exists beside that chain.
+        #[arg(long, conflicts_with = "new_chain")]
+        adopt_legacy_chain: bool,
     },
 
     /// Stop a running kernel daemon (sends SIGTERM).
@@ -133,6 +139,7 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
         KernelAction::Start {
             foreground,
             new_chain,
+            adopt_legacy_chain,
         } => {
             if foreground {
                 // Run in foreground (blocking)
@@ -141,6 +148,7 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
                     super::load_config_layered(&platform, args.config.as_deref()).await?;
                 let kernel_config = loaded.config.kernel.clone();
                 clawft_kernel::chain_storage::request_new_chain(new_chain);
+                clawft_kernel::chain_storage::request_adopt_legacy_chain(adopt_legacy_chain);
                 crate::daemon::run(
                     loaded.config,
                     kernel_config,
@@ -150,7 +158,7 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
                 .await?;
             } else {
                 // Background (default) — spawn detached child
-                crate::daemon::daemonize(args.config.as_deref(), new_chain)?;
+                crate::daemon::daemonize(args.config.as_deref(), new_chain, adopt_legacy_chain)?;
             }
         }
         #[cfg(unix)]
@@ -197,7 +205,7 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
         KernelAction::Restart => {
             println!("Restarting daemon (stop + start)...");
             let _ = stop_windows(true).await;
-            crate::daemon::daemonize(args.config.as_deref(), false)?;
+            crate::daemon::daemonize(args.config.as_deref(), false, false)?;
         }
         #[cfg(not(any(unix, windows)))]
         KernelAction::Start { .. } | KernelAction::Stop { .. } | KernelAction::Restart => {
