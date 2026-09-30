@@ -161,7 +161,7 @@ and two ADR-028s share numbers (collisions).
 `[kernel]` max_processes=64, health interval=30s · `[tick]` interval_ms=50,
 budget_ratio=0.3, adaptive=true (DEMOCRITUS) · `[embedding]` mock-sha256, 384-dim
 · `[governance]` env=development, risk_threshold=0.9 · `[kernel.mesh]` tcp,
-0.0.0.0:9470, noise=false (ESP32 bring-up) · `[kernel.ipc_tcp]` 127.0.0.1:9471
+0.0.0.0:9489, noise=false (ESP32 bring-up) · `[kernel.ipc_tcp]` 127.0.0.1:9471
 (loopback-only without bearer) · `[kernel.llm]` local llama.cpp http://127.0.0.1:8111,
 gemma-iq2m (overrides OpenRouter) · `[kernel.agent]` anchor_chain/hnsw/causal=true
 (each chat turn → witness tick + HNSW entry + causal node).

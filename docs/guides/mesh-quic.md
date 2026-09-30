@@ -19,10 +19,10 @@ skip-verify on the client).
 [kernel.mesh]
 enabled = true
 transport = "quic"                 # "tcp" | "ws" | "quic"
-listen_addr = "0.0.0.0:9470"       # UDP bind for QUIC
+listen_addr = "0.0.0.0:9489"       # UDP bind for QUIC
 noise = true                       # Noise XX (recommended production)
 # noise_key_path = "/etc/weftos/mesh.key"
-seed_peers = ["quic://10.0.0.2:9470"]
+seed_peers = ["quic://10.0.0.2:9489"]
 discovery = false
 ```
 
@@ -34,9 +34,9 @@ JSON equivalent (`~/.clawft/config.json`):
     "mesh": {
       "enabled": true,
       "transport": "quic",
-      "listen_addr": "0.0.0.0:9470",
+      "listen_addr": "0.0.0.0:9489",
       "noise": true,
-      "seed_peers": ["quic://10.0.0.2:9470"]
+      "seed_peers": ["quic://10.0.0.2:9489"]
     }
   }
 }
@@ -48,7 +48,7 @@ JSON equivalent (`~/.clawft/config.json`):
 |-------|------|---------|-------|
 | `enabled` | bool | `false` | Start mesh listener at boot (phase 5d). |
 | `transport` | string | `"tcp"` | `"tcp"`, `"ws"` / `"websocket"`, or `"quic"`. |
-| `listen_addr` | string | `0.0.0.0:9470` | Bind address. For QUIC this is a **UDP** port. |
+| `listen_addr` | string | `0.0.0.0:9489` | Bind address. For QUIC this is a **UDP** port. |
 | `noise` | bool | `false` | Wrap every peer stream in Noise XX. |
 | `noise_key_path` | string? | — | 32-byte Ed25519/X25519 private key file. |
 | `seed_peers` | string[] | `[]` | Peer URLs to dial after listen. Prefer `quic://` when `transport = "quic"`. |
@@ -90,7 +90,7 @@ transport-agnostic via `MeshTransport` / `MeshStream`.
 
 ## Firewall / ops
 
-- Open **UDP** on the mesh port (default `9470/udp`).
+- Open **UDP** on the mesh port (default `9489/udp`).
 - Some corporate networks block UDP; fall back with
   `transport = "tcp"` (or WebSocket for browser edges).
 - QUIC multipath / connection migration benefits Edge nodes that change

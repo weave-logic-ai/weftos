@@ -84,7 +84,7 @@ impl GlobalPid {
 pub struct ClusterConfig {
     // ... existing fields ...
 
-    /// Address to bind the mesh listener (e.g., "0.0.0.0:9470")
+    /// Address to bind the mesh listener (e.g., "0.0.0.0:9489")
     pub bind_address: Option<String>,
 
     /// Seed peers for bootstrap discovery
