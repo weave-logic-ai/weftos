@@ -223,9 +223,28 @@ def operator_guard(pi_before, pi_after, mac_before, mac_after):
 
 
 def filter_matched(results):
-    """With --filter, the test stage must run at least one test in total;
-    otherwise a typo'd filter would report green without testing anything."""
-    return sum(r["passed"] for r in results if r["stage"] == "test") > 0
+    """With --filter, the test stage must select at least one test in total
+    (passed, failed or ignored); otherwise a typo'd filter would report green
+    without testing anything. Failures are judged by stage_ok, not here."""
+    return sum(r["passed"] + r["failed"] + r["ignored"]
+               for r in results if r["stage"] == "test") > 0
+
+
+def remove_scratch_command(scratch_rel):
+    """Remove the (validated, relative) Pi scratch dir, falling back to sudo -n
+    for the root-owned files a conformance --sudo stage leaves, and fail if it
+    is still there. Used before staging (a killed run's leftovers) and after."""
+    if not valid_scratch(scratch_rel):
+        raise ValueError("invalid scratch dir %r" % scratch_rel)
+    rd = scratch_rel
+    return "cd && { rm -rf %s 2>/dev/null || sudo -n rm -rf %s; } && test ! -e %s" % (rd, rd, rd)
+
+
+def sync_files_command(root):
+    """git command listing the files synced to the Pi: tracked files only
+    under SYNC_ROOTS, so untracked local files (notes, credentials) never leave
+    the Mac."""
+    return ["git", "-C", root, "ls-files", "-z", "--cached", "--"] + list(SYNC_ROOTS)
 
 
 def parse_results(text):

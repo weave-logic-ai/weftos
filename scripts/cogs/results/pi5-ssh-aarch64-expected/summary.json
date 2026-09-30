@@ -36,7 +36,7 @@
   "release": "6.12.47+rpt-rpi-2712",
   "system": "Linux"
  },
- "measured_at": "2026-09-30T01:16:23Z",
+ "measured_at": "2026-09-30T01:30:16Z",
  "outcomes": {
   "anomaly-detect": "clean",
   "fall-detect": "clean",

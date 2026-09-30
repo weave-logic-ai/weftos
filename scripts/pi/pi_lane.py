@@ -5,7 +5,7 @@
 
 Cross-builds aarch64-unknown-linux-gnu test binaries in an arm64 Debian
 container (OrbStack / Docker; the Pi has no Rust toolchain), copies them and
-the tracked crate sources over SSH to a scratch dir on the Pi, runs them there
+the git-tracked crate sources over SSH to a scratch dir on the Pi, runs them there
 under `env -i` with an isolated HOME and WEFTOS_RUNTIME_DIR, streams the output
 back and removes the scratch dir. With no crate and no stage flag it runs the
 full lane: clawft-kernel tests, the native adapter live test (anomaly-detect)
@@ -17,6 +17,7 @@ weaver.service, and checks the chain file mtimes on both ends before and after.
 """
 import argparse
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -154,12 +155,12 @@ class Lane:
 
     def stage_remote(self, arts, extra_bins):
         s = self.scratch
-        rc, _ = self.ssh("rm -rf %s && mkdir -p %s/bin %s/src %s/home %s/runtime %s/tmp"
-                         % ((self.a.scratch,) * 6), capture="quiet")
+        rd = self.a.scratch   # a killed earlier run may have left it (root files too)
+        rc, _ = self.ssh("%s && mkdir -p %s/bin %s/src %s/home %s/runtime %s/tmp"
+                         % ((plan.remove_scratch_command(rd),) + (rd,) * 5), capture="quiet")
         if rc != 0:
             raise SystemExit("test-pi: cannot create the Pi scratch dir")
-        files = subprocess.run(["git", "-C", ROOT, "ls-files", "-z", "-co", "--exclude-standard",
-                                "--"] + list(plan.SYNC_ROOTS),
+        files = subprocess.run(plan.sync_files_command(ROOT),
                                stdout=subprocess.PIPE, check=True).stdout
         rsh = "ssh " + " ".join(SSH_OPTS)
         with tempfile.NamedTemporaryFile(suffix=".lst") as lst:
@@ -246,9 +247,35 @@ class Lane:
         if self.a.keep:
             print("  INFO  --keep: leaving %s on the Pi" % self.a.scratch)
             return
-        rd = self.a.scratch   # validated relative path; conformance --sudo leaves root files
-        self.ssh("rm -rf %s 2>/dev/null || sudo -n rm -rf %s; test ! -e %s" % (rd, rd, rd),
-                 capture="quiet")
+        rc, _ = self.ssh(plan.remove_scratch_command(self.a.scratch), capture="quiet",
+                         timeout=120)
+        if rc != 0 and not self.run.dry_run:
+            print("  WARN  could not remove ~/%s on the Pi (rc %s); the next run removes it"
+                  % (self.a.scratch, rc))
+
+    def stages(self):
+        a = self.a
+        self.preflight()
+        build = list(a.crates) + (["clawft-kernel"] if a.live_native else [])
+        arts = self.build(list(dict.fromkeys(build)), launcher=a.cogs)
+        extra = [self.fetch_cog()] if a.live_native else []
+        self.stage_remote(arts, extra)
+        if a.crates:
+            self.run_tests(arts, a.crates)
+        if a.live_native:
+            self.run_live_native(arts)
+        if a.cogs:
+            self.run_cogs()
+
+    def abort(self, why):
+        """A stage stopped the lane: it is a FAIL row, and the guard still runs."""
+        self.results.append(dict(stage="abort", name=why, rc=1, ok=False, passed=0,
+                                 failed=1, ignored=0, suites=0))
+        print("  FAIL  lane aborted: %s" % why)
+
+
+def _raise_on_signal(signum, _frame):
+    raise SystemExit("test-pi: interrupted by signal %d" % signum)
 
 
 def parse_args(argv):
@@ -305,18 +332,15 @@ def main(argv=None):
                          "without a before-snapshot")
     print("── test-pi: crates=%s live-native=%s cogs=%s filter=%s" % (
         ",".join(a.crates) or "-", a.live_native, a.cogs, a.filter or "-"))
-    lane.preflight()
-    build = list(a.crates) + (["clawft-kernel"] if a.live_native else [])
-    arts = lane.build(list(dict.fromkeys(build)), launcher=a.cogs)
+    # SIGTERM/SIGHUP become SystemExit so cleanup and the guard still run
+    # (SIGKILL cannot be caught; the next run removes the stale scratch dir).
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _raise_on_signal)
     try:
-        extra = [lane.fetch_cog()] if a.live_native else []
-        lane.stage_remote(arts, extra)
-        if a.crates:
-            lane.run_tests(arts, a.crates)
-        if a.live_native:
-            lane.run_live_native(arts)
-        if a.cogs:
-            lane.run_cogs()
+        lane.stages()
+    except (SystemExit, KeyboardInterrupt) as e:
+        code = getattr(e, "code", None)
+        lane.abort(code if isinstance(code, str) else "interrupted (%s)" % type(e).__name__)
     finally:
         lane.cleanup()
     pi_after, mac_after = lane.pi_state(), local_chain_mtime()

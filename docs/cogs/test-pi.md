@@ -43,18 +43,20 @@ them with `python3 -m unittest discover -s scripts/pi`.
    cargo registry is cached next to it, and the rustup toolchain is cached in the
    `weftos-pi-rustup` docker volume. The test executables come from cargo's JSON
    artifacts. With `--cogs` it also builds the `cog_adapter_run` launcher.
-3. **Stage.** It recreates `~/weftos-test-pi/{bin,src,home,runtime,tmp}` on the
-   Pi, rsyncs the tracked and untracked-but-not-ignored files under `crates/`,
-   `config/` and `assets/` (plus the workspace manifests) into `src/`, and puts
-   the test binaries in `bin/`.
+3. **Stage.** It removes any `~/weftos-test-pi` a killed earlier run left behind
+   (with `sudo -n` for root-owned harness files), recreates
+   `~/weftos-test-pi/{bin,src,home,runtime,tmp}` on the Pi, rsyncs only the
+   git-tracked files under `crates/`, `config/` and `assets/` (plus the workspace
+   manifests) into `src/`, and puts the test binaries in `bin/`. Untracked local
+   files never leave the Mac.
 4. **Run.** Each binary runs from its crate directory, as `cargo test` would, as
    `env -i PATH=… HOME=~/weftos-test-pi/home WEFTOS_RUNTIME_DIR=~/weftos-test-pi/runtime
    TMPDIR=… XDG_*=… CARGO_MANIFEST_DIR=… <bin> [filter]`. Nothing from the login
    environment leaks in, and nothing can reach `~/.clawft` or the system weaver on
    `:9470`. Output streams back live. A binary passes when it exits 0, libtest
    printed a `test result:` line, and no test failed. With `--filter`, the stage
-   also fails if the filter ran zero tests across all binaries, so a typo cannot
-   report green. Each binary runs under the Pi's `timeout -k 10 <--timeout>`, so
+   also fails if the filter selected zero tests (passed, failed or ignored)
+   across all binaries, so a typo cannot report green. Each binary runs under the Pi's `timeout -k 10 <--timeout>`, so
    a hung test is killed on the Pi, not only the local ssh client.
 5. **Native adapter live test.** The clawft-kernel lib test binary runs
    `workload_runtime::tests_live::live_native_anomaly_detect` with
@@ -74,8 +76,12 @@ them with `python3 -m unittest discover -s scripts/pi`.
    needed only because the harness ingest stub binds `127.0.0.1:80`.
 7. **Clean up.** It removes `~/weftos-test-pi`, including the root-owned
    harness output (with `sudo -n` when needed), unless you pass `--keep`. The
-   removal runs even when a stage fails.
-8. **Guard.** It re-reads the Pi operator files, `weaver.service` and the Mac
+   removal runs even when a stage fails or the lane aborts (a failed build,
+   rsync or fetch, Ctrl-C, SIGTERM or SIGHUP); the abort becomes a FAIL row in
+   the summary. SIGKILL cannot be caught, so step 3 of the next run removes
+   whatever such a run left.
+8. **Guard.** It runs after every run that got past the before-probe, aborted
+   or not, and re-reads the Pi operator files, `weaver.service` and the Mac
    chain mtime. If any of them changed, or the Pi can no longer be probed (an
    unknown state is never counted as unchanged), the lane prints `CRITICAL` and
    exits 3. `sessions/` and `kernel.log` are not compared, because the Pi's own

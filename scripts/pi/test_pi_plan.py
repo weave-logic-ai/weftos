@@ -150,10 +150,37 @@ class Guard(unittest.TestCase):
         self.assertFalse(plan.operator_guard(st, dict(st), 7, 8)["ok"])
 
     def test_filter_must_match_something(self):
-        r = lambda n: {"stage": "test", "passed": n}
+        sel = lambda p, f, i, st="test": {"stage": st, "passed": p, "failed": f, "ignored": i}
+        r = lambda n: sel(n, 0, 0)
         self.assertFalse(plan.filter_matched([r(0), r(0)]))
-        self.assertFalse(plan.filter_matched([{"stage": "live-native", "passed": 1}]))
+        self.assertFalse(plan.filter_matched([sel(1, 0, 0, "live-native")]))
         self.assertTrue(plan.filter_matched([r(0), r(3)]))
+        self.assertTrue(plan.filter_matched([sel(0, 0, 2)]))   # only #[ignore] matched
+        self.assertTrue(plan.filter_matched([sel(0, 1, 0)]))   # matched, all failed
+
+    def test_scratch_removal_is_bounded_and_sudo_backed(self):
+        line = plan.remove_scratch_command("weftos-test-pi")
+        self.assertIn("sudo -n rm -rf weftos-test-pi", line)
+        self.assertTrue(line.startswith("cd && ") and line.endswith("test ! -e weftos-test-pi"))
+        for bad in ("../x", "/etc", "", "a/../b"):
+            with self.assertRaises(ValueError):
+                plan.remove_scratch_command(bad)
+
+    def test_sync_list_is_tracked_files_only(self):
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            git = lambda *a: subprocess.run(["git", "-C", d] + list(a), check=True,
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            git("init", "-q")
+            os.makedirs(os.path.join(d, "crates", "x"))
+            for f in ("crates/x/lib.rs", "crates/x/local-notes.txt"):
+                open(os.path.join(d, f), "w").close()
+            git("add", "crates/x/lib.rs")
+            out = subprocess.run(plan.sync_files_command(d), stdout=subprocess.PIPE,
+                                 check=True).stdout.split(b"\0")
+        self.assertIn(b"crates/x/lib.rs", out)
+        self.assertNotIn(b"crates/x/local-notes.txt", out)
 
     def test_remote_timeout_runs_on_the_pi(self):
         line = plan.remote_test_command("/h/s", "/h/s/bin/t", "/h/s/src/c", [], timeout=60)
@@ -185,13 +212,15 @@ class BuildShWiring(unittest.TestCase):
 class FakeRunner:
     """Scripted Pi: ssh/docker/rsync calls answered from `script`."""
 
-    def __init__(self, fail_on=None, chain=("100", "100"), output=None):
+    def __init__(self, fail_on=None, chain=("100", "100"), output=None, hook=None):
         self.dry_run, self.calls, self.fail_on = False, [], fail_on
-        self.chain, self.output = list(chain), output
+        self.chain, self.output, self.hook = list(chain), output, hook
 
     def __call__(self, cmd, capture="all", timeout=None):
         self.calls.append(cmd)
         line = " ".join(cmd)
+        if self.hook and self.hook(line) is not None:
+            return self.hook(line)
         if plan.STATE_END in line:
             mt = self.chain.pop(0)
             if mt is None:                       # probe failed (Pi dropped off)
@@ -271,6 +300,48 @@ class LaneBehaviour(unittest.TestCase):
         rc, out = self.run_main(["clawft-kernel", "--filter", "typo_name"], runner)
         self.assertEqual(rc, 1, out)
         self.assertIn("matched no test", out)
+
+    def probes(self, runner):
+        return sum(plan.STATE_END in " ".join(c) for c in runner.calls)
+
+    def test_abort_after_touching_the_pi_still_cleans_up_and_guards(self):
+        runner = FakeRunner(hook=lambda l: (23, "") if l.startswith("rsync") else None)
+        rc, out = self.run_main(["clawft-kernel"], runner)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("lane aborted: test-pi: rsync to the Pi failed", out)
+        self.assertEqual(self.probes(runner), 2)          # before + after
+        self.assertIn("INFO  operator data:", out)
+        self.assertIn("sudo -n rm -rf weftos-test-pi", " ".join(runner.calls[-2]))
+
+    def test_abort_with_changed_operator_state_is_critical(self):
+        runner = FakeRunner(chain=("100", "101"),
+                            hook=lambda l: (23, "") if l.startswith("rsync") else None)
+        rc, out = self.run_main(["clawft-kernel"], runner)
+        self.assertEqual(rc, 3, out)
+        self.assertIn("CRITICAL", out)
+
+    def test_sigterm_mid_test_cleans_up_and_guards(self):
+        import signal
+
+        def hook(line):
+            if " env -i " in line:
+                os.kill(os.getpid(), signal.SIGTERM)
+            return None
+        saved = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP)}
+        try:
+            rc, out = self.run_main(["clawft-kernel"], FakeRunner(hook=hook))
+        finally:
+            for s, h in saved.items():
+                signal.signal(s, h)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("interrupted by signal %d" % signal.SIGTERM, out)
+        self.assertIn("INFO  operator data:", out)
+
+    def test_staging_first_removes_a_stale_scratch_dir(self):
+        runner = FakeRunner()
+        self.run_main(["clawft-kernel"], runner)
+        mk = next(" ".join(c) for c in runner.calls if "mkdir -p" in " ".join(c))
+        self.assertLess(mk.index("sudo -n rm -rf weftos-test-pi"), mk.index("mkdir -p"))
 
     def test_no_args_means_full_lane(self):
         a = pi_lane.parse_args([])
