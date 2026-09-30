@@ -11,8 +11,11 @@
 //! # Examples
 //!
 //! ```text
-//! # Single message
+//! # Single message (needs a running kernel: `weaver kernel start`)
 //! weft agent -m "What is Rust?"
+//!
+//! # No kernel: run the agent loop in-process
+//! weft agent --local -m "What is Rust?"
 //!
 //! # Interactive mode
 //! weft agent
@@ -147,7 +150,11 @@ pub async fn run(args: AgentArgs) -> anyhow::Result<()> {
     }
     if !args.local {
         let why = super::daemon_fallback::refuse_state_change("`weft agent`").await;
-        anyhow::bail!("{why}\n  Or pass --local to run the agent loop in-process.");
+        let retry = match args.message.as_deref() {
+            Some(m) => format!("weft agent --local -m {m:?}"),
+            None => "weft agent --local".to_string(),
+        };
+        anyhow::bail!("{why}\n  Or run it in-process instead: {retry}");
     }
     eprintln!(
         "{}",

@@ -308,34 +308,13 @@ pub async fn cron_enable(job_id: String, enabled: bool, _config: &Config) -> any
     Err(super::daemon_fallback::refuse_state_change("enabling or disabling a cron job").await)
 }
 
-/// Manually trigger a cron job.
-///
-/// Tries daemon RPC first; falls back to direct file I/O with a
-/// deprecation warning if the daemon does not support the method yet.
+/// Manually trigger a cron job (not implemented by the kernel).
 pub async fn cron_run(job_id: String, _config: &Config) -> anyhow::Result<()> {
-    if let Ok(mut client) = DaemonClient::connect().await.ok_or(()) {
-        let params = serde_json::json!({ "id": job_id });
-        let resp = client
-            .call(Request::with_params("cron.run", params))
-            .await?;
-        if resp.ok {
-            println!("Cron job '{job_id}' triggered via daemon.");
-            if let Some(data) = resp.result {
-                println!("{}", serde_json::to_string_pretty(&data)?);
-            }
-            return Ok(());
-        }
-        if let Some(ref err) = resp.error
-            && !err.contains("unknown method")
-        {
-            anyhow::bail!("{err}");
-        }
-        anyhow::bail!("the running daemon does not support cron.run yet; upgrade it");
-    }
-
-    // The daemon owns cron: a job written to a local store it never reads
-    // would silently never run.
-    Err(super::daemon_fallback::refuse_state_change("running a cron job").await)
+    anyhow::bail!(
+        "`weft cron run {job_id}` is not implemented: the kernel cron service only fires \
+         jobs on their interval and has no manual-trigger call. Use `weft cron enable` / \
+         `weft cron disable` to control a job, or `weft cron list` to see its state."
+    )
 }
 
 #[cfg(test)]
