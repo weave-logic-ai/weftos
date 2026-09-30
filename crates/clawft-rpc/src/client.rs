@@ -19,6 +19,8 @@ mod imp {
     /// A client connected to the kernel daemon.
     pub struct DaemonClient {
         stream: UnixStream,
+        /// Per-client request context; overrides the process default.
+        pub(crate) ctx: Option<crate::connect::ClientContext>,
     }
 
     /// Streaming subscription returned by [`DaemonClient::open_stream`].
@@ -61,7 +63,7 @@ mod imp {
         /// that a live developer daemon may own (WEFT-645).
         pub async fn connect_path(path: impl AsRef<Path>) -> Option<Self> {
             let stream = UnixStream::connect(path.as_ref()).await.ok()?;
-            Some(Self { stream })
+            Some(Self { stream, ctx: None })
         }
 
         /// Send a request and wait for the response.
@@ -78,9 +80,7 @@ mod imp {
         /// keeps that scope; only an absent token gets the implicit
         /// upgrade.
         pub async fn call(&mut self, mut request: Request) -> anyhow::Result<Response> {
-            if request.auth.is_none() {
-                request.auth = Some("admin".to_string());
-            }
+            crate::connect::stamp_request(&mut request, self.ctx.as_ref());
             let mut json = serde_json::to_string(&request)?;
             json.push('\n');
 
@@ -116,9 +116,7 @@ mod imp {
             mut self,
             mut request: Request,
         ) -> anyhow::Result<(Response, StreamSession)> {
-            if request.auth.is_none() {
-                request.auth = Some("admin".to_string());
-            }
+            crate::connect::stamp_request(&mut request, self.ctx.as_ref());
             let mut json = serde_json::to_string(&request)?;
             json.push('\n');
             self.stream.write_all(json.as_bytes()).await?;
@@ -157,6 +155,8 @@ mod imp {
     /// A client connected to the kernel daemon over a Windows named pipe.
     pub struct DaemonClient {
         stream: NamedPipeClient,
+        /// Per-client request context; overrides the process default.
+        pub(crate) ctx: Option<crate::connect::ClientContext>,
     }
 
     /// Streaming subscription returned by [`DaemonClient::open_stream`].
@@ -200,7 +200,7 @@ mod imp {
         /// runtime dir. Returns `None` when nothing is listening.
         pub async fn connect_path(path: impl AsRef<Path>) -> Option<Self> {
             let pipe = protocol::pipe_name_for_path(path.as_ref());
-            connect_pipe(&pipe).await.map(|stream| Self { stream })
+            connect_pipe(&pipe).await.map(|stream| Self { stream, ctx: None })
         }
 
         /// Send a request and wait for the response.
@@ -210,9 +210,7 @@ mod imp {
         /// ACL-gated by the creating process (same trust model as UDS
         /// filesystem permissions on Unix).
         pub async fn call(&mut self, mut request: Request) -> anyhow::Result<Response> {
-            if request.auth.is_none() {
-                request.auth = Some("admin".to_string());
-            }
+            crate::connect::stamp_request(&mut request, self.ctx.as_ref());
             let mut json = serde_json::to_string(&request)?;
             json.push('\n');
 
@@ -245,9 +243,7 @@ mod imp {
             mut self,
             mut request: Request,
         ) -> anyhow::Result<(Response, StreamSession)> {
-            if request.auth.is_none() {
-                request.auth = Some("admin".to_string());
-            }
+            crate::connect::stamp_request(&mut request, self.ctx.as_ref());
             let mut json = serde_json::to_string(&request)?;
             json.push('\n');
             self.stream.write_all(json.as_bytes()).await?;
@@ -312,7 +308,9 @@ mod imp {
     /// Stub daemon client for platforms without a local transport
     /// (e.g. pure WASM). Prefer the Unix UDS or Windows named-pipe
     /// implementations on native targets.
-    pub struct DaemonClient;
+    pub struct DaemonClient {
+        pub(crate) ctx: Option<crate::connect::ClientContext>,
+    }
 
     /// Stub stream session (never constructible on this platform).
     pub struct StreamSession;

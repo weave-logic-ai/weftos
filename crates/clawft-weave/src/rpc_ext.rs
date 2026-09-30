@@ -57,13 +57,42 @@ use crate::capability::{CallerCapabilities, Capability, required_capability};
 /// Shared kernel handle, same shape `daemon.rs` passes around.
 pub type KernelRef = Arc<RwLock<Kernel<NativePlatform>>>;
 
+/// A project id the client CLAIMED in `Request.project`.
+///
+/// UNVERIFIED: the daemon only checks that it is a well-formed ULID and
+/// that it equals the daemon's bound project (when it has one). Holding a
+/// `ClaimedProject` proves nothing about membership; package G must verify
+/// it against the project registry before any scope decision relies on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimedProject(String);
+
+impl ClaimedProject {
+    /// The claimed id, unverified.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for ClaimedProject {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for ClaimedProject {
+    fn from(s: &str) -> Self {
+        Self(s.to_owned())
+    }
+}
+
 /// Who is calling, as established by the entry path before dispatch.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CallerCtx {
     /// Bearer / scope token from the request envelope, if any.
     pub auth: Option<String>,
-    /// Project the request is scoped to, once the envelope carries one.
-    pub project: Option<String>,
+    /// Project the client claims the request is scoped to
+    /// (`Request.project`). Unverified; see [`ClaimedProject`].
+    pub project: Option<ClaimedProject>,
 }
 
 impl CallerCtx {
@@ -72,6 +101,14 @@ impl CallerCtx {
         Self {
             auth,
             project: None,
+        }
+    }
+
+    /// Caller context for a wire request: its `auth` and `project`.
+    pub fn from_request(req: &clawft_rpc::Request) -> Self {
+        Self {
+            auth: req.auth.clone(),
+            project: req.project.clone().map(ClaimedProject::from),
         }
     }
 
@@ -93,7 +130,8 @@ impl CallerCtx {
 pub struct ExtCtx {
     pub kernel: KernelRef,
     pub auth: Option<String>,
-    pub project: Option<String>,
+    /// Unverified client claim; see [`ClaimedProject`].
+    pub project: Option<ClaimedProject>,
     /// Capabilities already resolved for this caller.
     pub caps: CallerCapabilities,
 }
@@ -135,6 +173,7 @@ pub struct GateRequest<'a> {
     pub method: &'a str,
     pub params: &'a Value,
     pub auth: Option<&'a str>,
+    /// Unverified client claim (see [`ClaimedProject`]).
     pub project: Option<&'a str>,
     /// Capabilities resolved for the caller (the capability check has
     /// already passed for `method`).
@@ -168,13 +207,24 @@ pub type GateFn = for<'a> fn(&'a GateRequest<'a>) -> GateFuture<'a>;
 /// `ExtRoute { prefix: "project.", capability: Capability::Read,
 /// handler: crate::project_rpc::handle }`.
 #[cfg(not(test))]
-const ROUTES: &[ExtRoute] = &[];
-#[cfg(test)]
 const ROUTES: &[ExtRoute] = &[ExtRoute {
-    prefix: "rpc_ext.test.",
-    capability: Capability::Write,
-    handler: test_probe,
+    prefix: "kernel.handshake",
+    capability: Capability::Read,
+    handler: crate::handshake_rpc::handle,
 }];
+#[cfg(test)]
+const ROUTES: &[ExtRoute] = &[
+    ExtRoute {
+        prefix: "kernel.handshake",
+        capability: Capability::Read,
+        handler: crate::handshake_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "rpc_ext.test.",
+        capability: Capability::Write,
+        handler: test_probe,
+    },
+];
 
 /// Registered gates, run in order; the first denial wins.
 ///
@@ -191,6 +241,7 @@ fn test_probe(call: ExtCall) -> ExtFuture {
         Response::success(serde_json::json!({
             "method": call.method,
             "auth": call.ctx.auth,
+            "project": call.ctx.project.as_ref().map(ClaimedProject::as_str),
         }))
     })
 }
@@ -296,7 +347,7 @@ pub async fn authorize_with(
         method,
         params,
         auth: caller.auth.as_deref(),
-        project: caller.project.as_deref(),
+        project: caller.project.as_ref().map(ClaimedProject::as_str),
         caps,
         kernel,
     };

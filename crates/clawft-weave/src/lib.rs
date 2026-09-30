@@ -24,6 +24,9 @@ pub mod daemon;
 pub mod instance_lock;
 #[cfg(any(unix, windows))]
 pub mod llm_service;
+/// `kernel.handshake` and the request-envelope gate (ADR-103 D14).
+#[cfg(any(unix, windows))]
+pub mod handshake_rpc;
 /// Daemon RPC extension seam: method-prefix routes + pre-dispatch gates (ADR-103 D0).
 #[cfg(any(unix, windows))]
 pub mod rpc_ext;

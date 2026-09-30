@@ -50,8 +50,8 @@ pub async fn probe_socket(path: &Path) -> SocketState {
     }
 }
 
-/// Operator-facing explanation for an unreachable endpoint.
-pub fn describe_unreachable(path: &Path, state: &SocketState, paths: &RuntimePaths) -> String {
+/// One-clause reason an endpoint is unusable (no trailing guidance).
+pub fn describe_state(path: &Path, state: &SocketState) -> String {
     let endpoint = if cfg!(windows) {
         format!(
             "{} (named pipe {})",
@@ -61,7 +61,7 @@ pub fn describe_unreachable(path: &Path, state: &SocketState, paths: &RuntimePat
     } else {
         path.display().to_string()
     };
-    let why = match state {
+    match state {
         SocketState::Reachable => "reachable".to_string(),
         SocketState::NoSocketFile => {
             format!("no socket file at {endpoint}; no kernel is running there")
@@ -74,7 +74,12 @@ pub fn describe_unreachable(path: &Path, state: &SocketState, paths: &RuntimePat
             format!("permission denied connecting to {endpoint}; it belongs to another user")
         }
         SocketState::Other(e) => format!("cannot connect to {endpoint}: {e}"),
-    };
+    }
+}
+
+/// Operator-facing explanation for an unreachable endpoint.
+pub fn describe_unreachable(path: &Path, state: &SocketState, paths: &RuntimePaths) -> String {
+    let why = describe_state(path, state);
     let origin = match paths.source() {
         RootSource::Env => "WEFTOS_RUNTIME_DIR".to_string(),
         RootSource::Project(p) => format!("project {}", p.display()),
