@@ -41,6 +41,8 @@ COMMAND=""
 COGS_ARGS=()
 # cogs-launcher: --linux-arm64 builds the launcher in an arm64 Linux container
 LAUNCHER_LINUX=false
+# test-pi: everything after the subcommand is passed through to scripts/pi/pi_lane.py
+PI_ARGS=()
 
 # ── Reporting helpers ────────────────────────────────────────────────
 pass()  { printf "  ${GREEN}PASS${NC}  %s\n" "$*"; }
@@ -1274,6 +1276,20 @@ cmd_cogs_launcher() {
     return $rc
 }
 
+# ── Real Pi 5 test lane (mesh-placement-fu-pi-test-lane) ────────────
+# Cross-builds aarch64 test binaries in an arm64 Debian container, runs them
+# on the Pi named by WEFTOS_PI_HOST (skips when unset) with an isolated HOME
+# and WEFTOS_RUNTIME_DIR, plus the native adapter live test and the cog
+# conformance harness in remote mode. See docs/cogs/test-pi.md.
+cmd_test_pi() {
+    header "ARM tests on the real Pi 5 (scripts/pi/pi_lane.py)"
+    timer_start
+    local rc=0
+    python3 -u "$ROOT/scripts/pi/pi_lane.py" "${PI_ARGS[@]}" || rc=$?
+    timer_end
+    return $rc
+}
+
 # ── Gate check 13 helper: clawft-kernel diskann + bench feature matrix ──
 check_kernel_diskann_and_bench_matrix() {
     # --tests included deliberately: cfg-gated test modules rot separately
@@ -1777,6 +1793,16 @@ ${BOLD}Commands:${NC}
                   from CHANGELOG.md (also runs as --check before commits)
   all             Build everything (native + wasi + browser + ui)
   test [pkg…]     Run cargo test --workspace (or scoped: test clawft-channels …)
+  test-pi [crate…] [--filter <test>] [--live-native] [--cogs] [--full]
+                  Run ARM tests on the real Raspberry Pi 5: cross-build aarch64
+                  test binaries in an arm64 Debian container (image
+                  rust:<toolchain>-bookworm, glibc no newer than the Pi's),
+                  rsync them to ~/weftos-test-pi on the Pi, run them there
+                  under env -i with an isolated HOME and WEFTOS_RUNTIME_DIR,
+                  stream results, clean up. No args = full lane: clawft-kernel
+                  + native adapter live test (anomaly-detect) + cog conformance
+                  in ssh mode. Pi from WEFTOS_PI_HOST (skips when unset); never
+                  touches ~/.clawft or weaver.service. See docs/cogs/test-pi.md
   test-browser    Run browser WASM regression suite under headless Chrome
                   (WEFT-388 / M5-A). Requires wasm-pack + chromedriver.
   bundle-size     Gate browser WASM bundle (raw + gzip) against the
@@ -1885,6 +1911,8 @@ ${BOLD}Examples:${NC}
   scripts/build.sh gui-egui --profile debug         # Native egui GUI (debug)
   scripts/build.sh browser                          # Browser WASM
   scripts/build.sh gate                             # Full phase gate
+  WEFTOS_PI_HOST=pi5 scripts/build.sh test-pi       # Full lane on the real Pi 5
+  WEFTOS_PI_HOST=pi5 scripts/build.sh test-pi clawft-kernel --filter chain
   scripts/build.sh gate --with-release-dry-run      # Gate + cargo-dist host rehearsal
   scripts/build.sh release-dry-run                  # cargo-dist host-triple dry-run
   scripts/build.sh native --dry-run                 # Preview commands
@@ -1911,6 +1939,13 @@ parse_args() {
             shift
         done
         [ ${#COGS_ARGS[@]} -gt 0 ] || COGS_ARGS=(--help)
+        return 0
+    fi
+
+    # test-pi passes every remaining argument (including --dry-run and
+    # --help) through to scripts/pi/pi_lane.py.
+    if [ "$COMMAND" = "test-pi" ]; then
+        PI_ARGS=("$@")
         return 0
     fi
 
@@ -2055,6 +2090,7 @@ main() {
         agents-leak-check)  cmd_agents_leak_check ;;
         cogs-conformance)   cmd_cogs_conformance ;;
         cogs-launcher)      cmd_cogs_launcher ;;
+        test-pi)            cmd_test_pi ;;
         gate)         cmd_gate ;;
         pipeline-pass) cmd_pipeline_pass ;;
         release-dry-run) cmd_release_dry_run ;;

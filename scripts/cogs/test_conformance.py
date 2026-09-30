@@ -347,6 +347,26 @@ class Runtimes(unittest.TestCase):
             with self.assertRaises(ValueError):
                 runtimes.make_adapter("ssh", "aarch64", ssh_host=bad)
 
+    def test_ssh_adapter_remote_dir(self):
+        seen = []
+
+        class P:
+            returncode = 0
+
+        def runner(cmd, timeout):
+            seen.append(cmd)
+            return P()
+        ad = runtimes.make_adapter("ssh", "aarch64", ssh_host="pi5", runner=runner,
+                                   remote_dir="weftos-test-pi/cogs")
+        ad.run("/w1", timeout=10)
+        self.assertEqual(seen[0][2], "rm -rf weftos-test-pi/cogs && mkdir -p weftos-test-pi/cogs")
+        self.assertTrue(seen[1][-1].endswith(":weftos-test-pi/cogs/"))
+        self.assertIn("weftos-test-pi/cogs/results.json", seen[3][2])
+        self.assertEqual(ad.binary_root("/w1"), "weftos-test-pi/cogs")
+        for bad in ["/abs", "..", "a/../b", "a//b", "a b", "a;rm", ".", "a/./b", "~/x"]:
+            with self.assertRaises(ValueError, msg=bad):
+                runtimes.make_adapter("ssh", "aarch64", ssh_host="pi5", remote_dir=bad)
+
     def test_adapter_failure_raises(self):
         class P:
             returncode = 125

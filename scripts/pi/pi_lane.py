@@ -1,0 +1,333 @@
+#!/usr/bin/env python3
+"""Run ARM tests on the real Raspberry Pi 5 (scripts/build.sh test-pi).
+
+  scripts/build.sh test-pi [crate ...] [--filter <test>] [--live-native] [--cogs]
+
+Cross-builds aarch64-unknown-linux-gnu test binaries in an arm64 Debian
+container (OrbStack / Docker; the Pi has no Rust toolchain), copies them and
+the tracked crate sources over SSH to a scratch dir on the Pi, runs them there
+under `env -i` with an isolated HOME and WEFTOS_RUNTIME_DIR, streams the output
+back and removes the scratch dir. With no crate and no stage flag it runs the
+full lane: clawft-kernel tests, the native adapter live test (anomaly-detect)
+and the scripts/cogs conformance harness in remote (ssh) mode.
+
+The Pi comes from WEFTOS_PI_HOST ([user@]host, never committed); unset means
+the lane is skipped (exit 0). It never touches the Pi's ~/.clawft or its
+weaver.service, and checks the chain file mtimes on both ends before and after.
+"""
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+import threading
+
+import pi_plan as plan
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
+COGS_DIR = os.path.join(ROOT, "scripts", "cogs")
+TARGET = os.path.join(ROOT, "target", "pi-aarch64")
+SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15"]
+LIVE_TEST = "workload_runtime::tests_live::live_native_anomaly_detect"
+LIVE_MARK = "interval run:"
+DEFAULT_COGS = "anomaly-detect,fall-detect,sleep-apnea,health-monitor"
+CHAIN = ".clawft/chain.rvf"
+
+
+class Runner:
+    """Runs commands, streaming output; returns (rc, captured text)."""
+
+    def __init__(self, dry_run=False):
+        self.dry_run = dry_run
+
+    def __call__(self, cmd, capture="all", timeout=None):
+        if self.dry_run:
+            print("  DRY   " + " ".join(cmd))
+            return 0, ""
+        if capture == "stdout":   # stdout captured quietly, stderr streamed
+            p = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, timeout=timeout)
+            return p.returncode, p.stdout
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, errors="replace")
+        timer = threading.Timer(timeout, p.kill) if timeout else None
+        if timer:
+            timer.start()
+        chunks = []
+        for line in p.stdout:
+            chunks.append(line)
+            if capture != "quiet":
+                sys.stdout.write(line)
+                sys.stdout.flush()
+        rc = p.wait()
+        if timer:
+            timer.cancel()
+        return rc, "".join(chunks)
+
+
+def local_chain_mtime():
+    try:
+        return int(os.stat(os.path.expanduser("~/" + CHAIN)).st_mtime)
+    except OSError:
+        return None
+
+
+class Lane:
+    def __init__(self, args, host, runner):
+        self.a, self.host, self.run = args, host, runner
+        self.results = []   # {stage, name, rc, passed, failed, ignored, ok}
+        self.facts = {}
+
+    # ── helpers ────────────────────────────────────────────────────────
+    def ssh(self, line, capture="all", timeout=None):
+        return self.run(["ssh"] + SSH_OPTS + [self.host, line], capture, timeout)
+
+    def record(self, stage, name, rc, text, require_ran=False, marker=None):
+        tot = plan.parse_results(text)
+        ok = plan.stage_ok(rc, tot, require_ran) and (marker is None or marker in text)
+        if self.run.dry_run:
+            ok = True
+        self.results.append(dict(stage=stage, name=name, rc=rc, ok=ok, **tot))
+        print("  %s  %s %s (%d passed, %d failed, %d ignored)" % (
+            "PASS" if ok else "FAIL", stage, name, tot["passed"], tot["failed"], tot["ignored"]))
+        return ok
+
+    def pi_state(self):
+        """(chain mtime or 'absent', weaver.service state) on the Pi."""
+        rc, out = self.ssh("stat -c %%Y %s 2>/dev/null || echo absent; "
+                           "systemctl is-active weaver.service 2>/dev/null || true" % CHAIN,
+                           capture="quiet")
+        lines = (out or "").split()
+        return (lines[0] if lines else "?"), (lines[1] if len(lines) > 1 else "?")
+
+    # ── stages ─────────────────────────────────────────────────────────
+    def preflight(self):
+        rc, out = self.ssh('uname -m; ldd --version 2>&1 | head -1; printf "%s\\n" "$HOME"',
+                           capture="quiet")
+        if self.run.dry_run:
+            out = "aarch64\nldd (dry-run) 2.41\n/home/pi-user\n"
+        lines = out.splitlines()
+        if rc != 0 or len(lines) < 3:
+            raise SystemExit("test-pi: cannot reach the Pi over ssh (rc %s)" % rc)
+        if lines[0].strip() != "aarch64":
+            raise SystemExit("test-pi: target is %s, not aarch64" % lines[0].strip())
+        home = lines[2].strip()
+        if not home.startswith("/") or any(c.isspace() for c in home):
+            raise SystemExit("test-pi: unexpected remote $HOME")
+        self.scratch = "%s/%s" % (home, self.a.scratch)
+        rc, bout = self.run(["docker", "run", "--rm", "--platform", "linux/arm64",
+                             self.a.image, "sh", "-c", "ldd --version 2>&1 | head -1"],
+                            capture="quiet")
+        pi_glibc, b_glibc = plan.glibc_version(lines[1]), plan.glibc_version(bout)
+        if not self.run.dry_run and not plan.glibc_compatible(b_glibc, pi_glibc):
+            raise SystemExit("test-pi: builder glibc %s is newer than the Pi's %s"
+                             % (b_glibc, pi_glibc))
+        self.facts.update(arch="aarch64", pi_glibc=pi_glibc, builder_glibc=b_glibc,
+                          builder_image=self.a.image)
+        print("  INFO  Pi aarch64, glibc %s; builder %s glibc %s" % (
+            pi_glibc, self.a.image, b_glibc))
+
+    def build(self, crates, launcher):
+        os.makedirs(os.path.join(TARGET, "cargo-registry"), exist_ok=True)
+        src = self.scratch + "/src"
+        mk = lambda args: plan.builder_command(self.a.image, ROOT, src, TARGET,
+                                                os.path.join(TARGET, "cargo-registry"), args)
+        arts = []
+        if crates:
+            print("── Cross-building test binaries: %s" % " ".join(crates))
+            rc, out = self.run(mk(plan.test_cargo_args(crates)), capture="stdout")
+            if rc != 0:
+                raise SystemExit("test-pi: container build failed (rc %d)" % rc)
+            arts = plan.parse_test_artifacts(out.splitlines(), TARGET)
+            if not arts and not self.run.dry_run:
+                raise SystemExit("test-pi: cargo produced no test binaries")
+        if launcher:
+            print("── Cross-building cog_adapter_run launcher")
+            rc, _ = self.run(mk(plan.launcher_cargo_args()))
+            if rc != 0:
+                raise SystemExit("test-pi: launcher build failed (rc %d)" % rc)
+        return arts
+
+    def stage_remote(self, arts, extra_bins):
+        s = self.scratch
+        rc, _ = self.ssh("rm -rf %s && mkdir -p %s/bin %s/src %s/home %s/runtime %s/tmp"
+                         % ((self.a.scratch,) * 6), capture="quiet")
+        if rc != 0:
+            raise SystemExit("test-pi: cannot create the Pi scratch dir")
+        files = subprocess.run(["git", "-C", ROOT, "ls-files", "-z", "-co", "--exclude-standard",
+                                "--"] + list(plan.SYNC_ROOTS),
+                               stdout=subprocess.PIPE, check=True).stdout
+        rsh = "ssh " + " ".join(SSH_OPTS)
+        with tempfile.NamedTemporaryFile(suffix=".lst") as lst:
+            lst.write(files)
+            lst.flush()
+            print("── Syncing tracked sources and %d binaries to the Pi" % (len(arts) + len(extra_bins)))
+            rc, _ = self.run(["rsync", "-a", "--from0", "--files-from=" + lst.name, "-e", rsh,
+                              ROOT + "/", "%s:%s/src/" % (self.host, s)], capture="quiet")
+        bins = [a["local_path"] for a in arts] + list(extra_bins)
+        if rc == 0 and bins:
+            rc, _ = self.run(["rsync", "-a", "-e", rsh] + bins
+                             + ["%s:%s/bin/" % (self.host, s)], capture="quiet")
+        if rc != 0:
+            raise SystemExit("test-pi: rsync to the Pi failed (rc %d)" % rc)
+
+    def remote_bin(self, art):
+        return "%s/bin/%s" % (self.scratch, os.path.basename(art["container_path"]))
+
+    def run_tests(self, arts, crates):
+        test_args = [self.a.filter] if self.a.filter else []
+        for art in (a for a in arts if a["crate"] in crates):
+            name = "%s[%s:%s]" % (art["crate"], art["kind"], art["name"])
+            print("── Running %s on the Pi" % name)
+            line = plan.remote_test_command(self.scratch, self.remote_bin(art),
+                                            art["manifest_dir"], test_args)
+            rc, out = self.ssh(line, timeout=self.a.timeout)
+            self.record("test", name, rc, out)
+
+    def run_live_native(self, arts):
+        lib = next((a for a in arts if a["crate"] == "clawft-kernel" and a["kind"] == "lib"), None)
+        if lib is None and self.run.dry_run:
+            lib = {"container_path": "/target/debug/deps/clawft_kernel-<hash>",
+                   "manifest_dir": self.scratch + "/src/crates/clawft-kernel"}
+        if lib is None:
+            raise SystemExit("test-pi: clawft-kernel lib test binary missing")
+        print("── Native adapter live test (anomaly-detect) on the Pi")
+        env = {"WEFTOS_NATIVE_LIVE": "1",
+               "WEFTOS_COG_AARCH64_BIN": "%s/bin/%s" % (self.scratch, self.cog_bin_name)}
+        line = plan.remote_test_command(self.scratch, self.remote_bin(lib), lib["manifest_dir"],
+                                        [LIVE_TEST, "--exact", "--nocapture"], env)
+        rc, out = self.ssh(line, timeout=self.a.timeout)
+        self.record("live-native", "anomaly-detect", rc, out, require_ran=True, marker=LIVE_MARK)
+
+    def run_cogs(self):
+        launcher = os.path.join(TARGET, "debug", "examples", "cog_adapter_run")
+        base = [sys.executable, os.path.join(COGS_DIR, "conformance.py"), "sweep",
+                "--runtime", "ssh", "--ssh-host", self.host, "--sudo", "--arch", "aarch64",
+                "--mode", "expected", "--cogs", self.a.cogs_ids]
+        sweeps = [
+            ("harness", ["--remote-dir", self.a.scratch + "/cogs-harness",
+                         "--label", "pi5-ssh-aarch64-expected"]),
+            ("adapter-native", ["--remote-dir", self.a.scratch + "/cogs-adapter",
+                                "--launcher", launcher, "--adapter-runtime", "native",
+                                "--adapter-run-as", "65534:65534",
+                                "--label", "pi5-adapter-native-aarch64-expected"]),
+        ]
+        for name, extra in sweeps:
+            print("── Cog conformance on the Pi (%s)" % name)
+            rc, out = self.run(base + extra, timeout=self.a.timeout)
+            ok = rc == 0 or self.run.dry_run
+            self.results.append(dict(stage="cogs", name=name, rc=rc, ok=ok, passed=0,
+                                     failed=0 if ok else 1, ignored=0, suites=1))
+            print("  %s  cogs %s (rc %d)" % ("PASS" if ok else "FAIL", name, rc))
+
+    def fetch_cog(self):
+        sys.path.insert(0, COGS_DIR)
+        import runtimes  # scripts/cogs: cached, ELF-checked released binaries
+        self.cog_bin_name = runtimes.binary_name("anomaly-detect", "aarch64")
+        if self.run.dry_run:
+            return os.path.join(COGS_DIR, ".cache", "aarch64", self.cog_bin_name)
+        path, why = runtimes.fetch_binary("anomaly-detect", "aarch64",
+                                          os.path.join(COGS_DIR, ".cache", "aarch64"))
+        if path is None:
+            raise SystemExit("test-pi: anomaly-detect aarch64 binary: %s" % why)
+        return path
+
+    def cleanup(self):
+        if self.a.keep:
+            print("  INFO  --keep: leaving %s on the Pi" % self.a.scratch)
+            return
+        rd = self.a.scratch   # validated relative path; conformance --sudo leaves root files
+        self.ssh("rm -rf %s 2>/dev/null || sudo -n rm -rf %s; test ! -e %s" % (rd, rd, rd),
+                 capture="quiet")
+
+
+def parse_args(argv):
+    ap = argparse.ArgumentParser(prog="scripts/build.sh test-pi", description=__doc__.split("\n")[0])
+    ap.add_argument("crates", nargs="*", help="crates whose tests run on the Pi")
+    ap.add_argument("--filter", help="libtest name filter passed to every test binary")
+    ap.add_argument("--live-native", action="store_true",
+                    help="native adapter live test (anomaly-detect) on the Pi")
+    ap.add_argument("--cogs", action="store_true",
+                    help="scripts/cogs conformance in remote mode (harness + native adapter)")
+    ap.add_argument("--full", action="store_true",
+                    help="clawft-kernel + --live-native + --cogs (the default with no args)")
+    ap.add_argument("--cogs-ids", default=DEFAULT_COGS, help="cogs for --cogs (comma-separated)")
+    ap.add_argument("--image", help="arm64 builder image (default rust:<toolchain>-bookworm)")
+    ap.add_argument("--scratch", default="weftos-test-pi",
+                    help="scratch dir relative to the Pi login dir (removed at the end)")
+    ap.add_argument("--timeout", type=int, default=3600, help="per-stage cap in seconds")
+    ap.add_argument("--keep", action="store_true", help="leave the Pi scratch dir in place")
+    ap.add_argument("--report", help="write a JSON summary here (no host names)")
+    ap.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args(argv)
+    if not (a.crates or a.live_native or a.cogs) or a.full:
+        a.crates = list(dict.fromkeys(a.crates + ["clawft-kernel"]))
+        a.live_native = a.cogs = True
+    for c in a.crates:
+        if not plan.valid_crate(c):
+            ap.error("invalid crate name %r" % c)
+    if a.filter is not None and not plan.valid_filter(a.filter):
+        ap.error("--filter must match [A-Za-z0-9_:.-]+")
+    if not plan.valid_scratch(a.scratch):
+        ap.error("--scratch must be a relative path of [A-Za-z0-9._-] parts")
+    if not all(plan.valid_crate(c) for c in a.cogs_ids.split(",")):
+        ap.error("--cogs-ids must be comma-separated cog ids")
+    if not a.image:
+        with open(os.path.join(ROOT, "rust-toolchain.toml")) as f:
+            a.image = "rust:%s-bookworm" % (plan.toolchain_channel(f.read()) or "1")
+    return a
+
+
+def main(argv=None):
+    a = parse_args(sys.argv[1:] if argv is None else argv)
+    host = os.environ.get("WEFTOS_PI_HOST", "").strip()
+    if not host:
+        print("  SKIP  test-pi: WEFTOS_PI_HOST is not set ([user@]host of the Pi 5); "
+              "nothing ran")
+        return 0
+    if not plan.valid_host(host):
+        raise SystemExit("test-pi: WEFTOS_PI_HOST must be a plain [user@]host")
+    lane = Lane(a, host, Runner(a.dry_run))
+    mac_before = local_chain_mtime()
+    pi_before = lane.pi_state()
+    print("── test-pi: crates=%s live-native=%s cogs=%s filter=%s" % (
+        ",".join(a.crates) or "-", a.live_native, a.cogs, a.filter or "-"))
+    lane.preflight()
+    build = list(a.crates) + (["clawft-kernel"] if a.live_native else [])
+    arts = lane.build(list(dict.fromkeys(build)), launcher=a.cogs)
+    try:
+        extra = [lane.fetch_cog()] if a.live_native else []
+        lane.stage_remote(arts, extra)
+        if a.crates:
+            lane.run_tests(arts, a.crates)
+        if a.live_native:
+            lane.run_live_native(arts)
+        if a.cogs:
+            lane.run_cogs()
+    finally:
+        lane.cleanup()
+    pi_after, mac_after = lane.pi_state(), local_chain_mtime()
+    guard = {"pi_chain_unchanged": pi_before[0] == pi_after[0],
+             "pi_weaver_service": "%s -> %s" % (pi_before[1], pi_after[1]),
+             "pi_weaver_unchanged": pi_before[1] == pi_after[1],
+             "mac_chain_unchanged": mac_before == mac_after}
+    rc = 0 if lane.results and all(r["ok"] for r in lane.results) else 1
+    print("\n── test-pi summary")
+    for r in lane.results:
+        print("  %s  %-12s %s" % ("PASS" if r["ok"] else "FAIL", r["stage"], r["name"]))
+    print("  INFO  operator data: %s" % guard)
+    if not (guard["pi_chain_unchanged"] and guard["mac_chain_unchanged"]
+            and guard["pi_weaver_unchanged"]) and not a.dry_run:
+        print("  CRITICAL  operator chain or weaver.service changed during the run")
+        rc = 3
+    if a.report:
+        import json
+        with open(a.report, "w") as f:
+            json.dump({"facts": lane.facts, "guard": guard, "results": lane.results,
+                       "crates": a.crates, "filter": a.filter, "ok": rc == 0}, f, indent=2)
+            f.write("\n")
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())

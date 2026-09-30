@@ -12,6 +12,7 @@ and produces results.json in it by running harness.py on the target:
                   COG_HARNESS_SSH_HOST and is never written into results)
 """
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -151,17 +152,20 @@ class SshAdapter(Adapter):
     name = "ssh"
     REMOTE_DIR = "cog-conformance"
 
-    def __init__(self, arch, host, sudo=False, **kw):
+    def __init__(self, arch, host, sudo=False, remote_dir=None, **kw):
         super().__init__(arch, **kw)
         if not host or host.startswith("-") or any(c.isspace() for c in host):
             raise ValueError("ssh host must be a plain [user@]host alias")
-        self.host, self.sudo = host, sudo
+        rd = remote_dir or self.REMOTE_DIR
+        if not valid_remote_dir(rd):
+            raise ValueError("remote dir must be a relative path of [A-Za-z0-9._-] parts")
+        self.host, self.sudo, self.remote_dir = host, sudo, rd
 
     def binary_root(self, workdir):
-        return self.REMOTE_DIR  # relative to the remote login directory
+        return self.remote_dir  # relative to the remote login directory
 
     def commands(self, workdir):
-        rd = self.REMOTE_DIR
+        rd = self.remote_dir
         run = _in_target(rd)
         if self.sudo:
             run = ["sudo", "-n"] + run
@@ -180,15 +184,25 @@ ADAPTERS = {"docker": DockerAdapter, "apple-container": AppleContainerAdapter,
             "native": NativeAdapter, "ssh": SshAdapter}
 
 
+def valid_remote_dir(rd):
+    """A remote work dir is relative to the login directory, with no `..`,
+    empty or dot-only parts, so `rm -rf` on it stays inside that directory."""
+    if not isinstance(rd, str) or not rd or rd.startswith("/"):
+        return False
+    return all(part and part.strip(".") and re.fullmatch(r"[A-Za-z0-9._-]+", part)
+               for part in rd.split("/"))
+
+
 def make_adapter(runtime, arch, ssh_host=None, sudo=False, image=DEFAULT_IMAGE,
-                 runner=subprocess.run, engine_args=()):
+                 runner=subprocess.run, engine_args=(), remote_dir=None):
     """`engine_args` go into `docker run` / `container run` before the image
     (e.g. `--net host` and a docker socket mount for adapter-driven runs)."""
     if runtime not in ADAPTERS:
         raise ValueError("runtime must be one of %s" % sorted(ADAPTERS))
     if runtime == "ssh":
         host = ssh_host or os.environ.get("COG_HARNESS_SSH_HOST")
-        return SshAdapter(arch, host, sudo=sudo, image=image, runner=runner)
+        return SshAdapter(arch, host, sudo=sudo, image=image, runner=runner,
+                          remote_dir=remote_dir)
     return ADAPTERS[runtime](arch, image=image, runner=runner, engine_args=engine_args)
 
 

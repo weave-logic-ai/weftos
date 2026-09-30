@@ -1,0 +1,52 @@
+{
+ "arch": "aarch64",
+ "by_outcome": {
+  "clean": 4,
+  "cli-error": 0,
+  "exec-error": 0,
+  "missing-binary": 0,
+  "no-output": 0
+ },
+ "feed": "features",
+ "group_counts": {
+  "clean": 4,
+  "needs-extra-cli": 0,
+  "needs-interval": 0,
+  "no-build": 0,
+  "regressed": 0,
+  "unknown": 0
+ },
+ "groups": {
+  "clean": [
+   "anomaly-detect",
+   "fall-detect",
+   "health-monitor",
+   "sleep-apnea"
+  ],
+  "needs-extra-cli": [],
+  "needs-interval": [],
+  "no-build": [],
+  "regressed": [],
+  "unknown": []
+ },
+ "harness_runtime": "ssh",
+ "host": {
+  "machine": "aarch64",
+  "python": "3.13.5",
+  "release": "6.12.47+rpt-rpi-2712",
+  "system": "Linux"
+ },
+ "measured_at": "2026-09-30T01:17:03Z",
+ "outcomes": {
+  "anomaly-detect": "clean",
+  "fall-detect": "clean",
+  "health-monitor": "clean",
+  "sleep-apnea": "clean"
+ },
+ "runtime": "native",
+ "sweep_mode": "expected",
+ "swept": 4,
+ "timeout_s": 15.0,
+ "total": 4,
+ "unexpected": []
+}

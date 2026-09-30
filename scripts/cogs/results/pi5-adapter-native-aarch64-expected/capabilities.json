@@ -1,0 +1,82 @@
+[
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "anomaly-detect",
+   "feed": "reference-v1",
+   "harness_runtime": "ssh",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-30T01:17:03Z",
+   "mode": "once",
+   "runtime": "native",
+   "samples": 1,
+   "sha256": "42154913cbb57fd58e010548a833221a2afe73cf1768aa1e0ab00e9441d6cb25",
+   "value": 714.9
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "fall-detect",
+   "feed": "reference-v1",
+   "harness_runtime": "ssh",
+   "harness_version": "1.0.0",
+   "interval_s": null,
+   "measured_at": "2026-09-30T01:17:03Z",
+   "mode": "once",
+   "runtime": "native",
+   "samples": 1,
+   "sha256": "e8746a8d66373601b65451b32cb36242439bc54683adfe5f5ddec72a3d93f5c4",
+   "value": 714.8
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "sleep-apnea",
+   "feed": "reference-v1",
+   "harness_runtime": "ssh",
+   "harness_version": "1.0.0",
+   "interval_s": 1,
+   "measured_at": "2026-09-30T01:17:03Z",
+   "mode": "interval",
+   "runtime": "native",
+   "samples": 10,
+   "sha256": "22b12fb380fa52ccee66f7e9fe6c7e4fade451acac1d59ea74aec83e04887a1a",
+   "value": 1000.1
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ },
+ {
+  "attrs": {
+   "arch": "aarch64",
+   "cog_id": "health-monitor",
+   "feed": "reference-v1",
+   "harness_runtime": "ssh",
+   "harness_version": "1.0.0",
+   "interval_s": 1,
+   "measured_at": "2026-09-30T01:17:03Z",
+   "mode": "interval",
+   "runtime": "native",
+   "samples": 11,
+   "sha256": "24cc4733d66ddb6e3e5ceba5b6d0a2f0dba4f193b1ae950d889d4043857eacde",
+   "value": 1000.1
+  },
+  "exclusive": false,
+  "id": "perf.cog.cycle_ms",
+  "provenance": "measured",
+  "state": "available"
+ }
+]

@@ -1,0 +1,196 @@
+{
+ "host": {
+  "machine": "aarch64",
+  "python": "3.13.5",
+  "release": "6.12.47+rpt-rpi-2712",
+  "system": "Linux"
+ },
+ "results": [
+  {
+   "argv": [
+    "cog-anomaly-detect-aarch64",
+    "--once"
+   ],
+   "cycle_ms": 714.9,
+   "cycles": 1,
+   "elapsed_ms": 714.9,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 664.5,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "anomaly-detect",
+   "ingest_posts": 1,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[0,[3.567137564459693e-6,-0.28293274908763505,0.0,0.0,0.0,0.0,0.0,0.0]]]}"
+   ],
+   "ingest_vectors": 1,
+   "interval_s": null,
+   "launcher": [
+    "cog_adapter_run",
+    "--runtime",
+    "native",
+    "--arch",
+    "aarch64",
+    "--timeout-secs",
+    "15",
+    "--run-secs",
+    "11",
+    "--run-as",
+    "65534:65534"
+   ],
+   "mode": "once",
+   "packets_sent": 44,
+   "rc": 0,
+   "sha256": "42154913cbb57fd58e010548a833221a2afe73cf1768aa1e0ab00e9441d6cb25",
+   "status": "ran",
+   "stderr_tail": "[cog-anomaly-detect] starting (interval=10s, z_threshold=2.5)\n[adapter] runtime=native provides=[\"runtime.native\"] network=Egress chain=[\"workload.load\", \"workload.start\", \"workload.unload\"]",
+   "stdout_json_lines": 1,
+   "stdout_lines": 1,
+   "stdout_tail": "{\"anomalies\":[],\"stats\":{\"num_channels\":256,\"mean_amplitude\":0.00035671375644596927,\"max_z_score\":-1.4146637454381752,\"cusum_drift_detected\":false},\"timestamp\":1790730997}",
+   "timed_out": false,
+   "timeout_s": 15.0
+  },
+  {
+   "argv": [
+    "cog-fall-detect-aarch64",
+    "--once"
+   ],
+   "cycle_ms": 714.8,
+   "cycles": 1,
+   "elapsed_ms": 714.8,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 664.5,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "fall-detect",
+   "ingest_posts": 1,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[2,[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]]}"
+   ],
+   "ingest_vectors": 1,
+   "interval_s": null,
+   "launcher": [
+    "cog_adapter_run",
+    "--runtime",
+    "native",
+    "--arch",
+    "aarch64",
+    "--timeout-secs",
+    "15",
+    "--run-secs",
+    "11",
+    "--run-as",
+    "65534:65534"
+   ],
+   "mode": "once",
+   "packets_sent": 44,
+   "rc": 0,
+   "sha256": "e8746a8d66373601b65451b32cb36242439bc54683adfe5f5ddec72a3d93f5c4",
+   "status": "ran",
+   "stderr_tail": "[cog-fall-detect] start (interval=1s, impact_threshold=6, stillness_window=8s, cooldown=30s, ruview=false)\n[adapter] runtime=native provides=[\"runtime.native\"] network=Egress chain=[\"workload.load\", \"workload.start\", \"workload.unload\"]",
+   "stdout_json_lines": 1,
+   "stdout_lines": 1,
+   "stdout_tail": "{\"status\":\"quiet\",\"fall_detected\":false,\"confidence\":0.0,\"z_impact\":0.0,\"stillness_pct\":0.0,\"total_falls\":0,\"timestamp\":1790730999}",
+   "timed_out": false,
+   "timeout_s": 15.0
+  },
+  {
+   "argv": [
+    "cog-sleep-apnea-aarch64",
+    "--interval",
+    "1"
+   ],
+   "cycle_ms": 1000.1,
+   "cycles": 10,
+   "elapsed_ms": 11078.4,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 1034.7,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "sleep-apnea",
+   "ingest_posts": 10,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[0,[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]]}"
+   ],
+   "ingest_vectors": 10,
+   "interval_s": 1,
+   "launcher": [
+    "cog_adapter_run",
+    "--runtime",
+    "native",
+    "--arch",
+    "aarch64",
+    "--timeout-secs",
+    "15",
+    "--run-secs",
+    "11",
+    "--run-as",
+    "65534:65534"
+   ],
+   "mode": "interval",
+   "packets_sent": 560,
+   "rc": 0,
+   "sha256": "22b12fb380fa52ccee66f7e9fe6c7e4fade451acac1d59ea74aec83e04887a1a",
+   "status": "ran",
+   "stderr_tail": "[cog-sleep-apnea] starting (interval=1s)\n[cog-sleep-apnea] error: no JSON\n[adapter] runtime=native provides=[\"runtime.native\"] network=Egress chain=[\"workload.load\", \"workload.start\", \"workload.stop\", \"workload.unload\"]",
+   "stdout_json_lines": 11,
+   "stdout_lines": 11,
+   "stdout_tail": ":1790731002}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790731003}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790731004}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790731005}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790731006}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790731007}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790731008}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790731009}\n{\"status\":\"calibrating\",\"severity\":\"none\",\"breathing_drop_pct\":0.0,\"event_duration_secs\":0,\"apnea_events\":0,\"hypopnea_events\":0,\"ahi\":0.0,\"ahi_severity\":\"normal\",\"timestamp\":1790731010}",
+   "timed_out": false,
+   "timeout_s": 15.0
+  },
+  {
+   "argv": [
+    "cog-health-monitor-aarch64",
+    "--interval",
+    "1"
+   ],
+   "cycle_ms": 1000.1,
+   "cycles": 11,
+   "elapsed_ms": 11078.9,
+   "feed": "features",
+   "feed_id": "reference-v1",
+   "first_event_ms": 1050.1,
+   "harness_version": "1.0.0",
+   "host_machine": "aarch64",
+   "id": "health-monitor",
+   "ingest_posts": 11,
+   "ingest_samples": [
+    "{\"dedup\":true,\"vectors\":[[0,[1.875,0.38671875,0.0,0.0003229795347018936,0.0,0.0,0.7,0.2]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[1.552734375,0.3984375,0.0,0.00032299345228005747,0.0,0.0,0.7,0.2]]]}",
+    "{\"dedup\":true,\"vectors\":[[0,[1.728515625,0.3984375,0.0,0.00032235018814447244,0.0,0.0,0.7,0.2]]]}"
+   ],
+   "ingest_vectors": 11,
+   "interval_s": 1,
+   "launcher": [
+    "cog_adapter_run",
+    "--runtime",
+    "native",
+    "--arch",
+    "aarch64",
+    "--timeout-secs",
+    "15",
+    "--run-secs",
+    "11",
+    "--run-as",
+    "65534:65534"
+   ],
+   "mode": "interval",
+   "packets_sent": 559,
+   "rc": 0,
+   "sha256": "24cc4733d66ddb6e3e5ceba5b6d0a2f0dba4f193b1ae950d889d4043857eacde",
+   "status": "ran",
+   "stderr_tail": "[cog-health-monitor] starting (interval=1s source=auto window_ms=1000)\n[cog-health-monitor] error: no JSON\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 75 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 62 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 69 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 69 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 76 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 69 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 70 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 69 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 76 bpm\"]\n[cog-health-monitor] ALERT: [\"TACHYPNEA: 71 bpm\"]\n[adapter] runtime=native provides=[\"runtime.native\"] network=Egress chain=[\"workload.load\", \"workload.start\", \"workload.stop\", \"workload.unload\"]",
+   "stdout_json_lines": 11,
+   "stdout_lines": 11,
+   "stdout_tail": "ed\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 69 bpm\"],\"timestamp\":1790731017,\"source\":\"auto:esp32-udp\"}\n{\"breathing_bpm\":70.3125,\"heart_rate_bpm\":78.515625,\"presence_detected\":false,\"signal_variance\":0.03233370198715334,\"apnea_detected\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 70 bpm\"],\"timestamp\":1790731018,\"source\":\"auto:esp32-udp\"}\n{\"breathing_bpm\":69.140625,\"heart_rate_bpm\":79.6875,\"presence_detected\":false,\"signal_variance\":0.032302127654111445,\"apnea_detected\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 69 bpm\"],\"timestamp\":1790731019,\"source\":\"auto:esp32-udp\"}\n{\"breathing_bpm\":76.171875,\"heart_rate_bpm\":78.515625,\"presence_detected\":false,\"signal_variance\":0.005006805986577655,\"apnea_detected\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 76 bpm\"],\"timestamp\":1790731020,\"source\":\"auto:esp32-udp\"}\n{\"breathing_bpm\":71.484375,\"heart_rate_bpm\":78.515625,\"presence_detected\":false,\"signal_variance\":0.032307225413089245,\"apnea_detected\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 71 bpm\"],\"timestamp\":1790731021,\"source\":\"auto:esp32-udp\"}\n{\"breathing_bpm\":66.796875,\"heart_rate_bpm\":80.859375,\"presence_detected\":false,\"signal_variance\":0.032274514322787835,\"apnea_detected\":false,\"breathing_drop_pct\":0.0,\"overall_status\":\"alert\",\"alerts\":[\"TACHYPNEA: 67 bpm\"],\"timestamp\":1790731022,\"source\":\"auto:esp32-udp\"}",
+   "timed_out": false,
+   "timeout_s": 15.0
+  }
+ ]
+}

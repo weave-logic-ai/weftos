@@ -112,7 +112,8 @@ def execute(args, expectations, ids, sweep_mode):
         specs.append(classify.plan_spec(cid, expectations.get(cid, {}), sweep_mode))
     adapter = runtimes.make_adapter(args.runtime, args.arch, ssh_host=args.ssh_host,
                                     sudo=args.sudo, image=args.image,
-                                    engine_args=args.harness_engine_arg or ())
+                                    engine_args=args.harness_engine_arg or (),
+                                    remote_dir=getattr(args, "remote_dir", None))
     workdir = tempfile.mkdtemp(prefix="run-", dir=_ensure(args.cache_dir))
     try:
         runtimes.stage_workdir(workdir, os.path.join(HERE, "harness.py"), binaries)
@@ -241,6 +242,9 @@ def _runner_opts(p):
     p.add_argument("--image", default=runtimes.DEFAULT_IMAGE)
     p.add_argument("--ssh-host", help="remote node for --runtime ssh "
                    "(default $COG_HARNESS_SSH_HOST)")
+    p.add_argument("--remote-dir", help="ssh: work dir relative to the remote login "
+                   "directory (default %s); removed and recreated per run"
+                   % runtimes.SshAdapter.REMOTE_DIR)
     p.add_argument("--sudo", action="store_true",
                    help="ssh/native: run the harness via sudo -n (ingest stub binds :80)")
     p.add_argument("--binary-dir", help="use local binaries instead of downloading")
