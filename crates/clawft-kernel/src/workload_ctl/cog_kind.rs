@@ -1,4 +1,4 @@
-//! The cog kind's requirements (COG-001 section 2): how a verified cog
+//! The cog kind's requirements (ADR-100 section 2): how a verified cog
 //! package becomes a placement [`WorkloadSpec`].
 //!
 //! Per binary arch, three routes, in the order a kind prefers them:
@@ -10,7 +10,7 @@
 //!   (placed only when the operator sets `allow_emulated`).
 //!
 //! Memory is `[resources].ram_mb`; the policy needs a paired node (native
-//! isolation is weak until landlock / seccomp, COG-001 section 3) and lists
+//! isolation is weak until landlock / seccomp, ADR-100 section 3) and lists
 //! the package id, signer keys and artifact hashes as revocable refs.
 
 use clawft_types::placement::engine::{

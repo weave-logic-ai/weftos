@@ -188,7 +188,7 @@ struct PlaceParams {
 }
 
 /// `workload.place {store_pin: ...}`: an operator-pinned store cog on a
-/// Seed's operator-assigned node id (COG-001 section 5).
+/// Seed's operator-assigned node id (ADR-100 section 5).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StorePinParams {

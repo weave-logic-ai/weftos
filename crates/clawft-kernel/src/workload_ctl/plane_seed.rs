@@ -1,4 +1,4 @@
-//! Seed nodes (COG-001 section 5, option b): a Cognitum Seed does not run
+//! Seed nodes (ADR-100 section 5, option b): a Cognitum Seed does not run
 //! WeftOS, so there is no `workload-host` to message. The control plane
 //! addresses card 09's `remote.api` Seed adapter, held on this node, by the
 //! operator-assigned node id. Only operator-pinned store cogs go there

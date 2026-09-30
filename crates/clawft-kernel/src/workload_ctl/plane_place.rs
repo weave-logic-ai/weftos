@@ -4,7 +4,7 @@
 //! `place`:
 //!
 //! 1. verify and seed the signed package (this node serves it to the
-//!    target during the call), derive the kind's spec (COG-001 s2);
+//!    target during the call), derive the kind's spec (ADR-100 s2);
 //! 2. ask the gate `workload.place` for every cached node (each check is
 //!    chained by the gate) and run the pure engine on the verified facts;
 //! 3. chain the decision (candidates, scores, failed constraints) as
@@ -121,7 +121,7 @@ impl PlacementControlPlane {
         };
         json!({ "node_id": node_id, "workload": {
             "kind": w.kind, "package_trust": "pinned_signer", "node_tier": tier,
-            // A native cog has the host's network (COG-001 s4): say so.
+            // A native cog has the host's network (ADR-100 s4): say so.
             "network": "egress", "secrets": false, "emulated": emulated,
             "resource_cost": cost, "package_id": pid, "signer_keys": keys,
             "artifact_hashes": hashes,

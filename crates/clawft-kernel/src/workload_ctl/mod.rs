@@ -4,7 +4,7 @@
 //! - [`facts`]: card 03's cached, verified [`NodeFacts`] as card 04's
 //!   `PlacementFacts` (liveness from membership or direct contact,
 //!   receiver-assigned trust tier, load from live state, measured `perf.*`).
-//! - [`cog_kind`]: the cog kind's requirements (COG-001 section 2).
+//! - [`cog_kind`]: the cog kind's requirements (ADR-100 section 2).
 //! - [`msg`]: the signed `workload.ctl` message set (nonce, expiry,
 //!   decision id; unknown methods denied).
 //! - [`session`]: the message set on the wire as `MeshIpcEnvelope` /
