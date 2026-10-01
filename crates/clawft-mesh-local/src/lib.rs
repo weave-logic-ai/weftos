@@ -15,10 +15,13 @@ pub mod framing;
 pub mod hexser;
 pub mod peer;
 pub mod proto;
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
 pub use addr::{AddrError, Node, WeftAddr};
 pub use cert::{node_id_from_pubkey, CertError, UserCert};
 pub use client::{ClientConfig, ClientError, MeshLocalClient};
-pub use peer::{InjectedPeer, PeerCreds, PeerError, PeerIdentity, Principal};
+#[cfg(any(test, feature = "testing"))]
+pub use peer::InjectedPeer;
+pub use peer::{PeerCreds, PeerError, PeerIdentity, Principal};
 pub use proto::{Frame, Message, PROTO_MAX, PROTO_MIN};

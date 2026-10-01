@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::{Signer, SigningKey};
+use rand::RngCore;
 use serde_json::Value;
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::UnixStream;
@@ -19,9 +20,13 @@ use crate::framing::{write_frame, FrameError, FrameReader, HELLO_DEADLINE};
 use crate::hexser;
 use crate::peer::{PeerError, PeerIdentity, Principal, UnixPeer};
 use crate::proto::{
-    negotiate_features, register_signing_bytes, Addresses, ErrorBody, Frame, HelloAck, Message,
-    ProjectBinding, RegisterAck, RegisterReq, Role, ServiceRecord, PROTO_MAX, PROTO_MIN,
+    is_reply_class, negotiate_features, register_signing_bytes, verify_hello_proof, Addresses,
+    ErrorBody, Frame, HelloAck, Message, ProjectBinding, RegisterAck, RegisterReq, Role,
+    ServiceRecord, PROTO_MAX, PROTO_MIN, SERVICE_ID_FLAG,
 };
+
+/// Capacity of the unsolicited-event queue.
+pub const EVENT_QUEUE: usize = 256;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
@@ -36,10 +41,15 @@ pub enum ClientError {
     #[error("server runs as {got:?}, expected root or uid {expected} from service.json; refusing")]
     ServerUid { got: Principal, expected: u32 },
     #[error(
-        "machine_key_changed: pinned {pinned} but the service presented {presented}; \
-         verify out of band, then run `weaver mesh trust`"
+        "machine_key_changed: pinned {pinned} but the service presented {presented}; verify \
+         out of band, then remove the pin file to re-pin (a `weaver mesh trust` command \
+         arrives with Phase 3 package S)"
     )]
     MachineKeyChanged { pinned: String, presented: String },
+    #[error("{} is corrupt; remove it to re-pin", .0.display())]
+    PinCorrupt(PathBuf),
+    #[error("the service did not prove possession of its machine key (bad or replayed hello proof)")]
+    BadServerProof,
     #[error("bad server hello: {0}")]
     BadServerHello(String),
     #[error("server chose protocol {chosen}, outside our range {min}..={max}")]
@@ -50,8 +60,8 @@ pub enum ClientError {
     Addr(#[from] AddrError),
     #[error("deadline exceeded")]
     Timeout,
-    #[error("connection closed")]
-    Closed,
+    #[error("connection closed: {0}")]
+    Closed(String),
     #[error("unexpected reply: {0}")]
     Unexpected(String),
 }
@@ -62,7 +72,7 @@ impl ClientError {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            ClientError::Io(_) | ClientError::Timeout | ClientError::Closed
+            ClientError::Io(_) | ClientError::Timeout | ClientError::Closed(_)
         ) || matches!(self, ClientError::Frame(FrameError::Io(_) | FrameError::Truncated))
     }
 }
@@ -83,7 +93,9 @@ pub struct ClientConfig {
     /// Deadline for each handshake step and each request.
     pub deadline: Duration,
     /// Test seam: credentials to use for the server instead of reading
-    /// `peer_cred` from the socket.
+    /// `peer_cred` from the socket. Absent from production builds, which
+    /// always use the real peer credential.
+    #[cfg(feature = "testing")]
     pub server_peer: Option<Arc<dyn PeerIdentity>>,
 }
 
@@ -99,6 +111,7 @@ impl ClientConfig {
             exe: String::new(),
             proto: (PROTO_MIN, PROTO_MAX),
             deadline: HELLO_DEADLINE,
+            #[cfg(feature = "testing")]
             server_peer: None,
         }
     }
@@ -118,7 +131,9 @@ pub struct MeshLocalClient {
     writer: Arc<AsyncMutex<OwnedWriteHalf>>,
     pending: Pending,
     next_id: AtomicU64,
-    events: mpsc::UnboundedReceiver<Frame>,
+    events: mpsc::Receiver<Frame>,
+    dropped_events: Arc<AtomicU64>,
+    close_reason: Arc<Mutex<Option<String>>>,
     reader: tokio::task::JoinHandle<()>,
     hello_ack: HelloAck,
     features: Vec<String>,
@@ -135,33 +150,63 @@ async fn within<T>(d: Duration, f: impl std::future::Future<Output = T>) -> Resu
     tokio::time::timeout(d, f).await.map_err(|_| ClientError::Timeout)
 }
 
-/// First contact writes the pin; afterwards a different key is a hard error.
+/// First contact writes the pin atomically; afterwards a different key is a
+/// hard error. Comparison is case-insensitive (the pin is normalised to
+/// lowercase on write); an empty or malformed pin is `PinCorrupt`.
 fn check_pin(path: &Path, presented: &[u8; 32]) -> Result<(), ClientError> {
-    match std::fs::read_to_string(path) {
-        Ok(s) => {
-            let pinned = s.trim();
-            if pinned == hexser::encode(presented) {
-                Ok(())
-            } else {
-                Err(ClientError::MachineKeyChanged {
-                    pinned: pinned.to_string(),
-                    presented: hexser::encode(presented),
-                })
-            }
+    let compare = |text: &str| -> Result<(), ClientError> {
+        let norm = text.trim().to_ascii_lowercase();
+        match hexser::decode::<32>(&norm) {
+            None => Err(ClientError::PinCorrupt(path.to_path_buf())),
+            Some(p) if &p == presented => Ok(()),
+            Some(_) => Err(ClientError::MachineKeyChanged {
+                pinned: norm,
+                presented: hexser::encode(presented),
+            }),
         }
+    };
+    match std::fs::read_to_string(path) {
+        Ok(s) => compare(&s),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)?;
-            }
-            let mut o = std::fs::OpenOptions::new();
-            o.write(true).create_new(true);
-            #[cfg(unix)]
-            std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
-            std::io::Write::write_all(&mut o.open(path)?, hexser::encode(presented).as_bytes())?;
-            Ok(())
+            write_pin_atomically(path, presented)?;
+            // A concurrent first contact may have won the race: re-read.
+            compare(&std::fs::read_to_string(path)?)
         }
         Err(e) => Err(e.into()),
     }
+}
+
+/// temp file (0600) + fsync + create-if-absent hard link + fsync of the dir, so
+/// a crash never leaves a partial pin and two writers cannot clobber each other.
+fn write_pin_atomically(path: &Path, key: &[u8; 32]) -> Result<(), ClientError> {
+    use std::io::Write;
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut db = std::fs::DirBuilder::new();
+    db.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut db, 0o700);
+    db.create(dir)?;
+    let tmp = dir.join(format!(".machine.pub.tmp.{}", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+    let mut f = o.open(&tmp)?;
+    f.write_all(hexser::encode(key).as_bytes())?;
+    f.sync_all()?;
+    drop(f);
+    let linked = std::fs::hard_link(&tmp, path);
+    let _ = std::fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e.into()),
+    }
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    Ok(())
 }
 
 fn server_error(msg: Message) -> ClientError {
@@ -181,8 +226,13 @@ impl MeshLocalClient {
         let stream = within(cfg.deadline, UnixStream::connect(&cfg.socket_path)).await??;
 
         // Anti-squat: the server must be root or the service account.
-        let server = match &cfg.server_peer {
-            Some(p) => p.principal()?,
+        // Captured once, at connect time (see `UnixPeer`).
+        #[cfg(feature = "testing")]
+        let injected = cfg.server_peer.as_ref().map(|p| p.principal());
+        #[cfg(not(feature = "testing"))]
+        let injected: Option<Result<Principal, PeerError>> = None;
+        let server = match injected {
+            Some(p) => p?,
             None => UnixPeer::from_stream(&stream)?.principal()?,
         };
         if server != Principal::Uid(0) && server != Principal::Uid(cfg.service.service_uid) {
@@ -192,7 +242,10 @@ impl MeshLocalClient {
         let (rd, mut wr) = stream.into_split();
         let mut rd = FrameReader::new(rd);
 
+        let mut client_nonce = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut client_nonce);
         let hello = Message::Hello {
+            client_nonce,
             proto_min: cfg.proto.0,
             proto_max: cfg.proto.1,
             features: cfg.features.clone(),
@@ -202,12 +255,12 @@ impl MeshLocalClient {
             pid: std::process::id(),
         };
         write_frame(&mut wr, &Frame::new(hello)).await?;
-        let first = within(cfg.deadline, rd.read_frame()).await??.ok_or(ClientError::Closed)?;
+        let first = within(cfg.deadline, rd.read_frame()).await??.ok_or_else(eof)?;
         let ack = match first.msg {
             Message::HelloAck(a) => a,
             other => return Err(server_error(other)),
         };
-        Self::check_hello_ack(cfg, &ack)?;
+        Self::check_hello_ack(cfg, &ack, &client_nonce)?;
 
         // Register: the signature binds the challenge, the uid the service saw
         // and the node id, so it cannot be replayed on another connection.
@@ -229,7 +282,7 @@ impl MeshLocalClient {
             build_sha: cfg.build_sha.clone(),
         };
         write_frame(&mut wr, &Frame::new(Message::Register(req))).await?;
-        let reply = within(cfg.deadline, rd.read_frame()).await??.ok_or(ClientError::Closed)?;
+        let reply = within(cfg.deadline, rd.read_frame()).await??.ok_or_else(eof)?;
         let register_ack = match reply.msg {
             Message::RegisterAck(a) => a,
             other => return Err(server_error(other)),
@@ -241,14 +294,25 @@ impl MeshLocalClient {
 
         let writer = Arc::new(AsyncMutex::new(wr));
         let pending: Pending = Arc::default();
-        let (tx, events) = mpsc::unbounded_channel();
-        let reader = tokio::spawn(read_loop(rd, writer.clone(), pending.clone(), tx));
+        let (tx, events) = mpsc::channel(EVENT_QUEUE);
+        let dropped_events = Arc::new(AtomicU64::new(0));
+        let close_reason = Arc::new(Mutex::new(None));
+        let reader = tokio::spawn(read_loop(
+            rd,
+            writer.clone(),
+            pending.clone(),
+            tx,
+            dropped_events.clone(),
+            close_reason.clone(),
+        ));
         let features = negotiate_features(&cfg.features, &ack.features);
         Ok(Self {
             writer,
             pending,
             next_id: AtomicU64::new(1),
             events,
+            dropped_events,
+            close_reason,
             reader,
             features,
             cert: register_ack.cert.clone(),
@@ -258,7 +322,11 @@ impl MeshLocalClient {
         })
     }
 
-    fn check_hello_ack(cfg: &ClientConfig, ack: &HelloAck) -> Result<(), ClientError> {
+    fn check_hello_ack(
+        cfg: &ClientConfig,
+        ack: &HelloAck,
+        client_nonce: &[u8; 32],
+    ) -> Result<(), ClientError> {
         if ack.proto < cfg.proto.0 || ack.proto > cfg.proto.1 {
             return Err(ClientError::ProtoOutOfRange {
                 chosen: ack.proto,
@@ -275,10 +343,26 @@ impl MeshLocalClient {
                 presented: hexser::encode(&ack.machine_pubkey),
             });
         }
+        // Proof of key possession over our fresh nonce, before anything is
+        // pinned or registered: a process that merely holds the service uid, or
+        // replays an old hello_ack, cannot produce it.
+        if !verify_hello_proof(ack, client_nonce) {
+            return Err(ClientError::BadServerProof);
+        }
         if let Some(pin) = &cfg.machine_pin {
             check_pin(pin, &ack.machine_pubkey)?;
         }
         Ok(())
+    }
+
+    /// Events dropped because the queue ([`EVENT_QUEUE`]) was full.
+    pub fn dropped_events(&self) -> u64 {
+        self.dropped_events.load(Ordering::Relaxed)
+    }
+
+    fn closed(&self) -> ClientError {
+        let why = self.close_reason.lock().expect("close lock").clone();
+        ClientError::Closed(why.unwrap_or_else(|| "connection ended".into()))
     }
 
     pub fn hello_ack(&self) -> &HelloAck {
@@ -315,7 +399,7 @@ impl MeshLocalClient {
         }
         let reply = match tokio::time::timeout(self.deadline, rx).await {
             Ok(Ok(m)) => m,
-            Ok(Err(_)) => return Err(ClientError::Closed),
+            Ok(Err(_)) => return Err(self.closed()),
             Err(_) => {
                 self.pending.lock().expect("pending lock").remove(&id);
                 return Err(ClientError::Timeout);
@@ -376,14 +460,32 @@ impl Drop for MeshLocalClient {
     }
 }
 
+fn eof() -> ClientError {
+    ClientError::Closed("server closed the connection during the handshake".into())
+}
+
+/// Reads frames until the connection ends. Replies (reply-class messages with
+/// a client-namespace id) wake their waiter; everything else is an event.
+/// When the event queue is full the newest event is dropped and counted, so a
+/// consumer that never calls `next_event` cannot stall request replies.
 async fn read_loop(
     mut rd: FrameReader<tokio::net::unix::OwnedReadHalf>,
     writer: Arc<AsyncMutex<OwnedWriteHalf>>,
     pending: Pending,
-    events: mpsc::UnboundedSender<Frame>,
+    events: mpsc::Sender<Frame>,
+    dropped: Arc<AtomicU64>,
+    close_reason: Arc<Mutex<Option<String>>>,
 ) {
-    while let Ok(Some(frame)) = rd.read_frame().await {
-        if let (Some(id), true) = (frame.id, !matches!(frame.msg, Message::VerdictRequest(_))) {
+    let why = loop {
+        let frame = match rd.read_frame().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break "server closed the connection".to_string(),
+            Err(e) => break format!("{e}"),
+        };
+        if let Some(id) = frame.id
+            && id & SERVICE_ID_FLAG == 0
+            && is_reply_class(&frame.msg)
+        {
             let waiter = pending.lock().expect("pending lock").remove(&id);
             if let Some(tx) = waiter {
                 let _ = tx.send(frame.msg);
@@ -397,10 +499,15 @@ async fn read_loop(
         }
         // Service-initiated requests keep their id; callers answer with
         // `reply(id, ..)`.
-        if events.send(frame).is_err() {
-            break;
+        match events.try_send(frame) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => break "client dropped".to_string(),
         }
-    }
+    };
+    *close_reason.lock().expect("close lock") = Some(why);
     // Dropping `pending` senders wakes every waiter with `Closed`.
     pending.lock().expect("pending lock").clear();
 }

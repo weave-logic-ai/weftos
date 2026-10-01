@@ -20,6 +20,12 @@ thiserror = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "net", "rt", "sync", "time", "macros"] }
 
+[features]
+# Test seams (loopback server, injected peer credentials, client server-peer
+# override). Never enabled in production builds.
+testing = []
+
 [dev-dependencies]
+clawft-mesh-local = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -16,6 +16,14 @@ pub const PROTO_MIN: u32 = 1;
 /// Newest protocol version this build speaks.
 pub const PROTO_MAX: u32 = 1;
 
+/// Domain separator of the service's hello proof.
+pub const HELLO_DOMAIN: &[u8] = b"weftos/mesh-local/hello/v1\0";
+
+/// Ids at or above this bit are originated by the service (for example
+/// `verdict.request`); the client allocates ids below it. The two namespaces
+/// cannot collide, so a service-originated id never matches a pending request.
+pub const SERVICE_ID_FLAG: u64 = 1 << 63;
+
 /// Domain separator of the register signature.
 pub const REGISTER_DOMAIN: &[u8] = b"weftos/mesh-local/register/v1\0";
 
@@ -139,6 +147,10 @@ pub struct HelloAck {
     /// Per-connection, single-use register challenge.
     #[serde(with = "hex32")]
     pub challenge: [u8; 32],
+    /// Ed25519 by the machine key over [`hello_signing_bytes`]: proof of key
+    /// possession bound to this connection's nonce and challenge.
+    #[serde(with = "hex64")]
+    pub machine_sig: [u8; 64],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,6 +273,10 @@ pub enum Message {
         exe: String,
         #[serde(default)]
         pid: u32,
+        /// Fresh random nonce; the service signs it (with its challenge) in
+        /// `hello_ack.machine_sig` to prove it holds the machine key.
+        #[serde(with = "hex32")]
+        client_nonce: [u8; 32],
     },
     #[serde(rename = "hello_ack")]
     HelloAck(HelloAck),
@@ -352,8 +368,48 @@ pub enum Message {
     Unknown,
 }
 
-/// Bytes the user key signs to register: domain, challenge, principal bytes
-/// (uid as u32 big endian), then the node id text.
+/// Bytes the machine key signs in `hello_ack`: domain, the client's nonce, the
+/// service's challenge, then the machine public key.
+pub fn hello_signing_bytes(
+    client_nonce: &[u8; 32],
+    challenge: &[u8; 32],
+    machine_pubkey: &[u8; 32],
+) -> Vec<u8> {
+    let mut b = Vec::with_capacity(HELLO_DOMAIN.len() + 96);
+    b.extend_from_slice(HELLO_DOMAIN);
+    b.extend_from_slice(client_nonce);
+    b.extend_from_slice(challenge);
+    b.extend_from_slice(machine_pubkey);
+    b
+}
+
+/// Verify the service's key-possession proof for this connection.
+pub fn verify_hello_proof(ack: &HelloAck, client_nonce: &[u8; 32]) -> bool {
+    let Ok(key) = ed25519_dalek::VerifyingKey::from_bytes(&ack.machine_pubkey) else {
+        return false;
+    };
+    let bytes = hello_signing_bytes(client_nonce, &ack.challenge, &ack.machine_pubkey);
+    key.verify_strict(&bytes, &ed25519_dalek::Signature::from_bytes(&ack.machine_sig)).is_ok()
+}
+
+/// True for messages that can answer a request. Only these are routed to a
+/// waiting `request()`; anything else carrying an id goes to the event stream.
+pub fn is_reply_class(m: &Message) -> bool {
+    matches!(
+        m,
+        Message::Ack {}
+            | Message::Reply { .. }
+            | Message::Error(_)
+            | Message::Cert { .. }
+            | Message::Pong {}
+            | Message::JournalHeadReply { .. }
+            | Message::RegisterAck(_)
+            | Message::HelloAck(_)
+    )
+}
+
+/// Bytes the user key signs to register: domain, challenge, the tagged and
+/// length-prefixed principal, then the length-prefixed node id text.
 pub fn register_signing_bytes(
     challenge: &[u8; 32],
     principal: &Principal,
@@ -363,7 +419,9 @@ pub fn register_signing_bytes(
     b.extend_from_slice(REGISTER_DOMAIN);
     b.extend_from_slice(challenge);
     b.extend_from_slice(&principal.signing_bytes());
-    b.extend_from_slice(node_id.as_bytes());
+    let node = &node_id.as_bytes()[..node_id.len().min(u16::MAX as usize)];
+    b.extend_from_slice(&(node.len() as u16).to_be_bytes());
+    b.extend_from_slice(node);
     b
 }
 

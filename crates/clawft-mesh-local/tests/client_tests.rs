@@ -259,5 +259,87 @@ async fn closed_connection_ends_events_and_fails_requests() {
     let ev = tokio::time::timeout(Duration::from_secs(5), c.next_event()).await;
     assert!(matches!(ev, Ok(None)), "event stream must end: {ev:?}");
     let r = c.request(Message::Ping {}).await;
-    assert!(matches!(r, Err(ClientError::Closed | ClientError::Frame(_))), "{r:?}");
+    assert!(matches!(r, Err(ClientError::Closed(_) | ClientError::Frame(_))), "{r:?}");
+    if let Err(ClientError::Closed(why)) = r {
+        assert!(!why.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn bad_hello_proof_is_refused_and_nothing_is_pinned_or_registered() {
+    let e = env_with(501, |s| s.corrupt_hello_sig = true);
+    let err = MeshLocalClient::connect_and_register(&e.cfg, &key(1), &params()).await.err().unwrap();
+    assert!(matches!(err, ClientError::BadServerProof), "{err:?}");
+    assert!(!err.is_retryable());
+    assert!(e.server.registrations().is_empty());
+    assert!(!e.cfg.machine_pin.as_ref().unwrap().exists(), "an unproven key must not be pinned");
+}
+
+#[tokio::test]
+async fn replayed_hello_ack_with_an_old_nonce_is_refused() {
+    let e = env_with(501, |s| s.hello_sig_nonce = Some([0xee; 32]));
+    let err = MeshLocalClient::connect_and_register(&e.cfg, &key(1), &params()).await.err().unwrap();
+    assert!(matches!(err, ClientError::BadServerProof), "{err:?}");
+    assert!(e.server.registrations().is_empty());
+}
+
+#[tokio::test]
+async fn non_reply_message_with_a_matching_id_is_not_a_reply() {
+    let e = env_with(501, |s| s.spoof_ping_reply = true);
+    let mut cfg = e.cfg.clone();
+    cfg.deadline = Duration::from_millis(300);
+    let c = MeshLocalClient::connect_and_register(&cfg, &key(1), &params()).await.unwrap();
+    let r = c.request(Message::Status {}).await;
+    assert!(matches!(r, Err(ClientError::Timeout)), "spoofed ping must not satisfy the request: {r:?}");
+}
+
+#[tokio::test]
+async fn service_originated_ids_are_a_separate_namespace() {
+    let e = env_with(501, |s| s.push_verdict_on_status = true);
+    let mut c = MeshLocalClient::connect_and_register(&e.cfg, &key(1), &params()).await.unwrap();
+    // The pushed verdict.request carries SERVICE_ID_FLAG | <request id>.
+    let r = c.request(Message::Status {}).await.unwrap();
+    assert!(matches!(r, Message::Reply { .. }), "the real reply still reaches the waiter: {r:?}");
+    let ev = tokio::time::timeout(Duration::from_secs(2), c.next_event()).await.unwrap().unwrap();
+    assert!(matches!(ev.msg, Message::VerdictRequest(_)));
+    let id = ev.id.unwrap();
+    assert_ne!(id & clawft_mesh_local::proto::SERVICE_ID_FLAG, 0);
+}
+
+#[tokio::test]
+async fn pin_corruption_and_case_are_handled() {
+    let e = env(501);
+    let pin = e.cfg.machine_pin.clone().unwrap();
+    std::fs::create_dir_all(pin.parent().unwrap()).unwrap();
+    for bad in ["", "   \n", "not hex", &"ab".repeat(31)] {
+        std::fs::write(&pin, bad).unwrap();
+        let err = MeshLocalClient::connect_and_register(&e.cfg, &key(1), &params()).await.err().unwrap();
+        assert!(matches!(err, ClientError::PinCorrupt(_)), "{bad:?}: {err:?}");
+        assert!(err.to_string().contains("remove it to re-pin"));
+    }
+    // An uppercase, newline-terminated pin of the right key is accepted.
+    let hex = clawft_mesh_local::hexser::encode(&e.server.machine_pubkey()).to_uppercase();
+    std::fs::write(&pin, format!("{hex}\n")).unwrap();
+    MeshLocalClient::connect_and_register(&e.cfg, &key(1), &params()).await.unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let e2 = env(502);
+        let p2 = e2.cfg.machine_pin.clone().unwrap();
+        MeshLocalClient::connect_and_register(&e2.cfg, &key(1), &params()).await.unwrap();
+        assert_eq!(std::fs::metadata(p2.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
+        let leftovers: Vec<_> = std::fs::read_dir(p2.parent().unwrap()).unwrap().map(|d| d.unwrap().file_name()).collect();
+        assert_eq!(leftovers.len(), 1, "no temp file left behind: {leftovers:?}");
+    }
+}
+
+#[tokio::test]
+async fn event_queue_is_bounded_and_counts_drops() {
+    // Producers push verdict requests; the consumer never reads events.
+    let e = env_with(501, |s| s.push_verdict_on_status = true);
+    let c = MeshLocalClient::connect_and_register(&e.cfg, &key(1), &params()).await.unwrap();
+    for _ in 0..(clawft_mesh_local::client::EVENT_QUEUE + 40) {
+        c.request(Message::Status {}).await.unwrap(); // replies keep flowing
+    }
+    assert!(c.dropped_events() >= 40, "dropped {}", c.dropped_events());
 }

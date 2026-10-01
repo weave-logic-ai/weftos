@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signer, SigningKey};
 use rand::RngCore;
 use tokio::net::{UnixListener, UnixStream};
 
@@ -15,7 +15,8 @@ use crate::client::now_unix;
 use crate::framing::{write_frame, FrameReader, HELLO_DEADLINE};
 use crate::peer::{PeerIdentity, Principal};
 use crate::proto::{
-    negotiate, negotiate_features, verify_register_sig, Accepted, BindState, ErrorBody, ErrorKind,
+    hello_signing_bytes, negotiate, negotiate_features, verify_register_sig, SERVICE_ID_FLAG,
+    PeerInfo, VerdictRequest, VerdictSubject, Accepted, BindState, ErrorBody, ErrorKind,
     Frame, HelloAck, Message, RegisterAck, RegisterReq, ServiceRecord, VersionRange,
 };
 
@@ -27,6 +28,16 @@ pub struct TestServerConfig {
     pub features: Vec<String>,
     pub peer: Arc<dyn PeerIdentity>,
     pub cert_ttl_s: u64,
+    /// Fault injection: flip a bit in `machine_sig`.
+    pub corrupt_hello_sig: bool,
+    /// Fault injection: sign this nonce instead of the client's (a replayed
+    /// hello_ack from an earlier connection).
+    pub hello_sig_nonce: Option<[u8; 32]>,
+    /// Fault injection: answer `status` with a spoofed `ping` carrying the
+    /// request's id.
+    pub spoof_ping_reply: bool,
+    /// On `status`, first push a service-originated `verdict.request`.
+    pub push_verdict_on_status: bool,
 }
 
 impl TestServerConfig {
@@ -37,6 +48,10 @@ impl TestServerConfig {
             features: Vec::new(),
             peer,
             cert_ttl_s: DEFAULT_TTL_S,
+            corrupt_hello_sig: false,
+            hello_sig_nonce: None,
+            spoof_ping_reply: false,
+            push_verdict_on_status: false,
         }
     }
 }
@@ -136,10 +151,10 @@ async fn serve_inner(
     let mut rd = FrameReader::new(rd);
 
     let Some(first) = rd.read_frame_within(HELLO_DEADLINE).await? else { return Ok(()) };
-    let (client_features, proto) = match first.msg {
-        Message::Hello { proto_min, proto_max, features, .. } => {
+    let (client_features, proto, client_nonce) = match first.msg {
+        Message::Hello { proto_min, proto_max, features, client_nonce, .. } => {
             match negotiate(cfg.proto, (proto_min, proto_max)) {
-                Ok(p) => (features, p),
+                Ok(p) => (features, p, client_nonce),
                 Err(m) => {
                     let body = Message::Error(ErrorBody::proto_mismatch(&m));
                     return write_frame(&mut wr, &Frame::new(body)).await;
@@ -153,7 +168,16 @@ async fn serve_inner(
     };
     let mut challenge = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut challenge);
+    let signed_nonce = cfg.hello_sig_nonce.unwrap_or(client_nonce);
+    let mut machine_sig = cfg
+        .machine_key
+        .sign(&hello_signing_bytes(&signed_nonce, &challenge, &machine_pubkey))
+        .to_bytes();
+    if cfg.corrupt_hello_sig {
+        machine_sig[0] ^= 1;
+    }
     let ack = HelloAck {
+        machine_sig,
         proto,
         features: negotiate_features(&cfg.features, &client_features),
         node_id: node_id.clone(),
@@ -185,7 +209,30 @@ async fn serve_inner(
                 None => err(ErrorKind::Forbidden, "register first", "send register"),
             },
             Message::Ping {} => Message::Pong {},
-            Message::Status {} => Message::Reply { data: serde_json::json!({"node_id": node_id}) },
+            // Replies to our own pings need no answer.
+            Message::Pong {} => continue,
+            Message::Status {} if cfg.spoof_ping_reply => Message::Ping {},
+            Message::Status {} => {
+                if cfg.push_verdict_on_status {
+                    let v = VerdictRequest {
+                        subject: VerdictSubject::PeerAdmit,
+                        peer: PeerInfo {
+                            node_id: "peer".into(),
+                            pubkey: "k".into(),
+                            platform: String::new(),
+                            capabilities: vec![],
+                            genesis_hash: String::new(),
+                            chain_seq: 0,
+                        },
+                        topic: None,
+                    };
+                    // Same low bits as the request id on purpose: the service
+                    // namespace flag must keep them apart.
+                    let id = SERVICE_ID_FLAG | frame.id.unwrap_or(0);
+                    write_frame(&mut wr, &Frame::with_id(id, Message::VerdictRequest(v))).await?;
+                }
+                Message::Reply { data: serde_json::json!({"node_id": node_id}) }
+            }
             Message::Send { dest, message, .. } => {
                 state.lock().expect("state").sent.push((dest, message));
                 Message::Ack {}

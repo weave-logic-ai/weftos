@@ -13,13 +13,20 @@ pub enum Principal {
 }
 
 impl Principal {
-    /// The bytes bound into the register signature (plan 1.2): uid as 4 bytes
-    /// big endian; a SID as `"sid:"` plus its text.
+    /// The bytes bound into the register signature (plan 1.2).
+    ///
+    /// Tagged and length-prefixed (`tag(1) || len(u16 BE) || bytes`) so a uid
+    /// and a SID can never produce the same bytes.
     pub fn signing_bytes(&self) -> Vec<u8> {
-        match self {
-            Principal::Uid(u) => u.to_be_bytes().to_vec(),
-            Principal::Sid(s) => [b"sid:".as_slice(), s.as_bytes()].concat(),
-        }
+        let (tag, body): (u8, Vec<u8>) = match self {
+            Principal::Uid(u) => (1, u.to_be_bytes().to_vec()),
+            Principal::Sid(s) => (2, s.as_bytes()[..s.len().min(u16::MAX as usize)].to_vec()),
+        };
+        let mut out = Vec::with_capacity(3 + body.len());
+        out.push(tag);
+        out.extend_from_slice(&(body.len() as u16).to_be_bytes());
+        out.extend_from_slice(&body);
+        out
     }
 }
 
@@ -56,15 +63,20 @@ pub trait PeerIdentity: Send + Sync {
 }
 
 /// Fixed credentials for tests (also used by downstream crates' tests).
+/// Only compiled with the `testing` feature: production code can never inject
+/// an identity.
+#[cfg(any(test, feature = "testing"))]
 #[derive(Debug, Clone)]
 pub struct InjectedPeer(pub PeerCreds);
 
+#[cfg(any(test, feature = "testing"))]
 impl InjectedPeer {
     pub fn uid(uid: u32) -> Self {
         Self(PeerCreds::uid(uid))
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl PeerIdentity for InjectedPeer {
     fn credentials(&self) -> Result<PeerCreds, PeerError> {
         Ok(self.0.clone())
@@ -73,6 +85,14 @@ impl PeerIdentity for InjectedPeer {
 
 /// Credentials read from a unix stream's `SO_PEERCRED` / `LOCAL_PEERCRED`,
 /// captured once at construction.
+///
+/// Semantics: the kernel records the credentials of the process that called
+/// `connect()` (client side) or `listen()` (server side) when the socket was
+/// set up, not of whichever process later reads or writes the descriptor. A
+/// descriptor passed to another process keeps the original identity, and the
+/// snapshot is never refreshed, so a uid that changes mid-connection (setuid)
+/// is not noticed. Authorization decisions must therefore be made per
+/// connection and re-checked on reconnect, never cached across connections.
 #[cfg(unix)]
 #[derive(Debug, Clone)]
 pub struct UnixPeer(PeerCreds);

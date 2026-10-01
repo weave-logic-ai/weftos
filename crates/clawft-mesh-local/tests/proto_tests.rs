@@ -18,8 +18,8 @@ fn cert() -> UserCert {
 fn all_messages() -> Vec<Message> {
     let pb = ProjectBinding { project_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".into(), project_pubkey: [3; 32], cert_sig: [4; 64] };
     vec![
-        Message::Hello { proto_min: 1, proto_max: 2, features: vec!["a".into()], role: Role::Admin, build_sha: "s".into(), exe: "/x".into(), pid: 7 },
-        Message::HelloAck(HelloAck { proto: 1, features: vec![], node_id: "n".into(), machine_pubkey: [5; 32], service_build_sha: "s".into(), deprecated_below: Some(1), uid: 501, challenge: [6; 32] }),
+        Message::Hello { proto_min: 1, proto_max: 2, features: vec!["a".into()], role: Role::Admin, build_sha: "s".into(), exe: "/x".into(), pid: 7, client_nonce: [8; 32] },
+        Message::HelloAck(HelloAck { proto: 1, features: vec![], node_id: "n".into(), machine_pubkey: [5; 32], service_build_sha: "s".into(), deprecated_below: Some(1), uid: 501, challenge: [6; 32], machine_sig: [7; 64] }),
         Message::Error(ErrorBody::new(ErrorKind::BindPending, "m", "r")),
         Message::Register(RegisterReq { user_pubkey: [2; 32], sig: [9; 64], addresses: Addresses { user_id: "u".into(), projects: vec![pb.clone()] }, topic_prefixes: vec!["p".into()], capabilities: vec!["c".into()], version: "1".into(), build_sha: "s".into() }),
         Message::RegisterAck(RegisterAck { user_id: "u".into(), cert: cert(), accepted: Accepted { addresses: vec!["a".into()], topic_prefixes: vec![] }, rejected: vec![Rejected { what: "w".into(), reason: "r".into() }], bind: BindState::Pending }),
@@ -61,10 +61,10 @@ fn every_message_round_trips_with_and_without_id() {
 
 #[test]
 fn golden_wire_examples() {
-    let hello = Frame::new(Message::Hello { proto_min: 1, proto_max: 1, features: vec![], role: Role::User, build_sha: "abc".into(), exe: "weaver".into(), pid: 9 });
+    let hello = Frame::new(Message::Hello { proto_min: 1, proto_max: 1, features: vec![], role: Role::User, build_sha: "abc".into(), exe: "weaver".into(), pid: 9, client_nonce: [0; 32] });
     assert_eq!(
         serde_json::to_string(&hello).unwrap(),
-        r#"{"t":"hello","proto_min":1,"proto_max":1,"features":[],"role":"user","build_sha":"abc","exe":"weaver","pid":9}"#
+        r#"{"t":"hello","proto_min":1,"proto_max":1,"features":[],"role":"user","build_sha":"abc","exe":"weaver","pid":9,"client_nonce":"0000000000000000000000000000000000000000000000000000000000000000"}"#
     );
     let pong = Frame::with_id(5, Message::Ping {});
     assert_eq!(serde_json::to_string(&pong).unwrap(), r#"{"id":5,"t":"ping"}"#);
@@ -77,7 +77,7 @@ fn golden_wire_examples() {
     );
     let dotted = serde_json::to_value(Message::VerdictReply { allow: false, ttl_s: 1, reason: String::new(), rule_hash: String::new() }).unwrap();
     assert_eq!(dotted["t"], "verdict.reply");
-    let ha = serde_json::to_value(Message::HelloAck(HelloAck { proto: 1, features: vec![], node_id: "n".into(), machine_pubkey: [0xab; 32], service_build_sha: String::new(), deprecated_below: None, uid: 1, challenge: [0; 32] })).unwrap();
+    let ha = serde_json::to_value(Message::HelloAck(HelloAck { proto: 1, features: vec![], node_id: "n".into(), machine_pubkey: [0xab; 32], service_build_sha: String::new(), deprecated_below: None, uid: 1, challenge: [0; 32], machine_sig: [0; 64] })).unwrap();
     assert_eq!(ha["machine_pubkey"], "ab".repeat(32));
     assert_eq!(ha["challenge"], "0".repeat(64));
     assert!(ha.get("deprecated_below").is_none());
@@ -85,7 +85,7 @@ fn golden_wire_examples() {
 
 #[test]
 fn unknown_fields_and_unknown_types_are_tolerated() {
-    let f: Frame = serde_json::from_str(r#"{"t":"hello","proto_min":1,"proto_max":3,"role":"user","future_field":{"x":1}}"#).unwrap();
+    let f: Frame = serde_json::from_str(r#"{"t":"hello","proto_min":1,"proto_max":3,"role":"user","client_nonce":"0000000000000000000000000000000000000000000000000000000000000000","future_field":{"x":1}}"#).unwrap();
     assert!(matches!(f.msg, Message::Hello { proto_max: 3, .. }));
     let f: Frame = serde_json::from_str(r#"{"id":9,"t":"from.the.future","a":1}"#).unwrap();
     assert_eq!(f, Frame { id: Some(9), msg: Message::Unknown });
@@ -159,7 +159,10 @@ fn register_signature_binds_challenge_uid_and_node() {
     assert!(!verify_register_sig(&forged, &challenge, &uid, &node), "other key");
     let b = register_signing_bytes(&challenge, &uid, &node);
     assert!(b.starts_with(b"weftos/mesh-local/register/v1\0"));
-    assert_eq!(&b[30 + 32..30 + 36], &501u32.to_be_bytes());
+    assert_eq!(b[62], 1, "uid tag");
+    assert_eq!(&b[63..65], &4u16.to_be_bytes());
+    assert_eq!(&b[65..69], &501u32.to_be_bytes());
+    assert_eq!(&b[69..71], &32u16.to_be_bytes(), "node id is length prefixed");
 }
 
 #[tokio::test]
@@ -212,7 +215,8 @@ async fn framing_deadline_and_write_limit() {
 fn injected_peer_and_principal_bytes() {
     let p = InjectedPeer::uid(1000);
     assert_eq!(p.principal().unwrap(), Principal::Uid(1000));
-    assert_eq!(Principal::Sid("S-1-5".into()).signing_bytes(), b"sid:S-1-5");
+    assert_eq!(Principal::Sid("S-1-5".into()).signing_bytes(), b"\x02\x00\x05S-1-5");
+    assert_eq!(Principal::Uid(1000).signing_bytes(), [1, 0, 4, 0, 0, 3, 0xe8]);
 }
 
 #[tokio::test]
@@ -223,4 +227,51 @@ async fn real_peer_cred_is_this_process() {
     assert_eq!(creds.pid, Some(std::process::id()));
     assert!(matches!(creds.principal, Principal::Uid(_)));
     assert!(creds.gid.is_some());
+}
+
+#[test]
+fn register_bytes_cannot_collide_across_principal_kinds_or_boundaries() {
+    let c = [1u8; 32];
+    let uid = register_signing_bytes(&c, &Principal::Uid(0x7369_6401), "n");
+    let sid = register_signing_bytes(&c, &Principal::Sid("sid\u{1}".into()), "n");
+    assert_ne!(uid, sid);
+    // Moving a byte between principal and node id changes the bytes.
+    let a = register_signing_bytes(&c, &Principal::Sid("ab".into()), "c");
+    let b = register_signing_bytes(&c, &Principal::Sid("a".into()), "bc");
+    assert_ne!(a, b);
+}
+
+#[test]
+fn hello_proof_binds_nonce_challenge_and_key() {
+    let key = SigningKey::from_bytes(&[5; 32]);
+    let pk = key.verifying_key().to_bytes();
+    let (nonce, challenge) = ([1u8; 32], [2u8; 32]);
+    let sig = key.sign(&hello_signing_bytes(&nonce, &challenge, &pk)).to_bytes();
+    let ack = HelloAck { proto: 1, features: vec![], node_id: String::new(), machine_pubkey: pk, service_build_sha: String::new(), deprecated_below: None, uid: 1, challenge, machine_sig: sig };
+    assert!(verify_hello_proof(&ack, &nonce));
+    assert!(!verify_hello_proof(&ack, &[9u8; 32]), "old nonce");
+    assert!(!verify_hello_proof(&HelloAck { challenge: [3; 32], ..ack.clone() }, &nonce), "other challenge");
+    assert!(!verify_hello_proof(&HelloAck { machine_pubkey: SigningKey::from_bytes(&[6; 32]).verifying_key().to_bytes(), ..ack }, &nonce), "other key");
+    assert!(hello_signing_bytes(&nonce, &challenge, &pk).starts_with(b"weftos/mesh-local/hello/v1\0"));
+}
+
+#[test]
+fn reply_class_and_service_id_namespace() {
+    assert!(is_reply_class(&Message::Ack {}));
+    assert!(is_reply_class(&Message::Pong {}));
+    assert!(is_reply_class(&Message::Cert { cert: cert() }));
+    assert!(!is_reply_class(&Message::Ping {}));
+    assert!(!is_reply_class(&Message::Status {}));
+    assert!(!is_reply_class(&Message::Unknown));
+    assert_eq!(SERVICE_ID_FLAG, 1u64 << 63);
+}
+
+/// Golden vector shared with the kernel's `node_id_from_pubkey` test: the same
+/// pubkey and expected id must appear there verbatim.
+///   pubkey  = bytes 0x00..=0x1f
+///   node id = 630dcd2966c4336691125448bbb25b4f   (sha256(pubkey)[..16], hex)
+#[test]
+fn node_id_golden_vector() {
+    let pk: [u8; 32] = std::array::from_fn(|i| i as u8);
+    assert_eq!(clawft_mesh_local::node_id_from_pubkey(&pk), "630dcd2966c4336691125448bbb25b4f");
 }
