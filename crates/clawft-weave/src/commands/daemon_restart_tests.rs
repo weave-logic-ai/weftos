@@ -12,7 +12,14 @@
         /// sha answers, consumed per `status` call; the last repeats.
         shas: RefCell<Vec<&'static str>>,
         performed: RefCell<Vec<Action>>,
-        /// Pids this fake was asked about (alive/exe lookups).
+        /// Pid the fake daemon reports in its handshake (None = default 4242).
+    status_pid: Option<Option<u32>>,
+    /// Answers `status` at all.
+    silent: bool,
+    /// Exe returned from the second `exe_of` call on (pid recycled).
+    exe_after: Option<&'static str>,
+    exe_calls: RefCell<u32>,
+    /// Pids this fake was asked about (alive/exe lookups).
         asked: RefCell<Vec<u32>>,
         fail: bool,
     }
@@ -24,12 +31,19 @@
         }
         fn exe_of(&self, pid: u32) -> Option<PathBuf> {
             self.asked.borrow_mut().push(pid);
+            *self.exe_calls.borrow_mut() += 1;
+            if let (Some(e), true) = (self.exe_after, *self.exe_calls.borrow() > 1) {
+                return Some(PathBuf::from(e));
+            }
             self.exes.iter().find(|(p, _)| *p == pid).map(|(_, e)| PathBuf::from(e))
         }
-        fn status(&self, _: &Path) -> Option<(String, String)> {
+        fn status(&self, _: &Path) -> Option<DaemonStatus> {
+            if self.silent {
+                return None;
+            }
             let mut s = self.shas.borrow_mut();
             let sha = if s.len() > 1 { s.remove(0) } else { *s.first()? };
-            Some(("0.8.1".into(), sha.into()))
+            Some(DaemonStatus { sha: sha.into(), pid: self.status_pid.unwrap_or(Some(4242)) })
         }
         fn launchd_main_pid(&self, _: u32) -> Option<u32> {
             self.launchd
@@ -238,3 +252,47 @@ created = \"2026-01-01T00:00:00Z\"\nlast_seen = \"2026-01-01T00:00:00Z\"\n\n[leg
         assert_eq!(parse_systemctl_show("ActiveState=inactive\nMainPID=0\n"), None);
         assert_eq!(parse_systemctl_show("ActiveState=active\nMainPID=0\n"), None);
     }
+
+#[test]
+fn sighup_requires_a_socket_that_names_the_same_pid() {
+    let d = tempfile::tempdir().unwrap();
+    let f = Fake { silent: true, ..healthy() };
+    let r = restart_with(&inputs(d.path(), Some("4242")), &f);
+    assert!(matches!(&r.outcome, Outcome::Refused(m) if m.contains("does not answer")), "{r:?}");
+    assert!(f.performed.borrow().is_empty());
+
+    let f = Fake { status_pid: Some(Some(70730)), ..healthy() };
+    let r = restart_with(&inputs(d.path(), Some("4242")), &f);
+    assert!(matches!(&r.outcome, Outcome::Refused(m) if m.contains("reports pid 70730")), "{r:?}");
+    assert!(f.performed.borrow().is_empty());
+
+    let f = Fake { status_pid: Some(None), ..healthy() };
+    let r = restart_with(&inputs(d.path(), Some("4242")), &f);
+    assert!(matches!(r.outcome, Outcome::Refused(_)));
+}
+
+#[test]
+fn silent_socket_does_not_block_a_service_manager_restart() {
+    let d = tempfile::tempdir().unwrap();
+    let f = Fake { silent: true, launchd: Some(4242), ..healthy() };
+    restart_with(&inputs(d.path(), Some("4242")), &f);
+    assert_eq!(*f.performed.borrow(), vec![Action::LaunchdKickstart { uid: 501 }]);
+}
+
+#[test]
+fn exe_is_rechecked_immediately_before_the_signal() {
+    let d = tempfile::tempdir().unwrap();
+    let f = Fake { exe_after: Some("/usr/bin/postgres"), ..healthy() };
+    let r = restart_with(&inputs(d.path(), Some("4242")), &f);
+    assert!(matches!(&r.outcome, Outcome::Refused(m) if m.contains("changed identity")), "{r:?}");
+    assert!(f.performed.borrow().is_empty());
+}
+
+#[test]
+fn parses_kernel_status_line() {
+    let line = r#"{"ok":true,"result":{"build":{"version":"0.8.1","sha":"abc"},"handshake":{"pid":77}}}"#;
+    assert_eq!(parse_status(line), Some(DaemonStatus { sha: "abc".into(), pid: Some(77) }));
+    let old = r#"{"ok":true,"result":{"build":{"sha":"abc"}}}"#;
+    assert_eq!(parse_status(old).unwrap().pid, None);
+    assert_eq!(parse_status("garbage"), None);
+}

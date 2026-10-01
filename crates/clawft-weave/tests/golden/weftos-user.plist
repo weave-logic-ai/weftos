@@ -17,6 +17,8 @@
     <string>/Users/alice</string>
     <key>RunAtLoad</key>
     <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
     <key>KeepAlive</key>
     <dict>
         <key>SuccessfulExit</key>

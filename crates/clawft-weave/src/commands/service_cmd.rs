@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Subcommand, ValueEnum};
 use clawft_types::runtime_paths::home_dir;
 
-use crate::service_units::{UnitKind, canonical_exe};
+use crate::service_units::{UnitKind, stable_exe};
 
 /// `weaver service` arguments.
 #[derive(Debug, Args)]
@@ -57,7 +57,7 @@ pub async fn run(args: ServiceArgs) -> anyhow::Result<()> {
     match args.action {
         ServiceAction::Unit { kind, out, force } => {
             let home = home_dir().ok_or_else(|| anyhow::anyhow!("cannot determine the home directory"))?;
-            let exe = canonical_exe(&std::env::current_exe()?);
+            let exe = stable_exe(&std::env::current_exe()?, std::env::var_os("PATH").as_deref());
             let mut stdout = std::io::stdout().lock();
             unit(kind.into(), &exe, &home, out.as_deref(), force, &mut stdout)
         }
@@ -74,7 +74,7 @@ pub fn unit(
     force: bool,
     w: &mut dyn Write,
 ) -> anyhow::Result<()> {
-    let text = kind.render(exe, home);
+    let text = kind.render(exe, home).map_err(|e| anyhow::anyhow!(e))?;
     let Some(path) = out else {
         w.write_all(text.as_bytes())?;
         return Ok(());
@@ -96,7 +96,7 @@ pub fn unit(
     f.write_all(text.as_bytes())?;
     writeln!(w, "Wrote {}", path.display())?;
     writeln!(w, "To install, run (this command does not run them):")?;
-    for c in kind.install_commands(path) {
+    for c in kind.install_commands(path, home) {
         writeln!(w, "  {c}")?;
     }
     Ok(())

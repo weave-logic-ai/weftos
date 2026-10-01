@@ -11,6 +11,9 @@
 //! 4. launchd / systemd are used only when the managed service's main pid
 //!    *is* the pid-file pid; otherwise the pid-file pid gets SIGHUP, as
 //!    `weaver kernel restart` does.
+//! 5. Before a SIGHUP the user socket must answer `kernel.status` with a
+//!    handshake pid equal to the pid-file pid, and the exe is checked once
+//!    more immediately before acting.
 //!
 //! Every effect (liveness, exe lookup, handshake, `launchctl`, `systemctl`,
 //! signals, sleeping) goes through [`Host`], so tests inject fakes and never
@@ -36,13 +39,22 @@ pub enum Action {
     Sighup { pid: u32 },
 }
 
+/// What `kernel.status` reports about the daemon behind a socket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonStatus {
+    /// Build stamp.
+    pub sha: String,
+    /// The daemon's own pid from its handshake, when reported.
+    pub pid: Option<u32>,
+}
+
 /// The outside world. The real impl is [`RealHost`]; tests supply fakes.
 pub trait Host {
     fn alive(&self, pid: u32) -> bool;
     /// Executable of a process (may carry a Linux ` (deleted)` suffix).
     fn exe_of(&self, pid: u32) -> Option<PathBuf>;
-    /// `(version, sha)` from `kernel.status` on `socket`.
-    fn status(&self, socket: &Path) -> Option<(String, String)>;
+    /// `kernel.status` on `socket`; `None` when nothing answers.
+    fn status(&self, socket: &Path) -> Option<DaemonStatus>;
     /// Main pid of the loaded launchd service, `None` if not loaded.
     fn launchd_main_pid(&self, uid: u32) -> Option<u32>;
     /// Main pid of the active systemd user unit, `None` if inactive.
@@ -152,14 +164,38 @@ fn decide_and_restart(i: &Inputs, host: &dyn Host) -> Outcome {
         };
     }
 
-    let before = host.status(&i.socket).map(|(_, sha)| sha);
+    let before_status = host.status(&i.socket);
+    let before = before_status.as_ref().map(|st| st.sha.clone());
     let (method, action) = if host.launchd_main_pid(i.uid) == Some(pid) {
         ("launchd", Action::LaunchdKickstart { uid: i.uid })
     } else if host.systemd_main_pid() == Some(pid) {
         ("systemd", Action::SystemctlRestart)
     } else {
+        // A signal needs proof the socket and the pid file name one daemon.
+        match before_status.as_ref().map(|st| st.pid) {
+            None => {
+                return Outcome::Refused(format!(
+                    "the user socket {} does not answer kernel.status; not signalling pid {pid}",
+                    i.socket.display()
+                ));
+            }
+            Some(p) if p != Some(pid) => {
+                return Outcome::Refused(format!(
+                    "the daemon on {} reports pid {}, not pid {pid} from the pid file; not signalling",
+                    i.socket.display(),
+                    p.map_or_else(|| "none".into(), |p| p.to_string())
+                ));
+            }
+            Some(_) => {}
+        }
         ("sighup", Action::Sighup { pid })
     };
+    // Re-check the exe right before acting: the pid may have been recycled
+    // since the first look.
+    match host.exe_of(pid) {
+        Some(e) if is_weaver(&e) && same_binary(&e, &i.installed_exe) => {}
+        _ => return Outcome::Refused(format!("pid {pid} changed identity just before the restart; not acting")),
+    }
     if let Err(e) = host.perform(&action) {
         return Outcome::Failed(format!("{method} restart failed: {e}"));
     }
@@ -170,10 +206,10 @@ fn decide_and_restart(i: &Inputs, host: &dyn Host) -> Outcome {
         if n > 0 {
             host.settle();
         }
-        if let Some((_, sha)) = host.status(&i.socket) {
+        if let Some(st) = host.status(&i.socket) {
             let new_pid = read_pid(&i.pid_file);
-            confirmed = new_pid != Some(pid) || Some(&sha) != before.as_ref();
-            after = Some(sha);
+            confirmed = new_pid != Some(pid) || Some(&st.sha) != before.as_ref();
+            after = Some(st.sha);
             if confirmed {
                 break;
             }
@@ -304,6 +340,36 @@ pub fn parse_systemctl_show(text: &str) -> Option<u32> {
     get("MainPID=")?.trim().parse().ok().filter(|p| *p > 1)
 }
 
+/// Query `kernel.status` over the unix socket (blocking, short timeouts).
+#[cfg(unix)]
+fn rpc_daemon_status(socket: &Path) -> Option<DaemonStatus> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    let mut s = UnixStream::connect(socket).ok()?;
+    s.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+    s.set_write_timeout(Some(Duration::from_secs(2))).ok()?;
+    s.write_all(b"{\"method\":\"kernel.status\",\"params\":null,\"auth\":\"read\"}\n").ok()?;
+    let mut line = String::new();
+    BufReader::new(s).read_line(&mut line).ok()?;
+    parse_status(&line)
+}
+
+#[cfg(not(unix))]
+fn rpc_daemon_status(_: &Path) -> Option<DaemonStatus> {
+    None
+}
+
+/// Parse a `kernel.status` response line.
+pub fn parse_status(line: &str) -> Option<DaemonStatus> {
+    let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    let sha = v.pointer("/result/build/sha")?.as_str()?.to_owned();
+    let pid = v
+        .pointer("/result/handshake/pid")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|p| u32::try_from(p).ok());
+    Some(DaemonStatus { sha, pid })
+}
+
 /// The real process / service manager.
 pub struct RealHost;
 
@@ -324,8 +390,8 @@ impl Host for RealHost {
         clawft_rpc::doctor::daemon::resolve_exe_cwd(pid).0
     }
 
-    fn status(&self, socket: &Path) -> Option<(String, String)> {
-        clawft_rpc::doctor::daemon::rpc_status(socket)
+    fn status(&self, socket: &Path) -> Option<DaemonStatus> {
+        rpc_daemon_status(socket)
     }
 
     fn launchd_main_pid(&self, uid: u32) -> Option<u32> {

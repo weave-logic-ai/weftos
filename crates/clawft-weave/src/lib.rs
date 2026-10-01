@@ -19,6 +19,9 @@ pub mod conv_postmortem;
 // Local RPC daemon: Unix UDS + Windows named pipes (WEFT-559).
 #[cfg(any(unix, windows))]
 pub mod daemon;
+/// Boot refusals (exit 78) and the SIGHUP re-exec plan.
+#[cfg(any(unix, windows))]
+pub mod boot_refusal;
 /// Single-instance advisory lock on `<runtime>/kernel.lock` (ADR-103 P0b).
 #[cfg(any(unix, windows))]
 pub mod instance_lock;

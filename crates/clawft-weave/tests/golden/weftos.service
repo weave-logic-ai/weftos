@@ -1,6 +1,8 @@
 [Unit]
 Description=WeftOS per-user daemon
 Documentation=https://github.com/weave-logic-ai/weftos
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -8,6 +10,7 @@ WorkingDirectory=/home/alice
 ExecStart="/opt/weftos/bin/weaver" kernel start --foreground --profile user
 Restart=on-failure
 RestartSec=3
+RestartPreventExitStatus=78
 
 [Install]
 WantedBy=default.target
