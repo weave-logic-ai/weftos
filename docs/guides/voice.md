@@ -590,7 +590,7 @@ the daemon's default ESP32 source node.
     "enabled": true,
     "consumer": {
       "enabled": true,
-      "transcriptTopic": "substrate/_derived/transcript/n-bfc4cd/mic",
+      "transcriptTopic": "substrate/_derived/transcript/<mic-node-id>/mic",
       "chatTargetAgent": "concierge-bot",
       "convId": "voice-default",
       "commandPrefix": "weft "
@@ -602,7 +602,7 @@ the daemon's default ESP32 source node.
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `voice.consumer.enabled` | `false` | Master toggle. When false the daemon does not subscribe to the transcript topic. |
-| `voice.consumer.transcriptTopic` | `substrate/_derived/transcript/n-bfc4cd/mic` | Substrate path to subscribe to. Must match what your STT service publishes on. |
+| `voice.consumer.transcriptTopic` | `""` (auto) | Substrate path to subscribe to. Empty follows the mic source node (see below); set an explicit path to pin it. Must match what your STT service publishes on. |
 | `voice.consumer.chatTargetAgent` | `concierge-bot` | Agent identifier whose chat conversation receives non-command transcripts. |
 | `voice.consumer.convId` | `voice-default` | Stable conversation id; per-conv mutex / sink / heartbeat anchor. |
 | `voice.consumer.commandPrefix` | `"weft "` | Prefix marking a transcript as a verb. Empty disables command routing. |
@@ -612,11 +612,13 @@ the daemon's default ESP32 source node.
 The whisper service publishes at
 `substrate/_derived/transcript/<source-node-id>/mic`. The source node
 id is the substrate node that owns the microphone -- on the daemon
-this is set by the `WHISPER_INPUT_NODE_ID` environment variable, with
-a fallback to `n-bfc4cd`. When the daemon spawns whisper at boot it
-constructs the path from that env var; the consumer needs the same
-path because it subscribes to whisper's output, not the sensor's
-input.
+this is the `WHISPER_INPUT_NODE_ID` environment variable when set, and
+otherwise the registered node that publishes `sensor/mic`. Node ids are
+derived from each node's key (32 hex characters), so there is no default
+id. The daemon starts whisper and classify once that node is found, and
+logs a WARN naming `WHISPER_INPUT_NODE_ID` every minute while none is.
+An empty `transcriptTopic` follows the same node; the consumer needs
+whisper's output path, not the sensor's input.
 
 If you are running multiple mic sources, run multiple consumer
 instances -- each pinned to one transcript topic -- rather than

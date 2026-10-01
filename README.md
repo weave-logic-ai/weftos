@@ -328,8 +328,10 @@ export OPENAI_API_KEY="sk-..."
 ### Run an agent
 
 ```sh
+weaver kernel start                      # the agent runs through the kernel daemon
 weft agent
 weft agent -m "Summarize this project"
+weft agent --local -m "Summarize this project"   # no daemon: run in-process
 ```
 
 ### Run WeftOS kernel

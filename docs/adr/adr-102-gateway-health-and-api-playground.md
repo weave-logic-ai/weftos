@@ -72,6 +72,8 @@ The daemon is the single token authority. The daemon must be running to issue or
 
 The operator issuing the token is already authenticated by local socket access, so a token grants the full surface: every REST route and the MCP `full` profile, including shell, process, file-write and spawn tools. There are no scoped playground tokens in this ADR. `SessionScopes::owner()` is the capability attached to every issued token; the enterprise ceiling (`session_cap.rs:355`) still applies if a deployment sets one.
 
+A token is owner-equivalent, including lifecycle verbs; it cannot issue/revoke/list tokens (the daemon refuses `auth.token.issue`, `revoke` and `list` for a token bearer).
+
 Because a token is full-power, TTL is the main limit: default 15 minutes, maximum 24 hours.
 
 ### D5. One token path

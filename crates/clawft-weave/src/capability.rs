@@ -52,6 +52,15 @@ pub enum Capability {
     Admin,
 }
 
+/// True when `token` is nothing but the reserved literal scope strings
+/// (`admin`, `write`, `chat`, `read`, comma-separated): a self-asserted
+/// scope, not a credential. Only the local unix-socket owner may use it.
+pub fn is_literal_scope(token: &str) -> bool {
+    let known = ["admin", "write", "chat", "read"];
+    let t = token.trim();
+    !t.is_empty() && t.split(',').map(str::trim).all(|p| known.contains(&p))
+}
+
 /// Look up the [`Capability`] required by a given JSON-RPC method.
 ///
 /// Methods not in the table default to [`Capability::Read`]. This
@@ -122,7 +131,12 @@ pub fn required_capability(method: &str) -> Capability {
         // mesh-placement-12: these sign/contact peers or expose cog output.
         | "workload.explain"
         | "workload.status"
-        | "workload.logs" => Capability::Write,
+        | "workload.logs"
+        // Cron mutations change what the kernel will run on its own.
+        | "cron.add"
+        | "cron.remove"
+        | "cron.enable"
+        | "cron.disable" => Capability::Write,
 
         // ── Chat: LLM-conversational verbs ──────────────────────────
         "agent.chat" => Capability::Chat,

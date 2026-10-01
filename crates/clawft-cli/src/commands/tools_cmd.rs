@@ -15,7 +15,7 @@ use clap::{Args, Subcommand};
 use comfy_table::{Table, presets};
 
 use clawft_core::tools::registry::ToolRegistry;
-use clawft_rpc::{DaemonClient, Request};
+use clawft_rpc::Request;
 use clawft_types::config::Config;
 
 /// Arguments for the `weft tools` subcommand.
@@ -90,7 +90,7 @@ const DAEMON_FALLBACK_WARNING: &str = "Warning: running without kernel daemon â€
 /// Try to send an RPC to the daemon. Returns `Some(result_json)` on success,
 /// or `None` if no daemon is running (caller should fall back to local).
 async fn try_daemon_rpc(method: &str, params: serde_json::Value) -> Option<serde_json::Value> {
-    let mut client = DaemonClient::connect().await?;
+    let mut client = crate::commands::daemon_conn::connect_opt().await?;
     let request = Request::with_params(method, params);
     match client.call(request).await {
         Ok(resp) => match resp.into_result() {

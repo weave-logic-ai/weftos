@@ -368,6 +368,19 @@ impl SubstrateService {
         entry.sensitivity = sensitivity;
     }
 
+    /// Daemon-internal existence check: has anything been published at or
+    /// under `prefix`? Acts as no principal and reads no values, so callers
+    /// (discovery, health) need not impersonate a node to ask. It is not an
+    /// egress path and must not be exposed over RPC.
+    pub fn has_published_under(&self, prefix: &str) -> bool {
+        let norm = normalize_prefix(prefix);
+        let child = format!("{norm}/");
+        self.inner
+            .entries
+            .iter()
+            .any(|r| r.value.is_some() && (*r.key() == norm || r.key().starts_with(&child)))
+    }
+
     /// Egress gate: ADR-057 path ACL then sensitivity tier.
     ///
     /// This is intentionally the *one* seam the policy will gate, so
@@ -675,9 +688,9 @@ impl SubstrateService {
         // Tier detection. Mesh-canonical paths get the grant check;
         // anything else falls through to the legacy per-node-prefix
         // rule. Note that `_derived/` is the *only* reserved word
-        // under `substrate/` — node-ids carry a leading `n-` exactly
-        // so they cannot collide with this segment (see
-        // `node_registry::node_id_from_pubkey`).
+        // under `substrate/` — node-ids are 32 hex chars, so they
+        // cannot collide with this segment (see
+        // `node_id::node_id_from_pubkey`).
         if path.starts_with(crate::node_registry::MESH_CANONICAL_PREFIX) {
             if !node_registry.has_derived_grant(node_id, path) {
                 return Err(GateDenied::MissingDerivedGrant {

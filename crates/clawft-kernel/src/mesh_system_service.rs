@@ -177,7 +177,7 @@ mod tests {
     #[tokio::test]
     async fn lifecycle_start_stop_health() {
         let rt = Arc::new(MeshRuntime::new("node-test".into()));
-        let svc = MeshService::with_endpoints(Arc::clone(&rt), "127.0.0.1:9470", "tcp");
+        let svc = MeshService::with_endpoints(Arc::clone(&rt), "127.0.0.1:9489", "tcp");
 
         assert!(!svc.is_started());
         assert!(matches!(
@@ -274,8 +274,8 @@ mod tests {
     #[test]
     fn endpoints_accessors() {
         let rt = Arc::new(MeshRuntime::new("n".into()));
-        let svc = MeshService::with_endpoints(Arc::clone(&rt), "0.0.0.0:9470", "ws");
-        assert_eq!(svc.listen_addr(), Some("0.0.0.0:9470"));
+        let svc = MeshService::with_endpoints(Arc::clone(&rt), "0.0.0.0:9489", "ws");
+        assert_eq!(svc.listen_addr(), Some("0.0.0.0:9489"));
         assert_eq!(svc.transport_name(), Some("ws"));
         assert_eq!(svc.runtime().node_id(), "n");
     }

@@ -37,6 +37,7 @@ fn base_config() -> Config {
 
 fn minimal_kernel_config() -> KernelConfig {
     KernelConfig {
+        governance: Default::default(),
         enabled: true,
         max_processes: 64,
         health_check_interval_secs: 5,
@@ -321,6 +322,6 @@ async fn register_node_smoke() {
     // exercise it but the broader story does.
     let (_tmp, socket, shutdown_tx, _kernel) = spawn_test_daemon().await;
     let (node_id, _sk) = register_node(&socket, 91).await;
-    assert!(node_id.starts_with("n-"), "got: {node_id}");
+    assert!(clawft_kernel::is_node_id(&node_id), "got: {node_id}");
     let _ = shutdown_tx.send(true);
 }

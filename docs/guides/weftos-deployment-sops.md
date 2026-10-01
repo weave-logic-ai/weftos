@@ -498,7 +498,7 @@ For the initial WeaveLogic deployment:
 
 | Project | Role | Mesh Address |
 |---|---|---|
-| clawft (weftos.weavelogic.ai docs) | **Coordinator** | `0.0.0.0:9470` |
+| clawft (weftos.weavelogic.ai docs) | **Coordinator** | `0.0.0.0:9489` |
 | weavelogic.ai | **Member** | `0.0.0.0:9471` |
 
 The coordinator is typically the project with the richer knowledge graph or the
@@ -513,7 +513,7 @@ source code which is the authoritative reference.
 # weave.toml
 [mesh]
 enabled = true
-bind_address = "0.0.0.0:9470"
+bind_address = "0.0.0.0:9489"
 seed_peers = []
 node_id = "clawft-coordinator"
 
@@ -530,7 +530,7 @@ ca_path = ".weftos/certs/ca.crt"
 [mesh]
 enabled = true
 bind_address = "0.0.0.0:9471"
-seed_peers = ["127.0.0.1:9470"]   # Or the coordinator's reachable address
+seed_peers = ["127.0.0.1:9489"]   # Or the coordinator's reachable address
 node_id = "weavelogic-ai-member"
 
 [mesh.tls]

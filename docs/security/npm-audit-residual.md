@@ -202,3 +202,11 @@ After bumps, `clawft-ui` must still build:
 scripts/build.sh ui
 # or: (cd clawft-ui && npm run build)
 ```
+
+## 2026-09-30 follow-up (audit-remediation-2026-09-30)
+
+- root: `undici` override 7.29.0 -> 7.30.0 (GHSA-3wwx-pv8p-q78v, GHSA-pmjh-fq2x-6v4x and
+  others affect <= 7.29.0; reached via fastmcp and @ai-sdk/provider-utils). The ruflo pin is
+  unchanged. Root now reports 0 high, 32 moderate (the existing OTEL-chain residual).
+- `clawft-ui/`, `gui/`: `brace-expansion` override 5.0.9 -> 5.0.12 (advisory range 4.0.0 - 5.0.11).
+  Both report 0 vulnerabilities.

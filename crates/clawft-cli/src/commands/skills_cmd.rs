@@ -38,7 +38,7 @@ use clawft_core::agent::skill_watcher::{
     SkillRefreshOutcome, SkillWatcherConfig, refresh_registry,
 };
 use clawft_core::agent::skills_v2::SkillRegistry;
-use clawft_rpc::{DaemonClient, Request};
+use clawft_rpc::Request;
 use clawft_types::skill::{SkillDefinition, SkillFormat};
 
 /// Arguments for the `weft skills` subcommand.
@@ -174,7 +174,7 @@ const DAEMON_FALLBACK_WARNING: &str = "Warning: running without kernel daemon â€
 /// Try to send an RPC to the daemon. Returns `Some(result_json)` on success,
 /// or `None` if no daemon is running (caller should fall back to local).
 async fn try_daemon_rpc(method: &str, params: serde_json::Value) -> Option<serde_json::Value> {
-    let mut client = DaemonClient::connect().await?;
+    let mut client = crate::commands::daemon_conn::connect_opt().await?;
     let request = Request::with_params(method, params);
     match client.call(request).await {
         Ok(resp) => match resp.into_result() {

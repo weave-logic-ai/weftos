@@ -71,7 +71,7 @@ pub const LEGACY_FLAT_REMOVAL_DATE: &str = "2026-10-01";
 /// Production ESP32 / daemon-hosted sensors MUST pass their real node
 /// id. This constant exists so unit tests and single-host previews have
 /// a stable, readable segment that is clearly not a provisioned id
-/// (`n-<hex>` style).
+/// (32-hex node-id style).
 pub const HOST_LOCAL_NODE_ID: &str = "host-local";
 
 /// Mic sensor name segment.

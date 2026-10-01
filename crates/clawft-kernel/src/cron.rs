@@ -224,6 +224,16 @@ impl CronService {
         Ok(removed)
     }
 
+    /// Enable or disable a job. Returns the updated job, or `None` when the
+    /// id is unknown. A disabled job is skipped by [`tick`](Self::tick).
+    pub fn set_enabled(&self, id: &str, enabled: bool) -> Option<CronJob> {
+        let mut jobs = self.jobs.lock().unwrap();
+        let job = jobs.get_mut(id)?;
+        job.enabled = enabled;
+        debug!(job_id = %job.id, enabled, "cron job enable state changed");
+        Some(job.clone())
+    }
+
     /// List all registered jobs.
     pub fn list_jobs(&self) -> Vec<CronJob> {
         let jobs = self.jobs.lock().unwrap();

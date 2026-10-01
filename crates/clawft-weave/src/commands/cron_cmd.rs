@@ -3,7 +3,6 @@
 use clap::{Args, Subcommand};
 use comfy_table::{Cell, Table};
 
-use crate::client::DaemonClient;
 use crate::protocol::{CronAddParams, CronJobInfo, CronRemoveParams, Request};
 
 #[derive(Args)]
@@ -39,9 +38,7 @@ pub enum CronCommand {
 }
 
 pub async fn run(args: CronArgs) -> anyhow::Result<()> {
-    let mut client = DaemonClient::connect()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("no daemon running — start with 'weaver kernel start'"))?;
+    let mut client = clawft_rpc::connect_or_bail().await?;
 
     match args.command {
         CronCommand::Add {

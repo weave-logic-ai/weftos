@@ -1,8 +1,9 @@
 //! `weft cron` -- manage scheduled jobs.
 //!
 //! Routes cron operations through the kernel daemon via RPC (ADR-021).
-//! Falls back to direct JSONL file I/O when the daemon is not running,
-//! with a deprecation warning.
+//! `list` falls back to reading the local JSONL store (with a warning naming
+//! the socket tried) when the daemon is not running; add, remove, enable
+//! and run need a running daemon and fail with the socket path otherwise.
 //!
 //! The storage file is located at `~/.clawft/cron.jsonl` (or
 //! `~/.nanobot/cron.jsonl` as fallback).
@@ -24,9 +25,9 @@ use std::str::FromStr;
 use chrono::{TimeZone, Utc};
 use comfy_table::{Table, presets::UTF8_FULL};
 
-use clawft_rpc::{DaemonClient, Request};
+use clawft_rpc::Request;
 use clawft_types::config::Config;
-use clawft_types::cron::{CronJob, CronJobState, CronPayload, CronSchedule, ScheduleKind};
+use clawft_types::cron::{CronJob, ScheduleKind};
 
 /// Default cron store filename (JSONL, shared with CronService).
 const CRON_STORE_FILENAME: &str = "cron.jsonl";
@@ -95,11 +96,6 @@ fn load_jobs(path: &Path) -> anyhow::Result<Vec<CronJob>> {
         .map_err(|e| anyhow::anyhow!("failed to load cron store at {}: {e}", path.display()))
 }
 
-/// Generate a unique job ID using UUID v4.
-fn generate_job_id() -> String {
-    format!("job-{}", uuid::Uuid::new_v4())
-}
-
 /// Format a `DateTime<Utc>` as a human-readable string, or "-" if `None`.
 fn format_ts(dt: Option<chrono::DateTime<Utc>>) -> String {
     match dt {
@@ -112,7 +108,7 @@ fn format_ts(dt: Option<chrono::DateTime<Utc>>) -> String {
 ///
 /// Tries daemon RPC first; falls back to direct file I/O.
 pub async fn cron_list(_config: &Config) -> anyhow::Result<()> {
-    if let Ok(mut client) = DaemonClient::connect().await.ok_or(()) {
+    if let Ok(mut client) = crate::commands::daemon_conn::connect_opt().await.ok_or(()) {
         let resp = client.simple_call("cron.list").await?;
         if resp.ok {
             let data = resp.result.unwrap_or_default();
@@ -130,7 +126,10 @@ pub async fn cron_list(_config: &Config) -> anyhow::Result<()> {
         );
     }
 
-    // ── Direct file fallback (deprecated) ──
+    eprintln!(
+        "{}",
+        super::daemon_fallback::local_note("listing the local cron store (deprecated)").await
+    );
     cron_list_local()
 }
 
@@ -220,7 +219,7 @@ pub async fn cron_add(
     cron::Schedule::from_str(&normalized)
         .map_err(|e| anyhow::anyhow!("Invalid cron expression: {e}"))?;
 
-    if let Ok(mut client) = DaemonClient::connect().await.ok_or(()) {
+    if let Ok(mut client) = crate::commands::daemon_conn::connect_opt().await.ok_or(()) {
         let params = serde_json::json!({
             "name": name,
             "schedule": normalized,
@@ -243,56 +242,19 @@ pub async fn cron_add(
         {
             anyhow::bail!("{err}");
         }
-        eprintln!(
-            "warning: daemon does not support cron.add yet, falling back to local store (deprecated)"
-        );
+        anyhow::bail!("the running daemon does not support cron.add yet; upgrade it");
     }
 
-    // ── Direct file fallback (deprecated) ──
-    cron_add_local(name, normalized, prompt)
-}
-
-/// Direct-file implementation of cron add.
-fn cron_add_local(name: String, normalized: String, prompt: String) -> anyhow::Result<()> {
-    let path = cron_store_path();
-    migrate_legacy_store(&path);
-
-    let job_id = generate_job_id();
-    let now = Utc::now();
-
-    let job = CronJob {
-        id: job_id.clone(),
-        name: name.clone(),
-        enabled: true,
-        schedule: CronSchedule {
-            kind: ScheduleKind::Cron,
-            at_ms: None,
-            every_ms: None,
-            expr: Some(normalized),
-            tz: Some("UTC".into()),
-        },
-        payload: CronPayload {
-            message: prompt,
-            ..Default::default()
-        },
-        state: CronJobState::default(),
-        created_at: now,
-        updated_at: now,
-        delete_after_run: false,
-    };
-
-    clawft_services::cron_service::storage::append_create_sync(&path, &job)
-        .map_err(|e| anyhow::anyhow!("failed to write cron store: {e}"))?;
-
-    println!("Cron job '{name}' created with ID: {job_id}");
-    Ok(())
+    // The daemon owns cron: a job written to a local store it never reads
+    // would silently never run.
+    Err(super::daemon_fallback::refuse_state_change("adding a cron job").await)
 }
 
 /// Remove a cron job by ID.
 ///
 /// Tries daemon RPC first; falls back to direct file I/O.
 pub async fn cron_remove(job_id: String, _config: &Config) -> anyhow::Result<()> {
-    if let Ok(mut client) = DaemonClient::connect().await.ok_or(()) {
+    if let Ok(mut client) = crate::commands::daemon_conn::connect_opt().await.ok_or(()) {
         let params = serde_json::json!({ "id": job_id });
         let resp = client
             .call(Request::with_params("cron.remove", params))
@@ -306,30 +268,12 @@ pub async fn cron_remove(job_id: String, _config: &Config) -> anyhow::Result<()>
         {
             anyhow::bail!("{err}");
         }
-        eprintln!(
-            "warning: daemon does not support cron.remove yet, falling back to local store (deprecated)"
-        );
+        anyhow::bail!("the running daemon does not support cron.remove yet; upgrade it");
     }
 
-    // ── Direct file fallback (deprecated) ──
-    cron_remove_local(job_id)
-}
-
-/// Direct-file implementation of cron remove.
-fn cron_remove_local(job_id: String) -> anyhow::Result<()> {
-    let path = cron_store_path();
-    migrate_legacy_store(&path);
-    let jobs = load_jobs(&path)?;
-
-    if !jobs.iter().any(|j| j.id == job_id) {
-        anyhow::bail!("cron job not found: {job_id}");
-    }
-
-    clawft_services::cron_service::storage::append_delete_sync(&path, &job_id)
-        .map_err(|e| anyhow::anyhow!("failed to write cron store: {e}"))?;
-
-    println!("Cron job '{job_id}' removed.");
-    Ok(())
+    // The daemon owns cron: a job written to a local store it never reads
+    // would silently never run.
+    Err(super::daemon_fallback::refuse_state_change("removing a cron job").await)
 }
 
 /// Enable or disable a cron job.
@@ -343,7 +287,7 @@ pub async fn cron_enable(job_id: String, enabled: bool, _config: &Config) -> any
         "cron.disable"
     };
 
-    if let Ok(mut client) = DaemonClient::connect().await.ok_or(()) {
+    if let Ok(mut client) = crate::commands::daemon_conn::connect_opt().await.ok_or(()) {
         let params = serde_json::json!({ "id": job_id });
         let resp = client.call(Request::with_params(method, params)).await?;
         if resp.ok {
@@ -356,94 +300,27 @@ pub async fn cron_enable(job_id: String, enabled: bool, _config: &Config) -> any
         {
             anyhow::bail!("{err}");
         }
-        eprintln!(
-            "warning: daemon does not support {method} yet, falling back to local store (deprecated)"
-        );
+        anyhow::bail!("the running daemon does not support {method} yet; upgrade it");
     }
 
-    // ── Direct file fallback (deprecated) ──
-    cron_enable_local(job_id, enabled)
+    // The daemon owns cron: a job written to a local store it never reads
+    // would silently never run.
+    Err(super::daemon_fallback::refuse_state_change("enabling or disabling a cron job").await)
 }
 
-/// Direct-file implementation of cron enable/disable.
-fn cron_enable_local(job_id: String, enabled: bool) -> anyhow::Result<()> {
-    let path = cron_store_path();
-    migrate_legacy_store(&path);
-    let jobs = load_jobs(&path)?;
-
-    if !jobs.iter().any(|j| j.id == job_id) {
-        anyhow::bail!("cron job not found: {job_id}");
-    }
-
-    clawft_services::cron_service::storage::append_update_sync(
-        &path,
-        &job_id,
-        "enabled",
-        &serde_json::json!(enabled),
-    )
-    .map_err(|e| anyhow::anyhow!("failed to write cron store: {e}"))?;
-
-    let state = if enabled { "enabled" } else { "disabled" };
-    println!("Cron job '{job_id}' {state}.");
-    Ok(())
-}
-
-/// Manually trigger a cron job.
-///
-/// Tries daemon RPC first; falls back to direct file I/O with a
-/// deprecation warning if the daemon does not support the method yet.
+/// Manually trigger a cron job (not implemented by the kernel).
 pub async fn cron_run(job_id: String, _config: &Config) -> anyhow::Result<()> {
-    if let Ok(mut client) = DaemonClient::connect().await.ok_or(()) {
-        let params = serde_json::json!({ "id": job_id });
-        let resp = client
-            .call(Request::with_params("cron.run", params))
-            .await?;
-        if resp.ok {
-            println!("Cron job '{job_id}' triggered via daemon.");
-            if let Some(data) = resp.result {
-                println!("{}", serde_json::to_string_pretty(&data)?);
-            }
-            return Ok(());
-        }
-        if let Some(ref err) = resp.error
-            && !err.contains("unknown method")
-        {
-            anyhow::bail!("{err}");
-        }
-        eprintln!(
-            "warning: daemon does not support cron.run yet, falling back to local store (deprecated)"
-        );
-    }
-
-    // ── Direct file fallback (deprecated) ──
-    cron_run_local(job_id)
-}
-
-/// Direct-file implementation of cron run.
-fn cron_run_local(job_id: String) -> anyhow::Result<()> {
-    let path = cron_store_path();
-    migrate_legacy_store(&path);
-    let jobs = load_jobs(&path)?;
-
-    let job = jobs
-        .iter()
-        .find(|j| j.id == job_id)
-        .ok_or_else(|| anyhow::anyhow!("cron job not found: {job_id}"))?;
-
-    println!("Triggering cron job '{}' ({})", job.name, job.id);
-    println!("  Schedule: {:?}", job.schedule.kind);
-    if let Some(ref expr) = job.schedule.expr {
-        println!("  Expression: {expr}");
-    }
-    println!("  Prompt: {}", job.payload.message);
-    println!();
-    println!("[Cron job execution not yet wired -- see integration task]");
-    Ok(())
+    anyhow::bail!(
+        "`weft cron run {job_id}` is not implemented: the kernel cron service only fires \
+         jobs on their interval and has no manual-trigger call. Use `weft cron enable` / \
+         `weft cron disable` to control a job, or `weft cron list` to see its state."
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clawft_types::cron::{CronJobState, CronPayload, CronSchedule};
 
     #[test]
     fn format_ts_none() {
@@ -463,21 +340,6 @@ mod tests {
     fn format_ts_epoch() {
         let result = format_ts(Some(chrono::DateTime::UNIX_EPOCH));
         assert!(result.contains("1970"));
-    }
-
-    #[test]
-    fn generate_job_id_format() {
-        let id = generate_job_id();
-        assert!(id.starts_with("job-"));
-        // UUID v4 format: job-xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
-        assert_eq!(id.len(), 4 + 36); // "job-" + UUID
-    }
-
-    #[test]
-    fn generate_job_id_unique() {
-        let id1 = generate_job_id();
-        let id2 = generate_job_id();
-        assert_ne!(id1, id2, "UUID-based IDs must be unique");
     }
 
     #[test]

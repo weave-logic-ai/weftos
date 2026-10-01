@@ -57,7 +57,8 @@ them with `python3 -m unittest discover -s scripts/pi`.
    `env -i PATH=… HOME=~/weftos-test-pi/home WEFTOS_RUNTIME_DIR=~/weftos-test-pi/runtime
    TMPDIR=… XDG_*=… CARGO_MANIFEST_DIR=… <bin> [filter]`. Nothing from the login
    environment leaks in, and nothing can reach `~/.clawft` or the system weaver on
-   `:9470`. Output streams back live. A binary passes when it exits 0, libtest
+   its mesh port (`:9489`; a Pi weaver deployed before ADR-103 still listens on
+   `:9470` until it is redeployed). Output streams back live. A binary passes when it exits 0, libtest
    printed a `test result:` line, and no test failed. With `--filter`, the stage
    also fails if the filter selected zero tests (passed, failed or ignored)
    across all binaries, so a typo cannot report green. Each binary runs under the Pi's `timeout -k 10 <--timeout>`, so
@@ -88,7 +89,9 @@ them with `python3 -m unittest discover -s scripts/pi`.
    that controller only), `workload-trust.json` and `workload-permits.json`.
    These go into `~/weftos-test-pi/runtime`, the isolated daemon's
    `WEFTOS_RUNTIME_DIR`; it runs under `env -i` with its own HOME, chain and
-   socket, so the system weaver keeps `:9470` and `~/.clawft`. A synthetic
+   socket, so the system weaver keeps `:9489` (`:9470` on a Pi weaver not yet
+   redeployed) and `~/.clawft`. The placement port defaults to 9471 and can be
+   overridden with `WEFTOS_PI_PLACEMENT_PORT`. A synthetic
    ADR-069 feed (`scripts/pi/csi_feed.py`) runs on `127.0.0.1:15006`. The
    Mac daemon runs under `env -i` in a temp dir (own HOME, runtime dir, key
    and chain; mesh transport off) with the Pi in `workload-peers.json` as

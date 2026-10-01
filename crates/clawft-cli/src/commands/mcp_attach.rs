@@ -10,7 +10,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use clawft_rpc::resolve::Resolution;
 use clawft_rpc::{DaemonClient, Request};
+
+use super::daemon_conn::{Outcome, outcome, outcome_for};
 use clawft_services::mcp::ToolDefinition;
 use clawft_services::mcp::provider::{CallToolResult, ToolError, ToolProvider};
 use serde_json::{Value, json};
@@ -68,6 +71,8 @@ pub trait AttachFacade: Send + Sync {
 pub struct DaemonAttachFacade {
     /// Explicit socket override (tests / multi-instance). `None` = default.
     socket_path: Option<PathBuf>,
+    /// Pre-resolved endpoint (tests); `None` resolves from flags/env each time.
+    resolution: Option<Resolution>,
     client: Mutex<Option<DaemonClient>>,
 }
 
@@ -81,7 +86,7 @@ impl DaemonAttachFacade {
     pub async fn connect_path(socket_path: Option<PathBuf>) -> Result<Self, String> {
         let client = match &socket_path {
             Some(p) => DaemonClient::connect_path(p).await,
-            None => DaemonClient::connect().await,
+            None => crate::commands::daemon_conn::connect_opt().await,
         }
         .ok_or_else(daemon_unavailable_error)?;
 
@@ -95,6 +100,22 @@ impl DaemonAttachFacade {
 
         Ok(Self {
             socket_path,
+            resolution: None,
+            client: Mutex::new(Some(client)),
+        })
+    }
+
+    /// Connect to a pre-resolved endpoint. A wrong daemon is an `Err`.
+    #[cfg(test)]
+    async fn connect_resolution(res: Resolution) -> Result<Self, String> {
+        let client = match outcome_for(&res).await {
+            Outcome::Reachable(c) => c.client,
+            Outcome::Unreachable => return Err(daemon_unavailable_error()),
+            Outcome::Wrong(text) => return Err(text),
+        };
+        Ok(Self {
+            socket_path: None,
+            resolution: Some(res),
             client: Mutex::new(Some(client)),
         })
     }
@@ -104,11 +125,25 @@ impl DaemonAttachFacade {
         if guard.is_some() {
             return Ok(());
         }
-        let client = match &self.socket_path {
-            Some(p) => DaemonClient::connect_path(p).await,
-            None => DaemonClient::connect().await,
-        }
-        .ok_or_else(daemon_unavailable_error)?;
+        // Runs inside a long-lived stdio server: a daemon that came back as
+        // the wrong one (other project, node or protocol) is an error for
+        // this tool call, never a process exit.
+        let client = match (&self.socket_path, &self.resolution) {
+            (Some(p), _) => DaemonClient::connect_path(p)
+                .await
+                .ok_or_else(daemon_unavailable_error)?,
+            (None, res) => {
+                let found = match res {
+                    Some(r) => outcome_for(r).await,
+                    None => outcome().await,
+                };
+                match found {
+                    Outcome::Reachable(c) => c.client,
+                    Outcome::Unreachable => return Err(daemon_unavailable_error()),
+                    Outcome::Wrong(text) => return Err(text),
+                }
+            }
+        };
         *guard = Some(client);
         Ok(())
     }
@@ -630,5 +665,82 @@ mod tests {
         };
         assert!(err.contains("no kernel daemon"));
         assert!(err.contains("without --attach"));
+    }
+
+    #[tokio::test]
+    async fn wrong_daemon_after_start_is_a_tool_error_not_an_exit() {
+        use clawft_rpc::handshake::{BoundVia, handshake_value};
+        use clawft_rpc::resolve::{ResolveFlags, ResolveInputs, resolve_with};
+        use clawft_rpc::{Handshake, ProtoRange, Response};
+        use std::sync::atomic::AtomicBool;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        const A: &str = "01J0000000000000000000000A";
+        const B: &str = "01J0000000000000000000000B";
+        let dir = tempfile::Builder::new()
+            .prefix("ma")
+            .tempdir_in(std::env::temp_dir())
+            .unwrap();
+        let swapped = Arc::new(AtomicBool::new(false));
+        let flag = swapped.clone();
+        let l = tokio::net::UnixListener::bind(dir.path().join("kernel.sock")).unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((s, _)) = l.accept().await else { return };
+                let flag = flag.clone();
+                tokio::spawn(async move {
+                    let (r, mut w) = s.into_split();
+                    let mut lines = BufReader::new(r).lines();
+                    while let Ok(Some(_)) = lines.next_line().await {
+                        let project = if flag.load(Ordering::SeqCst) { B } else { A };
+                        let hs = Handshake {
+                            proto: ProtoRange::supported(),
+                            node_id: "n".into(),
+                            user_id: None,
+                            project_id: Some(project.into()),
+                            bound_via: BoundVia::Project,
+                            depth: 0,
+                            parent: None,
+                            runtime_dir: "/x".into(),
+                            pid: 1,
+                            version: "0.8.1".into(),
+                            sha: "abcd1234".into(),
+                            binary: None,
+                            user_key_id: None,
+                            profile: None,
+                            roles: Vec::new(),
+                        };
+                        let mut out =
+                            serde_json::to_string(&Response::success(handshake_value(&hs)))
+                                .unwrap();
+                        out.push('\n');
+                        if w.write_all(out.as_bytes()).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        let res = resolve_with(&ResolveInputs {
+            flags: ResolveFlags {
+                runtime: Some(dir.path().to_path_buf()),
+                project: Some(A.into()),
+            },
+            ..Default::default()
+        })
+        .unwrap();
+        let facade = DaemonAttachFacade::connect_resolution(res).await.unwrap();
+
+        // The daemon "restarts" as another project; the old connection is gone.
+        facade.client.lock().await.take();
+        swapped.store(true, Ordering::SeqCst);
+        let err = facade.status().await.unwrap_err();
+        assert!(err.contains(A) && err.contains(B), "{err}");
+        assert!(err.contains(&format!("--project {A}")), "{err}");
+
+        // Still alive and recovers when the right daemon is back.
+        swapped.store(false, Ordering::SeqCst);
+        let _ = facade.status().await; // reconnects; the fake answers handshakes only
+        assert!(facade.client.lock().await.is_some());
     }
 }

@@ -107,7 +107,7 @@ impl VoiceLlm for DaemonBrainVoiceLlm {
 /// daemon-brain mode can't work). Does NOT confirm `[kernel.agent].voice_loop`
 /// is enabled — see [`resolve_brain`]'s printed caveat.
 async fn connect_daemon_brain(conv_id: &str) -> Option<DaemonBrainVoiceLlm> {
-    let mut client = DaemonClient::connect().await?;
+    let mut client = crate::commands::daemon_conn::connect_opt().await?;
     let probe = Request::with_params(
         "conversation.graph",
         serde_json::json!({ "conv_id": conv_id }),
@@ -179,7 +179,7 @@ async fn fetch_graph(
         Ok(resp) => resp
             .into_result()
             .map_err(|e| VoiceError::Transport(format!("conversation.graph rejected: {e}"))),
-        Err(e) => match DaemonClient::connect().await {
+        Err(e) => match crate::commands::daemon_conn::connect_retry().await {
             Some(reconnected) => {
                 *client = reconnected;
                 let request =

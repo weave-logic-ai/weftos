@@ -54,7 +54,7 @@ impl ObjectType for Node {
             PropertyDecl {
                 name: "node_id",
                 kind: PropertyKind::String,
-                doc: "Stable BLAKE3-prefixed node identifier (n-<6-hex>).",
+                doc: "Stable node identifier: hex(SHA-256(pubkey)[..16]) (32 hex chars).",
             },
             PropertyDecl {
                 name: "pubkey",

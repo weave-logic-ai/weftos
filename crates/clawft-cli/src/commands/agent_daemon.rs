@@ -59,7 +59,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 /// falls back to the in-process loop).
 pub async fn detect() -> Option<DaemonClient> {
     // A probe timeout (Err) collapses to `None` — same as "no daemon".
-    let mut client = tokio::time::timeout(PROBE_TIMEOUT, DaemonClient::connect())
+    let mut client = tokio::time::timeout(PROBE_TIMEOUT, crate::commands::daemon_conn::connect_opt())
         .await
         .unwrap_or_default()?;
     // Surface a stale-binary/daemon pairing before the session starts
@@ -240,7 +240,7 @@ pub async fn run_interactive(
                 // but keeps the session alive. If the daemon is truly gone
                 // (connect returns None) we end the session rather than
                 // spin printing errors.
-                match DaemonClient::connect().await {
+                match crate::commands::daemon_conn::connect_retry().await {
                     Some(fresh) => {
                         client = fresh;
                         eprintln!("(reconnected to daemon)");

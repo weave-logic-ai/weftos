@@ -149,13 +149,13 @@ mod tests {
     use super::*;
 
     fn tmp_config() -> PersistenceConfig {
-        let dir = std::env::temp_dir().join(format!(
-            "weftos_persist_test_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        // A unique, not-yet-existing data dir inside a fresh temp dir. A
+        // timestamp name collided under parallel nextest on macOS, whose
+        // clock is microsecond-grained.
+        let dir = tempfile::tempdir()
+            .expect("temp dir")
+            .keep()
+            .join("weftos_persist_test");
         PersistenceConfig {
             data_dir: dir,
             auto_save_interval_secs: None,

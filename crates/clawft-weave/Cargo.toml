@@ -108,4 +108,4 @@ exo-resource-tree = { workspace = true, optional = true }
 weftos-rvf-wire = { workspace = true, optional = true }
 rvf-types = { workspace = true, optional = true }
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.29", default-features = false, features = ["signal", "process"] }
+nix = { version = "0.29", default-features = false, features = ["signal", "process", "fs", "user"] }

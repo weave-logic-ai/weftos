@@ -11,8 +11,11 @@
 //! # Examples
 //!
 //! ```text
-//! # Single message
+//! # Single message (needs a running kernel: `weaver kernel start`)
 //! weft agent -m "What is Rust?"
+//!
+//! # No kernel: run the agent loop in-process
+//! weft agent --local -m "What is Rust?"
 //!
 //! # Interactive mode
 //! weft agent
@@ -72,6 +75,12 @@ pub struct AgentArgs {
     /// Enable intelligent routing (requires vector-memory feature).
     #[arg(long)]
     pub intelligent_routing: bool,
+
+    /// Run the agent loop inside this process when no kernel daemon is
+    /// reachable. Without it, a missing daemon is an error: an in-process
+    /// agent can run tools and write files the daemon never sees.
+    #[arg(long)]
+    pub local: bool,
 
     /// Trust workspace-level (project) skills.
     ///
@@ -139,7 +148,19 @@ pub async fn run(args: AgentArgs) -> anyhow::Result<()> {
         let skill_registry = discover_skill_registry(args.trust_project_skills).await;
         return super::agent_daemon::run_interactive(client, &skill_registry).await;
     }
-    info!("no kernel daemon reachable — using in-process agent loop");
+    if !args.local {
+        let why = super::daemon_fallback::refuse_state_change("`weft agent`").await;
+        let retry = match args.message.as_deref() {
+            Some(m) => format!("weft agent --local -m {m:?}"),
+            None => "weft agent --local".to_string(),
+        };
+        anyhow::bail!("{why}\n  Or run it in-process instead: {retry}");
+    }
+    eprintln!(
+        "{}",
+        super::daemon_fallback::local_note("running the agent loop in-process (--local)").await
+    );
+    info!("no kernel daemon reachable — using in-process agent loop (--local)");
 
     // Bootstrap the application context (bus, sessions, memory, skills, pipeline).
     // WEFT-10: attach split routing layers so PermissionResolver ceiling runs.
@@ -294,7 +315,7 @@ async fn run_single_message(
     info!(model = %model, "single-message mode");
 
     // Engine line to stderr so `-m` stdout stays clean for scripting.
-    eprintln!("Engine: in-process (daemon not running)");
+    eprintln!("Engine: in-process (--local)");
 
     // Create and publish the inbound message. The chat id is fresh per
     // invocation (or the `--session` name), never the REPL's `cli-session`.
@@ -368,7 +389,7 @@ async fn run_interactive(
     skill_registry: &SkillRegistry,
 ) -> anyhow::Result<()> {
     println!("weft agent -- interactive mode (type /help for commands)");
-    println!("Engine: in-process (daemon not running)");
+    println!("Engine: in-process (--local)");
     println!("Model: {model}");
 
     // Set up slash command registry with builtins.
@@ -711,6 +732,7 @@ mod tests {
             config: None,
             intelligent_routing: false,
             trust_project_skills: false,
+            local: false,
         };
         assert!(args.message.is_none());
         assert!(args.model.is_none());
@@ -726,6 +748,7 @@ mod tests {
             config: None,
             intelligent_routing: false,
             trust_project_skills: false,
+            local: false,
         };
         assert_eq!(args.message.as_deref(), Some("test message"));
     }
@@ -739,6 +762,7 @@ mod tests {
             config: None,
             intelligent_routing: false,
             trust_project_skills: false,
+            local: false,
         };
         assert_eq!(args.model.as_deref(), Some("openai/gpt-4"));
     }
@@ -752,6 +776,7 @@ mod tests {
             config: Some("/tmp/test-config.json".into()),
             intelligent_routing: false,
             trust_project_skills: false,
+            local: false,
         };
         assert_eq!(args.config.as_deref(), Some("/tmp/test-config.json"));
     }

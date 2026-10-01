@@ -108,6 +108,9 @@ enum Commands {
         cmd: Option<commands::update_cmd::UpdateCmd>,
     },
 
+    /// Check install, daemon, runtime and MCP health (read-only; `--fix` for stale files).
+    Doctor(commands::doctor_cmd::DoctorArgs),
+
     /// Show version and build info.
     Version,
 }
@@ -169,6 +172,7 @@ async fn main() -> anyhow::Result<()> {
             None => commands::update_cmd::run_default().await?,
         },
         Commands::Init(args) => commands::init_cmd::run(args).await?,
+        Commands::Doctor(args) => commands::doctor_cmd::run(args).await?,
         Commands::Version => {
             println!(
                 "weaver {} (WeftOS) · git {} · built {}",

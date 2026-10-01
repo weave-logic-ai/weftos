@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
 use comfy_table::{Table, presets};
-use clawft_rpc::{DaemonClient, Request};
+use clawft_rpc::Request;
 
 /// Arguments for the `weft mcp` subcommand.
 #[derive(Args, Debug)]
@@ -659,7 +659,7 @@ fn persist_config_document(path: &Path, doc: &ConfigDocument) -> anyhow::Result<
 // ── Daemon reload ────────────────────────────────────────────────────────
 
 async fn try_daemon_rpc(method: &str, params: serde_json::Value) -> Option<serde_json::Value> {
-    let mut client = DaemonClient::connect().await?;
+    let mut client = crate::commands::daemon_conn::connect_opt().await?;
     let request = Request::with_params(method, params);
     match client.call(request).await {
         Ok(resp) => match resp.into_result() {

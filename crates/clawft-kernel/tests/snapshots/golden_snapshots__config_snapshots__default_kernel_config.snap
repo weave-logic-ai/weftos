@@ -6,6 +6,7 @@ expression: json
 {
   "brand": "WeftOS",
   "enabled": true,
+  "governance": {},
   "health_check_interval_secs": 30,
   "max_processes": 64
 }

@@ -74,7 +74,9 @@ pub async fn run(args: OnboardArgs) -> anyhow::Result<()> {
     println!("Next steps:");
     println!("  1. Set your API key as an environment variable, or");
     println!("     edit {} to add it directly.", config_path.display());
-    println!("  2. Run: weft agent -m \"hello\"");
+    println!("  2. Start the kernel: weaver kernel start");
+    println!("  3. Run: weft agent -m \"hello\"");
+    println!("     (no daemon? add --local to run the agent in-process)");
 
     Ok(())
 }

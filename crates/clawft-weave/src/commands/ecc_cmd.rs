@@ -193,9 +193,7 @@ pub enum SpatialBranchOp {
 }
 
 pub async fn run(args: EccArgs) -> anyhow::Result<()> {
-    let mut client = DaemonClient::connect()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("no daemon running — start with 'weaver kernel start'"))?;
+    let mut client = clawft_rpc::connect_or_bail().await?;
 
     match args.command {
         EccCommand::Status => {

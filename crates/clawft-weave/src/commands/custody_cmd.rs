@@ -2,7 +2,6 @@
 
 use clap::{Args, Subcommand};
 
-use crate::client::DaemonClient;
 use crate::protocol::CustodyAttestResult;
 
 #[derive(Args)]
@@ -18,9 +17,7 @@ pub enum CustodyCommand {
 }
 
 pub async fn run(args: CustodyArgs) -> anyhow::Result<()> {
-    let mut client = DaemonClient::connect()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("no daemon running — start with 'weaver kernel start'"))?;
+    let mut client = clawft_rpc::connect_or_bail().await?;
 
     match args.command {
         CustodyCommand::Attest => {

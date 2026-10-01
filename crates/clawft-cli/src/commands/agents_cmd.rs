@@ -18,7 +18,7 @@ use clap::{Args, Subcommand};
 use comfy_table::{Table, presets};
 
 use clawft_core::agent::agents::{AgentDefinition, AgentRegistry};
-use clawft_rpc::{DaemonClient, Request};
+use clawft_rpc::Request;
 
 /// Arguments for the `weft agents` subcommand.
 #[derive(Args)]
@@ -46,10 +46,6 @@ pub enum AgentsAction {
     },
 }
 
-/// Warning printed when no daemon is available.
-const NO_DAEMON_WARNING: &str =
-    "Warning: running without kernel daemon. Start daemon with: weaver kernel start";
-
 /// Run the agents subcommand.
 pub async fn run(args: AgentsArgs) -> anyhow::Result<()> {
     match args.action {
@@ -61,7 +57,7 @@ pub async fn run(args: AgentsArgs) -> anyhow::Result<()> {
 
 /// Try `agents.list` via RPC, fall back to local registry.
 async fn agents_list_rpc() -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let resp = client.simple_call("agents.list").await?;
         let data = resp.into_result()?;
         // Daemon returns a JSON array of agent objects; render as a table.
@@ -89,13 +85,16 @@ async fn agents_list_rpc() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    eprintln!("{NO_DAEMON_WARNING}");
+    eprintln!(
+        "{}",
+        super::daemon_fallback::local_note("listing the local registry").await
+    );
     agents_list_local()
 }
 
 /// Try `agents.show` via RPC, fall back to local registry.
 async fn agents_show_rpc(name: &str) -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let req = Request::with_params("agents.show", serde_json::json!({ "name": name }));
         let resp = client.call(req).await?;
         let data = resp.into_result()?;
@@ -103,13 +102,16 @@ async fn agents_show_rpc(name: &str) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    eprintln!("{NO_DAEMON_WARNING}");
+    eprintln!(
+        "{}",
+        super::daemon_fallback::local_note("showing the local registry").await
+    );
     agents_show_local(name)
 }
 
 /// Try `agents.use` via RPC, fall back to local registry.
 async fn agents_use_rpc(name: &str) -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let req = Request::with_params("agents.use", serde_json::json!({ "name": name }));
         let resp = client.call(req).await?;
         let data = resp.into_result()?;
@@ -127,7 +129,10 @@ async fn agents_use_rpc(name: &str) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    eprintln!("{NO_DAEMON_WARNING}");
+    eprintln!(
+        "{}",
+        super::daemon_fallback::local_note("validating against the local registry (nothing is persisted)").await
+    );
     agents_use_local(name)
 }
 

@@ -10,8 +10,18 @@ These flags are available on all subcommands.
 | Flag | Description |
 |------|-------------|
 | `--verbose`, `-v` | Enable debug-level logging (default level is `warn`) |
+| `--project <ULID>` | Talk to the kernel serving this project (see `weft project list`) |
+| `--runtime <DIR>` | Talk to the kernel whose runtime directory is `DIR` (overrides `WEFTOS_RUNTIME_DIR`; `weft` also exports it as `WEFTOS_RUNTIME_DIR` for the rest of the process) |
 | `--version` | Show version and exit |
 | `--help`, `-h` | Show help text and exit |
+
+Every command that talks to the kernel resolves its endpoint the same way
+(flag, then environment, then the project manifest, then the user daemon) and
+verifies the daemon's handshake. When the daemon cannot be reached or is the
+wrong one, the error names the socket tried and the exact next command. A daemon
+that answers but is the wrong one (another project, another node, an
+incompatible protocol) is always an error: commands never fall back to local
+state changes against it.
 
 The default log level is `warn`. Only warnings and errors are printed unless
 `--verbose` is passed (which sets it to `debug`). The `RUST_LOG` environment
@@ -136,6 +146,89 @@ Detailed status with all component info:
 
 ```
 weft status --detailed
+```
+
+---
+
+## weft doctor / weaver doctor
+
+Grouped health checks for the install, the running kernel daemon, the runtime
+directory, MCP wiring, config and multi-agent readiness. `weaver doctor` runs
+the same engine (`clawft_rpc::doctor`) minus `config` and `agents`, which need
+the agent config and stay in `weft doctor`.
+
+Each check reports PASS, WARN or FAIL, and every non-pass line carries a
+one-line `fix:` command. Doctor is read-only unless `--fix` is given.
+
+### Usage
+
+```
+weft doctor [COMPONENT...] [OPTIONS]
+weaver doctor [COMPONENT...] [OPTIONS]
+```
+
+### Options
+
+| Flag / Option | Description |
+|---------------|-------------|
+| `COMPONENT`, `--component <LIST>` | Limit to `install`, `daemon`, `runtime`, `config`, `mcp`, `agents` (comma-separated or repeated). `weft doctor install` and `weft doctor --component install` are the same. |
+| `--json` | Machine-readable output: `summary`, `exit_code`, `findings[]`, and an inventory under `data`. |
+| `--strict` | Exit non-zero on WARN as well as FAIL. |
+| `--fix` | Remove provably stale `kernel.sock` / `kernel.pid` files in the ACTIVE runtime dir and print exactly what changed. Nothing else is modified. |
+| `--all-runtimes` | With `--fix`, also repair every runtime dir doctor can see (`~/.clawft`, `~/.weftos/runtime`, ancestor `.weftos/runtime`). |
+| `--multi-agent` | Same as `--component agents` (kept for WEFT-197 users). |
+| `--config`, `-c` `<PATH>` | (weft only) config file path. |
+
+Exit code is 1 on any FAIL, or on any WARN with `--strict`; otherwise 0.
+
+### Checks
+
+| Component | What it looks at |
+|-----------|------------------|
+| `install` | Every copy of `weft`, `weaver`, `weftos` on `PATH` and in `~/.cargo/bin`, `/usr/local/bin`, `/opt/homebrew/bin`, `~/.local/bin`: path, version, sha256, dirty flag, owning channel (Homebrew Cellar, cargo-dist receipt in `~/.config/*/*receipt*.json`, `~/.config/weftos/dev-install.json`, a `-dirty` build, cargo ledger `~/.cargo/.crates2.json`), which copy wins on `PATH`. WARN when the winner is dirty or a shadowed copy is newer, and on duplicates. FAIL when `weft` or `weaver` is missing or does not run. |
+| `daemon` | Kernel processes from `ps` (`weaver kernel start`, `weftos boot`): pid, executable (`/proc/<pid>/exe` or `lsof`), version (from `kernel.status` when the socket is tied to the pid, else `<exe> --version`). WARN when the executable is outside any known install location, differs from the `PATH` winner, or the CLI and daemon versions differ. Never starts or signals a process. |
+| `runtime` | The resolved runtime dir and how it was resolved; `kernel.sock` connect test (refused means stale), `kernel.pid` liveness, every `node.key` under `~/.clawft`, `~/.weftos/runtime` and project `.weftos/runtime` dirs (paths and permissions only; contents are never read, keys are never deleted). |
+| `mcp` | Each stdio server in the nearest `.mcp.json` resolves on `PATH`. |
+| `config`, `agents` | (weft) config loads; `claude` on `PATH`, auto-delegation rules, agent routes. |
+
+`--fix` is deliberately narrow: a socket is removed only when a connect is
+refused and its recorded pid is not running; a pid file only when that pid is
+not running. Both conditions are re-checked immediately before each unlink.
+If `ps` fails (sandbox), liveness is unknown and `--fix` removes nothing. By
+default only the active runtime dir is repaired (the one `weaver kernel`
+would use from this directory); `--all-runtimes` widens that. Setting
+`WEFTOS_RUNTIME_DIR` makes it the only directory doctor looks at, which is
+how to sandbox a doctor run. Live sockets, keys and binaries are never
+touched.
+
+Duplicate copies are ranked probed before unprobed, clean before dirty, then
+by semver precedence (a prerelease is older than its release; `-dirty`,
+git-describe and build suffixes do not count as newer), then by channel
+(cargo-dist or Homebrew, then `cargo install`, then `build.sh`, then
+unknown). A dirty build is never the copy to keep over a clean one. The
+`fix:` line names `rm` only for a copy that is byte-identical to the kept
+copy, or that was probed, parses, is strictly older, is not a
+prerelease-versus-release mix, involves no dirty build, and is not better
+managed than the kept copy. Every other case is advice only, naming both
+copies, which one wins on `PATH`, and the fix (reorder `PATH`, or the
+channel's update command, or `scripts/build.sh install` when a dev build
+shadows a managed copy). A copy that was not probed is never offered for
+removal.
+
+Doctor runs `--version` only on files that are native executables (Mach-O,
+ELF, PE) named weft, weaver or weftos; a script with that name is reported
+as not probed rather than executed. `--json` daemon entries carry only the
+binary and subcommand, never the full command line. Copies of a
+binary are never removed by doctor; the `fix:` line for a duplicate is a
+command for you to run.
+
+### Examples
+
+```
+weft doctor                       # everything
+weaver doctor install             # just the binary inventory
+weaver doctor --component runtime --fix
+weft doctor --json --strict       # for CI
 ```
 
 ---
@@ -884,6 +977,64 @@ Remove a user-installed skill:
 ```
 weft skills remove summarize
 ```
+
+---
+
+## weft project
+
+Project identity (ADR-103). A project is a directory tree with a ULID in
+`.weftos/project.toml`, registered in the user-level index
+`~/.weftos/projects/<id>.toml`. The index directory can be overridden with
+`WEFTOS_MANIFESTS_DIR`. See the [Projects section of the workspaces
+guide](../guides/workspaces.md#projects).
+
+### weft project init
+
+```
+weft project init [--name <NAME>] [--fork [--force]]
+```
+
+Give the current project root (the nearest ancestor with a `project.toml`, else
+the current directory) an identity and register it. Idempotent. Adopts an id
+already seeded from `workspaces.json`. Refuses `$HOME` itself. Adds
+`.weftos/chain/` and `.weftos/project.key` to an existing `.gitignore`.
+Prints the id, the root, the identity file and the manifest path.
+
+| Option | Description |
+|--------|-------------|
+| `--name` | Project name (default: directory name) |
+| `--fork` | The tree is a copy of another project: mint a new id, record the old one as `parent` |
+| `--force` | With `--fork`: also re-identify the registered home of the id (its manifest is archived) |
+
+A copy of a registered tree on the same machine is refused with a
+`RootConflict` error; `--fork` is the remedy.
+
+### weft project list
+
+```
+weft project list [--json]
+```
+
+Read the index directly (no daemon). Entries whose root is gone show `missing`.
+
+### weft project show
+
+```
+weft project show [<ID|NAME|.>] [--here] [--json]
+```
+
+Show one project (default: the one containing the current directory), plus the
+live daemon handshake when one answers, or why it was not verified. A name
+matching several projects is an error listing their ids.
+
+### weft project seed
+
+```
+weft project seed
+```
+
+Import `~/.clawft/workspaces.json` into the index and print what was created,
+adopted, missing, unchanged or skipped. Idempotent.
 
 ---
 

@@ -12,6 +12,7 @@ pub mod cluster_facts;
 pub mod console_cmd;
 pub mod cron_cmd;
 pub mod custody_cmd;
+pub mod doctor_cmd;
 pub mod ecc_cmd;
 pub mod graphify_cmd;
 pub mod init_cmd;

@@ -3,7 +3,7 @@
 without ESP32 hardware.
 
 Mimics crates/clawft-edge-pad/src/mesh.rs byte-for-byte:
-  - connects to the daemon mesh transport (plaintext TCP :9470)
+  - connects to the daemon mesh transport (plaintext TCP :9489)
   - sends a `mesh.subscribe` MeshIpcEnvelope for this leaf's push topic
   - fires `weaver leaf push --target <leaf-id> text ...`
   - reports every `[4-byte BE len][JSON envelope]` frame received
@@ -22,7 +22,7 @@ import time
 
 LEAF_ID = sys.argv[1] if len(sys.argv) > 1 else "aabbccddeeff"
 HOST = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1"
-PORT = int(sys.argv[3]) if len(sys.argv) > 3 else 9470
+PORT = int(sys.argv[3]) if len(sys.argv) > 3 else 9489
 TOPIC = f"mesh.leaf.{LEAF_ID}.push"
 
 # Byte-identical to mesh.rs subscribe_envelope().
