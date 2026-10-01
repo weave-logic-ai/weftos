@@ -42,7 +42,7 @@ mod tests;
 
 pub use manifest::{
     AttestationRef, CogPackageBody, FileRef, KIND_COG, MANIFEST_FILE, MANIFEST_SCHEMA,
-    ManifestEnvelope, ManifestError, PackageSource, SignatureEntry,
+    MAX_MANIFEST_BYTES, ManifestEnvelope, ManifestError, PackageSource, SignatureEntry,
 };
 pub use pack::{CogPackInput, PackError, pack_cog, write_manifest};
 pub use sign::{key_id_for, sign_envelope, signing_key_from_hex};

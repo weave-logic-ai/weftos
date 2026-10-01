@@ -259,6 +259,9 @@ type Checked = (ManifestEnvelope, CogPackageBody, Vec<AcceptedSigner>);
 
 fn parse_and_check(manifest: &[u8], anchors: &TrustAnchors) -> Result<Checked, VerifyError> {
     let envelope = ManifestEnvelope::from_bytes(manifest)?;
+    // Registered kind first (structured unknown-kind error); the verified
+    // package is still cog-typed until a kind brings its own verified body.
+    crate::workload_kind::validate_envelope(&crate::workload_kind::KindRegistry::builtin(), &envelope)?;
     let body = envelope.cog_body()?;
     let signers = check_signatures(&envelope, anchors)?;
     Ok((envelope, body, signers))

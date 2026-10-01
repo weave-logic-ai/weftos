@@ -32,6 +32,9 @@ pub enum ManifestError {
     /// A field failed validation.
     #[error("manifest invalid: {0}")]
     Invalid(String),
+    /// No workload kind is registered under the manifest's `kind`.
+    #[error(transparent)]
+    UnknownKind(#[from] crate::workload_kind::UnknownKind),
     /// Canonical encoding refused the value.
     #[error(transparent)]
     Canonical(#[from] CanonicalError),

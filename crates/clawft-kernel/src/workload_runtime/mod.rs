@@ -76,6 +76,6 @@ pub use seed_creds::FileCredentials;
 pub use seed_http::{HttpSeedTransport, SeedCredentials, SeedTransport};
 pub use seed_ops::{SeedBackup, UpgradeOutcome};
 pub use types::{
-    Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, Preemption, RunMode,
-    RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadRuntime, WorkloadSource,
+    Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, Preemption,
+    ProjectPayload, RunMode, RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadRuntime, WorkloadSource,
 };

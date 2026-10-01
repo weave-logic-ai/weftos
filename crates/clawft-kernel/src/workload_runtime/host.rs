@@ -87,6 +87,13 @@ impl WorkloadHost {
                 Vec::new(),
                 0.25,
             ),
+            WorkloadSource::Project(p) => (
+                "project_cert",
+                format!("project.{}.{}", p.project_id, p.cert_serial),
+                Vec::new(),
+                Vec::new(),
+                0.25,
+            ),
         };
         json!({ "workload": {
             "kind": kind,

@@ -329,6 +329,9 @@ impl VerifiedWorkload {
             WorkloadSource::StorePin { .. } => Err(RuntimeError::AdmissionRefused(format!(
                 "{runtime} runs only signed packages; store pins go through the Seed adapter"
             ))),
+            WorkloadSource::Project(_) => Err(RuntimeError::AdmissionRefused(format!(
+                "{runtime} runs only signed packages; project workloads are not supported yet"
+            ))),
         }
     }
 }
