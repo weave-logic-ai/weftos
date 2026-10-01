@@ -194,3 +194,24 @@ fn user_root_is_under_home_weftos_run_and_never_a_project() {
     assert_eq!(p.root(), home.join(".weftos/run"));
     assert_eq!(p.socket(), home.join(".weftos/run/kernel.sock"));
 }
+
+/// `kernel start --foreground` is `daemon::run`: it must take the same
+/// runtime-root lock as the background daemon before booting anything, so a
+/// held lock refuses it and names the holder.
+#[tokio::test]
+async fn foreground_start_refuses_when_the_runtime_lock_is_held() {
+    isolate_env();
+    let paths = RuntimePaths::resolve();
+    let _held = clawft_weave::instance_lock::InstanceLock::acquire(&paths).expect("lock");
+    let err = clawft_weave::daemon::run(
+        Config::default(),
+        KernelConfig::default(),
+        Default::default(),
+        None,
+    )
+    .await
+    .expect_err("must refuse");
+    let msg = err.to_string();
+    assert!(msg.contains("another kernel owns"), "{msg}");
+    assert!(msg.contains(&format!("pid {}", std::process::id())), "{msg}");
+}

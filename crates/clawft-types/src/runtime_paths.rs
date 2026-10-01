@@ -79,14 +79,33 @@ pub fn absolutize(path: &Path) -> PathBuf {
 /// Turning it on captures `$WEFTOS_RUNTIME_DIR` as an absolute path now, so
 /// a later `chdir` cannot move the root. Call before changing directory.
 pub fn set_user_profile(on: bool) {
-    let state = on.then(|| {
-        std::env::var(RUNTIME_DIR_ENV)
-            .ok()
-            .map(|v| v.trim().to_owned())
-            .filter(|v| !v.is_empty())
-            .map(|v| absolutize(Path::new(&v)))
-    });
+    let state = on.then(|| capture_runtime_dir(std::env::var(RUNTIME_DIR_ENV).ok().as_deref()));
     *USER_PROFILE.write().unwrap_or_else(|e| e.into_inner()) = state;
+}
+
+/// `env` (a raw `$WEFTOS_RUNTIME_DIR`) as an absolute path; blank is unset.
+fn capture_runtime_dir(env: Option<&str>) -> Option<PathBuf> {
+    env.map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| absolutize(Path::new(v)))
+}
+
+/// `$WEFTOS_RUNTIME_DIR` as code outside the resolver should read it.
+///
+/// Once the user profile is entered this is the value captured then
+/// (absolute, immune to the daemon's later `chdir`); otherwise the raw
+/// variable. Prefer this to `std::env::var`, and not a `set_var`, which
+/// would be unsound with the tokio runtime already running.
+pub fn runtime_dir_env() -> Option<PathBuf> {
+    let user = USER_PROFILE.read().unwrap_or_else(|e| e.into_inner()).clone();
+    match user {
+        Some(captured) => captured,
+        None => capture_none_if_blank(std::env::var(RUNTIME_DIR_ENV).ok().as_deref()),
+    }
+}
+
+fn capture_none_if_blank(env: Option<&str>) -> Option<PathBuf> {
+    env.filter(|v| !v.is_empty()).map(PathBuf::from)
 }
 
 /// True when this process runs (or addresses) the user daemon.
@@ -364,6 +383,18 @@ mod tests {
         assert_eq!(
             user_chain_checkpoint(&home),
             home.join(".weftos/chain/chain.json")
+        );
+    }
+
+    #[test]
+    fn captured_runtime_dir_is_absolute_and_blank_is_unset() {
+        assert_eq!(capture_runtime_dir(None), None);
+        assert_eq!(capture_runtime_dir(Some("  ")), None);
+        let rel = capture_runtime_dir(Some("rel/run")).unwrap();
+        assert_eq!(rel, std::env::current_dir().unwrap().join("rel/run"));
+        assert_eq!(
+            capture_runtime_dir(Some("/abs/run")),
+            Some(PathBuf::from("/abs/run"))
         );
     }
 
