@@ -10,8 +10,16 @@
 //! 16 characters of that hash, so the hash reveals nothing that helps an
 //! attacker: a 256-bit preimage is not searchable.
 //!
-//! Scope is [`TokenScope::Owner`] (full surface, ADR-102 D4); TTL is the
-//! limit: default 15 minutes, maximum 24 hours.
+//! Scope is [`TokenScope::Owner`] (full surface, ADR-102 D4, an owner
+//! decision): a token is owner-equivalent, including lifecycle verbs such
+//! as `kernel.shutdown`, with one exception enforced in the daemon: a
+//! token cannot issue, revoke or list tokens. TTL is the limit: default
+//! 15 minutes, maximum 24 hours.
+//!
+//! Durability: the chain is saved only on clean shutdown, so each issue
+//! and revoke is also fsynced to a small journal ([`TokenAuthority::with_journal`])
+//! before it is acknowledged. Without it, a revocation followed by a crash
+//! would let the token validate again after reboot.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -68,6 +76,8 @@ pub enum TokenError {
     TtlTooLong,
     #[error("label must be 1-{MAX_LABEL_LEN} printable characters")]
     BadLabel,
+    #[error("could not persist the token record: {0}")]
+    Persist(String),
 }
 
 /// Who asked for the token (recorded on the chain, unverified in Phase 1).
@@ -85,6 +95,7 @@ struct Entry {
 pub struct TokenAuthority {
     chain: Arc<ChainManager>,
     node_id: String,
+    journal: Option<std::path::PathBuf>,
     table: Mutex<HashMap<String, Entry>>,
 }
 
@@ -122,70 +133,159 @@ fn parse_time(v: &Value, key: &str) -> Option<DateTime<Utc>> {
         .map(|t| t.with_timezone(&Utc))
 }
 
+/// One token event, from the chain or the journal.
+struct Record<'a> {
+    kind: &'a str,
+    payload: &'a Value,
+}
+
+/// Parse an `issued` payload; `None` for anything malformed, forged
+/// (id not the hash prefix) or longer-lived than [`MAX_TTL`].
+fn parse_issued(p: &Value) -> Option<Entry> {
+    let id = p.get("id").and_then(Value::as_str)?;
+    let hash = p.get("sha256").and_then(Value::as_str).and_then(unhex32)?;
+    let issued_at = parse_time(p, "issued_at")?;
+    let expires_at = parse_time(p, "expires_at")?;
+    let life = expires_at - issued_at;
+    if id_of(&hash) != id || life <= Duration::zero() || life > MAX_TTL {
+        return None;
+    }
+    Some(Entry {
+        hash,
+        info: TokenInfo {
+            id: id.to_owned(),
+            label: p
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            issued_at,
+            expires_at,
+            scope: TokenScope::Owner,
+            project: p.get("project").and_then(Value::as_str).map(str::to_owned),
+        },
+    })
+}
+
+/// Fold records into the live table: issued minus revoked minus expired.
+/// The revocation set wins over any `issued` for the same id, whatever
+/// the order, so a replayed or forged re-issue cannot revive a token.
+fn fold(records: &[Record<'_>], now: DateTime<Utc>) -> HashMap<String, Entry> {
+    let mut revoked = std::collections::HashSet::new();
+    let mut table = HashMap::new();
+    for r in records {
+        match r.kind {
+            KIND_ISSUED => {
+                if let Some(e) = parse_issued(r.payload) {
+                    table.insert(e.info.id.clone(), e);
+                }
+            }
+            KIND_REVOKED => {
+                if let Some(id) = r.payload.get("id").and_then(Value::as_str) {
+                    revoked.insert(id.to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+    table.retain(|id, e| !revoked.contains(id) && e.info.expires_at > now);
+    table
+}
+
 impl TokenAuthority {
-    /// Build the authority over `chain` and replay its token events.
+    /// Build the authority over `chain` (no journal) and replay it.
     pub fn new(chain: Arc<ChainManager>, node_id: impl Into<String>) -> Self {
+        Self::with_journal(chain, node_id, None)
+    }
+
+    /// Build the authority with a durable journal at `journal`.
+    ///
+    /// The chain is only persisted on clean shutdown, so a revocation held
+    /// only on the chain would fail open after a crash. Every issue and
+    /// revoke is therefore also appended to this file and fsynced before
+    /// the call returns; rebuild merges it with the chain. It holds the
+    /// same hash-only payloads as the chain events, never a secret.
+    pub fn with_journal(
+        chain: Arc<ChainManager>,
+        node_id: impl Into<String>,
+        journal: Option<std::path::PathBuf>,
+    ) -> Self {
         let a = Self {
             chain,
             node_id: node_id.into(),
+            journal,
             table: Mutex::new(HashMap::new()),
         };
         a.rebuild_at(Utc::now());
         a
     }
 
-    /// Replay the chain: issued minus revoked minus expired at `now`.
+    /// Strong references to the underlying chain (the authority holds one).
+    pub fn chain_refs(&self) -> usize {
+        Arc::strong_count(&self.chain)
+    }
+
+    fn read_journal(&self) -> Vec<(String, Value)> {
+        let Some(path) = &self.journal else {
+            return Vec::new();
+        };
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return Vec::new();
+        };
+        text.lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .filter(|v| v.get("source").and_then(Value::as_str) == Some(SOURCE))
+            .filter_map(|v| {
+                Some((
+                    v.get("kind")?.as_str()?.to_owned(),
+                    v.get("payload")?.clone(),
+                ))
+            })
+            .collect()
+    }
+
+    /// Append one record to the journal and fsync it.
+    fn journal_append(&self, kind: &str, payload: &Value) -> Result<(), TokenError> {
+        use std::io::Write;
+        let Some(path) = &self.journal else {
+            return Ok(());
+        };
+        let line = json!({ "source": SOURCE, "kind": kind, "payload": payload });
+        let write = || -> std::io::Result<()> {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)?;
+            writeln!(f, "{line}")?;
+            f.sync_all()
+        };
+        write().map_err(|e| TokenError::Persist(e.to_string()))
+    }
+
+    /// Replay the chain and journal: issued minus revoked minus expired at
+    /// `now`. Only events from [`SOURCE`] count.
     pub fn rebuild_at(&self, now: DateTime<Utc>) {
-        let mut table: HashMap<String, Entry> = HashMap::new();
-        for ev in self.chain.tail_from(0) {
-            let Some(p) = ev.payload.as_ref() else {
+        let events = self.chain.tail_from(0);
+        let journal = self.read_journal();
+        let mut records: Vec<Record<'_>> = Vec::new();
+        for ev in &events {
+            if ev.source != SOURCE {
                 continue;
-            };
-            match ev.kind.as_str() {
-                KIND_ISSUED => {
-                    let (Some(id), Some(hash), Some(issued_at), Some(expires_at)) = (
-                        p.get("id").and_then(Value::as_str),
-                        p.get("sha256").and_then(Value::as_str).and_then(unhex32),
-                        parse_time(p, "issued_at"),
-                        parse_time(p, "expires_at"),
-                    ) else {
-                        continue;
-                    };
-                    if id_of(&hash) != id {
-                        continue;
-                    }
-                    table.insert(
-                        id.to_owned(),
-                        Entry {
-                            hash,
-                            info: TokenInfo {
-                                id: id.to_owned(),
-                                label: p
-                                    .get("label")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default()
-                                    .to_owned(),
-                                issued_at,
-                                expires_at,
-                                scope: TokenScope::Owner,
-                                project: p
-                                    .get("project")
-                                    .and_then(Value::as_str)
-                                    .map(str::to_owned),
-                            },
-                        },
-                    );
-                }
-                KIND_REVOKED => {
-                    if let Some(id) = p.get("id").and_then(Value::as_str) {
-                        table.remove(id);
-                    }
-                }
-                _ => {}
+            }
+            if let Some(payload) = ev.payload.as_ref() {
+                records.push(Record {
+                    kind: ev.kind.as_str(),
+                    payload,
+                });
             }
         }
-        table.retain(|_, e| e.info.expires_at > now);
-        *self.table.lock().unwrap_or_else(|e| e.into_inner()) = table;
+        for (kind, payload) in &journal {
+            records.push(Record { kind, payload });
+        }
+        *self.table.lock().unwrap_or_else(|e| e.into_inner()) = fold(&records, now);
     }
 
     /// Issue a token. Returns the secret (shown once) and its metadata.
@@ -244,6 +344,8 @@ impl TokenAuthority {
         if let Some(p) = &info.project {
             payload["project"] = json!(p);
         }
+        // Durable first: a token that cannot be journaled is not issued.
+        self.journal_append(KIND_ISSUED, &payload)?;
         self.chain.append(SOURCE, KIND_ISSUED, Some(payload));
         self.lock().insert(
             info.id.clone(),
@@ -255,17 +357,19 @@ impl TokenAuthority {
         Ok((secret, info))
     }
 
-    /// Revoke by id. Returns whether a live token was revoked.
-    pub fn revoke(&self, id: &str) -> bool {
-        if !self.lock().contains_key(id) {
-            return false;
+    /// Revoke by id. Returns whether a live token was revoked. The token
+    /// stops validating immediately even if journaling then fails (the
+    /// error is returned so the caller knows the revocation may not
+    /// survive a crash).
+    pub fn revoke(&self, id: &str) -> Result<bool, TokenError> {
+        if self.lock().remove(id).is_none() {
+            return Ok(false);
         }
-        self.chain.append(
-            SOURCE,
-            KIND_REVOKED,
-            Some(json!({ "id": id, "revoked_at": Utc::now().to_rfc3339() })),
-        );
-        self.lock().remove(id).is_some()
+        let payload = json!({ "id": id, "revoked_at": Utc::now().to_rfc3339() });
+        self.chain
+            .append(SOURCE, KIND_REVOKED, Some(payload.clone()));
+        self.journal_append(KIND_REVOKED, &payload)?;
+        Ok(true)
     }
 
     /// Validate a presented secret. Compares hashes in constant time.

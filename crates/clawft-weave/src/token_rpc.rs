@@ -26,9 +26,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::Duration;
 use clawft_kernel::boot::Kernel;
-use clawft_kernel::token_authority::{
-    Issuer, SECRET_PREFIX, TokenAuthority, TokenError, TokenInfo,
-};
+use clawft_kernel::token_authority::{Issuer, MAX_TTL, SECRET_PREFIX, TokenAuthority, TokenInfo};
 use clawft_platform::NativePlatform;
 use clawft_rpc::Response;
 use serde_json::{Value, json};
@@ -43,6 +41,11 @@ static AUTHORITIES: OnceLock<Mutex<HashMap<usize, Arc<TokenAuthority>>>> = OnceL
 
 /// The authority for this kernel's chain, created (and replayed) on first
 /// use. `None` when the kernel has no chain.
+///
+/// Keyed by the chain manager's address. The authority holds a strong
+/// reference to its chain, so an address cannot be reused while its entry
+/// exists; entries whose chain nothing else references (the kernel is
+/// gone) are pruned on each lookup.
 pub async fn authority_for(
     kernel: &Arc<RwLock<Kernel<NativePlatform>>>,
 ) -> Option<Arc<TokenAuthority>> {
@@ -53,11 +56,24 @@ pub async fn authority_for(
         .get_or_init(Default::default)
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+    map.retain(|_, a| a.chain_refs() > 1);
     if let Some(a) = map.get(&key) {
         return Some(Arc::clone(a));
     }
     let node_id = k.cluster_membership().local_node_id().to_owned();
-    let a = Arc::new(TokenAuthority::new(chain, node_id));
+    // The journal sits beside the chain checkpoint (see `with_journal`).
+    let journal = k
+        .kernel_config()
+        .chain
+        .clone()
+        .unwrap_or_default()
+        .effective_checkpoint_path()
+        .and_then(|p| {
+            std::path::Path::new(&p)
+                .parent()
+                .map(|d| d.join("auth-tokens.jsonl"))
+        });
+    let a = Arc::new(TokenAuthority::with_journal(chain, node_id, journal));
     map.insert(key, Arc::clone(&a));
     Some(a)
 }
@@ -116,7 +132,10 @@ pub fn run(
     match method {
         "auth.token.issue" => issue(authority, params),
         "auth.token.revoke" => match params.get("id").and_then(Value::as_str) {
-            Some(id) => Response::success(json!({ "revoked": authority.revoke(id), "id": id })),
+            Some(id) => match authority.revoke(id) {
+                Ok(revoked) => Response::success(json!({ "revoked": revoked, "id": id })),
+                Err(e) => Response::error(format!("auth.token.revoke: {e}")),
+            },
             None => Response::error("auth.token.revoke: missing string param 'id'"),
         },
         "auth.token.list" => {
@@ -144,6 +163,10 @@ fn issue(authority: &TokenAuthority, params: &Value) -> Response {
     let ttl = match params.get("ttl_secs") {
         None | Some(Value::Null) => None,
         Some(v) => match v.as_i64() {
+            // Compare before `Duration::seconds`, which panics on huge values.
+            Some(s) if s > MAX_TTL.num_seconds() => {
+                return Response::error("auth.token.issue: ttl exceeds the 24 h maximum");
+            }
             Some(s) if s > 0 => Some(Duration::seconds(s)),
             _ => return Response::error("auth.token.issue: 'ttl_secs' must be a positive integer"),
         },
@@ -165,9 +188,7 @@ fn issue(authority: &TokenAuthority, params: &Value) -> Response {
             v["secret"] = json!(secret);
             Response::success(v)
         }
-        Err(e @ (TokenError::TtlNotPositive | TokenError::TtlTooLong | TokenError::BadLabel)) => {
-            Response::error(format!("auth.token.issue: {e}"))
-        }
+        Err(e) => Response::error(format!("auth.token.issue: {e}")),
     }
 }
 

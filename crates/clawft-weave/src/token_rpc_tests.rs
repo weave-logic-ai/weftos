@@ -137,3 +137,25 @@ fn a_token_cannot_issue_revoke_or_list() {
         .ok
     );
 }
+
+#[test]
+fn huge_ttl_is_an_error_not_a_panic() {
+    let a = authority();
+    for ttl in [i64::MAX, i64::MAX / 2, 1 << 60] {
+        let r = run(
+            &a,
+            "auth.token.issue",
+            &json!({ "ttl_secs": ttl }),
+            Some("admin"),
+        );
+        assert!(!r.ok, "{ttl}");
+    }
+    // u64 above i64::MAX is not an i64 at all
+    let r = run(
+        &a,
+        "auth.token.issue",
+        &json!({ "ttl_secs": u64::MAX }),
+        Some("admin"),
+    );
+    assert!(!r.ok);
+}

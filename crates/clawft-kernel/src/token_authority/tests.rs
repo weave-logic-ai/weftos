@@ -44,7 +44,7 @@ fn secret_is_never_on_the_chain_or_in_listings() {
     let c = chain();
     let a = auth(&c);
     let (secret, _) = a.issue("x", None, None, &owner()).unwrap();
-    a.revoke(&a.list()[0].id);
+    a.revoke(&a.list()[0].id).unwrap();
     let dump = serde_json::to_string(&c.tail_from(0)).unwrap();
     assert!(!dump.contains(&secret));
     assert!(!dump.contains(secret.strip_prefix(SECRET_PREFIX).unwrap()));
@@ -94,10 +94,10 @@ fn revoke_removes_and_is_idempotent() {
     let c = chain();
     let a = auth(&c);
     let (s, info) = a.issue("x", None, None, &owner()).unwrap();
-    assert!(a.revoke(&info.id));
+    assert!(a.revoke(&info.id).unwrap());
     assert!(a.validate(&s).is_none());
-    assert!(!a.revoke(&info.id));
-    assert!(!a.revoke("0000000000000000"));
+    assert!(!a.revoke(&info.id).unwrap());
+    assert!(!a.revoke("0000000000000000").unwrap());
     assert_eq!(
         c.tail_from(0)
             .iter()
@@ -123,7 +123,7 @@ fn rebuild_keeps_live_drops_revoked_and_expired() {
             &owner(),
         )
         .unwrap();
-    a.revoke(&gi.id);
+    a.revoke(&gi.id).unwrap();
     drop(a);
 
     // a second instance over the same chain, as after a restart
@@ -188,4 +188,112 @@ fn issued_event_records_issuer_without_claiming_verification() {
     assert_eq!(p["issuer"]["node_id"], "node-test");
     assert_eq!(p["issuer"]["uid"], 501);
     assert_eq!(p["issuer"]["uid_verified"], false);
+}
+
+fn issued_payload(id_hash: &[u8; 32], issued: DateTime<Utc>, ttl: Duration) -> Value {
+    json!({
+        "id": id_of(id_hash),
+        "sha256": hex(id_hash),
+        "label": "x",
+        "issued_at": issued.to_rfc3339(),
+        "expires_at": (issued + ttl).to_rfc3339(),
+    })
+}
+
+#[test]
+fn revocation_survives_a_crash_via_the_journal() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("auth-tokens.jsonl");
+    // The chain is never saved: it is dropped, as in kill -9.
+    let a = TokenAuthority::with_journal(chain(), "n", Some(journal.clone()));
+    let (s, info) = a.issue("x", None, None, &owner()).unwrap();
+    let (keep, _) = a.issue("keep", None, None, &owner()).unwrap();
+    a.revoke(&info.id).unwrap();
+    drop(a);
+
+    let fresh_chain = chain();
+    let b = TokenAuthority::with_journal(fresh_chain, "n", Some(journal.clone()));
+    assert!(
+        b.validate(&s).is_none(),
+        "revoked token revived after crash"
+    );
+    assert!(b.validate(&keep).is_some(), "issued token lost");
+    assert!(!std::fs::read_to_string(&journal).unwrap().contains(&s));
+}
+
+#[test]
+fn unwritable_journal_fails_issue_and_reports_revoke() {
+    let dir = tempfile::tempdir().unwrap();
+    // A directory where the file should be makes every append fail.
+    let bad = dir.path().join("j");
+    std::fs::create_dir(&bad).unwrap();
+    let a = TokenAuthority::with_journal(chain(), "n", Some(bad));
+    assert!(matches!(
+        a.issue("x", None, None, &owner()),
+        Err(TokenError::Persist(_))
+    ));
+    assert!(a.list().is_empty());
+}
+
+#[test]
+fn events_from_other_sources_are_ignored() {
+    let c = chain();
+    let h = hash_secret("wft_other");
+    c.append(
+        "kernel",
+        KIND_ISSUED,
+        Some(issued_payload(&h, Utc::now(), Duration::hours(1))),
+    );
+    assert!(auth(&c).validate("wft_other").is_none());
+}
+
+#[test]
+fn events_exceeding_max_ttl_are_ignored() {
+    let c = chain();
+    let h = hash_secret("wft_long");
+    c.append(
+        SOURCE,
+        KIND_ISSUED,
+        Some(issued_payload(
+            &h,
+            Utc::now(),
+            MAX_TTL + Duration::seconds(1),
+        )),
+    );
+    let h2 = hash_secret("wft_neg");
+    c.append(
+        SOURCE,
+        KIND_ISSUED,
+        Some(issued_payload(&h2, Utc::now(), Duration::seconds(-5))),
+    );
+    let a = auth(&c);
+    assert!(a.validate("wft_long").is_none());
+    assert!(a.validate("wft_neg").is_none());
+    let h3 = hash_secret("wft_ok");
+    c.append(
+        SOURCE,
+        KIND_ISSUED,
+        Some(issued_payload(&h3, Utc::now(), MAX_TTL)),
+    );
+    a.rebuild_at(Utc::now());
+    assert!(a.validate("wft_ok").is_some());
+}
+
+#[test]
+fn revoked_id_stays_revoked_after_a_later_reissue_event() {
+    let c = chain();
+    let h = hash_secret("wft_back");
+    let now = Utc::now();
+    c.append(
+        SOURCE,
+        KIND_ISSUED,
+        Some(issued_payload(&h, now, Duration::hours(1))),
+    );
+    c.append(SOURCE, KIND_REVOKED, Some(json!({ "id": id_of(&h) })));
+    c.append(
+        SOURCE,
+        KIND_ISSUED,
+        Some(issued_payload(&h, now, Duration::hours(1))),
+    );
+    assert!(auth(&c).validate("wft_back").is_none());
 }

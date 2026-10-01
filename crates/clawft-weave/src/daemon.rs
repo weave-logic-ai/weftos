@@ -3595,6 +3595,24 @@ async fn authorize_caller(
     params: &serde_json::Value,
     kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
 ) -> Result<crate::capability::CallerCapabilities, Response> {
+    // Phase 3 consideration (D3 peer credentials): a daemon under another
+    // uid than the CLI user denies the CLI's implicit "admin". Say so
+    // instead of a bare permission error.
+    if caller.peer_untrusted
+        && caller
+            .auth
+            .as_deref()
+            .is_some_and(crate::capability::is_literal_scope)
+    {
+        return Err(Response::error_with_kind(
+            "peer_uid_mismatch",
+            format!(
+                "permission denied: this daemon runs as uid {}; use a token \
+                 (`weft token issue` as that user) or connect as that user",
+                nix::unistd::geteuid().as_raw()
+            ),
+        ));
+    }
     let caps = resolve_caller_capabilities(caller, kernel).await;
     crate::rpc_ext::authorize(caller, &caps, method, params, kernel).await?;
     Ok(caps)
