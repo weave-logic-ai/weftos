@@ -1,5 +1,7 @@
 # Weave topology Phase 2: file-level implementation plan
 
+> **Decisions (2026-10-01):** the owner accepted all seven open decisions as recommended (ADR-103 A6).
+
 Status: plan, not started. Implements Phase 2 of [ADR-103](../adr/adr-103-weave-topology-roles-and-instances.md) (card weave-topology-P2): per-project kernels as children of the user daemon. Analysis: [analysis.md](../research/daemon-topology/analysis.md) sections 4-7, 10.3-10.4. Audit inputs: [cog-boundary/audit.md](../research/cog-boundary/audit.md) M1, M3, M12. Date: 2026-09-30.
 
 Assumes Phase 1 is integrated (`integrate/p1`: `RuntimePaths`/`RootSource::{Env,Project,User,LegacyHome}`, project store in `clawft-types/src/project/`, `kernel.handshake`/`resolve.rs`/`connect_resolved` in `clawft-rpc`, `rpc_ext.rs` `ROUTES`/`GATES`/`CallerCtx`/`ClaimedProject`, `scope_gate.rs`, `user_daemon.rs`, `chain_storage.rs`, `token_authority.rs`). File paths below are relative to `crates/`; read the real names first. Phase 3 (machine mesh service, peer credentials) and Phase 4 (sandbox drivers) are out of scope.

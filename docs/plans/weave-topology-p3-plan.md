@@ -1,5 +1,7 @@
 # Weave topology Phase 3: file-level implementation plan
 
+> **Decisions (2026-10-01):** the owner accepted D-1..D-10 as recommended (ADR-103 A6). macOS: a non-root LaunchDaemon can write `/var/run/weftos` only when the service account is in the directory's group, so package H's installer creates `/var/run/weftos` group-owned by `_weftos` (mode 0770 or 0775) and adds the service account to that group; verify on the owner's Mac.
+
 Status: plan, not started. Implements Phase 3 of [ADR-103](../adr/adr-103-weave-topology-roles-and-instances.md) (card weave-topology-P3): the machine mesh service as an OS service. Analysis: [daemon-topology/analysis.md](../research/daemon-topology/analysis.md) sections 4, 5, 9, 10.4. Builds on [P1](weave-topology-p1-plan.md) and the Phase 0 review (R2, R9). Date: 2026-09-30.
 
 Assumes P0 and P1 have landed (P0 resolver and fatal mesh bind; P1 user daemon at `~/.weftos/run/` with roles `machine,user`, `kernel.status` handshake, `rpc_ext.rs` hook, `service_units.rs`, token authority, chain migrated to `~/.weftos/chain/`). Where this plan names a P1 module it means that branch's real name; agents read it first. P2 (project kernels) is independent: a project kernel never talks to the mesh listener, it registers its address with the user daemon, which forwards it (package U).
