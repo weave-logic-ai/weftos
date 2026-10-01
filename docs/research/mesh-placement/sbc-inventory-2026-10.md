@@ -80,6 +80,26 @@ The full per-product list is in the appendix.
 | D-Robotics RDK X3 | $100 | 4× A53; 4 GB | 5 TOPS | vendor Ubuntu; check glibc | ROS-oriented. Its RDK X5 sibling (10 TOPS) was in the earlier sensor list [V title] |
 | BeagleBone AI-64 | $200 | TI TDA4VM, 2× A72 | DSP/MMA, about 8 TOPS [I] | Debian [I] | Older and pricier than BeagleY-AI |
 
+### The Arduino Linux family (three boards)
+
+Arduino has three Linux-capable boards. The rest of its range (Portenta H7, Nicla, Nano, UNO R4) is microcontrollers. [V]
+
+| | UNO Q | **Ventuno Q** | Portenta X8 |
+|---|---|---|---|
+| SoC | Qualcomm QRB2210, 4× A53 at 2.0 GHz | Qualcomm **IQ-8275**, 8× Kryo Gen 6, Adreno A623 | NXP i.MX 8M Mini, 4× A53 at 1.8 GHz |
+| RAM / storage | 2 GB / 16 GB or 4 GB / 32 GB | **16 GB LPDDR5 / 64 GB eMMC + NVMe Gen4 M.2** | 2 GB / 16 GB |
+| AI | none | **40 dense INT8 TOPS** (Hexagon) | none |
+| MCU | STM32U585 (M33, Zephyr) | STM32H5F5 (M33 at 250 MHz, Zephyr) | STM32H747 (M7 + M4) |
+| Network | Wi-Fi 5, BT 5.1 | **2.5 GbE**, Wi-Fi 6E tri-band, BT 5.3 | Wi-Fi, BT |
+| Other I/O | UNO header | UNO and Pi headers, 3× MIPI CSI, HDMI 4K, 2× USB 3.0, fan; 160 × 100 mm | 1 × 2.6 in module; Max Carrier sold separately |
+| OS | upstream Debian | upstream **Debian and Ubuntu**; SoC drivers in mainline since Linux 6.14 | Yocto (Foundries LmP) with Docker |
+| Price | $59 / $79 | **$299 preorder, including a 65 W USB-C supply** | $239 ($574 with Max Carrier) |
+| Cog verdict | cheap sensor-adjacent leaf | **cogs + small local models + vision** | expensive for what it is; only for Portenta/Foundries industrial fleets |
+
+**Ventuno Q availability.** Preorder from the [Arduino US store](https://store-usa.arduino.cc/products/ventuno-q) (3-4 week lead time) or official distributors (DigiKey, Mouser, Farnell/Newark, RS). Electromaker lists it at $306, "on order". [V] Hackster's preorder report says the board and software shown were pre-release, and SBCwiki's demo unit used active cooling where a passive design is planned. Treat the first units as development hardware.
+
+**Why it suits WeftOS.** Upstream kernel support avoids the vendor-BSP lock-in that Jetson boards carry, and Ubuntu/Debian clear the glibc floor. One caveat: there is only one Ethernet port, so the sensor-network/uplink split needs Wi-Fi, a VLAN, or a USB Ethernet adapter. [I]
+
 ### Cheap 64-bit Arm leaves and gateways
 
 | Board | Price | Notes |
