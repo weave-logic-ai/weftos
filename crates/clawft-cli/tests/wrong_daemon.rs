@@ -27,6 +27,9 @@ fn fake_daemon(dir: &Path, project: Option<&str>) {
         version: "0.8.1".into(),
         sha: "abcd1234".into(),
         binary: None,
+        user_key_id: None,
+        profile: None,
+        roles: Vec::new(),
     };
     let l = UnixListener::bind(dir.join("kernel.sock")).unwrap();
     std::thread::spawn(move || {

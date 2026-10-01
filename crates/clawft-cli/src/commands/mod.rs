@@ -41,6 +41,7 @@ pub mod sessions;
 pub mod skills_cmd;
 pub mod status;
 pub mod swarm_cmd;
+pub mod token_cmd;
 pub mod tools_cmd;
 #[cfg(feature = "api")]
 pub mod ui_cmd;
