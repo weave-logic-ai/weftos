@@ -49,6 +49,7 @@ pub mod mic_source;
 #[cfg(any(feature = "mesh", feature = "exochain"))]
 pub mod node_facts_rpc;
 pub mod protocol;
+pub mod service_units;
 /// Governance-gate helper for daemon RPC families (mesh-placement-06).
 pub mod rpc_gate;
 // WEFT-720 residual: `spatial_rpc` dropped when BvhStore/CLI helpers

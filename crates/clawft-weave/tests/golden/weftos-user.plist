@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.weftos.user</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/weftos/bin/weaver</string>
+        <string>kernel</string>
+        <string>start</string>
+        <string>--foreground</string>
+        <string>--profile</string>
+        <string>user</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/alice</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/alice/.weftos/run/kernel.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/alice/.weftos/run/kernel.log</string>
+</dict>
+</plist>
