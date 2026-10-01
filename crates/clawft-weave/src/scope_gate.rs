@@ -3,10 +3,13 @@
 //! Two gates registered in `rpc_ext::GATES`:
 //!
 //! * [`scope_gate`]: when a request is *outside any project*, apply the
-//!   `kernel.governance.outside_project` policy (`read_only` by default).
+//!   `kernel.governance.outside_project` policy. Unset, it is `read_only`
+//!   for the `--profile user` daemon and `allow_all` for every other root
+//!   (ADR-103 D12, amendment pending; see
+//!   `clawft_types::config::default_outside_policy`).
 //!   Under `read_only` only the explicit [`READ_ONLY_ALLOW`] list passes;
 //!   every other method, including methods added later, is denied with
-//!   `error_kind = "scope_denied"`. There is deliberately no "default
+//!   `error_kind = "project_required"`. There is deliberately no "default
 //!   read" fallback: `capability.rs` defaults unlisted methods to `Read`,
 //!   which would make a new mutating verb anonymous-callable outside a
 //!   project.
@@ -16,6 +19,11 @@
 //!   the utterance and run unattended. Cron mutations are therefore
 //!   denied to [`Principal::InternalVoice`] regardless of project or
 //!   policy ([`VOICE_DENIED`]). Listing cron jobs stays allowed.
+//!
+//! The in-process voice principal is *inside* for the scope gate: it is
+//! the daemon itself acting for a present operator, not a client that can
+//! name a project, so `read_only` must not strip its Write verbs.
+//! `voice_gate` is what limits it.
 //!
 //! # Outside a project
 //!
@@ -43,10 +51,12 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use clawft_types::config::OutsideProjectPolicy;
 use clawft_types::project::{ProjectState, read_manifest};
 
+use crate::capability::Capability;
 use crate::rpc_ext::{Denial, GateFuture, GateRequest, Principal};
 
 /// Error text for a scope denial.
@@ -76,8 +86,20 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
     "llm.models",
     "mcp.list",
     "tools.mcp",
+    "auth.token.validate",
     "project.list",
     "project.show",
+];
+
+/// User-level operations: callable outside a project, but only by a caller
+/// holding `Admin` (token and project registration are per-user by nature,
+/// they do not belong to any one project). Denied under `deny_all`. The
+/// routes are registered by other Phase 1 packages; the names are stable.
+pub const USER_LEVEL_ALLOW: &[&str] = &[
+    "auth.token.issue",
+    "auth.token.revoke",
+    "auth.token.list",
+    "project.register",
 ];
 
 /// What `deny_all` still permits: liveness, discovery and project lookup.
@@ -101,8 +123,14 @@ pub const VOICE_DENIED: &[&str] = &["cron.add", "cron.remove", "cron.enable", "c
 /// startup by [`init`], else `~/.weftos/projects`.
 static MANIFESTS_DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
 
-/// Record the manifest directory (daemon startup; tests inject a tempdir).
-pub fn init(manifests_dir: Option<PathBuf>) {
+/// Whether this daemon runs the `--profile user` root; selects the default
+/// outside-project policy when none is configured.
+static USER_PROFILE: AtomicBool = AtomicBool::new(false);
+
+/// Record the manifest directory and profile (daemon startup; tests inject
+/// a tempdir).
+pub fn init(manifests_dir: Option<PathBuf>, is_user_profile: bool) {
+    USER_PROFILE.store(is_user_profile, Ordering::Relaxed);
     *MANIFESTS_DIR.write().unwrap_or_else(|e| e.into_inner()) = manifests_dir;
 }
 
@@ -130,6 +158,7 @@ pub fn inside_project(bound: Option<&str>, claim: Option<&str>, manifests_dir: O
 pub fn decide(
     policy: OutsideProjectPolicy,
     method: &str,
+    is_admin: bool,
     inside: impl FnOnce() -> bool,
 ) -> Result<(), Denial> {
     let allowed = match policy {
@@ -137,17 +166,28 @@ pub fn decide(
         OutsideProjectPolicy::ReadOnly => READ_ONLY_ALLOW,
         OutsideProjectPolicy::DenyAll => DENY_ALL_ALLOW,
     };
-    if allowed.contains(&method) || inside() {
+    let user_level =
+        policy == OutsideProjectPolicy::ReadOnly && is_admin && USER_LEVEL_ALLOW.contains(&method);
+    if allowed.contains(&method) || user_level || inside() {
         return Ok(());
     }
-    Err(Denial::new("scope_denied", SCOPE_MESSAGE))
+    Err(Denial::new("project_required", SCOPE_MESSAGE))
 }
 
 /// Gate: the outside-project policy.
 pub fn scope_gate<'a>(req: &'a GateRequest<'a>) -> GateFuture<'a> {
     Box::pin(async move {
-        let policy = req.kernel.read().await.kernel_config().governance.outside_project;
-        decide(policy, req.method, || {
+        if req.principal == Principal::InternalVoice {
+            return Ok(());
+        }
+        let policy = req
+            .kernel
+            .read()
+            .await
+            .kernel_config()
+            .governance
+            .effective_outside_project(USER_PROFILE.load(Ordering::Relaxed));
+        decide(policy, req.method, req.caps.allows(Capability::Admin), || {
             let bound = crate::handshake_rpc::bound_project_id();
             inside_project(bound.as_deref(), req.project, manifests_dir().as_deref())
         })

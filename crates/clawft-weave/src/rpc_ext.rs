@@ -249,6 +249,13 @@ const ROUTES: &[ExtRoute] = &[
     },
 ];
 
+/// Prefix or exact name and required capability of each built-in route
+/// (scope-gate population test).
+#[cfg(test)]
+pub(crate) fn builtin_route_names() -> Vec<(&'static str, Capability)> {
+    ROUTES.iter().map(|r| (r.prefix, r.capability)).collect()
+}
+
 /// Registered gates, run in order; the first denial wins.
 ///
 /// The D12 scope gates (package G): the voice deny-list, then the

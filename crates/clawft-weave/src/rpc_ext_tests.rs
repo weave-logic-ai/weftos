@@ -8,11 +8,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 async fn test_kernel() -> KernelRef {
     use clawft_types::config::{ChainConfig, Config, KernelConfig};
     let kcfg = KernelConfig {
-        // The scope gate has its own tests (`scope_gate_tests`); these
-        // exercise the seam with unscoped probe methods.
-        governance: clawft_types::config::GovernanceConfig {
-            outside_project: clawft_types::config::OutsideProjectPolicy::AllowAll,
-        },
         chain: Some(ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())),
         ..KernelConfig::default()
     };

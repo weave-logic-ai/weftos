@@ -1150,18 +1150,25 @@ Full guide: [mesh-quic.md](./mesh-quic.md). Kernel overview: [kernel.md](./kerne
 ADR-103 D12. A request is *outside any project* when it claims no project and
 the daemon is not bound to one, or when the project it claims does not verify
 (it differs from the daemon's binding, or has no active manifest in
-`~/.weftos/projects/<id>.toml`). The claim itself is never trusted.
+`~/.weftos/projects/<id>.toml`). The claim itself is never trusted. The
+daemon's own in-process voice consumer counts as inside.
 
 ```toml
 [kernel.governance]
-outside_project = "read_only"   # read_only (default) | deny_all | allow_all
+outside_project = "read_only"   # read_only | deny_all | allow_all
 ```
+
+When unset the default depends on the daemon's root (ADR-103 D12; an
+amendment is pending): the `--profile user` daemon defaults to `read_only`;
+every other root (project-bound, legacy `~/.clawft`, env-isolated) defaults to
+`allow_all`, preserving pre-ADR-103 behaviour until it migrates. An explicit
+value always wins.
 
 | Value | Outside a project |
 |-------|-------------------|
-| `read_only` | Only an explicit allow-list of read methods (`kernel.status`, `kernel.ps`, `kernel.services`, `kernel.logs`, `kernel.handshake`, `ping`, `cluster.status\|nodes\|health`, `chain.status\|verify`, `agent.list\|inspect`, `control.list`, `llm.models`, `mcp.list`, `project.list\|show`). Everything else, including methods added later, fails with `error_kind = "scope_denied"`: "not in a project; run `weft project init` or pass `--project`". |
+| `read_only` | Only an explicit allow-list of read methods (`kernel.status`, `kernel.ps`, `kernel.services`, `kernel.logs`, `kernel.handshake`, `ping`, `cluster.status\|nodes\|health`, `chain.status\|verify`, `agent.list\|inspect`, `control.list`, `llm.models`, `mcp.list`, `auth.token.validate`, `project.list\|show`), plus the user-level operations `auth.token.issue\|revoke\|list` and `project.register` for callers holding `admin`. Everything else, including methods added later, fails with `error_kind = "project_required"`: "not in a project; run `weft project init` or pass `--project`". |
 | `deny_all` | Only `kernel.status`, `kernel.handshake`, `project.list`, `project.show`. |
-| `allow_all` | No restriction (pre-ADR-103 behaviour). |
+| `allow_all` | No restriction. |
 
 Inside a project every method falls through to the usual capability check.
 

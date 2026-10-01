@@ -39,7 +39,7 @@ fn manifest(id: &str, state: ProjectState) -> ProjectManifest {
 
 async fn kernel_with(policy: OutsideProjectPolicy) -> KernelRef {
     let kcfg = KernelConfig {
-        governance: GovernanceConfig { outside_project: policy },
+        governance: GovernanceConfig { outside_project: Some(policy) },
         chain: Some(ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())),
         ..KernelConfig::default()
     };
@@ -96,37 +96,37 @@ fn corrupt_manifest_does_not_verify() {
 #[test]
 fn read_only_allows_only_the_list_outside() {
     for m in READ_ONLY_ALLOW {
-        assert!(decide(OutsideProjectPolicy::ReadOnly, m, || false).is_ok(), "{m}");
+        assert!(decide(OutsideProjectPolicy::ReadOnly, m, false, || false).is_ok(), "{m}");
     }
     for m in ["agent.spawn", "cron.add", "kernel.shutdown", "no.such.method", ""] {
-        let d = decide(OutsideProjectPolicy::ReadOnly, m, || false).unwrap_err();
-        assert_eq!(d.kind, "scope_denied", "{m}");
+        let d = decide(OutsideProjectPolicy::ReadOnly, m, false, || false).unwrap_err();
+        assert_eq!(d.kind, "project_required", "{m}");
         assert_eq!(d.message, SCOPE_MESSAGE);
-        assert!(decide(OutsideProjectPolicy::ReadOnly, m, || true).is_ok(), "{m} inside");
+        assert!(decide(OutsideProjectPolicy::ReadOnly, m, false, || true).is_ok(), "{m} inside");
     }
 }
 
 #[test]
 fn deny_all_keeps_only_liveness_and_project_lookup() {
     for m in DENY_ALL_ALLOW {
-        assert!(decide(OutsideProjectPolicy::DenyAll, m, || false).is_ok(), "{m}");
+        assert!(decide(OutsideProjectPolicy::DenyAll, m, false, || false).is_ok(), "{m}");
     }
     for m in ["kernel.ps", "agent.list", "chain.status", "agent.spawn"] {
-        assert!(decide(OutsideProjectPolicy::DenyAll, m, || false).is_err(), "{m}");
-        assert!(decide(OutsideProjectPolicy::DenyAll, m, || true).is_ok(), "{m} inside");
+        assert!(decide(OutsideProjectPolicy::DenyAll, m, false, || false).is_err(), "{m}");
+        assert!(decide(OutsideProjectPolicy::DenyAll, m, false, || true).is_ok(), "{m} inside");
     }
     assert!(DENY_ALL_ALLOW.iter().all(|m| READ_ONLY_ALLOW.contains(m)));
 }
 
 #[test]
 fn allow_all_never_checks_the_project() {
-    let r = decide(OutsideProjectPolicy::AllowAll, "agent.spawn", || panic!("not evaluated"));
+    let r = decide(OutsideProjectPolicy::AllowAll, "agent.spawn", false, || panic!("not evaluated"));
     assert!(r.is_ok());
 }
 
 #[test]
 fn allow_listed_methods_skip_registry_verification() {
-    decide(OutsideProjectPolicy::ReadOnly, "kernel.status", || panic!("not evaluated")).unwrap();
+    decide(OutsideProjectPolicy::ReadOnly, "kernel.status", false, || panic!("not evaluated")).unwrap();
 }
 
 // ---- population ----
@@ -171,7 +171,7 @@ const INTERCEPTS: &[&str] = &["ipc.subscribe_stream", "substrate.subscribe", "ke
 
 /// Allow-listed methods whose handler is not a legacy arm (ext routes or
 /// owned by other Phase 1 packages).
-const NOT_LEGACY_ARMS: &[&str] = &["kernel.handshake", "project.list", "project.show"];
+const NOT_LEGACY_ARMS: &[&str] = &["kernel.handshake", "project.list", "project.show", "auth.token.validate"];
 
 fn all_methods() -> Vec<String> {
     let (mut arms, _) = dispatch_arms();
@@ -199,7 +199,7 @@ fn population_every_dispatch_arm_is_allowed_or_denied_outside() {
     let methods = all_methods();
     let allowed: Vec<_> = methods
         .iter()
-        .filter(|m| decide(OutsideProjectPolicy::ReadOnly, m, || false).is_ok())
+        .filter(|m| decide(OutsideProjectPolicy::ReadOnly, m, false, || false).is_ok())
         .cloned()
         .collect();
     let mut expect: Vec<_> = methods
@@ -210,11 +210,11 @@ fn population_every_dispatch_arm_is_allowed_or_denied_outside() {
     expect.sort();
     assert_eq!(allowed, expect);
     for m in &methods {
-        assert!(decide(OutsideProjectPolicy::AllowAll, m, || false).is_ok(), "{m}");
+        assert!(decide(OutsideProjectPolicy::AllowAll, m, false, || false).is_ok(), "{m}");
         let on_list = DENY_ALL_ALLOW.contains(&m.as_str());
-        assert_eq!(decide(OutsideProjectPolicy::DenyAll, m, || false).is_ok(), on_list, "{m}");
+        assert_eq!(decide(OutsideProjectPolicy::DenyAll, m, false, || false).is_ok(), on_list, "{m}");
         if required_capability(m) != Capability::Read {
-            assert!(decide(OutsideProjectPolicy::ReadOnly, m, || false).is_err(), "{m} is not Read");
+            assert!(decide(OutsideProjectPolicy::ReadOnly, m, false, || false).is_err(), "{m} is not Read");
         }
     }
     // Sanity: the gate denies the bulk of the surface.
@@ -261,7 +261,7 @@ struct Reset;
 impl Drop for Reset {
     fn drop(&mut self) {
         crate::handshake_rpc::set_bound(Default::default());
-        init(None);
+        init(None, false);
     }
 }
 
@@ -271,25 +271,25 @@ async fn wire_scope_gate_denies_outside_and_verifies_claims() {
     let _reset = Reset;
     let dir = tempfile::tempdir().unwrap();
     write_manifest(dir.path(), &manifest(A, ProjectState::Active)).unwrap();
-    init(Some(dir.path().to_path_buf()));
+    init(Some(dir.path().to_path_buf()), false);
     crate::handshake_rpc::set_bound(Default::default());
     let kernel = kernel_with(OutsideProjectPolicy::ReadOnly).await;
 
     // No claim, unbound: a write-class probe is denied, a listed read passes.
     let r = roundtrip(&kernel, &echo_req("rpc_ext.test.echo", None)).await;
-    assert_eq!(r.error_kind.as_deref(), Some("scope_denied"));
+    assert_eq!(r.error_kind.as_deref(), Some("project_required"));
     assert_eq!(r.error.as_deref(), Some(SCOPE_MESSAGE));
     assert_eq!(r.id.as_deref(), Some("1"));
     assert!(roundtrip(&kernel, &echo_req("kernel.status", None)).await.ok);
     // Unregistered (unverified) claim: still outside.
     let r = roundtrip(&kernel, &echo_req("rpc_ext.test.echo", Some(C))).await;
-    assert_eq!(r.error_kind.as_deref(), Some("scope_denied"));
+    assert_eq!(r.error_kind.as_deref(), Some("project_required"));
     // Registered claim verifies against the manifest registry.
     let r = roundtrip(&kernel, &echo_req("rpc_ext.test.echo", Some(A))).await;
     assert!(r.ok, "{:?}", r.error);
     // A client that cannot be verified can't smuggle a mutating verb either.
     let r = roundtrip(&kernel, &echo_req("agent.spawn", Some(C))).await;
-    assert_eq!(r.error_kind.as_deref(), Some("scope_denied"));
+    assert_eq!(r.error_kind.as_deref(), Some("project_required"));
 }
 
 #[tokio::test]
@@ -298,7 +298,7 @@ async fn wire_bound_daemon_is_inside_and_mismatch_is_outside() {
     let _reset = Reset;
     let dir = tempfile::tempdir().unwrap();
     write_manifest(dir.path(), &manifest(B, ProjectState::Active)).unwrap();
-    init(Some(dir.path().to_path_buf()));
+    init(Some(dir.path().to_path_buf()), false);
     crate::handshake_rpc::set_bound(crate::handshake_rpc::BoundProject {
         project_id: Some(A.into()),
         via: clawft_rpc::handshake::BoundVia::Manifest,
@@ -318,19 +318,19 @@ async fn wire_bound_daemon_is_inside_and_mismatch_is_outside() {
         ..CallerCtx::default()
     };
     let r = authorize(&caller, &caps, "rpc_ext.test.echo", &null, &kernel).await.unwrap_err();
-    assert_eq!(r.error_kind.as_deref(), Some("scope_denied"));
+    assert_eq!(r.error_kind.as_deref(), Some("project_required"));
 }
 
 #[tokio::test]
 async fn wire_policies_deny_all_and_allow_all() {
     let _serial = TEST_BOUND_LOCK.lock().await;
     let _reset = Reset;
-    init(Some(tempfile::tempdir().unwrap().keep()));
+    init(Some(tempfile::tempdir().unwrap().keep()), false);
     crate::handshake_rpc::set_bound(Default::default());
     let deny = kernel_with(OutsideProjectPolicy::DenyAll).await;
     assert!(roundtrip(&deny, &echo_req("kernel.status", None)).await.ok);
     let r = roundtrip(&deny, &echo_req("kernel.ps", None)).await;
-    assert_eq!(r.error_kind.as_deref(), Some("scope_denied"));
+    assert_eq!(r.error_kind.as_deref(), Some("project_required"));
     let allow = kernel_with(OutsideProjectPolicy::AllowAll).await;
     assert!(roundtrip(&allow, &echo_req("rpc_ext.test.echo", None)).await.ok);
 }
@@ -386,5 +386,88 @@ fn voice_deny_list_covers_every_cron_mutation() {
     }
     for m in VOICE_DENIED {
         assert!(arms.iter().any(|a| a == m), "{m} is not a dispatched method");
+    }
+}
+
+// ---- profile-keyed default, voice inside, user-level, routes ----
+
+#[tokio::test]
+async fn unset_policy_is_allow_all_off_the_user_profile_and_read_only_on_it() {
+    let _serial = TEST_BOUND_LOCK.lock().await;
+    let _reset = Reset;
+    crate::handshake_rpc::set_bound(Default::default());
+    let kcfg = KernelConfig {
+        chain: Some(ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())),
+        ..KernelConfig::default()
+    };
+    assert_eq!(kcfg.governance.outside_project, None);
+    let k = Kernel::boot(Config::default(), kcfg, Arc::new(NativePlatform::new()))
+        .await
+        .unwrap();
+    let kernel: KernelRef = Arc::new(RwLock::new(k));
+    init(None, false);
+    assert!(roundtrip(&kernel, &echo_req("rpc_ext.test.echo", None)).await.ok);
+    init(None, true);
+    let r = roundtrip(&kernel, &echo_req("rpc_ext.test.echo", None)).await;
+    assert_eq!(r.error_kind.as_deref(), Some("project_required"));
+}
+
+#[tokio::test]
+async fn voice_principal_is_inside_for_the_scope_gate() {
+    let _serial = TEST_BOUND_LOCK.lock().await;
+    let _reset = Reset;
+    crate::handshake_rpc::set_bound(Default::default());
+    let kernel = kernel_with(OutsideProjectPolicy::DenyAll).await;
+    let voice = CallerCtx::internal_voice();
+    let caps = CallerCapabilities::from_scopes(voice.auth.clone().unwrap().split(',').map(str::to_owned));
+    let null = Value::Null;
+    assert!(authorize(&voice, &caps, "agent.spawn", &null, &kernel).await.is_ok());
+    // The cron deny-list still applies to it.
+    let e = authorize(&voice, &caps, "cron.add", &null, &kernel).await.unwrap_err();
+    assert_eq!(e.error_kind.as_deref(), Some("voice_denied"));
+    // An external caller with the same scopes is outside and denied.
+    let ext = CallerCtx::from_auth(voice.auth.clone());
+    let e = authorize(&ext, &caps, "agent.spawn", &null, &kernel).await.unwrap_err();
+    assert_eq!(e.error_kind.as_deref(), Some("project_required"));
+}
+
+#[test]
+fn user_level_ops_need_admin_outside_a_project() {
+    for m in USER_LEVEL_ALLOW {
+        let r = |p, admin| decide(p, m, admin, || false);
+        assert!(r(OutsideProjectPolicy::ReadOnly, true).is_ok(), "{m} admin");
+        assert_eq!(r(OutsideProjectPolicy::ReadOnly, false).unwrap_err().kind, "project_required", "{m}");
+        assert!(r(OutsideProjectPolicy::DenyAll, true).is_err(), "{m} deny_all");
+        assert!(r(OutsideProjectPolicy::AllowAll, false).is_ok());
+        assert!(!READ_ONLY_ALLOW.contains(m));
+    }
+    assert!(READ_ONLY_ALLOW.contains(&"auth.token.validate"));
+}
+
+/// Prefix routes whose verbs are individually listed above (everything
+/// unlisted under them is denied outside a project by default).
+const CLASSIFIED_PREFIXES: &[&str] = &["project.", "auth.token.", "rpc_ext.test."];
+
+/// Every registered ext route must be classified: allow-listed, user-level,
+/// or a prefix whose verbs are classified. Fails when a package adds a route
+/// without deciding what it means outside a project.
+#[test]
+fn population_every_ext_route_is_classified() {
+    let routes = crate::rpc_ext::builtin_route_names();
+    assert!(!routes.is_empty());
+    for (name, _cap) in routes {
+        let classified = if name.ends_with('.') {
+            CLASSIFIED_PREFIXES.contains(&name)
+        } else {
+            READ_ONLY_ALLOW.contains(&name) || USER_LEVEL_ALLOW.contains(&name)
+        };
+        assert!(classified, "ext route {name:?} is not classified in scope_gate");
+    }
+}
+
+#[test]
+fn unlisted_verbs_under_classified_prefixes_are_denied() {
+    for m in ["project.init", "project.archive", "auth.token.rotate", "rpc_ext.test.echo"] {
+        assert!(decide(OutsideProjectPolicy::ReadOnly, m, true, || false).is_err(), "{m}");
     }
 }
