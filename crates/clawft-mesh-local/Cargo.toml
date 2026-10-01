@@ -1,0 +1,25 @@
+[package]
+name = "clawft-mesh-local"
+version.workspace = true
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "mesh-local/1 protocol, user certificate, weft:// addressing, peer identity and client for the WeftOS machine mesh service (ADR-103)"
+
+# Deliberately no clawft-kernel dependency: the machine mesh service links this
+# crate and must stay free of the kernel's owned-state subsystems.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+ed25519-dalek = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+rand = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "net", "rt", "sync", "time", "macros"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
