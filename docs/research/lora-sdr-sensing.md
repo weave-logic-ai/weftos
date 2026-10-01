@@ -173,6 +173,23 @@ No code needed until a capture workload asks for them.
 | E5 | E4 again with one interior wall in the path | result recorded; this is the point of sub-GHz |
 | E6 | Run beside one RuView CSI node, both host-timestamped, into one log | agreement matrix for presence/motion between LoRa and CSI |
 | E7 (if E4/E5 are weak) | Two coherent channels (clock-shared RTLs or KrakenSDR), `H1·conj(H2)` | measurable breathing improvement over amplitude-only |
+| E7' (alternative) | AD9361 B210-class board: transmit and receive on **one clock** (no CFO at all), 2 coherent RX, 12-bit ADC, 26 MHz of the 915 band in one capture | coherent phase breathing; delay-resolved links |
+
+**B210-class upgrade (AD9361 clones, typically $150-350, not $20).** [I]
+
+| | RTL-SDR V3/V4 | AD9361 B210 clone |
+|---|---|---|
+| ADC | 8-bit, about 45 dB usable | 12-bit, about 70 dB |
+| Bandwidth | 2.56 MHz | up to 56 MHz |
+| Frequency | 0.5 MHz-1.766 GHz | 70 MHz-6 GHz (covers 433/915 and both Wi-Fi bands) |
+| Coherent RX channels | 1 | 2 (2×2 MIMO) |
+| Transmit | no | yes, full duplex, same clock as RX |
+
+- **The transmit side is the big win.** Transmit and receive share one oscillator, so the carrier offset from §2 disappears. You get real coherent phase, and it can run as a small FMCW/chirp radar.
+- **Clone risks to check before buying:**
+  - an AD9363 relabelled as an AD9361 (the AD9363 covers only 325 MHz-3.8 GHz with 20 MHz bandwidth)
+  - Kintex-7 (XC7K325T) variants need the vendor's FPGA image and UHD build, not stock Ettus images
+- **USB 3 vs the Pi 5.** 56 MS/s on two channels is beyond what USB 3 and the Pi 5 can carry. Sensing needs only 2-10 MS/s, which is fine.
 
 Put the capture and dechirp code in `scripts/` for the first pass. Move it to a Rust crate or cog only after E4 passes.
 
