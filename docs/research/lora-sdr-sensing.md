@@ -55,6 +55,18 @@ The 4πd/λ figure is the monostatic upper bound. For a bistatic link it depends
 - **All three** are within the RTL-SDR's range, so the receiver doesn't decide it. [V, datasheet coverage]
 - **Check the regulations before a long unattended run.** The legal column is inference from the band plans, not a reading of the current FCC/ISED text.
 
+### 2.4 GHz LoRa (SX1280/SX1281) and ESP32-only radios (added 2026-10-01)
+
+- **SX1280 is LoRa at 2.4 GHz with a built-in ranging engine.** It measures time-of-flight between two radios, which gives distance with no SDR involved. The 2.4 GHz band is licence-free worldwide, so the 433-vs-915 question goes away. Against 915 MHz:
+  - Breathing phase sensitivity is about 2.6× better (0.50 rad for 5 mm, versus 0.19).
+  - The Fresnel zone is narrower.
+  - It goes through walls less well and gets less range.
+  - It shares the band with Wi-Fi.
+
+  The LilyGO T3-S3 ships with an SX1280 option (ESP32-S3, RadioLib, plus a ToF ranging demo). ([CNX](https://www.cnx-software.com/2022/08/30/esp32-board-supports-2-4ghz-lora-with-sx1280-rf-transceiver/), [LilyGO T3-S3 wiki](https://wiki.lilygo.cc/products/t3-series/t3-s3/)) [V for the parts; I for the sensing comparison]
+- **lozaning/ESP32SDR** (created 2026-09-30, **no licence**): two ESP32-S3s. Receive is the ESPARGOS burst I/Q capture: 80/40/16 MS/s, bursts of about 16k samples, 10-bit I/Q packed to 8. Transmit works only by **keying the Wi-Fi calibration tone**, a CW carrier snapped to the 5 MHz Wi-Fi channel grid. That gives OOK/ASK/2-FSK at 0% BER board to board. The arbitrary-I/Q DAC replay path **doesn't radiate on the S3**, so there is no BPSK/QPSK and **no LoRa chirps**. RX quirks: a mirrored spectrum, a fixed spur at −3 MHz from centre, and an 8-bit ADC that clips (use manual gain around 22). ([repo](https://github.com/lozaning/ESP32SDR)) [V, README]
+- **Fit for sensing.** One ESP32-S3 keying a CW tone (the illuminator) plus a second in burst-RX mode makes a **~$20 2.4 GHz bistatic pair**. Bursts at about 5/s (F5OEO's measured rate) are above the ~1 Hz needed for 0.1-0.5 Hz breathing, but with separate clocks only amplitude is usable, the same as the RTL-SDR plan. An SX1280 transmitter could also stand in for the CW tone. That's an inexpensive 2.4 GHz counterpart to E2-E4. The missing licence means research only. [I]
+
 ## 2. Why this needs an SDR
 
 - **The SX127x only reports summary numbers.** Per packet you get RSSI and SNR, and in FSK mode you can poll a live RSSI register. There is no channel phase and no raw I/Q. That is enough for presence and motion (RSSI jumps as people move) and not enough for reliable breathing. The SX1262 has the same limit. [I]
