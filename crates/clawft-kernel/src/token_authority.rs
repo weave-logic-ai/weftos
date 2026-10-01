@@ -359,6 +359,73 @@ impl TokenAuthority {
             });
         }
         *self.table.lock().unwrap_or_else(|e| e.into_inner()) = fold(&records, now);
+        self.prune_journal(&events, &revoked_in_journal, now);
+    }
+
+    /// Drop journal revocations whose token can no longer be live
+    /// (`issued_at + MAX_TTL <= now`, by the chain's issued event). A
+    /// revocation whose issued event is unknown is kept. Rewrites
+    /// atomically (temp, fsync, rename, fsync dir, mode 0600), and only
+    /// when something is dropped.
+    fn prune_journal(
+        &self,
+        events: &[crate::chain::ChainEvent],
+        revoked: &[Value],
+        now: DateTime<Utc>,
+    ) {
+        use std::io::Write;
+        let Some(path) = &self.journal else { return };
+        let mut issued_at: HashMap<&str, DateTime<Utc>> = HashMap::new();
+        for ev in events {
+            if ev.source != SOURCE || ev.kind != KIND_ISSUED {
+                continue;
+            }
+            if let Some(p) = ev.payload.as_ref()
+                && let (Some(id), Some(t)) = (
+                    p.get("id").and_then(Value::as_str),
+                    parse_time(p, "issued_at"),
+                )
+            {
+                issued_at.insert(id, t);
+            }
+        }
+        let keep: Vec<&Value> = revoked
+            .iter()
+            .filter(|p| {
+                let id = p.get("id").and_then(Value::as_str).unwrap_or_default();
+                issued_at.get(id).is_none_or(|t| *t + MAX_TTL > now)
+            })
+            .collect();
+        if keep.len() == revoked.len() {
+            return;
+        }
+        let _guard = self.journal_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let write = || -> std::io::Result<()> {
+            let tmp = path.with_extension("jsonl.tmp");
+            let mut opts = std::fs::OpenOptions::new();
+            opts.create(true).write(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut f = opts.open(&tmp)?;
+            for p in &keep {
+                let mut line =
+                    json!({ "source": SOURCE, "kind": KIND_REVOKED, "payload": p }).to_string();
+                line.push('\n');
+                f.write_all(line.as_bytes())?;
+            }
+            f.sync_all()?;
+            std::fs::rename(&tmp, path)?;
+            if let Some(dir) = path.parent() {
+                std::fs::File::open(dir)?.sync_all()?;
+            }
+            Ok(())
+        };
+        if let Err(e) = write() {
+            tracing::warn!(path = %path.display(), error = %e, "token journal prune failed; keeping the old file");
+        }
     }
 
     /// Issue a token. Returns the secret (shown once) and its metadata.

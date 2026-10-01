@@ -396,3 +396,57 @@ fn revoked_id_stays_revoked_after_a_later_reissue_event() {
     );
     assert!(auth(&c).validate("wft_back").is_none());
 }
+
+#[test]
+fn rebuild_prunes_old_revocations_but_keeps_live_and_unknown_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("j.jsonl");
+    let c = chain();
+    let a = TokenAuthority::with_journal(Arc::clone(&c), "n", Some(journal.clone()));
+    let now = Utc::now();
+    // Issued 30 h ago: could no longer be live, so its revocation is prunable.
+    let old = hash_secret("wft_old");
+    c.append(
+        SOURCE,
+        KIND_ISSUED,
+        Some(issued_payload(
+            &old,
+            now - Duration::hours(30),
+            Duration::hours(1),
+        )),
+    );
+    // Issued now and revoked via the API: must stay.
+    let (_, live) = a.issue("live", None, None, &owner()).unwrap();
+    a.revoke(&live.id).unwrap();
+    // Revocation for an id with no issued event on the chain: must stay.
+    let unknown = "abcdabcdabcdabcd";
+    let mut text = std::fs::read_to_string(&journal).unwrap();
+    for id in [id_of(&old), unknown.to_owned()] {
+        let line = json!({"source": SOURCE, "kind": KIND_REVOKED, "payload": {"id": id}});
+        text.push_str(&format!("{line}\n"));
+    }
+    std::fs::write(&journal, text).unwrap();
+
+    a.rebuild_at(now);
+    let kept = std::fs::read_to_string(&journal).unwrap();
+    assert!(!kept.contains(&id_of(&old)), "old revocation not pruned");
+    assert!(kept.contains(&live.id));
+    assert!(kept.contains(unknown));
+    assert_eq!(kept.lines().count(), 2);
+    for l in kept.lines() {
+        serde_json::from_str::<Value>(l).unwrap();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&journal).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    assert!(!journal.with_extension("jsonl.tmp").exists());
+
+    // Nothing to prune: the file is left alone (same bytes).
+    a.rebuild_at(now);
+    assert_eq!(std::fs::read_to_string(&journal).unwrap(), kept);
+}
