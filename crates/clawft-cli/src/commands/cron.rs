@@ -25,7 +25,7 @@ use std::str::FromStr;
 use chrono::{TimeZone, Utc};
 use comfy_table::{Table, presets::UTF8_FULL};
 
-use clawft_rpc::{DaemonClient, Request};
+use clawft_rpc::Request;
 use clawft_types::config::Config;
 use clawft_types::cron::{CronJob, ScheduleKind};
 
@@ -108,7 +108,7 @@ fn format_ts(dt: Option<chrono::DateTime<Utc>>) -> String {
 ///
 /// Tries daemon RPC first; falls back to direct file I/O.
 pub async fn cron_list(_config: &Config) -> anyhow::Result<()> {
-    if let Ok(mut client) = DaemonClient::connect().await.ok_or(()) {
+    if let Ok(mut client) = crate::commands::daemon_conn::connect_opt().await.ok_or(()) {
         let resp = client.simple_call("cron.list").await?;
         if resp.ok {
             let data = resp.result.unwrap_or_default();
@@ -219,7 +219,7 @@ pub async fn cron_add(
     cron::Schedule::from_str(&normalized)
         .map_err(|e| anyhow::anyhow!("Invalid cron expression: {e}"))?;
 
-    if let Ok(mut client) = DaemonClient::connect().await.ok_or(()) {
+    if let Ok(mut client) = crate::commands::daemon_conn::connect_opt().await.ok_or(()) {
         let params = serde_json::json!({
             "name": name,
             "schedule": normalized,
@@ -254,7 +254,7 @@ pub async fn cron_add(
 ///
 /// Tries daemon RPC first; falls back to direct file I/O.
 pub async fn cron_remove(job_id: String, _config: &Config) -> anyhow::Result<()> {
-    if let Ok(mut client) = DaemonClient::connect().await.ok_or(()) {
+    if let Ok(mut client) = crate::commands::daemon_conn::connect_opt().await.ok_or(()) {
         let params = serde_json::json!({ "id": job_id });
         let resp = client
             .call(Request::with_params("cron.remove", params))
@@ -287,7 +287,7 @@ pub async fn cron_enable(job_id: String, enabled: bool, _config: &Config) -> any
         "cron.disable"
     };
 
-    if let Ok(mut client) = DaemonClient::connect().await.ok_or(()) {
+    if let Ok(mut client) = crate::commands::daemon_conn::connect_opt().await.ok_or(()) {
         let params = serde_json::json!({ "id": job_id });
         let resp = client.call(Request::with_params(method, params)).await?;
         if resp.ok {

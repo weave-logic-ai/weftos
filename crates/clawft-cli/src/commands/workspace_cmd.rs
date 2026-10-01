@@ -26,7 +26,7 @@ use clap::{Args, Subcommand};
 use comfy_table::{Table, presets::UTF8_FULL};
 
 use clawft_core::workspace::{WorkspaceManager, WorkspaceStatus};
-use clawft_rpc::{DaemonClient, Request};
+use clawft_rpc::Request;
 
 /// Arguments for the `weft workspace` subcommand.
 #[derive(Args)]
@@ -137,7 +137,7 @@ pub async fn run(args: WorkspaceArgs) -> anyhow::Result<()> {
 // ── RPC-first wrappers ─────────────────────────────────────────
 
 async fn ws_create_rpc(name: &str, dir: Option<&str>) -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let params = serde_json::json!({ "name": name, "dir": dir });
         let req = Request::with_params("workspace.create", params);
         let resp = client.call(req).await?;
@@ -154,7 +154,7 @@ async fn ws_create_rpc(name: &str, dir: Option<&str>) -> anyhow::Result<()> {
 }
 
 async fn ws_list_rpc(show_all: bool) -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let params = serde_json::json!({ "all": show_all });
         let req = Request::with_params("workspace.list", params);
         let resp = client.call(req).await?;
@@ -187,7 +187,7 @@ async fn ws_list_rpc(show_all: bool) -> anyhow::Result<()> {
 }
 
 async fn ws_load_rpc(name_or_path: &str) -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let params = serde_json::json!({ "name_or_path": name_or_path });
         let req = Request::with_params("workspace.load", params);
         let resp = client.call(req).await?;
@@ -204,7 +204,7 @@ async fn ws_load_rpc(name_or_path: &str) -> anyhow::Result<()> {
 }
 
 async fn ws_status_rpc() -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let resp = client.simple_call("workspace.status").await?;
         let data = resp.into_result()?;
         if let Some(name) = data["name"].as_str() {
@@ -249,7 +249,7 @@ async fn ws_delete_rpc(name: &str, skip_confirm: bool, keep_data: bool) -> anyho
         }
     }
 
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let params = serde_json::json!({ "name": name, "keep_data": keep_data });
         let req = Request::with_params("workspace.delete", params);
         let resp = client.call(req).await?;
@@ -262,7 +262,7 @@ async fn ws_delete_rpc(name: &str, skip_confirm: bool, keep_data: bool) -> anyho
 }
 
 async fn ws_config_set_rpc(key: &str, value: &str) -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let params = serde_json::json!({ "key": key, "value": value });
         let req = Request::with_params("workspace.config.set", params);
         let resp = client.call(req).await?;
@@ -275,7 +275,7 @@ async fn ws_config_set_rpc(key: &str, value: &str) -> anyhow::Result<()> {
 }
 
 async fn ws_config_get_rpc(key: &str) -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let params = serde_json::json!({ "key": key });
         let req = Request::with_params("workspace.config.get", params);
         let resp = client.call(req).await?;
@@ -294,7 +294,7 @@ async fn ws_config_get_rpc(key: &str) -> anyhow::Result<()> {
 }
 
 async fn ws_config_reset_rpc() -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let resp = client.simple_call("workspace.config.reset").await?;
         resp.into_result()?;
         println!("Workspace configuration reset to defaults.");
