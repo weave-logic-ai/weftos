@@ -91,6 +91,32 @@ pub fn show(dir: &Path, params: &Value) -> Response {
     }
 }
 
+/// Why `canon` must not become a project root, if it must not: the
+/// filesystem root and its direct children (`/etc`, `/Users`), `$HOME` and
+/// every ancestor of it, anything inside `~/.weftos` or `~/.clawft`, and
+/// dot-dirs directly under `$HOME` (`~/.ssh`, `~/.config`).
+fn refuse_root(canon: &Path, home: Option<&Path>) -> Option<&'static str> {
+    if canon.parent().is_none_or(|p| p.parent().is_none()) {
+        return Some("refusing to register the filesystem root or a top-level system directory");
+    }
+    let home = home?;
+    let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+    if home.starts_with(canon) {
+        return Some("refusing to register $HOME or one of its ancestors as a project");
+    }
+    for state in [".weftos", ".clawft"] {
+        if canon.starts_with(home.join(state)) {
+            return Some("refusing to register WeftOS's own state directory as a project");
+        }
+    }
+    let dot_dir_under_home = canon.parent() == Some(home.as_path())
+        && canon
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with('.'));
+    dot_dir_under_home.then_some("refusing to register a dot-directory under $HOME as a project")
+}
+
 /// `project.register`: adopt `root` into the manifest store.
 pub fn register(dir: &Path, home: Option<&Path>, params: &Value) -> Response {
     let Some(root) = params.get("root").and_then(Value::as_str) else {
@@ -101,12 +127,8 @@ pub fn register(dir: &Path, home: Option<&Path>, params: &Value) -> Response {
         return Response::error_with_kind("bad_root", format!("{}: root must be absolute", root.display()));
     }
     let canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let is_home = home.is_some_and(|h| h.canonicalize().map_or(h == canon, |c| c == canon));
-    if canon.parent().is_none() || is_home {
-        return Response::error_with_kind(
-            "bad_root",
-            format!("{}: refusing to register the filesystem root or $HOME as a project", canon.display()),
-        );
+    if let Some(why) = refuse_root(&canon, home) {
+        return Response::error_with_kind("bad_root", format!("{}: {why}", canon.display()));
     }
     let name = params.get("name").and_then(Value::as_str);
     match adopt_or_init(&canon, dir, name) {
@@ -214,6 +236,32 @@ mod tests {
         }
         assert_eq!(register(&mdir, Some(&home), &json!({"root": home})).error_kind.as_deref(), Some("bad_root"));
         assert!(!mdir.exists() || list_manifests(&mdir).unwrap().manifests.is_empty());
+    }
+
+    #[test]
+    fn register_refuses_ancestors_state_dirs_and_dot_dirs_under_home() {
+        let (t, mdir, home, _p) = dirs();
+        for d in [".ssh", ".config", ".weftos/run", ".weftos", ".clawft"] {
+            std::fs::create_dir_all(home.join(d)).unwrap();
+        }
+        let parent = home.parent().unwrap().to_path_buf();
+        for bad in [
+            parent,
+            home.join(".ssh"),
+            home.join(".config"),
+            home.join(".weftos"),
+            home.join(".weftos/run"),
+            home.join(".clawft"),
+        ] {
+            let r = register(&mdir, Some(&home), &json!({"root": bad}));
+            assert_eq!(r.error_kind.as_deref(), Some("bad_root"), "{}", bad.display());
+            assert!(!bad.join(".weftos/project.toml").exists(), "{}", bad.display());
+        }
+        // A normal directory under home, and a non-dot subdir, are fine.
+        let ok_dir = home.join("work/app");
+        std::fs::create_dir_all(&ok_dir).unwrap();
+        assert!(register(&mdir, Some(&home), &json!({"root": ok_dir})).ok);
+        let _ = t;
     }
 
     #[test]

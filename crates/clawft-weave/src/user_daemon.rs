@@ -12,11 +12,12 @@
 //! [`RootSource::User`]: clawft_types::runtime_paths::RootSource::User
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use clawft_platform::{Platform, config_loader};
 use clawft_types::config::Config;
-use clawft_types::runtime_paths::{home_dir, set_user_profile, user_weftos_dir};
+use clawft_types::runtime_paths::{
+    absolutize, home_dir, set_user_profile, user_profile_active, user_weftos_dir,
+};
 
 use crate::commands::LoadedConfig;
 
@@ -38,18 +39,28 @@ pub fn parse_profile(value: Option<&str>) -> Result<Option<&'static str>, String
     }
 }
 
-static ACTIVE: AtomicBool = AtomicBool::new(false);
-
 /// Activate the user profile for this process: every later
-/// `RuntimePaths::resolve()` returns the user root.
+/// `RuntimePaths::resolve()` returns the user root. Must run before the
+/// working directory changes ([`prepare_home`]); it captures a relative
+/// `WEFTOS_RUNTIME_DIR` as an absolute path.
 pub fn enter() {
     set_user_profile(true);
-    ACTIVE.store(true, Ordering::SeqCst);
+}
+
+/// Leave the user profile (tests).
+pub fn leave() {
+    set_user_profile(false);
 }
 
 /// True when this process runs or addresses the user daemon.
 pub fn is_active() -> bool {
-    ACTIVE.load(Ordering::SeqCst)
+    user_profile_active()
+}
+
+/// A `--config` path made absolute, so the later `chdir` to `~/.weftos`
+/// cannot change what it names.
+pub fn absolutize_config(config: Option<&str>) -> Option<String> {
+    config.map(|c| absolutize(Path::new(c)).to_string_lossy().into_owned())
 }
 
 /// Profile and roles to report in the handshake (`None` for the default daemon).
@@ -187,6 +198,17 @@ mod tests {
         let loaded = layer_user_config(layers, &json!({})).unwrap();
         assert_eq!(loaded.config.kernel.max_processes, 9);
         assert!(loaded.workspace_routing.is_none());
+    }
+
+    #[test]
+    fn config_path_is_absolutized() {
+        assert_eq!(absolutize_config(None), None);
+        assert_eq!(absolutize_config(Some("/a/b.json")).as_deref(), Some("/a/b.json"));
+        let abs = absolutize_config(Some("cfg.json")).unwrap();
+        assert_eq!(
+            Path::new(&abs),
+            std::env::current_dir().unwrap().join("cfg.json")
+        );
     }
 
     #[test]

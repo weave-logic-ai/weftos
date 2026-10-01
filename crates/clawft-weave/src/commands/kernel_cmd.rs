@@ -126,7 +126,7 @@ pub enum KernelAction {
 }
 
 /// Run the kernel subcommand.
-pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
+pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
     #[cfg(any(unix, windows))]
     let user_profile = crate::user_daemon::parse_profile(
         args.profile
@@ -138,7 +138,9 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
         .is_some();
     #[cfg(any(unix, windows))]
     if user_profile {
-        // Before anything resolves a socket, pid or chain path.
+        // Before anything resolves a socket, pid or chain path, and before
+        // `prepare_home` changes directory: fix relative paths first.
+        args.config = crate::user_daemon::absolutize_config(args.config.as_deref());
         crate::user_daemon::enter();
     }
     // Platforms without a local daemon transport (neither Unix UDS nor

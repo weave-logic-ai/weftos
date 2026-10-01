@@ -32,7 +32,7 @@
 //! kernel boot, chain choice) agrees. `$WEFTOS_RUNTIME_DIR` still wins.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::RwLock;
 
 /// Environment variable that points a daemon at an isolated runtime dir.
 pub const RUNTIME_DIR_ENV: &str = "WEFTOS_RUNTIME_DIR";
@@ -62,16 +62,39 @@ pub enum RootSource {
     User,
 }
 
-static USER_PROFILE: AtomicBool = AtomicBool::new(false);
+/// Process-wide user-profile state: `None` when off, else the absolute
+/// `$WEFTOS_RUNTIME_DIR` captured when the profile was entered (the daemon
+/// later changes its working directory, so a relative value must be fixed
+/// first). The one source of truth for "is this the user daemon".
+static USER_PROFILE: RwLock<Option<Option<PathBuf>>> = RwLock::new(None);
+
+/// Make `path` absolute against the current working directory (lexical; the
+/// path need not exist).
+pub fn absolutize(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+}
 
 /// Make [`RuntimePaths::resolve`] return the user root for this process.
+///
+/// Turning it on captures `$WEFTOS_RUNTIME_DIR` as an absolute path now, so
+/// a later `chdir` cannot move the root. Call before changing directory.
 pub fn set_user_profile(on: bool) {
-    USER_PROFILE.store(on, Ordering::SeqCst);
+    let state = on.then(|| {
+        std::env::var(RUNTIME_DIR_ENV)
+            .ok()
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty())
+            .map(|v| absolutize(Path::new(&v)))
+    });
+    *USER_PROFILE.write().unwrap_or_else(|e| e.into_inner()) = state;
 }
 
 /// True when this process runs (or addresses) the user daemon.
 pub fn user_profile_active() -> bool {
-    USER_PROFILE.load(Ordering::SeqCst)
+    USER_PROFILE
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some()
 }
 
 /// `<home>/.weftos`, the per-user state directory (ADR-103 D4).
@@ -179,7 +202,7 @@ impl RuntimePaths {
     pub fn user_with(env: Option<&str>, home: Option<&Path>) -> Self {
         if let Some(dir) = env.map(str::trim).filter(|d| !d.is_empty()) {
             return Self {
-                root: PathBuf::from(dir),
+                root: absolutize(Path::new(dir)),
                 source: RootSource::User,
             };
         }
@@ -196,8 +219,10 @@ impl RuntimePaths {
     /// Honours [`set_user_profile`].
     pub fn resolve() -> Self {
         let env = std::env::var(RUNTIME_DIR_ENV).ok();
-        if user_profile_active() {
-            return Self::user_with(env.as_deref(), home_dir().as_deref());
+        let user = USER_PROFILE.read().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(captured) = user {
+            let captured = captured.as_ref().and_then(|p| p.to_str());
+            return Self::user_with(captured, home_dir().as_deref());
         }
         let cwd = std::env::current_dir().ok();
         let home = home_dir();
@@ -339,6 +364,17 @@ mod tests {
         assert_eq!(
             user_chain_checkpoint(&home),
             home.join(".weftos/chain/chain.json")
+        );
+    }
+
+    #[test]
+    fn user_root_env_override_is_made_absolute() {
+        let p = RuntimePaths::user_with(Some("rel/run"), Some(Path::new("/h")));
+        assert!(p.root().is_absolute(), "{:?}", p.root());
+        assert!(p.root().ends_with("rel/run"));
+        assert_eq!(
+            p.root(),
+            std::env::current_dir().unwrap().join("rel/run")
         );
     }
 

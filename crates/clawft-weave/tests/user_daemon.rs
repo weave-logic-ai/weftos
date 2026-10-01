@@ -105,6 +105,15 @@ async fn call(socket: &Path, method: &str, params: Value, auth: &str) -> Value {
     serde_json::from_str(ack.trim()).unwrap()
 }
 
+/// Resets the process-wide user profile when a test ends, pass or fail.
+struct ProfileGuard;
+
+impl Drop for ProfileGuard {
+    fn drop(&mut self) {
+        clawft_weave::user_daemon::leave();
+    }
+}
+
 #[tokio::test]
 async fn kernel_status_carries_the_handshake_default_then_user_profile() {
     let (socket, _shutdown) = spawn_test_daemon().await;
@@ -124,6 +133,7 @@ async fn kernel_status_carries_the_handshake_default_then_user_profile() {
 
     // User profile: profile, roles, the local uid and the chain-key id.
     clawft_weave::user_daemon::enter();
+    let _guard = ProfileGuard;
     let r = call(&socket, "kernel.status", Value::Null, "admin").await;
     let h = &r["result"]["handshake"];
     assert_eq!(h["profile"], "user", "{h}");
