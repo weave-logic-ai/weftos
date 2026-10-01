@@ -287,7 +287,7 @@ files remain valid.
 ```json
 {
   "gateway": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 18790,
     "heartbeatIntervalMinutes": 0,
     "heartbeatPrompt": "heartbeat",
@@ -300,7 +300,7 @@ files remain valid.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `host` | string | `"0.0.0.0"` | Gateway bind address |
+| `host` | string | `"127.0.0.1"` | Gateway bind address |
 | `port` | u16 | `18790` | Gateway listen port |
 | `heartbeatIntervalMinutes` | u64 | `0` | Heartbeat interval (0 = off) |
 | `heartbeatPrompt` | string | `"heartbeat"` | Heartbeat prompt text |

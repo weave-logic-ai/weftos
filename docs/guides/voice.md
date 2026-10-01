@@ -358,7 +358,7 @@ A complete `config.json` snippet with voice, provider keys, and gateway:
   },
 
   "gateway": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 18790,
     "api_enabled": true
   }

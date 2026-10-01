@@ -217,7 +217,7 @@ async fn processes_and_chain_status_return_daemon_data() {
 }
 
 #[tokio::test]
-async fn daemon_down_returns_503_with_socket_path() {
+async fn daemon_down_returns_503_without_socket_path() {
     let dir = tempfile::tempdir().unwrap();
     let sock = dir.path().join("absent.sock");
     let (state, auth) = make_state(&sock);
@@ -227,7 +227,7 @@ async fn daemon_down_returns_503_with_socket_path() {
     let (status, body) = get(app, &token, "/api/processes").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"], "daemon unavailable");
-    assert_eq!(body["socket"], sock.display().to_string());
+    assert!(!body.to_string().contains("absent.sock"));
     assert_eq!(body["remedy"], "weaver kernel start");
 }
 
