@@ -45,7 +45,8 @@ C->S  hello      {proto_min, proto_max, features:[..], role:"user"|"admin", buil
                   client_nonce:"<32B hex>"}
 S->C  hello_ack  {proto, features:[..], node_id, machine_pubkey, service_build_sha, deprecated_below?,
                   uid, challenge:"<32B hex>", machine_sig}  // uid = what the service read from the peer credential
-      machine_sig = Ed25519(machine_key, "weftos/mesh-local/hello/v1\0" || client_nonce || challenge || machine_pubkey)
+      machine_sig = Ed25519(machine_key, "weftos/mesh-local/hello/v1\0" || client_nonce || challenge || machine_pubkey || principal(uid))
+      // the client also requires ack.uid == its own euid (a trusted-uid relay cannot register under its own uid)
       // verified by the client against the pinned machine key BEFORE pinning or registering (key-possession proof)
 S->C  error      {kind:"proto_mismatch"|"bind_conflict"|"bind_pending"|"address_in_use"|"forbidden"|"bad_sig"|
                   "rate_limited"|"scope_required"|..., message, remedy, data?}   // then close for fatal kinds
