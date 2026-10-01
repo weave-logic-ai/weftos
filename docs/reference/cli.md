@@ -11,14 +11,17 @@ These flags are available on all subcommands.
 |------|-------------|
 | `--verbose`, `-v` | Enable debug-level logging (default level is `warn`) |
 | `--project <ULID>` | Talk to the kernel serving this project (see `weft project list`) |
-| `--runtime <DIR>` | Talk to the kernel whose runtime directory is `DIR` (overrides `WEFTOS_RUNTIME_DIR`) |
+| `--runtime <DIR>` | Talk to the kernel whose runtime directory is `DIR` (overrides `WEFTOS_RUNTIME_DIR`; `weft` also exports it as `WEFTOS_RUNTIME_DIR` for the rest of the process) |
 | `--version` | Show version and exit |
 | `--help`, `-h` | Show help text and exit |
 
 Every command that talks to the kernel resolves its endpoint the same way
 (flag, then environment, then the project manifest, then the user daemon) and
 verifies the daemon's handshake. When the daemon cannot be reached or is the
-wrong one, the error names the socket tried and the exact next command.
+wrong one, the error names the socket tried and the exact next command. A daemon
+that answers but is the wrong one (another project, another node, an
+incompatible protocol) is always an error: commands never fall back to local
+state changes against it.
 
 The default log level is `warn`. Only warnings and errors are printed unless
 `--verbose` is passed (which sets it to `debug`). The `RUST_LOG` environment

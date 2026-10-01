@@ -284,3 +284,41 @@ fn global_flags_parse_and_validate() {
         ],
     );
 }
+
+#[test]
+fn init_refuses_ancestors_of_home_and_state_dirs() {
+    let sb = Sandbox::new();
+    let parent = sb.home.path().canonicalize().unwrap();
+    let home = sb.dir("h");
+    let run = |cwd: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_weft"))
+            .args(["project", "init"])
+            .current_dir(cwd)
+            .env("HOME", &home)
+            .env("WEFTOS_MANIFESTS_DIR", parent.join("manifests"))
+            .env("RUST_LOG", "off")
+            .output()
+            .unwrap()
+    };
+    let o = run(&parent);
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("parent of your home"));
+    let state = home.join(".weftos/x");
+    std::fs::create_dir_all(&state).unwrap();
+    let o = run(&state);
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("state directories"));
+    assert!(!state.join(".weftos").exists());
+}
+
+#[test]
+fn init_from_a_subdirectory_says_it_used_the_enclosing_root() {
+    let sb = Sandbox::new();
+    let proj = sb.dir("alpha");
+    sb.ok(&proj, &["project", "init"]);
+    let sub = proj.join("src");
+    std::fs::create_dir_all(&sub).unwrap();
+    let o = sb.weft(&sub, &["project", "init"]);
+    assert!(o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("enclosing project root"));
+}

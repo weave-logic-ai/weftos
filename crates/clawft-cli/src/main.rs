@@ -388,10 +388,25 @@ enum CronAction {
     },
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+fn main() -> anyhow::Result<()> {
+    let mut cli = Cli::parse();
+    if let Some(dir) = cli.runtime.take() {
+        // `--runtime` also governs the code paths that read the environment
+        // (`socket_path()`, `is_daemon_running()`, the kernel's node-key dir),
+        // so export it before any of them can run. The tokio runtime has not
+        // started yet, so this process is still single-threaded.
+        let dir = std::path::absolute(&dir).unwrap_or(dir);
+        // SAFETY: no other thread exists yet.
+        unsafe { std::env::set_var(clawft_types::runtime_paths::RUNTIME_DIR_ENV, &dir) };
+        cli.runtime = Some(dir);
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run(cli))
+}
 
+async fn run(cli: Cli) -> anyhow::Result<()> {
     if let Some(p) = &cli.project {
         clawft_types::project::validate_id(p).map_err(|_| {
             anyhow::anyhow!(

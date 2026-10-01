@@ -589,7 +589,7 @@ async fn spawn_turn_recorder(
                     }
                     Err(e) if attempt == 0 => {
                         tracing::debug!(error = %e, method, "voice recorder transport error; reconnecting");
-                        match crate::commands::daemon_conn::connect_opt().await {
+                        match crate::commands::daemon_conn::connect_retry().await {
                             Some(c) => client = c,
                             None => break,
                         }
@@ -599,7 +599,7 @@ async fn spawn_turn_recorder(
                     }
                 }
             }
-            if !posted && crate::commands::daemon_conn::connect_opt().await.is_none() {
+            if !posted && crate::commands::daemon_conn::connect_retry().await.is_none() {
                 tracing::warn!("kernel daemon gone — voice turn anchoring stopped for this session");
                 return;
             }

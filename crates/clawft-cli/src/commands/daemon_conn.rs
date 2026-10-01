@@ -7,7 +7,7 @@
 //! `--project` flags, verify the daemon's handshake, and print any
 //! warnings once per process.
 
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use clawft_rpc::handshake::remedy_for;
@@ -64,6 +64,38 @@ fn print_warnings(warnings: &[String]) {
     }
 }
 
+/// What dialing the resolved endpoint found.
+pub enum Outcome {
+    /// The right daemon answered.
+    Reachable(Box<Connected>),
+    /// Nothing answers at the endpoint; a local fallback is legitimate.
+    Unreachable,
+    /// Something answered (or the request was invalid) but it is not the
+    /// target: never fall back to local work. Carries the operator text,
+    /// ending in the remedy.
+    Wrong(String),
+}
+
+/// Dial `res` and classify the result.
+pub async fn outcome_for(res: &Resolution) -> Outcome {
+    match DaemonClient::connect_resolved(res).await {
+        Ok(c) => {
+            print_warnings(&c.warnings);
+            Outcome::Reachable(Box::new(c))
+        }
+        Err(ConnectError::Unreachable { .. }) => Outcome::Unreachable,
+        Err(e) => Outcome::Wrong(describe(&e)),
+    }
+}
+
+/// Resolve from flags and environment, then [`outcome_for`].
+pub async fn outcome() -> Outcome {
+    match resolve_current() {
+        Ok(res) => outcome_for(&res).await,
+        Err(e) => Outcome::Wrong(e.to_string()),
+    }
+}
+
 /// Resolve, connect and verify. Errors carry the remedy.
 pub async fn connect() -> anyhow::Result<Connected> {
     let res = resolve_current().map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -76,28 +108,38 @@ pub async fn connect() -> anyhow::Result<Connected> {
     }
 }
 
-/// [`connect`] for commands that have a local fallback.
+/// [`connect`] for one-shot commands that have a local fallback.
 ///
-/// An unreachable endpoint is `None` so the caller falls back (and prints
-/// its own note). A reachable but wrong daemon (project, node, protocol
-/// mismatch) is reported on stderr, also as `None`: the caller must not
-/// believe it reached the right kernel.
+/// `None` means nothing is listening, so the caller may fall back. A daemon
+/// that is the wrong one (project, node or protocol mismatch, refused
+/// handshake) or an invalid `--project` is a hard error: the message and its
+/// remedy go to stderr and the process exits 1, so no caller can run local
+/// work against the wrong target.
 pub async fn connect_opt() -> Option<DaemonClient> {
-    let res = match resolve_current() {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return None;
+    match outcome().await {
+        Outcome::Reachable(c) => Some(c.client),
+        Outcome::Unreachable => None,
+        Outcome::Wrong(text) => {
+            eprintln!("error: {text}");
+            std::process::exit(1);
         }
-    };
-    match DaemonClient::connect_resolved(&res).await {
-        Ok(c) => {
-            print_warnings(&c.warnings);
-            Some(c.client)
-        }
-        Err(ConnectError::Unreachable { .. }) => None,
-        Err(e) => {
-            eprintln!("error: {}", describe(&e));
+    }
+}
+
+static LAST_WRONG: Mutex<Option<String>> = Mutex::new(None);
+
+/// [`connect_opt`] for reconnect loops: a wrong daemon is reported once per
+/// distinct error and yields `None` (the loop's own give-up path).
+pub async fn connect_retry() -> Option<DaemonClient> {
+    match outcome().await {
+        Outcome::Reachable(c) => Some(c.client),
+        Outcome::Unreachable => None,
+        Outcome::Wrong(text) => {
+            let mut last = LAST_WRONG.lock().unwrap_or_else(|p| p.into_inner());
+            if last.as_deref() != Some(text.as_str()) {
+                eprintln!("error: {text}");
+                *last = Some(text);
+            }
             None
         }
     }
@@ -195,5 +237,133 @@ mod tests {
             detail: "denied".into(),
         };
         assert!(describe(&r).contains("next:"));
+    }
+
+    // ---- fake daemons: Outcome classification ----
+
+    use clawft_rpc::handshake::{
+        BoundVia, DaemonBuild, ProtoRange, handshake_value, proto_mismatch_response,
+    };
+    use clawft_rpc::{Handshake, Request, Response};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixListener;
+
+    const ID_A: &str = "01J0000000000000000000000A";
+    const ID_B: &str = "01J0000000000000000000000B";
+
+    /// Short path: unix socket paths are limited to ~104 bytes.
+    fn short_dir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("wc")
+            .tempdir_in(std::env::temp_dir())
+            .unwrap()
+    }
+
+    fn hs(project: Option<&str>) -> Handshake {
+        Handshake {
+            proto: ProtoRange::supported(),
+            node_id: "n".into(),
+            user_id: None,
+            project_id: project.map(String::from),
+            bound_via: if project.is_some() { BoundVia::Project } else { BoundVia::None },
+            depth: 0,
+            parent: None,
+            runtime_dir: "/x".into(),
+            pid: 1,
+            version: "0.8.1".into(),
+            sha: "abcd1234".into(),
+            binary: None,
+        }
+    }
+
+    fn serve(dir: &std::path::Path, reply: impl Fn(&Request) -> Response + Send + 'static) {
+        let l = UnixListener::bind(dir.join("kernel.sock")).unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((s, _)) = l.accept().await else { return };
+                let (r, mut w) = s.into_split();
+                let mut lines = BufReader::new(r).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let req: Request = serde_json::from_str(&line).unwrap();
+                    let mut out = serde_json::to_string(&reply(&req)).unwrap();
+                    out.push('\n');
+                    if w.write_all(out.as_bytes()).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    fn resolution_for(dir: &std::path::Path, project: Option<&str>) -> Resolution {
+        resolve_with(&ResolveInputs {
+            flags: clawft_rpc::resolve::ResolveFlags {
+                runtime: Some(dir.to_path_buf()),
+                project: project.map(String::from),
+            },
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    fn wrong_text(o: Outcome) -> String {
+        match o {
+            Outcome::Wrong(t) => t,
+            Outcome::Reachable(_) => panic!("expected Wrong, got Reachable"),
+            Outcome::Unreachable => panic!("expected Wrong, got Unreachable"),
+        }
+    }
+
+    #[tokio::test]
+    async fn nothing_listening_is_unreachable() {
+        let d = short_dir();
+        let o = outcome_for(&resolution_for(d.path(), Some(ID_A))).await;
+        assert!(matches!(o, Outcome::Unreachable));
+    }
+
+    #[tokio::test]
+    async fn right_daemon_is_reachable() {
+        let d = short_dir();
+        serve(d.path(), |_| Response::success(handshake_value(&hs(Some(ID_A)))));
+        let o = outcome_for(&resolution_for(d.path(), Some(ID_A))).await;
+        assert!(matches!(o, Outcome::Reachable(_)));
+    }
+
+    #[tokio::test]
+    async fn wrong_project_daemon_is_wrong_not_unreachable() {
+        let d = short_dir();
+        serve(d.path(), |_| Response::success(handshake_value(&hs(Some(ID_B)))));
+        let t = wrong_text(outcome_for(&resolution_for(d.path(), Some(ID_A))).await);
+        assert!(t.contains(ID_A) && t.contains(ID_B), "{t}");
+        assert!(t.contains(&format!("--project {ID_A}")), "{t}");
+        assert!(!t.contains("no kernel reachable"), "{t}");
+    }
+
+    #[tokio::test]
+    async fn unbound_daemon_on_explicit_endpoint_is_wrong() {
+        let d = short_dir();
+        serve(d.path(), |_| Response::success(handshake_value(&hs(None))));
+        let t = wrong_text(outcome_for(&resolution_for(d.path(), Some(ID_A))).await);
+        assert!(t.contains("serves none"), "{t}");
+    }
+
+    #[tokio::test]
+    async fn proto_mismatch_no_handshake_and_refused_are_wrong() {
+        let d = short_dir();
+        serve(d.path(), |_| {
+            proto_mismatch_response(9, DaemonBuild { sha: "abcd1234", version: "0.8.1" })
+        });
+        let t = wrong_text(outcome_for(&resolution_for(d.path(), None)).await);
+        assert!(t.contains("protocol mismatch"), "{t}");
+
+        let d = short_dir();
+        serve(d.path(), |r| Response::error(format!("unknown method: {}", r.method)));
+        let t = wrong_text(outcome_for(&resolution_for(d.path(), None)).await);
+        assert!(t.contains("kernel.handshake"), "{t}");
+
+        let d = short_dir();
+        serve(d.path(), |_| Response::error_with_kind("denied", "no"));
+        let t = wrong_text(outcome_for(&resolution_for(d.path(), None)).await);
+        assert!(t.contains("refused the handshake"), "{t}");
     }
 }

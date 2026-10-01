@@ -122,34 +122,65 @@ fn canon(p: &Path) -> PathBuf {
     p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
 }
 
-/// Root of the project containing `cwd`, or `cwd` itself when none exists.
-/// Refuses `$HOME` itself: a project rooted there would claim everything.
-fn project_root(env: &Env) -> anyhow::Result<PathBuf> {
+/// Why `root` can never be a project root, if so. A project rooted at
+/// `$HOME`, above it, or in the tool's own state directories would claim
+/// trees that are not one project.
+fn forbidden_root(root: &Path, home: &Path) -> Option<String> {
+    let why = if root.parent().is_none() {
+        "the filesystem root"
+    } else if root == home {
+        "your home directory"
+    } else if home.starts_with(root) {
+        "a parent of your home directory"
+    } else if root.starts_with(home.join(".weftos")) || root.starts_with(home.join(".clawft")) {
+        "inside the WeftOS state directories (~/.weftos, ~/.clawft)"
+    } else {
+        return None;
+    };
+    Some(format!(
+        "refusing to create a project at {} ({why}); cd into a project directory first",
+        root.display()
+    ))
+}
+
+/// Root of the project containing `cwd`, or `cwd` itself when none exists,
+/// plus a note when that root is an ancestor of the cwd.
+fn project_root(env: &Env) -> anyhow::Result<(PathBuf, Option<String>)> {
     let home = canon(&env.home);
-    if let Some(root) = find_project_toml(&env.cwd, Some(&home)) {
-        return Ok(root);
-    }
     let cwd = canon(&env.cwd);
-    if cwd == home {
-        bail!(
-            "refusing to create a project at {} (your home directory); \
-             cd into a project directory first",
-            cwd.display()
-        );
+    let found = find_project_toml(&env.cwd, Some(&home));
+    let root = found.clone().map(|r| canon(&r)).unwrap_or_else(|| cwd.clone());
+    if let Some(msg) = forbidden_root(&root, &home) {
+        bail!("{msg}");
     }
-    Ok(cwd)
+    let note = (root != cwd).then(|| {
+        format!(
+            "note: acting on the enclosing project root {} (not the current directory)",
+            root.display()
+        )
+    });
+    Ok((root, note))
 }
 
 /// `weft project init`.
 pub fn init(env: &Env, name: Option<&str>, fork: bool, force: bool) -> anyhow::Result<String> {
-    let root = project_root(env)?;
+    let (root, note) = project_root(env)?;
+    if let Some(n) = note {
+        eprintln!("{n}");
+    }
     let m = if fork {
         reinit_fork(&root, &env.manifests_dir, name, force)
     } else {
         adopt_or_init(&root, &env.manifests_dir, name)
     }
     .map_err(|e| anyhow::anyhow!("{e}"))?;
-    let ignored = update_gitignore(&m.root);
+    let ignored = match update_gitignore(&m.root) {
+        Ok(added) => added,
+        Err(e) => {
+            eprintln!("warning: could not update .gitignore: {e}");
+            Vec::new()
+        }
+    };
     let mut out = format!(
         "project {} ({})\n  id:       {}\n  root:     {}\n  identity: {}\n  manifest: {}",
         m.name,
@@ -167,10 +198,12 @@ pub fn init(env: &Env, name: Option<&str>, fork: bool, force: bool) -> anyhow::R
 
 /// Append the chain and key paths to an existing `.gitignore` (never creates
 /// one). Returns the lines added.
-fn update_gitignore(root: &Path) -> Vec<String> {
+fn update_gitignore(root: &Path) -> Result<Vec<String>, String> {
     let path = root.join(".gitignore");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Vec::new();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
     };
     let missing: Vec<String> = [".weftos/chain/", ".weftos/project.key"]
         .into_iter()
@@ -178,7 +211,7 @@ fn update_gitignore(root: &Path) -> Vec<String> {
         .map(String::from)
         .collect();
     if missing.is_empty() {
-        return missing;
+        return Ok(missing);
     }
     let mut next = text;
     if !next.ends_with('\n') && !next.is_empty() {
@@ -188,10 +221,8 @@ fn update_gitignore(root: &Path) -> Vec<String> {
         next.push_str(l);
         next.push('\n');
     }
-    if std::fs::write(&path, next).is_err() {
-        return Vec::new();
-    }
-    missing
+    std::fs::write(&path, next).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(missing)
 }
 
 fn root_exists(m: &ProjectManifest) -> bool {
@@ -388,4 +419,28 @@ pub fn seed(env: &Env) -> anyhow::Result<String> {
     let report =
         seed_from_workspaces(&src, &env.manifests_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(format!("from {}\n{}", src.display(), render_seed(&report)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forbidden_roots() {
+        let home = Path::new("/Users/me");
+        for (root, frag) in [
+            ("/", "filesystem root"),
+            ("/Users/me", "home directory"),
+            ("/Users", "parent of your home"),
+            ("/Users/me/.weftos", "state directories"),
+            ("/Users/me/.weftos/projects/x", "state directories"),
+            ("/Users/me/.clawft/ws", "state directories"),
+        ] {
+            let m = forbidden_root(Path::new(root), home).unwrap_or_else(|| panic!("{root}"));
+            assert!(m.contains(frag), "{root}: {m}");
+        }
+        for ok in ["/Users/me/dev/x", "/Users/me/.config/x", "/srv/x", "/Users/meh"] {
+            assert!(forbidden_root(Path::new(ok), home).is_none(), "{ok}");
+        }
+    }
 }

@@ -116,7 +116,7 @@ pub async fn handle_watch(conv_id: String, json: bool, interval_ms: u64) -> anyh
                         },
                         Err(e) => {
                             eprintln!("daemon transport error: {e}; reconnecting…");
-                            match crate::commands::daemon_conn::connect_opt().await {
+                            match crate::commands::daemon_conn::connect_retry().await {
                                 Some(c) => { client = c; continue; }
                                 None => {
                                     eprintln!("kernel daemon gone — watch stopped.");
@@ -138,7 +138,7 @@ pub async fn handle_watch(conv_id: String, json: bool, interval_ms: u64) -> anyh
                     Err(e) => {
                         // One reconnect attempt; a stopped daemon ends the watch.
                         eprintln!("daemon transport error: {e}; reconnecting…");
-                        match crate::commands::daemon_conn::connect_opt().await {
+                        match crate::commands::daemon_conn::connect_retry().await {
                             Some(c) => client = c,
                             None => {
                                 eprintln!("kernel daemon gone — watch stopped.");

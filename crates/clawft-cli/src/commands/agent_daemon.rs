@@ -240,7 +240,7 @@ pub async fn run_interactive(
                 // but keeps the session alive. If the daemon is truly gone
                 // (connect returns None) we end the session rather than
                 // spin printing errors.
-                match crate::commands::daemon_conn::connect_opt().await {
+                match crate::commands::daemon_conn::connect_retry().await {
                     Some(fresh) => {
                         client = fresh;
                         eprintln!("(reconnected to daemon)");

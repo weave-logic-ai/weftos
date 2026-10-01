@@ -179,7 +179,7 @@ async fn fetch_graph(
         Ok(resp) => resp
             .into_result()
             .map_err(|e| VoiceError::Transport(format!("conversation.graph rejected: {e}"))),
-        Err(e) => match crate::commands::daemon_conn::connect_opt().await {
+        Err(e) => match crate::commands::daemon_conn::connect_retry().await {
             Some(reconnected) => {
                 *client = reconnected;
                 let request =
