@@ -58,6 +58,7 @@ members = [
     "crates/eml-core",
     "crates/clawft-app",
     "crates/clawft-gui-egui",
+    "crates/weftos-ecg-scope",
     "crates/clawft-substrate",
     "crates/clawft-surface",
     "crates/clawft-canon",

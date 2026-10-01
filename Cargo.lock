@@ -10670,6 +10670,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "weftos-ecg-scope"
+version = "0.8.1"
+dependencies = [
+ "console_error_panic_hook",
+ "eframe",
+ "egui_plot",
+ "ehttp",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
+]
+
+[[package]]
 name = "weftos-leaf-scene"
 version = "0.1.0"
 dependencies = [

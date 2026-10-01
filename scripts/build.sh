@@ -445,6 +445,38 @@ cmd_browser() {
     fi
 }
 
+cmd_ecg_scope() {
+    local profile="${PROFILE:-release}"
+    header "Building weft-ecg-scope (native egui, profile: $profile)"
+    timer_start
+    run_cmd cargo build -p weftos-ecg-scope --bin weft-ecg-scope --profile "$profile"
+    timer_end
+    local dir="$profile"; [ "$profile" = "dev" ] && dir="debug"
+    report_binary_size "target/${dir}/weft-ecg-scope" "weft-ecg-scope"
+    pass "run: SEED_HOST=169.254.42.1 target/${dir}/weft-ecg-scope"
+}
+
+cmd_ecg_scope_web() {
+    local profile="${PROFILE:-release-wasm}"
+    header "Building weft-ecg-scope for the browser (wasm32-unknown-unknown, profile: $profile)"
+    if ! check_target_installed wasm32-unknown-unknown; then return 1; fi
+    timer_start
+    run_cmd cargo build --target wasm32-unknown-unknown -p weftos-ecg-scope --lib --profile "$profile"
+    timer_end
+    local wasm_file="target/wasm32-unknown-unknown/${profile}/weftos_ecg_scope.wasm"
+    report_binary_size "$wasm_file" "ecg-scope WASM (raw)"
+    local pkg_dir="$ROOT/crates/weftos-ecg-scope/www/pkg"
+    if command -v wasm-bindgen >/dev/null 2>&1; then
+        info "Running wasm-bindgen → $pkg_dir"
+        run_cmd wasm-bindgen "$wasm_file" --out-dir "$pkg_dir" --target web --no-typescript
+        report_binary_size "$pkg_dir/weftos_ecg_scope_bg.wasm" "ecg-scope WASM (bindgen)"
+        pass "pkg/ ready — serve crates/weftos-ecg-scope/www over http and open /?seed=<seed-ip>"
+    else
+        skip "wasm-bindgen CLI not found — pkg/ not generated"
+        info "Install with: cargo install wasm-bindgen-cli"
+    fi
+}
+
 cmd_ui() {
     header "Building React frontend (tsc + vite)"
     if [ ! -d "$ROOT/clawft-ui" ] || [ ! -f "$ROOT/clawft-ui/package.json" ]; then
@@ -1854,6 +1886,8 @@ ${BOLD}Commands:${NC}
   gui-egui        Build native egui GUI binary (weft-gui-egui, requires --features native)
   wasi            Build WASM for WASI (wasm32-wasip2)
   browser         Build WASM for browser (wasm32-unknown-unknown)
+  ecg-scope       Build weft-ecg-scope (native egui sensor hook-up tool for the sen0213-ecg cog)
+  ecg-scope-web   Build weft-ecg-scope for the browser (wasm + wasm-bindgen into www/pkg)
   ui              Build React frontend (tsc + vite)
   ui-docker       Build the clawft-ui multi-stage Docker image (WEFT-317).
                   Override tag with CLAWFT_UI_DOCKER_TAG=...
@@ -2143,6 +2177,8 @@ main() {
         gui-egui)     cmd_gui_egui ;;
         wasi)         cmd_wasi ;;
         browser)      cmd_browser ;;
+        ecg-scope)    cmd_ecg_scope ;;
+        ecg-scope-web) cmd_ecg_scope_web ;;
         ui)           cmd_ui ;;
         ui-docker)    cmd_ui_docker ;;
         ui-e2e)       cmd_ui_e2e ;;
