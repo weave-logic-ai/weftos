@@ -1,0 +1,508 @@
+---
+source: crates/clawft-kernel/tests/golden_snapshots.rs
+assertion_line: 214
+expression: json
+---
+{
+  "agent_routing": {
+    "routes": []
+  },
+  "agents": {
+    "binding_thread_mode": "deny",
+    "cost_budget": {
+      "max_iterations_per_conv": 30,
+      "max_tokens_per_conv": 200000,
+      "max_usd_per_conv": 1.0
+    },
+    "cow_memory": {
+      "cadence": "turn",
+      "enabled": false,
+      "ingest_turns": true,
+      "path": "~/.clawft/workspace/cow_memory"
+    },
+    "defaults": {
+      "max_tokens": 8192,
+      "max_tool_iterations": 20,
+      "memory_window": 50,
+      "model": "local/hermes-4.3-36b",
+      "temperature": 0.7,
+      "workspace": "~/.nanobot/workspace"
+    },
+    "workspace_root": null
+  },
+  "channels": {
+    "dingtalk": {
+      "allow_from": [],
+      "client_id": "",
+      "client_secret": "",
+      "enabled": false
+    },
+    "discord": {
+      "allow_from": [],
+      "enabled": false,
+      "gateway_url": "wss://gateway.discord.gg/?v=10&encoding=json",
+      "intents": 37377,
+      "max_chunks_before_file": 10,
+      "max_message_length": null,
+      "nitro": false,
+      "prefer_embeds": false,
+      "token": "",
+      "token_env": null
+    },
+    "email": {
+      "allow_from": [],
+      "auto_reply_enabled": true,
+      "consent_granted": false,
+      "enabled": false,
+      "from_address": "",
+      "imap_host": "",
+      "imap_mailbox": "INBOX",
+      "imap_password": "",
+      "imap_port": 993,
+      "imap_use_ssl": true,
+      "imap_username": "",
+      "mark_seen": true,
+      "max_body_chars": 12000,
+      "poll_interval_seconds": 30,
+      "smtp_host": "",
+      "smtp_password": "",
+      "smtp_port": 587,
+      "smtp_use_ssl": false,
+      "smtp_use_tls": true,
+      "smtp_username": "",
+      "subject_prefix": "Re: "
+    },
+    "feishu": {
+      "allow_from": [],
+      "app_id": "",
+      "app_secret": "",
+      "enabled": false,
+      "encrypt_key": "",
+      "verification_token": ""
+    },
+    "mochat": {
+      "agent_user_id": "",
+      "allow_from": [],
+      "base_url": "https://mochat.io",
+      "claw_token": "",
+      "enabled": false,
+      "groups": {},
+      "max_retry_attempts": 0,
+      "mention": {
+        "require_in_groups": false
+      },
+      "panels": [],
+      "refresh_interval_ms": 30000,
+      "reply_delay_mode": "non-mention",
+      "reply_delay_ms": 120000,
+      "retry_delay_ms": 500,
+      "sessions": [],
+      "socket_connect_timeout_ms": 10000,
+      "socket_disable_msgpack": false,
+      "socket_max_reconnect_delay_ms": 10000,
+      "socket_path": "/socket.io",
+      "socket_reconnect_delay_ms": 1000,
+      "socket_url": "",
+      "watch_limit": 100,
+      "watch_timeout_ms": 25000
+    },
+    "qq": {
+      "allow_from": [],
+      "app_id": "",
+      "enabled": false,
+      "secret": ""
+    },
+    "slack": {
+      "app_token": "",
+      "app_token_env": null,
+      "bot_token": "",
+      "bot_token_env": null,
+      "dm": {
+        "allow_from": [],
+        "enabled": true,
+        "policy": "open"
+      },
+      "enabled": false,
+      "group_allow_from": [],
+      "group_policy": "mention",
+      "mode": "socket",
+      "user_token_read_only": true,
+      "webhook_path": "/slack/events"
+    },
+    "telegram": {
+      "allow_from": [],
+      "enabled": false,
+      "proxy": null,
+      "token": "",
+      "token_env": null
+    },
+    "whatsapp": {
+      "allow_from": [],
+      "bridge_token": "",
+      "bridge_url": "ws://localhost:3001",
+      "enabled": false
+    }
+  },
+  "delegation": {
+    "claude_enabled": true,
+    "claude_model": "claude-sonnet-4-20250514",
+    "excluded_tools": [],
+    "max_tokens": 4096,
+    "max_turns": 10,
+    "rules": []
+  },
+  "gateway": {
+    "api_enabled": false,
+    "api_port": 18789,
+    "cors_origins": [
+      "http://localhost:5173"
+    ],
+    "heartbeat_interval_minutes": 0,
+    "heartbeat_prompt": "heartbeat",
+    "host": "127.0.0.1",
+    "port": 18790
+  },
+  "kernel": {
+    "brand": "WeftOS",
+    "enabled": true,
+    "governance": {},
+    "health_check_interval_secs": 30,
+    "max_processes": 64
+  },
+  "pipeline": {
+    "learner": "noop",
+    "scorer": "noop"
+  },
+  "plugins": {
+    "voice_grants": {}
+  },
+  "providers": {
+    "aihubmix": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "anthropic": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "custom": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "dashscope": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "deepseek": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "elevenlabs": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "gemini": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "groq": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "local": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "minimax": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "moonshot": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "ollama": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "openai": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "openai_codex": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "openrouter": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "provider_fallback_order": [],
+    "vllm": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "xai": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    },
+    "zhipu": {
+      "api_base": null,
+      "api_key": "",
+      "browser_direct": false,
+      "cors_proxy": null,
+      "extra_headers": null
+    }
+  },
+  "routing": {
+    "context_router": "null",
+    "cost_budgets": {
+      "global_daily_limit_usd": 0.0,
+      "global_monthly_limit_usd": 0.0,
+      "reset_hour_utc": 0,
+      "tracking_persistence": false
+    },
+    "escalation": {
+      "enabled": false,
+      "max_escalation_tiers": 1,
+      "threshold": 0.6000000238418579
+    },
+    "fallback_model": null,
+    "max_grantable_level": 1,
+    "mode": "static",
+    "permissions": {
+      "admin": {
+        "cost_budget_daily_usd": null,
+        "cost_budget_monthly_usd": null,
+        "custom_permissions": null,
+        "escalation_allowed": null,
+        "escalation_threshold": null,
+        "level": null,
+        "max_context_tokens": null,
+        "max_output_tokens": null,
+        "max_tier": null,
+        "model_access": null,
+        "model_denylist": null,
+        "model_override": null,
+        "rate_limit": null,
+        "streaming_allowed": null,
+        "tool_access": null,
+        "tool_denylist": null
+      },
+      "channels": {},
+      "user": {
+        "cost_budget_daily_usd": null,
+        "cost_budget_monthly_usd": null,
+        "custom_permissions": null,
+        "escalation_allowed": null,
+        "escalation_threshold": null,
+        "level": null,
+        "max_context_tokens": null,
+        "max_output_tokens": null,
+        "max_tier": null,
+        "model_access": null,
+        "model_denylist": null,
+        "model_override": null,
+        "rate_limit": null,
+        "streaming_allowed": null,
+        "tool_access": null,
+        "tool_denylist": null
+      },
+      "users": {},
+      "zero_trust": {
+        "cost_budget_daily_usd": null,
+        "cost_budget_monthly_usd": null,
+        "custom_permissions": null,
+        "escalation_allowed": null,
+        "escalation_threshold": null,
+        "level": null,
+        "max_context_tokens": null,
+        "max_output_tokens": null,
+        "max_tier": null,
+        "model_access": null,
+        "model_denylist": null,
+        "model_override": null,
+        "rate_limit": null,
+        "streaming_allowed": null,
+        "tool_access": null,
+        "tool_denylist": null
+      }
+    },
+    "rate_limiting": {
+      "global_rate_limit_rpm": 0,
+      "strategy": "sliding_window",
+      "window_seconds": 60
+    },
+    "selection_strategy": null,
+    "tiers": []
+  },
+  "skills": {
+    "autogen": {
+      "enabled": false,
+      "max_pending": 10,
+      "threshold": 3
+    },
+    "promotion": {
+      "enabled": true,
+      "threshold": 10
+    }
+  },
+  "tools": {
+    "allowed_tools": [],
+    "command_policy": {
+      "allowlist": [],
+      "denylist": [],
+      "mode": "allowlist"
+    },
+    "exec": {
+      "timeout": 60
+    },
+    "mcp_servers": {},
+    "restrict_to_workspace": false,
+    "url_policy": {
+      "allow_private": false,
+      "allowed_domains": [],
+      "blocked_domains": [],
+      "enabled": true
+    },
+    "web": {
+      "search": {
+        "api_key": "",
+        "max_results": 5
+      }
+    }
+  },
+  "voice": {
+    "audio": {
+      "channels": 1,
+      "chunk_size": 512,
+      "input_device": null,
+      "output_device": null,
+      "sample_rate": 16000
+    },
+    "audio_retention": "none",
+    "cloud_fallback": {
+      "enabled": false,
+      "stt_provider": "",
+      "tts_provider": ""
+    },
+    "confirmation": {
+      "anti_replay_nonce": true,
+      "timeout_seconds": 10,
+      "transcription_echo": true
+    },
+    "consumer": {
+      "chat_target_agent": "concierge-bot",
+      "command_prefix": "weft ",
+      "conv_id": "voice-default",
+      "enabled": false,
+      "permissions": {
+        "default_level": 0,
+        "principal_levels": {},
+        "safe_commands": [
+          "status",
+          "list",
+          "help"
+        ]
+      },
+      "transcript_topic": ""
+    },
+    "enabled": false,
+    "mode": "xai_s2s",
+    "personalities": {},
+    "rate_limit": {
+      "commands_per_minute": 10,
+      "fail_threshold": 3,
+      "post_fail_cooldown_seconds": 30,
+      "wake_activations_per_minute": 5
+    },
+    "stt": {
+      "enabled": true,
+      "language": "",
+      "model": "sherpa-onnx-streaming-zipformer-en-20M"
+    },
+    "tts": {
+      "enabled": true,
+      "fast_engine": "auto",
+      "model": "vits-piper-en_US-amy-medium",
+      "provider": "local",
+      "speed": 1.0,
+      "voice": ""
+    },
+    "vad": {
+      "adaptive": {
+        "enabled": true,
+        "learning_rate": 0.3499999940395355,
+        "max_ms": 3000,
+        "min_ms": 500,
+        "pause_margin_ms": 250,
+        "window_size": 8
+      },
+      "min_speech_ms": 250,
+      "silence_timeout_ms": 1500,
+      "threshold": 0.5
+    },
+    "wake": {
+      "enabled": false,
+      "model_path": null,
+      "phrase": "hey weft",
+      "sensitivity": 0.5
+    },
+    "xai": {
+      "api_key_env": "XAI_API_KEY",
+      "endpoint": "wss://api.x.ai/v1/realtime",
+      "realtime_model": "grok-voice-latest"
+    }
+  }
+}

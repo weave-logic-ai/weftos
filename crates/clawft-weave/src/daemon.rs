@@ -1004,9 +1004,7 @@ pub async fn run(
 
     // Endpoint probe, with the lock held (platform-specific).
     #[cfg(unix)]
-    crate::instance_lock::reclaim_stale_socket(&paths)
-        .await
-        .map_err(|e| anyhow::Error::new(crate::boot_refusal::BootRefused(e.to_string())))?;
+    crate::instance_lock::reclaim_stale_socket(&paths).await?;
     #[cfg(windows)]
     {
         // Named pipes have no filesystem node; dial the derived pipe name.
@@ -1084,15 +1082,7 @@ pub async fn run(
         .map_err(|e| anyhow::anyhow!("daemon identity bootstrap: {e}"))?;
     let kernel =
         boot_kernel_with_identity(config, kernel_config, Arc::new(platform), &daemon_identity)
-            .await
-            .map_err(|e| match e {
-                // Chain lock held, legacy adoption refused, bad boot config:
-                // retrying cannot help (exit 78, see boot_refusal).
-                clawft_kernel::KernelError::Boot(m) => {
-                    anyhow::Error::new(crate::boot_refusal::BootRefused(m))
-                }
-                e => anyhow::Error::new(e),
-            })?;
+            .await?;
     // The one-shot --new-chain / --adopt-legacy-chain requests have been
     // consumed by boot.
     clawft_kernel::chain_storage::request_new_chain(false);
@@ -3497,13 +3487,18 @@ pub async fn run(
     if restart_requested {
         info!("re-exec for restart");
         use std::os::unix::process::CommandExt;
-        // Original args (keeps `--profile user`) minus one-shot chain flags,
-        // and an exe path that survives an update replacing the binary.
-        let (exe, args) = crate::boot_refusal::reexec_plan(
-            &std::env::current_exe()?,
-            std::env::args().skip(1).collect(),
-        );
-        let err = std::process::Command::new(exe).args(args).exec(); // replaces process; only reached on error
+        // Original args (keeps `--profile user`), captured before the
+        // chdir with --config absolute, minus one-shot chain flags; an exe
+        // path that survives an update replacing the binary; an absolute
+        // runtime dir in the child's environment (Command::env).
+        let plan =
+            crate::boot_refusal::reexec_plan(&std::env::current_exe()?, crate::boot_refusal::replay());
+        let mut cmd = std::process::Command::new(&plan.exe);
+        cmd.args(&plan.args);
+        if let Some(rt) = &plan.runtime_dir {
+            cmd.env(clawft_types::runtime_paths::RUNTIME_DIR_ENV, rt);
+        }
+        let err = cmd.exec(); // replaces process; only reached on error
         eprintln!("re-exec failed: {err}");
         std::process::exit(1);
     }

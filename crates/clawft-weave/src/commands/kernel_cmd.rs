@@ -127,6 +127,9 @@ pub enum KernelAction {
 
 /// Run the kernel subcommand.
 pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
+    // Before any chdir: the SIGHUP re-exec replays these (see boot_refusal).
+    #[cfg(any(unix, windows))]
+    crate::boot_refusal::capture_replay();
     #[cfg(any(unix, windows))]
     let user_profile = crate::user_daemon::parse_profile(
         args.profile
