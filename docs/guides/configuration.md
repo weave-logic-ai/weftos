@@ -1144,3 +1144,40 @@ seed_peers = ["quic://10.0.0.2:9489"]
 ```
 
 Full guide: [mesh-quic.md](./mesh-quic.md). Kernel overview: [kernel.md](./kernel.md#mesh-k6).
+
+## Outside-project policy (`kernel.governance.outside_project`)
+
+ADR-103 D12. A request is *outside any project* when it claims no project and
+the daemon is not bound to one, or when the project it claims does not verify
+(it differs from the daemon's binding, or has no active manifest in
+`~/.weftos/projects/<id>.toml`). The claim itself is never trusted. The
+daemon's own in-process voice consumer counts as inside.
+
+```toml
+[kernel.governance]
+outside_project = "read_only"   # read_only | deny_all | allow_all
+```
+
+When unset the default depends on the daemon's root (ADR-103 D12; an
+amendment is pending): the `--profile user` daemon defaults to `read_only`;
+every other root (project-bound, legacy `~/.clawft`, env-isolated) defaults to
+`allow_all`, preserving pre-ADR-103 behaviour until it migrates. An explicit
+value always wins.
+
+| Value | Outside a project |
+|-------|-------------------|
+| `read_only` | Only an explicit allow-list of read methods (`kernel.status`, `kernel.ps`, `kernel.services`, `kernel.logs`, `kernel.handshake`, `ping`, `cluster.status\|nodes\|health`, `chain.status\|verify`, `agent.list\|inspect`, `control.list`, `llm.models`, `mcp.list`, `auth.token.validate`, `project.list\|show`), plus the user-level operations `auth.token.issue\|revoke\|list` and `project.register` for callers holding `admin`. Everything else, including methods added later, fails with `error_kind = "project_required"`: "not in a project; run `weft project init` or pass `--project`". |
+| `deny_all` | Only `kernel.status`, `kernel.handshake`, `project.list`, `project.show`. |
+| `allow_all` | No restriction. |
+
+Inside a project every method falls through to the usual capability check.
+
+Limit: `project` is declared by the client, so verification proves the project
+is registered, not that the caller belongs to it. In Phase 1 this guards
+against working in the wrong place by accident; it is not an authorisation
+boundary between local processes of one user.
+
+Independently of this setting, the daemon's in-process voice principal can
+never call the cron mutations (`cron.add`, `cron.remove`, `cron.enable`,
+`cron.disable`): a spoken command must not be able to schedule recurring
+unattended agent jobs (`error_kind = "voice_denied"`).

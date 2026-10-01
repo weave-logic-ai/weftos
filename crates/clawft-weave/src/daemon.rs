@@ -1045,6 +1045,14 @@ pub async fn run(
             .map(|h| clawft_rpc::resolve::manifests_dir(&h))
             .as_deref(),
     );
+    // ADR-103 D12: the scope gate verifies claimed projects against the
+    // same manifest registry (`None` falls back to `~/.weftos/projects`).
+    // `false`: the `--profile user` root (package D) passes `true` here, so
+    // only that daemon defaults to `read_only` (ADR-103 D12 amendment).
+    crate::scope_gate::init(
+        clawft_types::runtime_paths::home_dir().map(|h| clawft_rpc::resolve::manifests_dir(&h)),
+        false,
+    );
     let daemon_identity = crate::node_identity::load_or_generate(&runtime_dir)
         .map_err(|e| anyhow::anyhow!("daemon identity bootstrap: {e}"))?;
     let kernel =

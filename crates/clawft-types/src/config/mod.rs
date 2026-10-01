@@ -14,6 +14,7 @@
 pub mod adaptive_silence;
 pub mod chain_paths;
 pub mod channels;
+pub mod governance;
 pub mod kernel;
 pub mod local_llm;
 pub mod personality;
@@ -26,6 +27,7 @@ pub mod voice_metrics;
 // Re-export channel types at the config level for backward compatibility.
 pub use adaptive_silence::{AdaptiveSilenceConfig, AdaptiveSilenceTimeout};
 pub use channels::*;
+pub use governance::*;
 pub use kernel::*;
 pub use local_llm::*;
 pub use personality::*;
