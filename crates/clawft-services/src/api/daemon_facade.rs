@@ -162,6 +162,18 @@ impl KernelFacadeBackend for DaemonKernelFacade {
             }
             Ok(Ok(resp)) => {
                 tracing::warn!(method, error = ?resp.error, kind = ?resp.error_kind, "daemon returned error");
+                if matches!(
+                    resp.error_kind.as_deref(),
+                    Some("project_required" | "scope_denied")
+                ) {
+                    return FacadeResponse {
+                        status: 403,
+                        body: serde_json::json!({
+                            "error": "outside a project",
+                            "remedy": "pass a project or run `weft project init`",
+                        }),
+                    };
+                }
                 let (status, msg) = match resp.error_kind.as_deref() {
                     Some("gate_deny") => (403, "daemon denied the request"),
                     Some("timeout") => (504, "daemon operation timed out"),
@@ -292,6 +304,23 @@ mod tests {
         let other = facade.call_rpc("kernel.status", serde_json::json!({})).await;
         assert_eq!(other.status, 500);
         assert!(!other.body.to_string().contains("secret"));
+    }
+
+    #[tokio::test]
+    async fn project_required_maps_to_403_with_remedy() {
+        fn denied(_: &str) -> clawft_rpc::Response {
+            clawft_rpc::Response::error_with_kind("project_required", "not in a project: /secret")
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("kernel.sock");
+        let _srv = fake_daemon(&sock, denied);
+        let facade = DaemonKernelFacade::with_socket(&sock);
+
+        let resp = facade.call_rpc("kernel.ps", serde_json::json!({})).await;
+        assert_eq!(resp.status, 403);
+        assert_eq!(resp.body["error"], "outside a project");
+        assert_eq!(resp.body["remedy"], "pass a project or run `weft project init`");
+        assert!(!resp.body.to_string().contains("secret"));
     }
 
     #[tokio::test]

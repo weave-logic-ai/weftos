@@ -241,3 +241,37 @@ async fn coherence_route_is_501() {
     let (status, _) = get(build_router(state, &[], None), &token, "/api/ecc/coherence").await;
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
 }
+
+/// Host guard is wired through `serve()` on loopback listeners.
+#[tokio::test]
+async fn serve_pins_host_header_on_loopback() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, _auth) = make_state(&dir.path().join("absent.sock"));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(async move {
+        clawft_services::api::serve(listener, state, &[], None, async {
+            let _ = stop_rx.await;
+        })
+        .await
+    });
+
+    async fn status_with_host(addr: std::net::SocketAddr, host: &str) -> String {
+        use tokio::io::AsyncReadExt;
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let req = format!("GET /api/nothing HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).await.unwrap();
+        out.lines().next().unwrap_or_default().to_string()
+    }
+
+    assert!(status_with_host(addr, "evil.example").await.contains("421"));
+    // Allowed host passes the guard (unauthenticated, so 401 rather than 421).
+    let ok = status_with_host(addr, "localhost").await;
+    assert!(!ok.contains("421"), "{ok}");
+
+    let _ = stop_tx.send(());
+    let _ = server.await;
+}

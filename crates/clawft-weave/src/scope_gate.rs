@@ -80,6 +80,13 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
     "cluster.health",
     "chain.status",
     "chain.verify",
+    // The gateway facade (`DaemonKernelFacade`, ADR-102) forwards these
+    // read-only calls on a user-level daemon, so they must work outside a
+    // project. `chain.local` / `chain.export` stay excluded.
+    "chain.tail",
+    "ecc.status",
+    "ecc.search",
+    "ecc.calibrate",
     "agent.list",
     "agent.inspect",
     "control.list",
