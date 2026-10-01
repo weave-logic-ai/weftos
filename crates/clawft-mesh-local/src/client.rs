@@ -2,7 +2,7 @@
 //! negotiate, register with a user key, then correlate requests and replies.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -18,7 +18,8 @@ use crate::addr::{AddrError, WeftAddr};
 use crate::cert::{node_id_from_pubkey, CertError, UserCert};
 use crate::framing::{write_frame, FrameError, FrameReader, HELLO_DEADLINE};
 use crate::hexser;
-use crate::peer::{PeerError, PeerIdentity, Principal, UnixPeer};
+use crate::peer::{own_uid, PeerError, PeerIdentity, Principal, UnixPeer};
+use crate::pin::check_pin;
 use crate::proto::{
     is_reply_class, negotiate_features, register_signing_bytes, verify_hello_proof, Addresses,
     ErrorBody, Frame, HelloAck, Message, ProjectBinding, RegisterAck, RegisterReq, Role,
@@ -48,6 +49,8 @@ pub enum ClientError {
     MachineKeyChanged { pinned: String, presented: String },
     #[error("{} is corrupt; remove it to re-pin", .0.display())]
     PinCorrupt(PathBuf),
+    #[error("the service reports uid {ack} for this connection but this process runs as {own}")]
+    UidMismatch { ack: u32, own: u32 },
     #[error("the service did not prove possession of its machine key (bad or replayed hello proof)")]
     BadServerProof,
     #[error("bad server hello: {0}")]
@@ -97,6 +100,10 @@ pub struct ClientConfig {
     /// always use the real peer credential.
     #[cfg(feature = "testing")]
     pub server_peer: Option<Arc<dyn PeerIdentity>>,
+    /// Test seam: the uid this process claims to run as (the injected server
+    /// credentials in tests are not our real euid).
+    #[cfg(feature = "testing")]
+    pub own_uid: Option<u32>,
 }
 
 impl ClientConfig {
@@ -113,6 +120,8 @@ impl ClientConfig {
             deadline: HELLO_DEADLINE,
             #[cfg(feature = "testing")]
             server_peer: None,
+            #[cfg(feature = "testing")]
+            own_uid: None,
         }
     }
 }
@@ -150,65 +159,6 @@ async fn within<T>(d: Duration, f: impl std::future::Future<Output = T>) -> Resu
     tokio::time::timeout(d, f).await.map_err(|_| ClientError::Timeout)
 }
 
-/// First contact writes the pin atomically; afterwards a different key is a
-/// hard error. Comparison is case-insensitive (the pin is normalised to
-/// lowercase on write); an empty or malformed pin is `PinCorrupt`.
-fn check_pin(path: &Path, presented: &[u8; 32]) -> Result<(), ClientError> {
-    let compare = |text: &str| -> Result<(), ClientError> {
-        let norm = text.trim().to_ascii_lowercase();
-        match hexser::decode::<32>(&norm) {
-            None => Err(ClientError::PinCorrupt(path.to_path_buf())),
-            Some(p) if &p == presented => Ok(()),
-            Some(_) => Err(ClientError::MachineKeyChanged {
-                pinned: norm,
-                presented: hexser::encode(presented),
-            }),
-        }
-    };
-    match std::fs::read_to_string(path) {
-        Ok(s) => compare(&s),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            write_pin_atomically(path, presented)?;
-            // A concurrent first contact may have won the race: re-read.
-            compare(&std::fs::read_to_string(path)?)
-        }
-        Err(e) => Err(e.into()),
-    }
-}
-
-/// temp file (0600) + fsync + create-if-absent hard link + fsync of the dir, so
-/// a crash never leaves a partial pin and two writers cannot clobber each other.
-fn write_pin_atomically(path: &Path, key: &[u8; 32]) -> Result<(), ClientError> {
-    use std::io::Write;
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut db = std::fs::DirBuilder::new();
-    db.recursive(true);
-    #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut db, 0o700);
-    db.create(dir)?;
-    let tmp = dir.join(format!(".machine.pub.tmp.{}", std::process::id()));
-    let _ = std::fs::remove_file(&tmp);
-    let mut o = std::fs::OpenOptions::new();
-    o.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
-    let mut f = o.open(&tmp)?;
-    f.write_all(hexser::encode(key).as_bytes())?;
-    f.sync_all()?;
-    drop(f);
-    let linked = std::fs::hard_link(&tmp, path);
-    let _ = std::fs::remove_file(&tmp);
-    match linked {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(e) => return Err(e.into()),
-    }
-    if let Ok(d) = std::fs::File::open(dir) {
-        let _ = d.sync_all();
-    }
-    Ok(())
-}
-
 fn server_error(msg: Message) -> ClientError {
     match msg {
         Message::Error(e) => ClientError::Server(e),
@@ -239,6 +189,14 @@ impl MeshLocalClient {
             return Err(ClientError::ServerUid { got: server, expected: cfg.service.service_uid });
         }
 
+        #[cfg(feature = "testing")]
+        let own = match cfg.own_uid {
+            Some(u) => u,
+            None => own_uid().await?,
+        };
+        #[cfg(not(feature = "testing"))]
+        let own = own_uid().await?;
+
         let (rd, mut wr) = stream.into_split();
         let mut rd = FrameReader::new(rd);
 
@@ -260,7 +218,7 @@ impl MeshLocalClient {
             Message::HelloAck(a) => a,
             other => return Err(server_error(other)),
         };
-        Self::check_hello_ack(cfg, &ack, &client_nonce)?;
+        Self::check_hello_ack(cfg, &ack, &client_nonce, own)?;
 
         // Register: the signature binds the challenge, the uid the service saw
         // and the node id, so it cannot be replayed on another connection.
@@ -326,6 +284,7 @@ impl MeshLocalClient {
         cfg: &ClientConfig,
         ack: &HelloAck,
         client_nonce: &[u8; 32],
+        own_uid: u32,
     ) -> Result<(), ClientError> {
         if ack.proto < cfg.proto.0 || ack.proto > cfg.proto.1 {
             return Err(ClientError::ProtoOutOfRange {
@@ -348,6 +307,10 @@ impl MeshLocalClient {
         // replays an old hello_ack, cannot produce it.
         if !verify_hello_proof(ack, client_nonce) {
             return Err(ClientError::BadServerProof);
+        }
+        // The proof covers ack.uid, so it is authentic; it must also be us.
+        if ack.uid != own_uid {
+            return Err(ClientError::UidMismatch { ack: ack.uid, own: own_uid });
         }
         if let Some(pin) = &cfg.machine_pin {
             check_pin(pin, &ack.machine_pubkey)?;
@@ -501,8 +464,20 @@ async fn read_loop(
         // `reply(id, ..)`.
         match events.try_send(frame) {
             Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(_)) => {
+            Err(mpsc::error::TrySendError::Full(f)) => {
                 dropped.fetch_add(1, Ordering::Relaxed);
+                // Fail closed visibly: a dropped verdict request is denied now
+                // instead of timing out at the service.
+                if let (Message::VerdictRequest(_), Some(id)) = (&f.msg, f.id) {
+                    let deny = Message::VerdictReply {
+                        allow: false,
+                        ttl_s: 0,
+                        reason: "client event queue full".into(),
+                        rule_hash: String::new(),
+                    };
+                    let mut w = writer.lock().await;
+                    let _ = write_frame(&mut *w, &Frame::with_id(id, deny)).await;
+                }
             }
             Err(mpsc::error::TrySendError::Closed(_)) => break "client dropped".to_string(),
         }
@@ -510,53 +485,4 @@ async fn read_loop(
     *close_reason.lock().expect("close lock") = Some(why);
     // Dropping `pending` senders wakes every waiter with `Closed`.
     pending.lock().expect("pending lock").clear();
-}
-
-/// Full-jitter exponential backoff for reconnects.
-#[derive(Debug, Clone)]
-pub struct Backoff {
-    base: Duration,
-    max: Duration,
-    attempt: u32,
-}
-
-impl Backoff {
-    pub fn new(base: Duration, max: Duration) -> Self {
-        Self { base, max, attempt: 0 }
-    }
-
-    /// Next delay: uniformly between half and the full exponential step.
-    pub fn next_delay(&mut self) -> Duration {
-        let step = self.base.saturating_mul(1u32 << self.attempt.min(16)).min(self.max);
-        self.attempt = self.attempt.saturating_add(1);
-        let lo = step / 2;
-        let span = (step - lo).as_millis().max(1) as u64;
-        lo + Duration::from_millis(rand::random::<u64>() % span)
-    }
-
-    pub fn reset(&mut self) {
-        self.attempt = 0;
-    }
-}
-
-/// Connect and register, retrying transport failures with backoff.
-/// Verification and protocol failures return immediately.
-pub async fn connect_with_retry(
-    cfg: &ClientConfig,
-    user_key: &SigningKey,
-    params: &RegisterParams,
-    mut backoff: Backoff,
-    max_attempts: u32,
-) -> Result<MeshLocalClient, ClientError> {
-    let mut attempt = 0;
-    loop {
-        attempt += 1;
-        match MeshLocalClient::connect_and_register(cfg, user_key, params).await {
-            Ok(c) => return Ok(c),
-            Err(e) if e.is_retryable() && attempt < max_attempts => {
-                tokio::time::sleep(backoff.next_delay()).await;
-            }
-            Err(e) => return Err(e),
-        }
-    }
 }

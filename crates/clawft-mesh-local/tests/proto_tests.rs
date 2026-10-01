@@ -246,13 +246,14 @@ fn hello_proof_binds_nonce_challenge_and_key() {
     let key = SigningKey::from_bytes(&[5; 32]);
     let pk = key.verifying_key().to_bytes();
     let (nonce, challenge) = ([1u8; 32], [2u8; 32]);
-    let sig = key.sign(&hello_signing_bytes(&nonce, &challenge, &pk)).to_bytes();
-    let ack = HelloAck { proto: 1, features: vec![], node_id: String::new(), machine_pubkey: pk, service_build_sha: String::new(), deprecated_below: None, uid: 1, challenge, machine_sig: sig };
+    let sig = key.sign(&hello_signing_bytes(&nonce, &challenge, &pk, 501)).to_bytes();
+    let ack = HelloAck { proto: 1, features: vec![], node_id: String::new(), machine_pubkey: pk, service_build_sha: String::new(), deprecated_below: None, uid: 501, challenge, machine_sig: sig };
     assert!(verify_hello_proof(&ack, &nonce));
     assert!(!verify_hello_proof(&ack, &[9u8; 32]), "old nonce");
+    assert!(!verify_hello_proof(&HelloAck { uid: 502, ..ack.clone() }, &nonce), "other uid");
     assert!(!verify_hello_proof(&HelloAck { challenge: [3; 32], ..ack.clone() }, &nonce), "other challenge");
     assert!(!verify_hello_proof(&HelloAck { machine_pubkey: SigningKey::from_bytes(&[6; 32]).verifying_key().to_bytes(), ..ack }, &nonce), "other key");
-    assert!(hello_signing_bytes(&nonce, &challenge, &pk).starts_with(b"weftos/mesh-local/hello/v1\0"));
+    assert!(hello_signing_bytes(&nonce, &challenge, &pk, 501).starts_with(b"weftos/mesh-local/hello/v1\0"));
 }
 
 #[test]

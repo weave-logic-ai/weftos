@@ -13,7 +13,10 @@ pub mod cert;
 pub mod client;
 pub mod framing;
 pub mod hexser;
+mod negotiate;
 pub mod peer;
+mod pin;
+pub mod retry;
 pub mod proto;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
@@ -21,6 +24,7 @@ pub mod testing;
 pub use addr::{AddrError, Node, WeftAddr};
 pub use cert::{node_id_from_pubkey, CertError, UserCert};
 pub use client::{ClientConfig, ClientError, MeshLocalClient};
+pub use retry::{connect_with_retry, Backoff};
 #[cfg(any(test, feature = "testing"))]
 pub use peer::InjectedPeer;
 pub use peer::{PeerCreds, PeerError, PeerIdentity, Principal};

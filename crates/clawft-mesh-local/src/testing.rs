@@ -36,6 +36,12 @@ pub struct TestServerConfig {
     /// Fault injection: answer `status` with a spoofed `ping` carrying the
     /// request's id.
     pub spoof_ping_reply: bool,
+    /// Fault injection: report this uid in `hello_ack` after signing the real
+    /// one (a relay editing the ack).
+    pub tamper_ack_uid: Option<u32>,
+    /// Fault injection: sign and report this uid instead of the peer's (a
+    /// service that vouches for a different uid).
+    pub claim_uid: Option<u32>,
     /// On `status`, first push a service-originated `verdict.request`.
     pub push_verdict_on_status: bool,
 }
@@ -50,6 +56,8 @@ impl TestServerConfig {
             cert_ttl_s: DEFAULT_TTL_S,
             corrupt_hello_sig: false,
             hello_sig_nonce: None,
+            tamper_ack_uid: None,
+            claim_uid: None,
             spoof_ping_reply: false,
             push_verdict_on_status: false,
         }
@@ -63,6 +71,7 @@ struct State {
     registrations: Vec<(Principal, RegisterReq)>,
     sent: Vec<(String, serde_json::Value)>,
     serial: u64,
+    verdict_replies: Vec<(u64, bool, String)>,
 }
 
 pub struct TestServer {
@@ -112,6 +121,11 @@ impl TestServer {
     /// Registrations accepted so far, in order.
     pub fn registrations(&self) -> Vec<(Principal, RegisterReq)> {
         self.state.lock().expect("state").registrations.clone()
+    }
+
+    /// `(id, allow, reason)` of every `verdict.reply` received.
+    pub fn verdict_replies(&self) -> Vec<(u64, bool, String)> {
+        self.state.lock().expect("state").verdict_replies.clone()
     }
 
     /// `(dest, message)` of every `send` received.
@@ -168,10 +182,11 @@ async fn serve_inner(
     };
     let mut challenge = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut challenge);
+    let uid = cfg.claim_uid.unwrap_or(uid);
     let signed_nonce = cfg.hello_sig_nonce.unwrap_or(client_nonce);
     let mut machine_sig = cfg
         .machine_key
-        .sign(&hello_signing_bytes(&signed_nonce, &challenge, &machine_pubkey))
+        .sign(&hello_signing_bytes(&signed_nonce, &challenge, &machine_pubkey, uid))
         .to_bytes();
     if cfg.corrupt_hello_sig {
         machine_sig[0] ^= 1;
@@ -187,6 +202,7 @@ async fn serve_inner(
         uid,
         challenge,
     };
+    let ack = HelloAck { uid: cfg.tamper_ack_uid.unwrap_or(ack.uid), ..ack };
     write_frame(&mut wr, &Frame::new(Message::HelloAck(ack))).await?;
 
     let mut user_pubkey: Option<[u8; 32]> = None;
@@ -211,6 +227,11 @@ async fn serve_inner(
             Message::Ping {} => Message::Pong {},
             // Replies to our own pings need no answer.
             Message::Pong {} => continue,
+            Message::VerdictReply { allow, reason, .. } => {
+                let id = frame.id.unwrap_or(0);
+                state.lock().expect("state").verdict_replies.push((id, allow, reason));
+                continue;
+            }
             Message::Status {} if cfg.spoof_ping_reply => Message::Ping {},
             Message::Status {} => {
                 if cfg.push_verdict_on_status {

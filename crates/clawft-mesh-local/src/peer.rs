@@ -117,6 +117,17 @@ impl PeerIdentity for UnixPeer {
     }
 }
 
+/// The uid this process runs as, read back from a socketpair so no `libc`
+/// dependency is needed (the kernel reports the creator's effective uid).
+#[cfg(unix)]
+pub async fn own_uid() -> Result<u32, PeerError> {
+    let (a, _b) = tokio::net::UnixStream::pair().map_err(|e| PeerError::Unavailable(e.to_string()))?;
+    match UnixPeer::from_stream(&a)?.principal()? {
+        Principal::Uid(u) => Ok(u),
+        Principal::Sid(_) => Err(PeerError::Unsupported),
+    }
+}
+
 /// Windows placeholder: always refuses (ADR-103 section 6).
 #[cfg(not(unix))]
 #[derive(Debug, Clone, Default)]

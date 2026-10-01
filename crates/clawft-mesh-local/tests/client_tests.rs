@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use clawft_mesh_local::client::{connect_with_retry, Backoff, ClientConfig, ClientError, MeshLocalClient, RegisterParams};
+use clawft_mesh_local::retry::{connect_with_retry, Backoff};
+use clawft_mesh_local::client::{ClientConfig, ClientError, MeshLocalClient, RegisterParams};
 use clawft_mesh_local::proto::{BindState, ErrorKind, Message, ProjectBinding, ServiceRecord};
 use clawft_mesh_local::testing::{TestServer, TestServerConfig};
 use clawft_mesh_local::{InjectedPeer, WeftAddr};
@@ -28,6 +29,7 @@ fn env_with(uid: u32, tweak: impl FnOnce(&mut TestServerConfig)) -> Env {
     let mut cfg = ClientConfig::new(server.path(), server.service_record(SERVICE_UID));
     cfg.server_peer = Some(Arc::new(InjectedPeer::uid(SERVICE_UID)));
     cfg.deadline = Duration::from_secs(5);
+    cfg.own_uid = Some(uid);
     cfg.machine_pin = Some(dir.path().join("mesh/machine.pub"));
     cfg.build_sha = "client-sha".into();
     Env { _dir: dir, server, cfg }
@@ -342,4 +344,57 @@ async fn event_queue_is_bounded_and_counts_drops() {
         c.request(Message::Status {}).await.unwrap(); // replies keep flowing
     }
     assert!(c.dropped_events() >= 40, "dropped {}", c.dropped_events());
+}
+
+#[tokio::test]
+async fn tampered_ack_uid_fails_the_proof() {
+    let e = env_with(501, |s| s.tamper_ack_uid = Some(0));
+    let err = MeshLocalClient::connect_and_register(&e.cfg, &key(1), &params()).await.err().unwrap();
+    assert!(matches!(err, ClientError::BadServerProof), "{err:?}");
+    assert!(e.server.registrations().is_empty());
+}
+
+#[tokio::test]
+async fn ack_uid_that_is_not_ours_is_refused_even_when_signed() {
+    // A relay holding the service uid vouches for a different uid.
+    let e = env_with(501, |s| s.claim_uid = Some(777));
+    let err = MeshLocalClient::connect_and_register(&e.cfg, &key(1), &params()).await.err().unwrap();
+    assert!(matches!(err, ClientError::UidMismatch { ack: 777, own: 501 }), "{err:?}");
+    assert!(!err.is_retryable());
+    assert!(e.server.registrations().is_empty());
+    assert!(!e.cfg.machine_pin.as_ref().unwrap().exists(), "nothing pinned before the uid check");
+}
+
+#[tokio::test]
+async fn real_euid_is_used_when_not_overridden() {
+    let uid = clawft_mesh_local::peer::own_uid().await.unwrap();
+    let e = env_with(uid, |_| {});
+    let mut cfg = e.cfg.clone();
+    cfg.own_uid = None;
+    let c = MeshLocalClient::connect_and_register(&cfg, &key(1), &params()).await.unwrap();
+    assert_eq!(c.hello_ack().uid, uid);
+    // And a server that saw a different uid is refused against the real euid.
+    let e = env_with(uid.wrapping_add(1), |_| {});
+    let mut cfg = e.cfg.clone();
+    cfg.own_uid = None;
+    let err = MeshLocalClient::connect_and_register(&cfg, &key(1), &params()).await.err().unwrap();
+    assert!(matches!(err, ClientError::UidMismatch { .. }), "{err:?}");
+}
+
+#[tokio::test]
+async fn dropped_verdict_requests_are_denied_visibly() {
+    let e = env_with(501, |s| s.push_verdict_on_status = true);
+    let c = MeshLocalClient::connect_and_register(&e.cfg, &key(1), &params()).await.unwrap();
+    for _ in 0..(clawft_mesh_local::client::EVENT_QUEUE + 20) {
+        c.request(Message::Status {}).await.unwrap();
+    }
+    // Let the reader flush its last denies to the server.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let denies = e.server.verdict_replies();
+    assert!(denies.len() as u64 >= c.dropped_events() && c.dropped_events() >= 20, "{} denies, {} dropped", denies.len(), c.dropped_events());
+    for (id, allow, reason) in denies {
+        assert_ne!(id & clawft_mesh_local::proto::SERVICE_ID_FLAG, 0, "reply echoes the service id");
+        assert!(!allow);
+        assert_eq!(reason, "client event queue full");
+    }
 }
