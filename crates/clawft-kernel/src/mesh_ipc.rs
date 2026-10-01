@@ -72,6 +72,20 @@ impl MeshIpcEncoding {
     }
 }
 
+/// Tenant scope carried on a mesh envelope (P3 plan section 1.1).
+///
+/// `user_id` is 32 hex; `project_id` is a 26-char ULID when present. The
+/// machine mesh service stamps `src_scope` from the sending registration;
+/// the kernel only carries the fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Scope {
+    /// Owning user id.
+    pub user_id: String,
+    /// Project within the user, when the address is project-level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+}
+
 /// A mesh IPC envelope wrapping a KernelMessage with routing metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeshIpcEnvelope {
@@ -85,6 +99,14 @@ pub struct MeshIpcEnvelope {
     pub hop_count: u8,
     /// Unique envelope ID for deduplication.
     pub envelope_id: String,
+    /// Destination tenant scope. Absent on the wire when `None`, so
+    /// envelopes without scopes stay byte-identical to the old format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dest_scope: Option<Scope>,
+    /// Source tenant scope (stamped by the mesh service, never trusted
+    /// from an unregistered peer). Absent on the wire when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub src_scope: Option<Scope>,
 }
 
 impl MeshIpcEnvelope {
@@ -96,6 +118,8 @@ impl MeshIpcEnvelope {
             message,
             hop_count: 0,
             envelope_id: uuid::Uuid::new_v4().to_string(),
+            dest_scope: None,
+            src_scope: None,
         }
     }
 
@@ -610,5 +634,60 @@ mod tests {
             err,
             MeshIpcError::UnsupportedEncoding { encoding: "rvf" }
         ));
+    }
+
+    // ── P3-K0: scope fields are wire-compatible ──────────────────
+
+    #[test]
+    fn envelope_without_scopes_serializes_byte_identical_to_old_format() {
+        let msg = KernelMessage::text(1, MessageTarget::Topic("t".into()), "x");
+        let mut env = MeshIpcEnvelope::new("a".into(), "b".into(), msg.clone());
+        env.envelope_id = "fixed-id".into();
+        // The old struct, field for field, is the golden: a derived
+        // serializer over the same fields in the same order.
+        #[derive(serde::Serialize)]
+        struct Old {
+            source_node: String,
+            dest_node: String,
+            message: KernelMessage,
+            hop_count: u8,
+            envelope_id: String,
+        }
+        let old = Old {
+            source_node: "a".into(),
+            dest_node: "b".into(),
+            message: msg,
+            hop_count: 0,
+            envelope_id: "fixed-id".into(),
+        };
+        let new_json = serde_json::to_string(&env).unwrap();
+        assert_eq!(new_json, serde_json::to_string(&old).unwrap());
+        assert!(!new_json.contains("scope"));
+    }
+
+    #[test]
+    fn old_json_without_scopes_deserializes() {
+        let msg = KernelMessage::text(1, MessageTarget::Topic("t".into()), "x");
+        let env = MeshIpcEnvelope::new("a".into(), "b".into(), msg);
+        let bytes = env.to_bytes().unwrap();
+        let back = MeshIpcEnvelope::from_bytes(&bytes).unwrap();
+        assert!(back.dest_scope.is_none() && back.src_scope.is_none());
+    }
+
+    #[test]
+    fn scoped_envelope_round_trips() {
+        let msg = KernelMessage::text(1, MessageTarget::Topic("t".into()), "x");
+        let mut env = MeshIpcEnvelope::new("a".into(), "b".into(), msg);
+        env.dest_scope = Some(Scope {
+            user_id: "u".repeat(32),
+            project_id: Some("P".repeat(26)),
+        });
+        env.src_scope = Some(Scope {
+            user_id: "v".repeat(32),
+            project_id: None,
+        });
+        let back = MeshIpcEnvelope::from_bytes(&env.to_bytes().unwrap()).unwrap();
+        assert_eq!(back.dest_scope, env.dest_scope);
+        assert_eq!(back.src_scope, env.src_scope);
     }
 }

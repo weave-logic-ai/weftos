@@ -16,6 +16,7 @@ use crate::mesh_assess::AssessmentTransport;
 use crate::mesh_chain::{ChainSyncRequest, ChainSyncResponse};
 use crate::mesh_discovery::{MeshPeerEvent, MeshPeerEventBus};
 use crate::mesh_heartbeat::{ClockSource, HeartbeatConfig, HeartbeatTracker, MeshClockSync};
+use crate::mesh_delivery::LocalDelivery;
 use crate::mesh_ipc::MeshIpcEnvelope;
 use crate::mesh_kad::KademliaTable;
 
@@ -53,7 +54,7 @@ pub struct MeshRuntime {
     /// Active peer connections: node_id -> PeerConnection.
     peers: DashMap<String, PeerConnection>,
     /// Reference to the local A2A router for injecting remote messages.
-    local_router: Option<Arc<A2ARouter>>,
+    local_router: Option<Arc<dyn LocalDelivery>>,
     /// Optional discovery state (Kademlia + heartbeat).
     discovery: Option<DiscoveryState>,
     /// Mesh time synchronization state.
@@ -202,6 +203,12 @@ impl MeshRuntime {
     /// Attach the local A2A router for incoming message injection.
     pub fn set_local_router(&mut self, router: Arc<A2ARouter>) {
         self.local_router = Some(router);
+    }
+
+    /// Attach any [`LocalDelivery`] sink for inbound messages (a mesh
+    /// service delivers to tenants instead of an in-kernel router).
+    pub fn set_local_delivery(&mut self, delivery: Arc<dyn LocalDelivery>) {
+        self.local_router = Some(delivery);
     }
 
     // ── Peer topic subscription registry ─────────────────────────
@@ -473,6 +480,7 @@ impl MeshRuntime {
 
         // Unwrap the RemoteNode wrapper so the local router sees the
         // inner target (Process, Service, Topic, etc.).
+        let dest_scope = envelope.dest_scope;
         let mut message = envelope.message;
         if let MessageTarget::RemoteNode { target, .. } = message.target {
             message.target = *target;
@@ -511,7 +519,7 @@ impl MeshRuntime {
             .local_router
             .as_ref()
             .ok_or_else(|| KernelError::Mesh("no local router attached to mesh runtime".into()))?;
-        router.send(message).await
+        router.deliver(dest_scope.as_ref(), message).await
     }
 
     /// Number of currently connected peers.

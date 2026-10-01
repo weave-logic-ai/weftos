@@ -830,6 +830,15 @@ check_kernel_ecc_rejected_on_wasm() {
     return 1
 }
 
+# P3-K0: the mesh role must build without exochain/cluster/tilezero/ecc so a
+# machine mesh service can depend on the kernel's mesh modules alone.
+cmd_check_mesh_only() {
+    header "Running cargo check -p clawft-kernel --no-default-features --features native,mesh"
+    timer_start
+    run_cmd cargo check -p clawft-kernel --no-default-features --features native,mesh
+    timer_end
+}
+
 cmd_check() {
     header "Running cargo check --workspace${FEATURES:+ --features $FEATURES}"
     timer_start
@@ -1882,6 +1891,7 @@ ${BOLD}Commands:${NC}
                   via wasm-pack / cargo + wasm-bindgen + wasm-opt -Oz, then
                   gate against the panel size budget. (WEFT-484 / M6-B)
                   Override budget: scripts/build.sh wasm-panel <max-raw-kb> <max-gz-kb>
+  check-mesh-only Run cargo check -p clawft-kernel --no-default-features --features native,mesh
   check           Run cargo check --workspace (fast compile check), then
                   cargo check -p clawft-kernel --target wasm32-unknown-unknown
                   --no-default-features when the target is installed (WEFT-114:
@@ -2153,6 +2163,7 @@ main() {
         bundle-size)  cmd_bundle_size ;;
         wasm-panel)   cmd_wasm_panel "${WASM_PANEL_MAX_RAW_KB:-}" "${WASM_PANEL_MAX_GZ_KB:-}" ;;
         check)        cmd_check ;;
+        check-mesh-only) cmd_check_mesh_only ;;
         clippy)       cmd_clippy ;;
         audit)        cmd_audit ;;
         npm-audit)    cmd_npm_audit ;;

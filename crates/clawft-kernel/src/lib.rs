@@ -317,6 +317,8 @@ pub mod mesh_chain;
 #[cfg(feature = "mesh")]
 pub mod mesh_dedup;
 #[cfg(feature = "mesh")]
+pub mod mesh_delivery;
+#[cfg(feature = "mesh")]
 pub mod mesh_discovery;
 #[cfg(feature = "mesh")]
 pub mod mesh_framing;
@@ -333,6 +335,8 @@ pub mod mesh_log;
 #[cfg(feature = "mesh")]
 pub mod mesh_mdns;
 #[cfg(feature = "mesh")]
+pub mod mesh_mode;
+#[cfg(feature = "mesh")]
 pub mod mesh_noise;
 #[cfg(feature = "mesh")]
 pub mod mesh_process;
@@ -340,6 +344,8 @@ pub mod mesh_process;
 pub mod mesh_runtime;
 #[cfg(feature = "mesh")]
 pub mod mesh_sensor;
+#[cfg(feature = "mesh")]
+pub mod mesh_serve;
 #[cfg(feature = "mesh")]
 pub mod mesh_service;
 #[cfg(feature = "mesh")]
@@ -588,7 +594,11 @@ pub use mesh_heartbeat::{
     HeartbeatConfig, HeartbeatState, HeartbeatTracker, PeerHeartbeat, PingRequest, PingResponse,
 };
 #[cfg(feature = "mesh")]
-pub use mesh_ipc::{MeshIpcEnvelope, MeshIpcError};
+pub use mesh_ipc::{MeshIpcEnvelope, MeshIpcError, Scope as MeshScope};
+#[cfg(feature = "mesh")]
+pub use mesh_delivery::LocalDelivery;
+#[cfg(feature = "mesh")]
+pub use mesh_mode::MeshMode;
 #[cfg(feature = "mesh")]
 pub use mesh_kad::{
     ALPHA, DhtEntry, DhtKey, K_BUCKET_SIZE, KEY_BITS, KademliaDiscovery, KademliaTable,
