@@ -204,35 +204,134 @@ fn issued_payload(id_hash: &[u8; 32], issued: DateTime<Utc>, ttl: Duration) -> V
 fn revocation_survives_a_crash_via_the_journal() {
     let dir = tempfile::tempdir().unwrap();
     let journal = dir.path().join("auth-tokens.jsonl");
-    // The chain is never saved: it is dropped, as in kill -9.
-    let a = TokenAuthority::with_journal(chain(), "n", Some(journal.clone()));
+    let rvf = dir.path().join("chain.rvf");
+    let c = chain();
+    let a = TokenAuthority::with_journal(Arc::clone(&c), "n", Some(journal.clone()));
     let (s, info) = a.issue("x", None, None, &owner()).unwrap();
     let (keep, _) = a.issue("keep", None, None, &owner()).unwrap();
+    // The chain reaches disk with both issues, then the revoke happens and
+    // the process dies before the chain is saved again.
+    c.save_to_rvf(&rvf).unwrap();
     a.revoke(&info.id).unwrap();
     drop(a);
 
-    let fresh_chain = chain();
-    let b = TokenAuthority::with_journal(fresh_chain, "n", Some(journal.clone()));
+    let reloaded = Arc::new(ChainManager::load_from_rvf(&rvf, 1000).unwrap());
+    assert!(!reloaded.tail_from(0).iter().any(|e| e.kind == KIND_REVOKED));
+    let b = TokenAuthority::with_journal(reloaded, "n", Some(journal.clone()));
     assert!(
         b.validate(&s).is_none(),
         "revoked token revived after crash"
     );
-    assert!(b.validate(&keep).is_some(), "issued token lost");
+    assert!(b.validate(&keep).is_some());
     assert!(!std::fs::read_to_string(&journal).unwrap().contains(&s));
 }
 
 #[test]
-fn unwritable_journal_fails_issue_and_reports_revoke() {
+fn issues_are_not_journaled_and_forged_journal_issues_are_ignored() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("j.jsonl");
+    let a = TokenAuthority::with_journal(chain(), "n", Some(journal.clone()));
+    a.issue("x", None, None, &owner()).unwrap();
+    assert!(!journal.exists(), "issue must not touch the journal");
+
+    // An attacker with write access forges an `issued` line for a secret
+    // of their choosing.
+    let h = hash_secret("wft_attacker");
+    let forged = json!({
+        "source": SOURCE, "kind": KIND_ISSUED,
+        "payload": issued_payload(&h, Utc::now(), Duration::hours(1)),
+    });
+    std::fs::write(&journal, format!("{forged}\n")).unwrap();
+    let b = TokenAuthority::with_journal(chain(), "n", Some(journal));
+    assert!(b.validate("wft_attacker").is_none());
+}
+
+#[test]
+fn torn_tail_then_revoke_keeps_the_revoke() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("j.jsonl");
+    let c = chain();
+    let a = TokenAuthority::with_journal(Arc::clone(&c), "n", Some(journal.clone()));
+    let (s1, i1) = a.issue("a", None, None, &owner()).unwrap();
+    let (s2, i2) = a.issue("b", None, None, &owner()).unwrap();
+    a.revoke(&i1.id).unwrap();
+    // Simulate a crash mid-write: truncate the final newline and half a record.
+    let mut text = std::fs::read_to_string(&journal).unwrap();
+    text.push_str("{\"source\":\"auth.tok");
+    std::fs::write(&journal, text).unwrap();
+    a.revoke(&i2.id).unwrap();
+
+    // Fresh chain with the issues only (revokes exist only in the journal).
+    let c2 = chain();
+    for ev in c.tail_from(0).iter().filter(|e| e.kind == KIND_ISSUED) {
+        c2.append(SOURCE, KIND_ISSUED, ev.payload.clone());
+    }
+    let b = TokenAuthority::with_journal(c2, "n", Some(journal));
+    assert!(b.validate(&s1).is_none());
+    assert!(b.validate(&s2).is_none(), "revoke after torn tail was lost");
+}
+
+#[test]
+fn concurrent_revokes_both_parse() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("j.jsonl");
+    let a = Arc::new(TokenAuthority::with_journal(
+        chain(),
+        "n",
+        Some(journal.clone()),
+    ));
+    let ids: Vec<_> = (0..16)
+        .map(|i| {
+            a.issue(&format!("t{i}"), None, None, &owner())
+                .unwrap()
+                .1
+                .id
+        })
+        .collect();
+    let hs: Vec<_> = ids
+        .iter()
+        .cloned()
+        .map(|id| {
+            let a = Arc::clone(&a);
+            std::thread::spawn(move || a.revoke(&id).unwrap())
+        })
+        .collect();
+    for h in hs {
+        h.join().unwrap();
+    }
+    let text = std::fs::read_to_string(&journal).unwrap();
+    assert_eq!(text.lines().count(), 16);
+    for l in text.lines() {
+        serde_json::from_str::<Value>(l).expect("every line parses");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn journal_is_created_mode_0600() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("j.jsonl");
+    let a = TokenAuthority::with_journal(chain(), "n", Some(journal.clone()));
+    let (_, i) = a.issue("x", None, None, &owner()).unwrap();
+    a.revoke(&i.id).unwrap();
+    let mode = std::fs::metadata(&journal).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
+#[test]
+fn unwritable_journal_reports_revoke_error_but_still_revokes() {
     let dir = tempfile::tempdir().unwrap();
     // A directory where the file should be makes every append fail.
     let bad = dir.path().join("j");
     std::fs::create_dir(&bad).unwrap();
     let a = TokenAuthority::with_journal(chain(), "n", Some(bad));
-    assert!(matches!(
-        a.issue("x", None, None, &owner()),
-        Err(TokenError::Persist(_))
-    ));
-    assert!(a.list().is_empty());
+    let (secret, info) = a.issue("x", None, None, &owner()).unwrap();
+    assert!(matches!(a.revoke(&info.id), Err(TokenError::Persist(_))));
+    assert!(
+        a.validate(&secret).is_none(),
+        "revoked in memory regardless"
+    );
 }
 
 #[test]

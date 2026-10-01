@@ -16,10 +16,15 @@
 //! token cannot issue, revoke or list tokens. TTL is the limit: default
 //! 15 minutes, maximum 24 hours.
 //!
-//! Durability: the chain is saved only on clean shutdown, so each issue
-//! and revoke is also fsynced to a small journal ([`TokenAuthority::with_journal`])
-//! before it is acknowledged. Without it, a revocation followed by a crash
-//! would let the token validate again after reboot.
+//! Durability: the chain is saved only on clean shutdown, so a revocation
+//! held only on the chain would fail open after a crash. Each revoke is
+//! therefore also appended to a small fsynced journal
+//! ([`TokenAuthority::with_journal`]) before it is acknowledged. The
+//! journal holds revocations ONLY and rebuild accepts `issued` events
+//! only from the chain: anyone who can write the journal file could
+//! otherwise mint an owner token for a secret of their choosing. A forged
+//! revoke is at worst a denial of service. Losing an issue in a crash
+//! fails closed (the token does not validate), which is acceptable.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -96,6 +101,8 @@ pub struct TokenAuthority {
     chain: Arc<ChainManager>,
     node_id: String,
     journal: Option<std::path::PathBuf>,
+    /// Serialises journal appends (open + write + fsync).
+    journal_lock: Mutex<()>,
     table: Mutex<HashMap<String, Entry>>,
 }
 
@@ -131,6 +138,21 @@ fn parse_time(v: &Value, key: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(v.get(key)?.as_str()?)
         .ok()
         .map(|t| t.with_timezone(&Utc))
+}
+
+/// WARN when the directory holding the journal is group/world-writable.
+fn warn_if_dir_writable(path: &std::path::Path) {
+    #[cfg(unix)]
+    if let Some(dir) = path.parent()
+        && let Ok(m) = std::fs::metadata(dir)
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if m.permissions().mode() & 0o022 != 0 {
+            tracing::warn!(dir = %dir.display(), "token journal directory is group/world-writable");
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 /// One token event, from the chain or the journal.
@@ -198,22 +220,24 @@ impl TokenAuthority {
         Self::with_journal(chain, node_id, None)
     }
 
-    /// Build the authority with a durable journal at `journal`.
-    ///
-    /// The chain is only persisted on clean shutdown, so a revocation held
-    /// only on the chain would fail open after a crash. Every issue and
-    /// revoke is therefore also appended to this file and fsynced before
-    /// the call returns; rebuild merges it with the chain. It holds the
-    /// same hash-only payloads as the chain events, never a secret.
+    /// Build the authority with a durable revocation journal at `journal`
+    /// (see the module docs). `None` means revocations are not crash-durable.
     pub fn with_journal(
         chain: Arc<ChainManager>,
         node_id: impl Into<String>,
         journal: Option<std::path::PathBuf>,
     ) -> Self {
+        match &journal {
+            None => tracing::warn!(
+                "token authority has no journal path: revocations are not durable across a crash"
+            ),
+            Some(path) => warn_if_dir_writable(path),
+        }
         let a = Self {
             chain,
             node_id: node_id.into(),
             journal,
+            journal_lock: Mutex::new(()),
             table: Mutex::new(HashMap::new()),
         };
         a.rebuild_at(Utc::now());
@@ -225,42 +249,88 @@ impl TokenAuthority {
         Arc::strong_count(&self.chain)
     }
 
-    fn read_journal(&self) -> Vec<(String, Value)> {
+    /// Revoked ids recorded in the journal. Lines that cannot be parsed
+    /// are logged loudly (a lost revocation is security-relevant); `issued`
+    /// lines are ignored by design.
+    fn read_journal(&self) -> Vec<Value> {
         let Some(path) = &self.journal else {
             return Vec::new();
         };
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Vec::new();
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+            Err(e) => {
+                tracing::error!(path = %path.display(), error = %e, "token journal unreadable: revocations may be lost");
+                return Vec::new();
+            }
         };
-        text.lines()
-            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-            .filter(|v| v.get("source").and_then(Value::as_str) == Some(SOURCE))
-            .filter_map(|v| {
-                Some((
-                    v.get("kind")?.as_str()?.to_owned(),
-                    v.get("payload")?.clone(),
-                ))
-            })
-            .collect()
+        let mut out = Vec::new();
+        for (n, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<Value>(line) else {
+                tracing::warn!(path = %path.display(), line = n + 1, "token journal: unparseable line skipped; a revocation may be lost");
+                continue;
+            };
+            let kind = v.get("kind").and_then(Value::as_str);
+            let payload = v.get("payload");
+            match (kind, payload) {
+                (Some(KIND_REVOKED), Some(p)) if p.get("id").and_then(Value::as_str).is_some() => {
+                    out.push(p.clone());
+                }
+                (Some(KIND_ISSUED), _) => {
+                    tracing::warn!(path = %path.display(), line = n + 1, "token journal: ignoring an `issued` entry (the journal is revocations only)");
+                }
+                _ => {
+                    tracing::warn!(path = %path.display(), line = n + 1, "token journal: malformed entry skipped");
+                }
+            }
+        }
+        out
     }
 
-    /// Append one record to the journal and fsync it.
-    fn journal_append(&self, kind: &str, payload: &Value) -> Result<(), TokenError> {
-        use std::io::Write;
+    /// Append one revocation to the journal and fsync it. One `write_all`
+    /// of a newline-terminated line under a lock; a torn previous tail is
+    /// terminated first so it cannot swallow this record.
+    fn journal_revoke(&self, payload: &Value) -> Result<(), TokenError> {
+        use std::io::{Read, Seek, SeekFrom, Write};
         let Some(path) = &self.journal else {
             return Ok(());
         };
-        let line = json!({ "source": SOURCE, "kind": kind, "payload": payload });
-        let write = || -> std::io::Result<()> {
-            if let Some(dir) = path.parent() {
+        let mut line =
+            json!({ "source": SOURCE, "kind": KIND_REVOKED, "payload": payload }).to_string();
+        line.push('\n');
+        let _guard = self.journal_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut write = || -> std::io::Result<()> {
+            let dir = path.parent();
+            if let Some(dir) = dir {
                 std::fs::create_dir_all(dir)?;
             }
-            let mut f = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)?;
-            writeln!(f, "{line}")?;
-            f.sync_all()
+            let created = !path.exists();
+            let mut opts = std::fs::OpenOptions::new();
+            opts.create(true).append(true).read(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut f = opts.open(path)?;
+            let len = f.metadata()?.len();
+            if len > 0 {
+                f.seek(SeekFrom::Start(len - 1))?;
+                let mut last = [0u8; 1];
+                f.read_exact(&mut last)?;
+                if last[0] != b'\n' {
+                    line.insert(0, '\n');
+                }
+            }
+            f.write_all(line.as_bytes())?;
+            f.sync_all()?;
+            if created && let Some(dir) = dir {
+                std::fs::File::open(dir)?.sync_all()?;
+            }
+            Ok(())
         };
         write().map_err(|e| TokenError::Persist(e.to_string()))
     }
@@ -269,7 +339,7 @@ impl TokenAuthority {
     /// `now`. Only events from [`SOURCE`] count.
     pub fn rebuild_at(&self, now: DateTime<Utc>) {
         let events = self.chain.tail_from(0);
-        let journal = self.read_journal();
+        let revoked_in_journal = self.read_journal();
         let mut records: Vec<Record<'_>> = Vec::new();
         for ev in &events {
             if ev.source != SOURCE {
@@ -282,8 +352,11 @@ impl TokenAuthority {
                 });
             }
         }
-        for (kind, payload) in &journal {
-            records.push(Record { kind, payload });
+        for payload in &revoked_in_journal {
+            records.push(Record {
+                kind: KIND_REVOKED,
+                payload,
+            });
         }
         *self.table.lock().unwrap_or_else(|e| e.into_inner()) = fold(&records, now);
     }
@@ -344,8 +417,6 @@ impl TokenAuthority {
         if let Some(p) = &info.project {
             payload["project"] = json!(p);
         }
-        // Durable first: a token that cannot be journaled is not issued.
-        self.journal_append(KIND_ISSUED, &payload)?;
         self.chain.append(SOURCE, KIND_ISSUED, Some(payload));
         self.lock().insert(
             info.id.clone(),
@@ -368,7 +439,7 @@ impl TokenAuthority {
         let payload = json!({ "id": id, "revoked_at": Utc::now().to_rfc3339() });
         self.chain
             .append(SOURCE, KIND_REVOKED, Some(payload.clone()));
-        self.journal_append(KIND_REVOKED, &payload)?;
+        self.journal_revoke(&payload)?;
         Ok(true)
     }
 
