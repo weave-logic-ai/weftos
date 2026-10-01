@@ -144,7 +144,7 @@ section you do not need.
   },
 
   "gateway": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 18790,
     "heartbeat_interval_minutes": 0,
     "heartbeat_prompt": "heartbeat"

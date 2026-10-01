@@ -127,6 +127,9 @@ enum Commands {
     /// Manage workspaces.
     Workspace(commands::workspace_cmd::WorkspaceArgs),
 
+    /// Issue, revoke and list daemon bearer tokens (ADR-102).
+    Token(commands::token_cmd::TokenArgs),
+
     /// Initialize clawft config and workspace.
     Onboard(commands::onboard::OnboardArgs),
 
@@ -573,6 +576,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Routing(args) => commands::routing_cmd::run(args).await?,
         Commands::Project(args) => commands::project_cmd::run(args).await?,
         Commands::Workspace(args) => commands::workspace_cmd::run(args).await?,
+        Commands::Token(args) => {
+            let platform = clawft_platform::NativePlatform::new();
+            commands::token_cmd::run(args, &platform).await?;
+        }
         Commands::Onboard(args) => commands::onboard::run(args).await?,
         Commands::Analyze(args) => commands::analyze_cmd::run(args).await?,
         Commands::Assess(args) => commands::assess_cmd::run(args).await?,

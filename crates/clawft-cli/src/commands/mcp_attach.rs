@@ -706,6 +706,9 @@ mod tests {
                             version: "0.8.1".into(),
                             sha: "abcd1234".into(),
                             binary: None,
+                            user_key_id: None,
+                            profile: None,
+                            roles: Vec::new(),
                         };
                         let mut out =
                             serde_json::to_string(&Response::success(handshake_value(&hs)))

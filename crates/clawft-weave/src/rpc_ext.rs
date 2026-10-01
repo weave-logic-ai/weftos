@@ -31,10 +31,12 @@
 //! method's required capability while its handler never runs, so routes
 //! must not cover them (a test asserts this for `ROUTES`).
 //!
-//! There is no transport marker: the TCP relay byte-copies into the unix
-//! socket, so a relayed caller is indistinguishable from a local one and
-//! no gate may rely on the difference. (The relay checks its bearer
-//! before forwarding.)
+//! There is no transport marker: the TCP relay forwards into the unix
+//! socket, so a relayed caller looks like a local one and no gate may rely
+//! on the difference. Instead the relay (`relay_auth`) strips self-asserted
+//! literal scope strings from relayed requests, and the daemon honours
+//! literal scopes only from a unix peer with its own uid
+//! ([`CallerCtx::peer_untrusted`]). Token secrets work on any path.
 //!
 //! Registration is explicit and stateless: the `ROUTES` and `GATES` const
 //! tables below, one line per package. There is no global mutable
@@ -106,6 +108,11 @@ pub struct CallerCtx {
     /// Project the client claims the request is scoped to
     /// (`Request.project`). Unverified; see [`ClaimedProject`].
     pub project: Option<ClaimedProject>,
+    /// The connection's peer is NOT the daemon's own uid (unix socket
+    /// peer credentials). Such a caller cannot use literal scope strings
+    /// (`"admin"`, ...) as auth; only a token secret counts. `false` for
+    /// in-process callers and for the default.
+    pub peer_untrusted: bool,
 }
 
 impl CallerCtx {
@@ -115,7 +122,14 @@ impl CallerCtx {
             principal: Principal::External,
             auth,
             project: None,
+            peer_untrusted: false,
         }
+    }
+
+    /// Mark the connection peer as not the daemon's uid.
+    pub fn with_peer_untrusted(mut self, untrusted: bool) -> Self {
+        self.peer_untrusted = untrusted;
+        self
     }
 
     /// Caller context for a wire request: its `auth` and `project`.
@@ -124,6 +138,7 @@ impl CallerCtx {
             principal: Principal::External,
             auth: req.auth.clone(),
             project: req.project.clone().map(ClaimedProject::from),
+            peer_untrusted: false,
         }
     }
 
@@ -251,6 +266,28 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Admin,
         handler: crate::project_rpc::handle_register,
     },
+    ExtRoute {
+        prefix: "auth.token.issue",
+        capability: Capability::Admin,
+        handler: crate::token_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "auth.token.revoke",
+        capability: Capability::Admin,
+        handler: crate::token_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "auth.token.list",
+        capability: Capability::Admin,
+        handler: crate::token_rpc::handle,
+    },
+    // Read: the gateway and any anonymous caller may ask "is this secret
+    // valid?"; a 256-bit secret cannot be searched for.
+    ExtRoute {
+        prefix: "auth.token.validate",
+        capability: Capability::Read,
+        handler: crate::token_rpc::handle,
+    },
 ];
 #[cfg(test)]
 const ROUTES: &[ExtRoute] = &[
@@ -273,6 +310,28 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "project.register",
         capability: Capability::Admin,
         handler: crate::project_rpc::handle_register,
+    },
+    ExtRoute {
+        prefix: "auth.token.issue",
+        capability: Capability::Admin,
+        handler: crate::token_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "auth.token.revoke",
+        capability: Capability::Admin,
+        handler: crate::token_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "auth.token.list",
+        capability: Capability::Admin,
+        handler: crate::token_rpc::handle,
+    },
+    // Read: the gateway and any anonymous caller may ask "is this secret
+    // valid?"; a 256-bit secret cannot be searched for.
+    ExtRoute {
+        prefix: "auth.token.validate",
+        capability: Capability::Read,
+        handler: crate::token_rpc::handle,
     },
     ExtRoute {
         prefix: "rpc_ext.test.",

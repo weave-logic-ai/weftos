@@ -60,11 +60,18 @@ fn base_config() -> Config {
 }
 
 async fn spawn_test_daemon() -> (PathBuf, watch::Sender<bool>) {
+    spawn_test_daemon_with(Default::default()).await
+}
+
+async fn spawn_test_daemon_with(
+    governance: clawft_types::config::GovernanceConfig,
+) -> (PathBuf, watch::Sender<bool>) {
     isolate_env();
     let tmp = tempfile::tempdir().unwrap().keep();
     let socket_path = tmp.join("kernel.sock");
     let kernel_config = KernelConfig {
         chain: Some(clawft_types::config::ChainConfig::isolated_in(&tmp)),
+        governance,
         ..KernelConfig::default()
     };
     let kernel = Kernel::boot(base_config(), kernel_config, Arc::new(NativePlatform::new()))
@@ -93,10 +100,23 @@ async fn spawn_test_daemon() -> (PathBuf, watch::Sender<bool>) {
 }
 
 async fn call(socket: &Path, method: &str, params: Value, auth: &str) -> Value {
+    call_in(socket, method, params, auth, None).await
+}
+
+async fn call_in(
+    socket: &Path,
+    method: &str,
+    params: Value,
+    auth: &str,
+    project: Option<&str>,
+) -> Value {
     let stream = UnixStream::connect(socket).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
-    let req = json!({ "id": "t", "method": method, "params": params, "auth": auth });
+    let mut req = json!({ "id": "t", "method": method, "params": params, "auth": auth });
+    if let Some(p) = project {
+        req["project"] = json!(p);
+    }
     let mut line = serde_json::to_string(&req).unwrap();
     line.push('\n');
     writer.write_all(line.as_bytes()).await.unwrap();
@@ -105,17 +125,23 @@ async fn call(socket: &Path, method: &str, params: Value, auth: &str) -> Value {
     serde_json::from_str(ack.trim()).unwrap()
 }
 
+/// The scope gate and the user profile are process-global: tests that set
+/// them (or that the gate could refuse) run one at a time.
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Resets the process-wide user profile when a test ends, pass or fail.
 struct ProfileGuard;
 
 impl Drop for ProfileGuard {
     fn drop(&mut self) {
         clawft_weave::user_daemon::leave();
+        clawft_weave::scope_gate::init(None, false);
     }
 }
 
 #[tokio::test]
 async fn kernel_status_carries_the_handshake_default_then_user_profile() {
+    let _serial = SERIAL.lock().await;
     let (socket, _shutdown) = spawn_test_daemon().await;
 
     // Default daemon: a handshake, but no profile, roles or user fields.
@@ -148,6 +174,7 @@ async fn kernel_status_carries_the_handshake_default_then_user_profile() {
 
 #[tokio::test]
 async fn project_rpcs_register_list_show_with_capabilities() {
+    let _serial = SERIAL.lock().await;
     let mdir = manifests();
     let (socket, _shutdown) = spawn_test_daemon().await;
     let proj = tempfile::tempdir().unwrap();
@@ -214,4 +241,62 @@ async fn foreground_start_refuses_when_the_runtime_lock_is_held() {
     let msg = err.to_string();
     assert!(msg.contains("another kernel owns"), "{msg}");
     assert!(msg.contains(&format!("pid {}", std::process::id())), "{msg}");
+}
+
+/// A Write method the scope gate must police. The call may still fail later
+/// (bad params, no agent runtime); only the gate's verdict is asserted.
+const WRITE_METHOD: &str = "agent.spawn";
+
+fn scope_denied(r: &Value) -> bool {
+    r["error_kind"] == "project_required"
+}
+
+/// ADR-103 D12 at the wire, in the process-global setup the daemon uses:
+/// `scope_gate::init(manifests, user_profile_active())` after the profile is
+/// entered. Sequential in one test so the globals cannot interleave.
+#[tokio::test]
+async fn outside_project_policy_by_profile_over_the_wire() {
+    let _serial = SERIAL.lock().await;
+    // Before enter(): the profile captures WEFTOS_RUNTIME_DIR, so the root
+    // must already be the tempdir, never the real ~/.weftos/run.
+    isolate_env();
+    let _guard = ProfileGuard;
+    let mdir = scratch().join("scope-projects");
+    let proj = tempfile::tempdir().unwrap();
+    let id = clawft_types::project::adopt_or_init(proj.path(), &mdir, Some("scoped"))
+        .unwrap()
+        .id;
+    let params = json!({"agent_id": "scope-test"});
+
+    // (a) user profile, no explicit policy: read_only. No claim is refused.
+    clawft_weave::user_daemon::enter();
+    clawft_weave::scope_gate::init(Some(mdir.clone()), clawft_types::runtime_paths::user_profile_active());
+    let (sock, _s1) = spawn_test_daemon().await;
+    let r = call_in(&sock, WRITE_METHOD, params.clone(), "admin", None).await;
+    assert!(scope_denied(&r), "no claim must be project_required: {r}");
+    // Reads stay open outside a project.
+    let r = call_in(&sock, "kernel.status", Value::Null, "admin", None).await;
+    assert_eq!(r["ok"], true, "{r}");
+    // A claim that names no registered project is still outside.
+    let r = call_in(&sock, WRITE_METHOD, params.clone(), "admin", Some("01J0000000000000000000000A")).await;
+    assert!(scope_denied(&r), "unregistered claim: {r}");
+
+    // (b) the same request claiming a registered project passes the gate.
+    let r = call_in(&sock, WRITE_METHOD, params.clone(), "admin", Some(&id)).await;
+    assert!(!scope_denied(&r), "registered claim must pass the gate: {r}");
+
+    // (d) explicit allow_all on the user profile allows the unclaimed call.
+    let allow = clawft_types::config::GovernanceConfig {
+        outside_project: Some(clawft_types::config::OutsideProjectPolicy::AllowAll),
+    };
+    let (sock_allow, _s2) = spawn_test_daemon_with(allow).await;
+    let r = call_in(&sock_allow, WRITE_METHOD, params.clone(), "admin", None).await;
+    assert!(!scope_denied(&r), "explicit allow_all must win: {r}");
+
+    // (c) a default-root daemon with no policy is allow_all.
+    clawft_weave::user_daemon::leave();
+    clawft_weave::scope_gate::init(Some(mdir), clawft_types::runtime_paths::user_profile_active());
+    let (sock_default, _s3) = spawn_test_daemon().await;
+    let r = call_in(&sock_default, WRITE_METHOD, params, "admin", None).await;
+    assert!(!scope_denied(&r), "non-user daemon defaults to allow_all: {r}");
 }

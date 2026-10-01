@@ -39,6 +39,12 @@ pub mod rpc_ext;
 /// D12 scope gate: outside-project policy and the voice deny-list (ADR-103).
 #[cfg(any(unix, windows))]
 pub mod scope_gate;
+/// `auth.token.*` RPC handlers and the per-kernel token authority (ADR-102 D3).
+#[cfg(any(unix, windows))]
+pub mod token_rpc;
+/// TCP-relay request sanitiser: strips self-asserted scope strings (ADR-102 D3).
+#[cfg(unix)]
+pub mod relay_auth;
 /// Live MCP registry RPC handlers (WEFT-494 / ADR-070). Available on all
 /// platforms so unit tests can exercise add/list/remove without UDS.
 pub mod mcp_rpc;
