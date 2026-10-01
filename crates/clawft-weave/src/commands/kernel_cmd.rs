@@ -36,6 +36,14 @@ pub struct KernelArgs {
     /// Config file path (overrides auto-discovery).
     #[arg(short, long, global = true)]
     pub config: Option<String>,
+
+    /// Daemon profile. `user` addresses the per-user daemon: runtime root
+    /// `~/.weftos/run`, config `~/.weftos/weave.toml` over the legacy config.
+    /// Applies to start, stop, restart, status and every other subcommand.
+    /// Falls back to `WEAVER_PROFILE`; omit for the default (project or
+    /// legacy) daemon.
+    #[arg(long, global = true)]
+    pub profile: Option<String>,
 }
 
 /// Kernel subcommands.
@@ -119,7 +127,23 @@ pub enum KernelAction {
 }
 
 /// Run the kernel subcommand.
-pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
+pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
+    #[cfg(any(unix, windows))]
+    let user_profile = crate::user_daemon::parse_profile(
+        args.profile
+            .clone()
+            .or_else(|| std::env::var("WEAVER_PROFILE").ok())
+            .as_deref(),
+    )
+        .map_err(|e| anyhow::anyhow!(e))?
+        .is_some();
+    #[cfg(any(unix, windows))]
+    if user_profile {
+        // Before anything resolves a socket, pid or chain path, and before
+        // `prepare_home` changes directory: fix relative paths first.
+        args.config = crate::user_daemon::absolutize_config(args.config.as_deref());
+        crate::user_daemon::enter();
+    }
     // Platforms without a local daemon transport (neither Unix UDS nor
     // Windows named pipes) cannot host kernel start/stop/restart.
     #[cfg(not(any(unix, windows)))]
@@ -145,8 +169,14 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
             if foreground {
                 // Run in foreground (blocking)
                 let platform = NativePlatform::new();
-                let loaded =
-                    super::load_config_layered(&platform, args.config.as_deref()).await?;
+                let loaded = if user_profile {
+                    let home = crate::user_daemon::require_home()?;
+                    crate::user_daemon::prepare_home(&home)?;
+                    crate::user_daemon::load_user_config(&platform, args.config.as_deref(), &home)
+                        .await?
+                } else {
+                    super::load_config_layered(&platform, args.config.as_deref()).await?
+                };
                 let kernel_config = loaded.config.kernel.clone();
                 clawft_kernel::chain_storage::request_new_chain(new_chain);
                 clawft_kernel::chain_storage::request_adopt_legacy_chain(adopt_legacy_chain);
@@ -231,6 +261,13 @@ pub async fn run(args: KernelArgs) -> anyhow::Result<()> {
                     eprintln!("daemon error: {msg}");
                 }
             } else {
+                #[cfg(any(unix, windows))]
+                if user_profile {
+                    anyhow::bail!(
+                        "no user daemon running at {} (start it with `weaver kernel start --profile user`)",
+                        protocol::runtime_dir().display()
+                    );
+                }
                 eprintln!("(no daemon running — booting ephemeral kernel)\n");
                 let platform = NativePlatform::new();
                 let config = super::load_config(&platform, args.config.as_deref()).await?;
@@ -508,9 +545,36 @@ fn print_daemon_status(result: &protocol::KernelStatusResult, pid: Option<u32>) 
     }
     println!("Socket:     {}", protocol::socket_path().display());
     println!("Log:        {}", protocol::log_path().display());
+    if let Some(h) = &result.handshake {
+        print_handshake_summary(h);
+    }
 
     // Show cluster info if available (via separate RPC call)
     // This is best-effort; errors are silently ignored.
+}
+
+/// The handshake block of `kernel status`: profile, root, bound project,
+/// identity and protocol.
+fn print_handshake_summary(h: &clawft_rpc::handshake::Handshake) {
+    let profile = h.profile.as_deref().unwrap_or("default");
+    if h.roles.is_empty() {
+        println!("Profile:    {profile}");
+    } else {
+        println!("Profile:    {profile} (roles: {})", h.roles.join(", "));
+    }
+    println!("Runtime:    {}", h.runtime_dir);
+    match &h.project_id {
+        Some(id) => println!("Project:    {id} (bound via {:?})", h.bound_via),
+        None => println!("Project:    (unbound)"),
+    }
+    println!("Node:       {}", h.node_id);
+    if let Some(uid) = &h.user_id {
+        println!("User:       uid {uid} (unverified)");
+    }
+    if let Some(key) = &h.user_key_id {
+        println!("User key:   {key} (chain key until Phase 3)");
+    }
+    println!("Protocol:   {}..={}", h.proto.min, h.proto.current);
 }
 
 /// Fetch and print cluster info from daemon (appended to status output).
@@ -951,5 +1015,20 @@ mod tests {
     fn kernel_args_parses() {
         use clap::CommandFactory;
         KernelArgs::command().debug_assert();
+    }
+
+    #[test]
+    fn profile_flag_parses_globally_for_start_stop_restart_status() {
+        for argv in [
+            ["kernel", "start", "--profile", "user"],
+            ["kernel", "--profile", "user", "stop"],
+            ["kernel", "restart", "--profile", "user"],
+            ["kernel", "status", "--profile", "user"],
+        ] {
+            let args = KernelArgs::try_parse_from(argv).unwrap();
+            assert_eq!(args.profile.as_deref(), Some("user"), "{argv:?}");
+        }
+        let args = KernelArgs::try_parse_from(["kernel", "start"]).unwrap();
+        assert_eq!(args.profile, None);
     }
 }

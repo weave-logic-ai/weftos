@@ -39,6 +39,14 @@ struct Cli {
     #[arg(short, long, global = true)]
     verbose: bool,
 
+    /// Use the kernel serving this project (ULID; see `weft project list`).
+    #[arg(long, global = true, value_name = "ULID")]
+    project: Option<String>,
+
+    /// Use the kernel whose runtime directory is DIR (overrides WEFTOS_RUNTIME_DIR).
+    #[arg(long, global = true, value_name = "DIR")]
+    runtime: Option<std::path::PathBuf>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -113,8 +121,14 @@ enum Commands {
     /// Environment and multi-agent readiness checks.
     Doctor(commands::doctor::DoctorArgs),
 
+    /// Manage projects (init, fork, list, show, seed).
+    Project(commands::project_cmd::ProjectArgs),
+
     /// Manage workspaces.
     Workspace(commands::workspace_cmd::WorkspaceArgs),
+
+    /// Issue, revoke and list daemon bearer tokens (ADR-102).
+    Token(commands::token_cmd::TokenArgs),
 
     /// Initialize clawft config and workspace.
     Onboard(commands::onboard::OnboardArgs),
@@ -377,9 +391,41 @@ enum CronAction {
     },
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+fn main() -> anyhow::Result<()> {
+    let mut cli = Cli::parse();
+    if let Some(dir) = cli.runtime.take() {
+        // `--runtime` also governs the code paths that read the environment
+        // (`socket_path()`, `is_daemon_running()`, the kernel's node-key dir),
+        // so export it before any of them can run. The tokio runtime has not
+        // started yet, so this process is still single-threaded.
+        let dir = std::path::absolute(&dir).unwrap_or(dir);
+        // SAFETY: no other thread exists yet.
+        unsafe { std::env::set_var(clawft_types::runtime_paths::RUNTIME_DIR_ENV, &dir) };
+        cli.runtime = Some(dir);
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run(cli))
+}
+
+async fn run(cli: Cli) -> anyhow::Result<()> {
+    if let Some(p) = &cli.project {
+        clawft_types::project::validate_id(p).map_err(|_| {
+            anyhow::anyhow!(
+                "invalid --project {p:?}: expected a 26-character ULID (see `weft project list`)"
+            )
+        })?;
+    }
+    let project = cli.project.clone();
+    commands::daemon_conn::set_flags(clawft_rpc::resolve::ResolveFlags {
+        runtime: cli.runtime.clone(),
+        project: project.clone(),
+    });
+    clawft_rpc::set_context(clawft_rpc::ClientContext {
+        project,
+        ..Default::default()
+    });
 
     let default_filter = if cli.verbose { "debug" } else { "warn" };
     // Logs go to stderr: stdout carries `weft agent -m` replies and the
@@ -528,7 +574,12 @@ async fn main() -> anyhow::Result<()> {
         Commands::Swarm(args) => commands::swarm_cmd::run(args).await?,
         Commands::Delegate(args) => commands::delegate_cmd::run(args).await?,
         Commands::Routing(args) => commands::routing_cmd::run(args).await?,
+        Commands::Project(args) => commands::project_cmd::run(args).await?,
         Commands::Workspace(args) => commands::workspace_cmd::run(args).await?,
+        Commands::Token(args) => {
+            let platform = clawft_platform::NativePlatform::new();
+            commands::token_cmd::run(args, &platform).await?;
+        }
         Commands::Onboard(args) => commands::onboard::run(args).await?,
         Commands::Analyze(args) => commands::analyze_cmd::run(args).await?,
         Commands::Assess(args) => commands::assess_cmd::run(args).await?,
@@ -582,6 +633,34 @@ mod tests {
     fn cli_parses_without_error() {
         // Verify the clap derive macro produces a valid command structure.
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn project_and_global_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "weft",
+            "--project",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "--runtime",
+            "/r",
+            "project",
+            "init",
+            "--fork",
+            "--force",
+            "--name",
+            "x",
+        ])
+        .unwrap();
+        assert_eq!(cli.project.as_deref(), Some("01ARZ3NDEKTSV4RRFFQ69G5FAV"));
+        assert_eq!(cli.runtime.as_deref(), Some(std::path::Path::new("/r")));
+        assert!(matches!(cli.command, Commands::Project(_)));
+        // Global: also accepted after the subcommand.
+        assert!(
+            Cli::try_parse_from(["weft", "project", "list", "--runtime", "/r", "--json"]).is_ok()
+        );
+        // --force without --fork, and --here with a target, are rejected.
+        assert!(Cli::try_parse_from(["weft", "project", "init", "--force"]).is_err());
+        assert!(Cli::try_parse_from(["weft", "project", "show", "x", "--here"]).is_err());
     }
 
     #[test]

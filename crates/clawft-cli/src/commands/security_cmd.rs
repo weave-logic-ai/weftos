@@ -9,7 +9,7 @@
 //! - `weft security checks` -- List all available audit checks.
 
 use clap::{Args, Subcommand};
-use clawft_rpc::{DaemonClient, Request};
+use clawft_rpc::Request;
 use clawft_security::{AuditSeverity, SecurityScanner};
 
 /// Arguments for `weft security`.
@@ -69,7 +69,7 @@ fn parse_min_severity(s: &str) -> AuditSeverity {
 
 async fn run_scan(path: &str, format: &str, min_severity: &str) -> anyhow::Result<()> {
     // Try daemon-first path (ADR-021).
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let params = serde_json::json!({
             "path": path,
             "format": format,

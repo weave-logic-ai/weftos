@@ -537,7 +537,7 @@ async fn spawn_turn_recorder(
 ) -> Option<std::sync::Arc<dyn clawft_voice_talk::ConversationObserver>> {
     use clawft_rpc::{DaemonClient, Request};
 
-    let mut client = DaemonClient::connect().await?;
+    let mut client = crate::commands::daemon_conn::connect_opt().await?;
     // Warn once if this binary and the daemon were built from different trees
     // (covers `weft voice talk` and `weft voice listen`, which both anchor
     // turns through this recorder).
@@ -589,7 +589,7 @@ async fn spawn_turn_recorder(
                     }
                     Err(e) if attempt == 0 => {
                         tracing::debug!(error = %e, method, "voice recorder transport error; reconnecting");
-                        match DaemonClient::connect().await {
+                        match crate::commands::daemon_conn::connect_retry().await {
                             Some(c) => client = c,
                             None => break,
                         }
@@ -599,7 +599,7 @@ async fn spawn_turn_recorder(
                     }
                 }
             }
-            if !posted && DaemonClient::connect().await.is_none() {
+            if !posted && crate::commands::daemon_conn::connect_retry().await.is_none() {
                 tracing::warn!("kernel daemon gone — voice turn anchoring stopped for this session");
                 return;
             }

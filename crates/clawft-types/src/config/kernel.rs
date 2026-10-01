@@ -274,6 +274,11 @@ pub struct KernelConfig {
     /// behaviour stays the only side-effect unless an operator opts in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<AgentAnchorConfig>,
+
+    /// Governance policy (ADR-103 D12): what requests outside any project
+    /// may do. Defaults to `read_only`.
+    #[serde(default)]
+    pub governance: super::governance::GovernanceConfig,
 }
 
 impl Default for KernelConfig {
@@ -295,6 +300,7 @@ impl Default for KernelConfig {
             ipc_tcp: None,
             llm: None,
             agent: None,
+            governance: Default::default(),
         }
     }
 }
@@ -1688,6 +1694,7 @@ mod tests {
             ipc_tcp: None,
             llm: None,
             agent: None,
+            governance: Default::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let restored: KernelConfig = serde_json::from_str(&json).unwrap();

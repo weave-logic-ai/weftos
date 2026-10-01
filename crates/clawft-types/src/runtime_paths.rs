@@ -22,8 +22,17 @@
 //!
 //! Phase 1 of ADR-103 changes the root; keep that change inside
 //! [`resolve_root`].
+//!
+//! # User profile
+//!
+//! `weaver kernel start --profile user` runs the per-user daemon, whose
+//! root is `~/.weftos/run` ([`RootSource::User`]) and never the project
+//! walk-up. The profile is process state ([`set_user_profile`]), set once
+//! by the CLI, so every later [`RuntimePaths::resolve`] (socket, pid,
+//! kernel boot, chain choice) agrees. `$WEFTOS_RUNTIME_DIR` still wins.
 
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 /// Environment variable that points a daemon at an isolated runtime dir.
 pub const RUNTIME_DIR_ENV: &str = "WEFTOS_RUNTIME_DIR";
@@ -49,6 +58,80 @@ pub enum RootSource {
     Project(PathBuf),
     /// The legacy `~/.clawft` directory.
     LegacyHome,
+    /// The per-user daemon root, `~/.weftos/run` (`--profile user`).
+    User,
+}
+
+/// Process-wide user-profile state: `None` when off, else the absolute
+/// `$WEFTOS_RUNTIME_DIR` captured when the profile was entered (the daemon
+/// later changes its working directory, so a relative value must be fixed
+/// first). The one source of truth for "is this the user daemon".
+static USER_PROFILE: RwLock<Option<Option<PathBuf>>> = RwLock::new(None);
+
+/// Make `path` absolute against the current working directory (lexical; the
+/// path need not exist).
+pub fn absolutize(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Make [`RuntimePaths::resolve`] return the user root for this process.
+///
+/// Turning it on captures `$WEFTOS_RUNTIME_DIR` as an absolute path now, so
+/// a later `chdir` cannot move the root. Call before changing directory.
+pub fn set_user_profile(on: bool) {
+    let state = on.then(|| capture_runtime_dir(std::env::var(RUNTIME_DIR_ENV).ok().as_deref()));
+    *USER_PROFILE.write().unwrap_or_else(|e| e.into_inner()) = state;
+}
+
+/// `env` (a raw `$WEFTOS_RUNTIME_DIR`) as an absolute path; blank is unset.
+fn capture_runtime_dir(env: Option<&str>) -> Option<PathBuf> {
+    env.map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| absolutize(Path::new(v)))
+}
+
+/// `$WEFTOS_RUNTIME_DIR` as code outside the resolver should read it.
+///
+/// Once the user profile is entered this is the value captured then
+/// (absolute, immune to the daemon's later `chdir`); otherwise the raw
+/// variable. Prefer this to `std::env::var`, and not a `set_var`, which
+/// would be unsound with the tokio runtime already running.
+pub fn runtime_dir_env() -> Option<PathBuf> {
+    let user = USER_PROFILE.read().unwrap_or_else(|e| e.into_inner()).clone();
+    match user {
+        Some(captured) => captured,
+        None => capture_none_if_blank(std::env::var(RUNTIME_DIR_ENV).ok().as_deref()),
+    }
+}
+
+fn capture_none_if_blank(env: Option<&str>) -> Option<PathBuf> {
+    env.filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
+/// True when this process runs (or addresses) the user daemon.
+pub fn user_profile_active() -> bool {
+    USER_PROFILE
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some()
+}
+
+/// `<home>/.weftos`, the per-user state directory (ADR-103 D4).
+pub fn user_weftos_dir(home: &Path) -> PathBuf {
+    home.join(".weftos")
+}
+
+/// `<home>/.weftos/run`, the user daemon's runtime root.
+pub fn user_runtime_root(home: &Path) -> PathBuf {
+    user_weftos_dir(home).join("run")
+}
+
+/// `<home>/.weftos/chain/chain.json`, where the user chain lives once
+/// `weaver migrate user-chain` has moved it (Phase 1 package E).
+pub fn user_chain_checkpoint(home: &Path) -> PathBuf {
+    user_weftos_dir(home)
+        .join("chain")
+        .join(CHAIN_CHECKPOINT_FILE)
 }
 
 /// Every runtime file location, derived from one root.
@@ -132,9 +215,34 @@ impl RuntimePaths {
         Self { root, source }
     }
 
+    /// The user daemon's paths: `$WEFTOS_RUNTIME_DIR` when set, else
+    /// `<home>/.weftos/run`. Never walks up to a project. Without a home
+    /// directory the root falls back to a temp dir, as the legacy one does.
+    pub fn user_with(env: Option<&str>, home: Option<&Path>) -> Self {
+        if let Some(dir) = env.map(str::trim).filter(|d| !d.is_empty()) {
+            return Self {
+                root: absolutize(Path::new(dir)),
+                source: RootSource::User,
+            };
+        }
+        let home = home
+            .map(Path::to_path_buf)
+            .unwrap_or_else(std::env::temp_dir);
+        Self {
+            root: user_runtime_root(&home),
+            source: RootSource::User,
+        }
+    }
+
     /// Resolve from the process environment, working directory and home.
+    /// Honours [`set_user_profile`].
     pub fn resolve() -> Self {
         let env = std::env::var(RUNTIME_DIR_ENV).ok();
+        let user = USER_PROFILE.read().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(captured) = user {
+            let captured = captured.as_ref().and_then(|p| p.to_str());
+            return Self::user_with(captured, home_dir().as_deref());
+        }
         let cwd = std::env::current_dir().ok();
         let home = home_dir();
         Self::resolve_with(env.as_deref(), cwd.as_deref(), home.as_deref())
@@ -247,16 +355,7 @@ pub const LEGACY_MIGRATED_MARKER: &str = "MIGRATED-TO-WEFTOS.txt";
 
 /// The Phase 1 user chain directory (`~/.weftos/chain`, ADR-103 D4).
 pub fn user_chain_root(home: &Path) -> PathBuf {
-    home.join(".weftos").join("chain")
-}
-
-/// The migrated user chain checkpoint path, when `home` has one: the
-/// `MIGRATED_FROM.json` marker and a chain file are both present.
-pub fn migrated_user_chain(home: Option<&Path>) -> Option<PathBuf> {
-    let root = user_chain_root(home?);
-    let paths = RuntimePaths::at(&root);
-    let has_chain = paths.chain_checkpoint().exists() || paths.chain_rvf().exists();
-    (root.join(MIGRATED_FROM_FILE).is_file() && has_chain).then(|| paths.chain_checkpoint())
+    user_weftos_dir(home).join("chain")
 }
 
 /// The migration marker beside the legacy chain in `legacy_root`, if any, and
@@ -294,6 +393,54 @@ mod tests {
         let p = dir.join(rel);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, "").unwrap();
+    }
+
+    #[test]
+    fn user_root_is_weftos_run_and_ignores_projects() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path().join("home");
+        let p = RuntimePaths::user_with(None, Some(&home));
+        assert_eq!(p.root(), home.join(".weftos/run"));
+        assert_eq!(p.source(), &RootSource::User);
+        assert_eq!(p.socket(), home.join(".weftos/run/kernel.sock"));
+        assert_eq!(p.lock(), home.join(".weftos/run/kernel.lock"));
+        assert_eq!(
+            user_chain_checkpoint(&home),
+            home.join(".weftos/chain/chain.json")
+        );
+    }
+
+    #[test]
+    fn captured_runtime_dir_is_absolute_and_blank_is_unset() {
+        assert_eq!(capture_runtime_dir(None), None);
+        assert_eq!(capture_runtime_dir(Some("  ")), None);
+        let rel = capture_runtime_dir(Some("rel/run")).unwrap();
+        assert_eq!(rel, std::env::current_dir().unwrap().join("rel/run"));
+        assert_eq!(
+            capture_runtime_dir(Some("/abs/run")),
+            Some(PathBuf::from("/abs/run"))
+        );
+    }
+
+    #[test]
+    fn user_root_env_override_is_made_absolute() {
+        let p = RuntimePaths::user_with(Some("rel/run"), Some(Path::new("/h")));
+        assert!(p.root().is_absolute(), "{:?}", p.root());
+        assert!(p.root().ends_with("rel/run"));
+        assert_eq!(
+            p.root(),
+            std::env::current_dir().unwrap().join("rel/run")
+        );
+    }
+
+    #[test]
+    fn user_root_env_override_and_blank_env() {
+        let home = Path::new("/h");
+        let p = RuntimePaths::user_with(Some("/run/probe"), Some(home));
+        assert_eq!(p.root(), Path::new("/run/probe"));
+        assert_eq!(p.source(), &RootSource::User);
+        let p = RuntimePaths::user_with(Some("  "), Some(home));
+        assert_eq!(p.root(), Path::new("/h/.weftos/run"));
     }
 
     #[test]

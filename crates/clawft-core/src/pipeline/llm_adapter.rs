@@ -62,11 +62,10 @@ pub fn resolve_retry_model_path() -> PathBuf {
             return path;
         }
     }
-    if let Ok(dir) = std::env::var("WEFTOS_RUNTIME_DIR") {
-        let dir = PathBuf::from(dir);
-        if !dir.as_os_str().is_empty() {
-            return dir.join("eml-models").join(clawft_llm::RETRY_MODEL_FILENAME);
-        }
+    // Not a raw env read: the user daemon changes directory at startup, so
+    // a relative value must resolve as it did when the profile was entered.
+    if let Some(dir) = clawft_types::runtime_paths::runtime_dir_env() {
+        return dir.join("eml-models").join(clawft_llm::RETRY_MODEL_FILENAME);
     }
     let state_dir = dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))

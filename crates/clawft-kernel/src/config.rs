@@ -39,6 +39,7 @@ mod tests {
     #[test]
     fn kernel_config_ext_from_base() {
         let base = KernelConfig {
+            governance: Default::default(),
             enabled: true,
             max_processes: 128,
             health_check_interval_secs: 10,

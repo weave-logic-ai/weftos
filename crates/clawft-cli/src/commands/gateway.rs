@@ -828,9 +828,8 @@ fn build_api_state(
         channels: Arc::new(channel_bridge),
         voice: Arc::new(voice_bridge),
         broadcaster,
-        // WEFT-122: stub kernel facade until daemon RPC is wired through.
-        // SSE + route table work; call_rpc returns stub envelopes.
-        kernel_facade: Arc::new(clawft_services::api::InMemoryKernelFacade::new()),
+        // ADR-102 D6: facade routes forward to the kernel daemon; 503 when it is down.
+        kernel_facade: Arc::new(clawft_services::api::DaemonKernelFacade::new()),
         // WEFT-40: empty ring unless wired to PipelineRegistry::decision_history.
         routing_history: Arc::new(
             clawft_core::pipeline::decision_history::RoutingDecisionHistory::new(),
