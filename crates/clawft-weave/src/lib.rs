@@ -27,6 +27,12 @@ pub mod llm_service;
 /// `kernel.handshake` and the request-envelope gate (ADR-103 D14).
 #[cfg(any(unix, windows))]
 pub mod handshake_rpc;
+/// `project.*` RPCs over the per-user manifest store (ADR-103 Phase 1).
+#[cfg(any(unix, windows))]
+pub mod project_rpc;
+/// The per-user daemon profile (`weaver kernel start --profile user`).
+#[cfg(any(unix, windows))]
+pub mod user_daemon;
 /// Daemon RPC extension seam: method-prefix routes + pre-dispatch gates (ADR-103 D0).
 #[cfg(any(unix, windows))]
 pub mod rpc_ext;

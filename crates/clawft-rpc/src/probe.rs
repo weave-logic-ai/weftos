@@ -84,6 +84,7 @@ pub fn describe_unreachable(path: &Path, state: &SocketState, paths: &RuntimePat
         RootSource::Env => "WEFTOS_RUNTIME_DIR".to_string(),
         RootSource::Project(p) => format!("project {}", p.display()),
         RootSource::LegacyHome => "legacy ~/.clawft (no project found from here)".to_string(),
+        RootSource::User => "user daemon root ~/.weftos/run".to_string(),
     };
     format!(
         "no kernel reachable: {why}\n  runtime root: {} (from {origin})\n  \

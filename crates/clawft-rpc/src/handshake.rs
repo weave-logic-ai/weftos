@@ -72,8 +72,20 @@ pub struct Handshake {
     /// Mesh node id (32 hex), derived from the node key.
     pub node_id: String,
     /// Owning user id once user identity exists; `None` until then.
+    /// The user daemon reports the local uid (Phase 1, unverified).
     #[serde(default)]
     pub user_id: Option<String>,
+    /// Id of the user key: the node-id-style hash of the chain verifying
+    /// key. Phase 1 uses the migrated `chain.key` (plan D-1); it becomes
+    /// `~/.weftos/user.key` in Phase 3.
+    #[serde(default)]
+    pub user_key_id: Option<String>,
+    /// Daemon profile (`user`), `None` for the default project/legacy daemon.
+    #[serde(default)]
+    pub profile: Option<String>,
+    /// Roles this daemon runs (`machine`, `user`, ...); empty when unset.
+    #[serde(default)]
+    pub roles: Vec<String>,
     /// Project ULID the daemon serves, when it is bound to one.
     #[serde(default)]
     pub project_id: Option<String>,
@@ -329,6 +341,9 @@ mod tests {
             proto: ProtoRange::supported(),
             node_id: "n".into(),
             user_id: None,
+            user_key_id: None,
+            profile: None,
+            roles: Vec::new(),
             project_id: Some("P".into()),
             bound_via: BoundVia::Manifest,
             depth: 0,

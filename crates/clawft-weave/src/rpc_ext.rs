@@ -230,17 +230,49 @@ pub type GateFn = for<'a> fn(&'a GateRequest<'a>) -> GateFuture<'a>;
 /// `ExtRoute { prefix: "project.", capability: Capability::Read,
 /// handler: crate::project_rpc::handle }`.
 #[cfg(not(test))]
-const ROUTES: &[ExtRoute] = &[ExtRoute {
-    prefix: "kernel.handshake",
-    capability: Capability::Read,
-    handler: crate::handshake_rpc::handle,
-}];
+const ROUTES: &[ExtRoute] = &[
+    ExtRoute {
+        prefix: "kernel.handshake",
+        capability: Capability::Read,
+        handler: crate::handshake_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.list",
+        capability: Capability::Read,
+        handler: crate::project_rpc::handle_list,
+    },
+    ExtRoute {
+        prefix: "project.show",
+        capability: Capability::Read,
+        handler: crate::project_rpc::handle_show,
+    },
+    ExtRoute {
+        prefix: "project.register",
+        capability: Capability::Admin,
+        handler: crate::project_rpc::handle_register,
+    },
+];
 #[cfg(test)]
 const ROUTES: &[ExtRoute] = &[
     ExtRoute {
         prefix: "kernel.handshake",
         capability: Capability::Read,
         handler: crate::handshake_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.list",
+        capability: Capability::Read,
+        handler: crate::project_rpc::handle_list,
+    },
+    ExtRoute {
+        prefix: "project.show",
+        capability: Capability::Read,
+        handler: crate::project_rpc::handle_show,
+    },
+    ExtRoute {
+        prefix: "project.register",
+        capability: Capability::Admin,
+        handler: crate::project_rpc::handle_register,
     },
     ExtRoute {
         prefix: "rpc_ext.test.",

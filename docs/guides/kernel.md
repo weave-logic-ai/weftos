@@ -284,6 +284,99 @@ event names the demo app, look it up by sequence in
 sequence runs, so the boot and gate events around them belong to the
 same demo daemon.
 
+### User daemon (Phase 1)
+
+ADR-103 Phase 1 adds a per-user daemon that collapses the `machine` and
+`user` roles into one process. It serves every project of one user; the
+project-local runtime (`<project>/.weftos/runtime/`) keeps working
+unchanged until Phase 2.
+
+```bash
+weaver kernel start --profile user     # or WEAVER_PROFILE=user
+weaver kernel status --profile user
+weaver kernel stop --profile user      # restart likewise
+```
+
+`--profile` is global to `weaver kernel`, so `stop`, `restart` and
+`status` resolve the same root as `start`. Without it everything behaves
+as before.
+
+| Item | User profile |
+|------|--------------|
+| Runtime root | `~/.weftos/run/` (socket, `kernel.pid`, `kernel.log`, `kernel.lock`, `node.key`). The project walk-up is never used; `WEFTOS_RUNTIME_DIR` still overrides for isolation. |
+| One per user | The `kernel.lock` in that root. A second start exits nonzero naming the holder's pid. |
+| Config | `~/.weftos/weave.toml` layered over the legacy `~/.clawft/config.json`, so the `.toml` wins on conflict. The working directory is set to `~/.weftos`, so a project-local `weave.toml` or `.clawft/config.json` is not picked up. An explicit `--config FILE` is used as-is. |
+| Chain | `~/.weftos/chain/` when it exists (written by `weaver migrate user-chain`). Otherwise the legacy `~/.clawft` chain under the Phase 0 guard: the first start needs `--adopt-legacy-chain`, and the daemon never starts a silent fresh genesis. `--new-chain` starts a fresh `~/.weftos/chain/` and leaves the legacy chain untouched. |
+| Projects | On start the manifest store `~/.weftos/projects/` is seeded from `~/.clawft/workspaces.json` (idempotent). |
+
+The plan's decision D-1 applies: until Phase 3 the user key is the
+chain key (`chain.key`). The handshake reports its id (the node-id-style
+hash of the chain verifying key) as `user_key_id`. It becomes
+`~/.weftos/user.key` in Phase 3.
+
+#### Handshake in `kernel.status`
+
+`kernel.status` carries the same payload as `kernel.handshake` (which
+stays for compatibility) under a `handshake` key:
+
+```json
+{"state": "running", "...": "...",
+ "handshake": {
+   "proto": {"current": 1, "min": 1},
+   "node_id": "<32 hex>", "user_id": "501", "user_key_id": "<32 hex>",
+   "profile": "user", "roles": ["machine", "user"],
+   "project_id": null, "bound_via": "none",
+   "runtime_dir": "/Users/me/.weftos/run", "pid": 4242,
+   "version": "0.8.1", "sha": "...", "binary": "..."}}
+```
+
+`user_id` is the local uid and is unverified in Phase 1 (peer
+credentials arrive in Phase 3). A default daemon leaves `profile`,
+`roles`, `user_id` and `user_key_id` empty. `weaver kernel status`
+prints the profile, runtime root, bound project, node, user and
+protocol.
+
+#### `project.*` RPCs
+
+| Method | Capability | Params |
+|--------|------------|--------|
+| `project.list` | Read | none |
+| `project.show` | Read | `{id}` or `{root}` |
+| `project.register` | Admin | `{root, name?}` |
+
+They read and write the manifests in `~/.weftos/projects/`.
+`project.register` adopts an absolute, existing project root exactly
+like `weft project init`: an existing `project.toml` id wins, a seeded
+manifest is adopted, else a ULID is minted. It refuses a relative root,
+`/`, `$HOME`, and a root whose id is registered for another live root
+(`root_conflict`). Errors carry `error_kind`: `project_not_found`,
+`invalid_project`, `bad_root`, `root_conflict`, `invalid_params`.
+
+#### Owner migration (one machine, in this order)
+
+1. Stop every older daemon, for example in each project
+   `weaver kernel stop`, then confirm with `lsof -i :9470` that the mesh
+   port is free and that no `kernel.pid` remains. This must precede the
+   chain copy: the migration refuses while a live pid is recorded or
+   the chain is locked, but it cannot see a writer that uses a
+   different runtime dir.
+2. Copy the `[kernel.mesh]` (and Noise) settings from the old project's
+   `weave.toml` into `~/.weftos/weave.toml`. Until then the user daemon
+   runs with mesh off and the old daemon's mesh peers see it disappear.
+3. `weaver migrate user-chain --dry-run`, read the plan, then run it
+   without `--dry-run` (this command lands with Phase 1 package E). The
+   legacy `~/.clawft` chain is copied and verified, never modified.
+4. `weaver kernel start --profile user`. If you skipped step 3 and the
+   legacy chain is still in use, add `--adopt-legacy-chain` the first
+   time. Check `weaver kernel status --profile user` and
+   `weft project list`.
+5. In each project: `weft project init` (adopts the seeded manifest),
+   then `weft project show .`.
+
+Rollback: `weaver kernel stop --profile user`, then restart the old
+daemon with the old binary in its project directory. `~/.clawft` is
+unchanged.
+
 ### Governance (three-branch)
 
 Governance is a permission-and-deferral layer in front of the chain.
