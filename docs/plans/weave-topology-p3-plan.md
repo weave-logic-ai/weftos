@@ -36,17 +36,23 @@ Tests and probes override with `WEFTOS_MESH_STATE_DIR` and `WEFTOS_MESH_SOCKET` 
 
 ### 1.2 mesh-local/1 (package L)
 
+*Updated 2026-10-01 after the package L review: `hello.client_nonce` and `hello_ack.machine_sig` (server key-possession proof), length-prefixed register signing bytes, reply-class id correlation with service-originated ids flagged `1<<63`.*
+
 Transport: unix stream (named pipe on Windows, section 6), newline-delimited JSON, one object per line, max line 1 MiB, 5 s deadline for `hello`, every object `{"t": "<type>", "id": <u64>?, ...}`. Binary payloads are not needed: mesh bodies are already JSON `KernelMessage`s (ADR-031 shipped encoding).
 
 ```
-C->S  hello      {proto_min, proto_max, features:[..], role:"user"|"admin", build_sha, exe, pid}
+C->S  hello      {proto_min, proto_max, features:[..], role:"user"|"admin", build_sha, exe, pid,
+                  client_nonce:"<32B hex>"}
 S->C  hello_ack  {proto, features:[..], node_id, machine_pubkey, service_build_sha, deprecated_below?,
-                  uid, challenge:"<32B hex>"}            // uid = what the service read from the peer credential
+                  uid, challenge:"<32B hex>", machine_sig}  // uid = what the service read from the peer credential
+      machine_sig = Ed25519(machine_key, "weftos/mesh-local/hello/v1\0" || client_nonce || challenge || machine_pubkey)
+      // verified by the client against the pinned machine key BEFORE pinning or registering (key-possession proof)
 S->C  error      {kind:"proto_mismatch"|"bind_conflict"|"bind_pending"|"address_in_use"|"forbidden"|"bad_sig"|
                   "rate_limited"|"scope_required"|..., message, remedy, data?}   // then close for fatal kinds
 C->S  register   {user_pubkey, sig, addresses:{user_id, projects:[{project_id, project_pubkey, cert_sig}]},
                   topic_prefixes:[..], capabilities:[..], version, build_sha}
-      sig = Ed25519(user_key, "weftos/mesh-local/register/v1\0" || challenge || uid_be32 || node_id)
+      sig = Ed25519(user_key, "weftos/mesh-local/register/v1\0" || challenge || principal || node_id)
+      principal = tag(1=uid, 2=sid) || len_u16be || bytes;  node_id = len_u16be || bytes
 S->C  register_ack {user_id, cert:<UserCert>, accepted:{addresses,topic_prefixes}, rejected:[{what,reason}],
                   bind:"new"|"existing"|"pending"}
 C->S  renew {} -> S->C {cert}                     // client renews at 50% of lifetime
