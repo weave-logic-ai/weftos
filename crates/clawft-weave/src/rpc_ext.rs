@@ -321,6 +321,11 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Admin,
         handler: crate::anchor_rpc::handle_restore,
     },
+    ExtRoute {
+        prefix: "project.anchor.reset",
+        capability: Capability::Admin,
+        handler: crate::anchor_rpc::handle_reset,
+    },
     // Per-project child kernels (ADR-103 A6, package G). Lifecycle is Admin;
     // `project.token.refresh` is Write so a project token can renew itself.
     ExtRoute {
@@ -486,6 +491,11 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "project.anchor.restore",
         capability: Capability::Admin,
         handler: crate::anchor_rpc::handle_restore,
+    },
+    ExtRoute {
+        prefix: "project.anchor.reset",
+        capability: Capability::Admin,
+        handler: crate::anchor_rpc::handle_reset,
     },
     // Per-project child kernels (ADR-103 A6, package G). Lifecycle is Admin;
     // `project.token.refresh` is Write so a project token can renew itself.

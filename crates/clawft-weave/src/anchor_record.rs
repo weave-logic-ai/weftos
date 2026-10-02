@@ -28,20 +28,30 @@ pub(super) fn anchor_file(dir: &Path, id: &str) -> PathBuf {
     dir.join(format!("{id}.anchor.json"))
 }
 
-fn record_bytes(statement_hash: &str, user_seq: u64, user_event_hash: &str) -> Vec<u8> {
-    let body = json!({
+fn record_bytes(statement_hash: &str, user_seq: u64, user_event_hash: &str, epoch: u64) -> Vec<u8> {
+    let mut body = json!({
         "statement_hash": statement_hash,
         "user_seq": user_seq,
         "user_event_hash": user_event_hash,
     });
+    // Only a non-zero epoch is signed, so records from before epochs keep verifying.
+    if epoch > 0 {
+        body["epoch"] = json!(epoch);
+    }
     format!("{RECORD_DOMAIN}{}", canonical_json(&body)).into_bytes()
 }
 
 /// An [`Accepted`] sealed with the user key.
-pub(super) fn seal(env: &CertEnv, statement: ProjectAnchorStmt, user_seq: u64, user_event_hash: String) -> Accepted {
-    let bytes = record_bytes(&statement.hash(), user_seq, &user_event_hash);
+pub(super) fn seal(
+    env: &CertEnv,
+    statement: ProjectAnchorStmt,
+    user_seq: u64,
+    user_event_hash: String,
+    epoch: u64,
+) -> Accepted {
+    let bytes = record_bytes(&statement.hash(), user_seq, &user_event_hash, epoch);
     let rec_sig = hex_encode(&env.user_key.sign(&bytes).to_bytes());
-    Accepted { statement, user_seq, user_event_hash, rec_sig }
+    Accepted { statement, user_seq, user_event_hash, rec_sig, epoch }
 }
 
 /// Sealed by the key in use, or by a user key rotated out since, provided the
@@ -55,7 +65,7 @@ fn seal_ok(env: &CertEnv, a: &Accepted) -> bool {
     let Some(at) = DateTime::parse_from_rfc3339(&a.statement.at).ok().map(|t| t.with_timezone(&Utc)) else {
         return false;
     };
-    let bytes = record_bytes(&a.statement.hash(), a.user_seq, &a.user_event_hash);
+    let bytes = record_bytes(&a.statement.hash(), a.user_seq, &a.user_event_hash, a.epoch);
     let sig = Signature::from_bytes(&sig);
     std::iter::once(*history.current())
         .chain(history.retired_keys())
@@ -97,17 +107,20 @@ pub(super) fn write_file(env: &CertEnv, a: &Accepted) -> Result<(), AnchorError>
         .map_err(|e: IdentityError| AnchorError::Store(format!("record accepted anchor: {e}")))
 }
 
-pub(super) fn append_event(env: &CertEnv, stmt: &ProjectAnchorStmt, recovered: Option<&Accepted>) -> Accepted {
+pub(super) fn append_event(env: &CertEnv, stmt: &ProjectAnchorStmt, recovered: Option<&Accepted>, epoch: u64) -> Accepted {
     let mut payload = json!({
         "project_id": stmt.project_id,
         "statement": stmt,
         "statement_hash": stmt.hash(),
     });
+    if epoch > 0 {
+        payload["epoch"] = json!(epoch);
+    }
     if let Some(old) = recovered {
         payload["recovered"] = json!(true);
         payload["original_user_seq"] = json!(old.user_seq);
         payload["original_user_event_hash"] = json!(old.user_event_hash);
     }
     let ev = env.chain.append(ANCHOR_SOURCE, KIND_ANCHOR, Some(payload));
-    seal(env, stmt.clone(), ev.sequence, ident::hex(&ev.hash))
+    seal(env, stmt.clone(), ev.sequence, ident::hex(&ev.hash), epoch)
 }

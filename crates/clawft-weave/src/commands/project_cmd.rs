@@ -7,7 +7,7 @@ use crate::project_migrate::{self, Action, MigrateError};
 
 /// Project operator subcommand.
 #[derive(Parser)]
-#[command(about = "Per-project kernel operations (migrate-kernel)")]
+#[command(about = "Per-project kernel operations (migrate-kernel, anchor reset)")]
 pub struct ProjectArgs {
     /// Project subcommand.
     #[command(subcommand)]
@@ -33,13 +33,61 @@ pub enum ProjectAction {
         #[arg(long)]
         revert: bool,
     },
+    /// Anchor operations on the user daemon (owner only).
+    Anchor {
+        /// Anchor subcommand.
+        #[command(subcommand)]
+        action: AnchorAction,
+    },
+}
+
+/// `weaver project anchor` subcommands.
+#[derive(Subcommand)]
+pub enum AnchorAction {
+    /// Retire a project's anchor head after its chain was reset on purpose.
+    ///
+    /// A project whose chain was moved aside restarts its anchors at seq 1,
+    /// which the user daemon refuses while it holds the old head. This records
+    /// a signed reset on the user chain (the old statements stay as history)
+    /// and lets the project anchor again from genesis. Run it only when the
+    /// project chain really was reset; it changes nothing about the project's
+    /// key. Needs the owner's local socket (Admin); a token is refused.
+    Reset {
+        /// Project id (a ULID).
+        #[arg(long)]
+        project: String,
+        /// Why (kept on the chain; control characters are removed).
+        #[arg(long, default_value = "")]
+        reason: String,
+    },
 }
 
 /// Run the project subcommand.
 pub async fn run(args: ProjectArgs) -> anyhow::Result<()> {
     match args.action {
         ProjectAction::MigrateKernel { project, dry_run, revert } => migrate(&project, dry_run, revert),
+        ProjectAction::Anchor { action: AnchorAction::Reset { project, reason } } => anchor_reset(&project, &reason).await,
     }
+}
+
+async fn anchor_reset(project: &str, reason: &str) -> anyhow::Result<()> {
+    let mut client = clawft_rpc::DaemonClient::connect()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no user daemon is running; start it with `weaver kernel start --profile user`"))?;
+    let req = clawft_rpc::Request::with_params(
+        "project.anchor.reset",
+        serde_json::json!({ "project_id": project, "reason": reason }),
+    );
+    let resp = client.call(req).await?;
+    if !resp.ok {
+        anyhow::bail!("{}", resp.error.unwrap_or_else(|| "anchor reset refused".into()));
+    }
+    let r = resp.result.unwrap_or_default();
+    println!(
+        "project {project}: anchor epoch {} (retired head seq {}); its next anchor starts from seq 1",
+        r["epoch"], r["retired"]["seq"]
+    );
+    Ok(())
 }
 
 fn migrate(project: &str, dry_run: bool, revert: bool) -> anyhow::Result<()> {

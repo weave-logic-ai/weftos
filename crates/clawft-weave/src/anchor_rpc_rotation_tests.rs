@@ -64,12 +64,12 @@ fn a_record_the_old_key_seals_after_the_rotation_point_is_refused() {
     let view = current_view(&env).unwrap();
 
     // Control: an old-key seal on a statement dated before the point is read.
-    let early = seal(&old_env, stmt(&f, 1, None, 10, later(50)), 3, "ab".repeat(32));
+    let early = seal(&old_env, stmt(&f, 1, None, 10, later(50)), 3, "ab".repeat(32), 0);
     write_file(&env, &early).unwrap();
     assert!(read_file(&env, &f.id, &view).is_some());
 
     // After the point: refused, so it cannot set the baseline.
-    let late = seal(&old_env, stmt(&f, 1, None, 10, later(300)), 3, "ab".repeat(32));
+    let late = seal(&old_env, stmt(&f, 1, None, 10, later(300)), 3, "ab".repeat(32), 0);
     write_file(&env, &late).unwrap();
     assert!(read_file(&env, &f.id, &view).is_none());
     assert!(anchor_file(&env.manifests_dir, &f.id).exists());
