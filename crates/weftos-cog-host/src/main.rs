@@ -71,9 +71,15 @@ fn cmd_serve(a: &[String]) -> Result<(), String> {
     let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| format!("bind :{port}: {e}"))?;
     eprintln!("[cog-host] root={} api=http://0.0.0.0:{port} — {} cog(s) known", root.display(), sup.lock().unwrap().ids().len());
 
+    // Per-host bearer token for the /hw/* mutating routes ($WEFT_COG_HOST_TOKEN, else <root>/host.token).
+    let policy = Arc::new(weftos_cog_host::auth::Policy::load(&root).map_err(|e| format!("host token: {e}"))?);
+    eprintln!("[cog-host] /hw token: {} (or $WEFT_COG_HOST_TOKEN); allowed browser origins: loopback + $WEFT_COG_HOST_ORIGINS", weftos_cog_host::auth::token_path(&root).display());
+    // Persist the dex numbering (append-only) once so read-only GETs never have to write.
+    let _ = weftos_cog_host::dex::with_dex(&root, |_| ());
+
     // HTTP thread
     let http_sup = Arc::clone(&sup);
-    std::thread::spawn(move || http::serve(listener, http_sup));
+    std::thread::spawn(move || http::serve(listener, http_sup, policy));
 
     // Stop children cleanly on Ctrl-C by relying on process exit; supervision loop in the main thread.
     loop {

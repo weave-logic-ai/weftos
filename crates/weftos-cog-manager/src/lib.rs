@@ -10,6 +10,8 @@
 #![allow(deprecated)]
 
 pub mod client;
+mod hw_dex;
+mod hw_identify;
 
 use client::{Client, HostCog, HostStatus, Net, Settings};
 use eframe::egui::{self, Color32, RichText};
@@ -38,6 +40,7 @@ pub struct Manager {
     client: Client,
     section: Section,
     host_draft: String,
+    token_draft: String,
     /// Sensors tab: the cog whose guide is open (None = the list), its parsed bundle, and the
     /// renderer. `guide_port_draft` lets the user correct the export port if the default is wrong.
     guide_cog: Option<String>,
@@ -49,16 +52,21 @@ pub struct Manager {
     cat_tab: u8, // 0 projects, 1 modules, 2 chips
     cat_search: String,
     cat_kind: String, // module kind filter: all|board|sensor|display|actuator
+    /// Catalog tab: the "Identify hardware" USB scan modal.
+    hw: hw_identify::HwIdentify,
+    dex: hw_dex::DexUi,
 }
 
 impl Manager {
     pub fn new() -> Self {
         let s = Settings::default();
         let host_draft = s.host.clone();
+        let token_draft = s.token.clone();
         Self {
             client: Client::new(s),
             section: Section::Cogs,
             host_draft,
+            token_draft,
             guide_cog: None,
             guide_view: GuideView::at(None),
             guide_bundle: None,
@@ -67,15 +75,17 @@ impl Manager {
             cat_tab: 1,
             cat_search: String::new(),
             cat_kind: "all".into(),
+            hw: hw_identify::HwIdentify::default(),
+            dex: hw_dex::DexUi::default(),
         }
     }
 }
 
 fn mod_hay(m: &Module) -> String {
-    format!("{} {} {} {} {} {} {}", m.name, m.vendor, m.kind, m.summary, m.chips.join(" "), m.good_for.join(" "), m.spec.values().cloned().collect::<Vec<_>>().join(" ")).to_lowercase()
+    format!("{} {} {} {} {} {} {} {}", m.id, m.name, m.vendor, m.kind, m.summary, m.chips.join(" "), m.good_for.join(" "), m.spec.values().cloned().collect::<Vec<_>>().join(" ")).to_lowercase()
 }
 fn chip_hay(c: &Chip) -> String {
-    format!("{} {} {} {} {} {}", c.name, c.manufacturer, c.role, c.summary, c.tags.join(" "), c.spec.values().cloned().collect::<Vec<_>>().join(" ")).to_lowercase()
+    format!("{} {} {} {} {} {} {}", c.id, c.name, c.manufacturer, c.role, c.summary, c.tags.join(" "), c.spec.values().cloned().collect::<Vec<_>>().join(" ")).to_lowercase()
 }
 fn proj_hay(p: &Project) -> String {
     format!("{} {} {} {} {}", p.name, p.category, p.difficulty, p.summary, p.modules.join(" ")).to_lowercase()
@@ -218,9 +228,12 @@ impl Manager {
                 ui.separator();
                 ui.label("host");
                 ui.add(egui::TextEdit::singleline(&mut self.host_draft).desired_width(230.0).hint_text("http://<ip>:9480"));
+                ui.label("token");
+                ui.add(egui::TextEdit::singleline(&mut self.token_draft).password(true).desired_width(110.0).hint_text("<root>/host.token"));
                 if ui.button("Connect").clicked() {
                     let mut s = self.client.s.clone();
                     s.host = self.host_draft.clone();
+                    s.token = self.token_draft.clone();
                     self.client.reconnect(s);
                 }
                 ui.separator();
@@ -399,8 +412,15 @@ impl Manager {
         ui.add_space(2.0);
     }
 
-    fn catalog_view(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Hardware catalog");
+    fn catalog_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.horizontal(|ui| {
+            ui.heading("Hardware catalog");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("🔍 Identify hardware").on_hover_text("scan the host's USB bus and match devices to the catalog").clicked() {
+                    self.hw.open(&self.client, ctx);
+                }
+            });
+        });
         ui.label(
             RichText::new(format!(
                 "{} projects · {} modules · {} chips — Projects → Modules → Chips (explored across weftos, mentra, whitsentry)",
@@ -416,6 +436,7 @@ impl Manager {
             ui.selectable_value(&mut self.cat_tab, 0u8, "Projects");
             ui.selectable_value(&mut self.cat_tab, 1u8, "Modules");
             ui.selectable_value(&mut self.cat_tab, 2u8, "Chips");
+            ui.selectable_value(&mut self.cat_tab, 3u8, "Dex");
             ui.add_space(10.0);
             ui.add(egui::TextEdit::singleline(&mut self.cat_search).hint_text("search name, vendor, spec, what it senses…").desired_width(300.0));
         });
@@ -427,6 +448,10 @@ impl Manager {
             });
         }
         ui.separator();
+        if self.cat_tab == 3 {
+            self.dex.show(ui, ctx, &self.client, &self.catalog);
+            return;
+        }
         let q = self.cat_search.to_lowercase();
         let (tab, kind) = (self.cat_tab, self.cat_kind.clone());
         let cat = &self.catalog;
@@ -749,12 +774,18 @@ impl eframe::App for Manager {
             egui::ScrollArea::vertical().show(ui, |ui| match self.section {
                 Section::Cogs => self.cogs_view(ui, ctx),
                 Section::Sensors => self.sensors_view(ui, ctx),
-                Section::Catalog => self.catalog_view(ui),
+                Section::Catalog => self.catalog_view(ui, ctx),
                 Section::Network => self.network_view(ui),
                 Section::Apps => self.apps_view(ui),
                 Section::System => self.system_view(ui),
             });
         });
+        if let Some(j) = self.hw.show(ctx, &self.client, &self.catalog) {
+            self.section = Section::Catalog;
+            self.cat_tab = j.tab;
+            self.cat_search = j.search;
+            self.cat_kind = "all".into();
+        }
     }
 }
 

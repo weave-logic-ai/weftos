@@ -16,7 +16,7 @@ pub fn snapshot() -> Value {
     })
 }
 
-fn node_name() -> String {
+pub fn node_name() -> String {
     Command::new("hostname")
         .output()
         .ok()
