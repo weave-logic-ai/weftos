@@ -116,6 +116,25 @@ async fn unbound_daemon_on_default_endpoint_is_a_warning() {
 }
 
 #[tokio::test]
+async fn user_daemon_is_unbound_without_warning_or_error() {
+    // D14: a project resolved to the user daemon (explicit manifest source or
+    // default) must neither fail nor warn "not bound to a project".
+    for source in [ResolveSource::Manifest, ResolveSource::Default] {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().to_path_buf();
+        serve(d.path(), move |_| {
+            let mut h = hs(&dir, None, "n");
+            h.profile = Some("user".into());
+            Response::success(handshake_value(&h))
+        });
+        let mut res = resolution(d.path(), Some(ID_A));
+        res.source = source;
+        let c = connect(&res).await.unwrap();
+        assert!(!c.warnings.iter().any(|w| w.contains("not bound")), "{:?}", c.warnings);
+    }
+}
+
+#[tokio::test]
 async fn node_mismatch_is_a_hard_error() {
     let d = tempfile::tempdir().unwrap();
     let dir = d.path().to_path_buf();

@@ -1,7 +1,10 @@
 //! Daemon-backed [`KernelFacadeBackend`] (ADR-102 D6, card api-playground-03).
 //!
 //! Forwards each facade route's RPC method to the kernel daemon over the
-//! `clawft-rpc` line protocol (UDS on unix, named pipe on Windows).
+//! `clawft-rpc` line protocol (UDS on unix, named pipe on Windows). The
+//! endpoint comes from the shared D14 resolver (`clawft_rpc::resolve`), then
+//! `connect_resolved` handshakes, so a gateway started from `$HOME` reaches
+//! the user daemon like `weft` does.
 //! Replaces the WEFT-122 [`InMemoryKernelFacade`](super::InMemoryKernelFacade)
 //! stub in the gateway; the stub stays for tests.
 //!
@@ -27,6 +30,7 @@ use clawft_kernel::console::KernelEventLog;
 use clawft_kernel::http_facade::{
     FacadeResponse, SseMessage, WitnessRequest, WitnessResponse, poll_events,
 };
+use clawft_rpc::resolve::{ResolveFlags, resolve};
 use clawft_rpc::{DaemonClient, Request};
 
 use super::http_facade_api::KernelFacadeBackend;
@@ -58,8 +62,10 @@ const CHAIN_EVENTS_MAX: u64 = 1000;
 
 /// [`KernelFacadeBackend`] that forwards RPC calls to the kernel daemon.
 pub struct DaemonKernelFacade {
-    /// Explicit socket path; `None` resolves `clawft_rpc::socket_path()` per call.
+    /// Explicit socket path (hermetic tests); bypasses the resolver.
     socket: Option<PathBuf>,
+    /// Configured runtime dir, the resolver's `--runtime` level.
+    runtime_dir: Option<PathBuf>,
     timeout: Duration,
     /// Gateway-local event log feeding the SSE stream.
     event_log: KernelEventLog,
@@ -70,6 +76,7 @@ impl DaemonKernelFacade {
     pub fn new() -> Self {
         Self {
             socket: None,
+            runtime_dir: None,
             timeout: DAEMON_CALL_TIMEOUT,
             event_log: KernelEventLog::new(),
         }
@@ -83,18 +90,52 @@ impl DaemonKernelFacade {
         }
     }
 
+    /// Facade against the daemon whose runtime dir is `dir` (outranks
+    /// `WEFTOS_RUNTIME_DIR` and the manifest, like `weft --runtime`).
+    pub fn with_runtime_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.runtime_dir = Some(dir.into());
+        self
+    }
+
     /// Override the call timeout (tests).
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
 
-    fn socket_path(&self) -> PathBuf {
-        self.socket.clone().unwrap_or_else(clawft_rpc::socket_path)
+    /// Resolve (D14), connect and handshake; `None` when the daemon is
+    /// unreachable, the wrong one, or speaks an incompatible protocol.
+    async fn connect(&self) -> Option<DaemonClient> {
+        if let Some(socket) = &self.socket {
+            return DaemonClient::connect_path(socket).await;
+        }
+        let flags = ResolveFlags {
+            runtime: self.runtime_dir.clone(),
+            project: None,
+        };
+        let res = match resolve(&flags) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "daemon endpoint resolution failed");
+                return None;
+            }
+        };
+        match DaemonClient::connect_resolved(&res).await {
+            Ok(c) => {
+                for w in &c.warnings {
+                    tracing::warn!("{w}");
+                }
+                Some(c.client)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "daemon connect failed");
+                None
+            }
+        }
     }
 
     fn unavailable(&self) -> FacadeResponse {
-        tracing::warn!(socket = %self.socket_path().display(), "daemon unavailable");
+        tracing::warn!("daemon unavailable");
         FacadeResponse {
             status: 503,
             body: serde_json::json!({
@@ -135,8 +176,7 @@ impl KernelFacadeBackend for DaemonKernelFacade {
             return not_implemented("route has no daemon RPC method");
         }
 
-        let connect = DaemonClient::connect_path(self.socket_path());
-        let Ok(Some(mut client)) = tokio::time::timeout(self.timeout, connect).await else {
+        let Ok(Some(mut client)) = tokio::time::timeout(self.timeout, self.connect()).await else {
             return self.unavailable();
         };
         let request = Request::with_params(method, params).with_auth(FACADE_AUTH_SCOPE);

@@ -52,6 +52,40 @@ fn print_plan(p: &Plan) {
     );
 }
 
+/// The `kernel.chain.checkpoint_path` set in a `config.json` body, if any
+/// (snake or camel case). An explicit path bypasses the chain guards, so the
+/// user daemon would keep writing the chain this command is about to retire.
+fn config_checkpoint_path(config_json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(config_json).ok()?;
+    let chain = v.get("kernel")?.get("chain")?;
+    ["checkpoint_path", "checkpointPath"]
+        .iter()
+        .find_map(|k| chain.get(*k)?.as_str())
+        .filter(|p| !p.trim().is_empty())
+        .map(str::to_owned)
+}
+
+/// Warn when `~/.clawft/config.json` pins `kernel.chain.checkpoint_path`.
+fn warn_explicit_checkpoint(home: Option<&std::path::Path>) {
+    let Some(cfg) = home.map(|h| h.join(".clawft").join("config.json")) else {
+        return;
+    };
+    let Some(path) = std::fs::read_to_string(&cfg)
+        .ok()
+        .and_then(|t| config_checkpoint_path(&t))
+    else {
+        return;
+    };
+    eprintln!(
+        "warning: {} sets kernel.chain.checkpoint_path = {path}. An explicit path bypasses the \
+         chain guards, so a kernel started with this config keeps writing that chain after the \
+         migration and the migrated copy goes stale. Remove the key or point it at the migrated \
+         chain before starting the user daemon (a path inside a migrated directory is refused at \
+         boot unless --adopt-legacy-chain is passed).",
+        cfg.display()
+    );
+}
+
 /// Run the migrate subcommand.
 pub fn run(args: MigrateArgs) -> anyhow::Result<()> {
     match args.action {
@@ -76,6 +110,7 @@ pub fn run(args: MigrateArgs) -> anyhow::Result<()> {
                 tool_version: env!("CARGO_PKG_VERSION"),
                 allow_unsigned,
             };
+            warn_explicit_checkpoint(home.as_deref());
             match migrate_user_chain(&opts).map_err(|e| anyhow::anyhow!("{e}"))? {
                 Outcome::DryRun(p) => {
                     println!("dry run: would copy, verify, then atomically place the chain");
@@ -105,4 +140,25 @@ pub fn run(args: MigrateArgs) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::config_checkpoint_path;
+
+    #[test]
+    fn finds_an_explicit_checkpoint_path() {
+        let j = r#"{"kernel":{"chain":{"checkpoint_path":"/h/.clawft/chain.json"}}}"#;
+        assert_eq!(config_checkpoint_path(j).as_deref(), Some("/h/.clawft/chain.json"));
+        let j = r#"{"kernel":{"chain":{"checkpointPath":"/x/chain.json"}}}"#;
+        assert_eq!(config_checkpoint_path(j).as_deref(), Some("/x/chain.json"));
+    }
+
+    #[test]
+    fn ignores_absent_blank_or_malformed() {
+        assert_eq!(config_checkpoint_path(r#"{"kernel":{"chain":{}}}"#), None);
+        assert_eq!(config_checkpoint_path(r#"{"kernel":{"chain":{"checkpoint_path":" "}}}"#), None);
+        assert_eq!(config_checkpoint_path("not json"), None);
+        assert_eq!(config_checkpoint_path("{}"), None);
+    }
 }
