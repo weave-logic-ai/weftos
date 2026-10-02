@@ -36,6 +36,26 @@ pub struct GuideDoc {
     /// Zone map for matrix sensors (ToF arrays, thermal arrays).
     #[serde(default)]
     pub grid: Option<Grid>,
+    /// Pickable sensors when a cog reads more than one (a shared ADC's channels, a fleet of mics,
+    /// a module's analog vs digital output). The viewer shows a searchable picker (scales to many)
+    /// and a "Configuring: <name>" banner so it's always clear which one you're on.
+    #[serde(default)]
+    pub sensors: Vec<Sensor>,
+}
+
+/// One pickable sensor within a multi-sensor cog.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct Sensor {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub detail: String,
+    /// Where it connects — shown in the banner, e.g. "ADS1115 A1 · addr 0x48" or "node mic-07".
+    #[serde(default, rename = "where")]
+    pub location: String,
+    /// Optional page id to jump to when this sensor is selected.
+    #[serde(default)]
+    pub page: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -136,18 +156,22 @@ pub struct GuidePage {
     pub markdown: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct GuideBundle {
     pub doc: GuideDoc,
     /// In `doc.pages` order.
     pub pages: Vec<GuidePage>,
+    /// Embedded images by file name (as referenced in Markdown `![](name)`), decoded bytes.
+    pub images: BTreeMap<String, Vec<u8>>,
 }
 
-/// One piece of a page: Markdown text, or a diagram fence.
+/// One piece of a page: Markdown text, a diagram fence, or a standalone image.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Segment {
     Text(String),
     Diagram(String),
+    /// A standalone `![alt](name)` line; `name` keys into `GuideBundle::images`.
+    Image { alt: String, name: String },
 }
 
 fn title_and_summary(id: &str, md: &str) -> (String, String) {
@@ -167,8 +191,17 @@ fn title_and_summary(id: &str, md: &str) -> (String, String) {
 }
 
 impl GuideBundle {
-    /// Builds a bundle from `guide.toml` text and `(page id, markdown)` pairs.
+    /// Builds a bundle from `guide.toml` text and `(page id, markdown)` pairs (no images).
     pub fn from_parts(toml_text: &str, pages: &BTreeMap<String, String>) -> Result<Self, String> {
+        Self::from_parts_with_images(toml_text, pages, BTreeMap::new())
+    }
+
+    /// Builds a bundle, also carrying decoded image bytes keyed by the file name Markdown references.
+    pub fn from_parts_with_images(
+        toml_text: &str,
+        pages: &BTreeMap<String, String>,
+        images: BTreeMap<String, Vec<u8>>,
+    ) -> Result<Self, String> {
         let doc: GuideDoc = toml::from_str(toml_text).map_err(|e| format!("guide.toml: {e}"))?;
         if doc.schema != SCHEMA {
             return Err(format!(
@@ -189,11 +222,13 @@ impl GuideBundle {
                 markdown: md.clone(),
             });
         }
-        Ok(Self { doc, pages: out })
+        Ok(Self { doc, pages: out, images })
     }
 
-    /// Parses the `/guide` JSON a cog serves: `{"toml": "...", "pages": {id: markdown}}`.
+    /// Parses the `/guide` JSON a cog serves: `{"toml": "...", "pages": {id: markdown},
+    /// "images": {name: base64}}`. `images` is optional.
     pub fn from_json(v: &serde_json::Value) -> Result<Self, String> {
+        use base64::Engine as _;
         let toml_text = v["toml"].as_str().ok_or("guide JSON has no 'toml'")?;
         let pages = v["pages"]
             .as_object()
@@ -201,22 +236,39 @@ impl GuideBundle {
             .iter()
             .filter_map(|(k, md)| md.as_str().map(|s| (k.clone(), s.to_string())))
             .collect();
-        Self::from_parts(toml_text, &pages)
+        let mut images = BTreeMap::new();
+        if let Some(obj) = v.get("images").and_then(|i| i.as_object()) {
+            for (name, b64) in obj {
+                let decoded = b64.as_str().and_then(|s| base64::engine::general_purpose::STANDARD.decode(s.trim()).ok());
+                if let Some(bytes) = decoded {
+                    images.insert(name.clone(), bytes);
+                }
+            }
+        }
+        Self::from_parts_with_images(toml_text, &pages, images)
     }
 
-    /// Loads `<dir>/guide.toml` and `<dir>/<page>.md` (native only).
+    /// Loads `<dir>/guide.toml`, `<dir>/<page>.md`, and any image files the pages reference
+    /// (native only; used by the sensor-guide renderer binary and cog build steps).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn from_dir(dir: &std::path::Path) -> Result<Self, String> {
         let toml_text = std::fs::read_to_string(dir.join("guide.toml"))
             .map_err(|e| format!("guide.toml: {e}"))?;
         let doc: GuideDoc = toml::from_str(&toml_text).map_err(|e| format!("guide.toml: {e}"))?;
         let mut pages = BTreeMap::new();
+        let mut images = BTreeMap::new();
         for id in &doc.pages {
             let md = std::fs::read_to_string(dir.join(format!("{id}.md")))
                 .map_err(|e| format!("{id}.md: {e}"))?;
+            for seg in segments(&md) {
+                let Segment::Image { name, .. } = seg else { continue };
+                let std::collections::btree_map::Entry::Vacant(slot) = images.entry(name.clone()) else { continue };
+                let Ok(bytes) = std::fs::read(dir.join(&name)) else { continue };
+                slot.insert(bytes);
+            }
             pages.insert(id.clone(), md);
         }
-        Self::from_parts(&toml_text, &pages)
+        Self::from_parts_with_images(&toml_text, &pages, images)
     }
 
     pub fn page(&self, id: &str) -> Option<&GuidePage> {
@@ -276,24 +328,34 @@ impl GuideBundle {
         }
         for p in &self.pages {
             for seg in segments(&p.markdown) {
-                if let Segment::Diagram(kind) = seg {
-                    let ok = match kind.as_str() {
-                        "header" => d.header.is_some(),
-                        "wiring" => !d.parts.is_empty(),
-                        "placements" => !d.placements.is_empty(),
-                        "flow" => !d.flow.is_empty(),
-                        "grid" => d.grid.as_ref().is_some_and(|g| {
-                            (1..=64).contains(&g.rows) && (1..=64).contains(&g.cols)
-                        }),
-                        _ => false,
-                    };
-                    if !ok {
-                        errs.push(format!(
-                            "page '{}' embeds diagram '{kind}' with no data for it",
-                            p.id
-                        ));
+                match seg {
+                    Segment::Diagram(kind) => {
+                        let ok = match kind.as_str() {
+                            "header" => d.header.is_some(),
+                            "wiring" => !d.parts.is_empty(),
+                            "placements" => !d.placements.is_empty(),
+                            "flow" => !d.flow.is_empty(),
+                            "grid" => d.grid.as_ref().is_some_and(|g| {
+                                (1..=64).contains(&g.rows) && (1..=64).contains(&g.cols)
+                            }),
+                            _ => false,
+                        };
+                        if !ok {
+                            errs.push(format!("page '{}' embeds diagram '{kind}' with no data for it", p.id));
+                        }
                     }
+                    Segment::Image { name, .. } => {
+                        if !self.images.contains_key(&name) {
+                            errs.push(format!("page '{}' references image '{name}' not in the bundle", p.id));
+                        }
+                    }
+                    Segment::Text(_) => {}
                 }
+            }
+        }
+        for s in &d.sensors {
+            if !s.page.is_empty() && !page_ids.contains(&s.page.as_str()) {
+                errs.push(format!("sensor '{}' points at missing page '{}'", s.id, s.page));
             }
         }
         errs
@@ -321,6 +383,12 @@ pub fn segments(md: &str) -> Vec<Segment> {
             }
             text.clear();
             out.push(Segment::Diagram(kind));
+        } else if let Some((alt, name)) = standalone_image(line) {
+            if !text.trim().is_empty() {
+                out.push(Segment::Text(std::mem::take(&mut text)));
+            }
+            text.clear();
+            out.push(Segment::Image { alt, name });
         } else {
             text.push_str(line);
             text.push('\n');
@@ -330,6 +398,19 @@ pub fn segments(md: &str) -> Vec<Segment> {
         out.push(Segment::Text(text));
     }
     out
+}
+
+/// A line that is exactly `![alt](name)` (nothing else) -> (alt, name). Inline images in prose are
+/// left in the text (rendered as their alt text), so only deliberate figures become image segments.
+fn standalone_image(line: &str) -> Option<(String, String)> {
+    let t = line.trim();
+    let rest = t.strip_prefix("![")?;
+    let (alt, rest) = rest.split_once("](")?;
+    let name = rest.strip_suffix(')')?;
+    if name.is_empty() || name.contains(['(', ' ']) {
+        return None;
+    }
+    Some((alt.to_string(), name.to_string()))
 }
 
 #[cfg(test)]

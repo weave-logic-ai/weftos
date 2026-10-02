@@ -55,7 +55,10 @@ pub fn header(ui: &mut Ui, doc: &GuideDoc) {
     let (p, r) = canvas(ui, 118.0 + rows as f32 * 21.0);
     let pitch = ((r.width() - 60.0) / 20.0).min(40.0);
     let x0 = r.left() + 30.0 + pitch / 2.0;
-    let (y_odd, y_even) = (r.top() + 70.0, r.top() + 70.0 + pitch);
+    // Header along the top edge, ports along the bottom: the OUTER row (nearer the board edge) holds
+    // the even pins 2-40 and is drawn on top; the INNER row (nearer the chip) holds the odd pins
+    // 1-39 and is drawn below. Pin 1 (3.3 V) is the inner row's left pin. Matches the orientation text.
+    let (y_even, y_odd) = (r.top() + 70.0, r.top() + 70.0 + pitch);
     p.text(
         pos2(r.left() + 14.0, r.top() + 12.0),
         Align2::LEFT_TOP,
@@ -72,12 +75,27 @@ pub fn header(ui: &mut Ui, doc: &GuideDoc) {
     );
     p.rect_stroke(
         Rect::from_min_max(
-            pos2(x0 - pitch * 0.7, y_odd - pitch * 0.7),
-            pos2(x0 + pitch * 19.7, y_even + pitch * 0.7),
+            pos2(x0 - pitch * 0.7, y_even - pitch * 0.7),
+            pos2(x0 + pitch * 19.7, y_odd + pitch * 0.7),
         ),
         4.0,
         Stroke::new(1.0, EDGE),
         egui::StrokeKind::Middle,
+    );
+    // Row labels so the orientation is unambiguous regardless of how the board is held.
+    p.text(
+        pos2(x0 - pitch * 0.7, y_even - pitch * 0.95),
+        Align2::LEFT_BOTTOM,
+        "outer row · even 2-40 (board edge)",
+        FontId::proportional(10.0),
+        DIM,
+    );
+    p.text(
+        pos2(x0 - pitch * 0.7, y_odd + pitch * 0.95),
+        Align2::LEFT_TOP,
+        "inner row · odd 1-39 (nearer the chip) — pin 1 = 3V3 at left",
+        FontId::proportional(10.0),
+        DIM,
     );
     for pin in 1..=40u8 {
         let col = f32::from((pin - 1) / 2);
@@ -90,6 +108,10 @@ pub fn header(ui: &mut Ui, doc: &GuideDoc) {
             _ => (Color32::from_gray(70), pitch * 0.18),
         };
         p.circle_filled(pos, rad, fill);
+        if pin == 1 {
+            // Ring pin 1 so the corner is obvious.
+            p.circle_stroke(pos, rad + 3.0, Stroke::new(2.0, Color32::from_rgb(240, 190, 40)));
+        }
         if avoid {
             p.line_segment(
                 [pos - vec2(rad, rad) * 1.3, pos + vec2(rad, rad) * 1.3],
@@ -97,10 +119,11 @@ pub fn header(ui: &mut Ui, doc: &GuideDoc) {
             );
         }
         if used.is_some() || avoid || pin <= 2 {
+            // Odd pins are on the lower (inner) row → number below; even on the upper row → above.
             let dy = if pin % 2 == 1 {
-                -pitch * 0.62
-            } else {
                 pitch * 0.62
+            } else {
+                -pitch * 0.62
             };
             p.text(
                 pos + vec2(0.0, dy),

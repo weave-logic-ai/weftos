@@ -4859,6 +4859,8 @@ dependencies = [
  "num-traits",
  "png 0.18.1",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -10864,8 +10866,11 @@ dependencies = [
 name = "weftos-sensor-guide"
 version = "0.8.1"
 dependencies = [
+ "base64 0.22.1",
  "egui",
  "egui_commonmark",
+ "egui_extras",
+ "image",
  "serde",
  "serde_json",
  "toml 0.8.23",
