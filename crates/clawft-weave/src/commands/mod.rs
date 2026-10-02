@@ -20,6 +20,8 @@ pub mod init_cmd;
 pub mod ipc_cmd;
 pub mod kernel_cmd;
 pub mod leaf_cmd;
+#[cfg(all(unix, feature = "mesh"))]
+pub mod mesh_cmd;
 pub mod resource_cmd;
 pub mod service_cmd;
 pub mod soul_cmd;
