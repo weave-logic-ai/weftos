@@ -228,12 +228,12 @@ async fn admit_first_frame(
 pub(crate) fn screen_frame(data: Vec<u8>, act: &Active) -> Option<Vec<u8>> {
     match MeshIpcEnvelope::from_bytes(&data) {
         Ok(mut env) => {
-            if let Some(id) = &act.bound {
-                if &env.source_node != id {
-                    tracing::warn!(claimed = %env.source_node, verified = %id,
-                        "dropping envelope: source_node differs from admitted node id");
-                    return None;
-                }
+            if let Some(id) = &act.bound
+                && &env.source_node != id
+            {
+                tracing::warn!(claimed = %env.source_node, verified = %id,
+                    "dropping envelope: source_node differs from admitted node id");
+                return None;
             }
             if act.limits == PeerLimits::Leaf {
                 let id = act.bound.as_deref().unwrap_or_default();

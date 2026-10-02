@@ -437,7 +437,7 @@ pub fn hex_encode(b: &[u8]) -> String {
 
 /// Decode hex (empty string decodes to empty).
 pub fn hex_decode(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 || !s.is_ascii() {
+    if !s.len().is_multiple_of(2) || !s.is_ascii() {
         return None;
     }
     (0..s.len())

@@ -107,8 +107,8 @@ async fn got(n: &Node, topic: &str) -> Option<bool> {
 async fn two_enforce_nodes_admit_each_other_over_noise() {
     let a = node(1, MeshAdmissionMode::Enforce).await;
     let b = node(2, MeshAdmissionMode::Enforce).await;
-    connect_seeds(&a.rt, &[b.addr.clone()], "tcp", Some(a.noise.clone()), Some(a.identity.clone()));
-    connect_seeds(&b.rt, &[a.addr.clone()], "tcp", Some(b.noise.clone()), Some(b.identity.clone()));
+    connect_seeds(&a.rt, std::slice::from_ref(&b.addr), "tcp", Some(a.noise.clone()), Some(a.identity.clone()));
+    connect_seeds(&b.rt, std::slice::from_ref(&a.addr), "tcp", Some(b.noise.clone()), Some(b.identity.clone()));
     push(&a, &b, "a.to.b").await;
     push(&b, &a, "b.to.a").await;
     assert_eq!(got(&b, "a.to.b").await, Some(true), "B must serve A as a verified peer");
@@ -119,7 +119,7 @@ async fn two_enforce_nodes_admit_each_other_over_noise() {
 async fn enforce_refuses_a_dialer_that_sends_no_hello() {
     let a = node(1, MeshAdmissionMode::Enforce).await;
     let b = node(2, MeshAdmissionMode::Enforce).await;
-    connect_seeds(&a.rt, &[b.addr.clone()], "tcp", Some(a.noise.clone()), None);
+    connect_seeds(&a.rt, std::slice::from_ref(&b.addr), "tcp", Some(a.noise.clone()), None);
     push(&a, &b, "no.hello").await;
     assert_eq!(got(&b, "no.hello").await, None);
 }
@@ -128,7 +128,7 @@ async fn enforce_refuses_a_dialer_that_sends_no_hello() {
 async fn observe_serves_a_dialer_that_sends_no_hello() {
     let a = node(1, MeshAdmissionMode::Observe).await;
     let b = node(2, MeshAdmissionMode::Observe).await;
-    connect_seeds(&a.rt, &[b.addr.clone()], "tcp", Some(a.noise.clone()), None);
+    connect_seeds(&a.rt, std::slice::from_ref(&b.addr), "tcp", Some(a.noise.clone()), None);
     push(&a, &b, "legacy").await;
     assert_eq!(got(&b, "legacy").await, Some(false));
 }
