@@ -637,3 +637,70 @@ Reported by the lead for `integrate/p3` @ 86ff8c936: the full suite passed
 (10526 tests) and `scripts/build.sh gate` passed 20 of 20, with the UI build
 needing `npm ci` in the worktree first. This review ran nothing; the lane
 `scripts/build.sh test-mesh-service` was not re-run here.
+
+## Re-check: fix round `wt/p3-fable-fixes` @ 3a53fcd58 (diff 83663fdf3..3a53fcd58)
+
+Read-only pass on 2026-10-02 against sections 2 and 3 above. Nothing was run
+here; the lead's gate on that worktree is the test evidence.
+
+- **M1 fixed.** `Plan::from_args` now takes the collapsed key and
+  `mesh_install_key::key_notes` refuses when `~/.weftos/run/node.key` exists
+  and neither `--adopt-node-key` nor `--fresh-node-key` is given, with both
+  commands in the error (`commands/mesh_install_key.rs:59-78`,
+  `mesh_install.rs:127,375-378`). `--fresh-node-key` puts a `# WARNING` in the
+  script header and on stderr; the two flags are mutually exclusive. The
+  "exists and differs" branch now prints a remedy with the right stop command
+  per manager (`mesh_install.rs:321-345`, golden `mesh-install-launchd.sh:61-67`).
+  A new machine (no collapsed key) still generates silently, which is right.
+  Tests: `a_collapsed_key_is_never_replaced_by_omission`,
+  `a_collapsed_key_needs_an_explicit_choice`.
+- **M2 a-j: all present and accurate against the code.** Listen default and
+  the Pi, `--admin-uid`, `required` after step 5, rollback `chown`/`chmod`,
+  pin wording (daemon pins, verbs compare, `trust` writes), the five
+  `configuration.md` keys (match `config/kernel.rs:880-953`), `peer revoke`
+  wording, "never `sudo` for the service", both stale strings, the `kernel.md`
+  pointer. One line survives from before: SOP "Moving to the machine mesh
+  service" step 3 still says to compare the fingerprint "with the one the
+  install script printed"; the script prints no fingerprint (a shell script
+  cannot derive the public key from the seed; `mesh_install.rs:322` only
+  echoes "compare ... out of band"). For the adopt case the real check is
+  that `weaver mesh status` prints the pre-migration node id. Doc nit, not a
+  blocker.
+- **M3 fixed.** ADR-103 A10 records the ~600 s compounded cache, that
+  `observe` is not protection, the steady-state chain events, and the two
+  identity guards. Matches the code.
+- **S1 fixed, with one cost note.** `serve_connection` now ticks every 250 ms
+  (`mesh_limits.rs:12`, `mesh_serve.rs:341-343,365-375`): a connection whose
+  route no longer sends through its channel (`MeshRuntime::routes_via`,
+  `mesh_runtime.rs:351-354`) is closed, and under `enforce` a revoked bound
+  id is closed on the tick and before every frame
+  (`mesh_admit_gate.rs:305-309`, `mesh_serve.rs:398-405`); `observe` keeps
+  the old admission-only semantics (`live_revocation_applies_under_enforce_only`).
+  `disconnect_peer` has no other production caller than admin revoke and
+  shutdown (`admin.rs:205`, `main_loop.rs:121`, `mesh_system_service.rs:115`),
+  so no reaper now closes live sockets. The idle timer regression is handled:
+  the silence deadline is `sleep_until(last_activity + d)` and only inbound
+  and outbound frames advance `last_activity` (`mesh_serve.rs:347,356,409,420`),
+  so the tick cannot keep a silent peer alive. No new liveness bug found.
+  Two notes for follow-up cards: (1) `routes_via` scans the whole peer
+  `DashMap` per tick per routed connection, O(peers) x connections x 4/s;
+  at the 1024 cap that is a few million entry visits per second. An O(1)
+  check (look up the ids this channel registered) or a per-connection flag
+  flipped by `disconnect_peer` would remove it. (2) Under `observe`, a
+  `source_node` claim already replaced an unverified route
+  (`mesh_runtime.rs:313-329`); it now also closes the legitimate peer's
+  connection within 250 ms, so a takeover becomes a flap between the two
+  connections. A10's "observe is not protection" should say so. Under
+  `enforce` the takeover is refused as before.
+  Test `a_peer_revoke_closes_the_live_connection` covers the route-removed
+  path end to end.
+- **S2 fixed.** `mesh_boot::refuse_fresh_identity` refuses under `auto` when
+  `~/.weftos/mesh/machine.pub` exists and `<runtime>/node.key` does not,
+  before any key is generated (`mesh_boot.rs:67-70,86-97`); `off` collapses
+  deliberately and `auto` with a key present (rollback) still works.
+  Process-level test `tests/mesh_boot_guard.rs` asserts no key is written;
+  it is in the e2e lane (`scripts/dev/mesh-p3-e2e.sh:46`).
+
+**Final verdict: SHIP to `0.8-metaharness`.** No remaining must-fix. Carry
+over as cards: the SOP fingerprint sentence (step 3), the two S1 notes above,
+and S3-S10 from section 3.
