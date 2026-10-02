@@ -198,7 +198,7 @@ async fn json_roundtrip(kernel: &KernelRef, line: &str) -> Response {
 #[tokio::test]
 async fn wire_json_gate_denial_is_structured() {
     let kernel = test_kernel().await;
-    let resp = json_roundtrip(&kernel, r#"{"method":"rpc_ext.gated.x","params":null,"id":"7"}"#).await;
+    let resp = json_roundtrip(&kernel, r#"{"method":"rpc_ext.gated.x","params":null,"proto":1,"id":"7"}"#).await;
     assert!(!resp.ok);
     assert_eq!(resp.error_kind.as_deref(), Some("scope_denied"));
     assert_eq!(resp.id.as_deref(), Some("7"));
@@ -207,12 +207,12 @@ async fn wire_json_gate_denial_is_structured() {
 #[tokio::test]
 async fn wire_json_ext_route_enforces_capability_and_passes_auth() {
     let kernel = test_kernel().await;
-    let anon = json_roundtrip(&kernel, r#"{"method":"rpc_ext.test.echo","params":null}"#).await;
+    let anon = json_roundtrip(&kernel, r#"{"method":"rpc_ext.test.echo","params":null,"proto":1}"#).await;
     assert!(!anon.ok);
     assert!(anon.error.unwrap().contains("requires capability Write"));
     let ok = json_roundtrip(
         &kernel,
-        r#"{"method":"rpc_ext.test.echo","params":null,"auth":"write"}"#,
+        r#"{"method":"rpc_ext.test.echo","params":null,"auth":"write","proto":1}"#,
     )
     .await;
     assert!(ok.ok, "{:?}", ok.error);
@@ -234,7 +234,7 @@ async fn wire_json_propagates_project_into_caller_ctx() {
     assert_eq!(ok.result.unwrap()["project"], PROJECT_A);
     let none = json_roundtrip(
         &kernel,
-        r#"{"method":"rpc_ext.test.echo","params":null,"auth":"write"}"#,
+        r#"{"method":"rpc_ext.test.echo","params":null,"auth":"write","proto":1}"#,
     )
     .await;
     assert!(none.result.unwrap()["project"].is_null());
@@ -398,7 +398,7 @@ async fn wire_streaming_intercepts_are_authorized() {
     let kernel = test_kernel().await;
     for method in ["ipc.subscribe_stream", "substrate.subscribe", "kernel.logs_stream", "chain.subscribe"] {
         // An unrecognised token resolves to empty (denied) capabilities.
-        let line = format!(r#"{{"method":"{method}","params":{{}},"auth":"bogus-token"}}"#);
+        let line = format!(r#"{{"method":"{method}","params":{{}},"auth":"bogus-token","proto":1}}"#);
         let resp = json_roundtrip(&kernel, &line).await;
         assert!(!resp.ok, "{method}");
         assert!(
