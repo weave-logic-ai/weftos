@@ -30,6 +30,9 @@ tracing = { workspace = true }
 # Error handling.
 thiserror = { workspace = true }
 
+# `LlmBackend` (async transport seam).
+async-trait = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
 wiremock = "0.6"

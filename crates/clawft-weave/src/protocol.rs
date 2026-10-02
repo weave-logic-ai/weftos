@@ -52,6 +52,19 @@ pub struct KernelStatusResult {
     /// shows where a client landed. Absent from older daemons.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handshake: Option<clawft_rpc::handshake::Handshake>,
+    /// Health of the services a `project`-profile kernel takes from its
+    /// parent (ADR-103 Phase 2 F). Absent on every other profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_services: Option<SharedServicesHealth>,
+}
+
+/// `parent` when the user daemon answered last time, `down` otherwise. There
+/// is no third state: a down service fails closed, it never runs locally.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SharedServicesHealth {
+    pub embeddings: String,
+    pub llm: String,
+    pub voice: String,
 }
 
 /// A single process entry for `kernel.ps`.

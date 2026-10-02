@@ -101,6 +101,11 @@ pub struct ResolvedLlmEndpoint {
 pub fn resolve_llm_endpoint(
     cfg_llm: Option<&clawft_types::config::LlmEndpointConfig>,
 ) -> ResolvedLlmEndpoint {
+    // A project-profile kernel reaches the model through its parent: no URL,
+    // no key, no OpenRouter takeover from the environment (ADR-103 Phase 2 F).
+    if crate::project_profile::is_project_profile() {
+        return crate::project_profile::parent_llm_endpoint(cfg_llm);
+    }
     let cfg_llm_url = cfg_llm
         .and_then(|c| c.service_url.clone())
         .filter(|s| !s.is_empty());
@@ -184,8 +189,17 @@ pub fn build_llm_client(
     cfg_llm: Option<&clawft_types::config::LlmEndpointConfig>,
 ) -> Result<(LlmClient, ResolvedLlmEndpoint), clawft_service_llm::LlmError> {
     let resolved = resolve_llm_endpoint(cfg_llm);
-    let client = LlmClient::new(resolved.config.clone())?;
+    let client = new_client(resolved.config.clone())?;
     Ok((client, resolved))
+}
+
+/// [`LlmClient::new`], except in a project-profile kernel, where the client
+/// runs on the parent backend and never opens an HTTP connection itself.
+pub fn new_client(config: LlmConfig) -> Result<LlmClient, clawft_service_llm::LlmError> {
+    match crate::project_profile::parent_llm_backend() {
+        Some(backend) => LlmClient::with_backend(config, backend),
+        None => LlmClient::new(config),
+    }
 }
 
 /// SystemService adapter wrapping the daemon's [`SharedLlmClient`].

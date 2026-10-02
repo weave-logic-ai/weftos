@@ -1774,6 +1774,7 @@ dependencies = [
 name = "clawft-service-llm"
 version = "0.8.1"
 dependencies = [
+ "async-trait",
  "reqwest",
  "serde",
  "serde_json",
@@ -2106,6 +2107,7 @@ dependencies = [
  "clawft-services",
  "clawft-tools",
  "clawft-types",
+ "clawft-weave",
  "comfy-table",
  "dashmap",
  "dirs",

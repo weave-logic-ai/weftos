@@ -51,7 +51,7 @@ fn daemon_control() -> Option<Arc<DaemonControlState>> {
 /// outer `Arc`.
 static DAEMON_LLM: OnceLock<clawft_service_llm::SharedLlmClient> = OnceLock::new();
 
-fn daemon_llm() -> Option<clawft_service_llm::SharedLlmClient> {
+pub(crate) fn daemon_llm() -> Option<clawft_service_llm::SharedLlmClient> {
     DAEMON_LLM.get().cloned()
 }
 
@@ -890,7 +890,18 @@ async fn build_embedding_router_or_warn(
     // Pick ApiEmbedder when an API key is configured, else the hash
     // floor. ApiEmbedder itself collapses to its SHA-256 fallback
     // per-call when the API errors, so production stays robust.
-    let embedder: Arc<dyn clawft_core::embeddings::Embedder> = if std::env::var("OPENAI_API_KEY")
+    let embedder: Arc<dyn clawft_core::embeddings::Embedder> = if let Some(remote) =
+        crate::project_profile::project_embedder().await
+    {
+        // Project profile: the parent embeds; no local model, no API key.
+        // Never build the index on a guessed width: until the parent has
+        // reported its own, the router is unavailable.
+        if !remote.is_ready() {
+            warn!("agent-core: EmbeddingRouter unavailable; the user daemon has not reported an embedding width");
+            return None;
+        }
+        remote
+    } else if std::env::var("OPENAI_API_KEY")
         .map(|s| !s.is_empty())
         .unwrap_or(false)
     {
@@ -983,7 +994,7 @@ fn seed_user_projects() {
 /// workspace is the optional overlay that will be clamped.
 pub async fn run(
     mut config: Config,
-    kernel_config: KernelConfig,
+    mut kernel_config: KernelConfig,
     // WEFT-10: unmerged global routing (ceiling for PermissionResolver).
     global_routing: clawft_types::routing::RoutingConfig,
     // WEFT-10: workspace overlay routing, when present.
@@ -991,7 +1002,7 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     // ADR-103 A6 seams: bodies live in `project_hooks` (no-ops until Phase 2 H/F).
     let _pre_boot = crate::project_hooks::pre_boot(&mut config);
-    crate::project_hooks::adjust_services(&mut config);
+    crate::project_hooks::adjust_services(&mut config, &mut kernel_config);
     let paths = protocol::runtime_paths();
     let socket_path = paths.socket();
 
@@ -1237,13 +1248,17 @@ pub async fn run(
     // publisher is auto-selected; several candidates are refused with a
     // warning. There is no hard-coded node id.
     let (mic_node_tx, mic_node_rx) = watch::channel(None::<String>);
-    tokio::spawn(crate::mic_source::supervise(
-        crate::mic_source::pin_from(voice_mic_pin.as_deref()),
-        kernel.clone(),
-        control_flags.clone(),
-        daemon_identity.node_id.clone(),
-        mic_node_tx,
-    ));
+    // A project kernel runs no voice pipeline (the user daemon does); with the
+    // sender dropped the receiver just keeps its `None`.
+    if crate::project_profile::mic_supervisor_enabled(crate::project_profile::is_project_profile()) {
+        tokio::spawn(crate::mic_source::supervise(
+            crate::mic_source::pin_from(voice_mic_pin.as_deref()),
+            kernel.clone(),
+            control_flags.clone(),
+            daemon_identity.node_id.clone(),
+            mic_node_tx,
+        ));
+    }
 
     // Spawn the LLM service handle. Unlike whisper this is a
     // request/response client — there's no background tokio task to
@@ -1318,7 +1333,7 @@ pub async fn run(
             );
         }
 
-        match clawft_service_llm::LlmClient::new(resolved.config) {
+        match crate::llm_service::new_client(resolved.config) {
             Ok(client) => {
                 // WEFT-343: shared swappable handle — outer Arc is
                 // stable for the process lifetime; inner client can
@@ -1572,7 +1587,9 @@ pub async fn run(
                 },
             );
         }
-        let tool_registry = Arc::new(tool_registry);
+        // Project profile: no voice tools (their default STT/TTS endpoints and
+        // cloud fallbacks belong to the user daemon).
+        let tool_registry = Arc::new(crate::project_profile::strip_voice_tools(tool_registry));
         // Stash the registry + spawner so the lifecycle paths (idle reaper,
         // agent.chat.end, agent.chat.cancel) can cascade-cancel a parent's
         // still-running children when the parent conversation ends (design D5).
@@ -1674,7 +1691,11 @@ pub async fn run(
                 // provider when its weights are present, else the Mock fallback.
                 if let Some(chain) = chain {
                     let embedder: Arc<dyn clawft_kernel::embedding::EmbeddingProvider> =
-                        Arc::from(clawft_kernel::embedding::select_embedding_provider(None));
+                        match crate::project_profile::project_embedding_provider().await {
+                            // Project profile: remote only; never load a local model.
+                            Some(remote) => remote,
+                            None => Arc::from(clawft_kernel::embedding::select_embedding_provider(None)),
+                        };
                     let mut tier = clawft_service_agent::SessionTier::new(embedder, chain, None);
                     // ADR-062 §1.1 forest join: dual-write turns into the
                     // kernel-global causal graph + cross-ref store and fuse
@@ -5656,6 +5677,7 @@ async fn dispatch(
                     version: env!("CARGO_PKG_VERSION").to_owned(),
                 },
                 handshake: Some(crate::handshake_rpc::current_handshake(&k)),
+                shared_services: crate::project_profile::shared_services_health(),
             };
             Response::success(serde_json::to_value(result).unwrap())
         }

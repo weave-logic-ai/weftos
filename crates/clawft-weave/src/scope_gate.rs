@@ -148,7 +148,7 @@ pub fn init(manifests_dir: Option<PathBuf>, is_user_profile: bool) {
     *MANIFESTS_DIR.write().unwrap_or_else(|e| e.into_inner()) = manifests_dir;
 }
 
-fn manifests_dir() -> Option<PathBuf> {
+pub(crate) fn manifests_dir() -> Option<PathBuf> {
     if let Some(d) = MANIFESTS_DIR.read().unwrap_or_else(|e| e.into_inner()).clone() {
         return Some(d);
     }

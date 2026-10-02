@@ -524,7 +524,7 @@ pub struct ChatRequest {
 }
 
 /// One choice in a chat completion response.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatChoice {
     /// The assistant message produced for this choice.
     pub message: ChatMessage,
@@ -538,7 +538,7 @@ pub struct ChatChoice {
 ///
 /// All fields default to 0 because some OpenAI-compat servers omit
 /// the block entirely when token counts aren't tracked.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChatUsage {
     /// Tokens in the prompt.
     #[serde(default)]
@@ -558,7 +558,7 @@ pub struct ChatUsage {
 
 /// Optional `usage.prompt_tokens_details` block. Surfaces slot prefix
 /// cache hit counts so callers can verify cache reuse.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChatUsagePromptDetails {
     /// Tokens served from the slot prefix cache.
     #[serde(default)]
@@ -567,7 +567,7 @@ pub struct ChatUsagePromptDetails {
 
 /// llama-server's `timings` block — server-specific, carries token-rate
 /// metrics. Absent on stricter OpenAI-compat backends.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChatTimings {
     /// Sustained generation rate during this call (tokens/sec).
     #[serde(default)]
@@ -578,7 +578,7 @@ pub struct ChatTimings {
 }
 
 /// Wire shape for `POST /v1/chat/completions` response body.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResponse {
     /// One or more completion choices. Practically always one for
     /// llama-server.
@@ -639,10 +639,28 @@ impl LlmError {
     }
 }
 
+/// A replacement transport for [`LlmClient`] (ADR-103 Phase 2 package F).
+///
+/// A client built with [`LlmClient::with_backend`] never touches HTTP and
+/// never reads `config.api_key`: `complete*`, `list_models` and `health` all
+/// go to the backend. The per-project kernel uses this to reach the model
+/// through its parent daemon, so provider credentials stay in the user tier.
+/// The in-flight permit and per-call defaults still apply.
+#[async_trait::async_trait]
+pub trait LlmBackend: Send + Sync + std::fmt::Debug {
+    /// Execute one chat completion.
+    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError>;
+    /// Model ids the backend offers.
+    async fn list_models(&self) -> Result<Vec<String>, LlmError>;
+    /// One readiness probe: `Ok(true)` ready, `Ok(false)` loading.
+    async fn health(&self) -> Result<bool, LlmError>;
+}
+
 /// HTTP client for the LLM service.
 #[derive(Debug, Clone)]
 pub struct LlmClient {
     config: LlmConfig,
+    backend: Option<Arc<dyn LlmBackend>>,
     http: reqwest::Client,
     /// Backpressure: permits=1 matches `llama-server`'s single-batch
     /// processing core. We enforce it client-side so we never pipeline
@@ -672,9 +690,28 @@ impl LlmClient {
             .map_err(|e| LlmError::Transport(e.to_string()))?;
         Ok(Self {
             config,
+            backend: None,
             http,
             in_flight: Arc::new(Semaphore::new(1)),
         })
+    }
+
+    /// Build a client whose transport is `backend` instead of HTTP.
+    pub fn with_backend(
+        config: LlmConfig,
+        backend: Arc<dyn LlmBackend>,
+    ) -> Result<Self, LlmError> {
+        let mut client = Self::new(config)?;
+        client.backend = Some(backend);
+        Ok(client)
+    }
+
+    /// Take the single in-flight slot without waiting: `None` while another
+    /// call holds it. A caller that must never queue behind (or in front of)
+    /// the daemon's own turns holds this across [`Self::complete_unchecked`]
+    /// instead of calling [`Self::complete_with_tools`].
+    pub fn try_slot(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        Arc::clone(&self.in_flight).try_acquire_owned().ok()
     }
 
     /// Read-only accessor; used by the daemon's wiring + structured logs.
@@ -687,6 +724,9 @@ impl LlmClient {
     /// Returns `Ok(true)` on 200, `Ok(false)` on 503 (loading model),
     /// or `Err` on transport / other failure.
     pub async fn health(&self) -> Result<bool, LlmError> {
+        if let Some(backend) = &self.backend {
+            return backend.health().await;
+        }
         let url = format!("{}/health", self.config.base_url);
         let resp = self
             .http
@@ -819,6 +859,9 @@ impl LlmClient {
     /// [`LlmError`] so the daemon can fall back to the configured
     /// default without failing the RPC.
     pub async fn list_models(&self) -> Result<Vec<String>, LlmError> {
+        if let Some(backend) = &self.backend {
+            return backend.list_models().await;
+        }
         let url = self.models_url();
         let mut req = self.http.get(&url);
         if let Some(key) = self.config.api_key.as_deref() {
@@ -889,6 +932,14 @@ impl LlmClient {
             tools: if tools.is_empty() { None } else { Some(tools) },
             tool_choice,
         };
+
+        if let Some(backend) = &self.backend {
+            let parsed = backend.chat(body).await?;
+            if parsed.choices.is_empty() {
+                return Err(LlmError::NoChoices);
+            }
+            return Ok(parsed);
+        }
 
         let mut req = self.http.post(&url).json(&body);
         if let Some(key) = self.config.api_key.as_deref() {

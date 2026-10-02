@@ -44,6 +44,27 @@ pub mod rpc_ext;
 /// Seams `daemon::run` calls for the per-project kernel profile (ADR-103 A6).
 #[cfg(any(unix, windows))]
 pub mod project_hooks;
+/// Read a running process's real environment (supervisor tests, ADR-103 Phase 2 F).
+#[cfg(any(unix, windows))]
+pub mod env_probe;
+/// Parent-side client for the shared services of a `project`-profile kernel (ADR-103 Phase 2 F).
+#[cfg(any(unix, windows))]
+pub mod parent_link;
+/// Remote embedder and LLM backend over the parent link (ADR-103 Phase 2 F).
+#[cfg(any(unix, windows))]
+pub mod parent_services;
+/// The `project`-profile service adjustments (ADR-103 Phase 2 F).
+#[cfg(any(unix, windows))]
+pub mod project_profile;
+/// Per-project rate limit and token budget for `shared.*` (ADR-103 Phase 2 F).
+#[cfg(any(unix, windows))]
+pub mod shared_meter;
+/// Process state behind `shared.*`: meter, cached limits, permits, model allow-list (ADR-103 Phase 2 F).
+#[cfg(any(unix, windows))]
+pub mod shared_state;
+/// `shared.*` RPCs: the user daemon's embedding and LLM services for its projects (ADR-103 Phase 2 F).
+#[cfg(any(unix, windows))]
+pub mod shared_rpc;
 /// `VerifiedProject`: a project id with cryptographic provenance (ADR-103 A6).
 #[cfg(any(unix, windows))]
 pub mod verified_project;

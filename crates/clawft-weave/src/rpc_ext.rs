@@ -315,6 +315,14 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Read,
         handler: crate::token_rpc::handle,
     },
+    // One prefix for shared.embed / shared.llm.chat / shared.llm.models: the
+    // handler resolves the project itself (token scope or Admin) and refuses
+    // anonymous callers; `Write` is the floor.
+    ExtRoute {
+        prefix: "shared.",
+        capability: Capability::Write,
+        handler: crate::shared_rpc::handle,
+    },
 ];
 #[cfg(test)]
 const ROUTES: &[ExtRoute] = &[
@@ -384,6 +392,14 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "auth.token.validate",
         capability: Capability::Read,
         handler: crate::token_rpc::handle,
+    },
+    // One prefix for shared.embed / shared.llm.chat / shared.llm.models: the
+    // handler resolves the project itself (token scope or Admin) and refuses
+    // anonymous callers; `Write` is the floor.
+    ExtRoute {
+        prefix: "shared.",
+        capability: Capability::Write,
+        handler: crate::shared_rpc::handle,
     },
     ExtRoute {
         prefix: "rpc_ext.test.",
