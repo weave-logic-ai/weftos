@@ -1,8 +1,13 @@
 # WeftOS Deployment Standard Operating Procedures
 
-Version: 1.0.0
+Version: 1.1.0
 Effective: 2026-04-02
-Applies to: WeftOS v0.3.1+
+Updated: 2026-10-02
+Applies to: the 0.8.x tree (checked against `weaver` built at c9e8f86b3)
+Checked against the CLI and config schema: SOP 1, SOP 3 Steps 1-3, the systemd
+example in [agents.md](./agents.md). SOP 2, 4, 5 and SOP 3 Steps 4-5 still use
+the original 0.3.1 command names and have not been re-verified.
+Drift check: `scripts/build.sh check-doc-commands`
 Author: WeaveLogic Architecture Team
 
 ---
@@ -43,152 +48,126 @@ boot.
 
 | Requirement | Detail |
 |---|---|
-| WeftOS CLI (`weft`) | v0.3.1+ installed and on PATH (via cargo install, Homebrew, or binary release) |
-| Rust toolchain | 1.93+ (only if building from source) |
+| WeftOS daemon CLI (`weaver`) | Built from this tree (`scripts/build.sh native`) or installed from a release, and on PATH. Every command in SOP 1 and SOP 3 is a `weaver` command; `weft` has no `init` or `kernel` subcommand (`weft --help`; `weft onboard` initializes clawft config and workspace, not a WeftOS project) |
+| Rust toolchain | Only if building from source; see `rust-toolchain.toml` |
 | Project VCS | Git repository with at least one commit |
-| Disk space | 100 MB minimum for `.weftos/` runtime state (models, sessions, chain) |
-| Network | Outbound HTTPS for LLM providers (optional for offline/local inference) |
 | Permissions | Write access to project root directory |
+| Network | Outbound HTTPS for LLM providers (optional for offline/local inference) |
 
 ### Procedure
 
-#### Step 1: Run `weft init` from the project root
+#### Step 1: Run `weaver init` from the project root
 
 ```bash
 cd /path/to/project
-weft init
+weaver init --yes
 ```
 
-This invokes `weftos::init::init_project()` which performs three operations:
+`weaver init` (`crates/clawft-weave/src/commands/init_cmd.rs`) creates:
 
-1. **Creates the `.weftos/` directory structure:**
+- `weave.toml` at the project root. It refuses to overwrite an existing one
+  (`--force` overwrites, `--update` keeps it and only seeds missing files).
+- `.weftos/runtime/`, the runtime root of a kernel started inside this project
+  (socket `kernel.sock`, `kernel.pid`, `kernel.log`, `kernel.lock`, the node key
+  and the chain checkpoint; see `crates/clawft-types/src/runtime_paths.rs`).
+  `weaver init` writes nothing else under `.weftos/`; the kernel creates the
+  rest.
+- `graphify-out/`, the output directory of `weaver graphify` / `weaver topology`.
+- `.gitignore` entries for `.weftos/` and `graphify-out/` (the file is created
+  when absent).
+- `.clawft/SOUL.md`, `.clawft/IDENTITY.md` and `.clawft/SOUL.journal.md`, the
+  agent identity files (see [agents.md](./agents.md)).
 
-```
-.weftos/
-  chain/          # ExoChain append-only event ledger (SHAKE-256 linked)
-  tree/           # Exo-resource-tree serialized snapshots
-  logs/           # Kernel and agent runtime logs
-  artifacts/      # Build artifacts, generated reports, exported graphs
-  models/         # ONNX embedding models (all-MiniLM-L6-v2, ~86 MB)
-  sessions/
-    current/      # Active session JSONL files (one per running session)
-    history/      # Archived sessions organized by project name
-    subagents/    # Session state for spawned sub-agents
-```
-
-2. **Generates `weave.toml`** at the project root with auto-detected settings:
-   - `domain.language` -- detected from Cargo.toml (rust), package.json
-     (javascript), pyproject.toml (python), or falls back to generic
-   - `sources.git` -- enabled if `.git/` exists
-   - `sources.files.patterns` -- language-appropriate glob patterns
-   - `kernel.max_processes` -- defaults to 64
-   - `embedding.provider` -- defaults to `mock-sha256` (no GPU required)
-   - `mesh.enabled` -- defaults to false (single-project mode)
-
-3. **Appends `.weftos/` to `.gitignore`** if a gitignore exists and does not
-   already contain the entry.
+The generated `weave.toml` sets `kernel.max_processes = 64` and
+`kernel.health_check_interval_secs = 30`, plus `[domain]`, `[tick]`,
+`[sources.files]` and `[embedding]` sections. Flags: `--name`, `--mesh` (adds a
+`[kernel.mesh]` block, see SOP 3), `--ecc` (adds `[kernel.ecc]`), `--force`,
+`--update`, `--yes`.
 
 #### Step 2: Configure `weave.toml` for the specific project
 
-Edit the generated `weave.toml` to set project-specific values. The critical
-sections for initial deployment are:
+The daemon reads `weave.toml` from its working directory and layers the JSON
+config (`~/.clawft/config.json`) over it
+(`crates/clawft-platform/src/config_loader.rs`). It deserializes the result into
+`Config`, whose top-level keys are `agents`, `channels`, `providers`, `gateway`,
+`tools`, `delegation`, `routing`, `agent_routing`, `voice`, `kernel`, `pipeline`,
+`plugins` and `skills` (`CONFIG_TOP_LEVEL_KEYS`,
+`crates/clawft-types/src/config/mod.rs`). Unknown keys are ignored. That
+includes `[domain]`, `[tick]`, `[sources.*]` and `[embedding]` as `weaver init`
+writes them: they are not `Config` fields, so editing them does not change how
+the daemon boots. The `[kernel]` keys it does read are in `KernelConfig`
+(`crates/clawft-types/src/config/kernel.rs`). The ones SOP 1 needs:
 
 ```toml
-[domain]
-name = "weavelogic-ai"          # Human-readable project name
-language = "javascript"          # Primary language
-description = "B2B consulting website for WeaveLogic"
-
 [kernel]
-max_processes = 32               # Tune to project complexity
-health_check_interval_secs = 60  # Longer interval for low-churn projects
-
-[embedding]
-provider = "onnx"                # Use ONNX for real embeddings
-model_path = ".weftos/models/all-MiniLM-L6-v2.onnx"
-dimensions = 384
-batch_size = 16
-
-[sources.git]
-path = "."
-branch = "main"                  # or "master"
-
-[sources.files]
-root = "."
-patterns = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.json", "**/*.md"]
-exclude = ["node_modules/**", ".next/**", "dist/**", ".weftos/**"]
-
-[governance]
-default_environment = "development"
-risk_threshold = 0.9
+max_processes = 32               # default 64 (kernel.rs:10-12)
+health_check_interval_secs = 60  # default 30 (kernel.rs:15-17)
 ```
 
-#### Step 3: Download the embedding model
+`weaver kernel status` echoes both values back as `Max procs` and `Health chk`.
 
-If using ONNX embeddings (recommended for real knowledge graph construction):
+#### Step 3: Start the kernel
 
 ```bash
-weft kernel boot --download-models
+weaver kernel start
 ```
 
-This places `all-MiniLM-L6-v2.onnx` (86 MB) into `.weftos/models/`. The model
-produces 384-dimensional sentence embeddings used by HNSW for semantic search.
+`weaver kernel start` backgrounds the daemon by default. Add `--foreground` to
+keep it in the terminal or to run it under a service manager (a unit must use
+`--foreground`; see [agents.md](./agents.md)). There is no `daemon`
+subcommand and no `boot` action.
 
-For lightweight or CI environments, keep `embedding.provider = "mock-sha256"`
-which uses SHA-256 content hashing instead of semantic embeddings. This is
-deterministic and costs nothing, but loses semantic similarity search.
+Beside a running user daemon, a plain `weaver kernel start` inside a project is
+refused unless `--legacy-project-daemon` is passed (ADR-103 A7); the supported
+path there is `weaver kernel start --project <id|name>`.
 
-#### Step 4: Boot the kernel
+Embedding models are not downloaded by the CLI: there is no
+`--download-models` flag. `[embedding]` in `weave.toml` is not a daemon `Config` field
+(Step 2).
+
+The daemon opens the IPC socket for CLI communication; the boot log is written
+to `kernel.log` in the runtime root, and `weaver kernel logs` or
+`weaver kernel attach` shows it.
+
+#### Step 4: Verify the installation
 
 ```bash
-weft kernel boot --foreground
+weaver kernel status
 ```
 
-The boot sequence follows this state machine:
-
-```
-Booting -> [init services] -> [init chain] -> [init ECC] -> Running
-```
-
-During boot, the kernel:
-
-1. Initializes the `ServiceRegistry` and registers system services
-2. Creates the `ProcessTable` for agent lifecycle management
-3. Initializes the `ChainSubsystem` (ExoChain with genesis event)
-4. Initializes the `EccSubsystem` if the `ecc` feature is enabled:
-   - `HnswService` (vector index with ef_search=100, ef_construction=200)
-   - `CausalGraph` (concurrent DAG on DashMap)
-   - `ImpulseQueue` (inter-structure event bus)
-   - `CrossRefStore` (forward/reverse index across structures)
-   - `DemocritusLoop` configuration
-5. Starts the `HealthSystem` for periodic liveness checks
-6. Opens the IPC socket for CLI communication
-
-#### Step 5: Verify the installation
+Prints `State:      running`, the `Processes:` and `Services:` counts, `Max procs`,
+`Health chk`, `Socket`, `Log`, the `Node:` id and a `Mesh:` line (`off` unless
+`[kernel.mesh]` is enabled). A freshly started kernel with no agents reported
+`Processes:  1` when checked on this tree.
 
 ```bash
-weft kernel status
+weaver kernel services
 ```
 
-Expected output shows kernel state as `running`, with service count >= 1 and
-process count of 0 (no agents spawned yet).
+Prints a table (Name, Type, Health, Detail). A default start with no mesh listed
+`ecc.hnsw`, `assessment`, `cluster`, `agent.chat`, `cron`, `ecc.cognitive_tick`,
+`llm` and `containers`; `llm` reports `unhealthy` when no LLM endpoint
+answers. There is no separate ExoChain service entry. Stop with
+`weaver kernel stop`.
 
-```bash
-weft kernel services
-```
-
-Expected output lists at minimum: ExoChain, HNSW (if ECC enabled), Health.
+If no daemon is running, `kernel status` and `kernel services` boot a throwaway
+kernel and say so (`no daemon running — booting ephemeral kernel`); that output
+does not verify a started daemon.
 
 
 #### Optional: machine mesh service
 
 When the machine mesh service runs (`weaver mesh serve`, or the installed unit),
-check it and pin its key once, after comparing the fingerprint `weaver mesh status`
-shows with the one an administrator reads on the service host:
+check it and pin its key once. `weaver mesh trust` prints the fingerprint and pins
+the key in the same invocation, with no confirmation prompt
+(`crates/clawft-weave/src/commands/mesh_cmd.rs`, `trust`), so compare first: the
+`machine key` fingerprint and public key shown by `weaver mesh status` must match
+the values the installing administrator recorded, out of band (the install script
+does not print a fingerprint).
 
 ```bash
 weaver mesh status            # identity, policy, registrations, journal
-weaver mesh trust             # shows the machine key fingerprint, then pins it
+weaver mesh trust             # prints the machine key fingerprint, then pins it
 ```
 
 The pin is `~/.weftos/mesh/machine.pub`, and two clients treat it differently.
@@ -279,7 +258,9 @@ under `/var/lib/weftos/mesh`, the user daemon only `~/.weftos/user.key` and
 `~/.weftos/mesh/`. Once running in service mode the user daemon does append to its
 own chain as usual, including `mesh.service.bound` and `mesh.journal.anchor` events.
 
-1. **Install the service, adopting the node key.** Build and install the packaged
+1. **Record the current node id, then install the service, adopting the node key.**
+   While the collapsed user daemon still runs, note its node id
+   (`weaver kernel status --profile user`, the `Node:` line). Then build and install the packaged
    binary, then `weaver mesh install-service --adopt-node-key ~/.weftos/run/node.key
    --listen 0.0.0.0:9489 --admin-uid "$(id -u)" > install.sh`, read it, and run it as
    an administrator. `--listen 0.0.0.0:9489` keeps the machine reachable from the Pi
@@ -296,8 +277,15 @@ own chain as usual, including `mesh.service.bound` and `mesh.journal.anchor` eve
 3. **Swap the listener.** Stop the collapsed user daemon (`weaver kernel stop
    --profile user`; it holds 9489), start the service (`sudo launchctl bootstrap
    system /Library/LaunchDaemons/ai.weftos.mesh.plist` or `sudo systemctl enable --now
-   weftos-mesh`), then `weaver mesh status` and `weaver mesh trust` after comparing
-   the fingerprint with the one the install script printed.
+   weftos-mesh`), then `weaver mesh status`. The install script prints no
+   fingerprint, so there is nothing to compare it with; verify identity instead.
+   *Adopted key (this procedure):* the `node` line of `weaver mesh status` must
+   equal the node id you recorded in step 1; if it differs, stop here, the service
+   is not running the key you adopted. *Fresh key (`--fresh-node-key`, or a machine
+   with no `node.key`):* the id is new, so compare the `machine key` fingerprint
+   and the public key from `weaver mesh status` with the values the installing
+   administrator recorded, out of band (not read back through this socket). Only then run `weaver mesh trust`, which prints the
+   fingerprint and pins the key in one step.
 4. **Require the service.** Set `service = "required"` under `[kernel.mesh]` in
    `~/.weftos/weave.toml` and start the user daemon again. **Keep it `required` after
    step 5.** Once `~/.weftos/run/node.key` is gone, a daemon under `auto` that finds
@@ -349,29 +337,28 @@ tier skew.
 
 | Output | Location | Description |
 |---|---|---|
-| `.weftos/` directory | Project root | Runtime state directory with all subdirectories |
+| `.weftos/` directory | Project root | Created with `runtime/` inside; the kernel adds the rest |
 | `weave.toml` | Project root | Project configuration file |
-| `.gitignore` update | Project root | `.weftos/` entry appended |
-| Genesis chain event | `.weftos/chain/` | First ExoChain event (tamper-evident root) |
-| Kernel boot log | `.weftos/logs/` | Boot sequence with timing data |
+| `.gitignore` update | Project root | `.weftos/` and `graphify-out/` entries appended |
+| Runtime root | `.weftos/runtime/` | Socket, pid, lock, node key, chain checkpoint (`runtime_paths.rs`) |
+| Kernel log | `.weftos/runtime/kernel.log` | Boot sequence with timing data |
+| Agent identity files | `.clawft/` | `SOUL.md`, `IDENTITY.md`, `SOUL.journal.md` |
 
 ### Quality Gates
 
-- [ ] `weft kernel status` returns `running` state
-- [ ] `weft kernel services` lists ExoChain service
-- [ ] `.weftos/` directory contains chain/, tree/, logs/, artifacts/, sessions/
+- [ ] `weaver kernel status` (with the daemon started, not the ephemeral fallback) prints `State:      running`
+- [ ] `weaver kernel services` lists the registered services (`cluster`, `ecc.hnsw`, ...)
+- [ ] `.weftos/runtime/` exists and holds `kernel.sock` and `kernel.pid` while the daemon runs
 - [ ] `weave.toml` exists and is valid TOML
-- [ ] `.gitignore` contains `.weftos/` entry
+- [ ] `.gitignore` contains the `.weftos/` entry
 - [ ] No secrets or credentials in `weave.toml`
 
 ### Known Limitations and Future Improvements
 
 | Limitation | Impact | Future Fix |
 |---|---|---|
-| `mock-sha256` default embedding | No semantic search until ONNX configured | Auto-download model on first boot (Sprint 15) |
-| No `weave.toml` schema validation | Typos in config silently ignored | JSON Schema + `weft doctor` check (Sprint 14) |
-| Single kernel instance per project | Cannot run multiple kernels in same `.weftos/` | PID file locking (Sprint 14) |
-| No daemon mode | Must keep terminal open or use systemd/pm2 | `weft kernel boot --daemon` (Sprint 15) |
+| `weave.toml` is not schema-validated | Unknown keys are ignored: a typo, or `[domain]` / `[embedding]` as `weaver init` writes them, does nothing | Strict top-level check exists in the library (`Config::from_json_str_strict`, `DenyUnknown::Yes`, `config/mod.rs:169`); no caller outside `config/mod.rs` (`grep -rn from_json_str_strict crates`) |
+| `[embedding]`, `[sources.*]`, `[tick]` and `[domain]` written by `weaver init` are not fields of the daemon's `Config` | Editing them does not change how the daemon boots (`weft assess` reads its own `[project]` and `[assessment]` sections of `.weftos/weave.toml`) | Not tracked; the generator and the schema disagree |
 
 ---
 
@@ -654,89 +641,140 @@ patterns.
 | SOP 1 + SOP 2 completed | On each participating project |
 | Network connectivity | Projects must be able to reach each other (same host, LAN, or WAN) |
 | Shared org identity | Projects belong to the same governance domain |
-| Mesh feature enabled | `weft` binary compiled with `mesh` feature |
+| Mesh feature enabled | `weaver` built with the `mesh` feature; it is in the default feature set (`crates/clawft-weave/Cargo.toml`, `default = [..., "mesh", ...]`) |
 
 ### Procedure
 
 #### Step 1: Designate Project Roles
 
+SOP 3 configures the mesh as **separate daemons that each listen**: each project
+runs its own `weaver kernel start` (collapsed mode), with its own runtime root
+and its own `[kernel.mesh]` block. That is the single-tenant / standalone shape in
+ADR-103 D2. Two limits apply:
+
+- A project kernel that a user daemon supervises (`weaver kernel start --project
+  <id|name>`) never listens: the `project` profile turns the mesh listener off and
+  ignores a project `weave.toml` mesh section with a warning
+  (`crates/clawft-weave/src/project_profile.rs:6-8`). Such projects reach the mesh
+  through the machine mesh service (see "Optional: machine mesh service" in SOP 1).
+- Port 9489 is the machine's weave port (ADR-103 D1). Two daemons on one host
+  cannot both bind it; give every additional daemon on the host its own port.
+
 For the initial WeaveLogic deployment:
 
 | Project | Role | Mesh Address |
 |---|---|---|
-| clawft (weftos.weavelogic.ai docs) | **Coordinator** | `0.0.0.0:9489` |
-| weavelogic.ai | **Member** | `0.0.0.0:9471` |
+| clawft (weftos.weavelogic.ai docs) | **Coordinator** | `127.0.0.1:9489` (same host) |
+| weavelogic.ai | **Member** | `127.0.0.1:9471` |
 
-The coordinator is typically the project with the richer knowledge graph or the
-one that owns shared infrastructure. In this case, clawft contains the WeftOS
-source code which is the authoritative reference.
+Role names are a convention of this SOP: the kernel has no coordinator/member
+distinction in `MeshConfig`; the member simply lists the coordinator in
+`seed_peers`. Use `0.0.0.0:<port>` only for a listener that remote hosts must
+reach (see "What is enforced today" below).
 
 #### Step 2: Configure Mesh Networking
+
+The schema is `[kernel.mesh]` (`MeshConfig`,
+`crates/clawft-types/src/config/kernel.rs:896-962`): `enabled` (default `false`),
+`transport` (`tcp` default, `ws`, `quic`), `listen_addr` (alias `listen`, default
+`0.0.0.0:9489`), `discovery` (default `false`), `seed_peers`, `noise` (default
+`false`), `noise_key_path`, `admission` (`off | observe | enforce`, default
+`observe`), `genesis_hash`, `admission_open_membership`, `service`
+(`auto | required | off`) and `service_socket`. There is no `[mesh]` table, no
+`bind_address`, no `node_id` key (the node id is derived from the node key,
+ADR-103 D11) and no TLS block. Encryption is Noise XX (`noise = true`), not
+certificates.
+
+Run `weaver init --mesh` to have the block generated, or add it by hand. This
+pair starts on this tree. It was checked on 2026-10-02 with two `weaver kernel
+start --foreground` processes, each with its own `WEFTOS_RUNTIME_DIR`, using
+ports 19489 and 19471 so as not to collide with a machine's real 9489.
 
 **On the coordinator (clawft):**
 
 ```toml
 # weave.toml
-[mesh]
+[kernel.mesh]
 enabled = true
-bind_address = "0.0.0.0:9489"
-seed_peers = []
-node_id = "clawft-coordinator"
-
-[mesh.tls]
-cert_path = ".weftos/certs/node.crt"
-key_path = ".weftos/certs/node.key"
-ca_path = ".weftos/certs/ca.crt"
+transport = "tcp"
+listen_addr = "127.0.0.1:9489"
+noise = true
 ```
 
 **On the member (weavelogic.ai):**
 
 ```toml
 # weave.toml
-[mesh]
+[kernel.mesh]
 enabled = true
-bind_address = "0.0.0.0:9471"
+transport = "tcp"
+listen_addr = "127.0.0.1:9471"
+noise = true
 seed_peers = ["127.0.0.1:9489"]   # Or the coordinator's reachable address
-node_id = "weavelogic-ai-member"
-
-[mesh.tls]
-cert_path = ".weftos/certs/node.crt"
-key_path = ".weftos/certs/node.key"
-ca_path = ".weftos/certs/ca.crt"
 ```
+
+Start each with `weaver kernel start` from its project directory, then check
+`weaver kernel status` (the `Mesh:` line reads `collapsed` and the kernel log
+says `Mesh transport started (tcp on 127.0.0.1:9471, 1 seed peers)`) and
+`weaver kernel services` (a `mesh` service). `weaver cluster nodes` on the
+member listed the seed address `127.0.0.1:9489` as a node; on the coordinator
+the member did not appear within 30 s of the check, so treat "both sides list
+each other" as not yet demonstrated by this SOP.
 
 #### Step 3: Establish the Trust Model
 
-The mesh transport (defined in `mesh.rs`) uses the Noise protocol for encrypted
-peer-to-peer communication. Trust is established through:
+**What is enforced today.** The mesh transport (`crates/clawft-kernel/src/mesh.rs`)
+can encrypt with Noise XX (`noise = true`). Admission is the K1 `CryptoGate`
+(`crates/clawft-kernel/src/mesh_admit.rs`, `mesh_admit_gate.rs`), set by
+`kernel.mesh.admission`:
 
-1. **Genesis hash verification** -- Both nodes must share the same governance
-   genesis hash. If they differ, the connection is rejected with
-   `MeshError::GenesisMismatch`. This ensures both projects belong to the
-   same organizational governance domain.
+| `admission` | Behaviour (`MeshConfig.admission`, `kernel.rs:933-949`; `CryptoGate::admit`, `mesh_admit_gate.rs:311-352`) |
+|---|---|
+| `off` | No policy. A peer that sends a signed `AdmitHello` still has it verified and its `source_node` bound to the verified key. |
+| `observe` (default) | Checks the hello, genesis, revocation and verdict, records would-be refusals, never refuses and never marks a peer admitted. Takes effect only once `genesis_hash` is pinned. **Not protection**: route ownership and `src_scope` are enforced only under `enforce` (ADR-103 A10). |
+| `enforce` | Refuses unsigned, plaintext, wrong-genesis (`wrong_genesis`), revoked and verdict-denied peers. Needs `genesis_hash` and a governance gate, or `admission_open_membership = true`, which admits every peer that presents a valid hello for the right genesis (`boot.rs:739-766`). |
 
-2. **Peer discovery** -- Three mechanisms are available:
-   - `SeedPeer` -- Static addresses in `mesh.seed_peers` (always available)
-   - `Mdns` -- Automatic LAN discovery (behind `mesh-discovery` feature)
-   - `Kademlia` -- WAN discovery via DHT (behind `mesh-discovery` feature)
-   - `PeerExchange` -- Learned from connected peers' peer lists
+- **Genesis hash.** Set `kernel.mesh.genesis_hash` (64 hex characters) to the same
+  value on both sides; a peer whose hello carries a different one is refused with
+  `wrong_genesis` under `enforce` and recorded under `observe`. It is a cluster
+  label, not a credential: anyone who knows it can present it (`mesh_admit_gate.rs:172`).
+- **Revocation.** `weaver mesh peer revoke <node-id>` (machine mesh service only)
+  closes the peer's live connection in every mode; under `enforce` the peer is
+  also refused on reconnect (ADR-103 A10).
+- **Peer discovery.** Static `seed_peers`, and `discovery = true` for DHT
+  discovery (`MeshConfig.discovery`). Discovery backends beyond `seed_peers`
+  are not exercised by this SOP.
+- **Capabilities.** `AgentCapabilities` and `CapabilityChecker`
+  (`crates/clawft-kernel/src/capability.rs`) gate what operations an agent may
+  perform; this SOP has not verified how they apply to remote peers.
 
-3. **Capability-based access** -- The `AgentCapabilities` system controls what
-   operations remote peers can perform. Capabilities are checked by the
-   `CapabilityChecker` before any cross-project operation executes.
+**Planned, not enforced.** There is no pairing handshake in the mesh runtime:
+`ClusterMembership::open_pairing_window` (`crates/clawft-kernel/src/cluster.rs:1173`)
+is called only from unit tests (`cluster.rs:2030-2092`), and no CLI command opens
+a window. `weaver cluster join` / `leave` are the manual membership verbs. Per-peer
+certificates and a CA do not exist: there is nothing to configure beyond Noise,
+the genesis pin and admission mode. Under the default (`observe`) a peer that
+can reach the listener can join; set `admission = "enforce"` with a
+`genesis_hash` for a listener that crosses a trust boundary. The decision to
+enforce by default is ADR-103 A6 (observe for one release, then enforce after
+the Pi and ESP32 are redeployed).
 
-**For same-host deployments** (like WeaveLogic's server):
+**For same-host deployments** (like WeaveLogic's server): use `127.0.0.1`
+listeners with distinct ports, as in Step 2. Noise is optional on loopback.
 
-Both projects run on the same machine. Use `127.0.0.1` addresses and skip TLS
-(development mode). The governance genesis is shared by deriving it from a
-common org secret.
-
-**For cross-host deployments** (client engagements):
-
-Use TLS with mutual certificate authentication. Each project generates a
-keypair and the CA certificate is distributed to all participating projects.
+**For cross-host deployments** (client engagements): bind a reachable address
+(`0.0.0.0:<port>` or the interface address), set `noise = true`,
+`admission = "enforce"` and the same `genesis_hash` on every node, and list the
+other nodes in `seed_peers`. Note the default `listen_addr` is `0.0.0.0:9489`
+for the collapsed daemon, so enabling the mesh without setting
+`listen_addr` exposes the port on every interface (ADR-103 D1, below).
 
 #### Step 4: Configure the Federated Knowledge Graph
+
+> Steps 4 and 5 describe the intended federation design. They were not
+> re-checked against the code when Steps 1-3 were brought up to date; treat the
+> protocol details (gossip interval, query forwarding, event bridging) as design
+> intent until verified.
 
 The ECC graph spans projects through a federated model, not a single shared
 database. Each project maintains its own:
@@ -817,11 +855,11 @@ deploy events in each project's ExoChain.
 
 ### Quality Gates
 
-- [ ] `weft kernel services` on each project shows Mesh service as healthy
-- [ ] Peer discovery confirms both nodes see each other
+- [ ] `weaver kernel services` on each daemon shows the `mesh` service as healthy, and `weaver kernel status` shows `Mesh:       collapsed` (or `service (connected)` under the machine mesh service)
+- [ ] `weaver cluster nodes` on the member lists the coordinator (seed peers appear by address first)
 - [ ] At least one cross-project CrossRef exists after initial sync
 - [ ] Gossip interval producing regular metadata exchange
-- [ ] No `GenesisMismatch` errors in kernel logs
+- [ ] No `wrong_genesis` refusals in the kernel log
 
 ### Known Limitations and Future Improvements
 
@@ -1228,7 +1266,7 @@ This appendix applies the SOPs above to the two WeaveLogic properties.
 | Status | SOP 1 partially complete (directory exists, no weave.toml yet) |
 
 **Remaining SOP 1 steps:**
-1. Generate `weave.toml` via `weft init` (will detect Rust + Node.js)
+1. Generate `weave.toml` via `weaver init` (the generated file lists Rust, TypeScript, Python, Go and Markdown file patterns)
 2. Configure dual source patterns: `["**/*.rs", "**/*.ts", "**/*.tsx"]`
 3. Exclude: `["target/**", "node_modules/**", ".weftos/**", "docs/src/.next/**"]`
 4. Boot kernel with ONNX embeddings (model already present)
@@ -1250,7 +1288,7 @@ This appendix applies the SOPs above to the two WeaveLogic properties.
 | Status | SOP 1 not started |
 
 **SOP 1 steps:**
-1. Run `weft init` from project root
+1. Run `weaver init` from project root
 2. `weave.toml` will detect Node.js (package.json present)
 3. Configure patterns: `["**/*.ts", "**/*.tsx", "**/*.js", "**/*.prisma"]`
 4. Exclude: `["node_modules/**", ".next/**", ".weftos/**"]`
@@ -1362,17 +1400,17 @@ Every significant operation is logged to the ExoChain with:
 
 ```
 # Install WeftOS on a project
-cd /path/to/project && weft init
+cd /path/to/project && weaver init --yes
 
 # Configure (edit generated file)
 $EDITOR weave.toml
 
 # Boot the kernel
-weft kernel boot --foreground
+weaver kernel start --foreground
 
 # Check kernel health
-weft kernel status
-weft kernel services
+weaver kernel status
+weaver kernel services
 
 # Spawn analysis agents
 weft agent spawn --type researcher --name code-analyzer --tool treesitter_parse
@@ -1382,11 +1420,11 @@ weft agent spawn --type researcher --name git-miner --tool git_log
 weft assess --scope full --format table
 
 # Connect two projects (mesh)
-# Edit weave.toml [mesh] section on both projects, then boot both kernels
+# Add a [kernel.mesh] block to weave.toml on both projects (SOP 3), then start both kernels
 
 # Query the knowledge graph
 weft chain query --kind "sop*" --since "7d"
 
 # Check cross-project links
-weft kernel services  # Look for Mesh service status
+weaver kernel services  # Look for the mesh service
 ```

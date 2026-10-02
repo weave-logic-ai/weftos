@@ -908,6 +908,16 @@ cmd_check_mesh_only() {
     timer_end
 }
 
+# Doc drift: the weaver/weft commands and [kernel.mesh] keys in the verified
+# deployment docs must exist in target/debug/{weaver,weft}
+# (scripts/check-doc-commands.sh). Not part of `gate`.
+cmd_check_doc_commands() {
+    header "Checking documented weaver/weft commands against the built CLI"
+    timer_start
+    run_cmd scripts/check-doc-commands.sh
+    timer_end
+}
+
 # P3-X: the machine mesh service lane: the mesh crates' tests, the Phase 3
 # end-to-end test (the real service plus two user daemons as the current user,
 # tempdirs only; scripts/dev/mesh-p3-e2e.sh), the no-owned-state gate and the
@@ -2057,6 +2067,10 @@ ${BOLD}Commands:${NC}
                   gate against the panel size budget. (WEFT-484 / M6-B)
                   Override budget: scripts/build.sh wasm-panel <max-raw-kb> <max-gz-kb>
   check-mesh-only Run cargo check -p clawft-kernel --no-default-features --features native,mesh
+  check-doc-commands
+                  Doc drift check: weaver/weft commands and [kernel.mesh] keys in
+                  docs/guides/agents.md and the deployment SOPs (SOP 1, SOP 3)
+                  must exist in target/debug/{weaver,weft} (run native-debug first)
   test-mesh-service
                   Machine mesh service lane (P3): cargo test -p clawft-mesh-local
                   -p clawft-mesh-service, scripts/dev/mesh-p3-e2e.sh, the
@@ -2356,6 +2370,7 @@ main() {
         wasm-panel)   cmd_wasm_panel "${WASM_PANEL_MAX_RAW_KB:-}" "${WASM_PANEL_MAX_GZ_KB:-}" ;;
         check)        cmd_check ;;
         check-mesh-only) cmd_check_mesh_only ;;
+        check-doc-commands) cmd_check_doc_commands ;;
         test-mesh-service) cmd_test_mesh_service ;;
         check-tests)  cmd_check_tests ;;
         check-mesh-no-owned-state) cmd_check_mesh_no_owned_state ;;
