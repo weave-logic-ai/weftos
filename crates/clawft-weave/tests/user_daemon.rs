@@ -113,7 +113,7 @@ async fn call_in(
     let stream = UnixStream::connect(socket).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
-    let mut req = json!({ "id": "t", "method": method, "params": params, "auth": auth });
+    let mut req = json!({ "id": "t", "proto": 1, "method": method, "params": params, "auth": auth });
     if let Some(p) = project {
         req["project"] = json!(p);
     }

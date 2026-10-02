@@ -63,7 +63,7 @@ where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
 {
-    let mut req = json!({ "id": "t", "method": method, "params": params });
+    let mut req = json!({ "id": "t", "proto": 1, "method": method, "params": params });
     if let Some(a) = auth {
         req["auth"] = json!(a);
     }

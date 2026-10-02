@@ -181,7 +181,7 @@ pub fn kill9(pid: u32) {
 pub async fn rpc(sock: &Path, method: &str, params: Value, auth: Option<&str>) -> Value {
     let fut = async {
         let (r, mut w) = UnixStream::connect(sock).await.map_err(|e| e.to_string())?.into_split();
-        let mut req = json!({"id": "e2e", "method": method, "params": params});
+        let mut req = json!({"id": "e2e", "proto": 1, "method": method, "params": params});
         if let Some(a) = auth {
             req["auth"] = json!(a);
         }

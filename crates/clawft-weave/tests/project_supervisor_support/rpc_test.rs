@@ -17,7 +17,7 @@ use super::fixture::{self, Fixture};
 
 async fn call(sock: &std::path::Path, method: &str, params: Value, auth: Option<&str>) -> Value {
     let (r, mut w) = UnixStream::connect(sock).await.unwrap().into_split();
-    let mut req = json!({ "id": "t", "method": method, "params": params });
+    let mut req = json!({ "id": "t", "proto": 1, "method": method, "params": params });
     if let Some(a) = auth {
         req["auth"] = json!(a);
     }

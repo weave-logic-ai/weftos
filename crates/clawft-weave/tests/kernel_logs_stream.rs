@@ -123,7 +123,7 @@ async fn logs_stream_delivers_live_entries_with_seq() {
 
     let req = serde_json::json!({
         "id": "logs-1",
-        "method": "kernel.logs_stream",
+        "proto": 1, "method": "kernel.logs_stream",
         "params": { "count": 10 },
     });
     let mut line = serde_json::to_string(&req).unwrap();
