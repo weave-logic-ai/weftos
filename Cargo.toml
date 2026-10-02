@@ -62,6 +62,7 @@ members = [
     "crates/weftos-sensor-guide",
     "crates/weftos-cog-companion",
     "crates/weftos-tof-scope",
+    "crates/weftos-bridge-send",
     "crates/clawft-substrate",
     "crates/clawft-surface",
     "crates/clawft-canon",

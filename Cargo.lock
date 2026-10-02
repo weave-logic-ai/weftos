@@ -10670,6 +10670,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "weftos-bridge-send"
+version = "0.8.1"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "weftos-cog-companion"
 version = "0.8.1"
 dependencies = [
