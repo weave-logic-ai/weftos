@@ -52,6 +52,8 @@ pub struct Bindings {
     last_serial: u64,
     /// Principals whose binding was revoked and not yet re-approved.
     revoked_principals: HashSet<Principal>,
+    /// Users a quarantine proved revoked (their keys are never bindable).
+    lost_revoked_ids: HashSet<String>,
     degraded: Option<String>,
 }
 
@@ -62,7 +64,6 @@ impl Bindings {
         for rec in journal.iter() {
             b.apply(rec)?;
         }
-        b.apply_marker(journal);
         Ok(b)
     }
 
@@ -71,12 +72,17 @@ impl Bindings {
     pub fn fold_lenient(journal: &Journal) -> Self {
         let mut b = Bindings::default();
         for rec in journal.iter() {
+            if b.degraded.is_some() {
+                // Quarantine facts only ever tighten the state; keep applying them.
+                if let Ok(ev @ (Event::Quarantine(_) | Event::Accept(_))) = Event::parse(rec) {
+                    b.commit(&ev);
+                }
+                continue;
+            }
             if let Err(e) = b.apply(rec) {
                 b.degraded = Some(e.to_string());
-                return b;
             }
         }
-        b.apply_marker(journal);
         b
     }
 
@@ -85,37 +91,40 @@ impl Bindings {
         self.degraded.as_deref()
     }
 
-    /// An unacknowledged quarantine already constrains the state: serials
-    /// never go below what the lost tail issued, and keys it revoked stay so.
-    fn apply_marker(&mut self, journal: &Journal) {
-        if let Some(l) = journal.lost() {
-            self.apply_lost(l.serial_high_water, &l.revoked_user_ids);
-        }
-    }
-
+    /// Apply the signed facts of a quarantine: serials never go below the
+    /// (clamped) high-water mark, every revoked user's serials up to it are
+    /// revoked, and those users' keys can never be bound again, even if the
+    /// bind itself was lost with the tail.
     pub(crate) fn apply_lost(&mut self, high_water: u64, revoked_user_ids: &[String]) {
         self.last_serial = self.last_serial.max(high_water);
         for id in revoked_user_ids {
-            let Some(key) = self.user_ids.get(id).copied() else { continue };
-            if let Some(p) = self.by_key.get(&key).cloned() {
+            self.lost_revoked_ids.insert(id.clone());
+            let bound = self.user_ids.get(id).and_then(|k| self.by_key.get(k).map(|p| (p.clone(), *k)));
+            if let Some((p, key)) = bound {
                 self.drop_key(&p, &key);
                 self.revoked_principals.insert(p);
             }
+            let t = self.revoked_through.entry(id.clone()).or_insert(0);
+            *t = (*t).max(high_water);
         }
     }
 
-    /// Admin acknowledgement of a quarantined tail. Journals what the
-    /// quarantine lost (serial floor, keys it revoked) so those constraints
-    /// outlive the marker, then lifts read-only.
-    pub fn accept_truncate(&mut self, journal: &mut Journal, ack: AdminAck) -> Result<(), BindError> {
+    /// Admin acknowledgement of a quarantined tail: journals the acceptance
+    /// and lifts read-only. `floor` is an explicit admin-chosen serial floor;
+    /// it can only raise the floor (default: the clamped quarantine value
+    /// already in the state). The constraining facts come from the signed
+    /// `journal.quarantine` record, never from the marker file.
+    pub fn accept_truncate(
+        &mut self,
+        journal: &mut Journal,
+        ack: AdminAck,
+        floor: Option<u64>,
+    ) -> Result<(), BindError> {
         self.refuse_degraded()?;
-        let l = journal.lost().cloned().unwrap_or_default();
+        let quarantine = journal.lost().map(|l| l.quarantine.clone()).unwrap_or_default();
         let ev = Event::Accept(AcceptBody {
-            lost_from_seq: l.lost_from_seq,
-            lost_count: l.lost_count,
-            serial_high_water: l.serial_high_water,
-            revoked_user_ids: l.revoked_user_ids,
-            quarantine: l.quarantine,
+            serial_floor: floor.unwrap_or(self.last_serial),
+            quarantine,
             by: ack.by.clone(),
         });
         self.write(journal, false, ev)?;
@@ -140,6 +149,9 @@ impl Bindings {
     }
 
     pub fn check(&self, principal: &Principal, key: &[u8; 32]) -> Check {
+        if self.degraded.is_some() {
+            return Check::Conflict(ConflictReason::Degraded);
+        }
         match self.by_principal.get(principal) {
             Some(k) if k == key => return Check::Existing,
             Some(_) => return Check::Conflict(ConflictReason::PrincipalHasOtherKey),
@@ -148,7 +160,7 @@ impl Bindings {
         if self.by_key.contains_key(key) {
             return Check::Conflict(ConflictReason::KeyBoundToOtherPrincipal);
         }
-        if self.revoked_keys.contains(key) {
+        if self.revoked_keys.contains(key) || self.lost_revoked_ids.contains(&node_id_from_pubkey(key)) {
             return Check::Conflict(ConflictReason::KeyRevoked);
         }
         if self.pending.get(principal) == Some(key) {
@@ -187,7 +199,7 @@ impl Bindings {
     }
 
     pub fn is_serial_revoked(&self, user_id: &str, serial: u64) -> bool {
-        self.revoked_through.get(user_id).is_some_and(|t| serial <= *t)
+        self.degraded.is_some() || self.revoked_through.get(user_id).is_some_and(|t| serial <= *t)
     }
 
     pub fn last_serial(&self) -> u64 {
@@ -314,7 +326,7 @@ impl Bindings {
 
     fn validate(&self, ev: &Event) -> Result<(), BindError> {
         match ev {
-            Event::Other | Event::Accept(_) => Ok(()),
+            Event::Other | Event::Accept(_) | Event::Quarantine(_) => Ok(()),
             Event::Pending(p) => {
                 id_matches(&p.user_pubkey, &p.user_id)?;
                 match self.check(&p.principal, &p.user_pubkey) {
@@ -339,7 +351,7 @@ impl Bindings {
                     if self.by_key.contains_key(&b.user_pubkey) {
                         return Err(BindError::Conflict(ConflictReason::KeyBoundToOtherPrincipal));
                     }
-                    if self.revoked_keys.contains(&b.user_pubkey) {
+                    if self.revoked_keys.contains(&b.user_pubkey) || self.lost_revoked_ids.contains(&b.user_id) {
                         return Err(BindError::Conflict(ConflictReason::KeyRevoked));
                     }
                     return Ok(());
@@ -381,7 +393,8 @@ impl Bindings {
     fn commit(&mut self, ev: &Event) {
         match ev {
             Event::Other => {}
-            Event::Accept(a) => self.apply_lost(a.serial_high_water, &a.revoked_user_ids),
+            Event::Accept(a) => self.last_serial = self.last_serial.max(a.serial_floor),
+            Event::Quarantine(q) => self.apply_lost(q.serial_high_water, &q.revoked_user_ids),
             Event::Pending(p) => {
                 self.pending.insert(p.principal.clone(), p.user_pubkey);
             }

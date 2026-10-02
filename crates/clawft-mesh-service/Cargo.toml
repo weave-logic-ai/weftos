@@ -22,5 +22,10 @@ thiserror = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[features]
+# Test seams (write-failure injection). Never enabled in production builds.
+testing = []
+
 [dev-dependencies]
+clawft-mesh-service = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }

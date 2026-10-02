@@ -79,7 +79,7 @@ fn lost_revoke_and_serials_stay_effective_through_accept() {
     assert_eq!(b.check(&u(501), &k(1)), Check::Conflict(ConflictReason::KeyRevoked));
     assert!(b.issue_cert(&mut j, &u(501), 1, 2).is_err());
 
-    b.accept_truncate(&mut j, ack()).unwrap();
+    b.accept_truncate(&mut j, ack(), None).unwrap();
     assert!(!j.read_only());
     assert!(!dir.path().join("journal.truncated").exists());
     // Needs an approved bind with an approver after a revoke.
@@ -192,7 +192,7 @@ fn oversized_records_are_refused_on_write_and_quarantined_on_read() {
     fs::write(&path, data).unwrap();
     let j = Journal::open(dir.path(), key()).unwrap();
     assert!(j.read_only());
-    assert_eq!(j.len(), 1);
+    assert_eq!(j.iter().filter(|r| r.kind != "journal.quarantine").count(), 1);
 }
 
 #[test]

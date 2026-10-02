@@ -4,7 +4,7 @@ use clawft_mesh_local::Principal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::journal::{JournalError, Record, KIND_ACCEPT_TRUNCATE};
+use crate::journal::{JournalError, Record, KIND_ACCEPT_TRUNCATE, KIND_QUARANTINE};
 
 pub const KIND_BIND: &str = "user.bind";
 pub const KIND_BIND_PENDING: &str = "user.bind_pending";
@@ -27,6 +27,8 @@ pub enum ConflictReason {
     KeyBoundToOtherPrincipal,
     /// The key was revoked (or replaced by a rebind) and is never reusable.
     KeyRevoked,
+    /// The fold stopped at an invalid record; everything is denied.
+    Degraded,
 }
 
 /// Result of [`Bindings::check`].
@@ -118,16 +120,24 @@ pub(crate) struct RevokeBody {
     pub serials_revoked_through: Option<u64>,
 }
 
-/// Journals an admin's acknowledgement of a quarantined tail and what the
-/// quarantine is known to have lost, so the floor survives the marker.
+/// An admin's acknowledgement of a quarantined tail. `serial_floor` can only
+/// raise the serial floor (never lower the clamped quarantine value).
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct AcceptBody {
+    pub serial_floor: u64,
+    pub quarantine: Vec<String>,
+    pub by: Principal,
+}
+
+/// Signed facts about a quarantined tail; this is what constrains the state.
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct QuarantineBody {
     pub lost_from_seq: u64,
     pub lost_count: u64,
     pub serial_high_water: u64,
+    pub raw_serial_high_water: u64,
     pub revoked_user_ids: Vec<String>,
     pub quarantine: Vec<String>,
-    pub by: Principal,
 }
 
 #[derive(Clone)]
@@ -137,6 +147,7 @@ pub(crate) enum Event {
     Cert(CertBody),
     Revoke(RevokeBody),
     Accept(AcceptBody),
+    Quarantine(QuarantineBody),
     /// Kinds this fold does not interpret (peer.*, policy.*, ...).
     Other,
 }
@@ -155,6 +166,7 @@ impl Event {
             KIND_CERT_ISSUE => Event::Cert(serde_json::from_value(b).map_err(bad)?),
             KIND_REVOKE => Event::Revoke(serde_json::from_value(b).map_err(bad)?),
             KIND_ACCEPT_TRUNCATE => Event::Accept(serde_json::from_value(b).map_err(bad)?),
+            KIND_QUARANTINE => Event::Quarantine(serde_json::from_value(b).map_err(bad)?),
             _ => Event::Other,
         })
     }
@@ -166,6 +178,7 @@ impl Event {
             Event::Cert(b) => (KIND_CERT_ISSUE, serde_json::to_value(b)?),
             Event::Revoke(b) => (KIND_REVOKE, serde_json::to_value(b)?),
             Event::Accept(b) => (KIND_ACCEPT_TRUNCATE, serde_json::to_value(b)?),
+            Event::Quarantine(b) => (KIND_QUARANTINE, serde_json::to_value(b)?),
             Event::Other => ("", Value::Null),
         })
     }

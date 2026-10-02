@@ -72,7 +72,7 @@ fn tamper_every_byte_position_is_detected() {
             Err(JournalError::Unverifiable { .. }) => {}
             Ok(j) => {
                 assert!(j.quarantined().is_some() && j.read_only(), "byte {pos} not detected");
-                assert!(j.len() < 4, "byte {pos}: all records survived");
+                assert!(real(&j) < 4, "byte {pos}: all records survived");
             }
             Err(e) => panic!("byte {pos}: unexpected {e}"),
         }
@@ -105,7 +105,7 @@ fn truncated_tail_is_quarantined_and_binds_refused() {
     fs::write(&path, &data[..data.len() - 10]).unwrap();
 
     let mut j = Journal::open(dir.path(), key()).unwrap();
-    assert_eq!(j.len(), 2);
+    assert_eq!(real(&j), 2);
     assert!(j.read_only());
     let q = j.quarantined().unwrap().to_path_buf();
     assert!(q.file_name().unwrap().to_string_lossy().starts_with("journal.corrupt."));
@@ -119,12 +119,12 @@ fn truncated_tail_is_quarantined_and_binds_refused() {
     let r = b.bind_pending(&mut j, &Principal::Uid(501), &pk, BindMeta::default());
     assert!(matches!(r, Err(BindError::Journal(JournalError::ReadOnly))));
 
-    b.accept_truncate(&mut j, clawft_mesh_service::AdminAck::admin_verified(Principal::Uid(0))).unwrap();
+    b.accept_truncate(&mut j, clawft_mesh_service::AdminAck::admin_verified(Principal::Uid(0)), None).unwrap();
     b.bind(&mut j, &Principal::Uid(501), &pk, BindHow::Tofu, BindMeta::default()).unwrap();
     drop(j);
     let j = Journal::open(dir.path(), key()).unwrap();
     assert!(!j.read_only());
-    assert_eq!(j.len(), 4, "valid prefix + acceptance record + bind");
+    assert_eq!(j.len(), 5, "prefix + quarantine record + acceptance + bind");
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn deleting_a_middle_record_breaks_the_chain() {
     fs::write(&path, edited).unwrap();
     let j = Journal::open(dir.path(), key()).unwrap();
     assert!(j.read_only());
-    assert_eq!(j.len(), 1);
+    assert_eq!(real(&j), 1);
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn segment_rollover_keeps_the_chain() {
     drop(j);
     fs::remove_file(dir.path().join("journal.001.jsonl")).unwrap();
     let j = Journal::open_with(dir.path(), key(), opts).unwrap();
-    assert!(j.read_only() && j.len() < 13);
+    assert!(j.read_only() && real(&j) < 13);
 }
 
 #[test]
@@ -228,4 +228,9 @@ fn tmpdir() -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
     std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     d
+}
+
+/// Records excluding the quarantine bookkeeping record.
+fn real(j: &Journal) -> usize {
+    j.iter().filter(|r| r.kind != "journal.quarantine").count()
 }

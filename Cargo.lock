@@ -1662,6 +1662,7 @@ name = "clawft-mesh-service"
 version = "0.8.1"
 dependencies = [
  "clawft-mesh-local",
+ "clawft-mesh-service",
  "ed25519-dalek",
  "libc",
  "serde",

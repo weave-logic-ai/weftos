@@ -3,7 +3,7 @@
 
 use serde_json::json;
 
-use crate::bindings::{BindError, BindHow, BindMeta, Bindings};
+use crate::bindings::{BindError, BindHow, BindMeta, Bindings, Check, ConflictReason};
 use crate::journal::{Journal, JournalError};
 use clawft_mesh_local::{node_id_from_pubkey, hexser, Principal};
 use ed25519_dalek::SigningKey;
@@ -30,7 +30,10 @@ fn invalid_signed_record_degrades_instead_of_bricking() {
     assert_eq!(b.key_of(&Principal::Uid(501)), Some([1; 32]), "state up to the bad record");
     assert_eq!(b.key_of(&Principal::Uid(502)), None);
     let r = b.bind(&mut j, &Principal::Uid(503), &[3; 32], BindHow::Tofu, BindMeta::default());
-    assert!(matches!(r, Err(BindError::Degraded(_))));
+    assert!(matches!(r, Err(BindError::Conflict(ConflictReason::Degraded))));
+    // check() fails closed, even for the binding that exists.
+    assert_eq!(b.check(&Principal::Uid(501), &[1; 32]), Check::Conflict(ConflictReason::Degraded));
+    assert!(b.is_serial_revoked("anything", 1));
     let r = b.revoke(&mut j, &Principal::Uid(501), "x", &Principal::Uid(0));
     assert!(matches!(r, Err(BindError::Degraded(_))));
     let _ = JournalError::ReadOnly;
@@ -67,4 +70,24 @@ fn tmpdir() -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
     std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     d
+}
+
+#[test]
+fn degraded_fold_still_applies_quarantine_facts() {
+    let dir = tmpdir();
+    let mut j = Journal::open(dir.path(), key()).unwrap();
+    j.append_raw(1, "user.bind", bind_body(501, 1)).unwrap();
+    j.append_raw(2, "user.bind", bind_body(501, 1)).unwrap(); // invalid: degrades here
+    let uid = node_id_from_pubkey(&[4; 32]);
+    j.append_raw(
+        3,
+        "journal.quarantine",
+        json!({"lost_from_seq": 2, "lost_count": 1, "serial_high_water": 9, "raw_serial_high_water": 9,
+               "revoked_user_ids": [uid], "quarantine": []}),
+    )
+    .unwrap();
+    let b = Bindings::fold_lenient(&j);
+    assert!(b.degraded().is_some());
+    assert_eq!(b.last_serial(), 9);
+    assert!(b.is_serial_revoked(&uid, 9));
 }

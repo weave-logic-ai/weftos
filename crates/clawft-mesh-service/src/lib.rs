@@ -7,6 +7,7 @@
 //! This crate must not depend on `clawft-kernel`.
 
 mod bind_events;
+mod chain;
 pub mod bindings;
 mod fsutil;
 mod lost;

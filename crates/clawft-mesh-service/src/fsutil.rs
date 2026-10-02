@@ -144,3 +144,23 @@ pub fn read_line<R: BufRead>(r: &mut R, buf: &mut Vec<u8>, max: usize) -> std::i
     }
     Ok((if n > max { Line::TooLong } else { Line::Torn }, n))
 }
+
+/// Discard the rest of the current line without buffering it.
+pub fn skip_line<R: BufRead>(r: &mut R) -> std::io::Result<()> {
+    loop {
+        let (found, len) = {
+            let buf = r.fill_buf()?;
+            if buf.is_empty() {
+                return Ok(());
+            }
+            (buf.iter().position(|b| *b == b'\n'), buf.len())
+        };
+        match found {
+            Some(i) => {
+                r.consume(i + 1);
+                return Ok(());
+            }
+            None => r.consume(len),
+        }
+    }
+}

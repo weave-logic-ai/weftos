@@ -21,17 +21,18 @@
 //! One writer: an exclusive `flock` on `mesh.lock`, holding the owner pid.
 
 use std::fs::{self, File};
-use std::io::{BufReader, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clawft_mesh_local::{hexser, Principal};
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
+use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::fsutil::{self, Line, MAX_RECORD_BYTES};
-use crate::lost::{harvest, LostInfo};
+use crate::fsutil::{self, MAX_RECORD_BYTES};
+use crate::chain::scan;
+use crate::lost::{harvest, recompute, LostInfo};
 
 /// Domain separation prefix for journal signatures.
 pub const DOMAIN: &[u8] = b"weftos/mesh-journal/v1\0";
@@ -45,9 +46,9 @@ pub const ACTIVE: &str = "journal.jsonl";
 pub const MARKER: &str = "journal.truncated";
 /// Record kind journalled by an acknowledged truncation.
 pub const KIND_ACCEPT_TRUNCATE: &str = "journal.accept_truncate";
+/// Signed record of a quarantine: the facts that constrain the state.
+pub const KIND_QUARANTINE: &str = "journal.quarantine";
 const ZERO_PREV: &str = "0000000000000000000000000000000000000000000000000000000000000000";
-/// `,"sig":"` + 128 hex + `"}`
-const SIG_TAIL_LEN: usize = 8 + 128 + 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
@@ -143,13 +144,27 @@ pub struct Journal {
     fail_next_write: bool,
 }
 
+/// Highest serial any journalled record already accounts for.
+fn serial_floor(records: &[Record]) -> u64 {
+    records
+        .iter()
+        .filter_map(|r| match r.kind.as_str() {
+            "user.cert.issue" => r.body["serial"].as_u64(),
+            KIND_QUARANTINE => r.body["serial_high_water"].as_u64(),
+            KIND_ACCEPT_TRUNCATE => r.body["serial_floor"].as_u64(),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
 /// Kinds only the bindings writer may append.
 fn reserved(kind: &str) -> bool {
-    kind.starts_with("user.") || kind == KIND_ACCEPT_TRUNCATE
+    kind.starts_with("user.") || kind == KIND_ACCEPT_TRUNCATE || kind == KIND_QUARANTINE
 }
 
 /// Numbered segments, ascending: `journal.NNN.jsonl`.
@@ -169,74 +184,6 @@ fn segments(dir: &Path) -> std::io::Result<Vec<(u32, PathBuf)>> {
     }
     out.sort();
     Ok(out)
-}
-
-/// Verify one line (without its newline) against the expected position.
-fn verify_line(line: &[u8], seq: u64, prev_hash: &[u8; 32], key: &SigningKey) -> Result<Record, String> {
-    if line.len() <= SIG_TAIL_LEN {
-        return Err("line too short".into());
-    }
-    let split = line.len() - SIG_TAIL_LEN;
-    let (head, tail) = line.split_at(split);
-    if &tail[..8] != b",\"sig\":\"" || &tail[SIG_TAIL_LEN - 2..] != b"\"}" {
-        return Err("malformed signature field".into());
-    }
-    let sig_hex = std::str::from_utf8(&tail[8..8 + 128]).map_err(|_| "signature not utf-8")?;
-    let sig_bytes = hexser::decode::<64>(sig_hex).ok_or("signature not lowercase hex")?;
-    let mut msg = Vec::with_capacity(DOMAIN.len() + split + 1);
-    msg.extend_from_slice(DOMAIN);
-    msg.extend_from_slice(head);
-    msg.push(b'}');
-    key.verifying_key()
-        .verify(&msg, &Signature::from_bytes(&sig_bytes))
-        .map_err(|_| "bad signature")?;
-    let rec: Record = serde_json::from_slice(line).map_err(|e| format!("unparseable: {e}"))?;
-    if rec.v != RECORD_VERSION {
-        return Err(format!("unsupported record version {}", rec.v));
-    }
-    if rec.seq != seq {
-        return Err(format!("sequence {} where {} expected", rec.seq, seq));
-    }
-    if rec.prev != hexser::encode(prev_hash) {
-        return Err("hash chain broken".into());
-    }
-    Ok(rec)
-}
-
-struct Scan {
-    records: Vec<Record>,
-    prev_hash: [u8; 32],
-    /// File index, byte offset and reason of the first bad record.
-    bad: Option<(usize, u64, String)>,
-}
-
-fn scan(files: &[PathBuf], key: &SigningKey) -> Result<Scan, JournalError> {
-    let mut s = Scan { records: Vec::new(), prev_hash: [0u8; 32], bad: None };
-    let mut buf = Vec::new();
-    'files: for (fi, path) in files.iter().enumerate() {
-        let mut r = BufReader::new(fsutil::open_file(path, false, false, false)?);
-        let mut off = 0u64;
-        loop {
-            let (kind, n) = fsutil::read_line(&mut r, &mut buf, MAX_RECORD_BYTES)?;
-            let reason = match kind {
-                Line::Eof => break,
-                Line::Torn => "torn final line (no newline)".to_string(),
-                Line::TooLong => "record exceeds the size limit".to_string(),
-                Line::Complete => match verify_line(&buf, s.records.len() as u64, &s.prev_hash, key) {
-                    Ok(rec) => {
-                        s.prev_hash = Sha256::digest(&buf).into();
-                        s.records.push(rec);
-                        off += n as u64;
-                        continue;
-                    }
-                    Err(reason) => reason,
-                },
-            };
-            s.bad = Some((fi, off, reason));
-            break 'files;
-        }
-    }
-    Ok(s)
 }
 
 impl Journal {
@@ -270,6 +217,10 @@ impl Journal {
             poisoned: false,
             fail_next_write: false,
         };
+        if let Some(info) = j.lost.as_mut().filter(|i| !i.recorded) {
+            // Crash window or hand-written marker: never trust its numbers.
+            recompute(&j.dir, info);
+        }
         if let Some((fi, off, reason)) = sc.bad {
             if j.records.is_empty() {
                 return Err(JournalError::Unverifiable { file: files[fi].display().to_string(), reason });
@@ -277,11 +228,13 @@ impl Journal {
             j.quarantine(&files, fi, off)?;
         }
         j.active_len = fs::symlink_metadata(&active).map_or(0, |m| m.len());
+        j.finalize_marker()?;
         Ok(j)
     }
 
-    /// Move the bad record and everything after it into `journal.corrupt.<ts>`,
-    /// persist the marker, then truncate.
+    /// Quarantine the bad record and everything after it. Order matters for
+    /// crash safety: harvest the facts and persist the marker first, then move
+    /// bytes, then truncate; the signed record follows in `finalize_marker`.
     fn quarantine(&mut self, files: &[PathBuf], fi: usize, off: u64) -> Result<(), JournalError> {
         let ts = now();
         let mut corrupt = self.dir.join(format!("journal.corrupt.{ts}"));
@@ -290,33 +243,45 @@ impl Journal {
             n += 1;
             corrupt = self.dir.join(format!("journal.corrupt.{ts}.{n}"));
         }
+        let cname = corrupt.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let bad = &files[fi];
+        let mut sources = vec![(bad.clone(), off)];
+        let mut planned = vec![corrupt.clone()];
+        let mut moves = Vec::new();
+        for later in &files[fi + 1..] {
+            let name = later.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let dest = self.dir.join(format!("{cname}.{name}"));
+            sources.push((later.clone(), 0));
+            planned.push(dest.clone());
+            moves.push((later.clone(), dest));
+        }
+        let (count, hw, ids) = harvest(&sources);
+        let mut info = match self.lost.take() {
+            Some(i) if !i.recorded => i,
+            Some(i) => LostInfo { quarantine: i.quarantine, ..LostInfo::default() },
+            None => LostInfo::default(),
+        };
+        let seq = self.records.len() as u64;
+        info.lost_from_seq = if info.lost_count == 0 { seq } else { info.lost_from_seq.min(seq) };
+        info.lost_count += count;
+        info.raw_serial_high_water = info.raw_serial_high_water.max(hw);
+        info.revoked_user_ids.extend(ids);
+        info.revoked_user_ids.sort();
+        info.revoked_user_ids.dedup();
+        info.quarantine.extend(planned.iter().map(|p| p.display().to_string()));
+        info.ts = ts;
+        info.recorded = false;
+        crate::lost::write_marker(&self.dir, &info)?;
+        self.lost = Some(info);
+
         let mut src = fsutil::open_file(bad, false, false, false)?;
         src.seek(SeekFrom::Start(off))?;
         let mut out = fsutil::open_file(&corrupt, true, true, false)?;
         std::io::copy(&mut src, &mut out)?;
         out.sync_all()?;
-        let mut lost_paths = vec![corrupt.clone()];
-        let cname = corrupt.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        for later in &files[fi + 1..] {
-            let name = later.file_name().unwrap_or_default().to_string_lossy().into_owned();
-            let dest = self.dir.join(format!("{cname}.{name}"));
-            fs::rename(later, &dest)?;
-            lost_paths.push(dest);
+        for (from, to) in &moves {
+            fs::rename(from, to)?;
         }
-        let (count, hw, ids) = harvest(&lost_paths);
-        let mut info = self.lost.take().unwrap_or_default();
-        info.lost_from_seq = if info.lost_count == 0 { self.records.len() as u64 } else { info.lost_from_seq.min(self.records.len() as u64) };
-        info.lost_count += count;
-        info.serial_high_water = info.serial_high_water.max(hw);
-        info.revoked_user_ids.extend(ids);
-        info.revoked_user_ids.sort();
-        info.revoked_user_ids.dedup();
-        info.quarantine.extend(lost_paths.iter().map(|p| p.display().to_string()));
-        info.ts = ts;
-        crate::lost::write_marker(&self.dir, &info)?;
-        self.lost = Some(info);
-
         if off == 0 {
             fs::remove_file(bad)?;
         } else {
@@ -330,6 +295,22 @@ impl Journal {
         }
         fsutil::sync_dir(&self.dir);
         self.quarantined = Some(corrupt);
+        Ok(())
+    }
+
+    /// Journal the signed `journal.quarantine` record for an unrecorded
+    /// marker (allowed while read-only), clamping the harvested high-water mark
+    /// to what the lost lines could plausibly have issued: a forged serial in
+    /// an unverified tail must not be able to exhaust the serial space.
+    fn finalize_marker(&mut self) -> Result<(), JournalError> {
+        let Some(mut info) = self.lost.clone().filter(|i| !i.recorded) else { return Ok(()) };
+        let floor = serial_floor(&self.records);
+        info.serial_high_water = info.raw_serial_high_water.min(floor.saturating_add(info.lost_count));
+        let body = serde_json::to_value(&info)?;
+        self.append_raw(now(), KIND_QUARANTINE, body)?;
+        info.recorded = true;
+        crate::lost::write_marker(&self.dir, &info)?;
+        self.lost = Some(info);
         Ok(())
     }
 
@@ -386,6 +367,7 @@ impl Journal {
     }
 
     /// Test seam: the next append behaves as a partial write whose rollback fails.
+    #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     pub fn inject_write_failure(&mut self) {
         self.fail_next_write = true;
