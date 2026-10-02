@@ -36,6 +36,24 @@ pub mod project_rpc;
 /// The per-user daemon profile (`weaver kernel start --profile user`).
 #[cfg(any(unix, windows))]
 pub mod user_daemon;
+/// The user key (`~/.weftos/user.key`) and its migration from `chain.key` (ADR-103 D-5).
+pub mod user_key;
+/// Mesh mode as reported in the handshake (ADR-103 P3-U).
+pub mod mesh_state;
+/// Chain events the mesh link records (journal anchors, service binding), queued until appended.
+pub mod mesh_local_chain;
+/// Client side of the machine mesh service: link, registration, delivery, verdicts (P3-U).
+#[cfg(all(unix, feature = "mesh"))]
+pub mod mesh_local_glue;
+/// Inbound delivery into the A2A router and outbound remote forwarding (P3-U).
+#[cfg(all(unix, feature = "mesh"))]
+pub mod mesh_local_sink;
+/// Boot glue: mesh mode and node identity before the kernel, the link after it.
+#[cfg(all(unix, feature = "mesh"))]
+pub mod mesh_boot;
+/// `verdict.request` answered by the governance gate (P3-U).
+#[cfg(all(unix, feature = "mesh"))]
+pub mod mesh_local_verdict;
 /// Daemon RPC extension seam: method-prefix routes + pre-dispatch gates (ADR-103 D0).
 #[cfg(any(unix, windows))]
 pub mod rpc_ext;

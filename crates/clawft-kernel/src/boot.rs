@@ -126,6 +126,14 @@ pub struct ObservabilitySubsystem {
     pub(crate) dead_letter_queue: Option<Arc<crate::dead_letter::DeadLetterQueue>>,
 }
 
+/// Where a booting kernel gets its node identity from.
+enum NodeBinding {
+    /// A persisted key seed (`None`: ephemeral, tests and one-shot boots).
+    Key(Option<[u8; 32]>),
+    /// The machine mesh service's node id (P3-U); no key is held here.
+    Service(String),
+}
+
 /// The WeftOS kernel.
 ///
 /// Wraps `AppContext<P>` in a managed boot sequence with process
@@ -211,10 +219,69 @@ impl<P: Platform> Kernel<P> {
     /// and its listener cannot bind (ADR-103 D2).
     pub async fn boot_with_node_key(
         config: Config,
-        mut kernel_config: KernelConfig,
+        kernel_config: KernelConfig,
         platform: Arc<P>,
         node_key_seed: Option<[u8; 32]>,
     ) -> KernelResult<Self> {
+        Self::boot_bound(config, kernel_config, platform, NodeBinding::Key(node_key_seed)).await
+    }
+
+    /// Boot as a client of the machine mesh service (ADR-103 P3-U).
+    ///
+    /// The node id is the service's (`hello_ack.node_id`); this kernel holds
+    /// no node key, binds no mesh listener and starts no mesh runtime. There
+    /// is no ephemeral-identity fallback: a malformed id fails the boot.
+    ///
+    /// # Errors
+    ///
+    /// [`KernelError::Boot`] when `service_node_id` is not a node id, plus
+    /// everything [`Kernel::boot`] can return.
+    pub async fn boot_in_service_mode(
+        config: Config,
+        kernel_config: KernelConfig,
+        platform: Arc<P>,
+        service_node_id: String,
+    ) -> KernelResult<Self> {
+        if !crate::node_id::is_node_id(&service_node_id) {
+            return Err(KernelError::Boot(format!(
+                "service mode needs the mesh service's node id, got {service_node_id:?}"
+            )));
+        }
+        Self::boot_bound(
+            config,
+            kernel_config,
+            platform,
+            NodeBinding::Service(service_node_id),
+        )
+        .await
+    }
+
+    async fn boot_bound(
+        config: Config,
+        mut kernel_config: KernelConfig,
+        platform: Arc<P>,
+        binding: NodeBinding,
+    ) -> KernelResult<Self> {
+        let (node_key_seed, service_node_id) = match binding {
+            NodeBinding::Key(seed) => (seed, None),
+            NodeBinding::Service(id) => (None, Some(id)),
+        };
+        // `required` means a machine mesh service must carry the mesh. A boot
+        // path that did not link one (one-shot CLI boot, foreground boot,
+        // tests) cannot honour it and must not quietly run its own listener.
+        #[cfg(feature = "mesh")]
+        if service_node_id.is_none()
+            && let Some(m) = kernel_config.mesh.as_ref()
+            && m.enabled
+            && m.service == clawft_types::config::MeshServicePolicy::Required
+        {
+            return Err(KernelError::Boot(
+                "kernel.mesh.service = \"required\" but this boot did not link a machine mesh \
+                 service (start the user daemon with the service running, or set \
+                 kernel.mesh.service = \"auto\")"
+                    .into(),
+            ));
+        }
         let boot_time = Instant::now();
         let mut boot_log = BootLog::new();
         // Resolve the chain location once (explicit config, else
@@ -348,7 +415,11 @@ impl<P: Platform> Kernel<P> {
         // Node identity (ADR-025 / ADR-103 D11): the node id is derived from
         // the Ed25519 node key, never allocated per boot. Mesh handshake,
         // cluster membership, heartbeats and status all use this one id.
-        let node_id: String = {
+        let node_id: String = if let Some(id) = service_node_id.clone() {
+            // Service mode: the id belongs to the machine mesh service; this
+            // kernel never derives or generates one (no silent fallback).
+            id
+        } else {
             #[cfg(any(feature = "mesh", feature = "exochain"))]
             {
                 let identity = match node_key_seed {
@@ -485,7 +556,9 @@ impl<P: Platform> Kernel<P> {
         #[cfg(all(feature = "native", feature = "mesh"))]
         let mesh_runtime = {
             let mesh_config = mesh_config_early;
-            if crate::mesh_mode::select(&mesh_config) == crate::mesh_mode::MeshMode::Collapsed {
+            if service_node_id.is_none()
+                && crate::mesh_mode::select(&mesh_config) == crate::mesh_mode::MeshMode::Collapsed
+            {
                 let node_id = mesh_node_id
                     .clone()
                     .expect("mesh enabled implies mesh_node_id");
@@ -731,7 +804,11 @@ impl<P: Platform> Kernel<P> {
             } else {
                 boot_log.push(BootEvent::info(
                     BootPhase::Network,
-                    "Mesh transport disabled",
+                    if service_node_id.is_some() {
+                        "Mesh transport owned by the machine mesh service"
+                    } else {
+                        "Mesh transport disabled"
+                    },
                 ));
                 None
             }
@@ -889,7 +966,26 @@ impl<P: Platform> Kernel<P> {
                 let signing_key = if let Some(ref ckpt_path) =
                     chain_config.effective_checkpoint_path()
                 {
-                    let key_path = std::path::PathBuf::from(ckpt_path).with_extension("key");
+                    // `~/.weftos/user.key` wins over `chain.key` for the user
+                    // chain (ADR-103 D-5); every other chain keeps its own key.
+                    let key_path = clawft_types::config::chain_paths::chain_key_for_checkpoint(
+                        std::path::Path::new(ckpt_path),
+                    );
+                    // The user key is held to the same standard as the mesh
+                    // client's reader: a symlink, a non-regular file or a key
+                    // readable beyond its owner is refused, not followed.
+                    #[cfg(unix)]
+                    if key_path.file_name().is_some_and(|n| n == "user.key") {
+                        use std::os::unix::fs::PermissionsExt;
+                        if let Ok(m) = std::fs::symlink_metadata(&key_path) {
+                            if !m.file_type().is_file() || m.permissions().mode() & 0o077 != 0 {
+                                return Err(KernelError::Boot(format!(
+                                    "{} must be a regular file readable only by its owner (chmod 600); refusing to sign the chain with it",
+                                    key_path.display()
+                                )));
+                            }
+                        }
+                    }
                     match crate::chain::ChainManager::load_or_create_key(&key_path) {
                         Ok(key) => {
                             boot_log.push(BootEvent::info(
@@ -2742,6 +2838,120 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains(&addr), "error should name the address: {msg}");
         assert!(msg.contains("another kernel"), "error should name the cause: {msg}");
+    }
+
+    /// P3-U: a symlinked or loose `~/.weftos/user.key` is refused as the chain
+    /// signing key instead of being followed.
+    #[cfg(all(feature = "native", feature = "exochain", unix))]
+    #[tokio::test]
+    async fn user_key_symlink_or_loose_mode_is_refused_at_boot() {
+        use clawft_types::config::ChainConfig;
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let weftos = home.path().join(".weftos");
+        let chain_dir = weftos.join("chain");
+        std::fs::create_dir_all(&chain_dir).unwrap();
+        let mk = |ckpt: &std::path::Path| {
+            let mut kc = test_kernel_config();
+            kc.chain = Some(ChainConfig {
+                enabled: true,
+                checkpoint_path: Some(ckpt.display().to_string()),
+                ..ChainConfig::default()
+            });
+            kc
+        };
+        let ckpt = chain_dir.join("chain.json");
+
+        // Loose permissions.
+        let user_key = weftos.join("user.key");
+        std::fs::write(&user_key, [3u8; 32]).unwrap();
+        std::fs::set_permissions(&user_key, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let err = Kernel::boot(test_config(), mk(&ckpt), Arc::new(NativePlatform::new()))
+            .await
+            .err()
+            .expect("loose user.key must refuse boot");
+        assert!(err.to_string().contains("user.key"), "{err}");
+
+        // A symlink, even to a private file.
+        std::fs::remove_file(&user_key).unwrap();
+        let target = home.path().join("elsewhere.key");
+        std::fs::write(&target, [3u8; 32]).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink(&target, &user_key).unwrap();
+        let err = Kernel::boot(test_config(), mk(&ckpt), Arc::new(NativePlatform::new()))
+            .await
+            .err()
+            .expect("symlinked user.key must refuse boot");
+        assert!(err.to_string().contains("user.key"), "{err}");
+    }
+
+    /// P3-U: service mode takes the service's node id, binds no listener (the
+    /// taken port is not touched) and starts no mesh runtime.
+    #[cfg(all(feature = "native", feature = "mesh"))]
+    #[tokio::test]
+    async fn service_mode_uses_the_service_node_id_and_binds_nothing() {
+        use clawft_types::config::MeshConfig;
+
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = taken.local_addr().unwrap().to_string();
+        let service_id = crate::node_id::node_id_from_pubkey(&[42u8; 32]);
+
+        let mut kconfig = test_kernel_config();
+        kconfig.mesh = Some(MeshConfig {
+            enabled: true,
+            listen_addr: addr,
+            ..MeshConfig::default()
+        });
+        let mut kernel = Kernel::boot_in_service_mode(
+            test_config(),
+            kconfig,
+            Arc::new(NativePlatform::new()),
+            service_id.clone(),
+        )
+        .await
+        .expect("service mode must not try to bind the taken port");
+        assert_eq!(kernel.cluster_membership().local_node_id(), service_id);
+        assert!(kernel.services().get("mesh").is_none(), "no in-kernel mesh service");
+        kernel.shutdown().await.unwrap();
+    }
+
+    /// P3-U: a malformed service node id fails the boot; there is no
+    /// ephemeral-identity fallback.
+    #[cfg(all(feature = "native", feature = "mesh"))]
+    #[tokio::test]
+    async fn service_mode_refuses_a_malformed_node_id() {
+        let err = Kernel::boot_in_service_mode(
+            test_config(),
+            test_kernel_config(),
+            Arc::new(NativePlatform::new()),
+            "nope".into(),
+        )
+        .await
+        .err()
+        .expect("must fail");
+        assert!(err.to_string().contains("node id"), "{err}");
+    }
+
+    /// P3-U (R2): `kernel.mesh.service = required` fails any boot path that
+    /// did not link a service, instead of running its own listener.
+    #[cfg(all(feature = "native", feature = "mesh"))]
+    #[tokio::test]
+    async fn required_service_fails_a_boot_without_a_link() {
+        use clawft_types::config::{MeshConfig, MeshServicePolicy};
+
+        let mut kconfig = test_kernel_config();
+        kconfig.mesh = Some(MeshConfig {
+            enabled: true,
+            listen_addr: "127.0.0.1:0".into(),
+            service: MeshServicePolicy::Required,
+            ..MeshConfig::default()
+        });
+        let err = Kernel::boot(test_config(), kconfig, Arc::new(NativePlatform::new()))
+            .await
+            .err()
+            .expect("required without a service link must fail");
+        assert!(err.to_string().contains("required"), "{err}");
     }
 
     /// Mesh off means no bind and no error, even if the address is taken.

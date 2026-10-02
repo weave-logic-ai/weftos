@@ -27,6 +27,7 @@ fn hs(dir: &Path, project: Option<&str>, node: &str) -> Handshake {
         version: "0.8.1".into(),
         sha: "abcd1234".into(),
         binary: None,
+        mesh: None,
     }
 }
 

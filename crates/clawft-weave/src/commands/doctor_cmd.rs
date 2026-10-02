@@ -59,7 +59,13 @@ pub async fn run(args: DoctorArgs) -> anyhow::Result<()> {
         self_version: env!("BUILD_VERSION").to_string(),
     };
     let env = DoctorEnv::detect();
-    let report = tokio::task::spawn_blocking(move || doctor::run_system(&env, &opts)).await?;
+    let runtime_wanted = opts.components.contains(&Component::Runtime);
+    let home = env.home.clone();
+    let mut report = tokio::task::spawn_blocking(move || doctor::run_system(&env, &opts)).await?;
+    if runtime_wanted {
+        // user.key / chain.key during the D-5 transition (compares pubkeys).
+        report.findings.extend(crate::user_key::doctor_findings(&home));
+    }
     let code = doctor::print_report(&report, "weaver doctor", args.json, args.strict);
     if code != 0 {
         std::process::exit(code);

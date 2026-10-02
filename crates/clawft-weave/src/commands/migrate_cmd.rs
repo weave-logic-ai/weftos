@@ -2,6 +2,10 @@
 //!
 //! `weaver migrate user-chain [--dry-run] [--from DIR] [--to DIR]` copies the
 //! legacy `~/.clawft` chain to `~/.weftos/chain`, verified, source untouched.
+//!
+//! `weaver migrate user-key [--dry-run]` (Phase 3, D-5) copies the seed of the
+//! migrated `chain.key` to `~/.weftos/user.key`; idempotent, `chain.key` is
+//! never modified.
 
 use std::path::PathBuf;
 
@@ -38,6 +42,35 @@ pub enum MigrateAction {
         #[arg(long)]
         allow_unsigned: bool,
     },
+    /// Copy chain.key's seed to ~/.weftos/user.key (same public key, same user id).
+    #[command(name = "user-key")]
+    UserKey {
+        /// Show what would happen without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+fn describe_user_key(outcome: &crate::user_key::MigrateOutcome) -> String {
+    use crate::user_key::{MIGRATED_FROM_FILE, MigrateOutcome};
+    match outcome {
+        MigrateOutcome::WouldCopy { from, to } => format!(
+            "dry run: would copy the seed of {} to {} (0600) and write {MIGRATED_FROM_FILE}; {} is never modified",
+            from.display(),
+            to.display(),
+            from.display()
+        ),
+        MigrateOutcome::Copied { from, to } => format!(
+            "copied the seed of {} to {}; public keys verified equal, user id unchanged. \
+             {} is kept (remove it yourself after one release)",
+            from.display(),
+            to.display(),
+            from.display()
+        ),
+        MigrateOutcome::AlreadyMigrated { to } => {
+            format!("{} already holds the same key; nothing to do", to.display())
+        }
+    }
 }
 
 fn print_plan(p: &Plan) {
@@ -89,6 +122,10 @@ fn warn_explicit_checkpoint(home: Option<&std::path::Path>) {
 /// Run the migrate subcommand.
 pub fn run(args: MigrateArgs) -> anyhow::Result<()> {
     match args.action {
+        MigrateAction::UserKey { dry_run } => {
+            let home = home_dir().ok_or_else(|| anyhow::anyhow!("cannot determine the home directory"))?;
+            println!("{}", describe_user_key(&crate::user_key::migrate_user_key(&home, dry_run)?));
+        }
         MigrateAction::UserChain {
             dry_run,
             from,

@@ -282,6 +282,7 @@ fn degraded_handshake(res: &Resolution, status: &serde_json::Value) -> Handshake
         version: build("version"),
         sha: build("sha"),
         binary: None,
+        mesh: None,
     }
 }
 
