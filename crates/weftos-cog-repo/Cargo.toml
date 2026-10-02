@@ -1,0 +1,21 @@
+[package]
+name = "weftos-cog-repo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "WeaveLogic cog repository tooling (COG-008): sign cog binaries, build a registry, and install to a Seed with mandatory Ed25519 verification (signed-only)"
+
+[[bin]]
+name = "weft-cog-repo"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+hex = "0.4"
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "pkcs8", "pem"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
