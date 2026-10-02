@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use ed25519_dalek::{Signer, SigningKey};
 use rand::RngCore;
 use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::{mpsc, Mutex as AsyncMutex};
 
 use crate::cert::{node_id_from_pubkey, UserCert, DEFAULT_TTL_S};
 use crate::client::now_unix;
@@ -72,6 +73,10 @@ struct State {
     sent: Vec<(String, serde_json::Value)>,
     serial: u64,
     verdict_replies: Vec<(u64, bool, String)>,
+    /// `(seq, hash)` answered to `journal.head`.
+    head: (u64, String),
+    /// One sender per live connection, for [`TestServer::push`].
+    pushers: Vec<mpsc::UnboundedSender<Frame>>,
 }
 
 pub struct TestServer {
@@ -128,6 +133,19 @@ impl TestServer {
         self.state.lock().expect("state").verdict_replies.clone()
     }
 
+    /// Set what `journal.head` answers.
+    pub fn set_journal_head(&self, seq: u64, hash: &str) {
+        self.state.lock().expect("state").head = (seq, hash.to_owned());
+    }
+
+    /// Send an unsolicited frame (a `deliver`, a `verdict.request`, ...) to
+    /// every connected client. Returns how many connections took it.
+    pub fn push(&self, frame: Frame) -> usize {
+        let mut st = self.state.lock().expect("state");
+        st.pushers.retain(|tx| tx.send(frame.clone()).is_ok());
+        st.pushers.len()
+    }
+
     /// `(dest, message)` of every `send` received.
     pub fn sent(&self) -> Vec<(String, serde_json::Value)> {
         self.state.lock().expect("state").sent.clone()
@@ -161,7 +179,8 @@ async fn serve_inner(
     let Principal::Uid(uid) = principal else { return Ok(()) };
     let machine_pubkey = cfg.machine_key.verifying_key().to_bytes();
     let node_id = node_id_from_pubkey(&machine_pubkey);
-    let (rd, mut wr) = stream.into_split();
+    let (rd, wr) = stream.into_split();
+    let wr = Arc::new(AsyncMutex::new(wr));
     let mut rd = FrameReader::new(rd);
 
     let Some(first) = rd.read_frame_within(HELLO_DEADLINE).await? else { return Ok(()) };
@@ -171,13 +190,13 @@ async fn serve_inner(
                 Ok(p) => (features, p, client_nonce),
                 Err(m) => {
                     let body = Message::Error(ErrorBody::proto_mismatch(&m));
-                    return write_frame(&mut wr, &Frame::new(body)).await;
+                    return write_frame(&mut *wr.lock().await, &Frame::new(body)).await;
                 }
             }
         }
         _ => {
             let m = err(ErrorKind::Forbidden, "expected hello", "send hello first");
-            return write_frame(&mut wr, &Frame::new(m)).await;
+            return write_frame(&mut *wr.lock().await, &Frame::new(m)).await;
         }
     };
     let mut challenge = [0u8; 32];
@@ -203,7 +222,17 @@ async fn serve_inner(
         challenge,
     };
     let ack = HelloAck { uid: cfg.tamper_ack_uid.unwrap_or(ack.uid), ..ack };
-    write_frame(&mut wr, &Frame::new(Message::HelloAck(ack))).await?;
+    write_frame(&mut *wr.lock().await, &Frame::new(Message::HelloAck(ack))).await?;
+    let (push_tx, mut push_rx) = mpsc::unbounded_channel::<Frame>();
+    state.lock().expect("state").pushers.push(push_tx);
+    let pusher_wr = wr.clone();
+    tokio::spawn(async move {
+        while let Some(f) = push_rx.recv().await {
+            if write_frame(&mut *pusher_wr.lock().await, &f).await.is_err() {
+                break;
+            }
+        }
+    });
 
     let mut user_pubkey: Option<[u8; 32]> = None;
     while let Some(frame) = rd.read_frame_within(std::time::Duration::from_secs(30)).await? {
@@ -215,7 +244,7 @@ async fn serve_inner(
                         Message::RegisterAck(r)
                     }
                     Err(e) => {
-                        write_frame(&mut wr, &Frame { id: frame.id, msg: *e }).await?;
+                        write_frame(&mut *wr.lock().await, &Frame { id: frame.id, msg: *e }).await?;
                         return Ok(());
                     }
                 }
@@ -225,6 +254,10 @@ async fn serve_inner(
                 None => err(ErrorKind::Forbidden, "register first", "send register"),
             },
             Message::Ping {} => Message::Pong {},
+            Message::JournalHead {} => {
+                let (seq, hash) = state.lock().expect("state").head.clone();
+                Message::JournalHeadReply { seq, hash, ts: now_unix(), sig: String::new() }
+            }
             // Replies to our own pings need no answer.
             Message::Pong {} => continue,
             Message::VerdictReply { allow, reason, .. } => {
@@ -250,7 +283,7 @@ async fn serve_inner(
                     // Same low bits as the request id on purpose: the service
                     // namespace flag must keep them apart.
                     let id = SERVICE_ID_FLAG | frame.id.unwrap_or(0);
-                    write_frame(&mut wr, &Frame::with_id(id, Message::VerdictRequest(v))).await?;
+                    write_frame(&mut *wr.lock().await, &Frame::with_id(id, Message::VerdictRequest(v))).await?;
                 }
                 Message::Reply { data: serde_json::json!({"node_id": node_id}) }
             }
@@ -261,7 +294,7 @@ async fn serve_inner(
             Message::Bye {} => return Ok(()),
             _ => err(ErrorKind::Unsupported, "not supported by the test server", ""),
         };
-        write_frame(&mut wr, &Frame { id: frame.id, msg: reply }).await?;
+        write_frame(&mut *wr.lock().await, &Frame { id: frame.id, msg: reply }).await?;
     }
     Ok(())
 }
