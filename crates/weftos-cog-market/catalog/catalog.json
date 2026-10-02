@@ -758,12 +758,6 @@
           "price": "$17.59 USD",
           "url": "https://www.mouser.com/en/ProductDetail/Pimoroni/PIM472?qs=P1JMDcb91o7p2TYl00AP7g%3D%3D",
           "ships_from": "Mouser"
-        },
-        {
-          "vendor": "Mouser",
-          "price": "$4.00 USD",
-          "url": "https://www.mouser.com/en/ProductDetail/Bosch-Sensortec/BME280?qs=2OnyuXx6vpj2fK9HX7qb3g%3D%3D",
-          "ships_from": "Mouser"
         }
       ],
       "seen_in": [
@@ -2612,12 +2606,6 @@
           "vendor": "Mouser",
           "price": "$3.36 USD",
           "url": "https://www.mouser.com/en/ProductDetail/PUI-Audio/DMM-4026-B-I2S-R?qs=zhx2xqPtQQxBuLVw%2Fwt86Q%3D%3D",
-          "ships_from": "Mouser"
-        },
-        {
-          "vendor": "Mouser",
-          "price": "",
-          "url": "https://www.mouser.com/en/ProductDetail/TDK/INMP441?qs=A6eO%252BMLsxmQ7QOONrFN3Pg%3D%3D",
           "ships_from": "Mouser"
         }
       ],
@@ -4646,12 +4634,6 @@
           "price": "$410.00 USD",
           "url": "https://www.mouser.com/en/ProductDetail/Raspberry-Pi/Raspberry-Pi-500%2b-PT-unit-only?qs=yc9RBI4tIAIXyMjzfnmVcw%3D%3D",
           "ships_from": "Mouser"
-        },
-        {
-          "vendor": "Mouser",
-          "price": "$536.21 USD",
-          "url": "https://www.mouser.com/en/ProductDetail/EDATEC/ED-HMI3010-133CA-0832?qs=yc9RBI4tIAKqtxR52Sd3ZQ%3D%3D",
-          "ships_from": "Mouser"
         }
       ],
       "seen_in": [
@@ -6523,44 +6505,6 @@
         "docs/planning/demo-readiness-2026-09-17.md",
         "docs/planning/ruview-wavlink/"
       ]
-    },
-    {
-      "id": "esp32-c6-devkitc-1-clone-ch343p",
-      "name": "ESP32-C6 DevKitC-1 clone (dual USB-C, CH343P)",
-      "vendor": "generic / clone",
-      "kind": "board",
-      "summary": "ESP32-C6-WROOM-1-N4 dev board with two USB-C ports: one through a CH343P UART bridge, one native USB-Serial/JTAG. Ships with the ESP-IDF blink example, whose image under-declares the flash as 2 MB and has no OTA slots.",
-      "good_for": [
-        "WiFi 6 / 802.15.4 / BLE prototyping",
-        "native USB-Serial/JTAG flashing and debugging"
-      ],
-      "not_for": [
-        "OTA updates without repartitioning the 4 MB flash"
-      ],
-      "notes": [],
-      "spec": {
-        "module": "ESP32-C6-WROOM-1-N4",
-        "soc": "ESP32-C6 QFN40 rev v0.2",
-        "crystal": "40 MHz, no 32 kHz crystal",
-        "flash": "4 MB external (JEDEC mfr 0x68 dev 0x4016, likely Boya BY25Q32)",
-        "security": "secure boot and flash encryption disabled",
-        "port_com": "USB-C via CH343P (1a86:55d3)",
-        "port_usb": "USB-C native USB-Serial/JTAG (303a:1001)",
-        "led": "WS2812 RGB LED on GPIO8",
-        "buttons": "BOOT + RST",
-        "factory_firmware": "ESP-IDF blink example, built for 2 MB flash; partition table nvs/phy_init/factory (1 MB); no OTA",
-        "source": "measured 2026-10-02 (esptool v5.3.1 chip-id/flash-id/get-security-info + boot log)"
-      },
-      "pins": [],
-      "chips": [
-        "esp32-c6",
-        "wch-ch343p"
-      ],
-      "photo": "",
-      "datasheet": "https://www.espressif.com/sites/default/files/documentation/esp32-c6-wroom-1_wroom-1u_datasheet_en.pdf",
-      "mouser_query": "",
-      "buy": [],
-      "seen_in": []
     }
   ],
   "chips": [
@@ -6864,12 +6808,6 @@
           "vendor": "Mouser",
           "price": "$5.19 USD",
           "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/ADS1115IDGSR?qs=IK5e5L0zOXjKCJoVMhYO%2FQ%3D%3D",
-          "ships_from": "Mouser"
-        },
-        {
-          "vendor": "Mouser",
-          "price": "$7.74 USD",
-          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/ADS1115QNKSRQ1?qs=ulEaXIWI0c%252B%252BH1ufhGRAvg%3D%3D",
           "ships_from": "Mouser"
         }
       ]
@@ -8515,7 +8453,15 @@
         "source": "QST QMC5883L datasheet"
       },
       "mouser_query": "QMC5883L",
-      "datasheet": ""
+      "datasheet": "",
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$4.66 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Olimex-Ltd/MOD-QMC5883L?qs=9vOqFld9vZVvvZuY%2FZj%252B1g%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "qorvo-dw3000",
@@ -9172,7 +9118,15 @@
         "source": "u-blox M10 datasheet"
       },
       "mouser_query": "MAX-M10S",
-      "datasheet": "https://www.u-blox.com/en/product/m10-standard-precision-gnss"
+      "datasheet": "https://www.u-blox.com/en/product/m10-standard-precision-gnss",
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$9.12 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/u-blox/MAX-M10S-00B?qs=A6eO%252BMLsxmT0PfQYPb7LLQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "vl53l1x",
@@ -9267,26 +9221,6 @@
           "ships_from": "Mouser"
         }
       ]
-    },
-    {
-      "id": "wch-ch343p",
-      "name": "WCH CH343P USB-to-UART bridge",
-      "manufacturer": "WCH (Nanjing Qinheng)",
-      "role": "USB to UART bridge for dev-board programming and console",
-      "tags": [
-        "usb",
-        "uart",
-        "bridge"
-      ],
-      "summary": "USB-UART bridge used on dev boards for flashing and serial console. Enumerates as USB 1a86:55d3 on the ESP32-C6 DevKitC-1 clone.",
-      "spec": {
-        "usb_id": "1a86:55d3",
-        "source": "measured 2026-10-02 (esptool v5.3.1 chip-id/flash-id/get-security-info + boot log)"
-      },
-      "mouser_query": "",
-      "datasheet": "https://www.wch-ic.com/products/CH343.html",
-      "seen_in": [],
-      "buy": []
     }
   ]
 }
