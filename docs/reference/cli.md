@@ -15,13 +15,25 @@ These flags are available on all subcommands.
 | `--version` | Show version and exit |
 | `--help`, `-h` | Show help text and exit |
 
-Every command that talks to the kernel resolves its endpoint the same way
-(flag, then environment, then the project manifest, then the user daemon) and
-verifies the daemon's handshake. When the daemon cannot be reached or is the
-wrong one, the error names the socket tried and the exact next command. A daemon
-that answers but is the wrong one (another project, another node, an
-incompatible protocol) is always an error: commands never fall back to local
-state changes against it.
+Every command that talks to the kernel resolves its endpoint the same way and
+verifies the daemon's handshake. The runtime root is the first match of:
+
+1. `--runtime <DIR>`
+2. `WEFTOS_RUNTIME_DIR`
+3. the project manifest (`project.toml` above the working directory, never
+   `$HOME`, or `--project` / `WEFTOS_PROJECT`, then
+   `~/.weftos/projects/<ULID>.toml`): its `[serve] runtime_dir`, or, when it
+   has none and `[serve] via = "user-daemon"`, the user daemon's root
+   `~/.weftos/run`
+4. the user default: with no project known, `~/.weftos/run` when its
+   `kernel.sock` or `kernel.lock` exists
+5. the Phase 0 default: the project's `.weftos/runtime`, otherwise `~/.clawft`
+
+The unreachable-daemon error lists every level tried, in order. When the daemon cannot be reached or is the wrong one, the error names
+the socket tried and the exact next command. A daemon that answers but is the
+wrong one (another project, another node, an incompatible protocol) is always
+an error: commands never fall back to local state changes against it. The user
+daemon is not bound to a project, so reaching it for a project is not an error.
 
 The default log level is `warn`. Only warnings and errors are printed unless
 `--verbose` is passed (which sets it to `debug`). The `RUST_LOG` environment

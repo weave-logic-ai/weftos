@@ -2903,6 +2903,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
 dependencies = [
  "const-oid",
+ "pem-rfc7468 0.7.0",
  "zeroize",
 ]
 
@@ -2912,7 +2913,7 @@ version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a878c850e9e421b20262e9b41f9c860e4785fa07541c266b62ff9d1ef998a80a"
 dependencies = [
- "pem-rfc7468",
+ "pem-rfc7468 1.0.0",
  "zeroize",
 ]
 
@@ -6592,6 +6593,15 @@ checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
 dependencies = [
  "base64 0.22.1",
  "serde_core",
+]
+
+[[package]]
+name = "pem-rfc7468"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88b39c9bfcfc231068454382784bb460aae594343fb030d46e9f50a645418412"
+dependencies = [
+ "base64ct",
 ]
 
 [[package]]
@@ -10704,6 +10714,91 @@ dependencies = [
 ]
 
 [[package]]
+name = "weftos-bridge-send"
+version = "0.8.1"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "weftos-cog-companion"
+version = "0.8.1"
+dependencies = [
+ "console_error_panic_hook",
+ "eframe",
+ "ehttp",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
+ "weftos-sensor-guide",
+]
+
+[[package]]
+name = "weftos-cog-host"
+version = "0.8.1"
+dependencies = [
+ "base64 0.22.1",
+ "serde",
+ "serde_json",
+ "weftos-cog-repo",
+]
+
+[[package]]
+name = "weftos-cog-manager"
+version = "0.8.1"
+dependencies = [
+ "base64 0.22.1",
+ "console_error_panic_hook",
+ "eframe",
+ "ehttp",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
+ "weftos-cog-market",
+ "weftos-cog-repo",
+]
+
+[[package]]
+name = "weftos-cog-market"
+version = "0.8.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "weftos-cog-repo",
+]
+
+[[package]]
+name = "weftos-cog-repo"
+version = "0.8.1"
+dependencies = [
+ "ed25519-dalek",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "weftos-ecg-scope"
+version = "0.8.1"
+dependencies = [
+ "eframe",
+ "egui_plot",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-time",
+ "weftos-cog-companion",
+]
+
+[[package]]
 name = "weftos-leaf-scene"
 version = "0.1.0"
 dependencies = [
@@ -10753,6 +10848,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "weftos-sensor-guide"
+version = "0.8.1"
+dependencies = [
+ "egui",
+ "egui_commonmark",
+ "serde",
+ "serde_json",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "weftos-sensor-pipeline"
 version = "0.8.1"
 dependencies = [
@@ -10775,6 +10881,19 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "weftos-worldmodel-core",
+]
+
+[[package]]
+name = "weftos-tof-scope"
+version = "0.8.1"
+dependencies = [
+ "eframe",
+ "egui_plot",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-time",
+ "weftos-cog-companion",
 ]
 
 [[package]]

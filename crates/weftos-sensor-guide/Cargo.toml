@@ -1,0 +1,17 @@
+[package]
+name = "weftos-sensor-guide"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Sensor guides that ship with sensor cogs (ADR-104): guide.toml + Markdown pages, validated and rendered in egui with painted wiring, header, placement and flow diagrams (native + wasm)"
+
+[dependencies]
+egui = { version = "0.34", default-features = false }
+# Same pin and feature set as clawft-gui-egui (no image loaders: keeps wasm small).
+egui_commonmark = { version = "0.23", default-features = false, features = ["pulldown_cmark"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
