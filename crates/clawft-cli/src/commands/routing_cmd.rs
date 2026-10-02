@@ -23,7 +23,7 @@ use clawft_core::agent::routing_log::{
     compute_metrics, decision_id_from_path, diff_replay, is_routing_tombstone, select_recent_records,
     RouterDecisionRecord, RoutingLogMetrics, ROUTING_RECENT_SUBSTRATE_PREFIX,
 };
-use clawft_rpc::{DaemonClient, Request};
+use clawft_rpc::Request;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -362,12 +362,10 @@ pub fn parse_records_text(text: &str) -> anyhow::Result<Vec<RouterDecisionRecord
 }
 
 async fn load_records_from_daemon() -> anyhow::Result<LoadedSource> {
-    let mut client = DaemonClient::connect().await.ok_or_else(|| {
-        anyhow::anyhow!(
-            "no daemon running — start with `weaver kernel start` / `weft daemon`, \
-             or pass --from-file <dump.json>"
-        )
-    })?;
+    let mut client = crate::commands::daemon_conn::connect()
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}\n  or pass --from-file <dump.json>"))?
+        .client;
 
     let list_params = json!({
         "prefix": ROUTING_RECENT_SUBSTRATE_PREFIX,

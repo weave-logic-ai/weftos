@@ -10,6 +10,7 @@ pub mod channels_api;
 pub mod chat;
 pub mod config_api;
 pub mod cron_api;
+pub mod daemon_facade;
 pub mod delegation;
 pub mod handlers;
 pub mod http_facade_api;
@@ -26,6 +27,7 @@ use std::sync::Arc;
 use axum::Router;
 use tower_http::trace::TraceLayer;
 
+pub use daemon_facade::DaemonKernelFacade;
 pub use http_facade_api::{InMemoryKernelFacade, KernelFacadeBackend};
 pub use voice_status::{
     VoicePipelineUpdate, VoiceStatusEvent, VoiceStatusHub, VOICE_STATUS_TOPIC,
@@ -321,7 +323,11 @@ pub async fn serve(
     // The handle is detached -- the task observes the store via a
     // Weak ref and self-terminates when ApiState drops its Arc.
     let _cleanup = auth::spawn_cleanup_task(state.auth.clone(), auth::TOKEN_CLEANUP_INTERVAL_SECS);
-    let router = build_router(state, cors_origins, static_dir);
+    let mut router = build_router(state, cors_origins, static_dir);
+    // Loopback binds are exposed to DNS rebinding; pin the Host header.
+    if listener.local_addr().is_ok_and(|a| a.ip().is_loopback()) {
+        router = router.layer(axum::middleware::from_fn(middleware::host_guard_middleware));
+    }
     // `into_make_service_with_connect_info::<SocketAddr>()` makes
     // `ConnectInfo<SocketAddr>` available to handlers and middleware
     // (used by the per-IP rate limiter in `middleware::rate_limit_middleware`).

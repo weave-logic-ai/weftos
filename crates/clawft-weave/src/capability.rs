@@ -52,6 +52,15 @@ pub enum Capability {
     Admin,
 }
 
+/// True when `token` is nothing but the reserved literal scope strings
+/// (`admin`, `write`, `chat`, `read`, comma-separated): a self-asserted
+/// scope, not a credential. Only the local unix-socket owner may use it.
+pub fn is_literal_scope(token: &str) -> bool {
+    let known = ["admin", "write", "chat", "read"];
+    let t = token.trim();
+    !t.is_empty() && t.split(',').map(str::trim).all(|p| known.contains(&p))
+}
+
 /// Look up the [`Capability`] required by a given JSON-RPC method.
 ///
 /// Methods not in the table default to [`Capability::Read`]. This

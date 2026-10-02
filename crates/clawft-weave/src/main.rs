@@ -99,6 +99,9 @@ enum Commands {
         cmd: commands::bench_cmd::BenchCmd,
     },
 
+    /// Print a launchd / systemd unit for the per-user daemon.
+    Service(commands::service_cmd::ServiceArgs),
+
     /// Initialize development environment (install skills, verify tools).
     Init(commands::init_cmd::InitArgs),
 
@@ -110,6 +113,9 @@ enum Commands {
 
     /// Check install, daemon, runtime and MCP health (read-only; `--fix` for stale files).
     Doctor(commands::doctor_cmd::DoctorArgs),
+
+    /// Migrate WeftOS state (user chain).
+    Migrate(commands::migrate_cmd::MigrateArgs),
 
     /// Show version and build info.
     Version,
@@ -171,8 +177,10 @@ async fn main() -> anyhow::Result<()> {
             Some(c) => commands::update_cmd::run(c).await?,
             None => commands::update_cmd::run_default().await?,
         },
+        Commands::Service(args) => commands::service_cmd::run(args).await?,
         Commands::Init(args) => commands::init_cmd::run(args).await?,
         Commands::Doctor(args) => commands::doctor_cmd::run(args).await?,
+        Commands::Migrate(args) => commands::migrate_cmd::run(args)?,
         Commands::Version => {
             println!(
                 "weaver {} (WeftOS) · git {} · built {}",

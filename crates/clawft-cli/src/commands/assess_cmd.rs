@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use clap::{Args, Subcommand, ValueEnum};
-use clawft_rpc::{DaemonClient, Request};
+use clawft_rpc::Request;
 
 /// Arguments for `weft assess`.
 #[derive(Args)]
@@ -247,7 +247,7 @@ async fn run_assessment_with_daemon(
     dir: Option<&str>,
     pr_number: Option<u64>,
 ) -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let mut params = serde_json::json!({
             "scope": scope.to_string(),
             "format": format.to_string(),
@@ -282,7 +282,7 @@ async fn run_assessment_with_daemon(
 
 /// Try daemon RPC for `assess.link`; fall back to local execution.
 async fn run_link_with_daemon(name: &str, location: &str, dir: Option<&str>) -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let mut params = serde_json::json!({
             "name": name,
             "location": location,
@@ -313,7 +313,7 @@ async fn run_link_with_daemon(name: &str, location: &str, dir: Option<&str>) -> 
 
 /// Try daemon RPC for `assess.compare`; fall back to local execution.
 async fn run_compare_with_daemon(peer_name: &str, dir: Option<&str>) -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let mut params = serde_json::json!({
             "peer": peer_name,
         });
@@ -343,7 +343,7 @@ async fn run_compare_with_daemon(peer_name: &str, dir: Option<&str>) -> anyhow::
 
 /// Try daemon RPC for `assess.review`; fall back to local execution.
 async fn run_review_with_daemon(history: usize, dir: Option<&str>) -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let mut params = serde_json::json!({
             "history": history,
         });
@@ -373,7 +373,7 @@ async fn run_review_with_daemon(history: usize, dir: Option<&str>) -> anyhow::Re
 
 /// Query `assess.mesh.status` from the daemon (WEFT-117).
 async fn run_mesh_status(as_json: bool) -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let resp = client
             .call(Request::new("assess.mesh.status"))
             .await?;

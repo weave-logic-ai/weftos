@@ -164,6 +164,11 @@ fn held(paths: &RuntimePaths, lock: &Path) -> LockError {
 /// never treated as stale. One that accepts connections belongs to a
 /// server that does not hold our lock; it is never taken over.
 #[cfg(unix)]
+fn refused(msg: String) -> anyhow::Error {
+    anyhow::Error::new(crate::boot_refusal::BootRefused(msg))
+}
+
+#[cfg(unix)]
 pub async fn reclaim_stale_socket(paths: &RuntimePaths) -> anyhow::Result<()> {
     use clawft_rpc::probe::{SocketState, probe_socket};
     let socket = paths.socket();
@@ -171,12 +176,12 @@ pub async fn reclaim_stale_socket(paths: &RuntimePaths) -> anyhow::Result<()> {
         return Ok(());
     }
     match probe_socket(&socket).await {
-        SocketState::Reachable => anyhow::bail!(
+        SocketState::Reachable => Err(refused(format!(
             "daemon already running (socket accepts connections: {}); \
              it does not hold {} - refusing to take over its socket",
             socket.display(),
             paths.lock().display()
-        ),
+        ))),
         // ECONNREFUSED / ENOENT: nobody serves it, so it is stale.
         SocketState::Stale | SocketState::NoSocketFile => {
             std::fs::remove_file(&socket)?;
@@ -184,10 +189,10 @@ pub async fn reclaim_stale_socket(paths: &RuntimePaths) -> anyhow::Result<()> {
             Ok(())
         }
         // Not ours to judge: another user's socket, or an unexpected error.
-        SocketState::PermissionDenied => anyhow::bail!(
+        SocketState::PermissionDenied => Err(refused(format!(
             "cannot probe {}: permission denied; it belongs to another user, leaving it alone",
             socket.display()
-        ),
+        ))),
         SocketState::Other(e) => anyhow::bail!(
             "cannot tell whether {} is stale ({e}); leaving it alone",
             socket.display()
@@ -215,6 +220,9 @@ mod tests {
             "{msg}"
         );
 
+        let err = anyhow::Error::new(err);
+        assert_eq!(crate::boot_refusal::exit_code(&err), 78, "a held lock is a refusal");
+
         drop(first);
         InstanceLock::acquire(&paths).expect("lock free after drop");
     }
@@ -237,6 +245,7 @@ mod tests {
         let _live = tokio::net::UnixListener::bind(paths.socket()).unwrap();
         let err = reclaim_stale_socket(&paths).await.unwrap_err();
         assert!(err.to_string().contains("already running"), "{err}");
+        assert_eq!(crate::boot_refusal::exit_code(&err), 78, "a live daemon is a refusal");
         assert!(paths.socket().exists());
     }
 

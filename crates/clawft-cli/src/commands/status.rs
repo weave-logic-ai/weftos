@@ -19,7 +19,6 @@ use clap::Args;
 use serde::Deserialize;
 
 use clawft_platform::NativePlatform;
-use clawft_rpc::DaemonClient;
 
 use super::{discover_config_path, load_config};
 use super::daemon_guard::warn_on_build_mismatch;
@@ -196,7 +195,7 @@ pub async fn run(args: StatusArgs) -> anyhow::Result<()> {
 /// Silent when no daemon is reachable or the service is not
 /// registered (pre-WEFT-333 daemons). Never fails the command.
 async fn print_agent_chat_status() {
-    let Some(mut client) = DaemonClient::connect().await else {
+    let Some(mut client) = crate::commands::daemon_conn::connect_opt().await else {
         println!();
         println!("agent.chat:");
         println!("  Daemon: not running (start with `weft daemon` / `weaver daemon`)");

@@ -31,10 +31,12 @@
 //! method's required capability while its handler never runs, so routes
 //! must not cover them (a test asserts this for `ROUTES`).
 //!
-//! There is no transport marker: the TCP relay byte-copies into the unix
-//! socket, so a relayed caller is indistinguishable from a local one and
-//! no gate may rely on the difference. (The relay checks its bearer
-//! before forwarding.)
+//! There is no transport marker: the TCP relay forwards into the unix
+//! socket, so a relayed caller looks like a local one and no gate may rely
+//! on the difference. Instead the relay (`relay_auth`) strips self-asserted
+//! literal scope strings from relayed requests, and the daemon honours
+//! literal scopes only from a unix peer with its own uid
+//! ([`CallerCtx::peer_untrusted`]). Token secrets work on any path.
 //!
 //! Registration is explicit and stateless: the `ROUTES` and `GATES` const
 //! tables below, one line per package. There is no global mutable
@@ -57,21 +59,86 @@ use crate::capability::{CallerCapabilities, Capability, required_capability};
 /// Shared kernel handle, same shape `daemon.rs` passes around.
 pub type KernelRef = Arc<RwLock<Kernel<NativePlatform>>>;
 
+/// A project id the client CLAIMED in `Request.project`.
+///
+/// UNVERIFIED: the daemon only checks that it is a well-formed ULID and
+/// that it equals the daemon's bound project (when it has one). Holding a
+/// `ClaimedProject` proves nothing about membership; package G must verify
+/// it against the project registry before any scope decision relies on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimedProject(String);
+
+impl ClaimedProject {
+    /// The claimed id, unverified.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for ClaimedProject {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for ClaimedProject {
+    fn from(s: &str) -> Self {
+        Self(s.to_owned())
+    }
+}
+
+/// The kind of principal behind a request, set by the entry path (never by
+/// the client). Gates use it for per-principal deny-lists.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Principal {
+    /// A socket / RVF caller.
+    #[default]
+    External,
+    /// The daemon's in-process voice consumer ([`CallerCtx::internal_voice`]).
+    InternalVoice,
+}
+
 /// Who is calling, as established by the entry path before dispatch.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CallerCtx {
+    /// Set by the entry path; see [`Principal`].
+    pub principal: Principal,
     /// Bearer / scope token from the request envelope, if any.
     pub auth: Option<String>,
-    /// Project the request is scoped to, once the envelope carries one.
-    pub project: Option<String>,
+    /// Project the client claims the request is scoped to
+    /// (`Request.project`). Unverified; see [`ClaimedProject`].
+    pub project: Option<ClaimedProject>,
+    /// The connection's peer is NOT the daemon's own uid (unix socket
+    /// peer credentials). Such a caller cannot use literal scope strings
+    /// (`"admin"`, ...) as auth; only a token secret counts. `false` for
+    /// in-process callers and for the default.
+    pub peer_untrusted: bool,
 }
 
 impl CallerCtx {
     /// A caller presenting `auth` (or none).
     pub fn from_auth(auth: Option<String>) -> Self {
         Self {
+            principal: Principal::External,
             auth,
             project: None,
+            peer_untrusted: false,
+        }
+    }
+
+    /// Mark the connection peer as not the daemon's uid.
+    pub fn with_peer_untrusted(mut self, untrusted: bool) -> Self {
+        self.peer_untrusted = untrusted;
+        self
+    }
+
+    /// Caller context for a wire request: its `auth` and `project`.
+    pub fn from_request(req: &clawft_rpc::Request) -> Self {
+        Self {
+            principal: Principal::External,
+            auth: req.auth.clone(),
+            project: req.project.clone().map(ClaimedProject::from),
+            peer_untrusted: false,
         }
     }
 
@@ -83,8 +150,14 @@ impl CallerCtx {
     /// (`kernel.shutdown`, `kernel.kill-process`, `cluster.*`,
     /// `workload.revoke`, `chain.checkpoint`) stay out of reach of speech.
     /// Before this the voice path dispatched with no check at all.
+    ///
+    /// The scope gate additionally denies this principal the cron
+    /// mutations (`cron.*` writes), see `scope_gate::VOICE_DENIED`.
     pub fn internal_voice() -> Self {
-        Self::from_auth(Some("read,chat,write".to_owned()))
+        Self {
+            principal: Principal::InternalVoice,
+            ..Self::from_auth(Some("read,chat,write".to_owned()))
+        }
     }
 }
 
@@ -93,7 +166,8 @@ impl CallerCtx {
 pub struct ExtCtx {
     pub kernel: KernelRef,
     pub auth: Option<String>,
-    pub project: Option<String>,
+    /// Unverified client claim; see [`ClaimedProject`].
+    pub project: Option<ClaimedProject>,
     /// Capabilities already resolved for this caller.
     pub caps: CallerCapabilities,
 }
@@ -132,9 +206,12 @@ impl ExtRoute {
 
 /// What a gate sees. Borrowed so running gates never clones params.
 pub struct GateRequest<'a> {
+    /// Who is calling (set by the entry path, not the client).
+    pub principal: Principal,
     pub method: &'a str,
     pub params: &'a Value,
     pub auth: Option<&'a str>,
+    /// Unverified client claim (see [`ClaimedProject`]).
     pub project: Option<&'a str>,
     /// Capabilities resolved for the caller (the capability check has
     /// already passed for `method`).
@@ -168,21 +245,123 @@ pub type GateFn = for<'a> fn(&'a GateRequest<'a>) -> GateFuture<'a>;
 /// `ExtRoute { prefix: "project.", capability: Capability::Read,
 /// handler: crate::project_rpc::handle }`.
 #[cfg(not(test))]
-const ROUTES: &[ExtRoute] = &[];
+const ROUTES: &[ExtRoute] = &[
+    ExtRoute {
+        prefix: "kernel.handshake",
+        capability: Capability::Read,
+        handler: crate::handshake_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.list",
+        capability: Capability::Read,
+        handler: crate::project_rpc::handle_list,
+    },
+    ExtRoute {
+        prefix: "project.show",
+        capability: Capability::Read,
+        handler: crate::project_rpc::handle_show,
+    },
+    ExtRoute {
+        prefix: "project.register",
+        capability: Capability::Admin,
+        handler: crate::project_rpc::handle_register,
+    },
+    ExtRoute {
+        prefix: "auth.token.issue",
+        capability: Capability::Admin,
+        handler: crate::token_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "auth.token.revoke",
+        capability: Capability::Admin,
+        handler: crate::token_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "auth.token.list",
+        capability: Capability::Admin,
+        handler: crate::token_rpc::handle,
+    },
+    // Read: the gateway and any anonymous caller may ask "is this secret
+    // valid?"; a 256-bit secret cannot be searched for.
+    ExtRoute {
+        prefix: "auth.token.validate",
+        capability: Capability::Read,
+        handler: crate::token_rpc::handle,
+    },
+];
 #[cfg(test)]
-const ROUTES: &[ExtRoute] = &[ExtRoute {
-    prefix: "rpc_ext.test.",
-    capability: Capability::Write,
-    handler: test_probe,
-}];
+const ROUTES: &[ExtRoute] = &[
+    ExtRoute {
+        prefix: "kernel.handshake",
+        capability: Capability::Read,
+        handler: crate::handshake_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.list",
+        capability: Capability::Read,
+        handler: crate::project_rpc::handle_list,
+    },
+    ExtRoute {
+        prefix: "project.show",
+        capability: Capability::Read,
+        handler: crate::project_rpc::handle_show,
+    },
+    ExtRoute {
+        prefix: "project.register",
+        capability: Capability::Admin,
+        handler: crate::project_rpc::handle_register,
+    },
+    ExtRoute {
+        prefix: "auth.token.issue",
+        capability: Capability::Admin,
+        handler: crate::token_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "auth.token.revoke",
+        capability: Capability::Admin,
+        handler: crate::token_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "auth.token.list",
+        capability: Capability::Admin,
+        handler: crate::token_rpc::handle,
+    },
+    // Read: the gateway and any anonymous caller may ask "is this secret
+    // valid?"; a 256-bit secret cannot be searched for.
+    ExtRoute {
+        prefix: "auth.token.validate",
+        capability: Capability::Read,
+        handler: crate::token_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "rpc_ext.test.",
+        capability: Capability::Write,
+        handler: test_probe,
+    },
+];
+
+/// Prefix or exact name and required capability of each built-in route
+/// (scope-gate population test).
+#[cfg(test)]
+pub(crate) fn builtin_route_names() -> Vec<(&'static str, Capability)> {
+    ROUTES.iter().map(|r| (r.prefix, r.capability)).collect()
+}
 
 /// Registered gates, run in order; the first denial wins.
 ///
-/// Package G adds the D12 scope gate here.
+/// The D12 scope gates (package G): the voice deny-list, then the
+/// outside-project policy.
 #[cfg(not(test))]
-const GATES: &[GateFn] = &[];
+const GATES: &[GateFn] = &[
+    crate::scope_gate::voice_gate,
+    crate::scope_gate::scope_gate,
+];
 #[cfg(test)]
-const GATES: &[GateFn] = &[test_deny_gate];
+const GATES: &[GateFn] = &[
+    test_deny_gate,
+    crate::scope_gate::voice_gate,
+    crate::scope_gate::scope_gate,
+];
 
 /// Unit-test-only route: proves extension dispatch on the real wire path.
 #[cfg(test)]
@@ -191,6 +370,7 @@ fn test_probe(call: ExtCall) -> ExtFuture {
         Response::success(serde_json::json!({
             "method": call.method,
             "auth": call.ctx.auth,
+            "project": call.ctx.project.as_ref().map(ClaimedProject::as_str),
         }))
     })
 }
@@ -293,10 +473,11 @@ pub async fn authorize_with(
         )));
     }
     let req = GateRequest {
+        principal: caller.principal,
         method,
         params,
         auth: caller.auth.as_deref(),
-        project: caller.project.as_deref(),
+        project: caller.project.as_ref().map(ClaimedProject::as_str),
         caps,
         kernel,
     };

@@ -209,15 +209,24 @@ pub async fn load_config_raw(
 async fn load_weave_toml(
     fs: &dyn super::fs::FileSystem,
 ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-    let toml_path = PathBuf::from("weave.toml");
+    load_weave_toml_file(fs, &PathBuf::from("weave.toml")).await
+}
 
-    if !fs.exists(&toml_path).await {
+/// Load a `weave.toml` at `toml_path` as key-normalized JSON.
+///
+/// A missing file is an empty object; an unreadable or unparseable one is
+/// an error (the caller decides whether that is fatal).
+pub async fn load_weave_toml_file(
+    fs: &dyn super::fs::FileSystem,
+    toml_path: &std::path::Path,
+) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    if !fs.exists(toml_path).await {
         return Ok(Value::Object(serde_json::Map::new()));
     }
 
-    tracing::debug!("loading weave.toml from project root");
+    tracing::debug!(path = %toml_path.display(), "loading weave.toml");
     let contents = fs
-        .read_to_string(&toml_path)
+        .read_to_string(toml_path)
         .await
         .map_err(|e| format!("failed to read weave.toml: {e}"))?;
 
@@ -236,7 +245,7 @@ async fn load_weave_toml(
 
 /// Deep-merge `overlay` into `base`. Overlay values win on conflict.
 /// Objects are merged recursively; non-object values are replaced.
-fn deep_merge(base: &mut Value, overlay: &Value) {
+pub fn deep_merge(base: &mut Value, overlay: &Value) {
     match (base, overlay) {
         (Value::Object(base_map), Value::Object(overlay_map)) => {
             for (key, overlay_val) in overlay_map {

@@ -47,6 +47,11 @@ pub struct KernelStatusResult {
     /// (no `build` key) deserialize with an all-empty stamp.
     #[serde(default)]
     pub build: BuildStamp,
+    /// The daemon's `kernel.handshake` payload (profile, roles, runtime
+    /// root, bound project, user id and key id), folded in so one call
+    /// shows where a client landed. Absent from older daemons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handshake: Option<clawft_rpc::handshake::Handshake>,
 }
 
 /// A single process entry for `kernel.ps`.

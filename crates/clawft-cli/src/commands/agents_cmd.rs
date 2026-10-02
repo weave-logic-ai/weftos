@@ -18,7 +18,7 @@ use clap::{Args, Subcommand};
 use comfy_table::{Table, presets};
 
 use clawft_core::agent::agents::{AgentDefinition, AgentRegistry};
-use clawft_rpc::{DaemonClient, Request};
+use clawft_rpc::Request;
 
 /// Arguments for the `weft agents` subcommand.
 #[derive(Args)]
@@ -57,7 +57,7 @@ pub async fn run(args: AgentsArgs) -> anyhow::Result<()> {
 
 /// Try `agents.list` via RPC, fall back to local registry.
 async fn agents_list_rpc() -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let resp = client.simple_call("agents.list").await?;
         let data = resp.into_result()?;
         // Daemon returns a JSON array of agent objects; render as a table.
@@ -94,7 +94,7 @@ async fn agents_list_rpc() -> anyhow::Result<()> {
 
 /// Try `agents.show` via RPC, fall back to local registry.
 async fn agents_show_rpc(name: &str) -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let req = Request::with_params("agents.show", serde_json::json!({ "name": name }));
         let resp = client.call(req).await?;
         let data = resp.into_result()?;
@@ -111,7 +111,7 @@ async fn agents_show_rpc(name: &str) -> anyhow::Result<()> {
 
 /// Try `agents.use` via RPC, fall back to local registry.
 async fn agents_use_rpc(name: &str) -> anyhow::Result<()> {
-    if let Some(mut client) = DaemonClient::connect().await {
+    if let Some(mut client) = crate::commands::daemon_conn::connect_opt().await {
         let req = Request::with_params("agents.use", serde_json::json!({ "name": name }));
         let resp = client.call(req).await?;
         let data = resp.into_result()?;

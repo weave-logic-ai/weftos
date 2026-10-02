@@ -18,6 +18,11 @@
 //!    legacy chain stays in use (WARN) until `weaver migrate user-chain`
 //!    (ADR-103 Phase 1) moves it.
 //!
+//! Once the legacy chain
+//! carries a `MIGRATED-TO-WEFTOS.txt` marker, a boot that would still land on
+//! it is refused (it would fork history) unless `WEFTOS_RUNTIME_DIR` isolates
+//! it or `--adopt-legacy-chain` is passed (with a WARN).
+//!
 //! Whichever chain is in use is guarded by [`ChainLock`] (`chain.lock` beside
 //! it) for the kernel's lifetime, so two kernels can never append to one
 //! chain. In this crate's own unit tests the default is a fresh temp dir per
@@ -26,7 +31,10 @@
 use std::path::{Path, PathBuf};
 
 use clawft_types::config::KernelConfig;
-use clawft_types::runtime_paths::{RootSource, RuntimePaths, legacy_chain_left_behind};
+use clawft_types::runtime_paths::{
+    RootSource, RuntimePaths, legacy_chain_left_behind, legacy_migration_marker,
+    user_chain_checkpoint, user_runtime_root,
+};
 
 /// The runtime paths this boot uses for every non-chain runtime file
 /// (cluster peers, apps, revoked hosts).
@@ -83,7 +91,7 @@ pub const LEGACY_ACTIVE_WINDOW: std::time::Duration = std::time::Duration::from_
 /// Kernels that know about the lock create `chain.lock` the first time they
 /// use a chain, so its absence means the last writer was an older,
 /// lock-unaware build that may still be running.
-fn lock_unaware_writer_age(checkpoint: &Path, now: std::time::SystemTime) -> Option<u64> {
+pub(crate) fn lock_unaware_writer_age(checkpoint: &Path, now: std::time::SystemTime) -> Option<u64> {
     if ChainLock::lock_path(checkpoint).exists() {
         return None;
     }
@@ -126,7 +134,63 @@ fn legacy_adoption_refusal(
     })
 }
 
+/// Fork hazard: the legacy chain in `dir` was migrated (marker beside it), and
+/// this boot would still append to it. `--adopt-legacy-chain` overrides, with
+/// a loud WARN.
+fn migrated_refusal(dir: &Path, adopt_legacy: bool) -> Option<String> {
+    let (marker, dest) = legacy_migration_marker(dir)?;
+    if adopt_legacy {
+        tracing::warn!(
+            marker = %marker.display(),
+            "--adopt-legacy-chain overrides a migration marker: this kernel appends to the \
+             legacy chain and forks history from the migrated user chain"
+        );
+        return None;
+    }
+    Some(format!(
+        "the legacy chain in {} was migrated to {} (see {}); booting on it would fork \
+         history. Use the migrated chain (`weaver kernel start --profile user`), isolate this run with WEFTOS_RUNTIME_DIR, or \
+         pass --adopt-legacy-chain to knowingly continue on the legacy copy",
+        dir.display(),
+        dest.as_deref().unwrap_or("~/.weftos/chain"),
+        marker.display()
+    ))
+}
+
+/// Explicit `kernel.chain.checkpoint_path` guard (Phase 1 review S5): an
+/// explicit path skips every default-chain rule, so a config that pins the
+/// legacy chain would keep appending to it after `weaver migrate user-chain`.
+/// Refuse when the path's directory carries the migration marker, unless
+/// `--adopt-legacy-chain` was passed (loud WARN, as for the default path).
+fn explicit_path_refusal(checkpoint: &Path, adopt_legacy: bool) -> Option<String> {
+    let dir = checkpoint.parent()?;
+    let (marker, dest) = legacy_migration_marker(dir)?;
+    if adopt_legacy {
+        tracing::warn!(
+            marker = %marker.display(),
+            "--adopt-legacy-chain overrides a migration marker for an explicit \
+             kernel.chain.checkpoint_path: this kernel forks history from the migrated chain"
+        );
+        return None;
+    }
+    Some(format!(
+        "kernel.chain.checkpoint_path ({}) points into {}, whose chain was migrated to {} \
+         (see {}); booting on it would fork history. Remove kernel.chain.checkpoint_path from \
+         the config (check ~/.clawft/config.json), point it at the migrated chain, or pass \
+         --adopt-legacy-chain to knowingly continue on the legacy copy",
+        checkpoint.display(),
+        dir.display(),
+        dest.as_deref().unwrap_or("~/.weftos/chain"),
+        marker.display()
+    ))
+}
+
 /// Choose the default chain for `paths` (see module docs, rule 2 and 3).
+///
+/// Once a user chain exists at `~/.weftos/chain` (the result of
+/// `weaver migrate user-chain`), a kernel that would still adopt the legacy
+/// `~/.clawft` chain is refused: it would append to the old copy and fork
+/// history. `--adopt-legacy-chain` overrides, with a loud warning.
 pub fn choose_default_chain(
     paths: &RuntimePaths,
     home: Option<&Path>,
@@ -134,36 +198,80 @@ pub fn choose_default_chain(
     adopt_legacy: bool,
     now: std::time::SystemTime,
 ) -> ChainChoice {
-    let resolved = paths.chain_checkpoint();
-    let Some(legacy) = legacy_chain_left_behind(paths, home) else {
-        // Rooted at ~/.clawft itself (any non-project cwd, e.g. $HOME): the
-        // resolved chain IS the legacy chain, so the same first-adoption guard
-        // applies (Phase 0 review R1). `--new-chain` cannot start a fresh
-        // chain in place of it: its first checkpoint would overwrite history.
-        if matches!(paths.source(), RootSource::LegacyHome) && has_chain(&resolved) {
-            let refusal = if new_chain {
-                Some(format!(
-                    "--new-chain cannot start a fresh chain at {} because the legacy chain \
-                     lives there; start the kernel from a project, or set \
-                     kernel.chain.checkpoint_path to a new location",
-                    resolved.display()
-                ))
-            } else {
-                legacy_adoption_refusal(&resolved, adopt_legacy, now)
-            };
-            return ChainChoice {
-                checkpoint: resolved,
-                legacy_in_use: true,
-                warning: None,
-                refusal,
-            };
+    let mut choice = choose_default_chain_inner(paths, home, new_chain, adopt_legacy, now);
+    let Some(home) = home else {
+        return choice;
+    };
+    let user = user_chain_checkpoint(home);
+    let legacy = home
+        .join(".clawft")
+        .join(clawft_types::runtime_paths::CHAIN_CHECKPOINT_FILE);
+    let on_legacy = !matches!(paths.source(), RootSource::User)
+        && choice.legacy_in_use
+        && choice.checkpoint == legacy;
+    if on_legacy && has_chain(&user) {
+        if adopt_legacy {
+            choice.warning = Some(format!(
+                "WARNING: appending to the legacy chain at {} although the chain was migrated to \
+                 {} (--adopt-legacy-chain): the two chains will diverge",
+                legacy.display(),
+                user.display()
+            ));
+        } else {
+            choice.refusal = Some(format!(
+                "the legacy chain was migrated to {}; start the user daemon \
+                 (`weaver kernel start --profile user`) or pass --adopt-legacy-chain to override",
+                user.display()
+            ));
         }
-        return ChainChoice {
-            checkpoint: resolved,
+    }
+    choice
+}
+
+fn choose_default_chain_inner(
+    paths: &RuntimePaths,
+    home: Option<&Path>,
+    new_chain: bool,
+    adopt_legacy: bool,
+    now: std::time::SystemTime,
+) -> ChainChoice {
+    if matches!(paths.source(), RootSource::User) {
+        return choose_user_chain(paths, home, new_chain, adopt_legacy, now);
+    }
+    let resolved = paths.chain_checkpoint();
+    let plain = |checkpoint: PathBuf, warning: Option<String>, refusal: Option<String>| {
+        ChainChoice {
+            checkpoint,
             legacy_in_use: false,
-            warning: None,
-            refusal: None,
+            warning,
+            refusal,
+        }
+    };
+    let migrated_refusal = |dir: &Path| migrated_refusal(dir, adopt_legacy);
+    // Rooted at ~/.clawft itself (any non-project cwd, e.g. $HOME): the
+    // resolved chain IS the legacy chain, so the first-adoption guard applies
+    // (Phase 0 review R1), plus the migration marker. `--new-chain` cannot
+    // start a fresh chain in place of it: its first checkpoint would
+    // overwrite history.
+    if matches!(paths.source(), RootSource::LegacyHome) && has_chain(&resolved) {
+        let refusal = if new_chain {
+            Some(format!(
+                "--new-chain cannot start a fresh chain at {} because the legacy chain \
+                 lives there; start the kernel from a project, or set \
+                 kernel.chain.checkpoint_path to a new location",
+                resolved.display()
+            ))
+        } else {
+            migrated_refusal(paths.root())
+                .or_else(|| legacy_adoption_refusal(&resolved, adopt_legacy, now))
         };
+        return ChainChoice {
+            legacy_in_use: true,
+            ..plain(resolved, None, refusal)
+        };
+    }
+    let Some(legacy) = legacy_chain_left_behind(paths, home) else {
+        return plain(resolved, None, None);
     };
     if new_chain {
         let warning = format!(
@@ -172,14 +280,11 @@ pub fn choose_default_chain(
             resolved.display(),
             legacy.display()
         );
-        return ChainChoice {
-            checkpoint: resolved,
-            legacy_in_use: false,
-            warning: Some(warning),
-            refusal: None,
-        };
+        return plain(resolved, Some(warning), None);
     }
-    let refusal = legacy_adoption_refusal(&legacy, adopt_legacy, now);
+    let legacy_dir = legacy.parent().unwrap_or(Path::new("."));
+    let refusal = migrated_refusal(legacy_dir)
+        .or_else(|| legacy_adoption_refusal(&legacy, adopt_legacy, now));
     let warning = format!(
         "no chain at {} but a legacy chain exists at {}; continuing on the legacy chain \
          and its key so history is not forked (nothing was moved). Phase 1 \
@@ -193,6 +298,79 @@ pub fn choose_default_chain(
         legacy_in_use: true,
         warning: Some(warning),
         refusal,
+    }
+}
+
+/// Chain choice for the user daemon (`--profile user`, ADR-103 Phase 1).
+///
+/// At the standard root (`~/.weftos/run`) the chain is, in order: the user
+/// chain `~/.weftos/chain` when one exists (what `weaver migrate user-chain`
+/// produces); else the legacy `~/.clawft` chain under the same first-adoption
+/// guard as Phase 0 (never a silent fresh genesis that would fork history);
+/// else a fresh user chain. Under an isolated root (`WEFTOS_RUNTIME_DIR`)
+/// the chain is that root's own and the operator's chains are never read.
+/// `legacy_in_use` is true whenever the chain is not at `paths`' own root,
+/// which keeps the anchor ledger beside the chain actually in use.
+fn choose_user_chain(
+    paths: &RuntimePaths,
+    home: Option<&Path>,
+    new_chain: bool,
+    adopt_legacy: bool,
+    now: std::time::SystemTime,
+) -> ChainChoice {
+    let standard = home.filter(|h| paths.root() == user_runtime_root(h));
+    let Some(home) = standard else {
+        return ChainChoice {
+            checkpoint: paths.chain_checkpoint(),
+            legacy_in_use: false,
+            warning: None,
+            refusal: None,
+        };
+    };
+    let user = user_chain_checkpoint(home);
+    let legacy = home
+        .join(".clawft")
+        .join(clawft_types::runtime_paths::CHAIN_CHECKPOINT_FILE);
+    if new_chain && has_chain(&user) {
+        return ChainChoice {
+            refusal: Some(format!(
+                "--new-chain would orphan the existing user chain at {}; move that directory \
+                 aside first if a fresh chain is really intended",
+                user.display()
+            )),
+            checkpoint: user,
+            legacy_in_use: true,
+            warning: None,
+        };
+    }
+    if has_chain(&user) || new_chain || !has_chain(&legacy) {
+        let warning = (new_chain && has_chain(&legacy)).then(|| {
+            format!(
+                "starting a fresh user chain at {} (--new-chain); the legacy chain at {} is \
+                 untouched and this kernel will not append to it",
+                user.display(),
+                legacy.display()
+            )
+        });
+        return ChainChoice {
+            checkpoint: user,
+            legacy_in_use: true,
+            warning,
+            refusal: None,
+        };
+    }
+    ChainChoice {
+        refusal: migrated_refusal(home.join(".clawft").as_path(), adopt_legacy)
+            .or_else(|| legacy_adoption_refusal(&legacy, adopt_legacy, now)),
+        warning: Some(format!(
+            "no user chain at {} but a legacy chain exists at {}; continuing on the legacy \
+             chain and its key so history is not forked (nothing was moved). Run \
+             `weaver migrate user-chain` to move it, or pass --new-chain for a fresh user chain.",
+            user.display(),
+            legacy.display()
+        )),
+        checkpoint: legacy,
+        legacy_in_use: true,
     }
 }
 
@@ -230,6 +408,11 @@ pub fn pin_chain_storage_noted(kernel_config: &mut KernelConfig) -> PinOutcome {
         warning = w;
         refusal = r;
         legacy_in_use = legacy;
+    } else if let Some(p) = &chain.checkpoint_path {
+        refusal = explicit_path_refusal(
+            Path::new(p),
+            ADOPT_LEGACY.load(std::sync::atomic::Ordering::SeqCst),
+        );
     }
     if let (Some(anchor), Some(ckpt)) = (chain.external_anchor.as_mut(), &chain.checkpoint_path)
         && anchor.ledger_path.is_none()
@@ -312,6 +495,15 @@ pub struct ChainLock {
     path: PathBuf,
 }
 
+/// Why [`ChainLock::try_acquire`] failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChainLockError {
+    /// Another kernel holds the lock.
+    InUse(String),
+    /// Filesystem or locking failure.
+    Other(String),
+}
+
 impl ChainLock {
     /// Lock file path for a chain checkpoint (`chain.json` -> `chain.lock`).
     pub fn lock_path(checkpoint: &Path) -> PathBuf {
@@ -325,26 +517,59 @@ impl ChainLock {
     /// The message names the holder PID and the ways out (`--new-chain`,
     /// `kernel.chain.checkpoint_path`).
     pub fn acquire(checkpoint: &Path) -> Result<Self, String> {
+        Self::try_acquire(checkpoint).map_err(|e| match e {
+            ChainLockError::InUse(m) | ChainLockError::Other(m) => m,
+        })
+    }
+
+    /// [`acquire`](Self::acquire), telling "another kernel holds it" (a
+    /// refusal no retry fixes) apart from I/O failures.
+    pub fn try_acquire(checkpoint: &Path) -> Result<Self, ChainLockError> {
         let path = Self::lock_path(checkpoint);
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)
-                .map_err(|e| format!("cannot create chain dir {}: {e}", dir.display()))?;
+            std::fs::create_dir_all(dir).map_err(|e| {
+                ChainLockError::Other(format!("cannot create chain dir {}: {e}", dir.display()))
+            })?;
         }
-        let mut file = open_lock_file(&path)
-            .map_err(|e| format!("cannot open chain lock {}: {e}", path.display()))?;
+        let mut file = open_lock_file(&path).map_err(|e| {
+            ChainLockError::Other(format!("cannot open chain lock {}: {e}", path.display()))
+        })?;
         match try_lock(&file) {
             Ok(true) => {
                 record_pid(&mut file);
                 Ok(Self { _file: file, path })
             }
-            Ok(false) => Err(format!(
+            Ok(false) => Err(ChainLockError::InUse(format!(
                 "chain {} is in use by another kernel (pid {}); refusing to share a chain. \
                  Give this kernel its own: start with --new-chain or set \
                  kernel.chain.checkpoint_path",
                 checkpoint.display(),
                 holder_pid(&path)
+            ))),
+            Err(e) => Err(ChainLockError::Other(format!("cannot lock {}: {e}", path.display()))),
+        }
+    }
+
+    /// Check that `checkpoint`'s chain is not locked, without creating or
+    /// writing the lock file. `Ok` when no lock file exists or it is free.
+    pub fn probe(checkpoint: &Path) -> Result<(), String> {
+        let path = Self::lock_path(checkpoint);
+        if !path.exists() {
+            return Ok(());
+        }
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(|e| format!("cannot open chain lock {}: {e}", path.display()))?;
+        match try_lock(&file) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(format!(
+                "chain {} is in use by another kernel (pid {})",
+                checkpoint.display(),
+                holder_pid(&path)
             )),
-            Err(e) => Err(format!("cannot lock {}: {e}", path.display())),
+            Err(e) => Err(format!("cannot probe {}: {e}", path.display())),
         }
     }
 
@@ -484,6 +709,90 @@ mod tests {
     }
 
     #[test]
+    fn user_profile_prefers_the_user_chain_then_legacy_then_fresh() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, _proj) = legacy_fixture(&t);
+        let paths = RuntimePaths::user_with(None, Some(&home));
+        let legacy = home.join(".clawft/chain.json");
+        let user = home.join(".weftos/chain/chain.json");
+
+        // Legacy only: legacy chain, guarded like Phase 0.
+        let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
+        assert_eq!(c.checkpoint, legacy);
+        assert!(c.refusal.expect("guard").contains("--adopt-legacy-chain"));
+        let c = choose_default_chain(&paths, Some(&home), false, true, far_future());
+        assert!(c.refusal.is_none() && c.checkpoint == legacy);
+
+        // --new-chain: a fresh user chain, legacy untouched.
+        let c = choose_default_chain(&paths, Some(&home), true, false, far_future());
+        assert_eq!(c.checkpoint, user);
+        assert!(c.refusal.is_none() && c.warning.unwrap().contains("--new-chain"));
+
+        // A user chain wins over the legacy one.
+        std::fs::create_dir_all(user.parent().unwrap()).unwrap();
+        std::fs::write(&user, "{}").unwrap();
+        let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
+        assert_eq!((c.checkpoint.clone(), c.refusal), (user.clone(), None));
+
+        // --new-chain now would orphan it: refused.
+        let c = choose_default_chain(&paths, Some(&home), true, false, far_future());
+        assert!(c.refusal.expect("refused").contains("orphan"));
+    }
+
+    #[test]
+    fn default_daemon_is_refused_the_legacy_chain_once_a_user_chain_exists() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, proj) = legacy_fixture(&t);
+        let user = home.join(".weftos/chain/chain.json");
+        std::fs::create_dir_all(user.parent().unwrap()).unwrap();
+        std::fs::write(&user, "{}").unwrap();
+        let legacy = home.join(".clawft/chain.json");
+        // A project with no chain of its own would fall back to legacy: refused.
+        let pp = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
+        let c = choose_default_chain(&pp, Some(&home), false, false, far_future());
+        assert!(c.legacy_in_use && c.refusal.expect("refused").contains("--profile user"));
+        // A legacy-rooted kernel would fall back to the legacy chain: refused.
+        for paths in [RuntimePaths::resolve_with(None, Some(&home), Some(&home))] {
+            let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
+            let r = c.refusal.expect("refused");
+            assert!(r.contains("--profile user") && r.contains("--adopt-legacy-chain"), "{r}");
+            // Override is kept, with a loud warning.
+            let c = choose_default_chain(&paths, Some(&home), false, true, far_future());
+            assert_eq!(c.checkpoint, legacy);
+            assert!(c.refusal.is_none());
+            assert!(c.warning.unwrap().contains("diverge"));
+        }
+        // A project that owns its own chain is not affected.
+        std::fs::create_dir_all(proj.join(".weftos/runtime")).unwrap();
+        std::fs::write(proj.join(".weftos/runtime/chain.json"), "{}").unwrap();
+        let paths = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
+        let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
+        assert!(c.refusal.is_none() && !c.legacy_in_use);
+    }
+
+    #[test]
+    fn user_profile_with_no_chain_anywhere_starts_a_user_chain() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let paths = RuntimePaths::user_with(None, Some(&home));
+        let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
+        assert_eq!(c.checkpoint, home.join(".weftos/chain/chain.json"));
+        assert!(c.refusal.is_none() && c.warning.is_none());
+    }
+
+    #[test]
+    fn user_profile_under_an_isolated_root_never_reads_home_chains() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, _proj) = legacy_fixture(&t);
+        let iso = t.path().join("iso");
+        let paths = RuntimePaths::user_with(iso.to_str(), Some(&home));
+        let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
+        assert_eq!(c.checkpoint, iso.join("chain.json"));
+        assert!(c.refusal.is_none() && !c.legacy_in_use);
+    }
+
+    #[test]
     fn new_chain_flag_starts_fresh_at_the_resolved_path() {
         let t = tempfile::tempdir().unwrap();
         let (home, proj) = legacy_fixture(&t);
@@ -600,6 +909,14 @@ mod tests {
         );
         assert!(err.contains("--new-chain"), "{err}");
         assert!(err.contains("kernel.chain.checkpoint_path"), "{err}");
+        // A held lock is the refusal class; an unusable path is not.
+        assert!(matches!(ChainLock::try_acquire(&ckpt), Err(ChainLockError::InUse(_))));
+        let blocked = t.path().join("file");
+        std::fs::write(&blocked, "x").unwrap();
+        assert!(matches!(
+            ChainLock::try_acquire(&blocked.join("sub/chain.json")),
+            Err(ChainLockError::Other(_))
+        ));
         drop(first);
         ChainLock::acquire(&ckpt).expect("free after drop");
     }
@@ -644,5 +961,33 @@ mod tests {
             k.chain.unwrap().checkpoint_path.as_deref(),
             Some(p.to_string_lossy().as_ref())
         );
+    }
+
+    #[test]
+    fn explicit_checkpoint_path_into_a_migrated_dir_is_refused() {
+        let t = tempfile::tempdir().unwrap();
+        let legacy = t.path().join(".clawft");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("chain.json"), "{}").unwrap();
+        std::fs::write(
+            legacy.join(clawft_types::runtime_paths::LEGACY_MIGRATED_MARKER),
+            "migrated-to: /u/.weftos/chain\n",
+        )
+        .unwrap();
+        let ckpt = legacy.join("chain.json");
+
+        let mut cfg = KernelConfig::default();
+        let mut chain = ChainConfig::default();
+        chain.checkpoint_path = Some(ckpt.to_string_lossy().into_owned());
+        cfg.chain = Some(chain);
+        let out = pin_chain_storage_noted(&mut cfg);
+        let msg = out.refusal.expect("refused");
+        assert!(msg.contains("kernel.chain.checkpoint_path"), "{msg}");
+        assert!(msg.contains("--adopt-legacy-chain"), "{msg}");
+
+        // The override passes, and an unmarked directory is never refused.
+        assert!(explicit_path_refusal(&ckpt, true).is_none());
+        let other = t.path().join("elsewhere").join("chain.json");
+        assert!(explicit_path_refusal(&other, false).is_none());
     }
 }

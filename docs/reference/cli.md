@@ -10,8 +10,30 @@ These flags are available on all subcommands.
 | Flag | Description |
 |------|-------------|
 | `--verbose`, `-v` | Enable debug-level logging (default level is `warn`) |
+| `--project <ULID>` | Talk to the kernel serving this project (see `weft project list`) |
+| `--runtime <DIR>` | Talk to the kernel whose runtime directory is `DIR` (overrides `WEFTOS_RUNTIME_DIR`; `weft` also exports it as `WEFTOS_RUNTIME_DIR` for the rest of the process) |
 | `--version` | Show version and exit |
 | `--help`, `-h` | Show help text and exit |
+
+Every command that talks to the kernel resolves its endpoint the same way and
+verifies the daemon's handshake. The runtime root is the first match of:
+
+1. `--runtime <DIR>`
+2. `WEFTOS_RUNTIME_DIR`
+3. the project manifest (`project.toml` above the working directory, never
+   `$HOME`, or `--project` / `WEFTOS_PROJECT`, then
+   `~/.weftos/projects/<ULID>.toml`): its `[serve] runtime_dir`, or, when it
+   has none and `[serve] via = "user-daemon"`, the user daemon's root
+   `~/.weftos/run`
+4. the user default: with no project known, `~/.weftos/run` when its
+   `kernel.sock` or `kernel.lock` exists
+5. the Phase 0 default: the project's `.weftos/runtime`, otherwise `~/.clawft`
+
+The unreachable-daemon error lists every level tried, in order. When the daemon cannot be reached or is the wrong one, the error names
+the socket tried and the exact next command. A daemon that answers but is the
+wrong one (another project, another node, an incompatible protocol) is always
+an error: commands never fall back to local state changes against it. The user
+daemon is not bound to a project, so reaching it for a project is not an error.
 
 The default log level is `warn`. Only warnings and errors are printed unless
 `--verbose` is passed (which sets it to `debug`). The `RUST_LOG` environment
@@ -967,6 +989,64 @@ Remove a user-installed skill:
 ```
 weft skills remove summarize
 ```
+
+---
+
+## weft project
+
+Project identity (ADR-103). A project is a directory tree with a ULID in
+`.weftos/project.toml`, registered in the user-level index
+`~/.weftos/projects/<id>.toml`. The index directory can be overridden with
+`WEFTOS_MANIFESTS_DIR`. See the [Projects section of the workspaces
+guide](../guides/workspaces.md#projects).
+
+### weft project init
+
+```
+weft project init [--name <NAME>] [--fork [--force]]
+```
+
+Give the current project root (the nearest ancestor with a `project.toml`, else
+the current directory) an identity and register it. Idempotent. Adopts an id
+already seeded from `workspaces.json`. Refuses `$HOME` itself. Adds
+`.weftos/chain/` and `.weftos/project.key` to an existing `.gitignore`.
+Prints the id, the root, the identity file and the manifest path.
+
+| Option | Description |
+|--------|-------------|
+| `--name` | Project name (default: directory name) |
+| `--fork` | The tree is a copy of another project: mint a new id, record the old one as `parent` |
+| `--force` | With `--fork`: also re-identify the registered home of the id (its manifest is archived) |
+
+A copy of a registered tree on the same machine is refused with a
+`RootConflict` error; `--fork` is the remedy.
+
+### weft project list
+
+```
+weft project list [--json]
+```
+
+Read the index directly (no daemon). Entries whose root is gone show `missing`.
+
+### weft project show
+
+```
+weft project show [<ID|NAME|.>] [--here] [--json]
+```
+
+Show one project (default: the one containing the current directory), plus the
+live daemon handshake when one answers, or why it was not verified. A name
+matching several projects is an error listing their ids.
+
+### weft project seed
+
+```
+weft project seed
+```
+
+Import `~/.clawft/workspaces.json` into the index and print what was created,
+adopted, missing, unchanged or skipped. Idempotent.
 
 ---
 

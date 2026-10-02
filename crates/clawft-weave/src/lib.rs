@@ -19,14 +19,35 @@ pub mod conv_postmortem;
 // Local RPC daemon: Unix UDS + Windows named pipes (WEFT-559).
 #[cfg(any(unix, windows))]
 pub mod daemon;
+/// Boot refusals (exit 78) and the SIGHUP re-exec plan.
+#[cfg(any(unix, windows))]
+pub mod boot_refusal;
 /// Single-instance advisory lock on `<runtime>/kernel.lock` (ADR-103 P0b).
 #[cfg(any(unix, windows))]
 pub mod instance_lock;
 #[cfg(any(unix, windows))]
 pub mod llm_service;
+/// `kernel.handshake` and the request-envelope gate (ADR-103 D14).
+#[cfg(any(unix, windows))]
+pub mod handshake_rpc;
+/// `project.*` RPCs over the per-user manifest store (ADR-103 Phase 1).
+#[cfg(any(unix, windows))]
+pub mod project_rpc;
+/// The per-user daemon profile (`weaver kernel start --profile user`).
+#[cfg(any(unix, windows))]
+pub mod user_daemon;
 /// Daemon RPC extension seam: method-prefix routes + pre-dispatch gates (ADR-103 D0).
 #[cfg(any(unix, windows))]
 pub mod rpc_ext;
+/// D12 scope gate: outside-project policy and the voice deny-list (ADR-103).
+#[cfg(any(unix, windows))]
+pub mod scope_gate;
+/// `auth.token.*` RPC handlers and the per-kernel token authority (ADR-102 D3).
+#[cfg(any(unix, windows))]
+pub mod token_rpc;
+/// TCP-relay request sanitiser: strips self-asserted scope strings (ADR-102 D3).
+#[cfg(unix)]
+pub mod relay_auth;
 /// Live MCP registry RPC handlers (WEFT-494 / ADR-070). Available on all
 /// platforms so unit tests can exercise add/list/remove without UDS.
 pub mod mcp_rpc;
@@ -37,6 +58,7 @@ pub mod mic_source;
 #[cfg(any(feature = "mesh", feature = "exochain"))]
 pub mod node_facts_rpc;
 pub mod protocol;
+pub mod service_units;
 /// Governance-gate helper for daemon RPC families (mesh-placement-06).
 pub mod rpc_gate;
 // WEFT-720 residual: `spatial_rpc` dropped when BvhStore/CLI helpers

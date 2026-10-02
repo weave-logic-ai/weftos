@@ -14,6 +14,7 @@
 pub mod adaptive_silence;
 pub mod chain_paths;
 pub mod channels;
+pub mod governance;
 pub mod kernel;
 pub mod local_llm;
 pub mod personality;
@@ -26,6 +27,7 @@ pub mod voice_metrics;
 // Re-export channel types at the config level for backward compatibility.
 pub use adaptive_silence::{AdaptiveSilenceConfig, AdaptiveSilenceTimeout};
 pub use channels::*;
+pub use governance::*;
 pub use kernel::*;
 pub use local_llm::*;
 pub use personality::*;
@@ -832,7 +834,8 @@ pub struct GatewayConfig {
 }
 
 fn default_gateway_host() -> String {
-    "0.0.0.0".into()
+    // Loopback by default (ADR-102): LAN exposure must be an explicit choice.
+    "127.0.0.1".into()
 }
 fn default_gateway_port() -> u16 {
     18790
@@ -1091,7 +1094,7 @@ mod tests {
         assert_eq!(cfg.channels.discord.intents, 37377);
 
         // Gateway defaults
-        assert_eq!(cfg.gateway.host, "0.0.0.0");
+        assert_eq!(cfg.gateway.host, "127.0.0.1");
         assert_eq!(cfg.gateway.port, 18790);
 
         // Tool defaults

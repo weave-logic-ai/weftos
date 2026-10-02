@@ -28,6 +28,7 @@ fn base_config() -> Config {
 
 fn minimal_kernel_config() -> KernelConfig {
     KernelConfig {
+        governance: Default::default(),
         enabled: true,
         max_processes: 16,
         health_check_interval_secs: 5,
@@ -54,6 +55,7 @@ fn minimal_kernel_config() -> KernelConfig {
 fn exochain_kernel_config() -> KernelConfig {
     use clawft_types::config::{ChainConfig, ResourceTreeConfig};
     KernelConfig {
+        governance: Default::default(),
         enabled: true,
         max_processes: 32,
         health_check_interval_secs: 5,

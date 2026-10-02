@@ -121,6 +121,47 @@ weft workspace config reset   # resets to empty {}
 Values are auto-parsed: `42` becomes a number, `true`/`false` become booleans,
 `null` removes the key, and everything else is stored as a string.
 
+## Projects
+
+A workspace is a configuration directory; a **project** is the identity the
+kernel uses to tell trees apart (ADR-103). Each project has a ULID in
+`<root>/.weftos/project.toml` and an index entry in
+`~/.weftos/projects/<id>.toml` (set `WEFTOS_MANIFESTS_DIR` to use another
+index).
+
+```bash
+weft project init --name my-api   # give the current tree an id and register it
+weft project list                 # all registered projects, `missing` if the root is gone
+weft project show                 # the project containing the current directory
+weft project show my-api --json   # by name or id; includes the live daemon handshake
+weft project seed                 # import ~/.clawft/workspaces.json
+```
+
+`init` is idempotent, works from any subdirectory of a project, and adopts the
+id of an entry that `seed` already created for the same root.
+
+### Clones and forks
+
+The id lives in the tree, so `cp -r` of a project carries it along. On one
+machine a project id belongs to one root: running `weft project init` in the
+copy fails with `RootConflict` naming the original. Give the copy its own
+identity with:
+
+```bash
+weft project init --fork
+```
+
+The copy gets a new id and records the old one as `parent`; the original is
+untouched. `--fork` on the registered home of an id is refused unless you add
+`--force`, which archives that manifest first.
+
+### Choosing a kernel
+
+`--project <ULID>` and `--runtime <DIR>` (global flags) select which daemon a
+command talks to; `WEFTOS_PROJECT` and `WEFTOS_RUNTIME_DIR` do the same from the
+environment. If the daemon that answers is bound to a different project, the
+command stops and prints the command that fixes it.
+
 ## Config Merging
 
 Configuration is resolved through a three-level merge:
