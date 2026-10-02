@@ -145,3 +145,71 @@ fn a_compromise_revoked_statement_is_not_re_appended() {
     let env3 = lost_chain_env(&g);
     assert_eq!(reconcile(&env3).unwrap(), vec![g.id.clone()]);
 }
+
+fn restore_params(s: &ProjectAnchorStmt, user_seq: u64) -> serde_json::Value {
+    serde_json::json!({ "statement": s, "user_seq": user_seq, "user_event_hash": "ab".repeat(32) })
+}
+
+#[test]
+fn restore_reseeds_a_parent_that_lost_its_state() {
+    let f = fixture();
+    let s1 = stmt(&f, 1, None, 10, later(5));
+    let s2 = stmt(&f, 2, Some(s1.hash()), 20, later(6));
+    submit(&f.env, &s1, later(10)).unwrap();
+    submit(&f.env, &s2, later(11)).unwrap();
+    // The user daemon loses everything about anchors: record file and chain.
+    std::fs::remove_file(anchor_file(&f.env.manifests_dir, &f.id)).unwrap();
+    let env2 = lost_chain_env(&f);
+    let s3 = stmt(&f, 3, Some(s2.hash()), 30, later(7));
+    let e = submit(&env2, &s3, later(12)).unwrap_err();
+    assert_eq!(e.kind(), "anchor_seq");
+    assert!(e.to_string().contains("project.anchor.restore"), "{e}");
+
+    let out = restore(&env2, &restore_params(&s2, 2), later(13)).unwrap();
+    assert_eq!(out["seq"], 2);
+    assert_eq!(last_accepted(&env2, &f.id).unwrap().unwrap().statement, s2);
+    let ev = env2.chain.tail(0).into_iter().find(|e| e.source == ANCHOR_SOURCE).unwrap();
+    assert_eq!(ev.payload.unwrap()["recovered"], true);
+    submit(&env2, &s3, later(14)).unwrap();
+    // A restart still finds the signed record.
+    assert_eq!(last_accepted(&lost_chain_env(&f), &f.id).unwrap().unwrap().statement, s3);
+}
+
+#[test]
+fn restore_refuses_forgeries_rewinds_and_compromised_keys() {
+    let f = fixture();
+    let s1 = stmt(&f, 1, None, 10, later(5));
+    let s2 = stmt(&f, 2, Some(s1.hash()), 20, later(6));
+    submit(&f.env, &s1, later(10)).unwrap();
+    submit(&f.env, &s2, later(11)).unwrap();
+
+    let mut forged = s2.clone();
+    forged.head_seq = 21;
+    assert_eq!(restore(&f.env, &restore_params(&forged, 2), later(13)).unwrap_err().kind(), "anchor_bad_signature");
+    assert_eq!(
+        restore(&f.env, &restore_params(&s1, 1), later(13)).unwrap_err().kind(),
+        "anchor_bad_statement",
+        "never rewinds"
+    );
+    assert!(restore(&f.env, &serde_json::json!({ "statement": s2 }), later(13)).is_err());
+
+    // Identical restore is a no-op success.
+    restore(&f.env, &restore_params(&s2, 2), later(13)).unwrap();
+
+    revoke(&f.env, &serde_json::json!({ "id": f.id })).unwrap();
+    let env2 = lost_chain_env(&f);
+    std::fs::remove_file(anchor_file(&f.env.manifests_dir, &f.id)).unwrap();
+    assert_eq!(restore(&env2, &restore_params(&s2, 2), later(14)).unwrap_err().kind(), "anchor_key_revoked");
+}
+
+#[test]
+fn restore_accepts_a_rekeyed_out_key() {
+    let f = fixture();
+    let s1 = stmt(&f, 1, None, 10, later(5));
+    submit(&f.env, &s1, later(10)).unwrap();
+    rekey_to(&f, &SigningKey::from_bytes(&[4u8; 32]));
+    std::fs::remove_file(anchor_file(&f.env.manifests_dir, &f.id)).unwrap();
+    let env2 = lost_chain_env(&f);
+    restore(&env2, &restore_params(&s1, 1), later(14)).unwrap();
+    assert_eq!(last_accepted(&env2, &f.id).unwrap().unwrap().statement, s1);
+}

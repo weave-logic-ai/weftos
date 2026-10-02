@@ -114,6 +114,7 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "project.identity.repair",
     "project.rekey",
     "project.revoke",
+    "project.anchor.restore",
     // Signature-authenticated; a project kernel calls it with its project
     // claim, so it is inside a project and needs no Admin.
     "project.anchor.submit",

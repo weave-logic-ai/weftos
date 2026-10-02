@@ -40,6 +40,13 @@
 //! fails is ignored, and a recovered statement whose key was revoked for
 //! compromise is never re-appended.
 //!
+//! Parent lost its state (no record, the project's `seq` is ahead): the
+//! refusal says so and nothing is adopted. The owner runs
+//! `project.anchor.restore {statement, user_seq, user_event_hash}` with the
+//! `statement`, `user_seq` and `user_event_hash` of the project's last
+//! `project.anchored` event ([`restore`]); the project's next anchor then
+//! continues at N + 1. Never a rewind, never a compromise-revoked key.
+//!
 //! Cost: structural checks (id, hex lengths, canonical `at`) run before the
 //! identity view, and the signature is checked, all outside the accept lock;
 //! the lock is taken only after the signature passes and revocation is
@@ -368,6 +375,81 @@ pub async fn reconcile_startup(kernel: &KernelRef) {
         Ok(Err(e)) => warn!(error = %e, "anchor reconcile failed"),
         Err(e) => warn!(error = %e, "anchor reconcile task failed"),
     }
+}
+
+/// `project.anchor.restore`: the owner re-seeds the user daemon's anchor
+/// record for a project from the project's own last `project.anchored`
+/// event (`statement`, `user_seq`, `user_event_hash`), after the daemon lost
+/// its state. The statement must verify under the project's certificate
+/// history; a key revoked for compromise is refused. Never rewinds: a record
+/// that is already further, or a different statement at the same seq, is
+/// refused. The record is sealed with the user key and written, and the user
+/// chain event is re-appended (`recovered: true`).
+pub fn restore(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Value, AnchorError> {
+    let bad = |m: &str| AnchorError::BadStatement(m.to_owned());
+    let stmt: ProjectAnchorStmt = serde_json::from_value(params.get("statement").cloned().ok_or_else(|| bad("missing `statement`"))?)
+        .map_err(|e| AnchorError::BadStatement(format!("not an anchor statement: {e}")))?;
+    let user_seq = params.get("user_seq").and_then(Value::as_u64).ok_or_else(|| bad("missing `user_seq`"))?;
+    let hash = params.get("user_event_hash").and_then(Value::as_str).ok_or_else(|| bad("missing `user_event_hash`"))?;
+    if !lower_hex(hash, 64) {
+        return Err(bad("`user_event_hash` is not 64 lowercase hex characters"));
+    }
+    // The statement may be old; only its shape and signature matter here.
+    structural(&stmt, now + Duration::days(36_500))?;
+    let key = key_of(env, &stmt.project_id);
+    let mut guard = ACCEPT.lock().unwrap_or_else(|p| p.into_inner());
+    let view = current_view(env)?;
+    if view.is_compromised(&stmt.project_id, &stmt.project_key_id) {
+        return Err(AnchorError::KeyRevoked { project_id: stmt.project_id.clone(), key_id: stmt.project_key_id.clone() });
+    }
+    let pk = view
+        .key_history(&stmt.project_id)
+        .iter()
+        .find(|c| c.project_key_id == stmt.project_key_id)
+        .and_then(|c| hex_decode::<32>(&c.project_pubkey))
+        .ok_or_else(|| AnchorError::NotCertified(stmt.project_id.clone()))?;
+    stmt.verify(&pk).map_err(cert_error)?;
+    let last = cached_last(&mut guard, env, &stmt.project_id, &view)?;
+    if let Some(l) = &last {
+        if l.statement.seq > stmt.seq || (l.statement.seq == stmt.seq && l.statement != stmt) {
+            return Err(bad("the daemon's record is already at or beyond this statement; restore never rewinds"));
+        }
+    }
+    let sealed = record::seal(env, stmt, user_seq, hash.to_owned());
+    write_file(env, &sealed)?;
+    let inner = guard.as_mut().expect("inner exists");
+    inner.index.remove(&key);
+    inner.backoff.remove(&key);
+    let fixed = cached_last(&mut guard, env, &sealed.statement.project_id, &view)?.unwrap_or(sealed);
+    info!(project = %fixed.statement.project_id, seq = fixed.statement.seq, "anchor record restored by the owner");
+    Ok(json!({ "project_id": fixed.statement.project_id, "seq": fixed.statement.seq, "user_seq": fixed.user_seq, "user_event_hash": fixed.user_event_hash }))
+}
+
+/// Handler for `project.anchor.restore` (Admin, user daemon only, no token).
+pub fn handle_restore(call: ExtCall) -> ExtFuture {
+    Box::pin(async move {
+        if call
+            .ctx
+            .auth
+            .as_deref()
+            .is_some_and(|a| a.trim().starts_with(clawft_kernel::token_authority::SECRET_PREFIX))
+        {
+            return Response::error_with_kind(
+                crate::token_rpc::TOKEN_CANNOT_MINT_KIND,
+                "a token cannot restore anchor records; use the local socket as the owner",
+            );
+        }
+        let env = match crate::project_cert_rpc::env_from(&call.ctx).await {
+            Ok(e) => e,
+            Err(e) => return AnchorError::Unavailable(e.to_string()).response(),
+        };
+        let params = call.params;
+        match tokio::task::spawn_blocking(move || restore(&env, &params, Utc::now())).await {
+            Ok(Ok(v)) => Response::success(v),
+            Ok(Err(e)) => e.response(),
+            Err(e) => Response::error(format!("anchor restore task failed: {e}")),
+        }
+    })
 }
 
 /// Handler for `project.anchor.submit`. Params are the statement itself.

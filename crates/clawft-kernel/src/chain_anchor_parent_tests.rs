@@ -452,3 +452,19 @@ fn a_hung_transport_times_out_without_blocking_readers() {
     assert!(e2.contains("previous submit still in flight"), "{e2}");
     assert!(entered.try_recv().is_err(), "the transport was entered only once");
 }
+
+#[test]
+fn replicated_events_under_reserved_sources_are_refused() {
+    use crate::chain::AppendSignedError;
+    let (src, dst) = (ChainManager::new(0, 100), ChainManager::new(0, 100));
+    for source in [ANCHOR_SOURCE, "user.projects"] {
+        let ev = src.append(source, "x", None);
+        assert!(matches!(
+            dst.append_signed(ev),
+            Err(AppendSignedError::ReservedSource { .. })
+        ));
+    }
+    let other = ChainManager::new(0, 100);
+    let ok = other.append("kernel", "boot", None);
+    dst.append_signed(ok).unwrap();
+}

@@ -301,6 +301,11 @@ const ROUTES: &[ExtRoute] = &[
         handler: crate::anchor_rpc::handle,
     },
     ExtRoute {
+        prefix: "project.anchor.restore",
+        capability: Capability::Admin,
+        handler: crate::anchor_rpc::handle_restore,
+    },
+    ExtRoute {
         prefix: "auth.token.issue",
         capability: Capability::Admin,
         handler: crate::token_rpc::handle,
@@ -376,6 +381,11 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "project.anchor.submit",
         capability: Capability::Read,
         handler: crate::anchor_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.anchor.restore",
+        capability: Capability::Admin,
+        handler: crate::anchor_rpc::handle_restore,
     },
     ExtRoute {
         prefix: "auth.token.issue",

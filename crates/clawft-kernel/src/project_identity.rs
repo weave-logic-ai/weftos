@@ -67,12 +67,7 @@ pub const KIND_REVOKE: &str = "project.revoke";
 /// Chain sources only the daemon's own code may append under. A caller
 /// that chooses its own source (the `chain.append` RPC) must be refused
 /// these: a forged `user.projects` event would otherwise feed the view.
-pub const RESERVED_SOURCES: &[&str] = &[SOURCE, ANCHOR_SOURCE];
-
-/// Is `source` reserved for the daemon's own identity events?
-pub fn is_reserved_source(source: &str) -> bool {
-    RESERVED_SOURCES.contains(&source.trim())
-}
+pub use crate::chain::{RESERVED_SOURCES, is_reserved_source};
 
 /// Why an identity operation was refused.
 #[derive(Debug, thiserror::Error)]

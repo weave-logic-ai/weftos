@@ -61,7 +61,7 @@ pub enum AnchorError {
     #[error("statement signature does not verify")]
     BadSignature,
     /// `seq` is not last + 1.
-    #[error("seq {got} is not the next accepted seq {want}")]
+    #[error("seq {got} is not the next accepted seq {want}{}", remedy(.last))]
     Seq {
         /// Submitted.
         got: u64,
@@ -149,5 +149,14 @@ impl AnchorError {
                 .map(|x| x.key_history.iter().filter_map(|h| hex_decode::<32>(h)).collect())
                 .unwrap_or_default(),
         }
+    }
+}
+
+/// Appended to a `seq` refusal when the daemon has no record at all.
+fn remedy(last: &Option<Box<Resync>>) -> &'static str {
+    if last.is_none() {
+        "; if the user daemon lost its record, the owner restores it with `project.anchor.restore`"
+    } else {
+        ""
     }
 }
