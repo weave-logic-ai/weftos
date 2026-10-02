@@ -13,6 +13,7 @@
 
 pub mod dex;
 pub mod hw;
+pub mod sensor_types;
 pub mod usb;
 
 use serde::{Deserialize, Serialize};

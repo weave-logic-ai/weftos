@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use weftos_cog_market::dex as rules;
 use weftos_cog_market::hw::HwCatalog;
+use weftos_cog_market::sensor_types::SensorTypes;
 use weftos_cog_market::usb::{UsbId, UsbIdTable};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -67,6 +68,11 @@ pub fn catalog() -> &'static HwCatalog {
 pub fn id_table() -> &'static UsbIdTable {
     static T: OnceLock<UsbIdTable> = OnceLock::new();
     T.get_or_init(UsbIdTable::bundled)
+}
+
+pub fn sensor_types() -> &'static SensorTypes {
+    static T: OnceLock<SensorTypes> = OnceLock::new();
+    T.get_or_init(SensorTypes::bundled)
 }
 
 fn vp(vid: u16, pid: u16) -> String {
@@ -139,7 +145,8 @@ impl Dex {
             "number": self.numbers.get(r),
             "name": name,
             "kind": kind,
-            "rarity": rules::rarity(cat, r).map(|x| x.label()),
+            "rarity": rules::rarity_with(cat, sensor_types(), r).map(|x| x.label()),
+            "grade": sensor_types().grade_of(r).map(|g| g.label()),
         })
     }
 
@@ -223,7 +230,8 @@ impl Dex {
             })
             .collect();
         let have = |kind: &str| self.caught.keys().filter(|r| rules::exists(cat, r) && r.starts_with(kind)).count();
-        let caught_set: BTreeSet<String> = self.caught.keys().filter(|r| rules::exists(cat, r)).cloned().collect();
+        let caught_at: BTreeMap<String, u64> =
+            self.caught.iter().filter(|(r, _)| rules::exists(cat, r)).map(|(r, c)| (r.clone(), c.first_caught_at)).collect();
         json!({
             "ok": true,
             "node": node,
@@ -233,7 +241,8 @@ impl Dex {
                 "modules": { "caught": have("module:"), "total": cat.modules.len() },
                 "chips": { "caught": have("chip:"), "total": cat.chips.len() },
             },
-            "badges": rules::badges(cat, table, &caught_set, self.wild.len()),
+            "badges": rules::badges(cat, table, sensor_types(), &caught_at, self.wild.len()),
+            "types": rules::type_rows(sensor_types(), &caught_at),
             "numbers": self.numbers,
         })
     }
@@ -311,6 +320,23 @@ mod tests {
         assert!(rep["badges"].as_array().unwrap().iter().any(|b| b["id"] == "naturalist" && b["earned"] == true));
         // wild needs a name when the device has none
         assert!(with_dex(t.path(), |d| d.register(&dev(1, 2, ""), "wild", "", "", catalog(), "n", 1)).unwrap().is_err());
+    }
+
+    #[test]
+    fn report_has_types_with_best_caught_vs_available() {
+        let t = tempfile::tempdir().unwrap();
+        // RTL-SDR (grade C sdr module) is caught; bladeRF/USRP (A) are available.
+        scan(t.path(), &[dev(0x0bda, 0x2838, "RTL2838UHIDIR")], 10);
+        let rep = with_dex(t.path(), |d| d.report(catalog(), id_table(), "n1")).unwrap();
+        let sdr = rep["types"].as_array().unwrap().iter().find(|r| r["type"] == "sdr").unwrap();
+        assert_eq!(sdr["caught"], true);
+        assert_eq!((sdr["best_caught_grade"].as_str(), sdr["best_available_grade"].as_str()), (Some("C"), Some("A")));
+        assert_eq!(sdr["upgrade_available"], true);
+        assert!(sdr["members"].as_array().unwrap().iter().any(|m| m["id"] == "module:rtl-sdr" && m["caught"] == true));
+        let rtl = rep["caught"].as_array().unwrap().iter().find(|c| c["ref"] == "module:rtl-sdr").unwrap();
+        assert_eq!((rtl["grade"].as_str(), rtl["rarity"].as_str()), (Some("C"), Some("common")));
+        let other = rep["types"].as_array().unwrap().iter().find(|r| r["type"] == "imu").unwrap();
+        assert_eq!(other["caught"], false);
     }
 
     #[test]

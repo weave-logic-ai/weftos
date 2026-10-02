@@ -242,6 +242,38 @@ pub struct DexCatch {
     pub times_seen: u32,
     #[serde(default)]
     pub via: String,
+    /// Sensor grade C/B/A/S, when the item has one.
+    #[serde(default)]
+    pub grade: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct DexTypeMember {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub grade: String,
+    #[serde(default)]
+    pub caught: bool,
+}
+
+/// One sensor type row of `GET /hw/dex` `types[]`.
+#[derive(Deserialize, Clone, Default)]
+pub struct DexTypeRow {
+    #[serde(default, rename = "type")]
+    pub type_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub caught: bool,
+    #[serde(default)]
+    pub best_caught_grade: Option<String>,
+    #[serde(default)]
+    pub best_available_grade: Option<String>,
+    #[serde(default)]
+    pub upgrade_available: bool,
+    #[serde(default)]
+    pub members: Vec<DexTypeMember>,
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -296,6 +328,8 @@ pub struct HwDexReport {
     pub totals: DexTotals,
     #[serde(default)]
     pub badges: Vec<DexBadge>,
+    #[serde(default)]
+    pub types: Vec<DexTypeRow>,
     /// ref -> dex number, for every catalog item (so uncaught ones show "#042 ???").
     #[serde(default)]
     pub numbers: std::collections::BTreeMap<String, u32>,

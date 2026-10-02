@@ -8,6 +8,7 @@ use eframe::egui::{self, Color32, RichText};
 use std::collections::BTreeMap;
 use weftos_cog_market::dex::{self as rules, Rarity};
 use weftos_cog_market::hw::HwCatalog;
+use weftos_cog_market::sensor_types::SensorTypes;
 
 const RARITIES: [&str; 5] = ["all", "common", "uncommon", "rare", "legendary"];
 
@@ -34,12 +35,29 @@ pub fn ymd(secs: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-#[derive(Default)]
 pub struct DexUi {
     /// 0 all, 1 caught, 2 uncaught
     filter: u8,
     rarity: usize,
     last_frame: u64,
+    /// false = grid of cards, true = "By type" roll-up
+    by_type: bool,
+    types: SensorTypes,
+}
+
+impl Default for DexUi {
+    fn default() -> Self {
+        Self { filter: 0, rarity: 0, last_frame: 0, by_type: false, types: SensorTypes::bundled() }
+    }
+}
+
+fn grade_color(g: &str) -> Color32 {
+    match g {
+        "S" => AMBER,
+        "A" => WL,
+        "B" => GREEN,
+        _ => GREY,
+    }
 }
 
 struct Entry<'a> {
@@ -48,13 +66,14 @@ struct Entry<'a> {
     kind: &'a str,
     rarity: Rarity,
     caught: Option<&'a DexCatch>,
+    grade: Option<&'static str>,
 }
 
-fn entries<'a>(cat: &'a HwCatalog, rep: &'a HwDexReport) -> Vec<Entry<'a>> {
+fn entries<'a>(cat: &'a HwCatalog, types: &SensorTypes, rep: &'a HwDexReport) -> Vec<Entry<'a>> {
     let caught: BTreeMap<&str, &DexCatch> = rep.caught.iter().map(|c| (c.r.as_str(), c)).collect();
     let mk = |r: String, name: &'a str, kind: &'a str| {
-        let rarity = rules::rarity(cat, &r).unwrap_or(Rarity::Common);
-        Entry { number: rep.numbers.get(&r).copied().unwrap_or(0), caught: caught.get(r.as_str()).copied(), name, kind, rarity }
+        let rarity = rules::rarity_with(cat, types, &r).unwrap_or(Rarity::Common);
+        Entry { number: rep.numbers.get(&r).copied().unwrap_or(0), caught: caught.get(r.as_str()).copied(), grade: types.grade_of(&r).map(|g| g.label()), name, kind, rarity }
     };
     let mut v: Vec<Entry> = cat.modules.iter().map(|m| mk(rules::module_ref(&m.id), &m.name, &m.kind)).collect();
     v.extend(cat.chips.iter().map(|c| mk(rules::chip_ref(&c.id), &c.name, "chip")));
@@ -114,6 +133,14 @@ impl DexUi {
                 }
             });
         }
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.by_type, false, "Grid");
+            ui.selectable_value(&mut self.by_type, true, "By type");
+        });
+        if self.by_type {
+            by_type(ui, cat, &rep);
+            return;
+        }
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.filter, 0, "all");
             ui.selectable_value(&mut self.filter, 1, "caught");
@@ -124,7 +151,7 @@ impl DexUi {
             }
         });
         ui.separator();
-        let all = entries(cat, &rep);
+        let all = entries(cat, &self.types, &rep);
         let shown: Vec<&Entry> = all
             .iter()
             .filter(|e| match self.filter {
@@ -151,7 +178,12 @@ fn card(ui: &mut egui::Ui, e: &Entry) {
             Some(c) => {
                 ui.label(RichText::new(format!("#{:03}", e.number)).monospace().color(GREY));
                 ui.label(RichText::new(e.name).strong());
-                ui.label(RichText::new(format!("{} · {}", e.rarity.label(), e.kind)).small().color(rarity_color(e.rarity.label())));
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{} · {}", e.rarity.label(), e.kind)).small().color(rarity_color(e.rarity.label())));
+                    if let Some(g) = e.grade {
+                        ui.label(RichText::new(format!("grade {g}")).small().strong().color(grade_color(g)));
+                    }
+                });
                 ui.label(RichText::new(format!("caught {} on {}", ymd(c.first_caught_at), c.caught_on)).small().color(GREY));
                 ui.label(RichText::new(format!("seen {}x · via {}", c.times_seen, c.via)).small().color(GREY));
             }
@@ -162,6 +194,41 @@ fn card(ui: &mut egui::Ui, e: &Entry) {
             }
         }
     });
+}
+
+/// "By type": one block per sensor type with best grade caught vs available and its members.
+fn by_type(ui: &mut egui::Ui, cat: &HwCatalog, rep: &HwDexReport) {
+    let (n, got) = (rep.types.len(), rep.types.iter().filter(|t| t.caught).count());
+    bar(ui, "sensor types", got, n);
+    ui.add_space(4.0);
+    for t in &rep.types {
+        let best = |g: &Option<String>| g.clone().unwrap_or_else(|| "-".into());
+        egui::CollapsingHeader::new(
+            RichText::new(format!(
+                "{} {}  ·  caught {} / available {}{}",
+                if t.caught { "●" } else { "○" },
+                t.name,
+                best(&t.best_caught_grade),
+                best(&t.best_available_grade),
+                if t.upgrade_available { "  ⬆ upgrade available" } else { "" }
+            ))
+            .color(if t.caught { GREEN } else { GREY }),
+        )
+        .id_salt(format!("dex-type-{}", t.type_id))
+        .show(ui, |ui| {
+            for m in &t.members {
+                let name = rules::describe(cat, &m.id).map(|(n, _)| n).unwrap_or_else(|| m.id.clone());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("[{}]", m.grade)).monospace().strong().color(grade_color(&m.grade)));
+                    if m.caught {
+                        ui.label(RichText::new(name).strong());
+                    } else {
+                        ui.label(RichText::new("???").color(GREY));
+                    }
+                });
+            }
+        });
+    }
 }
 
 #[cfg(test)]
