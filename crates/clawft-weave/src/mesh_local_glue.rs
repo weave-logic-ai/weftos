@@ -116,15 +116,21 @@ pub fn state_dir() -> PathBuf {
 /// so no service. `Err`: something is there that cannot be verified
 /// (unreadable `service.json`, unusable user key); the caller treats that as
 /// a refusal.
+///
+/// `service.json` is read from beside the socket: the state dir is 0700 and
+/// owned by the service account, so the service writes a copy there for its
+/// clients (the same copy `weaver mesh` verbs and the doctor read).
 pub fn build_endpoint(
     cfg: &MeshConfig,
     home: &Path,
     build_sha: &str,
 ) -> Result<Option<ServiceEndpoint>, String> {
-    build_endpoint_in(cfg, home, build_sha, &state_dir())
+    let sock = mesh_mode::service_socket(cfg);
+    let record_dir = sock.parent().map_or_else(state_dir, Path::to_path_buf);
+    build_endpoint_in(cfg, home, build_sha, &record_dir)
 }
 
-/// [`build_endpoint`] with an explicit service state dir.
+/// [`build_endpoint`] with an explicit directory holding `service.json`.
 pub fn build_endpoint_in(
     cfg: &MeshConfig,
     home: &Path,
@@ -399,10 +405,17 @@ async fn run(
 ) {
     let ServiceLink { endpoint, client } = *link;
     let node_id = client.hello_ack().node_id.clone();
-    let sink = Arc::new(MeshSink::new(deps.delivery.clone(), client.register_ack().user_id.clone()));
+    let sink = Arc::new(
+        MeshSink::new(deps.delivery.clone(), client.register_ack().user_id.clone())
+            .with_machine_key(client.hello_ack().machine_pubkey),
+    );
     let mut backoff = Backoff::new(deps.timings.backoff.0, deps.timings.backoff.1);
     let mut next = Some(client);
     let mut last_security_log: Option<std::time::Instant> = None;
+    // The service refused the registration itself (key rebound or revoked,
+    // bind pending, rate limited): retry at the slowest pace so a daemon left
+    // with a stale key does not burn its uid's registration budget.
+    let mut refused: Option<std::time::Instant> = None;
     loop {
         if let Some(c) = next.take() {
             publish(&deps.state, &c, "connected");
@@ -422,7 +435,7 @@ async fn run(
             }
         }
         tokio::select! {
-            () = tokio::time::sleep(backoff.next_delay()) => {}
+            () = tokio::time::sleep(if refused.is_some() { deps.timings.backoff.1 } else { backoff.next_delay() }) => {}
             _ = shutdown.changed() => return,
         }
         deps.chain.flush();
@@ -430,7 +443,10 @@ async fn run(
         let mut ep_client = endpoint.client.clone();
         ep_client.deadline = deps.timings.deadline;
         match MeshLocalClient::connect_and_register(&ep_client, &endpoint.user_key, &endpoint.register).await {
-            Ok(c) if c.hello_ack().node_id == node_id => next = Some(c),
+            Ok(c) if c.hello_ack().node_id == node_id => {
+                refused = None;
+                next = Some(c);
+            }
             Ok(c) => {
                 error!(
                     old = %node_id,
@@ -447,6 +463,18 @@ async fn run(
                         "the mesh service failed verification on reconnect and is NOT being used. \
                          service.json is read once at boot; after a legitimate machine key rotation run \
                          `weaver mesh trust` (from the mesh service package) and restart this daemon"
+                    );
+                }
+            }
+            Err(ClientError::Server(e)) => {
+                if refused.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
+                    refused = Some(std::time::Instant::now());
+                    warn!(
+                        kind = ?e.kind,
+                        message = %e.message,
+                        remedy = %e.remedy,
+                        "the mesh service refused this daemon's registration; retrying slowly. After \
+                         `weaver mesh bind rebind` or `revoke`, restart this daemon with the current user key"
                     );
                 }
             }

@@ -116,3 +116,5 @@ clawft-mesh-local = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
 clawft-mesh-local = { workspace = true, features = ["testing"] }
+# P3-X e2e: start the real service in-process with an injected peer source.
+clawft-mesh-service = { workspace = true, features = ["testing"] }

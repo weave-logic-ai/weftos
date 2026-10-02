@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use clawft_mesh_local::proto::{PROTO_MAX, PROTO_MIN};
 use clawft_rpc::doctor::{Component, Finding, Severity};
+use clawft_rpc::handshake::MeshHandshake;
 use serde_json::Value;
 
 use crate::service_units_system::{SERVICE_EXE, STATE_DIR};
@@ -180,6 +181,38 @@ pub fn findings(p: &MeshProbe, home: &std::path::Path) -> Vec<Finding> {
         );
     }
     out
+}
+
+/// Whether the running daemon's mesh mode (from its handshake) agrees with
+/// what is on the host. `None`: no daemon answered (the `daemon` component
+/// reports that), so nothing is said here.
+pub fn mode_findings(daemon: Option<&MeshHandshake>, p: &MeshProbe) -> Vec<Finding> {
+    let Some(d) = daemon else { return Vec::new() };
+    let service_node = p.status.as_ref().and_then(|s| s["node_id"].as_str());
+    let finding = match d.mode.as_str() {
+        "service" => match (service_node, d.state.as_deref()) {
+            (None, _) => f("mode", Severity::Warn, format!("the daemon is a client of the machine mesh service ({}) but the service does not answer here", d.summary()))
+                .remedy("weaver mesh status"),
+            (Some(n), _) if d.service_node_id.as_deref() != Some(n) => f(
+                "mode",
+                Severity::Fail,
+                format!("the daemon is bound to mesh node {} but the service is now node {n}", d.service_node_id.as_deref().unwrap_or("-")),
+            )
+            .remedy("weaver kernel restart   (the daemon adopts the service's node id at boot)"),
+            (Some(_), Some("reconnecting")) => f("mode", Severity::Warn, "the daemon is in service mode and its link to the service is reconnecting")
+                .remedy("weaver mesh status; the daemon keeps running and reconnects on its own"),
+            (Some(n), _) => f("mode", Severity::Ok, format!("daemon mesh mode: service, node {n}{}", d.cert_serial.map(|s| format!(", cert serial {s}")).unwrap_or_default())),
+        },
+        "collapsed" if service_node.is_some() => f(
+            "mode",
+            Severity::Warn,
+            "a machine mesh service is running, but the daemon booted in collapsed mode (its own mesh listener and node.key)",
+        )
+        .remedy("weaver kernel restart   (set kernel.mesh.service = \"required\" in ~/.weftos/weave.toml to make it mandatory)"),
+        "collapsed" => f("mode", Severity::Ok, "daemon mesh mode: collapsed (no machine mesh service)"),
+        other => f("mode", Severity::Ok, format!("daemon mesh mode: {other}")),
+    };
+    vec![finding]
 }
 
 /// Distinct pids listening on `port`, via `lsof` (None when lsof is absent).
@@ -368,6 +401,24 @@ mod tests {
         let mut p = running();
         p.box_key = Some(FileStat { mode: 0o100600, uid: 501 });
         assert_eq!(sev(&findings(&p, Path::new("/h")), "box_key"), Severity::Fail);
+    }
+
+    #[test]
+    fn mode_agrees_with_the_host() {
+        let svc = |state: &str, node: &str| MeshHandshake {
+            mode: "service".into(),
+            state: Some(state.into()),
+            service_node_id: Some(node.into()),
+            ..MeshHandshake::default()
+        };
+        let collapsed = MeshHandshake { mode: "collapsed".into(), ..MeshHandshake::default() };
+        assert!(mode_findings(None, &running()).is_empty(), "no daemon: the daemon component says so");
+        assert_eq!(sev(&mode_findings(Some(&svc("connected", "n1")), &running()), "mode"), Severity::Ok);
+        assert_eq!(sev(&mode_findings(Some(&svc("connected", "n2")), &running()), "mode"), Severity::Fail);
+        assert_eq!(sev(&mode_findings(Some(&svc("reconnecting", "n1")), &running()), "mode"), Severity::Warn);
+        assert_eq!(sev(&mode_findings(Some(&svc("connected", "n1")), &MeshProbe::default()), "mode"), Severity::Warn);
+        assert_eq!(sev(&mode_findings(Some(&collapsed), &running()), "mode"), Severity::Warn);
+        assert_eq!(sev(&mode_findings(Some(&collapsed), &MeshProbe::default()), "mode"), Severity::Ok);
     }
 
     #[test]

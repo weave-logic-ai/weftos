@@ -73,6 +73,8 @@ pub async fn run(args: DoctorArgs) -> anyhow::Result<()> {
         if runtime_wanted {
             let probe = crate::mesh_doctor::gather(&home).await;
             report.findings.extend(crate::mesh_doctor::findings(&probe, &home));
+            let daemon = daemon_mesh().await;
+            report.findings.extend(crate::mesh_doctor::mode_findings(daemon.as_ref(), &probe));
         }
         if install_wanted {
             report.findings.extend(service_tier_findings(&config_dir));
@@ -87,6 +89,19 @@ pub async fn run(args: DoctorArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The running daemon's mesh mode, from `kernel.status` (None: no daemon
+/// answered within 3 s).
+#[cfg(all(unix, feature = "mesh"))]
+async fn daemon_mesh() -> Option<clawft_rpc::handshake::MeshHandshake> {
+    let ask = async {
+        let mut client = crate::client::DaemonClient::connect().await?;
+        let resp = client.simple_call("kernel.status").await.ok()?;
+        let status: crate::protocol::KernelStatusResult = serde_json::from_value(resp.result?).ok()?;
+        status.handshake?.mesh
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(3), ask).await.ok().flatten()
+}
+
 /// Service tier skew: the service's own `service.json` wins over the receipt.
 #[cfg(all(unix, feature = "mesh"))]
 fn service_tier_findings(config_dir: &std::path::Path) -> Vec<clawft_rpc::doctor::Finding> {
@@ -95,7 +110,13 @@ fn service_tier_findings(config_dir: &std::path::Path) -> Vec<clawft_rpc::doctor
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or(serde_json::Value::Null);
-    let record = std::path::Path::new(crate::service_units_system::RUN_DIR).join("service.json");
+    // The same record the mesh checks and the daemon read: beside the socket
+    // ($WEFTOS_MESH_SOCKET honoured).
+    let sock = crate::commands::mesh_cmd::socket_of(&crate::commands::mesh_cmd::ConnArgs::default());
+    let record = sock
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new(crate::service_units_system::RUN_DIR))
+        .join("service.json");
     let observed = clawft_mesh_local::proto::ServiceRecord::load(&record)
         .ok()
         .map(|r| ServiceObserved { build_sha: r.build_sha });
