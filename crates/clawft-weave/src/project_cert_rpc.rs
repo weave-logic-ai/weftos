@@ -119,6 +119,10 @@ pub enum IssueError {
     /// Identity rule (TOFU conflict, revoked, not bound, bad cert).
     #[error(transparent)]
     Identity(#[from] IdentityError),
+    /// The user-key rotation log is unreadable, broken or does not end at the
+    /// key in use (ADR-103 A11); nothing is verified until it is repaired.
+    #[error(transparent)]
+    Rotation(#[from] ident::RotationError),
     /// Manifest store failure.
     #[error("{0}")]
     Store(String),
@@ -145,6 +149,7 @@ impl IssueError {
             Self::Identity(IdentityError::NotBound(_)) => "not_certified",
             Self::Identity(IdentityError::ProjectRevoked(_)) => "project_revoked",
             Self::Identity(_) => "cert_error",
+            Self::Rotation(_) => "user_key_history_invalid",
             Self::Store(_) => "project_store_error",
             Self::Incomplete(_) => "identity_change_incomplete",
         }
@@ -367,6 +372,39 @@ fn user_pubkey(env: &CertEnv) -> [u8; 32] {
     env.user_key.verifying_key().to_bytes()
 }
 
+/// The user keys this daemon trusts for material it sealed earlier: the key in
+/// use plus every key it replaced, from `<manifests>/user-key-rotations.jsonl`
+/// (ADR-103 A11). An empty log is a single key; a log that is unreadable,
+/// broken or does not end at the key in use is an error (fail closed).
+pub fn user_history(env: &CertEnv) -> Result<ident::UserKeyHistory, IssueError> {
+    Ok(ident::RotationLog::new(&env.manifests_dir).history(&user_pubkey(env))?)
+}
+
+/// Append a `user.key.rotated` event to the user chain for every record of
+/// the rotation log the chain does not hold yet (the offline
+/// `weaver migrate user-key --rotate` cannot open the chain; the daemon
+/// chains the handover at its next use). Idempotent. Returns how many were
+/// appended.
+pub fn chain_rotations(env: &CertEnv) -> Result<usize, IssueError> {
+    let records = ident::RotationLog::new(&env.manifests_dir).read()?;
+    if records.is_empty() {
+        return Ok(0);
+    }
+    let chained: std::collections::HashSet<String> = env
+        .chain
+        .tail_from(0)
+        .iter()
+        .filter(|e| e.source == SOURCE && e.kind == ident::KIND_ROTATED)
+        .filter_map(|e| e.payload.as_ref()?.get("record_hash")?.as_str().map(str::to_owned))
+        .collect();
+    let mut n = 0;
+    for r in records.iter().filter(|r| !chained.contains(&r.hash())) {
+        env.chain.append(SOURCE, ident::KIND_ROTATED, Some(json!({ "record": r, "record_hash": r.hash() })));
+        n += 1;
+    }
+    Ok(n)
+}
+
 /// Certify the key in `req` for `project.register`. Refuses an id that is
 /// not in the manifest store, a root that is not that project's registered
 /// root, a key the caller cannot prove (PoP over a daemon-issued nonce), a
@@ -380,11 +418,44 @@ pub fn register(env: &CertEnv, req: RegisterRequest, now: DateTime<Utc>) -> Resu
     verify_pop(env, PopOp::Register, &req.project_pubkey, &req.nonce, &req.project_id, &req.pop_sig)?;
     let journal = IdentityJournal::new(&env.manifests_dir);
     let lock = journal.lock()?;
-    match current_view_locked(env, &lock)?.plan_registration(&req.project_id, &req.project_pubkey)? {
+    let view = current_view_locked(env, &lock)?;
+    match view.plan_registration(&req.project_id, &req.project_pubkey)? {
         Registration::Existing(cert) => {
-            ident::verify_cert_at(&cert, &user_pubkey(env), now).map_err(IdentityError::from)?;
-            write_cert_file(&env.manifests_dir, &cert)?;
-            Ok(Issued { cert: *cert, new: false })
+            let history = user_history(env)?;
+            let current = key_id(&user_pubkey(env));
+            if cert.user_key_id == current {
+                ident::verify_cert_at(&cert, &user_pubkey(env), now).map_err(IdentityError::from)?;
+                write_cert_file(&env.manifests_dir, &cert)?;
+                return Ok(Issued { cert: *cert, new: false });
+            }
+            // Sealed by a user key that has since been rotated out: it still
+            // verifies (dated before the rotation point), but the child pins
+            // the key in use, so certify the same project key again under the
+            // current user key with the next serial (ADR-103 A11).
+            ident::verify_cert_historic(&cert, &history)?;
+            let renewed = ident::sign_cert(
+                &env.user_key,
+                &CertRequest {
+                    project_id: req.project_id.clone(),
+                    project_pubkey: req.project_pubkey,
+                    serial: view.last_serial(&req.project_id) + 1,
+                    issued_at: now,
+                    expires_at: None,
+                },
+            )?;
+            journal.append(&lock, &JournalRecord::Register { cert: renewed.clone() })?;
+            env.chain.append(
+                SOURCE,
+                KIND_REGISTER,
+                Some(json!({
+                    "cert": renewed,
+                    "renewal": true,
+                    "replaces_serial": cert.serial,
+                    "replaces_user_key_id": cert.user_key_id,
+                })),
+            );
+            write_cert_file(&env.manifests_dir, &renewed)?;
+            Ok(Issued { cert: renewed, new: true })
         }
         Registration::New { serial } => {
             let cert = ident::sign_cert(
@@ -561,7 +632,14 @@ pub(crate) async fn env_from_kernel(kernel: &crate::rpc_ext::KernelRef) -> Resul
     };
     let manifests_dir = crate::project_rpc::configured_dir()
         .ok_or_else(|| IssueError::Unavailable("no manifest store (no home directory)".into()))?;
-    Ok(CertEnv { chain, user_key, manifests_dir })
+    let env = CertEnv { chain, user_key, manifests_dir };
+    // The rotation log must end at the key in use before anything is signed
+    // or verified (fail closed), and its records belong on the chain.
+    user_history(&env)?;
+    if let Err(e) = chain_rotations(&env) {
+        tracing::warn!(error = %e, "could not chain the user-key rotation records");
+    }
+    Ok(env)
 }
 
 /// Certify a registering child's key. Shared by package H's

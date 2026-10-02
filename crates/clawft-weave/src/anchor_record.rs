@@ -13,6 +13,7 @@ use clawft_kernel::chain_anchor::{ANCHOR_SOURCE, KIND_ANCHOR};
 use clawft_kernel::project_identity::{self as ident, IdentityError, RevocationView};
 use clawft_types::project::canon::{canonical_json, hex_decode, hex_encode};
 use clawft_types::project::cert::ProjectAnchorStmt;
+use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Signer, VerifyingKey};
 use serde_json::json;
 use tracing::warn;
@@ -43,11 +44,24 @@ pub(super) fn seal(env: &CertEnv, statement: ProjectAnchorStmt, user_seq: u64, u
     Accepted { statement, user_seq, user_event_hash, rec_sig }
 }
 
+/// Sealed by the key in use, or by a user key rotated out since, provided the
+/// statement it seals is dated at or before that key's rotation point
+/// (ADR-103 A11). A record the old key sealed after the rotation point is
+/// refused: the daemon seals only with the key in use, so the old key's
+/// signature on a later statement is not the daemon's.
 fn seal_ok(env: &CertEnv, a: &Accepted) -> bool {
     let Some(sig) = hex_decode::<64>(&a.rec_sig) else { return false };
-    let vk: VerifyingKey = env.user_key.verifying_key();
+    let Ok(history) = crate::project_cert_rpc::user_history(env) else { return false };
+    let Some(at) = DateTime::parse_from_rfc3339(&a.statement.at).ok().map(|t| t.with_timezone(&Utc)) else {
+        return false;
+    };
     let bytes = record_bytes(&a.statement.hash(), a.user_seq, &a.user_event_hash);
-    vk.verify_strict(&bytes, &Signature::from_bytes(&sig)).is_ok()
+    let sig = Signature::from_bytes(&sig);
+    std::iter::once(*history.current())
+        .chain(history.retired_keys())
+        .filter(|pk| history.accepts(pk, at))
+        .filter_map(|pk| VerifyingKey::from_bytes(&pk).ok())
+        .any(|vk| vk.verify_strict(&bytes, &sig).is_ok())
 }
 
 /// The statement still verifies under some certificate ever issued for the

@@ -43,6 +43,9 @@ pub mod project_rpc;
 pub mod user_daemon;
 /// The user key (`~/.weftos/user.key`) and its migration from `chain.key` (ADR-103 D-5).
 pub mod user_key;
+/// `weaver migrate user-key --rotate`: rotation with a dual-signed handover (ADR-103 A11).
+#[cfg(any(unix, windows))]
+pub mod user_key_rotate;
 /// Mesh mode as reported in the handshake (ADR-103 P3-U).
 pub mod mesh_state;
 /// `weaver doctor` mesh-service checks (P3-H).

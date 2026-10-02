@@ -240,8 +240,14 @@ fn check_cert(
     if cert.project_key_id != stmt.project_key_id {
         return Err(revoked());
     }
-    cert.verify(&env.user_key.verifying_key().to_bytes(), now)
-        .map_err(|e| AnchorError::CertInvalid(e.to_string()))?;
+    // The certificate may have been sealed by a user key that was rotated
+    // out after it was issued (ADR-103 A11); it verifies under that key up
+    // to the rotation point. Expiry is judged as before.
+    let history = crate::project_cert_rpc::user_history(env).map_err(|e| AnchorError::CertInvalid(e.to_string()))?;
+    ident::verify_cert_historic(cert, &history).map_err(|e| AnchorError::CertInvalid(e.to_string()))?;
+    if cert.expires_at.as_deref().and_then(|t| DateTime::parse_from_rfc3339(t).ok()).is_some_and(|t| t.with_timezone(&Utc) <= now) {
+        return Err(AnchorError::CertInvalid(CertError::Expired.to_string()));
+    }
     if stmt.cert_serial != cert.serial {
         return Err(AnchorError::CertInvalid(format!(
             "cert_serial {} is not the certificate in force ({})",
@@ -488,3 +494,6 @@ mod tests;
 #[cfg(test)]
 #[path = "anchor_rpc_record_tests.rs"]
 mod record_tests;
+#[cfg(test)]
+#[path = "anchor_rpc_rotation_tests.rs"]
+mod rotation_tests;

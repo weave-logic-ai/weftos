@@ -6,8 +6,9 @@ use clawft_types::project::cert::{ProjectCert, key_id};
 
 use super::{
     IdentityError, JournalRecord, KIND_REGISTER, KIND_REKEY, KIND_REVOKE, SOURCE,
-    verify_signature_only,
+    verify_cert_historic,
 };
+use crate::user_key_rotation::UserKeyHistory;
 use crate::chain::ChainEvent;
 
 /// Outcome of [`RevocationView::plan_registration`].
@@ -37,7 +38,7 @@ struct ProjectIdentity {
 /// by [`Self::build`]; there is no way to add an unverified certificate.
 #[derive(Debug, Clone)]
 pub struct RevocationView {
-    user_pubkey: [u8; 32],
+    trust: UserKeyHistory,
     projects: HashMap<String, ProjectIdentity>,
     /// key id -> the project that first claimed it (certified or revoked).
     key_owner: HashMap<String, String>,
@@ -54,8 +55,20 @@ impl RevocationView {
         journal: &[JournalRecord],
         cert_files: &[ProjectCert],
     ) -> Self {
+        Self::build_with(&UserKeyHistory::single(user_pubkey), events, journal, cert_files)
+    }
+
+    /// [`Self::build`] under a user-key rotation history: a certificate sealed
+    /// by a retired user key counts when it is dated at or before that key's
+    /// rotation point (ADR-103 A11); one dated after it is dropped.
+    pub fn build_with(
+        trust: &UserKeyHistory,
+        events: &[ChainEvent],
+        journal: &[JournalRecord],
+        cert_files: &[ProjectCert],
+    ) -> Self {
         let mut v = Self {
-            user_pubkey: *user_pubkey,
+            trust: trust.clone(),
             projects: HashMap::new(),
             key_owner: HashMap::new(),
             rejected: 0,
@@ -116,7 +129,7 @@ impl RevocationView {
     }
 
     fn ingest_cert(&mut self, c: &ProjectCert) {
-        if verify_signature_only(c, &self.user_pubkey).is_err() {
+        if self.verify_historic(c).is_err() {
             self.rejected += 1;
             return;
         }
@@ -127,6 +140,12 @@ impl RevocationView {
         if !st.certs.iter().any(|x| x.sig == c.sig) {
             st.certs.push(c.clone());
         }
+    }
+
+    /// Signature and shape under the user key that sealed `c` (current or
+    /// retired), with the rotation-point rule for a retired one.
+    fn verify_historic(&self, c: &ProjectCert) -> Result<(), IdentityError> {
+        verify_cert_historic(c, &self.trust)
     }
 
     fn ingest_revoke(&mut self, project_id: &str, key_id: &str) {

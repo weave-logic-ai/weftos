@@ -6,7 +6,7 @@ use clawft_kernel::project_identity::{IdentityJournal, JournalLock, JournalRecor
 use clawft_types::project::cert::ProjectCert;
 use serde_json::{Value, json};
 
-use super::{CertEnv, IssueError, user_pubkey};
+use super::{CertEnv, IssueError, user_history};
 
 /// The `<id>.cert.json` files. A missing directory is empty; any other
 /// directory or file read error fails closed instead of hiding a binding.
@@ -43,8 +43,9 @@ fn has_chain_evidence(env: &CertEnv) -> bool {
     env.chain.tail_from(0).iter().any(|e| e.source == SOURCE)
 }
 
-fn view_from(env: &CertEnv, journal: Vec<JournalRecord>, certs: &[ProjectCert]) -> RevocationView {
-    RevocationView::build(&user_pubkey(env), &env.chain.tail_from(0), &journal, certs)
+fn view_from(env: &CertEnv, journal: Vec<JournalRecord>, certs: &[ProjectCert]) -> Result<RevocationView, IssueError> {
+    let trust = user_history(env)?;
+    Ok(RevocationView::build_with(&trust, &env.chain.tail_from(0), &journal, certs))
 }
 
 /// The one view every issue, rekey, revoke and verification decision uses:
@@ -61,7 +62,7 @@ pub fn current_view(env: &CertEnv) -> Result<RevocationView, IssueError> {
     let certs = read_cert_files(&env.manifests_dir)?;
     let evidence = !certs.is_empty() || has_chain_evidence(env);
     let journal = IdentityJournal::new(&env.manifests_dir).read(evidence)?;
-    Ok(view_from(env, journal, &certs))
+    view_from(env, journal, &certs)
 }
 
 /// [`current_view`] for a caller holding the exclusive journal lock.
@@ -69,7 +70,7 @@ pub(super) fn current_view_locked(env: &CertEnv, lock: &JournalLock) -> Result<R
     let certs = read_cert_files(&env.manifests_dir)?;
     let evidence = !certs.is_empty() || has_chain_evidence(env);
     let journal = IdentityJournal::new(&env.manifests_dir).read_locked(lock, evidence)?;
-    Ok(view_from(env, journal, &certs))
+    view_from(env, journal, &certs)
 }
 
 /// `project.identity.repair`: rebuild a corrupt or missing journal from the
@@ -90,7 +91,7 @@ pub fn repair(env: &CertEnv) -> Result<Value, IssueError> {
     // A torn tail must not drop earlier journal-only revocations: merge
     // every line of the old journal that still parses.
     let salvaged = journal.salvage(&lock);
-    let view = view_from(env, salvaged, &certs);
+    let view = view_from(env, salvaged, &certs)?;
     let records = view.export_records();
     let moved = journal.replace(&lock, &records)?;
     Ok(json!({

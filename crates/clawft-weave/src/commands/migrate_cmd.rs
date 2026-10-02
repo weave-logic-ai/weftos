@@ -43,11 +43,21 @@ pub enum MigrateAction {
         allow_unsigned: bool,
     },
     /// Copy chain.key's seed to ~/.weftos/user.key (same public key, same user id).
+    ///
+    /// With --rotate: replace the user key instead. The handover is recorded
+    /// in the manifest store, signed by the old and the new key, so
+    /// certificates, anchor records and policies sealed by the old key keep
+    /// verifying up to the rotation point (ADR-103 A11). Stop the user daemon
+    /// first; afterwards restart it, restart project kernels, and run
+    /// `weaver mesh bind rebind` if the machine mesh service is installed.
     #[command(name = "user-key")]
     UserKey {
         /// Show what would happen without writing anything.
         #[arg(long)]
         dry_run: bool,
+        /// Rotate the user key (new key, dual-signed handover) instead of migrating.
+        #[arg(long)]
+        rotate: bool,
     },
 }
 
@@ -70,6 +80,22 @@ fn describe_user_key(outcome: &crate::user_key::MigrateOutcome) -> String {
         MigrateOutcome::AlreadyMigrated { to } => {
             format!("{} already holds the same key; nothing to do", to.display())
         }
+    }
+}
+
+fn describe_rotation(outcome: &crate::user_key_rotate::RotateOutcome) -> String {
+    use crate::user_key_rotate::RotateOutcome;
+    match outcome {
+        RotateOutcome::WouldRotate { old_key_id } => format!(
+            "dry run: would retire user key {old_key_id}, create a new one and record a dual-signed handover; nothing written"
+        ),
+        RotateOutcome::Rotated { seq, old_key_id, new_key_id, retired } => format!(
+            "rotated the user key (record {seq}): {old_key_id} -> {new_key_id}.{} Next: start the user daemon \
+             (it chains the handover), restart each project kernel (`weaver kernel restart --project <id>`; \
+             a running child still pins the old key), and run `weaver mesh bind rebind` if the machine mesh \
+             service is installed. Delete the retired key yourself once you are satisfied; code never does.",
+            retired.as_ref().map_or(String::new(), |p| format!(" The old private key is kept at {}.", p.display()))
+        ),
     }
 }
 
@@ -122,9 +148,14 @@ fn warn_explicit_checkpoint(home: Option<&std::path::Path>) {
 /// Run the migrate subcommand.
 pub fn run(args: MigrateArgs) -> anyhow::Result<()> {
     match args.action {
-        MigrateAction::UserKey { dry_run } => {
+        MigrateAction::UserKey { dry_run, rotate } => {
             let home = home_dir().ok_or_else(|| anyhow::anyhow!("cannot determine the home directory"))?;
-            println!("{}", describe_user_key(&crate::user_key::migrate_user_key(&home, dry_run)?));
+            if rotate {
+                let manifests = crate::user_daemon::manifests_dir(&home);
+                println!("{}", describe_rotation(&crate::user_key_rotate::rotate_user_key(&home, &manifests, dry_run, chrono::Utc::now())?));
+            } else {
+                println!("{}", describe_user_key(&crate::user_key::migrate_user_key(&home, dry_run)?));
+            }
         }
         MigrateAction::UserChain {
             dry_run,
