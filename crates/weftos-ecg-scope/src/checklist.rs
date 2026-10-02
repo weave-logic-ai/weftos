@@ -19,6 +19,25 @@ pub struct Step {
     pub detail: String,
 }
 
+impl Step {
+    /// Stable id for linking a step to a cog guide page (`[links]` in guide.toml, ADR-104).
+    pub fn id(&self) -> &'static str {
+        match self.title {
+            "Seed agent reachable" => "seed_api",
+            "Cog installed" => "cog_installed",
+            "Cog running" => "cog_running",
+            "Signal export reachable" => "export",
+            "ADS1115 found on I2C" => "adc_found",
+            "Sensor powered" => "sensor_powered",
+            "Electrodes attached" => "electrodes",
+            "Heartbeats detected" => "beats",
+            "Lead polarity" => "polarity",
+            "Mains notch" => "mains",
+            _ => "",
+        }
+    }
+}
+
 fn step(title: &'static str, mark: Mark, detail: impl Into<String>) -> Step {
     Step {
         title,
@@ -253,6 +272,13 @@ mod tests {
 
     fn marks(v: &[Step]) -> Vec<Mark> {
         v.iter().map(|s| s.mark).collect()
+    }
+
+    #[test]
+    fn every_step_has_a_guide_link_id() {
+        let steps = evaluate(&State::default(), &Calibration::default(), None);
+        assert_eq!(steps.len(), 10);
+        assert!(steps.iter().all(|s| !s.id().is_empty()), "{steps:?}");
     }
 
     #[test]

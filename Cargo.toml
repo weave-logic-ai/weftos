@@ -59,6 +59,7 @@ members = [
     "crates/clawft-app",
     "crates/clawft-gui-egui",
     "crates/weftos-ecg-scope",
+    "crates/weftos-sensor-guide",
     "crates/clawft-substrate",
     "crates/clawft-surface",
     "crates/clawft-canon",

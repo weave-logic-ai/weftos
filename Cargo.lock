@@ -10683,6 +10683,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "web-time",
+ "weftos-sensor-guide",
 ]
 
 [[package]]
@@ -10732,6 +10733,17 @@ name = "weftos-scene-builder"
 version = "0.1.0"
 dependencies = [
  "weftos-leaf-scene",
+]
+
+[[package]]
+name = "weftos-sensor-guide"
+version = "0.8.1"
+dependencies = [
+ "egui",
+ "egui_commonmark",
+ "serde",
+ "serde_json",
+ "toml 0.8.23",
 ]
 
 [[package]]

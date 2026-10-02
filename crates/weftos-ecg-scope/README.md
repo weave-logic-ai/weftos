@@ -48,6 +48,7 @@ There's no SSH and no TLS. The agent serves plain HTTP on port 80 over USB, LAN 
   - a RuView ADR-293 reference series (`timestamp_ms,value`: beat-to-beat bpm). That series is ground truth for grading `wifi-densepose-vitals`.
 
   Natively both are written to files; in the browser they're copied to the clipboard.
+- **Guide tab (ADR-104):** the cog's own sensor guide, fetched from `http://<seed>:8046/guide`. It's a searchable mini-wiki covering start, parts, wiring, electrodes, setup, calibration, troubleshooting, API reference, safety and glossary, with painted header, wiring, placement and flow diagrams, rendered by `weftos-sensor-guide`. Each checklist step has a "?" that opens its page. Set `ECG_GUIDE_DIR=<cog>/guide` (native) to author against a local folder.
 - **Start, stop and test-run** the cog (`--once --simulate`, which needs no hardware).
 
 Not a medical device. Power the Seed from a battery while pads are on a person.
@@ -61,6 +62,7 @@ Not a medical device. Power the Seed from a battery while pads are on a person.
 | `src/analysis.rs` | calibration maths and tap tempo |
 | `src/checklist.rs` | hook-up steps from live state |
 | `src/app.rs` | egui panels |
-| `src/shot.rs` | native-only self-screenshot (`ECG_SCOPE_SCREENSHOT=<file.bmp>`) for headless visual checks |
+| (guide) | rendering comes from the shared `weftos-sensor-guide` crate; content ships with the cog |
+| `src/shot.rs` | native-only self-screenshot (`ECG_SCOPE_SCREENSHOT=<file.bmp>`, with `ECG_SCOPE_TAB=guide` and `ECG_SCOPE_PAGE=<id>` to capture a guide page) for headless visual checks |
 
 The cog lives in the private cogs repo (`src/cogs/sen0213-ecg`, ADR-158).

@@ -121,6 +121,7 @@ pub struct Net {
     status: Lane,
     agent: Lane,
     config: Lane,
+    guide: Lane,
     /// Bumped when settings change, so replies to an old Seed are dropped.
     generation: Arc<AtomicU64>,
 }
@@ -143,6 +144,7 @@ impl Net {
             status: Lane::new(1000),
             agent: Lane::new(3000),
             config: Lane::new(5000),
+            guide: Lane::new(15_000),
             generation: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -182,6 +184,7 @@ impl Net {
             });
         }
         self.poll_config(s, ctx);
+        self.poll_guide(s, ctx);
         if self.agent.due() {
             let url = format!("{}/api/v1/apps", s.agent_base());
             self.get(url, &self.agent.busy.clone(), ctx, |st, r| {
@@ -202,6 +205,33 @@ impl Net {
                 }
             });
         }
+    }
+
+    /// The cog serves its guide at `/guide` (ADR-104). Fetched until it loads; with
+    /// `ECG_GUIDE_DIR=<dir>` (native) the guide is read from a local folder instead.
+    fn poll_guide(&mut self, s: &Settings, ctx: &egui::Context) {
+        let loaded = self
+            .state
+            .lock()
+            .map(|st| matches!(st.guide, Some(Ok(_))))
+            .unwrap_or(true);
+        if loaded || !self.guide.due() {
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dir) = env("ECG_GUIDE_DIR") {
+            let g = weftos_sensor_guide::GuideBundle::from_dir(std::path::Path::new(&dir));
+            self.guide.busy.store(false, Ordering::Release);
+            if let Ok(mut st) = self.state.lock() {
+                st.guide = Some(g);
+            }
+            return;
+        }
+        let url = format!("{}/guide", s.export_base());
+        self.get(url, &self.guide.busy.clone(), ctx, |st, r| {
+            st.guide =
+                Some(json_of(&r).and_then(|v| weftos_sensor_guide::GuideBundle::from_json(&v)));
+        });
     }
 
     fn poll_config(&mut self, s: &Settings, ctx: &egui::Context) {

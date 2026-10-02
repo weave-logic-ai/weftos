@@ -126,6 +126,8 @@ pub struct State {
     pub last_action: Option<String>,
     /// The cog's current config from the agent (`GET /api/v1/apps/<id>/config`).
     pub cog_config: Option<serde_json::Value>,
+    /// The cog's own guide (`GET :8046/guide`, ADR-104), or why it could not be loaded.
+    pub guide: Option<Result<weftos_sensor_guide::GuideBundle, String>>,
     pub last_poll: Option<Instant>,
 }
 

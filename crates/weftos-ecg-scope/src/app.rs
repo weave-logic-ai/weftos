@@ -26,6 +26,29 @@ const WIRING: [(&str, &str); 7] = [
     ("Never", "pin 2 / 4 (5 V)"),
 ];
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Live,
+    Guide,
+}
+
+/// Native: `ECG_SCOPE_TAB=guide` and `ECG_SCOPE_PAGE=<id>` open a guide page at start
+/// (used with ECG_SCOPE_SCREENSHOT for docs and visual checks).
+fn start_tab() -> Tab {
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::env::var("ECG_SCOPE_TAB").is_ok_and(|t| t == "guide") {
+        return Tab::Guide;
+    }
+    Tab::Live
+}
+
+fn start_page() -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::env::var("ECG_SCOPE_PAGE").ok();
+    #[cfg(target_arch = "wasm32")]
+    None
+}
+
 /// (filtered mV, raw V, R markers) as plot points.
 type Series = (Vec<[f64; 2]>, Vec<[f64; 2]>, Vec<[f64; 2]>);
 
@@ -42,6 +65,8 @@ pub struct ScopeApp {
     save_path: String,
     note: Option<String>,
     cfg_draft: Option<CogConfig>,
+    tab: Tab,
+    guide: weftos_sensor_guide::GuideView,
 }
 
 impl ScopeApp {
@@ -59,6 +84,8 @@ impl ScopeApp {
             save_path: "ecg-capture".into(),
             note: None,
             cfg_draft: None,
+            tab: start_tab(),
+            guide: weftos_sensor_guide::GuideView::at(start_page()),
         }
     }
 }
@@ -279,15 +306,26 @@ impl eframe::App for ScopeApp {
         egui::SidePanel::left("checklist").resizable(true).default_width(360.0).show(ctx, |ui| {
             ui.heading("Hook-up checklist");
             egui::ScrollArea::vertical().show(ui, |ui| {
+                let mut open_step = None;
                 for s in &steps {
                     ui.horizontal_top(|ui| {
                         mark_dot(ui, s.mark);
+                        if ui.small_button("?").on_hover_text("open the guide page for this step").clicked() {
+                            open_step = Some(s.id());
+                        }
                         ui.vertical(|ui| {
                             ui.strong(s.title);
                             ui.label(RichText::new(&s.detail).small());
                         });
                     });
                     ui.add_space(4.0);
+                }
+                if let Some(id) = open_step {
+                    let guide = self.state.lock().ok().and_then(|st| st.guide.clone());
+                    if let Some(Ok(g)) = guide {
+                        self.guide.open_for_step(&g, id);
+                    }
+                    self.tab = Tab::Guide;
                 }
                 ui.separator();
                 egui::CollapsingHeader::new("Wiring (3.3 V only)").default_open(true).show(ui, |ui| {
@@ -304,7 +342,8 @@ impl eframe::App for ScopeApp {
             });
         });
 
-        egui::SidePanel::right("calib").resizable(true).default_width(300.0).show(ctx, |ui| {
+        if self.tab == Tab::Live {
+            egui::SidePanel::right("calib").resizable(true).default_width(300.0).show(ctx, |ui| {
             let hr = report.as_ref().and_then(|r| r["heart_rate_bpm"].as_f64());
             let status = report.as_ref().and_then(|r| r["status"].as_str()).unwrap_or("–").to_string();
             ui.label(RichText::new(opt(hr, |v| format!("{v:.0} bpm"))).size(40.0).strong());
@@ -440,8 +479,28 @@ impl eframe::App for ScopeApp {
                 ui.label(RichText::new(n).small());
             }
         });
+        }
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.tab, Tab::Live, RichText::new("Live").size(16.0));
+                ui.selectable_value(&mut self.tab, Tab::Guide, RichText::new("Guide").size(16.0));
+            });
+            ui.separator();
+            if self.tab == Tab::Guide {
+                let guide = self.state.lock().ok().and_then(|st| st.guide.clone());
+                match guide {
+                    Some(Ok(g)) => self.guide.show(ui, &g),
+                    Some(Err(e)) => {
+                        ui.label(RichText::new(format!("The cog's guide could not be loaded: {e}")).color(RED));
+                        ui.label("It is served by the cog at :8046/guide (cog 0.1.2+). Start the cog, or set ECG_GUIDE_DIR to a local guide folder.");
+                    }
+                    None => {
+                        ui.label("Loading the guide from the cog...");
+                    }
+                }
+                return;
+            }
             ui.horizontal(|ui| {
                 ui.heading("ECG");
                 ui.add(egui::Slider::new(&mut self.window_s, 2.0..=30.0).text("seconds"));
