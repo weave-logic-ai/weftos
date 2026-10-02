@@ -1001,7 +1001,10 @@ pub async fn run(
     workspace_routing: Option<clawft_types::routing::RoutingConfig>,
 ) -> anyhow::Result<()> {
     // ADR-103 A6 seams: bodies live in `project_hooks` (no-ops until Phase 2 H/F).
-    let _pre_boot = crate::project_hooks::pre_boot(&mut config);
+    // For the `project` profile `pre_boot` does the spawn handshake, key and
+    // registration (and fixes `RuntimePaths::resolve()`), so it must stay the
+    // first thing here.
+    let mut pre_boot = crate::project_hooks::pre_boot(&mut config, &kernel_config).await?;
     crate::project_hooks::adjust_services(&mut config, &mut kernel_config);
     let paths = protocol::runtime_paths();
     let socket_path = paths.socket();
@@ -1092,8 +1095,13 @@ pub async fn run(
         clawft_types::runtime_paths::home_dir().map(|h| clawft_rpc::resolve::manifests_dir(&h)),
         clawft_types::runtime_paths::user_profile_active(),
     );
-    let daemon_identity = crate::node_identity::load_or_generate(&runtime_dir)
-        .map_err(|e| anyhow::anyhow!("daemon identity bootstrap: {e}"))?;
+    // A project kernel boots with its project key (node key == chain key),
+    // already loaded and certified by `pre_boot`.
+    let daemon_identity = match pre_boot.take_identity() {
+        Some(identity) => identity,
+        None => crate::node_identity::load_or_generate(&runtime_dir)
+            .map_err(|e| anyhow::anyhow!("daemon identity bootstrap: {e}"))?,
+    };
     // ADR-103 A6 (package I): a project-bound kernel attributes every
     // governance request to its own bound project.
     crate::caller_principal::attest_instance(&daemon_identity.node_id);
@@ -1104,7 +1112,7 @@ pub async fn run(
     // consumed by boot.
     clawft_kernel::chain_storage::request_new_chain(false);
     clawft_kernel::chain_storage::request_adopt_legacy_chain(false);
-    crate::project_hooks::post_boot(&kernel);
+    crate::project_hooks::post_boot(&kernel, &pre_boot)?;
     let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
     // Record this process as the live daemon only now that boot (which takes
     // the chain lock) has succeeded, so a refused boot leaves no stale pid.
@@ -3485,6 +3493,9 @@ pub async fn run(
         info!(drained, "agent service shutdown");
     }
 
+    // Project kernel: final anchor and unregister, before the chain is saved.
+    crate::project_hooks::pre_shutdown().await;
+
     // Gracefully shut down running agents before kernel shutdown
     {
         let k = kernel.read().await;
@@ -3700,6 +3711,7 @@ async fn authorize_caller(
     // ADR-103 A6 (Phase 2 package I): the caller's verified project comes
     // from a token scope, a verified forward header or this kernel's own
     // binding, never from `Request.project`; a disagreeing claim is refused.
+    crate::project_boot_run::note_activity(method);
     caller.verified_project = crate::caller_principal::establish(caller, method, params, kernel).await?;
     let caps = resolve_caller_capabilities(caller, kernel).await;
     crate::rpc_ext::authorize(caller, &caps, method, params, kernel).await?;

@@ -209,8 +209,14 @@ pub fn adjust_services(config: &mut Config, kernel_config: &mut KernelConfig) {
     if !scrubbed.is_empty() {
         info!(count = scrubbed.len(), "project profile: credential variables removed from this process's environment (best effort; the supervisor must spawn the child with a cleared env)");
     }
-    let spawn_json = RuntimePaths::resolve().spawn_json();
-    let link = Arc::new(ParentLink::from_spawn_json(&spawn_json));
+    // `project_boot::pre_boot` has already read and deleted `spawn.json`; its
+    // contents come from there. Without it (tests, a hand-built kernel) the
+    // file is read as before.
+    let link = Arc::new(match crate::project_boot::spawn_link() {
+        Some((socket, id, Some(token))) if !token.trim().is_empty() => ParentLink::new(socket, id, token),
+        Some(_) => ParentLink::unconfigured("spawn.json carried no project token"),
+        None => ParentLink::from_spawn_json(&RuntimePaths::resolve().spawn_json()),
+    });
     if let Some(why) = link_problem(&link) {
         warn!(
             problem = %why,

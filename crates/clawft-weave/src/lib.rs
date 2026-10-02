@@ -44,6 +44,21 @@ pub mod user_daemon;
 /// Daemon RPC extension seam: method-prefix routes + pre-dispatch gates (ADR-103 D0).
 #[cfg(any(unix, windows))]
 pub mod rpc_ext;
+/// `mesh.*` (mesh-local/1): the user daemon's child registry (ADR-103 Phase 2 H).
+#[cfg(unix)]
+pub mod mesh_local_registry;
+/// `mesh.challenge|register|heartbeat|unregister` handlers (ADR-103 Phase 2 H).
+#[cfg(unix)]
+pub mod mesh_local_rpc;
+/// Child bootstrap: spawn handshake, key, registration, certificate (ADR-103 Phase 2 H).
+#[cfg(unix)]
+pub mod project_boot;
+/// The child's wire to the user daemon and the real anchor transport (ADR-103 Phase 2 H).
+#[cfg(unix)]
+pub mod project_boot_link;
+/// The child's running half: genesis, heartbeat, anchors, shutdown (ADR-103 Phase 2 H).
+#[cfg(unix)]
+pub mod project_boot_run;
 /// Seams `daemon::run` calls for the per-project kernel profile (ADR-103 A6).
 #[cfg(any(unix, windows))]
 pub mod project_hooks;
