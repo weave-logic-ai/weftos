@@ -22,8 +22,10 @@ pub const VERSION_PIN_FILE: &str = "parent-policy.version";
 /// own certificate and logs a warning.
 pub const USER_PIN_FILE: &str = "user.pub";
 /// Marker the user daemon drops in the run dir when it revokes the project;
-/// its presence stops boot, reload and update.
-pub const REVOKED_FILE: &str = "revoked";
+/// its presence stops boot, reload and update. Defined once in
+/// `clawft_types::runtime_paths` (`revoked_marker`), shared with the writer
+/// and the supervisor.
+pub use clawft_types::runtime_paths::REVOKED_FILE;
 
 /// What the project chain says about earlier governance applications.
 #[derive(Debug, Default)]
@@ -74,10 +76,9 @@ pub fn write_user_pin(run_dir: &std::path::Path, user_pubkey: &[u8; 32]) -> std:
 /// Returns the key and whether it came from the `user.pub` pin.
 pub(crate) fn load_user_pubkey(paths: &RuntimePaths) -> Result<([u8; 32], bool), OverlayError> {
     let cert_err = |m: String| OverlayError::Cert(m);
-    if paths.root().join(REVOKED_FILE).exists() {
-        return Err(OverlayError::Revoked(
-            paths.root().join(REVOKED_FILE).display().to_string(),
-        ));
+    let revoked = paths.revoked_marker();
+    if revoked.exists() {
+        return Err(OverlayError::Revoked(revoked.display().to_string()));
     }
     let path = paths
         .project_cert()

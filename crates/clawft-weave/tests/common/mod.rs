@@ -111,6 +111,8 @@ pub async fn spawn() -> Daemon {
     let tmp = tempfile::tempdir().unwrap();
     let manifests = tmp.path().join("projects");
     clawft_weave::project_rpc::init_manifests_dir(manifests.clone());
+    // Children's run dirs (and the revoked marker) live beside the store.
+    clawft_weave::project_cert_rpc::init_run_root(tmp.path().join("run"));
     clawft_weave::scope_gate::init(Some(manifests.clone()), false);
     let kcfg = KernelConfig {
         chain: Some(ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())),

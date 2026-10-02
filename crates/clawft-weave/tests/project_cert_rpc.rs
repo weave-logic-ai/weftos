@@ -143,6 +143,7 @@ async fn owner_flow_on_the_user_daemon() {
     let home = tempfile::tempdir().unwrap();
     let mdir = home.path().join(".weftos/projects");
     clawft_weave::project_rpc::init_manifests_dir(mdir.clone());
+    clawft_weave::project_cert_rpc::init_run_root(home.path().join(".weftos/run"));
     let root = home.path().join("proj");
     std::fs::create_dir_all(&root).unwrap();
 
@@ -150,7 +151,8 @@ async fn owner_flow_on_the_user_daemon() {
     let r = call(&d, "project.cert.show", json!({"id": "01JB8Z3Q0V6X9KQ4M2N7T5R1WD"}), Some("admin")).await;
     assert_eq!(r["error_kind"], "cert_unavailable", "{r}");
 
-    clawft_weave::user_daemon::enter();
+    // An explicit run root: nothing resolves the real `~/.weftos/run`.
+    clawft_weave::user_daemon::enter_at(&home.path().join(".weftos/run"));
     let reg = call(&d, "project.register", json!({"root": root, "name": "demo"}), Some("admin")).await;
     assert_eq!(reg["ok"], true, "{reg}");
     let id = reg["result"]["project"]["id"].as_str().unwrap().to_owned();

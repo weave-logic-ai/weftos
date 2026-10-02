@@ -365,7 +365,7 @@ fn revoked_marker() {
         let r = sup.ensure_running(&fx.id).await.unwrap();
         fx.mark_revoked(); // what the project.revoke RPC does first
         sup.revoked(&fx.id, "project.revoke").await;
-        assert!(state::is_marked_revoked(&fx.run_dir()), "the marker the child checks");
+        assert!(state::is_marked_revoked(&fx.run_root, &fx.id), "the marker the child checks");
         wait_until("child stopped", 5, || !pid_alive(r.pid)).await;
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(sup.launcher().spawn_count(), 1, "a revoked project is not restarted");

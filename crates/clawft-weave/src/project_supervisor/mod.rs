@@ -142,9 +142,11 @@ impl Supervisor {
         &self.launcher
     }
 
-    /// `<run_root>/<id>`.
+    /// `<run_root>/<id>` (`runtime_paths::child_run_dir`; ids are validated
+    /// before they get here).
     pub fn run_dir(&self, id: &str) -> PathBuf {
-        self.cfg.run_root.join(id)
+        clawft_types::runtime_paths::child_run_dir(&self.cfg.run_root, id)
+            .unwrap_or_else(|| self.cfg.run_root.join(id))
     }
 
     fn socket(&self, id: &str) -> PathBuf {
@@ -193,9 +195,8 @@ impl Supervisor {
         let view = crate::project_cert_rpc::current_view(&self.deps.cert_env)
             .map_err(|e| SupError::Identity(e.kind().to_owned() + ": " + &e.to_string()))?;
         let cert = view.current_cert(id).cloned();
-        let run_dir = self.run_dir(id);
         // Revoke is terminal: the marker is never lifted by the supervisor.
-        if state::is_marked_revoked(&run_dir) {
+        if state::is_marked_revoked(&self.cfg.run_root, id) {
             return Err(SupError::Revoked(id.to_owned()));
         }
         let upub = self.deps.cert_env.user_key.verifying_key().to_bytes();
@@ -269,7 +270,7 @@ impl Supervisor {
         {
             return Ok(Running { socket: self.socket(id), pid, started: false });
         }
-        if state::is_marked_revoked(&self.run_dir(id)) {
+        if state::is_marked_revoked(&self.cfg.run_root, id) {
             return Err(SupError::Revoked(id.to_owned()));
         }
         let failed = {

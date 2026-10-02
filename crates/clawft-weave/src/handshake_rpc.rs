@@ -49,6 +49,9 @@ fn canon(p: &Path) -> PathBuf {
 
 /// Decide the bound project for a daemon owning `paths`.
 ///
+/// - a spawned child kernel (`RootSource::Child`, ADR-103 A7): the project it
+///   was started for, which `pre_boot` checked against `spawn.json`, the run
+///   dir name and the certificate (`BoundVia::Project`);
 /// - root resolved from a project directory: that `project.toml` id
 ///   (`BoundVia::Project`);
 /// - otherwise: the one manifest in `manifests_dir` whose `[serve]
@@ -56,6 +59,12 @@ fn canon(p: &Path) -> PathBuf {
 ///   (`BoundVia::Manifest`);
 /// - else unbound.
 pub fn compute_bound(paths: &RuntimePaths, manifests_dir: Option<&Path>) -> BoundProject {
+    if let RootSource::Child { id, .. } = paths.source() {
+        return BoundProject {
+            project_id: Some(id.clone()),
+            via: BoundVia::Project,
+        };
+    }
     if let RootSource::Project(dir) = paths.source() {
         if let Some(pt) = read_project_toml(dir).ok().flatten() {
             return BoundProject {
@@ -363,6 +372,17 @@ mod tests {
         assert_eq!(h.project_id.as_deref(), Some(A));
         assert_eq!(h.bound_via, BoundVia::Project);
         assert_eq!((h.depth, h.parent), (0, None));
+    }
+
+    #[test]
+    fn a_child_kernel_is_bound_to_its_project() {
+        // The supervisor's readiness check and the verified-project path
+        // both read this: a child that reported no project never got ready.
+        let paths = RuntimePaths::child_at("/iso/run", A, "/work/p").unwrap();
+        let b = compute_bound(&paths, None);
+        assert_eq!((b.project_id.as_deref(), b.via), (Some(A), BoundVia::Project));
+        let h = build_handshake("node".into(), &paths, None, &b);
+        assert_eq!(h.project_id.as_deref(), Some(A));
     }
 
     #[test]

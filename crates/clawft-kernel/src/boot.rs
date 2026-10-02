@@ -998,7 +998,15 @@ impl<P: Platform> Kernel<P> {
                 let signing_key = if let Some(ref ckpt_path) =
                     chain_config.effective_checkpoint_path()
                 {
-                    let key_path = std::path::PathBuf::from(ckpt_path).with_extension("key");
+                    // ADR-103 A7, one project key: a project kernel's chain
+                    // is signed by `project.key` (`RuntimePaths::chain_key`,
+                    // loaded by `pre_boot` before boot), never by a
+                    // `chain.key` beside the checkpoint.
+                    let key_path = if runtime_paths.child_id().is_some() {
+                        runtime_paths.chain_key()
+                    } else {
+                        std::path::PathBuf::from(ckpt_path).with_extension("key")
+                    };
                     match crate::chain::ChainManager::load_or_create_key(&key_path) {
                         Ok(key) => {
                             boot_log.push(BootEvent::info(

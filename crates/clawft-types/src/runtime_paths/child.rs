@@ -57,6 +57,27 @@ pub const PROJECT_KEY_FILE: &str = "project.key";
 pub const PROJECT_CERT_FILE: &str = "project.cert.json";
 /// The committed overlay (only the owner writes it).
 pub const OVERLAY_FILE: &str = "overlay.toml";
+/// Terminal revocation marker in a child's run dir. Only the user daemon's
+/// `project.revoke` writes it and nothing clears it; while it exists the
+/// supervisor never starts the project and the child refuses to boot, reload
+/// or take policy.
+pub const REVOKED_FILE: &str = "revoked";
+
+/// `<run_root>/<id>`: the run dir of child `id` under a user daemon's run
+/// root (`RuntimePaths::user_with(..).root()`, which honours
+/// `$WEFTOS_RUNTIME_DIR`). `None` when `id` is not a safe path component.
+pub fn child_run_dir(run_root: &Path, id: &str) -> Option<PathBuf> {
+    safe_component(id).then(|| run_root.join(id))
+}
+
+/// `<run_root>/<id>/revoked`. The one derivation of the revoked marker: the
+/// user daemon's writer and the supervisor call this with the daemon's run
+/// root, and the child reaches the same file through
+/// [`RuntimePaths::revoked_marker`] because its run dir is
+/// [`child_run_dir`]. `None` when `id` is not a safe path component.
+pub fn revoked_marker(run_root: &Path, id: &str) -> Option<PathBuf> {
+    child_run_dir(run_root, id).map(|d| d.join(REVOKED_FILE))
+}
 
 /// True when `id` is usable as a single path component: non-empty, ASCII
 /// alphanumeric only (a ULID qualifies). Rejects separators and `.`.
@@ -85,7 +106,7 @@ impl RuntimePaths {
     /// A child kernel's paths under `<home>/.weftos/run/<id>/`. `None` when
     /// `id` is not a safe path component.
     pub fn child_with(home: &Path, id: &str, project_root: impl Into<PathBuf>) -> Option<Self> {
-        Self::child_at(user_runtime_root(home).join(id), id, project_root)
+        Self::child_at(child_run_dir(&user_runtime_root(home), id)?, id, project_root)
     }
 
     /// `<project_root>/.weftos` when this is a child; `None` otherwise.
@@ -115,6 +136,10 @@ impl RuntimePaths {
     /// `<run>/state.json`.
     pub fn state_json(&self) -> PathBuf {
         self.file(STATE_JSON_FILE)
+    }
+    /// `<run>/revoked`: for a child, the file [`revoked_marker`] names.
+    pub fn revoked_marker(&self) -> PathBuf {
+        self.file(REVOKED_FILE)
     }
     /// `<root>/.weftos/project.key` (children only).
     pub fn project_key(&self) -> Option<PathBuf> {
@@ -225,6 +250,24 @@ mod tests {
         assert_eq!(p.root(), cwd.join("rel/run"));
         assert_eq!(p.chain_dir(), cwd.join("rel/proj/.weftos/chain"));
         assert!(p.project_key().unwrap().is_absolute());
+    }
+
+    #[test]
+    fn revoked_marker_is_one_path_for_parent_and_child() {
+        let run_root = Path::new("/iso/run");
+        let marker = revoked_marker(run_root, ID).unwrap();
+        assert_eq!(marker, PathBuf::from(format!("/iso/run/{ID}/revoked")));
+        let dir = child_run_dir(run_root, ID).unwrap();
+        let at = RuntimePaths::child_at(&dir, ID, "/p").unwrap();
+        assert_eq!(at.revoked_marker(), marker);
+        // The default layout agrees too.
+        assert_eq!(
+            child().revoked_marker(),
+            revoked_marker(&user_runtime_root(Path::new("/h")), ID).unwrap()
+        );
+        for bad in ["", "..", "a/b"] {
+            assert!(revoked_marker(run_root, bad).is_none() && child_run_dir(run_root, bad).is_none());
+        }
     }
 
     #[test]

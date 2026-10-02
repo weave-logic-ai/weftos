@@ -2,7 +2,6 @@
 
 use std::path::Path;
 
-use clawft_kernel::overlay_trust::REVOKED_FILE;
 use clawft_kernel::parent_policy::write_atomic_0600;
 use clawft_types::project::ChildState;
 use clawft_types::runtime_paths::STATE_JSON_FILE;
@@ -56,13 +55,13 @@ pub fn read(run_dir: &Path) -> Option<StateFile> {
 }
 
 // The terminal `revoked` marker is written by the user daemon's
-// `project.revoke` RPC (package H); the supervisor only reads it.
+// `project.revoke` (`project_cert_rpc::on_identity_change`); the supervisor
+// only reads it, at the same path (`runtime_paths::revoked_marker`).
 
-/// True when the marker exists.
-pub fn is_marked_revoked(run_dir: &Path) -> bool {
-    run_dir.join(REVOKED_FILE).exists()
+/// True when the marker of `id` under the daemon's `run_root` exists.
+pub fn is_marked_revoked(run_root: &Path, id: &str) -> bool {
+    clawft_types::runtime_paths::revoked_marker(run_root, id).is_some_and(|p| p.exists())
 }
-
 
 /// Unix seconds now.
 pub fn now_unix() -> u64 {

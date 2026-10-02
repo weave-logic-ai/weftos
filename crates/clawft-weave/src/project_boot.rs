@@ -309,9 +309,7 @@ pub async fn bootstrap_with(
     }
     let paths = RuntimePaths::child_at(run_dir, project_id, &spawn.root)
         .ok_or_else(|| BootError::NotSpawned("project id is not a safe path component".into()))?;
-    let revoked = paths
-        .root()
-        .join(clawft_kernel::overlay_trust::REVOKED_FILE);
+    let revoked = paths.revoked_marker();
     if revoked.exists() {
         return Err(BootError::Revoked(revoked));
     }

@@ -73,8 +73,9 @@ pub enum RootSource {
 
 mod child;
 pub use child::{
-    OVERLAY_FILE, PARENT_POLICY_FILE, PROJECT_CERT_FILE, PROJECT_KEY_FILE, SPAWN_JSON_FILE,
-    STATE_JSON_FILE, child_profile, set_child_profile,
+    OVERLAY_FILE, PARENT_POLICY_FILE, PROJECT_CERT_FILE, PROJECT_KEY_FILE, REVOKED_FILE,
+    SPAWN_JSON_FILE, STATE_JSON_FILE, child_profile, child_run_dir, revoked_marker,
+    set_child_profile,
 };
 
 /// Process-wide user-profile state: `None` when off, else the absolute
@@ -96,6 +97,14 @@ pub fn absolutize(path: &Path) -> PathBuf {
 pub fn set_user_profile(on: bool) {
     let state = on.then(|| capture_runtime_dir(std::env::var(RUNTIME_DIR_ENV).ok().as_deref()));
     *USER_PROFILE.write().unwrap_or_else(|e| e.into_inner()) = state;
+}
+
+/// Enter the user profile with an explicit run root, as if
+/// `$WEFTOS_RUNTIME_DIR` had been `root` when it was entered. For tests that
+/// host the user daemon in process and must never resolve the real
+/// `~/.weftos/run` (setting the variable is unsound once threads run).
+pub fn set_user_profile_at(root: &Path) {
+    *USER_PROFILE.write().unwrap_or_else(|e| e.into_inner()) = Some(Some(absolutize(root)));
 }
 
 /// `env` (a raw `$WEFTOS_RUNTIME_DIR`) as an absolute path; blank is unset.

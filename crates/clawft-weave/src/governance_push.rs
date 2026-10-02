@@ -200,7 +200,9 @@ mod imp {
                     "this daemon has no chain signing key to sign the policy with",
                 );
             };
-            let run_root = RuntimePaths::resolve().root().to_path_buf();
+            // The supervisor's run root, where the child reads its policy.
+            let run_root = crate::project_cert_rpc::user_run_root()
+                .unwrap_or_else(|| RuntimePaths::resolve().root().to_path_buf());
             match push_policy(&run_root, id, snapshot, &limits, &key).await {
                 Ok(v) => Response::success(v),
                 Err(r) => r,

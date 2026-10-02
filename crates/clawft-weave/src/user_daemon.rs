@@ -66,6 +66,12 @@ pub fn enter() {
     set_user_profile(true);
 }
 
+/// [`enter`] with an explicit run root instead of `$WEFTOS_RUNTIME_DIR`
+/// (tests that host the user daemon in process).
+pub fn enter_at(run_root: &Path) {
+    clawft_types::runtime_paths::set_user_profile_at(run_root);
+}
+
 /// Leave the user profile (tests).
 pub fn leave() {
     set_user_profile(false);

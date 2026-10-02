@@ -1038,6 +1038,64 @@ adopted, missing, unchanged or skipped. Idempotent.
 
 ---
 
+## weaver kernel: project kernels
+
+Per-project child kernels supervised by the user daemon (ADR-103 Phase 2,
+amendment A7). A project runs as a child only after it opts in with
+`weaver project migrate-kernel`, which sets `[serve] via = "child-kernel"`
+in its manifest. These commands talk to the user daemon; none of them starts
+it. When it is not running they print the command that does
+(`weaver kernel start --profile user`).
+
+```
+weaver kernel start --project <ID|NAME>
+weaver kernel stop --project <ID|NAME>
+weaver kernel stop --all-children
+weaver kernel stop --profile user [--keep-children]
+weaver kernel restart --project <ID|NAME>
+weaver kernel status
+```
+
+| Command | What it does |
+|---------|--------------|
+| `start --project` | Start the project's kernel, or find the one already running (`project.start`). It is ready when its handshake names the project. |
+| `stop --project` | Graceful stop: `kernel.shutdown` (final anchor first), then `SIGTERM`, then `SIGKILL`. A stopped child is not restarted. |
+| `stop --all-children` | Stop every project kernel and leave the user daemon running. |
+| `stop --profile user` | Stop the user daemon. Its children are stopped cleanly first unless you pass `--keep-children`, which leaves them for the next daemon to adopt. |
+| `restart --project` | Stop the project's kernel, clear a `failed` state and start it again. |
+| `status` | On the user daemon, also lists the children and any unverifiable leftovers. |
+
+A crashed child is restarted after a 1 s backoff that doubles up to 30 s.
+After `restart_max` crashes inside `restart_window_secs` (manifest `[serve]`,
+defaults 5 and 60 s) the child is marked `failed` and is not started again,
+not even on demand, until `restart --project`. A clean exit (an idle stop or
+an explicit stop) is never restarted. A `child-kernel` project with no
+activity for `idle_stop_secs` (default 1800, `0` disables it) is stopped
+gracefully. After `project.revoke` the project never starts again; the
+terminal marker is `<run_root>/<id>/revoked` (`~/.weftos/run/<id>/revoked`
+unless `WEFTOS_RUNTIME_DIR` names the run root), and nothing removes it. To
+re-enroll the project, delete the marker by hand.
+
+Inside a project, a plain `weaver kernel start` is refused while a user
+daemon runs on this account. `--legacy-project-daemon` overrides that for one
+more release.
+
+## weaver project migrate-kernel
+
+```
+weaver project migrate-kernel <ID|NAME> [--dry-run | --revert]
+```
+
+Opt one project into a supervised child kernel. The command refuses while the
+project's own daemon runs, and that daemon is never signalled. It also
+refuses symlinked sources. It copies `<root>/.weftos/runtime/{workloads.json,
+apps.json}` to `<root>/.weftos/state/` (copies only; the originals are kept),
+sets `[serve] via = "child-kernel"` and prints the rollback line.
+`--dry-run` prints the plan and changes nothing. `--revert` sets the project
+back to the user daemon and leaves the copies in place.
+
+---
+
 ## weft workspace
 
 Manage workspaces. Workspaces provide isolated directories for sessions,

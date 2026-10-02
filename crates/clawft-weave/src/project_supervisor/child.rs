@@ -199,9 +199,11 @@ impl Launcher {
         self.spawns.load(Ordering::SeqCst)
     }
 
-    /// `<run_root>/<id>`.
+    /// `<run_root>/<id>` (`runtime_paths::child_run_dir`; ids are validated
+    /// before they get here). This is the child's `$WEFTOS_RUNTIME_DIR`.
     pub fn run_dir(&self, id: &str) -> PathBuf {
-        self.cfg.run_root.join(id)
+        clawft_types::runtime_paths::child_run_dir(&self.cfg.run_root, id)
+            .unwrap_or_else(|| self.cfg.run_root.join(id))
     }
 
     fn procs(&self) -> std::sync::MutexGuard<'_, HashMap<String, Entry>> {

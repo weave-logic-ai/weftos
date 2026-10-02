@@ -121,3 +121,10 @@ clawft-weave = { path = ".", features = ["test-support"] }
 [[test]]
 name = "project_supervisor"
 harness = false
+
+# The user daemon in-process, the REAL `weaver kernel` as the child (the test
+# binary hands its argv to `commands::kernel_cmd::run`): see
+# tests/project_kernel_e2e.rs.
+[[test]]
+name = "project_kernel_e2e"
+harness = false

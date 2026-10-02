@@ -173,19 +173,54 @@ pub fn root_sha256(root: &Path) -> String {
     ident::hex(&Sha256::digest(bytes))
 }
 
-/// The marker a revoked project's child refuses to run under:
-/// `<manifests>/../run/<id>/revoked`, i.e. `~/.weftos/run/<id>/revoked`, the
-/// file `RuntimePaths::child_at(<run>/<id>, ..).root().join("revoked")`
-/// names (`clawft_kernel::overlay_trust::REVOKED_FILE`).
-pub fn revoked_marker(manifests_dir: &Path, id: &str) -> Option<PathBuf> {
-    Some(manifests_dir.parent()?.join("run").join(id).join(clawft_kernel::overlay_trust::REVOKED_FILE))
+/// Run root pinned by [`init_run_root`] (tests that host the user daemon's
+/// RPCs in-process; a real daemon never sets it).
+static RUN_ROOT: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+/// Pin the user daemon's run root for this process, as
+/// `project_rpc::init_manifests_dir` pins the manifest store.
+pub fn init_run_root(dir: PathBuf) {
+    *RUN_ROOT.write().unwrap_or_else(|e| e.into_inner()) = Some(dir);
+}
+
+/// The user daemon's run root, the parent of every child's run dir, never
+/// derived from the manifest store (which can live elsewhere): the running
+/// supervisor's (which `post_boot` takes from here), else the pinned root,
+/// else, in the user daemon, `RuntimePaths::resolve().root()`
+/// (`$WEFTOS_RUNTIME_DIR`, else `~/.weftos/run`). `None` outside the user
+/// daemon (no children, nothing to mark). Integration-test builds
+/// (`test-support`) never fall back to the real `~/.weftos/run`: they must
+/// pin the root or name it with `$WEFTOS_RUNTIME_DIR`.
+pub fn user_run_root() -> Option<PathBuf> {
+    #[cfg(all(unix, feature = "exochain", feature = "placement"))]
+    if let Some(sup) = crate::project_supervisor::global() {
+        return Some(sup.config().run_root.clone());
+    }
+    if let Some(dir) = RUN_ROOT.read().unwrap_or_else(|e| e.into_inner()).clone() {
+        return Some(dir);
+    }
+    if !clawft_types::runtime_paths::user_profile_active() {
+        return None;
+    }
+    if cfg!(feature = "test-support") && clawft_types::runtime_paths::runtime_dir_env().is_none() {
+        return None;
+    }
+    Some(clawft_types::runtime_paths::RuntimePaths::resolve().root().to_path_buf())
+}
+
+/// The marker a revoked project's child refuses to run under,
+/// `<run_root>/<id>/revoked` via the one derivation
+/// (`clawft_types::runtime_paths::revoked_marker`) the supervisor and the
+/// child (`RuntimePaths::revoked_marker`) use too.
+pub fn revoked_marker_path(id: &str) -> Option<PathBuf> {
+    clawft_types::runtime_paths::revoked_marker(&user_run_root()?, id)
 }
 
 /// `project.revoke` is terminal for the id: drop the session (a running
 /// child's next heartbeat fails and its re-register is refused `key_revoked`)
 /// and, from [`on_identity_change`], write the marker (atomic, 0600; the run dir is created 0700 when the
 /// child is stopped, so a stopped child is marked too). Nothing here clears
-/// it: delete `~/.weftos/run/<id>/revoked` by hand after re-enrolling the
+/// it: delete `<run_root>/<id>/revoked` (`~/.weftos/run/<id>/revoked` by default) by hand after re-enrolling the
 /// project. A marker that cannot be written is logged, not fatal: the
 /// journal is the authority, the marker is what lets a child that cannot
 /// reach the parent still see the revocation.
@@ -200,8 +235,11 @@ fn mark_revoked(_env: &CertEnv, id: &str, _why: &str) {
 /// marker that cannot be written is logged, not fatal: the journal is the
 /// authority, the marker is what lets a child that cannot reach the parent
 /// still see the revocation. Called only from [`on_identity_change`].
-fn write_revoked_marker(manifests_dir: &Path, id: &str, why: &str) {
-    let Some(path) = revoked_marker(manifests_dir, id) else { return };
+fn write_revoked_marker(id: &str, why: &str) {
+    let Some(path) = revoked_marker_path(id) else {
+        tracing::warn!(project = id, "no user-daemon run root: the revoked marker was not written");
+        return;
+    };
     if let Some(dir) = path.parent() {
         let mut b = std::fs::DirBuilder::new();
         b.recursive(true);
@@ -484,9 +522,9 @@ pub async fn issue_for_register(ctx: &ExtCtx, req: RegisterRequest) -> Result<Is
 /// marker). Without a supervisor (not the user
 /// daemon) there is nothing to do.
 #[cfg(all(unix, feature = "exochain", feature = "placement"))]
-pub async fn on_identity_change(manifests_dir: &Path, id: &str, method: &str) {
+pub async fn on_identity_change(id: &str, method: &str) {
     if method == "project.revoke" {
-        write_revoked_marker(manifests_dir, id, "revoked");
+        write_revoked_marker(id, "revoked");
     }
     if let Some(sup) = crate::project_supervisor::global() {
         if method == "project.revoke" {
@@ -499,9 +537,9 @@ pub async fn on_identity_change(manifests_dir: &Path, id: &str, method: &str) {
 
 /// See the supervised variant; without placement there is no supervisor.
 #[cfg(not(all(unix, feature = "exochain", feature = "placement")))]
-pub async fn on_identity_change(manifests_dir: &Path, id: &str, method: &str) {
+pub async fn on_identity_change(id: &str, method: &str) {
     if method == "project.revoke" {
-        write_revoked_marker(manifests_dir, id, "revoked");
+        write_revoked_marker(id, "revoked");
     }
 }
 
@@ -526,10 +564,9 @@ pub fn handle(call: ExtCall) -> ExtFuture {
         };
         let (method, params) = (call.method, call.params);
         // After the journal write succeeds, a revoke stops the child for good
-        // (`project.revoke` wrote the marker itself) and a rekey stops the old
+        // (`on_identity_change` writes the marker first) and a rekey stops the old
         // child (package G); a repair that changed a bound key does the same.
         let is_repair = method == "project.identity.repair";
-        let manifests_dir = env.manifests_dir.clone();
         let after = matches!(method.as_str(), "project.revoke" | "project.rekey").then(|| {
             (
                 method.clone(),
@@ -579,13 +616,13 @@ pub fn handle(call: ExtCall) -> ExtFuture {
         match out {
             Ok(Ok(v)) => {
                 if let Some((method, Some(id))) = after {
-                    crate::project_cert_rpc::on_identity_change(&manifests_dir, &id, &method).await;
+                    crate::project_cert_rpc::on_identity_change(&id, &method).await;
                 }
                 if is_repair {
                     for c in v.get("key_changes").and_then(Value::as_array).into_iter().flatten() {
                         let Some(id) = c.get("id").and_then(Value::as_str) else { continue };
                         let m = if c["revoked"] == true { "project.revoke" } else { "project.rekey" };
-                        crate::project_cert_rpc::on_identity_change(&manifests_dir, id, m).await;
+                        crate::project_cert_rpc::on_identity_change(id, m).await;
                     }
                 }
                 Response::success(v)

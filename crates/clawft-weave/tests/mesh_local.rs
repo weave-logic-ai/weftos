@@ -46,9 +46,17 @@ struct Proj {
     run: PathBuf,
 }
 
+/// Where every user-profile path of this process resolves (cluster peers and
+/// the rest of the run root), never the real `~/.weftos/run`.
+fn scratch_run() -> &'static Path {
+    static DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| tempfile::tempdir().unwrap()).path()
+}
+
 async fn world() -> World {
+    // Before the kernel boots, so nothing it resolves lands in `~/.weftos`.
+    clawft_weave::user_daemon::enter_at(scratch_run());
     let d = common::spawn().await;
-    clawft_weave::user_daemon::enter();
     let user_key = {
         let k = d.kernel.read().await;
         k.chain_manager().unwrap().signing_key_clone().unwrap()

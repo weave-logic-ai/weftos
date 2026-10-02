@@ -175,8 +175,10 @@ pub fn post_boot(kernel: &clawft_kernel::Kernel<clawft_platform::NativePlatform>
     };
     let Ok(exe) = std::env::current_exe() else { return };
     let paths = clawft_types::runtime_paths::RuntimePaths::resolve();
+    // The run root the revoked-marker writer uses too (one derivation).
+    let Some(run_root) = crate::project_cert_rpc::user_run_root() else { return };
     let mut cfg = SupervisorConfig::new(&home, exe);
-    cfg.run_root = paths.root().to_path_buf();
+    cfg.run_root = run_root;
     cfg.parent_socket = paths.socket();
     cfg.manifests_dir = manifests_dir.clone();
     let gate = kernel.governance_gate().cloned();

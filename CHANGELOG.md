@@ -42,6 +42,24 @@ Staging area for changes after the 0.8.1 cut.
   with `weaver kernel stop --profile user` stops its children first unless you
   pass `--keep-children`.
 
+### Fixed — Weave topology Phase 2 integration (ADR-103 A7)
+
+- A project kernel now signs its chain with `project.key`. Before, it created
+  a separate `chain.key` beside the checkpoint and its own one-key check then
+  stopped it, so no real child could boot.
+- A project kernel is bound to its project, and its `kernel.handshake` names
+  it. Before, no real child got past the supervisor's readiness check. The
+  user-signed forward header on the supervisor's graceful `kernel.shutdown`
+  now verifies, and governance events on the child carry the project.
+- `project.revoke` writes the terminal marker in the user daemon's run root
+  (`$WEFTOS_RUNTIME_DIR` when set), where the supervisor and the child look
+  for it. Before, the path came from the manifest store, so with a custom run
+  root or store the marker was written where nothing read it.
+- New end-to-end test (`tests/project_kernel_e2e.rs`). The user daemon runs in
+  process and the child is the real `weaver kernel` code path. The test covers
+  registration, the overlay deny, idle stop with the final anchor, restart on
+  demand, three crashes then `failed`, `restart --project` and revoke.
+
 ### Changed — Weave topology Phase 0 (ADR-103) — read before upgrading
 
 - **Stop every pre-0.8.2 daemon before first running the new build, and check
