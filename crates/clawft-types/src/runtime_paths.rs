@@ -60,7 +60,22 @@ pub enum RootSource {
     LegacyHome,
     /// The per-user daemon root, `~/.weftos/run` (`--profile user`).
     User,
+    /// A per-project child kernel: root `~/.weftos/run/<id>/`, durable state
+    /// in `<project_root>/.weftos/` (see [`child`]). Never chosen by the
+    /// project walk-up.
+    Child {
+        /// Project id (ULID); the run dir name.
+        id: String,
+        /// The project root that owns the durable files.
+        project_root: PathBuf,
+    },
 }
+
+mod child;
+pub use child::{
+    OVERLAY_FILE, PARENT_POLICY_FILE, PROJECT_CERT_FILE, PROJECT_KEY_FILE, SPAWN_JSON_FILE,
+    STATE_JSON_FILE,
+};
 
 /// Process-wide user-profile state: `None` when off, else the absolute
 /// `$WEFTOS_RUNTIME_DIR` captured when the profile was entered (the daemon
@@ -280,10 +295,16 @@ impl RuntimePaths {
     }
     /// Daemon Ed25519 node key.
     pub fn node_key(&self) -> PathBuf {
+        if let Some(d) = self.child_weftos_dir() {
+            return d.join(PROJECT_KEY_FILE);
+        }
         self.file("node.key")
     }
     /// Chain JSON checkpoint; the RVF, key and tree files derive from it.
     pub fn chain_checkpoint(&self) -> PathBuf {
+        if let Some(d) = self.child_weftos_dir() {
+            return d.join("chain").join(CHAIN_CHECKPOINT_FILE);
+        }
         self.file(CHAIN_CHECKPOINT_FILE)
     }
     /// Chain RVF store (checkpoint path with `.rvf`).
@@ -292,6 +313,9 @@ impl RuntimePaths {
     }
     /// Chain signing key (checkpoint path with `.key`).
     pub fn chain_key(&self) -> PathBuf {
+        if let Some(d) = self.child_weftos_dir() {
+            return d.join(PROJECT_KEY_FILE);
+        }
         self.chain_checkpoint().with_extension("key")
     }
     /// Resource-tree checkpoint (checkpoint path with `.tree.json`).
@@ -300,6 +324,9 @@ impl RuntimePaths {
     }
     /// Chain export/scratch directory.
     pub fn chain_dir(&self) -> PathBuf {
+        if let Some(d) = self.child_weftos_dir() {
+            return d.join("chain");
+        }
         self.file("chain")
     }
     /// External-anchor ledger.
@@ -308,6 +335,9 @@ impl RuntimePaths {
     }
     /// Node-local workload catalog.
     pub fn workloads(&self) -> PathBuf {
+        if let Some(d) = self.child_weftos_dir() {
+            return d.join("state").join("workloads.json");
+        }
         self.file("workloads.json")
     }
     /// Persisted cluster peers.
@@ -316,6 +346,9 @@ impl RuntimePaths {
     }
     /// Installed-apps manifest store.
     pub fn apps(&self) -> PathBuf {
+        if let Some(d) = self.child_weftos_dir() {
+            return d.join("state").join("apps.json");
+        }
         self.file("apps.json")
     }
     /// Persistent revoked-host ban list.

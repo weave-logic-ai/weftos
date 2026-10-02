@@ -1966,6 +1966,7 @@ version = "0.8.1"
 dependencies = [
  "chrono",
  "dirs",
+ "ed25519-dalek",
  "getrandom 0.2.17",
  "libc",
  "serde",

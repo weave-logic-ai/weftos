@@ -45,6 +45,20 @@ mod tests {
     }
 
     #[test]
+    fn matches_the_project_key_id() {
+        // A child's node_id must equal its certified project_key_id.
+        for seed in [0u8, 2, 7, 255] {
+            let pk = ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+                .verifying_key()
+                .to_bytes();
+            assert_eq!(
+                node_id_from_pubkey(&pk),
+                clawft_types::project::cert::key_id(&pk)
+            );
+        }
+    }
+
+    #[test]
     fn differs_per_key() {
         assert_ne!(
             node_id_from_pubkey(&[1u8; 32]),

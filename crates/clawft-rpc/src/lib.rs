@@ -30,6 +30,7 @@ mod client;
 mod connect;
 pub mod doctor;
 pub mod handshake;
+pub mod mesh_local;
 pub mod named_pipe;
 pub mod probe;
 mod protocol;
