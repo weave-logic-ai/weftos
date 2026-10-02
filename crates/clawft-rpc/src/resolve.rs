@@ -17,9 +17,11 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use clawft_types::project::{
-    find_project_toml, read_manifest, read_project_toml, validate_id,
+    ServeVia, find_project_toml, read_manifest, read_project_toml, validate_id,
 };
-use clawft_types::runtime_paths::{RUNTIME_DIR_ENV, RuntimePaths, SOCKET_NAME, home_dir};
+use clawft_types::runtime_paths::{
+    RUNTIME_DIR_ENV, RuntimePaths, SOCKET_NAME, home_dir, user_runtime_root,
+};
 
 use crate::probe::{SocketState, describe_state};
 
@@ -85,6 +87,16 @@ pub struct Attempt {
     pub used: bool,
 }
 
+/// A `via = "child-kernel"` project: its kernel is a child of the user
+/// daemon, started on demand (ADR-103 A6, Phase 2 package G).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnsureRunning {
+    /// Project to start.
+    pub project_id: String,
+    /// The user daemon's socket (`~/.weftos/run/kernel.sock`).
+    pub user_socket: PathBuf,
+}
+
 /// The resolved endpoint and what was expected of the daemon behind it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolution {
@@ -96,6 +108,11 @@ pub struct Resolution {
     pub project_id: Option<String>,
     /// Node id the daemon must have, when the caller knows one.
     pub expected_node: Option<String>,
+    /// Set when the endpoint is a supervised child kernel: connecting
+    /// calls `project.ensure_running` on the user daemon once when the
+    /// socket is absent. `None` for an explicit endpoint (flag, env,
+    /// `runtime_dir`).
+    pub ensure: Option<EnsureRunning>,
     pub tried: Vec<Attempt>,
 }
 
@@ -220,12 +237,35 @@ pub fn resolve_with(i: &ResolveInputs) -> Result<Resolution, ResolveError> {
         }
     }
 
+    // The child kernel's run dir when the manifest says `via = child-kernel`
+    // and names no explicit `runtime_dir`.
+    let mut child_root: Option<PathBuf> = None;
     // Runtime override from the project's user-level manifest.
     let manifest_root = match (&project, home) {
         (Some((id, _)), Some(h)) => match read_manifest(&manifests_dir(h), id) {
             Ok(Some(m)) => {
                 let over = m.runtime_dir_override().map(Path::to_path_buf);
+                let is_child = m.serve.as_ref().is_some_and(|s| s.via == ServeVia::ChildKernel);
                 match (&over, &found_root) {
+                    (None, Some(root)) if is_child && canon(&m.root) != canon(root) => {
+                        manifest_note = format!(
+                            "{manifest_note}; ignored via = child-kernel: manifest root {} \
+                             is not this project's root {} (a copy must not reuse the \
+                             original's kernel)",
+                            m.root.display(),
+                            root.display()
+                        );
+                        None
+                    }
+                    (None, _) if is_child => {
+                        let run = user_runtime_root(h).join(&m.id);
+                        manifest_note = format!(
+                            "{manifest_note}; via = child-kernel, run dir {}",
+                            run.display()
+                        );
+                        child_root = Some(run);
+                        None
+                    }
                     (None, _) => {
                         manifest_note =
                             format!("{manifest_note}; manifest has no [serve] runtime_dir");
@@ -273,6 +313,8 @@ pub fn resolve_with(i: &ResolveInputs) -> Result<Resolution, ResolveError> {
         (p, ResolveSource::Env)
     } else if let Some(p) = manifest_root.clone() {
         (p, ResolveSource::Manifest)
+    } else if let Some(p) = child_root.clone() {
+        (p, ResolveSource::Manifest)
     } else {
         (default.root().to_path_buf(), ResolveSource::Default)
     };
@@ -309,7 +351,15 @@ pub fn resolve_with(i: &ResolveInputs) -> Result<Resolution, ResolveError> {
         used: source == ResolveSource::Default,
     });
 
+    let ensure = match (&child_root, &project, home) {
+        (Some(_), Some((id, _)), Some(h)) if source == ResolveSource::Manifest => Some(EnsureRunning {
+            project_id: id.clone(),
+            user_socket: user_runtime_root(h).join(SOCKET_NAME),
+        }),
+        _ => None,
+    };
     Ok(Resolution {
+        ensure,
         socket: root.join(SOCKET_NAME),
         runtime_root: root,
         source,

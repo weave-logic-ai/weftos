@@ -246,3 +246,81 @@ fn symlinked_home_still_stops_the_walk() {
     };
     assert_eq!(resolve_with(&i).unwrap().project_id, None);
 }
+
+/// Like [`world`], with an arbitrary `[serve]` body.
+fn world_serve(serve_body: &str) -> World {
+    let w = world(None);
+    let mdir = manifests_dir(&w.home);
+    fs::create_dir_all(&mdir).unwrap();
+    fs::write(
+        mdir.join(format!("{ID_A}.toml")),
+        format!(
+            "schema = 1\nid = \"{ID_A}\"\nname = \"app\"\nroot = \"{}\"\n\
+             created = 2026-01-01T00:00:00Z\nlast_seen = 2026-01-01T00:00:00Z\n\
+             [serve]\n{serve_body}\n",
+            w.proj.display()
+        ),
+    )
+    .unwrap();
+    w
+}
+
+#[test]
+fn child_kernel_manifest_resolves_to_the_run_dir_and_asks_for_ensure_running() {
+    let w = world_serve("via = \"child-kernel\"");
+    let r = resolve_with(&inputs(&w)).unwrap();
+    let run = w.home.join(".weftos/run").join(ID_A);
+    assert_eq!(r.source, ResolveSource::Manifest);
+    assert_eq!(r.socket, run.join("kernel.sock"));
+    assert_eq!(r.runtime_root, run);
+    let e = r.ensure.expect("a supervised child is started on demand");
+    assert_eq!(e.project_id, ID_A);
+    // The default parent socket of a child is `<run>/../kernel.sock`: the
+    // user daemon's own socket.
+    assert_eq!(e.user_socket, w.home.join(".weftos/run/kernel.sock"));
+    assert_eq!(e.user_socket, run.parent().unwrap().join("kernel.sock"));
+}
+
+#[test]
+fn an_explicit_endpoint_never_starts_a_child() {
+    let w = world_serve("via = \"child-kernel\"");
+    let mut i = inputs(&w);
+    i.env_runtime = Some("/rt/env".into());
+    assert!(resolve_with(&i).unwrap().ensure.is_none());
+    let mut i = inputs(&w);
+    i.flags.runtime = Some("/rt/flag".into());
+    assert!(resolve_with(&i).unwrap().ensure.is_none());
+}
+
+#[test]
+fn runtime_dir_override_beats_child_kernel() {
+    let w = world_serve("via = \"child-kernel\"\nruntime_dir = \"/rt/pinned\"");
+    let r = resolve_with(&inputs(&w)).unwrap();
+    assert_eq!(r.socket, PathBuf::from("/rt/pinned/kernel.sock"));
+    assert!(r.ensure.is_none());
+}
+
+#[test]
+fn user_daemon_via_has_no_ensure() {
+    let w = world_serve("via = \"user-daemon\"");
+    let r = resolve_with(&inputs(&w)).unwrap();
+    assert!(r.ensure.is_none());
+    assert_eq!(r.source, ResolveSource::Default);
+}
+
+#[test]
+fn a_copied_project_never_reuses_the_originals_child() {
+    // The manifest's root is another directory than this tree's: the copy
+    // must not be pointed at the original's kernel.
+    let w = world_serve("via = \"child-kernel\"");
+    let mdir = manifests_dir(&w.home);
+    let p = mdir.join(format!("{ID_A}.toml"));
+    let text = fs::read_to_string(&p).unwrap().replace(
+        &format!("root = \"{}\"", w.proj.display()),
+        "root = \"/somewhere/else\"",
+    );
+    fs::write(&p, text).unwrap();
+    let r = resolve_with(&inputs(&w)).unwrap();
+    assert!(r.ensure.is_none());
+    assert_eq!(r.source, ResolveSource::Default);
+}
