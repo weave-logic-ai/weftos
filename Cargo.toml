@@ -27,6 +27,8 @@ members = [
     # ADR-103 Phase 3 (package L): mesh-local/1 protocol, user cert, weft:// addresses,
     # peer identity, client. No clawft-kernel dependency by design.
     "crates/clawft-mesh-local",
+    # ADR-103 Phase 3 (package J/S): machine mesh service journal and bindings.
+    "crates/clawft-mesh-service",
     "crates/clawft-weave",
     "crates/exo-resource-tree",
     # WEFT-619 / ADR-043: K6 substrate primitives (BLAKE3+HLC) + in-memory
@@ -337,6 +339,7 @@ futures = "0.3"
 # version atomically updates all path-dep version constraints (WEFT-8).
 clawft-rpc = { version = "0.8.1", path = "crates/clawft-rpc" }
 clawft-mesh-local = { version = "0.8.1", path = "crates/clawft-mesh-local" }
+clawft-mesh-service = { version = "0.8.1", path = "crates/clawft-mesh-service" }
 clawft-types = { version = "0.8.1", path = "crates/clawft-types", default-features = false }
 clawft-platform = { version = "0.8.1", path = "crates/clawft-platform", default-features = false }
 clawft-core = { version = "0.8.1", path = "crates/clawft-core", default-features = false }
