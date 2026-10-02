@@ -638,31 +638,20 @@ mod tests {
 
     // ── P3-K0: scope fields are wire-compatible ──────────────────
 
+    /// Frozen wire bytes of an envelope as written before scopes existed.
+    /// Do not regenerate: if this fails, the wire format changed.
+    const FROZEN_PRE_SCOPE_ENVELOPE: &str = concat!(
+        r#"{"source_node":"a","dest_node":"b","message":{"id":"m1","from":1,"#,
+        r#""target":{"Topic":"t"},"payload":{"Text":"x"},"#,
+        r#""timestamp":"2026-01-02T03:04:05Z"},"hop_count":0,"envelope_id":"fixed-id"}"#
+    );
+
     #[test]
     fn envelope_without_scopes_serializes_byte_identical_to_old_format() {
-        let msg = KernelMessage::text(1, MessageTarget::Topic("t".into()), "x");
-        let mut env = MeshIpcEnvelope::new("a".into(), "b".into(), msg.clone());
-        env.envelope_id = "fixed-id".into();
-        // The old struct, field for field, is the golden: a derived
-        // serializer over the same fields in the same order.
-        #[derive(serde::Serialize)]
-        struct Old {
-            source_node: String,
-            dest_node: String,
-            message: KernelMessage,
-            hop_count: u8,
-            envelope_id: String,
-        }
-        let old = Old {
-            source_node: "a".into(),
-            dest_node: "b".into(),
-            message: msg,
-            hop_count: 0,
-            envelope_id: "fixed-id".into(),
-        };
-        let new_json = serde_json::to_string(&env).unwrap();
-        assert_eq!(new_json, serde_json::to_string(&old).unwrap());
-        assert!(!new_json.contains("scope"));
+        let env = MeshIpcEnvelope::from_bytes(FROZEN_PRE_SCOPE_ENVELOPE.as_bytes()).unwrap();
+        assert!(env.dest_scope.is_none() && env.src_scope.is_none());
+        assert_eq!(serde_json::to_string(&env).unwrap(), FROZEN_PRE_SCOPE_ENVELOPE);
+        assert!(!FROZEN_PRE_SCOPE_ENVELOPE.contains("scope"));
     }
 
     #[test]
