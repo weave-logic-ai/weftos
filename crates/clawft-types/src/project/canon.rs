@@ -1,5 +1,10 @@
 //! Canonical JSON for signed project statements (certificates, anchors).
 //!
+//! This is the `serde_json` rendering with sorted keys, NOT RFC 8785 (JCS);
+//! do not describe it as JCS. Signed string fields are restricted to ASCII
+//! by their validators (hex digests, ULIDs, canonical timestamps), so escape
+//! and normalisation differences between implementations do not arise.
+//!
 //! Rules (fixed so other implementations can reproduce the bytes): object
 //! keys sorted by their UTF-8 bytes, no insignificant whitespace, strings
 //! escaped exactly as `serde_json` does, integers in decimal. Signed
@@ -56,7 +61,8 @@ pub fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-/// Decode exactly `N` bytes of lowercase or uppercase hex.
+/// Decode exactly `N` bytes of **lowercase** hex. Uppercase is refused so a
+/// hex string has one spelling and hashes of signed statements cannot fork.
 pub fn hex_decode<const N: usize>(s: &str) -> Option<[u8; N]> {
     let b = s.as_bytes();
     if b.len() != N * 2 {
@@ -65,7 +71,6 @@ pub fn hex_decode<const N: usize>(s: &str) -> Option<[u8; N]> {
     let nib = |c: u8| match c {
         b'0'..=b'9' => Some(c - b'0'),
         b'a'..=b'f' => Some(c - b'a' + 10),
-        b'A'..=b'F' => Some(c - b'A' + 10),
         _ => None,
     };
     let mut out = [0u8; N];
@@ -73,4 +78,9 @@ pub fn hex_decode<const N: usize>(s: &str) -> Option<[u8; N]> {
         *o = (nib(b[2 * i])? << 4) | nib(b[2 * i + 1])?;
     }
     Some(out)
+}
+
+/// True when `s` is exactly `len` lowercase hex characters.
+pub fn is_lower_hex(s: &str, len: usize) -> bool {
+    s.len() == len && s.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
 }

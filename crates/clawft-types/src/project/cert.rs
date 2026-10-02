@@ -25,7 +25,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::canon::{canonical_json, hex_decode, hex_encode};
+use super::canon::{canonical_json, hex_decode, hex_encode, is_lower_hex};
+use super::ids::validate_id;
 
 /// Domain tag prepended to the signed bytes of a [`ProjectCert`].
 pub const CERT_DOMAIN: &str = "weftos-project-cert-v1\n";
@@ -37,6 +38,10 @@ pub const POP_DOMAIN: &str = "weftos-mesh-local-pop-v1\n";
 pub const CERT_TYPE: &str = "project-cert";
 /// Certificate format version.
 pub const CERT_VERSION: u32 = 1;
+/// How far in the future `issued_at` may be (clock skew), seconds.
+pub const MAX_ISSUE_SKEW_SECS: i64 = 60;
+/// Proof-of-possession nonce length: 16 bytes as lowercase hex.
+pub const POP_NONCE_HEX_LEN: usize = 32;
 
 /// Why a certificate or statement failed verification.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -65,6 +70,18 @@ pub enum CertError {
     /// `expires_at` is at or before `now`.
     #[error("certificate expired")]
     Expired,
+    /// `issued_at` is more than [`MAX_ISSUE_SKEW_SECS`] ahead of `now`.
+    #[error("certificate issued in the future")]
+    NotYetValid,
+    /// `project_id` is not a canonical ULID.
+    #[error("project_id is not a canonical ULID")]
+    BadProjectId,
+    /// A field that must be 64 lowercase hex characters is not.
+    #[error("field `{0}` is not 64 lowercase hex characters")]
+    BadDigest(&'static str),
+    /// A proof-of-possession nonce is not [`POP_NONCE_HEX_LEN`] lowercase hex.
+    #[error("nonce is not {POP_NONCE_HEX_LEN} lowercase hex characters")]
+    BadNonce,
 }
 
 /// First 16 bytes of SHA-256 of `pubkey`, as 32 lowercase hex characters.
@@ -77,9 +94,14 @@ fn ts(t: DateTime<Utc>) -> String {
 }
 
 fn parse_ts(s: &str, field: &'static str) -> Result<DateTime<Utc>, CertError> {
-    DateTime::parse_from_rfc3339(s)
+    let t = DateTime::parse_from_rfc3339(s)
         .map(|t| t.with_timezone(&Utc))
-        .map_err(|_| CertError::BadTimestamp(field))
+        .map_err(|_| CertError::BadTimestamp(field))?;
+    // One spelling per instant: `YYYY-MM-DDTHH:MM:SSZ` only.
+    if ts(t) != s {
+        return Err(CertError::BadTimestamp(field));
+    }
+    Ok(t)
 }
 
 fn verifying_key(pk: &[u8; 32]) -> Result<VerifyingKey, CertError> {
@@ -213,6 +235,7 @@ impl ProjectCert {
         if self.kind != CERT_TYPE {
             return Err(CertError::BadType(self.kind.clone()));
         }
+        validate_id(&self.project_id).map_err(|_| CertError::BadProjectId)?;
         let project_pk: [u8; 32] =
             hex_decode(&self.project_pubkey).ok_or(CertError::BadHex("project_pubkey"))?;
         let user_pk: [u8; 32] =
@@ -226,7 +249,10 @@ impl ProjectCert {
         if &user_pk != trusted_user_pubkey {
             return Err(CertError::UntrustedUser);
         }
-        parse_ts(&self.issued_at, "issued_at")?;
+        let issued = parse_ts(&self.issued_at, "issued_at")?;
+        if issued > now + chrono::Duration::seconds(MAX_ISSUE_SKEW_SECS) {
+            return Err(CertError::NotYetValid);
+        }
         let expiry = self
             .expires_at
             .as_deref()
@@ -306,6 +332,17 @@ impl ProjectAnchorStmt {
         if self.project_key_id != key_id(project_pubkey) {
             return Err(CertError::KeyIdMismatch("project_key_id"));
         }
+        validate_id(&self.project_id).map_err(|_| CertError::BadProjectId)?;
+        for (name, v) in [("head_hash", &self.head_hash), ("rule_hash", &self.rule_hash)] {
+            if !is_lower_hex(v, 64) {
+                return Err(CertError::BadDigest(name));
+            }
+        }
+        if let Some(p) = &self.prev_anchor
+            && !is_lower_hex(p, 64)
+        {
+            return Err(CertError::BadDigest("prev_anchor"));
+        }
         parse_ts(&self.at, "at")?;
         check_sig(project_pubkey, &self.sig, ANCHOR_DOMAIN, &self.body())
     }
@@ -321,6 +358,14 @@ impl ProjectAnchorStmt {
 
 /// Bytes the project key signs to prove possession during `mesh.register`:
 /// `"weftos-mesh-local-pop-v1\n<nonce>\n<project_id>"`.
-pub fn pop_signed_bytes(nonce: &str, project_id: &str) -> Vec<u8> {
-    format!("{POP_DOMAIN}{nonce}\n{project_id}").into_bytes()
+///
+/// Both parts are validated first (the nonce as [`POP_NONCE_HEX_LEN`]
+/// lowercase hex, the id as a canonical ULID) so neither can contain the
+/// `\n` separator and two different pairs never give the same bytes.
+pub fn pop_signed_bytes(nonce: &str, project_id: &str) -> Result<Vec<u8>, CertError> {
+    if !is_lower_hex(nonce, POP_NONCE_HEX_LEN) {
+        return Err(CertError::BadNonce);
+    }
+    validate_id(project_id).map_err(|_| CertError::BadProjectId)?;
+    Ok(format!("{POP_DOMAIN}{nonce}\n{project_id}").into_bytes())
 }

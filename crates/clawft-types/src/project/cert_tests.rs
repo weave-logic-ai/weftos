@@ -17,7 +17,8 @@ const CERT_SIG: &str = "081ef31a626b34369d2da9df686d53f2ed1f96e9fc78ab5c554e5921
 const ANCHOR_CANON: &str = r#"{"at":"2026-10-01T10:00:00Z","cert_serial":1,"chain_id":0,"head_hash":"abababababababababababababababababababababababababababababababab","head_seq":4210,"prev_anchor":null,"project_id":"01JB8Z3Q0V6X9KQ4M2N7T5R1WD","project_key_id":"6a3803d5f059902a1c6dafbc9ba47292","rule_hash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","seq":17}"#;
 const ANCHOR_SIG: &str = "6e390a39c81f8b60753abbd1e494dcae41acf4b056a9eab0eb387656795fd39b81d9a36409b63b977ac14cc43efe7df94e79a62e1f2500171710a238e788900d";
 const ANCHOR_HASH: &str = "4b97b9304b53143e0772be7ea09bcb03733f9e136edc8b95ea6b83c4b0e35dc4";
-const POP_SIG: &str = "89018b43a1f8db4167488b744dd308902558c9e2375867a6fbd3e8cdce638d026ad65cdc580cc8dcb3a6369b66d3299c4888fa95c75be979b2e65a5995e51302";
+const POP_NONCE: &str = "00112233445566778899aabbccddeeff";
+const POP_SIG: &str = "71077e668d8fff3f84e60927fe75ef129c31b3faae3b40216001047f6eb8122e0df9885b654756429be0a310b16073d03d23cf8d0e51dbdcc13ddf25c67ac405";
 
 fn user_key() -> SigningKey {
     SigningKey::from_bytes(&[1u8; 32])
@@ -260,15 +261,91 @@ fn anchor_hash_covers_the_signature_and_chains() {
 
 #[test]
 fn pop_bytes_and_golden_signature() {
-    let bytes = pop_signed_bytes("00ff", PID);
+    let bytes = pop_signed_bytes(POP_NONCE, PID).unwrap();
     assert_eq!(
         bytes,
-        format!("weftos-mesh-local-pop-v1\n00ff\n{PID}").into_bytes()
+        format!("weftos-mesh-local-pop-v1\n{POP_NONCE}\n{PID}").into_bytes()
     );
     assert_eq!(hex_encode(&proj_key().sign(&bytes).to_bytes()), POP_SIG);
     // Binding: another project id or nonce changes the bytes.
-    assert_ne!(bytes, pop_signed_bytes("00fe", PID));
-    assert_ne!(bytes, pop_signed_bytes("00ff", "01JB8Z3Q0V6X9KQ4M2N7T5R1WE"));
+    let other_nonce = "00112233445566778899aabbccddeeff".replace('f', "e");
+    assert_ne!(bytes, pop_signed_bytes(&other_nonce, PID).unwrap());
+    assert_ne!(
+        bytes,
+        pop_signed_bytes(POP_NONCE, "01JB8Z3Q0V6X9KQ4M2N7T5R1WE").unwrap()
+    );
+}
+
+#[test]
+fn pop_refuses_separator_smuggling() {
+    // ("aa\nBB", "C") and ("aa", "BB\nC") would join to the same bytes.
+    assert_eq!(pop_signed_bytes("aa\nBB", "C"), Err(CertError::BadNonce));
+    assert_eq!(pop_signed_bytes("aa", "BB\nC"), Err(CertError::BadNonce));
+    let n = POP_NONCE;
+    assert_eq!(pop_signed_bytes(n, "BB\nC"), Err(CertError::BadProjectId));
+    assert_eq!(pop_signed_bytes(n, &format!("{PID}\n")), Err(CertError::BadProjectId));
+    for bad in ["", "00ff", &n.to_uppercase(), &format!("{n}0"), "zz112233445566778899aabbccddeeff"] {
+        assert_eq!(pop_signed_bytes(bad, PID), Err(CertError::BadNonce), "{bad}");
+    }
+}
+
+#[test]
+fn uppercase_sig_is_refused_everywhere() {
+    let mut c = cert();
+    c.sig = c.sig.to_uppercase();
+    assert_eq!(c.verify(&user_pk(), now()), Err(CertError::BadHex("sig")));
+    let mut a = anchor();
+    let lower_hash = a.hash();
+    a.sig = a.sig.to_uppercase();
+    assert!(a.verify(&proj_key().verifying_key().to_bytes()).is_err());
+    // The hash of the genuine statement is unchanged by the refused spelling.
+    assert_eq!(anchor().hash(), lower_hash);
+    // Uppercase keys fail too.
+    let mut c = cert();
+    c.project_pubkey = c.project_pubkey.to_uppercase();
+    assert!(c.verify(&user_pk(), now()).is_err());
+}
+
+#[test]
+fn cert_project_id_and_issue_time_are_checked() {
+    let mut r = req();
+    r.project_id = "not-a-ulid\nx".into();
+    let c = ProjectCert::sign(&user_key(), &r);
+    assert_eq!(c.verify(&user_pk(), now()), Err(CertError::BadProjectId));
+    // issued_at slightly ahead is skew; well ahead is refused.
+    let mut r = req();
+    r.issued_at = now() + Duration::seconds(30);
+    ProjectCert::sign(&user_key(), &r).verify(&user_pk(), now()).unwrap();
+    r.issued_at = now() + Duration::seconds(120);
+    assert_eq!(
+        ProjectCert::sign(&user_key(), &r).verify(&user_pk(), now()),
+        Err(CertError::NotYetValid)
+    );
+    // Non-canonical spellings of a timestamp are refused.
+    let mut c = cert();
+    c.issued_at = "2026-10-01T09:30:00+00:00".into();
+    assert_eq!(c.verify(&user_pk(), now()), Err(CertError::BadTimestamp("issued_at")));
+}
+
+#[test]
+fn anchor_digest_fields_are_shape_checked() {
+    let pk = proj_key().verifying_key().to_bytes();
+    let resign = |f: &dyn Fn(&mut ProjectAnchorStmt)| {
+        let mut a = anchor();
+        f(&mut a);
+        a.sign(&proj_key())
+    };
+    let cases: Vec<(&str, ProjectAnchorStmt)> = vec![
+        ("head_hash", resign(&|a| a.head_hash = "AB".repeat(32))),
+        ("head_hash", resign(&|a| a.head_hash = "ab".repeat(31))),
+        ("rule_hash", resign(&|a| a.rule_hash = "x".repeat(64))),
+        ("prev_anchor", resign(&|a| a.prev_anchor = Some("Ab".repeat(32)))),
+    ];
+    for (name, a) in cases {
+        assert_eq!(a.verify(&pk), Err(CertError::BadDigest(name)));
+    }
+    let a = resign(&|a| a.project_id = "x\ny".into());
+    assert_eq!(a.verify(&pk), Err(CertError::BadProjectId));
 }
 
 #[test]
@@ -283,7 +360,8 @@ fn canonical_json_sorts_keys_and_nests() {
 
 #[test]
 fn hex_helpers() {
-    assert_eq!(hex_decode::<2>("0aFf"), Some([0x0a, 0xff]));
+    assert_eq!(hex_decode::<2>("0aff"), Some([0x0a, 0xff]));
+    assert_eq!(hex_decode::<2>("0aFf"), None);
     assert_eq!(hex_decode::<2>("0a"), None);
     assert_eq!(hex_decode::<1>("zz"), None);
 }

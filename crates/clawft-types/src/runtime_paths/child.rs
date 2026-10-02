@@ -19,7 +19,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{RootSource, RuntimePaths, user_runtime_root};
+use super::{RootSource, RuntimePaths, absolutize, user_runtime_root};
 
 /// Spawn handshake written by the user daemon (0600, 60 s expiry).
 pub const SPAWN_JSON_FILE: &str = "spawn.json";
@@ -50,10 +50,10 @@ impl RuntimePaths {
         project_root: impl Into<PathBuf>,
     ) -> Option<Self> {
         safe_component(id).then(|| Self {
-            root: run_dir.into(),
+            root: absolutize(&run_dir.into()),
             source: RootSource::Child {
                 id: id.to_owned(),
-                project_root: project_root.into(),
+                project_root: absolutize(&project_root.into()),
             },
         })
     }
@@ -192,6 +192,15 @@ mod tests {
                 "{bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn relative_inputs_are_made_absolute() {
+        let p = RuntimePaths::child_at("rel/run", ID, "rel/proj").unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(p.root(), cwd.join("rel/run"));
+        assert_eq!(p.chain_dir(), cwd.join("rel/proj/.weftos/chain"));
+        assert!(p.project_key().unwrap().is_absolute());
     }
 
     #[test]

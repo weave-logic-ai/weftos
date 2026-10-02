@@ -303,3 +303,16 @@ fn property_merge_only_tightens() {
     }
     assert!(ok > 200 && rejected > 200, "weak coverage: {ok} ok, {rejected} rejected");
 }
+
+#[test]
+fn invalid_parent_limits_are_refused() {
+    for v in [f64::NAN, -0.5, f64::INFINITY, f64::NEG_INFINITY, 1.5] {
+        let mut p = parent();
+        p.limits.risk_threshold = Some(v);
+        let e = merge(&p, &OverlayFile::default()).unwrap_err();
+        assert!(
+            matches!(&e, OverlayError::InvalidLimit { key } if key == "parent.limits.risk_threshold"),
+            "{v}: {e:?}"
+        );
+    }
+}

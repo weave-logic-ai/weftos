@@ -637,25 +637,61 @@ pub struct GatePrincipal {
     /// everything that predates Phase 2, which keeps old chain payloads
     /// byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project_id: Option<String>,
+    project_id: Option<String>,
 
     /// Node id of the kernel that evaluated the request (the project key id
     /// for a child kernel).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub instance_id: Option<String>,
+    instance_id: Option<String>,
 }
 
-/// A project id whose provenance is cryptographic (token scope, the
-/// kernel's own bound project, or a user-signed forward header).
+/// Where a [`ProjectAttestation`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttestSource {
+    /// The kernel's own bound project (the socket reached is the project's).
+    BoundKernel,
+    /// A validated token whose scope names the project.
+    TokenScope,
+    /// A user-daemon forward header whose user signature was checked.
+    UserForward,
+}
+
+/// A project id whose provenance is cryptographic, ready to stamp onto a
+/// [`GatePrincipal`] with [`GatePrincipal::with_project`].
 ///
-/// Implemented by the daemon's `VerifiedProject`. [`GatePrincipal::with_project`]
-/// accepts only this, so a bare `Request.project` string cannot be stamped
-/// onto a principal by accident. A same-uid process can still claim a
-/// project over the socket; this is an isolation guard between one user's
-/// projects, not a boundary against a hostile local process.
-pub trait AttestedProject {
+/// Cross-crate sealing is not possible here: the daemon (another crate)
+/// is what verifies the sources, so this constructor has to be public.
+/// The guard is therefore by construction path, not by the compiler: the
+/// daemon's `VerifiedProject::attest` is the only caller, a `ClaimedProject`
+/// has no route to it, and package I adds a grep test that no other site
+/// calls [`ProjectAttestation::from_verified`]. A same-uid process can still
+/// claim a project over the socket; this is an isolation guard between one
+/// user's projects, not a boundary against a hostile local process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectAttestation {
+    project_id: String,
+    source: AttestSource,
+}
+
+impl ProjectAttestation {
+    /// Wrap a project id the caller has ALREADY verified from `source`.
+    /// Never call this with a client-supplied `Request.project`.
+    pub fn from_verified(project_id: impl Into<String>, source: AttestSource) -> Self {
+        Self {
+            project_id: project_id.into(),
+            source,
+        }
+    }
+
     /// The verified project id.
-    fn project_id(&self) -> &str;
+    pub fn project_id(&self) -> &str {
+        &self.project_id
+    }
+
+    /// Which verified source produced it.
+    pub fn source(&self) -> AttestSource {
+        self.source
+    }
 }
 
 impl GatePrincipal {
@@ -672,9 +708,19 @@ impl GatePrincipal {
     }
 
     /// Attribute the action to a verified project (ADR-103 A6).
-    pub fn with_project(mut self, project: &impl AttestedProject) -> Self {
+    pub fn with_project(mut self, project: &ProjectAttestation) -> Self {
         self.project_id = Some(project.project_id().to_owned());
         self
+    }
+
+    /// The attributed project, if one was verified.
+    pub fn project_id(&self) -> Option<&str> {
+        self.project_id.as_deref()
+    }
+
+    /// The evaluating kernel's node id, if recorded.
+    pub fn instance_id(&self) -> Option<&str> {
+        self.instance_id.as_deref()
     }
 
     /// Record the evaluating kernel's node id.
@@ -3918,8 +3964,8 @@ mod tests {
         // A pre-Phase-2 chain payload.
         let old = r#"{"agent_id":"a","user_id":"u","parent_agent_id":"p","conv_id":"c"}"#;
         let p: GatePrincipal = serde_json::from_str(old).unwrap();
-        assert_eq!(p.project_id, None);
-        assert_eq!(p.instance_id, None);
+        assert_eq!(p.project_id(), None);
+        assert_eq!(p.instance_id(), None);
         // And it serialises back to the same bytes: nothing new appears.
         assert_eq!(serde_json::to_string(&p).unwrap(), old);
         // Missing everything still parses (all fields default).
@@ -3929,20 +3975,20 @@ mod tests {
 
     #[test]
     fn gate_principal_project_and_instance_round_trip() {
-        struct Verified;
-        impl AttestedProject for Verified {
-            fn project_id(&self) -> &str {
-                "01JB8Z3Q0V6X9KQ4M2N7T5R1WD"
-            }
-        }
+        let att = ProjectAttestation::from_verified(
+            "01JB8Z3Q0V6X9KQ4M2N7T5R1WD",
+            AttestSource::UserForward,
+        );
+        assert_eq!(att.source(), AttestSource::UserForward);
         let p = GatePrincipal::agent("a")
-            .with_project(&Verified)
+            .with_project(&att)
             .with_instance("6a3803d5f059902a1c6dafbc9ba47292");
         let v = serde_json::to_value(&p).unwrap();
         assert_eq!(v["project_id"], "01JB8Z3Q0V6X9KQ4M2N7T5R1WD");
         assert_eq!(v["instance_id"], "6a3803d5f059902a1c6dafbc9ba47292");
         let back: GatePrincipal = serde_json::from_value(v).unwrap();
         assert_eq!(back, p);
+        assert_eq!(back.project_id(), Some("01JB8Z3Q0V6X9KQ4M2N7T5R1WD"));
     }
 
     // ── WEFT-506: explicit EffectVector schema per gate family ──

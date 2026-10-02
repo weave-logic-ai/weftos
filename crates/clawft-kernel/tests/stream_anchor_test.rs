@@ -39,6 +39,8 @@ fn base_config() -> Config {
 fn kernel_config_with_chain() -> KernelConfig {
     KernelConfig {
         governance: Default::default(),
+        profile: None,
+        shared_services: Default::default(),
         enabled: true,
         max_processes: 64,
         health_check_interval_secs: 5,

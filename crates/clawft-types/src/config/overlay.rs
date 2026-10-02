@@ -318,7 +318,7 @@ fn union(a: &[String], b: impl Iterator<Item = String>) -> Vec<String> {
 }
 
 /// Merge `overlay` onto `parent`, tighten-only. The first violation (in the
-/// order: schema, forbidden keys, deny rules, approval rules, limits) is
+/// order: parent limits, schema, forbidden keys, deny rules, approval rules, limits) is
 /// returned and nothing is clamped.
 pub fn merge(parent: &ParentView, overlay: &OverlayFile) -> Result<EffectiveOverlay, OverlayError> {
     if overlay.schema != OVERLAY_SCHEMA {
@@ -328,6 +328,13 @@ pub fn merge(parent: &ParentView, overlay: &OverlayFile) -> Result<EffectiveOver
         return Err(match key.as_str() {
             "permit" | "deactivate" => OverlayError::Forbidden(key.clone()),
             _ => OverlayError::UnknownKey(key.clone()),
+        });
+    }
+    if let Some(r) = parent.limits.risk_threshold
+        && !(r.is_finite() && (0.0..=1.0).contains(&r))
+    {
+        return Err(OverlayError::InvalidLimit {
+            key: "parent.limits.risk_threshold".into(),
         });
     }
     let parent_ids: BTreeSet<String> = parent

@@ -27,44 +27,51 @@
 //! let _: VerifiedProject = claimed.into();
 //! ```
 
-use clawft_kernel::governance::AttestedProject;
+use clawft_kernel::governance::{AttestSource, ProjectAttestation};
 use clawft_kernel::token_authority::TokenInfo;
 
 use crate::handshake_rpc::BoundProject;
 
 /// A verified project id. See the module docs for the three sources.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VerifiedProject(String);
+pub struct VerifiedProject(String, AttestSource);
 
 impl VerifiedProject {
     /// The kernel's own bound project, if it has one. A child kernel's
     /// handshake `project_id` is verified by construction.
     pub(crate) fn from_bound(bound: &BoundProject) -> Option<Self> {
-        bound.project_id.clone().map(Self)
+        bound
+            .project_id
+            .clone()
+            .map(|id| Self(id, AttestSource::BoundKernel))
     }
 
     /// The project a validated token is scoped to, if any. Call only with a
     /// `TokenInfo` the token authority returned for a secret it checked.
     pub(crate) fn from_token(info: &TokenInfo) -> Option<Self> {
-        info.project.clone().map(Self)
+        info.project
+            .clone()
+            .map(|id| Self(id, AttestSource::TokenScope))
     }
 
     /// A project id from a user-daemon forward header. Call only after the
     /// header's user signature, 5 s window and single use were checked
     /// (package I).
     pub(crate) fn from_verified_forward(project_id: String) -> Self {
-        Self(project_id)
+        Self(project_id, AttestSource::UserForward)
     }
 
     /// The verified project id.
     pub fn as_str(&self) -> &str {
         &self.0
     }
-}
 
-impl AttestedProject for VerifiedProject {
-    fn project_id(&self) -> &str {
-        &self.0
+    /// The proof [`GatePrincipal::with_project`] takes. The only producer of
+    /// a [`ProjectAttestation`] in this crate.
+    ///
+    /// [`GatePrincipal::with_project`]: clawft_kernel::governance::GatePrincipal::with_project
+    pub fn attest(&self) -> ProjectAttestation {
+        ProjectAttestation::from_verified(self.0.clone(), self.1)
     }
 }
 
@@ -87,8 +94,8 @@ mod tests {
     trait AmbiguousIfFrom<A> {
         fn check() {}
     }
-    impl<T: ?Sized, Src> AmbiguousIfFrom<(Src, ())> for PhantomData<(T, Src)> {}
-    impl<T: ?Sized + From<Src>, Src> AmbiguousIfFrom<(Src, u8)> for PhantomData<(T, Src)> {}
+    impl<T, Src> AmbiguousIfFrom<(Src, ())> for PhantomData<(T, Src)> {}
+    impl<T: From<Src>, Src> AmbiguousIfFrom<(Src, u8)> for PhantomData<(T, Src)> {}
 
     #[test]
     fn no_conversion_from_claimed_or_raw_strings() {
@@ -125,9 +132,10 @@ mod tests {
     }
 
     #[test]
-    fn stamps_a_principal_only_through_the_attested_trait() {
+    fn stamps_a_principal_only_through_attest() {
         let v = VerifiedProject::from_verified_forward(ID.into());
-        let p = GatePrincipal::agent("a").with_project(&v);
-        assert_eq!(p.project_id.as_deref(), Some(ID));
+        let p = GatePrincipal::agent("a").with_project(&v.attest());
+        assert_eq!(p.project_id(), Some(ID));
+        assert_eq!(v.attest().source(), AttestSource::UserForward);
     }
 }
