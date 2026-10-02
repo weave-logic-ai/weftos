@@ -96,7 +96,12 @@ pub struct VerifiedHello {
 }
 
 impl VerifiedHello {
-    /// Class implied by the capabilities.
+    /// Class implied by the capabilities. **Self-declared**: a node can
+    /// claim `leaf` (taking limits it does not need) or omit it. Under
+    /// `enforce` the verdict source may override it
+    /// ([`Verdict::PermitAs`](crate::mesh_admit::Verdict)); a full fix
+    /// (class bound to an issued credential) is a known open limit
+    /// (ADR-103, Phase 3).
     pub fn class(&self) -> PeerClass {
         if self.capabilities.iter().any(|c| c == CAP_LEAF) {
             PeerClass::Leaf
@@ -141,12 +146,36 @@ impl HelloFailure {
 }
 
 /// The exact bytes a hello signs.
-pub fn signed_bytes(handshake_hash: &[u8], genesis: &[u8; 32], ts: u64) -> Vec<u8> {
-    let mut b = Vec::with_capacity(HELLO_DOMAIN.len() + handshake_hash.len() + 40);
+///
+/// Layout: domain || handshake hash || genesis || ts (BE) || node_id ||
+/// platform || capability count (BE u32) || each capability, with every
+/// variable-length string prefixed by its length (BE u32). Covering the
+/// identity, platform and capabilities means none can be altered in
+/// flight; the class a hello implies is therefore signed (but still
+/// self-declared, see [`VerifiedHello::class`]).
+pub fn signed_bytes(
+    handshake_hash: &[u8],
+    genesis: &[u8; 32],
+    ts: u64,
+    node_id: &str,
+    platform: &str,
+    capabilities: &[String],
+) -> Vec<u8> {
+    fn put(b: &mut Vec<u8>, s: &str) {
+        b.extend_from_slice(&(s.len() as u32).to_be_bytes());
+        b.extend_from_slice(s.as_bytes());
+    }
+    let mut b = Vec::with_capacity(HELLO_DOMAIN.len() + handshake_hash.len() + 128);
     b.extend_from_slice(HELLO_DOMAIN);
     b.extend_from_slice(handshake_hash);
     b.extend_from_slice(genesis);
     b.extend_from_slice(&ts.to_be_bytes());
+    put(&mut b, node_id);
+    put(&mut b, platform);
+    b.extend_from_slice(&(capabilities.len() as u32).to_be_bytes());
+    for c in capabilities {
+        put(&mut b, c);
+    }
     b
 }
 
@@ -164,11 +193,14 @@ impl AdmitHello {
         capabilities: Vec<String>,
     ) -> Self {
         let pk = key.verifying_key().to_bytes();
-        let sig = key.sign(&signed_bytes(handshake_hash, genesis, ts));
+        let node_id = node_id_from_pubkey(&pk);
+        let sig = key.sign(&signed_bytes(
+            handshake_hash, genesis, ts, &node_id, platform, &capabilities,
+        ));
         Self {
             kind: HELLO_KIND.to_owned(),
             v: 1,
-            node_id: node_id_from_pubkey(&pk),
+            node_id,
             pubkey: hex_encode(&pk),
             platform: platform.to_owned(),
             capabilities,
@@ -224,14 +256,22 @@ impl AdmitHello {
         }
         let vk = VerifyingKey::from_bytes(&pubkey)
             .map_err(|_| HelloFailure::Malformed("pubkey not on curve".into()))?;
-        vk.verify_strict(
-            &signed_bytes(binding.handshake_hash, &genesis, self.ts),
-            &Signature::from_bytes(&sig),
-        )
-        .map_err(|_| HelloFailure::BadSignature)?;
+        // Cheap check first: skew before the signature verification.
         if now.abs_diff(self.ts) > MAX_SKEW_SECS {
             return Err(HelloFailure::ClockSkew);
         }
+        vk.verify_strict(
+            &signed_bytes(
+                binding.handshake_hash,
+                &genesis,
+                self.ts,
+                &self.node_id,
+                &self.platform,
+                &self.capabilities,
+            ),
+            &Signature::from_bytes(&sig),
+        )
+        .map_err(|_| HelloFailure::BadSignature)?;
         Ok(VerifiedHello {
             node_id: self.node_id.clone(),
             pubkey,
@@ -273,7 +313,7 @@ impl DialIdentity {
 }
 
 /// How the peer presented itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PeerClass {
     /// Verified full node.
     Node,
@@ -324,10 +364,25 @@ pub struct Refusal {
 pub struct Grant {
     /// Post-admission limits.
     pub limits: PeerLimits,
-    /// Keep the peer's `src_scope` (only for fully verified peers).
+    /// Class the connection is served as (the gate may override the
+    /// declared class under `enforce`).
+    pub class: PeerClass,
+    /// True only when the hello verified AND the gate actually enforces
+    /// (`CryptoGate` in `enforce`) AND decided Admit. `AllowAll`, `off`
+    /// and `observe` never set it: a verified key there only binds
+    /// `source_node`, it is not membership.
+    pub admitted: bool,
+    /// Keep the peer's `src_scope` (only for admitted `Node` peers).
     pub trust_scope: bool,
     /// Set under `observe` when enforcement would have refused.
     pub observed: Option<Refusal>,
+}
+
+impl Grant {
+    /// An unrestricted, non-admitted grant (no membership claimed).
+    pub fn open(class: PeerClass) -> Self {
+        Self { limits: PeerLimits::None, class, admitted: false, trust_scope: false, observed: None }
+    }
 }
 
 /// Gate decision.
@@ -342,6 +397,13 @@ pub enum Admission {
 /// Admission policy for the mesh listener.
 #[async_trait]
 pub trait AdmissionGate: Send + Sync + 'static {
+    /// True when the listener should apply first-frame, idle and per-IP
+    /// limits (a gate that actually checks peers). `AllowAll` is false so
+    /// slow legacy leaves behave exactly as before.
+    fn strict(&self) -> bool {
+        false
+    }
+
     /// A hello verified; decide.
     async fn admit(&self, hello: &VerifiedHello, ctx: &AdmitContext) -> Admission;
 
@@ -356,11 +418,11 @@ pub struct AllowAll;
 
 #[async_trait]
 impl AdmissionGate for AllowAll {
-    async fn admit(&self, _: &VerifiedHello, _: &AdmitContext) -> Admission {
-        Admission::Admit(Grant { limits: PeerLimits::None, trust_scope: false, observed: None })
+    async fn admit(&self, _: &VerifiedHello, ctx: &AdmitContext) -> Admission {
+        Admission::Admit(Grant::open(ctx.class))
     }
     async fn admit_unverified(&self, _: &HelloFailure, _: &AdmitContext) -> Admission {
-        Admission::Admit(Grant { limits: PeerLimits::None, trust_scope: false, observed: None })
+        Admission::Admit(Grant::open(PeerClass::Legacy))
     }
 }
 

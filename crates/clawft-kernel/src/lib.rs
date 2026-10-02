@@ -333,6 +333,8 @@ pub mod mesh_ipc;
 #[cfg(feature = "mesh")]
 pub mod mesh_kad;
 #[cfg(feature = "mesh")]
+pub mod mesh_limits;
+#[cfg(feature = "mesh")]
 pub mod mesh_listener;
 #[cfg(feature = "mesh")]
 pub mod mesh_log;

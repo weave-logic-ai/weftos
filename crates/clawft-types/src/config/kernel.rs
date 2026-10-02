@@ -879,17 +879,34 @@ pub struct MeshConfig {
     pub noise_key_path: Option<String>,
 
     /// Peer admission policy on the mesh listener (ADR-103, P3-K1).
-    /// `observe` (default) admits every peer and records would-be
-    /// refusals; `enforce` refuses unsigned, plaintext, wrong-genesis and
-    /// revoked peers; `off` skips admission entirely. Observe only takes
-    /// effect once `genesis_hash` is pinned.
+    ///
+    /// - `off`: no policy, but a peer that sends an `AdmitHello` still has
+    ///   it consumed and verified, and its `source_node` is bound to the
+    ///   verified key.
+    /// - `observe` (default): checks and records would-be refusals, never
+    ///   refuses, never marks a peer admitted. Takes effect only once
+    ///   `genesis_hash` is pinned.
+    /// - `enforce`: refuses unsigned, plaintext, wrong-genesis, revoked and
+    ///   verdict-denied peers. Needs `genesis_hash`, and a governance gate
+    ///   unless `admission_open_membership` is set.
+    ///
+    /// For every peer that is not *admitted* (anything but `enforce`
+    /// accepting a verified hello) the listener strips the envelope's
+    /// `src_scope`.
     #[serde(default)]
     pub admission: MeshAdmissionMode,
 
     /// Cluster genesis hash (64 hex chars) peers must present in their
-    /// `AdmitHello`. Required for `admission = "enforce"`.
+    /// `AdmitHello`. Required for `admission = "enforce"`. This is a
+    /// cluster label, not a credential: anyone who knows it can present it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub genesis_hash: Option<String>,
+
+    /// Allow `admission = "enforce"` without a governance gate, i.e. admit
+    /// every peer that presents a valid hello for the right genesis. Off by
+    /// default: without it enforce refuses everyone when no gate exists.
+    #[serde(default)]
+    pub admission_open_membership: bool,
 }
 
 /// Mesh admission policy (see [`MeshConfig::admission`]).
@@ -928,6 +945,7 @@ impl Default for MeshConfig {
             noise_key_path: None,
             admission: MeshAdmissionMode::default(),
             genesis_hash: None,
+            admission_open_membership: false,
         }
     }
 }

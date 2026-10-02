@@ -471,6 +471,10 @@ impl<P: Platform> Kernel<P> {
         // governance gate once that exists (step 9, below the mesh block).
         #[cfg(all(feature = "native", feature = "mesh", feature = "exochain"))]
         let mesh_verdicts = Arc::new(crate::mesh_admit::GateVerdictSource::late());
+        #[cfg(all(feature = "native", feature = "mesh", feature = "exochain"))]
+        let mesh_closed_without_gate = mesh_config_early.admission
+            == clawft_types::config::MeshAdmissionMode::Enforce
+            && !mesh_config_early.admission_open_membership;
 
         // 5d. Initialize mesh transport (K6) if configured.
         //     Must happen before cluster (step 7) because cluster needs mesh
@@ -648,8 +652,18 @@ impl<P: Platform> Kernel<P> {
                             let verdicts: Arc<dyn crate::mesh_admit::VerdictSource> =
                                 mesh_verdicts.clone();
                             #[cfg(not(feature = "exochain"))]
-                            let verdicts: Arc<dyn crate::mesh_admit::VerdictSource> =
-                                Arc::new(crate::mesh_admit::OpenVerdicts);
+                            let verdicts: Arc<dyn crate::mesh_admit::VerdictSource> = {
+                                if mode == Adm::Enforce && !mesh_config.admission_open_membership {
+                                    return Err(KernelError::Boot(
+                                        "kernel.mesh.admission = \"enforce\" needs a governance \
+                                         gate; this build has none. Set \
+                                         kernel.mesh.admission_open_membership = true to admit \
+                                         any valid hello"
+                                            .into(),
+                                    ));
+                                }
+                                Arc::new(crate::mesh_admit::OpenVerdicts)
+                            };
                             Arc::new(crate::mesh_admit::CryptoGate::new(
                                 genesis,
                                 Arc::clone(&revocation_list),
@@ -1743,7 +1757,18 @@ impl<P: Platform> Kernel<P> {
         #[cfg(all(feature = "native", feature = "mesh", feature = "exochain"))]
         match &governance_gate {
             Some(g) => mesh_verdicts.bind(Arc::clone(g)),
-            None => mesh_verdicts.bind_open(),
+            None if mesh_closed_without_gate => {
+                error!(
+                    "mesh admission = enforce but no governance gate exists: every peer will be \
+                     refused. Enable the chain/governance, or set \
+                     kernel.mesh.admission_open_membership = true to admit any valid hello"
+                );
+                mesh_verdicts.bind_closed();
+            }
+            None => {
+                warn!("mesh admission_open_membership: admitting any peer with a valid hello");
+                mesh_verdicts.bind_open();
+            }
         }
 
         // Wire governance gate into A2A router for dual-layer enforcement.

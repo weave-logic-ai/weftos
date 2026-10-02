@@ -296,34 +296,37 @@ impl MeshRuntime {
         sender: tokio::sync::mpsc::Sender<Vec<u8>>,
         verified: bool,
     ) -> bool {
-        let existing = self
-            .peers
-            .get(&node_id)
-            .map(|e| (e.sender.same_channel(&sender), e.verified));
-        if let Some((same, was_verified)) = existing {
-            if same {
-                return true;
-            }
-            if was_verified && !verified {
-                warn!(peer = %node_id, "refusing route takeover of an admitted peer by an unverified connection");
-                return false;
-            }
-        }
+        use dashmap::mapref::entry::Entry;
         debug!(peer = %node_id, "adding peer connection");
-        let was_known = existing.is_some();
         let address = self
             .discovery
             .as_ref()
             .and_then(|d| d.peer_addresses.get(&node_id).map(|a| a.value().clone()));
-        self.peers.insert(
-            node_id.clone(),
-            PeerConnection {
-                node_id: node_id.clone(),
-                connected_at: chrono::Utc::now(),
-                sender,
-                verified,
-            },
-        );
+        let conn = PeerConnection {
+            node_id: node_id.clone(),
+            connected_at: chrono::Utc::now(),
+            sender,
+            verified,
+        };
+        // Decide and write under the entry (shard) lock so an unverified
+        // registration can never overwrite a verified one in a race.
+        let was_known = match self.peers.entry(node_id.clone()) {
+            Entry::Occupied(mut o) => {
+                if o.get().sender.same_channel(&conn.sender) {
+                    return true;
+                }
+                if o.get().verified && !verified {
+                    warn!(peer = %node_id, "refusing route takeover of an admitted peer by an unverified connection");
+                    return false;
+                }
+                o.insert(conn);
+                true
+            }
+            Entry::Vacant(v) => {
+                v.insert(conn);
+                false
+            }
+        };
         // WEFT-120: reconnected peers emit Recovered; first connect → Joined.
         if was_known {
             self.peer_events.emit(MeshPeerEvent::Recovered {
@@ -338,6 +341,27 @@ impl MeshRuntime {
             });
         }
         true
+    }
+
+    /// Remove every route that still points at `tx` (a closed connection's
+    /// outbound channel). Routes since replaced by a newer connection are
+    /// left alone. Returns the number removed.
+    pub fn disconnect_channel(&self, tx: &tokio::sync::mpsc::Sender<Vec<u8>>) -> usize {
+        let ids: Vec<String> = self
+            .peers
+            .iter()
+            .filter(|e| e.sender.same_channel(tx))
+            .map(|e| e.key().clone())
+            .collect();
+        let mut n = 0;
+        for id in ids {
+            if self.peers.remove_if(&id, |_, p| p.sender.same_channel(tx)).is_some() {
+                self.unregister_all_peer_topics(&id);
+                self.peer_events.emit(MeshPeerEvent::Left { node_id: id });
+                n += 1;
+            }
+        }
+        n
     }
 
     /// Send a [`MeshIpcEnvelope`] to a connected peer.

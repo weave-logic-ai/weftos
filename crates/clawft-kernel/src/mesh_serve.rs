@@ -16,6 +16,7 @@ use crate::mesh_admit::{
 use crate::mesh_assess::{AssessmentEnvelope, AssessmentTransport};
 use crate::mesh_delivery::PeerCtx;
 use crate::mesh_ipc::MeshIpcEnvelope;
+use crate::mesh_limits::{IpSlot, Limits, HANDSHAKE_TIMEOUT, MAX_CONNECTIONS};
 use crate::mesh_noise::{
     noise_static_public, EncryptedChannel, NoiseChannel, NoiseConfig, PassthroughChannel,
 };
@@ -60,11 +61,33 @@ pub fn transport_for(name: &str, seed_peer: Option<&str>) -> Box<dyn MeshTranspo
 /// behaviour.
 pub async fn serve_listener(
     runtime: Arc<MeshRuntime>,
+    listener: Box<dyn TransportListener>,
+    noise: Option<Arc<NoiseConfig>>,
+    transport_name: &str,
+    listen_addr: &str,
+    gate: Arc<dyn AdmissionGate>,
+) {
+    serve_listener_with(
+        runtime,
+        listener,
+        noise,
+        transport_name,
+        listen_addr,
+        gate,
+        Limits::default(),
+    )
+    .await;
+}
+
+/// [`serve_listener`] with explicit [`Limits`] (tests use short ones).
+pub async fn serve_listener_with(
+    runtime: Arc<MeshRuntime>,
     mut listener: Box<dyn TransportListener>,
     noise: Option<Arc<NoiseConfig>>,
     transport_name: &str,
     listen_addr: &str,
     gate: Arc<dyn AdmissionGate>,
+    limits: Limits,
 ) {
     let bind = listener
         .local_addr()
@@ -82,6 +105,8 @@ pub async fn serve_listener(
     // concurrent connections.
     let mut conns = tokio::task::JoinSet::new();
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+    let per_ip = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let strict = gate.strict();
     loop {
         while conns.try_join_next().is_some() {}
         match listener.accept().await {
@@ -91,12 +116,23 @@ pub async fn serve_listener(
                         "mesh connection cap reached, dropping");
                     continue;
                 };
+                let ip_slot = if strict {
+                    let Some(slot) = IpSlot::acquire(&per_ip, peer_addr.ip(), limits.per_ip) else {
+                        tracing::warn!(peer = %peer_addr, max = limits.per_ip,
+                            "mesh per-IP connection cap reached, dropping");
+                        continue;
+                    };
+                    Some(slot)
+                } else {
+                    None
+                };
                 let rt = Arc::clone(&runtime);
                 let nc = noise.clone();
                 let gate = Arc::clone(&gate);
                 conns.spawn(async move {
-                    serve_connection(rt, stream, peer_addr, nc, gate).await;
+                    serve_connection(rt, stream, peer_addr, nc, gate, limits).await;
                     drop(permit);
+                    drop(ip_slot);
                 });
             }
             Err(e) => {
@@ -106,17 +142,15 @@ pub async fn serve_listener(
     }
 }
 
-/// Most concurrent inbound connections served at once.
-pub const MAX_CONNECTIONS: usize = 1024;
-/// Time a peer gets to finish the Noise handshake.
-pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
 /// What admission granted this connection.
 pub(crate) struct Active {
     /// Verified node id; later envelopes must carry it as `source_node`.
     pub(crate) bound: Option<String>,
     pub(crate) limits: PeerLimits,
     pub(crate) trust_scope: bool,
+    /// Admitted = hello verified AND the gate enforced AND said Admit.
+    /// `bound` alone is only key possession, not membership.
+    pub(crate) admitted: bool,
     pub(crate) class: PeerClass,
     pub(crate) remote_static: Option<Vec<u8>>,
 }
@@ -126,7 +160,7 @@ impl Active {
     fn peer_ctx(&self) -> PeerCtx {
         PeerCtx {
             peer_id: self.bound.clone().unwrap_or_default(),
-            node_verified: self.bound.is_some(),
+            node_verified: self.admitted,
             class: self.class,
             remote_static: self.remote_static.clone(),
             src_scope: None,
@@ -154,30 +188,30 @@ async fn admit_first_frame(
         handshake_hash: h,
         remote_static: channel.remote_static_key(),
     });
-    let (decision, bound, rest, class) = match AdmitHello::parse_frame(&data) {
+    let (decision, bound, rest) = match AdmitHello::parse_frame(&data) {
         None => (
             gate.admit_unverified(&HelloFailure::Missing, &legacy).await,
             None,
             Some(data),
-            PeerClass::Legacy,
         ),
-        Some(Err(f)) => (gate.admit_unverified(&f, &legacy).await, None, None, PeerClass::Legacy),
+        Some(Err(f)) => (gate.admit_unverified(&f, &legacy).await, None, None),
         Some(Ok(hello)) => match hello.verify(binding.as_ref(), unix_now()) {
             Ok(v) => {
                 let ctx = AdmitContext { class: v.class(), channel: kind };
-                (gate.admit(&v, &ctx).await, Some(v.node_id), None, ctx.class)
+                (gate.admit(&v, &ctx).await, Some(v.node_id), None)
             }
-            Err(f) => (gate.admit_unverified(&f, &legacy).await, None, None, PeerClass::Legacy),
+            Err(f) => (gate.admit_unverified(&f, &legacy).await, None, None),
         },
     };
     match decision {
         Admission::Refuse(r) => Err(r),
         Admission::Admit(g) => Ok((
             Active {
-                trust_scope: g.trust_scope && bound.is_some(),
+                admitted: g.admitted && bound.is_some(),
+                trust_scope: g.trust_scope && g.admitted && bound.is_some(),
                 limits: g.limits,
                 bound,
-                class,
+                class: g.class,
                 remote_static: channel.remote_static_key().map(<[u8]>::to_vec),
             },
             rest,
@@ -245,6 +279,7 @@ async fn serve_connection(
     peer_addr: std::net::SocketAddr,
     nc: Option<Arc<NoiseConfig>>,
     gate: Arc<dyn AdmissionGate>,
+    limits: Limits,
 ) {
     tracing::info!(
         peer = %peer_addr,
@@ -299,8 +334,24 @@ async fn serve_connection(
     // from its source, and must not desync the TCP length-prefix stream.
     // Admission runs in the handler of a completed `recv`, never inside a
     // raced future.
+    let strict = gate.strict();
     loop {
+        // Strict gates bound how long a peer may stay silent: briefly before
+        // the first frame, longer once admitted. Lenient gates keep the
+        // pre-admission behaviour (no limit) so slow legacy leaves still work.
+        let limit = strict
+            .then(|| if active.is_none() { limits.first_frame } else { limits.idle });
+        let timer = async {
+            match limit {
+                Some(d) => tokio::time::sleep(d).await,
+                None => std::future::pending::<()>().await,
+            }
+        };
         tokio::select! {
+            _ = timer => {
+                tracing::warn!(peer = %peer_addr, "mesh connection timed out, dropping");
+                break;
+            }
             inbound = channel.recv_encrypted() => match inbound {
                 Ok(data) => {
                     let frame = match active {
@@ -340,6 +391,9 @@ async fn serve_connection(
             },
         }
     }
+    // Drop our route if it still points at this connection (a verified
+    // route must not outlive its connection).
+    rt.disconnect_channel(&out_tx);
 }
 
 /// Dial each seed peer in its own task (Noise initiator when `noise` is

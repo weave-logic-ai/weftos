@@ -163,8 +163,44 @@ async fn a2a_router_delivery_ignores_scope() {
     let scope = Scope { user_id: "a".repeat(32), project_id: None };
     let from = PeerCtx::unauthenticated("p");
     for s in [None, Some(&scope)] {
-        let m = KernelMessage::text(0, MessageTarget::Process(pid), "x");
+        let m = KernelMessage::text(pid, MessageTarget::Process(pid), "x");
         router.deliver(&from, s, m).await.unwrap();
         assert!(inbox.try_recv().is_ok(), "scope {s:?} must not change routing");
     }
+}
+
+#[test]
+fn concurrent_registration_never_lets_unverified_overwrite_verified() {
+    for _ in 0..2000 {
+        let rt = Arc::new(MeshRuntime::new("local".into()));
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let (vtx, _vrx) = chan();
+        let (utx, _urx) = chan();
+        let (r1, b1) = (rt.clone(), barrier.clone());
+        let v = std::thread::spawn(move || {
+            b1.wait();
+            r1.register_peer("n".into(), vtx, true);
+        });
+        let (r2, b2) = (rt.clone(), barrier);
+        let u = std::thread::spawn(move || {
+            b2.wait();
+            r2.register_peer("n".into(), utx, false);
+        });
+        v.join().unwrap();
+        u.join().unwrap();
+        assert!(rt.peers.get("n").unwrap().verified, "verified route was overwritten");
+    }
+}
+
+#[test]
+fn disconnect_channel_only_removes_routes_still_on_that_channel() {
+    let rt = MeshRuntime::new("local".into());
+    let (old_tx, _o) = chan();
+    let (new_tx, _n) = chan();
+    rt.register_peer("n".into(), old_tx.clone(), true);
+    rt.register_peer("n".into(), new_tx.clone(), true);
+    assert_eq!(rt.disconnect_channel(&old_tx), 0, "route already moved to a newer connection");
+    assert_eq!(rt.peer_ids(), vec!["n".to_string()]);
+    assert_eq!(rt.disconnect_channel(&new_tx), 1);
+    assert!(rt.peer_ids().is_empty());
 }

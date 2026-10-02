@@ -247,18 +247,18 @@ fn scope() -> Scope {
 #[test]
 fn src_scope_is_kept_only_for_verified_peers() {
     let bytes = env_bytes("n", "t", Some(scope()));
-    let trusted = Active { bound: Some("n".into()), limits: PeerLimits::None, trust_scope: true, class: PeerClass::Node, remote_static: None };
+    let trusted = Active { bound: Some("n".into()), limits: PeerLimits::None, trust_scope: true, admitted: true, class: PeerClass::Node, remote_static: None };
     let kept = screen_frame(bytes.clone(), &trusted).unwrap();
     assert!(MeshIpcEnvelope::from_bytes(&kept).unwrap().src_scope.is_some());
 
-    let untrusted = Active { bound: None, limits: PeerLimits::None, trust_scope: false, class: PeerClass::Legacy, remote_static: None };
+    let untrusted = Active { bound: None, limits: PeerLimits::None, trust_scope: false, admitted: false, class: PeerClass::Legacy, remote_static: None };
     let stripped = screen_frame(bytes, &untrusted).unwrap();
     assert!(MeshIpcEnvelope::from_bytes(&stripped).unwrap().src_scope.is_none());
 }
 
 #[test]
 fn source_node_must_match_the_bound_id() {
-    let act = Active { bound: Some("n".into()), limits: PeerLimits::None, trust_scope: false, class: PeerClass::Legacy, remote_static: None };
+    let act = Active { bound: Some("n".into()), limits: PeerLimits::None, trust_scope: false, admitted: false, class: PeerClass::Legacy, remote_static: None };
     assert!(screen_frame(env_bytes("n", "t", None), &act).is_some());
     assert!(screen_frame(env_bytes("evil", "t", None), &act).is_none());
 }
@@ -268,12 +268,14 @@ fn source_node_must_match_the_bound_id() {
 #[derive(Default)]
 struct Recorder {
     got: Mutex<Vec<String>>,
+    verified: Mutex<Vec<(String, bool)>>,
 }
 
 #[async_trait]
 impl LocalDelivery for Recorder {
-    async fn deliver(&self, _: &PeerCtx, _: Option<&Scope>, msg: KernelMessage) -> KernelResult<()> {
+    async fn deliver(&self, from: &PeerCtx, _: Option<&Scope>, msg: KernelMessage) -> KernelResult<()> {
         if let MessageTarget::Topic(t) = msg.target {
+            self.verified.lock().unwrap().push((t.clone(), from.node_verified));
             self.got.lock().unwrap().push(t);
         }
         Ok(())
@@ -281,6 +283,7 @@ impl LocalDelivery for Recorder {
 }
 
 struct Server {
+    rt: Arc<MeshRuntime>,
     addr: String,
     rec: Arc<Recorder>,
     task: tokio::task::JoinHandle<()>,
@@ -308,8 +311,9 @@ async fn server(gate: Arc<dyn AdmissionGate>, noise: bool) -> Server {
             remote_static_key: None,
         })
     });
-    let task = tokio::spawn(serve_listener(Arc::new(rt), listener, cfg, "tcp", "x", gate));
-    Server { addr, rec, task, noise_pub: kp.public }
+    let rt = Arc::new(rt);
+    let task = tokio::spawn(serve_listener(Arc::clone(&rt), listener, cfg, "tcp", "x", gate));
+    Server { rt, addr, rec, task, noise_pub: kp.public }
 }
 
 struct Client {
@@ -505,3 +509,6 @@ async fn unsigned_noise_peer_enforce_refuses_observe_serves() {
     c.publish("legacy", "t.x").await;
     assert!(wait_for(&srv.rec, "t.x").await);
 }
+
+#[path = "mesh_admit_fix_tests.rs"]
+mod fix;
