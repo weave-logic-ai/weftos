@@ -187,8 +187,22 @@ pub fn resolve_user_key(home: &Path, create: bool) -> Result<(SigningKey, KeySou
     if !create {
         return Err(UserKeyError::NoSource { path: chain.display().to_string() });
     }
-    let legacy = home.join(".clawft").join(clawft_types::runtime_paths::CHAIN_CHECKPOINT_FILE);
-    if std::fs::symlink_metadata(&legacy).is_ok() {
+    // Same predicate as Phase 1's `legacy_chain_left_behind` (a chain is its
+    // .json or its .rvf); that helper needs a project-rooted `RuntimePaths`,
+    // which the user daemon does not have.
+    let legacy_root = home.join(".clawft");
+    let legacy = legacy_root.join(clawft_types::runtime_paths::CHAIN_CHECKPOINT_FILE);
+    let has_legacy_chain = std::fs::symlink_metadata(&legacy).is_ok()
+        || std::fs::symlink_metadata(legacy.with_extension("rvf")).is_ok();
+    if clawft_types::runtime_paths::legacy_migration_marker(&legacy_root).is_some() {
+        // Migrated, but no chain.key came with it (`--allow-unsigned`): the
+        // chain carries no identity, so a new user key splits nothing.
+        tracing::warn!(
+            expected = %chain.display(),
+            "the legacy chain was migrated without a chain.key (migrated with --allow-unsigned); \
+             there is no existing identity key, creating a new ~/.weftos/user.key"
+        );
+    } else if has_legacy_chain {
         return Err(UserKeyError::LegacyChainPending { path: legacy.display().to_string() });
     }
     let mut seed = [0u8; 32];
@@ -455,5 +469,37 @@ mod tests {
         assert!(matches!(e, UserKeyError::LegacyChainPending { .. }), "{e}");
         assert!(e.to_string().contains("weaver migrate user-chain"));
         assert!(!user_key_path(&home).exists());
+    }
+
+    fn legacy_dir(home: &Path) -> PathBuf {
+        let d = home.join(".clawft");
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn an_rvf_only_legacy_chain_also_blocks_a_fresh_key() {
+        let (_t, home) = setup(None);
+        std::fs::write(legacy_dir(&home).join("chain.rvf"), b"x").unwrap();
+        assert!(matches!(
+            resolve_user_key(&home, true),
+            Err(UserKeyError::LegacyChainPending { .. })
+        ));
+        assert!(!user_key_path(&home).exists());
+    }
+
+    #[test]
+    fn a_migrated_chain_without_chain_key_does_not_block_a_new_user_key() {
+        let (_t, home) = setup(None);
+        let legacy = legacy_dir(&home);
+        std::fs::write(legacy.join("chain.json"), b"{}").unwrap();
+        std::fs::write(
+            legacy.join(clawft_types::runtime_paths::LEGACY_MIGRATED_MARKER),
+            format!("migrated-to: {}\n", home.join(".weftos/chain").display()),
+        )
+        .unwrap();
+        let (_, src) = resolve_user_key(&home, true).expect("daemon can still boot");
+        assert!(matches!(src, KeySource::Generated(_)));
+        assert!(user_key_path(&home).exists());
     }
 }

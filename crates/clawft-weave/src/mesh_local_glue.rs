@@ -443,7 +443,7 @@ async fn run(
                         error = %e,
                         "the mesh service failed verification on reconnect and is NOT being used. \
                          service.json is read once at boot; after a legitimate machine key rotation run \
-                         `weaver mesh trust` and restart this daemon"
+                         `weaver mesh trust` (from the mesh service package) and restart this daemon"
                     );
                 }
             }
@@ -541,7 +541,10 @@ async fn session(
                 Some(other) => debug!(?other, "ignored mesh service event"),
             },
             Some(cmd) = out_rx.recv() => {
-                let Ok(permit) = sends.clone().acquire_owned().await else { continue };
+                let Ok(permit) = sends.clone().try_acquire_owned() else {
+                    let _ = cmd.reply.send(Err("too many sends in flight (busy)".into()));
+                    continue;
+                };
                 let (c, lost_tx) = (c.clone(), lost_tx.clone());
                 tasks.spawn(async move {
                     let r = c.send(&cmd.dest, cmd.message).await;
