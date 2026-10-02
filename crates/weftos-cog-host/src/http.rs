@@ -10,6 +10,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use weftos_cog_host::fleet::Heartbeat;
 use weftos_cog_host::supervise::Supervisor;
 use weftos_cog_host::{install, InstallReq};
 
@@ -30,6 +31,7 @@ pub fn serve(listener: TcpListener, sup: Arc<Mutex<Supervisor>>) {
 }
 
 fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>) -> std::io::Result<()> {
+    let peer_ip = s.peer_addr().ok().map(|a| a.ip().to_string());
     s.set_read_timeout(Some(Duration::from_secs(15))).ok();
     let mut buf: Vec<u8> = Vec::new();
     let mut tmp = [0u8; 16384];
@@ -61,7 +63,7 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>) -> std::io::Result<()> 
     let path = first.next().unwrap_or("/");
     let body: &[u8] = if he + 4 <= buf.len() { &buf[he + 4..] } else { &[] };
 
-    let (code, payload) = route(method, path, body, &sup);
+    let (code, payload) = route(method, path, body, peer_ip, &sup);
     let bytes = payload.into_bytes();
     let resp = format!(
         "HTTP/1.1 {code}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\nConnection: close\r\n\r\n",
@@ -72,13 +74,25 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>) -> std::io::Result<()> 
     s.flush()
 }
 
-fn route(method: &str, path: &str, body: &[u8], sup: &Arc<Mutex<Supervisor>>) -> (&'static str, String) {
+fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &Arc<Mutex<Supervisor>>) -> (&'static str, String) {
     if method == "OPTIONS" {
         return ("204 No Content", String::new());
     }
     let parts: Vec<&str> = path.trim_matches('/').split('/').filter(|p| !p.is_empty()).collect();
     match (method, parts.as_slice()) {
         ("GET", ["healthz"]) => ("200 OK", r#"{"ok":true}"#.to_string()),
+        ("GET", ["network"]) => {
+            let mut snap = weftos_cog_host::network::snapshot();
+            snap["fleet"] = sup.lock().unwrap().fleet.roster();
+            ("200 OK", snap.to_string())
+        }
+        ("POST", ["fleet", "heartbeat"]) => match serde_json::from_slice::<Heartbeat>(body) {
+            Ok(h) => {
+                sup.lock().unwrap().fleet.heartbeat(&h, peer_ip);
+                ("200 OK", serde_json::json!({"ok":true,"id":h.id}).to_string())
+            }
+            Err(e) => ("400 Bad Request", serde_json::json!({"ok":false,"error":format!("bad heartbeat: {e}")}).to_string()),
+        },
         ("GET", ["status"]) | ("GET", ["cogs"]) => {
             let sup = sup.lock().unwrap();
             let obj = serde_json::json!({
@@ -89,7 +103,6 @@ fn route(method: &str, path: &str, body: &[u8], sup: &Arc<Mutex<Supervisor>>) ->
             });
             ("200 OK", obj.to_string())
         }
-        ("GET", ["network"]) => ("200 OK", weftos_cog_host::network::snapshot().to_string()),
         ("POST", ["reload"]) => {
             sup.lock().unwrap().reload();
             ("200 OK", r#"{"ok":true}"#.to_string())

@@ -103,6 +103,28 @@ pub struct Tailscale {
 }
 
 #[derive(Deserialize, Clone, Default)]
+pub struct FleetNode {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub sensor: String,
+    #[serde(default)]
+    pub ip: String,
+    #[serde(default)]
+    pub rssi: Option<i32>,
+    #[serde(default)]
+    pub battery: Option<f64>,
+    #[serde(default)]
+    pub fw: String,
+    #[serde(default)]
+    pub age_s: u64,
+    #[serde(default)]
+    pub online: bool,
+}
+
+#[derive(Deserialize, Clone, Default)]
 pub struct Net {
     #[serde(default)]
     pub node: String,
@@ -111,6 +133,9 @@ pub struct Net {
     /// Cognitum mesh overlay peers (count + peers), kept raw.
     #[serde(default)]
     pub cognitum_mesh: serde_json::Value,
+    /// Edge nodes that checked in (COG-010 Fleet).
+    #[serde(default)]
+    pub fleet: Vec<FleetNode>,
 }
 
 #[derive(Default)]

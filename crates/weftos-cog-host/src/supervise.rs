@@ -34,6 +34,8 @@ pub struct CogStatus {
 
 pub struct Supervisor {
     pub root: PathBuf,
+    /// Edge-node roster (COG-010), checked into via `/fleet/heartbeat`.
+    pub fleet: crate::fleet::Fleet,
     records: HashMap<String, CogRecord>,
     running: HashMap<String, Running>,
     restarts: HashMap<String, u32>,
@@ -46,6 +48,7 @@ impl Supervisor {
         let records = load_records(&root).into_iter().map(|r| (r.id.clone(), r)).collect();
         Supervisor {
             root,
+            fleet: crate::fleet::Fleet::default(),
             records,
             running: HashMap::new(),
             restarts: HashMap::new(),

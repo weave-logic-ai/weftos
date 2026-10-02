@@ -337,6 +337,37 @@ impl Manager {
                 ui.label(RichText::new("mesh status unavailable").color(GREY).small());
             }
         }
+
+        ui.add_space(10.0);
+        ui.label(RichText::new("Fleet nodes (edge / ESP32)").strong().color(AMBER));
+        if n.fleet.is_empty() {
+            ui.label(RichText::new("none checked in. Edge nodes POST /fleet/heartbeat to appear here (COG-010); firmware is the next step.").color(GREY).small());
+        } else {
+            let online = n.fleet.iter().filter(|f| f.online).count();
+            ui.label(RichText::new(format!("{} node(s), {} online", n.fleet.len(), online)).color(GREY).small());
+            egui::Grid::new("fleet").num_columns(5).striped(true).spacing([14.0, 5.0]).show(ui, |ui| {
+                for h in ["node", "kind", "sensor", "signal / batt", "seen"] {
+                    ui.label(RichText::new(h).strong().small());
+                }
+                ui.end_row();
+                for f in &n.fleet {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("●").color(if f.online { GREEN } else { GREY }));
+                        ui.label(RichText::new(&f.id).strong());
+                        if !f.ip.is_empty() {
+                            ui.label(RichText::new(&f.ip).color(GREY).small());
+                        }
+                    });
+                    ui.label(RichText::new(&f.kind).small());
+                    ui.label(RichText::new(if f.sensor.is_empty() { "—" } else { &f.sensor }).small());
+                    let sig = f.rssi.map(|r| format!("{r} dBm")).unwrap_or_else(|| "—".into());
+                    let batt = f.battery.map(|b| format!(" · {b:.1}V")).unwrap_or_default();
+                    ui.label(RichText::new(format!("{sig}{batt}")).small());
+                    ui.label(RichText::new(if f.online { format!("{}s ago", f.age_s) } else { "offline".into() }).color(if f.online { GREEN } else { GREY }).small());
+                    ui.end_row();
+                }
+            });
+        }
     }
 
     fn sensors_view(&self, ui: &mut egui::Ui) {
