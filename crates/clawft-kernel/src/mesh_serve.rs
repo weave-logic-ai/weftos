@@ -10,13 +10,15 @@ use std::sync::Arc;
 use crate::ipc::MessageTarget;
 use crate::mesh::{MeshTransport, TransportListener};
 use crate::mesh_admit::{
-    AdmitContext, AdmitHello, Admission, AdmissionGate, ChannelBinding, ChannelKind, HelloFailure,
+    AdmitContext, AdmitHello, Admission, DialIdentity, AdmissionGate, ChannelBinding, ChannelKind, HelloFailure,
     PeerClass, PeerLimits, Refusal,
 };
 use crate::mesh_assess::{AssessmentEnvelope, AssessmentTransport};
 use crate::mesh_delivery::PeerCtx;
 use crate::mesh_ipc::MeshIpcEnvelope;
-use crate::mesh_noise::{EncryptedChannel, NoiseChannel, NoiseConfig, PassthroughChannel};
+use crate::mesh_noise::{
+    noise_static_public, EncryptedChannel, NoiseChannel, NoiseConfig, PassthroughChannel,
+};
 use crate::mesh_runtime::MeshRuntime;
 
 /// Build the transport for a `kernel.mesh.transport` name.
@@ -347,12 +349,14 @@ pub fn connect_seeds(
     seed_peers: &[String],
     transport_name: &str,
     noise: Option<Arc<NoiseConfig>>,
+    identity: Option<Arc<DialIdentity>>,
 ) {
     for peer_addr in seed_peers {
         let addr = peer_addr.clone();
         let rt = Arc::clone(runtime);
         let transport_name = transport_name.to_owned();
         let nc = noise.clone();
+        let identity = identity.clone();
         tokio::spawn(async move {
             let transport = transport_for(&transport_name, Some(&addr));
 
@@ -372,6 +376,25 @@ pub fn connect_seeds(
                         },
                         None => Box::new(PassthroughChannel::new(stream)),
                     };
+
+                    // Introduce ourselves before anything else is sent. Only a
+                    // Noise session has a handshake hash to bind the hello to;
+                    // plaintext dials send nothing (the far side's gate decides
+                    // whether that is acceptable).
+                    if let (Some(id), Some(cfg), Some(hash)) =
+                        (&identity, &nc, channel.handshake_hash().map(<[u8]>::to_vec))
+                    {
+                        match noise_static_public(&cfg.local_private_key) {
+                            Some(stat) => {
+                                let hello = id.hello(&hash, &stat, unix_now());
+                                if channel.send_encrypted(&hello.to_bytes()).await.is_err() {
+                                    tracing::warn!(peer = %addr, "failed to send admission hello");
+                                    return;
+                                }
+                            }
+                            None => tracing::warn!(peer = %addr, "cannot derive noise static key"),
+                        }
+                    }
 
                     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
                     let peer_id = addr.clone();

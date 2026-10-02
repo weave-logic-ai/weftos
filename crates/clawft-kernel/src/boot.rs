@@ -605,21 +605,34 @@ impl<P: Platform> Kernel<P> {
 
                 // Admission (P3-K1): AllowAll unless a genesis hash is pinned
                 // (observe) or enforcement is requested (needs the pin).
+                let pinned = mesh_config
+                    .genesis_hash
+                    .as_deref()
+                    .map(|h| {
+                        crate::mesh_admit::hex_decode(h)
+                            .and_then(|b| <[u8; 32]>::try_from(b).ok())
+                            .ok_or_else(|| {
+                                KernelError::Boot(
+                                    "kernel.mesh.genesis_hash must be 64 hex characters".into(),
+                                )
+                            })
+                    })
+                    .transpose()?;
+                let dial_identity: Option<Arc<crate::mesh_admit::DialIdentity>> =
+                    match (mesh_config.admission, pinned, node_key_seed) {
+                        (clawft_types::config::MeshAdmissionMode::Off, _, _) => None,
+                        (_, Some(genesis), Some(seed)) => {
+                            Some(Arc::new(crate::mesh_admit::DialIdentity {
+                                key: ed25519_dalek::SigningKey::from_bytes(&seed),
+                                genesis,
+                                platform: std::env::consts::OS.to_owned(),
+                                capabilities: vec![],
+                            }))
+                        }
+                        _ => None,
+                    };
                 let admission_gate: Arc<dyn crate::mesh_admit::AdmissionGate> = {
                     use clawft_types::config::MeshAdmissionMode as Adm;
-                    let pinned = mesh_config
-                        .genesis_hash
-                        .as_deref()
-                        .map(|h| {
-                            crate::mesh_admit::hex_decode(h)
-                                .and_then(|b| <[u8; 32]>::try_from(b).ok())
-                                .ok_or_else(|| {
-                                    KernelError::Boot(
-                                        "kernel.mesh.genesis_hash must be 64 hex characters".into(),
-                                    )
-                                })
-                        })
-                        .transpose()?;
                     match (mesh_config.admission, pinned) {
                         (Adm::Off, _) | (Adm::Observe, None) => {
                             Arc::new(crate::mesh_admit::AllowAll)
@@ -666,6 +679,7 @@ impl<P: Platform> Kernel<P> {
                     &seed_peers,
                     &transport_name_for_seeds,
                     noise_for_seeds,
+                    dial_identity,
                 );
 
                 // WEFT-119: register Mesh as a SystemService so start/stop/

@@ -243,6 +243,35 @@ impl AdmitHello {
     }
 }
 
+/// What this node needs to introduce itself on an outbound connection.
+#[derive(Clone)]
+pub struct DialIdentity {
+    /// This node's Ed25519 key (its node id derives from it).
+    pub key: SigningKey,
+    /// Cluster genesis hash to present.
+    pub genesis: [u8; 32],
+    /// Platform string.
+    pub platform: String,
+    /// Capability tags.
+    pub capabilities: Vec<String>,
+}
+
+impl DialIdentity {
+    /// Hello for a session. `noise_static` is our own Noise static public
+    /// key (see [`noise_static_public`](crate::mesh_noise::noise_static_public)).
+    pub fn hello(&self, handshake_hash: &[u8], noise_static: &[u8], ts: u64) -> AdmitHello {
+        AdmitHello::sign(
+            &self.key,
+            handshake_hash,
+            noise_static,
+            &self.genesis,
+            ts,
+            &self.platform,
+            self.capabilities.clone(),
+        )
+    }
+}
+
 /// How the peer presented itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerClass {
@@ -362,3 +391,7 @@ fn hex_decode_fixed<const N: usize>(s: &str) -> Option<[u8; N]> {
 #[cfg(test)]
 #[path = "mesh_admit_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "mesh_admit_dial_tests.rs"]
+mod dial_tests;

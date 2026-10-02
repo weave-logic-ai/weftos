@@ -315,6 +315,17 @@ impl EncryptedChannel for PassthroughChannel {
     }
 }
 
+/// The Noise static public key for a static private key (Curve25519),
+/// i.e. what the remote side sees as this node's remote static. Needed to
+/// fill `noise_static_pub` in an admission hello on the initiator side,
+/// where the handshake does not expose the local static.
+pub fn noise_static_public(private: &[u8; 32]) -> Option<[u8; 32]> {
+    use snow::resolvers::{CryptoResolver, DefaultResolver};
+    let mut dh = DefaultResolver.resolve_dh(&snow::params::DHChoice::Curve25519)?;
+    dh.set(private);
+    dh.pubkey().try_into().ok()
+}
+
 /// Create an encrypted channel for a mesh connection.
 ///
 /// When `noise_config` is `Some`, performs a real Noise XX handshake.
