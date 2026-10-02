@@ -482,6 +482,38 @@ cmd_scope_web() {
     fi
 }
 
+cmd_manager() {
+    local profile="${PROFILE:-release}"
+    header "Building weft-cog-manager (WeftOS appliance console, native, profile: $profile)"
+    timer_start
+    run_cmd cargo build -p weftos-cog-manager --bin weft-cog-manager --profile "$profile"
+    timer_end
+    local dir="$profile"; [ "$profile" = "dev" ] && dir="debug"
+    report_binary_size "target/${dir}/weft-cog-manager" "weft-cog-manager"
+    pass "run: WEFTOS_HOST=http://<ip>:9480 target/${dir}/weft-cog-manager"
+}
+
+cmd_manager_web() {
+    local profile="${PROFILE:-release-wasm}"
+    header "Building weft-cog-manager for the browser (wasm32-unknown-unknown, profile: $profile)"
+    if ! check_target_installed wasm32-unknown-unknown; then return 1; fi
+    timer_start
+    run_cmd cargo build --target wasm32-unknown-unknown -p weftos-cog-manager --lib --profile "$profile"
+    timer_end
+    local wasm_file="target/wasm32-unknown-unknown/${profile}/weftos_cog_manager.wasm"
+    report_binary_size "$wasm_file" "cog-manager WASM (raw)"
+    local pkg_dir="$ROOT/crates/weftos-cog-manager/www/pkg"
+    if command -v wasm-bindgen >/dev/null 2>&1; then
+        info "Running wasm-bindgen → $pkg_dir"
+        run_cmd wasm-bindgen "$wasm_file" --out-dir "$pkg_dir" --target web --no-typescript
+        report_binary_size "$pkg_dir/weftos_cog_manager_bg.wasm" "cog-manager WASM (bindgen)"
+        pass "pkg/ ready — serve crates/weftos-cog-manager/www and open /?host=http://<ip>:9480"
+    else
+        skip "wasm-bindgen CLI not found — pkg/ not generated"
+        info "Install with: cargo install wasm-bindgen-cli"
+    fi
+}
+
 cmd_ui() {
     header "Building React frontend (tsc + vite)"
     if [ ! -d "$ROOT/clawft-ui" ] || [ ! -f "$ROOT/clawft-ui/package.json" ]; then
@@ -2196,6 +2228,8 @@ main() {
         scope-web)    cmd_scope_web "$SCOPE_NAME" ;;
         ecg-scope)    cmd_scope ecg ;;
         ecg-scope-web) cmd_scope_web ecg ;;
+        manager)      cmd_manager ;;
+        manager-web)  cmd_manager_web ;;
         ui)           cmd_ui ;;
         ui-docker)    cmd_ui_docker ;;
         ui-e2e)       cmd_ui_e2e ;;

@@ -10711,6 +10711,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "weftos-cog-manager"
+version = "0.8.1"
+dependencies = [
+ "console_error_panic_hook",
+ "eframe",
+ "ehttp",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
+ "weftos-cog-market",
+ "weftos-cog-repo",
+]
+
+[[package]]
 name = "weftos-cog-market"
 version = "0.8.1"
 dependencies = [
