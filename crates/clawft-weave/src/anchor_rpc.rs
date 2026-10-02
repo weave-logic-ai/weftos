@@ -33,9 +33,17 @@
 //! different hash is a post-crash sequence collision, not corruption: the
 //! event is re-appended under a new seq and the file rewritten (logged).
 //!
+//! The user chain can have per-project seq gaps after a crash: a recovered
+//! event carries `original_user_seq` / `original_user_event_hash`, and an
+//! identical resend after recovery returns the rewritten (new) ack. The
+//! record is signed by the user key (`rec_sig`, see `anchor_record`); one that
+//! fails is ignored, and a recovered statement whose key was revoked for
+//! compromise is never re-appended.
+//!
 //! Cost: structural checks (id, hex lengths, canonical `at`) run before the
-//! identity view. Verification and the accept happen under one lock, so a
-//! revoke or rekey that landed before the lock is taken is seen. The last
+//! identity view, and the signature is checked, all outside the accept lock;
+//! the lock is taken only after the signature passes and revocation is
+//! re-read under it (`project.revoke` / `project.rekey` hold the same lock). The last
 //! accepted statement per project is kept in memory (no chain scan per
 //! call). After three consecutive AUTHENTICATED refusals (seq, prev, head)
 //! a project is answered `anchor_backoff` for 1 s doubling to 60 s; refusals
@@ -50,12 +58,11 @@
 //! T"; it cannot verify X without subscribing to the project chain.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use chrono::{DateTime, Duration, Utc};
 use clawft_kernel::chain_anchor::{ANCHOR_SOURCE, AnchorAck};
-use clawft_kernel::project_identity::{self as ident, IdentityError, RevocationView};
+use clawft_kernel::project_identity::{self as ident, RevocationView};
 use clawft_rpc::Response;
 use clawft_types::project::canon::hex_decode;
 use clawft_types::project::cert::{CertError, ProjectAnchorStmt, ts};
@@ -95,13 +102,12 @@ pub(crate) fn identity_change_guard() -> std::sync::MutexGuard<'static, Option<I
     ACCEPT.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+#[path = "anchor_record.rs"]
+mod record;
+use record::{append_event, read_file, write_file};
 #[path = "anchor_error.rs"]
 mod error;
 pub use error::{Accepted, AnchorError, Resync};
-
-fn anchor_file(dir: &Path, id: &str) -> PathBuf {
-    dir.join(format!("{id}.anchor.json"))
-}
 
 fn key_of(env: &CertEnv, id: &str) -> Key {
     (std::sync::Arc::as_ptr(&env.chain) as *const () as usize, id.to_owned())
@@ -143,54 +149,10 @@ fn history_keys(view: &RevocationView, id: &str) -> Vec<String> {
     view.key_history(id).iter().map(|c| c.project_pubkey.clone()).collect()
 }
 
-/// A statement the daemon accepted earlier still verifies under some
-/// certificate ever issued for the project (tamper detection).
-fn recorded_ok(view: &RevocationView, a: &Accepted) -> bool {
-    let s = &a.statement;
-    view.all_certs(&s.project_id).iter().any(|c| {
-        c.project_key_id == s.project_key_id
-            && hex_decode::<32>(&c.project_pubkey).is_some_and(|pk| s.verify(&pk).is_ok())
-    })
-}
-
-fn read_file(env: &CertEnv, id: &str) -> Option<Accepted> {
-    std::fs::read(anchor_file(&env.manifests_dir, id))
-        .ok()
-        .and_then(|b| serde_json::from_slice::<Accepted>(&b).ok())
-        .filter(|a| a.statement.project_id == id)
-}
-
-fn write_file(env: &CertEnv, a: &Accepted) -> Result<(), AnchorError> {
-    let bytes = serde_json::to_vec_pretty(a).map_err(|e| AnchorError::Store(e.to_string()))?;
-    ident::write_private_atomic(&anchor_file(&env.manifests_dir, &a.statement.project_id), &bytes, false)
-        .map_err(|e: IdentityError| AnchorError::Store(format!("record accepted anchor: {e}")))
-}
-
-fn append_event(env: &CertEnv, stmt: &ProjectAnchorStmt, recovered: Option<&Accepted>) -> Accepted {
-    let mut payload = json!({
-        "project_id": stmt.project_id,
-        "statement": stmt,
-        "statement_hash": stmt.hash(),
-    });
-    if let Some(old) = recovered {
-        payload["recovered"] = json!(true);
-        payload["original_user_seq"] = json!(old.user_seq);
-        payload["original_user_event_hash"] = json!(old.user_event_hash);
-    }
-    let ev = env.chain.append(ANCHOR_SOURCE, KIND_ANCHOR, Some(payload));
-    Accepted { statement: stmt.clone(), user_seq: ev.sequence, user_event_hash: ident::hex(&ev.hash) }
-}
-
-/// Load the last accepted statement from the file and the chain, and
-/// re-append the chain event when the file is ahead (or its event is gone).
+/// Load the last accepted statement from the record and the chain, and
+/// re-append the chain event when the record is ahead (or its event is gone).
 fn load_last(env: &CertEnv, id: &str, view: &RevocationView) -> Result<Option<Accepted>, AnchorError> {
-    let file = read_file(env, id).filter(|a| {
-        let ok = recorded_ok(view, a);
-        if !ok {
-            warn!(project = id, "anchor record does not verify under the certificate history; ignored");
-        }
-        ok
-    });
+    let file = read_file(env, id, view);
     let events = env.chain.tail(0);
     let chain_best = events
         .iter()
@@ -198,18 +160,18 @@ fn load_last(env: &CertEnv, id: &str, view: &RevocationView) -> Result<Option<Ac
         .filter_map(|e| {
             let statement: ProjectAnchorStmt =
                 serde_json::from_value(e.payload.as_ref()?.get("statement")?.clone()).ok()?;
-            (statement.project_id == id).then(|| Accepted {
-                statement,
-                user_seq: e.sequence,
-                user_event_hash: ident::hex(&e.hash),
-            })
+            (statement.project_id == id).then(|| record::seal(env, statement, e.sequence, ident::hex(&e.hash)))
         })
         .max_by_key(|a| a.statement.seq);
     let Some(f) = file else { return Ok(chain_best) };
     if chain_best.as_ref().is_some_and(|c| c.statement.seq >= f.statement.seq) {
         return Ok(chain_best);
     }
-    // The file is ahead of the chain (the chain was not saved before a crash).
+    if view.is_compromised(id, &f.statement.project_key_id) {
+        warn!(project = id, "anchor record is signed by a compromise-revoked key; not re-appended");
+        return Ok(chain_best);
+    }
+    // The record is ahead of the chain (the chain was not saved before a crash).
     let colliding = events.iter().any(|e| e.sequence == f.user_seq && ident::hex(&e.hash) != f.user_event_hash);
     if colliding {
         warn!(project = id, user_seq = f.user_seq, "user-chain event at the recorded seq differs; re-appending");
@@ -220,7 +182,7 @@ fn load_last(env: &CertEnv, id: &str, view: &RevocationView) -> Result<Option<Ac
     Ok(Some(fixed))
 }
 
-/// The last statement accepted for `project_id` (index, else file + chain).
+/// The last statement accepted for `project_id` (index, else record + chain).
 pub fn last_accepted(env: &CertEnv, project_id: &str) -> Result<Option<Accepted>, AnchorError> {
     let view = current_view(env)?;
     let mut g = ACCEPT.lock().unwrap_or_else(|p| p.into_inner());
@@ -250,18 +212,14 @@ fn cert_error(e: CertError) -> AnchorError {
     }
 }
 
-/// Verify `stmt` and, when it is the next statement, record it. Pure of the
-/// daemon: tests and an in-process transport call this directly.
-pub fn submit(
+/// The certificate in force names the statement's key and serial; returns
+/// that key.
+fn check_cert(
     env: &CertEnv,
+    view: &RevocationView,
     stmt: &ProjectAnchorStmt,
     now: DateTime<Utc>,
-) -> Result<Accepted, AnchorError> {
-    structural(stmt, now)?;
-    let key = key_of(env, &stmt.project_id);
-    let mut guard = ACCEPT.lock().unwrap_or_else(|p| p.into_inner());
-    // Everything below sees revocations and rekeys that landed before this point.
-    let view = current_view(env)?;
+) -> Result<[u8; 32], AnchorError> {
     let revoked = || AnchorError::KeyRevoked {
         project_id: stmt.project_id.clone(),
         key_id: stmt.project_key_id.clone(),
@@ -283,23 +241,51 @@ pub fn submit(
             stmt.cert_serial, cert.serial
         )));
     }
-    let project_pk: [u8; 32] = hex_decode(&cert.project_pubkey)
-        .ok_or_else(|| AnchorError::CertInvalid("certificate public key is malformed".into()))?;
-    stmt.verify(&project_pk).map_err(cert_error)?;
+    hex_decode(&cert.project_pubkey)
+        .ok_or_else(|| AnchorError::CertInvalid("certificate public key is malformed".into()))
+}
 
+/// Verify `stmt` and, when it is the next statement, record it. Pure of the
+/// daemon: tests and an in-process transport call this directly.
+///
+/// The structural checks, the identity view and the signature run outside
+/// the accept lock; the lock is taken only once the signature passed, and
+/// revocation is re-read under it.
+pub fn submit(
+    env: &CertEnv,
+    stmt: &ProjectAnchorStmt,
+    now: DateTime<Utc>,
+) -> Result<Accepted, AnchorError> {
+    structural(stmt, now)?;
+    let pk = check_cert(env, &current_view(env)?, stmt, now)?;
+    stmt.verify(&pk).map_err(cert_error)?;
+
+    let key = key_of(env, &stmt.project_id);
+    let mut guard = ACCEPT.lock().unwrap_or_else(|p| p.into_inner());
+    // A revoke or rekey takes the same lock, so this view is current.
+    let view = current_view(env)?;
+    check_cert(env, &view, stmt, now)?;
+    let last = cached_last(&mut guard, env, &stmt.project_id, &view)?;
+    // An identical resend (a lost answer) is not a refusal and never backs off.
+    if let Some(l) = &last
+        && l.statement == *stmt
+    {
+        // Best effort: the record may have been unwritable the first time.
+        if let Err(e) = write_file(env, l) {
+            warn!(project = %stmt.project_id, error = %e, "anchor record still not writable");
+        }
+        return Ok(l.clone());
+    }
     // Authenticated from here on: refusals count towards the backoff.
-    let inner = guard.get_or_insert_with(Inner::default);
+    let inner = guard.as_mut().expect("inner exists");
     if let Some((_, Some(until))) = inner.backoff.get(&key)
         && now < *until
     {
         return Err(AnchorError::Backoff((*until - now).num_seconds().max(1)));
     }
-    let last = cached_last(&mut guard, env, &stmt.project_id, &view)?;
-    let inner = guard.as_mut().expect("inner exists");
-    let outcome = accept(env, &view, stmt, last);
+    let outcome = accept(env, &view, stmt, last, inner, &key);
     match &outcome {
-        Ok(a) => {
-            inner.index.insert(key.clone(), Some(a.clone()));
+        Ok(_) => {
             inner.backoff.remove(&key);
         }
         Err(AnchorError::Store(_)) => {}
@@ -320,12 +306,9 @@ fn accept(
     view: &RevocationView,
     stmt: &ProjectAnchorStmt,
     last: Option<Accepted>,
+    inner: &mut Inner,
+    key: &Key,
 ) -> Result<Accepted, AnchorError> {
-    if let Some(l) = &last
-        && l.statement == *stmt
-    {
-        return Ok(l.clone());
-    }
     let resync = |last: Option<Accepted>| {
         last.map(|l| Box::new(Resync { last: l, key_history: history_keys(view, &stmt.project_id) }))
     };
@@ -342,6 +325,10 @@ fn accept(
         return Err(AnchorError::HeadRegress { got: stmt.head_seq, last: l.statement.head_seq });
     }
     let accepted = append_event(env, stmt, None);
+    // The event is on the chain: publish before the file write, so a failed
+    // write (reported as Store; the project retries) cannot make the retry
+    // look like a new statement and append a second event.
+    inner.index.insert(key.clone(), Some(accepted.clone()));
     write_file(env, &accepted)?;
     Ok(accepted)
 }

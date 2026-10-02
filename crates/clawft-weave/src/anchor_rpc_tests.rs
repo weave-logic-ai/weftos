@@ -1,5 +1,6 @@
 //! Tests for [`super`]: dirs are injected, never `HOME`.
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use clawft_kernel::chain::ChainManager;
@@ -9,6 +10,7 @@ use clawft_types::project::adopt_or_init;
 use clawft_types::project::cert::{PopOp, ts};
 use ed25519_dalek::SigningKey;
 
+use super::record::anchor_file;
 use super::*;
 use crate::project_cert_rpc::{
     RegisterRequest, SpawnInfo, claim_nonce, issue_challenge, register, rekey, revoke, root_sha256,
@@ -487,4 +489,77 @@ fn authenticated_refusals_back_off_but_garbage_does_not() {
     let next = stmt(&f, 2, Some(first_hash), 20, later(6));
     assert_eq!(submit(&f.env, &next, later(11)).unwrap_err().kind(), "anchor_backoff");
     submit(&f.env, &next, later(13)).unwrap();
+}
+
+fn lost_chain_env(f: &Fx) -> CertEnv {
+    CertEnv {
+        chain: Arc::new(ChainManager::new(0, 100_000)),
+        user_key: user_key(),
+        manifests_dir: f.env.manifests_dir.clone(),
+    }
+}
+
+#[test]
+fn an_unwritable_record_still_yields_exactly_one_event() {
+    let f = fixture();
+    // A directory where the record file belongs: every write of it fails.
+    std::fs::create_dir(anchor_file(&f.env.manifests_dir, &f.id)).unwrap();
+    let s = stmt(&f, 1, None, 10, later(5));
+    assert_eq!(submit(&f.env, &s, later(10)).unwrap_err().kind(), "anchor_store");
+    // The event is on the chain and in the index: the retry is an identical resend.
+    let a = submit(&f.env, &s, later(11)).unwrap();
+    assert_eq!(a.statement, s);
+    assert_eq!(user_events(&f), 1, "no second project.anchor event");
+    // A refused store never counts towards the backoff.
+    for _ in 0..4 {
+        submit(&f.env, &s, later(12)).unwrap();
+    }
+    assert_eq!(user_events(&f), 1);
+}
+
+#[test]
+fn a_record_with_a_bad_rec_sig_is_ignored() {
+    let f = fixture();
+    submit(&f.env, &stmt(&f, 1, None, 10, later(5)), later(10)).unwrap();
+    let path = anchor_file(&f.env.manifests_dir, &f.id);
+    let mut rec: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    rec["user_seq"] = json!(77);
+    std::fs::write(&path, serde_json::to_vec(&rec).unwrap()).unwrap();
+    assert_eq!(last_accepted(&lost_chain_env(&f), &f.id).unwrap(), None);
+    // Unsigned records (or signed by another key) are ignored too.
+    rec["user_seq"] = json!(1);
+    rec.as_object_mut().unwrap().remove("rec_sig");
+    std::fs::write(&path, serde_json::to_vec(&rec).unwrap()).unwrap();
+    assert_eq!(last_accepted(&lost_chain_env(&f), &f.id).unwrap(), None);
+}
+
+#[test]
+fn a_compromise_revoked_statement_is_not_re_appended() {
+    let f = fixture();
+    submit(&f.env, &stmt(&f, 1, None, 10, later(5)), later(10)).unwrap();
+    revoke(&f.env, &json!({ "id": f.id })).unwrap();
+    let env2 = lost_chain_env(&f);
+    assert!(reconcile(&env2).unwrap().is_empty());
+    assert_eq!(env2.chain.tail(0).iter().filter(|e| e.source == ANCHOR_SOURCE).count(), 0);
+    assert_eq!(last_accepted(&env2, &f.id).unwrap(), None);
+
+    // A rekeyed-out key is history, not compromise: it is re-appended.
+    let g = fixture();
+    submit(&g.env, &stmt(&g, 1, None, 10, later(5)), later(10)).unwrap();
+    rekey_to(&g, &SigningKey::from_bytes(&[4u8; 32]));
+    let env3 = lost_chain_env(&g);
+    assert_eq!(reconcile(&env3).unwrap(), vec![g.id.clone()]);
+}
+
+#[test]
+fn an_identical_resend_is_never_backed_off() {
+    let f = fixture();
+    let first = stmt(&f, 1, None, 10, later(5));
+    submit(&f.env, &first, later(10)).unwrap();
+    for _ in 0..5 {
+        submit(&f.env, &stmt(&f, 9, None, 20, later(6)), later(11)).unwrap_err();
+    }
+    let next = stmt(&f, 2, Some(first.hash()), 20, later(6));
+    assert_eq!(submit(&f.env, &next, later(11)).unwrap_err().kind(), "anchor_backoff");
+    submit(&f.env, &first, later(11)).expect("the resend of the last accepted statement is not refused");
 }

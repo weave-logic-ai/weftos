@@ -163,6 +163,13 @@ impl RevocationView {
         })
     }
 
+    /// Was `key_id` removed by `project.revoke` (not replaced by a rekey)?
+    pub fn is_compromised(&self, project_id: &str, key_id: &str) -> bool {
+        self.projects
+            .get(project_id)
+            .is_some_and(|st| st.revoked.contains(key_id) && !st.retired.contains(key_id))
+    }
+
     /// Every certificate ever issued for `project_id`, compromised keys
     /// included. For re-verifying records the daemon itself accepted while
     /// the key was valid.

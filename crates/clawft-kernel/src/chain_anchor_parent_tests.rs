@@ -163,31 +163,6 @@ fn restart_continues_the_sequence_from_the_chain() {
 }
 
 #[test]
-fn forged_acknowledgement_is_ignored_on_recovery() {
-    let f = Fx::new();
-    let forged = ProjectAnchorStmt {
-        project_id: ID.into(),
-        project_key_id: String::new(),
-        cert_serial: 1,
-        seq: 7,
-        chain_id: 0,
-        head_hash: "00".repeat(32),
-        head_seq: 1,
-        rule_hash: "00".repeat(32),
-        at: ts(at(0)),
-        prev_anchor: None,
-        sig: String::new(),
-    }
-    .sign(&SigningKey::from_bytes(&[1u8; 32]));
-    f.chain.append(
-        ANCHOR_SOURCE,
-        KIND_ANCHORED,
-        Some(json!({ "statement": forged, "user_seq": 1, "user_event_hash": "00".repeat(32) })),
-    );
-    assert_eq!(f.anchor().last_accepted(), None);
-}
-
-#[test]
 fn parent_down_writes_pending_and_the_project_keeps_appending() {
     let f = Fx::new();
     f.parent.down.store(true, Ordering::SeqCst);
@@ -350,7 +325,7 @@ fn rekey_then_restart_continues_at_n_plus_one() {
     let f = Fx::new();
     let k1 = key();
     let k2 = SigningKey::from_bytes(&[10u8; 32]);
-    let a1 = f.anchor_with(k1.clone());
+    let a1 = f.anchor_with(k1);
     a1.anchor_head_at(at(0), true).unwrap();
     f.grow(3);
     a1.anchor_head_at(at(1), true).unwrap();
@@ -358,21 +333,18 @@ fn rekey_then_restart_continues_at_n_plus_one() {
     drop(a1);
     f.grow(200);
 
-    // Restart under the new key: the old statements do not verify, so
-    // nothing is recovered, the parent refuses seq 1 and sends its last
-    // statement plus the certificate history; that is adopted.
-    *f.parent.history.lock().unwrap() = vec![k1.verifying_key().to_bytes()];
+    // Restart under the new key: our own chain's K1 statements are the baseline.
     let a2 = f.anchor_with(k2.clone());
-    assert_eq!(a2.last_accepted(), None);
+    assert_eq!(a2.last_accepted().unwrap().0, 2);
     let r = a2.anchor_head_at(at(100), true).unwrap();
     assert_eq!(a2.last_accepted().unwrap().0, 3, "continues at N + 1");
     let calls = f.parent.calls();
     let last = calls.last().unwrap();
     assert_eq!(last.seq, 3);
+    assert_eq!(last.prev_anchor.as_deref(), Some(calls[1].hash().as_str()));
     last.verify(&k2.verifying_key().to_bytes()).unwrap();
     assert!(a2.verify(&r).unwrap());
 
-    // And a further restart recovers the K2 statement directly.
     f.grow(3);
     drop(a2);
     let a3 = f.anchor_with(k2);
@@ -382,17 +354,36 @@ fn rekey_then_restart_continues_at_n_plus_one() {
 }
 
 #[test]
-fn a_statement_from_an_unreported_key_is_never_adopted() {
+fn a_parent_statement_under_another_key_is_never_adopted() {
     let f = Fx::new();
-    let k1 = key();
-    let k2 = SigningKey::from_bytes(&[10u8; 32]);
-    f.anchor_with(k1).anchor_head_at(at(0), true).unwrap();
-    f.grow(150);
-    // The parent does not list K1 (compromise-revoked): history is not trusted.
-    let a2 = f.anchor_with(k2);
-    let e = a2.anchor_head_at(at(100), true).unwrap_err();
-    assert!(e.contains("not adopted") && e.contains("does not verify"), "{e}");
-    assert_eq!(a2.last_accepted(), None);
+    let a = f.anchor();
+    // The parent's "last" is signed by a key that is not ours, even though
+    // it is the right shape and names a head our chain has.
+    let head = f.chain.tail(1)[0].clone();
+    let other = SigningKey::from_bytes(&[11u8; 32]);
+    let theirs = ProjectAnchorStmt {
+        project_id: ID.into(),
+        project_key_id: String::new(),
+        cert_serial: 1,
+        seq: 1,
+        chain_id: 0,
+        head_hash: hex_encode(&head.hash),
+        head_seq: head.sequence,
+        rule_hash: "00".repeat(32),
+        at: ts(at(0)),
+        prev_anchor: None,
+        sig: String::new(),
+    }
+    .sign(&other);
+    *f.parent.last.lock().unwrap() =
+        Some((theirs, AnchorAck { user_seq: 1, user_event_hash: "00".repeat(32) }));
+    // Even a parent-supplied key history naming that key buys nothing.
+    *f.parent.history.lock().unwrap() = vec![other.verifying_key().to_bytes()];
+    f.grow(2);
+    let e = a.anchor_head_at(at(1), true).unwrap_err();
+    assert!(e.contains("not adopted") && e.contains("current project key"), "{e}");
+    assert_eq!(a.last_accepted(), None);
+    assert!(anchored_events(&f.chain).is_empty());
 }
 
 #[test]
@@ -455,4 +446,9 @@ fn a_hung_transport_times_out_without_blocking_readers() {
     let e = worker.join().unwrap().unwrap_err();
     assert!(e.contains("no answer within 1 s"), "{e}");
     assert!(a.pending().is_some());
+    // The abandoned worker is still running: no second thread is spawned.
+    f.grow(1);
+    let e2 = a.anchor_head_at(at(1), true).unwrap_err();
+    assert!(e2.contains("previous submit still in flight"), "{e2}");
+    assert!(entered.try_recv().is_err(), "the transport was entered only once");
 }

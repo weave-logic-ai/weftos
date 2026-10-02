@@ -24,7 +24,7 @@ pub enum AnchorSubmitError {
     Unreachable(String),
     /// The user daemon answered and refused. `last` is its last accepted
     /// statement for this project when the refusal was about `seq` or
-    /// `prev_anchor`; `key_history` then lists the public keys of the
+    /// `prev_anchor`; `key_history` then lists (diagnostics only, never trusted) the public keys of the
     /// project's certificate history (never a compromise-revoked key).
     Rejected {
         /// Daemon `error_kind`.

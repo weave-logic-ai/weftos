@@ -19,6 +19,10 @@ pub struct Accepted {
     pub user_seq: u64,
     /// That event's hash, hex.
     pub user_event_hash: String,
+    /// User-key signature over `{statement_hash, user_seq, user_event_hash}`
+    /// (see `anchor_record`): a record without a valid one is ignored.
+    #[serde(default)]
+    pub rec_sig: String,
 }
 
 impl Accepted {

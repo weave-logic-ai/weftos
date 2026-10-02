@@ -27,24 +27,27 @@
 //!   events (each re-verified under the project key) at construction, so a
 //!   restart continues the `seq` / `prev_anchor` chain.
 //!
-//! Key history: after `project.rekey` the chain holds statements signed by
-//! the replaced key. A statement is trusted as history only when it verifies
-//! under the current key or a key the user daemon reports as part of the
-//! project's certificate history (rekeyed-out keys; never a key revoked for
-//! compromise). At construction only the current key is known, so older
-//! statements are skipped and the first submission is refused with the
-//! parent's last statement plus that key history; [`ParentAnchor`] then
-//! adopts it (see below) and the sequence continues at N + 1.
+//! Recovery trusts our own chain: a `project.anchored` event already on the
+//! hash-chained project chain is accepted without re-verifying its signature
+//! (only this process appends under that reserved source). So after
+//! `project.rekey` and a restart the statements signed by the replaced key
+//! are still the baseline, and the sequence continues at N + 1 under the new
+//! key.
 //!
-//! Adoption (a lost acknowledgement, or the rekey case) requires that the
-//! statement verifies, that it extends what we hold, and that OUR chain
-//! really has `head_hash` at `head_seq`: a parent cannot make us record a
-//! head we never produced. The acknowledgement itself ([`AnchorAck`]) is
+//! Adoption (a lost acknowledgement) takes the parent's last statement only
+//! when it verifies under the CURRENT key, is exactly the next one
+//! (`seq == last + 1` and `prev_anchor == hash(last)`; with nothing recorded
+//! only `seq == 1` and no `prev_anchor`), and OUR chain really has
+//! `head_hash` at `head_seq`: a parent cannot make us record a head we never
+//! produced. The `key_history` the parent sends is diagnostic only and never
+//! enters the trust path. The acknowledgement ([`AnchorAck`]) is
 //! authenticated by the transport only (the local unix socket to the user
 //! daemon); nothing signs it.
 //!
 //! Transport contract: [`ParentTransport::submit`] must return within a
-//! bounded time. It is run on a worker thread and abandoned after
+//! bounded time. It is run on a worker thread (one at a time: while an
+//! abandoned one is still running a new submission fails as unreachable)
+//! and abandoned after
 //! [`ParentAnchorConfig::submit_timeout_secs`] (default 10 s, also for the
 //! forced shutdown anchor), counting as unreachable; a late success of an
 //! abandoned call is a lost acknowledgement and is handled as such. No lock
@@ -62,6 +65,7 @@
 //! T"; it cannot verify X without subscribing to the project chain.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 use chrono::{DateTime, Duration, Utc};
@@ -89,8 +93,6 @@ struct State {
     failures: u32,
     retry_at: Option<DateTime<Utc>>,
     last_error: Option<String>,
-    /// Retired keys the parent told us about (in memory only).
-    learned: Vec<[u8; 32]>,
 }
 
 /// The `Parent` anchor backend.
@@ -106,6 +108,8 @@ pub struct ParentAnchor {
     op: Mutex<()>,
     /// Short-lived: never held across a submission.
     state: Mutex<State>,
+    /// Submission workers still running (abandoned ones included).
+    inflight: Arc<AtomicUsize>,
 }
 
 fn receipt_of(acc: &Accepted, now: DateTime<Utc>) -> AnchorReceipt {
@@ -139,10 +143,11 @@ impl ParentAnchor {
             cfg,
             op: Mutex::new(()),
             state: Mutex::new(State::default()),
+            inflight: Arc::new(AtomicUsize::new(0)),
         };
         {
             let mut st = this.state.lock().unwrap();
-            st.last = this.recover(&[]);
+            st.last = this.recover();
             if this.read_pending().is_some_and(|p| st.last.as_ref().is_some_and(|l| p.seq <= l.stmt.seq)) {
                 let _ = std::fs::remove_file(&this.pending_path);
             }
@@ -175,26 +180,15 @@ impl ParentAnchor {
         self.key.verifying_key().to_bytes()
     }
 
-    /// Does `stmt` verify under the current key, a key learned from the
-    /// parent, or one of `extra`?
-    fn verifies(&self, stmt: &ProjectAnchorStmt, learned: &[[u8; 32]], extra: &[[u8; 32]]) -> bool {
-        std::iter::once(self.pubkey())
-            .chain(learned.iter().copied())
-            .chain(extra.iter().copied())
-            .any(|pk| key_id(&pk) == stmt.project_key_id && stmt.verify(&pk).is_ok())
-    }
-
-    fn recover(&self, learned: &[[u8; 32]]) -> Option<Accepted> {
+    /// The newest `project.anchored` event on our own chain.
+    fn recover(&self) -> Option<Accepted> {
         let mut best: Option<Accepted> = None;
         for e in self.chain.tail(0) {
             if e.source != ANCHOR_SOURCE || e.kind != KIND_ANCHORED {
                 continue;
             }
             let Some(acc) = e.payload.as_ref().and_then(parse_anchored) else { continue };
-            if acc.stmt.project_id != self.project_id || !self.verifies(&acc.stmt, learned, &[]) {
-                continue;
-            }
-            if best.as_ref().is_none_or(|b| acc.stmt.seq > b.stmt.seq) {
+            if acc.stmt.project_id == self.project_id && best.as_ref().is_none_or(|b| acc.stmt.seq > b.stmt.seq) {
                 best = Some(acc);
             }
         }
@@ -303,28 +297,24 @@ impl ParentAnchor {
         acc
     }
 
-    /// Take the parent's last accepted statement as ours. Refused unless it
-    /// verifies (current key, learned keys, or `key_history`), extends what
-    /// we hold, and OUR chain has its `head_hash` at `head_seq`.
-    fn adopt(&self, last: (ProjectAnchorStmt, AnchorAck), key_history: &[[u8; 32]]) -> Result<Accepted, String> {
+    /// Take the parent's last accepted statement as ours (see the module
+    /// docs for the exact conditions).
+    fn adopt(&self, last: (ProjectAnchorStmt, AnchorAck)) -> Result<Accepted, String> {
         let (stmt, ack) = last;
-        let (ours, learned) = {
-            let st = self.state.lock().unwrap();
-            (st.last.clone(), st.learned.clone())
-        };
+        let ours = self.state.lock().unwrap().last.clone();
         if stmt.project_id != self.project_id {
             return Err("statement is for another project".into());
         }
-        if !self.verifies(&stmt, &learned, key_history) {
-            return Err("statement does not verify under any key of this project".into());
+        let pk = self.pubkey();
+        if key_id(&pk) != stmt.project_key_id || stmt.verify(&pk).is_err() {
+            return Err("statement does not verify under the current project key".into());
         }
         let extends = match &ours {
             Some(o) => stmt.seq == o.stmt.seq + 1 && stmt.prev_anchor.as_deref() == Some(o.stmt.hash().as_str()),
-            // Nothing recoverable (fresh run, or history signed by a replaced key).
-            None => (stmt.seq == 1) == stmt.prev_anchor.is_none(),
+            None => stmt.seq == 1 && stmt.prev_anchor.is_none(),
         };
         if !extends {
-            return Err("statement does not extend the recorded anchor chain".into());
+            return Err("statement is not the next one after the recorded anchor chain".into());
         }
         if !self.has_head(stmt.head_seq, &stmt.head_hash) {
             return Err(format!(
@@ -332,17 +322,22 @@ impl ParentAnchor {
                 stmt.head_hash, stmt.head_seq
             ));
         }
-        self.state.lock().unwrap().learned.extend(key_history.iter().copied());
         Ok(self.record(stmt, ack))
     }
 
     /// One bounded submission. The call runs on a worker thread and is
     /// abandoned after the configured deadline; no lock is held meanwhile.
     fn submit_bounded(&self, stmt: &ProjectAnchorStmt) -> Result<AnchorAck, AnchorSubmitError> {
+        if self.inflight.load(Ordering::SeqCst) > 0 {
+            return Err(AnchorSubmitError::Unreachable("previous submit still in flight".into()));
+        }
+        self.inflight.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::channel();
-        let (transport, s) = (self.transport.clone(), stmt.clone());
+        let (transport, s, inflight) = (self.transport.clone(), stmt.clone(), self.inflight.clone());
         std::thread::spawn(move || {
-            let _ = tx.send(transport.submit(&s));
+            let r = transport.submit(&s);
+            inflight.fetch_sub(1, Ordering::SeqCst);
+            let _ = tx.send(r);
         });
         rx.recv_timeout(std::time::Duration::from_secs(self.cfg.submit_timeout_secs))
             .unwrap_or_else(|_| {
@@ -361,9 +356,9 @@ impl ParentAnchor {
                 Err(AnchorSubmitError::Unreachable(m)) => {
                     return Err(self.fail(now, format!("parent unreachable: {m}")));
                 }
-                Err(AnchorSubmitError::Rejected { kind, message, last, key_history }) => {
+                Err(AnchorSubmitError::Rejected { kind, message, last, .. }) => {
                     if attempt == 0 && let Some(last) = last {
-                        match self.adopt(*last, &key_history) {
+                        match self.adopt(*last) {
                             Ok(acc) => {
                                 let head = self.head_event()?;
                                 if Self::covered(&acc, &head) {
