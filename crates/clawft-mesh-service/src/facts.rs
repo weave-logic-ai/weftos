@@ -23,6 +23,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::config::MeshServiceConfig;
+use crate::force_revoked::ForceRevoked;
 use crate::state::Core;
 
 /// Domain separator of the revocation statement signature.
@@ -91,11 +92,26 @@ impl Facts {
 
     /// Sign and write fresh facts from the cached probe and the current
     /// revocations; journal `facts.sign` when the revocations changed.
-    pub fn refresh(&self, core: &Mutex<Core>, now: u64) -> Result<(), FactsError> {
+    pub fn refresh(&self, core: &Mutex<Core>, force: &ForceRevoked, now: u64) -> Result<(), FactsError> {
         let (serials, ranges) = {
             let c = core.lock().expect("core lock");
-            let serials = c.bindings.revoked_serials().map_err(|e| FactsError::Degraded(e.to_string()))?;
-            let ranges = c.bindings.revoked_ranges().map_err(|e| FactsError::Degraded(e.to_string()))?;
+            let mut serials = c.bindings.revoked_serials().map_err(|e| FactsError::Degraded(e.to_string()))?;
+            let mut ranges = c.bindings.revoked_ranges().map_err(|e| FactsError::Degraded(e.to_string()))?;
+            // Principals revoked while the journal could not record it: their
+            // certificate serials are revoked for verifiers all the same.
+            for p in force.list() {
+                let Some(key) = c.bindings.key_of(&p) else { continue };
+                let user_id = clawft_mesh_local::node_id_from_pubkey(&key);
+                let issued = c.bindings.serials(&p);
+                if let Some(through) = issued.iter().max().copied() {
+                    serials.extend(issued);
+                    ranges.retain(|(u, _)| *u != user_id);
+                    ranges.push((user_id, through));
+                }
+            }
+            serials.sort_unstable();
+            serials.dedup();
+            ranges.sort();
             (serials, ranges)
         };
         let payload = json!({

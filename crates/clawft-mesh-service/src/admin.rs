@@ -57,6 +57,13 @@ fn valid_node_id(s: &str) -> bool {
         && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '/'))
 }
 
+fn persisted_note(saved: &std::io::Result<()>) -> String {
+    match saved {
+        Ok(()) => "recorded in force-revoked.json, which survives a restart".into(),
+        Err(e) => format!("force-revoked.json could not be written ({e}): in memory only until restart"),
+    }
+}
+
 fn journal_err(e: &JournalError) -> Reject {
     Reject::journal_error(e)
 }
@@ -108,7 +115,7 @@ fn admin_dispatch(ctx: &ConnCtx, m: Message) -> Result<Value, Reject> {
     match m {
         Message::BindingsList {} => {
             let c = st.core.lock().expect("core lock");
-            Ok(bindings_json(&c, &st.registry))
+            Ok(bindings_json(&c, &st.registry, &st.force_revoked.list()))
         }
         Message::BindApprove { uid, user_id } => {
             let p = Principal::Uid(uid);
@@ -126,7 +133,7 @@ fn admin_dispatch(ctx: &ConnCtx, m: Message) -> Result<Value, Reject> {
                 )));
             }
             bindings.bind(journal, &p, &key, BindHow::Approved, meta(ctx)).map_err(|e| admin_err(&e))?;
-            st.force_revoked.lock().expect("force lock").remove(&p);
+            st.force_revoked.remove(&p);
             Ok(Value::Null)
         }
         Message::BindRevoke { uid, reason } => {
@@ -140,15 +147,17 @@ fn admin_dispatch(ctx: &ConnCtx, m: Message) -> Result<Value, Reject> {
                     // The record could not be written, but cutting someone
                     // off must not wait for the journal: enforce in memory.
                     Err(BindError::Journal(e)) if bindings.key_of(&p).is_some() => {
-                        st.force_revoked.lock().expect("force lock").insert(p.clone());
+                        let saved = st.force_revoked.insert(&p);
                         warning = Some(format!(
-                            "journal record failed ({e}); the revocation is enforced in memory until the service restarts"
+                            "journal record failed ({e}); the revocation is enforced by the service ({})",
+                            persisted_note(&saved)
                         ));
                     }
                     Err(BindError::Degraded(w)) => {
-                        st.force_revoked.lock().expect("force lock").insert(p.clone());
+                        let saved = st.force_revoked.insert(&p);
                         warning = Some(format!(
-                            "bindings are degraded ({w}); the revocation is enforced in memory until the service restarts"
+                            "bindings are degraded ({w}); the revocation is enforced by the service ({})",
+                            persisted_note(&saved)
                         ));
                     }
                     Err(e) => return Err(admin_err(&e)),
@@ -177,7 +186,7 @@ fn admin_dispatch(ctx: &ConnCtx, m: Message) -> Result<Value, Reject> {
                 bindings.rebind(journal, &p, &key, meta(ctx)).map_err(|e| admin_err(&e))?;
             }
             st.conflicts.lock().expect("conflicts lock").remove(&p);
-            st.force_revoked.lock().expect("force lock").remove(&p);
+            st.force_revoked.remove(&p);
             if let Some(r) = st.registry.by_principal(&p) {
                 r.kill("binding replaced; register with the new key");
             }
@@ -269,7 +278,14 @@ fn admin_dispatch(ctx: &ConnCtx, m: Message) -> Result<Value, Reject> {
                 st.verdicts.clear();
             }
             if let Some(e) = failure {
-                return Err(journal_err(&e));
+                let mut r = journal_err(&e);
+                let applied = match (apply_owner.is_some(), apply_mode.is_some(), cluster_owner_uid.is_some(), mode.is_some()) {
+                    (true, false, _, true) => "cluster_owner_uid was changed, admission was not",
+                    (false, false, _, _) => "nothing was changed",
+                    _ => "the requested changes were applied except the ones the journal refused",
+                };
+                r.message = format!("{} ({applied})", r.message);
+                return Err(r);
             }
             Ok(json!({
                 "admission": admission_str(st.policy.admission()),

@@ -331,6 +331,13 @@ fn render_status(w: &mut dyn Write, d: &Value) -> Result<()> {
         d["cluster_owner_uid"].as_u64().map_or("-".to_string(), |u| u.to_string())
     )?;
     writeln!(w, "registered  {}", d["registered"])?;
+    for p in d["force_revoked"].as_array().into_iter().flatten() {
+        writeln!(
+            w,
+            "FORCE-REVOKED uid {} (enforced from force-revoked.json; the journal could not record it)",
+            p["id"]
+        )?;
+    }
     for r in d["registrations"].as_array().into_iter().flatten() {
         writeln!(
             w,
@@ -376,6 +383,9 @@ fn render_bindings(w: &mut dyn Write, d: &Value) -> Result<()> {
     }
     for r in d["revoked"].as_array().into_iter().flatten() {
         writeln!(w, "revoked  {}", who(r))?;
+    }
+    for r in d["force_revoked"].as_array().into_iter().flatten() {
+        writeln!(w, "FORCE-REVOKED  {}  (journal could not record it; fix the journal, then re-run the revoke)", who(&serde_json::json!({"uid": r["id"]})))?;
     }
     if d["read_only"] == true {
         writeln!(w, "note     the journal is read-only; binds and certificates are refused")?;
@@ -484,7 +494,7 @@ mod tests {
         let d = serde_json::json!({
             "bound": [{"principal": {"uid": 501}, "user_id": "u1", "serials": [1, 2], "registered": true}],
             "pending": [{"principal": {"uid": 502}, "user_id": "u2"}],
-            "revoked": [{"uid": 503}], "degraded": null, "read_only": false,
+            "revoked": [{"uid": 503}], "force_revoked": [{"kind": "uid", "id": 504}], "degraded": null, "read_only": false,
         });
         let mut out = Vec::new();
         render_bindings(&mut out, &d).unwrap();
@@ -492,5 +502,6 @@ mod tests {
         assert!(t.contains("bound    uid 501") && t.contains("(registered)"), "{t}");
         assert!(t.contains("pending  uid 502") && t.contains("bind approve"), "{t}");
         assert!(t.contains("revoked  uid 503"), "{t}");
+        assert!(t.contains("FORCE-REVOKED  uid 504"), "{t}");
     }
 }

@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 
 use crate::config::MeshServiceConfig;
 use crate::facts::Facts;
+use crate::force_revoked::ForceRevoked;
 use crate::gate::ServiceGate;
 use crate::limits::{LimitConfig, Limiter};
 use crate::registry::Registry;
@@ -135,7 +136,7 @@ pub struct ServiceState {
     pub last_certs: Mutex<HashMap<String, clawft_mesh_local::UserCert>>,
     /// Principals revoked while the journal could not record it: enforced in
     /// memory (registration and renewal refuse them) until a restart.
-    pub force_revoked: Mutex<std::collections::HashSet<Principal>>,
+    pub force_revoked: ForceRevoked,
     pub conn_seq: AtomicU64,
     pub started_at: u64,
     /// Where the mesh listener actually bound.
@@ -157,6 +158,7 @@ impl ServiceState {
         if let Some(why) = bindings.degraded() {
             tracing::error!(reason = why, "bindings are degraded: serving read-only, refusing binds and certs");
         }
+        let force_revoked = ForceRevoked::load(&cfg.state_dir)?;
         let policy = PolicyCell::from_journal(&cfg, &journal);
         if policy.admission() == MeshAdmissionMode::Enforce && policy.owner_uid().is_none() {
             return Err("the effective admission mode is enforce but no cluster owner is set \
@@ -201,7 +203,7 @@ impl ServiceState {
             conn_seq: AtomicU64::new(1),
             started_at: unix_now(),
             listen_addr: Mutex::new(None),
-            force_revoked: Mutex::new(std::collections::HashSet::new()),
+            force_revoked,
         }))
     }
 
@@ -228,7 +230,7 @@ impl ServiceState {
 
     /// Re-sign facts after a revocation change (best effort, logged).
     pub fn refresh_facts(&self) {
-        if let Err(e) = self.facts.refresh(&self.core, unix_now()) {
+        if let Err(e) = self.facts.refresh(&self.core, &self.force_revoked, unix_now()) {
             tracing::error!(error = %e, "facts refresh failed");
         }
     }
@@ -279,6 +281,7 @@ impl ServiceState {
             "cluster_owner_uid": self.policy.owner_uid(),
             "you": caller_uid,
             "registered": self.registry.len(),
+            "force_revoked": if admin { self.force_revoked.list() } else { Vec::new() },
             "registrations": regs,
             "peers": if admin || registered { self.router.runtime().map(|r| r.peer_ids()).unwrap_or_default() } else { Vec::new() },
             "journal": {

@@ -15,7 +15,7 @@ fn principal_json(p: &Principal) -> Value {
 }
 
 /// `bindings.list` reply data: bound, pending and revoked principals.
-pub fn bindings_json(core: &Core, registry: &Registry) -> Value {
+pub fn bindings_json(core: &Core, registry: &Registry, force_revoked: &[Principal]) -> Value {
     let bound: Vec<Value> = core
         .bindings
         .bound_principals()
@@ -42,6 +42,7 @@ pub fn bindings_json(core: &Core, registry: &Registry) -> Value {
         core.bindings.revoked_principal_list().iter().map(principal_json).collect();
     json!({
         "bound": bound, "pending": pending, "revoked": revoked,
+        "force_revoked": force_revoked.iter().map(principal_json).collect::<Vec<_>>(),
         "degraded": core.bindings.degraded(),
         "read_only": core.journal.read_only(),
     })

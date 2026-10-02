@@ -27,6 +27,7 @@ mod bindings_view;
 mod chain;
 pub mod config;
 pub mod facts;
+pub mod force_revoked;
 mod fsutil;
 pub mod gate;
 pub mod journal;

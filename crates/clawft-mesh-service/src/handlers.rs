@@ -167,7 +167,7 @@ fn renew_blocking(
     let mut guard = st.core.lock().expect("core lock");
     let Core { journal, bindings } = &mut *guard;
     let serial_revoked = current.is_some_and(|c| bindings.is_serial_revoked(&reg.user_id, c.serial));
-    let forced = st.force_revoked.lock().expect("force lock").contains(&ctx.principal);
+    let forced = st.force_revoked.contains(&ctx.principal);
     if bindings.key_of(&ctx.principal) != Some(reg.user_pubkey) || serial_revoked || forced {
         return None;
     }

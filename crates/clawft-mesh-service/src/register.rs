@@ -175,7 +175,7 @@ fn bind_and_issue(ctx: &ConnCtx, req: &RegisterReq) -> Result<(BindState, UserCe
     let uid = ctx.uid;
     let user_id = node_id_from_pubkey(&key);
     let meta = BindMeta { by: None, peer_pid: Some(ctx.pid).filter(|p| *p > 0), exe: Some(ctx.exe.clone()) };
-    if st.force_revoked.lock().expect("force lock").contains(&ctx.principal) {
+    if st.force_revoked.contains(&ctx.principal) {
         return Err(Reject::new(
             ErrorKind::Forbidden,
             "this binding was revoked (the revocation is enforced in memory until the journal is repaired)",

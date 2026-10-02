@@ -161,7 +161,9 @@ async fn the_state_dir_holds_only_the_planned_files_after_a_full_session() {
     // Plan 1.1: node.key, journal.jsonl (+ segments), revoked.json, facts.json,
     // service.json, plus the single-writer lock. Nothing else: no chain, no
     // governance state, no tokens, no secrets of any user.
-    let allowed = ["node.key", "journal.jsonl", "revoked.json", "facts.json", "service.json", "mesh.lock"];
+    let allowed = [
+        "node.key", "journal.jsonl", "revoked.json", "facts.json", "service.json", "mesh.lock", "force-revoked.json",
+    ];
     for n in names(&h.state_dir()) {
         let segment = n.starts_with("journal.") && n.ends_with(".jsonl");
         assert!(allowed.contains(&n.as_str()) || segment, "unexpected file in the state dir: {n}");
@@ -395,4 +397,47 @@ async fn a_journalled_enforce_with_an_incomplete_mesh_toml_stops_the_service() {
     assert!(matches!(h.begin().await, Err(StartError::Config(_))));
     h.cfg.cluster_owner_uid = Some(h.euid);
     h.begin().await.expect("a complete configuration starts");
+}
+
+#[tokio::test]
+async fn a_force_revocation_survives_a_restart_and_is_listed_in_facts_and_status() {
+    let mut h = Harness::start().await;
+    let c = h.connect(None, 1, RegisterParams::default()).await.unwrap();
+    let serial = c.cert().serial;
+    drop(c);
+    h.svc().state.core.lock().unwrap().journal.inject_write_failure();
+    let data = h.admin_ok(Message::BindRevoke { uid: h.euid, reason: "compromised".into() }).await;
+    assert!(data["warning"].as_str().unwrap().contains("force-revoked.json"), "{data}");
+    let file = h.state_dir().join("force-revoked.json");
+    assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o077, 0, "0600");
+
+    // Status and bindings show it; the signed facts revoke its serials.
+    let s = h.admin_ok(Message::Status {}).await;
+    assert_eq!(s["force_revoked"].as_array().unwrap().len(), 1);
+    let b = h.admin_ok(Message::BindingsList {}).await;
+    assert_eq!(b["force_revoked"].as_array().unwrap().len(), 1);
+    let facts = h.admin_ok(Message::FactsGet {}).await;
+    let payload: serde_json::Value = serde_json::from_str(facts["revocations"]["payload"].as_str().unwrap()).unwrap();
+    assert!(payload["serials"].as_array().unwrap().iter().any(|x| x == serial), "{payload}");
+    assert!(payload["ranges"].as_array().unwrap().iter().any(|r| r["user_id"] == user_id(1)));
+
+    // The journal never recorded it, but a restart still keeps the uid out.
+    h.restart().await;
+    assert_eq!(server_kind(h.connect_retry(None, 1, RegisterParams::default()).await), ErrorKind::Forbidden);
+    assert_eq!(h.admin_ok(Message::Status {}).await["force_revoked"].as_array().unwrap().len(), 1);
+
+    // A (journalled) rebind clears it, in memory and on disk.
+    h.admin_ok(Message::BindRebind { uid: h.euid, user_pubkey: Some(pubkey_hex(2)) }).await;
+    assert!(h.connect_retry(None, 2, RegisterParams::default()).await.is_ok());
+    assert!(!std::fs::read_to_string(&file).unwrap().contains("uid"));
+    h.restart().await;
+    assert!(h.admin_ok(Message::Status {}).await["force_revoked"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_corrupt_force_revoked_file_stops_the_service() {
+    let mut h = Harness::start().await;
+    h.stop().await;
+    std::fs::write(h.state_dir().join("force-revoked.json"), b"not json").unwrap();
+    assert!(matches!(h.begin().await, Err(StartError::Config(_))), "fail closed");
 }
