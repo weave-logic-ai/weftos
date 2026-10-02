@@ -20,6 +20,8 @@
 //! directory are the transient `chain.lock` and the final marker.
 
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -84,6 +86,9 @@ pub struct MigrateOptions<'a> {
     pub now: SystemTime,
     /// Recorded in the marker (`weaver` version).
     pub tool_version: &'a str,
+    /// Migrate even when `chain.key` is missing or the RVF signature cannot
+    /// be verified against it.
+    pub allow_unsigned: bool,
 }
 
 /// One file in the set.
@@ -152,7 +157,8 @@ pub enum Outcome {
     /// Copied, verified, in place.
     Migrated(Plan),
     /// The destination already holds this migration (or identical bytes).
-    AlreadyMigrated(Option<Marker>),
+    /// The flag is true when this run had to (re)write the source marker.
+    AlreadyMigrated(Option<Marker>, bool),
 }
 
 fn sha_hex(p: &Path) -> std::io::Result<(u64, String)> {
@@ -244,8 +250,8 @@ fn check_destination(
         let m: Marker = serde_json::from_str(&text).map_err(|e| {
             MigrateError::Refused(format!("{} is unreadable: {e}", marker_path.display()))
         })?;
-        let same = m.source == from.to_string_lossy();
-        if !same {
+        let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        if canon(Path::new(&m.source)) != canon(from) {
             return Err(MigrateError::Refused(format!(
                 "{} already holds a chain migrated from {}",
                 to.display(),
@@ -260,7 +266,19 @@ fn check_destination(
                 from.display()
             )));
         }
-        return Ok(Some(Outcome::AlreadyMigrated(Some(m))));
+        // Do not trust the marker alone: the destination must still hold the
+        // recorded bytes, or a chain that restores and has only moved forward.
+        if inventory(to)? != m.files {
+            let ok = load_head(to).is_ok_and(|h| h.sequence >= m.sequence);
+            if !ok {
+                return Err(MigrateError::Refused(format!(
+                    "{} has a migration marker but its chain no longer matches it (files \
+                     changed, missing or not restorable); not trusting it",
+                    to.display()
+                )));
+            }
+        }
+        return Ok(Some(Outcome::AlreadyMigrated(Some(m), false)));
     }
     let dst = inventory(to)?;
     if dst.is_empty() {
@@ -275,7 +293,7 @@ fn check_destination(
         };
     }
     if dst == src {
-        return Ok(Some(Outcome::AlreadyMigrated(None)));
+        return Ok(Some(Outcome::AlreadyMigrated(None, false)));
     }
     Err(MigrateError::Refused(format!(
         "{} already holds a chain that differs from {}; it will not be overwritten",
@@ -319,10 +337,18 @@ pub fn migrate_with_hook(
         )));
     }
     if let Some(done) = check_destination(from, to, &files)? {
-        return Ok(done);
+        return finish_already(opts, done);
     }
     guards(from, opts.now)?;
+    check_key(from, &files, opts.allow_unsigned)?;
     let head = load_head(from)?;
+    if !opts.allow_unsigned && head.signature != "verified" && head.signature != "no-rvf" {
+        return Err(MigrateError::Refused(format!(
+            "the chain signature cannot be verified against chain.key ({}); pass \
+             --allow-unsigned to migrate it anyway",
+            head.signature
+        )));
+    }
     let plan = Plan {
         from: from.into(),
         to: to.into(),
@@ -335,6 +361,40 @@ pub fn migrate_with_hook(
     execute(opts, plan, after_copy)
 }
 
+fn check_key(from: &Path, files: &[FileEntry], allow: bool) -> Result<(), MigrateError> {
+    let key = from.join("chain.key");
+    let regular = std::fs::symlink_metadata(&key).is_ok_and(|m| m.is_file());
+    if allow || (regular && files.iter().any(|f| f.name == "chain.key")) {
+        return Ok(());
+    }
+    Err(MigrateError::Refused(format!(
+        "{} is missing or not a regular file: the migrated chain would not verify against its \
+         key. Pass --allow-unsigned to migrate it anyway",
+        key.display()
+    )))
+}
+
+/// Already migrated: make sure the fork-guard marker beside the source exists
+/// (a crash between the rename and the marker write leaves it missing).
+fn finish_already(opts: &MigrateOptions<'_>, done: Outcome) -> Result<Outcome, MigrateError> {
+    let Outcome::AlreadyMigrated(marker, _) = done else {
+        return Ok(done);
+    };
+    let present = opts.from.join(LEGACY_MIGRATED_MARKER).is_file();
+    if opts.dry_run || present {
+        return Ok(Outcome::AlreadyMigrated(marker, false));
+    }
+    let (seq, hash) = match &marker {
+        Some(m) => (m.sequence, m.head_hash.clone()),
+        None => {
+            let h = load_head(opts.from)?;
+            (h.sequence, h.hash)
+        }
+    };
+    write_source_marker(opts.from, opts.to, seq, &hash)?;
+    Ok(Outcome::AlreadyMigrated(marker, true))
+}
+
 fn execute(
     opts: &MigrateOptions<'_>,
     plan: Plan,
@@ -345,14 +405,18 @@ fn execute(
     let lock_existed = ChainLock::lock_path(&ckpt).exists();
     let lock = ChainLock::acquire(&ckpt).map_err(MigrateError::Refused)?;
     let result = copy_verify_place(opts, &plan, after_copy);
-    drop(lock);
+    let marked = match result {
+        Ok(()) => write_source_marker(from, to, plan.head.sequence, &plan.head.hash),
+        Err(e) => Err(e),
+    };
     if !lock_existed {
         // Leave the source as found: our lock must not make a never-locked
-        // chain look lock-aware to the first-adoption guard.
+        // chain look lock-aware to the first-adoption guard. Unlink while
+        // still holding the flock, so no kernel can lock the doomed inode.
         let _ = std::fs::remove_file(ChainLock::lock_path(&ckpt));
     }
-    result?;
-    write_source_marker(from, to, &plan);
+    drop(lock);
+    marked?;
     Ok(Outcome::Migrated(plan))
 }
 
@@ -369,9 +433,10 @@ fn copy_verify_place(
         ));
     }
     let parent = to.parent().unwrap_or(Path::new("."));
-    io("create destination parent", std::fs::create_dir_all(parent))?;
+    io("create destination parent", mkdir_private(parent))?;
     let name = to.file_name().map_or("chain".into(), |n| n.to_string_lossy());
     let tmp = parent.join(format!(".{name}.migrating-{}", std::process::id()));
+    sweep_stale(parent, &format!(".{name}.migrating-"));
     let _ = std::fs::remove_dir_all(&tmp);
     let r = build_temp(opts, plan, &tmp, after_copy);
     if r.is_err() {
@@ -396,9 +461,9 @@ fn build_temp(
     tmp: &Path,
     after_copy: &mut dyn FnMut(&Path, &Path),
 ) -> Result<(), MigrateError> {
-    io("create temp dir", std::fs::create_dir_all(tmp.join("chain")))?;
+    io("create temp dir", mkdir_private(&tmp.join("chain")))?;
     for f in &plan.files {
-        copy_fsync(&opts.from.join(&f.name), &tmp.join(&f.name), f.name == "chain.key")?;
+        copy_fsync(&opts.from.join(&f.name), &tmp.join(&f.name))?;
     }
     sync_dir(&tmp.join("chain"));
     sync_dir(tmp);
@@ -435,24 +500,47 @@ fn build_temp(
     let json = serde_json::to_vec_pretty(&marker)
         .map_err(|e| MigrateError::Io(format!("encode marker: {e}")))?;
     let mp = tmp.join(MIGRATED_FROM_FILE);
-    let mut mf = io("write marker", std::fs::File::create(&mp))?;
+    let mut mf = io("write marker", private_file(&mp))?;
     io("write marker", mf.write_all(&json))?;
     io("sync marker", mf.sync_all())?;
     sync_dir(tmp);
     Ok(())
 }
 
-fn copy_fsync(src: &Path, dst: &Path, secret: bool) -> Result<(), MigrateError> {
+/// New file, mode 0600 on unix (chain.key must never be group/world readable).
+fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
     let mut o = std::fs::OpenOptions::new();
     o.write(true).create_new(true);
     #[cfg(unix)]
-    if secret {
-        use std::os::unix::fs::OpenOptionsExt;
-        o.mode(0o600);
+    o.mode(0o600);
+    o.open(path)
+}
+
+/// `create_dir_all` with mode 0700 on unix for every directory it creates.
+fn mkdir_private(dir: &Path) -> std::io::Result<()> {
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    b.mode(0o700);
+    b.create(dir)
+}
+
+/// Remove leftover temp dirs from an earlier crashed run (they may hold a
+/// copy of `chain.key`). Called with the source lock held.
+fn sweep_stale(parent: &Path, prefix: &str) {
+    let Ok(rd) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for e in rd.flatten() {
+        if e.file_name().to_string_lossy().starts_with(prefix) {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
     }
-    let _ = secret;
+}
+
+fn copy_fsync(src: &Path, dst: &Path) -> Result<(), MigrateError> {
     let mut input = io(&format!("open {}", src.display()), std::fs::File::open(src))?;
-    let mut out = io(&format!("create {}", dst.display()), o.open(dst))?;
+    let mut out = io(&format!("create {}", dst.display()), private_file(dst))?;
     io("copy", std::io::copy(&mut input, &mut out))?;
     io("fsync", out.sync_all())
 }
@@ -463,23 +551,45 @@ fn sync_dir(dir: &Path) {
     }
 }
 
-/// Best effort: the copy is already in place and verified, so a read-only
-/// source directory must not fail the migration.
-fn write_source_marker(from: &Path, to: &Path, plan: &Plan) {
+/// Write the fork-guard marker beside the source (temp file, then rename).
+/// A failure is an error: without the marker a daemon rooted at the legacy
+/// directory would not be stopped from forking the chain. The destination is
+/// already in place, so re-running completes just this step.
+fn write_source_marker(
+    from: &Path,
+    to: &Path,
+    seq: u64,
+    hash: &str,
+) -> Result<(), MigrateError> {
     let text = format!(
         "This chain was migrated to the WeftOS user chain.\n\
          migrated-to: {}\n\
-         head-seq: {}\n\
-         head-hash: {}\n\
+         head-seq: {seq}\n\
+         head-hash: {hash}\n\
          migrated-at: {}\n\
          The files here were copied, not moved or changed. Do not start a kernel on this \
          chain: it would fork history from {}. To override knowingly, pass \
          --adopt-legacy-chain or isolate the run with WEFTOS_RUNTIME_DIR.\n",
         to.display(),
-        plan.head.sequence,
-        plan.head.hash,
         chrono::Utc::now().to_rfc3339(),
         to.display()
     );
-    let _ = std::fs::write(from.join(LEGACY_MIGRATED_MARKER), text);
+    let fail = |e: std::io::Error| {
+        MigrateError::Io(format!(
+            "the chain was migrated to {} but the marker {} could not be written ({e}); \
+             a daemon rooted at {} is NOT yet blocked from forking it. Fix the permissions \
+             and re-run the same command to finish",
+            to.display(),
+            from.join(LEGACY_MIGRATED_MARKER).display(),
+            from.display()
+        ))
+    };
+    let tmp = from.join(format!(".{LEGACY_MIGRATED_MARKER}.tmp"));
+    let _ = std::fs::remove_file(&tmp);
+    let mut f = private_file(&tmp).map_err(fail)?;
+    f.write_all(text.as_bytes()).map_err(fail)?;
+    f.sync_all().map_err(fail)?;
+    std::fs::rename(&tmp, from.join(LEGACY_MIGRATED_MARKER)).map_err(fail)?;
+    sync_dir(from);
+    Ok(())
 }

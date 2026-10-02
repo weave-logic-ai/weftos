@@ -41,7 +41,7 @@ fn snapshot(root: &Path) -> Vec<(String, Vec<u8>)> {
 }
 
 fn opts<'a>(from: &'a Path, to: &'a Path, dry: bool, now: SystemTime) -> MigrateOptions<'a> {
-    MigrateOptions { from, to, dry_run: dry, now, tool_version: "test" }
+    MigrateOptions { from, to, dry_run: dry, now, tool_version: "test", allow_unsigned: false }
 }
 
 struct Fx {
@@ -120,7 +120,7 @@ fn full_migration_verifies_and_leaves_source_byte_identical() {
     // Idempotent re-run, and metamorphic: same hashes either way.
     assert!(matches!(
         migrate_user_chain(&opts(&f.from, &f.to, false, far())).unwrap(),
-        Outcome::AlreadyMigrated(Some(_))
+        Outcome::AlreadyMigrated(Some(_), false)
     ));
     let other = f.to.with_file_name("chain2");
     migrate_user_chain(&opts(&f.from, &other, false, far())).unwrap();
@@ -165,7 +165,7 @@ fn differing_destination_is_refused_identical_is_already_migrated() {
     }
     assert!(matches!(
         migrate_user_chain(&opts(&g.from, &g.to, false, far())).unwrap(),
-        Outcome::AlreadyMigrated(None)
+        Outcome::AlreadyMigrated(None, true)
     ));
 
     // A non-empty destination holding no chain.
@@ -251,19 +251,30 @@ fn booted() -> (Fx, PathBuf, PathBuf) {
 }
 
 #[test]
-fn boot_after_migration_prefers_the_user_chain() {
+fn project_boot_after_migration_is_refused_not_silently_moved() {
     let (f, home, proj) = booted();
     let paths = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
     let c = choose_default_chain(&paths, Some(&home), false, false, far());
-    assert!(c.user_chain_in_use && !c.legacy_in_use);
-    assert_eq!(c.checkpoint, f.to.join("chain.json"));
-    assert!(c.refusal.is_none());
-    assert!(c.warning.unwrap().contains("migrated user chain"));
+    assert!(c.legacy_in_use);
+    assert!(c.refusal.expect("refused").contains("migrated"));
+    // The override is --adopt-legacy-chain only.
+    assert!(choose_default_chain(&paths, Some(&home), false, true, far()).refusal.is_none());
     // A project that has its own chain keeps it.
     std::fs::create_dir_all(proj.join(".weftos/runtime")).unwrap();
     std::fs::write(proj.join(".weftos/runtime/chain.json"), "{}").unwrap();
     let c = choose_default_chain(&paths, Some(&home), false, false, far());
-    assert!(!c.user_chain_in_use && c.refusal.is_none());
+    assert!(c.refusal.is_none() && !c.legacy_in_use);
+    let _ = f;
+}
+
+#[test]
+fn user_profile_with_marker_and_no_user_chain_is_refused() {
+    let (f, home, _proj) = booted();
+    std::fs::remove_dir_all(&f.to).unwrap(); // the documented rollback
+    let paths = RuntimePaths::user_with(None, Some(&home));
+    let c = choose_default_chain(&paths, Some(&home), false, false, far());
+    assert!(c.refusal.expect("refused").contains("--adopt-legacy-chain"));
+    assert!(choose_default_chain(&paths, Some(&home), false, true, far()).refusal.is_none());
 }
 
 #[test]
@@ -292,4 +303,82 @@ fn project_falling_back_to_legacy_when_user_chain_is_gone_is_refused() {
     assert!(c.legacy_in_use);
     assert!(c.refusal.expect("refuse").contains("was migrated"));
     assert!(choose_default_chain(&paths, Some(&home), false, true, far()).refusal.is_none());
+}
+
+#[test]
+fn crash_before_source_marker_is_completed_by_a_rerun() {
+    let f = fx();
+    migrate_user_chain(&opts(&f.from, &f.to, false, far())).unwrap();
+    std::fs::remove_file(f.from.join(LEGACY_MIGRATED_MARKER)).unwrap();
+    // Dry run reports but does not write.
+    migrate_user_chain(&opts(&f.from, &f.to, true, far())).unwrap();
+    assert!(!f.from.join(LEGACY_MIGRATED_MARKER).exists());
+    let r = migrate_user_chain(&opts(&f.from, &f.to, false, far())).unwrap();
+    assert!(matches!(r, Outcome::AlreadyMigrated(Some(_), true)), "{r:?}");
+    let txt = std::fs::read_to_string(f.from.join(LEGACY_MIGRATED_MARKER)).unwrap();
+    assert!(txt.contains("migrated-to:"));
+    assert!(matches!(
+        migrate_user_chain(&opts(&f.from, &f.to, false, far())).unwrap(),
+        Outcome::AlreadyMigrated(Some(_), false)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn marker_write_failure_is_an_error_and_rerun_completes() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = fx();
+    let from = f.from.clone();
+    let r = migrate_with_hook(&opts(&f.from, &f.to, false, far()), &mut |_, _| {
+        std::fs::set_permissions(&from, std::fs::Permissions::from_mode(0o555)).unwrap();
+    });
+    std::fs::set_permissions(&f.from, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let Err(MigrateError::Io(m)) = r else { panic!("expected Io error, got {r:?}") };
+    assert!(m.contains("NOT yet blocked"), "{m}");
+    assert!(f.to.join("chain.rvf").exists(), "destination stays in place");
+    let r = migrate_user_chain(&opts(&f.from, &f.to, false, far())).unwrap();
+    assert!(matches!(r, Outcome::AlreadyMigrated(_, true)), "{r:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn modes_are_private_and_stale_temp_dirs_are_swept() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = fx();
+    let parent = f.to.parent().unwrap();
+    let stale = parent.join(".chain.migrating-99999");
+    std::fs::create_dir_all(&stale).unwrap();
+    std::fs::write(stale.join("chain.key"), "old").unwrap();
+    migrate_user_chain(&opts(&f.from, &f.to, false, far())).unwrap();
+    assert!(!stale.exists(), "stale temp swept");
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(parent), 0o700);
+    assert_eq!(mode(&f.to), 0o700);
+    assert_eq!(mode(&f.to.join("chain")), 0o700);
+    for n in ["chain.rvf", "chain.json", "chain.key", "chain.tree.json", MIGRATED_FROM_FILE] {
+        assert_eq!(mode(&f.to.join(n)), 0o600, "{n}");
+    }
+}
+
+#[test]
+fn missing_key_is_refused_unless_allowed() {
+    let f = fx();
+    std::fs::remove_file(f.from.join("chain.key")).unwrap();
+    let m = refused(migrate_user_chain(&opts(&f.from, &f.to, false, far())));
+    assert!(m.contains("--allow-unsigned"), "{m}");
+    assert!(!f.to.exists());
+    let mut o = opts(&f.from, &f.to, false, far());
+    o.allow_unsigned = true;
+    assert!(matches!(migrate_user_chain(&o).unwrap(), Outcome::Migrated(_)));
+}
+
+#[test]
+fn marker_is_not_trusted_when_the_destination_chain_was_damaged() {
+    let f = fx();
+    migrate_user_chain(&opts(&f.from, &f.to, false, far())).unwrap();
+    let rvf = f.to.join("chain.rvf");
+    let b = std::fs::read(&rvf).unwrap();
+    std::fs::write(&rvf, &b[..b.len() / 2]).unwrap();
+    let m = refused(migrate_user_chain(&opts(&f.from, &f.to, false, far())));
+    assert!(m.contains("not trusting"), "{m}");
 }

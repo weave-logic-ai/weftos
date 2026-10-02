@@ -18,8 +18,7 @@
 //!    legacy chain stays in use (WARN) until `weaver migrate user-chain`
 //!    (ADR-103 Phase 1) moves it.
 //!
-//! A migrated user chain (`weaver migrate user-chain`, `~/.weftos/chain`) beats
-//! rule 3: a project with no chain of its own uses it. Once the legacy chain
+//! Once the legacy chain
 //! carries a `MIGRATED-TO-WEFTOS.txt` marker, a boot that would still land on
 //! it is refused (it would fork history) unless `WEFTOS_RUNTIME_DIR` isolates
 //! it or `--adopt-legacy-chain` is passed (with a WARN).
@@ -77,8 +76,6 @@ pub struct ChainChoice {
     pub checkpoint: PathBuf,
     /// True when this is the legacy `~/.clawft` chain, not the resolved one.
     pub legacy_in_use: bool,
-    /// True when this is the migrated user chain (`~/.weftos/chain`).
-    pub user_chain_in_use: bool,
     /// WARN text for the operator, when the choice needs explaining.
     pub warning: Option<String>,
     /// Set when adopting the legacy chain looks unsafe: boot must refuse.
@@ -135,6 +132,29 @@ fn legacy_adoption_refusal(
             legacy.display()
         )
     })
+}
+
+/// Fork hazard: the legacy chain in `dir` was migrated (marker beside it), and
+/// this boot would still append to it. `--adopt-legacy-chain` overrides, with
+/// a loud WARN.
+fn migrated_refusal(dir: &Path, adopt_legacy: bool) -> Option<String> {
+    let (marker, dest) = legacy_migration_marker(dir)?;
+    if adopt_legacy {
+        tracing::warn!(
+            marker = %marker.display(),
+            "--adopt-legacy-chain overrides a migration marker: this kernel appends to the \
+             legacy chain and forks history from the migrated user chain"
+        );
+        return None;
+    }
+    Some(format!(
+        "the legacy chain in {} was migrated to {} (see {}); booting on it would fork \
+         history. Use the migrated chain, isolate this run with WEFTOS_RUNTIME_DIR, or \
+         pass --adopt-legacy-chain to knowingly continue on the legacy copy",
+        dir.display(),
+        dest.as_deref().unwrap_or("~/.weftos/chain"),
+        marker.display()
+    ))
 }
 
 /// Choose the default chain for `paths` (see module docs, rule 2 and 3).
@@ -195,51 +215,11 @@ fn choose_default_chain_inner(
         ChainChoice {
             checkpoint,
             legacy_in_use: false,
-            user_chain_in_use: false,
             warning,
             refusal,
         }
     };
-    // Rule 2b: a migrated user chain beats legacy adoption.
-    if matches!(paths.source(), RootSource::Project(_))
-        && !has_chain(&resolved)
-        && !new_chain
-        && let Some(user) = home
-            .map(user_chain_checkpoint)
-            .filter(|u| has_chain(u))
-    {
-        return ChainChoice {
-            user_chain_in_use: true,
-            warning: Some(format!(
-                "no chain at {}; using the migrated user chain at {} (migrated from the \
-                 legacy ~/.clawft chain by `weaver migrate user-chain`)",
-                resolved.display(),
-                user.display()
-            )),
-            ..plain(user, None, None)
-        };
-    }
-    // Fork hazard: the legacy chain was migrated, and this boot would still
-    // append to it.
-    let migrated_refusal = |dir: &Path| {
-        let (marker, dest) = legacy_migration_marker(dir)?;
-        if adopt_legacy {
-            tracing::warn!(
-                marker = %marker.display(),
-                "--adopt-legacy-chain overrides a migration marker: this kernel appends to the \
-                 legacy chain and forks history from the migrated user chain"
-            );
-            return None;
-        }
-        Some(format!(
-            "the legacy chain in {} was migrated to {} (see {}); booting on it would fork \
-             history. Use the migrated chain, isolate this run with WEFTOS_RUNTIME_DIR, or \
-             pass --adopt-legacy-chain to knowingly continue on the legacy copy",
-            dir.display(),
-            dest.as_deref().unwrap_or("~/.weftos/chain"),
-            marker.display()
-        ))
-    };
+    let migrated_refusal = |dir: &Path| migrated_refusal(dir, adopt_legacy);
     // Rooted at ~/.clawft itself (any non-project cwd, e.g. $HOME): the
     // resolved chain IS the legacy chain, so the first-adoption guard applies
     // (Phase 0 review R1), plus the migration marker. `--new-chain` cannot
@@ -259,7 +239,6 @@ fn choose_default_chain_inner(
         };
         return ChainChoice {
             legacy_in_use: true,
-            user_chain_in_use: false,
             ..plain(resolved, None, refusal)
         };
     }
@@ -289,7 +268,6 @@ fn choose_default_chain_inner(
     ChainChoice {
         checkpoint: legacy,
         legacy_in_use: true,
-        user_chain_in_use: false,
         warning: Some(warning),
         refusal,
     }
@@ -317,7 +295,6 @@ fn choose_user_chain(
         return ChainChoice {
             checkpoint: paths.chain_checkpoint(),
             legacy_in_use: false,
-            user_chain_in_use: false,
             warning: None,
             refusal: None,
         };
@@ -335,7 +312,6 @@ fn choose_user_chain(
             )),
             checkpoint: user,
             legacy_in_use: true,
-            user_chain_in_use: false,
             warning: None,
         };
     }
@@ -351,13 +327,13 @@ fn choose_user_chain(
         return ChainChoice {
             checkpoint: user,
             legacy_in_use: true,
-            user_chain_in_use: false,
             warning,
             refusal: None,
         };
     }
     ChainChoice {
-        refusal: legacy_adoption_refusal(&legacy, adopt_legacy, now),
+        refusal: migrated_refusal(home.join(".clawft").as_path(), adopt_legacy)
+            .or_else(|| legacy_adoption_refusal(&legacy, adopt_legacy, now)),
         warning: Some(format!(
             "no user chain at {} but a legacy chain exists at {}; continuing on the legacy \
              chain and its key so history is not forked (nothing was moved). Run \
@@ -367,7 +343,6 @@ fn choose_user_chain(
         )),
         checkpoint: legacy,
         legacy_in_use: true,
-        user_chain_in_use: false,
     }
 }
 
@@ -444,13 +419,10 @@ fn default_checkpoint_path(
         adopt,
         std::time::SystemTime::now(),
     );
-    if choice.user_chain_in_use {
-        tracing::info!(chain = %choice.checkpoint.display(), "using migrated user chain");
-    }
     (
         Some(choice.checkpoint.to_string_lossy().into_owned()),
         choice.warning,
-        choice.legacy_in_use || choice.user_chain_in_use,
+        choice.legacy_in_use,
         choice.refusal,
     )
 }
@@ -723,10 +695,10 @@ mod tests {
         std::fs::create_dir_all(user.parent().unwrap()).unwrap();
         std::fs::write(&user, "{}").unwrap();
         let legacy = home.join(".clawft/chain.json");
-        // A project with no chain of its own uses the user chain (rule 2b).
+        // A project with no chain of its own would fall back to legacy: refused.
         let pp = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
         let c = choose_default_chain(&pp, Some(&home), false, false, far_future());
-        assert!(c.refusal.is_none() && c.user_chain_in_use && c.checkpoint == user);
+        assert!(c.legacy_in_use && c.refusal.expect("refused").contains("--profile user"));
         // A legacy-rooted kernel would fall back to the legacy chain: refused.
         for paths in [RuntimePaths::resolve_with(None, Some(&home), Some(&home))] {
             let c = choose_default_chain(&paths, Some(&home), false, false, far_future());

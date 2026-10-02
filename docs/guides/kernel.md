@@ -177,11 +177,13 @@ source; then renames it into place and writes `MIGRATED_FROM.json` there
 and `MIGRATED-TO-WEFTOS.txt` beside the source. The source chain files are
 never modified. Re-running is a no-op ("already migrated"); a destination
 that holds a different chain is refused. `--dry-run` writes nothing. After
-migration a project kernel with no chain of its own uses `~/.weftos/chain`
-(logged), and a boot that would still land on the migrated legacy chain is
+migration a boot that would still land on the migrated legacy chain is
 refused unless `WEFTOS_RUNTIME_DIR` isolates it or `--adopt-legacy-chain`
 is passed (WARN: that forks history). Rollback: delete the destination
-directory; the legacy chain is intact.
+directory and `MIGRATED-TO-WEFTOS.txt` beside the legacy chain; the legacy
+chain is intact. `--allow-unsigned` migrates a chain whose key is missing
+or whose signature cannot be verified. If the marker write fails the command
+exits non-zero; re-run it to finish.
 
 Chain lock: whichever chain is in use is guarded by an exclusive lock
 (`chain.lock` beside it) for the kernel's lifetime. A second kernel on the

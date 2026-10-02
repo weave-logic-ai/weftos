@@ -33,6 +33,10 @@ pub enum MigrateAction {
         /// Destination chain directory (default: ~/.weftos/chain).
         #[arg(long)]
         to: Option<PathBuf>,
+        /// Migrate even if chain.key is missing or the chain signature cannot
+        /// be verified against it.
+        #[arg(long)]
+        allow_unsigned: bool,
     },
 }
 
@@ -51,7 +55,12 @@ fn print_plan(p: &Plan) {
 /// Run the migrate subcommand.
 pub fn run(args: MigrateArgs) -> anyhow::Result<()> {
     match args.action {
-        MigrateAction::UserChain { dry_run, from, to } => {
+        MigrateAction::UserChain {
+            dry_run,
+            from,
+            to,
+            allow_unsigned,
+        } => {
             let home = home_dir();
             let from = from
                 .or_else(|| home.as_ref().map(|h| h.join(".clawft")))
@@ -65,6 +74,7 @@ pub fn run(args: MigrateArgs) -> anyhow::Result<()> {
                 dry_run,
                 now: std::time::SystemTime::now(),
                 tool_version: env!("CARGO_PKG_VERSION"),
+                allow_unsigned,
             };
             match migrate_user_chain(&opts).map_err(|e| anyhow::anyhow!("{e}"))? {
                 Outcome::DryRun(p) => {
@@ -78,10 +88,18 @@ pub fn run(args: MigrateArgs) -> anyhow::Result<()> {
                     println!("migrated and verified");
                     print_plan(&p);
                     println!("  source {} is unchanged (a MIGRATED-TO-WEFTOS.txt marker was added).", p.from.display());
-                    println!("  rollback: rm -r {} ; the legacy chain is intact.", p.to.display());
+                    println!(
+                        "  rollback: rm -r {} ; the legacy chain is intact. Remove {}/MIGRATED-TO-WEFTOS.txt too, \
+                         or pass --adopt-legacy-chain to start a kernel on the legacy chain.",
+                        p.to.display(),
+                        p.from.display()
+                    );
                 }
-                Outcome::AlreadyMigrated(_) => {
-                    println!("already migrated: {} holds this chain; nothing to do", to.display());
+                Outcome::AlreadyMigrated(_, marked) => {
+                    println!("already migrated: {} holds this chain", to.display());
+                    if marked {
+                        println!("  wrote the missing MIGRATED-TO-WEFTOS.txt marker beside {}", from.display());
+                    }
                 }
             }
         }
