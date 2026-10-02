@@ -169,6 +169,7 @@ exclude = [
     # RVF validator; built by `scripts/build.sh n6-leaf`.
     "crates/weftos-n6-leaf",
     "crates/weftos-n6-leaf-hostcheck",
+    "crates/weftos-n6-node",
     # WEFT-33: cargo-fuzz harness (own [workspace] + nightly/libfuzzer).
     "crates/clawft-core/fuzz",
 ]

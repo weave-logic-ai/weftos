@@ -1553,6 +1553,7 @@ cmd_n6_leaf() {
     # .cargo/config.toml (thumbv8m target) applies only to the firmware.
     [ $rc -eq 0 ] && (cd "$ROOT/crates/weftos-n6-leaf" && cargo build --release $v) || rc=$?
     [ $rc -eq 0 ] && (cd "$ROOT/crates/weftos-n6-leaf-hostcheck" && cargo build --release $v) || rc=$?
+    [ $rc -eq 0 ] && (cd "$ROOT/crates/weftos-n6-node" && cargo build --release $v) || rc=$?
     timer_end
     return $rc
 }
@@ -2079,10 +2080,10 @@ ${BOLD}Commands:${NC}
                   + native adapter live test (anomaly-detect) + cog conformance
                   in ssh mode. Pi from WEFTOS_PI_HOST (skips when unset); never
                   touches ~/.clawft or weaver.service. See docs/cogs/test-pi.md
-  n6-leaf         Build the STM32N6 leaf firmware (crates/weftos-n6-leaf,
-                  thumbv8m.main-none-eabihf, RAM image) and its host RVF
-                  validator (crates/weftos-n6-leaf-hostcheck). Run on the
-                  board with scripts/n6.sh leaf.
+  n6-leaf         Build the STM32N6 firmware: the leaf smoke
+                  (crates/weftos-n6-leaf) with its host RVF validator
+                  (crates/weftos-n6-leaf-hostcheck), and the embassy node
+                  (crates/weftos-n6-node). Run with scripts/n6.sh leaf / node.
   test-browser    Run browser WASM regression suite under headless Chrome
                   (WEFT-388 / M5-A). Requires wasm-pack + chromedriver.
   bundle-size     Gate browser WASM bundle (raw + gzip) against the

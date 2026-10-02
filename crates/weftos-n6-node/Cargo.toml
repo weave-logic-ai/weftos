@@ -1,0 +1,34 @@
+# WeftOS node firmware for the NUCLEO-N657X0-Q (STM32N657, Cortex-M55), on
+# embassy: HSE-referenced clocks, RMII Ethernet with DHCP, and a periodic UDP
+# broadcast of the leaf's CBOR capability announce. Standalone: the empty
+# `[workspace]` keeps the thumbv8m target out of host builds.
+[workspace]
+
+[package]
+name = "weftos-n6-node"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# embassy's STM32N6 support (rcc, eth) is on main; pin the commit we tested.
+[dependencies]
+embassy-stm32 = { git = "https://github.com/embassy-rs/embassy", rev = "ae258ddd1b2a45715aef5ac12a70434b94e96139", features = ["defmt", "stm32n657x0", "time-driver-any", "exti", "unstable-pac"] }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "ae258ddd1b2a45715aef5ac12a70434b94e96139", features = ["platform-cortex-m", "executor-thread", "defmt"] }
+embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "ae258ddd1b2a45715aef5ac12a70434b94e96139", features = ["defmt", "defmt-timestamp-uptime", "tick-hz-32_768"] }
+embassy-net = { git = "https://github.com/embassy-rs/embassy", rev = "ae258ddd1b2a45715aef5ac12a70434b94e96139", features = ["defmt", "udp", "dhcpv4", "medium-ethernet", "icmp-ping-reply"] }
+
+defmt = "1.0.1"
+defmt-rtt = "1.0.0"
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+cortex-m = { version = "0.7.6", features = ["inline-asm", "critical-section-single-core"] }
+cortex-m-rt = { version = "0.7.0", features = ["set-vtor"] }
+static_cell = "2"
+embedded-alloc = "0.6"
+weftos-leaf-types = { path = "../weftos-leaf-types", default-features = false }
+
+[profile.release]
+codegen-units = 1
+debug = 2
+lto = "fat"
+opt-level = "s"
