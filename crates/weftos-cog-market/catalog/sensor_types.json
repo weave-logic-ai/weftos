@@ -126,6 +126,16 @@
    "id": "power-monitor",
    "name": "Battery / power",
    "desc": "fuel gauge and battery state"
+  },
+  {
+   "id": "gnss",
+   "name": "GNSS / positioning",
+   "desc": "satellite positioning receivers (GPS, GLONASS, Galileo, BeiDou)"
+  },
+  {
+   "id": "magnetometer",
+   "name": "Magnetometer / compass",
+   "desc": "3-axis magnetic field sensors used for heading"
   }
  ],
  "assign": [
@@ -1290,6 +1300,62 @@
    "grade": "C",
    "why": "phone-class battery fuel gauge; no figures in the catalog spec",
    "confidence": "low"
+  },
+  {
+   "ref": "module:ublox-neo-6m-gps",
+   "type": "gnss",
+   "grade": "C",
+   "why": "GPS-only 50-channel receiver; catalog spec gnss=GPS (50 ch), update_rate=up to 5 Hz, timepulse=1PPS",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:gt-u7-gps",
+   "type": "gnss",
+   "grade": "C",
+   "why": "NEO-6M clone board, GPS-only; catalog spec chip=u-blox NEO-6M, timepulse=1PPS",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:ublox-neo-7m-gps",
+   "type": "gnss",
+   "grade": "C",
+   "why": "single-constellation GPS receiver; catalog spec gnss=GPS, update_rate=up to 10 Hz",
+   "confidence": "medium"
+  },
+  {
+   "ref": "module:hglrc-m100-pro-gps",
+   "type": "gnss",
+   "grade": "B",
+   "why": "concurrent four-constellation M10 receiver; catalog spec gnss=GPS+GLONASS+Galileo+BeiDou concurrent",
+   "confidence": "medium"
+  },
+  {
+   "ref": "chip:neo-6m",
+   "type": "gnss",
+   "grade": "C",
+   "why": "GPS-only; catalog spec sensitivity=-161 dBm tracking, update=up to 5 Hz",
+   "confidence": "medium"
+  },
+  {
+   "ref": "chip:neo-7m",
+   "type": "gnss",
+   "grade": "C",
+   "why": "GPS (GLONASS alt.); catalog spec sensitivity=-162 dBm, update=up to 10 Hz",
+   "confidence": "medium"
+  },
+  {
+   "ref": "chip:ublox-m10",
+   "type": "gnss",
+   "grade": "B",
+   "why": "concurrent multi-GNSS; catalog spec gnss=GPS+GLONASS+Galileo+BeiDou concurrent, sensitivity=-167 dBm",
+   "confidence": "medium"
+  },
+  {
+   "ref": "chip:qmc5883l",
+   "type": "magnetometer",
+   "grade": "C",
+   "why": "hobby 3-axis compass; catalog spec range=+-8 gauss, resolution=16-bit, odr=up to 200 Hz",
+   "confidence": "medium"
   }
  ]
 }
