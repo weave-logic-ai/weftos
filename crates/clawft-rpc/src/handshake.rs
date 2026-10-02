@@ -138,6 +138,13 @@ pub struct MeshHandshake {
     /// Service mode: negotiated mesh-local protocol version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proto: Option<u32>,
+    /// Service mode: chain events (journal anchors, binding records) waiting
+    /// for the chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events_pending: Option<u64>,
+    /// Service mode: chain events dropped because the queue was full.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events_dropped: Option<u64>,
 }
 
 impl MeshHandshake {

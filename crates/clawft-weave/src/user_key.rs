@@ -50,6 +50,20 @@ pub enum UserKeyError {
         /// File involved.
         path: String,
     },
+    /// A key file is readable beyond its owner.
+    #[error("{path} is mode {mode:o}, readable beyond its owner; refusing to use it (chmod 600 {path})")]
+    LooseMode {
+        /// File involved.
+        path: String,
+        /// Its permission bits.
+        mode: u32,
+    },
+    /// A legacy chain exists but has not been migrated: a fresh key would split the identity.
+    #[error("a legacy chain exists at {path} and has not been migrated; run `weaver migrate user-chain` first (a freshly generated user.key would split your identity)")]
+    LegacyChainPending {
+        /// The legacy chain checkpoint.
+        path: String,
+    },
     /// Nothing to migrate from.
     #[error("no chain.key at {path}: nothing to migrate (run `weaver migrate user-chain` first if the chain still lives in ~/.clawft)")]
     NoSource {
@@ -87,8 +101,9 @@ pub fn chain_key_path(home: &Path) -> PathBuf {
     user_chain_checkpoint(home).with_extension("key")
 }
 
-/// Read a 32-byte seed, refusing symlinks and non-regular files. Loose
-/// permissions are tightened to 0600 (what the chain loader does).
+/// Read a 32-byte seed, refusing symlinks, non-regular files and keys
+/// readable beyond their owner (refused, not repaired: a key that was exposed
+/// is not made safe by a chmod).
 pub fn read_seed(path: &Path) -> Result<[u8; 32], UserKeyError> {
     let meta = std::fs::symlink_metadata(path).map_err(io_err(path))?;
     if !meta.file_type().is_file() {
@@ -97,9 +112,9 @@ pub fn read_seed(path: &Path) -> Result<[u8; 32], UserKeyError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if meta.permissions().mode() & 0o077 != 0 {
-            tracing::warn!(path = %path.display(), "key file is readable beyond its owner; fixing to 0600");
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        let mode = meta.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(UserKeyError::LooseMode { path: path.display().to_string(), mode });
         }
     }
     let bytes = std::fs::read(path).map_err(io_err(path))?;
@@ -128,15 +143,26 @@ fn publish_seed(path: &Path, seed: &[u8; 32]) -> io::Result<()> {
     f.write_all(seed)?;
     f.sync_all()?;
     drop(f);
-    let linked = std::fs::hard_link(&tmp, path);
-    let _ = std::fs::remove_file(&tmp);
-    match linked {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(e),
+    match std::fs::hard_link(&tmp, path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&tmp);
+            Ok(())
+        }
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+        // No hard links here (EPERM, ENOTSUP, FAT, some FUSE mounts): rename
+        // the complete, synced temp file into place, so a reader never sees a
+        // partial key. The existence check keeps a racing creator's key.
         Err(_) => {
-            let mut f = private_options().open(path)?;
-            f.write_all(seed)?;
-            f.sync_all()
+            if std::fs::symlink_metadata(path).is_ok() {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+            }
+            std::fs::rename(&tmp, path).inspect_err(|_| {
+                let _ = std::fs::remove_file(&tmp);
+            })
         }
     }
 }
@@ -160,6 +186,10 @@ pub fn resolve_user_key(home: &Path, create: bool) -> Result<(SigningKey, KeySou
     }
     if !create {
         return Err(UserKeyError::NoSource { path: chain.display().to_string() });
+    }
+    let legacy = home.join(".clawft").join(clawft_types::runtime_paths::CHAIN_CHECKPOINT_FILE);
+    if std::fs::symlink_metadata(&legacy).is_ok() {
+        return Err(UserKeyError::LegacyChainPending { path: legacy.display().to_string() });
     }
     let mut seed = [0u8; 32];
     OsRng.fill_bytes(&mut seed);
@@ -283,7 +313,11 @@ pub fn doctor_findings(home: &Path) -> Vec<Finding> {
                     Severity::Warn,
                     format!("{} and {} hold different keys (split identity): the chain signs with user.key, older events carry the chain.key identity", user.display(), chain.display()),
                 )
-                .remedy("decide which identity is yours; doctor never deletes keys"),
+                .remedy(format!(
+                    "to keep the chain's identity: mv {} {}.bak && weaver migrate user-key   (to adopt user.key instead, keep it and start a new chain; doctor never deletes keys)",
+                    user.display(),
+                    user.display()
+                )),
             ),
             (u, ch) => {
                 let why = [u.err(), ch.err()]
@@ -303,6 +337,11 @@ pub fn doctor_findings(home: &Path) -> Vec<Finding> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    fn write_key(path: &Path, seed: [u8; 32]) {
+        std::fs::write(path, seed).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
 
     fn setup(seed: Option<[u8; 32]>) -> (tempfile::TempDir, PathBuf) {
         let t = tempfile::tempdir().unwrap();
@@ -344,7 +383,7 @@ mod tests {
     #[test]
     fn a_diverged_user_key_is_never_overwritten() {
         let (_t, home) = setup(Some([7u8; 32]));
-        std::fs::write(user_key_path(&home), [9u8; 32]).unwrap();
+        write_key(&user_key_path(&home), [9u8; 32]);
         let e = migrate_user_key(&home, false).unwrap_err();
         assert!(matches!(e, UserKeyError::Diverged { .. }), "{e}");
         assert_eq!(std::fs::read(user_key_path(&home)).unwrap(), vec![9u8; 32]);
@@ -362,7 +401,7 @@ mod tests {
         let (k, src) = resolve_user_key(&home, false).unwrap();
         assert!(matches!(src, KeySource::ChainKey(_)));
         assert_eq!(k.to_bytes(), [7u8; 32]);
-        std::fs::write(user_key_path(&home), [3u8; 32]).unwrap();
+        write_key(&user_key_path(&home), [3u8; 32]);
         let (k, src) = resolve_user_key(&home, false).unwrap();
         assert!(matches!(src, KeySource::UserKey(_)));
         assert_eq!(k.to_bytes(), [3u8; 32]);
@@ -387,11 +426,34 @@ mod tests {
     #[test]
     fn doctor_warns_when_the_two_keys_differ() {
         let (_t, home) = setup(Some([7u8; 32]));
-        std::fs::write(user_key_path(&home), [9u8; 32]).unwrap();
+        write_key(&user_key_path(&home), [9u8; 32]);
         let f = doctor_findings(&home);
         assert!(f.iter().any(|x| x.id == "user_key_split" && x.severity == Severity::Warn));
-        std::fs::write(user_key_path(&home), [7u8; 32]).unwrap();
+        write_key(&user_key_path(&home), [7u8; 32]);
         let f = doctor_findings(&home);
         assert!(f.iter().all(|x| x.severity == Severity::Ok), "{f:?}");
+    }
+
+    #[test]
+    fn a_key_readable_beyond_its_owner_is_refused_not_repaired() {
+        let (_t, home) = setup(Some([7u8; 32]));
+        let chain = chain_key_path(&home);
+        std::fs::set_permissions(&chain, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(read_seed(&chain), Err(UserKeyError::LooseMode { mode: 0o644, .. })));
+        assert!(matches!(migrate_user_key(&home, false), Err(UserKeyError::LooseMode { .. })));
+        let mode = std::fs::metadata(&chain).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644, "not chmodded");
+    }
+
+    #[test]
+    fn a_pending_legacy_chain_blocks_generating_a_fresh_key() {
+        let (_t, home) = setup(None);
+        let legacy = home.join(".clawft");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join(clawft_types::runtime_paths::CHAIN_CHECKPOINT_FILE), b"{}").unwrap();
+        let e = resolve_user_key(&home, true).err().unwrap();
+        assert!(matches!(e, UserKeyError::LegacyChainPending { .. }), "{e}");
+        assert!(e.to_string().contains("weaver migrate user-chain"));
+        assert!(!user_key_path(&home).exists());
     }
 }

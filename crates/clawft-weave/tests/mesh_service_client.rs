@@ -25,7 +25,7 @@ use clawft_mesh_local::{ClientConfig, InjectedPeer, node_id_from_pubkey};
 use clawft_types::config::{MeshConfig, MeshServicePolicy};
 use clawft_weave::mesh_local_chain::{ChainQueue, ChainSink, KIND_ANCHOR, KIND_BOUND};
 use clawft_weave::mesh_local_glue::{
-    LinkDeps, Resolved, ServiceEndpoint, ServiceLink, Timings, resolve, spawn,
+    LinkDeps, Resolved, ServiceEndpoint, ServiceLink, Timings, build_endpoint_in, resolve, resolve_with, spawn,
 };
 use clawft_weave::mesh_state::MeshStateCell;
 use ed25519_dalek::SigningKey;
@@ -439,5 +439,150 @@ async fn remote_node_messages_are_forwarded_as_send() {
     // A malformed node id is an error, not a send.
     assert!(h.forwarder.forward("not-a-node", kernel_msg("x")).await.is_err());
     assert_eq!(server.sent().len(), 1);
+    h.shutdown().await;
+}
+
+/// A listener bound then dropped leaves a socket file nobody serves.
+fn stale_socket(path: &Path) {
+    drop(std::os::unix::net::UnixListener::bind(path).unwrap());
+}
+
+#[tokio::test]
+async fn a_refusing_socket_is_retried_then_collapses_loudly() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("mesh.sock");
+    let proto = server_at(&dir.path().join("proto.sock"), |_| {});
+    stale_socket(&sock);
+    let ep = endpoint(&sock, &proto, &dir.path().join("pin"));
+    let t = std::time::Instant::now();
+    let r = resolve_with(
+        &mesh_cfg(MeshServicePolicy::Auto),
+        Ok(Some(ep)),
+        &[Duration::from_millis(60), Duration::from_millis(60)],
+    )
+    .await
+    .unwrap();
+    assert!(matches!(r, Resolved::Collapsed));
+    assert!(t.elapsed() >= Duration::from_millis(120), "both retries were taken");
+    // Under `required` the same situation is a boot failure.
+    let ep = endpoint(&sock, &proto, &dir.path().join("pin"));
+    assert!(resolve_with(&mesh_cfg(MeshServicePolicy::Required), Ok(Some(ep)), &[]).await.is_err());
+}
+
+#[tokio::test]
+async fn a_service_that_comes_up_during_the_retries_is_used() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("mesh.sock");
+    let proto = server_at(&dir.path().join("proto.sock"), |_| {});
+    stale_socket(&sock);
+    let ep = endpoint(&sock, &proto, &dir.path().join("pin"));
+    let late = sock.clone();
+    let starter = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        std::fs::remove_file(&late).unwrap();
+        server_at(&late, |_| {})
+    });
+    let retries = [Duration::from_millis(100); 8];
+    let r = resolve_with(&mesh_cfg(MeshServicePolicy::Auto), Ok(Some(ep)), &retries).await.unwrap();
+    assert!(matches!(r, Resolved::Service(_)));
+    drop(starter.await.unwrap());
+}
+
+#[test]
+fn an_uninspectable_socket_path_is_a_refusal_not_absence() {
+    use std::os::unix::fs::PermissionsExt;
+    if nix::unistd::geteuid().is_root() {
+        return; // root can inspect anything
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let locked = dir.path().join("run");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let mut cfg = mesh_cfg(MeshServicePolicy::Auto);
+    cfg.service_socket = Some(locked.join("mesh.sock").display().to_string());
+    let r = build_endpoint_in(&cfg, dir.path(), "sha", dir.path());
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let e = r.err().expect("EACCES must not read as 'no service'");
+    assert!(e.contains("mesh.sock") && e.contains("group"), "{e}");
+}
+
+#[tokio::test]
+async fn service_json_owned_by_someone_else_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("mesh.sock");
+    let proto = server_at(&dir.path().join("proto.sock"), |_| {});
+    let _l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    // The file is owned by this uid, but the record names another service uid.
+    let record = proto.service_record(nix::unistd::geteuid().as_raw() + 1);
+    std::fs::write(dir.path().join("service.json"), serde_json::to_vec(&record).unwrap()).unwrap();
+    let mut cfg = mesh_cfg(MeshServicePolicy::Auto);
+    cfg.service_socket = Some(sock.display().to_string());
+    let e = build_endpoint_in(&cfg, dir.path(), "sha", dir.path()).err().expect("refused");
+    assert!(e.contains("owned by uid"), "{e}");
+}
+
+#[tokio::test]
+async fn a_pending_legacy_chain_blocks_service_mode_instead_of_minting_a_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("mesh.sock");
+    let proto = server_at(&dir.path().join("proto.sock"), |_| {});
+    let _l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    let me = nix::unistd::geteuid().as_raw();
+    std::fs::write(dir.path().join("service.json"), serde_json::to_vec(&proto.service_record(me)).unwrap())
+        .unwrap();
+    std::fs::create_dir_all(home.path().join(".clawft")).unwrap();
+    std::fs::write(home.path().join(".clawft/chain.json"), b"{}").unwrap();
+    let mut cfg = mesh_cfg(MeshServicePolicy::Auto);
+    cfg.service_socket = Some(sock.display().to_string());
+    let e = build_endpoint_in(&cfg, home.path(), "sha", dir.path()).err().expect("refused");
+    assert!(e.contains("weaver migrate user-chain"), "{e}");
+    assert!(!home.path().join(".weftos/user.key").exists());
+}
+
+struct SlowInbox;
+
+#[async_trait]
+impl LocalDelivery for SlowInbox {
+    async fn deliver(&self, _: &PeerCtx, _: Option<&KScope>, _: KernelMessage) -> KernelResult<()> {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_slow_inbox_does_not_hold_up_verdicts_or_sends() {
+    let dir = tempfile::tempdir().unwrap();
+    let (server, link) = linked(dir.path(), |_| {}).await;
+    let (chain, _) = open_chain();
+    let h = spawn(link, deps(Arc::new(SlowInbox), None, chain, Arc::new(MeshStateCell::new())));
+    let mut m = kernel_msg("x");
+    m.payload = MessagePayload::Text("slow".into());
+    for _ in 0..3 {
+        server.push(Frame::new(Message::Deliver(Deliver {
+            source_node: node_id_from_pubkey(&[8; 32]),
+            source_cert: None,
+            scope: Scope { user_id: user_id(), project_id: None },
+            envelope_id: "e".into(),
+            message: serde_json::to_value(&m).unwrap(),
+        })));
+    }
+    let peer = PeerInfo {
+        node_id: node_id_from_pubkey(&[5; 32]),
+        pubkey: "k".into(),
+        platform: String::new(),
+        capabilities: vec![],
+        genesis_hash: String::new(),
+        chain_seq: 0,
+    };
+    server.push(Frame::with_id(
+        SERVICE_ID_FLAG | 3,
+        Message::VerdictRequest(VerdictRequest { subject: VerdictSubject::PeerAdmit, peer, topic: None }),
+    ));
+    let t = std::time::Instant::now();
+    wait_until("verdict answered while deliveries are stuck", || !server.verdict_replies().is_empty()).await;
+    let remote = node_id_from_pubkey(&[7; 32]);
+    h.forwarder.forward(&remote, kernel_msg(&remote)).await.unwrap();
+    assert!(t.elapsed() < Duration::from_secs(2), "took {:?}", t.elapsed());
     h.shutdown().await;
 }

@@ -402,6 +402,14 @@ impl MeshLocalClient {
         self.events.recv().await
     }
 
+    /// Take the unsolicited-event receiver so another task can drain it while
+    /// requests keep going through `&self`. Afterwards [`next_event`] yields
+    /// `None`.
+    pub fn take_events(&mut self) -> mpsc::Receiver<Frame> {
+        let (_tx, closed) = mpsc::channel(1);
+        std::mem::replace(&mut self.events, closed)
+    }
+
     /// Reply to a service-initiated request (for example `verdict.request`).
     pub async fn reply(&self, id: u64, msg: Message) -> Result<(), ClientError> {
         let mut w = self.writer.lock().await;

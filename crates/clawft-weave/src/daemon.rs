@@ -1163,8 +1163,10 @@ pub async fn run(
     {
         let k = kernel.read().await;
         let pubkey: [u8; 32] = daemon_identity.public_key();
-        k.node_registry()
-            .register(pubkey, Some("daemon".to_string()));
+        // In service mode `pubkey` is the machine's: this process cannot sign
+        // for it, so the entry says it is attested by the service.
+        let label = if daemon_identity.is_service() { "daemon (service-attested)" } else { "daemon" };
+        k.node_registry().register(pubkey, Some(label.to_string()));
         info!(node_id = %daemon_identity.node_id, "daemon node registered");
         k.event_log().info(
             "node",

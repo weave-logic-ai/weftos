@@ -595,6 +595,13 @@ fn print_handshake_summary(h: &clawft_rpc::handshake::Handshake) {
     println!("Protocol:   {}..={}", h.proto.min, h.proto.current);
     if let Some(m) = &h.mesh {
         println!("Mesh:       {}", m.summary());
+        if m.events_dropped.unwrap_or(0) > 0 {
+            println!(
+                "            WARNING: {} mesh chain event(s) dropped ({} pending); the chain is not accepting events",
+                m.events_dropped.unwrap_or(0),
+                m.events_pending.unwrap_or(0)
+            );
+        }
     }
 }
 

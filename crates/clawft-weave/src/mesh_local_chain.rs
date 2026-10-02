@@ -29,6 +29,8 @@ pub trait ChainSink: Send + Sync + 'static {
 pub struct ChainQueue {
     sink: Box<dyn ChainSink>,
     queue: Mutex<VecDeque<(String, Value)>>,
+    /// Held while events go to the sink, so the queue lock is not.
+    flushing: Mutex<()>,
     dropped: std::sync::atomic::AtomicU64,
 }
 
@@ -38,6 +40,7 @@ impl ChainQueue {
         Self {
             sink: Box::new(sink),
             queue: Mutex::new(VecDeque::new()),
+            flushing: Mutex::new(()),
             dropped: std::sync::atomic::AtomicU64::new(0),
         }
     }
@@ -48,7 +51,12 @@ impl ChainQueue {
             let mut q = self.queue.lock().unwrap_or_else(|e| e.into_inner());
             if q.len() >= MAX_QUEUED {
                 q.pop_front();
-                self.dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if self.dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                    tracing::warn!(
+                        max = MAX_QUEUED,
+                        "mesh chain event queue is full: the chain is not accepting events; dropping the oldest"
+                    );
+                }
             }
             q.push_back((kind.to_owned(), payload));
         }
@@ -68,15 +76,19 @@ impl ChainQueue {
     /// Hand queued events to the sink in order, stopping at the first
     /// refusal. Returns how many are still queued.
     pub fn flush(&self) -> usize {
-        let mut q = self.queue.lock().unwrap_or_else(|e| e.into_inner());
-        while let Some((kind, payload)) = q.front() {
-            if let Err(why) = self.sink.append(kind, payload.clone()) {
-                tracing::debug!(%kind, %why, queued = q.len(), "chain event stays queued");
-                break;
+        // One flusher at a time; the queue lock is taken only to peek and pop,
+        // never across the sink call.
+        let Ok(_flushing) = self.flushing.try_lock() else { return self.pending() };
+        loop {
+            let front = self.queue.lock().unwrap_or_else(|e| e.into_inner()).front().cloned();
+            let Some((kind, payload)) = front else { return 0 };
+            if let Err(why) = self.sink.append(&kind, payload) {
+                let queued = self.pending();
+                tracing::debug!(%kind, %why, queued, "chain event stays queued");
+                return queued;
             }
-            q.pop_front();
+            self.queue.lock().unwrap_or_else(|e| e.into_inner()).pop_front();
         }
-        q.len()
     }
 
     /// Events waiting for the sink.

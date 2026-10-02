@@ -58,11 +58,20 @@ pub async fn prepare(kernel_config: &KernelConfig, runtime_dir: &Path) -> anyhow
         .map_err(|why| anyhow::anyhow!("mesh: {why}"))?;
     match resolved {
         Resolved::Service(link) => {
+            // Roles and mesh mode in the handshake are right from here on.
+            link.publish_state(mesh_state::global());
             let identity = link.identity().map_err(|e| anyhow::anyhow!("mesh service identity: {e}"))?;
             Ok(MeshBoot { identity, link: Some(link) })
         }
         other => {
             mesh_local_glue::record_plain_mode(mesh_state::global(), &other);
+            if matches!(other, Resolved::Collapsed) && cfg.service == MeshServicePolicy::Auto {
+                // Booted without a service: keep watching, never switch live.
+                mesh_local_glue::watch_for_service(
+                    clawft_kernel::mesh_mode::service_socket(&cfg),
+                    std::time::Duration::from_secs(30),
+                );
+            }
             Ok(MeshBoot { identity: local()?, link: None })
         }
     }

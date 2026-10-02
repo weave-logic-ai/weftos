@@ -971,6 +971,21 @@ impl<P: Platform> Kernel<P> {
                     let key_path = clawft_types::config::chain_paths::chain_key_for_checkpoint(
                         std::path::Path::new(ckpt_path),
                     );
+                    // The user key is held to the same standard as the mesh
+                    // client's reader: a symlink, a non-regular file or a key
+                    // readable beyond its owner is refused, not followed.
+                    #[cfg(unix)]
+                    if key_path.file_name().is_some_and(|n| n == "user.key") {
+                        use std::os::unix::fs::PermissionsExt;
+                        if let Ok(m) = std::fs::symlink_metadata(&key_path) {
+                            if !m.file_type().is_file() || m.permissions().mode() & 0o077 != 0 {
+                                return Err(KernelError::Boot(format!(
+                                    "{} must be a regular file readable only by its owner (chmod 600); refusing to sign the chain with it",
+                                    key_path.display()
+                                )));
+                            }
+                        }
+                    }
                     match crate::chain::ChainManager::load_or_create_key(&key_path) {
                         Ok(key) => {
                             boot_log.push(BootEvent::info(
@@ -2823,6 +2838,52 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains(&addr), "error should name the address: {msg}");
         assert!(msg.contains("another kernel"), "error should name the cause: {msg}");
+    }
+
+    /// P3-U: a symlinked or loose `~/.weftos/user.key` is refused as the chain
+    /// signing key instead of being followed.
+    #[cfg(all(feature = "native", feature = "exochain", unix))]
+    #[tokio::test]
+    async fn user_key_symlink_or_loose_mode_is_refused_at_boot() {
+        use clawft_types::config::ChainConfig;
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let weftos = home.path().join(".weftos");
+        let chain_dir = weftos.join("chain");
+        std::fs::create_dir_all(&chain_dir).unwrap();
+        let mk = |ckpt: &std::path::Path| {
+            let mut kc = test_kernel_config();
+            kc.chain = Some(ChainConfig {
+                enabled: true,
+                checkpoint_path: Some(ckpt.display().to_string()),
+                ..ChainConfig::default()
+            });
+            kc
+        };
+        let ckpt = chain_dir.join("chain.json");
+
+        // Loose permissions.
+        let user_key = weftos.join("user.key");
+        std::fs::write(&user_key, [3u8; 32]).unwrap();
+        std::fs::set_permissions(&user_key, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let err = Kernel::boot(test_config(), mk(&ckpt), Arc::new(NativePlatform::new()))
+            .await
+            .err()
+            .expect("loose user.key must refuse boot");
+        assert!(err.to_string().contains("user.key"), "{err}");
+
+        // A symlink, even to a private file.
+        std::fs::remove_file(&user_key).unwrap();
+        let target = home.path().join("elsewhere.key");
+        std::fs::write(&target, [3u8; 32]).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink(&target, &user_key).unwrap();
+        let err = Kernel::boot(test_config(), mk(&ckpt), Arc::new(NativePlatform::new()))
+            .await
+            .err()
+            .expect("symlinked user.key must refuse boot");
+        assert!(err.to_string().contains("user.key"), "{err}");
     }
 
     /// P3-U: service mode takes the service's node id, binds no listener (the
