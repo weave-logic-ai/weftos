@@ -1,0 +1,16 @@
+[package]
+name = "weftos-bridge-send"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "weft-bridge-send: on a WeftOS node (Pi 5, Orange Pi), poll one of our cog's export and forward readings to the bridge cog on a Cognitum Seed (COG-007)"
+
+[[bin]]
+name = "weft-bridge-send"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = { workspace = true }

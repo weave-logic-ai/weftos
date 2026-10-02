@@ -1,7 +1,7 @@
 # ADR-103: The Weave topology: roles, project kernels, instances and environments
 
 - **Status**: Accepted (2026-09-30; decisions D1–D14 set by the owner 2026-09-30; implementation tracked on cards weave-topology-P0..P4, leaf track, cog-boundary audit)
-- **Updated**: 2026-09-30. Phase 0 implemented (integrate/p0, Fable phase review `docs/research/daemon-topology/phase-0-review.md`). D11 implemented. Amendments A1–A5 below record what Phase 0 added beyond the original text.
+- **Updated**: 2026-09-30. Phase 0 implemented (integrate/p0, Fable phase review `docs/research/daemon-topology/phase-0-review.md`). D11 implemented. Amendments A1–A6 below record what Phase 0 added beyond the original text.
 - **Date**: 2026-09-30
 - **Deciders**: Owner / platform
 - **Depends-On**: ADR-022 (mandatory chain audit), ADR-025 (Ed25519 node identity), ADR-033 (three-branch governance), ADR-057 (substrate read ACLs), ADR-092 (rule distribution), ADR-094 (spawn permission), ADR-098 (process-compose), ADR-099 (governed workload placement), ADR-101 (inference kind), ADR-100 (cog kind)
@@ -72,6 +72,11 @@ Staging-as-a-gate, CI/CD, sensor fusion and similar purpose-specific behavior ar
 - **A3 (voice principal).** Voice commands dispatch through the authorization chokepoint as an internal principal with `read, chat, write`, never `admin`. Whether cron mutations stay reachable by voice is decided in Phase 1 package G.
 - **A4 (D14 scope).** Phase 0 delivered the "prints what it tried, no silent fallback" half of D14. Manifest resolution and the `kernel.status` handshake are Phase 1 packages A and D.
 - **A5 (gateway bind).** The gateway's `0.0.0.0` default is changed to loopback with ADR-102 card 03; LAN exposure is an explicit choice.
+
+- **A6 (decisions of 2026-10-01, owner accepted the recommendations).**
+  - *D12 default:* `read_only` applies only to the `--profile user` daemon; every other root keeps `allow_all` until migrated; an explicit `kernel.governance.outside_project` always wins. Voice is inside the scope but is denied cron mutations. Denial `error_kind` is `project_required`.
+  - *Phase 2:* one project key (node = chain = anchor key); invalid overlay at boot refuses to start; `idle_stop_secs` 1800 and never while agents, workloads or streams are active; children survive a user-daemon restart by adoption (`kernel stop` cascades unless `--keep-children`); mesh delivery to children is register-only until Phase 3; project chains start fresh with a parent-head link; existing projects opt in via `weaver project migrate-kernel`, default flips in Phase 3.
+  - *Phase 3:* uid binding is TOFU on single-human-user machines and admin-approved otherwise; admission runs in observe mode for one release, then enforce after the Pi and ESP32 are redeployed; a designated `cluster_owner_uid` answers cluster verdicts, fail-closed, with a 10-minute grace for already-admitted peers; the owner's Mac adopts its existing `node.key` as the box key (new machines generate one); `user.key` keeps the migrated `chain.key` seed; the service runs as `weaver mesh serve` from a root-owned path; the local socket is 0666 with peer-credential authorization; service accounts `_weftos` (macOS) and `weftos` (Linux); user certificates last 24 h and renew at 12 h; Windows is design-only in Phase 3. On macOS a non-root LaunchDaemon writes `/var/run/weftos` only when its user is in the directory's group, so the installer creates the directory group-owned by the service group and adds the service account to it.
 
 ## Consequences
 
