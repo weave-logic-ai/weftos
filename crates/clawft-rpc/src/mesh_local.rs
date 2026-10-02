@@ -64,6 +64,35 @@ pub struct ChallengeRequest {
 pub struct ChallengeReply {
     /// Single-use nonce, hex.
     pub nonce: String,
+    /// `key_id` of the user key the child's proof of possession names
+    /// (`pop_sign` binds it). Informational: the child takes the user key
+    /// from its own `spawn.json`, never from this reply.
+    #[serde(default)]
+    pub user_key_id: String,
+}
+
+/// Domain tag of the user daemon's acknowledgement signature.
+pub const ACK_DOMAIN: &str = "weftos-mesh-local-ack-v1\n";
+
+/// Bytes the user key signs into [`RegisterAck::parent_sig`]:
+/// `weftos-mesh-local-ack-v1\n<project_id>\n<session>\n<nonce>\n<client_nonce>`.
+///
+/// `client_nonce` is fresh randomness the child picks per attempt
+/// ([`RegisterRequest::client_nonce`]), so a socket squatting at the parent's
+/// path cannot replay a captured acknowledgement: it would have to get the
+/// user key to sign over a value it chose after the child did.
+pub fn ack_signed_bytes(project_id: &str, session: &str, nonce: &str, client_nonce: &str) -> Vec<u8> {
+    format!("{ACK_DOMAIN}{project_id}\n{session}\n{nonce}\n{client_nonce}").into_bytes()
+}
+
+/// The user-chain head the user daemon had when it accepted a registration;
+/// a child's first boot records it in `project.genesis`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParentHead {
+    /// User-chain sequence number.
+    pub user_seq: u64,
+    /// Hash of the user-chain head event, hex.
+    pub user_event_hash: String,
 }
 
 /// The signed nonce inside a [`RegisterRequest`].
@@ -108,8 +137,17 @@ pub struct RegisterRequest {
     /// Capabilities the child offers (`anchor`, `subscribe`).
     #[serde(default)]
     pub features: Vec<String>,
-    /// The spawn nonce from `spawn.json`; absent for a child the supervisor
-    /// did not start (refused in Phase 2).
+    /// Fresh child-chosen randomness (32 hex) the acknowledgement signature
+    /// covers; a child refuses an acknowledgement that does not.
+    #[serde(default)]
+    pub client_nonce: String,
+    /// Hex SHA-256 of the canonical project root (`root_sha256` of the path
+    /// in `spawn.json`); the user daemon compares it with the manifest.
+    #[serde(default)]
+    pub root_sha256: String,
+    /// The spawn nonce from `spawn.json`; absent on a re-register of a
+    /// session the user daemon already knows by pid, and for a child the
+    /// supervisor did not start (refused in Phase 2).
     #[serde(default)]
     pub spawn_nonce: Option<String>,
     /// Proof of possession of the project key.
@@ -136,6 +174,13 @@ pub struct RegisterAck {
     /// Machine certificate (Phase 3); always `None` in Phase 2.
     #[serde(default)]
     pub machine_cert: Option<serde_json::Value>,
+    /// The user-chain head at registration (for `project.genesis`).
+    #[serde(default)]
+    pub parent_head: Option<ParentHead>,
+    /// User-key signature (hex) over [`ack_signed_bytes`]. A child refuses an
+    /// acknowledgement without a valid one.
+    #[serde(default)]
+    pub parent_sig: Option<String>,
 }
 
 /// What a child is busy with (used for idle stop).
@@ -208,6 +253,8 @@ mod tests {
             pid: 4242,
             socket: "/Users/x/.weftos/run/01JB8Z3Q0V6X9KQ4M2N7T5R1WD/kernel.sock".into(),
             features: vec!["anchor".into(), "subscribe".into()],
+            client_nonce: "dd".repeat(16),
+            root_sha256: "ee".repeat(32),
             spawn_nonce: Some("n0".into()),
             nonce_reply: NonceReply {
                 nonce: "00ff".into(),
@@ -249,6 +296,8 @@ mod tests {
             proto: ProtoRange { current: 1, min: 1 },
             heartbeat_secs: 15,
             machine_cert: None,
+            parent_head: Some(ParentHead { user_seq: 3, user_event_hash: "aa".into() }),
+            parent_sig: Some("bb".repeat(64)),
         };
         let back: RegisterAck = serde_json::from_str(&serde_json::to_string(&ack).unwrap()).unwrap();
         assert_eq!(back, ack);
@@ -261,6 +310,20 @@ mod tests {
         assert!(Busy::default().is_idle());
         let bare: HeartbeatRequest = serde_json::from_str(r#"{"session":"s"}"#).unwrap();
         assert_eq!(bare.activity, Activity::default());
+    }
+
+    #[test]
+    fn ack_bytes_bind_every_field() {
+        let b = ack_signed_bytes("p", "s", "n", "sn");
+        assert_eq!(b, b"weftos-mesh-local-ack-v1\np\ns\nn\nsn".to_vec());
+        for other in [
+            ack_signed_bytes("q", "s", "n", "sn"),
+            ack_signed_bytes("p", "t", "n", "sn"),
+            ack_signed_bytes("p", "s", "m", "sn"),
+            ack_signed_bytes("p", "s", "n", "tn"),
+        ] {
+            assert_ne!(b, other);
+        }
     }
 
     #[test]

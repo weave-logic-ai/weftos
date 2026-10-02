@@ -22,6 +22,7 @@ mod error;
 mod ids;
 mod schema;
 mod seed;
+pub mod spawn;
 mod store;
 
 pub use adopt::{adopt_or_init, reinit_fork};
@@ -33,6 +34,7 @@ pub use schema::{
     LegacySection, ProjectManifest, ProjectState, ProjectToml,
     ProjectTomlPresence, SCHEMA_VERSION, SeedSection, ServeSection, ServeVia, WeaveSection,
 };
+pub use spawn::{SPAWN_TTL_SECS, SpawnError, SpawnFile};
 pub use seed::{SeedReport, seed_from_registry, seed_from_workspaces};
 pub use store::{
     ManifestListing, PROJECT_DIR, PROJECT_TOML, find_by_id, find_by_root, find_project_toml,

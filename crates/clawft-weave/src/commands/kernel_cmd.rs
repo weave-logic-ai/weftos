@@ -138,7 +138,7 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
             .as_deref(),
     )
         .map_err(|e| anyhow::anyhow!(e))?
-        .is_some();
+        .is_some_and(|p| p == crate::user_daemon::PROFILE_USER);
     #[cfg(any(unix, windows))]
     if user_profile {
         // Before anything resolves a socket, pid or chain path, and before
