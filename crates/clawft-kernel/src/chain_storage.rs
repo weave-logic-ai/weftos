@@ -259,6 +259,7 @@ fn choose_default_chain_inner(
         };
         return ChainChoice {
             legacy_in_use: true,
+            user_chain_in_use: false,
             ..plain(resolved, None, refusal)
         };
     }
@@ -316,6 +317,7 @@ fn choose_user_chain(
         return ChainChoice {
             checkpoint: paths.chain_checkpoint(),
             legacy_in_use: false,
+            user_chain_in_use: false,
             warning: None,
             refusal: None,
         };
@@ -333,6 +335,7 @@ fn choose_user_chain(
             )),
             checkpoint: user,
             legacy_in_use: true,
+            user_chain_in_use: false,
             warning: None,
         };
     }
@@ -348,6 +351,7 @@ fn choose_user_chain(
         return ChainChoice {
             checkpoint: user,
             legacy_in_use: true,
+            user_chain_in_use: false,
             warning,
             refusal: None,
         };
@@ -363,6 +367,7 @@ fn choose_user_chain(
         )),
         checkpoint: legacy,
         legacy_in_use: true,
+        user_chain_in_use: false,
     }
 }
 
@@ -718,11 +723,12 @@ mod tests {
         std::fs::create_dir_all(user.parent().unwrap()).unwrap();
         std::fs::write(&user, "{}").unwrap();
         let legacy = home.join(".clawft/chain.json");
-        // Project root falling back to legacy, and a legacy-rooted kernel.
-        for paths in [
-            RuntimePaths::resolve_with(None, Some(&proj), Some(&home)),
-            RuntimePaths::resolve_with(None, Some(&home), Some(&home)),
-        ] {
+        // A project with no chain of its own uses the user chain (rule 2b).
+        let pp = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
+        let c = choose_default_chain(&pp, Some(&home), false, false, far_future());
+        assert!(c.refusal.is_none() && c.user_chain_in_use && c.checkpoint == user);
+        // A legacy-rooted kernel would fall back to the legacy chain: refused.
+        for paths in [RuntimePaths::resolve_with(None, Some(&home), Some(&home))] {
             let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
             let r = c.refusal.expect("refused");
             assert!(r.contains("--profile user") && r.contains("--adopt-legacy-chain"), "{r}");
