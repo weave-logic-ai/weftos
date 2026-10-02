@@ -157,6 +157,34 @@ fn migrated_refusal(dir: &Path, adopt_legacy: bool) -> Option<String> {
     ))
 }
 
+/// Explicit `kernel.chain.checkpoint_path` guard (Phase 1 review S5): an
+/// explicit path skips every default-chain rule, so a config that pins the
+/// legacy chain would keep appending to it after `weaver migrate user-chain`.
+/// Refuse when the path's directory carries the migration marker, unless
+/// `--adopt-legacy-chain` was passed (loud WARN, as for the default path).
+fn explicit_path_refusal(checkpoint: &Path, adopt_legacy: bool) -> Option<String> {
+    let dir = checkpoint.parent()?;
+    let (marker, dest) = legacy_migration_marker(dir)?;
+    if adopt_legacy {
+        tracing::warn!(
+            marker = %marker.display(),
+            "--adopt-legacy-chain overrides a migration marker for an explicit \
+             kernel.chain.checkpoint_path: this kernel forks history from the migrated chain"
+        );
+        return None;
+    }
+    Some(format!(
+        "kernel.chain.checkpoint_path ({}) points into {}, whose chain was migrated to {} \
+         (see {}); booting on it would fork history. Remove kernel.chain.checkpoint_path from \
+         the config (check ~/.clawft/config.json), point it at the migrated chain, or pass \
+         --adopt-legacy-chain to knowingly continue on the legacy copy",
+        checkpoint.display(),
+        dir.display(),
+        dest.as_deref().unwrap_or("~/.weftos/chain"),
+        marker.display()
+    ))
+}
+
 /// Choose the default chain for `paths` (see module docs, rule 2 and 3).
 ///
 /// Once a user chain exists at `~/.weftos/chain` (the result of
@@ -380,6 +408,11 @@ pub fn pin_chain_storage_noted(kernel_config: &mut KernelConfig) -> PinOutcome {
         warning = w;
         refusal = r;
         legacy_in_use = legacy;
+    } else if let Some(p) = &chain.checkpoint_path {
+        refusal = explicit_path_refusal(
+            Path::new(p),
+            ADOPT_LEGACY.load(std::sync::atomic::Ordering::SeqCst),
+        );
     }
     if let (Some(anchor), Some(ckpt)) = (chain.external_anchor.as_mut(), &chain.checkpoint_path)
         && anchor.ledger_path.is_none()
@@ -928,5 +961,33 @@ mod tests {
             k.chain.unwrap().checkpoint_path.as_deref(),
             Some(p.to_string_lossy().as_ref())
         );
+    }
+
+    #[test]
+    fn explicit_checkpoint_path_into_a_migrated_dir_is_refused() {
+        let t = tempfile::tempdir().unwrap();
+        let legacy = t.path().join(".clawft");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("chain.json"), "{}").unwrap();
+        std::fs::write(
+            legacy.join(clawft_types::runtime_paths::LEGACY_MIGRATED_MARKER),
+            "migrated-to: /u/.weftos/chain\n",
+        )
+        .unwrap();
+        let ckpt = legacy.join("chain.json");
+
+        let mut cfg = KernelConfig::default();
+        let mut chain = ChainConfig::default();
+        chain.checkpoint_path = Some(ckpt.to_string_lossy().into_owned());
+        cfg.chain = Some(chain);
+        let out = pin_chain_storage_noted(&mut cfg);
+        let msg = out.refusal.expect("refused");
+        assert!(msg.contains("kernel.chain.checkpoint_path"), "{msg}");
+        assert!(msg.contains("--adopt-legacy-chain"), "{msg}");
+
+        // The override passes, and an unmarked directory is never refused.
+        assert!(explicit_path_refusal(&ckpt, true).is_none());
+        let other = t.path().join("elsewhere").join("chain.json");
+        assert!(explicit_path_refusal(&other, false).is_none());
     }
 }
