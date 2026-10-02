@@ -66,6 +66,8 @@ members = [
     # COG-008: off-device WeaveLogic cog repository tooling (sign/verify/install,
     # signed-only Ed25519 trust model).
     "crates/weftos-cog-repo",
+    # COG-009: unified cog marketplace catalog (WeaveLogic signed + Cognitum mirror).
+    "crates/weftos-cog-market",
     "crates/clawft-substrate",
     "crates/clawft-surface",
     "crates/clawft-canon",

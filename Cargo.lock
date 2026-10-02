@@ -10703,6 +10703,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "weftos-cog-market"
+version = "0.8.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "weftos-cog-repo",
+]
+
+[[package]]
 name = "weftos-cog-repo"
 version = "0.8.1"
 dependencies = [

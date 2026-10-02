@@ -11,11 +11,20 @@ description = "WeaveLogic cog repository tooling (COG-008): sign cog binaries, b
 [[bin]]
 name = "weft-cog-repo"
 path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+# Default build (native) = the CLI with signing (pkcs8/pem) + network fetch (reqwest).
+default = ["cli"]
+# `cli` drags in the native-only deps. Leaving it off (e.g. a wasm consumer of the lib)
+# keeps just the pure registry types + Ed25519/sha256 verification, which build for wasm32.
+cli = ["dep:reqwest", "ed25519-dalek/pkcs8", "ed25519-dalek/pem"]
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.10"
 hex = "0.4"
-ed25519-dalek = { version = "2", default-features = false, features = ["std", "pkcs8", "pem"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+# Base features (std) cover verify_artifact; pkcs8/pem (for the signer) come in via `cli`.
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
