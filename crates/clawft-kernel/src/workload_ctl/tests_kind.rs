@@ -51,7 +51,7 @@ fn cog_round_trip_through_the_registry_matches_direct_calls() {
     let direct = VerifiedWorkload::from_package(&verified, &DirSource::new(&pkg)).unwrap();
     let direct_spec = super::cog_workload_spec(&direct).unwrap();
     let kind = reg.require(KIND_COG).unwrap();
-    let via = kind.load(&pkg, &anchors).unwrap();
+    let via = kind.load(&pkg, &anchors, &reg).unwrap();
     assert_eq!(
         (&via.id, &via.kind, &via.version),
         (&direct.id, &direct.kind, &direct.version)
@@ -99,4 +99,110 @@ async fn a_registry_without_cog_refuses_cog_packages() {
     let plane = plane.with_kind_registry(KindRegistry::new());
     let err = plane.place(&order(&pkg)).await.unwrap_err();
     assert!(matches!(err, PlaneError::UnknownKind(_)));
+}
+
+/// Test-only kind: a cog-shaped body under the id `echo`.
+struct Echo;
+
+impl WorkloadKind for Echo {
+    fn id(&self) -> &'static str {
+        "echo"
+    }
+    fn validate(&self, env: &ManifestEnvelope) -> Result<(), crate::workload_pkg::ManifestError> {
+        env.cog_shaped_body().map(|_| ())
+    }
+    fn load(
+        &self,
+        dir: &std::path::Path,
+        anchors: &crate::workload_pkg::TrustAnchors,
+        kinds: &KindRegistry,
+    ) -> Result<VerifiedWorkload, PlaneError> {
+        crate::workload_kind::load_cog_shaped(self.id(), dir, anchors, kinds)
+    }
+    fn spec(
+        &self,
+        w: &VerifiedWorkload,
+    ) -> Result<clawft_types::placement::engine::WorkloadSpec, String> {
+        super::cog_workload_spec(w)
+    }
+    fn adapters(&self) -> &'static [&'static str] {
+        &["native"]
+    }
+}
+
+/// A signed package re-labelled as kind `echo`.
+fn echo_package(root: &std::path::Path) -> std::path::PathBuf {
+    use crate::workload_pkg::{key_id_for, sign_envelope, write_manifest};
+    let pkg = package(root, "kind-echo", "#!/bin/sh\nexit 0\n", &[arch()]);
+    let mut env =
+        ManifestEnvelope::from_bytes(&std::fs::read(pkg.join(MANIFEST_FILE)).unwrap()).unwrap();
+    env.kind = "echo".into();
+    env.signatures.clear();
+    let k = signer();
+    sign_envelope(&mut env, &k, &key_id_for(&k.verifying_key().to_bytes())).unwrap();
+    write_manifest(&pkg, &env).unwrap();
+    pkg
+}
+
+#[test]
+fn a_registered_echo_kind_prepares_and_seeds_through_the_plane() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = echo_package(tmp.path());
+    let mut reg = KindRegistry::builtin();
+    reg.register(Arc::new(Echo)).unwrap();
+    let (plane, _c) = controller(
+        &SigningKey::from_bytes(&[43; 32]),
+        Arc::new(MeshConnector::new(false)),
+    );
+    let plane = plane.with_kind_registry(reg);
+    let (w, spec, manifest_hash) = plane.prepare(&order(&pkg)).unwrap();
+    assert_eq!((w.kind.as_str(), spec.kind.as_str()), ("echo", "echo"));
+    assert_eq!(manifest_hash.len(), 64);
+}
+
+#[test]
+fn echo_is_refused_by_the_default_registry_before_seeding() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = echo_package(tmp.path());
+    let (plane, _c) = controller(
+        &SigningKey::from_bytes(&[44; 32]),
+        Arc::new(MeshConnector::new(false)),
+    );
+    let err = plane.prepare(&order(&pkg)).unwrap_err();
+    // UnknownKind, not the Package error seeding or loading would give.
+    assert!(matches!(err, PlaneError::UnknownKind(_)), "{err:?}");
+    // The default seeding path refuses it too.
+    assert!(plane.exchange.seed_package_dir(&pkg, &anchors()).is_err());
+}
+
+#[test]
+fn a_kind_refuses_a_manifest_that_verifies_as_another_kind() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = echo_package(tmp.path());
+    let mut reg = KindRegistry::builtin();
+    reg.register(Arc::new(Echo)).unwrap();
+    // The cog kind loading an echo package: the verified kind differs.
+    let err = CogKind.load(&pkg, &anchors(), &reg).unwrap_err();
+    assert!(
+        matches!(&err, PlaneError::Package(m) if m.contains("is not \"cog\"")),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn project_sources_are_refused_by_signed() {
+    use crate::workload_runtime::{ProjectPayload, WorkloadSource};
+    let w = VerifiedWorkload {
+        kind: "project".into(),
+        id: "p".into(),
+        version: "1".into(),
+        source: WorkloadSource::Project(ProjectPayload {
+            project_id: "p".into(),
+            key_id: "k".into(),
+            cert_serial: 1,
+            user_key_id: "u".into(),
+            policy_hash: "00".into(),
+        }),
+    };
+    assert!(w.signed("native").is_err());
 }

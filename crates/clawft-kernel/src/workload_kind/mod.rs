@@ -31,8 +31,15 @@ mod cog;
 mod tests;
 
 pub use cog::CogKind;
+#[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
+pub use cog::load_cog_shaped;
 
-/// No kind is registered under this id.
+/// Longest kind id accepted from a manifest (and the most unauthenticated
+/// kind text ever echoed into an error or chain event).
+pub const MAX_KIND_LEN: usize = 32;
+
+/// No kind is registered under this id (the id is truncated to
+/// [`MAX_KIND_LEN`] characters).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("unknown workload kind {0:?}")]
 pub struct UnknownKind(pub String);
@@ -52,12 +59,15 @@ pub trait WorkloadKind: Send + Sync {
     fn validate(&self, envelope: &ManifestEnvelope) -> Result<(), ManifestError>;
 
     #[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
-    /// Verify the signed package in `package_dir` against `anchors` and
-    /// load it as a runnable workload.
+    /// Verify the signed package in `package_dir` against `anchors` (with
+    /// `kinds` as the registry the manifest is checked against) and load it
+    /// as a runnable workload. Must refuse a manifest whose kind is not
+    /// [`id`](Self::id).
     fn load(
         &self,
         package_dir: &Path,
         anchors: &TrustAnchors,
+        kinds: &KindRegistry,
     ) -> Result<VerifiedWorkload, PlaneError>;
 
     #[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
@@ -107,7 +117,8 @@ impl KindRegistry {
 
     /// Like [`get`](Self::get) with a structured error for an unknown id.
     pub fn require(&self, id: &str) -> Result<&Arc<dyn WorkloadKind>, UnknownKind> {
-        self.get(id).ok_or_else(|| UnknownKind(id.to_string()))
+        self.get(id)
+            .ok_or_else(|| UnknownKind(id.chars().take(MAX_KIND_LEN).collect()))
     }
 
     /// Registered ids in order.
@@ -132,14 +143,22 @@ pub fn validate_envelope(
 }
 
 /// The `kind` a package directory's manifest declares, if the manifest is
-/// readable and parses far enough to say. `None` leaves the failure to
-/// package verification, which reports it precisely.
+/// a bounded regular file that parses far enough to say and the kind is a
+/// valid token of at most [`MAX_KIND_LEN`] characters. `None` leaves the
+/// failure to package verification, which reports it precisely. The result
+/// is unauthenticated: it only selects which registered kind verifies the
+/// package, and that kind re-checks the verified envelope.
 pub fn peek_manifest_kind(package_dir: &Path) -> Option<String> {
+    use crate::workload_pkg::manifest::valid_token;
+    use crate::workload_pkg::verify::read_bounded;
     use crate::workload_pkg::{MANIFEST_FILE, MAX_MANIFEST_BYTES};
-    let path = package_dir.join(MANIFEST_FILE);
-    if std::fs::metadata(&path).ok()?.len() > MAX_MANIFEST_BYTES as u64 {
-        return None;
-    }
-    let doc: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    doc.get("kind")?.as_str().map(str::to_string)
+    let bytes = read_bounded(
+        &package_dir.join(MANIFEST_FILE),
+        MANIFEST_FILE,
+        MAX_MANIFEST_BYTES as u64,
+    )
+    .ok()?;
+    let doc: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let kind = doc.get("kind")?.as_str()?;
+    valid_token(kind, MAX_KIND_LEN).then(|| kind.to_string())
 }

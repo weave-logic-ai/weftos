@@ -16,7 +16,12 @@ impl WorkloadKind for Echo {
         Ok(())
     }
     #[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
-    fn load(&self, _: &Path, _: &TrustAnchors) -> Result<VerifiedWorkload, PlaneError> {
+    fn load(
+        &self,
+        _: &Path,
+        _: &TrustAnchors,
+        _: &KindRegistry,
+    ) -> Result<VerifiedWorkload, PlaneError> {
         Err(PlaneError::Package("echo has no package".into()))
     }
     #[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
@@ -94,4 +99,55 @@ fn peek_reads_the_declared_kind() {
     )
     .unwrap();
     assert_eq!(peek_manifest_kind(dir.path()), None);
+}
+
+fn peek_in(manifest: &[u8]) -> Option<String> {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(crate::workload_pkg::MANIFEST_FILE),
+        manifest,
+    )
+    .unwrap();
+    peek_manifest_kind(dir.path())
+}
+
+#[test]
+fn peek_rejects_non_string_and_overlong_or_odd_kinds() {
+    assert_eq!(peek_in(br#"{"kind":7}"#), None);
+    assert_eq!(peek_in(br#"{"kind":null}"#), None);
+    let long = format!(r#"{{"kind":"{}"}}"#, "a".repeat(MAX_KIND_LEN + 1));
+    assert_eq!(peek_in(long.as_bytes()), None);
+    let ok = format!(r#"{{"kind":"{}"}}"#, "a".repeat(MAX_KIND_LEN));
+    assert!(peek_in(ok.as_bytes()).is_some());
+    assert_eq!(peek_in(br#"{"kind":"has space"}"#), None);
+    assert_eq!(peek_in(br#"{"kind":""}"#), None);
+}
+
+#[test]
+fn peek_refuses_oversized_symlinked_and_fifo_manifests() {
+    use crate::workload_pkg::{MANIFEST_FILE, MAX_MANIFEST_BYTES};
+    let dir = tempfile::tempdir().unwrap();
+    let m = dir.path().join(MANIFEST_FILE);
+    let pad = " ".repeat(MAX_MANIFEST_BYTES + 1);
+    std::fs::write(&m, format!(r#"{{"kind":"cog"}}{pad}"#)).unwrap();
+    assert_eq!(peek_manifest_kind(dir.path()), None);
+
+    std::fs::remove_file(&m).unwrap();
+    let real = dir.path().join("real.json");
+    std::fs::write(&real, r#"{"kind":"cog"}"#).unwrap();
+    std::os::unix::fs::symlink(&real, &m).unwrap();
+    assert_eq!(peek_manifest_kind(dir.path()), None);
+
+    std::fs::remove_file(&m).unwrap();
+    let c = std::ffi::CString::new(m.to_str().unwrap()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    // Must return immediately rather than block opening the FIFO.
+    assert_eq!(peek_manifest_kind(dir.path()), None);
+}
+
+#[test]
+fn unknown_kind_text_is_truncated() {
+    let r = KindRegistry::builtin();
+    let e = r.require(&"x".repeat(500)).err().unwrap();
+    assert_eq!(e.0.len(), MAX_KIND_LEN);
 }

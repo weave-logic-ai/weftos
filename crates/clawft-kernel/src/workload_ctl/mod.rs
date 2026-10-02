@@ -28,6 +28,7 @@ pub mod msg;
 pub mod plane;
 pub mod plane_peers;
 pub mod plane_place;
+mod plane_prepare;
 mod plane_reconcile;
 pub mod plane_seed;
 mod plane_state;

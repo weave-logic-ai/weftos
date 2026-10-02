@@ -7,7 +7,7 @@ use std::path::Path;
 #[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
 use crate::workload_ctl::{PlaneError, cog_workload_spec};
 #[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
-use crate::workload_pkg::{DirSource, TrustAnchors, VerifyPolicy, verify_dir};
+use crate::workload_pkg::{DirSource, TrustAnchors, VerifyPolicy, verify_dir_in};
 use crate::workload_pkg::{ManifestEnvelope, ManifestError};
 #[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
 use crate::workload_runtime::VerifiedWorkload;
@@ -15,6 +15,8 @@ use crate::workload_runtime::VerifiedWorkload;
 use clawft_types::placement::engine::WorkloadSpec;
 
 use super::WorkloadKind;
+#[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
+use super::{KindRegistry, MAX_KIND_LEN};
 
 /// Native, container and Seed-hosted cog packages.
 #[derive(Debug, Clone, Copy, Default)]
@@ -34,11 +36,9 @@ impl WorkloadKind for CogKind {
         &self,
         package_dir: &Path,
         anchors: &TrustAnchors,
+        kinds: &KindRegistry,
     ) -> Result<VerifiedWorkload, PlaneError> {
-        let verified = verify_dir(package_dir, anchors, &VerifyPolicy::default())
-            .map_err(|e| PlaneError::Package(e.to_string()))?;
-        VerifiedWorkload::from_package(&verified, &DirSource::new(package_dir))
-            .map_err(|e| PlaneError::Package(e.to_string()))
+        load_cog_shaped(self.id(), package_dir, anchors, kinds)
     }
 
     #[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
@@ -50,4 +50,31 @@ impl WorkloadKind for CogKind {
     fn adapters(&self) -> &'static [&'static str] {
         &["native", "container", "emulated", "remote.api"]
     }
+}
+
+/// Verify and load a package whose verified body is cog-shaped, refusing it
+/// unless the verified envelope's kind is `expected` (closes the window
+/// between peeking the kind and verifying the package).
+#[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
+pub fn load_cog_shaped(
+    expected: &str,
+    package_dir: &Path,
+    anchors: &TrustAnchors,
+    kinds: &KindRegistry,
+) -> Result<VerifiedWorkload, PlaneError> {
+    let verified = verify_dir_in(package_dir, anchors, &VerifyPolicy::default(), kinds)
+        .map_err(|e| PlaneError::Package(e.to_string()))?;
+    if verified.envelope.kind != expected {
+        return Err(PlaneError::Package(format!(
+            "manifest kind {:?} is not {expected:?}",
+            verified
+                .envelope
+                .kind
+                .chars()
+                .take(MAX_KIND_LEN)
+                .collect::<String>()
+        )));
+    }
+    VerifiedWorkload::from_package(&verified, &DirSource::new(package_dir))
+        .map_err(|e| PlaneError::Package(e.to_string()))
 }

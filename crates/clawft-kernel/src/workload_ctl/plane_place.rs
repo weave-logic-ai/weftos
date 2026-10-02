@@ -28,7 +28,6 @@ use serde_json::{Value, json};
 use crate::chain;
 use crate::gate::GateDecision;
 use crate::workload_pkg::codec::hex_encode;
-use crate::workload_kind::peek_manifest_kind;
 use crate::workload_runtime::VerifiedWorkload;
 
 use super::facts::governance_tier;
@@ -164,26 +163,6 @@ impl PlacementControlPlane {
                 .append(PLANE_CHAIN_SOURCE, kind, Some(payload))
                 .hash,
         )
-    }
-
-    /// Verify the package and build its spec through its registered kind;
-    /// seed it for serving.
-    fn prepare(
-        &self,
-        order: &PlaceOrder,
-    ) -> Result<(VerifiedWorkload, WorkloadSpec, String), PlaneError> {
-        // A manifest too broken to name its kind falls to the cog path,
-        // whose verification reports the real problem.
-        let kind_id = peek_manifest_kind(&order.package_dir)
-            .unwrap_or_else(|| crate::workload_pkg::KIND_COG.to_string());
-        let kind = self.kinds.require(&kind_id)?;
-        let w = kind.load(&order.package_dir, &self.anchors)?;
-        let seeded = self
-            .exchange
-            .seed_package_dir(&order.package_dir, &self.anchors)
-            .map_err(|e| PlaneError::Package(e.to_string()))?;
-        let spec = kind.spec(&w).map_err(PlaneError::Package)?;
-        Ok((w, spec, seeded.manifest_hash))
     }
 
     /// Decide (and unless `dry_run`, dispatch) one placement.

@@ -22,10 +22,12 @@ use std::path::Path;
 use crate::mesh_artifact::{ArtifactExchange, ExchangeError};
 use crate::mesh_artifact_transfer::{FetchError, PeerSet};
 use crate::mesh_artifact_wire::{ArtifactId, ArtifactKey};
+use crate::workload_kind::KindRegistry;
 use crate::workload_pkg::codec::{hex_decode_exact, hex_encode};
 use crate::workload_pkg::manifest::{FileRef, MANIFEST_FILE, MAX_MANIFEST_BYTES};
 use crate::workload_pkg::verify::{
     VerifiedPackage, VerifyError, read_bounded, verify_manifest_signatures,
+    verify_manifest_signatures_in,
 };
 use crate::workload_pkg::{TrustAnchors, VerifyPolicy, verify_stored};
 
@@ -71,7 +73,18 @@ impl ArtifactExchange {
         anchors: &TrustAnchors,
         open: &mut dyn FnMut(&FileRef) -> std::io::Result<Box<dyn Read>>,
     ) -> Result<ExchangedPackage, PackageExchangeError> {
-        let verified = verify_manifest_signatures(manifest, anchors)?;
+        self.seed_package_in(manifest, anchors, &KindRegistry::builtin(), open)
+    }
+
+    /// [`Self::seed_package`] against a caller-supplied kind registry.
+    pub fn seed_package_in(
+        &self,
+        manifest: &[u8],
+        anchors: &TrustAnchors,
+        kinds: &KindRegistry,
+        open: &mut dyn FnMut(&FileRef) -> std::io::Result<Box<dyn Read>>,
+    ) -> Result<ExchangedPackage, PackageExchangeError> {
+        let verified = verify_manifest_signatures_in(manifest, anchors, kinds)?;
         let mut files = Vec::new();
         for file in verified.body.files() {
             let expect = pinned(file)?;
@@ -107,6 +120,16 @@ impl ArtifactExchange {
         dir: &Path,
         anchors: &TrustAnchors,
     ) -> Result<ExchangedPackage, PackageExchangeError> {
+        self.seed_package_dir_in(dir, anchors, &KindRegistry::builtin())
+    }
+
+    /// [`Self::seed_package_dir`] against a caller-supplied kind registry.
+    pub fn seed_package_dir_in(
+        &self,
+        dir: &Path,
+        anchors: &TrustAnchors,
+        kinds: &KindRegistry,
+    ) -> Result<ExchangedPackage, PackageExchangeError> {
         let manifest = read_bounded(
             &dir.join(MANIFEST_FILE),
             MANIFEST_FILE,
@@ -115,7 +138,7 @@ impl ArtifactExchange {
         let root = dir
             .canonicalize()
             .map_err(|e| ExchangeError::Io(e.to_string()))?;
-        self.seed_package(&manifest, anchors, &mut |file| {
+        self.seed_package_in(&manifest, anchors, kinds, &mut |file| {
             // Paths were validated as relative and traversal-free; also
             // refuse symlinks that resolve outside the package.
             let real = root.join(&file.path).canonicalize()?;
