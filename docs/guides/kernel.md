@@ -375,28 +375,70 @@ manifest is adopted, else a ULID is minted. It refuses a relative root,
 
 #### Owner migration (one machine, in this order)
 
-1. Stop every older daemon, for example in each project
-   `weaver kernel stop`, then confirm with `lsof -i :9470` that the mesh
-   port is free and that no `kernel.pid` remains. This must precede the
-   chain copy: the migration refuses while a live pid is recorded or
-   the chain is locked, but it cannot see a writer that uses a
-   different runtime dir.
-2. Copy the `[kernel.mesh]` (and Noise) settings from the old project's
-   `weave.toml` into `~/.weftos/weave.toml`. Until then the user daemon
-   runs with mesh off and the old daemon's mesh peers see it disappear.
-3. `weaver migrate user-chain --dry-run`, read the plan, then run it
-   without `--dry-run` (this command lands with Phase 1 package E). The
-   legacy `~/.clawft` chain is copied and verified, never modified.
-4. `weaver kernel start --profile user`. If you skipped step 3 and the
-   legacy chain is still in use, add `--adopt-legacy-chain` the first
-   time. Check `weaver kernel status --profile user` and
-   `weft project list`.
-5. In each project: `weft project init` (adopts the seeded manifest),
-   then `weft project show .`.
+1. **Install the new binaries.** Nothing signals old daemons.
+2. **Stop every older daemon**, from its own project directory with its own
+   binary (`weaver kernel stop`, or `kill`). Confirm with `lsof -i :9470`
+   that the mesh port is free and that no `kernel.pid` remains. This must
+   precede the chain copy: the migration refuses a locked or recently
+   written chain, but it cannot see a writer that uses a different runtime
+   dir.
+3. **Check `~/.clawft/config.json`.**
+   - If it sets `kernel.chain.checkpoint_path`, remove it or point it at the
+     migrated location. An explicit path bypasses the chain guards; one that
+     points into a migrated directory is refused at boot (exit 78) unless
+     `--adopt-legacy-chain` is passed, and `weaver migrate user-chain` warns.
+   - Check `gateway.host`. The default is now `127.0.0.1` (with a `Host`
+     check); set `0.0.0.0` only if you want LAN exposure.
+4. **Create `~/.weftos/weave.toml`.** Copy the `[kernel.mesh]` and Noise
+   settings from the old project's `weave.toml`. Without it the user daemon
+   runs with the mesh off and the old daemon's mesh peers see it disappear.
+5. **Migrate the chain.** Run `weaver migrate user-chain --dry-run` and read
+   the plan (five files, the head seq and hash, signature `verified`), then
+   run it without `--dry-run`. Afterwards `~/.weftos/chain/` holds the chain
+   and `MIGRATED_FROM.json`, and `~/.clawft/` holds `MIGRATED-TO-WEFTOS.txt`;
+   the source bytes are unchanged. It is refused if `chain.key` is missing
+   or the signature does not verify; `--allow-unsigned` overrides that and is
+   not recommended.
+6. **Start the user daemon** with `weaver kernel start --profile user`. If
+   you skipped step 5 and the legacy chain is still in use, add
+   `--adopt-legacy-chain` the first time. `weaver kernel status --profile
+   user` should show profile `user`, roles `machine, user`, runtime
+   `~/.weftos/run` and project `(unbound)`.
+7. **Optional: run it as a service.** Run
+   `weaver service unit --kind launchd --out ~/Library/LaunchAgents/ai.weftos.user.plist`
+   (or `--kind systemd`), then the printed `launchctl bootstrap` line. Stop
+   the foreground daemon first; the lock refuses two user daemons. After
+   that `weaver update --restart` restarts through the service manager. A
+   refused boot exits 78; systemd does not retry it
+   (`RestartPreventExitStatus=78`), launchd retries every 30 s, so read the
+   log if the service keeps cycling.
+8. **Register each project** with `weft project init` (adopts the seeded
+   manifest and prints the ULID), then `weft project show .`. `weft` reaches
+   the user daemon from a registered project directory, or from anywhere
+   once `~/.weftos/run` has a daemon, with no `--runtime`.
+9. **What to expect afterwards.**
+   - `weaver kernel start` in a project without flags is refused (exit 78)
+     while it would land on a migrated legacy chain. Only two flags override
+     it: `--adopt-legacy-chain`, which forks history, or `--new-chain`, which
+     starts a fresh project chain.
+   - Against the user daemon, mutating commands outside a project return
+     `project_required` (`read_only`). The log streams, `substrate.read`,
+     `cluster.facts` and `voice.trace` that the egui tray and
+     `weft voice watch` use are allowed; `ipc.subscribe_stream` needs a
+     project.
+10. **Tokens.** `weft token issue` prints a `wft_` secret once, plus a
+    playground link; `weft token list|revoke` manage them. Literal `auth`
+    scopes work only from the daemon's uid on the unix socket.
 
-Rollback: `weaver kernel stop --profile user`, then restart the old
-daemon with the old binary in its project directory. `~/.clawft` is
-unchanged.
+Rollback:
+
+1. `weaver kernel stop --profile user`.
+2. Remove `~/.weftos/chain` and `~/.clawft/MIGRATED-TO-WEFTOS.txt` (the
+   marker, otherwise the old daemon is refused).
+3. Restart the old daemon with the old binary in its project directory.
+
+The `~/.clawft` chain files are byte-identical; that directory only gained
+`chain.lock` (and `MIGRATED-TO-WEFTOS.txt` until you remove it).
 
 ### Governance (three-branch)
 
