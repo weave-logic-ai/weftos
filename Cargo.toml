@@ -172,7 +172,7 @@ exclude = [
 [workspace.package]
 version = "0.8.1"
 edition = "2024"
-rust-version = "1.93"
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/weave-logic-ai/weftos"
 homepage = "https://github.com/weave-logic-ai/weftos"
@@ -264,10 +264,10 @@ getrandom = { version = "0.2", features = ["js"] }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 
 # WASM runtime (feature-gated behind wasm-sandbox)
-# WEFT-551: bumped 33 → 45 (MSRV 1.93; 46+ needs rustc 1.94). 45.0.3 is on the
-# advisory fix line for RUSTSEC-2026-0188 and the rest of the WEFT-551 cluster.
-wasmtime = { version = "45", default-features = false, features = ["cranelift", "async", "wat", "runtime"] }
-wasmtime-wasi = { version = "45", default-features = false, features = ["p1"] }
+# WEFT-551: bumped 33 → 45; now 48.0.4 (MSRV 1.95) for RUSTSEC-2026-0321/0322/
+# 0323/0327 (fixed in >=48.0.4,<49 or >=49.0.2; 49.0.2 needs rustc 1.96).
+wasmtime = { version = "48.0.4", default-features = false, features = ["cranelift", "async", "wat", "runtime"] }
+wasmtime-wasi = { version = "48.0.4", default-features = false, features = ["p1"] }
 
 # File-system watching
 # WEFT-553: notify 8+ drops unmaintained `instant` (RUSTSEC-2024-0384) in
