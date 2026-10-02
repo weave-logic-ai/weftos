@@ -11,22 +11,27 @@
 //! depends on re-serialising JSON.
 //!
 //! Open verifies every hash link and signature. A bad record and everything
-//! after it is moved to `journal.corrupt.<ts>` and the journal comes up
-//! read-only for binds until an admin calls [`Journal::accept_truncate`].
-//! A bad *first* record is a hard error and nothing is modified (wrong key or
-//! wrong directory, not a damaged tail).
+//! after it is moved to `journal.corrupt.<ts>` and a durable marker
+//! (`journal.truncated`) is written. While the marker exists the journal is
+//! read-only for binds and cert issues, across restarts, until an admin
+//! acknowledges via `Bindings::accept_truncate` (which journals what was
+//! lost). A bad *first* record is a hard error and nothing is modified (wrong
+//! key or wrong directory, not a damaged tail).
 //!
 //! One writer: an exclusive `flock` on `mesh.lock`, holding the owner pid.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::{self, File};
+use std::io::{BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use clawft_mesh_local::hexser;
+use clawft_mesh_local::{hexser, Principal};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+use crate::fsutil::{self, Line, MAX_RECORD_BYTES};
+use crate::lost::{harvest, LostInfo};
 
 /// Domain separation prefix for journal signatures.
 pub const DOMAIN: &[u8] = b"weftos/mesh-journal/v1\0";
@@ -36,7 +41,10 @@ pub const RECORD_VERSION: u32 = 1;
 pub const DEFAULT_SEGMENT_BYTES: u64 = 8 * 1024 * 1024;
 /// Active file name.
 pub const ACTIVE: &str = "journal.jsonl";
-const LOCK: &str = "mesh.lock";
+/// Durable "bad tail was quarantined and not yet acknowledged" marker.
+pub const MARKER: &str = "journal.truncated";
+/// Record kind journalled by an acknowledged truncation.
+pub const KIND_ACCEPT_TRUNCATE: &str = "journal.accept_truncate";
 const ZERO_PREV: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 /// `,"sig":"` + 128 hex + `"}`
 const SIG_TAIL_LEN: usize = 8 + 128 + 2;
@@ -49,10 +57,34 @@ pub enum JournalError {
     Locked { holder_pid: Option<u32> },
     #[error("journal head cannot be verified ({file}): {reason}; nothing was modified")]
     Unverifiable { file: String, reason: String },
-    #[error("journal is read-only until `--accept-truncate`")]
+    #[error("journal is read-only until an admin accepts the truncation")]
     ReadOnly,
+    #[error("journal is poisoned by a failed write; restart the service")]
+    Poisoned,
+    #[error("unsafe state path: {0}")]
+    UnsafePath(String),
+    #[error("record kind `{0}` is reserved for the bindings writer")]
+    ReservedKind(String),
+    #[error("record of {0} bytes exceeds the {MAX_RECORD_BYTES} byte limit")]
+    RecordTooLarge(usize),
     #[error("record body: {0}")]
     Encode(#[from] serde_json::Error),
+}
+
+/// Witness that an operator-authorised admin path requested the acknowledgement.
+///
+/// Only the admin path (`weaver mesh journal --accept-truncate`, after the
+/// peer-credential admin check) may construct this; nothing else should.
+#[derive(Debug, Clone)]
+pub struct AdminAck {
+    pub(crate) by: Principal,
+}
+
+impl AdminAck {
+    /// Call only after the requester was verified as an admin.
+    pub fn admin_verified(by: Principal) -> Self {
+        Self { by }
+    }
 }
 
 /// One journal record.
@@ -105,74 +137,19 @@ pub struct Journal {
     records: Vec<Record>,
     prev_hash: [u8; 32],
     active_len: u64,
-    read_only: bool,
+    lost: Option<LostInfo>,
     quarantined: Option<PathBuf>,
+    poisoned: bool,
+    fail_next_write: bool,
 }
 
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
-fn sync_dir(dir: &Path) {
-    if let Ok(d) = File::open(dir) {
-        let _ = d.sync_all();
-    }
-}
-
-fn private_open(path: &Path, append: bool) -> std::io::Result<File> {
-    let mut o = OpenOptions::new();
-    o.create(true).read(true);
-    if append {
-        o.append(true);
-    } else {
-        o.write(true);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        o.mode(0o600);
-    }
-    o.open(path)
-}
-
-#[cfg(unix)]
-fn take_lock(dir: &Path) -> Result<File, JournalError> {
-    use std::os::unix::io::AsRawFd;
-    let path = dir.join(LOCK);
-    let mut f = private_open(&path, false)?;
-    // SAFETY: valid fd owned by `f` for the duration of the call.
-    let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if rc != 0 {
-        let err = std::io::Error::last_os_error();
-        if err.kind() != std::io::ErrorKind::WouldBlock {
-            return Err(err.into());
-        }
-        let mut holder = None;
-        for _ in 0..20 {
-            let mut s = String::new();
-            if let Ok(mut r) = File::open(&path) {
-                let _ = r.read_to_string(&mut s);
-            }
-            holder = s.trim().parse::<u32>().ok();
-            if holder.is_some() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        return Err(JournalError::Locked { holder_pid: holder });
-    }
-    f.set_len(0)?;
-    write!(f, "{}", std::process::id())?;
-    f.sync_data()?;
-    Ok(f)
-}
-
-#[cfg(not(unix))]
-fn take_lock(_dir: &Path) -> Result<File, JournalError> {
-    Err(JournalError::Io(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "mesh.lock requires a unix host (Windows is design-only in Phase 3)",
-    )))
+/// Kinds only the bindings writer may append.
+fn reserved(kind: &str) -> bool {
+    kind.starts_with("user.") || kind == KIND_ACCEPT_TRUNCATE
 }
 
 /// Numbered segments, ascending: `journal.NNN.jsonl`.
@@ -195,12 +172,7 @@ fn segments(dir: &Path) -> std::io::Result<Vec<(u32, PathBuf)>> {
 }
 
 /// Verify one line (without its newline) against the expected position.
-fn verify_line(
-    line: &[u8],
-    seq: u64,
-    prev_hash: &[u8; 32],
-    key: &SigningKey,
-) -> Result<Record, String> {
+fn verify_line(line: &[u8], seq: u64, prev_hash: &[u8; 32], key: &SigningKey) -> Result<Record, String> {
     if line.len() <= SIG_TAIL_LEN {
         return Err("line too short".into());
     }
@@ -234,32 +206,34 @@ fn verify_line(
 struct Scan {
     records: Vec<Record>,
     prev_hash: [u8; 32],
-    /// Index into the file list and byte offset of the first bad record.
-    bad: Option<(usize, usize, String)>,
+    /// File index, byte offset and reason of the first bad record.
+    bad: Option<(usize, u64, String)>,
 }
 
 fn scan(files: &[PathBuf], key: &SigningKey) -> Result<Scan, JournalError> {
     let mut s = Scan { records: Vec::new(), prev_hash: [0u8; 32], bad: None };
+    let mut buf = Vec::new();
     'files: for (fi, path) in files.iter().enumerate() {
-        let data = fs::read(path)?;
-        let mut off = 0usize;
-        while off < data.len() {
-            let Some(nl) = data[off..].iter().position(|b| *b == b'\n') else {
-                s.bad = Some((fi, off, "torn final line (no newline)".into()));
-                break 'files;
+        let mut r = BufReader::new(fsutil::open_file(path, false, false, false)?);
+        let mut off = 0u64;
+        loop {
+            let (kind, n) = fsutil::read_line(&mut r, &mut buf, MAX_RECORD_BYTES)?;
+            let reason = match kind {
+                Line::Eof => break,
+                Line::Torn => "torn final line (no newline)".to_string(),
+                Line::TooLong => "record exceeds the size limit".to_string(),
+                Line::Complete => match verify_line(&buf, s.records.len() as u64, &s.prev_hash, key) {
+                    Ok(rec) => {
+                        s.prev_hash = Sha256::digest(&buf).into();
+                        s.records.push(rec);
+                        off += n as u64;
+                        continue;
+                    }
+                    Err(reason) => reason,
+                },
             };
-            let line = &data[off..off + nl];
-            match verify_line(line, s.records.len() as u64, &s.prev_hash, key) {
-                Ok(rec) => {
-                    s.prev_hash = Sha256::digest(line).into();
-                    s.records.push(rec);
-                }
-                Err(reason) => {
-                    s.bad = Some((fi, off, reason));
-                    break 'files;
-                }
-            }
-            off += nl + 1;
+            s.bad = Some((fi, off, reason));
+            break 'files;
         }
     }
     Ok(s)
@@ -272,25 +246,14 @@ impl Journal {
         Self::open_with(dir, key, JournalOptions::default())
     }
 
-    pub fn open_with(
-        dir: impl AsRef<Path>,
-        key: SigningKey,
-        opts: JournalOptions,
-    ) -> Result<Self, JournalError> {
+    pub fn open_with(dir: impl AsRef<Path>, key: SigningKey, opts: JournalOptions) -> Result<Self, JournalError> {
         let dir = dir.as_ref().to_path_buf();
-        if !dir.exists() {
-            fs::create_dir_all(&dir)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
-            }
-        }
-        let lock = take_lock(&dir)?;
+        fsutil::ensure_state_dir(&dir)?;
+        let lock = fsutil::take_lock(&dir)?;
 
         let mut files: Vec<PathBuf> = segments(&dir)?.into_iter().map(|(_, p)| p).collect();
         let active = dir.join(ACTIVE);
-        if active.exists() {
+        if fs::symlink_metadata(&active).is_ok() {
             files.push(active.clone());
         }
         let sc = scan(&files, &key)?;
@@ -302,54 +265,70 @@ impl Journal {
             records: sc.records,
             prev_hash: sc.prev_hash,
             active_len: 0,
-            read_only: false,
+            lost: crate::lost::load_marker(&active.with_file_name(MARKER))?,
             quarantined: None,
+            poisoned: false,
+            fail_next_write: false,
         };
         if let Some((fi, off, reason)) = sc.bad {
             if j.records.is_empty() {
-                return Err(JournalError::Unverifiable {
-                    file: files[fi].display().to_string(),
-                    reason,
-                });
+                return Err(JournalError::Unverifiable { file: files[fi].display().to_string(), reason });
             }
             j.quarantine(&files, fi, off)?;
         }
-        j.active_len = fs::metadata(&active).map_or(0, |m| m.len());
+        j.active_len = fs::symlink_metadata(&active).map_or(0, |m| m.len());
         Ok(j)
     }
 
-    /// Move the bad record and everything after it into `journal.corrupt.<ts>`.
-    fn quarantine(&mut self, files: &[PathBuf], fi: usize, off: usize) -> Result<(), JournalError> {
+    /// Move the bad record and everything after it into `journal.corrupt.<ts>`,
+    /// persist the marker, then truncate.
+    fn quarantine(&mut self, files: &[PathBuf], fi: usize, off: u64) -> Result<(), JournalError> {
         let ts = now();
         let mut corrupt = self.dir.join(format!("journal.corrupt.{ts}"));
         let mut n = 0;
-        while corrupt.exists() {
+        while fs::symlink_metadata(&corrupt).is_ok() {
             n += 1;
             corrupt = self.dir.join(format!("journal.corrupt.{ts}.{n}"));
         }
-        let data = fs::read(&files[fi])?;
-        let mut out = private_open(&corrupt, false)?;
-        out.write_all(&data[off..])?;
-        out.sync_all()?;
-        for later in &files[fi + 1..] {
-            let name = later.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-            fs::rename(later, self.dir.join(format!("{}.{name}", corrupt.file_name().unwrap().to_string_lossy())))?;
-        }
         let bad = &files[fi];
+        let mut src = fsutil::open_file(bad, false, false, false)?;
+        src.seek(SeekFrom::Start(off))?;
+        let mut out = fsutil::open_file(&corrupt, true, true, false)?;
+        std::io::copy(&mut src, &mut out)?;
+        out.sync_all()?;
+        let mut lost_paths = vec![corrupt.clone()];
+        let cname = corrupt.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        for later in &files[fi + 1..] {
+            let name = later.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let dest = self.dir.join(format!("{cname}.{name}"));
+            fs::rename(later, &dest)?;
+            lost_paths.push(dest);
+        }
+        let (count, hw, ids) = harvest(&lost_paths);
+        let mut info = self.lost.take().unwrap_or_default();
+        info.lost_from_seq = if info.lost_count == 0 { self.records.len() as u64 } else { info.lost_from_seq.min(self.records.len() as u64) };
+        info.lost_count += count;
+        info.serial_high_water = info.serial_high_water.max(hw);
+        info.revoked_user_ids.extend(ids);
+        info.revoked_user_ids.sort();
+        info.revoked_user_ids.dedup();
+        info.quarantine.extend(lost_paths.iter().map(|p| p.display().to_string()));
+        info.ts = ts;
+        crate::lost::write_marker(&self.dir, &info)?;
+        self.lost = Some(info);
+
         if off == 0 {
             fs::remove_file(bad)?;
         } else {
-            let f = OpenOptions::new().write(true).open(bad)?;
-            f.set_len(off as u64)?;
+            let f = fsutil::open_file(bad, false, true, false)?;
+            f.set_len(off)?;
             f.sync_all()?;
-            // The surviving prefix becomes the active file.
             let active = self.dir.join(ACTIVE);
             if *bad != active {
                 fs::rename(bad, &active)?;
             }
         }
-        sync_dir(&self.dir);
-        self.read_only = true;
+        fsutil::sync_dir(&self.dir);
         self.quarantined = Some(corrupt);
         Ok(())
     }
@@ -371,50 +350,73 @@ impl Journal {
         self.records.is_empty()
     }
 
-    /// True after a bad tail was quarantined and not yet accepted.
+    /// True while an unacknowledged quarantine marker exists (durable).
     pub fn read_only(&self) -> bool {
-        self.read_only
+        self.lost.is_some()
     }
 
-    /// Where the bad tail went, if one was quarantined at open.
+    /// What the unacknowledged quarantine lost, if anything.
+    pub fn lost(&self) -> Option<&LostInfo> {
+        self.lost.as_ref()
+    }
+
+    /// Where the bad tail went when it was quarantined by *this* open.
     pub fn quarantined(&self) -> Option<&Path> {
         self.quarantined.as_deref()
     }
 
-    /// Admin acknowledgement of a truncation (`weaver mesh journal --accept-truncate`).
-    pub fn accept_truncate(&mut self) {
-        self.read_only = false;
+    /// True after a failed write whose rollback also failed.
+    pub fn poisoned(&self) -> bool {
+        self.poisoned
     }
 
     pub fn dir(&self) -> &Path {
         &self.dir
     }
 
-    /// Append a record stamped with the current time.
+    /// Remove the marker once the acceptance record is journalled.
+    pub(crate) fn clear_lost(&mut self, _ack: &AdminAck) -> Result<(), JournalError> {
+        let m = self.dir.join(MARKER);
+        if fs::symlink_metadata(&m).is_ok() {
+            fs::remove_file(&m)?;
+            fsutil::sync_dir(&self.dir);
+        }
+        self.lost = None;
+        Ok(())
+    }
+
+    /// Test seam: the next append behaves as a partial write whose rollback fails.
+    #[doc(hidden)]
+    pub fn inject_write_failure(&mut self) {
+        self.fail_next_write = true;
+    }
+
+    /// Append a non-binding record (peer.*, policy.*, facts.*, service.*...)
+    /// stamped with the current time. `user.*` kinds are refused: only the
+    /// bindings writer may produce them, so a semantically invalid record can
+    /// never be forged through this door.
     pub fn append(&mut self, kind: &str, body: serde_json::Value) -> Result<Head, JournalError> {
         self.append_at(now(), kind, body)
     }
 
-    /// Append with an explicit timestamp (deterministic tests, replay tools).
-    pub fn append_at(
-        &mut self,
-        ts: u64,
-        kind: &str,
-        body: serde_json::Value,
-    ) -> Result<Head, JournalError> {
+    /// As [`Journal::append`] with an explicit timestamp.
+    pub fn append_at(&mut self, ts: u64, kind: &str, body: serde_json::Value) -> Result<Head, JournalError> {
+        if reserved(kind) {
+            return Err(JournalError::ReservedKind(kind.to_string()));
+        }
+        self.append_raw(ts, kind, body)
+    }
+
+    pub(crate) fn append_raw(&mut self, ts: u64, kind: &str, body: serde_json::Value) -> Result<Head, JournalError> {
+        if self.poisoned {
+            return Err(JournalError::Poisoned);
+        }
         if self.active_len > 0 && self.active_len >= self.opts.max_segment_bytes {
             self.rotate()?;
         }
         let seq = self.records.len() as u64;
         let prev = if seq == 0 { ZERO_PREV.to_string() } else { hexser::encode(&self.prev_hash) };
-        let unsigned = serde_json::to_string(&Unsigned {
-            v: RECORD_VERSION,
-            seq,
-            ts,
-            prev: &prev,
-            kind,
-            body: &body,
-        })?;
+        let unsigned = serde_json::to_string(&Unsigned { v: RECORD_VERSION, seq, ts, prev: &prev, kind, body: &body })?;
         let mut msg = Vec::with_capacity(DOMAIN.len() + unsigned.len());
         msg.extend_from_slice(DOMAIN);
         msg.extend_from_slice(unsigned.as_bytes());
@@ -422,19 +424,29 @@ impl Journal {
         let mut line = unsigned;
         line.pop(); // closing brace
         line.push_str(&format!(",\"sig\":\"{sig}\"}}"));
+        if line.len() > MAX_RECORD_BYTES {
+            return Err(JournalError::RecordTooLarge(line.len()));
+        }
 
         let path = self.dir.join(ACTIVE);
-        let created = !path.exists();
-        let mut f = private_open(&path, true)?;
+        let created = fs::symlink_metadata(&path).is_err();
+        let mut f = fsutil::open_file(&path, true, true, true)?;
         let mut bytes = line.clone().into_bytes();
         bytes.push(b'\n');
-        let res = f.write_all(&bytes).and_then(|_| f.sync_data());
+        let injected = std::mem::take(&mut self.fail_next_write);
+        let res = if injected {
+            Err(std::io::Error::other("injected write failure"))
+        } else {
+            f.write_all(&bytes).and_then(|_| f.sync_data())
+        };
         if let Err(e) = res {
-            let _ = f.set_len(self.active_len);
+            if injected || f.set_len(self.active_len).and_then(|_| f.sync_data()).is_err() {
+                self.poisoned = true;
+            }
             return Err(e.into());
         }
         if created {
-            sync_dir(&self.dir);
+            fsutil::sync_dir(&self.dir);
         }
         self.active_len += bytes.len() as u64;
         self.prev_hash = Sha256::digest(line.as_bytes()).into();
@@ -448,7 +460,7 @@ impl Journal {
     fn rotate(&mut self) -> Result<(), JournalError> {
         let next = segments(&self.dir)?.last().map_or(0, |(n, _)| n + 1);
         fs::rename(self.dir.join(ACTIVE), self.dir.join(format!("journal.{next:03}.jsonl")))?;
-        sync_dir(&self.dir);
+        fsutil::sync_dir(&self.dir);
         self.active_len = 0;
         Ok(())
     }

@@ -6,8 +6,15 @@
 //!
 //! This crate must not depend on `clawft-kernel`.
 
+mod bind_events;
 pub mod bindings;
+mod fsutil;
+mod lost;
 pub mod journal;
 
 pub use bindings::{BindError, BindHow, BindMeta, Bindings, Check, ConflictReason};
-pub use journal::{Head, Journal, JournalError, JournalOptions, Record};
+pub use journal::{AdminAck, Head, Journal, JournalError, JournalOptions, Record};
+pub use lost::LostInfo;
+
+#[cfg(test)]
+mod tests_internal;

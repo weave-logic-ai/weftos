@@ -20,7 +20,7 @@ fn bind(b: &mut Bindings, j: &mut Journal, p: u32, key: u8) -> Result<(), BindEr
 
 #[test]
 fn bind_check_and_idempotence() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tmpdir();
     let mut j = open(dir.path());
     let mut b = Bindings::default();
     assert_eq!(b.check(&u(501), &k(1)), Check::New);
@@ -35,7 +35,7 @@ fn bind_check_and_idempotence() {
 
 #[test]
 fn one_key_per_principal_and_one_principal_per_key() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tmpdir();
     let mut j = open(dir.path());
     let mut b = Bindings::default();
     bind(&mut b, &mut j, 501, 1).unwrap();
@@ -54,7 +54,7 @@ fn one_key_per_principal_and_one_principal_per_key() {
 
 #[test]
 fn pending_then_approved() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tmpdir();
     let mut j = open(dir.path());
     let mut b = Bindings::default();
     b.bind_pending(&mut j, &u(501), &k(1), BindMeta::default()).unwrap();
@@ -67,7 +67,7 @@ fn pending_then_approved() {
 
 #[test]
 fn certificate_serials_are_monotone_and_need_a_binding() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tmpdir();
     let mut j = open(dir.path());
     let mut b = Bindings::default();
     assert!(matches!(b.issue_cert(&mut j, &u(501), 10, 20), Err(BindError::NotBound)));
@@ -82,7 +82,7 @@ fn certificate_serials_are_monotone_and_need_a_binding() {
 
 #[test]
 fn revoke_drops_binding_and_serials_and_bars_the_key() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tmpdir();
     let mut j = open(dir.path());
     let mut b = Bindings::default();
     bind(&mut b, &mut j, 501, 1).unwrap();
@@ -97,14 +97,16 @@ fn revoke_drops_binding_and_serials_and_bars_the_key() {
     assert!(matches!(bind(&mut b, &mut j, 501, 1), Err(BindError::Conflict(ConflictReason::KeyRevoked))));
     assert!(matches!(bind(&mut b, &mut j, 502, 1), Err(BindError::Conflict(ConflictReason::KeyRevoked))));
     // A fresh key for the same principal is fine, and serials keep rising.
-    bind(&mut b, &mut j, 501, 5).unwrap();
+    assert!(matches!(bind(&mut b, &mut j, 501, 5), Err(BindError::ApprovalRequired)));
+    let by = BindMeta { by: Some(u(0)), ..Default::default() };
+    b.bind(&mut j, &u(501), &k(5), BindHow::Approved, by).unwrap();
     assert_eq!(b.issue_cert(&mut j, &u(501), 30, 40).unwrap(), 3);
     assert!(matches!(b.revoke(&mut j, &u(777), "x", &u(0)), Err(BindError::NotBound)));
 }
 
 #[test]
 fn rebind_replaces_key_and_revokes_old_serials() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tmpdir();
     let mut j = open(dir.path());
     let mut b = Bindings::default();
     bind(&mut b, &mut j, 501, 1).unwrap();
@@ -131,7 +133,7 @@ fn rebind_replaces_key_and_revokes_old_serials() {
 
 #[test]
 fn rebind_cannot_be_requested_through_bind() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tmpdir();
     let mut j = open(dir.path());
     let mut b = Bindings::default();
     let r = b.bind(&mut j, &u(1), &k(1), BindHow::Rebind, BindMeta::default());
@@ -140,7 +142,7 @@ fn rebind_cannot_be_requested_through_bind() {
 
 #[test]
 fn fold_is_deterministic_and_equals_incremental_state() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tmpdir();
     let mut j = open(dir.path());
     let mut b = Bindings::default();
     // Deterministic pseudo-random operation stream over 4 principals / 6 keys.
@@ -172,4 +174,12 @@ fn fold_is_deterministic_and_equals_incremental_state() {
     drop(j);
     let j = open(dir.path());
     assert_eq!(Bindings::fold(&j).unwrap(), b, "state survives a reopen");
+}
+
+/// A temp dir the state-dir safety check accepts (0700).
+fn tmpdir() -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    d
 }

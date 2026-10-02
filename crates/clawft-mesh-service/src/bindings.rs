@@ -8,27 +8,27 @@
 //! Invariants, enforced here and not in callers: one key per principal, one
 //! principal per key, a revoked key is never accepted again, and a rebind
 //! revokes every serial issued to the old key.
+//!
+//! After a `user.revoke` the same principal may not TOFU-bind a new key: it
+//! needs an `Approved` bind (carrying `by`), because the revocation usually
+//! means the account or key was compromised. A rebind (principal still bound)
+//! is the normal key-replacement path.
+//!
+//! If the fold itself fails (a validly signed but semantically invalid
+//! record), [`Bindings::fold_lenient`] yields the state up to that record,
+//! marked [`Bindings::degraded`]; every mutator then refuses, so the service
+//! can come up read-only with a loud error instead of refusing to start.
 
 use std::collections::{HashMap, HashSet};
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use clawft_mesh_local::{node_id_from_pubkey, Principal};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
-use crate::journal::{Journal, JournalError, Record};
-
-pub const KIND_BIND: &str = "user.bind";
-pub const KIND_BIND_PENDING: &str = "user.bind_pending";
-pub const KIND_CERT_ISSUE: &str = "user.cert.issue";
-pub const KIND_REVOKE: &str = "user.revoke";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum BindHow {
-    Tofu,
-    Approved,
-    Rebind,
-}
+use crate::bind_events::{
+    AcceptBody, BindBody, CertBody, Event, PendingBody, RevokeBody,
+};
+pub use crate::bind_events::{BindError, Check, ConflictReason, BindHow, KIND_BIND, KIND_BIND_PENDING, KIND_CERT_ISSUE, KIND_REVOKE};
+use crate::journal::{AdminAck, Journal, JournalError, Record};
 
 /// Optional context recorded with a bind.
 #[derive(Debug, Clone, Default)]
@@ -36,135 +36,6 @@ pub struct BindMeta {
     pub by: Option<Principal>,
     pub peer_pid: Option<u32>,
     pub exe: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConflictReason {
-    /// The principal is already bound to a different key.
-    PrincipalHasOtherKey,
-    /// The key is bound to a different principal.
-    KeyBoundToOtherPrincipal,
-    /// The key was revoked (or replaced by a rebind) and is never reusable.
-    KeyRevoked,
-}
-
-/// Result of [`Bindings::check`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Check {
-    Existing,
-    New,
-    Conflict(ConflictReason),
-    Pending,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum BindError {
-    #[error("bind conflict: {0:?}")]
-    Conflict(ConflictReason),
-    #[error("principal is already bound")]
-    AlreadyBound,
-    #[error("principal is not bound")]
-    NotBound,
-    #[error("unknown user id")]
-    UnknownUser,
-    #[error("user_id does not match user_pubkey")]
-    UserIdMismatch,
-    #[error("certificate serial {got} is not above the last issued serial {last}")]
-    SerialNotMonotonic { got: u64, last: u64 },
-    #[error("certificate not_after must be after issued_at")]
-    BadValidity,
-    #[error("serials_revoked_through does not match the issued serials")]
-    RevokeMismatch,
-    #[error("`how` must be tofu or approved here (use rebind for replacement)")]
-    InvalidHow,
-    #[error("malformed {kind} record at seq {seq}: {reason}")]
-    Malformed { kind: String, seq: u64, reason: String },
-    #[error("record seq {seq} violates a binding invariant: {source}")]
-    Replay { seq: u64, #[source] source: Box<BindError> },
-    #[error(transparent)]
-    Journal(#[from] JournalError),
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct BindBody {
-    principal: Principal,
-    #[serde(with = "clawft_mesh_local::hexser::hex32")]
-    user_pubkey: [u8; 32],
-    user_id: String,
-    how: BindHow,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    by: Option<Principal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    peer_pid: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    exe: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct PendingBody {
-    principal: Principal,
-    #[serde(with = "clawft_mesh_local::hexser::hex32")]
-    user_pubkey: [u8; 32],
-    user_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    peer_pid: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    exe: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct CertBody {
-    user_id: String,
-    serial: u64,
-    issued_at: u64,
-    not_after: u64,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct RevokeBody {
-    principal: Principal,
-    user_id: String,
-    reason: String,
-    by: Principal,
-    serials_revoked_through: Option<u64>,
-}
-
-#[derive(Clone)]
-enum Event {
-    Bind(BindBody),
-    Pending(PendingBody),
-    Cert(CertBody),
-    Revoke(RevokeBody),
-    /// Kinds this fold does not interpret (peer.*, policy.*, ...).
-    Other,
-}
-
-impl Event {
-    fn parse(rec: &Record) -> Result<Event, BindError> {
-        let bad = |e: serde_json::Error| BindError::Malformed {
-            kind: rec.kind.clone(),
-            seq: rec.seq,
-            reason: e.to_string(),
-        };
-        let b = rec.body.clone();
-        Ok(match rec.kind.as_str() {
-            KIND_BIND => Event::Bind(serde_json::from_value(b).map_err(bad)?),
-            KIND_BIND_PENDING => Event::Pending(serde_json::from_value(b).map_err(bad)?),
-            KIND_CERT_ISSUE => Event::Cert(serde_json::from_value(b).map_err(bad)?),
-            KIND_REVOKE => Event::Revoke(serde_json::from_value(b).map_err(bad)?),
-            _ => Event::Other,
-        })
-    }
-
-    fn kind_body(&self) -> Result<(&'static str, Value), serde_json::Error> {
-        Ok(match self {
-            Event::Bind(b) => (KIND_BIND, serde_json::to_value(b)?),
-            Event::Pending(b) => (KIND_BIND_PENDING, serde_json::to_value(b)?),
-            Event::Cert(b) => (KIND_CERT_ISSUE, serde_json::to_value(b)?),
-            Event::Revoke(b) => (KIND_REVOKE, serde_json::to_value(b)?),
-            Event::Other => ("", Value::Null),
-        })
-    }
 }
 
 /// The folded state.
@@ -179,6 +50,9 @@ pub struct Bindings {
     issued: HashMap<String, Vec<u64>>,
     revoked_through: HashMap<String, u64>,
     last_serial: u64,
+    /// Principals whose binding was revoked and not yet re-approved.
+    revoked_principals: HashSet<Principal>,
+    degraded: Option<String>,
 }
 
 impl Bindings {
@@ -188,7 +62,72 @@ impl Bindings {
         for rec in journal.iter() {
             b.apply(rec)?;
         }
+        b.apply_marker(journal);
         Ok(b)
+    }
+
+    /// Like [`Bindings::fold`] but never fails: on an invalid record the state
+    /// so far is returned, marked degraded (all mutators refuse).
+    pub fn fold_lenient(journal: &Journal) -> Self {
+        let mut b = Bindings::default();
+        for rec in journal.iter() {
+            if let Err(e) = b.apply(rec) {
+                b.degraded = Some(e.to_string());
+                return b;
+            }
+        }
+        b.apply_marker(journal);
+        b
+    }
+
+    /// Why the fold stopped early, if it did.
+    pub fn degraded(&self) -> Option<&str> {
+        self.degraded.as_deref()
+    }
+
+    /// An unacknowledged quarantine already constrains the state: serials
+    /// never go below what the lost tail issued, and keys it revoked stay so.
+    fn apply_marker(&mut self, journal: &Journal) {
+        if let Some(l) = journal.lost() {
+            self.apply_lost(l.serial_high_water, &l.revoked_user_ids);
+        }
+    }
+
+    pub(crate) fn apply_lost(&mut self, high_water: u64, revoked_user_ids: &[String]) {
+        self.last_serial = self.last_serial.max(high_water);
+        for id in revoked_user_ids {
+            let Some(key) = self.user_ids.get(id).copied() else { continue };
+            if let Some(p) = self.by_key.get(&key).cloned() {
+                self.drop_key(&p, &key);
+                self.revoked_principals.insert(p);
+            }
+        }
+    }
+
+    /// Admin acknowledgement of a quarantined tail. Journals what the
+    /// quarantine lost (serial floor, keys it revoked) so those constraints
+    /// outlive the marker, then lifts read-only.
+    pub fn accept_truncate(&mut self, journal: &mut Journal, ack: AdminAck) -> Result<(), BindError> {
+        self.refuse_degraded()?;
+        let l = journal.lost().cloned().unwrap_or_default();
+        let ev = Event::Accept(AcceptBody {
+            lost_from_seq: l.lost_from_seq,
+            lost_count: l.lost_count,
+            serial_high_water: l.serial_high_water,
+            revoked_user_ids: l.revoked_user_ids,
+            quarantine: l.quarantine,
+            by: ack.by.clone(),
+        });
+        self.write(journal, false, ev)?;
+        journal.clear_lost(&ack)?;
+        Ok(())
+    }
+
+    fn refuse_degraded(&self) -> Result<(), BindError> {
+        match &self.degraded {
+            Some(m) => Err(BindError::Degraded(m.clone())),
+            None => Ok(()),
+        }
     }
 
     /// Apply one journal record (validating it against the current state).
@@ -326,7 +265,7 @@ impl Bindings {
         not_after: u64,
     ) -> Result<u64, BindError> {
         let key = self.key_of(principal).ok_or(BindError::NotBound)?;
-        let serial = self.last_serial + 1;
+        let serial = self.last_serial.checked_add(1).ok_or(BindError::SerialExhausted)?;
         let ev = Event::Cert(CertBody {
             user_id: node_id_from_pubkey(&key),
             serial,
@@ -360,12 +299,13 @@ impl Bindings {
     }
 
     fn write(&mut self, journal: &mut Journal, needs_rw: bool, ev: Event) -> Result<(), BindError> {
+        self.refuse_degraded()?;
         if needs_rw && journal.read_only() {
             return Err(JournalError::ReadOnly.into());
         }
         self.validate(&ev)?;
         let (kind, body) = ev.kind_body().map_err(JournalError::from)?;
-        journal.append(kind, body)?;
+        journal.append_raw(now(), kind, body)?;
         self.commit(&ev);
         Ok(())
     }
@@ -374,7 +314,7 @@ impl Bindings {
 
     fn validate(&self, ev: &Event) -> Result<(), BindError> {
         match ev {
-            Event::Other => Ok(()),
+            Event::Other | Event::Accept(_) => Ok(()),
             Event::Pending(p) => {
                 id_matches(&p.user_pubkey, &p.user_id)?;
                 match self.check(&p.principal, &p.user_pubkey) {
@@ -385,6 +325,12 @@ impl Bindings {
             }
             Event::Bind(b) => {
                 id_matches(&b.user_pubkey, &b.user_id)?;
+                if b.how == BindHow::Approved && b.by.is_none() {
+                    return Err(BindError::ApprovalWithoutApprover);
+                }
+                if b.how == BindHow::Tofu && self.revoked_principals.contains(&b.principal) {
+                    return Err(BindError::ApprovalRequired);
+                }
                 if b.how == BindHow::Rebind {
                     let old = self.by_principal.get(&b.principal).ok_or(BindError::NotBound)?;
                     if *old == b.user_pubkey {
@@ -408,8 +354,9 @@ impl Bindings {
                 if !self.user_ids.contains_key(&c.user_id) {
                     return Err(BindError::UnknownUser);
                 }
-                if c.serial <= self.last_serial {
-                    return Err(BindError::SerialNotMonotonic { got: c.serial, last: self.last_serial });
+                let expected = self.last_serial.checked_add(1).ok_or(BindError::SerialExhausted)?;
+                if c.serial != expected {
+                    return Err(BindError::SerialOutOfSequence { got: c.serial, expected });
                 }
                 if c.not_after <= c.issued_at {
                     return Err(BindError::BadValidity);
@@ -434,6 +381,7 @@ impl Bindings {
     fn commit(&mut self, ev: &Event) {
         match ev {
             Event::Other => {}
+            Event::Accept(a) => self.apply_lost(a.serial_high_water, &a.revoked_user_ids),
             Event::Pending(p) => {
                 self.pending.insert(p.principal.clone(), p.user_pubkey);
             }
@@ -442,6 +390,7 @@ impl Bindings {
                     self.drop_key(&b.principal, &old);
                 }
                 self.pending.remove(&b.principal);
+                self.revoked_principals.remove(&b.principal);
                 self.by_principal.insert(b.principal.clone(), b.user_pubkey);
                 self.by_key.insert(b.user_pubkey, b.principal.clone());
                 self.user_ids.insert(b.user_id.clone(), b.user_pubkey);
@@ -455,6 +404,7 @@ impl Bindings {
                     self.drop_key(&r.principal, &key);
                 }
                 self.pending.remove(&r.principal);
+                self.revoked_principals.insert(r.principal.clone());
             }
         }
     }
@@ -490,4 +440,8 @@ fn bind_body(principal: &Principal, key: &[u8; 32], how: BindHow, meta: BindMeta
         peer_pid: meta.peer_pid,
         exe: meta.exe,
     }
+}
+
+fn now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }

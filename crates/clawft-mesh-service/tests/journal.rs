@@ -28,7 +28,7 @@ fn copy_dir(from: &Path, to: &Path) {
 
 #[test]
 fn append_replay_golden() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tmpdir();
     let mut j = Journal::open(dir.path(), key()).unwrap();
     assert!(j.head().is_none());
     j.append_at(1_790_000_000, "machine.init", json!({"node_id": "n", "machine_pubkey": "p", "key_origin": "generated", "build_sha": "abc"})).unwrap();
@@ -57,13 +57,13 @@ fn append_replay_golden() {
 
 #[test]
 fn tamper_every_byte_position_is_detected() {
-    let src = tempfile::tempdir().unwrap();
+    let src = tmpdir();
     let mut j = Journal::open(src.path(), key()).unwrap();
     fill(&mut j, 4);
     drop(j);
     let orig = fs::read(src.path().join("journal.jsonl")).unwrap();
     for pos in 0..orig.len() {
-        let dst = tempfile::tempdir().unwrap();
+        let dst = tmpdir();
         copy_dir(src.path(), dst.path());
         let mut bad = orig.clone();
         bad[pos] ^= 0x01;
@@ -81,7 +81,7 @@ fn tamper_every_byte_position_is_detected() {
 
 #[test]
 fn wrong_key_is_an_error_and_modifies_nothing() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tmpdir();
     let mut j = Journal::open(dir.path(), key()).unwrap();
     fill(&mut j, 2);
     drop(j);
@@ -96,7 +96,7 @@ fn truncated_tail_is_quarantined_and_binds_refused() {
     use clawft_mesh_local::{node_id_from_pubkey, Principal};
     use clawft_mesh_service::{BindError, BindHow, BindMeta, Bindings};
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tmpdir();
     let mut j = Journal::open(dir.path(), key()).unwrap();
     fill(&mut j, 3);
     drop(j);
@@ -119,17 +119,17 @@ fn truncated_tail_is_quarantined_and_binds_refused() {
     let r = b.bind_pending(&mut j, &Principal::Uid(501), &pk, BindMeta::default());
     assert!(matches!(r, Err(BindError::Journal(JournalError::ReadOnly))));
 
-    j.accept_truncate();
+    b.accept_truncate(&mut j, clawft_mesh_service::AdminAck::admin_verified(Principal::Uid(0))).unwrap();
     b.bind(&mut j, &Principal::Uid(501), &pk, BindHow::Tofu, BindMeta::default()).unwrap();
     drop(j);
     let j = Journal::open(dir.path(), key()).unwrap();
     assert!(!j.read_only());
-    assert_eq!(j.len(), 3, "chain continues from the valid prefix");
+    assert_eq!(j.len(), 4, "valid prefix + acceptance record + bind");
 }
 
 #[test]
 fn deleting_a_middle_record_breaks_the_chain() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tmpdir();
     let mut j = Journal::open(dir.path(), key()).unwrap();
     fill(&mut j, 4);
     drop(j);
@@ -145,7 +145,7 @@ fn deleting_a_middle_record_breaks_the_chain() {
 
 #[test]
 fn segment_rollover_keeps_the_chain() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tmpdir();
     let opts = JournalOptions { max_segment_bytes: 400 };
     let mut j = Journal::open_with(dir.path(), key(), opts).unwrap();
     fill(&mut j, 12);
@@ -178,7 +178,7 @@ fn segment_rollover_keeps_the_chain() {
 
 #[test]
 fn second_opener_fails_naming_the_holder() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tmpdir();
     let j = Journal::open(dir.path(), key()).unwrap();
     match Journal::open(dir.path(), key()) {
         Err(JournalError::Locked { holder_pid }) => assert_eq!(holder_pid, Some(std::process::id())),
@@ -190,7 +190,7 @@ fn second_opener_fails_naming_the_holder() {
 
 #[test]
 fn concurrent_appenders_are_serialised_by_the_lock() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tmpdir();
     let path = dir.path().to_path_buf();
     let threads: Vec<_> = (0..8)
         .map(|t| {
@@ -220,4 +220,12 @@ fn concurrent_appenders_are_serialised_by_the_lock() {
     for (i, r) in j.iter().enumerate() {
         assert_eq!(r.seq, i as u64);
     }
+}
+
+/// A temp dir the state-dir safety check accepts (0700).
+fn tmpdir() -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    d
 }
