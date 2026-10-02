@@ -1,7 +1,6 @@
 //! Identity journal tests; helpers come from the parent test module.
 
 use super::*;
-use crate::project_identity::*;
 use serde_json::json;
 
 #[test]

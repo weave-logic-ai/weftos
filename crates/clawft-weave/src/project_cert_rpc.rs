@@ -32,8 +32,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use clawft_kernel::chain::ChainManager;
 use clawft_kernel::project_identity::{
-    self as ident, IdentityError, IdentityJournal, JournalLock, JournalRecord, KIND_REGISTER, KIND_REKEY,
-    KIND_REVOKE, Registration, RevocationView, SOURCE,
+    self as ident, IdentityError, IdentityJournal, JournalRecord, KIND_REGISTER, KIND_REKEY,
+    KIND_REVOKE, Registration, SOURCE,
 };
 use clawft_kernel::token_authority::SECRET_PREFIX;
 use clawft_rpc::Response;
@@ -47,7 +47,7 @@ use crate::rpc_ext::{ExtCall, ExtCtx, ExtFuture};
 
 #[path = "project_cert_store.rs"]
 mod store;
-use store::{current_view_locked, read_cert_files};
+use store::current_view_locked;
 pub use store::{current_view, repair};
 
 #[path = "project_cert_nonce.rs"]
