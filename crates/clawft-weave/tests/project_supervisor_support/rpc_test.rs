@@ -100,8 +100,16 @@ pub fn lifecycle_rpc_end_to_end() {
         // methods, but it can renew itself, and only itself.
         let token = fixture::seen_spawn(&fx.run_dir()).project_token.unwrap();
         for m in ["project.start", "project.stop_all", "project.restart", "kernel.shutdown"] {
-            assert!(denied(&call(&sock, m, json!({"id": fx.id}), Some(&token)).await), "{m} with a project token");
+            let r = call(&sock, m, json!({"id": fx.id}), Some(&token)).await;
+            assert!(denied(&r) || r["error_kind"] == "project_token_method_denied", "{m} with a project token: {r}");
         }
+        // Write methods outside the allow-list are refused before they run.
+        for m in ["agent.list", "cron.add", "agent.spawn", "workload.place", "chain.tail", "mesh.register"] {
+            let r = call(&sock, m, json!({}), Some(&token)).await;
+            assert_eq!(r["error_kind"], "project_token_method_denied", "{m}: {r}");
+        }
+        let r = call(&sock, "kernel.handshake", json!({}), Some(&token)).await;
+        assert_eq!(r["ok"], true, "the link's probe is allowed: {r}");
         let r = call(&sock, "project.token.refresh", json!({"id": fx.id}), Some(&token)).await;
         assert_eq!(r["ok"], true, "{r}");
         let fresh = r["result"]["token"].as_str().unwrap().to_owned();
@@ -187,6 +195,18 @@ async fn identity_changes(
     assert!(!fx.run_dir().join("revoked").exists(), "rekey must not write the marker");
     let r = call(sock, "project.ensure_running", json!({"id": fx.id}), Some("admin")).await;
     assert_eq!(r["ok"], true, "a rekeyed project starts normally: {r}");
+    let pid2 = r["result"]["pid"].as_u64().unwrap() as u32;
+
+    // Repair of a corrupt identity journal may change what a project's key
+    // is: its child is stopped (and starts again on demand).
+    std::fs::write(fx.mdir.join(clawft_kernel::project_identity::JOURNAL_FILE), "garbage\nmore garbage\n").unwrap();
+    let r = call(sock, "project.identity.repair", json!({}), Some("admin")).await;
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(r["result"]["key_changes"].as_array().is_some_and(|c| c.iter().any(|x| x["id"] == fx.id.as_str())), "{r}");
+    wait_gone(pid2).await;
+    assert!(!fx.run_dir().join("revoked").exists());
+    let r = call(sock, "project.ensure_running", json!({"id": fx.id}), Some("admin")).await;
+    assert_eq!(r["ok"], true, "{r}");
     let pid2 = r["result"]["pid"].as_u64().unwrap() as u32;
 
     // Revoke: terminal marker at the exact path the child checks.

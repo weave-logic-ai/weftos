@@ -3693,6 +3693,21 @@ async fn resolve_caller_capabilities(
     CallerCapabilities::denied()
 }
 
+/// True when the caller's credential is a live project-scoped token.
+async fn project_token_scope(
+    caller: &crate::rpc_ext::CallerCtx,
+    kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> bool {
+    let Some(t) = caller.auth.as_deref().map(str::trim) else { return false };
+    if !t.starts_with(clawft_kernel::token_authority::SECRET_PREFIX) {
+        return false;
+    }
+    let Some(authority) = crate::token_rpc::authority_for(kernel).await else { return false };
+    authority
+        .validate(t)
+        .is_some_and(|i| i.scope == clawft_kernel::token_authority::TokenScope::Project)
+}
+
 /// Resolve the caller's capabilities, then run the capability check and
 /// extension gates (ADR-103 D0). `Err` is the refusal response.
 async fn authorize_caller(
@@ -3724,6 +3739,13 @@ async fn authorize_caller(
     // binding, never from `Request.project`; a disagreeing claim is refused.
     crate::project_boot_run::note_activity(method);
     caller.verified_project = crate::caller_principal::establish(caller, method, params, kernel).await?;
+    // A project token may call only what its parent link calls.
+    if project_token_scope(caller, kernel).await && !crate::project_token_scope::allows(method) {
+        return Err(Response::error_with_kind(
+            crate::project_token_scope::DENIED_KIND,
+            format!("a project token may not call {method}"),
+        ));
+    }
     let caps = resolve_caller_capabilities(caller, kernel).await;
     crate::rpc_ext::authorize(caller, &caps, method, params, kernel).await?;
     Ok(caps)

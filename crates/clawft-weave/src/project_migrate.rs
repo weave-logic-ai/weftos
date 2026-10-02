@@ -45,6 +45,10 @@ pub enum MigrateError {
     /// Already in the requested state.
     #[error("project {0} is already {1}")]
     Already(String, &'static str),
+    /// A source, or a directory on the way to it, is a symlink or not a
+    /// regular file: never followed.
+    #[error("{0} is a symlink or not a regular file; refusing to follow it")]
+    Unsafe(String),
     /// Filesystem or manifest failure.
     #[error("{0}")]
     Io(String),
@@ -117,8 +121,45 @@ pub fn resolve(manifests_dir: &Path, id_or_name: &str) -> Result<ProjectManifest
 }
 
 /// Plan the migration; refuses while the project's own daemon runs.
+/// `Ok(true)` for a regular file, `Ok(false)` when absent; anything that is
+/// a symlink (or not a regular file) is [`MigrateError::Unsafe`].
+fn lstat_regular(p: &Path) -> Result<bool, MigrateError> {
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if m.file_type().is_file() => Ok(true),
+        Ok(_) => Err(MigrateError::Unsafe(p.display().to_string())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(MigrateError::Io(format!("{}: {e}", p.display()))),
+    }
+}
+
+/// A directory on the way (`.weftos`, `runtime`, `state`) must be a real
+/// directory when it exists: a symlink there would redirect the copy.
+fn lstat_dir(p: &Path) -> Result<(), MigrateError> {
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if m.file_type().is_dir() => Ok(()),
+        Ok(_) => Err(MigrateError::Unsafe(p.display().to_string())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(MigrateError::Io(format!("{}: {e}", p.display()))),
+    }
+}
+
+/// The checks both planning and applying run: every directory on the way is
+/// real and every source is a regular file.
+fn verify_paths(root: &Path) -> Result<(), MigrateError> {
+    let w = root.join(".weftos");
+    lstat_dir(&w)?;
+    lstat_dir(&w.join("runtime"))?;
+    lstat_dir(&w.join("state"))?;
+    for name in STATE_FILES {
+        lstat_regular(&w.join("runtime").join(name))?;
+        lstat_regular(&w.join("state").join(name))?;
+    }
+    Ok(())
+}
+
 pub fn plan(manifests_dir: &Path, id_or_name: &str) -> Result<Plan, MigrateError> {
     let m = resolve(manifests_dir, id_or_name)?;
+    verify_paths(&m.root)?;
     let legacy = m.root.join(".weftos").join("runtime");
     if let Some(why) = live_daemon_in(&legacy) {
         return Err(MigrateError::LegacyDaemonRunning(why, m.root.display().to_string()));
@@ -145,6 +186,8 @@ pub fn plan(manifests_dir: &Path, id_or_name: &str) -> Result<Plan, MigrateError
 
 /// Apply `plan`. Copies are written 0600 beside a temp name and renamed.
 pub fn apply(manifests_dir: &Path, plan: &Plan) -> Result<(), MigrateError> {
+    // Planning and applying are not atomic: look again.
+    verify_paths(&plan.manifest.root)?;
     for a in &plan.actions {
         match a {
             Action::Copy { from, to } => copy_private(from, to)?,
@@ -158,16 +201,34 @@ pub fn apply(manifests_dir: &Path, plan: &Plan) -> Result<(), MigrateError> {
 fn copy_private(from: &Path, to: &Path) -> Result<(), MigrateError> {
     use std::io::Write as _;
     let io = |e: std::io::Error| MigrateError::Io(format!("{}: {e}", to.display()));
-    let bytes = std::fs::read(from).map_err(|e| MigrateError::Io(format!("{}: {e}", from.display())))?;
+    // O_NOFOLLOW on the source: a file swapped for a symlink after the check
+    // is refused, not followed.
+    let bytes = {
+        use std::io::Read as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let mut f = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::libc::O_NOFOLLOW)
+            .open(from)
+            .map_err(|e| MigrateError::Io(format!("{}: {e}", from.display())))?;
+        if !f.metadata().map_err(io)?.is_file() {
+            return Err(MigrateError::Unsafe(from.display().to_string()));
+        }
+        let mut b = Vec::new();
+        f.read_to_end(&mut b).map_err(io)?;
+        b
+    };
     let dir = to.parent().ok_or_else(|| MigrateError::Io("no parent directory".into()))?;
     std::fs::create_dir_all(dir).map_err(io)?;
+    lstat_dir(dir)?;
     let tmp = dir.join(format!(".migrate.{}.tmp", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
     let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
+    opts.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        opts.mode(0o600);
+        opts.mode(0o600).custom_flags(nix::libc::O_NOFOLLOW);
     }
     let mut f = opts.open(&tmp).map_err(io)?;
     f.write_all(&bytes).map_err(io)?;
@@ -338,6 +399,52 @@ mod tests {
             ServeVia::UserDaemon
         );
         assert!(matches!(revert(&w.home, &w.mdir, &w.m.id, false), Err(MigrateError::Already(..))));
+    }
+
+    #[test]
+    fn symlinked_sources_and_directories_are_refused() {
+        let w = world();
+        let d = legacy_dir(&w);
+        let secret = w.m.root.join("secret.json");
+        std::fs::write(&secret, b"{\"keys\":1}").unwrap();
+        // A symlinked source.
+        std::os::unix::fs::symlink(&secret, d.join("workloads.json")).unwrap();
+        assert!(matches!(plan(&w.mdir, &w.m.id), Err(MigrateError::Unsafe(p)) if p.ends_with("workloads.json")));
+        std::fs::remove_file(d.join("workloads.json")).unwrap();
+        // A symlinked destination file.
+        std::fs::write(d.join("apps.json"), b"[]").unwrap();
+        let st = w.m.root.join(".weftos/state");
+        std::fs::create_dir_all(&st).unwrap();
+        std::os::unix::fs::symlink(&secret, st.join("apps.json")).unwrap();
+        assert!(matches!(plan(&w.mdir, &w.m.id), Err(MigrateError::Unsafe(_))));
+        std::fs::remove_file(st.join("apps.json")).unwrap();
+        // A symlinked state directory (the copy would land elsewhere).
+        std::fs::remove_dir(&st).unwrap();
+        let elsewhere = w.m.root.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &st).unwrap();
+        assert!(matches!(plan(&w.mdir, &w.m.id), Err(MigrateError::Unsafe(_))));
+        assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none(), "nothing was written through it");
+        std::fs::remove_file(&st).unwrap();
+        // A symlinked runtime directory.
+        std::fs::remove_dir_all(&d).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &d).unwrap();
+        assert!(matches!(plan(&w.mdir, &w.m.id), Err(MigrateError::Unsafe(_))));
+    }
+
+    #[test]
+    fn a_source_swapped_for_a_symlink_after_planning_is_not_followed() {
+        let w = world();
+        let d = legacy_dir(&w);
+        std::fs::write(d.join("apps.json"), b"[]").unwrap();
+        let p = plan(&w.mdir, &w.m.id).unwrap();
+        let secret = w.m.root.join("secret.json");
+        std::fs::write(&secret, b"TOP SECRET").unwrap();
+        std::fs::remove_file(d.join("apps.json")).unwrap();
+        std::os::unix::fs::symlink(&secret, d.join("apps.json")).unwrap();
+        assert!(matches!(apply(&w.mdir, &p), Err(MigrateError::Unsafe(_))));
+        assert!(!w.m.root.join(".weftos/state/apps.json").exists());
+        assert!(find_by_id(&w.mdir, &w.m.id).unwrap().unwrap().serve.is_none_or(|s| s.via == ServeVia::UserDaemon));
     }
 
     #[test]

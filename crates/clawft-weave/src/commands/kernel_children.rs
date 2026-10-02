@@ -14,11 +14,34 @@ use serde_json::{Value, json};
 pub const NO_USER_DAEMON: &str =
     "user daemon not running; run `weaver kernel start --profile user`";
 
-/// The user daemon's socket for this uid.
+/// The user daemon's socket for this uid: `~/.weftos/run/kernel.sock`, or
+/// `$WEFTOS_RUNTIME_DIR/kernel.sock` when this process is addressing the
+/// user daemon with an overridden runtime dir (`--profile user` /
+/// `WEAVER_PROFILE=user` plus `WEFTOS_RUNTIME_DIR`). A runtime dir override
+/// without the user profile names some other daemon, not the user daemon.
 pub fn user_socket() -> anyhow::Result<PathBuf> {
-    let home = home_dir()
-        .ok_or_else(|| anyhow::anyhow!("cannot determine the home directory to find the user daemon"))?;
-    Ok(user_runtime_root(&home).join(SOCKET_NAME))
+    let profile = std::env::var("WEAVER_PROFILE").ok();
+    let runtime = std::env::var("WEFTOS_RUNTIME_DIR").ok();
+    Ok(user_socket_with(
+        home_dir().as_deref(),
+        crate::user_daemon::is_active() || profile.as_deref() == Some("user"),
+        runtime.as_deref(),
+    )
+    .ok_or_else(|| anyhow::anyhow!("cannot determine the home directory to find the user daemon"))?)
+}
+
+/// [`user_socket`] over explicit inputs.
+pub fn user_socket_with(
+    home: Option<&std::path::Path>,
+    user_profile: bool,
+    runtime_dir: Option<&str>,
+) -> Option<PathBuf> {
+    if user_profile
+        && let Some(rt) = runtime_dir.map(str::trim).filter(|r| !r.is_empty())
+    {
+        return Some(clawft_types::runtime_paths::absolutize(std::path::Path::new(rt)).join(SOCKET_NAME));
+    }
+    home.map(|h| user_runtime_root(h).join(SOCKET_NAME))
 }
 
 /// One call to the user daemon. Never starts it.
@@ -187,6 +210,17 @@ mod tests {
         let p = RuntimePaths::resolve_with(None, Some(&w.proj), Some(&w.home));
         assert!(matches!(p.source(), RootSource::Project(_)), "{:?}", p.source());
         p
+    }
+
+    #[test]
+    fn the_user_socket_honours_a_runtime_dir_override_only_for_the_user_profile() {
+        let home = std::path::Path::new("/h");
+        assert_eq!(user_socket_with(Some(home), false, None).unwrap(), PathBuf::from("/h/.weftos/run/kernel.sock"));
+        // An override without the user profile names some other daemon.
+        assert_eq!(user_socket_with(Some(home), false, Some("/x")).unwrap(), PathBuf::from("/h/.weftos/run/kernel.sock"));
+        assert_eq!(user_socket_with(Some(home), true, Some("/x")).unwrap(), PathBuf::from("/x/kernel.sock"));
+        assert_eq!(user_socket_with(Some(home), true, Some("  ")).unwrap(), PathBuf::from("/h/.weftos/run/kernel.sock"));
+        assert!(user_socket_with(None, false, None).is_none());
     }
 
     #[tokio::test]

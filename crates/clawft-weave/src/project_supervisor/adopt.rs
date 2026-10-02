@@ -40,6 +40,9 @@ pub enum Skip {
     LockNotHeld,
     /// The socket did not answer, or answered for another project or pid.
     HandshakeFailed(String),
+    /// Verified as ours but the supervisor refused to manage it (revoked,
+    /// no longer registered, ...); see the text for what was done.
+    Refused(String),
 }
 
 impl std::fmt::Display for Skip {
@@ -52,6 +55,7 @@ impl std::fmt::Display for Skip {
             }
             Skip::LockNotHeld => f.write_str("kernel.lock is not held by that pid"),
             Skip::HandshakeFailed(e) => write!(f, "handshake failed: {e}"),
+            Skip::Refused(e) => write!(f, "{e}"),
         }
     }
 }
@@ -151,6 +155,38 @@ fn check_identity(run_dir: &Path, pid: u32, current_exe: &Path) -> Result<(), Sk
     Ok(())
 }
 
+/// Verify one run dir. `None` when it has no `kernel.pid`.
+pub async fn scan_one(dir: &Path, id: &str, current_exe: &Path, io: &dyn ChildIo) -> Option<Found> {
+    let id = id.to_owned();
+    let pid_file = dir.join("kernel.pid");
+    if !pid_file.exists() {
+        return None;
+    }
+    let pid = match std::fs::read_to_string(&pid_file)
+        .map_err(|e| e.to_string())
+        .and_then(|s| s.trim().parse::<u32>().map_err(|e| e.to_string()))
+    {
+        Ok(p) => p,
+        Err(e) => return Some(Found::Unverifiable { id, pid: None, reason: Skip::BadPidFile(e) }),
+    };
+    if let Err(reason) = check_identity(dir, pid, current_exe) {
+        return Some(Found::Unverifiable { id, pid: Some(pid), reason });
+    }
+    Some(match io.handshake(&dir.join("kernel.sock")).await {
+        Some(h) if h.project_id.as_deref() == Some(id.as_str()) && h.pid == pid => Found::Adopted { id, pid },
+        Some(h) => Found::Unverifiable {
+            id,
+            pid: Some(pid),
+            reason: Skip::HandshakeFailed(format!("answered as project {:?} pid {}", h.project_id, h.pid)),
+        },
+        None => Found::Unverifiable {
+            id,
+            pid: Some(pid),
+            reason: Skip::HandshakeFailed("no answer on kernel.sock".into()),
+        },
+    })
+}
+
 /// Scan `run_root` and verify every child dir. Pure observation: nothing is
 /// signalled or modified.
 pub async fn scan(run_root: &Path, current_exe: &Path, io: &dyn ChildIo) -> Vec<Found> {
@@ -166,41 +202,8 @@ pub async fn scan(run_root: &Path, current_exe: &Path, io: &dyn ChildIo) -> Vec<
     dirs.sort();
     let mut out = Vec::new();
     for (id, dir) in dirs {
-        let pid_file = dir.join("kernel.pid");
-        if !pid_file.exists() {
-            continue;
-        }
-        let pid = match std::fs::read_to_string(&pid_file)
-            .map_err(|e| e.to_string())
-            .and_then(|s| s.trim().parse::<u32>().map_err(|e| e.to_string()))
-        {
-            Ok(p) => p,
-            Err(e) => {
-                out.push(Found::Unverifiable { id, pid: None, reason: Skip::BadPidFile(e) });
-                continue;
-            }
-        };
-        if let Err(reason) = check_identity(&dir, pid, current_exe) {
-            out.push(Found::Unverifiable { id, pid: Some(pid), reason });
-            continue;
-        }
-        match io.handshake(&dir.join("kernel.sock")).await {
-            Some(h) if h.project_id.as_deref() == Some(id.as_str()) && h.pid == pid => {
-                out.push(Found::Adopted { id, pid });
-            }
-            Some(h) => out.push(Found::Unverifiable {
-                id,
-                pid: Some(pid),
-                reason: Skip::HandshakeFailed(format!(
-                    "answered as project {:?} pid {}",
-                    h.project_id, h.pid
-                )),
-            }),
-            None => out.push(Found::Unverifiable {
-                id,
-                pid: Some(pid),
-                reason: Skip::HandshakeFailed("no answer on kernel.sock".into()),
-            }),
+        if let Some(f) = scan_one(&dir, &id, current_exe, io).await {
+            out.push(f);
         }
     }
     out

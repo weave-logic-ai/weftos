@@ -469,8 +469,9 @@ pub async fn issue_for_register(ctx: &ExtCtx, req: RegisterRequest) -> Result<Is
         .map_err(|e| IssueError::Store(format!("task failed: {e}")))?
 }
 
-/// A project's key was revoked (terminal `revoked` marker, child stopped) or
-/// replaced (child stopped, no marker). Without a supervisor (not the user
+/// A project's key was revoked (the RPC wrote the terminal marker; the child
+/// is stopped and its credentials killed) or replaced (child stopped, no
+/// marker). Without a supervisor (not the user
 /// daemon) there is nothing to do.
 #[cfg(all(unix, feature = "exochain", feature = "placement"))]
 pub async fn on_identity_change(id: &str, method: &str) {
@@ -507,8 +508,10 @@ pub fn handle(call: ExtCall) -> ExtFuture {
             Err(e) => return e.response(),
         };
         let (method, params) = (call.method, call.params);
-        // Revoke and rekey drop the `revoked` marker the child checks and
-        // stop the child (package G); done after the journal write succeeds.
+        // After the journal write succeeds, a revoke stops the child for good
+        // (`project.revoke` wrote the marker itself) and a rekey stops the old
+        // child (package G); a repair that changed a bound key does the same.
+        let is_repair = method == "project.identity.repair";
         let after = matches!(method.as_str(), "project.revoke" | "project.rekey").then(|| {
             (
                 method.clone(),
@@ -518,7 +521,37 @@ pub fn handle(call: ExtCall) -> ExtFuture {
         let out = tokio::task::spawn_blocking(move || match method.as_str() {
             "project.cert.show" => show(&env, &params),
             "project.cert.challenge" => challenge(&env, &params),
-            "project.identity.repair" => repair(&env),
+            "project.identity.repair" => {
+                // Which bound keys does the repair change? (Compared by id.)
+                let bound = |e: &CertEnv| {
+                    current_view(e).ok().map(|v| {
+                        v.all_project_ids()
+                            .into_iter()
+                            .map(|p| (p.clone(), v.bound_key_id(&p).map(str::to_owned)))
+                            .collect::<std::collections::BTreeMap<_, _>>()
+                    })
+                };
+                // A corrupt journal has no readable "before": every project
+                // the repaired view knows is treated as possibly changed
+                // (its child is stopped; it is started again on demand).
+                let before = bound(&env);
+                repair(&env).map(|mut v| {
+                    let after = bound(&env).unwrap_or_default();
+                    let changed: Vec<Value> = match &before {
+                        Some(before) => before
+                            .iter()
+                            .filter(|(id, k)| after.get(*id) != Some(*k))
+                            .map(|(id, _)| json!({"id": id, "revoked": after.get(id).is_none_or(Option::is_none)}))
+                            .collect(),
+                        None => after
+                            .iter()
+                            .map(|(id, k)| json!({"id": id, "revoked": k.is_none()}))
+                            .collect(),
+                    };
+                    v["key_changes"] = Value::Array(changed);
+                    v
+                })
+            }
             "project.rekey" => rekey(&env, &params, Utc::now())
                 .map(|i| json!({ "cert": i.cert })),
             "project.revoke" => revoke(&env, &params),
@@ -529,6 +562,13 @@ pub fn handle(call: ExtCall) -> ExtFuture {
             Ok(Ok(v)) => {
                 if let Some((method, Some(id))) = after {
                     crate::project_cert_rpc::on_identity_change(&id, &method).await;
+                }
+                if is_repair {
+                    for c in v.get("key_changes").and_then(Value::as_array).into_iter().flatten() {
+                        let Some(id) = c.get("id").and_then(Value::as_str) else { continue };
+                        let m = if c["revoked"] == true { "project.revoke" } else { "project.rekey" };
+                        crate::project_cert_rpc::on_identity_change(id, m).await;
+                    }
                 }
                 Response::success(v)
             }

@@ -55,6 +55,11 @@ fn tests() -> Vec<(&'static str, TestFn)> {
         ("idle_stop_then_restart", idle_stop_then_restart),
         ("ignored_shutdown_escalates_to_sigterm", ignored_shutdown_escalates_to_sigterm),
         ("adoption_after_user_daemon_restart", lifecycle_tests::adoption_after_user_daemon_restart),
+        ("revoked_child_is_stopped_at_adoption", lifecycle_tests::revoked_child_is_stopped_at_adoption),
+        ("ensure_running_takes_over_a_live_verified_child", lifecycle_tests::ensure_running_takes_over_a_live_verified_child),
+        ("revoke_stops_the_child_even_when_the_gated_stop_fails", lifecycle_tests::revoke_stops_the_child_even_when_the_gated_stop_fails),
+        ("a_failed_spawn_leaves_nothing_behind", lifecycle_tests::a_failed_spawn_leaves_nothing_behind),
+        ("stop_removes_spawn_json_and_a_foreign_pid_is_not_ready", lifecycle_tests::stop_removes_spawn_json_and_a_foreign_pid_is_not_ready),
         ("adopted_zombie_counts_as_dead", lifecycle_tests::adopted_zombie_counts_as_dead),
         ("pid_reuse_and_unverifiable_leftovers_are_never_adopted", lifecycle_tests::unverifiable_leftovers),
         ("spawn_refusal_cases", lifecycle_tests::spawn_refusal_cases),
@@ -335,6 +340,7 @@ fn revoked_marker() {
     rt().block_on(async {
         let sup = fx.supervisor();
         let r = sup.ensure_running(&fx.id).await.unwrap();
+        fx.mark_revoked(); // what the project.revoke RPC does first
         sup.revoked(&fx.id, "project.revoke").await;
         assert!(state::is_marked_revoked(&fx.run_dir()), "the marker the child checks");
         wait_until("child stopped", 5, || !pid_alive(r.pid)).await;

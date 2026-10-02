@@ -5,7 +5,7 @@
 //! `kernel.sock`, and records what it was given (argv, environment, cwd,
 //! `spawn.json`) for the tests to read. Behaviour comes from the file
 //! `<run>/behavior`: `serve` (default), `crash`, `exit0`,
-//! `crash-after-ready`, `ignore-shutdown`, `nolock`, `wrong-project`.
+//! `crash-after-ready`, `ignore-shutdown`, `nolock`, `wrong-project`, `wrong-pid`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
@@ -49,9 +49,11 @@ fn serve(run: &PathBuf, id: &str, mode: &str) -> ! {
             std::process::exit(3);
         });
     }
+    let wrong_pid = mode == "wrong-pid";
     let reported = if mode == "wrong-project" { "01JB8Z3Q0V6X9KQ4M2N7T5R1WD".to_owned() } else { id.to_owned() };
     for conn in listener.incoming().flatten() {
         let (run, mode, reported) = (run.clone(), mode.to_owned(), reported.clone());
+        let shown_pid = std::process::id() + u32::from(wrong_pid);
         std::thread::spawn(move || {
             let mut out = conn.try_clone().unwrap();
             for line in BufReader::new(conn).lines().map_while(Result::ok) {
@@ -61,7 +63,7 @@ fn serve(run: &PathBuf, id: &str, mode: &str) -> ! {
                         "proto": {"current": 1, "min": 1},
                         "node_id": "0".repeat(32),
                         "runtime_dir": run.display().to_string(),
-                        "pid": std::process::id(),
+                        "pid": shown_pid,
                         "project_id": reported,
                     }}),
                     Some("kernel.shutdown") => {

@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.1 cut.
 
+### Added — Weave topology Phase 2, per-project kernels (ADR-103 A7, package G)
+
+- **Per-project child kernels under the user daemon.** `weaver kernel start
+  --project <id|name>` (never starts the user daemon; it tells you the command),
+  `weaver kernel stop --project | --all-children`, `weaver kernel restart
+  --project`, and `project.start|stop|restart|status|ensure_running` on the
+  user daemon. A project opts in with `weaver project migrate-kernel <id>
+  [--dry-run|--revert]` (refuses while the project's own daemon runs; it is
+  never signalled). `weft` commands start the child on demand for a project
+  marked `via = "child-kernel"`. Idle children stop after `idle_stop_secs`
+  (default 1800 for child-kernel projects).
+- **Supervision:** crashes restart with 1 s to 30 s backoff inside a budget,
+  then `failed` until `weaver kernel restart --project`; a clean exit is never
+  restarted; children survive a user-daemon restart (`weaver update`) and are
+  verified and adopted afterwards; unverifiable leftovers are listed, never
+  signalled. `weaver doctor` reports failed, orphaned and unverified children.
+- **Security:** a child starts with an allow-listed environment (no provider
+  keys), `--profile project`, a signed parent policy, a pinned user key and a
+  Write-only project token that may call only the shared services, the
+  handshake and its own refresh. `project.revoke` stops the child, kills its
+  token and is terminal.
+
+### Changed (package G)
+
+- A plain `weaver kernel start` inside a project, beside a running user daemon,
+  is refused; pass `--legacy-project-daemon` for one more release. Running
+  daemons are not affected by a restart.
+- The launchd unit gains `AbandonProcessGroup` and the systemd unit
+  `KillMode=process` so a service restart keeps project kernels. Regenerate
+  the unit (`weaver service unit`) and reinstall it. Stopping the user daemon
+  with `weaver kernel stop --profile user` stops its children first unless you
+  pass `--keep-children`.
+
 ### Changed — Weave topology Phase 0 (ADR-103) — read before upgrading
 
 - **Stop every pre-0.8.2 daemon before first running the new build, and check

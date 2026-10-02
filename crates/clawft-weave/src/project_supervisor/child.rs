@@ -423,11 +423,17 @@ impl ChildLauncher for Launcher {
             return Err(RuntimeError::InvalidState(format!("{id} already has a live kernel")));
         }
         let token = self.issue_token(id)?;
-        self.write_run_files(spec, &token)?;
         let run_dir = self.run_dir(id);
-        let started = self.launch(spec, &run_dir).await;
+        let started = match self.write_run_files(spec, &token) {
+            Ok(()) => self.launch(spec, &run_dir).await,
+            Err(e) => Err(e),
+        };
         if started.is_err() {
+            // Nothing is left behind by a failed spawn: no live token, no
+            // spawn file with a nonce in it, no outstanding expectation.
             cancel_spawn(id);
+            self.revoke_tokens(id);
+            self.clean_spawn_file(id);
         }
         started
     }
@@ -501,9 +507,14 @@ impl Launcher {
             }
             self.signal(id, owned, Signal::SIGTERM);
             if !self.wait_gone(id, self.cfg.kill_grace).await {
+                // Identity is re-checked inside `signal` for an adopted pid:
+                // between SIGTERM and SIGKILL the pid may have been recycled.
                 self.signal(id, owned, Signal::SIGKILL);
                 self.wait_gone(id, self.cfg.kill_grace).await;
             }
+        }
+        if self.pid_of(id).is_some() {
+            return Err(RuntimeError::Backend(format!("{id}: the kernel is still running after SIGKILL")));
         }
         let info = self.wait_exit(id).await;
         Ok(info.code)
@@ -554,9 +565,25 @@ impl Launcher {
     fn signal(&self, id: &str, owned: bool, sig: Signal) {
         let Some(pid) = self.pid_of(id) else { return };
         let target = Pid::from_raw(pid as i32);
-        // An owned child leads its own process group; an adopted one is
-        // signalled alone.
-        let _ = if owned { killpg(target, sig) } else { kill(target, sig) };
+        if owned {
+            // A child we started leads its own process group.
+            let _ = killpg(target, sig);
+            return;
+        }
+        // An adopted pid is signalled only while it still verifies as ours,
+        // and as a group only when it really leads one (a recycled pid that
+        // leads nothing is never group-killed).
+        if !super::adopt::identity_ok(&self.run_dir(id), pid, &self.cfg.exe) {
+            return;
+        }
+        let leads_group = nix::unistd::getpgid(Some(target)).is_ok_and(|g| g == target);
+        let _ = if leads_group { killpg(target, sig) } else { kill(target, sig) };
+    }
+
+    /// Delete `<run>/<id>/spawn.json` (the child consumes it at boot; this
+    /// covers a stop, a failure or a spawn that never booted).
+    pub fn clean_spawn_file(&self, id: &str) {
+        let _ = std::fs::remove_file(self.run_dir(id).join(SPAWN_JSON_FILE));
     }
 }
 

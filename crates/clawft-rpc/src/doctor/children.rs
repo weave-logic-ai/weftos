@@ -35,13 +35,44 @@ fn failed_reason(run_dir: &Path) -> Option<String> {
     (state == ChildState::Failed).then(|| v["failed_reason"].as_str().unwrap_or("restart budget spent").to_owned())
 }
 
+/// What the user daemon's supervisor says about its children
+/// (`project.status`): project id -> (state, pid). `None` when the daemon
+/// cannot be reached or does not answer within two seconds, so the process
+/// table alone never vouches for a child.
+pub fn supervisor_view(run_root: &Path) -> Option<std::collections::HashMap<String, (String, Option<u32>)>> {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::time::Duration;
+    let mut s = std::os::unix::net::UnixStream::connect(run_root.join(crate::SOCKET_NAME)).ok()?;
+    let t = Some(Duration::from_secs(2));
+    let _ = s.set_write_timeout(t);
+    let _ = s.set_read_timeout(t);
+    let req = crate::Request::with_params("project.status", serde_json::json!({})).with_auth("admin");
+    writeln!(s, "{}", serde_json::to_string(&req).ok()?).ok()?;
+    let mut line = String::new();
+    BufReader::new(s.take(1 << 20)).read_line(&mut line).ok()?;
+    let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    let kids = v.get("result")?.get("children")?.as_array()?;
+    Some(
+        kids.iter()
+            .filter_map(|k| {
+                Some((
+                    k.get("project_id")?.as_str()?.to_owned(),
+                    (k.get("state")?.as_str()?.to_owned(), k.get("pid").and_then(|p| p.as_u64()).map(|p| p as u32)),
+                ))
+            })
+            .collect(),
+    )
+}
+
 /// All child-kernel findings for `env.home`.
 pub fn check(env: &DoctorEnv, procs: &ProcTable) -> Vec<Finding> {
     let c = Component::Runtime;
     let run_root = user_runtime_root(&env.home);
     let user_daemon_alive = read_pid(&run_root.join(PID_FILE_NAME)).is_some_and(|p| procs.alive(p));
+    let supervisor = if user_daemon_alive { supervisor_view(&run_root) } else { None };
     let mut out = Vec::new();
     let mut children = 0usize;
+    let mut unconfirmed = 0usize;
 
     if let Ok(rd) = std::fs::read_dir(&run_root) {
         let mut dirs: Vec<_> = rd
@@ -79,7 +110,26 @@ pub fn check(env: &DoctorEnv, procs: &ProcTable) -> Vec<Finding> {
                 .map(|r| r.command.as_str())
                 .unwrap_or_default();
             if is_child_command(command, &id) {
-                children += 1;
+                if user_daemon_alive {
+                    match &supervisor {
+                        Some(view) if view.get(&id).is_some_and(|(st, p)| st == "running" && *p == Some(pid)) => {
+                            children += 1;
+                        }
+                        Some(_) => out.push(
+                            Finding::new(
+                                c,
+                                format!("child:{id}:unsupervised"),
+                                Severity::Warn,
+                                format!(
+                                    "project {id}: kernel pid {pid} runs but the user daemon's supervisor does not \
+                                     list it as running (a process in the table is not a supervised child)"
+                                ),
+                            )
+                            .remedy(format!("`weaver kernel start --project {id}` adopts a verified child; or restart the user daemon")),
+                        ),
+                        None => unconfirmed += 1,
+                    }
+                }
                 if !user_daemon_alive {
                     out.push(
                         Finding::new(
@@ -113,8 +163,22 @@ pub fn check(env: &DoctorEnv, procs: &ProcTable) -> Vec<Finding> {
             c,
             "children",
             Severity::Ok,
-            format!("{children} project kernel(s) running under the user daemon"),
+            format!("{children} project kernel(s) running under the user daemon (confirmed by its supervisor)"),
         ));
+    }
+    if unconfirmed > 0 {
+        out.push(
+            Finding::new(
+                c,
+                "children:unconfirmed",
+                Severity::Warn,
+                format!(
+                    "{unconfirmed} project kernel(s) are in the process table but the user daemon \
+                     did not answer `project.status`, so they are not confirmed as supervised"
+                ),
+            )
+            .remedy("`weaver kernel status --profile user`"),
+        );
     }
 
     // Project-rooted (legacy) daemons that run beside the user daemon, or
@@ -174,7 +238,8 @@ mod tests {
     const ID: &str = "01JB8Z3Q0V6X9KQ4M2N7T5R1WD";
 
     fn setup() -> (tempfile::TempDir, DoctorEnv) {
-        let t = tempfile::tempdir().unwrap();
+        // Short path: the supervisor-status tests bind a unix socket here.
+        let t = tempfile::Builder::new().prefix("dch").tempdir_in("/tmp").unwrap();
         let env = test_env(t.path());
         std::fs::create_dir_all(user_runtime_root(&env.home).join(ID)).unwrap();
         (t, env)
@@ -218,10 +283,48 @@ mod tests {
         let ps = format!("4242 /u/weaver kernel start --foreground --profile project --project {ID}\n");
         let (env, procs) = with_ps(env, &ps);
         assert_eq!(ids(&check(&env, &procs)), [format!("child:{ID}:orphan")]);
-        // With a live user daemon the same child is healthy.
-        std::fs::write(user_runtime_root(&env.home).join("kernel.pid"), "100").unwrap();
-        let (env, procs) = with_ps(env, &format!("100 /u/weaver kernel start --foreground --profile user\n{ps}"));
+        // A live user daemon that confirms the child: healthy.
+        let root = user_runtime_root(&env.home);
+        std::fs::write(root.join("kernel.pid"), "100").unwrap();
+        let ps2 = format!("100 /u/weaver kernel start --foreground --profile user\n{ps}");
+        let (env, procs) = with_ps(env, &ps2);
+        let status = serde_json::json!({"ok": true, "result": {"children": [
+            {"project_id": ID, "state": "running", "pid": 4242}], "unverifiable": []}});
+        serve_status(&root, status);
         assert_eq!(ids(&check(&env, &procs)), ["children"]);
+    }
+
+    /// A one-connection-at-a-time fake user daemon answering `project.status`.
+    fn serve_status(run_root: &std::path::Path, reply: serde_json::Value) {
+        use std::io::{BufRead, BufReader, Write};
+        let l = std::os::unix::net::UnixListener::bind(run_root.join("kernel.sock")).unwrap();
+        std::thread::spawn(move || {
+            for s in l.incoming().flatten() {
+                let mut line = String::new();
+                BufReader::new(&s).read_line(&mut line).unwrap_or(0);
+                let mut s = s;
+                let _ = writeln!(s, "{reply}");
+            }
+        });
+    }
+
+    #[test]
+    fn the_process_table_alone_never_vouches_for_a_child() {
+        let (_t, env) = setup();
+        let root = user_runtime_root(&env.home);
+        std::fs::write(root.join(ID).join("kernel.pid"), "4242").unwrap();
+        std::fs::write(root.join("kernel.pid"), "100").unwrap();
+        let ps = format!(
+            "100 /u/weaver kernel start --foreground --profile user\n\
+             4242 /u/weaver kernel start --foreground --profile project --project {ID}\n"
+        );
+        // The user daemon is in the table but does not answer: unconfirmed.
+        let (env, procs) = with_ps(env, &ps);
+        assert_eq!(ids(&check(&env, &procs)), ["children:unconfirmed"]);
+        // It answers and does not list the child (or lists another pid).
+        serve_status(&root, serde_json::json!({"ok": true, "result": {"children": [
+            {"project_id": ID, "state": "running", "pid": 999}], "unverifiable": []}}));
+        assert_eq!(ids(&check(&env, &procs)), [format!("child:{ID}:unsupervised")]);
     }
 
     #[test]

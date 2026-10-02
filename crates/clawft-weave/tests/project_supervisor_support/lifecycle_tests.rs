@@ -146,7 +146,7 @@ pub fn spawn_refusal_cases() {
         let deep = clawft_weave::project_supervisor::Supervisor::new(deep, fx.deps());
         assert_eq!(refused(deep.ensure_running(&fx.id).await.unwrap_err()), "socket_path_too_long");
         // A revoked key with no certificate in force.
-        state::mark_revoked(&fx.run_dir(), "test").unwrap();
+        fx.mark_revoked();
         assert_eq!(refused(sup.ensure_running(&fx.id).await.unwrap_err()), "project_revoked");
         std::fs::remove_file(fx.run_dir().join("revoked")).unwrap();
         // No governance engine: no parent policy, no child.
@@ -186,5 +186,137 @@ pub fn adopted_zombie_counts_as_dead() {
         std::fs::remove_file(fx.run_dir().join("kernel.pid")).unwrap();
         assert!(sup.launcher().wait_exit(&fx.id).await.clean());
         let _ = zombie.wait();
+    });
+}
+
+/// The user daemon restarts while a project is revoked: the verified child is
+/// stopped at adoption (not left silently running) and listed.
+pub fn revoked_child_is_stopped_at_adoption() {
+    let fx = Fixture::new();
+    fx.behavior("serve");
+    let first = rt();
+    let pid = first.block_on(async { fx.supervisor().ensure_running(&fx.id).await.unwrap().pid });
+    first.shutdown_background();
+    fx.mark_revoked();
+    rt().block_on(async {
+        let sup = fx.supervisor();
+        let found = sup.adopt_on_boot().await;
+        match &found[..] {
+            [Found::Unverifiable { pid: Some(p), reason: Skip::Refused(m), .. }] => {
+                assert_eq!(*p, pid);
+                assert!(m.contains("revoked") && m.contains("was stopped"), "{m}");
+            }
+            other => panic!("{other:?}"),
+        }
+        wait_until("revoked child stopped", 5, || !pid_alive(pid)).await;
+        assert_eq!(sup.unverifiable().len(), 1, "listed for doctor and status");
+        assert!(sup.status_all().await.iter().all(|s| s.pid.is_none()), "nothing is running or supervised");
+        assert_eq!(sup.ensure_running(&fx.id).await.unwrap_err().kind(), "project_revoked");
+    });
+}
+
+/// A verified child nobody supervises is taken over by ensure_running, never
+/// duplicated.
+pub fn ensure_running_takes_over_a_live_verified_child() {
+    let fx = Fixture::new();
+    fx.behavior("serve");
+    let first = rt();
+    let pid = first.block_on(async { fx.supervisor().ensure_running(&fx.id).await.unwrap().pid });
+    first.shutdown_background();
+    rt().block_on(async {
+        let sup = fx.supervisor(); // no adopt_on_boot
+        let r = sup.ensure_running(&fx.id).await.unwrap();
+        assert!(!r.started && r.pid == pid);
+        assert_eq!(sup.launcher().spawn_count(), 0);
+        sup.stop(&fx.id).await.unwrap();
+    });
+    // A live process that holds the lock but does not answer as the project
+    // cannot be adopted and a second kernel must not start beside it.
+    let fx = Fixture::new();
+    let mut squatter = manual_kernel(&fx.run_dir(), &fx.id, "wrong-project");
+    rt().block_on(async {
+        let sup = fx.supervisor();
+        let e = sup.ensure_running(&fx.id).await.unwrap_err();
+        assert_eq!(e.kind(), "leftover_kernel", "{e}");
+        assert_eq!(sup.launcher().spawn_count(), 0);
+    });
+    let _ = squatter.kill();
+    let _ = squatter.wait();
+}
+
+/// A gate that allows everything the supervisor does except stopping.
+struct DenyStop(clawft_kernel::workload_governance::WorkloadGate);
+
+impl clawft_kernel::gate::GateBackend for DenyStop {
+    fn check(&self, agent: &str, action: &str, ctx: &serde_json::Value) -> clawft_kernel::gate::GateDecision {
+        if action == "workload.stop" {
+            return clawft_kernel::gate::GateDecision::Deny { reason: "stop denied by test".into(), receipt: None };
+        }
+        self.0.check(agent, action, ctx)
+    }
+}
+
+/// Revoke with a governance gate that refuses the stop: credentials die
+/// first, the signal path still stops the child, the project is `failed`.
+pub fn revoke_stops_the_child_even_when_the_gated_stop_fails() {
+    use clawft_kernel::workload_governance::{WorkloadGate, project_supervisor_permit};
+    let fx = Fixture::new();
+    fx.behavior("serve");
+    rt().block_on(async {
+        let mut deps = fx.deps();
+        let gate = WorkloadGate::new(0.95, false).with_permit(project_supervisor_permit()).unwrap();
+        deps.gate = Some(std::sync::Arc::new(DenyStop(gate)));
+        let sup = clawft_weave::project_supervisor::Supervisor::new(fx.cfg(), deps);
+        let r = sup.ensure_running(&fx.id).await.unwrap();
+        let token = super::fixture::seen_spawn(&fx.run_dir()).project_token.unwrap();
+        assert!(fx.tokens.validate(&token).is_some());
+        fx.mark_revoked();
+        sup.revoked(&fx.id, "project.revoke").await;
+        assert!(fx.tokens.validate(&token).is_none(), "credentials are dead");
+        wait_until("child stopped by the fallback", 5, || !pid_alive(r.pid)).await;
+        let st = sup.status(&fx.id).await;
+        assert_eq!(st.state, ChildState::Failed);
+        assert!(st.failed_reason.unwrap().contains("revoked"));
+        assert!(!fx.run_dir().join("spawn.json").exists());
+        assert_eq!(sup.ensure_running(&fx.id).await.unwrap_err().kind(), "project_revoked");
+    });
+}
+
+/// A failed spawn leaves no token, no spawn file and no expectation.
+pub fn a_failed_spawn_leaves_nothing_behind() {
+    let fx = Fixture::new();
+    rt().block_on(async {
+        let mut cfg = fx.cfg();
+        cfg.exe = fx.tmp.path().join("no-such-kernel");
+        let sup = clawft_weave::project_supervisor::Supervisor::new(cfg, fx.deps());
+        let e = sup.ensure_running(&fx.id).await.unwrap_err();
+        assert_eq!(e.kind(), "project_start_failed", "{e}");
+        assert!(fx.tokens.list().is_empty(), "the issued token was revoked");
+        assert!(!fx.run_dir().join("spawn.json").exists());
+        assert!(!clawft_weave::mesh_local_registry::spawn_expected(&fx.id, state::now_unix()));
+    });
+}
+
+/// stop deletes spawn.json (the real child consumes it at boot; the fake
+/// leaves it), and a child answering with another pid is not "ready".
+pub fn stop_removes_spawn_json_and_a_foreign_pid_is_not_ready() {
+    let fx = Fixture::new();
+    fx.behavior("serve");
+    rt().block_on(async {
+        let sup = fx.supervisor();
+        sup.ensure_running(&fx.id).await.unwrap();
+        assert!(fx.run_dir().join("spawn.json").exists());
+        sup.stop(&fx.id).await.unwrap();
+        assert!(!fx.run_dir().join("spawn.json").exists());
+    });
+    let fx = Fixture::new();
+    fx.behavior("wrong-pid");
+    rt().block_on(async {
+        let mut cfg = fx.cfg();
+        cfg.ready_timeout = Duration::from_millis(400);
+        let sup = clawft_weave::project_supervisor::Supervisor::new(cfg, fx.deps());
+        let e = sup.ensure_running(&fx.id).await.unwrap_err();
+        assert_eq!(e.kind(), "project_not_ready", "{e}");
+        let _ = sup.stop(&fx.id).await;
     });
 }

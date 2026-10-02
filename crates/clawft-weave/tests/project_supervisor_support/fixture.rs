@@ -95,6 +95,12 @@ impl Fixture {
         std::fs::write(self.run_dir().join("behavior"), text).unwrap();
     }
 
+    /// What the user daemon's `project.revoke` RPC leaves behind.
+    pub fn mark_revoked(&self) {
+        std::fs::create_dir_all(self.run_dir()).unwrap();
+        std::fs::write(self.run_dir().join("revoked"), "revoked\n").unwrap();
+    }
+
     pub fn cfg(&self) -> SupervisorConfig {
         let mut c = SupervisorConfig::new(&self.home, std::env::current_exe().unwrap());
         c.backoff_initial = Duration::from_millis(20);

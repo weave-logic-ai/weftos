@@ -102,18 +102,34 @@ pub mod governance_push;
 /// (ADR-103 A6, Phase 2 package G).
 #[cfg(all(unix, feature = "exochain", feature = "placement"))]
 pub mod project_supervisor;
+/// The method allow-list of a project token (ADR-103 A6, package G).
+#[cfg(any(unix, windows))]
+pub mod project_token_scope;
 /// Open-stream counter (idle-stop input of a project kernel).
 #[cfg(any(unix, windows))]
 pub mod open_streams;
-/// The real `ParentTransport`: anchor submission over the user daemon's socket (ADR-103 A7).
-#[cfg(all(unix, feature = "exochain"))]
-pub mod parent_transport;
 /// `weaver project migrate-kernel` logic (ADR-103 A6, package G).
 #[cfg(all(unix, feature = "exochain", feature = "placement"))]
 pub mod project_migrate;
 /// `project.start|stop|restart|status|ensure_running` (ADR-103 A6, package G).
 #[cfg(all(unix, feature = "exochain", feature = "placement"))]
 pub mod project_lifecycle_rpc;
+/// Without the supervisor (non-unix, or no `exochain`/`placement`) the
+/// lifecycle routes still exist and answer `not_user_daemon`.
+#[cfg(not(all(unix, feature = "exochain", feature = "placement")))]
+pub mod project_lifecycle_rpc {
+    use crate::rpc_ext::{ExtCall, ExtFuture};
+
+    /// Every lifecycle method: this build cannot supervise project kernels.
+    pub fn handle(_call: ExtCall) -> ExtFuture {
+        Box::pin(async {
+            clawft_rpc::Response::error_with_kind(
+                "not_user_daemon",
+                "project supervision is not available in this build",
+            )
+        })
+    }
+}
 /// `auth.token.*` RPC handlers and the per-kernel token authority (ADR-102 D3).
 #[cfg(any(unix, windows))]
 pub mod token_rpc;

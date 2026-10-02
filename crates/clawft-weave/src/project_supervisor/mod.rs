@@ -21,261 +21,36 @@
 //! mutex is a plain `std` mutex held only for short, non-awaiting sections.
 
 pub mod adopt;
+mod boot;
 pub mod child;
 pub mod idle;
 pub mod io;
 pub mod restart;
 pub mod state;
+mod types;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use clawft_kernel::gate::{GateBackend, GovernanceSnapshot};
-use clawft_kernel::token_authority::TokenAuthority;
+use clawft_kernel::gate::GateBackend;
 use clawft_kernel::workload_governance::{
     NodeTrustTier, SUPERVISOR_PRINCIPAL, WorkloadGate, project_supervisor_permit,
 };
 use clawft_kernel::workload_kind::{ProjectFacts, ProjectPrepareError, prepare_project};
 use clawft_kernel::workload_runtime::{
-    ChildLauncher, ChildProbe, HostContract, InstanceHandle, LogicalRuntime, RunMode, RuntimeError,
+    ChildLauncher, ChildProbe, ChildRef, HostContract, InstanceHandle, LogicalRuntime, RunMode, RuntimeError,
     VerifiedWorkload, WorkloadConfig, WorkloadHost,
 };
-use clawft_rpc::Response;
 use clawft_types::project::{ChildState, ProjectManifest, ServeVia};
 use clawft_types::runtime_paths::{LOCK_FILE_NAME, SOCKET_NAME};
 use serde_json::{Value, json};
 
 use self::adopt::Found;
 use self::child::{ExitInfo, Launcher, LauncherParts};
-use self::idle::ActivitySource;
-use self::io::ChildIo;
 use self::restart::{Decision, RestartTracker};
 use crate::project_cert_rpc::CertEnv;
-
-/// Longest unix socket path that binds on every supported platform
-/// (`sun_path` is 104 bytes on macOS, 108 on Linux, one for the NUL).
-pub const MAX_SOCKET_PATH: usize = 103;
-
-/// Chain source of supervisor events.
-pub const CHAIN_SOURCE: &str = "project.supervisor";
-
-/// Timings and paths. The defaults are the production values; tests shrink
-/// the timings.
-#[derive(Debug, Clone)]
-pub struct SupervisorConfig {
-    /// The user's home (the child's `HOME`).
-    pub home: PathBuf,
-    /// `~/.weftos/run`: children live in `<run_root>/<id>/`.
-    pub run_root: PathBuf,
-    /// `~/.weftos/projects`.
-    pub manifests_dir: PathBuf,
-    /// The kernel executable children are started from.
-    pub exe: PathBuf,
-    /// The user daemon's socket, written to `spawn.json`.
-    pub parent_socket: PathBuf,
-    /// First restart delay.
-    pub backoff_initial: Duration,
-    /// Longest restart delay.
-    pub backoff_max: Duration,
-    /// Wait after `kernel.shutdown` before `SIGTERM`.
-    pub term_grace: Duration,
-    /// Wait after `SIGTERM` before `SIGKILL`.
-    pub kill_grace: Duration,
-    /// How long a start waits for the child's handshake.
-    pub ready_timeout: Duration,
-    /// Handshake poll interval.
-    pub ready_poll: Duration,
-    /// Idle check interval.
-    pub idle_poll: Duration,
-    /// Poll interval for an adopted child's liveness.
-    pub exit_poll: Duration,
-}
-
-impl SupervisorConfig {
-    /// Production defaults for a user daemon at `home` starting children
-    /// from `exe`.
-    pub fn new(home: &Path, exe: PathBuf) -> Self {
-        let run_root = clawft_types::runtime_paths::user_runtime_root(home);
-        Self {
-            home: home.to_path_buf(),
-            parent_socket: run_root.join(SOCKET_NAME),
-            run_root,
-            manifests_dir: crate::user_daemon::manifests_dir(home),
-            exe,
-            backoff_initial: Duration::from_secs(1),
-            backoff_max: Duration::from_secs(30),
-            term_grace: Duration::from_secs(10),
-            kill_grace: Duration::from_secs(5),
-            ready_timeout: Duration::from_secs(30),
-            ready_poll: Duration::from_millis(100),
-            idle_poll: Duration::from_secs(30),
-            exit_poll: Duration::from_millis(500),
-        }
-    }
-}
-
-/// What the supervisor needs from the daemon.
-pub struct Deps {
-    /// The user chain, the user key and the manifest store.
-    pub cert_env: CertEnv,
-    /// Snapshot of the governance engine for `parent-policy.json`.
-    pub snapshot: Arc<dyn Fn() -> Option<GovernanceSnapshot> + Send + Sync>,
-    /// Token authority (project tokens).
-    pub tokens: Option<Arc<TokenAuthority>>,
-    /// Where child activity comes from (idle stop).
-    pub activity: Arc<dyn ActivitySource>,
-    /// Calls to a child.
-    pub io: Arc<dyn ChildIo>,
-    /// Override of the workload gate (tests).
-    pub gate: Option<Arc<dyn GateBackend>>,
-}
-
-/// Why a supervisor operation was refused or failed.
-#[derive(Debug)]
-pub enum SupError {
-    /// `id` is not a project id.
-    InvalidId(String),
-    /// Not in the manifest store.
-    NotRegistered(String),
-    /// The root is `$HOME` or `/`: refusing to run a kernel over it.
-    RootIsHome(PathBuf),
-    /// The root is gone.
-    RootMissing(PathBuf),
-    /// `<root>/.weftos/project.toml` is missing or names another project.
-    IdMismatch {
-        /// Id the manifest registered.
-        manifest: String,
-        /// What project.toml says (`None`: missing).
-        found: Option<String>,
-    },
-    /// A legacy project-rooted daemon holds the project's own `kernel.lock`.
-    LegacyDaemonRunning(PathBuf),
-    /// `<run>/<id>/kernel.sock` would not fit in a unix socket address.
-    SocketPathTooLong(PathBuf),
-    /// The project key was revoked and no certificate is in force.
-    Revoked(String),
-    /// Certificate or identity check failed.
-    Identity(String),
-    /// The restart budget is spent; `project.restart` clears it.
-    Failed(String),
-    /// The child did not become ready.
-    NotReady(String),
-    /// The adapter or gate refused or failed.
-    Runtime(RuntimeError),
-}
-
-impl SupError {
-    /// snake_case discriminator for clients.
-    pub fn kind(&self) -> &'static str {
-        match self {
-            Self::InvalidId(_) => "invalid_params",
-            Self::NotRegistered(_) => "project_not_found",
-            Self::RootIsHome(_) => "root_is_home",
-            Self::RootMissing(_) => "root_missing",
-            Self::IdMismatch { .. } => "project_id_mismatch",
-            Self::LegacyDaemonRunning(_) => "legacy_daemon_running",
-            Self::SocketPathTooLong(_) => "socket_path_too_long",
-            Self::Revoked(_) => "project_revoked",
-            Self::Identity(_) => "project_identity_error",
-            Self::Failed(_) => "project_failed",
-            Self::NotReady(_) => "project_not_ready",
-            Self::Runtime(RuntimeError::Governance(_)) => "governance_denied",
-            Self::Runtime(e) => match e.code() {
-                "admission-refused" => "admission_refused",
-                _ => "project_start_failed",
-            },
-        }
-    }
-
-    /// The RPC error response.
-    pub fn response(&self) -> Response {
-        Response::error_with_kind(self.kind(), self.to_string())
-    }
-}
-
-impl std::fmt::Display for SupError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidId(m) => write!(f, "{m}"),
-            Self::NotRegistered(id) => write!(f, "project {id} is not registered with this daemon"),
-            Self::RootIsHome(p) => write!(f, "refusing to run a project kernel over {}", p.display()),
-            Self::RootMissing(p) => write!(f, "project root {} does not exist", p.display()),
-            Self::IdMismatch { manifest, found } => write!(
-                f,
-                "project.toml in the root names {} but the manifest registered {manifest}",
-                found.as_deref().unwrap_or("no project")
-            ),
-            Self::LegacyDaemonRunning(p) => write!(
-                f,
-                "a project-rooted daemon holds {}; stop it first (`weaver project migrate-kernel` explains)",
-                p.display()
-            ),
-            Self::SocketPathTooLong(p) => write!(
-                f,
-                "{} is too long for a unix socket address ({} bytes, the limit is {MAX_SOCKET_PATH}); \
-                 move the user daemon's run root (`WEFTOS_RUNTIME_DIR`) to a shorter path",
-                p.display(),
-                p.as_os_str().len()
-            ),
-            Self::Revoked(id) => write!(f, "project {id}'s key was revoked; re-register or rekey it"),
-            Self::Identity(m) => write!(f, "{m}"),
-            Self::Failed(m) => write!(
-                f,
-                "project kernel failed ({m}); fix the cause, then `weaver kernel restart --project <id>` \
-                 (`project.restart`) clears it"
-            ),
-            Self::NotReady(m) => write!(f, "project kernel did not become ready: {m}"),
-            Self::Runtime(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl std::error::Error for SupError {}
-
-impl From<RuntimeError> for SupError {
-    fn from(e: RuntimeError) -> Self {
-        Self::Runtime(e)
-    }
-}
-
-/// Result of [`Supervisor::ensure_running`] and friends.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Running {
-    /// The child's socket.
-    pub socket: PathBuf,
-    /// The child's pid.
-    pub pid: u32,
-    /// True when this call started it.
-    pub started: bool,
-}
-
-/// A project's supervision status.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct Status {
-    /// Project id.
-    pub project_id: String,
-    /// State machine position.
-    pub state: ChildState,
-    /// Live pid.
-    pub pid: Option<u32>,
-    /// Child socket.
-    pub socket: PathBuf,
-    /// Automatic restarts so far.
-    pub restarts: u32,
-    /// Exit code of the last exit.
-    pub last_exit_code: Option<i32>,
-    /// Why the project is `failed`.
-    pub failed_reason: Option<String>,
-}
-
-impl Status {
-    /// JSON for RPC replies.
-    pub fn to_json(&self) -> Value {
-        serde_json::to_value(self).unwrap_or(Value::Null)
-    }
-}
 
 #[derive(Default)]
 struct SlotState {
@@ -494,12 +269,33 @@ impl Supervisor {
         {
             return Ok(Running { socket: self.socket(id), pid, started: false });
         }
+        if state::is_marked_revoked(&self.run_dir(id)) {
+            return Err(SupError::Revoked(id.to_owned()));
+        }
         let failed = {
             let st = slot.st();
             (st.state == ChildState::Failed).then(|| st.failed.clone().unwrap_or_default())
         };
         if let Some(why) = failed {
             return Err(SupError::Failed(why));
+        }
+        // A live verified kernel that nobody supervises (an adoption that
+        // was skipped, a restarted daemon) is taken over, never duplicated.
+        if let Some(found) =
+            adopt::scan_one(&self.run_dir(id), id, &self.cfg.exe, self.deps.io.as_ref()).await
+        {
+            match found {
+                Found::Adopted { pid, .. } => {
+                    return match self.adopt_one(id, pid, &slot).await {
+                        Ok(()) => Ok(Running { socket: self.socket(id), pid, started: false }),
+                        Err(reason) => Err(SupError::LiveLeftover(reason.to_string())),
+                    };
+                }
+                Found::Unverifiable { pid: Some(pid), reason: adopt::Skip::HandshakeFailed(m), .. } => {
+                    return Err(SupError::LiveLeftover(format!("pid {pid} holds the lock but {m}")));
+                }
+                Found::Unverifiable { .. } => {}
+            }
         }
         self.start_locked(id, &slot).await
     }
@@ -590,8 +386,11 @@ impl Supervisor {
                     self.run_dir(id).join("kernel.log").display()
                 ));
             };
+            // The answer must come from the process we launched: a stale
+            // socket or a squatter answering for the project is not it.
             if let Some(h) = self.deps.io.handshake(&sock).await
                 && h.project_id.as_deref() == Some(id)
+                && h.pid == pid
             {
                 return Ok(pid);
             }
@@ -657,6 +456,7 @@ impl Supervisor {
                 Some(Err(why)) => {
                     self.set_state(&id, &slot, ChildState::Failed);
                     self.launcher.revoke_tokens(&id);
+                    self.launcher.clean_spawn_file(&id);
                     self.chain("project.kernel.failed", json!({"project_id": id, "reason": why}));
                     return;
                 }
@@ -731,29 +531,54 @@ impl Supervisor {
             st.generation += 1; // retire the monitor of the old child
             st.handle.clone()
         };
+        // Credentials first: whatever happens to the process, its token is
+        // dead before we try to stop it.
+        self.launcher.revoke_tokens(id);
+        let mut stop_err: Option<String> = None;
         if running {
             if why == "idle" {
                 self.set_state(id, slot, ChildState::IdleStopping);
             }
-            if let Some(h) = handle {
-                self.host.stop(&h, self.cfg.term_grace).await?;
+            if let Some(h) = handle
+                && let Err(e) = self.host.stop(&h, self.cfg.term_grace).await
+            {
+                stop_err = Some(e.to_string());
             }
-            self.chain(
-                if why == "idle" { "project.kernel.idle_stop" } else { "project.kernel.stopped" },
-                json!({"project_id": id}),
-            );
+            // The gated stop failed or did not finish: fall through to the
+            // launcher's graceful-then-signal path. A project we were asked
+            // to stop must not keep running because governance said no.
+            if let Some(pid) = self.probe_running(id).await {
+                let child = ChildRef { project_id: id.to_owned(), pid };
+                if let Err(e) = self.launcher.terminate(&child, Duration::ZERO).await {
+                    stop_err.get_or_insert(e.to_string());
+                }
+            }
+            if self.probe_running(id).await.is_none() {
+                self.chain(
+                    if why == "idle" { "project.kernel.idle_stop" } else { "project.kernel.stopped" },
+                    json!({"project_id": id, "via_fallback": stop_err.is_some()}),
+                );
+                stop_err = None;
+            }
         }
-        self.launcher.revoke_tokens(id);
-        // A failed project stays failed until `restart` clears it.
+        self.launcher.clean_spawn_file(id);
+        // A failed project stays failed until `restart` clears it; a child
+        // we could not stop is failed too.
         let cur = {
             let mut st = slot.st();
-            if st.state != ChildState::Failed {
+            if let Some(e) = &stop_err {
+                st.failed = Some(format!("could not stop the project kernel: {e}"));
+                st.state = ChildState::Failed;
+            } else if st.state != ChildState::Failed {
                 st.state = ChildState::Stopped;
             }
             st.state
         };
         self.set_state(id, slot, cur);
-        Ok(running)
+        match stop_err {
+            Some(e) => Err(SupError::Runtime(RuntimeError::Backend(e))),
+            None => Ok(running),
+        }
     }
 
     /// `project.restart`: stop, forget the failure and start again.
@@ -794,15 +619,24 @@ impl Supervisor {
         }
     }
 
-    /// `project.revoke`: write the terminal `<run>/<id>/revoked` marker its
-    /// child checks and stop the child. The project is never respawned.
+    /// `project.revoke` happened (the user daemon's RPC wrote the terminal
+    /// `<run>/<id>/revoked` marker): kill the child's credentials first, then
+    /// stop it (signals if the gated stop fails) and mark the project failed.
+    /// The project is never respawned: `prepare` refuses while the marker
+    /// exists.
     pub async fn revoked(self: &Arc<Self>, id: &str, reason: &str) {
-        if let Err(e) = state::mark_revoked(&self.run_dir(id), reason) {
-            tracing::warn!(project = id, error = %e, "could not write the revoked marker");
-        }
-        if let Err(e) = self.stop(id).await {
+        self.launcher.revoke_tokens(id);
+        let slot = self.slot(id);
+        let _g = slot.gate.lock().await;
+        if let Err(e) = self.stop_locked(id, &slot, "revoke").await {
             tracing::warn!(project = id, error = %e, "could not stop a revoked project's kernel");
         }
+        {
+            let mut st = slot.st();
+            st.failed = Some(format!("revoked ({reason})"));
+            st.state = ChildState::Failed;
+        }
+        self.set_state(id, &slot, ChildState::Failed);
     }
 
     /// Status of one project.
@@ -845,119 +679,6 @@ impl Supervisor {
             .collect()
     }
 
-    /// File an expired registry session for an adopted child so it can
-    /// re-register without a spawn nonce. Uses the REAL certified project
-    /// key: a zero or default key would silently break the child's signed
-    /// heartbeats. Without a certificate in force nothing is filed.
-    fn file_adopted_session(&self, id: &str, pid: u32) {
-        use crate::mesh_local_registry::{NewSession, registry};
-        let Ok(view) = crate::project_cert_rpc::current_view(&self.deps.cert_env) else { return };
-        let Some(cert) = view.current_cert(id) else { return };
-        let Some(project_pubkey) = clawft_types::project::canon::hex_decode::<32>(&cert.project_pubkey) else {
-            return;
-        };
-        registry().adopt_expired(NewSession {
-            project_id: id.to_owned(),
-            socket: self.socket(id),
-            pid,
-            addresses: vec![id.to_owned()],
-            topic_prefixes: vec![format!("chain/{id}/")],
-            version: env!("CARGO_PKG_VERSION").to_owned(),
-            project_key_id: cert.project_key_id.clone(),
-            project_pubkey,
-        });
-    }
-
-    /// Verify and adopt children left by an earlier daemon (see [`adopt`]).
-    pub async fn adopt_on_boot(self: &Arc<Self>) -> Vec<Found> {
-        let found = adopt::scan(&self.cfg.run_root, &self.cfg.exe, self.deps.io.as_ref()).await;
-        for f in &found {
-            match f {
-                Found::Adopted { id, pid } => {
-                    let slot = self.slot(id);
-                    let _g = slot.gate.lock().await;
-                    let (w, manifest) = match self.prepare(id) {
-                        Ok(x) => x,
-                        Err(e) => {
-                            tracing::warn!(project = %id, error = %e, "not adopting: project no longer prepares");
-                            continue;
-                        }
-                    };
-                    self.launcher.adopt(id, *pid);
-                    let handle = match self.host.load(&w, &Self::host_cfg(id)).await {
-                        Ok(h) => h,
-                        Err(e) => {
-                            tracing::warn!(project = %id, error = %e, "not adopting: load refused");
-                            self.launcher.forget(id);
-                            continue;
-                        }
-                    };
-                    let g = {
-                        let mut st = slot.st();
-                        st.handle = Some(handle);
-                        st.tracker = Some(self.tracker_for(&manifest));
-                        st.generation += 1;
-                        st.generation
-                    };
-                    self.file_adopted_session(id, *pid);
-                    self.set_state(id, &slot, ChildState::Running);
-                    self.chain("project.kernel.adopted", json!({"project_id": id, "pid": pid}));
-                    self.spawn_monitor(id.clone(), Arc::clone(&slot), g);
-                }
-                Found::Unverifiable { id, pid, reason } if *reason != adopt::Skip::Dead => {
-                    tracing::warn!(project = %id, pid = ?pid, %reason, "leftover project kernel not adopted and not signalled");
-                }
-                Found::Unverifiable { .. } => {}
-            }
-        }
-        *self.leftovers.lock().unwrap_or_else(|e| e.into_inner()) = found.clone();
-        found
-    }
-
-    /// One idle pass at `now_unix`: stop every running project that has been
-    /// quiet for its `idle_stop_secs`. Returns the ids stopped.
-    pub async fn idle_pass(self: &Arc<Self>, now_unix: u64) -> Vec<String> {
-        let running: Vec<String> = self
-            .status_all()
-            .await
-            .into_iter()
-            .filter(|s| s.state == ChildState::Running)
-            .map(|s| s.project_id)
-            .collect();
-        let mut stopped = Vec::new();
-        for id in running {
-            let Ok(Some(m)) = clawft_types::project::find_by_id(&self.cfg.manifests_dir, &id) else {
-                continue;
-            };
-            let secs = m.serve.as_ref().map_or(0, |s| s.idle_stop_secs());
-            let activity = self.deps.activity.activity(&id);
-            if idle::should_stop(now_unix, secs, activity.as_ref()) {
-                let slot = self.slot(&id);
-                let _g = slot.gate.lock().await;
-                if slot.st().state == ChildState::Running
-                    && matches!(self.stop_locked(&id, &slot, "idle").await, Ok(true))
-                {
-                    stopped.push(id);
-                }
-            }
-        }
-        stopped
-    }
-
-    /// Run [`idle_pass`](Self::idle_pass) every `idle_poll` until the
-    /// supervisor is dropped.
-    pub fn spawn_idle_loop(self: &Arc<Self>) {
-        let weak = Arc::downgrade(self);
-        let every = self.cfg.idle_poll;
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(every).await;
-                let Some(this) = weak.upgrade() else { return };
-                this.idle_pass(state::now_unix()).await;
-            }
-        });
-    }
-
     /// `via = child-kernel` for the project (the owner's opt-in).
     pub fn is_child_kernel(&self, id: &str) -> bool {
         matches!(
@@ -967,44 +688,5 @@ impl Supervisor {
     }
 }
 
-/// `post_boot` body for the user daemon: build the supervisor from the
-/// booted kernel, install it, adopt leftovers and start the idle loop. A
-/// no-op for any other profile.
-pub fn post_boot(kernel: &clawft_kernel::Kernel<clawft_platform::NativePlatform>) {
-    if !crate::user_daemon::is_active() {
-        return;
-    }
-    let Ok(rt) = tokio::runtime::Handle::try_current() else { return };
-    let Some(chain) = kernel.chain_manager().cloned() else { return };
-    let Some(user_key) = chain.signing_key_clone() else { return };
-    let (Some(home), Some(manifests_dir)) = (
-        clawft_types::runtime_paths::home_dir(),
-        crate::project_rpc::configured_dir(),
-    ) else {
-        return;
-    };
-    let Ok(exe) = std::env::current_exe() else { return };
-    let paths = clawft_types::runtime_paths::RuntimePaths::resolve();
-    let mut cfg = SupervisorConfig::new(&home, exe);
-    cfg.run_root = paths.root().to_path_buf();
-    cfg.parent_socket = paths.socket();
-    cfg.manifests_dir = manifests_dir.clone();
-    let gate = kernel.governance_gate().cloned();
-    let deps = Deps {
-        cert_env: CertEnv { chain, user_key: user_key.clone(), manifests_dir: manifests_dir.clone() },
-        snapshot: Arc::new(move || gate.as_ref().and_then(|g| g.governance_snapshot())),
-        tokens: crate::token_rpc::authority_for_kernel(kernel),
-        activity: Arc::new(idle::RegistryActivity),
-        io: Arc::new(io::RpcChildIo::new(user_key, manifests_dir)),
-        gate: None,
-    };
-    let sup = Supervisor::new(cfg, deps);
-    if !install_global(Arc::clone(&sup)) {
-        return;
-    }
-    rt.spawn(async move {
-        let found = sup.adopt_on_boot().await;
-        tracing::info!(children = found.len(), "project supervisor adoption scan done");
-        sup.spawn_idle_loop();
-    });
-}
+pub use boot::post_boot;
+pub use types::{CHAIN_SOURCE, Deps, MAX_SOCKET_PATH, Running, Status, SupError, SupervisorConfig};
