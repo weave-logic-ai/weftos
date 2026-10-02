@@ -14,6 +14,7 @@ pub mod client;
 use client::{Client, HostCog, HostStatus, Net, Settings};
 use eframe::egui::{self, Color32, RichText};
 use weftos_cog_market::{Catalog, CatalogItem, Source};
+use weftos_sensor_guide::{GuideBundle, GuideView};
 
 const GREEN: Color32 = Color32::from_rgb(0x4c, 0xc2, 0x7a);
 const RED: Color32 = Color32::from_rgb(0xe0, 0x5a, 0x5a);
@@ -35,13 +36,42 @@ pub struct Manager {
     client: Client,
     section: Section,
     host_draft: String,
+    /// Sensors tab: the cog whose guide is open (None = the list), its parsed bundle, and the
+    /// renderer. `guide_port_draft` lets the user correct the export port if the default is wrong.
+    guide_cog: Option<String>,
+    guide_view: GuideView,
+    guide_bundle: Option<Result<GuideBundle, String>>,
+    guide_port_draft: String,
 }
 
 impl Manager {
     pub fn new() -> Self {
         let s = Settings::default();
         let host_draft = s.host.clone();
-        Self { client: Client::new(s), section: Section::Cogs, host_draft }
+        Self {
+            client: Client::new(s),
+            section: Section::Cogs,
+            host_draft,
+            guide_cog: None,
+            guide_view: GuideView::at(None),
+            guide_bundle: None,
+            guide_port_draft: String::new(),
+        }
+    }
+}
+
+/// The export port each known sensor cog serves `/guide` on (from each cog.toml `[api].bind_port`).
+/// Unknown cogs fall back to a prompt + editable port. TODO: surface the port in the host `/status`
+/// (CogStatus.export_port) so this map isn't needed for cogs added later.
+fn default_export_port(id: &str) -> u16 {
+    match id {
+        "sen0213-ecg" => 8046,
+        "sen0628-tof" => 8047,
+        "bridge" => 8048,
+        "sound-detect" => 8049,
+        "rd-03e" => 8050,
+        "hlk-as201" => 8051,
+        _ => 0,
     }
 }
 
@@ -370,25 +400,111 @@ impl Manager {
         }
     }
 
-    fn sensors_view(&self, ui: &mut egui::Ui) {
+    fn sensors_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        // Guide open? Render it; otherwise list the running sensor cogs with a "Guide" button each.
+        if self.guide_cog.is_some() {
+            self.guide_detail(ui, ctx);
+            return;
+        }
+
         ui.heading("Sensors");
-        ui.label(RichText::new("live dashboards for running sensor cogs").color(GREY).small());
+        ui.label(RichText::new("running sensor cogs and their hook-up guides").color(GREY).small());
         ui.add_space(8.0);
-        let host = self.client.snapshot().host.clone();
-        let running: Vec<HostCog> = match &host {
+        let running: Vec<HostCog> = match &self.client.snapshot().host {
             Some(Ok(h)) => h.cogs.iter().filter(|c| c.running).cloned().collect(),
             _ => Vec::new(),
         };
         if running.is_empty() {
-            ui.label(RichText::new("No sensor cogs running. Start one in the Cogs tab, then its live dash appears here.").color(GREY));
+            ui.label(RichText::new("No cogs running. Start one in the Cogs tab, then open its guide here.").color(GREY));
         } else {
-            ui.label("Running sensor cogs:");
-            for c in &running {
-                ui.label(format!("  • {} (v{})", c.id, c.version));
-            }
+            egui::Grid::new("sensors").num_columns(3).spacing([16.0, 8.0]).striped(true).show(ui, |ui| {
+                for c in &running {
+                    ui.label(RichText::new(&c.id).strong());
+                    ui.label(RichText::new(format!("v{}", c.version)).color(GREY).small());
+                    if ui.button("📖  Guide").clicked() {
+                        let port = default_export_port(&c.id);
+                        self.guide_cog = Some(c.id.clone());
+                        self.guide_bundle = None;
+                        self.guide_view = GuideView::at(None);
+                        self.guide_port_draft = if port == 0 { String::new() } else { port.to_string() };
+                        if port != 0 {
+                            self.client.fetch_guide(&c.id, port, ctx);
+                        }
+                    }
+                    ui.end_row();
+                }
+            });
         }
         ui.add_space(10.0);
-        ui.label(RichText::new("Dashes coming next: generic vector/metrics/timeline for any cog, plus the ECG waveform (sen0213-ecg) and 8×8 ToF heatmap (sen0628-tof) reusing the scope views.").color(GREY).italics());
+        ui.label(
+            RichText::new(
+                "The guide is served by each cog on its own export port — no Seed agent needed. \
+                 Live dashboards (ECG waveform, ToF heatmap, generic trace) come next.",
+            )
+            .color(GREY)
+            .italics(),
+        );
+    }
+
+    /// Render the open cog's `/guide` bundle (fetched into `Shared.guide`), with a back button and
+    /// an editable export port for cogs whose default port we don't know.
+    fn guide_detail(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let id = self.guide_cog.clone().unwrap_or_default();
+        ui.horizontal(|ui| {
+            if ui.button("‹  Sensors").clicked() {
+                self.guide_cog = None;
+                self.guide_bundle = None;
+                self.client.clear_guide();
+            }
+            ui.add_space(8.0);
+            ui.heading(RichText::new(format!("{id} — guide")));
+        });
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("export port").color(GREY).small());
+            ui.add(egui::TextEdit::singleline(&mut self.guide_port_draft).desired_width(70.0));
+            let load = ui.button("Load").clicked().then(|| self.guide_port_draft.trim().parse::<u16>().ok()).flatten();
+            if let Some(p) = load {
+                self.guide_bundle = None;
+                self.guide_view = GuideView::at(None);
+                self.client.fetch_guide(&id, p, ctx);
+            }
+        });
+        ui.separator();
+
+        // Parse the fetched JSON into a GuideBundle once, then cache it.
+        if self.guide_bundle.is_none() {
+            let fetched = {
+                let sh = self.client.snapshot();
+                match &sh.guide {
+                    Some(g) if g.id == id => g.result.clone(),
+                    _ => None,
+                }
+            };
+            if let Some(res) = fetched {
+                self.guide_bundle = Some(res.and_then(|v| GuideBundle::from_json(&v)));
+            }
+        }
+
+        match &self.guide_bundle {
+            None => {
+                ui.add_space(8.0);
+                if self.guide_port_draft.trim().is_empty() {
+                    ui.label(RichText::new("Unknown export port for this cog — enter it above and press Load.").color(AMBER));
+                    ui.label(RichText::new("(It's the cog's [api].bind_port, e.g. 8050 for rd-03e.)").color(GREY).small());
+                } else {
+                    ui.label(RichText::new("Loading guide…").color(GREY));
+                }
+            }
+            Some(Ok(bundle)) => {
+                let bundle = bundle.clone();
+                self.guide_view.show(ui, &bundle);
+            }
+            Some(Err(e)) => {
+                ui.add_space(8.0);
+                ui.label(RichText::new(format!("Couldn't load the guide: {e}")).color(RED));
+                ui.label(RichText::new("Is the cog running and its export port reachable? Adjust the port above and press Load.").color(GREY).small());
+            }
+        }
     }
 
     fn apps_view(&self, ui: &mut egui::Ui) {
@@ -459,7 +575,7 @@ impl eframe::App for Manager {
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| match self.section {
                 Section::Cogs => self.cogs_view(ui, ctx),
-                Section::Sensors => self.sensors_view(ui),
+                Section::Sensors => self.sensors_view(ui, ctx),
                 Section::Network => self.network_view(ui),
                 Section::Apps => self.apps_view(ui),
                 Section::System => self.system_view(ui),

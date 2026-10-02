@@ -138,6 +138,15 @@ pub struct Net {
     pub fleet: Vec<FleetNode>,
 }
 
+/// A running cog's `/guide` bundle fetch (the ADR-104 guide the cog serves on its export port).
+#[derive(Default)]
+pub struct GuideFetch {
+    pub id: String,
+    pub port: u16,
+    /// None while in flight; Some once the request resolves.
+    pub result: Option<Result<serde_json::Value, String>>,
+}
+
 #[derive(Default)]
 pub struct Shared {
     pub host: Option<Result<HostStatus, String>>,
@@ -146,6 +155,8 @@ pub struct Shared {
     pub cognitum_reg: Option<Result<CognitumRegistry, String>>,
     pub catalog: Option<Catalog>,
     pub last_action: Option<String>,
+    /// The guide currently being viewed in the Sensors tab (one at a time).
+    pub guide: Option<GuideFetch>,
 }
 
 pub struct Client {
@@ -375,6 +386,46 @@ impl Client {
     fn set_action(&self, msg: String, ctx: &eframe::egui::Context) {
         self.shared.lock().unwrap().last_action = Some(msg);
         ctx.request_repaint();
+    }
+
+    /// Export base for a cog on this host: the host's address with the cog's export port, e.g.
+    /// host `http://100.109.125.18:9480` + port 8050 -> `http://100.109.125.18:8050`.
+    pub fn export_base(&self, port: u16) -> String {
+        let h = base(&self.s.host);
+        let rest = h.strip_prefix("http://").or_else(|| h.strip_prefix("https://")).unwrap_or(&h);
+        let hostname = rest.split('/').next().unwrap_or(rest).rsplit_once(':').map(|(a, _)| a).unwrap_or(rest);
+        format!("http://{hostname}:{port}")
+    }
+
+    /// Fetch a running cog's `/guide` bundle from its export port into `Shared.guide`. The Sensors
+    /// tab renders it with `weftos-sensor-guide`. Guides need no Seed agent — only the cog's export.
+    pub fn fetch_guide(&self, id: &str, port: u16, ctx: &eframe::egui::Context) {
+        {
+            let mut sh = self.shared.lock().unwrap();
+            sh.guide = Some(GuideFetch { id: id.to_string(), port, result: None });
+        }
+        let url = format!("{}/guide", self.export_base(port));
+        let shared = Arc::clone(&self.shared);
+        let id = id.to_string();
+        let ctx = ctx.clone();
+        ehttp::fetch(ehttp::Request::get(url), move |res| {
+            let parsed: Result<serde_json::Value, String> = match &res {
+                Ok(r) if r.ok => serde_json::from_slice(&r.bytes).map_err(|e| e.to_string()),
+                Ok(r) => Err(format!("HTTP {} {}", r.status, r.status_text)),
+                Err(e) => Err(format!("{e} (is the cog running? CORS/port reachable?)")),
+            };
+            let mut sh = shared.lock().unwrap();
+            // Only apply if this is still the guide we're waiting on.
+            if let Some(g) = sh.guide.as_mut().filter(|g| g.id == id && g.port == port) {
+                g.result = Some(parsed);
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Close the open guide.
+    pub fn clear_guide(&self) {
+        self.shared.lock().unwrap().guide = None;
     }
 }
 

@@ -10774,6 +10774,7 @@ dependencies = [
  "web-time",
  "weftos-cog-market",
  "weftos-cog-repo",
+ "weftos-sensor-guide",
 ]
 
 [[package]]
