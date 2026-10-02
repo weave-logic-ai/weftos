@@ -164,6 +164,9 @@ pub fn required_capability(method: &str) -> Capability {
         | "cluster.health"
         | "cluster.shards"
         | "chain.status"
+        // ADR-103 P2 D: streaming chain tail; `project/<id>` adds its own
+        // verified-project check in the handler.
+        | "chain.subscribe"
         | "chain.local"
         | "chain.verify"
         // WEFT-125: active vector backend introspection (read-only).

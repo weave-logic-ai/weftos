@@ -114,7 +114,7 @@ pub fn bound_project_id() -> Option<String> {
     bound().project_id
 }
 
-fn bound() -> BoundProject {
+pub(crate) fn bound() -> BoundProject {
     BOUND
         .read()
         .unwrap_or_else(|e| e.into_inner())

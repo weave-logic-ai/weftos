@@ -174,6 +174,15 @@ pub struct ChainEvent {
     /// same logical operation without invalidating the ledger.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<[u8; 32]>,
+    /// Hash of the kind-registry rules in force when this event was
+    /// appended (ADR-103 A7). `None` for every pre-P2 event.
+    ///
+    /// **Covered by the event hash only when `Some`**, so events
+    /// without it hash byte-identically to before the field existed.
+    /// A binary that predates the field ignores it on read, recomputes
+    /// a different hash and fails integrity verification loudly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_hash: Option<[u8; 32]>,
 }
 
 /// Number of recent events scanned for idempotency-key collisions
@@ -275,6 +284,7 @@ pub(crate) fn compute_payload_hash(payload: &Option<serde_json::Value>) -> [u8; 
 ///     sequence(8)  ‖  chain_id(4)  ‖  prev_hash(32)  ‖
 ///     source  ‖  0x00  ‖  kind  ‖  0x00  ‖
 ///     timestamp(8)  ‖  payload_hash(32)
+///     [ ‖  0x01  ‖  rule_hash(32) ]      -- only when `rule_hash` is Some
 /// )
 /// ```
 ///
@@ -288,8 +298,9 @@ pub(crate) fn compute_event_hash(
     kind: &str,
     timestamp: &DateTime<Utc>,
     payload_hash: &[u8; 32],
+    rule_hash: Option<&[u8; 32]>,
 ) -> [u8; 32] {
-    let mut buf = Vec::with_capacity(128);
+    let mut buf = Vec::with_capacity(160);
     buf.extend_from_slice(&sequence.to_le_bytes());
     buf.extend_from_slice(&chain_id.to_le_bytes());
     buf.extend_from_slice(prev_hash);
@@ -299,6 +310,10 @@ pub(crate) fn compute_event_hash(
     buf.push(0x00); // separator
     buf.extend_from_slice(&timestamp.timestamp().to_le_bytes());
     buf.extend_from_slice(payload_hash);
+    if let Some(rh) = rule_hash {
+        buf.push(0x01); // domain tag: rule_hash present
+        buf.extend_from_slice(rh);
+    }
     shake256_256(&buf)
 }
 
@@ -881,6 +896,9 @@ pub const EVENT_KIND_HNSW_EML_TRAINED: &str = "hnsw.eml.trained";
 /// with tuned parameters. Auditable training provenance.
 pub const EVENT_KIND_HNSW_EML_TRIAGE: &str = "hnsw.eml.triage";
 
+/// Supplies the rule hash stamped on each append (ADR-103 A7).
+pub type RuleHashProvider = std::sync::Arc<dyn Fn() -> Option<[u8; 32]> + Send + Sync>;
+
 /// Local chain state.
 struct LocalChain {
     chain_id: u32,
@@ -892,6 +910,11 @@ struct LocalChain {
     checkpoints: Vec<ChainCheckpoint>,
     /// Witness entries — one per event for cryptographic audit trail.
     witness_entries: Vec<WitnessEntry>,
+    /// Stamps `rule_hash` on every append (ADR-103 A7). Called under the
+    /// chain lock: it must not call back into the chain.
+    rule_hash_provider: Option<RuleHashProvider>,
+    /// Live fan-out for [`ChainManager::subscribe`].
+    hub: crate::chain_subscribe::EventHub,
 }
 
 impl LocalChain {
@@ -905,6 +928,8 @@ impl LocalChain {
             events_since_checkpoint: 0,
             checkpoints: Vec::new(),
             witness_entries: Vec::new(),
+            rule_hash_provider: None,
+            hub: Default::default(),
         }
     }
 
@@ -929,6 +954,8 @@ impl LocalChain {
             events_since_checkpoint: 0,
             checkpoints: Vec::new(),
             witness_entries,
+            rule_hash_provider: None,
+            hub: Default::default(),
         }
     }
 
@@ -956,6 +983,7 @@ impl LocalChain {
     ) -> &ChainEvent {
         let timestamp = Utc::now();
         let payload_hash = compute_payload_hash(&payload);
+        let rule_hash = self.rule_hash_provider.as_ref().and_then(|p| p());
         let hash = compute_event_hash(
             self.sequence,
             self.chain_id,
@@ -964,6 +992,7 @@ impl LocalChain {
             &kind,
             &timestamp,
             &payload_hash,
+            rule_hash.as_ref(),
         );
 
         let event = ChainEvent {
@@ -977,6 +1006,7 @@ impl LocalChain {
             kind,
             payload,
             idempotency_key,
+            rule_hash,
         };
 
         // Create a witness entry for this event.
@@ -990,6 +1020,7 @@ impl LocalChain {
         self.last_hash = hash;
         self.sequence += 1;
         self.events_since_checkpoint += 1;
+        self.hub.publish(&event);
         self.events.push(event);
 
         // Auto-checkpoint
@@ -1029,6 +1060,9 @@ struct RvfChainPayload {
     payload_hash: String,
     /// Hex-encoded 32-byte event hash.
     hash: String,
+    /// Hex-encoded 32-byte rule hash (ADR-103 A7); absent on pre-P2 events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rule_hash: Option<String>,
 }
 
 /// Encode a 32-byte hash as a lowercase hex string.
@@ -1329,6 +1363,32 @@ impl ChainManager {
         }
     }
 
+    /// Install the provider that stamps `rule_hash` on every append
+    /// (ADR-103 A7). The provider runs under the chain lock, so it must
+    /// not call back into this manager.
+    pub fn set_rule_hash_provider(&self, provider: RuleHashProvider) {
+        self.inner.lock().unwrap().rule_hash_provider = Some(provider);
+    }
+
+    /// Subscribe to chain events: optional replay from `filter.from_seq`,
+    /// then live events, with no gap and no duplicate between the two.
+    /// See [`crate::chain_subscribe`].
+    #[cfg(feature = "native")]
+    pub fn subscribe(
+        &self,
+        filter: crate::chain_subscribe::ChainFilter,
+    ) -> crate::chain_subscribe::ChainSubscription {
+        let chain = self.inner.lock().unwrap();
+        // Subscribe first, then snapshot the replay, both under the chain
+        // lock; the subscription also dedupes by sequence.
+        let rx = chain.hub.subscribe();
+        let replay: Vec<ChainEvent> = match filter.from_seq {
+            Some(from) => chain.events.iter().filter(|e| e.sequence >= from).cloned().collect(),
+            None => Vec::new(),
+        };
+        crate::chain_subscribe::ChainSubscription::new(filter, replay, rx, chain.sequence)
+    }
+
     /// Return events with sequence strictly greater than `after`.
     /// Used for incremental replication in K6.4 chain sync.
     pub fn tail_from(&self, after: u64) -> Vec<ChainEvent> {
@@ -1428,6 +1488,7 @@ impl ChainManager {
             &event.kind,
             &event.timestamp,
             &event.payload_hash,
+            event.rule_hash.as_ref(),
         );
         if event.hash != recomputed {
             return Err(AppendSignedError::HashMismatch {
@@ -1447,6 +1508,7 @@ impl ChainManager {
         chain.last_hash = event.hash;
         chain.sequence = event.sequence.saturating_add(1);
         chain.events_since_checkpoint = chain.events_since_checkpoint.saturating_add(1);
+        chain.hub.publish(&event);
         chain.events.push(event);
         if chain.checkpoint_interval > 0
             && chain.events_since_checkpoint >= chain.checkpoint_interval
@@ -1602,6 +1664,7 @@ impl ChainManager {
                 &event.kind,
                 &event.timestamp,
                 &event.payload_hash,
+                event.rule_hash.as_ref(),
             );
             if event.hash != recomputed {
                 errors.push(format!(
@@ -1742,6 +1805,7 @@ impl ChainManager {
                 payload: event.payload.clone(),
                 payload_hash: hex_hash(&event.payload_hash),
                 hash: hex_hash(&event.hash),
+                rule_hash: event.rule_hash.as_ref().map(hex_hash),
             };
 
             let mut cbor_bytes = Vec::new();
@@ -1866,6 +1930,11 @@ impl ChainManager {
 
                 let payload_hash = parse_hex_hash(&rvf_payload.payload_hash)?;
                 let hash = parse_hex_hash(&rvf_payload.hash)?;
+                let rule_hash = rvf_payload
+                    .rule_hash
+                    .as_deref()
+                    .map(parse_hex_hash)
+                    .transpose()?;
 
                 let timestamp = DateTime::from_timestamp(exo_header.timestamp_secs as i64, 0)
                     .ok_or_else(|| {
@@ -1889,6 +1958,7 @@ impl ChainManager {
                     // they are not persisted to RVF segments
                     // (preserves chain-hash stability across restores).
                     idempotency_key: None,
+                    rule_hash,
                 });
             } else if exo_header.subtype == 0x41 {
                 // Checkpoint — extract witness chain if present.

@@ -196,6 +196,8 @@ pub mod capability_claim;
 pub mod chain;
 #[cfg(feature = "exochain")]
 pub mod chain_anchor;
+#[cfg(feature = "exochain")]
+pub mod chain_subscribe;
 pub mod chain_storage;
 #[cfg(feature = "exochain")]
 pub mod token_authority;

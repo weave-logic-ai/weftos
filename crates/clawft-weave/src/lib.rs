@@ -12,6 +12,7 @@ pub mod app_rpc;
 pub mod capability;
 /// Tracing → pending-buffer bridge for ExoChain (WEFT-597).
 pub mod chain_bridge;
+pub mod chain_subscribe_rpc;
 pub mod client;
 pub mod commands;
 pub mod control;

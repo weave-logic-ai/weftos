@@ -167,7 +167,7 @@ fn literals(s: &str) -> Vec<String> {
 }
 
 /// Streaming intercepts matched in `dispatch_json_line` before `dispatch`.
-const INTERCEPTS: &[&str] = &["ipc.subscribe_stream", "substrate.subscribe", "kernel.logs_stream"];
+const INTERCEPTS: &[&str] = &["ipc.subscribe_stream", "substrate.subscribe", "kernel.logs_stream", "chain.subscribe"];
 
 /// Allow-listed methods whose handler is not a legacy arm (ext routes or
 /// owned by other Phase 1 packages).

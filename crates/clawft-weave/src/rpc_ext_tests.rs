@@ -395,7 +395,7 @@ fn voice_principal_is_not_admin() {
 #[tokio::test]
 async fn wire_streaming_intercepts_are_authorized() {
     let kernel = test_kernel().await;
-    for method in ["ipc.subscribe_stream", "substrate.subscribe", "kernel.logs_stream"] {
+    for method in ["ipc.subscribe_stream", "substrate.subscribe", "kernel.logs_stream", "chain.subscribe"] {
         // An unrecognised token resolves to empty (denied) capabilities.
         let line = format!(r#"{{"method":"{method}","params":{{}},"auth":"bogus-token"}}"#);
         let resp = json_roundtrip(&kernel, &line).await;
@@ -412,7 +412,7 @@ async fn wire_streaming_intercepts_are_authorized() {
 /// capability while its handler never ran (intercepts match first).
 #[test]
 fn no_route_covers_the_streaming_intercepts() {
-    for method in ["ipc.subscribe_stream", "substrate.subscribe", "kernel.logs_stream"] {
+    for method in ["ipc.subscribe_stream", "substrate.subscribe", "kernel.logs_stream", "chain.subscribe"] {
         assert!(
             !super::ROUTES.iter().any(|r| r.matches(method)),
             "a ROUTES prefix covers intercepted method {method}"
