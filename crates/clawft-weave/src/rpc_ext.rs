@@ -279,6 +279,11 @@ const ROUTES: &[ExtRoute] = &[
         handler: crate::project_cert_rpc::handle,
     },
     ExtRoute {
+        prefix: "project.identity.repair",
+        capability: Capability::Admin,
+        handler: crate::project_cert_rpc::handle,
+    },
+    ExtRoute {
         prefix: "project.rekey",
         capability: Capability::Admin,
         handler: crate::project_cert_rpc::handle,
@@ -340,6 +345,11 @@ const ROUTES: &[ExtRoute] = &[
     },
     ExtRoute {
         prefix: "project.cert.challenge",
+        capability: Capability::Admin,
+        handler: crate::project_cert_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.identity.repair",
         capability: Capability::Admin,
         handler: crate::project_cert_rpc::handle,
     },

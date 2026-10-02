@@ -101,9 +101,10 @@ fn denied(v: &Value) -> bool {
             .contains("permission denied")
 }
 
-const CERT_METHODS: [&str; 4] = [
+const CERT_METHODS: [&str; 5] = [
     "project.cert.show",
     "project.cert.challenge",
+    "project.identity.repair",
     "project.rekey",
     "project.revoke",
 ];
@@ -182,7 +183,7 @@ async fn owner_flow_on_the_user_daemon() {
         project: None,
         caps: clawft_weave::capability::CallerCapabilities::anonymous(),
     };
-    let issued = clawft_weave::project_cert_rpc::issue_for_register(&ctx, &req).await.unwrap();
+    let issued = clawft_weave::project_cert_rpc::issue_for_register(&ctx, req).await.unwrap();
     assert!(issued.new);
     assert!(mdir.join(format!("{id}.cert.json")).is_file());
     let shown = call(&d, "project.cert.show", json!({"id": id}), Some("admin")).await;

@@ -65,6 +65,7 @@ impl RevocationView {
                     v.ingest_cert(cert);
                 }
                 JournalRecord::Revoke { project_id, key_id } => v.ingest_revoke(project_id, key_id),
+                JournalRecord::Init {} => {}
             }
         }
         for c in cert_files {
@@ -132,6 +133,28 @@ impl RevocationView {
             .or_default()
             .revoked
             .insert(key_id.to_owned());
+    }
+
+    /// The state as journal records, for rebuilding a lost journal: every
+    /// verified certificate, then every revocation this view knows. A
+    /// revocation that only the lost journal remembered cannot be recovered.
+    pub fn export_records(&self) -> Vec<JournalRecord> {
+        let mut ids: Vec<&String> = self.projects.keys().collect();
+        ids.sort();
+        let mut out = Vec::new();
+        for id in ids {
+            let st = &self.projects[id];
+            let mut certs: Vec<&ProjectCert> = st.certs.iter().collect();
+            certs.sort_by_key(|c| c.serial);
+            out.extend(certs.into_iter().map(|c| JournalRecord::Register { cert: c.clone() }));
+            let mut rev: Vec<&String> = st.revoked.iter().collect();
+            rev.sort();
+            out.extend(rev.into_iter().map(|k| JournalRecord::Revoke {
+                project_id: id.clone(),
+                key_id: k.clone(),
+            }));
+        }
+        out
     }
 
     /// Certificates dropped because they did not verify against the user key.

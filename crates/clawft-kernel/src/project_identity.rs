@@ -32,6 +32,11 @@
 //! re-verified against the user key while folding. The merge is a union:
 //! the bound key of a project is its highest-serial certificate whose key is
 //! not revoked, so source order cannot resurrect a revoked key.
+//!
+//! Expired certificates still count as bound: an expired cert keeps its id
+//! (and its key) until it is rekeyed or revoked. This is moot while
+//! `expires_at` is null (Phase 2); the phase that sets expiry must decide
+//! whether an expired binding should free the id.
 
 use std::io::{Read as _, Write as _};
 use std::path::Path;
@@ -44,7 +49,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 #[path = "project_identity_journal.rs"]
 mod journal;
-pub use journal::{IdentityJournal, JOURNAL_FILE, JournalLock, JournalRecord};
+pub use journal::{IdentityJournal, JOURNAL_FILE, JournalLock, JournalRecord, SharedLock};
 #[path = "project_identity_view.rs"]
 mod view;
 pub use view::{Registration, RevocationView};
@@ -110,7 +115,7 @@ pub enum IdentityError {
         other_project: String,
     },
     /// The identity journal exists but cannot be trusted.
-    #[error("identity journal {path}: {why}; refusing to issue or verify until it is repaired")]
+    #[error("identity journal {path}: {why}; refusing to issue or verify until it is repaired (run `project.identity.repair`; do not delete the file)")]
     JournalCorrupt {
         /// Journal path.
         path: String,
@@ -265,6 +270,13 @@ pub fn write_private_atomic(path: &Path, bytes: &[u8], exclusive: bool) -> Resul
     })();
     if exclusive || result.is_err() {
         let _ = std::fs::remove_file(&tmp);
+    }
+    #[cfg(unix)]
+    if result.is_ok() {
+        // Make the new directory entry durable too.
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
     }
     result.map_err(|e| {
         if e.kind() == std::io::ErrorKind::AlreadyExists {

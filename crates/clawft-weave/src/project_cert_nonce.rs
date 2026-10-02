@@ -16,7 +16,8 @@ const MAX_CHALLENGES: usize = 1024;
 
 /// A challenge nonce this daemon issued, not yet used. Only
 /// [`claim_nonce`] makes one.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Deliberately not `Clone`: it is consumed by value.
+#[derive(Debug, PartialEq, Eq)]
 pub struct DaemonNonce {
     nonce: String,
     project_id: String,
@@ -53,15 +54,20 @@ pub fn issue_challenge(project_id: &str) -> Result<String, IssueError> {
 }
 
 /// Consume a challenge: it must be one this daemon issued for `project_id`,
-/// unexpired and unused. Any failure burns nothing but reports `pop_failed`.
+/// unexpired and unused. A claim for the wrong project fails without
+/// burning the challenge (its real holder can still use it until it
+/// expires); an expired one is dropped.
 pub fn claim_nonce(nonce: &str, project_id: &str) -> Result<DaemonNonce, IssueError> {
+    let fail = || IssueError::Pop("unknown, expired or already used challenge nonce".into());
     let mut map = CHALLENGES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
-    match map.remove(nonce) {
-        Some((pid, exp)) if pid == project_id && exp > Instant::now() => Ok(DaemonNonce {
-            nonce: nonce.to_owned(),
-            project_id: pid,
-        }),
-        _ => Err(IssueError::Pop("unknown, expired or already used challenge nonce".into())),
+    let Some((pid, exp)) = map.get(nonce) else { return Err(fail()) };
+    if *exp <= Instant::now() {
+        map.remove(nonce);
+        return Err(fail());
     }
+    if pid != project_id {
+        return Err(fail());
+    }
+    let (pid, _) = map.remove(nonce).ok_or_else(fail)?;
+    Ok(DaemonNonce { nonce: nonce.to_owned(), project_id: pid })
 }
-

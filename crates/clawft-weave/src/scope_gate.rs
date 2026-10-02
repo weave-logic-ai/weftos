@@ -109,6 +109,7 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "project.register",
     "project.cert.show",
     "project.cert.challenge",
+    "project.identity.repair",
     "project.rekey",
     "project.revoke",
 ];

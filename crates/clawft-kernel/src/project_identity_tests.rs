@@ -8,17 +8,17 @@ use chrono::Duration;
 use clawft_types::project::cert::PopOp;
 use serde_json::json;
 
-const PID: &str = "01JB8Z3Q0V6X9KQ4M2N7T5R1WD";
-const OTHER_PID: &str = "01JB8Z3Q0V6X9KQ4M2N7T5R1WE";
+pub(super) const PID: &str = "01JB8Z3Q0V6X9KQ4M2N7T5R1WD";
+pub(super) const OTHER_PID: &str = "01JB8Z3Q0V6X9KQ4M2N7T5R1WE";
 const CERT_SIG: &str = "081ef31a626b34369d2da9df686d53f2ed1f96e9fc78ab5c554e5921b96bdf7e77d612e6196a0c60ac69c952e0a4d91e2ed1b8d70224274fb53479d8160cb701";
 const POP_NONCE: &str = "00112233445566778899aabbccddeeff";
 const POP_SIG: &str = "a091f8884ef78b01ea1caac70b8c01b8e5e8b9cef8ac162321c1450596279d72426a8d4b86f94e9c13d38f944f9d291826e931fb9286999bc0c19a33466be10f";
 const USER_KID: &str = "34750f98bd59fcfc946da45aaabe933b";
 
-fn user_key() -> SigningKey {
+pub(super) fn user_key() -> SigningKey {
     SigningKey::from_bytes(&[1u8; 32])
 }
-fn proj_key() -> SigningKey {
+pub(super) fn proj_key() -> SigningKey {
     SigningKey::from_bytes(&[2u8; 32])
 }
 fn t(s: &str) -> DateTime<Utc> {
@@ -27,7 +27,7 @@ fn t(s: &str) -> DateTime<Utc> {
 fn now() -> DateTime<Utc> {
     t("2026-10-02T00:00:00Z")
 }
-fn user_pk() -> [u8; 32] {
+pub(super) fn user_pk() -> [u8; 32] {
     user_key().verifying_key().to_bytes()
 }
 fn req_for(pid: &str, key: &SigningKey, serial: u64) -> CertRequest {
@@ -39,7 +39,7 @@ fn req_for(pid: &str, key: &SigningKey, serial: u64) -> CertRequest {
         expires_at: None,
     }
 }
-fn cert() -> ProjectCert {
+pub(super) fn cert() -> ProjectCert {
     sign_cert(&user_key(), &req_for(PID, &proj_key(), 1)).unwrap()
 }
 
@@ -226,7 +226,7 @@ fn exclusive_write_refuses_to_overwrite() {
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 }
 
-fn chain_with(events: &[(&str, serde_json::Value)]) -> Vec<ChainEvent> {
+pub(super) fn chain_with(events: &[(&str, serde_json::Value)]) -> Vec<ChainEvent> {
     let cm = ChainManager::new(0, 1000);
     for (kind, payload) in events {
         cm.append(SOURCE, kind, Some(payload.clone()));
@@ -234,11 +234,11 @@ fn chain_with(events: &[(&str, serde_json::Value)]) -> Vec<ChainEvent> {
     cm.tail_from(0)
 }
 
-fn view(events: &[ChainEvent], journal: &[JournalRecord], files: &[ProjectCert]) -> RevocationView {
+pub(super) fn view(events: &[ChainEvent], journal: &[JournalRecord], files: &[ProjectCert]) -> RevocationView {
     RevocationView::build(&user_pk(), events, journal, files)
 }
 
-fn cert_for(pid: &str, key: &SigningKey, serial: u64) -> ProjectCert {
+pub(super) fn cert_for(pid: &str, key: &SigningKey, serial: u64) -> ProjectCert {
     sign_cert(&user_key(), &req_for(pid, key, serial)).unwrap()
 }
 
@@ -384,74 +384,5 @@ fn user_projects_is_a_reserved_source() {
     assert!(!is_reserved_source("kernel"));
 }
 
-#[test]
-fn journal_roundtrip_missing_is_empty_and_order_is_kept() {
-    let dir = tempfile::tempdir().unwrap();
-    let j = IdentityJournal::new(dir.path());
-    assert!(j.read().unwrap().is_empty());
-    let recs = vec![
-        JournalRecord::Register { cert: cert() },
-        JournalRecord::Revoke { project_id: PID.into(), key_id: "k".into() },
-    ];
-    let _l = j.lock().unwrap();
-    for r in &recs {
-        j.append(r).unwrap();
-    }
-    assert_eq!(j.read().unwrap(), recs);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(j.path()).unwrap().permissions().mode() & 0o777, 0o600);
-    }
-}
-
-#[test]
-fn a_corrupt_empty_or_unknown_journal_is_an_error_and_is_never_overwritten() {
-    let rec = JournalRecord::Revoke { project_id: PID.into(), key_id: "k".into() };
-    let good = serde_json::to_string(&rec).unwrap();
-    for (name, content) in [
-        ("empty", String::new()),
-        ("garbage", "not json\n".to_owned()),
-        ("torn", format!("{good}\n{{\"op\":\"reg")),
-        ("blank line", format!("{good}\n\n{good}\n")),
-        ("unknown op", "{\"op\":\"nuke\"}\n".to_owned()),
-        ("unknown field", "{\"op\":\"revoke\",\"project_id\":\"a\",\"key_id\":\"b\",\"x\":1}\n".to_owned()),
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        let j = IdentityJournal::new(dir.path());
-        std::fs::write(j.path(), &content).unwrap();
-        assert!(matches!(j.read(), Err(IdentityError::JournalCorrupt { .. })), "{name}");
-        assert!(j.append(&rec).is_err(), "{name}");
-        assert_eq!(std::fs::read_to_string(j.path()).unwrap(), content, "{name}: modified");
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn an_unreadable_journal_is_an_error_not_empty() {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = tempfile::tempdir().unwrap();
-    let j = IdentityJournal::new(dir.path());
-    let rec = JournalRecord::Revoke { project_id: PID.into(), key_id: "k".into() };
-    j.append(&rec).unwrap();
-    std::fs::set_permissions(j.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
-    let readable_anyway = std::fs::read(j.path()).is_ok(); // running as root
-    let r = j.read();
-    std::fs::set_permissions(j.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
-    if !readable_anyway {
-        assert!(matches!(r, Err(IdentityError::JournalCorrupt { .. })));
-    }
-}
-
-#[test]
-fn the_journal_lock_excludes_other_holders() {
-    let dir = tempfile::tempdir().unwrap();
-    let j = IdentityJournal::new(dir.path());
-    let held = j.lock().unwrap();
-    assert!(j.try_lock().unwrap().is_none(), "second holder got the lock");
-    let j2 = j.clone();
-    let t = std::thread::spawn(move || j2.try_lock().unwrap().is_none());
-    assert!(t.join().unwrap());
-    drop(held);
-    assert!(j.try_lock().unwrap().is_some());
-}
+#[path = "project_identity_journal_tests.rs"]
+mod journal_tests;

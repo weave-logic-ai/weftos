@@ -32,7 +32,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use clawft_kernel::chain::ChainManager;
 use clawft_kernel::project_identity::{
-    self as ident, IdentityError, IdentityJournal, JournalRecord, KIND_REGISTER, KIND_REKEY,
+    self as ident, IdentityError, IdentityJournal, JournalLock, JournalRecord, KIND_REGISTER, KIND_REKEY,
     KIND_REVOKE, Registration, RevocationView, SOURCE,
 };
 use clawft_kernel::token_authority::SECRET_PREFIX;
@@ -44,6 +44,11 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::rpc_ext::{ExtCall, ExtCtx, ExtFuture};
+
+#[path = "project_cert_store.rs"]
+mod store;
+use store::{current_view_locked, read_cert_files};
+pub use store::{current_view, repair};
 
 #[path = "project_cert_nonce.rs"]
 mod nonce;
@@ -61,7 +66,7 @@ pub struct SpawnInfo {
 }
 
 /// A request to certify a project key (from `mesh.register`).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RegisterRequest {
     /// Project ULID.
     pub project_id: String,
@@ -167,28 +172,6 @@ fn cert_path(dir: &Path, id: &str) -> PathBuf {
     dir.join(format!("{id}.cert.json"))
 }
 
-fn read_cert_files(dir: &Path) -> Vec<ProjectCert> {
-    let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
-    rd.flatten()
-        .filter(|e| e.file_name().to_string_lossy().ends_with(".cert.json"))
-        .filter_map(|e| serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok())
-        .collect()
-}
-
-/// The one view every issue, rekey, revoke and verification decision uses:
-/// journal, certificate files and chain merged, every certificate
-/// re-verified against the user key. Errors (instead of returning a weaker
-/// view) when the journal cannot be trusted.
-pub fn current_view(env: &CertEnv) -> Result<RevocationView, IssueError> {
-    let journal = IdentityJournal::new(&env.manifests_dir).read()?;
-    Ok(RevocationView::build(
-        &user_pubkey(env),
-        &env.chain.tail_from(0),
-        &journal,
-        &read_cert_files(&env.manifests_dir),
-    ))
-}
-
 fn write_cert_file(dir: &Path, cert: &ProjectCert) -> Result<(), IssueError> {
     let path = cert_path(dir, &cert.project_id);
     let text = serde_json::to_vec_pretty(cert).map_err(|e| IssueError::Store(e.to_string()))?;
@@ -243,15 +226,15 @@ fn user_pubkey(env: &CertEnv) -> [u8; 32] {
 /// root, a key the caller cannot prove (PoP over a daemon-issued nonce), a
 /// second key for a certified id, a key used by another project, and a
 /// revoked key. Idempotent for the certified key.
-pub fn register(env: &CertEnv, req: &RegisterRequest, now: DateTime<Utc>) -> Result<Issued, IssueError> {
+pub fn register(env: &CertEnv, req: RegisterRequest, now: DateTime<Utc>) -> Result<Issued, IssueError> {
     let manifest = registered_manifest(env, &req.project_id)?;
     if req.root_sha256 != root_sha256(&manifest.root) {
         return Err(IssueError::RootMismatch);
     }
     verify_pop(env, PopOp::Register, &req.project_pubkey, &req.nonce, &req.project_id, &req.pop_sig)?;
     let journal = IdentityJournal::new(&env.manifests_dir);
-    let _lock = journal.lock()?;
-    match current_view(env)?.plan_registration(&req.project_id, &req.project_pubkey)? {
+    let lock = journal.lock()?;
+    match current_view_locked(env, &lock)?.plan_registration(&req.project_id, &req.project_pubkey)? {
         Registration::Existing(cert) => {
             ident::verify_cert_at(&cert, &user_pubkey(env), now).map_err(IdentityError::from)?;
             write_cert_file(&env.manifests_dir, &cert)?;
@@ -268,7 +251,7 @@ pub fn register(env: &CertEnv, req: &RegisterRequest, now: DateTime<Utc>) -> Res
                     expires_at: None,
                 },
             )?;
-            journal.append(&JournalRecord::Register { cert: cert.clone() })?;
+            journal.append(&lock, &JournalRecord::Register { cert: cert.clone() })?;
             env.chain.append(
                 SOURCE,
                 KIND_REGISTER,
@@ -297,8 +280,8 @@ pub fn rekey(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Issued
     let sig = sig_param(params, "pop_sig")?;
     verify_pop(env, PopOp::Rekey, &new_pk, &nonce, id, &sig)?;
     let journal = IdentityJournal::new(&env.manifests_dir);
-    let _lock = journal.lock()?;
-    let (old_key_id, serial) = current_view(env)?.plan_rekey(id, &new_pk)?;
+    let lock = journal.lock()?;
+    let (old_key_id, serial) = current_view_locked(env, &lock)?.plan_rekey(id, &new_pk)?;
     let cert = ident::sign_cert(
         &env.user_key,
         &CertRequest {
@@ -309,7 +292,7 @@ pub fn rekey(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Issued
             expires_at: None,
         },
     )?;
-    journal.append(&JournalRecord::Rekey { old_key_id: old_key_id.clone(), cert: cert.clone() })?;
+    journal.append(&lock, &JournalRecord::Rekey { old_key_id: old_key_id.clone(), cert: cert.clone() })?;
     env.chain.append(
         SOURCE,
         KIND_REKEY,
@@ -330,12 +313,12 @@ pub fn revoke(env: &CertEnv, params: &Value) -> Result<Value, IssueError> {
     let id = str_param(params, "id")?;
     validate_id(id).map_err(|_| IssueError::Invalid("project id is not a canonical ULID".into()))?;
     let journal = IdentityJournal::new(&env.manifests_dir);
-    let _lock = journal.lock()?;
-    let old = current_view(env)?
+    let lock = journal.lock()?;
+    let old = current_view_locked(env, &lock)?
         .bound_key_id(id)
         .ok_or_else(|| IdentityError::NotBound(id.to_owned()))?
         .to_owned();
-    journal.append(&JournalRecord::Revoke { project_id: id.to_owned(), key_id: old.clone() })?;
+    journal.append(&lock, &JournalRecord::Revoke { project_id: id.to_owned(), key_id: old.clone() })?;
     env.chain.append(
         SOURCE,
         KIND_REVOKE,
@@ -419,16 +402,15 @@ async fn env_from(ctx: &ExtCtx) -> Result<CertEnv, IssueError> {
 
 /// Certify a registering child's key. Shared by package H's
 /// `mesh.register`; H verifies the spawn nonce and issued the PoP nonce.
-pub async fn issue_for_register(ctx: &ExtCtx, req: &RegisterRequest) -> Result<Issued, IssueError> {
+pub async fn issue_for_register(ctx: &ExtCtx, req: RegisterRequest) -> Result<Issued, IssueError> {
     let env = env_from(ctx).await?;
-    let req = req.clone();
-    tokio::task::spawn_blocking(move || register(&env, &req, Utc::now()))
+    tokio::task::spawn_blocking(move || register(&env, req, Utc::now()))
         .await
         .map_err(|e| IssueError::Store(format!("task failed: {e}")))?
 }
 
 /// Handler for `project.cert.show`, `project.cert.challenge`,
-/// `project.rekey` and `project.revoke`.
+/// `project.rekey`, `project.revoke` and `project.identity.repair`.
 pub fn handle(call: ExtCall) -> ExtFuture {
     Box::pin(async move {
         if call
@@ -450,6 +432,7 @@ pub fn handle(call: ExtCall) -> ExtFuture {
         let out = tokio::task::spawn_blocking(move || match method.as_str() {
             "project.cert.show" => show(&env, &params),
             "project.cert.challenge" => challenge(&env, &params),
+            "project.identity.repair" => repair(&env),
             "project.rekey" => rekey(&env, &params, Utc::now())
                 .map(|i| json!({ "cert": i.cert })),
             "project.revoke" => revoke(&env, &params),
