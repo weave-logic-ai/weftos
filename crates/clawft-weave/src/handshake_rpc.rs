@@ -24,6 +24,7 @@ use clawft_rpc::Response;
 use clawft_types::project::{list_manifests, read_project_toml, validate_id};
 use clawft_types::runtime_paths::{RootSource, RuntimePaths};
 
+use crate::capability::{Capability, required_capability};
 use crate::rpc_ext::{ExtCall, ExtFuture};
 
 const BUILD_SHA: &str = env!("BUILD_GIT_HASH");
@@ -220,8 +221,9 @@ pub fn handle(call: ExtCall) -> ExtFuture {
 /// exempt from the proto and mismatch refusals only; its claim must still
 /// be a ULID (the `ClaimedProject` invariant).
 ///
-/// A missing `proto` is a legacy client: accepted in Phase 1 with one
-/// warning per process.
+/// A missing `proto` is a legacy client: accepted for read-only methods with
+/// one warning per process, refused for every other method (0.8.2, ADR-103
+/// A8).
 pub fn envelope_refusal(method: &str, proto: Option<u32>, project: Option<&str>) -> Option<Response> {
     envelope_refusal_with(&bound(), method, proto, project)
 }
@@ -239,7 +241,21 @@ pub fn envelope_refusal_with(
     if !discovery {
         match check_proto(proto) {
             ProtoCheck::Supported => {}
-            ProtoCheck::Legacy => warn_legacy_once(),
+            ProtoCheck::Legacy => {
+                // Explicit allowlist, shared with the client: a method the
+                // table does not know defaults to Read there, so it must not
+                // pass here on that basis.
+                if !clawft_rpc::handshake::is_read_only_method(method) {
+                    return Some(proto_mismatch_response(
+                        0,
+                        DaemonBuild {
+                            sha: BUILD_SHA,
+                            version: VERSION,
+                        },
+                    ));
+                }
+                warn_legacy_once();
+            }
             ProtoCheck::Unsupported(p) => {
                 return Some(proto_mismatch_response(
                     p,
@@ -278,7 +294,7 @@ fn warn_legacy_once() {
     WARNED.call_once(|| {
         tracing::warn!(
             "rpc client sent no `proto` (legacy client, treated as protocol 0); \
-             accepted in this release, refused from ADR-103 Phase 2: update the client"
+             read-only calls are still accepted, every other call is refused: update the client"
         );
     });
 }
@@ -302,9 +318,28 @@ mod tests {
     }
 
     #[test]
-    fn envelope_accepts_legacy_and_current() {
-        assert!(envelope_refusal_with(&unbound(), "x", None, None).is_none());
+    fn envelope_accepts_legacy_read_only_and_current() {
+        assert!(envelope_refusal_with(&unbound(), "kernel.status", None, None).is_none());
         assert!(envelope_refusal_with(&unbound(), "x", Some(clawft_rpc::PROTO_VERSION), None).is_none());
+    }
+
+    #[test]
+    fn envelope_refuses_legacy_mutating_request() {
+        // `x.unlisted_mutation` is unknown to the capability table (defaults to
+        // Read there) and must still be refused: the gate is an allowlist.
+        for m in ["agent.spawn", "kernel.shutdown", "cron.add", "x.unlisted_mutation"] {
+            let r = envelope_refusal_with(&unbound(), m, None, None).unwrap();
+            assert_eq!(r.error_kind.as_deref(), Some("proto_mismatch"), "{m}");
+        }
+        // The discovery call stays open to a client with no proto.
+        assert!(envelope_refusal_with(&unbound(), "kernel.handshake", None, None).is_none());
+    }
+
+    #[test]
+    fn client_read_only_allowlist_is_read_capability() {
+        for m in clawft_rpc::handshake::READ_ONLY_METHODS {
+            assert_eq!(required_capability(m), Capability::Read, "{m}");
+        }
     }
 
     #[test]

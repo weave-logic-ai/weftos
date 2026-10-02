@@ -32,7 +32,7 @@ pub fn daemon_unavailable_error() -> String {
          Start the daemon with: weaver kernel start\n\
          Socket path: {}\n\
          Or use standalone mode: weft mcp-server  (without --attach)",
-        clawft_rpc::socket_path().display()
+        super::daemon_conn::current_socket_path().display()
     )
 }
 
@@ -94,7 +94,9 @@ impl DaemonAttachFacade {
             socket = %socket_path
                 .as_ref()
                 .map(|p| p.display().to_string())
-                .unwrap_or_else(|| clawft_rpc::socket_path().display().to_string()),
+                .unwrap_or_else(|| {
+                    crate::commands::daemon_conn::current_socket_path().display().to_string()
+                }),
             "attach façade connected to kernel daemon"
         );
 

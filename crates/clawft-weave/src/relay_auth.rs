@@ -27,6 +27,10 @@ pub const MAX_LINE: u64 = 4 * 1024 * 1024;
 ///   dropped: a forward header is honoured only from local unix callers, and
 ///   a remote caller's project claim means nothing to the local daemon.
 ///
+/// * `proto` is never added: a remote JSON client must declare it itself, so
+///   one that does not stays a legacy (read-only) client at the daemon from
+///   0.8.2 on.
+///
 /// Lines that are not a JSON object, and objects with nothing to drop, are
 /// returned unchanged.
 pub fn sanitize_line(line: &[u8]) -> Vec<u8> {
@@ -104,6 +108,16 @@ mod tests {
     fn auth_of(line: &[u8]) -> Option<String> {
         let v: Value = serde_json::from_slice(line).unwrap();
         v.get("auth").and_then(Value::as_str).map(str::to_owned)
+    }
+
+    #[test]
+    fn relay_never_stamps_proto() {
+        let out = sanitize_line(br#"{"method":"cron.add","auth":"admin","id":"1"}"#);
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        assert!(v.get("proto").is_none(), "{v}");
+        let out = sanitize_line(br#"{"method":"cron.add","proto":1,"id":"1"}"#);
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["proto"], 1);
     }
 
     #[test]

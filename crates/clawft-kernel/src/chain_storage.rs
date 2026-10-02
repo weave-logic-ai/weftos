@@ -80,6 +80,10 @@ pub struct ChainChoice {
     pub warning: Option<String>,
     /// Set when adopting the legacy chain looks unsafe: boot must refuse.
     pub refusal: Option<String>,
+    /// `refusal` clears by itself within [`LEGACY_ACTIVE_WINDOW`] (an older
+    /// kernel's recent write): a plain boot error, so a service manager's
+    /// retry is the right response, not the permanent exit 78.
+    pub transient: bool,
 }
 
 /// A legacy chain modified within this window may still have a live writer.
@@ -116,22 +120,43 @@ fn legacy_adoption_refusal(
     legacy: &Path,
     adopt_legacy: bool,
     now: std::time::SystemTime,
-) -> Option<String> {
+) -> Option<(String, bool)> {
     if !ChainLock::lock_path(legacy).exists() && !adopt_legacy {
-        return Some(format!(
+        return Some((format!(
             "The legacy chain at {} has never been used by a lock-aware kernel. Stop every \
              older weaver daemon (check `ps`/`weaver doctor daemon`) and then run \
              `weaver kernel start --adopt-legacy-chain` once. Or use --new-chain.",
             legacy.display()
-        ));
+        ), false));
     }
+    // The age window passes on its own, so this one is transient.
     lock_unaware_writer_age(legacy, now).map(|age| {
-        format!(
-            "the legacy chain at {} looks in use by an older kernel (modified {age}s ago); \
-             stop it first or use --new-chain",
-            legacy.display()
+        (
+            format!(
+                "the legacy chain at {} looks in use by an older kernel (modified {age}s ago); \
+                 stop it first or use --new-chain",
+                legacy.display()
+            ),
+            true,
         )
     })
+}
+
+/// Migration-marker refusal for `dir`, else the legacy adoption refusal for
+/// `legacy`; the flag is [`ChainChoice::transient`].
+fn migrated_or_adoption_refusal(
+    dir: &Path,
+    legacy: &Path,
+    adopt_legacy: bool,
+    now: std::time::SystemTime,
+) -> (Option<String>, bool) {
+    if let Some(m) = migrated_refusal(dir, adopt_legacy) {
+        return (Some(m), false);
+    }
+    match legacy_adoption_refusal(legacy, adopt_legacy, now) {
+        Some((m, t)) => (Some(m), t),
+        None => (None, false),
+    }
 }
 
 /// Fork hazard: the legacy chain in `dir` was migrated (marker beside it), and
@@ -245,6 +270,7 @@ fn choose_default_chain_inner(
             legacy_in_use: false,
             warning,
             refusal,
+            transient: false,
         }
     };
     let migrated_refusal = |dir: &Path| migrated_refusal(dir, adopt_legacy);
@@ -254,19 +280,22 @@ fn choose_default_chain_inner(
     // start a fresh chain in place of it: its first checkpoint would
     // overwrite history.
     if matches!(paths.source(), RootSource::LegacyHome) && has_chain(&resolved) {
-        let refusal = if new_chain {
-            Some(format!(
-                "--new-chain cannot start a fresh chain at {} because the legacy chain \
-                 lives there; start the kernel from a project, or set \
-                 kernel.chain.checkpoint_path to a new location",
-                resolved.display()
-            ))
+        let (refusal, transient) = if new_chain {
+            (
+                Some(format!(
+                    "--new-chain cannot start a fresh chain at {} because the legacy chain \
+                     lives there; start the kernel from a project, or set \
+                     kernel.chain.checkpoint_path to a new location",
+                    resolved.display()
+                )),
+                false,
+            )
         } else {
-            migrated_refusal(paths.root())
-                .or_else(|| legacy_adoption_refusal(&resolved, adopt_legacy, now))
+            migrated_or_adoption_refusal(paths.root(), &resolved, adopt_legacy, now)
         };
         return ChainChoice {
             legacy_in_use: true,
+            transient,
             ..plain(resolved, None, refusal)
         };
     }
@@ -283,8 +312,8 @@ fn choose_default_chain_inner(
         return plain(resolved, Some(warning), None);
     }
     let legacy_dir = legacy.parent().unwrap_or(Path::new("."));
-    let refusal = migrated_refusal(legacy_dir)
-        .or_else(|| legacy_adoption_refusal(&legacy, adopt_legacy, now));
+    let (refusal, transient) =
+        migrated_or_adoption_refusal(legacy_dir, &legacy, adopt_legacy, now);
     let warning = format!(
         "no chain at {} but a legacy chain exists at {}; continuing on the legacy chain \
          and its key so history is not forked (nothing was moved). Phase 1 \
@@ -298,6 +327,7 @@ fn choose_default_chain_inner(
         legacy_in_use: true,
         warning: Some(warning),
         refusal,
+        transient,
     }
 }
 
@@ -325,6 +355,7 @@ fn choose_user_chain(
             legacy_in_use: false,
             warning: None,
             refusal: None,
+            transient: false,
         };
     };
     let user = user_chain_checkpoint(home);
@@ -341,6 +372,7 @@ fn choose_user_chain(
             checkpoint: user,
             legacy_in_use: true,
             warning: None,
+            transient: false,
         };
     }
     if has_chain(&user) || new_chain || !has_chain(&legacy) {
@@ -357,11 +389,14 @@ fn choose_user_chain(
             legacy_in_use: true,
             warning,
             refusal: None,
+            transient: false,
         };
     }
+    let (refusal, transient) =
+        migrated_or_adoption_refusal(home.join(".clawft").as_path(), &legacy, adopt_legacy, now);
     ChainChoice {
-        refusal: migrated_refusal(home.join(".clawft").as_path(), adopt_legacy)
-            .or_else(|| legacy_adoption_refusal(&legacy, adopt_legacy, now)),
+        refusal,
+        transient,
         warning: Some(format!(
             "no user chain at {} but a legacy chain exists at {}; continuing on the legacy \
              chain and its key so history is not forked (nothing was moved). Run \
@@ -391,6 +426,8 @@ pub struct PinOutcome {
     pub warning: Option<String>,
     /// Boot must refuse with this message.
     pub refusal: Option<String>,
+    /// The refusal clears on its own (see [`ChainChoice::transient`]).
+    pub refusal_transient: bool,
 }
 
 /// [`pin_chain_storage`] plus the warning and refusal for the choice.
@@ -401,12 +438,14 @@ pub fn pin_chain_storage_noted(kernel_config: &mut KernelConfig) -> PinOutcome {
     }
     let mut warning = None;
     let mut refusal = None;
+    let mut refusal_transient = false;
     let mut legacy_in_use = false;
     if chain.checkpoint_path.is_none() {
-        let (path, w, legacy, r) = default_checkpoint_path(&chain);
+        let (path, w, legacy, r, transient) = default_checkpoint_path(&chain);
         chain.checkpoint_path = path;
         warning = w;
         refusal = r;
+        refusal_transient = transient;
         legacy_in_use = legacy;
     } else if let Some(p) = &chain.checkpoint_path {
         refusal = explicit_path_refusal(
@@ -434,13 +473,14 @@ pub fn pin_chain_storage_noted(kernel_config: &mut KernelConfig) -> PinOutcome {
         path: pinned,
         warning,
         refusal,
+        refusal_transient,
     }
 }
 
 #[cfg(not(test))]
 fn default_checkpoint_path(
     _chain: &clawft_types::config::ChainConfig,
-) -> (Option<String>, Option<String>, bool, Option<String>) {
+) -> (Option<String>, Option<String>, bool, Option<String>, bool) {
     let paths = RuntimePaths::resolve();
     let home = clawft_types::runtime_paths::home_dir();
     let new_chain = NEW_CHAIN.load(std::sync::atomic::Ordering::SeqCst);
@@ -457,6 +497,7 @@ fn default_checkpoint_path(
         choice.warning,
         choice.legacy_in_use,
         choice.refusal,
+        choice.transient,
     )
 }
 
@@ -464,7 +505,7 @@ fn default_checkpoint_path(
 #[cfg(test)]
 fn default_checkpoint_path(
     _chain: &clawft_types::config::ChainConfig,
-) -> (Option<String>, Option<String>, bool, Option<String>) {
+) -> (Option<String>, Option<String>, bool, Option<String>, bool) {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -481,6 +522,7 @@ fn default_checkpoint_path(
         None,
         false,
         None,
+        false,
     )
 }
 
@@ -686,6 +728,24 @@ mod tests {
         std::fs::write(ChainLock::lock_path(&legacy), "").unwrap();
         let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
         assert!(c.refusal.is_none(), "a lock-aware kernel already used it");
+    }
+
+    #[test]
+    fn only_the_age_window_refusal_is_transient() {
+        let t = tempfile::tempdir().unwrap();
+        let (home, _proj) = legacy_fixture(&t);
+        let paths = RuntimePaths::resolve_with(None, Some(&home), Some(&home));
+        let now = std::time::SystemTime::now();
+        // Never used by a lock-aware kernel: needs an operator, permanent.
+        let c = choose_default_chain(&paths, Some(&home), false, false, now);
+        assert!(c.refusal.is_some() && !c.transient);
+        // Adopted explicitly but written moments ago: clears by itself.
+        let c = choose_default_chain(&paths, Some(&home), false, true, now);
+        assert!(c.refusal.expect("recent write").contains("looks in use"));
+        assert!(c.transient);
+        // Same chain, long idle: no refusal at all.
+        let c = choose_default_chain(&paths, Some(&home), false, true, far_future());
+        assert!(c.refusal.is_none() && !c.transient);
     }
 
     #[test]

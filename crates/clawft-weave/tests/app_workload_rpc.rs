@@ -57,7 +57,7 @@ async fn spawn_daemon(tmp: &std::path::Path) -> (std::path::PathBuf, watch::Send
 async fn call_as(socket: &std::path::Path, auth: Option<&str>, method: &str, params: Value) -> Value {
     let stream = UnixStream::connect(socket).await.unwrap();
     let (r, mut w) = stream.into_split();
-    let mut req = json!({ "id": "t", "method": method, "params": params });
+    let mut req = json!({ "id": "t", "proto": 1, "method": method, "params": params });
     if let Some(a) = auth {
         req["auth"] = json!(a);
     }

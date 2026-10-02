@@ -112,7 +112,7 @@ async fn rpc(
     let mut reader = BufReader::new(reader);
     let req = serde_json::json!({
         "id": "t",
-        "method": method,
+        "proto": 1, "method": method,
         "params": params,
         "auth": "admin",
     });

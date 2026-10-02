@@ -190,7 +190,7 @@ async fn project_profile_boots_with_no_heavy_services_and_no_provider_keys() {
 
 async fn rpc(sock: &std::path::Path, method: &str, params: Value, auth: &str) -> Value {
     let (r, mut w) = UnixStream::connect(sock).await.unwrap().into_split();
-    let req = json!({"id": "t", "method": method, "params": params, "auth": auth});
+    let req = json!({"id": "t", "proto": 1, "method": method, "params": params, "auth": auth});
     w.write_all(format!("{req}\n").as_bytes()).await.unwrap();
     let mut line = String::new();
     BufReader::new(r).read_line(&mut line).await.unwrap();

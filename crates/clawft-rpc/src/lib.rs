@@ -42,7 +42,9 @@ pub use handshake::{
     DaemonBuild, Failure, Handshake, PROTO_MIN, PROTO_VERSION, ProtoCheck, ProtoRange, check_proto,
     proto_mismatch_response, remedy, remedy_for,
 };
-pub use client::{DaemonClient, StreamSession, is_daemon_running, is_daemon_running_at};
+pub use client::{
+    DaemonClient, StreamSession, is_daemon_running, is_daemon_running_at, is_daemon_running_for,
+};
 pub use protocol::{
     ForwardHeader,
     LOG_FILE_NAME, PID_FILE_NAME, PIPE_NAME_PREFIX, Request, Response, SOCKET_NAME,

@@ -203,6 +203,23 @@ pub fn resolve(flags: &ResolveFlags) -> Result<Resolution, ResolveError> {
     resolve_with(&ResolveInputs::from_process(flags.clone()))
 }
 
+/// The socket the resolver picks for `i`, or the legacy default when
+/// resolution itself fails (an invalid `--project`, say). For callers that
+/// only need a path to name or probe; anything that talks to the daemon uses
+/// [`resolve`] and `connect_resolved`.
+pub fn socket_for(i: &ResolveInputs) -> PathBuf {
+    resolve_with(i)
+        .map(|r| r.socket)
+        .unwrap_or_else(|_| crate::protocol::socket_path())
+}
+
+/// [`socket_for`] from the process environment and working directory, so a
+/// manifest `runtime_dir` is honoured where `WEFTOS_RUNTIME_DIR` is unset
+/// (Phase 1 review S8).
+pub fn current_socket_path() -> PathBuf {
+    socket_for(&ResolveInputs::from_process(ResolveFlags::default()))
+}
+
 /// Resolve from explicit inputs.
 pub fn resolve_with(i: &ResolveInputs) -> Result<Resolution, ResolveError> {
     let mut tried = Vec::new();

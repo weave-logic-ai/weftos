@@ -33,6 +33,35 @@ Staging area for changes after the 0.8.1 cut.
 - `auth.token` events and `governance.overlay.applied` are never replicated;
   chain sync stops cleanly at the first authority event (`StoppedAtAuthorityEvent`).
 
+### Changed — Weave topology Phase 1 follow-ups (ADR-103 A8, next release 0.8.2)
+
+- **Legacy clients are refused for mutating calls (breaking).** A request with
+  no `proto` now gets `proto_mismatch` unless the method is read-only, and
+  `weft`/`weaver` clients that meet a daemon with no `kernel.handshake` on the
+  default endpoint send read-only calls only (`unverified_daemon` otherwise).
+  Restart an old daemon with the current build to lift it. The gate is an
+  allowlist (`READ_ONLY_METHODS`), not the capability table. Remote JSON
+  clients on the TCP relay are not stamped by the relay: without `proto` they
+  are read-only from 0.8.2; send `"proto": 1`. The VS Code panel and the
+  child-kernel link now send it. Old no-`proto` clients that call
+  `kernel.subscribe`, `substrate.subscribe` or `agent.chat` now fail with
+  `proto_mismatch` (those are not on the read-only allowlist); remote relay
+  clients must send `"proto": 1`. Update the client.
+- **launchd no longer cycles on a permanent refusal.** The user daemon writes
+  `~/.weftos/run/REFUSED` on a permanent refusal or a clean exit and the
+  generated plist's `KeepAlive` is `PathState {REFUSED: false}`; the
+  daemon removes it once a boot succeeds (a refused duplicate start never
+  writes it; a clean-exit write happens only if no successor holds the
+  instance lock). launchd watches `~/.weftos/run/REFUSED`, so a
+  `WEFTOS_RUNTIME_DIR` override is not supervised by launchd. Regenerate the unit with `weaver service unit --kind launchd` to pick up the new
+  plist. The legacy-chain age-window refusal is now a plain boot error (exit
+  1, retried); `-cREL` is made absolute on SIGHUP re-exec.
+- `weaver kernel status` without `--profile user` reports a live user daemon
+  instead of booting an inspection kernel; `weft doctor` lists `~/.weftos/run`
+  with the `kernel.lock` holder, `REFUSED`, the migration marker and adoption
+  state; MCP attach messages and `is_daemon_running()` honour a manifest
+  `runtime_dir`.
+
 ### Added — Weave topology Phase 2, per-project kernels (ADR-103 A7, package G)
 
 - **Per-project child kernels under the user daemon.** `weaver kernel start

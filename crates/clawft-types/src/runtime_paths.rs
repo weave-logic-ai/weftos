@@ -48,6 +48,9 @@ pub const PID_FILE_NAME: &str = "kernel.pid";
 pub const LOG_FILE_NAME: &str = "kernel.log";
 /// Advisory single-instance lock file.
 pub const LOCK_FILE_NAME: &str = "kernel.lock";
+/// Sentinel the user daemon leaves when its service manager must not restart
+/// it (permanent boot refusal, clean exit). launchd's `KeepAlive` watches it.
+pub const REFUSED_FILE_NAME: &str = "REFUSED";
 
 /// Where the runtime root came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -304,6 +307,10 @@ impl RuntimePaths {
     /// Single-instance advisory lock.
     pub fn lock(&self) -> PathBuf {
         self.file(LOCK_FILE_NAME)
+    }
+    /// "Do not restart me" sentinel ([`REFUSED_FILE_NAME`]).
+    pub fn refused(&self) -> PathBuf {
+        self.file(REFUSED_FILE_NAME)
     }
     /// Daemon Ed25519 node key.
     pub fn node_key(&self) -> PathBuf {

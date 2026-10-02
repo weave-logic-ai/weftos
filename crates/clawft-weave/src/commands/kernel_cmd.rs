@@ -221,6 +221,15 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
             if !user_profile && !project_profile {
                 super::kernel_children::legacy_guard(legacy_project_daemon).await?;
             }
+            // The user daemon's "do not restart" sentinel (launchd KeepAlive)
+            // is written below on a permanent refusal or a clean exit, and
+            // lifted by the daemon once a boot succeeds (never by a start
+            // attempt that is refused: a duplicate start must leave a live
+            // daemon's state alone). It lives in the resolved runtime root;
+            // the generated plist watches `~/.weftos/run`, so a
+            // WEFTOS_RUNTIME_DIR override is not supervised by launchd.
+            #[cfg(any(unix, windows))]
+            let refused_sentinel = user_profile.then(|| protocol::runtime_paths().refused());
             if foreground {
                 // Run in foreground (blocking)
                 let platform = NativePlatform::new();
@@ -235,6 +244,9 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
                 // A config error is not fixed by retrying: exit 78.
                 let loaded = loaded.unwrap_or_else(|e| {
                     eprintln!("Error: {e:#}");
+                    if let Some(s) = &refused_sentinel {
+                        crate::boot_refusal::write_refused(s, &format!("{e:#}"));
+                    }
                     std::process::exit(crate::boot_refusal::EX_CONFIG)
                 });
                 let kernel_config = loaded.config.kernel.clone();
@@ -255,7 +267,20 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
                         return Err(e);
                     }
                     eprintln!("Error: {e:#}");
+                    if let Some(s) = &refused_sentinel
+                        && crate::boot_refusal::leaves_sentinel(&e)
+                    {
+                        crate::boot_refusal::write_refused(s, &format!("{e:#}"));
+                    }
                     std::process::exit(code);
+                }
+                // A clean exit (SIGTERM, `kernel stop`) must not be restarted
+                // either: that is what `SuccessfulExit=false` used to say.
+                if refused_sentinel.is_some() {
+                    crate::boot_refusal::write_refused_if_unowned(
+                        &protocol::runtime_paths(),
+                        "stopped cleanly",
+                    );
                 }
             } else {
                 // Background (default) — spawn detached child
@@ -363,6 +388,18 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
                         "no user daemon running at {} (start it with `weaver kernel start --profile user`)",
                         protocol::runtime_dir().display()
                     );
+                }
+                // Phase 1 review S7: a live user daemon is the answer, not an
+                // ephemeral inspection kernel booted beside it.
+                #[cfg(any(unix, windows))]
+                if !user_profile
+                    && std::env::var(clawft_types::runtime_paths::RUNTIME_DIR_ENV)
+                        .map_or(true, |v| v.trim().is_empty())
+                    && let Some(home) = clawft_types::runtime_paths::home_dir()
+                    && let Some(hint) = user_daemon_hint(&home).await
+                {
+                    println!("{hint}");
+                    return Ok(());
                 }
                 eprintln!("(no daemon running — booting ephemeral kernel)\n");
                 let platform = NativePlatform::new();
@@ -1083,6 +1120,20 @@ fn format_uptime(secs: f64) -> String {
     }
 }
 
+/// Text for `kernel status` when the default endpoint is empty but the user
+/// daemon under `home` answers on `~/.weftos/run/kernel.sock`.
+#[cfg(any(unix, windows))]
+async fn user_daemon_hint(home: &std::path::Path) -> Option<String> {
+    let root = clawft_types::runtime_paths::user_runtime_root(home);
+    let sock = root.join(clawft_types::runtime_paths::SOCKET_NAME);
+    DaemonClient::connect_path(&sock).await?;
+    Some(format!(
+        "A user daemon is running at {} (nothing answers on the default endpoint).\n\
+         Inspect it with: weaver kernel status --profile user",
+        root.display()
+    ))
+}
+
 /// Format a byte count as a human-readable string.
 fn format_bytes(bytes: u64) -> String {
     if bytes >= 1024 * 1024 * 1024 {
@@ -1136,5 +1187,23 @@ mod tests {
         }
         let args = KernelArgs::try_parse_from(["kernel", "start"]).unwrap();
         assert_eq!(args.profile, None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn status_hint_names_a_live_user_daemon_only() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(user_daemon_hint(home.path()).await.is_none(), "no user root, no hint");
+        let run = clawft_types::runtime_paths::user_runtime_root(home.path());
+        std::fs::create_dir_all(&run).unwrap();
+        let sock = run.join(clawft_types::runtime_paths::SOCKET_NAME);
+        // A stale socket file nobody listens on is not a running daemon.
+        drop(tokio::net::UnixListener::bind(&sock).unwrap());
+        assert!(user_daemon_hint(home.path()).await.is_none());
+        std::fs::remove_file(&sock).unwrap();
+        let _live = tokio::net::UnixListener::bind(&sock).unwrap();
+        let hint = user_daemon_hint(home.path()).await.expect("live daemon");
+        assert!(hint.contains("--profile user"), "{hint}");
+        assert!(hint.contains(&run.display().to_string()), "{hint}");
     }
 }

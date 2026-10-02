@@ -78,7 +78,12 @@ pub fn verify_parent_socket(path: &Path) -> Result<(), String> {
 }
 
 fn request_line(method: &str, params: Value, project: Option<&str>) -> String {
-    let mut req = json!({ "id": "mesh-local", "method": method, "params": params });
+    let mut req = json!({
+        "id": "mesh-local",
+        "proto": clawft_rpc::PROTO_VERSION,
+        "method": method,
+        "params": params
+    });
     if let Some(p) = project {
         req["project"] = json!(p);
     }

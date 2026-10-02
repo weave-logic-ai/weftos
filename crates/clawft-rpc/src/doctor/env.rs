@@ -102,7 +102,8 @@ impl DoctorEnv {
     }
 
     /// Every runtime directory doctor should inspect: the resolved one, then
-    /// `~/.clawft`, `~/.weftos/runtime`, and each ancestor `.weftos/runtime`.
+    /// `~/.clawft`, the user daemon's `~/.weftos/run`, `~/.weftos/runtime`,
+    /// and each ancestor `.weftos/runtime`.
     /// When `WEFTOS_RUNTIME_DIR` is set it is the ONLY candidate, so tests and
     /// sandboxes can isolate doctor from the real machine.
     pub fn runtime_dir_candidates(&self) -> Vec<PathBuf> {
@@ -116,6 +117,7 @@ impl DoctorEnv {
             }
         };
         push(self.home.join(".clawft"));
+        push(clawft_types::runtime_paths::user_runtime_root(&self.home));
         push(self.home.join(".weftos/runtime"));
         for p in project_runtime_dirs(&self.cwd) {
             push(p);

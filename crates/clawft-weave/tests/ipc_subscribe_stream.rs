@@ -127,7 +127,7 @@ async fn send_request(
     };
     let req = serde_json::json!({
         "id": "test-1",
-        "method": method,
+        "proto": 1, "method": method,
         "params": params,
         "auth": auth,
     });

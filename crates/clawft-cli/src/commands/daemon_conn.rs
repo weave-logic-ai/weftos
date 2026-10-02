@@ -32,6 +32,15 @@ pub fn resolve_current() -> Result<Resolution, ResolveError> {
     resolve(&flags())
 }
 
+/// The socket the resolver picks from the flags, environment and working
+/// directory, for messages and probes. Falls back to the default path when
+/// resolution fails; connecting always goes through [`connect`].
+pub fn current_socket_path() -> std::path::PathBuf {
+    resolve_current()
+        .map(|r| r.socket)
+        .unwrap_or_else(|_| clawft_rpc::socket_path())
+}
+
 /// The exact next command for a connect failure, when one is known.
 pub fn remedy_text(err: &ConnectError) -> Option<String> {
     err.failure().map(|f| remedy_for(&f))

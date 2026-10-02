@@ -22,6 +22,8 @@ export interface RpcRequest {
     method: string;
     params?: unknown;
     id?: string;
+    /** Protocol version announced to the daemon (ADR-103). */
+    proto?: number;
     /**
      * Optional WEFT-479 bearer / scope token. When set, forwarded on the
      * UDS JSON-RPC envelope as `auth` so the daemon's capability gate
@@ -119,6 +121,8 @@ export function rpcCall(
             method: req.method,
             params: req.params ?? null,
             id: req.id,
+            // ADR-103: a request without `proto` is read-only from 0.8.2.
+            proto: 1,
             // WEFT-495: only include `auth` when the host attached one
             // (multi-user panel session). Omitting keeps single-user
             // wire-compatible with anonymous daemon posture.

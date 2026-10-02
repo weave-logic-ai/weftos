@@ -183,7 +183,7 @@ async fn one_shot(
     let stream = UnixStream::connect(socket).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
-    let req = serde_json::json!({ "id": "t", "method": method, "params": params, "auth": "admin" });
+    let req = serde_json::json!({ "id": "t", "proto": 1, "method": method, "params": params, "auth": "admin" });
     let mut line = serde_json::to_string(&req).unwrap();
     line.push('\n');
     writer.write_all(line.as_bytes()).await.unwrap();
@@ -356,7 +356,7 @@ async fn substrate_subscribe_streams_updates() {
     let mut reader = BufReader::new(reader);
     let sub = serde_json::json!({
         "id": "sub",
-        "method": "substrate.subscribe",
+        "proto": 1, "method": "substrate.subscribe",
         "params": { "path": path },
     });
     let mut line = serde_json::to_string(&sub).unwrap();
@@ -420,7 +420,7 @@ async fn substrate_notify_wakes_subscriber_without_prior_publish() {
     let mut reader = BufReader::new(reader);
     let sub = serde_json::json!({
         "id": "notify-sub",
-        "method": "substrate.subscribe",
+        "proto": 1, "method": "substrate.subscribe",
         "params": { "path": path },
     });
     let mut line = serde_json::to_string(&sub).unwrap();
@@ -509,7 +509,7 @@ async fn substrate_notify_back_to_back_delivers_both_events() {
     let mut reader = BufReader::new(reader);
     let sub = serde_json::json!({
         "id": "notify-burst-sub",
-        "method": "substrate.subscribe",
+        "proto": 1, "method": "substrate.subscribe",
         "params": { "path": path },
     });
     let mut line = serde_json::to_string(&sub).unwrap();
