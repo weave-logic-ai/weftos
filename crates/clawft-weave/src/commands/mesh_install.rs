@@ -60,6 +60,12 @@ pub struct InstallArgs {
     /// Extra uid(s) allowed to run admin verbs (root always may).
     #[arg(long = "admin-uid")]
     pub admin_uids: Vec<u32>,
+    /// Written to mesh.toml as `max_connections_per_ip` (service default 64).
+    #[arg(long, value_name = "N")]
+    pub max_connections_per_ip: Option<usize>,
+    /// Written to mesh.toml as `first_frame_timeout_secs` (service default 10).
+    #[arg(long, value_name = "SECS")]
+    pub first_frame_timeout_secs: Option<u64>,
     /// uninstall only: also delete /var/lib/weftos/mesh/node.key.
     #[arg(long)]
     pub purge_key: bool,
@@ -75,6 +81,10 @@ pub struct Plan {
     pub listen: SocketAddr,
     pub admin_uids: Vec<u32>,
     pub purge_key: bool,
+    /// mesh.toml `max_connections_per_ip`, written only when set.
+    pub max_connections_per_ip: Option<usize>,
+    /// mesh.toml `first_frame_timeout_secs`, written only when set.
+    pub first_frame_timeout_secs: Option<u64>,
     /// `exe` already is the installed copy: nothing to copy.
     pub skip_copy: bool,
     /// Box-key warnings (fresh key on a machine that has one).
@@ -99,6 +109,9 @@ pub fn ignored_flag_warnings(a: &InstallArgs, uninstall: bool) -> Vec<String> {
         }
         if !a.admin_uids.is_empty() {
             w.push("--admin-uid is ignored by uninstall-service".to_owned());
+        }
+        if a.max_connections_per_ip.is_some() || a.first_frame_timeout_secs.is_some() {
+            w.push("--max-connections-per-ip and --first-frame-timeout-secs are ignored by uninstall-service".to_owned());
         }
     } else if a.purge_key {
         w.push("--purge-key is ignored by install-service (it never deletes a key)".to_owned());
@@ -135,6 +148,8 @@ impl Plan {
             listen,
             admin_uids: a.admin_uids.clone(),
             purge_key: a.purge_key,
+            max_connections_per_ip: a.max_connections_per_ip,
+            first_frame_timeout_secs: a.first_frame_timeout_secs,
             key_notes,
         })
     }
@@ -186,6 +201,12 @@ health_listen = \"127.0.0.1:9490\"\n",
     if !p.admin_uids.is_empty() {
         let ids: Vec<String> = p.admin_uids.iter().map(u32::to_string).collect();
         t.push_str(&format!("admin_uids = [{}]\n", ids.join(", ")));
+    }
+    if let Some(n) = p.max_connections_per_ip {
+        t.push_str(&format!("max_connections_per_ip = {n}\n"));
+    }
+    if let Some(n) = p.first_frame_timeout_secs {
+        t.push_str(&format!("first_frame_timeout_secs = {n}\n"));
     }
     t
 }
@@ -410,13 +431,15 @@ mod tests {
             listen: parse_listen(DEFAULT_LISTEN).unwrap(),
             admin_uids: vec![],
             purge_key: false,
+            max_connections_per_ip: None,
+            first_frame_timeout_secs: None,
             skip_copy: false,
             key_notes: vec![],
         }
     }
 
     fn args() -> InstallArgs {
-        InstallArgs { kind: None, apply: false, adopt_node_key: None, fresh_node_key: false, listen: DEFAULT_LISTEN.into(), admin_uids: vec![], purge_key: false }
+        InstallArgs { kind: None, apply: false, adopt_node_key: None, fresh_node_key: false, listen: DEFAULT_LISTEN.into(), admin_uids: vec![], purge_key: false, max_connections_per_ip: None, first_frame_timeout_secs: None }
     }
 
     fn check_golden(name: &str, got: &str) {
@@ -483,6 +506,20 @@ mod tests {
         let cfg = clawft_mesh_service::MeshServiceConfig::load(Some(&f), &clawft_mesh_service::Overrides::default()).unwrap();
         assert_eq!(cfg.listen, "127.0.0.1:9489");
         assert_eq!(cfg.admin_uids, vec![501, 502]);
+    }
+
+    #[test]
+    fn connection_limits_are_written_to_mesh_toml_only_when_set() {
+        let p = plan(Manager::Systemd);
+        let t = mesh_toml(&p);
+        assert!(!t.contains("max_connections_per_ip") && !t.contains("first_frame_timeout_secs"));
+        let a = InstallArgs { max_connections_per_ip: Some(8), first_frame_timeout_secs: Some(3), ..args() };
+        let p = Plan::from_args(&a, Path::new("/x/weaver"), None).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("mesh.toml");
+        std::fs::write(&f, mesh_toml(&p)).unwrap();
+        let cfg = clawft_mesh_service::MeshServiceConfig::load(Some(&f), &clawft_mesh_service::Overrides::default()).unwrap();
+        assert_eq!((cfg.max_connections_per_ip, cfg.first_frame_timeout_secs), (8, 3));
     }
 
     #[test]

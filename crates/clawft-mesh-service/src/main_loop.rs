@@ -24,7 +24,7 @@ use std::time::Duration;
 use clawft_kernel::mesh_admit::{AdmissionGate, DialIdentity};
 use clawft_kernel::mesh_noise::{NoiseConfig, NoisePattern};
 use clawft_kernel::mesh_runtime::MeshRuntime;
-use clawft_kernel::mesh_serve::{connect_seeds, serve_listener, transport_for};
+use clawft_kernel::mesh_serve::{connect_seeds, serve_listener_with, transport_for};
 use clawft_kernel::node_key::{load_or_generate_node_key, NODE_KEY_FILE};
 use clawft_kernel::revocation::RevocationList;
 use clawft_mesh_local::proto::{ServiceRecord, VersionRange, PROTO_MAX, PROTO_MIN};
@@ -297,9 +297,10 @@ async fn start_inner(
         let (rt, state, noise) = (Arc::clone(&rt), Arc::clone(&state), noise.clone());
         let tname = transport.name().to_string();
         let listen = cfg.listen.clone();
+        let limits = cfg.mesh_limits();
         tasks.push(tokio::spawn(async move {
             let gate: Arc<dyn AdmissionGate> = state.gate.clone();
-            serve_listener(rt, listener, noise, &tname, &listen, gate).await;
+            serve_listener_with(rt, listener, noise, &tname, &listen, gate, limits).await;
         }));
     }
     let dial = match (state.policy.admission(), cfg.genesis_hash) {

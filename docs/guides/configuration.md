@@ -1150,8 +1150,8 @@ Admission and the machine mesh service (ADR-103 Phase 3):
 | `admission` | `"observe"` | `off`, `observe` or `enforce`. `observe` checks peers' signed hellos and records would-be refusals but never refuses and never marks a peer verified; it takes effect only once `genesis_hash` is set. `enforce` refuses unsigned, plaintext, wrong-genesis, revoked and verdict-denied peers. |
 | `genesis_hash` | unset | 64 hex chars peers must present. A cluster label, not a credential. Required for `enforce`. |
 | `admission_open_membership` | `false` | Let `enforce` admit every peer with a valid hello when there is no governance gate (otherwise it refuses everyone). |
-| `max_connections_per_ip` | `64` | Concurrent inbound mesh connections per source IP (IPv6 per /64). Applies under every `admission` mode, including `off`. |
-| `first_frame_timeout_secs` | `10` | Seconds an inbound connection may stay silent before its first frame. Applies under every `admission` mode; a legacy leaf that connects and waits longer is dropped. |
+| `max_connections_per_ip` | `64` | Concurrent inbound mesh connections per source IP (IPv6 per /64). Applies under every `admission` mode, including `off`. The machine mesh service reads the same key from `mesh.toml`. |
+| `first_frame_timeout_secs` | `10` | Seconds an inbound connection may stay silent before its first frame. Applies under every `admission` mode; a legacy leaf that connects and waits longer is dropped. The machine mesh service reads the same key from `mesh.toml`. |
 | `service` | `"auto"` | User daemon only. `auto`: use the machine mesh service when it answers and verifies, else run the mesh in this daemon (collapsed). `required`: boot fails without the service. `off`: never probe. A service that answers but fails verification always fails the boot. Under `auto`, a machine whose service key is pinned and that has no local `node.key` refuses to collapse (it would need a new node id). |
 | `service_socket` | unset | Service socket override; else `$WEFTOS_MESH_SOCKET`, else `/var/run/weftos/mesh.sock`. |
 

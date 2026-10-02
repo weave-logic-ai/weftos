@@ -15,9 +15,12 @@ Staging area for changes after the 0.8.1 cut.
   first-frame timeout (default 10 s) now apply under every `kernel.mesh.admission`
   mode, not only `enforce`. A legacy leaf that connects and stays silent for
   more than 10 s is dropped, and one host can hold at most 64 connections.
-  Tune with `kernel.mesh.max_connections_per_ip` and
-  `kernel.mesh.first_frame_timeout_secs`. The idle timeout and live revocation
-  check remain `enforce`-only.
+  Tune them with `kernel.mesh.max_connections_per_ip` and
+  `kernel.mesh.first_frame_timeout_secs` for the collapsed daemon, or with
+  `max_connections_per_ip` and `first_frame_timeout_secs` in `mesh.toml` for the
+  machine mesh service (also `weaver mesh install-service
+  --max-connections-per-ip N --first-frame-timeout-secs S`, written only when
+  given). The idle timeout and live revocation check remain `enforce`-only.
 - Seed connections are now bidirectional, redial with jittered exponential
   backoff, drop after 5 minutes of inbound silence, and stop when the mesh
   service stops. There is no dial-side keepalive yet, so a seed that stays

@@ -265,3 +265,26 @@ async fn accept_from_is_validated_and_bounded() {
     assert!(matches!(a.send(&dest, serde_json::to_value(km("t")).unwrap()).await.unwrap(), Message::Ack {}));
     assert!(next_deliver(&mut b).await.is_some());
 }
+
+/// `mesh.toml`'s `first_frame_timeout_secs` and `max_connections_per_ip` reach
+/// the listener (not the kernel defaults of 10 s and 64).
+#[tokio::test]
+async fn configured_connection_limits_reach_the_mesh_listener() {
+    use tokio::io::AsyncReadExt;
+    let h = Harness::with(|c, _| {
+        c.first_frame_timeout_secs = 1;
+        c.max_connections_per_ip = 1;
+    })
+    .await;
+    let addr = h.svc().mesh_addr.unwrap();
+    let mut first = tokio::net::TcpStream::connect(addr).await.unwrap();
+    // The second connection from the same IP is over the cap and is closed.
+    let mut second = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let mut buf = [0u8; 1];
+    let r = tokio::time::timeout(Duration::from_millis(800), second.read(&mut buf)).await;
+    assert!(matches!(r, Ok(Ok(0)) | Ok(Err(_))), "second connection must be dropped by the per-IP cap: {r:?}");
+    // The first stays up until its silent first-frame window (1 s) ends, well
+    // before the 10 s default.
+    let r = tokio::time::timeout(Duration::from_secs(5), first.read(&mut buf)).await;
+    assert!(matches!(r, Ok(Ok(0)) | Ok(Err(_))), "silent connection must be dropped after ~1 s: {r:?}");
+}

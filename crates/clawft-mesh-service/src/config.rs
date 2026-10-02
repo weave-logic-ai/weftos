@@ -7,6 +7,7 @@
 
 use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use clawft_types::config::{MeshAdmissionMode, DEFAULT_MESH_PORT};
 use serde::Deserialize;
@@ -76,6 +77,8 @@ struct FileConfig {
     health_listen: Option<String>,
     facts_ttl_s: Option<u64>,
     probe_facts: Option<bool>,
+    max_connections_per_ip: Option<usize>,
+    first_frame_timeout_secs: Option<u64>,
 }
 
 /// Command-line overrides (`--state-dir --socket --listen --config`).
@@ -114,6 +117,14 @@ pub struct MeshServiceConfig {
     pub facts_ttl_s: u64,
     /// Probe the host for capabilities when signing facts. Tests turn it off.
     pub probe_facts: bool,
+    /// Concurrent mesh connections per source IP (default 64), in every
+    /// admission mode. Same meaning as the collapsed daemon's
+    /// `kernel.mesh.max_connections_per_ip`.
+    pub max_connections_per_ip: usize,
+    /// Seconds a mesh connection may stay silent before its first frame
+    /// (default 10), in every admission mode. Same meaning as
+    /// `kernel.mesh.first_frame_timeout_secs`.
+    pub first_frame_timeout_secs: u64,
     pub build_sha: String,
 }
 
@@ -138,6 +149,8 @@ impl Default for MeshServiceConfig {
             health_listen: Some(DEFAULT_HEALTH_LISTEN.into()),
             facts_ttl_s: 3600,
             probe_facts: true,
+            max_connections_per_ip: clawft_kernel::mesh_limits::MAX_CONNECTIONS_PER_IP,
+            first_frame_timeout_secs: clawft_kernel::mesh_limits::FIRST_FRAME_TIMEOUT.as_secs(),
             build_sha: option_env!("WEFTOS_BUILD_SHA")
                 .unwrap_or(env!("CARGO_PKG_VERSION"))
                 .to_string(),
@@ -176,7 +189,7 @@ impl MeshServiceConfig {
         take!(
             state_dir, socket, listen, transport, noise, discovery, seed_peers, bind_policy,
             admission, admin_uids, cert_ttl_s, verdict_timeout_s, stale_grace_s, facts_ttl_s,
-            probe_facts
+            probe_facts, max_connections_per_ip, first_frame_timeout_secs
         );
         if let Some(h) = f.genesis_hash {
             self.genesis_hash = Some(parse_genesis(&h)?);
@@ -217,6 +230,12 @@ impl MeshServiceConfig {
         if self.cert_ttl_s < 10 {
             return bad("cert_ttl_s must be at least 10 seconds");
         }
+        if self.max_connections_per_ip == 0 {
+            return bad("max_connections_per_ip must be at least 1");
+        }
+        if self.first_frame_timeout_secs == 0 {
+            return bad("first_frame_timeout_secs must be at least 1 second");
+        }
         if self.verdict_timeout_s == 0 {
             return bad("verdict_timeout_s must be at least 1 second");
         }
@@ -249,6 +268,16 @@ impl MeshServiceConfig {
             return bad("socket must be a file path inside a directory");
         }
         Ok(())
+    }
+
+    /// The connection limits the mesh listener enforces: the configured per-IP
+    /// cap and first-frame timeout over the kernel's other defaults.
+    pub fn mesh_limits(&self) -> clawft_kernel::mesh_limits::Limits {
+        clawft_kernel::mesh_limits::Limits {
+            first_frame: Duration::from_secs(self.first_frame_timeout_secs),
+            per_ip: self.max_connections_per_ip,
+            ..clawft_kernel::mesh_limits::Limits::default()
+        }
     }
 
     /// Whether `uid` may use admin verbs: root or listed in `admin_uids`.
@@ -301,6 +330,27 @@ mod tests {
         assert!(c.validate().is_err());
         let c = MeshServiceConfig { health_listen: Some("127.0.0.1:0".into()), ..Default::default() };
         assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn connection_limits_default_to_the_kernel_values_and_come_from_toml() {
+        let c = MeshServiceConfig::default();
+        assert_eq!((c.max_connections_per_ip, c.first_frame_timeout_secs), (64, 10));
+        let l = c.mesh_limits();
+        assert_eq!((l.per_ip, l.first_frame), (64, Duration::from_secs(10)));
+        let mut c = MeshServiceConfig::default();
+        c.apply_toml("max_connections_per_ip = 3\nfirst_frame_timeout_secs = 2", "t").unwrap();
+        let l = c.mesh_limits();
+        assert_eq!((l.per_ip, l.first_frame), (3, Duration::from_secs(2)));
+        assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn zero_connection_limits_are_rejected() {
+        let c = MeshServiceConfig { max_connections_per_ip: 0, ..Default::default() };
+        assert!(c.validate().is_err());
+        let c = MeshServiceConfig { first_frame_timeout_secs: 0, ..Default::default() };
+        assert!(c.validate().is_err());
     }
 
     #[test]

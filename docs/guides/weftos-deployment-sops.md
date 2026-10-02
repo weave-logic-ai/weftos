@@ -223,7 +223,8 @@ What the script does:
 - copies the binary to `/usr/local/libexec/weftos/weaver`, root-owned 0755. The
   service never runs from a user-writable path;
 - writes `/etc/weftos/mesh.toml` when absent: `listen = "127.0.0.1:9489"` unless you
-  pass `--listen`, plus `--admin-uid` ids if given;
+  pass `--listen`, plus `--admin-uid` ids, `max_connections_per_ip` (`--max-connections-per-ip`)
+  and `first_frame_timeout_secs` (`--first-frame-timeout-secs`) if given;
 - installs the unit (`/Library/LaunchDaemons/ai.weftos.mesh.plist` and a small
   `ai.weftos.mesh-rundir` helper that recreates `/var/run/weftos` at boot, because
   macOS clears `/var/run`; or `/etc/systemd/system/weftos-mesh.service`);
