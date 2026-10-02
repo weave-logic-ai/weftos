@@ -49,6 +49,21 @@ use crate::mesh_local_registry::{SpawnExpectation, cancel_spawn, expect_spawn, r
 use super::io::ChildIo;
 use super::state;
 
+/// Process groups of every child this daemon started or adopted, until the
+/// group is gone (see [`Launcher::supervised_pids`]).
+static GROUPS: Mutex<std::collections::BTreeSet<u32>> = Mutex::new(std::collections::BTreeSet::new());
+
+pub(crate) fn note_group(pgid: u32) {
+    GROUPS.lock().unwrap_or_else(|e| e.into_inner()).insert(pgid);
+}
+
+/// See [`Launcher::supervised_pids`].
+pub(crate) fn supervised_groups() -> Vec<u32> {
+    let mut g = GROUPS.lock().unwrap_or_else(|e| e.into_inner());
+    g.retain(|pgid| !matches!(killpg(Pid::from_raw(*pgid as i32), None), Err(nix::errno::Errno::ESRCH)));
+    g.iter().copied().collect()
+}
+
 static EXE_SHA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Locale variables passed through when set.
@@ -216,6 +231,7 @@ impl Launcher {
 
     /// Register a verified, already-running child (adoption).
     pub fn adopt(&self, id: &str, pid: u32) {
+        note_group(pid);
         self.procs().insert(
             id.to_owned(),
             Entry { proc: Proc::Adopted { pid }, stop: Arc::new(AtomicBool::new(false)) },
@@ -241,18 +257,15 @@ impl Launcher {
         }
     }
 
-    /// Pids of every live supervised child. Each leads its own process group
-    /// (`process_group(0)`), so a peer whose pgid is one of these belongs to
-    /// that child (`child_peer`, review S9).
+    /// Process-group ids of every supervised child whose group still exists.
+    /// Each child leads its own group (`process_group(0)`, so the group id is
+    /// its pid). A group stays in the set until `killpg(pgid, 0)` reports
+    /// `ESRCH`, so grandchildren orphaned by the leader's exit are still
+    /// recognised (`child_peer`, review S9). Never reaps: unlike
+    /// [`adopted_alive`] it does not `waitpid`, because this runs on the
+    /// accept path.
     pub fn supervised_pids(&self) -> Vec<u32> {
-        self.procs()
-            .values()
-            .filter_map(|e| match &e.proc {
-                Proc::Owned { pid, exit } if exit.borrow().is_none() => Some(*pid),
-                Proc::Adopted { pid } if adopted_alive(*pid) => Some(*pid),
-                _ => None,
-            })
-            .collect()
+        supervised_groups()
     }
 
     /// Wait until the child of `id` is gone and say how it ended.
@@ -494,6 +507,7 @@ impl Launcher {
             let info = child.wait().map(exit_info).unwrap_or_default();
             let _ = tx.send(Some(info));
         });
+        note_group(pid);
         self.procs().insert(
             id.to_owned(),
             Entry { proc: Proc::Owned { pid, exit: rx }, stop: Arc::new(AtomicBool::new(false)) },

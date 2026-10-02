@@ -16,6 +16,11 @@
 //! its project token is honoured. The owner's own CLI is not in any child's
 //! group and is unaffected.
 //!
+//! A same-uid peer whose pid or group cannot be determined is also a
+//! [`PeerClass::Child`] (fail closed). The Windows named-pipe path and the
+//! legacy `handle_connection` wrapper do not classify and default to
+//! [`PeerClass::Owner`].
+//!
 //! Honest limit: this is a narrowing, not a boundary. A process that leaves
 //! the group (`setsid`, `setpgid`) or double-forks away escapes it; the real
 //! boundary is a separate uid or a sandbox (Phase 4). The peer pid comes from
@@ -29,7 +34,8 @@ pub enum PeerClass {
     Owner,
     /// A different uid, or credentials that could not be read (fail closed).
     OtherUid,
-    /// Same uid, but inside a supervised child's process group.
+    /// Same uid, inside a supervised child's process group, or not provably
+    /// outside one (unknown pid, unreadable group).
     Child,
 }
 
@@ -52,10 +58,13 @@ pub fn classify(
     if peer_uid != own_uid {
         return PeerClass::OtherUid;
     }
-    let in_child_group = peer_pid
-        .and_then(pgid_of)
-        .is_some_and(|g| children.iter().any(|c| i64::from(*c) == i64::from(g)));
-    if in_child_group { PeerClass::Child } else { PeerClass::Owner }
+    // Fail closed: a same-uid peer whose pid is unknown, or whose process
+    // group cannot be read (it exited and was reaped between connect and
+    // accept: `ESRCH`), cannot be shown to be outside a child's group, so it
+    // is treated like a child (literal scopes ignored; its token still works).
+    // The owner's CLI is alive and waiting for its answer at accept.
+    let Some(g) = peer_pid.and_then(pgid_of) else { return PeerClass::Child };
+    if children.iter().any(|c| i64::from(*c) == i64::from(g)) { PeerClass::Child } else { PeerClass::Owner }
 }
 
 /// Pids of the supervised children (empty off the user daemon).

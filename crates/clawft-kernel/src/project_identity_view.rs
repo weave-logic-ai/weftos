@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use clawft_types::project::cert::{ProjectCert, key_id};
 
 use super::{
-    IdentityError, JournalRecord, KIND_REGISTER, KIND_REKEY, KIND_REVOKE, SOURCE,
+    IdentityError, JournalRecord, KIND_REGISTER, KIND_REKEY, KIND_REVOKE, KIND_ROTATED, SOURCE,
     verify_cert_historic,
 };
 use crate::user_key_rotation::UserKeyHistory;
@@ -39,6 +39,11 @@ struct ProjectIdentity {
 #[derive(Debug, Clone)]
 pub struct RevocationView {
     trust: UserKeyHistory,
+    /// Chain sequence of the `project.register`/`project.rekey` event that
+    /// carries each certificate (by signature).
+    anchored: HashMap<String, u64>,
+    /// Chain sequence of the first `user.key.rotated` event per retired key id.
+    rotated_seq: HashMap<String, u64>,
     projects: HashMap<String, ProjectIdentity>,
     /// key id -> the project that first claimed it (certified or revoked).
     key_owner: HashMap<String, String>,
@@ -69,10 +74,13 @@ impl RevocationView {
     ) -> Self {
         let mut v = Self {
             trust: trust.clone(),
+            anchored: HashMap::new(),
+            rotated_seq: HashMap::new(),
             projects: HashMap::new(),
             key_owner: HashMap::new(),
             rejected: 0,
         };
+        v.index_chain(events);
         for rec in journal {
             match rec {
                 JournalRecord::Register { cert } => v.ingest_cert(cert),
@@ -92,6 +100,28 @@ impl RevocationView {
             v.ingest_event(e);
         }
         v
+    }
+
+    /// Record where the chain holds each certificate and each rotation, the
+    /// evidence a retired-key certificate needs (see [`Self::verify_historic`]).
+    fn index_chain(&mut self, events: &[ChainEvent]) {
+        for ev in events.iter().filter(|e| e.source == SOURCE) {
+            let Some(p) = ev.payload.as_ref() else { continue };
+            match ev.kind.as_str() {
+                KIND_REGISTER | KIND_REKEY => {
+                    let field = if ev.kind == KIND_REGISTER { "cert" } else { "new_cert" };
+                    if let Some(c) = p.get(field).and_then(|c| serde_json::from_value::<ProjectCert>(c.clone()).ok()) {
+                        self.anchored.entry(c.sig).or_insert(ev.sequence);
+                    }
+                }
+                k if k == KIND_ROTATED => {
+                    if let Some(old) = p.get("record").and_then(|r| r.get("old_key_id")).and_then(|v| v.as_str()) {
+                        self.rotated_seq.entry(old.to_owned()).or_insert(ev.sequence);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn ingest_event(&mut self, ev: &ChainEvent) {
@@ -142,10 +172,27 @@ impl RevocationView {
         }
     }
 
-    /// Signature and shape under the user key that sealed `c` (current or
-    /// retired), with the rotation-point rule for a retired one.
+    /// Signature and shape under the user key that sealed `c`. A certificate
+    /// sealed by the key in use needs nothing more. One sealed by a RETIRED
+    /// key counts only when it is dated at or before the rotation point AND
+    /// the user chain proves it: a `project.register`/`project.rekey` event
+    /// carrying it has a sequence below the `user.key.rotated` event of that
+    /// key. A journal line or certificate file alone, however it is dated,
+    /// is not evidence (whoever holds the old private key can backdate; only
+    /// the daemon appends to the reserved chain source).
     fn verify_historic(&self, c: &ProjectCert) -> Result<(), IdentityError> {
-        verify_cert_historic(c, &self.trust)
+        verify_cert_historic(c, &self.trust)?;
+        let current = key_id(self.trust.current());
+        if c.user_key_id != current {
+            let before_rotation = matches!(
+                (self.anchored.get(&c.sig), self.rotated_seq.get(&c.user_key_id)),
+                (Some(s), Some(r)) if s < r
+            );
+            if !before_rotation {
+                return Err(clawft_types::project::CertError::UntrustedUser.into());
+            }
+        }
+        Ok(())
     }
 
     fn ingest_revoke(&mut self, project_id: &str, key_id: &str) {

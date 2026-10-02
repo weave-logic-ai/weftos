@@ -68,8 +68,8 @@ fn history_chains_and_must_end_at_the_current_key() {
 #[test]
 fn a_certificate_across_a_rotation_verifies_only_up_to_the_rotation_point() {
     let (old, new) = (key(1), key(2));
-    let r = RotationRecord::sign(&old, &new, None, t(100));
-    let h = UserKeyHistory::from_records(&pk(&new), &[r]).unwrap();
+    let rec = RotationRecord::sign(&old, &new, None, t(100));
+    let h = UserKeyHistory::from_records(&pk(&new), &[rec.clone()]).unwrap();
     let before = cert(&old, t(50), 1);
     let at_point = cert(&old, t(100), 2);
     let after = cert(&old, t(101), 3);
@@ -81,15 +81,23 @@ fn a_certificate_across_a_rotation_verifies_only_up_to_the_rotation_point() {
     // Without the history the old certificate is untrusted.
     assert!(verify_cert_historic(&before, &UserKeyHistory::single(&pk(&new))).is_err());
 
+    // The chain holds the old-key certificate before the rotation event.
+    let chain = crate::chain::ChainManager::new(0, 1000);
+    chain.append(ident::SOURCE, ident::KIND_REGISTER, Some(serde_json::json!({ "cert": before })));
+    chain.append(ident::SOURCE, ident::KIND_ROTATED, Some(serde_json::json!({ "record": rec })));
     let v = RevocationView::build_with(
         &h,
-        &[],
+        &chain.tail_from(0),
         &[],
         &[before.clone(), after.clone(), by_new.clone()],
     );
     assert_eq!(v.rejected(), 1);
     assert_eq!(v.last_serial(PID), 4);
     assert_eq!(v.current_cert(PID).map(|c| c.serial), Some(4));
+    // Without chain evidence the old-key certificate is dropped too, however it is dated.
+    let v = RevocationView::build_with(&h, &[], &[], &[before.clone()]);
+    assert_eq!(v.rejected(), 1);
+    assert_eq!(v.last_serial(PID), 0);
 }
 
 #[test]

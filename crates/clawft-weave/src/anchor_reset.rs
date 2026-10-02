@@ -9,9 +9,12 @@
 //! and records of an earlier epoch stay in the chain as history and are never
 //! the baseline, so the project anchors again from genesis.
 //!
-//! The record file survives a crash (the user chain is saved only on clean
-//! shutdown); the chain event is read as well, and the higher epoch wins. A
-//! record that fails its signature is ignored.
+//! The chain event is the authority for the epoch (only the daemon appends to
+//! the reserved source) and an epoch must be the previous one plus one. The
+//! record is a sealed copy: it never sets the epoch by itself, so a file
+//! written by anyone but the daemon changes nothing. If the daemon crashes
+//! before the chain is saved, the reset is lost with it and the owner repeats
+//! it (the retired head is still there to retire).
 
 use std::path::{Path, PathBuf};
 
@@ -118,10 +121,14 @@ fn read_records(env: &CertEnv, id: &str) -> Vec<ResetRecord> {
     }
 }
 
-/// The project's current epoch: the highest reset in the record file or on
-/// the user chain (0 when the owner never reset).
+/// The project's current epoch, from the user chain's `project.anchor.reset`
+/// events (only the daemon appends to that reserved source). An epoch counts
+/// only when it is exactly the previous one plus one, so a jump (a forged
+/// 999) is ignored. The record file is a sealed copy for audit and for
+/// [`corroborated`]; on its own it never changes the epoch: a record without
+/// a matching chain event is ignored.
 pub(super) fn current_epoch(env: &CertEnv, id: &str) -> u64 {
-    let from_chain = env
+    let mut epochs: Vec<u64> = env
         .chain
         .tail(0)
         .iter()
@@ -130,10 +137,28 @@ pub(super) fn current_epoch(env: &CertEnv, id: &str) -> u64 {
             let p = e.payload.as_ref()?;
             (p.get("project_id")?.as_str()? == id).then(|| p.get("epoch")?.as_u64()).flatten()
         })
-        .max()
-        .unwrap_or(0);
-    let from_file = read_records(env, id).iter().map(|r| r.epoch).max().unwrap_or(0);
-    from_chain.max(from_file)
+        .collect();
+    epochs.sort_unstable();
+    epochs.into_iter().fold(0, |cur, e| if e == cur + 1 { e } else { cur })
+}
+
+/// The reset records that verify AND match a `project.anchor.reset` chain
+/// event (same project, epoch, user sequence and event hash).
+#[allow(dead_code)]
+pub(super) fn corroborated(env: &CertEnv, id: &str) -> Vec<ResetRecord> {
+    let events = env.chain.tail(0);
+    read_records(env, id)
+        .into_iter()
+        .filter(|r| {
+            events.iter().any(|e| {
+                e.source == ANCHOR_SOURCE
+                    && e.kind == KIND_RESET
+                    && e.sequence == r.user_seq
+                    && ident::hex(&e.hash) == r.user_event_hash
+                    && e.payload.as_ref().and_then(|p| p.get("epoch")).and_then(|v| v.as_u64()) == Some(r.epoch)
+            })
+        })
+        .collect()
 }
 
 /// Add `r` to the record file (atomic, 0600).

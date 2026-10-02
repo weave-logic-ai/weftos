@@ -50,6 +50,9 @@ pub enum RotateOutcome {
         new_key_id: String,
         /// Where the retired private key was kept, if it was a `user.key`.
         retired: Option<PathBuf>,
+        /// `chain.key` still holds the retired key: the chain loader prefers
+        /// `user.key`, but the old secret remains on disk there.
+        chain_key_is_old: bool,
     },
 }
 
@@ -89,6 +92,12 @@ fn write_new(path: &Path, seed: &[u8; 32]) -> Result<(), RotateError> {
         .map_err(|e| RotateError::Io { path: path.display().to_string(), source: std::io::Error::other(e.to_string()) })
 }
 
+/// Does `chain.key` still hold the key whose public half is `old_pubkey` (hex)?
+fn chain_key_matches(home: &Path, old_pubkey: &str) -> bool {
+    read_seed(&crate::user_key::chain_key_path(home))
+        .is_ok_and(|s| clawft_types::project::canon::hex_encode(&pk(&s)) == old_pubkey)
+}
+
 /// Rotate the user key under `home`, recording the handover in
 /// `manifests_dir`.
 pub fn rotate_user_key(
@@ -98,12 +107,44 @@ pub fn rotate_user_key(
     now: DateTime<Utc>,
 ) -> Result<RotateOutcome, RotateError> {
     let ckpt = clawft_types::runtime_paths::user_chain_checkpoint(home);
-    clawft_kernel::chain_storage::ChainLock::probe(&ckpt).map_err(RotateError::DaemonRunning)?;
-    let (old, _) = resolve_user_key(home, false)?;
-    let old_pk = old.verifying_key().to_bytes();
+    // Hold the chain lock through the whole swap (not just probe it): a
+    // daemon cannot start between the check and the key replacement. With no
+    // chain directory no daemon has ever run here, so there is nothing to hold.
+    let _lock = if dry_run || !ckpt.parent().is_some_and(Path::exists) {
+        clawft_kernel::chain_storage::ChainLock::probe(&ckpt).map_err(RotateError::DaemonRunning)?;
+        None
+    } else {
+        Some(
+            clawft_kernel::chain_storage::ChainLock::try_acquire(&ckpt)
+                .map_err(|e| RotateError::DaemonRunning(format!("{e:?}")))?,
+        )
+    };
     let user = user_key_path(home);
     let next = user.with_file_name(format!("user.key.{NEXT_SUFFIX}"));
     let log = RotationLog::new(manifests_dir);
+    // Crash window: the record is appended and the old `user.key` was moved
+    // aside, but `user.key.next` never became `user.key`. Finish that step.
+    if std::fs::symlink_metadata(&user).is_err()
+        && std::fs::symlink_metadata(&next).is_ok()
+        && let Some(last) = log.read()?.last().cloned()
+    {
+        let seed = read_seed(&next)?;
+        if last.new_pubkey == clawft_types::project::canon::hex_encode(&pk(&seed)) {
+            if dry_run {
+                return Ok(RotateOutcome::WouldRotate { old_key_id: last.old_key_id });
+            }
+            std::fs::rename(&next, &user).map_err(io(&next))?;
+            return Ok(RotateOutcome::Rotated {
+                seq: last.seq,
+                old_key_id: last.old_key_id,
+                new_key_id: last.new_key_id,
+                retired: Some(user.with_file_name(format!("user.key.retired-{}", last.seq))).filter(|p| p.exists()),
+                chain_key_is_old: chain_key_matches(home, &last.old_pubkey),
+            });
+        }
+    }
+    let (old, _) = resolve_user_key(home, false)?;
+    let old_pk = old.verifying_key().to_bytes();
     let records = log.read()?;
     let old_id = clawft_types::project::cert::key_id(&old_pk);
 
@@ -132,6 +173,13 @@ pub fn rotate_user_key(
     };
     let retired = if std::fs::symlink_metadata(&user).is_ok() {
         let to = user.with_file_name(format!("user.key.retired-{}", record.seq));
+        // Never clobber an earlier retired key.
+        if std::fs::symlink_metadata(&to).is_ok() {
+            return Err(RotateError::Io {
+                path: to.display().to_string(),
+                source: std::io::Error::new(std::io::ErrorKind::AlreadyExists, "a retired key is already there; move it away and run again"),
+            });
+        }
         std::fs::rename(&user, &to).map_err(io(&user))?;
         Some(to)
     } else {
@@ -144,6 +192,7 @@ pub fn rotate_user_key(
         old_key_id: record.old_key_id,
         new_key_id: record.new_key_id,
         retired,
+        chain_key_is_old: chain_key_matches(home, &record.old_pubkey),
     })
 }
 

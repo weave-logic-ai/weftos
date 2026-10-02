@@ -10,10 +10,12 @@ fn only_a_same_uid_peer_outside_every_child_group_is_the_owner() {
     assert_eq!(classify(501, Some(4242), 501, &[4242], pgids), PeerClass::Child);
     // The owner's CLI.
     assert_eq!(classify(501, Some(555), 501, &[4242], pgids), PeerClass::Owner);
-    // No supervised children, unknown pid or unreadable group: still the owner (same uid).
+    // No supervised children and a readable group: the owner.
     assert_eq!(classify(501, Some(100), 501, &[], pgids), PeerClass::Owner);
-    assert_eq!(classify(501, None, 501, &[4242], pgids), PeerClass::Owner);
-    assert_eq!(classify(501, Some(100), 501, &[4242], |_| None), PeerClass::Owner);
+    // Fail closed: unknown pid or unreadable group (the sender exited and was reaped).
+    assert_eq!(classify(501, None, 501, &[4242], pgids), PeerClass::Child);
+    assert_eq!(classify(501, None, 501, &[], pgids), PeerClass::Child);
+    assert_eq!(classify(501, Some(100), 501, &[4242], |_| None), PeerClass::Child);
     // Another uid is never the owner, children or not.
     assert_eq!(classify(0, Some(555), 501, &[], pgids), PeerClass::OtherUid);
     assert!(PeerClass::Owner.is_owner() && !PeerClass::Child.is_owner() && !PeerClass::OtherUid.is_owner());
@@ -44,4 +46,30 @@ fn classify_peer_with(cred: std::io::Result<tokio::net::unix::UCred>, children: 
     classify(c.uid(), c.pid(), nix::unistd::geteuid().as_raw(), children, |pid| {
         nix::unistd::getpgid(Some(nix::unistd::Pid::from_raw(pid))).ok().map(nix::unistd::Pid::as_raw)
     })
+}
+
+/// The leader exits (and is reaped) but a grandchild keeps the group alive:
+/// the group stays supervised until it is gone (review S9).
+#[cfg(all(unix, feature = "exochain", feature = "placement"))]
+#[test]
+fn an_orphaned_grandchild_keeps_its_group_supervised_until_the_group_is_gone() {
+    use crate::project_supervisor::child::{note_group, supervised_groups};
+    use std::os::unix::process::CommandExt;
+    let mut leader = std::process::Command::new("sh")
+        .args(["-c", "sleep 30 & exit 0"])
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let pgid = leader.id();
+    note_group(pgid);
+    leader.wait().unwrap(); // the leader is gone and reaped
+    assert!(supervised_groups().contains(&pgid), "orphans keep the group");
+    nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
+    for _ in 0..100 {
+        if !supervised_groups().contains(&pgid) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("group never left the set after it died");
 }

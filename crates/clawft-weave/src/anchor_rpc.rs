@@ -121,6 +121,18 @@ pub use reset_record::{KIND_RESET, ResetRecord};
 mod error;
 pub use error::{Accepted, AnchorError, Resync};
 
+/// Forget the in-memory baseline of `env`'s chain, as a restart that
+/// brought the saved chain back would (tests).
+#[cfg(test)]
+pub(super) fn drop_cache(env: &CertEnv) {
+    let ptr = std::sync::Arc::as_ptr(&env.chain) as *const () as usize;
+    let mut g = ACCEPT.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(i) = g.as_mut() {
+        i.index.retain(|k, _| k.0 != ptr);
+        i.epochs.retain(|k, _| k.0 != ptr);
+    }
+}
+
 fn key_of(env: &CertEnv, id: &str) -> Key {
     (std::sync::Arc::as_ptr(&env.chain) as *const () as usize, id.to_owned())
 }

@@ -380,23 +380,48 @@ pub fn user_history(env: &CertEnv) -> Result<ident::UserKeyHistory, IssueError> 
     Ok(ident::RotationLog::new(&env.manifests_dir).history(&user_pubkey(env))?)
 }
 
-/// Append a `user.key.rotated` event to the user chain for every record of
-/// the rotation log the chain does not hold yet (the offline
-/// `weaver migrate user-key --rotate` cannot open the chain; the daemon
-/// chains the handover at its next use). Idempotent. Returns how many were
-/// appended.
-pub fn chain_rotations(env: &CertEnv) -> Result<usize, IssueError> {
-    let records = ident::RotationLog::new(&env.manifests_dir).read()?;
-    if records.is_empty() {
-        return Ok(0);
+/// The rotation records the user chain holds, oldest first, each verified
+/// (both signatures) and one per `seq`.
+fn chain_records(env: &CertEnv) -> Vec<ident::RotationRecord> {
+    let mut by_seq = std::collections::BTreeMap::new();
+    for e in env.chain.tail_from(0).iter().filter(|e| e.source == SOURCE && e.kind == ident::KIND_ROTATED) {
+        let rec = e
+            .payload
+            .as_ref()
+            .and_then(|p| p.get("record"))
+            .and_then(|r| serde_json::from_value::<ident::RotationRecord>(r.clone()).ok())
+            .filter(|r| r.verify().is_ok());
+        if let Some(r) = rec {
+            by_seq.entry(r.seq).or_insert(r);
+        }
     }
-    let chained: std::collections::HashSet<String> = env
-        .chain
-        .tail_from(0)
-        .iter()
-        .filter(|e| e.source == SOURCE && e.kind == ident::KIND_ROTATED)
-        .filter_map(|e| e.payload.as_ref()?.get("record_hash")?.as_str().map(str::to_owned))
-        .collect();
+    by_seq.into_values().collect()
+}
+
+/// Keep the rotation log and the user chain in agreement (ADR-103 A13).
+///
+/// * A record in the log the chain does not hold yet is appended as a
+///   `user.key.rotated` event (the offline `weaver migrate user-key --rotate`
+///   cannot open the chain). Idempotent.
+/// * A log that is missing or shorter than the chain's records (deleted, or
+///   truncated, which would silently downgrade verification to the key in
+///   use) is rebuilt from the chain's verified records, provided they form a
+///   history ending at the key in use; otherwise the error names the cause.
+///
+/// Returns how many events were appended.
+pub fn chain_rotations(env: &CertEnv) -> Result<usize, IssueError> {
+    let log = ident::RotationLog::new(&env.manifests_dir);
+    let mut records = log.read()?;
+    let on_chain = chain_records(env);
+    if on_chain.len() > records.len() {
+        let end = user_pubkey(env);
+        ident::UserKeyHistory::from_records(&end, &on_chain)
+            .map_err(|e| IssueError::Store(format!("the user-key rotation log is missing or short and the chain's records do not rebuild it: {e}")))?;
+        log.replace(&on_chain)?;
+        tracing::warn!(restored = on_chain.len(), "rebuilt the user-key rotation log from the user chain");
+        records = on_chain;
+    }
+    let chained: std::collections::HashSet<String> = chain_records(env).iter().map(|r| r.hash()).collect();
     let mut n = 0;
     for r in records.iter().filter(|r| !chained.contains(&r.hash())) {
         env.chain.append(SOURCE, ident::KIND_ROTATED, Some(json!({ "record": r, "record_hash": r.hash() })));
@@ -633,12 +658,10 @@ pub(crate) async fn env_from_kernel(kernel: &crate::rpc_ext::KernelRef) -> Resul
     let manifests_dir = crate::project_rpc::configured_dir()
         .ok_or_else(|| IssueError::Unavailable("no manifest store (no home directory)".into()))?;
     let env = CertEnv { chain, user_key, manifests_dir };
-    // The rotation log must end at the key in use before anything is signed
-    // or verified (fail closed), and its records belong on the chain.
+    // Repair the log from the chain first, then require that it ends at the
+    // key in use before anything is signed or verified (fail closed).
+    chain_rotations(&env)?;
     user_history(&env)?;
-    if let Err(e) = chain_rotations(&env) {
-        tracing::warn!(error = %e, "could not chain the user-key rotation records");
-    }
     Ok(env)
 }
 

@@ -3286,7 +3286,8 @@ pub async fn run(
             }
         })
     };
-    // Windows named-pipe accept loop (WEFT-559). After each client
+    // Windows named-pipe accept loop (WEFT-559). Peers are not classified
+    // here: `handle_connection` defaults them to Owner (ADR-103 A14). After each client
     // connects, re-create the next pipe instance so concurrent clients
     // can dial while the previous connection is still being served.
     #[cfg(windows)]
@@ -3630,6 +3631,7 @@ pub async fn handle_connection<S>(
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    // Not classified: this wrapper (and the Windows named-pipe path) default to Owner.
     handle_connection_peer(stream, kernel, shutdown_tx, false).await;
 }
 

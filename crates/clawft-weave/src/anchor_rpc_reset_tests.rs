@@ -18,6 +18,16 @@ fn restarted(f: &Fx) -> CertEnv {
     }
 }
 
+/// A clean restart: the chain was saved and is back.
+fn clean_restart(f: &Fx) -> CertEnv {
+    super::drop_cache(&f.env);
+    CertEnv {
+        chain: f.env.chain.clone(),
+        user_key: f.env.user_key.clone(),
+        manifests_dir: f.env.manifests_dir.clone(),
+    }
+}
+
 fn params(f: &Fx) -> Value {
     json!({ "project_id": f.id, "reason": "moved the chain\naside" })
 }
@@ -59,11 +69,11 @@ fn a_project_chain_reset_is_a_dead_end_until_the_owner_resets_the_anchors() {
 }
 
 #[test]
-fn the_reset_survives_a_restart_that_lost_the_chain() {
+fn the_reset_survives_a_clean_restart() {
     let f = fixture();
     anchor_two(&f);
     reset(&f.env, &params(&f), later(30)).unwrap();
-    let env = restarted(&f);
+    let env = clean_restart(&f);
     assert_eq!(current_epoch(&env, &f.id), 1);
     // The epoch-0 anchor record is still on disk but is not the baseline.
     assert!(anchor_file_exists(&env, &f.id));
@@ -71,7 +81,7 @@ fn the_reset_survives_a_restart_that_lost_the_chain() {
     let a = submit(&env, &stmt(&f, 1, None, 1, later(40)), later(41)).unwrap();
     assert_eq!(a.epoch, 1);
     // A second restart finds the epoch-1 record as the baseline.
-    let env2 = restarted(&f);
+    let env2 = clean_restart(&f);
     let last = last_accepted(&env2, &f.id).unwrap().unwrap();
     assert_eq!((last.statement.seq, last.epoch), (1, 1));
     submit(&env2, &stmt(&f, 2, Some(last.statement.hash()), 2, later(42)), later(43)).unwrap();
@@ -96,6 +106,50 @@ fn a_reset_needs_a_registered_project_and_a_head_to_retire() {
 }
 
 #[test]
+fn a_crash_that_lost_the_chain_loses_the_reset_and_it_can_be_repeated() {
+    let f = fixture();
+    anchor_two(&f);
+    reset(&f.env, &params(&f), later(30)).unwrap();
+    // The record file alone is not evidence: no chain event, no epoch.
+    let env = restarted(&f);
+    assert_eq!(current_epoch(&env, &f.id), 0);
+    assert!(super::reset_record::corroborated(&env, &f.id).is_empty());
+    assert_eq!(last_accepted(&env, &f.id).unwrap().unwrap().statement.seq, 2);
+    assert_eq!(reset(&env, &params(&f), later(31)).unwrap()["epoch"], 1);
+}
+
+#[test]
+fn an_epoch_jump_is_ignored_even_with_a_valid_seal() {
+    let f = fixture();
+    anchor_two(&f);
+    // Seal a record for epoch 999 with the real user key, as only the daemon could.
+    let mut rec = ResetRecord {
+        project_id: f.id.clone(),
+        epoch: 999,
+        retired_statement_hash: "00".repeat(32),
+        retired_seq: 2,
+        user_seq: 1,
+        user_event_hash: "00".repeat(32),
+        at: ts(later(1)),
+        reason: String::new(),
+        rec_sig: String::new(),
+    };
+    super::reset_record::sign(&f.env, &mut rec);
+    super::reset_record::record(&f.env, &rec).unwrap();
+    // And a chain event that jumps the epoch.
+    f.env.chain.append(
+        ANCHOR_SOURCE,
+        KIND_RESET,
+        Some(json!({ "project_id": f.id, "epoch": 999, "at": ts(later(1)) })),
+    );
+    let env = clean_restart(&f);
+    assert_eq!(current_epoch(&env, &f.id), 0);
+    assert_eq!(last_accepted(&env, &f.id).unwrap().unwrap().statement.seq, 2, "history intact");
+    let a = submit(&env, &stmt(&f, 3, Some(last_accepted(&env, &f.id).unwrap().unwrap().statement.hash()), 12, later(7)), later(12)).unwrap();
+    assert_eq!(a.epoch, 0);
+}
+
+#[test]
 fn a_forged_reset_record_changes_nothing() {
     let f = fixture();
     anchor_two(&f);
@@ -104,7 +158,7 @@ fn a_forged_reset_record_changes_nothing() {
         "user_seq": 1, "user_event_hash": "00".repeat(32), "at": ts(later(1)), "reason": "", "rec_sig": "00".repeat(64),
     }]});
     std::fs::write(f.env.manifests_dir.join(format!("{}.anchor-reset.json", f.id)), forged.to_string()).unwrap();
-    let env = restarted(&f);
+    let env = clean_restart(&f);
     assert_eq!(current_epoch(&env, &f.id), 0);
     assert_eq!(last_accepted(&env, &f.id).unwrap().unwrap().statement.seq, 2);
 }

@@ -21,15 +21,19 @@ fn new_key() -> SigningKey {
 }
 
 /// The fixture's store after a rotation at `later(100)`, as the next daemon
-/// boot sees it: the new user key, a chain that lost everything.
+/// boot sees it: the new user key, the saved chain back, and the rotation
+/// chained after everything the old key sealed.
 fn rotated(f: &Fx) -> CertEnv {
     let rec = RotationRecord::sign(&user_key(), &new_key(), None, later(100));
     RotationLog::new(&f.env.manifests_dir).append(&rec).unwrap();
-    CertEnv {
-        chain: Arc::new(ChainManager::new(0, 100_000)),
+    super::drop_cache(&f.env);
+    let env = CertEnv {
+        chain: f.env.chain.clone(),
         user_key: new_key(),
         manifests_dir: f.env.manifests_dir.clone(),
-    }
+    };
+    chain_rotations(&env).unwrap();
+    env
 }
 
 #[test]
@@ -92,10 +96,29 @@ fn a_certificate_the_old_key_issues_after_the_rotation_point_is_dropped() {
     .unwrap();
     let history = crate::project_cert_rpc::user_history(&env).unwrap();
     assert!(verify_cert_historic(&forged, &history).is_err());
+    // Backdated before the rotation point, high serial, no chain evidence: also dropped.
+    let backdated = ident::sign_cert(
+        &user_key(),
+        &clawft_types::project::CertRequest {
+            project_id: f.id.clone(),
+            project_pubkey: SigningKey::from_bytes(&[9u8; 32]).verifying_key().to_bytes(),
+            serial: 99,
+            issued_at: later(10),
+            expires_at: None,
+        },
+    )
+    .unwrap();
+    verify_cert_historic(&backdated, &history).expect("the time rule alone would accept it");
     std::fs::write(env.manifests_dir.join(format!("{}.cert.json", f.id)), serde_json::to_vec(&forged).unwrap()).unwrap();
     let view = current_view(&env).unwrap();
     assert_eq!(view.rejected(), 1);
     assert_eq!(view.current_cert(&f.id).map(|c| c.serial), Some(1), "the genuine certificate stays in force");
+    // The backdated one, planted as a cert file, is dropped for lack of chain evidence.
+    std::fs::write(env.manifests_dir.join(format!("{}.cert.json", f.id)), serde_json::to_vec(&backdated).unwrap()).unwrap();
+    let view = current_view(&env).unwrap();
+    assert_eq!(view.rejected(), 1);
+    assert_eq!(view.last_serial(&f.id), 1, "serial 99 never entered the view");
+    assert_eq!(view.current_cert(&f.id).map(|c| c.serial), Some(1));
     let _: RevocationView = view;
 }
 
@@ -140,11 +163,30 @@ fn a_rotation_log_that_does_not_end_at_the_key_in_use_stops_verification() {
 }
 
 #[test]
+fn a_deleted_or_truncated_rotation_log_is_rebuilt_from_the_chain() {
+    let f = fixture();
+    let env = rotated(&f);
+    let log = RotationLog::new(&env.manifests_dir);
+    std::fs::remove_file(log.path()).unwrap();
+    // Without repair this would silently verify against the new key only.
+    chain_rotations(&env).unwrap();
+    assert_eq!(log.read().unwrap().len(), 1);
+    assert_eq!(crate::project_cert_rpc::user_history(&env).unwrap().rotations(), 1);
+    assert_eq!(current_view(&env).unwrap().current_cert(&f.id).map(|c| c.serial), Some(1));
+    // A chain whose records do not end at the key in use cannot rebuild it.
+    std::fs::remove_file(log.path()).unwrap();
+    let wrong = CertEnv { chain: env.chain.clone(), user_key: SigningKey::from_bytes(&[8u8; 32]), manifests_dir: env.manifests_dir.clone() };
+    let e = chain_rotations(&wrong).unwrap_err();
+    assert!(e.to_string().contains("rotation log is missing"), "{e}");
+}
+
+#[test]
 fn rotation_records_are_chained_once() {
     let f = fixture();
     let env = rotated(&f);
-    assert_eq!(chain_rotations(&env).unwrap(), 1);
+    // `rotated` already chained it; doing so again appends nothing.
     assert_eq!(chain_rotations(&env).unwrap(), 0);
+    assert_eq!(env.chain.tail_from(0).iter().filter(|e| e.kind == ident::KIND_ROTATED).count(), 1);
     let ev = env.chain.tail_from(0).into_iter().find(|e| e.kind == ident::KIND_ROTATED).unwrap();
     assert_eq!(ev.source, ident::SOURCE);
     assert_eq!(ev.payload.unwrap()["record"]["seq"], 1);

@@ -89,12 +89,17 @@ fn describe_rotation(outcome: &crate::user_key_rotate::RotateOutcome) -> String 
         RotateOutcome::WouldRotate { old_key_id } => format!(
             "dry run: would retire user key {old_key_id}, create a new one and record a dual-signed handover; nothing written"
         ),
-        RotateOutcome::Rotated { seq, old_key_id, new_key_id, retired } => format!(
+        RotateOutcome::Rotated { seq, old_key_id, new_key_id, retired, chain_key_is_old } => format!(
             "rotated the user key (record {seq}): {old_key_id} -> {new_key_id}.{} Next: start the user daemon \
              (it chains the handover), restart each project kernel (`weaver kernel restart --project <id>`; \
              a running child still pins the old key), and run `weaver mesh bind rebind` if the machine mesh \
-             service is installed. Delete the retired key yourself once you are satisfied; code never does.",
-            retired.as_ref().map_or(String::new(), |p| format!(" The old private key is kept at {}.", p.display()))
+             service is installed. Delete the retired key yourself once you are satisfied; code never does.{}",
+            retired.as_ref().map_or(String::new(), |p| format!(" The old private key is kept at {}.", p.display())),
+            if *chain_key_is_old {
+                " WARNING: chain.key still holds the OLD key; the chain now signs with user.key, but the old secret remains in chain.key. Remove it yourself when you no longer need it."
+            } else {
+                ""
+            }
         ),
     }
 }

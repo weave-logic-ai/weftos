@@ -342,6 +342,23 @@ impl RotationLog {
         UserKeyHistory::from_records(current, &self.read()?)
     }
 
+    /// Replace the whole log with `records` (the chain's copy, for rebuilding a
+    /// deleted or truncated file). The records must form one history.
+    pub fn replace(&self, records: &[RotationRecord]) -> Result<(), RotationError> {
+        let end = records.last().and_then(|r| hex_decode::<32>(&r.new_pubkey)).ok_or_else(|| RotationError::Log {
+            path: self.path.display().to_string(),
+            why: "nothing to write".into(),
+        })?;
+        UserKeyHistory::from_records(&end, records)?;
+        let mut body = String::new();
+        for r in records {
+            body.push_str(&serde_json::to_string(r).unwrap_or_default());
+            body.push('\n');
+        }
+        crate::project_identity::write_private_atomic(&self.path, body.as_bytes(), false)
+            .map_err(|e| RotationError::Log { path: self.path.display().to_string(), why: e.to_string() })
+    }
+
     /// Append `record` (the whole file is rewritten atomically, 0600). The
     /// record must extend the existing log.
     pub fn append(&self, record: &RotationRecord) -> Result<(), RotationError> {

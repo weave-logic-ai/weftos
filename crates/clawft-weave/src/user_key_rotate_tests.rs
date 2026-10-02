@@ -37,7 +37,7 @@ fn rotation_replaces_the_key_records_a_dual_signed_handover_and_keeps_the_old_ke
     ));
     assert_eq!(read_seed(&user_key_path(&home)).unwrap(), [1u8; 32], "dry run writes nothing");
 
-    let RotateOutcome::Rotated { seq, old_key_id, new_key_id, retired } = rotate_user_key(&home, &manifests, false, t()).unwrap() else {
+    let RotateOutcome::Rotated { seq, old_key_id, new_key_id, retired, .. } = rotate_user_key(&home, &manifests, false, t()).unwrap() else {
         panic!("expected a rotation")
     };
     assert_eq!((seq, old_key_id.as_str()), (1, kid(&[1u8; 32]).as_str()));
@@ -69,8 +69,9 @@ fn a_chain_key_identity_is_rotated_by_writing_user_key_and_chain_key_is_untouche
     let (_t, home, manifests) = setup([4u8; 32], false);
     let chain = chain_key_path(&home);
     let before = std::fs::read(&chain).unwrap();
-    let RotateOutcome::Rotated { retired, .. } = rotate_user_key(&home, &manifests, false, t()).unwrap() else { panic!() };
+    let RotateOutcome::Rotated { retired, chain_key_is_old, .. } = rotate_user_key(&home, &manifests, false, t()).unwrap() else { panic!() };
     assert!(retired.is_none());
+    assert!(chain_key_is_old, "the warning fires when chain.key still holds the retired key");
     assert_eq!(std::fs::read(&chain).unwrap(), before);
     let (k, src) = resolve_user_key(&home, false).unwrap();
     assert!(matches!(src, crate::user_key::KeySource::UserKey(_)));
@@ -103,4 +104,29 @@ fn rotation_refuses_while_the_user_daemon_holds_the_chain() {
     assert!(matches!(e, RotateError::DaemonRunning(_)), "{e}");
     assert_eq!(read_seed(&user_key_path(&home)).unwrap(), [1u8; 32]);
     assert!(!manifests.join(clawft_kernel::project_identity::ROTATION_FILE).exists());
+}
+
+#[test]
+fn a_crash_after_the_old_key_moved_aside_is_finished_too() {
+    let (_t, home, manifests) = setup([1u8; 32], true);
+    let RotateOutcome::Rotated { retired, .. } = rotate_user_key(&home, &manifests, false, t()).unwrap() else { panic!() };
+    // Crash window: old key moved aside, `next` not yet renamed (user.key missing).
+    let user = user_key_path(&home);
+    std::fs::rename(&user, user.with_file_name("user.key.next")).unwrap();
+    assert!(!user.exists() && retired.unwrap().exists());
+    let RotateOutcome::Rotated { seq, .. } = rotate_user_key(&home, &manifests, false, t()).unwrap() else { panic!() };
+    assert_eq!(seq, 1);
+    assert!(user.exists());
+    assert_eq!(RotationLog::new(&manifests).read().unwrap().len(), 1);
+}
+
+#[test]
+fn an_earlier_retired_key_is_never_clobbered() {
+    let (_t, home, manifests) = setup([1u8; 32], true);
+    // A leftover from some earlier attempt sits where the retired key would go.
+    let leftover = user_key_path(&home).with_file_name("user.key.retired-1");
+    std::fs::write(&leftover, [5u8; 32]).unwrap();
+    let e = rotate_user_key(&home, &manifests, false, t()).unwrap_err();
+    assert!(matches!(e, RotateError::Io { .. }), "{e}");
+    assert_eq!(std::fs::read(&leftover).unwrap(), vec![5u8; 32]);
 }
