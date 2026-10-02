@@ -137,7 +137,13 @@ pub fn register(dir: &Path, home: Option<&Path>, params: &Value) -> Response {
     }
     let name = params.get("name").and_then(Value::as_str);
     match adopt_or_init(&canon, dir, name) {
-        Ok(m) => Response::success(json!({ "project": m })),
+        Ok(m) => {
+            // A (re-)registration can change the entry `shared.*` cached the
+            // limits of (state, `[shared]`): the next shared call reloads it.
+            #[cfg(any(unix, windows))]
+            crate::shared_state::invalidate(&m.id);
+            Response::success(json!({ "project": m }))
+        }
         Err(e) => project_error(&e),
     }
 }

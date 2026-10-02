@@ -3782,7 +3782,6 @@ async fn authorize_caller(
     // ADR-103 A6 (Phase 2 package I): the caller's verified project comes
     // from a token scope, a verified forward header or this kernel's own
     // binding, never from `Request.project`; a disagreeing claim is refused.
-    crate::project_boot_run::note_activity(method);
     caller.verified_project = crate::caller_principal::establish(caller, method, params, kernel).await?;
     // A project token may call only what its parent link calls.
     if project_token_scope(caller, kernel).await && !crate::project_token_scope::allows(method) {
@@ -3793,6 +3792,9 @@ async fn authorize_caller(
     }
     let caps = resolve_caller_capabilities(caller, kernel).await;
     crate::rpc_ext::authorize(caller, &caps, method, params, kernel).await?;
+    // Only a call that passed every check above counts for the idle clock: a
+    // denied or token-rejected call must not keep a project kernel awake.
+    crate::project_boot_run::note_activity(method);
     Ok(caps)
 }
 
@@ -8836,6 +8838,41 @@ mod tests {
             )),
             ..KernelConfig::default()
         }
+    }
+
+    /// Review d302d81c item 4: the idle clock moves only for a call that
+    /// passed authorization. A denied one (here: a read-scope caller asking
+    /// for an Admin verb) must not keep a project kernel awake.
+    #[tokio::test]
+    async fn only_an_authorized_call_moves_the_idle_clock() {
+        use crate::project_boot_run::test_hooks;
+        let _serial = test_hooks::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let kernel = Kernel::boot(
+            clawft_types::config::Config::default(),
+            isolated_kcfg(),
+            Arc::new(NativePlatform::new()),
+        )
+        .await
+        .expect("kernel boots");
+        let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
+        test_hooks::track(true);
+        // Restore the process-wide switch even when an assertion fails.
+        struct Untrack;
+        impl Drop for Untrack {
+            fn drop(&mut self) {
+                crate::project_boot_run::test_hooks::track(false);
+            }
+        }
+        let _untrack = Untrack;
+        let params = serde_json::json!({});
+        let mut denied = crate::rpc_ext::CallerCtx::from_auth(Some("read".into()));
+        let r = authorize_caller(&mut denied, "project.stop_all", &params, &kernel).await;
+        assert!(r.is_err(), "a read-scope caller may not run project.stop_all");
+        assert_eq!(test_hooks::last_activity(), 0, "a denied call is not activity");
+        let mut allowed = crate::rpc_ext::CallerCtx::from_auth(Some("admin".into()));
+        let r = authorize_caller(&mut allowed, "project.stop_all", &params, &kernel).await;
+        assert!(r.is_ok(), "the owner may");
+        assert!(test_hooks::last_activity() > 0, "an authorized call is activity");
     }
 
     /// The voice consumer must dispatch as a capped internal principal:

@@ -162,6 +162,10 @@ pub struct SessionInfo {
     pub last_heartbeat: Instant,
     /// Activity the last beat carried.
     pub activity: Activity,
+    /// A tombstone filed by adoption ([`ProjectRegistry::adopt_expired`]):
+    /// the child has not registered since. Never a "lost heartbeat" (an
+    /// adopted child of an older build may not re-register at all).
+    pub adopted: bool,
 }
 
 /// Where a project's child answers (the Phase 3 upstream hook).
@@ -229,6 +233,7 @@ impl ProjectRegistry {
             facts,
             last_heartbeat: now,
             activity: Activity::default(),
+            adopted: false,
         };
         map.insert(info.facts.project_id.clone(), info.clone());
         Ok(info)
@@ -392,6 +397,7 @@ impl ProjectRegistry {
                 facts,
                 last_heartbeat: dead,
                 activity: Activity::default(),
+                adopted: true,
             },
         );
     }

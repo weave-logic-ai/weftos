@@ -14,6 +14,8 @@
 mod fake_kernel;
 #[path = "project_supervisor_support/fixture.rs"]
 mod fixture;
+#[path = "project_supervisor_support/followup_tests.rs"]
+mod followup_tests;
 #[path = "project_supervisor_support/lifecycle_tests.rs"]
 mod lifecycle_tests;
 #[path = "project_supervisor_support/rpc_test.rs"]
@@ -67,6 +69,14 @@ fn tests() -> Vec<(&'static str, TestFn)> {
         ("revoked_marker_stops_the_child_and_blocks_a_restart", revoked_marker),
         ("token_refresh_rotates_and_refuses_strangers", token_refresh),
         ("crash_after_ready_restarts_and_recovers", crash_after_ready_recovers),
+        ("a_child_on_an_older_build_than_the_daemon_is_reported_stale", followup_tests::a_child_on_an_older_build_than_the_daemon_is_reported_stale),
+        ("ensure_running_during_an_automatic_restart_waits_for_the_socket", followup_tests::ensure_running_during_an_automatic_restart_waits_for_the_socket),
+        ("a_child_still_booting_at_adoption_is_adopted_or_found_by_the_stop_cascade", followup_tests::a_child_still_booting_at_adoption_is_adopted_or_found_by_the_stop_cascade),
+        ("a_child_that_lost_its_heartbeat_is_restarted_and_then_failed_when_the_budget_is_spent", followup_tests::a_child_that_lost_its_heartbeat_is_restarted_and_then_failed_when_the_budget_is_spent),
+        ("a_revoked_project_without_a_marker_is_refused_before_spawning", followup_tests::a_revoked_project_without_a_marker_is_refused_before_spawning),
+        ("an_adopted_pid_recycled_between_sigterm_and_sigkill_is_never_killed", followup_tests::an_adopted_pid_recycled_between_sigterm_and_sigkill_is_never_killed),
+        ("an_adopted_but_refused_leftover_is_reported_as_unmanaged", followup_tests::an_adopted_but_refused_leftover_is_reported_as_unmanaged),
+        ("a_wedged_leftover_delays_boot_and_the_stop_cascade_only_briefly", followup_tests::a_wedged_leftover_delays_boot_and_the_stop_cascade_only_briefly),
         // Last: installs the process-wide supervisor.
         ("lifecycle_rpc_end_to_end", rpc_test::lifecycle_rpc_end_to_end),
     ]

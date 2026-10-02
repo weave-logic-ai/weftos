@@ -488,6 +488,9 @@ impl Launcher {
             st.pid = Some(pid);
             st.exe = Some(self.cfg.exe.display().to_string());
             st.started_unix = Some(state::now_unix());
+            // The new process has not said which build it is yet.
+            st.kernel_sha = None;
+            st.kernel_version = None;
         });
         Ok(ChildRef { project_id: id.to_owned(), pid })
     }

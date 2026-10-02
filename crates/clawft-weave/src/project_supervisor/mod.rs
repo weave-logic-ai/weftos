@@ -61,6 +61,9 @@ struct SlotState {
     last_exit: Option<ExitInfo>,
     failed: Option<String>,
     restarts: u32,
+    /// When the liveness pass first saw this `running` child's session
+    /// expired (and it has not registered again since).
+    expired_since: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -196,7 +199,12 @@ impl Supervisor {
             .map_err(|e| SupError::Identity(e.kind().to_owned() + ": " + &e.to_string()))?;
         let cert = view.current_cert(id).cloned();
         // Revoke is terminal: the marker is never lifted by the supervisor.
-        if state::is_marked_revoked(&self.cfg.run_root, id) {
+        // The journal says the same: a project whose key was revoked and
+        // that has no certificate in force is refused even when the marker
+        // is missing (a full disk, a hand-removed file), instead of being
+        // spawned just to die on `project_revoked` and burn its restart
+        // budget.
+        if state::is_marked_revoked(&self.cfg.run_root, id) || (cert.is_none() && view.was_revoked(id)) {
             return Err(SupError::Revoked(id.to_owned()));
         }
         let upub = self.deps.cert_env.user_key.verifying_key().to_bytes();
@@ -265,10 +273,26 @@ impl Supervisor {
         let slot = self.slot(id);
         let _g = slot.gate.lock().await;
         let current = slot.st().state;
-        if let Some(pid) = self.probe_running(id).await
-            && matches!(current, ChildState::Running | ChildState::Starting)
-        {
-            return Ok(Running { socket: self.socket(id), pid, started: false });
+        if let Some(pid) = self.probe_running(id).await {
+            match current {
+                ChildState::Running => return Ok(Running { socket: self.socket(id), pid, started: false }),
+                // An automatic restart in flight: its child has a pid but
+                // has not bound its socket yet. Never hand that socket out;
+                // wait (bounded) for the handshake like a fresh start does.
+                ChildState::Starting => {
+                    return match self.wait_ready(id).await {
+                        Ok(pid) => {
+                            self.note_build(id).await;
+                            if slot.st().state == ChildState::Starting {
+                                self.set_state(id, &slot, ChildState::Running);
+                            }
+                            Ok(Running { socket: self.socket(id), pid, started: false })
+                        }
+                        Err(why) => Err(SupError::NotReady(why)),
+                    };
+                }
+                _ => {}
+            }
         }
         if state::is_marked_revoked(&self.cfg.run_root, id) {
             return Err(SupError::Revoked(id.to_owned()));
@@ -348,6 +372,7 @@ impl Supervisor {
         match self.wait_ready(id).await {
             Ok(pid) => {
                 self.set_state(id, slot, ChildState::Running);
+                self.note_build(id).await;
                 self.record_kernel_build(id).await;
                 Ok(Running { socket: self.socket(id), pid, started: true })
             }
@@ -371,6 +396,21 @@ impl Supervisor {
         if !matches!(r, Ok(Ok(Some(_)))) {
             tracing::warn!("could not record the project kernel build in the manifest");
         }
+    }
+
+    /// Record the build the running child reports (its handshake `sha` and
+    /// `version`) in `state.json`, where [`status`](Self::status) and the
+    /// doctor compare it with this daemon's build (a child outlives
+    /// `weaver update`; adoption never replaces it).
+    pub(super) async fn note_build(&self, id: &str) {
+        let Some(h) = self.deps.io.handshake(&self.socket(id)).await else { return };
+        if h.project_id.as_deref() != Some(id) {
+            return;
+        }
+        state::update(&self.run_dir(id), |s| {
+            s.kernel_sha = (!h.sha.is_empty()).then(|| h.sha.clone());
+            s.kernel_version = (!h.version.is_empty()).then(|| h.version.clone());
+        });
     }
 
     /// Wait for the child's handshake to name this project.
@@ -513,6 +553,8 @@ impl Supervisor {
         tokio::spawn(async move {
             if this.wait_ready(&id2).await.is_ok() && slot2.st().generation == g {
                 this.set_state(&id2, &slot2, ChildState::Running);
+                this.note_build(&id2).await;
+                this.record_kernel_build(&id2).await;
             }
         });
         Ok(g)
@@ -604,6 +646,10 @@ impl Supervisor {
 
     /// Stop every running child (user-daemon stop cascade).
     pub async fn stop_all(self: &Arc<Self>) -> Vec<String> {
+        // A child that was still booting when the adoption scan ran (its
+        // socket not yet bound) is a leftover, not a slot: give it the
+        // chance to answer now, so the cascade does not skip it.
+        self.reconcile_leftovers().await;
         let ids: Vec<String> = self.slots.lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
         let mut stopped = Vec::new();
         for id in ids {
@@ -649,14 +695,20 @@ impl Supervisor {
             let st = slot.st();
             (st.state, st.restarts, st.last_exit, st.failed.clone())
         };
+        let file = state::read(&self.run_dir(id)).unwrap_or_default();
+        let pid = self.probe_running(id).await;
+        let stale_build = pid.is_some() && file.kernel_sha.as_deref().is_some_and(|sha| sha != self.cfg.build_sha);
         Status {
             project_id: id.to_owned(),
             state: state_,
-            pid: self.probe_running(id).await,
+            pid,
             socket: self.socket(id),
             restarts,
             last_exit_code: exit.and_then(|e| e.code),
             failed_reason: failed,
+            kernel_sha: file.kernel_sha,
+            kernel_version: file.kernel_version,
+            stale_build,
         }
     }
 
@@ -680,6 +732,21 @@ impl Supervisor {
             .filter(|f| matches!(f, Found::Unverifiable { reason, .. } if *reason != adopt::Skip::Dead))
             .cloned()
             .collect()
+    }
+
+    /// A live kernel for `id` that the supervisor does not manage (an
+    /// adopted-but-refused leftover, or one that failed verification): its
+    /// pid and why. `project.stop` names it instead of saying "was not
+    /// running". It is never signalled.
+    pub fn unmanaged(&self, id: &str) -> Option<(u32, String)> {
+        self.leftovers.lock().unwrap_or_else(|e| e.into_inner()).iter().find_map(|f| match f {
+            Found::Unverifiable { id: i, pid: Some(pid), reason }
+                if i == id && *reason != adopt::Skip::Dead && child::pid_alive(*pid) =>
+            {
+                Some((*pid, reason.to_string()))
+            }
+            _ => None,
+        })
     }
 
     /// `via = child-kernel` for the project (the owner's opt-in).

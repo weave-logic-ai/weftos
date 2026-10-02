@@ -12,6 +12,23 @@
 //! `DAEMON_LLM` construction sites are exercised by their pure helpers and by
 //! `parent_link` unit tests).
 
+// Harness constraint: this binary holds exactly ONE test. It sets
+// process-wide environment variables (`set_var`: provider keys, the runtime
+// dir, the decoy URLs) and enters the project profile, which installs a
+// process-wide parent link. libtest runs a binary's tests on parallel
+// threads, so a second test here would race the environment. Any test added
+// to this file must start with `claim_process_env()`, which fails loudly
+// when a second one tries; put anything that does not need this state in
+// `shared_services.rs`.
+static ENV_CLAIMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn claim_process_env() {
+    assert!(
+        !ENV_CLAIMED.swap(true, std::sync::atomic::Ordering::SeqCst),
+        "shared_services_child.rs is a one-test binary: it mutates process-wide environment and state"
+    );
+}
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,10 +54,11 @@ const FAKE_KEYS: &[(&str, &str)] = &[
 
 #[tokio::test(flavor = "multi_thread")]
 async fn project_profile_boots_with_no_heavy_services_and_no_provider_keys() {
+    claim_process_env();
     // The parent's environment as it would be inherited.
     let run = tempfile::tempdir().unwrap();
-    // SAFETY: first statement of the only test in this binary; nothing else
-    // reads the environment concurrently.
+    // SAFETY: the only test in this binary (see `claim_process_env`); nothing
+    // else reads the environment concurrently.
     unsafe {
         for (k, v) in FAKE_KEYS {
             std::env::set_var(k, v);

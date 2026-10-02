@@ -34,6 +34,13 @@ pub struct StateFile {
     /// Why the project is `failed`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_reason: Option<String>,
+    /// Build stamp the running kernel reported in its handshake, recorded
+    /// when it became ready or was adopted (the stale-build check reads it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kernel_sha: Option<String>,
+    /// Crate version the running kernel reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kernel_version: Option<String>,
 }
 
 /// Write `state.json` atomically (0600). Best effort: a failure is logged,

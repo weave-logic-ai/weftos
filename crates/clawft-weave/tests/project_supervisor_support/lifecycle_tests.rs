@@ -40,7 +40,7 @@ pub fn adoption_after_user_daemon_restart() {
 }
 
 /// Start a fake kernel by hand in `dir` (not through a supervisor).
-fn manual_kernel(dir: &std::path::Path, id: &str, mode: &str) -> std::process::Child {
+pub fn manual_kernel(dir: &std::path::Path, id: &str, mode: &str) -> std::process::Child {
     std::fs::create_dir_all(dir).unwrap();
     std::fs::write(dir.join("behavior"), mode).unwrap();
     let child = std::process::Command::new(std::env::current_exe().unwrap())

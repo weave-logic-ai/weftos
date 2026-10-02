@@ -31,6 +31,14 @@ impl Activity {
 pub trait ActivitySource: Send + Sync {
     /// The latest report for `project_id`, `None` when there is none.
     fn activity(&self, project_id: &str) -> Option<Activity>;
+
+    /// True when `project_id`'s child had a session and has missed three
+    /// heartbeats without registering again (a wedged or cut-off child).
+    /// The supervisor restarts such a child after a grace period; sources
+    /// without heartbeat data say `false`.
+    fn lost_heartbeat(&self, _project_id: &str) -> bool {
+        false
+    }
 }
 
 /// Activity from the mesh-local registry: what each child last said in its
@@ -52,6 +60,22 @@ impl ActivitySource for RegistryActivity {
                 busy_workloads: s.activity.busy.workloads,
                 busy_streams: s.activity.busy.streams,
             })
+    }
+
+    fn lost_heartbeat(&self, project_id: &str) -> bool {
+        use crate::mesh_local_registry::{SessionState, registry};
+        // Only a session that really lived and then went quiet counts: not
+        // the tombstone adoption files (the child may never re-register, e.g.
+        // an older build), and not a child whose last beat said it was busy
+        // (a stalled heartbeat handler must not restart working children).
+        registry().sessions().into_iter().any(|(s, state)| {
+            s.facts.project_id == project_id
+                && state == SessionState::Expired
+                && !s.adopted
+                && s.activity.busy.agents == 0
+                && s.activity.busy.workloads == 0
+                && s.activity.busy.streams == 0
+        })
     }
 }
 
@@ -99,6 +123,51 @@ mod tests {
             Activity { busy_streams: 1, ..act(0) },
         ] {
             assert!(!should_stop(10_000, 1800, Some(&a)));
+        }
+    }
+
+    fn facts(id: &str) -> crate::mesh_local_registry::NewSession {
+        crate::mesh_local_registry::NewSession {
+            project_id: id.to_owned(),
+            socket: "/tmp/x.sock".into(),
+            pid: 1,
+            addresses: vec![id.to_owned()],
+            topic_prefixes: vec![format!("chain/{id}/")],
+            version: "0".into(),
+            project_key_id: "k".into(),
+            project_pubkey: [0; 32],
+        }
+    }
+
+    /// Through the real (global) registry: only a session that lived and then
+    /// went quiet, without a busy last beat, is a lost heartbeat.
+    #[test]
+    fn the_registry_reports_lost_heartbeats_but_not_adoption_tombstones_or_busy_children() {
+        use crate::mesh_local_registry::registry;
+        let reg = registry();
+        let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(100);
+        let src = RegistryActivity;
+        // Adopted and never registered since: the tombstone is expired from
+        // birth and must never count (an older build may not re-register).
+        let adopted = "01J000000000000000000ADOPT";
+        reg.adopt_expired(facts(adopted));
+        assert!(!src.lost_heartbeat(adopted));
+        // Registered, then silent for 100 s: lost.
+        let lost = "01J00000000000000000000LOS";
+        reg.register_at(facts(lost), long_ago).unwrap();
+        assert!(src.lost_heartbeat(lost));
+        // Same, but its last beat said it was busy: not restarted.
+        let busy = "01J00000000000000000000BSY";
+        let s = reg.register_at(facts(busy), long_ago).unwrap();
+        let act = clawft_rpc::mesh_local::Activity {
+            busy: clawft_rpc::mesh_local::Busy { agents: 1, workloads: 0, streams: 0 },
+            ..Default::default()
+        };
+        reg.heartbeat_at(&s.session, act, long_ago + std::time::Duration::from_secs(1)).unwrap();
+        assert!(!src.lost_heartbeat(busy));
+        assert!(!src.lost_heartbeat("01J00000000000000000000NON"));
+        for id in [adopted, lost, busy] {
+            reg.evict(id);
         }
     }
 }
