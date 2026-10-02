@@ -35,7 +35,7 @@ pub fn init_manifests_dir(dir: PathBuf) {
     *MANIFESTS.write().unwrap_or_else(|e| e.into_inner()) = Some(dir);
 }
 
-fn configured_dir() -> Option<PathBuf> {
+pub(crate) fn configured_dir() -> Option<PathBuf> {
     MANIFESTS
         .read()
         .unwrap_or_else(|e| e.into_inner())

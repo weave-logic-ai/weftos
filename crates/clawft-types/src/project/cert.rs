@@ -89,7 +89,8 @@ pub fn key_id(pubkey: &[u8]) -> String {
     hex_encode(&Sha256::digest(pubkey)[..16])
 }
 
-fn ts(t: DateTime<Utc>) -> String {
+/// Canonical timestamp spelling: `YYYY-MM-DDTHH:MM:SSZ`.
+pub fn ts(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 

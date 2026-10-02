@@ -107,6 +107,9 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "auth.token.revoke",
     "auth.token.list",
     "project.register",
+    "project.cert.show",
+    "project.rekey",
+    "project.revoke",
 ];
 
 /// What `deny_all` still permits: liveness, discovery and project lookup.
