@@ -77,7 +77,7 @@ const BACKOFF_MAX_SECS: i64 = 60;
 type Key = (usize, String);
 
 #[derive(Default)]
-struct Inner {
+pub(crate) struct Inner {
     /// Last accepted statement per (chain, project). `None` = loaded, none yet.
     index: HashMap<Key, Option<Accepted>>,
     /// Consecutive authenticated refusals and the end of the quiet period.
@@ -86,6 +86,14 @@ struct Inner {
 
 /// Serialises verify-then-append (and owns the in-memory index).
 static ACCEPT: Mutex<Option<Inner>> = Mutex::new(None);
+
+/// Held by `project.revoke` and `project.rekey` for their whole operation, so
+/// a statement is verified either wholly before or wholly after one.
+/// Lock order: this guard first, then the identity journal lock (a submit
+/// holds this guard and takes only the shared journal lock inside it).
+pub(crate) fn identity_change_guard() -> std::sync::MutexGuard<'static, Option<Inner>> {
+    ACCEPT.lock().unwrap_or_else(|p| p.into_inner())
+}
 
 #[path = "anchor_error.rs"]
 mod error;

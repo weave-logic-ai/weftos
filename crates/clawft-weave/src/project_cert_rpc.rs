@@ -275,6 +275,8 @@ pub fn register(env: &CertEnv, req: RegisterRequest, now: DateTime<Utc>) -> Resu
 /// PoP over a nonce from `project.cert.challenge`). The old key is revoked
 /// for good.
 pub fn rekey(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Issued, IssueError> {
+    // Before the journal lock (see `anchor_rpc::identity_change_guard`).
+    let _anchor_guard = crate::anchor_rpc::identity_change_guard();
     let id = str_param(params, "id")?;
     registered_manifest(env, id)?;
     let new_pk = pubkey_param(params, "new_pubkey")?;
@@ -312,6 +314,8 @@ pub fn rekey(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Issued
 /// `project.revoke`: revoke the certified key. The project has no key
 /// until a later register (the revoked key can never return).
 pub fn revoke(env: &CertEnv, params: &Value) -> Result<Value, IssueError> {
+    // Before the journal lock (see `anchor_rpc::identity_change_guard`).
+    let _anchor_guard = crate::anchor_rpc::identity_change_guard();
     let id = str_param(params, "id")?;
     validate_id(id).map_err(|_| IssueError::Invalid("project id is not a canonical ULID".into()))?;
     let journal = IdentityJournal::new(&env.manifests_dir);
