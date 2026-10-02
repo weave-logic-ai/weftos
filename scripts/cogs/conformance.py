@@ -51,6 +51,47 @@ def _write_json(path, doc):
         f.write("\n")
 
 
+MEASURED_KEY_ATTRS = ("cog_id", "arch", "runtime")
+
+
+def _measured_key(cap):
+    attrs = cap.get("attrs") or {}
+    return (cap.get("id"),) + tuple(attrs.get(k) for k in MEASURED_KEY_ATTRS)
+
+
+def merge_measured(path, caps):
+    """Merge measured perf.* capabilities into a daemon `perf.measured.json`.
+
+    Only `perf.*` entries with provenance `measured` are written (the daemon
+    keeps nothing else). A new entry replaces an older one for the same
+    capability id, cog, arch and runtime; every other entry is left alone.
+    The file is replaced atomically. Returns the number of entries written.
+    """
+    fresh = [c for c in caps if str(c.get("id", "")).startswith("perf.")
+             and c.get("provenance") == "measured"]
+    old = []
+    if os.path.exists(path):
+        doc = _load_json(path)
+        old = doc.get("capabilities") if isinstance(doc, dict) else doc
+        if not isinstance(old, list):
+            raise SystemExit("%s: expected a list or {capabilities:[...]}" % path)
+    replaced = {_measured_key(c) for c in fresh}
+    merged = [c for c in old if _measured_key(c) not in replaced] + fresh
+    merged.sort(key=lambda c: tuple(str(x) for x in _measured_key(c)))
+    d = os.path.dirname(os.path.abspath(path))
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".perf.measured.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(merged, f, indent=1, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+    return len(fresh)
+
+
 def _now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -174,6 +215,8 @@ def cmd_sweep(args):
     _write_json(os.path.join(out_dir, "results.json"), {"results": results, "host": host})
     _write_json(os.path.join(out_dir, "summary.json"), summary)
     _write_json(os.path.join(out_dir, "capabilities.json"), caps)
+    if args.measured_file:
+        merge_measured(args.measured_file, caps)
     print(json.dumps({"label": label, "group_counts": summary["group_counts"],
                       "by_outcome": summary["by_outcome"],
                       "unexpected": summary["unexpected"]}, indent=1))
@@ -205,6 +248,8 @@ def cmd_probe(args):
                                        measured_at, args.runtime)
     doc = {"cog": args.cog, "outcome": classify.classify(results[0]),
            "result": results[0], "capabilities": caps}
+    if args.measured_file:
+        merge_measured(args.measured_file, caps)
     text = json.dumps(doc, indent=1, sort_keys=True)
     if args.out:
         with open(args.out, "w") as f:
@@ -274,6 +319,11 @@ def _runner_opts(p):
                    "container (repeatable), e.g. --net=host")
 
 
+MEASURED_HELP = ("merge the measured perf.* capabilities into this node's "
+                 "perf.measured.json (the file the daemon reads at its next facts "
+                 "probe); other entries are kept, same cog/arch/runtime is replaced")
+
+
 def build_parser():
     ap = argparse.ArgumentParser(prog="cogs-conformance", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="command", required=True)
@@ -286,12 +336,14 @@ def build_parser():
     s.add_argument("--results-dir", default=RESULTS_DIR)
     s.add_argument("--check-baseline", action="store_true")
     s.add_argument("--baseline", default=BASELINE)
+    s.add_argument("--measured-file", help=MEASURED_HELP)
     s.set_defaults(fn=cmd_sweep)
     p = sub.add_parser("probe", help="admission probe for one cog")
     _runner_opts(p)
     p.add_argument("--cog", required=True)
     p.add_argument("--node-facts", help="JSON capabilities to upgrade")
     p.add_argument("--out")
+    p.add_argument("--measured-file", help=MEASURED_HELP)
     p.set_defaults(fn=cmd_probe)
     m = sub.add_parser("summarize", help="re-classify a results.json")
     m.add_argument("results")

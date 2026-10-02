@@ -20,6 +20,21 @@ use crate::mesh_delivery::{LocalDelivery, PeerCtx};
 use crate::mesh_ipc::MeshIpcEnvelope;
 use crate::mesh_kad::KademliaTable;
 
+/// Control topic carrying signed node facts between peers (card
+/// mesh-placement-03). Consumed by the runtime: handed to the installed
+/// [`PeerFactsSink`], never routed to local subscribers.
+pub const FACTS_TOPIC: &str = "mesh.node_facts";
+
+/// Receiver of `mesh.node_facts` control messages.
+///
+/// The sink decides what to trust: it is handed the connection's
+/// authenticated identity ([`PeerCtx`]) and returns payloads to send back
+/// to the same peer (for example a re-send request).
+pub trait PeerFactsSink: Send + Sync + 'static {
+    /// Handle one facts payload from `ctx.peer_id`; return replies.
+    fn on_peer_facts(&self, ctx: &PeerCtx, payload: &serde_json::Value) -> Vec<serde_json::Value>;
+}
+
 /// A handle to a connected peer, holding the sender half of an mpsc
 /// channel whose receiver is read by a background write loop.
 pub struct PeerConnection {
@@ -117,6 +132,8 @@ pub struct MeshRuntime {
     /// `ClusterService` / `ClusterMembership` subscribe so cluster
     /// membership tracks live mesh state.
     peer_events: MeshPeerEventBus,
+    /// Sink for `mesh.node_facts` control messages ([`FACTS_TOPIC`]).
+    facts_sink: std::sync::OnceLock<Arc<dyn PeerFactsSink>>,
 }
 
 impl MeshRuntime {
@@ -133,6 +150,7 @@ impl MeshRuntime {
             mesh_subscriptions: DashMap::new(),
             assessment_transport: std::sync::OnceLock::new(),
             peer_events: MeshPeerEventBus::new(),
+            facts_sink: std::sync::OnceLock::new(),
         }
     }
 
@@ -156,7 +174,13 @@ impl MeshRuntime {
             mesh_subscriptions: DashMap::new(),
             assessment_transport: std::sync::OnceLock::new(),
             peer_events: MeshPeerEventBus::new(),
+            facts_sink: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Install the sink for `mesh.node_facts` messages (first call wins).
+    pub fn set_facts_sink(&self, sink: Arc<dyn PeerFactsSink>) {
+        let _ = self.facts_sink.set(sink);
     }
 
     /// Subscribe to live mesh peer membership / health events (WEFT-120).
@@ -723,6 +747,28 @@ impl MeshRuntime {
                 from = %envelope.source_node,
                 "received malformed mesh.subscribe envelope (missing 'topic' field)"
             );
+            return Ok(());
+        }
+
+        // `mesh.node_facts` is a runtime control topic: handed to the facts
+        // sink with the connection's authenticated identity, never routed.
+        if let MessageTarget::Topic(ref t) = message.target
+            && t == FACTS_TOPIC
+        {
+            if let (Some(sink), MessagePayload::Json(payload)) =
+                (self.facts_sink.get(), &message.payload)
+            {
+                for reply in sink.on_peer_facts(ctx, payload) {
+                    let msg = KernelMessage::new(
+                        0,
+                        MessageTarget::Topic(FACTS_TOPIC.to_string()),
+                        MessagePayload::Json(reply),
+                    );
+                    if let Err(e) = self.route_to_remote(&ctx.peer_id, msg).await {
+                        warn!(peer = %ctx.peer_id, error = %e, "node facts reply failed");
+                    }
+                }
+            }
             return Ok(());
         }
 

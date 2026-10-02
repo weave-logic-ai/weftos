@@ -377,3 +377,56 @@ class Runtimes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MeasuredFile(unittest.TestCase):
+    """--measured-file feeds the daemon's perf.measured.json without
+    clobbering measurements from other cogs, arches or runtimes."""
+
+    @staticmethod
+    def cap(cog, value, arch="aarch64", runtime="docker", prov="measured", cid="perf.cog.cycle_ms"):
+        return {"id": cid, "attrs": {"cog_id": cog, "value": value, "arch": arch,
+                                      "runtime": runtime}, "provenance": prov}
+
+    def test_merge_replaces_same_key_keeps_others_and_drops_non_measured(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "perf.measured.json")
+            conformance.merge_measured(path, [self.cap("a", 1.0), self.cap("b", 2.0)])
+            n = conformance.merge_measured(path, [
+                self.cap("a", 9.0),                        # replaces a/aarch64/docker
+                self.cap("a", 5.0, arch="arm"),            # different arch: kept beside
+                self.cap("c", 3.0, prov="claimed"),        # not measured: dropped
+                {"id": "cpu.arch.aarch64", "provenance": "measured"},  # not perf.*: dropped
+            ])
+            self.assertEqual(n, 2)
+            with open(path) as f:
+                got = json.load(f)
+            vals = {(c["attrs"]["cog_id"], c["attrs"]["arch"]): c["attrs"]["value"] for c in got}
+            self.assertEqual(vals, {("a", "aarch64"): 9.0, ("a", "arm"): 5.0, ("b", "aarch64"): 2.0})
+            self.assertEqual([x for x in os.listdir(d)], ["perf.measured.json"])
+
+    def test_rejects_a_file_of_the_wrong_shape(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "perf.measured.json")
+            with open(path, "w") as f:
+                f.write('{"nope": 1}')
+            with self.assertRaises(SystemExit):
+                conformance.merge_measured(path, [self.cap("a", 1.0)])
+
+    def test_sweep_and_probe_write_the_file(self):
+        real = conformance.execute
+        conformance.execute = lambda *_a, **_k: ([raw("anomaly-detect")], {"system": "Linux"})
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                mf = os.path.join(d, "perf.measured.json")
+                for argv in (["sweep", "--results-dir", d, "--label", "x"], ["probe", "--cog", "anomaly-detect"]):
+                    os.path.exists(mf) and os.unlink(mf)
+                    args = conformance.build_parser().parse_args(argv + ["--measured-file", mf])
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        args.fn(args)
+                    with open(mf) as f:
+                        got = json.load(f)
+                    self.assertTrue(got and all(c["provenance"] == "measured"
+                                                and c["id"].startswith("perf.") for c in got), argv)
+        finally:
+            conformance.execute = real

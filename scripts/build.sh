@@ -32,6 +32,8 @@ BENCH_CRATE=""
 BENCH_NAME=""
 CLEAN_STALE_DAYS=""
 TEST_PACKAGES=()
+# test: only run tests whose name contains this substring (skips doctests)
+TEST_FILTER=""
 # WEFT-460: optional gate step — cargo-dist host-triple rehearsal
 WITH_RELEASE_DRY_RUN=false
 # agents-catalog: verify agents/catalog.json is up to date instead of writing it
@@ -660,7 +662,14 @@ workspace_test() {
     fi
     # ${arr[@]+…} guard: macOS bash 3.2 + `set -u` errors on expanding an
     # empty array without it.
-    if command -v cargo-nextest >/dev/null 2>&1; then
+    if [ -n "$TEST_FILTER" ]; then
+        # Targeted run (--test-filter): one name substring, no doctests.
+        if command -v cargo-nextest >/dev/null 2>&1; then
+            cargo nextest run "${scope[@]}" ${extra[@]+"${extra[@]}"} "$TEST_FILTER"
+        else
+            cargo test "${scope[@]}" ${extra[@]+"${extra[@]}"} "$TEST_FILTER"
+        fi
+    elif command -v cargo-nextest >/dev/null 2>&1; then
         cargo nextest run "${scope[@]}" ${extra[@]+"${extra[@]}"} \
             && cargo test "${scope[@]}" --doc ${extra[@]+"${extra[@]}"}
     else
@@ -2069,6 +2078,7 @@ ${BOLD}Commands:${NC}
                   from CHANGELOG.md (also runs as --check before commits)
   all             Build everything (native + wasi + browser + ui)
   test [pkg…]     Run cargo test --workspace (or scoped: test clawft-channels …)
+                  --test-filter <substr> runs only tests whose name contains it
   test-pi [crate…] [--filter <test>] [--live-native] [--cogs] [--full]
                   Run ARM tests on the real Raspberry Pi 5: cross-build aarch64
                   test binaries in an arm64 Debian container (image
@@ -2315,6 +2325,10 @@ parse_args() {
                 ;;
             --profile)
                 PROFILE="${2:?'--profile requires a value'}"
+                shift 2
+                ;;
+            --test-filter)
+                TEST_FILTER="${2:?'--test-filter requires a test-name substring'}"
                 shift 2
                 ;;
             --force|-f)

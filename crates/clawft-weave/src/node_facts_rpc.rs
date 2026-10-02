@@ -12,6 +12,18 @@
 //!   or a `probe` document); only `measured` `perf.*` entries are used.
 //! - `feeds.declared.json`: a list of `feed.*` capabilities, advertised as
 //!   `claimed`.
+//! - `facts.config.json`: `{"docker_probe_image": "alpine:3.20" | null}`, the
+//!   local image the probe runs inside a VM-backed container engine to list
+//!   emulated architectures (for example armv7). `null` disables it. The
+//!   `WEFTOS_FACTS_PROBE_IMAGE` environment variable overrides the file
+//!   (empty disables). Default `alpine:3.20`; it is never pulled.
+//!
+//! With a mesh runtime attached, each probe goes through
+//! [`FactsExchange`](clawft_kernel::node_facts_exchange::FactsExchange): a
+//! changed capability set becomes a new signed base, a live-state change
+//! (busy/free, free memory) a small signed delta, and both are sent to every
+//! connected or joining peer. Peers' facts arrive on the same exchange and
+//! are cached with a receiver-assigned trust tier.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -19,9 +31,12 @@ use std::time::Duration;
 
 use clawft_kernel::boot::Kernel;
 use clawft_kernel::cluster::ClusterMembership;
+use clawft_kernel::mesh_runtime::MeshRuntime;
 use clawft_kernel::node_facts::{
-    CachedNodeFacts, DEFAULT_FACTS_TTL_SECS, ProbeConfig, SystemHost, measured, probe_and_sign,
+    CachedNodeFacts, DEFAULT_FACTS_TTL_SECS, ProbeConfig, SystemHost, build_facts, measured,
+    probe_and_sign, probe_capabilities,
 };
+use clawft_kernel::node_facts_exchange::{FactsExchange, FactsTrustPolicy};
 use clawft_platform::NativePlatform;
 use clawft_rpc::Response;
 use clawft_types::placement::{Capability, TrustTier};
@@ -34,11 +49,47 @@ use tracing::{info, warn};
 pub const MEASURED_FILE: &str = "perf.measured.json";
 /// Declared feeds file under the runtime dir.
 pub const FEEDS_FILE: &str = "feeds.declared.json";
+/// Probe settings file under the runtime dir.
+pub const CONFIG_FILE: &str = "facts.config.json";
+/// Environment override for the container-engine probe image.
+pub const PROBE_IMAGE_ENV: &str = "WEFTOS_FACTS_PROBE_IMAGE";
+/// How often a connected node re-probes for live-state changes.
+pub const LIVE_PROBE_SECS: u64 = 60;
 
 struct LocalSigner {
     key: SigningKey,
     runtime_dir: PathBuf,
     last_seq: Mutex<u64>,
+    exchange: Option<Arc<FactsExchange>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FactsConfig {
+    /// Absent: keep the default. `null`: no probe image.
+    #[serde(default, deserialize_with = "some_or_null")]
+    docker_probe_image: Option<Option<String>>,
+}
+
+fn some_or_null<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(d).map(Some)
+}
+
+/// The probe image: environment, then `facts.config.json`, then `default`.
+fn probe_image(runtime_dir: &Path, env: Option<String>, default: Option<String>) -> Option<String> {
+    if let Some(v) = env {
+        return Some(v).filter(|v| !v.trim().is_empty());
+    }
+    if let Some(text) = read_small(&runtime_dir.join(CONFIG_FILE)) {
+        match serde_json::from_str::<FactsConfig>(&text) {
+            Ok(FactsConfig { docker_probe_image: Some(v) }) => {
+                return v.filter(|v| !v.trim().is_empty());
+            }
+            Ok(_) => {}
+            Err(e) => warn!(error = %e, "facts config unreadable; ignored"),
+        }
+    }
+    default
 }
 
 static LOCAL: OnceLock<Arc<LocalSigner>> = OnceLock::new();
@@ -62,6 +113,11 @@ fn read_small(path: &Path) -> Option<String> {
 /// Build the probe config from the runtime directory's optional inputs.
 pub fn probe_config(runtime_dir: &Path) -> ProbeConfig {
     let mut cfg = ProbeConfig::default();
+    cfg.docker_probe_image = probe_image(
+        runtime_dir,
+        std::env::var(PROBE_IMAGE_ENV).ok(),
+        cfg.docker_probe_image.take(),
+    );
     if let Some(text) = read_small(&runtime_dir.join(MEASURED_FILE)) {
         match measured::parse_measured(&text) {
             Ok(m) => {
@@ -83,6 +139,19 @@ pub fn probe_config(runtime_dir: &Path) -> ProbeConfig {
         }
     }
     cfg
+}
+
+/// Probe this machine into unsigned facts. Blocking: call off the runtime.
+fn probe_blocking(signer: &LocalSigner) -> clawft_types::placement::NodeFacts {
+    let cfg = probe_config(&signer.runtime_dir);
+    let node_id = clawft_kernel::node_id_from_pubkey(&signer.key.verifying_key().to_bytes());
+    build_facts(
+        &node_id,
+        now_secs(),
+        DEFAULT_FACTS_TTL_SECS,
+        0,
+        probe_capabilities(&SystemHost::default(), &cfg),
+    )
 }
 
 /// Probe, sign and cache this node's facts. Blocking: call off the runtime.
@@ -114,6 +183,22 @@ async fn refresh(
     signer: Arc<LocalSigner>,
     membership: Arc<ClusterMembership>,
 ) -> Result<u64, String> {
+    if let Some(exchange) = signer.exchange.clone() {
+        let s = signer.clone();
+        let facts = tokio::task::spawn_blocking(move || probe_blocking(&s))
+            .await
+            .map_err(|e| format!("probe task failed: {e}"))?;
+        let published = exchange
+            .update_live(facts, now_secs())
+            .await
+            .map_err(|e| e.to_string())?;
+        use clawft_kernel::node_facts_exchange::Published;
+        return Ok(match published {
+            Published::Base(seq) => seq,
+            Published::Delta { seq, .. } => seq,
+            Published::Nothing => 0,
+        });
+    }
     tokio::task::spawn_blocking(move || refresh_blocking(&signer, &membership))
         .await
         .map_err(|e| format!("probe task failed: {e}"))?
@@ -121,17 +206,39 @@ async fn refresh(
 
 /// Start local facts: first probe now, then refresh at 80% of the TTL.
 /// Idempotent: only the first call starts the task.
-pub fn init(key: SigningKey, runtime_dir: PathBuf, membership: Arc<ClusterMembership>) {
+pub fn init(
+    key: SigningKey,
+    runtime_dir: PathBuf,
+    membership: Arc<ClusterMembership>,
+    mesh: Option<Arc<MeshRuntime>>,
+) {
+    let exchange = mesh.map(|rt| {
+        let ex = FactsExchange::new(
+            key.clone(),
+            membership.clone(),
+            rt,
+            FactsTrustPolicy::default(),
+        );
+        ex.start();
+        ex
+    });
     let signer = Arc::new(LocalSigner {
         key,
         runtime_dir,
         last_seq: Mutex::new(0),
+        exchange,
     });
     if LOCAL.set(signer.clone()).is_err() {
         return;
     }
     tokio::spawn(async move {
-        let every = Duration::from_secs(DEFAULT_FACTS_TTL_SECS * 4 / 5);
+        // Connected nodes re-probe often enough to turn live-state changes into
+        // deltas; the exchange re-signs a base by itself before its TTL.
+        let every = if signer.exchange.is_some() {
+            Duration::from_secs(LIVE_PROBE_SECS)
+        } else {
+            Duration::from_secs(DEFAULT_FACTS_TTL_SECS * 4 / 5)
+        };
         loop {
             match refresh(signer.clone(), membership.clone()).await {
                 Ok(seq) => info!(seq, "node facts probed and signed"),
@@ -226,5 +333,58 @@ pub async fn handle(
     match serde_json::to_value(entries) {
         Ok(v) => Response::success(v),
         Err(e) => Response::error(format!("encode failed: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dir_with(config: Option<&str>) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        if let Some(c) = config {
+            std::fs::write(d.path().join(CONFIG_FILE), c).unwrap();
+        }
+        d
+    }
+
+    fn alpine() -> Option<String> {
+        Some("alpine:3.20".into())
+    }
+
+    #[test]
+    fn probe_image_defaults_then_file_then_environment() {
+        let none = dir_with(None);
+        assert_eq!(probe_image(none.path(), None, alpine()), alpine());
+
+        let file = dir_with(Some(r#"{"docker_probe_image": "armv7/probe:1"}"#));
+        assert_eq!(
+            probe_image(file.path(), None, alpine()).as_deref(),
+            Some("armv7/probe:1")
+        );
+        // Environment wins over the file.
+        assert_eq!(
+            probe_image(file.path(), Some("local/img:2".into()), alpine()).as_deref(),
+            Some("local/img:2")
+        );
+    }
+
+    #[test]
+    fn probe_image_can_be_disabled() {
+        let null = dir_with(Some(r#"{"docker_probe_image": null}"#));
+        assert_eq!(probe_image(null.path(), None, alpine()), None);
+        let none = dir_with(None);
+        assert_eq!(probe_image(none.path(), Some("  ".into()), alpine()), None);
+        // An empty config object keeps the default.
+        let empty = dir_with(Some("{}"));
+        assert_eq!(probe_image(empty.path(), None, alpine()), alpine());
+    }
+
+    #[test]
+    fn unreadable_config_falls_back_to_the_default() {
+        let bad = dir_with(Some("{not json"));
+        assert_eq!(probe_image(bad.path(), None, alpine()), alpine());
+        let unknown = dir_with(Some(r#"{"surprise": 1}"#));
+        assert_eq!(probe_image(unknown.path(), None, alpine()), alpine());
     }
 }

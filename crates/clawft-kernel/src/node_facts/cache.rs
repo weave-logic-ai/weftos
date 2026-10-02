@@ -11,7 +11,9 @@
 
 use dashmap::DashMap;
 
-use clawft_types::placement::{Capability, FactsError, NodeFacts, NodeLoad, TrustTier};
+use clawft_types::placement::{
+    Capability, FactsError, NodeFacts, NodeLoad, Provenance, TrustTier,
+};
 
 use crate::node_facts_advert::{
     NodeFactsAdvertError, SignedFactsDelta, SignedNodeFacts, verify_facts_delta, verify_node_facts,
@@ -117,7 +119,37 @@ impl NodeFactsCache {
         trust_tier: TrustTier,
         now: u64,
     ) -> Result<InsertOutcome, CacheError> {
-        let facts = verify_node_facts(&signed, now)?;
+        self.insert_capped(signed, trust_tier, now, None)
+    }
+
+    /// [`Self::insert`] for facts a *peer* sent. Every capability's
+    /// provenance is capped at `max_provenance` in the cached copy: the
+    /// receiver did not probe or measure remote data, so a peer's
+    /// `measured` claim is never held as `measured`. The signed envelope is
+    /// kept as received.
+    pub fn insert_remote(
+        &self,
+        signed: SignedNodeFacts,
+        trust_tier: TrustTier,
+        max_provenance: Provenance,
+        now: u64,
+    ) -> Result<InsertOutcome, CacheError> {
+        self.insert_capped(signed, trust_tier, now, Some(max_provenance))
+    }
+
+    fn insert_capped(
+        &self,
+        signed: SignedNodeFacts,
+        trust_tier: TrustTier,
+        now: u64,
+        cap: Option<Provenance>,
+    ) -> Result<InsertOutcome, CacheError> {
+        let mut facts = verify_node_facts(&signed, now)?;
+        if let Some(cap) = cap {
+            for c in &mut facts.capabilities {
+                c.provenance = c.provenance.min(cap);
+            }
+        }
         let mut public_key = [0u8; 32];
         public_key.copy_from_slice(&signed.public_key);
         let node_id = facts.node_id.clone();

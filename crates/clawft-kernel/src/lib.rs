@@ -273,6 +273,9 @@ pub mod node_facts;
 /// Signed node facts, beside `capability_claim` (card mesh-placement-03).
 #[cfg(all(feature = "native", any(feature = "mesh", feature = "exochain")))]
 pub mod node_facts_advert;
+/// Node facts and deltas over the mesh with receiver-assigned trust (card mesh-placement-03).
+#[cfg(all(feature = "native", feature = "mesh"))]
+pub mod node_facts_exchange;
 pub mod process;
 pub mod rate_limit;
 pub mod revocation;

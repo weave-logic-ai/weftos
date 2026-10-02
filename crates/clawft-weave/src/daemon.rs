@@ -1197,6 +1197,7 @@ pub async fn run(
             key.clone(),
             runtime_dir.clone(),
             kernel.read().await.cluster_membership().clone(),
+            kernel.read().await.a2a_router().mesh_runtime().cloned(),
         ),
         Err(e) => warn!(error = %e, "local node facts disabled (the mesh service advertises them)"),
     }
