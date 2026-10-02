@@ -137,13 +137,22 @@ fn deleting_the_marker_keeps_floor_and_revocations() {
     drop(Journal::open(dir.path(), key()).unwrap());
     fs::remove_file(dir.path().join("journal.truncated")).unwrap();
 
-    let j = Journal::open(dir.path(), key()).unwrap();
-    let b = Bindings::fold(&j).unwrap();
+    let mut j = Journal::open(dir.path(), key()).unwrap();
+    assert!(j.read_only(), "the signed chain keeps it read-only without the marker");
+    let mut b = Bindings::fold(&j).unwrap();
+    assert!(b.bind(&mut j, &u(502), &k(9), BindHow::Tofu, BindMeta::default()).is_err());
     assert_eq!(b.last_serial(), 3);
     assert_eq!(b.key_of(&u(501)), None);
     assert_eq!(b.check(&u(502), &k(1)), Check::Conflict(ConflictReason::KeyRevoked));
     let uid = node_id_from_pubkey(&k(1));
     assert!(b.is_serial_revoked(&uid, 2) && b.is_serial_revoked(&uid, 3), "lost-tail serials are revoked");
+
+    // Acceptance lifts it for good, with or without a marker.
+    b.accept_truncate(&mut j, ack(), None).unwrap();
+    assert!(!j.read_only());
+    drop(j);
+    let j = Journal::open(dir.path(), key()).unwrap();
+    assert!(!j.read_only());
 }
 
 #[test]

@@ -331,9 +331,22 @@ impl Journal {
         self.records.is_empty()
     }
 
-    /// True while an unacknowledged quarantine marker exists (durable).
+    /// True while a quarantine is unacknowledged. Derived from the signed
+    /// chain (a `journal.quarantine` record with no later
+    /// `journal.accept_truncate`), or from the marker file when that covers the
+    /// window before the record is appended. Deleting the marker alone cannot
+    /// lift it.
     pub fn read_only(&self) -> bool {
-        self.lost.is_some()
+        self.lost.is_some() || self.chain_unaccepted()
+    }
+
+    fn chain_unaccepted(&self) -> bool {
+        let last = |kind: &str| self.records.iter().rposition(|r| r.kind == kind);
+        match (last(KIND_QUARANTINE), last(KIND_ACCEPT_TRUNCATE)) {
+            (Some(q), Some(a)) => q > a,
+            (Some(_), None) => true,
+            _ => false,
+        }
     }
 
     /// What the unacknowledged quarantine lost, if anything.
