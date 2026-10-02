@@ -319,6 +319,7 @@ mod tests {
                 }],
                 risk_threshold: 0.8,
                 human_approval_required: false,
+                limits: Default::default(),
             }
         }
 

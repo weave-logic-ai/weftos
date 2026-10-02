@@ -33,7 +33,6 @@ use clawft_kernel::overlay_runtime::write_user_pin;
 use clawft_kernel::parent_policy::export_rules_to;
 use clawft_kernel::token_authority::{Issuer, TokenAuthority};
 use clawft_kernel::workload_runtime::{ChildLauncher, ChildProbe, ChildRef, ChildSpec, RuntimeError};
-use clawft_types::config::overlay::Limits;
 use clawft_types::project::cert::key_id;
 use clawft_types::project::SpawnFile;
 use clawft_types::project::token_consts::PROJECT_TOKEN_TTL_SECS;
@@ -307,7 +306,7 @@ impl Launcher {
             snap.rules,
             snap.risk_threshold,
             snap.human_approval_required,
-            &Limits::default(),
+            &snap.limits,
             &self.parts.user_key,
         )
         .map_err(|e| backend(format!("parent-policy.json: {e}")))?;

@@ -122,7 +122,7 @@ impl Fixture {
                 manifests_dir: self.mdir.clone(),
             },
             snapshot: Arc::new(|| {
-                Some(GovernanceSnapshot { rules: Vec::new(), risk_threshold: 0.7, human_approval_required: false })
+                Some(GovernanceSnapshot { rules: Vec::new(), risk_threshold: 0.7, human_approval_required: false, limits: clawft_types::config::overlay::Limits { max_processes: Some(12), spawn_budget: Some(3), ..Default::default() } })
             }),
             tokens: Some(Arc::clone(&self.tokens)),
             activity: Arc::clone(&self.activity) as Arc<dyn ActivitySource>,

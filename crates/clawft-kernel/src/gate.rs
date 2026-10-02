@@ -109,6 +109,12 @@ pub struct GovernanceSnapshot {
     pub risk_threshold: f64,
     /// Whether blocking verdicts escalate to a human.
     pub human_approval_required: bool,
+    /// Process and spawn caps the exporter's kernel runs under (ADR-103
+    /// A6). The engine does not know them: the daemon fills them in from
+    /// its kernel config, so a project kernel's merged limits start from the
+    /// parent's real caps and the overlay can only tighten them. The
+    /// threshold and approval flag travel in the fields above, not here.
+    pub limits: clawft_types::config::overlay::Limits,
 }
 
 /// Gate backend wrapping the existing `CapabilityChecker`.
@@ -455,6 +461,7 @@ impl GateBackend for GovernanceGate {
             rules: self.engine.rules().to_vec(),
             risk_threshold: self.engine.risk_threshold(),
             human_approval_required: self.engine.human_approval_required(),
+            limits: Default::default(),
         })
     }
 
