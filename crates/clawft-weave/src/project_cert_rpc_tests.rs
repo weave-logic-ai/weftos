@@ -314,7 +314,7 @@ fn no_cert_for_a_pubkey_the_caller_cannot_prove() {
     r.pop_sig = ident::pop_sign(&mine, PopOp::Register, &"0".repeat(32), r.nonce.as_str(), &f.id).unwrap();
     assert_eq!(register(&f.env, r, now()).unwrap_err().kind(), "pop_failed");
     assert_eq!(count(&f, KIND_REGISTER), 0);
-    assert!(IdentityJournal::new(&f.env.manifests_dir).read(true).unwrap().is_empty());
+    assert!(IdentityJournal::new(&f.env.manifests_dir).read(false).unwrap().is_empty());
 }
 
 #[test]

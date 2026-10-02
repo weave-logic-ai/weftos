@@ -25,6 +25,11 @@ pub(super) fn read_cert_files(dir: &Path) -> Result<Vec<ProjectCert>, IssueError
         if !entry.file_name().to_string_lossy().ends_with(".cert.json") {
             continue;
         }
+        // Only regular files are certificate files; a directory or symlink
+        // with that name is skipped, real I/O errors still fail closed.
+        if !entry.metadata().map_err(io)?.is_file() {
+            continue;
+        }
         let bytes = std::fs::read(entry.path())
             .map_err(|e| IssueError::Store(format!("{}: {e}", entry.path().display())))?;
         if let Ok(c) = serde_json::from_slice(&bytes) {
