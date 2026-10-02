@@ -59,6 +59,11 @@
 //!
 //! Source: <https://github.com/weave-logic-ai/weftos>
 
+// `test-support` exposes a process-wide child-root override for integration
+// tests; it must never reach a release build.
+#[cfg(all(feature = "test-support", not(debug_assertions)))]
+compile_error!("clawft-kernel: the `test-support` feature is for debug test builds only");
+
 // WEFT-504: `ecc` pulls native-only deps (blake3, clawft-core/vector-memory,
 // clawft-bvh). Browser / pure wasm32-unknown-unknown consumers must build
 // with `--no-default-features` (mesh + ecc off). `scripts/build.sh browser`

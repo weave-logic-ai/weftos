@@ -35,7 +35,7 @@ mesh = ["clawft-kernel/mesh", "clawft-kernel/quic"]
 placement = ["clawft-kernel/workload-runtime", "mesh", "ecc", "exochain"]
 rvf-rpc = ["dep:weftos-rvf-wire", "dep:rvf-types"]
 # Stub installers for the `shared.*` services (integration tests only).
-test-support = []
+test-support = ["clawft-kernel/test-support"]
 
 [dependencies]
 clawft-core = { workspace = true, features = ["native", "rvf", "embedding-router"] }

@@ -106,6 +106,11 @@ async fn project_profile_boots_with_no_heavy_services_and_no_provider_keys() {
         .to_string();
     assert!(err.contains("parent_unavailable"), "no local fallback: {err}");
 
+    // A project profile only boots on a real child root (package E checks
+    // its certificate, signed parent policy and pins). Build one with the
+    // kernel's test builder; nothing in the overlay's checks is bypassed.
+    clawft_kernel::overlay_runtime::test_support::install_child_fixture(run.path());
+
     // Boot the kernel from the adjusted kernel config and look at it over RPC.
     let kernel = Kernel::boot(config, kc, Arc::new(NativePlatform::new())).await.expect("boot");
     let kernel = Arc::new(RwLock::new(kernel));
