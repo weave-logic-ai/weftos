@@ -35,6 +35,9 @@ Staging area for changes after the 0.8.1 cut.
   value in the message; lower it to the parent cap or below.
 - `auth.token` events and `governance.overlay.applied` are never replicated;
   chain sync stops cleanly at the first authority event (`StoppedAtAuthorityEvent`).
+- Placement RPCs refuse after a `governance.parent.push` until the kernel
+  restarts (`governance changed ... restart this kernel`): the placement gate is
+  fixed at build time, so the older gate no longer decides after a push.
 
 ### Changed — Weave topology Phase 1 follow-ups (ADR-103 A8, next release 0.8.2)
 
@@ -70,6 +73,61 @@ Staging area for changes after the 0.8.1 cut.
   with the `kernel.lock` holder, `REFUSED`, the migration marker and adoption
   state; MCP attach messages and `is_daemon_running()` honour a manifest
   `runtime_dir`.
+
+### Added — Weave topology follow-ups: identity, supervisor, mesh service (ADR-103 A7, A10, A13, A14)
+
+- **User-key rotation.** `weaver migrate user-key --rotate` replaces
+  `~/.weftos/user.key` with a dual-signed handover appended to
+  `user-key-rotations.jsonl`; it needs the user daemon stopped and resumes after
+  a crash. Material sealed by the old key keeps verifying up to the rotation
+  point. `user_key_history_invalid` is the new fail-closed refusal when the
+  rotation log does not end at the key in use. A running project kernel fails
+  its next `mesh.register` (`pop_failed`) and is restarted by the supervisor's
+  liveness pass, not re-certified. Restart children with `weaver kernel restart
+  --project <id>` and run `weaver mesh bind rebind` afterwards (ADR-103 A13).
+- **Anchor reset.** `weaver project anchor reset --project <id>` (RPC
+  `project.anchor.reset`, Admin, user daemon only) opens a new anchor epoch after
+  a project chain was moved aside, so the project's restarted anchors (`seq = 1`)
+  are accepted instead of refused with `anchor_seq`. Within an epoch an anchor
+  statement's `chain_id` must equal the last accepted one (`anchor_chain_id`).
+- **Behaviour change:** a same-uid peer inside a supervised child's process
+  group no longer gets the ADR-070 shortcut: its literal `auth: "admin"` is
+  ignored and it is treated as anonymous (read and chat). Anything an agent runs
+  inside a child kernel that relied on the shortcut against the user daemon now
+  fails with permission denied. The owner's CLI is unaffected.
+- `weft token issue --project` help and tests now state what a project-scoped
+  token does: the token's project is the request's project and a different claim
+  is `project_scope_mismatch`; it is a claim guard, not a capability limit.
+
+### Changed — Supervisor liveness and shared slots (ADR-103 A7 S5-S8)
+
+- **Behaviour change:** a `running` child whose registry session has stayed
+  expired for 30 s (`lost_heartbeat_grace`, after three missed beats) is stopped
+  and restarted inside its restart budget, then marked `failed`. An adopted
+  child's tombstone session and a child whose last beat was busy are never
+  treated as lost.
+- `project.status`, `weaver kernel status` and `weaver doctor` report
+  `stale_build` (`child:<id>:stale-build`) when a child runs another build than
+  the user daemon. Nothing restarts it on its own.
+- `weaver kernel start --legacy-project-daemon` is refused in a tree whose
+  manifest says `via = child-kernel`; `project.stop` on an adopted-but-refused
+  leftover answers `unmanaged_pid`.
+- The four global shared-service slots are fair: a project holding a slot may not
+  take another while a project holding none was refused within 3 s. `shared.*`
+  re-checks on every call that the project is still registered and active.
+
+### Changed — Mesh service journal and record publication (ADR-103 A10)
+
+- **Behaviour change:** at start the service accepts a lone torn final journal
+  line by itself (no newline, nothing readable, no earlier pending quarantine):
+  it truncates the tail and journals `journal.accept_truncate` with
+  `auto: "torn_tail"`, so the journal is modified at start. `status` reports
+  `last_auto_accept`. Any other damage still quarantines and refuses to bind.
+- `service.json` is published only after the socket is bound and a lost bind
+  race never replaces the winner's record. `read_record` waits up to 2 s and
+  retries for a record that is mid-write.
+- `max_connections_per_ip` and `first_frame_timeout_secs` are `mesh.toml` keys;
+  see the connection-limits entry above.
 
 ### Added — Weave topology Phase 2, per-project kernels (ADR-103 A7, package G)
 

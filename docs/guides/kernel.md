@@ -598,7 +598,10 @@ by the old key keep verifying up to the rotation point; the old key's later
 signatures are refused. Afterwards start the user daemon, restart each project
 kernel (`weaver kernel restart --project <id>`; a running child pins the old
 key), and run `weaver mesh bind rebind` if the machine mesh service is
-installed. The old key is kept as `user.key.retired-<n>`; delete it yourself
+installed. A project kernel that keeps running after the rotation fails its
+next `mesh.register` (`pop_failed`) and is restarted by the supervisor's
+liveness pass after about 30 s beyond three missed beats; it is not
+re-certified in place. The old key is kept as `user.key.retired-<n>`; delete it yourself
 once you are satisfied. After a suspected compromise, also rekey or revoke the
 affected projects. Details: ADR-103 A13.
 
