@@ -403,3 +403,6 @@ pub fn parse_ack(result: &Value) -> Option<AnchorAck> {
 #[cfg(test)]
 #[path = "anchor_rpc_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "anchor_rpc_record_tests.rs"]
+mod record_tests;

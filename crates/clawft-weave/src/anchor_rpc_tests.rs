@@ -16,29 +16,29 @@ use crate::project_cert_rpc::{
     RegisterRequest, SpawnInfo, claim_nonce, issue_challenge, register, rekey, revoke, root_sha256,
 };
 
-fn user_key() -> SigningKey {
+pub(super) fn user_key() -> SigningKey {
     SigningKey::from_bytes(&[1u8; 32])
 }
 
-fn project_key() -> SigningKey {
+pub(super) fn project_key() -> SigningKey {
     SigningKey::from_bytes(&[2u8; 32])
 }
 
-fn t0() -> DateTime<Utc> {
+pub(super) fn t0() -> DateTime<Utc> {
     DateTime::parse_from_rfc3339("2026-10-01T09:30:00Z").unwrap().with_timezone(&Utc)
 }
 
-fn later(secs: i64) -> DateTime<Utc> {
+pub(super) fn later(secs: i64) -> DateTime<Utc> {
     t0() + Duration::seconds(secs)
 }
 
-struct Fx {
+pub(super) struct Fx {
     _t: tempfile::TempDir,
-    env: CertEnv,
-    id: String,
+    pub(super) env: CertEnv,
+    pub(super) id: String,
 }
 
-fn fixture() -> Fx {
+pub(super) fn fixture() -> Fx {
     let t = tempfile::tempdir().unwrap();
     let mdir = t.path().join("home/.weftos/projects");
     let root = t.path().join("proj");
@@ -53,7 +53,7 @@ fn fixture() -> Fx {
     Fx { _t: t, env, id: m.id }
 }
 
-fn certify(env: &CertEnv, id: &str, root: &Path, key: &SigningKey) {
+pub(super) fn certify(env: &CertEnv, id: &str, root: &Path, key: &SigningKey) {
     let n = issue_challenge(id).unwrap();
     let uk = clawft_types::project::cert::key_id(&user_key().verifying_key().to_bytes());
     register(
@@ -71,7 +71,7 @@ fn certify(env: &CertEnv, id: &str, root: &Path, key: &SigningKey) {
     .unwrap();
 }
 
-fn stmt(f: &Fx, seq: u64, prev: Option<String>, head_seq: u64, at: DateTime<Utc>) -> ProjectAnchorStmt {
+pub(super) fn stmt(f: &Fx, seq: u64, prev: Option<String>, head_seq: u64, at: DateTime<Utc>) -> ProjectAnchorStmt {
     ProjectAnchorStmt {
         project_id: f.id.clone(),
         project_key_id: String::new(),
@@ -88,7 +88,7 @@ fn stmt(f: &Fx, seq: u64, prev: Option<String>, head_seq: u64, at: DateTime<Utc>
     .sign(&project_key())
 }
 
-fn user_events(f: &Fx) -> usize {
+pub(super) fn user_events(f: &Fx) -> usize {
     f.env.chain.tail(0).iter().filter(|e| e.source == ANCHOR_SOURCE).count()
 }
 
@@ -239,33 +239,6 @@ fn refuses_a_stale_cert_serial_and_malformed_statements() {
     assert_eq!(submit(&f.env, &bad, later(10)).unwrap_err().kind(), "anchor_bad_statement");
 }
 
-#[test]
-fn accepted_anchor_survives_a_user_chain_lost_in_a_crash() {
-    let f = fixture();
-    let first = stmt(&f, 1, None, 10, later(5));
-    let a = submit(&f.env, &first, later(10)).unwrap();
-    // Same manifests (journal, certs, anchor file), a chain that was never saved.
-    let env2 = CertEnv {
-        chain: Arc::new(ChainManager::new(0, 100_000)),
-        user_key: user_key(),
-        manifests_dir: f.env.manifests_dir.clone(),
-    };
-    // Recovery re-appends the event: same statement, the rewritten ack.
-    let rec = last_accepted(&env2, &f.id).unwrap().unwrap();
-    assert_eq!(rec.statement, first);
-    let ev = env2.chain.tail(0).into_iter().find(|e| e.source == ANCHOR_SOURCE).unwrap();
-    assert_eq!((rec.user_seq, rec.user_event_hash.clone()), (ev.sequence, ident::hex(&ev.hash)));
-    let p = ev.payload.unwrap();
-    assert_eq!(p["recovered"], true);
-    assert_eq!(p["original_user_seq"], a.user_seq);
-    assert_eq!(p["original_user_event_hash"], a.user_event_hash);
-    // A resend after recovery returns the rewritten ack and adds no event.
-    assert_eq!(submit(&env2, &first, later(11)).unwrap(), rec);
-    assert_eq!(env2.chain.tail(0).iter().filter(|e| e.source == ANCHOR_SOURCE).count(), 1);
-    let next = stmt(&f, 2, Some(first.hash()), 20, later(6));
-    submit(&env2, &next, later(12)).unwrap();
-}
-
 /// A transport that calls the RPC logic in-process, with a switchable link
 /// and a clock the test sets.
 struct Direct {
@@ -347,7 +320,7 @@ fn project_to_user_daemon_end_to_end_with_an_outage() {
     );
 }
 
-fn rekey_to(f: &Fx, key: &SigningKey) {
+pub(super) fn rekey_to(f: &Fx, key: &SigningKey) {
     let n = issue_challenge(&f.id).unwrap();
     let uk = clawft_types::project::cert::key_id(&user_key().verifying_key().to_bytes());
     rekey(
@@ -435,52 +408,6 @@ fn rekey_then_restart_continues_the_anchor_chain_at_n_plus_one() {
 }
 
 #[test]
-fn a_file_ahead_of_the_chain_is_re_appended_at_startup() {
-    let f = fixture();
-    let first = stmt(&f, 1, None, 10, later(5));
-    let a = submit(&f.env, &first, later(10)).unwrap();
-    // A crash: the chain is back to what was saved (nothing), the file stays.
-    let env2 = CertEnv {
-        chain: Arc::new(ChainManager::new(0, 100_000)),
-        user_key: user_key(),
-        manifests_dir: f.env.manifests_dir.clone(),
-    };
-    // Post-crash events reuse sequence numbers: the old user_seq now names another event.
-    for _ in 0..=a.user_seq {
-        env2.chain.append("kernel", "other", None);
-    }
-    // Replay the identity events so the view still sees the project (journal + cert file do).
-    let fixed = reconcile(&env2).unwrap();
-    assert_eq!(fixed, vec![f.id.clone()]);
-    let ev = env2.chain.tail(0).into_iter().find(|e| e.source == ANCHOR_SOURCE).unwrap();
-    assert_eq!(ev.payload.as_ref().unwrap()["recovered"], true);
-    assert_eq!(ev.payload.as_ref().unwrap()["original_user_seq"], a.user_seq);
-    let now_last = last_accepted(&env2, &f.id).unwrap().unwrap();
-    assert_eq!(now_last.statement, first);
-    assert_eq!(now_last.user_seq, ev.sequence);
-    // The record now names the re-appended event, and a second pass changes nothing.
-    assert!(reconcile(&env2).unwrap().is_empty());
-    assert_eq!(env2.chain.tail(0).iter().filter(|e| e.source == ANCHOR_SOURCE).count(), 1);
-}
-
-#[test]
-fn a_tampered_anchor_record_is_ignored() {
-    let f = fixture();
-    let first = stmt(&f, 1, None, 10, later(5));
-    submit(&f.env, &first, later(10)).unwrap();
-    let path = anchor_file(&f.env.manifests_dir, &f.id);
-    let mut rec: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    rec["statement"]["head_seq"] = json!(999_999);
-    std::fs::write(&path, serde_json::to_vec(&rec).unwrap()).unwrap();
-    let env2 = CertEnv {
-        chain: Arc::new(ChainManager::new(0, 100_000)),
-        user_key: user_key(),
-        manifests_dir: f.env.manifests_dir.clone(),
-    };
-    assert_eq!(last_accepted(&env2, &f.id).unwrap(), None, "a forged record does not set the baseline");
-}
-
-#[test]
 fn authenticated_refusals_back_off_but_garbage_does_not() {
     let f = fixture();
     // Unsigned or badly signed garbage never counts.
@@ -499,66 +426,6 @@ fn authenticated_refusals_back_off_but_garbage_does_not() {
     let next = stmt(&f, 2, Some(first_hash), 20, later(6));
     assert_eq!(submit(&f.env, &next, later(11)).unwrap_err().kind(), "anchor_backoff");
     submit(&f.env, &next, later(13)).unwrap();
-}
-
-fn lost_chain_env(f: &Fx) -> CertEnv {
-    CertEnv {
-        chain: Arc::new(ChainManager::new(0, 100_000)),
-        user_key: user_key(),
-        manifests_dir: f.env.manifests_dir.clone(),
-    }
-}
-
-#[test]
-fn an_unwritable_record_still_yields_exactly_one_event() {
-    let f = fixture();
-    // A directory where the record file belongs: every write of it fails.
-    std::fs::create_dir(anchor_file(&f.env.manifests_dir, &f.id)).unwrap();
-    let s = stmt(&f, 1, None, 10, later(5));
-    assert_eq!(submit(&f.env, &s, later(10)).unwrap_err().kind(), "anchor_store");
-    // The event is on the chain and in the index: the retry is an identical resend.
-    let a = submit(&f.env, &s, later(11)).unwrap();
-    assert_eq!(a.statement, s);
-    assert_eq!(user_events(&f), 1, "no second project.anchor event");
-    // A refused store never counts towards the backoff.
-    for _ in 0..4 {
-        submit(&f.env, &s, later(12)).unwrap();
-    }
-    assert_eq!(user_events(&f), 1);
-}
-
-#[test]
-fn a_record_with_a_bad_rec_sig_is_ignored() {
-    let f = fixture();
-    submit(&f.env, &stmt(&f, 1, None, 10, later(5)), later(10)).unwrap();
-    let path = anchor_file(&f.env.manifests_dir, &f.id);
-    let mut rec: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    rec["user_seq"] = json!(77);
-    std::fs::write(&path, serde_json::to_vec(&rec).unwrap()).unwrap();
-    assert_eq!(last_accepted(&lost_chain_env(&f), &f.id).unwrap(), None);
-    // Unsigned records (or signed by another key) are ignored too.
-    rec["user_seq"] = json!(1);
-    rec.as_object_mut().unwrap().remove("rec_sig");
-    std::fs::write(&path, serde_json::to_vec(&rec).unwrap()).unwrap();
-    assert_eq!(last_accepted(&lost_chain_env(&f), &f.id).unwrap(), None);
-}
-
-#[test]
-fn a_compromise_revoked_statement_is_not_re_appended() {
-    let f = fixture();
-    submit(&f.env, &stmt(&f, 1, None, 10, later(5)), later(10)).unwrap();
-    revoke(&f.env, &json!({ "id": f.id })).unwrap();
-    let env2 = lost_chain_env(&f);
-    assert!(reconcile(&env2).unwrap().is_empty());
-    assert_eq!(env2.chain.tail(0).iter().filter(|e| e.source == ANCHOR_SOURCE).count(), 0);
-    assert_eq!(last_accepted(&env2, &f.id).unwrap(), None);
-
-    // A rekeyed-out key is history, not compromise: it is re-appended.
-    let g = fixture();
-    submit(&g.env, &stmt(&g, 1, None, 10, later(5)), later(10)).unwrap();
-    rekey_to(&g, &SigningKey::from_bytes(&[4u8; 32]));
-    let env3 = lost_chain_env(&g);
-    assert_eq!(reconcile(&env3).unwrap(), vec![g.id.clone()]);
 }
 
 #[test]
