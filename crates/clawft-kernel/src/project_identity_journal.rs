@@ -109,17 +109,18 @@ impl IdentityJournal {
     /// `init` record, so from then on a missing journal is an error.
     pub fn lock(&self) -> Result<JournalLock, IdentityError> {
         let fresh = !self.lock_path().exists() && !self.path().exists();
-        let lock = self
-            .lock_inner(false, false)?
-            .map(|f| JournalLock { _file: f })
-            .ok_or_else(|| IdentityError::Io(std::io::ErrorKind::WouldBlock.into()))?;
         if fresh {
+            // Journal first, lock file second: a crash between the two
+            // leaves a journal without a lock file (harmless), never a lock
+            // file without a journal.
             match write_private_atomic(&self.path(), &init_line(), true) {
                 Ok(()) | Err(IdentityError::Exists(_)) => {}
                 Err(e) => return Err(e),
             }
         }
-        Ok(lock)
+        self.lock_inner(false, false)?
+            .map(|f| JournalLock { _file: f })
+            .ok_or_else(|| IdentityError::Io(std::io::ErrorKind::WouldBlock.into()))
     }
 
     /// Take the exclusive lock if free; `None` when someone holds it.
@@ -261,6 +262,18 @@ impl IdentityJournal {
         f.write_all(&line)?;
         f.sync_all()?;
         Ok(())
+    }
+
+    /// Every record of the journal that parses, line by line, ignoring any
+    /// line that does not (a torn tail must not hide earlier records).
+    /// Unverified: the caller rebuilds a view, which re-verifies certificates.
+    pub fn salvage(&self, _lock: &JournalLock) -> Vec<JournalRecord> {
+        let Ok(Some(bytes)) = self.read_bytes() else { return Vec::new() };
+        String::from_utf8_lossy(&bytes)
+            .lines()
+            .filter_map(|l| serde_json::from_str::<JournalRecord>(l).ok())
+            .filter(|r| !matches!(r, JournalRecord::Init {}))
+            .collect()
     }
 
     /// Repair: move the current journal (if any) aside as

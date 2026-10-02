@@ -394,3 +394,27 @@ fn distinct_non_utf8_roots_hash_differently() {
     assert_ne!(a, b);
     assert_eq!(a, ident::hex(&Sha256::digest(b"/tmp/\xff")));
 }
+
+#[test]
+fn repair_keeps_journal_only_revocations_before_a_torn_tail() {
+    use std::io::Write as _;
+    let f = fixture();
+    register(&f.env, request(&f, &project_key(2)), now()).unwrap();
+    revoke(&f.env, &json!({"id": f.id})).unwrap();
+    let jpath = IdentityJournal::new(&f.env.manifests_dir).path();
+    std::fs::OpenOptions::new().append(true).open(&jpath).unwrap().write_all(b"{\"op\":\"rev").unwrap();
+    let r = restarted(&f);
+    assert_eq!(current_view(&r).unwrap_err().kind(), "journal_corrupt");
+    repair(&r).unwrap();
+    assert_eq!(register(&r, request(&f, &project_key(2)), now()).unwrap_err().kind(), "key_revoked");
+}
+
+#[test]
+fn an_unreadable_manifests_dir_fails_closed() {
+    let f = fixture();
+    let missing = f._t.path().join("no/such/dir");
+    assert!(store_read_certs(&missing).unwrap().is_empty());
+    let file = f._t.path().join("a-file");
+    std::fs::write(&file, b"x").unwrap();
+    assert!(store_read_certs(&file).is_err());
+}

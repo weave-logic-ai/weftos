@@ -48,6 +48,8 @@ use crate::rpc_ext::{ExtCall, ExtCtx, ExtFuture};
 #[path = "project_cert_store.rs"]
 mod store;
 use store::current_view_locked;
+#[cfg(test)]
+use store::read_cert_files as store_read_certs;
 pub use store::{current_view, repair};
 
 #[path = "project_cert_nonce.rs"]
