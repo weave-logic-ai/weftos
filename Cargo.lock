@@ -1643,6 +1643,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "clawft-mesh-local"
+version = "0.8.1"
+dependencies = [
+ "clawft-mesh-local",
+ "ed25519-dalek",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "clawft-mesh-service"
+version = "0.8.1"
+dependencies = [
+ "clawft-mesh-local",
+ "clawft-mesh-service",
+ "ed25519-dalek",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "clawft-platform"
 version = "0.8.1"
 dependencies = [

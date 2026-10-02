@@ -1,0 +1,25 @@
+//! WeftOS machine mesh service building blocks (ADR-103, Phase 3).
+//!
+//! Package J provides the machine journal ([`journal`]) and the bindings
+//! folded from it ([`bindings`]). The service itself (package S) builds on
+//! these.
+//!
+//! This crate must not depend on `clawft-kernel`.
+
+// The `testing` feature adds a write-failure seam; it must never ship.
+#[cfg(all(feature = "testing", not(debug_assertions)))]
+compile_error!("clawft-mesh-service: the `testing` feature must not be enabled in release builds");
+
+mod bind_events;
+mod chain;
+pub mod bindings;
+mod fsutil;
+mod lost;
+pub mod journal;
+
+pub use bindings::{BindError, BindHow, BindMeta, Bindings, Check, ConflictReason};
+pub use journal::{AdminAck, Head, Journal, JournalError, JournalOptions, Record};
+pub use lost::LostInfo;
+
+#[cfg(test)]
+mod tests_internal;

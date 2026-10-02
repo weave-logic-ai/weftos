@@ -1,0 +1,31 @@
+[package]
+name = "clawft-mesh-service"
+version.workspace = true
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "WeftOS machine mesh service: signed hash-chained journal and the principal/key bindings folded from it (ADR-103)"
+
+# Deliberately no clawft-kernel dependency (and so no exochain, cluster,
+# tilezero or ecc): the machine service must stay free of owned-state subsystems.
+[dependencies]
+clawft-mesh-local = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ed25519-dalek = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[features]
+# Test seams (write-failure injection). Never enabled in production builds.
+testing = []
+
+[dev-dependencies]
+clawft-mesh-service = { path = ".", features = ["testing"] }
+tempfile = { workspace = true }

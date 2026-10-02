@@ -831,6 +831,21 @@ check_kernel_ecc_rejected_on_wasm() {
 }
 
 cmd_check() {
+    # `check <pkg>…` scopes to the named packages (fast loop for new crates);
+    # the kernel wasm gates below only run for the whole-workspace check.
+    if [ ${#TEST_PACKAGES[@]} -gt 0 ]; then
+        local scope=() pkg
+        for pkg in "${TEST_PACKAGES[@]}"; do scope+=(-p "$pkg"); done
+        header "Running cargo check ${scope[*]}${FEATURES:+ --features $FEATURES}"
+        timer_start
+        if [ -n "$FEATURES" ]; then
+            run_cmd cargo check "${scope[@]}" --features "$FEATURES"
+        else
+            run_cmd cargo check "${scope[@]}"
+        fi
+        timer_end
+        return 0
+    fi
     header "Running cargo check --workspace${FEATURES:+ --features $FEATURES}"
     timer_start
     if [ -n "$FEATURES" ]; then
@@ -2040,7 +2055,8 @@ parse_args() {
     # Capture positional args for test command (package scoping):
     #   scripts/build.sh test [<package>…]
     #   scripts/build.sh clippy [<package>…]
-    if [ "$COMMAND" = "test" ] || [ "$COMMAND" = "clippy" ]; then
+    #   scripts/build.sh check [<package>…]
+    if [ "$COMMAND" = "test" ] || [ "$COMMAND" = "clippy" ] || [ "$COMMAND" = "check" ]; then
         while [ $# -gt 0 ] && [[ "$1" != --* ]]; do
             TEST_PACKAGES+=("$1")
             shift
