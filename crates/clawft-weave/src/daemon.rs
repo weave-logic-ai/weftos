@@ -3266,11 +3266,10 @@ pub async fn run(
                                 // ADR-070 owner model, now verified: literal
                                 // scopes only work for a peer with our uid.
                                 // Unknown credentials fail closed.
-                                let peer_untrusted = stream
-                                    .peer_cred()
-                                    .map(|c| c.uid() != nix::unistd::geteuid().as_raw())
-                                    .unwrap_or(true);
-                                tokio::spawn(handle_connection_peer(stream, k, tx, peer_untrusted));
+                                // A supervised project kernel (same uid) is
+                                // classified by its process group (review S9).
+                                let peer = crate::child_peer::classify_peer(stream.peer_cred());
+                                tokio::spawn(handle_connection_classed(stream, k, tx, peer));
                             }
                             Err(e) => {
                                 error!("accept error: {e}");
@@ -3637,10 +3636,26 @@ pub async fn handle_connection<S>(
 /// [`handle_connection`] with the peer-credential verdict: `true` when the
 /// peer is known not to be the daemon's uid (see `CallerCtx::peer_untrusted`).
 pub async fn handle_connection_peer<S>(
-    mut stream: S,
+    stream: S,
     kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
     shutdown_tx: watch::Sender<bool>,
     peer_untrusted: bool,
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    use crate::child_peer::PeerClass;
+    let peer = if peer_untrusted { PeerClass::OtherUid } else { PeerClass::Owner };
+    handle_connection_classed(stream, kernel, shutdown_tx, peer).await;
+}
+
+/// [`handle_connection_peer`] with the full peer classification
+/// ([`crate::child_peer::PeerClass`]): the accept loop uses it so a
+/// supervised child's literal scopes are ignored (ADR-103 A12).
+pub async fn handle_connection_classed<S>(
+    mut stream: S,
+    kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+    shutdown_tx: watch::Sender<bool>,
+    peer: crate::child_peer::PeerClass,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -3652,11 +3667,11 @@ pub async fn handle_connection_peer<S>(
 
     #[cfg(feature = "rvf-rpc")]
     if &header == b"RVFS" {
-        return handle_rvf_connection(stream, kernel, shutdown_tx, peer_untrusted).await;
+        return handle_rvf_connection(stream, kernel, shutdown_tx, peer).await;
     }
 
     // JSON mode: the 4 header bytes are the start of the first JSON line.
-    handle_json_connection(header, stream, kernel, shutdown_tx, peer_untrusted).await;
+    handle_json_connection(header, stream, kernel, shutdown_tx, peer).await;
 }
 
 /// Outcome of dispatching a single JSON-line request.
@@ -3727,6 +3742,15 @@ async fn resolve_caller_capabilities(
     }
 
     if is_literal_scope(token) {
+        // A supervised project kernel's literal scope (ADR-070 same-uid
+        // shortcut) is ignored, not refused: it is anonymous, and only its
+        // project token counts (review S9). The client library stamps every
+        // call with "admin", and the child's read-level parent calls
+        // (`kernel.handshake`, `mesh.*`, `project.anchor.submit`) must work.
+        if caller.peer_child {
+            tracing::warn!("rpc auth: literal scope from a supervised project kernel's process group; treating as anonymous");
+            return CallerCapabilities::anonymous();
+        }
         if caller.peer_untrusted {
             tracing::warn!("rpc auth: literal scope from a peer that is not the daemon uid; denying");
             return CallerCapabilities::denied();
@@ -3765,6 +3789,7 @@ async fn authorize_caller(
     // uid than the CLI user denies the CLI's implicit "admin". Say so
     // instead of a bare permission error.
     if caller.peer_untrusted
+        && !caller.peer_child
         && caller
             .auth
             .as_deref()
@@ -3834,7 +3859,7 @@ async fn dispatch_json_line<W>(
     kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
     shutdown_tx: &watch::Sender<bool>,
     writer: &mut W,
-    peer_untrusted: bool,
+    peer: crate::child_peer::PeerClass,
 ) -> DispatchOutcome
 where
     W: AsyncWriteExt + Unpin,
@@ -3861,7 +3886,7 @@ where
             // extension gates) for every entry path, before any streaming
             // intercept or dispatch.
             let mut caller =
-                crate::rpc_ext::CallerCtx::from_request(&req).with_peer_untrusted(peer_untrusted);
+                crate::rpc_ext::CallerCtx::from_request(&req).with_peer(peer);
             // ADR-103 D14: refuse an unsupported `proto` / malformed
             // `project` before anything else looks at the request.
             let (caps, denial) = if let Some(refusal) =
@@ -3963,7 +3988,7 @@ async fn handle_json_connection<S>(
     stream: S,
     kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
     shutdown_tx: watch::Sender<bool>,
-    peer_untrusted: bool,
+    peer: crate::child_peer::PeerClass,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -3976,7 +4001,7 @@ async fn handle_json_connection<S>(
         return;
     }
     let first_line = format!("{}{}", String::from_utf8_lossy(&prefix), rest_of_first);
-    match dispatch_json_line(&first_line, &kernel, &shutdown_tx, &mut writer, peer_untrusted).await {
+    match dispatch_json_line(&first_line, &kernel, &shutdown_tx, &mut writer, peer).await {
         DispatchOutcome::Continue => {}
         DispatchOutcome::Stop => return,
         DispatchOutcome::StreamSubscribe {
@@ -3997,7 +4022,7 @@ async fn handle_json_connection<S>(
             Ok(_) => {}
             Err(_) => break,
         }
-        match dispatch_json_line(&line, &kernel, &shutdown_tx, &mut writer, peer_untrusted).await {
+        match dispatch_json_line(&line, &kernel, &shutdown_tx, &mut writer, peer).await {
             DispatchOutcome::Continue => {}
             DispatchOutcome::Stop => break,
             DispatchOutcome::StreamSubscribe {
@@ -4560,7 +4585,7 @@ async fn handle_rvf_connection<S>(
     stream: S,
     kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
     shutdown_tx: watch::Sender<bool>,
-    peer_untrusted: bool,
+    peer: crate::child_peer::PeerClass,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -4586,7 +4611,7 @@ async fn handle_rvf_connection<S>(
             Ok(req) => {
                 let id = req.id.clone();
                 let caller = crate::rpc_ext::CallerCtx::from_request(&req)
-                    .with_peer_untrusted(peer_untrusted);
+                    .with_peer(peer);
                 if let Some(refusal) =
                     crate::handshake_rpc::envelope_refusal(&req.method, req.proto, req.project.as_deref())
                 {
@@ -9962,3 +9987,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "daemon_peer_tests.rs"]
+mod peer_tests;

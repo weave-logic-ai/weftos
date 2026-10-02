@@ -37,7 +37,10 @@ pub enum TokenAction {
         #[arg(long, default_value = "playground")]
         label: String,
 
-        /// Scope the token to a project (ULID).
+        /// Scope the token to a project (ULID). The daemon treats it as the
+        /// request's project and refuses a request that names another
+        /// (`project_scope_mismatch`). It is a claim guard, not a capability
+        /// limit: the token still carries owner scope.
         #[arg(long)]
         project: Option<String>,
 

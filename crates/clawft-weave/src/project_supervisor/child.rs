@@ -241,6 +241,20 @@ impl Launcher {
         }
     }
 
+    /// Pids of every live supervised child. Each leads its own process group
+    /// (`process_group(0)`), so a peer whose pgid is one of these belongs to
+    /// that child (`child_peer`, review S9).
+    pub fn supervised_pids(&self) -> Vec<u32> {
+        self.procs()
+            .values()
+            .filter_map(|e| match &e.proc {
+                Proc::Owned { pid, exit } if exit.borrow().is_none() => Some(*pid),
+                Proc::Adopted { pid } if adopted_alive(*pid) => Some(*pid),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Wait until the child of `id` is gone and say how it ended.
     pub async fn wait_exit(&self, id: &str) -> ExitInfo {
         enum W {
