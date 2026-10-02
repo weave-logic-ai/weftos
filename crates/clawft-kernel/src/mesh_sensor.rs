@@ -14,7 +14,14 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "exochain")]
 use crate::chain::EVENT_KIND_MESH_SENSOR_FRAME;
+
+/// Same value as `chain::EVENT_KIND_MESH_SENSOR_FRAME`, which only exists
+/// with `exochain`; this keeps the mesh modules buildable without it
+/// (`check-mesh-only`). A test under `exochain` guards drift.
+#[cfg(not(feature = "exochain"))]
+const EVENT_KIND_MESH_SENSOR_FRAME: &str = "mesh.sensor.v1.frame";
 use crate::mesh_framing::{FrameType, MeshFrame};
 use crate::process::{Pid, ProcessTable};
 use crate::topic::TopicRouter;
@@ -329,6 +336,12 @@ impl Default for SensorTopicBus {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "exochain")]
+    #[test]
+    fn frame_event_kind_matches_non_exochain_copy() {
+        assert_eq!(super::EVENT_KIND_MESH_SENSOR_FRAME, "mesh.sensor.v1.frame");
+    }
+
     use super::*;
 
     #[test]

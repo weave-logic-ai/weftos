@@ -76,13 +76,14 @@ pub struct MerkleProof {
 
 impl MerkleProof {
     /// Structural validation (non-empty fields). For full cryptographic
-    /// verification use [`Self::from_inclusion`] +
-    /// [`exo_resource_tree::MerkleInclusionProof::verify`] (WEFT-106).
+    /// verification use `from_inclusion` +
+    /// `exo_resource_tree::MerkleInclusionProof::verify` (WEFT-106).
     pub fn verify(&self) -> bool {
         !self.path.is_empty() && !self.node_hash.is_empty() && !self.root_hash.is_empty()
     }
 
     /// Build a wire-format proof from a cryptographic inclusion proof.
+    #[cfg(feature = "exochain")]
     pub fn from_inclusion(proof: &exo_resource_tree::MerkleInclusionProof) -> Self {
         let sibling_hashes: Vec<String> = proof
             .levels
