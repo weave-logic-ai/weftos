@@ -31,7 +31,7 @@ const MAX_SPAWN_BYTES: u64 = 64 * 1024;
 /// (package F's parent link) keep working when this grows.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpawnFile {
-    /// Single-use spawn nonce, 32 lowercase hex.
+    /// Single-use spawn nonce, 32 or 64 lowercase hex.
     pub nonce: String,
     /// The user daemon's socket.
     pub parent_socket: PathBuf,
@@ -111,8 +111,8 @@ impl SpawnFile {
     pub fn validate(&self) -> Result<(), SpawnError> {
         let bad = |m: &str| Err(SpawnError::Invalid(m.to_owned()));
         let hex = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
-        if !hex(&self.nonce, 32) {
-            return bad("`nonce` must be 32 lowercase hex characters");
+        if !(hex(&self.nonce, 32) || hex(&self.nonce, 64)) {
+            return bad("`nonce` must be 32 or 64 lowercase hex characters");
         }
         if !hex(&self.user_pubkey, 64) {
             return bad("`user_pubkey` must be 64 lowercase hex characters");
