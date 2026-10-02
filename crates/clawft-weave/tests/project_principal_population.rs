@@ -29,12 +29,45 @@ fn crates_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
 }
 
+/// Module declarations in `text`: `(file name or module name, gated)`.
+/// `gated` means a `#[cfg(..test..)]` attribute precedes it. A
+/// `#[path = "dir/x_tests.rs"] mod m;` gives `x_tests.rs`; a plain `mod m;`
+/// gives `m`.
+fn declarations(text: &str) -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    let (mut gated, mut path): (bool, Option<String>) = (false, None);
+    for l in text.lines().map(str::trim) {
+        if l.starts_with("#[") {
+            if l.starts_with("#[cfg(") && l.contains("test") {
+                gated = true;
+            }
+            if l.starts_with("#[path") {
+                path = l.split('"').nth(1).map(|p| p.rsplit('/').next().unwrap_or("").to_owned());
+            }
+            continue;
+        }
+        let item = l.strip_prefix("pub(crate) ").or_else(|| l.strip_prefix("pub ")).unwrap_or(l);
+        if let Some(r) = item.strip_prefix("mod ") {
+            let name = r.split(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or("");
+            out.push((path.take().unwrap_or_else(|| name.to_owned()), gated));
+        }
+        if !l.is_empty() {
+            gated = false;
+            path = None;
+        }
+    }
+    out
+}
+
 struct Src {
     /// Path under `crates/`, `/`-separated.
     path: String,
     /// Comments removed; test modules removed unless `is_test_file`.
     prod: String,
     is_test_file: bool,
+    /// Named like a unit-test file but no non-test file of its crate
+    /// declares it through `#[cfg(test)] mod` / `#[path]`.
+    undeclared_test_file: bool,
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -129,16 +162,56 @@ fn sources() -> Vec<Src> {
         if build.is_file() {
             files.push(build);
         }
+        // (rel, text, named_test, integration)
+        let mut loaded: Vec<(String, String, bool, bool)> = Vec::new();
         for p in files {
             let rel = p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
             let name = p.file_name().unwrap().to_string_lossy().into_owned();
-            let is_test_file = name.ends_with("_tests.rs")
-                || name == "tests.rs"
-                || name.starts_with("tests_")
-                || rel.split('/').nth(1) == Some("tests");
+            let parts: Vec<&str> = rel.split('/').collect();
+            let integration = parts.get(1) == Some(&"tests");
+            // A unit-test file: by name, or inside a `tests/` directory of `src`.
+            let in_src_tests_dir = parts.get(1) == Some(&"src") && parts[2..parts.len() - 1].contains(&"tests");
+            let named_test = name.ends_with("_tests.rs") || name == "tests.rs" || name.starts_with("tests_") || in_src_tests_dir;
             let text = strip_comments(&std::fs::read_to_string(&p).unwrap());
+            loaded.push((rel, text, named_test, integration));
+        }
+        // Declared names: `#[cfg(test)]`-gated declarations in non-test files,
+        // then, transitively, every declaration inside a declared test file.
+        let key = |rel: &str| -> Vec<String> {
+            let name = rel.rsplit('/').next().unwrap().to_owned();
+            let stem = name.trim_end_matches(".rs").to_owned();
+            let dir = rel.rsplit('/').nth(1).unwrap_or("").to_owned();
+            if name == "mod.rs" { vec![dir] } else { vec![stem, name] }
+        };
+        let mut declared: Vec<String> = loaded
+            .iter()
+            .filter(|(_, _, named, integ)| !named && !integ)
+            .flat_map(|(_, t, _, _)| declarations(t))
+            .filter(|(_, gated)| *gated)
+            .map(|(n, _)| n)
+            .collect();
+        loop {
+            let before = declared.len();
+            for (rel, text, named, integ) in &loaded {
+                if *named && !*integ && key(rel).iter().any(|k| declared.contains(k)) {
+                    for (n, _) in declarations(text) {
+                        if !declared.contains(&n) {
+                            declared.push(n);
+                        }
+                    }
+                }
+            }
+            if declared.len() == before {
+                break;
+            }
+        }
+        for (rel, text, named_test, integration) in loaded {
+            let declared_ok = key(&rel).iter().any(|k| declared.contains(k));
+            let undeclared_test_file = named_test && !integration && !declared_ok;
+            // Exempt only integration tests and declared unit-test files.
+            let is_test_file = integration || (named_test && declared_ok);
             let prod = if is_test_file { text } else { strip_test_modules(&text) };
-            v.push(Src { path: rel, prod, is_test_file });
+            v.push(Src { path: rel, prod, is_test_file, undeclared_test_file });
         }
     }
     v
@@ -174,6 +247,14 @@ fn assigns_project_id(text: &str) -> Option<usize> {
         from = at + pat.len();
     }
     None
+}
+
+#[test]
+fn every_exempt_test_file_is_declared_by_a_cfg_test_mod_or_path() {
+    let bad: Vec<String> = sources().into_iter().filter(|s| s.undeclared_test_file).map(|s| s.path).collect();
+    assert!(bad.is_empty(), "test-named files not declared via #[cfg(test)] mod / #[path]: {bad:?}");
+    let d = declarations("#[cfg(test)]\n#[path = \"a/b_tests.rs\"]\nmod tests;\n#[cfg(all(test, unix))]\nmod x {}\nmod plain;");
+    assert_eq!(d, [("b_tests.rs".to_owned(), true), ("x".to_owned(), true), ("plain".to_owned(), false)]);
 }
 
 #[test]

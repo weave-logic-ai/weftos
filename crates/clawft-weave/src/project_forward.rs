@@ -66,6 +66,8 @@ pub enum ForwardError {
     /// The header names a project other than the one this kernel serves.
     WrongProject,
     /// The header was signed for another child (key id) than this one.
+    /// Reserved kind: the target is inside the signed bytes, so today a
+    /// mis-targeted header is reported as `forward_bad_signature`.
     WrongTarget,
     /// `issued_at_ms` is more than [`FORWARD_WINDOW_MS`] from now.
     OutsideWindow,
@@ -114,6 +116,12 @@ pub struct ForwardBinding<'a> {
     pub target_key_id: &'a str,
 }
 
+/// The signed bytes are newline-joined, so no field may contain a newline
+/// (a method with one could shift bytes between fields).
+fn fields_ok(project_id: &str, b: &ForwardBinding<'_>) -> bool {
+    ![project_id, b.method, b.target_key_id].iter().any(|f| f.contains('\n'))
+}
+
 fn signed_bytes(project_id: &str, issued_at_ms: u64, b: &ForwardBinding<'_>) -> Vec<u8> {
     let params_hash = hex::encode(Sha256::digest(canonical_json(b.params).as_bytes()));
     format!(
@@ -129,33 +137,41 @@ pub fn sign_forward(
     project_id: &str,
     issued_at_ms: u64,
     binding: &ForwardBinding<'_>,
-) -> ForwardHeader {
+) -> Result<ForwardHeader, ForwardError> {
+    if !fields_ok(project_id, binding) {
+        return Err(ForwardError::Malformed);
+    }
     let sig = user_key.sign(&signed_bytes(project_id, issued_at_ms, binding));
-    ForwardHeader {
+    Ok(ForwardHeader {
         project_id: project_id.to_owned(),
         issued_at_ms,
         sig: hex::encode(sig.to_bytes()),
-    }
+    })
 }
 
 /// User-daemon side: stamp `req` (a call proxied to `project_id`'s kernel
 /// whose key id is `target_key_id`) with a fresh forward header bound to its
 /// method and params. Also pins `req.project` to the same id.
+///
+/// The proxy must call this as its LAST step, after any rewriting of the
+/// method or params: the header covers exactly the bytes it is given here,
+/// so a later change makes the child refuse the call.
 pub fn stamp_forward(
     req: &mut clawft_rpc::Request,
     user_key: &SigningKey,
     project_id: &str,
     target_key_id: &str,
     now_ms: u64,
-) {
+) -> Result<(), ForwardError> {
     let binding = ForwardBinding {
         method: &req.method,
         params: &req.params,
         target_key_id,
     };
-    let header = sign_forward(user_key, project_id, now_ms, &binding);
+    let header = sign_forward(user_key, project_id, now_ms, &binding)?;
     req.project = Some(project_id.to_owned());
     req.forward = Some(header);
+    Ok(())
 }
 
 /// Child side: verifies forward headers for one bound project.
@@ -191,6 +207,9 @@ impl ForwardVerifier {
         now_ms: u64,
         now: Instant,
     ) -> Result<VerifiedProject, ForwardError> {
+        if !fields_ok(&header.project_id, binding) {
+            return Err(ForwardError::Malformed);
+        }
         let sig_bytes: [u8; 64] = hex::decode(&header.sig)
             .ok()
             .and_then(|b| b.try_into().ok())
@@ -210,8 +229,12 @@ impl ForwardVerifier {
         let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
         let keep = Duration::from_millis(2 * FORWARD_WINDOW_MS);
         seen.retain(|_, at| now.saturating_duration_since(*at) <= keep);
-        if seen.insert(header.sig.clone(), now).is_some() {
-            return Err(ForwardError::Replayed);
+        match seen.entry(header.sig.clone()) {
+            // A replay does not refresh the entry's age.
+            std::collections::hash_map::Entry::Occupied(_) => return Err(ForwardError::Replayed),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(now);
+            }
         }
         Ok(VerifiedProject::from_verified_forward(header.project_id.clone()))
     }
