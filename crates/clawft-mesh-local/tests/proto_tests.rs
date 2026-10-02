@@ -21,7 +21,7 @@ fn all_messages() -> Vec<Message> {
         Message::Hello { proto_min: 1, proto_max: 2, features: vec!["a".into()], role: Role::Admin, build_sha: "s".into(), exe: "/x".into(), pid: 7, client_nonce: [8; 32] },
         Message::HelloAck(HelloAck { proto: 1, features: vec![], node_id: "n".into(), machine_pubkey: [5; 32], service_build_sha: "s".into(), deprecated_below: Some(1), uid: 501, challenge: [6; 32], machine_sig: [7; 64] }),
         Message::Error(ErrorBody::new(ErrorKind::BindPending, "m", "r")),
-        Message::Register(RegisterReq { user_pubkey: [2; 32], sig: [9; 64], addresses: Addresses { user_id: "u".into(), projects: vec![pb.clone()] }, topic_prefixes: vec!["p".into()], capabilities: vec!["c".into()], version: "1".into(), build_sha: "s".into() }),
+        Message::Register(RegisterReq { user_pubkey: [2; 32], sig: [9; 64], addresses: Addresses { user_id: "u".into(), projects: vec![pb.clone()] }, topic_prefixes: vec!["p".into()], capabilities: vec!["c".into()], version: "1".into(), build_sha: "s".into(), accept_from: vec![] }),
         Message::RegisterAck(RegisterAck { user_id: "u".into(), cert: cert(), accepted: Accepted { addresses: vec!["a".into()], topic_prefixes: vec![] }, rejected: vec![Rejected { what: "w".into(), reason: "r".into() }], bind: BindState::Pending }),
         Message::Renew {},
         Message::Cert { cert: cert() },
@@ -39,7 +39,7 @@ fn all_messages() -> Vec<Message> {
         Message::Status {}, Message::PeersList {}, Message::FactsGet {},
         Message::Reply { data: json!({"a": 1}) },
         Message::BindingsList {},
-        Message::BindApprove { uid: 1 },
+        Message::BindApprove { uid: 1, user_id: None },
         Message::BindRevoke { uid: 1, reason: "r".into() },
         Message::BindRebind { uid: 1, user_pubkey: Some("k".into()) },
         Message::PeerRevoke { node_id: "n".into(), reason: "r".into() },
@@ -149,7 +149,7 @@ fn register_signature_binds_challenge_uid_and_node() {
     let key = SigningKey::from_bytes(&[11; 32]);
     let (challenge, node, uid) = ([1u8; 32], "n".repeat(32), Principal::Uid(501));
     let sig = key.sign(&register_signing_bytes(&challenge, &uid, &node)).to_bytes();
-    let req = RegisterReq { user_pubkey: key.verifying_key().to_bytes(), sig, addresses: Addresses { user_id: "u".into(), projects: vec![] }, topic_prefixes: vec![], capabilities: vec![], version: String::new(), build_sha: String::new() };
+    let req = RegisterReq { user_pubkey: key.verifying_key().to_bytes(), sig, addresses: Addresses { user_id: "u".into(), projects: vec![] }, topic_prefixes: vec![], capabilities: vec![], version: String::new(), build_sha: String::new(), accept_from: vec![] };
     assert!(verify_register_sig(&req, &challenge, &uid, &node));
     assert!(!verify_register_sig(&req, &[2u8; 32], &uid, &node), "other challenge");
     assert!(!verify_register_sig(&req, &challenge, &Principal::Uid(502), &node), "other uid");

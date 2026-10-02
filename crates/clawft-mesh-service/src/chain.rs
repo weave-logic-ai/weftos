@@ -80,3 +80,31 @@ pub(crate) fn scan(files: &[PathBuf], key: &SigningKey) -> Result<Scan, JournalE
     }
     Ok(s)
 }
+
+/// Result of a read-only verification pass over a state directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifyReport {
+    pub records: u64,
+    pub head_seq: Option<u64>,
+    pub head_hash: Option<String>,
+    /// First bad record (`file`, `reason`); `None` when the whole chain verifies.
+    pub bad: Option<(String, String)>,
+}
+
+/// Verify every hash link and signature under `dir` without modifying or
+/// locking anything (unlike [`crate::Journal::open`], which quarantines a bad
+/// tail). Callers that race a writer must serialise with it.
+pub fn verify_dir(dir: &std::path::Path, key: &SigningKey) -> Result<VerifyReport, JournalError> {
+    let mut files: Vec<PathBuf> = crate::journal::segments(dir)?.into_iter().map(|(_, p)| p).collect();
+    let active = dir.join(crate::journal::ACTIVE);
+    if std::fs::symlink_metadata(&active).is_ok() {
+        files.push(active);
+    }
+    let sc = scan(&files, key)?;
+    Ok(VerifyReport {
+        records: sc.records.len() as u64,
+        head_seq: sc.records.last().map(|r| r.seq),
+        head_hash: (!sc.records.is_empty()).then(|| hexser::encode(&sc.prev_hash)),
+        bad: sc.bad.map(|(fi, _, reason)| (files[fi].display().to_string(), reason)),
+    })
+}

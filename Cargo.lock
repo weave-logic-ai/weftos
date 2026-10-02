@@ -1661,15 +1661,22 @@ dependencies = [
 name = "clawft-mesh-service"
 version = "0.8.1"
 dependencies = [
+ "async-trait",
+ "clawft-kernel",
  "clawft-mesh-local",
  "clawft-mesh-service",
+ "clawft-types",
  "ed25519-dalek",
  "libc",
+ "rand 0.8.7",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
 ]
 
 [[package]]
@@ -2126,6 +2133,7 @@ dependencies = [
  "clawft-graphify",
  "clawft-kernel",
  "clawft-mesh-local",
+ "clawft-mesh-service",
  "clawft-platform",
  "clawft-rpc",
  "clawft-service-agent",

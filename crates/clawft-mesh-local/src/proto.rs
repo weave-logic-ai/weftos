@@ -65,6 +65,10 @@ pub enum ErrorKind {
     ScopeRequired,
     UnknownScope,
     Unsupported,
+    /// `send` named a node that is not connected.
+    PeerUnreachable,
+    /// The request was well-formed JSON but not a valid request.
+    BadRequest,
     /// A kind this build does not know; treated as non-fatal.
     #[serde(other)]
     Unknown,
@@ -168,6 +172,10 @@ pub struct RegisterReq {
     pub version: String,
     #[serde(default)]
     pub build_sha: String,
+    /// User ids (32 hex) or `"*"` whose daemons may send to this one through
+    /// the service. Default empty: no other tenant may send here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accept_from: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -337,7 +345,13 @@ pub enum Message {
     #[serde(rename = "bindings.list")]
     BindingsList {},
     #[serde(rename = "bind.approve")]
-    BindApprove { uid: u32 },
+    BindApprove {
+        uid: u32,
+        /// `user_id` (key fingerprint) of the pending key the admin looked at;
+        /// the service refuses when the pending key is a different one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_id: Option<String>,
+    },
     #[serde(rename = "bind.revoke")]
     BindRevoke { uid: u32, #[serde(default)] reason: String },
     #[serde(rename = "bind.rebind")]
@@ -356,6 +370,19 @@ pub enum Message {
         admission: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cluster_owner_uid: Option<u32>,
+    },
+    /// Admin: re-verify the journal's hash chain and signatures.
+    #[serde(rename = "journal.verify")]
+    JournalVerify {},
+    /// Admin: acknowledge a quarantined journal tail (`weaver mesh journal
+    /// verify --accept-truncate`). `quarantine_seq` names the pending
+    /// `journal.quarantine` record; `floor` can only raise the serial floor.
+    #[serde(rename = "journal.accept_truncate")]
+    JournalAcceptTruncate {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quarantine_seq: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        floor: Option<u64>,
     },
     #[serde(rename = "ping")]
     Ping {},

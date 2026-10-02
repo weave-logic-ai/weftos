@@ -20,7 +20,7 @@ fn u(n: u32) -> Principal {
     Principal::Uid(n)
 }
 fn ack() -> AdminAck {
-    AdminAck::admin_verified(u(0))
+    AdminAck::for_tests(u(0))
 }
 
 fn tmpdir() -> tempfile::TempDir {

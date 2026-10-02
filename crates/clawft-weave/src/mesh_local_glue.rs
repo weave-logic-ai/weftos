@@ -168,6 +168,9 @@ pub fn build_endpoint_in(
         topic_prefixes: vec![format!("user/{user_id}/")],
         capabilities: vec!["a2a".to_owned()],
         version: env!("CARGO_PKG_VERSION").to_owned(),
+        // No other local tenant may send to this user unless configured;
+        // the service refuses cross-tenant sends by default (P3 S).
+        accept_from: Vec::new(),
     };
     Ok(Some(ServiceEndpoint { client, user_key, register }))
 }

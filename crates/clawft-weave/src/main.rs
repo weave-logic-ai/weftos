@@ -53,6 +53,10 @@ enum Commands {
     /// Governed workloads placed across the mesh (ADR-099).
     Workload(commands::workload_cmd::WorkloadArgs),
 
+    /// Machine mesh service: serve it, inspect it, administer bindings and peers (ADR-103).
+    #[cfg(all(unix, feature = "mesh"))]
+    Mesh(commands::mesh_cmd::MeshArgs),
+
     /// Cluster management (nodes, shards, health).
     Cluster(commands::cluster_cmd::ClusterArgs),
 
@@ -177,6 +181,8 @@ async fn main() -> anyhow::Result<()> {
             Some(c) => commands::update_cmd::run(c).await?,
             None => commands::update_cmd::run_default().await?,
         },
+        #[cfg(all(unix, feature = "mesh"))]
+        Commands::Mesh(args) => commands::mesh_cmd::run(args).await?,
         Commands::Service(args) => commands::service_cmd::run(args).await?,
         Commands::Init(args) => commands::init_cmd::run(args).await?,
         Commands::Doctor(args) => commands::doctor_cmd::run(args).await?,

@@ -65,6 +65,7 @@ fn endpoint(sock: &Path, record_from: &TestServer, pin: &Path) -> ServiceEndpoin
             topic_prefixes: vec![format!("user/{user_id}/")],
             capabilities: vec!["a2a".into()],
             version: "test".into(),
+            accept_from: vec![],
         },
     }
 }
