@@ -35,6 +35,14 @@ fn failed_reason(run_dir: &Path) -> Option<String> {
     (state == ChildState::Failed).then(|| v["failed_reason"].as_str().unwrap_or("restart budget spent").to_owned())
 }
 
+/// The raw probe request. It bypasses `stamp_request`, so it carries `proto`
+/// itself: the daemon refuses a no-proto request for anything not read-only.
+fn status_request() -> crate::Request {
+    let mut req = crate::Request::with_params("project.status", serde_json::json!({})).with_auth("admin");
+    req.proto = Some(crate::PROTO_VERSION);
+    req
+}
+
 /// What the user daemon's supervisor says about its children
 /// (`project.status`): project id -> (state, pid). `None` when the daemon
 /// cannot be reached or does not answer within two seconds, so the process
@@ -46,8 +54,7 @@ pub fn supervisor_view(run_root: &Path) -> Option<std::collections::HashMap<Stri
     let t = Some(Duration::from_secs(2));
     let _ = s.set_write_timeout(t);
     let _ = s.set_read_timeout(t);
-    let req = crate::Request::with_params("project.status", serde_json::json!({})).with_auth("admin");
-    writeln!(s, "{}", serde_json::to_string(&req).ok()?).ok()?;
+    writeln!(s, "{}", serde_json::to_string(&status_request()).ok()?).ok()?;
     let mut line = String::new();
     BufReader::new(s.take(1 << 20)).read_line(&mut line).ok()?;
     let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
@@ -232,6 +239,17 @@ pub fn check(env: &DoctorEnv, procs: &ProcTable) -> Vec<Finding> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn supervisor_probe_carries_proto_and_is_not_read_only_listed() {
+        // project.status is not on the read-only allowlist, so without proto
+        // the daemon would refuse it and the child listing would go dark.
+        let req = super::status_request();
+        assert_eq!(req.proto, Some(crate::PROTO_VERSION));
+        assert!(!crate::handshake::is_read_only_method(&req.method));
+        let line = serde_json::to_string(&req).unwrap();
+        assert!(line.contains("\"proto\":1"), "{line}");
+    }
+
     use super::*;
     use crate::doctor::env::test_env;
 

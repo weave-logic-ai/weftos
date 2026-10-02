@@ -19,7 +19,10 @@ Staging area for changes after the 0.8.1 cut.
   allowlist (`READ_ONLY_METHODS`), not the capability table. Remote JSON
   clients on the TCP relay are not stamped by the relay: without `proto` they
   are read-only from 0.8.2; send `"proto": 1`. The VS Code panel and the
-  child-kernel link now send it.
+  child-kernel link now send it. Old no-`proto` clients that call
+  `kernel.subscribe`, `substrate.subscribe` or `agent.chat` now fail with
+  `proto_mismatch` (those are not on the read-only allowlist); remote relay
+  clients must send `"proto": 1`. Update the client.
 - **launchd no longer cycles on a permanent refusal.** The user daemon writes
   `~/.weftos/run/REFUSED` on a permanent refusal or a clean exit and the
   generated plist's `KeepAlive` is `PathState {REFUSED: false}`; the

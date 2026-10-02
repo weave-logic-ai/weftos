@@ -356,7 +356,7 @@ fn rpc_daemon_status(socket: &Path) -> Option<DaemonStatus> {
     let mut s = UnixStream::connect(socket).ok()?;
     s.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
     s.set_write_timeout(Some(Duration::from_secs(2))).ok()?;
-    s.write_all(b"{\"method\":\"kernel.status\",\"params\":null,\"auth\":\"read\"}\n").ok()?;
+    s.write_all(b"{\"method\":\"kernel.status\",\"params\":null,\"auth\":\"read\",\"proto\":1}\n").ok()?;
     let mut line = String::new();
     BufReader::new(s).read_line(&mut line).ok()?;
     parse_status(&line)

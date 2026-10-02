@@ -189,7 +189,7 @@ pub fn rpc_status(socket: &Path) -> Option<(String, String)> {
     let mut s = UnixStream::connect(socket).ok()?;
     s.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
     s.set_write_timeout(Some(Duration::from_secs(2))).ok()?;
-    s.write_all(b"{\"method\":\"kernel.status\",\"params\":null,\"auth\":\"read\"}\n").ok()?;
+    s.write_all(b"{\"method\":\"kernel.status\",\"params\":null,\"auth\":\"read\",\"proto\":1}\n").ok()?;
     let mut line = String::new();
     BufReader::new(s).read_line(&mut line).ok()?;
     let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
