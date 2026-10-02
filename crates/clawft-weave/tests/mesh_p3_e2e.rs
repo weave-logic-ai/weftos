@@ -256,6 +256,37 @@ async fn a_service_restart_keeps_bindings_and_chains_and_the_daemon_reconnects()
 }
 
 #[tokio::test]
+async fn a_certificate_that_expires_while_the_service_is_down_is_replaced_on_reconnect() {
+    // The shortest certificate the service allows. Stop the service before the
+    // half-life renewal, keep it down past expiry, then bring it back.
+    let mut svc = Svc::with_config(Default::default(), |c| c.cert_ttl_s = 10).await;
+    let home = tempfile::tempdir().unwrap();
+    let a = daemon_as_me(&svc, home.path()).await;
+    wait_until("A is connected", || a.link_state().as_deref() == Some("connected")).await;
+    let issued = svc.journal("user.cert.issue");
+    let (serial, not_after) = {
+        let last = issued.last().expect("a certificate was issued");
+        (last["body"]["serial"].as_u64().unwrap(), last["body"]["not_after"].as_u64().unwrap())
+    };
+    let bound = a.chain.of(KIND_BOUND).len();
+    svc.stop().await;
+    wait_until("A notices", || a.link_state().as_deref() == Some("reconnecting")).await;
+    let now = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    while now() <= not_after {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    svc.begin().await;
+    wait_until("A reconnects with the service back", || a.link_state().as_deref() == Some("connected")).await;
+    wait_until("A records a new binding session", || a.chain.of(KIND_BOUND).len() > bound).await;
+    let newest = svc.journal("user.cert.issue");
+    let newest = newest.last().unwrap();
+    assert!(newest["body"]["serial"].as_u64().unwrap() > serial, "the expired certificate was replaced, not reused");
+    assert!(newest["body"]["not_after"].as_u64().unwrap() > now(), "and the new one is live");
+    assert_eq!(svc.journal("user.bind").len(), 1, "the binding itself is unchanged");
+}
+
+#[tokio::test]
 async fn service_off_is_collapsed_and_required_without_a_service_fails() {
     let mut svc = Svc::start().await;
     let home = tempfile::tempdir().unwrap();

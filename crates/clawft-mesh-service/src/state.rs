@@ -148,13 +148,22 @@ impl ServiceState {
     pub fn build(
         cfg: MeshServiceConfig,
         machine_key: SigningKey,
-        journal: Journal,
+        mut journal: Journal,
         revocations: Arc<RevocationList>,
         limits: LimitConfig,
     ) -> Result<Arc<Self>, String> {
         let machine_pubkey = machine_key.verifying_key().to_bytes();
         let node_id = clawft_mesh_local::node_id_from_pubkey(&machine_pubkey);
-        let bindings = Bindings::fold_lenient(&journal);
+        let mut bindings = Bindings::fold_lenient(&journal);
+        // A crash mid-append leaves one unacknowledged torn line; losing it
+        // loses nothing, and leaving the journal read-only would refuse every
+        // certificate renewal within 12 h (ADR-103 A10).
+        let by = clawft_mesh_local::Principal::Uid(crate::fsutil::euid());
+        match bindings.auto_accept_torn_tail(&mut journal, by) {
+            Ok(true) => tracing::warn!("journal: accepted a torn final line from an interrupted append (journalled, auto=torn_tail)"),
+            Ok(false) => {}
+            Err(e) => tracing::error!(error = %e, "journal: could not accept a torn tail; staying read-only"),
+        }
         if let Some(why) = bindings.degraded() {
             tracing::error!(reason = why, "bindings are degraded: serving read-only, refusing binds and certs");
         }

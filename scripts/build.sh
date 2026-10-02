@@ -917,7 +917,10 @@ cmd_test_mesh_service() {
     timer_start
     isolate_test_runtime
     run_cmd cargo test -p clawft-mesh-local -p clawft-mesh-service
-    run_cmd scripts/dev/mesh-p3-e2e.sh
+    # The shipped binary runs the process smoke (argument parsing, default
+    # paths, --health-listen off, adopted key, real quarantine, restart).
+    run_cmd cargo build -p clawft-weave --bin weaver
+    run_cmd env "WEAVER_BIN=${CARGO_TARGET_DIR:-$ROOT/target}/debug/weaver" scripts/dev/mesh-p3-e2e.sh
     cmd_check_mesh_no_owned_state
     cmd_check_mesh_only
     timer_end

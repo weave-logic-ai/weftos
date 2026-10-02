@@ -70,6 +70,11 @@ impl Svc {
     }
 
     pub async fn with_limits(limits: LimitConfig) -> Self {
+        Self::with_config(limits, |_| {}).await
+    }
+
+    /// As [`Svc::with_limits`], adjusting the service config before it starts.
+    pub async fn with_config(limits: LimitConfig, tweak: impl FnOnce(&mut MeshServiceConfig)) -> Self {
         let euid = own_uid().await.expect("own uid");
         // Short root: unix socket paths are length-limited.
         let dir = tempfile::Builder::new().prefix("x").tempdir().expect("tempdir");
@@ -84,6 +89,8 @@ impl Svc {
             build_sha: "e2e-service".into(),
             ..MeshServiceConfig::default()
         };
+        let mut cfg = cfg;
+        tweak(&mut cfg);
         let mut s = Self {
             dir,
             cfg,

@@ -33,7 +33,7 @@ use crate::node_identity::{DaemonIdentity, IdentityError};
 
 mod endpoint;
 mod session;
-pub use endpoint::{build_endpoint, build_endpoint_in, state_dir};
+pub use endpoint::{build_endpoint, build_endpoint_async, build_endpoint_in, state_dir};
 use session::session;
 
 /// Environment override for the service state dir (holds `service.json`).

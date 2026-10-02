@@ -91,16 +91,18 @@ JSON lines, hash-chained and signed by the box key. One record:
 |---|---|
 | `machine.init` | `{node_id, machine_pubkey, key_origin:"generated"\|"adopted", build_sha}` |
 | `service.start` | `{build_sha, proto:{min,max}, pid, listen, admission, bind_policy}` |
-| `user.bind` | `{principal:{kind:"uid",v:501}\|{kind:"sid",v:"S-1-5-.."}, user_pubkey, user_id, how:"tofu"\|"approved"\|"rebind", by?:principal, peer_pid?, exe?}` |
+| `user.bind` | `{principal:{kind:"uid",id:501}\|{kind:"sid",id:"S-1-5-.."}, user_pubkey, user_id, how:"tofu"\|"approved"\|"rebind", by?:principal, peer_pid?, exe?}` |
 | `user.bind_pending` | `{principal, user_pubkey, user_id, peer_pid?, exe?}` (policy `approve`) |
 | `user.cert.issue` | `{user_id, serial, issued_at, not_after}` |
 | `user.revoke` | `{principal, user_id, reason, by, serials_revoked_through}` |
 | `peer.admit` / `peer.refuse` | `{node_id, pubkey, class:"node"\|"leaf", verdict_rule_hash?, reason?, mode:"enforce"\|"observe"}` |
 | `peer.revoke` / `peer.unrevoke` | `{node_id, reason, by}` |
 | `policy.set` | `{key, old, new, by}` |
+| `journal.quarantine` | `{lost_from_seq, lost_count, serial_high_water, raw_serial_high_water, revoked_user_ids, quarantine:[file names], ts, recorded}` (reserved: written by the service when it quarantines a bad tail; `serial_high_water` is clamped to the last accounted serial plus `lost_count`) |
+| `journal.accept_truncate` | `{quarantine_seq, marker_only?, serial_floor, quarantine, by:principal, auto?:"torn_tail"}` (reserved: written by `Bindings::accept_truncate` behind the admin gate, or by the service itself for a lone torn final line) |
 | `facts.sign` | `{facts_hash, valid_until}` (hash only, not the facts) |
 
-The journal records decisions, not traffic: no route churn, no message metadata (chatty and sensitive). `bindings` (principal to user key, serials, revocations) is a fold of the journal rebuilt at start; the journal is the source of truth and `bindings` is never persisted separately. Segment at 8 MiB (`journal.NNN.jsonl`, first record of a segment repeats the last `prev`). On start: verify the full hash chain and every signature; a bad tail record is quarantined to `journal.corrupt.<ts>` and the service starts **read-only for binds** (refuses new binds and cert issues, keeps serving existing registrations) until an admin acks with `weaver mesh journal --accept-truncate`. Anchoring: the daemon periodically asks `journal.head` and appends `mesh.journal.anchor {seq, hash, node_id}` to its user chain (ADR-022), so truncation of the tail is detectable by any user chain holding a later anchor. The service owns no chain.
+The journal records decisions, not traffic: no route churn, no message metadata (chatty and sensitive). `bindings` (principal to user key, serials, revocations) is a fold of the journal rebuilt at start; the journal is the source of truth and `bindings` is never persisted separately. Segment at 8 MiB (`journal.NNN.jsonl`, first record of a segment repeats the last `prev`). On start: verify the full hash chain and every signature; a bad tail record is quarantined to `journal.corrupt.<ts>` and the service starts **read-only for binds** (refuses new binds and cert issues, keeps serving existing registrations) until an admin acks with `weaver mesh journal verify --accept-truncate` (the one exception: a lone torn final line with no readable facts, the signature of a crash mid-append, was never acknowledged to any caller; the service accepts it at start and journals `auto:"torn_tail"`). Anchoring: the daemon periodically asks `journal.head` and appends `mesh.journal.anchor {seq, hash, node_id}` to its user chain (ADR-022), so truncation of the tail is detectable by any user chain holding a later anchor. The service owns no chain.
 
 ### 1.4 User certificate (package L types, J issues, U stores)
 

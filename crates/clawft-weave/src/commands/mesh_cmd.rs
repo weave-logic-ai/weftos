@@ -428,6 +428,14 @@ async fn journal_verify(w: &mut dyn Write, c: &ConnArgs, accept: bool, seq: Opti
             "the journal is read-only after a quarantined tail (pending quarantine seq {})",
             v["latest_pending_quarantine"]
         )?;
+        if v["pending_quarantines"].as_array().is_some_and(|a| a.len() > 1) {
+            writeln!(
+                w,
+                "{} quarantines are pending ({}); one acceptance clears them all: review every journal.corrupt.* file first and pass --floor if an older one holds a higher serial",
+                v["pending_quarantines"].as_array().map_or(0, Vec::len),
+                v["pending_quarantines"]
+            )?;
+        }
     }
     if accept {
         call(c, Role::Admin, Message::JournalAcceptTruncate { quarantine_seq: seq, floor }).await?;

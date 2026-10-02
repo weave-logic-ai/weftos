@@ -87,6 +87,12 @@ impl AdminAck {
         Self { by }
     }
 
+    /// The service's own acknowledgement of a lone torn tail (see
+    /// [`Journal::lone_torn_tail`]). Not an admin act; the record says so.
+    pub(crate) fn service_torn_tail(by: Principal) -> Self {
+        Self { by }
+    }
+
     #[cfg(feature = "testing")]
     pub fn for_tests(by: Principal) -> Self { Self { by } }
 }
@@ -143,6 +149,9 @@ pub struct Journal {
     active_len: u64,
     lost: Option<LostInfo>,
     quarantined: Option<PathBuf>,
+    /// This open quarantined exactly one torn (newline-less) final line that
+    /// held no readable facts: a crash during an append, never acknowledged.
+    lone_torn: bool,
     poisoned: bool,
     fail_next_write: bool,
 }
@@ -217,6 +226,7 @@ impl Journal {
             active_len: 0,
             lost: crate::lost::load_marker(&active.with_file_name(MARKER))?,
             quarantined: None,
+            lone_torn: false,
             poisoned: false,
             fail_next_write: false,
         };
@@ -228,7 +238,13 @@ impl Journal {
             if j.records.is_empty() {
                 return Err(JournalError::Unverifiable { file: files[fi].display().to_string(), reason });
             }
+            let prior = j.lost.is_some();
             j.quarantine(&files, fi, off)?;
+            j.lone_torn = !prior
+                && reason.starts_with("torn final line")
+                && j.lost.as_ref().is_some_and(|i| {
+                    i.lost_count == 1 && i.raw_serial_high_water == 0 && i.revoked_user_ids.is_empty()
+                });
         }
         j.active_len = fs::symlink_metadata(&active).map_or(0, |m| m.len());
         j.finalize_marker()?;
@@ -381,6 +397,13 @@ impl Journal {
     /// The quarantine an acceptance must name: the newest pending one.
     pub fn latest_pending_quarantine(&self) -> Option<u64> {
         self.pending_quarantines().last().copied()
+    }
+
+    /// True when the only pending quarantine is a single torn final line with
+    /// no readable facts (the signature of a crash mid-append). Such a line was
+    /// never acknowledged to any caller, so accepting it loses nothing.
+    pub fn lone_torn_tail(&self) -> bool {
+        self.lone_torn && self.pending_quarantines().len() == 1
     }
 
     /// What the unacknowledged quarantine lost, if anything.

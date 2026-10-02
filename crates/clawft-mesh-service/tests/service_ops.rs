@@ -42,8 +42,18 @@ async fn a_restart_keeps_bindings_and_clients_register_again() {
     assert_eq!(server_kind(h.connect(None, 2, RegisterParams::default()).await), ErrorKind::BindConflict);
 }
 
+fn corrupt_last_signature(p: &std::path::Path) {
+    let text = std::fs::read_to_string(p).unwrap();
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+    let last = lines.last_mut().unwrap();
+    let at = last.rfind("\"sig\":\"").unwrap() + 7;
+    let repl = if last.as_bytes()[at] == b'0' { "1" } else { "0" };
+    last.replace_range(at..at + 1, repl);
+    std::fs::write(p, lines.join("\n") + "\n").unwrap();
+}
+
 #[tokio::test]
-async fn a_torn_journal_tail_after_a_crash_is_quarantined_and_gates_binds_until_accepted() {
+async fn a_torn_journal_tail_after_a_crash_is_accepted_by_the_service_and_journalled() {
     let mut h = Harness::start().await;
     h.connect(None, 1, RegisterParams::default()).await.unwrap().close().await;
     h.stop().await;
@@ -53,16 +63,53 @@ async fn a_torn_journal_tail_after_a_crash_is_quarantined_and_gates_binds_until_
     drop(f);
     h.begin().await.expect("the service still starts");
 
-    // Existing registrations cannot get a fresh certificate while read-only.
-    assert_eq!(server_kind(h.connect(None, 1, RegisterParams::default()).await), ErrorKind::Forbidden);
+    // The lost line was never acknowledged, so nothing gates renewals.
     let v = h.admin_ok(Message::JournalVerify {}).await;
     assert_eq!(v["ok"], true, "the surviving chain verifies");
+    assert_eq!(v["read_only"], false);
+    assert!(v["pending_quarantines"].as_array().unwrap().is_empty());
+    let c = h.connect_retry(None, 1, RegisterParams::default()).await.unwrap();
+    assert_eq!(c.register_ack().bind, BindState::Existing, "the earlier binding survived");
+    let log = std::fs::read_to_string(h.state_dir().join("journal.jsonl")).unwrap();
+    let acc = log.lines().find(|l| l.contains("journal.accept_truncate")).expect("acceptance is journalled");
+    assert!(acc.contains(r#""auto":"torn_tail""#), "{acc}");
+}
+
+#[tokio::test]
+async fn an_adopted_node_key_gives_the_same_node_id_and_is_journalled_as_adopted() {
+    // install-service --adopt-node-key: the old run dir's node.key is placed
+    // in the service's state dir before first start.
+    let first = Harness::start().await;
+    let node = first.svc().node_id.clone();
+    let key_bytes = std::fs::read(first.state_dir().join("node.key")).unwrap();
+    let second = Harness::with(|cfg, _| {
+        std::fs::create_dir_all(&cfg.state_dir).unwrap();
+        std::fs::set_permissions(&cfg.state_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let p = cfg.state_dir.join("node.key");
+        std::fs::write(&p, &key_bytes).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+    })
+    .await;
+    assert_eq!(second.svc().node_id, node, "an adopted key keeps the node id");
+    let log = std::fs::read_to_string(second.state_dir().join("journal.jsonl")).unwrap();
+    assert!(log.lines().next().unwrap().contains(r#""key_origin":"adopted""#), "{log}");
+}
+
+#[tokio::test]
+async fn a_corrupt_journal_tail_gates_binds_and_certs_until_an_admin_accepts() {
+    let mut h = Harness::start().await;
+    h.connect(None, 1, RegisterParams::default()).await.unwrap().close().await;
+    h.stop().await;
+    // A complete line with a bad signature is corruption, not a crash.
+    corrupt_last_signature(&h.state_dir().join("journal.jsonl"));
+    h.begin().await.expect("the service still starts");
+
+    assert_eq!(server_kind(h.connect(None, 1, RegisterParams::default()).await), ErrorKind::Forbidden);
+    let v = h.admin_ok(Message::JournalVerify {}).await;
     assert_eq!(v["read_only"], true);
     assert!(!v["pending_quarantines"].as_array().unwrap().is_empty());
 
     h.admin_ok(Message::JournalAcceptTruncate { quarantine_seq: None, floor: None }).await;
-    let c = h.connect_retry(None, 1, RegisterParams::default()).await.unwrap();
-    assert_eq!(c.register_ack().bind, BindState::Existing, "the earlier binding survived");
     let v = h.admin_ok(Message::JournalVerify {}).await;
     assert_eq!(v["read_only"], false);
 }
@@ -106,9 +153,8 @@ async fn a_live_socket_is_refused_and_a_stale_one_is_replaced() {
 }
 
 #[tokio::test]
-async fn the_record_is_written_before_the_socket_is_bound() {
-    // A socket path past the unix limit: binding is the step that fails, so
-    // whatever must precede it has already happened.
+async fn a_failed_bind_publishes_no_record_and_leaves_no_staging_file() {
+    // A socket path past the unix limit: binding is the step that fails.
     let euid = clawft_mesh_local::peer::own_uid().await.unwrap();
     let dir = tempfile::Builder::new().prefix("m").tempdir().unwrap();
     let mut cfg = config_in(dir.path(), euid);
@@ -118,7 +164,37 @@ async fn the_record_is_written_before_the_socket_is_bound() {
         Err(other) => panic!("expected the bind to fail, got {other}"),
         Ok(_) => panic!("a 120-byte socket name must not bind"),
     }
-    assert!(dir.path().join("r/service.json").exists(), "service.json is written before the socket exists");
+    for d in [dir.path().join("r"), dir.path().join("st")] {
+        let names: Vec<String> = std::fs::read_dir(&d)
+            .map(|r| r.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+            .unwrap_or_default();
+        assert!(!names.iter().any(|n| n.starts_with("service.json")), "no record or staging file in {d:?}: {names:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_service_that_loses_the_bind_does_not_clobber_the_live_services_record() {
+    let h = Harness::start().await;
+    let rec_path = h.cfg.socket.parent().unwrap().join("service.json");
+    let before = std::fs::read(&rec_path).unwrap();
+    // Same socket directory (so the same record), a different state dir, and a
+    // socket name whose bind fails after the record has been staged.
+    let other = tempfile::Builder::new().prefix("m").tempdir().unwrap();
+    let mut cfg = config_in(other.path(), h.euid);
+    cfg.socket = h.cfg.socket.parent().unwrap().join("s".repeat(120));
+    match start_with(cfg, peer_source(h.next_uid.clone()), Default::default()).await {
+        Err(StartError::Socket { .. }) => {}
+        Err(e) => panic!("expected the bind to fail, got {e}"),
+        Ok(_) => panic!("must not bind"),
+    }
+    assert_eq!(std::fs::read(&rec_path).unwrap(), before, "the live service's record is untouched");
+    let leftovers: Vec<_> = std::fs::read_dir(rec_path.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "staging files cleaned up: {leftovers:?}");
+    h.connect(None, 1, RegisterParams::default()).await.expect("the live service still serves");
 }
 
 #[tokio::test]
@@ -356,9 +432,7 @@ async fn admin_verbs_journal_first_and_change_nothing_when_the_journal_refuses()
     let mut h = Harness::start().await;
     h.connect(None, 1, RegisterParams::default()).await.unwrap().close().await;
     h.stop().await;
-    let mut f = std::fs::OpenOptions::new().append(true).open(h.state_dir().join("journal.jsonl")).unwrap();
-    f.write_all(br#"{"v":1,"seq":999,"ts":1,"prev":"00"#).unwrap();
-    drop(f);
+    corrupt_last_signature(&h.state_dir().join("journal.jsonl"));
     h.begin().await.expect("starts read-only");
 
     // Trust-increasing verbs are refused on a read-only journal and apply nothing.
