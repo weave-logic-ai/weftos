@@ -319,7 +319,7 @@ echo 'then enable the service with:'\n"
         Manager::Systemd => format!("systemctl enable --now {MESH_SYSTEMD_UNIT}"),
     };
     s.push_str(&format!("echo '  sudo {enable}'\n"));
-    s.push_str("echo 'afterwards: weaver mesh status, compare the machine key fingerprint out of band, weaver mesh trust'\n");
+    s.push_str("echo 'afterwards, as your own user: weaver mesh status prints the node id and the machine key fingerprint. Adopted key: the node id must equal the one you recorded before migrating. Fresh key: compare the fingerprint out of band, then run weaver mesh trust'\n");
     s.push_str(&format!("# ENABLE (exact command): {enable}\n"));
     s
 }

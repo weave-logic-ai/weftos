@@ -330,7 +330,10 @@ async fn a_record_that_appears_shortly_after_the_socket_is_waited_for() {
     std::fs::remove_file(&path).unwrap();
     let writer = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(300));
-        std::fs::write(&path, bytes).unwrap();
+        // Atomic publish, as the service does: never a visible empty file.
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, bytes).unwrap();
+        std::fs::rename(&tmp, &path).unwrap();
     });
     let cfg = svc.mesh_cfg(MeshServicePolicy::Auto);
     let ep = build_endpoint(&cfg, home.path(), "sha").expect("the record is waited for").expect("socket present");

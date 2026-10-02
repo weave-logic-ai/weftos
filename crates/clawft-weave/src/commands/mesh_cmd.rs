@@ -456,7 +456,7 @@ async fn trust(w: &mut dyn Write, t: TrustArgs) -> Result<()> {
     writeln!(w, "service node {node} (build {sha})")?;
     writeln!(w, "machine key   {}", hexser::encode(&key))?;
     writeln!(w, "fingerprint   {}", fingerprint(&key))?;
-    writeln!(w, "Compare this fingerprint with the one printed by the install script, out of band.")?;
+    writeln!(w, "Compare this fingerprint out of band (`weaver mesh status` run on the service host shows the same one) before relying on the pin.")?;
     let path = t.conn.pin.clone().or_else(default_pin).context("no pin path: set --pin or HOME")?;
     write_pin(&path, &key, t.replace)?;
     writeln!(w, "pinned in {}", path.display())?;

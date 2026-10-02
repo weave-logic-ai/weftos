@@ -115,20 +115,27 @@ fn read_record(path: &Path, sock_owner: u32) -> Result<ServiceRecord, String> {
         format!("{} is unreadable ({e}); without it the service's machine key cannot be checked", path.display())
     };
     let started = Instant::now();
-    let mut file = loop {
-        match std::fs::File::open(path) {
-            Ok(f) => break f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound && started.elapsed() < RECORD_WAIT => {
+    // A record that is missing, empty or not yet complete JSON inside the
+    // wait window is a writer mid-publish: retry until the window expires.
+    let (owner, record) = loop {
+        let retry = started.elapsed() < RECORD_WAIT;
+        let mut file = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && retry => {
                 std::thread::sleep(RECORD_POLL);
+                continue;
             }
             Err(e) => return Err(unreadable(e)),
+        };
+        let owner = file.metadata().map_err(unreadable)?.uid();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(unreadable)?;
+        match serde_json::from_slice::<ServiceRecord>(&bytes) {
+            Ok(r) => break (owner, r),
+            Err(_) if retry => std::thread::sleep(RECORD_POLL),
+            Err(e) => return Err(unreadable(std::io::Error::new(std::io::ErrorKind::InvalidData, e))),
         }
     };
-    let owner = file.metadata().map_err(unreadable)?.uid();
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(unreadable)?;
-    let record: ServiceRecord = serde_json::from_slice(&bytes)
-        .map_err(|e| unreadable(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
     if owner != 0 && owner != sock_owner {
         return Err(format!(
             "{} is owned by uid {owner}, not root or the socket's owner (uid {sock_owner}); refusing to trust it",
@@ -196,6 +203,33 @@ mod tests {
         // The file is ours; the socket belongs to someone else.
         let e = read_record(&p, me() + 1).unwrap_err();
         assert!(e.contains("owned by uid"), "{e}");
+    }
+
+    #[test]
+    fn an_empty_or_truncated_record_is_retried_until_complete() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("service.json");
+        std::fs::write(&p, b"").unwrap();
+        let full = serde_json::to_vec(&record(me())).unwrap();
+        let (pp, half) = (p.clone(), full[..full.len() / 2].to_vec());
+        let w = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(250));
+            std::fs::write(&pp, half).unwrap();
+            std::thread::sleep(Duration::from_millis(250));
+            std::fs::write(&pp, full).unwrap();
+        });
+        assert_eq!(read_record(&p, me()).unwrap().service_uid, me());
+        w.join().unwrap();
+    }
+
+    #[test]
+    fn a_record_that_stays_unparseable_fails_after_the_window() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("service.json");
+        std::fs::write(&p, b"{").unwrap();
+        let t = Instant::now();
+        let e = read_record(&p, me()).unwrap_err();
+        assert!(e.contains("unreadable") && t.elapsed() >= RECORD_WAIT, "{e}");
     }
 
     #[test]
