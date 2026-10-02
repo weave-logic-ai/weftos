@@ -131,17 +131,17 @@ pub struct Request {
 
     /// User-signed forward header on a call the user daemon proxies to a
     /// project's own kernel (ADR-103 A6, Phase 2 package I). Verified by the
-    /// child against its certificate's user key; never trusted from any
-    /// other sender, and ignored by a daemon that holds no such key.
+    /// child against its certificate's user key; a daemon that holds no such
+    /// key refuses the request with `forward_unavailable` (never ignores
+    /// it), and the TCP relay strips the field from remote lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forward: Option<ForwardHeader>,
 }
 
 /// `{project_id, issued_at_ms, sig}`: the user key's statement that the user
-/// daemon forwards this one request on behalf of `project_id`. Signed over
-/// `"weftos-project-forward-v1\n<project_id>\n<issued_at_ms>"`; the child
-/// accepts it within 5 s of `issued_at_ms` and once. See
-/// `clawft_weave::project_forward`.
+/// daemon forwards this one request (its method and params) to one child on
+/// behalf of `project_id`. The child accepts it within 5 s and once. See
+/// `clawft_weave::project_forward` for the signed bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForwardHeader {
     pub project_id: String,

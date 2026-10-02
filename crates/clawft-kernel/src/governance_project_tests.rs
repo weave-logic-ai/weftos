@@ -72,3 +72,19 @@ fn an_unattested_kernel_leaves_principals_without_a_project() {
     assert_eq!(r.base_principal(), GatePrincipal::agent("a"));
     let _ = (GovernanceRule::browser_policy("x", "y"), RuleSeverity::Advisory);
 }
+
+#[test]
+fn attribution_is_never_deserialised_and_is_cleared_without_an_attestation() {
+    // A payload asserting a project parses with the field ignored.
+    let v = serde_json::json!({"agent_id":"a","project_id":P1,"instance_id":INST});
+    let p: GatePrincipal = serde_json::from_value(v).unwrap();
+    assert_eq!(p.project_id(), None);
+    assert_eq!(p.instance_id(), None);
+    // And a request carrying an attributed principal loses it on a kernel
+    // with no attestation.
+    let forged = GovernanceRequest::new("a", "act")
+        .with_principal(GatePrincipal::agent("a").with_project(&att()).with_instance(INST))
+        .attributed_with(None, None);
+    assert_eq!(forged.base_principal().project_id(), None);
+    assert_eq!(forged.base_principal().instance_id(), None);
+}

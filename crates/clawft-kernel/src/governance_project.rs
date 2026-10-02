@@ -62,13 +62,13 @@ impl GovernanceRequest {
     }
 
     /// [`attributed`](Self::attributed) with an explicit attestation. With
-    /// `None` the request ends up with no `project_id` in its context and its
-    /// principal untouched.
+    /// `None` the request ends up with no `project_id` / `instance_id` in its
+    /// context or principal (the user daemon attributes nothing).
     pub fn attributed_with(mut self, att: Option<&ProjectAttestation>, instance: Option<&str>) -> Self {
         for k in RESERVED_CONTEXT_KEYS {
             self.context.remove(*k);
         }
-        let mut p = self.base_principal();
+        let mut p = self.base_principal().without_attribution();
         if let Some(att) = att {
             p = p.with_project(att);
             self.context.insert("project_id".into(), att.project_id().to_owned());

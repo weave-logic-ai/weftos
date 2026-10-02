@@ -105,7 +105,7 @@ pub fn init_bound(paths: &RuntimePaths, manifests_dir: Option<&Path>) {
 }
 
 /// Replace the recorded binding (startup and tests).
-pub fn set_bound(b: BoundProject) {
+pub(crate) fn set_bound(b: BoundProject) {
     *BOUND.write().unwrap_or_else(|e| e.into_inner()) = Some(b);
 }
 

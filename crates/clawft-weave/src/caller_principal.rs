@@ -77,6 +77,8 @@ pub fn reconcile(sources: Sources, claim: Option<&str>) -> Result<Option<Verifie
 /// Gather the sources for `caller` and reconcile them. `Err` is the refusal.
 pub async fn establish(
     caller: &CallerCtx,
+    method: &str,
+    params: &serde_json::Value,
     kernel: &crate::rpc_ext::KernelRef,
 ) -> Result<Option<VerifiedProject>, Response> {
     let bound_state = crate::handshake_rpc::bound();
@@ -93,21 +95,31 @@ pub async fn establish(
     let forward = caller
         .forward
         .as_ref()
-        .map(|h| verify_forward(h, bound_state.project_id.as_deref()));
+        .map(|h| verify_forward(h, bound_state.project_id.as_deref(), method, params));
     reconcile(Sources { token, forward, bound }, caller.project.as_ref().map(|c| c.as_str()))
 }
 
 /// Record this kernel's bound project (if any) as the project every
 /// governance request is attributed to (daemon boot, once).
 pub fn attest_instance(node_id: &str) {
-    if let Some(v) = VerifiedProject::from_bound(&crate::handshake_rpc::bound()) {
-        clawft_kernel::governance_project::set_instance_project(v.attest(), node_id);
+    if let Some(v) = VerifiedProject::from_bound(&crate::handshake_rpc::bound())
+        && !clawft_kernel::governance_project::set_instance_project(v.attest(), node_id)
+    {
+        tracing::error!(
+            project = v.as_str(),
+            "instance project attestation was already set; governance keeps the first one"
+        );
     }
 }
 
-fn verify_forward(h: &ForwardHeader, bound: Option<&str>) -> Result<VerifiedProject, ForwardError> {
+fn verify_forward(
+    h: &ForwardHeader,
+    bound: Option<&str>,
+    method: &str,
+    params: &serde_json::Value,
+) -> Result<VerifiedProject, ForwardError> {
     match bound {
-        Some(b) => crate::project_forward::verify_installed(h, b),
+        Some(b) => crate::project_forward::verify_installed(h, b, method, params),
         // The user daemon is not a child: it has no one to verify a forward for.
         None => Err(ForwardError::Unavailable),
     }

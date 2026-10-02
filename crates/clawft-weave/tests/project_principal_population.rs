@@ -1,23 +1,27 @@
 //! Population test for the verified project principal (ADR-103 A6, Phase 2
 //! package I). `ProjectAttestation::from_verified` has to be `pub` (the
 //! daemon verifies in another crate), so "only a `VerifiedProject` stamps a
-//! principal" is held by construction path and by this test, which greps the
-//! production sources:
+//! principal" is held by construction path and by this test, which scans the
+//! sources of every crate (`src`, `tests`, `benches`, `examples`, `build.rs`):
 //!
-//! * `from_verified` is called only from `verified_project.rs`;
+//! * `from_verified` is called only from `verified_project.rs` (unit-test
+//!   files may build attestations; benches, examples and build scripts may
+//!   not);
 //! * `GatePrincipal::with_project` is called only where the attestation is
 //!   already in hand (`governance.rs`, `governance_project.rs`);
-//! * no `.project_id =` assignment exists in kernel or weave code outside
-//!   `governance.rs` (the principal's field is private; this keeps it so);
+//! * no `.project_id =` assignment (whitespace and newlines tolerated) exists
+//!   in kernel or weave code outside `governance.rs` and the certificate
+//!   tests that set a `ProjectCert` field;
 //! * no `impl` of `ProjectAttestation` outside `governance.rs`, no
-//!   `From`/`Deref`-style bridge into `VerifiedProject` outside
-//!   `verified_project.rs`;
+//!   `From`/trait bridge into `VerifiedProject`;
 //! * every `GovernanceRequest` construction site in production code is in
-//!   the table below, is attributed from the kernel attestation, and none
-//!   reads a project from request parameters.
+//!   the tables below, each struct-literal site is followed by `.attributed`
+//!   in its own statement, and none reads a project from request parameters.
 //!
-//! "Production code" is a file's text before its first `#[cfg(test)]`,
-//! minus `*_tests.rs` files and anything under a `tests/` directory.
+//! "Production code" is a file's text with its `#[cfg(test)] mod ... { }`
+//! blocks cut out (the code after them is still scanned), minus `*_tests.rs`
+//! files and `tests/` directories; those are scanned as well, but only by the
+//! rules that apply to any code (the first four).
 
 use std::path::{Path, PathBuf};
 
@@ -25,179 +29,304 @@ fn crates_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
 }
 
-fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    for e in std::fs::read_dir(dir).unwrap().flatten() {
+struct Src {
+    /// Path under `crates/`, `/`-separated.
+    path: String,
+    /// Comments removed; test modules removed unless `is_test_file`.
+    prod: String,
+    is_test_file: bool,
+}
+
+fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let p = e.path();
-        let name = p.file_name().unwrap().to_string_lossy().into_owned();
         if p.is_dir() {
-            if !matches!(name.as_str(), "target" | "tests" | "archive" | "benches" | "examples" | ".cargo-target") {
-                rs_files(&p, out);
-            }
-        } else if name.ends_with(".rs") && !name.ends_with("_tests.rs") && !name.starts_with("tests_") {
+            collect(&p, out);
+        } else if p.extension().is_some_and(|x| x == "rs") {
             out.push(p);
         }
     }
 }
 
-/// The text before the file's test module: the first `#[cfg(test)]` whose
-/// item is a `mod` (an attribute on a lone fn or import does not end
-/// production code).
-fn strip_test_module(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    for (i, l) in lines.iter().enumerate() {
-        if l.trim() != "#[cfg(test)]" {
+fn strip_comments(text: &str) -> String {
+    text.lines()
+        .map(|l| {
+            // Line comments only; a `//` inside a string literal in these
+            // files would only hide code from the scan, never add some.
+            match l.find("//") {
+                Some(i) => &l[..i],
+                None => l,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Cut every `#[cfg(test)] mod name { ... }` block (and `mod name;`).
+fn strip_test_modules(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("#[cfg(test)]") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + "#[cfg(test)]".len()..];
+        // Skip further attributes, then look at the item.
+        let item = after.trim_start();
+        let item = {
+            let mut it = item;
+            while it.starts_with("#[") {
+                it = it[it.find(']').map_or(it.len(), |j| j + 1)..].trim_start();
+            }
+            it
+        };
+        let is_mod = item.starts_with("mod ") || item.starts_with("pub mod ") || item.starts_with("pub(crate) mod ");
+        if !is_mod {
+            // A lone cfg(test) item (fn, use, impl): keep scanning after the attribute.
+            rest = after;
             continue;
         }
-        let next = lines[i + 1..].iter().map(|l| l.trim()).find(|l| !l.starts_with("#["));
-        if next.is_some_and(|n| n.starts_with("mod ") || n.starts_with("pub mod ") || n.starts_with("pub(crate) mod ")) {
-            return lines[..i].join("\n");
+        let off = text.len() - item.len();
+        let semi = item.find(';');
+        let brace = item.find('{');
+        match (semi, brace) {
+            (Some(s), b) if b.is_none_or(|b| s < b) => rest = &text[off + s + 1..],
+            (_, Some(b)) => {
+                let mut depth = 0usize;
+                let mut end = item.len();
+                for (k, c) in item[b..].char_indices() {
+                    match c {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = b + k + 1;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                rest = &text[off + end..];
+            }
+            _ => rest = "",
         }
     }
-    text.to_owned()
+    out.push_str(rest);
+    out
 }
 
-/// `(relative path under crates/, production text)` of every source file.
-fn production() -> Vec<(String, String)> {
+fn sources() -> Vec<Src> {
     let root = crates_dir();
-    let mut files = Vec::new();
+    let mut v = Vec::new();
     for krate in std::fs::read_dir(&root).unwrap().flatten() {
-        let src = krate.path().join("src");
-        if krate.file_name() != "archive" && src.is_dir() {
-            rs_files(&src, &mut files);
+        if krate.file_name() == "archive" || !krate.path().is_dir() {
+            continue;
+        }
+        let mut files = Vec::new();
+        for sub in ["src", "tests", "benches", "examples"] {
+            collect(&krate.path().join(sub), &mut files);
+        }
+        let build = krate.path().join("build.rs");
+        if build.is_file() {
+            files.push(build);
+        }
+        for p in files {
+            let rel = p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            let is_test_file = name.ends_with("_tests.rs")
+                || name == "tests.rs"
+                || name.starts_with("tests_")
+                || rel.split('/').nth(1) == Some("tests");
+            let text = strip_comments(&std::fs::read_to_string(&p).unwrap());
+            let prod = if is_test_file { text } else { strip_test_modules(&text) };
+            v.push(Src { path: rel, prod, is_test_file });
         }
     }
-    files
-        .into_iter()
-        .map(|p| {
-            let text = std::fs::read_to_string(&p).unwrap();
-            let prod = strip_test_module(&text);
-            (p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"), prod)
-        })
-        .collect()
+    v
 }
 
-/// Code lines only: comments (`//`, `///`, `//!`) dropped.
-fn code(text: &str) -> impl Iterator<Item = (usize, &str)> {
-    text.lines().enumerate().filter(|(_, l)| !l.trim_start().starts_with("//")).map(|(i, l)| (i + 1, l))
+const SELF_FILE: &str = "clawft-weave/tests/project_principal_population.rs";
+
+fn kernel_or_weave(p: &str) -> bool {
+    p.starts_with("clawft-kernel/") || p.starts_with("clawft-weave/")
 }
 
-fn files_with(needle: &str, only_kernel_weave: bool) -> Vec<String> {
-    production()
-        .into_iter()
-        .filter(|(f, _)| !only_kernel_weave || f.starts_with("clawft-kernel/") || f.starts_with("clawft-weave/"))
-        .filter(|(_, t)| code(t).any(|(_, l)| l.contains(needle)))
-        .map(|(f, _)| f)
-        .collect()
+fn files_with(srcs: &[Src], needle: &str) -> Vec<String> {
+    let mut v: Vec<String> = srcs
+        .iter()
+        .filter(|s| s.path != SELF_FILE && !s.is_test_file && s.prod.contains(needle))
+        .map(|s| s.path.clone())
+        .collect();
+    v.sort();
+    v
+}
+
+/// Whether `text` contains `.project_id` followed by optional whitespace and
+/// a lone `=` (an assignment, not `==` or `=>`).
+fn assigns_project_id(text: &str) -> Option<usize> {
+    let pat = ".project_id";
+    let mut from = 0;
+    while let Some(i) = text[from..].find(pat) {
+        let at = from + i;
+        let after = text[at + pat.len()..].trim_start();
+        if after.starts_with('=') && !after.starts_with("==") && !after.starts_with("=>") {
+            return Some(text[..at].lines().count());
+        }
+        from = at + pat.len();
+    }
+    None
 }
 
 #[test]
 fn from_verified_is_called_only_by_verified_project_attest() {
-    let mut hits = files_with("ProjectAttestation::from_verified(", false);
-    hits.sort();
+    let hits = files_with(&sources(), "ProjectAttestation::from_verified(");
     assert_eq!(hits, ["clawft-weave/src/verified_project.rs"], "attestations are minted only by VerifiedProject::attest");
 }
 
 #[test]
 fn with_project_is_called_only_with_an_attestation_in_hand() {
-    let mut hits = files_with(".with_project(", false);
-    hits.sort();
+    let hits = files_with(&sources(), ".with_project(");
     assert_eq!(hits, ["clawft-kernel/src/governance.rs", "clawft-kernel/src/governance_project.rs"]);
 }
 
 #[test]
 fn no_project_id_assignment_outside_governance() {
-    for (f, t) in production() {
-        if !(f.starts_with("clawft-kernel/") || f.starts_with("clawft-weave/")) || f == "clawft-kernel/src/governance.rs" {
+    // `ProjectCert` / `ProjectAnchorStmt` field edits in the identity tests
+    // are another type's `project_id`.
+    let other_type = [
+        "clawft-kernel/src/project_identity_tests.rs",
+        "clawft-weave/src/project_forward_tests.rs",
+    ];
+    for s in sources() {
+        if !kernel_or_weave(&s.path)
+            || s.path == "clawft-kernel/src/governance.rs"
+            || s.path == SELF_FILE
+            || other_type.contains(&s.path.as_str())
+        {
             continue;
         }
-        for (n, l) in code(&t) {
-            let l = l.replace(' ', "");
+        if let Some(line) = assigns_project_id(&s.prod) {
+            panic!("{}: `.project_id =` outside governance.rs (near line {line})", s.path);
+        }
+    }
+    assert!(assigns_project_id("p.project_id\n   = x").is_some());
+    assert!(assigns_project_id("a.project_id == b").is_none());
+}
+
+#[test]
+fn the_attestation_path_has_no_impls_outside_its_modules() {
+    for s in sources() {
+        if s.path == SELF_FILE {
+            continue;
+        }
+        for l in s.prod.lines().map(str::trim).filter(|l| l.starts_with("impl")) {
+            if l.contains("ProjectAttestation") {
+                assert_eq!(s.path, "clawft-kernel/src/governance.rs", "{}: {l}", s.path);
+            }
             assert!(
-                !(l.contains(".project_id=") && !l.contains(".project_id==")),
-                "{f}:{n}: `.project_id =` outside governance.rs: {l}"
+                !(l.contains("VerifiedProject") && (l.contains(" for VerifiedProject") || l.contains("From<"))),
+                "{}: bridge into VerifiedProject: {l}",
+                s.path
             );
         }
     }
 }
 
-#[test]
-fn the_attestation_path_has_no_impls_outside_its_modules() {
-    for (f, t) in production() {
-        for (n, l) in code(&t) {
-            let l = l.trim();
-            if l.starts_with("impl") && l.contains("ProjectAttestation") {
-                assert_eq!(f, "clawft-kernel/src/governance.rs", "{f}:{n}: {l}");
-            }
-            if l.starts_with("impl") && l.contains("for VerifiedProject") {
-                panic!("{f}:{n}: trait impl into VerifiedProject: {l}");
-            }
-            if l.starts_with("impl") && l.contains("VerifiedProject") && l.contains("From<") {
-                panic!("{f}:{n}: conversion into VerifiedProject: {l}");
-            }
+/// Production `GovernanceRequest::new` sites (attributed inside `new`).
+const NEW_SITES: &[&str] = &[
+    "clawft-kernel/src/http_api.rs",
+    "clawft-kernel/src/profile_store.rs",
+    "clawft-kernel/src/hnsw_service.rs",
+    "clawft-kernel/src/causal.rs",
+    "clawft-kernel/src/wasm_runner/runner.rs",
+];
+/// Production `GovernanceRequest { .. }` literal sites.
+const LITERAL_SITES: &[&str] = &["clawft-kernel/src/gate.rs", "clawft-kernel/src/workload_governance/gate.rs"];
+
+/// Start offsets of every `GovernanceRequest {` struct literal in `text`.
+fn literals(text: &str) -> Vec<usize> {
+    let mut v = Vec::new();
+    let mut from = 0;
+    while let Some(i) = text[from..].find("GovernanceRequest {") {
+        let at = from + i;
+        let line_start = text[..at].rfind('\n').map_or(0, |n| n + 1);
+        let head = text[line_start..at].trim();
+        // Not the type's definition or an `impl GovernanceRequest {`.
+        if !(head.ends_with("struct") || head.ends_with("pub struct") || head.starts_with("impl") || head.contains("impl ")) {
+            v.push(at);
         }
+        from = at + 1;
     }
+    v
 }
 
-/// Every production `GovernanceRequest` construction site and how it takes
-/// its project. Add a row when adding a site; a site with no row fails.
-const NEW_SITES: &[(&str, &str)] = &[
-    ("clawft-kernel/src/http_api.rs", "GovernanceRequest::new: attributed() inside new; client context keys filtered"),
-    ("clawft-kernel/src/profile_store.rs", "GovernanceRequest::new"),
-    ("clawft-kernel/src/hnsw_service.rs", "GovernanceRequest::new"),
-    ("clawft-kernel/src/causal.rs", "GovernanceRequest::new"),
-    ("clawft-kernel/src/wasm_runner/runner.rs", "GovernanceRequest::new"),
-];
-const LITERAL_SITES: &[&str] = &[
-    "clawft-kernel/src/gate.rs",
-    "clawft-kernel/src/workload_governance/gate.rs",
-    "clawft-kernel/src/governance.rs", // `new` itself
-];
+/// The statement tail after the literal starting at `at`: from the closing
+/// brace of the literal to the next `;`.
+fn tail_after_literal(text: &str, at: usize) -> &str {
+    let open = at + text[at..].find('{').unwrap();
+    let mut depth = 0usize;
+    let mut end = text.len();
+    for (k, c) in text[open..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = open + k + 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let rest = &text[end..];
+    &rest[..rest.find(';').unwrap_or(rest.len())]
+}
 
 #[test]
 fn every_governance_request_site_is_enumerated_and_attributed_from_the_attestation() {
-    let prod = production();
-    let mut seen_new = Vec::new();
-    let mut seen_literal = Vec::new();
-    for (f, t) in &prod {
-        if !f.starts_with("clawft-kernel/") && !f.starts_with("clawft-weave/") {
-            continue;
+    let srcs = sources();
+    let (mut seen_new, mut seen_lit) = (Vec::new(), Vec::new());
+    for s in srcs.iter().filter(|s| kernel_or_weave(&s.path) && !s.is_test_file) {
+        if s.path != "clawft-kernel/src/governance.rs" && s.prod.contains("GovernanceRequest::new(") {
+            seen_new.push(s.path.clone());
         }
-        let has_new = code(t).any(|(_, l)| l.contains("GovernanceRequest::new("));
-        let has_lit = code(t).any(|(_, l)| l.contains("GovernanceRequest {") && !l.contains("struct GovernanceRequest") && !l.trim_start().starts_with("impl"));
-        if has_new && f != "clawft-kernel/src/governance.rs" {
-            seen_new.push(f.clone());
+        let lits = literals(&s.prod);
+        if !lits.is_empty() {
+            seen_lit.push(s.path.clone());
         }
-        if has_lit {
-            seen_literal.push(f.clone());
-            if f != "clawft-kernel/src/governance.rs" {
-                assert!(t.contains(".attributed"), "{f}: literal GovernanceRequest not attributed from the attestation");
-            }
+        // Per site, not per file: each literal's own statement is attributed.
+        for at in lits {
+            assert!(
+                tail_after_literal(&s.prod, at).contains(".attributed"),
+                "{}: a GovernanceRequest literal is not attributed in its own statement",
+                s.path
+            );
         }
     }
+    let (mut want_new, mut want_lit) = (NEW_SITES.to_vec(), LITERAL_SITES.to_vec());
     seen_new.sort();
-    seen_literal.sort();
-    let mut want_new: Vec<_> = NEW_SITES.iter().map(|(f, _)| (*f).to_owned()).collect();
+    seen_lit.sort();
     want_new.sort();
-    let mut want_lit: Vec<_> = LITERAL_SITES.iter().map(|f| (*f).to_owned()).collect();
     want_lit.sort();
     assert_eq!(seen_new, want_new, "GovernanceRequest::new sites changed: update NEW_SITES (and review them)");
-    assert_eq!(seen_literal, want_lit, "GovernanceRequest literal sites changed: update LITERAL_SITES (and review them)");
+    assert_eq!(seen_lit, want_lit, "GovernanceRequest literal sites changed: update LITERAL_SITES (and review them)");
+
+    // `new` attributes the request itself.
+    let gov = srcs.iter().find(|s| s.path == "clawft-kernel/src/governance.rs").unwrap();
+    let new_at = gov.prod.find("pub fn new(agent_id: impl Into<String>, action: impl Into<String>)").unwrap();
+    assert!(gov.prod[new_at..new_at + 600].contains(".attributed()"), "GovernanceRequest::new must call attributed()");
 }
 
 #[test]
 fn no_governance_request_site_reads_a_project_from_request_params() {
-    let prod = production();
-    let sites: Vec<&str> = NEW_SITES.iter().map(|(f, _)| *f).chain(LITERAL_SITES.iter().copied()).collect();
-    for (f, t) in &prod {
-        if !sites.contains(&f.as_str()) || f == "clawft-kernel/src/governance.rs" {
-            continue;
-        }
-        for (n, l) in code(t) {
+    let sites: Vec<&str> = NEW_SITES.iter().chain(LITERAL_SITES).copied().collect();
+    for s in sources().iter().filter(|s| sites.contains(&s.path.as_str())) {
+        for (n, l) in s.prod.lines().enumerate() {
             for bad in ["\"project_id\"", "\"project\"", "params.project", ".project_id"] {
-                // The workload gate may read the attestation's id; nothing
-                // else may name a project key.
-                let allowed = f.ends_with("workload_governance/gate.rs") && (l.contains("project_id") && !l.contains('"'));
-                assert!(!l.contains(bad) || allowed, "{f}:{n}: governance site names a project: {l}");
+                // The workload gate may read the attestation's own id.
+                let attestation_read =
+                    s.path.ends_with("workload_governance/gate.rs") && l.contains("project_id") && !l.contains('"');
+                assert!(!l.contains(bad) || attestation_read, "{}:{}: governance site names a project: {l}", s.path, n + 1);
             }
         }
     }
@@ -205,10 +334,15 @@ fn no_governance_request_site_reads_a_project_from_request_params() {
 
 #[test]
 fn reserved_context_keys_are_the_only_project_keys_and_are_kernel_owned() {
-    let t = production()
-        .into_iter()
-        .find(|(f, _)| f == "clawft-kernel/src/governance_project.rs")
-        .unwrap()
-        .1;
-    assert!(t.contains(r#"RESERVED_CONTEXT_KEYS: &[&str] = &["project_id", "instance_id"]"#));
+    let srcs = sources();
+    let t = srcs.iter().find(|s| s.path == "clawft-kernel/src/governance_project.rs").unwrap();
+    assert!(t.prod.contains(r#"RESERVED_CONTEXT_KEYS: &[&str] = &["project_id", "instance_id"]"#));
+}
+
+#[test]
+fn the_scanner_cuts_test_modules_and_keeps_code_after_them() {
+    let text = "fn a() {}\n#[cfg(test)]\nmod t { fn x() { let _ = 1; } }\nfn after() { GovernanceRequest::new(1) }\n#[cfg(test)]\nfn lone() {}\nfn last() {}";
+    let cut = strip_test_modules(text);
+    assert!(cut.contains("fn a()") && cut.contains("fn after()") && cut.contains("fn last()"));
+    assert!(!cut.contains("fn x()"));
 }

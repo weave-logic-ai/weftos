@@ -3689,7 +3689,7 @@ async fn authorize_caller(
     // ADR-103 A6 (Phase 2 package I): the caller's verified project comes
     // from a token scope, a verified forward header or this kernel's own
     // binding, never from `Request.project`; a disagreeing claim is refused.
-    caller.verified_project = crate::caller_principal::establish(caller, kernel).await?;
+    caller.verified_project = crate::caller_principal::establish(caller, method, params, kernel).await?;
     let caps = resolve_caller_capabilities(caller, kernel).await;
     crate::rpc_ext::authorize(caller, &caps, method, params, kernel).await?;
     Ok(caps)
