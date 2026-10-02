@@ -351,7 +351,8 @@ async fn a_binding_revocation_is_enforced_even_when_the_journal_cannot_record_it
     let c = h.connect(None, 1, RegisterParams::default()).await.unwrap();
     h.svc().state.core.lock().unwrap().journal.inject_write_failure();
     let data = h.admin_ok(Message::BindRevoke { uid: h.euid, reason: "compromised".into() }).await;
-    assert!(data["warning"].as_str().unwrap().contains("enforced in memory"), "{data}");
+    let w = data["warning"].as_str().unwrap();
+    assert!(w.contains("enforced by the service") && w.contains("force-revoked.json"), "{data}");
     // The live registration is cut off and the uid cannot come back.
     let mut gone = false;
     for _ in 0..40 {
