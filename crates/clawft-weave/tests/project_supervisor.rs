@@ -77,6 +77,28 @@ fn main() {
     if args.first().map(String::as_str) == Some("kernel") {
         fake_kernel::run(&args);
     }
+    // The libtest protocol, so `cargo nextest` (and `cargo test -- --list`)
+    // can drive this binary: `--list --format terse` prints `<name>: test`
+    // per test (nothing for `--ignored`), `<name> --exact` runs just that
+    // one; unknown flags are ignored.
+    if args.iter().any(|a| a == "--list") {
+        if !args.iter().any(|a| a == "--ignored") {
+            for (name, _) in tests() {
+                println!("{name}: test");
+            }
+        }
+        return;
+    }
+    let exact = args.iter().any(|a| a == "--exact");
+    let mut filters: Vec<&str> = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if matches!(a.as_str(), "--test-threads" | "--skip" | "--format" | "--color" | "--logfile") {
+            it.next();
+        } else if !a.starts_with('-') {
+            filters.push(a);
+        }
+    }
     // Set before any thread exists: the spawn test proves none of these
     // reaches a child.
     for (k, v) in SECRETS {
@@ -86,11 +108,12 @@ fn main() {
             std::env::set_var(k, v);
         }
     }
-    let filter = args.iter().find(|a| !a.starts_with('-')).cloned();
     let mut failed = Vec::new();
     let mut ran = 0;
     for (name, f) in tests() {
-        if filter.as_deref().is_some_and(|x| !name.contains(x)) {
+        let wanted = filters.is_empty()
+            || filters.iter().any(|f| if exact { name == *f } else { name.contains(f) });
+        if !wanted {
             continue;
         }
         ran += 1;

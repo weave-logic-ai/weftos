@@ -446,18 +446,20 @@ impl Supervisor {
             };
             match outcome {
                 None => {
-                    self.set_state(&id, &slot, ChildState::Stopped);
                     self.chain(
                         "project.kernel.exited",
                         json!({"project_id": id, "code": info.code, "signal": info.signal, "clean": true}),
                     );
+                    self.set_state(&id, &slot, ChildState::Stopped);
                     return;
                 }
                 Some(Err(why)) => {
-                    self.set_state(&id, &slot, ChildState::Failed);
+                    // Chained before the state flips: whoever sees `failed`
+                    // can already find the event.
+                    self.chain("project.kernel.failed", json!({"project_id": id, "reason": why}));
                     self.launcher.revoke_tokens(&id);
                     self.launcher.clean_spawn_file(&id);
-                    self.chain("project.kernel.failed", json!({"project_id": id, "reason": why}));
+                    self.set_state(&id, &slot, ChildState::Failed);
                     return;
                 }
                 Some(Ok(after)) => {
