@@ -1,0 +1,25 @@
+{
+  "_fixture": "ASSUMED SHAPE, NOT RECORDED. The real fleet_status output schema has not been captured (no call to the Cognitum cloud is made from this repo's agents). The owner replaces this file with the real capture; see docs/research/mesh-placement/cognitum-fleet-inventory.md.",
+  "region": "us-east",
+  "devices": [
+    {
+      "device_id": "4b0c1b1e-7a52-4f0e-8d3a-0d3c8f9a1e11",
+      "public_key": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "firmware": "0.24.2",
+      "online": true,
+      "last_seen": "2026-10-02T12:00:00Z"
+    },
+    {
+      "deviceId": "9d2f6a40-1c33-4a8e-b7aa-5e7c0b6d2f22",
+      "publicKey": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "firmware_version": "0.22.20",
+      "status": "offline"
+    },
+    {
+      "id": "c0ffee00-0000-4000-8000-000000000003",
+      "version": "0.24.2",
+      "online": false
+    },
+    { "note": "an entry without any device id is skipped, not guessed at" }
+  ]
+}

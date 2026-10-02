@@ -415,14 +415,23 @@ impl PlacementControlPlane {
                     .unwrap_or(crate::workload_governance::NodeTrustTier::Discovered),
                 "network": "egress", "resource_cost": 0.0,
             }});
+            // Stop and unload only shrink what is running, so they are never
+            // blocked by trust policy: an operator can always take down what
+            // they placed, including on a peer since demoted. The denial is
+            // still chained so the audit shows the override.
+            let mut overridden = None;
             if let GateDecision::Deny { reason, .. } = self.gate.check(&self.node_id, m, &ctx) {
-                return Err(PlaneError::Governance(reason));
+                if !method::is_teardown(m) {
+                    return Err(PlaneError::Governance(reason));
+                }
+                overridden = Some(reason);
             }
             Some(
                 self.chain_event(
                     crate::workload_governance::event_kind_for(m)
                         .unwrap_or(chain::EVENT_KIND_WORKLOAD_REFUSE),
-                    json!({ "phase": "request", "instance_id": instance_id, "node": rec.node_id }),
+                    json!({ "phase": "request", "instance_id": instance_id, "node": rec.node_id,
+                            "gate_denial_overridden_for_teardown": overridden }),
                 ),
             )
         } else {

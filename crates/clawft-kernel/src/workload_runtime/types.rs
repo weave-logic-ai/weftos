@@ -322,6 +322,18 @@ pub trait WorkloadRuntime: Send + Sync {
     /// Network exposure instances of this adapter actually get, reported
     /// to the gate as the request's `network` (never assumed).
     fn network_exposure(&self) -> NetworkPolicy;
+    /// Re-attach an instance this adapter loaded before the controller
+    /// restarted (its in-memory table is gone but the device still holds
+    /// it). The adapter verifies the instance is still there and still the
+    /// pinned version, so `stop` / `unload` work again; it starts and
+    /// changes nothing on the device.
+    async fn adopt(&self, h: &InstanceHandle, _w: &VerifiedWorkload) -> Result<(), RuntimeError> {
+        Err(RuntimeError::Unsupported(format!(
+            "{} cannot re-adopt {}",
+            self.id(),
+            h.instance_id
+        )))
+    }
     /// Instances that must stop before a console run of `h`. The host
     /// gates each one as `workload.stop` before calling [`Self::preempt`].
     async fn console_preemptions(

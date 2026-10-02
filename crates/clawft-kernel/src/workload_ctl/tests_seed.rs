@@ -28,7 +28,7 @@ use crate::workload_runtime::{
     WorkloadHost,
 };
 
-const NODE: &str = "seed-kitchen";
+pub(super) const NODE: &str = "seed-kitchen";
 
 struct Creds;
 impl SeedCredentials for Creds {
@@ -44,7 +44,7 @@ async fn mock_seed() -> MockServer {
     mock_seed_start(200, 1).await
 }
 
-async fn mock_seed_start(start_status: u16, starts: u64) -> MockServer {
+pub(super) async fn mock_seed_start(start_status: u16, starts: u64) -> MockServer {
     let s = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/apps"))
@@ -202,6 +202,17 @@ async fn seed_plane(
     server: &MockServer,
     tier: TrustTier,
 ) -> (PlacementControlPlane, Arc<ChainManager>, Arc<ChainManager>) {
+    seed_plane_at(server, tier, None)
+}
+
+/// [`seed_plane`] with the controller's state file at `state`: a second
+/// call with the same path is a controller restart (fresh plane, fresh
+/// adapter).
+pub(super) fn seed_plane_at(
+    server: &MockServer,
+    tier: TrustTier,
+    state: Option<&std::path::Path>,
+) -> (PlacementControlPlane, Arc<ChainManager>, Arc<ChainManager>) {
     let rt = SeedApiRuntime::new(
         SeedConfig {
             node_id: NODE.into(),
@@ -244,11 +255,15 @@ async fn seed_plane(
         anchors(),
         Arc::new(MeshConnector::new(false)),
     );
+    let plane = match state {
+        Some(p) => plane.with_state_file(p).unwrap(),
+        None => plane,
+    };
     plane.add_seed(NODE, host, tier).unwrap();
     (plane, chain, seed_chain)
 }
 
-fn pin_order(start: bool) -> StorePinOrder {
+pub(super) fn pin_order(start: bool) -> StorePinOrder {
     StorePinOrder {
         node_id: NODE.into(),
         registry: "cognitum".into(),

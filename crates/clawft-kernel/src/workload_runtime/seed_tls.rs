@@ -3,10 +3,18 @@
 //! A Seed serves HTTPS with a self-signed certificate, so public-CA
 //! verification cannot succeed. Rather than disabling verification (which
 //! would hand the per-Seed bearer token to anyone answering the handshake),
-//! the operator pins the SHA-256 of the Seed's leaf certificate, recorded
-//! once over a trusted path (USB link or first pairing). Any other
-//! certificate fails the handshake before a request, and so before the
-//! `Authorization` header, is sent.
+//! the operator pins either the SHA-256 of the Seed's leaf public key
+//! ([`SeedTls::PinnedSpki`], recommended) or of the whole leaf certificate
+//! ([`SeedTls::PinnedSha256`]), recorded once over a trusted path (USB link
+//! or first pairing). Any other certificate fails the handshake before a
+//! request, and so before the `Authorization` header, is sent.
+//!
+//! Firmware 0.22.20 and later cap leaf certificates at 825 days and renew
+//! them on the 6-hourly update loop, so a certificate pin can break with
+//! no operator action. The SPKI pin survives a renewal that keeps the
+//! device key; a renewal that changes the key is refused and needs the
+//! operator to re-pin over a trusted path (a new pin, never a silent
+//! re-trust).
 
 use std::sync::Arc;
 
@@ -24,6 +32,9 @@ pub enum SeedTls {
     WebPki,
     /// Accept exactly the leaf certificate with this SHA-256 (DER).
     PinnedSha256([u8; 32]),
+    /// Accept any leaf certificate whose SubjectPublicKeyInfo (DER) has
+    /// this SHA-256. Survives certificate renewal under the same key.
+    PinnedSpki([u8; 32]),
 }
 
 impl SeedTls {
@@ -51,6 +62,25 @@ impl SeedTls {
         Ok(Self::PinnedSha256(out))
     }
 
+    /// Parse `spki-sha256:<64 hex>` (colons between byte pairs allowed).
+    pub fn pinned_spki(fingerprint: &str) -> Result<Self, RuntimeError> {
+        let rest = fingerprint.strip_prefix("spki-sha256:").ok_or_else(|| {
+            RuntimeError::InvalidConfig("seed key pin must be spki-sha256:<64 hex digits>".into())
+        })?;
+        match Self::pinned(&format!("sha256:{rest}"))? {
+            Self::PinnedSha256(h) => Ok(Self::PinnedSpki(h)),
+            other => Ok(other),
+        }
+    }
+
+    /// `spki-sha256:<hex>` of a DER certificate's public key (for
+    /// recording a pin). `None` if the certificate does not parse.
+    pub fn spki_fingerprint(der: &[u8]) -> Option<String> {
+        let d = Sha256::digest(spki_der(der)?);
+        let hex: String = d.iter().map(|b| format!("{b:02x}")).collect();
+        Some(format!("spki-sha256:{hex}"))
+    }
+
     /// `sha256:<hex>` of a DER certificate (for recording a pin).
     pub fn fingerprint(der: &[u8]) -> String {
         let d = Sha256::digest(der);
@@ -61,12 +91,14 @@ impl SeedTls {
     /// The rustls client config for a pinned Seed (`None` for WebPki,
     /// which uses reqwest's default roots).
     pub(crate) fn client_config(&self) -> Option<rustls::ClientConfig> {
-        let Self::PinnedSha256(pin) = self else {
-            return None;
+        let pin = match self {
+            Self::PinnedSha256(p) => Pin::Cert(*p),
+            Self::PinnedSpki(p) => Pin::Spki(*p),
+            Self::WebPki => return None,
         };
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let verifier = Arc::new(PinnedCert {
-            pin: *pin,
+            pin,
             provider: provider.clone(),
         });
         let mut cfg = rustls::ClientConfig::builder_with_provider(provider)
@@ -80,11 +112,59 @@ impl SeedTls {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum Pin {
+    Cert([u8; 32]),
+    Spki([u8; 32]),
+}
+
+/// One DER element: returns `(content, rest)` for a `tag` at the start of
+/// `b`. Lengths beyond 4 bytes are rejected.
+fn der_take(b: &[u8], tag: u8) -> Option<(&[u8], &[u8])> {
+    let (&t, b) = b.split_first()?;
+    if t != tag {
+        return None;
+    }
+    let (&l0, b) = b.split_first()?;
+    let (len, b) = if l0 < 0x80 {
+        (l0 as usize, b)
+    } else {
+        let n = (l0 & 0x7f) as usize;
+        if n == 0 || n > 4 || b.len() < n {
+            return None;
+        }
+        let len = b[..n].iter().fold(0usize, |a, x| (a << 8) | *x as usize);
+        (len, &b[n..])
+    };
+    (b.len() >= len).then(|| b.split_at(len))
+}
+
+/// The DER `SubjectPublicKeyInfo` element (header included) of an X.509
+/// certificate.
+fn spki_der(cert: &[u8]) -> Option<&[u8]> {
+    let (cert, _) = der_take(cert, 0x30)?;
+    let (tbs, _) = der_take(cert, 0x30)?;
+    let mut rest = tbs;
+    if rest.first() == Some(&0xa0) {
+        rest = der_take(rest, 0xa0)?.1; // version
+    }
+    // serial, signature, issuer, validity, subject
+    let (_, r) = der_take(rest, 0x02)?;
+    rest = r;
+    for _ in 0..4 {
+        rest = der_take(rest, 0x30)?.1;
+    }
+    let (inner, _) = der_take(rest, 0x30)?;
+    // Header length = element length minus content length.
+    let head = rest.len() - der_take(rest, 0x30)?.1.len() - inner.len();
+    Some(&rest[..head + inner.len()])
+}
+
 /// Accepts only the pinned leaf; handshake signatures are still verified,
 /// so the peer must hold the pinned certificate's private key.
 #[derive(Debug)]
 struct PinnedCert {
-    pin: [u8; 32],
+    pin: Pin,
     provider: Arc<rustls::crypto::CryptoProvider>,
 }
 
@@ -97,8 +177,12 @@ impl ServerCertVerifier for PinnedCert {
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        let got: [u8; 32] = Sha256::digest(end_entity.as_ref()).into();
-        if got == self.pin {
+        let ok = match self.pin {
+            Pin::Cert(p) => <[u8; 32]>::from(Sha256::digest(end_entity.as_ref())) == p,
+            Pin::Spki(p) => spki_der(end_entity.as_ref())
+                .is_some_and(|k| <[u8; 32]>::from(Sha256::digest(k)) == p),
+        };
+        if ok {
             Ok(ServerCertVerified::assertion())
         } else {
             Err(rustls::Error::General(

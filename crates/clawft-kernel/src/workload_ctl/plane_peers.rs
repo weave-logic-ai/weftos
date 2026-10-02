@@ -77,8 +77,16 @@ impl PlacementControlPlane {
             .and_then(|mut t| t.get_mut(node_id).map(|e| e.tier = tier))
             .is_some();
         self.facts.set_trust_tier(node_id, tier);
+        // A Seed is addressed in-process: governance reads the tier held
+        // beside its adapter.
+        let seed = self
+            .seeds
+            .write()
+            .ok()
+            .and_then(|mut s| s.get_mut(node_id).map(|e| e.1 = tier))
+            .is_some();
         self.persist();
-        known
+        known || seed
     }
 
     /// Make the known targets match the operator's `peers`. Returns one

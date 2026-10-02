@@ -53,6 +53,8 @@ mod tests_seed;
 #[cfg(test)]
 mod tests_state;
 #[cfg(test)]
+mod tests_teardown;
+#[cfg(test)]
 mod tests_two_node;
 
 pub use cog_kind::cog_workload_spec;

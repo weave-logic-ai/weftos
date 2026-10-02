@@ -32,6 +32,18 @@ use super::plane::{PLANE_CHAIN_SOURCE, PlacementControlPlane, PlacementRecord, P
 /// Route name recorded for Seed placements.
 pub const SEED_ROUTE: &str = "remote.api";
 
+/// What the controller keeps for one instance placed on a Seed: the
+/// adapter handle plus the store pin it came from, so the instance can be
+/// re-adopted by a fresh adapter after a controller restart.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct SeedEntry {
+    pub handle: InstanceHandle,
+    pub registry: String,
+    pub version: String,
+    #[serde(default)]
+    pub sha256: Option<String>,
+}
+
 /// An operator store pin to place on a Seed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorePinOrder {
@@ -149,8 +161,7 @@ impl PlacementControlPlane {
             refuse("start", &why);
             if rolled.is_err() {
                 // Still loaded: keep it addressable (status / unload).
-                self.track_seed(self.seed_record(o, &w, &h, &decision_id), h)
-                    .await;
+                self.track_seed(self.seed_record(o, &w, &h, &decision_id), h, o);
             }
             return Err(PlaneError::Call(super::plane::CallFailure::Refused(
                 super::msg::Refusal::new(super::msg::RefusalCode::Runtime, why),
@@ -162,7 +173,7 @@ impl PlacementControlPlane {
             json!({ "phase": "placed", "decision_id": decision_id, "node": o.node_id,
                     "route": SEED_ROUTE, "instance_id": h.instance_id }),
         );
-        self.track_seed(rec.clone(), h).await;
+        self.track_seed(rec.clone(), h, o);
         Ok(rec)
     }
 
@@ -184,14 +195,22 @@ impl PlacementControlPlane {
         }
     }
 
-    async fn track_seed(&self, rec: PlacementRecord, h: InstanceHandle) {
-        self.seed_handles
-            .lock()
-            .await
-            .insert(h.instance_id.clone(), h);
+    fn track_seed(&self, rec: PlacementRecord, h: InstanceHandle, o: &StorePinOrder) {
+        if let Ok(mut m) = self.seed_handles.lock() {
+            m.insert(
+                h.instance_id.clone(),
+                SeedEntry {
+                    handle: h,
+                    registry: o.registry.clone(),
+                    version: o.version.clone(),
+                    sha256: o.sha256.clone(),
+                },
+            );
+        }
         if let Ok(mut p) = self.placements.lock() {
             p.insert(rec.instance_id.clone(), rec);
         }
+        self.persist();
     }
 
     /// Instance verbs on a Seed placement (gated and chained by its host).
@@ -201,11 +220,48 @@ impl PlacementControlPlane {
         m: &str,
     ) -> Option<Result<Value, PlaneError>> {
         let (host, _) = self.seed(&rec.node_id)?;
-        let mut handles = self.seed_handles.lock().await;
-        let Some(h) = handles.get(&rec.instance_id).cloned() else {
+        let entry = self
+            .seed_handles
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&rec.instance_id).cloned());
+        let Some(SeedEntry {
+            handle: h,
+            registry,
+            version,
+            sha256,
+        }) = entry
+        else {
             return Some(Err(PlaneError::Unknown(rec.instance_id.clone())));
         };
         let err = |e: crate::workload_runtime::RuntimeError| PlaneError::Governance(e.to_string());
+        // After a controller restart the adapter has no table: re-attach
+        // the instance (the Seed must still hold the pinned cog) so every
+        // verb below works on it again.
+        let adopted = async {
+            let w =
+                VerifiedWorkload::store_pin(&registry, &h.workload_id, &version, sha256.as_deref())
+                    .map_err(err)?;
+            host.adopt(&h, &w).await.map_err(err)
+        }
+        .await;
+        if let Err(e) = adopted {
+            // The Seed no longer holds the cog (removed out of band): an
+            // unload has nothing left to do but forget the record.
+            if m == method::UNLOAD && e.to_string().contains("is not installed on the Seed") {
+                if let Ok(mut s) = self.seed_handles.lock() {
+                    s.remove(&rec.instance_id);
+                }
+                if let Ok(mut p) = self.placements.lock() {
+                    p.remove(&rec.instance_id);
+                }
+                self.persist();
+                return Some(Ok(
+                    json!({ "unloaded": rec.instance_id, "note": "not on the Seed" }),
+                ));
+            }
+            return Some(Err(e));
+        }
         Some(match m {
             method::STATUS => {
                 Ok(json!({ "instance_id": h.instance_id, "status": host.status(&h).await }))
@@ -223,7 +279,13 @@ impl PlacementControlPlane {
             method::UNLOAD => {
                 let r = host.unload(h.clone()).await;
                 if r.is_ok() {
-                    handles.remove(&rec.instance_id);
+                    if let Ok(mut m) = self.seed_handles.lock() {
+                        m.remove(&rec.instance_id);
+                    }
+                    if let Ok(mut p) = self.placements.lock() {
+                        p.remove(&rec.instance_id);
+                    }
+                    self.persist();
                 }
                 r.map(|_| json!({ "unloaded": rec.instance_id }))
                     .map_err(err)

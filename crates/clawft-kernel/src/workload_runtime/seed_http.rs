@@ -91,14 +91,23 @@ impl HttpSeedTransport {
     /// Transport for `base_url`.
     ///
     /// An `https://` Seed is trusted per `tls`: WebPKI, or exactly the
-    /// operator-pinned certificate ([`SeedTls::PinnedSha256`]; a Seed's own
-    /// certificate is self-signed). Certificate checking is never switched
+    /// operator-pinned certificate or key ([`SeedTls::PinnedSha256`],
+    /// [`SeedTls::PinnedSpki`]; a Seed's own certificate is self-signed). Certificate checking is never switched
     /// off. A pin on an `http://` base is refused (it would protect nothing
     /// while looking as if it did).
     pub fn new(base_url: &str, tls: SeedTls) -> Result<Self, RuntimeError> {
         let base = validate_base_url(base_url)?;
-        let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
-        if let SeedTls::PinnedSha256(_) = tls {
+        // A Seed is reached directly (USB link-local, LAN or tailnet), never
+        // through a proxy: a system or environment proxy cannot route
+        // `169.254.0.0/16` and would also see the bearer token. Idle
+        // connections are not pooled: the Seed closes a keep-alive
+        // connection after a few seconds, and reusing the stale one fails
+        // with "error sending request".
+        let mut builder = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .pool_max_idle_per_host(0);
+        if matches!(tls, SeedTls::PinnedSha256(_) | SeedTls::PinnedSpki(_)) {
             if !base.starts_with("https://") {
                 return Err(RuntimeError::InvalidConfig(
                     "a seed TLS pin needs an https:// base URL".into(),

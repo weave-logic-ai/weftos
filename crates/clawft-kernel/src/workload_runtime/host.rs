@@ -240,6 +240,31 @@ impl WorkloadHost {
         r
     }
 
+    /// Re-attach an instance loaded before a controller restart
+    /// ([`WorkloadRuntime::adopt`]), gated as `workload.load` and chained
+    /// with phase `readopted`. A no-op if the instance is already known.
+    pub async fn adopt(
+        &self,
+        h: &InstanceHandle,
+        w: &VerifiedWorkload,
+    ) -> Result<(), RuntimeError> {
+        if self.loaded.lock().await.contains_key(&h.instance_id) {
+            return Ok(());
+        }
+        self.check("workload.load", w, &w.kind, false)?;
+        let r = self.runtime.adopt(h, w).await;
+        if r.is_ok() {
+            self.loaded
+                .lock()
+                .await
+                .insert(h.instance_id.clone(), (w.clone(), false));
+        }
+        let mut payload = self.base(w, Some(&h.instance_id));
+        payload["phase"] = json!("readopted");
+        self.outcome(chain::EVENT_KIND_WORKLOAD_LOAD, payload, &r);
+        r
+    }
+
     /// Gate and start.
     pub async fn start(&self, h: &InstanceHandle) -> Result<(), RuntimeError> {
         let (w, emu) = self.workload_of(h).await?;

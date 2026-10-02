@@ -27,12 +27,15 @@ pub mod container;
 pub mod container_cmd;
 pub mod container_relay;
 pub mod evidence;
+pub mod fleet_inventory;
+pub mod fleet_mcp;
 pub mod host;
 pub mod host_contract;
 pub mod host_seed;
 pub mod logical;
 pub mod native;
 pub mod seed;
+pub mod seed_bind;
 pub mod seed_client;
 pub mod seed_creds;
 pub mod seed_http;
@@ -49,6 +52,8 @@ mod tests_container;
 #[cfg(test)]
 mod tests_container_relay;
 #[cfg(test)]
+mod tests_fleet_inventory;
+#[cfg(test)]
 mod tests_host;
 #[cfg(test)]
 mod tests_live;
@@ -57,11 +62,15 @@ mod tests_native;
 #[cfg(test)]
 mod tests_seed;
 #[cfg(test)]
+mod tests_seed_bind;
+#[cfg(test)]
 mod tests_seed_host;
 #[cfg(test)]
 mod tests_seed_install;
 #[cfg(test)]
 mod tests_seed_ops;
+#[cfg(test)]
+mod tests_seed_pin;
 #[cfg(test)]
 mod tests_seed_transport;
 
@@ -69,6 +78,10 @@ pub use cog_spec::{CogSpec, ConsoleLimits, Resources};
 pub use container::{ContainerRuntime, ContainerRuntimeConfig};
 pub use container_cmd::{CommandRunner, Engine, SystemRunner};
 pub use evidence::RunEvidence;
+pub use fleet_inventory::{
+    FleetCandidate, FleetCheck, FleetError, FleetInventory, FleetMcp, ReadOnlyFleet,
+};
+pub use fleet_mcp::{HttpFleetMcp, OAuthTokens};
 pub use host::{RUNTIME_CHAIN_SOURCE, WorkloadHost};
 pub use host_contract::HostContract;
 pub use logical::{
@@ -76,10 +89,15 @@ pub use logical::{
 };
 pub use native::{NativeConfig, NativeRuntime};
 pub use seed::{SeedApiRuntime, SeedConfig, SeedPin};
+pub use seed_bind::{
+    BindError, BindRecord, Binding, SeedBinder, SignedBind, attest_seed_facts, seed_node_id,
+    sign_bind,
+};
 pub use seed_creds::FileCredentials;
 pub use seed_http::{HttpSeedTransport, SeedCredentials, SeedTransport};
 pub use seed_ops::{SeedBackup, UpgradeOutcome};
 pub use types::{
     Admission, ControlMode, InstanceHandle, InstanceState, InstanceStatus, Preemption,
-    ProjectPayload, RunMode, RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadRuntime, WorkloadSource,
+    ProjectPayload, RunMode, RuntimeError, VerifiedWorkload, WorkloadConfig, WorkloadRuntime,
+    WorkloadSource,
 };
