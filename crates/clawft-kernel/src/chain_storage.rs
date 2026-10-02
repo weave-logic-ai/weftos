@@ -18,6 +18,11 @@
 //!    legacy chain stays in use (WARN) until `weaver migrate user-chain`
 //!    (ADR-103 Phase 1) moves it.
 //!
+//! Once the legacy chain
+//! carries a `MIGRATED-TO-WEFTOS.txt` marker, a boot that would still land on
+//! it is refused (it would fork history) unless `WEFTOS_RUNTIME_DIR` isolates
+//! it or `--adopt-legacy-chain` is passed (with a WARN).
+//!
 //! Whichever chain is in use is guarded by [`ChainLock`] (`chain.lock` beside
 //! it) for the kernel's lifetime, so two kernels can never append to one
 //! chain. In this crate's own unit tests the default is a fresh temp dir per
@@ -27,7 +32,8 @@ use std::path::{Path, PathBuf};
 
 use clawft_types::config::KernelConfig;
 use clawft_types::runtime_paths::{
-    RootSource, RuntimePaths, legacy_chain_left_behind, user_chain_checkpoint, user_runtime_root,
+    RootSource, RuntimePaths, legacy_chain_left_behind, legacy_migration_marker,
+    user_chain_checkpoint, user_runtime_root,
 };
 
 /// The runtime paths this boot uses for every non-chain runtime file
@@ -85,7 +91,7 @@ pub const LEGACY_ACTIVE_WINDOW: std::time::Duration = std::time::Duration::from_
 /// Kernels that know about the lock create `chain.lock` the first time they
 /// use a chain, so its absence means the last writer was an older,
 /// lock-unaware build that may still be running.
-fn lock_unaware_writer_age(checkpoint: &Path, now: std::time::SystemTime) -> Option<u64> {
+pub(crate) fn lock_unaware_writer_age(checkpoint: &Path, now: std::time::SystemTime) -> Option<u64> {
     if ChainLock::lock_path(checkpoint).exists() {
         return None;
     }
@@ -126,6 +132,29 @@ fn legacy_adoption_refusal(
             legacy.display()
         )
     })
+}
+
+/// Fork hazard: the legacy chain in `dir` was migrated (marker beside it), and
+/// this boot would still append to it. `--adopt-legacy-chain` overrides, with
+/// a loud WARN.
+fn migrated_refusal(dir: &Path, adopt_legacy: bool) -> Option<String> {
+    let (marker, dest) = legacy_migration_marker(dir)?;
+    if adopt_legacy {
+        tracing::warn!(
+            marker = %marker.display(),
+            "--adopt-legacy-chain overrides a migration marker: this kernel appends to the \
+             legacy chain and forks history from the migrated user chain"
+        );
+        return None;
+    }
+    Some(format!(
+        "the legacy chain in {} was migrated to {} (see {}); booting on it would fork \
+         history. Use the migrated chain (`weaver kernel start --profile user`), isolate this run with WEFTOS_RUNTIME_DIR, or \
+         pass --adopt-legacy-chain to knowingly continue on the legacy copy",
+        dir.display(),
+        dest.as_deref().unwrap_or("~/.weftos/chain"),
+        marker.display()
+    ))
 }
 
 /// Choose the default chain for `paths` (see module docs, rule 2 and 3).
@@ -182,35 +211,39 @@ fn choose_default_chain_inner(
         return choose_user_chain(paths, home, new_chain, adopt_legacy, now);
     }
     let resolved = paths.chain_checkpoint();
-    let Some(legacy) = legacy_chain_left_behind(paths, home) else {
-        // Rooted at ~/.clawft itself (any non-project cwd, e.g. $HOME): the
-        // resolved chain IS the legacy chain, so the same first-adoption guard
-        // applies (Phase 0 review R1). `--new-chain` cannot start a fresh
-        // chain in place of it: its first checkpoint would overwrite history.
-        if matches!(paths.source(), RootSource::LegacyHome) && has_chain(&resolved) {
-            let refusal = if new_chain {
-                Some(format!(
-                    "--new-chain cannot start a fresh chain at {} because the legacy chain \
-                     lives there; start the kernel from a project, or set \
-                     kernel.chain.checkpoint_path to a new location",
-                    resolved.display()
-                ))
-            } else {
-                legacy_adoption_refusal(&resolved, adopt_legacy, now)
-            };
-            return ChainChoice {
-                checkpoint: resolved,
-                legacy_in_use: true,
-                warning: None,
-                refusal,
-            };
-        }
-        return ChainChoice {
-            checkpoint: resolved,
+    let plain = |checkpoint: PathBuf, warning: Option<String>, refusal: Option<String>| {
+        ChainChoice {
+            checkpoint,
             legacy_in_use: false,
-            warning: None,
-            refusal: None,
+            warning,
+            refusal,
+        }
+    };
+    let migrated_refusal = |dir: &Path| migrated_refusal(dir, adopt_legacy);
+    // Rooted at ~/.clawft itself (any non-project cwd, e.g. $HOME): the
+    // resolved chain IS the legacy chain, so the first-adoption guard applies
+    // (Phase 0 review R1), plus the migration marker. `--new-chain` cannot
+    // start a fresh chain in place of it: its first checkpoint would
+    // overwrite history.
+    if matches!(paths.source(), RootSource::LegacyHome) && has_chain(&resolved) {
+        let refusal = if new_chain {
+            Some(format!(
+                "--new-chain cannot start a fresh chain at {} because the legacy chain \
+                 lives there; start the kernel from a project, or set \
+                 kernel.chain.checkpoint_path to a new location",
+                resolved.display()
+            ))
+        } else {
+            migrated_refusal(paths.root())
+                .or_else(|| legacy_adoption_refusal(&resolved, adopt_legacy, now))
         };
+        return ChainChoice {
+            legacy_in_use: true,
+            ..plain(resolved, None, refusal)
+        };
+    }
+    let Some(legacy) = legacy_chain_left_behind(paths, home) else {
+        return plain(resolved, None, None);
     };
     if new_chain {
         let warning = format!(
@@ -219,14 +252,11 @@ fn choose_default_chain_inner(
             resolved.display(),
             legacy.display()
         );
-        return ChainChoice {
-            checkpoint: resolved,
-            legacy_in_use: false,
-            warning: Some(warning),
-            refusal: None,
-        };
+        return plain(resolved, Some(warning), None);
     }
-    let refusal = legacy_adoption_refusal(&legacy, adopt_legacy, now);
+    let legacy_dir = legacy.parent().unwrap_or(Path::new("."));
+    let refusal = migrated_refusal(legacy_dir)
+        .or_else(|| legacy_adoption_refusal(&legacy, adopt_legacy, now));
     let warning = format!(
         "no chain at {} but a legacy chain exists at {}; continuing on the legacy chain \
          and its key so history is not forked (nothing was moved). Phase 1 \
@@ -302,7 +332,8 @@ fn choose_user_chain(
         };
     }
     ChainChoice {
-        refusal: legacy_adoption_refusal(&legacy, adopt_legacy, now),
+        refusal: migrated_refusal(home.join(".clawft").as_path(), adopt_legacy)
+            .or_else(|| legacy_adoption_refusal(&legacy, adopt_legacy, now)),
         warning: Some(format!(
             "no user chain at {} but a legacy chain exists at {}; continuing on the legacy \
              chain and its key so history is not forked (nothing was moved). Run \
@@ -486,6 +517,29 @@ impl ChainLock {
         }
     }
 
+    /// Check that `checkpoint`'s chain is not locked, without creating or
+    /// writing the lock file. `Ok` when no lock file exists or it is free.
+    pub fn probe(checkpoint: &Path) -> Result<(), String> {
+        let path = Self::lock_path(checkpoint);
+        if !path.exists() {
+            return Ok(());
+        }
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(|e| format!("cannot open chain lock {}: {e}", path.display()))?;
+        match try_lock(&file) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(format!(
+                "chain {} is in use by another kernel (pid {})",
+                checkpoint.display(),
+                holder_pid(&path)
+            )),
+            Err(e) => Err(format!("cannot probe {}: {e}", path.display())),
+        }
+    }
+
     /// The lock file.
     pub fn path(&self) -> &Path {
         &self.path
@@ -660,11 +714,12 @@ mod tests {
         std::fs::create_dir_all(user.parent().unwrap()).unwrap();
         std::fs::write(&user, "{}").unwrap();
         let legacy = home.join(".clawft/chain.json");
-        // Project root falling back to legacy, and a legacy-rooted kernel.
-        for paths in [
-            RuntimePaths::resolve_with(None, Some(&proj), Some(&home)),
-            RuntimePaths::resolve_with(None, Some(&home), Some(&home)),
-        ] {
+        // A project with no chain of its own would fall back to legacy: refused.
+        let pp = RuntimePaths::resolve_with(None, Some(&proj), Some(&home));
+        let c = choose_default_chain(&pp, Some(&home), false, false, far_future());
+        assert!(c.legacy_in_use && c.refusal.expect("refused").contains("--profile user"));
+        // A legacy-rooted kernel would fall back to the legacy chain: refused.
+        for paths in [RuntimePaths::resolve_with(None, Some(&home), Some(&home))] {
             let c = choose_default_chain(&paths, Some(&home), false, false, far_future());
             let r = c.refusal.expect("refused");
             assert!(r.contains("--profile user") && r.contains("--adopt-legacy-chain"), "{r}");

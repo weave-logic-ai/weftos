@@ -134,7 +134,7 @@ Legacy chain: the chain used to resolve from `$WEFTOS_RUNTIME_DIR` or
 to a project root with no chain yet, while `~/.clawft/chain.*` exists,
 keeps using the legacy chain and its key and logs a WARN naming both
 paths; starting a fresh genesis there would fork the history. Nothing is
-moved: Phase 1's `weaver migrate user-chain` will do that. To start a
+moved until you run `weaver migrate user-chain` (below). To start a
 fresh chain at the project path instead, run
 `weaver kernel start --new-chain` (the legacy chain is left untouched), or
 pin `kernel.chain.checkpoint_path`. A fresh chain is otherwise created
@@ -163,6 +163,27 @@ so a new kernel cannot tell whether one is still writing
 Without the flag (and with no `chain.lock` yet) the start is refused. Even
 with the flag it is refused if the chain was modified within the last 120
 seconds ("looks in use by an older kernel").
+
+Migrating the legacy chain to the user chain: `weaver migrate user-chain
+[--dry-run] [--from DIR] [--to DIR]` (defaults `~/.clawft` to
+`~/.weftos/chain`). Stop every daemon that uses the legacy chain first.
+It refuses if a kernel holds `chain.lock` or the chain was modified in the
+last 120 s with no lock; takes the source `chain.lock` for the run; copies
+`chain.rvf`, `chain.json`, `chain.key`, `chain.tree.json` and
+`chain/anchors.jsonl` to a temp dir beside the destination with fsync;
+restores the copy with the kernel's own loader and checks file hashes,
+event count, head hash, integrity and the RVF signature against the
+source; then renames it into place and writes `MIGRATED_FROM.json` there
+and `MIGRATED-TO-WEFTOS.txt` beside the source. The source chain files are
+never modified. Re-running is a no-op ("already migrated"); a destination
+that holds a different chain is refused. `--dry-run` writes nothing. After
+migration a boot that would still land on the migrated legacy chain is
+refused unless `WEFTOS_RUNTIME_DIR` isolates it or `--adopt-legacy-chain`
+is passed (WARN: that forks history). Rollback: delete the destination
+directory and `MIGRATED-TO-WEFTOS.txt` beside the legacy chain; the legacy
+chain is intact. A chain with no `chain.key`, or whose signature cannot be verified
+against it, is refused unless `--allow-unsigned` is passed. If the marker write fails the command
+exits non-zero; re-run it to finish.
 
 Chain lock: whichever chain is in use is guarded by an exclusive lock
 (`chain.lock` beside it) for the kernel's lifetime. A second kernel on the
