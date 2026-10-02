@@ -333,6 +333,21 @@ checks (reachability, proto window, pin, journal, box key mode, a leftover
 `~/.weftos/run/node.key`, two listeners on 9489, force-revoked users) and the service
 tier skew.
 
+Journal quarantine (applies from the next release; the behaviour is on
+`wt/fu-mesh-service` at 7bbee6d36 and is not in a released binary). A crash-torn
+final line in the machine journal with nothing readable in it is accepted by the
+service itself at start and journalled as `auto=torn_tail`
+(`Bindings::auto_accept_torn_tail`,
+`crates/clawft-mesh-service/src/bindings/accept.rs`); no action is needed. Any
+other bad tail makes the journal read-only for binds and certificate issues
+(`journal.rs:16`, `Journal::read_only`), and every user link stops at its next
+12 h renewal until an admin runs `weaver mesh journal verify --accept-truncate`.
+After a repeat quarantine, `weaver mesh journal verify --json` lists every
+`pending_quarantines`, and one acceptance clears all of them. So review every
+older `journal.corrupt.*` file first, and pass `--floor N` if an older file holds
+a serial above the high-water the journal carried (`--seq N` names a specific
+quarantine instead of the newest).
+
 ### Expected Outputs
 
 | Output | Location | Description |
