@@ -158,13 +158,6 @@
    "confidence": "medium"
   },
   {
-   "ref": "chip:bosch-bno055",
-   "type": "imu",
-   "grade": "B",
-   "why": "9-DOF with on-chip absolute-orientation fusion; no figures in the catalog spec",
-   "confidence": "low"
-  },
-  {
    "ref": "module:lsm6dsv-imu",
    "type": "imu",
    "grade": "B",
@@ -186,13 +179,6 @@
    "confidence": "medium"
   },
   {
-   "ref": "module:icm20948-imu",
-   "type": "imu",
-   "grade": "C",
-   "why": "low-cost MEMS IMU, raw data only; no figures in the catalog spec",
-   "confidence": "low"
-  },
-  {
    "ref": "module:mpu-6050-imu",
    "type": "imu",
    "grade": "C",
@@ -205,13 +191,6 @@
    "grade": "C",
    "why": "low-cost MEMS IMU, raw data only; catalog spec dof=9",
    "confidence": "medium"
-  },
-  {
-   "ref": "chip:tdk-icm20948",
-   "type": "imu",
-   "grade": "C",
-   "why": "low-cost MEMS IMU, raw data only; no figures in the catalog spec",
-   "confidence": "low"
   },
   {
    "ref": "chip:mpu-6050",
@@ -284,25 +263,11 @@
    "confidence": "medium"
   },
   {
-   "ref": "module:bme280-env",
-   "type": "environmental",
-   "grade": "C",
-   "why": "consumer T/RH/P part with stated +-1 C / +-3 %RH / +-1 hPa; catalog spec measures=T (0.01°C), RH (0.001 %RH), pressure (Pa)",
-   "confidence": "medium"
-  },
-  {
    "ref": "chip:bme280",
    "type": "environmental",
    "grade": "C",
    "why": "consumer T/RH/P part with stated +-1 C / +-3 %RH / +-1 hPa; catalog spec temp=-40..+85 C (+-1 C), rh=0-100% (+-3%), press=300-1100 hPa (+-1 hPa)",
    "confidence": "medium"
-  },
-  {
-   "ref": "chip:bosch-bme280",
-   "type": "environmental",
-   "grade": "C",
-   "why": "consumer T/RH/P part with stated +-1 C / +-3 %RH / +-1 hPa; no figures in the catalog spec",
-   "confidence": "low"
   },
   {
    "ref": "module:bme680-env-gas",
@@ -494,21 +459,7 @@
    "confidence": "low"
   },
   {
-   "ref": "module:st-vl53l1x-breakout",
-   "type": "tof-lidar",
-   "grade": "C",
-   "why": "single-zone laser ToF, ~4 m; catalog spec range=up to ~4 m",
-   "confidence": "medium"
-  },
-  {
    "ref": "module:vl53l1x-tof",
-   "type": "tof-lidar",
-   "grade": "C",
-   "why": "single-zone laser ToF, ~4 m; catalog spec range=~4 m, rate=up to 50 Hz",
-   "confidence": "medium"
-  },
-  {
-   "ref": "chip:st-vl53l1x",
    "type": "tof-lidar",
    "grade": "C",
    "why": "single-zone laser ToF, ~4 m; catalog spec range=up to ~4 m",
@@ -518,7 +469,7 @@
    "ref": "chip:vl53l1x",
    "type": "tof-lidar",
    "grade": "C",
-   "why": "single-zone laser ToF, ~4 m; catalog spec range=~4 m, rate=up to 50 Hz",
+   "why": "single-zone laser ToF, ~4 m; catalog spec range=up to ~4 m",
    "confidence": "medium"
   },
   {
@@ -753,13 +704,6 @@
    "confidence": "medium"
   },
   {
-   "ref": "chip:infineon-bgt60tr13c",
-   "type": "radar",
-   "grade": "B",
-   "why": "60 GHz radar IC/module with raw or fine-range access; catalog spec bw=>5 GHz, band=58-63.5 GHz, channels=1Tx/3Rx",
-   "confidence": "medium"
-  },
-  {
    "ref": "chip:infineon-bgt60utr11aip",
    "type": "radar",
    "grade": "B",
@@ -848,13 +792,6 @@
    "type": "radar",
    "grade": "A",
    "why": "automotive/industrial-grade FMCW MIMO radar; catalog spec bw=4 GHz, freq=60 GHz",
-   "confidence": "medium"
-  },
-  {
-   "ref": "chip:ti-iwr6843",
-   "type": "radar",
-   "grade": "A",
-   "why": "automotive/industrial-grade FMCW MIMO radar; catalog spec band=60-64 GHz, channels=3Tx/4Rx",
    "confidence": "medium"
   },
   {
@@ -959,13 +896,6 @@
    "ref": "module:rtl-sdr",
    "type": "sdr",
    "grade": "C",
-   "why": "8-bit RX-only dongle; no figures in the catalog spec",
-   "confidence": "low"
-  },
-  {
-   "ref": "module:rtl-sdr-rtl2832u",
-   "type": "sdr",
-   "grade": "C",
    "why": "8-bit RX-only dongle; catalog spec adc=8-bit, bw=~2.4 MHz usable, tuning=~24 MHz - 1.766 GHz",
    "confidence": "medium"
   },
@@ -1024,13 +954,6 @@
    "grade": "A",
    "why": "12-bit 2x2 full-duplex wideband SDR; catalog spec adc=12-bit, tuning=70 MHz-6 GHz class, channels=2x2",
    "confidence": "medium"
-  },
-  {
-   "ref": "module:inmp441-mems-mic",
-   "type": "microphone",
-   "grade": "C",
-   "why": "consumer MEMS / electret microphone; no figures in the catalog spec",
-   "confidence": "low"
   },
   {
    "ref": "module:inmp441-mic",
@@ -1194,21 +1117,7 @@
    "confidence": "low"
   },
   {
-   "ref": "chip:adi-ad8232",
-   "type": "biopotential",
-   "grade": "C",
-   "why": "single-lead hobby ECG/EMG front end; no figures in the catalog spec",
-   "confidence": "low"
-  },
-  {
    "ref": "module:polar-h10",
-   "type": "biopotential",
-   "grade": "B",
-   "why": "validated consumer ECG chest strap; no figures in the catalog spec",
-   "confidence": "low"
-  },
-  {
-   "ref": "module:polar-h10-hr-strap",
    "type": "biopotential",
    "grade": "B",
    "why": "validated consumer ECG chest strap; no figures in the catalog spec",
@@ -1243,13 +1152,6 @@
    "confidence": "low"
   },
   {
-   "ref": "module:max30102-module",
-   "type": "ppg-optical",
-   "grade": "C",
-   "why": "hobby red/IR pulse-ox module; no figures in the catalog spec",
-   "confidence": "low"
-  },
-  {
    "ref": "module:max30102-ppg",
    "type": "ppg-optical",
    "grade": "C",
@@ -1262,13 +1164,6 @@
    "grade": "C",
    "why": "hobby red/IR pulse-ox module; catalog spec measures=red+IR PPG -> HR, SpO2",
    "confidence": "medium"
-  },
-  {
-   "ref": "chip:maxim-max30102",
-   "type": "ppg-optical",
-   "grade": "C",
-   "why": "hobby red/IR pulse-ox module; no figures in the catalog spec",
-   "confidence": "low"
   },
   {
    "ref": "chip:adi-max86141",
@@ -1290,13 +1185,6 @@
    "grade": "B",
    "why": "16-bit ADC at modest sample rates; catalog spec resolution=16-bit, rate=8-860 SPS, channels=4 single-ended / 2 differential",
    "confidence": "medium"
-  },
-  {
-   "ref": "chip:ti-ads1115",
-   "type": "adc",
-   "grade": "B",
-   "why": "16-bit ADC at modest sample rates; no figures in the catalog spec",
-   "confidence": "low"
   },
   {
    "ref": "chip:mcp33131d",
@@ -1363,13 +1251,6 @@
   },
   {
    "ref": "chip:gt911",
-   "type": "touch",
-   "grade": "C",
-   "why": "5-point capacitive touch controller; no figures in the catalog spec",
-   "confidence": "low"
-  },
-  {
-   "ref": "chip:goodix-gt911",
    "type": "touch",
    "grade": "C",
    "why": "5-point capacitive touch controller; no figures in the catalog spec",
