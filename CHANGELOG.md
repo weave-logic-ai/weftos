@@ -20,7 +20,8 @@ Staging area for changes after the 0.8.1 cut.
   check remain `enforce`-only.
 - Seed connections are now bidirectional, redial with jittered exponential
   backoff, drop after 5 minutes of inbound silence, and stop when the mesh
-  service stops.
+  service stops. There is no dial-side keepalive yet, so a seed that stays
+  silent for 300 s flaps `Left`/`Joined` every 5 minutes.
 
 ### Added — Weave topology Phase 2, per-project kernels (ADR-103 A7, package G)
 
