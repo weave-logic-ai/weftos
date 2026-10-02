@@ -565,6 +565,70 @@
       ]
     },
     {
+      "id": "bananapi-m1",
+      "name": "LeMaker BananaPi (M1)",
+      "vendor": "LeMaker",
+      "kind": "board",
+      "summary": "Allwinner A20 SBC, SATA + GbE. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "allwinner-a20",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "allwinner-a20"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "bananapro",
+      "name": "LeMaker BananaPro",
+      "vendor": "LeMaker",
+      "kind": "board",
+      "summary": "BananaPi Pro (A20, WiFi). Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "allwinner-a20",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "allwinner-a20"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
       "id": "bluerobotics-ping1d",
       "name": "Blue Robotics Ping1D single-beam echosounder",
       "vendor": "Blue Robotics",
@@ -3668,6 +3732,38 @@
       ]
     },
     {
+      "id": "nanopi",
+      "name": "NanoPi (family)",
+      "vendor": "FriendlyELEC",
+      "kind": "board",
+      "summary": "NanoPi SBC family (Allwinner H3/H5); Pi4J 1.2 experimental. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "allwinner-h3",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "allwinner-h3"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
       "id": "node-a1-esp32-s3-wroom-1-n16r8",
       "name": "ESP32-S3-WROOM-1 N16R8 DevKitC-1",
       "vendor": "Espressif (module)",
@@ -3888,6 +3984,102 @@
       "seen_in": [
         ".planning/sonobuoy/build/commercial-comparison.md"
       ]
+    },
+    {
+      "id": "odroid-c1",
+      "name": "Odroid-C1/C1+",
+      "vendor": "Hardkernel",
+      "kind": "board",
+      "summary": "Amlogic S805 quad-core SBC. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "amlogic-s805",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "amlogic-s805"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "odroid-xu4",
+      "name": "Odroid-XU4",
+      "vendor": "Hardkernel",
+      "kind": "board",
+      "summary": "Exynos 5422 octa-core (big.LITTLE), USB3/GbE. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "exynos-5422",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "exynos-5422"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "orangepi",
+      "name": "Orange Pi (family)",
+      "vendor": "Xunlong",
+      "kind": "board",
+      "summary": "Orange Pi SBC family (commonly Allwinner H3); Pi4J 1.2 experimental. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "allwinner-h3",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "allwinner-h3"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
     },
     {
       "id": "orbbec-gemini-2",
@@ -4624,6 +4816,422 @@
       ]
     },
     {
+      "id": "rpi-1-a",
+      "name": "Raspberry Pi 1 Model A",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "Original Pi Model A (no Ethernet). Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2835",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2835"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-1-a-plus",
+      "name": "Raspberry Pi 1 Model A+",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "Compact Pi 1 A+. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2835",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2835"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-1-b",
+      "name": "Raspberry Pi 1 Model B",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "Original Pi Model B (rev 1 & 2). Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2835",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2835"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-1-b-plus",
+      "name": "Raspberry Pi 1 Model B+",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "Pi 1 B+ (40-pin header). Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2835",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2835"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-2-b",
+      "name": "Raspberry Pi 2 Model B",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "First quad-core Pi. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2836",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2836"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-3-a-plus",
+      "name": "Raspberry Pi 3 Model A+",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "Compact Pi 3 A+. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2837b0",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2837b0"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-3-b",
+      "name": "Raspberry Pi 3 Model B",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "64-bit quad-core + WiFi/BT. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2837",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2837"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-3-b-plus",
+      "name": "Raspberry Pi 3 Model B+",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "Pi 3 B+ (1.4GHz, gigabit-over-USB). Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2837b0",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2837b0"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-cm1",
+      "name": "Raspberry Pi Compute Module 1",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "SODIMM compute module (BCM2835). Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2835",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2835"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-cm3",
+      "name": "Raspberry Pi Compute Module 3",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "SODIMM compute module (BCM2837). Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2837",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2837"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-cm3-plus",
+      "name": "Raspberry Pi Compute Module 3+",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "CM3+ (BCM2837, more flash options). Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2837",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2837"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-zero",
+      "name": "Raspberry Pi Zero",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "Tiny single-core Pi. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2835",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2835"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-zero-w",
+      "name": "Raspberry Pi Zero W",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "Pi Zero + WiFi/BT. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2835",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2835"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
       "id": "rtl-sdr",
       "name": "RTL-SDR (passive RF / spectrum receiver)",
       "vendor": "Realtek RTL2832U-based dongle",
@@ -5175,6 +5783,38 @@
         "firmware/node-a1-bringup/src/ssd1306.h",
         "firmware/node-a1-bringup/src/CMakeLists.txt"
       ]
+    },
+    {
+      "id": "synovoip-bpi",
+      "name": "Synovoip BPI (BananaPi)",
+      "vendor": "Synovoip",
+      "kind": "board",
+      "summary": "BananaPi variant; Pi4J 1.2 experimental. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "allwinner-a20",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "allwinner-a20"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
     },
     {
       "id": "ti-awr1642-evm",
@@ -6303,6 +6943,62 @@
       "seen_in": []
     },
     {
+      "id": "allwinner-a20",
+      "name": "Allwinner A20",
+      "manufacturer": "Allwinner",
+      "role": "SoC: Cortex-A7 dual-core",
+      "tags": [
+        "soc",
+        "sbc",
+        "arm"
+      ],
+      "summary": "SoC: Cortex-A7 dual-core used in Pi4J-supported SBCs.",
+      "spec": {
+        "cpu": "2x Cortex-A7",
+        "gpu": "Mali-400 MP2",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "mouser_query": "",
+      "datasheet": ""
+    },
+    {
+      "id": "allwinner-h3",
+      "name": "Allwinner H3",
+      "manufacturer": "Allwinner",
+      "role": "SoC: Cortex-A7 quad-core",
+      "tags": [
+        "soc",
+        "sbc",
+        "arm"
+      ],
+      "summary": "SoC: Cortex-A7 quad-core used in Pi4J-supported SBCs.",
+      "spec": {
+        "cpu": "4x Cortex-A7 @ 1.2GHz",
+        "gpu": "Mali-400 MP2",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "mouser_query": "",
+      "datasheet": ""
+    },
+    {
+      "id": "amlogic-s805",
+      "name": "Amlogic S805",
+      "manufacturer": "Amlogic",
+      "role": "SoC: Cortex-A5 quad-core",
+      "tags": [
+        "soc",
+        "sbc",
+        "arm"
+      ],
+      "summary": "SoC: Cortex-A5 quad-core used in Pi4J-supported SBCs.",
+      "spec": {
+        "cpu": "4x Cortex-A5 @ 1.5GHz",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "mouser_query": "",
+      "datasheet": ""
+    },
+    {
       "id": "ap2112",
       "name": "AP2112 3.3 V LDO regulator",
       "manufacturer": "Diodes Inc.",
@@ -6433,6 +7129,79 @@
       "mouser_query": "",
       "datasheet": "https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/",
       "seen_in": []
+    },
+    {
+      "id": "bcm2835",
+      "name": "Broadcom BCM2835",
+      "manufacturer": "Broadcom",
+      "role": "SoC: ARM1176JZF-S single-core",
+      "tags": [
+        "soc",
+        "sbc",
+        "arm"
+      ],
+      "summary": "SoC: ARM1176JZF-S single-core used in Pi4J-supported SBCs.",
+      "spec": {
+        "cpu": "ARM1176JZF-S @ 700MHz-1GHz",
+        "gpu": "VideoCore IV",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "mouser_query": "",
+      "datasheet": ""
+    },
+    {
+      "id": "bcm2836",
+      "name": "Broadcom BCM2836",
+      "manufacturer": "Broadcom",
+      "role": "SoC: Cortex-A7 quad-core",
+      "tags": [
+        "soc",
+        "sbc",
+        "arm"
+      ],
+      "summary": "SoC: Cortex-A7 quad-core used in Pi4J-supported SBCs.",
+      "spec": {
+        "cpu": "4x Cortex-A7 @ 900MHz",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "mouser_query": "",
+      "datasheet": ""
+    },
+    {
+      "id": "bcm2837",
+      "name": "Broadcom BCM2837",
+      "manufacturer": "Broadcom",
+      "role": "SoC: Cortex-A53 quad-core",
+      "tags": [
+        "soc",
+        "sbc",
+        "arm"
+      ],
+      "summary": "SoC: Cortex-A53 quad-core used in Pi4J-supported SBCs.",
+      "spec": {
+        "cpu": "4x Cortex-A53 @ 1.2GHz",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "mouser_query": "",
+      "datasheet": ""
+    },
+    {
+      "id": "bcm2837b0",
+      "name": "Broadcom BCM2837B0",
+      "manufacturer": "Broadcom",
+      "role": "SoC: Cortex-A53 quad-core (1.4GHz)",
+      "tags": [
+        "soc",
+        "sbc",
+        "arm"
+      ],
+      "summary": "SoC: Cortex-A53 quad-core (1.4GHz) used in Pi4J-supported SBCs.",
+      "spec": {
+        "cpu": "4x Cortex-A53 @ 1.4GHz",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "mouser_query": "",
+      "datasheet": ""
     },
     {
       "id": "bes2700",
@@ -6908,6 +7677,24 @@
           "ships_from": "Mouser"
         }
       ]
+    },
+    {
+      "id": "exynos-5422",
+      "name": "Samsung Exynos 5422",
+      "manufacturer": "Samsung",
+      "role": "SoC: big.LITTLE octa-core",
+      "tags": [
+        "soc",
+        "sbc",
+        "arm"
+      ],
+      "summary": "SoC: big.LITTLE octa-core used in Pi4J-supported SBCs.",
+      "spec": {
+        "cpu": "4x Cortex-A15 + 4x Cortex-A7 (octa)",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "mouser_query": "",
+      "datasheet": ""
     },
     {
       "id": "fdc2214",
