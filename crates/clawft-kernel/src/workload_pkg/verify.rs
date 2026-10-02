@@ -6,9 +6,12 @@
 //! Each failure class has its own [`VerifyError`] variant and stable
 //! [`VerifyError::code`].
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use ed25519_dalek::{Signature, VerifyingKey};
+
+use crate::workload_kind::{KindRegistry, validate_envelope};
 
 use super::codec::hex_decode_exact;
 use super::cognitum;
@@ -173,7 +176,20 @@ pub(crate) fn read_bounded(path: &Path, label: &str, max: u64) -> Result<Vec<u8>
             msg: format!("larger than {max} bytes"),
         });
     }
-    std::fs::read(path).map_err(|e| io_or_missing(e, label))
+    // Bounded read: the file may grow between the metadata check and here.
+    let mut out = Vec::new();
+    std::fs::File::open(path)
+        .map_err(|e| io_or_missing(e, label))?
+        .take(max + 1)
+        .read_to_end(&mut out)
+        .map_err(|e| io_or_missing(e, label))?;
+    if out.len() as u64 > max {
+        return Err(VerifyError::Io {
+            path: label.into(),
+            msg: format!("larger than {max} bytes"),
+        });
+    }
+    Ok(out)
 }
 
 fn io_or_missing(e: std::io::Error, label: &str) -> VerifyError {
@@ -193,12 +209,22 @@ pub fn verify_dir(
     anchors: &TrustAnchors,
     policy: &VerifyPolicy,
 ) -> Result<VerifiedPackage, VerifyError> {
+    verify_dir_in(dir, anchors, policy, &KindRegistry::builtin())
+}
+
+/// [`verify_dir`] against a caller-supplied kind registry.
+pub fn verify_dir_in(
+    dir: &Path,
+    anchors: &TrustAnchors,
+    policy: &VerifyPolicy,
+    kinds: &KindRegistry,
+) -> Result<VerifiedPackage, VerifyError> {
     let bytes = read_bounded(
         &dir.join(MANIFEST_FILE),
         MANIFEST_FILE,
         MAX_MANIFEST_BYTES as u64,
     )?;
-    verify_with_source(&bytes, &DirSource::new(dir), anchors, policy)
+    verify_with_source_in(&bytes, &DirSource::new(dir), anchors, policy, kinds)
 }
 
 /// Verify manifest bytes, reading listed files through `source`.
@@ -208,7 +234,18 @@ pub fn verify_with_source(
     anchors: &TrustAnchors,
     policy: &VerifyPolicy,
 ) -> Result<VerifiedPackage, VerifyError> {
-    let (envelope, body, mut signers) = parse_and_check(manifest, anchors)?;
+    verify_with_source_in(manifest, source, anchors, policy, &KindRegistry::builtin())
+}
+
+/// [`verify_with_source`] against a caller-supplied kind registry.
+pub fn verify_with_source_in(
+    manifest: &[u8],
+    source: &dyn FileSource,
+    anchors: &TrustAnchors,
+    policy: &VerifyPolicy,
+    kinds: &KindRegistry,
+) -> Result<VerifiedPackage, VerifyError> {
+    let (envelope, body, mut signers) = parse_and_check(manifest, anchors, kinds)?;
 
     if signers.is_empty()
         && policy.accept_cognitum_release
@@ -243,7 +280,16 @@ pub fn verify_manifest_signatures(
     manifest: &[u8],
     anchors: &TrustAnchors,
 ) -> Result<VerifiedPackage, VerifyError> {
-    let (envelope, body, signers) = parse_and_check(manifest, anchors)?;
+    verify_manifest_signatures_in(manifest, anchors, &KindRegistry::builtin())
+}
+
+/// [`verify_manifest_signatures`] against a caller-supplied kind registry.
+pub fn verify_manifest_signatures_in(
+    manifest: &[u8],
+    anchors: &TrustAnchors,
+    kinds: &KindRegistry,
+) -> Result<VerifiedPackage, VerifyError> {
+    let (envelope, body, signers) = parse_and_check(manifest, anchors, kinds)?;
     if signers.is_empty() {
         return Err(no_signer_error(&envelope));
     }
@@ -257,9 +303,17 @@ pub fn verify_manifest_signatures(
 
 type Checked = (ManifestEnvelope, CogPackageBody, Vec<AcceptedSigner>);
 
-fn parse_and_check(manifest: &[u8], anchors: &TrustAnchors) -> Result<Checked, VerifyError> {
+fn parse_and_check(
+    manifest: &[u8],
+    anchors: &TrustAnchors,
+    kinds: &KindRegistry,
+) -> Result<Checked, VerifyError> {
     let envelope = ManifestEnvelope::from_bytes(manifest)?;
-    let body = envelope.cog_body()?;
+    // The kind must be registered and accept the body. The verified package
+    // is still cog-shaped until a kind brings its own verified body, so a
+    // registered kind must also parse as a cog body.
+    validate_envelope(kinds, &envelope)?;
+    let body = envelope.cog_shaped_body()?;
     let signers = check_signatures(&envelope, anchors)?;
     Ok((envelope, body, signers))
 }

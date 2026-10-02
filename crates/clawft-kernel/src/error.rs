@@ -43,6 +43,12 @@ pub enum KernelError {
     #[error("boot error: {0}")]
     Boot(String),
 
+    /// Boot refused for a reason retrying cannot fix (chain lock held,
+    /// legacy chain adoption refused, unusable boot configuration). The
+    /// daemon exits 78 on this so service managers do not restart-loop it.
+    #[error("boot refused: {0}")]
+    BootRefused(String),
+
     /// IPC / messaging error.
     #[error("ipc error: {0}")]
     Ipc(String),

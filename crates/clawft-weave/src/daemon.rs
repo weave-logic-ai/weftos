@@ -3491,9 +3491,18 @@ pub async fn run(
     if restart_requested {
         info!("re-exec for restart");
         use std::os::unix::process::CommandExt;
-        let err = std::process::Command::new(std::env::current_exe()?)
-            .args(["kernel", "start", "--foreground"])
-            .exec(); // replaces process; only reached on error
+        // Original args (keeps `--profile user`), captured before the
+        // chdir with --config absolute, minus one-shot chain flags; an exe
+        // path that survives an update replacing the binary; an absolute
+        // runtime dir in the child's environment (Command::env).
+        let plan =
+            crate::boot_refusal::reexec_plan(&std::env::current_exe()?, crate::boot_refusal::replay());
+        let mut cmd = std::process::Command::new(&plan.exe);
+        cmd.args(&plan.args);
+        if let Some(rt) = &plan.runtime_dir {
+            cmd.env(clawft_types::runtime_paths::RUNTIME_DIR_ENV, rt);
+        }
+        let err = cmd.exec(); // replaces process; only reached on error
         eprintln!("re-exec failed: {err}");
         std::process::exit(1);
     }

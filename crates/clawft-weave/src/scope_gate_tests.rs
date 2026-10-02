@@ -241,10 +241,12 @@ fn population_allow_list_is_read_only_and_real() {
 
 /// Methods the `capability.rs` default would call anonymous `Read` but that
 /// can disclose or change state must stay off the list; the list never
-/// derives from capability.
+/// derives from capability. `chain.tail` is the one deliberate exception:
+/// the gateway facade serves `/api/chain/events` from it (owner decision).
 #[test]
 fn allow_list_excludes_known_sensitive_reads() {
-    for m in ["chain.local", "chain.tail", "chain.export", "substrate.read", "kernel.logs_stream", "agent.chat", "cluster.facts"] {
+    assert!(READ_ONLY_ALLOW.contains(&"chain.tail"));
+    for m in ["chain.local", "chain.export", "substrate.read", "kernel.logs_stream", "agent.chat", "cluster.facts"] {
         assert!(!READ_ONLY_ALLOW.contains(&m), "{m}");
     }
 }

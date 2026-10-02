@@ -28,6 +28,7 @@ pub mod msg;
 pub mod plane;
 pub mod plane_peers;
 pub mod plane_place;
+mod plane_prepare;
 mod plane_reconcile;
 pub mod plane_seed;
 mod plane_state;
@@ -41,6 +42,8 @@ mod test_support;
 mod tests_facts;
 #[cfg(test)]
 mod tests_flood;
+#[cfg(test)]
+mod tests_kind;
 #[cfg(test)]
 mod tests_peers;
 #[cfg(test)]

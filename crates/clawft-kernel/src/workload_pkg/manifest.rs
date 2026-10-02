@@ -32,6 +32,9 @@ pub enum ManifestError {
     /// A field failed validation.
     #[error("manifest invalid: {0}")]
     Invalid(String),
+    /// No workload kind is registered under the manifest's `kind`.
+    #[error(transparent)]
+    UnknownKind(#[from] crate::workload_kind::UnknownKind),
     /// Canonical encoding refused the value.
     #[error(transparent)]
     Canonical(#[from] CanonicalError),
@@ -143,6 +146,14 @@ impl ManifestEnvelope {
         if self.kind != KIND_COG {
             return Err(invalid(format!("kind {:?} is not a cog", self.kind)));
         }
+        self.cog_shaped_body()
+    }
+
+    /// The body parsed and validated as a cog package body, whatever the
+    /// envelope's `kind`. A registered kind whose verified package reuses
+    /// the cog body shape (the only shape `VerifiedPackage` carries today)
+    /// goes through this after its own `validate`.
+    pub fn cog_shaped_body(&self) -> Result<CogPackageBody, ManifestError> {
         let body: CogPackageBody = serde_json::from_value(self.body.clone())
             .map_err(|e| ManifestError::Parse(format!("cog body: {e}")))?;
         body.validate()?;

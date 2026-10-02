@@ -87,6 +87,15 @@ impl WorkloadHost {
                 Vec::new(),
                 0.25,
             ),
+            // TODO(package G): a real Project adapter needs a PackageTrust
+            // variant; until then this label matches no permit rule (fails closed).
+            WorkloadSource::Project(p) => (
+                "project_cert",
+                format!("project.{}.{}", p.project_id, p.cert_serial),
+                Vec::new(),
+                Vec::new(),
+                0.25,
+            ),
         };
         json!({ "workload": {
             "kind": kind,

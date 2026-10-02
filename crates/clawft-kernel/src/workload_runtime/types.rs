@@ -73,6 +73,24 @@ pub enum WorkloadSource {
         /// Optional expected SHA-256 of the store binary.
         sha256: Option<String>,
     },
+    /// A project workload, authorised by a project certificate rather than
+    /// a signed package. Type only: no adapter accepts it yet.
+    Project(ProjectPayload),
+}
+
+/// Identity of the project a [`WorkloadSource::Project`] workload belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectPayload {
+    /// Project id.
+    pub project_id: String,
+    /// Key id of the project signing key.
+    pub key_id: String,
+    /// Serial of the project certificate.
+    pub cert_serial: u64,
+    /// Key id of the user key that issued the certificate.
+    pub user_key_id: String,
+    /// Hash (hex) of the project policy in force.
+    pub policy_hash: String,
 }
 
 /// The verified payload of a signed package.

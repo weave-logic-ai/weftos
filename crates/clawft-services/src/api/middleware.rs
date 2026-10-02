@@ -339,3 +339,64 @@ mod tests {
         assert!(!is_localhost_origin("https://evil.localhost.com"));
     }
 }
+
+/// Host-header allow-list against DNS rebinding (ADR-102 review).
+///
+/// Applied only when the listener is bound to loopback: a rebinding page
+/// reaches `127.0.0.1` carrying its own hostname in `Host`, which this
+/// rejects with 421.
+pub async fn host_guard_middleware(
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let host = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    // Strip the port; keep bracketed IPv6 intact.
+    let name = match host.rfind(':') {
+        Some(i) if !host.ends_with(']') => &host[..i],
+        _ => host,
+    };
+    if matches!(name, "localhost" | "127.0.0.1" | "[::1]") {
+        next.run(req).await
+    } else {
+        let mut resp = Response::new(axum::body::Body::from("host not allowed"));
+        *resp.status_mut() = StatusCode::MISDIRECTED_REQUEST;
+        resp
+    }
+}
+
+#[cfg(test)]
+mod host_guard_tests {
+    use super::*;
+    use axum::{Router, routing::get};
+    use tower::ServiceExt;
+
+    async fn status_for(host: &str) -> StatusCode {
+        let app = Router::new()
+            .route("/x", get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn(host_guard_middleware));
+        app.oneshot(
+            Request::builder()
+                .uri("/x")
+                .header("host", host)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+    }
+
+    #[tokio::test]
+    async fn allows_loopback_hosts_and_rejects_others() {
+        for h in ["localhost:18789", "127.0.0.1:18789", "[::1]:18789", "localhost"] {
+            assert_eq!(status_for(h).await, StatusCode::OK, "{h}");
+        }
+        for h in ["evil.example:18789", "127.0.0.1.evil.example", ""] {
+            assert_eq!(status_for(h).await, StatusCode::MISDIRECTED_REQUEST, "{h}");
+        }
+    }
+}
