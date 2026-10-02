@@ -413,13 +413,20 @@ pub(crate) fn globs_overlap(a: &str, b: &str) -> bool {
 /// NOT checked here (see [`crate::parent_policy::verify_parent_policy`]);
 /// its rule hash is recomputed rather than trusted.
 pub fn merge(parent: &ParentPolicy, overlay: &Overlay) -> Result<Effective, OverlayError> {
+    // A parent with no threshold runs the engine default, so that default is
+    // the ceiling an overlay may not raise (otherwise 0.9 over "none" would
+    // loosen a 0.7 engine).
+    let mut view = parent_view(parent);
+    view.limits
+        .risk_threshold
+        .get_or_insert(crate::overlay_runtime::DEFAULT_RISK_THRESHOLD);
     let EffectiveOverlay {
         deny_actions,
         require_approval_actions,
         deny_rules,
         approval_rules,
         limits,
-    } = overlay_merge::merge(&parent_view(parent), &overlay.file)?;
+    } = overlay_merge::merge(&view, &overlay.file)?;
 
     // `max_processes = 0` would leave no slot for the kernel's own process.
     if limits.max_processes == Some(0) {
@@ -427,7 +434,6 @@ pub fn merge(parent: &ParentPolicy, overlay: &Overlay) -> Result<Effective, Over
             key: "limits.max_processes".into(),
         }));
     }
-    let view = parent_view(parent);
     for (i, a) in approval_rules.iter().enumerate() {
         for (j, g) in a.actions.iter().enumerate() {
             if let Some(pg) = view.deny_actions.iter().find(|pg| globs_overlap(g, pg)) {

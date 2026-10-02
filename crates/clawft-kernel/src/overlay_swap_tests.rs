@@ -109,3 +109,18 @@ fn concurrent_checks_and_swaps_never_pair_a_decision_with_the_wrong_hash() {
     }
     assert!(denies > 0 && permits > 0, "both generations must have been exercised");
 }
+
+#[test]
+fn a_swapped_gate_keeps_the_configured_rate_limit() {
+    // `start` configures an unlimited quota; the default would start denying
+    // ("rate limited") well inside this loop.
+    let f = fixture(&base_parent(), None);
+    let r = start(&f);
+    r.rt.apply_parent_update(parent_with(base_parent().rules, base_parent().limits, 2)).unwrap();
+    for i in 0..30_000 {
+        assert!(
+            matches!(check(&r.gate, "tool.read_file"), GateDecision::Permit { .. }),
+            "denied at check {i}"
+        );
+    }
+}

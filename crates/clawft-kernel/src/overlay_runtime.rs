@@ -83,6 +83,9 @@ impl OverlayGate {
     /// Replace the rules and publish `hash` in one step (see module docs).
     fn swap(&self, gate: GovernanceGate, hash: [u8; 32], cell: &RuleHashCell) {
         let mut w = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        // Keep the evaluation rate limit the kernel configured; a fresh gate
+        // would otherwise fall back to the default quota.
+        gate.engine().set_eval_rate_limit(w.engine().eval_rate_limit());
         *w = gate;
         cell.set(Some(hash));
     }

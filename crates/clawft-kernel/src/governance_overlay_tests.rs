@@ -465,3 +465,16 @@ fn a_zero_process_cap_is_refused_everywhere() {
     );
     assert!(matches!(p, Err(ParentPolicyError::Limit("max_processes"))));
 }
+
+#[test]
+fn a_parent_without_a_threshold_still_caps_the_overlay_at_the_engine_default() {
+    let mut p = base_parent();
+    p.limits.risk_threshold = None;
+    let e = merge(&p, &ov("[limits]\nrisk_threshold = 0.9\n")).unwrap_err();
+    assert_eq!(e.key(), "limits.risk_threshold");
+    let ok = merge(&p, &ov("[limits]\nrisk_threshold = 0.5\n")).unwrap();
+    assert_eq!(ok.limits.risk_threshold, Some(0.5));
+    // No overlay value: the effective ceiling is the default, spelled out.
+    let none = merge(&p, &Overlay::empty()).unwrap();
+    assert_eq!(none.limits.risk_threshold, Some(crate::overlay_runtime::DEFAULT_RISK_THRESHOLD));
+}
