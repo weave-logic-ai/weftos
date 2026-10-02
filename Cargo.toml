@@ -68,6 +68,8 @@ members = [
     "crates/weftos-cog-repo",
     # COG-009: unified cog marketplace catalog (WeaveLogic signed + Cognitum mirror).
     "crates/weftos-cog-market",
+    # COG-009: on-appliance cog supervisor + lifecycle API (no agent cap).
+    "crates/weftos-cog-host",
     "crates/clawft-substrate",
     "crates/clawft-surface",
     "crates/clawft-canon",

@@ -1,0 +1,17 @@
+[package]
+name = "weftos-cog-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "weft-cog-host (COG-009): a WeftOS process supervisor that runs cogs on an appliance with no agent cap, each still ingesting to the Cognitum store. Lifecycle HTTP API for the manager UI. std-only, arm64-portable."
+
+[[bin]]
+name = "weft-cog-host"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
