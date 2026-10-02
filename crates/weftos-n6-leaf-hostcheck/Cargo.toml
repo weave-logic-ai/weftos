@@ -1,0 +1,16 @@
+# Host-side validator for the RVF segment the N6 leaf writes (see
+# crates/weftos-n6-leaf). Standalone: the empty `[workspace]` keeps it out of
+# the host workspace, matching its firmware sibling.
+[workspace]
+
+[package]
+name = "weftos-n6-leaf-hostcheck"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Validates an RVF segment dumped from the STM32N6 with weftos-rvf-wire."
+
+[dependencies]
+weftos-rvf-wire = "0.2"
+rvf-types = "0.2"

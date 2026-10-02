@@ -1541,6 +1541,22 @@ cmd_test_pi() {
     return $rc
 }
 
+# ── STM32N6 leaf firmware + host validator (standalone crates) ───────
+cmd_n6_leaf() {
+    header "STM32N6 leaf firmware + host RVF validator"
+    timer_start
+    local rc=0 v=""
+    [ "$VERBOSE" = true ] && v="--verbose"
+    rustup target list --installed | grep -qx thumbv8m.main-none-eabihf \
+        || rustup target add thumbv8m.main-none-eabihf || rc=$?
+    # Each crate has its own [workspace]; build inside it so the firmware's
+    # .cargo/config.toml (thumbv8m target) applies only to the firmware.
+    [ $rc -eq 0 ] && (cd "$ROOT/crates/weftos-n6-leaf" && cargo build --release $v) || rc=$?
+    [ $rc -eq 0 ] && (cd "$ROOT/crates/weftos-n6-leaf-hostcheck" && cargo build --release $v) || rc=$?
+    timer_end
+    return $rc
+}
+
 # ── Gate check 13 helper: clawft-kernel diskann + bench feature matrix ──
 check_kernel_diskann_and_bench_matrix() {
     # --tests included deliberately: cfg-gated test modules rot separately
@@ -2063,6 +2079,10 @@ ${BOLD}Commands:${NC}
                   + native adapter live test (anomaly-detect) + cog conformance
                   in ssh mode. Pi from WEFTOS_PI_HOST (skips when unset); never
                   touches ~/.clawft or weaver.service. See docs/cogs/test-pi.md
+  n6-leaf         Build the STM32N6 leaf firmware (crates/weftos-n6-leaf,
+                  thumbv8m.main-none-eabihf, RAM image) and its host RVF
+                  validator (crates/weftos-n6-leaf-hostcheck). Run on the
+                  board with scripts/n6.sh leaf.
   test-browser    Run browser WASM regression suite under headless Chrome
                   (WEFT-388 / M5-A). Requires wasm-pack + chromedriver.
   bundle-size     Gate browser WASM bundle (raw + gzip) against the
@@ -2389,6 +2409,7 @@ main() {
         cogs-conformance)   cmd_cogs_conformance ;;
         cogs-launcher)      cmd_cogs_launcher ;;
         test-pi)            cmd_test_pi ;;
+        n6-leaf)            cmd_n6_leaf ;;
         gate)         cmd_gate ;;
         pipeline-pass) cmd_pipeline_pass ;;
         release-dry-run) cmd_release_dry_run ;;

@@ -1,0 +1,5 @@
+[build]
+target = "thumbv8m.main-none-eabihf"   # Cortex-M55 (Armv8.1-M mainline, FPU)
+
+[target.thumbv8m.main-none-eabihf]
+rustflags = ["-C", "link-arg=-Tlink.x"]

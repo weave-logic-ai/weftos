@@ -1,0 +1,30 @@
+# Standalone firmware crate for the NUCLEO-N657X0-Q (STM32N657, Cortex-M55).
+# The empty `[workspace]` table keeps it out of the host workspace so the
+# thumbv8m target in `.cargo/config.toml` never leaks into host builds.
+[workspace]
+
+[package]
+name = "weftos-n6-leaf"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "WeftOS leaf smoke for the STM32N6: writes an RVF segment and round-trips a leaf-types CBOR message in AXISRAM."
+
+[dependencies]
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = { version = "0.7", features = ["set-vtor", "set-sp"] }
+embedded-alloc = "0.6"
+rvf-types = { version = "0.2", default-features = false }
+xxhash-rust = { version = "0.8", default-features = false, features = ["xxh3"] }
+weftos-leaf-types = { path = "../weftos-leaf-types", default-features = false }
+
+[profile.release]
+opt-level = "s"
+debug = true
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

@@ -38,4 +38,17 @@ load_and_start() {
   sleep 1   # let the server finish resuming the core before it is stopped
   kill "$srv" 2>/dev/null || true
   wait "$srv" 2>/dev/null || true
+  ensure_running
+}
+
+# The GDB detach sometimes leaves the core halted. pyOCD attaches without
+# halting, so it can check DHCSR.S_HALT and resume without disturbing a running core.
+ensure_running() {
+  python3 -c '
+from pyocd.core.helpers import ConnectHelper
+with ConnectHelper.session_with_chosen_probe(target_override="cortex_m", connect_mode="attach") as s:
+    if s.target.is_halted():
+        s.target.resume()
+        print("ensure_running: core was halted after load; resumed")
+' 2> >(grep -v -i "disk devices by id" >&2)
 }

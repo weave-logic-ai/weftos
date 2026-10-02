@@ -11,6 +11,8 @@
 #   scripts/n6.sh smoke         end-to-end check (probe, CPUID, RAM, code runs)
 #   scripts/n6.sh clock [secs]  measure the CPU clock on HSI and HSE against host time
 #   scripts/n6.sh dw3000-id     read the DEV_ID of a DWM3000EVB shield on the Arduino header
+#   scripts/n6.sh leaf          WeftOS leaf smoke: RVF segment + leaf-types CBOR on the M55,
+#                               segment validated on the host with weftos-rvf-wire
 #   scripts/n6.sh run <elf>     load a RAM-linked ELF into AXISRAM and start it
 #   scripts/n6.sh shell         interactive shell with probe-rs available
 set -euo pipefail
@@ -129,6 +131,38 @@ python /work/n6/dw3000_id.py 2> >(grep -v -i "disk devices by id" >&2)
 EOF
 }
 
+cmd_leaf() {
+  "$REPO/scripts/build.sh" n6-leaf >/dev/null || die "scripts/build.sh n6-leaf failed"
+  local out; out="$(mktemp -d)"
+  cp "$REPO/crates/weftos-n6-leaf/target/thumbv8m.main-none-eabihf/release/weftos-n6-leaf" "$out/app.elf"
+  N6_EXTRA_MOUNT="$out:/work/out" in_container <<'EOF'
+. /work/n6/lib.sh
+pass() { echo "PASS  $*"; }
+fail() { echo "FAIL  $*"; exit 1; }
+elf=/work/out/app.elf
+sym() { arm-none-eabi-nm "$elf" | awk -v s="$1" '$3 == s { print "0x" $1 }'; }
+res=$(sym N6_RESULT); seg=$(sym N6_SEGMENT)
+words() { probe-rs read --chip "$CHIP" b32 "$1" "$2" | tr ' ' '\n' | grep -E '^[0-9a-f]{8}$'; }
+
+load_and_start "$elf" >/tmp/load.log
+sed 's/^/      /' /tmp/load.log
+for _ in 1 2 3 4 5 6; do
+  mapfile -t r < <(words "$res" 5)
+  [[ ${r[0]:-} == 57454654 ]] && break
+  sleep 0.5
+done
+[[ ${r[0]:-} == 57454654 ]] || fail "N6_RESULT magic ${r[0]:-none} (firmware did not finish)"
+(( (16#${r[1]} & 3) == 3 )) || fail "status 0x${r[1]} (bit0 RVF segment, bit1 leaf-types CBOR)"
+pass "M55 built a $((16#${r[2]}))-byte RVF segment and round-tripped a $((16#${r[3]}))-byte leaf-types CBOR announce"
+hb1=$((16#${r[4]})); sleep 0.5; hb2=$((16#$(words "$res" 5 | tail -1)))
+(( hb2 > hb1 )) && pass "firmware alive: heartbeat $hb1 -> $hb2" || fail "heartbeat stuck at $hb1"
+len=$((16#${r[2]}))
+probe-rs read --chip "$CHIP" b8 "$seg" "$len" | tr ' ' '\n' | grep -E '^[0-9a-f]{2}$' | tr -d '\n' \
+  | python3 -c 'import sys,binascii; sys.stdout.buffer.write(binascii.unhexlify(sys.stdin.read()))' >/work/out/segment.bin
+EOF
+  "$REPO/crates/weftos-n6-leaf-hostcheck/target/release/weftos-n6-leaf-hostcheck" "$out/segment.bin"
+}
+
 cmd_run() {
   local elf="${1:-}"
   [[ -f "$elf" ]] || die "usage: n6.sh run <ram-linked.elf>"
@@ -153,7 +187,8 @@ case "${1:-}" in
   smoke)  cmd_smoke ;;
   clock)  shift; cmd_clock "$@" ;;
   dw3000-id) cmd_dw3000_id ;;
+  leaf)   cmd_leaf ;;
   run)    shift; cmd_run "$@" ;;
   shell)  cmd_shell ;;
-  *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
