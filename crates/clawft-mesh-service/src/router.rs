@@ -1,0 +1,304 @@
+//! `TenantRouter`: how mesh traffic reaches tenants and how tenants reach the
+//! mesh (plan 1.6, 2 S).
+//!
+//! Inbound (the kernel's `serve_listener` calls [`LocalDelivery::deliver`]):
+//!
+//! - `dest_scope` in an envelope is **untrusted**: it is a peer's request for
+//!   an address. It selects a tenant only when the connection was *admitted*
+//!   (`PeerCtx::node_verified`). An unadmitted peer (legacy, leaf, anything
+//!   under `observe`) can reach only the default tenant: the sole registered
+//!   user, or the cluster owner's registration when several are registered. A
+//!   scope naming anyone else is dropped and counted, never rerouted.
+//! - Admitted peers: scope present delivers to that registration (and project)
+//!   or drops as `unknown_scope`; scope absent matches the longest registered
+//!   topic prefix, then the single registered user, else drops as
+//!   `scope_required`.
+//!
+//! Outbound (`send` from a registration): the envelope carries
+//! `source_node` = the machine node id and a `src_scope` stamped from the
+//! sending registration. Whatever a daemon puts in the message about who it
+//! is cannot change that. A destination on this machine is delivered locally
+//! with the sender's certificate attached.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock, Weak};
+
+use async_trait::async_trait;
+use clawft_kernel::error::{KernelError, KernelResult};
+use clawft_kernel::ipc::{KernelMessage, MessageTarget};
+use clawft_kernel::mesh_admit::PeerClass;
+use clawft_kernel::mesh_delivery::{LocalDelivery, PeerCtx};
+use clawft_kernel::mesh_ipc::{MeshIpcEnvelope, Scope as WireScope};
+use clawft_kernel::mesh_runtime::MeshRuntime;
+use clawft_mesh_local::proto::{Deliver, Frame, Message, Scope};
+use clawft_mesh_local::{Node, WeftAddr};
+
+use crate::registry::{QueueError, Registration, Registry, ScopeMiss};
+use crate::state::PolicyCell;
+
+/// Router counters, all monotonic.
+#[derive(Debug, Default)]
+pub struct RouterCounters {
+    pub delivered: AtomicU64,
+    /// Admitted peer, no scope and no prefix match, several users registered.
+    pub scope_required: AtomicU64,
+    /// Scope named a user or project nobody has registered.
+    pub unknown_scope: AtomicU64,
+    /// Unadmitted peer asked for a tenant other than the default.
+    pub denied_scope: AtomicU64,
+    /// Nobody registered at all.
+    pub no_tenant: AtomicU64,
+    pub dropped_full: AtomicU64,
+    pub sent_remote: AtomicU64,
+    pub sent_local: AtomicU64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendError {
+    /// Destination node is not connected.
+    Unreachable(String),
+    /// Local destination tenant is not registered.
+    UnknownScope(String),
+    /// The message could not be placed on the wire or in a queue.
+    Failed(String),
+}
+
+pub struct TenantRouter {
+    registry: Arc<Registry>,
+    policy: Arc<PolicyCell>,
+    node_id: String,
+    runtime: OnceLock<Weak<MeshRuntime>>,
+    pub counters: RouterCounters,
+}
+
+fn topic_of(msg: &KernelMessage) -> Option<&str> {
+    match &msg.target {
+        MessageTarget::Topic(t) => Some(t.as_str()),
+        _ => None,
+    }
+}
+
+impl TenantRouter {
+    pub fn new(registry: Arc<Registry>, policy: Arc<PolicyCell>, node_id: String) -> Arc<Self> {
+        Arc::new(Self {
+            registry,
+            policy,
+            node_id,
+            runtime: OnceLock::new(),
+            counters: RouterCounters::default(),
+        })
+    }
+
+    /// Attach the mesh runtime (it holds this router, so the link is weak).
+    pub fn set_runtime(&self, rt: &Arc<MeshRuntime>) {
+        let _ = self.runtime.set(Arc::downgrade(rt));
+    }
+
+    pub fn runtime(&self) -> Option<Arc<MeshRuntime>> {
+        self.runtime.get().and_then(Weak::upgrade)
+    }
+
+    /// The tenant an unadmitted peer may reach: the sole registered user, or
+    /// the cluster owner's registration when several are registered.
+    pub fn default_tenant(&self) -> Option<Arc<Registration>> {
+        if let Some(r) = self.registry.sole() {
+            return Some(r);
+        }
+        let uid = self.policy.owner_uid()?;
+        self.registry.by_principal(&clawft_mesh_local::Principal::Uid(uid))
+    }
+
+    fn miss(&self, why: ScopeMiss) {
+        let _ = why;
+        self.counters.unknown_scope.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Choose the registration for an inbound message and the scope to report.
+    fn resolve(
+        &self,
+        from: &PeerCtx,
+        dest: Option<&WireScope>,
+        topic: Option<&str>,
+    ) -> Option<(Arc<Registration>, Scope)> {
+        if from.node_verified {
+            return match dest {
+                Some(s) => match self.registry.lookup_scope(&s.user_id, s.project_id.as_deref()) {
+                    Ok(r) => Some((r, Scope { user_id: s.user_id.clone(), project_id: s.project_id.clone() })),
+                    Err(m) => {
+                        self.miss(m);
+                        None
+                    }
+                },
+                None => {
+                    let reg = topic
+                        .and_then(|t| self.registry.longest_prefix(t))
+                        .or_else(|| self.registry.sole());
+                    match reg {
+                        Some(r) => {
+                            let scope = Scope { user_id: r.user_id.clone(), project_id: None };
+                            Some((r, scope))
+                        }
+                        None if self.registry.is_empty() => {
+                            self.counters.no_tenant.fetch_add(1, Ordering::Relaxed);
+                            None
+                        }
+                        None => {
+                            self.counters.scope_required.fetch_add(1, Ordering::Relaxed);
+                            None
+                        }
+                    }
+                }
+            };
+        }
+        // Unadmitted: the envelope's scope is only a claim and can never move
+        // traffic to another tenant.
+        let Some(default) = self.default_tenant() else {
+            self.counters.no_tenant.fetch_add(1, Ordering::Relaxed);
+            return None;
+        };
+        let mut project = None;
+        if let Some(s) = dest {
+            if s.user_id != default.user_id {
+                self.counters.denied_scope.fetch_add(1, Ordering::Relaxed);
+                tracing::warn!(peer = %from.peer_id, claimed = %s.user_id,
+                    "dropping message: unadmitted peer named a non-default tenant");
+                return None;
+            }
+            if let Some(p) = &s.project_id {
+                match self.registry.lookup_scope(&default.user_id, Some(p)) {
+                    Ok(_) => project = Some(p.clone()),
+                    Err(m) => {
+                        self.miss(m);
+                        return None;
+                    }
+                }
+            }
+        }
+        let scope = Scope { user_id: default.user_id.clone(), project_id: project };
+        Some((default, scope))
+    }
+
+    fn queue(
+        &self,
+        reg: &Registration,
+        from_node: &str,
+        scope: Scope,
+        source_cert: Option<clawft_mesh_local::UserCert>,
+        msg: &KernelMessage,
+    ) -> Result<(), QueueError> {
+        let message = serde_json::to_value(msg).map_err(|_| QueueError::Closed)?;
+        let frame = Frame::new(Message::Deliver(Deliver {
+            source_node: from_node.to_string(),
+            source_cert,
+            scope,
+            envelope_id: msg.id.clone(),
+            message,
+        }));
+        match reg.try_queue(frame) {
+            Ok(()) => {
+                reg.counters.delivered.fetch_add(1, Ordering::Relaxed);
+                self.counters.delivered.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(QueueError::Full) => {
+                self.counters.dropped_full.fetch_add(1, Ordering::Relaxed);
+                Err(QueueError::Full)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// A registered tenant sends `msg` to `dest`.
+    pub async fn route_outbound(
+        &self,
+        from: &Arc<Registration>,
+        dest: &WeftAddr,
+        mut msg: KernelMessage,
+    ) -> Result<(), SendError> {
+        if !dest.topic.is_empty() {
+            msg.target = MessageTarget::Topic(dest.topic.clone());
+        }
+        let node = match &dest.node {
+            Node::Local => self.node_id.clone(),
+            Node::Id(n) => n.clone(),
+        };
+        let dest_scope = dest.user.as_ref().map(|u| WireScope {
+            user_id: u.clone(),
+            project_id: dest.project.clone(),
+        });
+        if node == self.node_id {
+            return self.deliver_local(from, dest_scope, msg);
+        }
+        let rt = self.runtime().ok_or_else(|| SendError::Failed("mesh runtime is not running".into()))?;
+        let mut env = MeshIpcEnvelope::new(self.node_id.clone(), node.clone(), msg);
+        env.dest_scope = dest_scope;
+        env.src_scope = Some(WireScope { user_id: from.user_id.clone(), project_id: None });
+        rt.send_to_peer(&node, env).await.map_err(|e| SendError::Unreachable(e.to_string()))?;
+        from.counters.sent.fetch_add(1, Ordering::Relaxed);
+        self.counters.sent_remote.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Delivery between tenants on this machine. The sender is a registered
+    /// tenant, so the destination scope is honoured as for an admitted peer.
+    fn deliver_local(
+        &self,
+        from: &Arc<Registration>,
+        dest: Option<WireScope>,
+        msg: KernelMessage,
+    ) -> Result<(), SendError> {
+        let ctx = PeerCtx {
+            peer_id: self.node_id.clone(),
+            node_verified: true,
+            class: PeerClass::Node,
+            remote_static: None,
+            src_scope: None,
+        };
+        let Some((reg, scope)) = self.resolve(&ctx, dest.as_ref(), topic_of(&msg)) else {
+            return Err(SendError::UnknownScope(
+                dest.map_or_else(|| "no matching tenant".into(), |s| s.user_id),
+            ));
+        };
+        self.queue(&reg, &self.node_id, scope, from.cert(), &msg)
+            .map_err(|e| SendError::Failed(format!("{e:?}")))?;
+        from.counters.sent.fetch_add(1, Ordering::Relaxed);
+        self.counters.sent_local.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl LocalDelivery for TenantRouter {
+    async fn deliver(
+        &self,
+        from: &PeerCtx,
+        dest_scope: Option<&WireScope>,
+        msg: KernelMessage,
+    ) -> KernelResult<()> {
+        let Some((reg, scope)) = self.resolve(from, dest_scope, topic_of(&msg)) else {
+            return Ok(());
+        };
+        self.queue(&reg, &from.peer_id, scope, None, &msg)
+            .map_err(|e| KernelError::Mesh(format!("tenant {} queue: {e:?}", reg.user_id)))
+    }
+
+    async fn authorize_subscribe(
+        &self,
+        from: &PeerCtx,
+        _topic: &str,
+        dest_scope: Option<&WireScope>,
+    ) -> bool {
+        if from.node_verified {
+            return true;
+        }
+        match (dest_scope, self.default_tenant()) {
+            (Some(s), Some(d)) => s.user_id == d.user_id,
+            (Some(_), None) => false,
+            (None, _) => true,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "router_tests.rs"]
+mod tests;

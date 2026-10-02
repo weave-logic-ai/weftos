@@ -1,0 +1,60 @@
+//! Journal- and bindings-derived listings used by the admin verbs.
+
+use serde_json::{json, Value};
+
+use clawft_mesh_local::{hexser, node_id_from_pubkey, Principal};
+
+use crate::registry::Registry;
+use crate::state::Core;
+use crate::Journal;
+
+/// The uid of the first `user.bind` record, which defaults the cluster owner.
+pub fn journal_first_bind_uid(journal: &Journal) -> Option<u32> {
+    journal
+        .iter()
+        .find(|r| r.kind == "user.bind")
+        .and_then(|r| match &r.body["principal"] {
+            p if p["kind"] == "uid" => p["id"].as_u64().and_then(|u| u32::try_from(u).ok()),
+            _ => None,
+        })
+}
+
+fn principal_json(p: &Principal) -> Value {
+    match p {
+        Principal::Uid(u) => json!({"uid": u}),
+        Principal::Sid(s) => json!({"sid": s}),
+    }
+}
+
+/// `bindings.list` reply data: bound, pending and revoked principals.
+pub fn bindings_json(core: &Core, registry: &Registry) -> Value {
+    let bound: Vec<Value> = core
+        .bindings
+        .bound_principals()
+        .iter()
+        .map(|(p, k)| {
+            let uid = node_id_from_pubkey(k);
+            json!({
+                "principal": principal_json(p), "user_id": uid, "user_pubkey": hexser::encode(k),
+                "serials": core.bindings.serials(p),
+                "registered": registry.get(&uid).is_some(),
+            })
+        })
+        .collect();
+    let pending: Vec<Value> = core
+        .bindings
+        .pending_principals()
+        .iter()
+        .map(|(p, k)| {
+            json!({"principal": principal_json(p), "user_id": node_id_from_pubkey(k),
+                   "user_pubkey": hexser::encode(k)})
+        })
+        .collect();
+    let revoked: Vec<Value> =
+        core.bindings.revoked_principal_list().iter().map(principal_json).collect();
+    json!({
+        "bound": bound, "pending": pending, "revoked": revoked,
+        "degraded": core.bindings.degraded(),
+        "read_only": core.journal.read_only(),
+    })
+}

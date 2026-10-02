@@ -23,6 +23,7 @@ use std::collections::{HashMap, HashSet};
 
 use clawft_mesh_local::{node_id_from_pubkey, Principal};
 mod accept;
+mod views;
 
 use crate::bind_events::{
     id_matches, now, AcceptBody, BindBody, CertBody, Event, PendingBody, RevokeBody,

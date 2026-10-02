@@ -65,6 +65,10 @@ pub enum ErrorKind {
     ScopeRequired,
     UnknownScope,
     Unsupported,
+    /// `send` named a node that is not connected.
+    PeerUnreachable,
+    /// The request was well-formed JSON but not a valid request.
+    BadRequest,
     /// A kind this build does not know; treated as non-fatal.
     #[serde(other)]
     Unknown,
@@ -356,6 +360,19 @@ pub enum Message {
         admission: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cluster_owner_uid: Option<u32>,
+    },
+    /// Admin: re-verify the journal's hash chain and signatures.
+    #[serde(rename = "journal.verify")]
+    JournalVerify {},
+    /// Admin: acknowledge a quarantined journal tail (`weaver mesh journal
+    /// verify --accept-truncate`). `quarantine_seq` names the pending
+    /// `journal.quarantine` record; `floor` can only raise the serial floor.
+    #[serde(rename = "journal.accept_truncate")]
+    JournalAcceptTruncate {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quarantine_seq: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        floor: Option<u64>,
     },
     #[serde(rename = "ping")]
     Ping {},

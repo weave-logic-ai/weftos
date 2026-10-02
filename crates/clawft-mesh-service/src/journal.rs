@@ -168,7 +168,7 @@ fn reserved(kind: &str) -> bool {
 }
 
 /// Numbered segments, ascending: `journal.NNN.jsonl`.
-fn segments(dir: &Path) -> std::io::Result<Vec<(u32, PathBuf)>> {
+pub(crate) fn segments(dir: &Path) -> std::io::Result<Vec<(u32, PathBuf)>> {
     let mut out = Vec::new();
     for e in fs::read_dir(dir)? {
         let e = e?;

@@ -839,6 +839,53 @@ cmd_check_mesh_only() {
     timer_end
 }
 
+# P3-S: compile (not run) the tests of the named packages. The lead session
+# runs the tests; this is the fast loop for writing them.
+cmd_check_tests() {
+    if [ ${#TEST_PACKAGES[@]} -eq 0 ]; then
+        fail "check-tests needs at least one package: scripts/build.sh check-tests <package>…"
+        return 1
+    fi
+    local scope=() pkg
+    for pkg in "${TEST_PACKAGES[@]}"; do scope+=(-p "$pkg"); done
+    header "Running cargo check ${scope[*]} --tests"
+    timer_start
+    run_cmd cargo check "${scope[@]}" --tests
+    timer_end
+}
+
+# P3-S "must not own": the machine mesh service links the kernel only for its
+# mesh modules. It must never pull in the chain, resource tree, RVF runtime,
+# the governance tile, the operator CLI, or the kernel features that bring
+# them (exochain, cluster, tilezero, ecc).
+cmd_check_mesh_no_owned_state() {
+    header "Asserting clawft-mesh-service owns no chain, governance or operator-CLI state"
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   cargo tree -p clawft-mesh-service -e normal,features\n"
+        timer_end
+        return 0
+    fi
+    local tree rc=0
+    tree="$(cargo tree -p clawft-mesh-service -e normal,features 2>&1)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        fail "cargo tree failed for clawft-mesh-service"
+        printf '%s\n' "$tree" | tail -20
+        return 1
+    fi
+    local hits
+    hits="$(printf '%s\n' "$tree" \
+        | grep -E '(exo-resource-tree|rvf-runtime|cognitum-gate-tilezero|clawft-weave) v[0-9]|clawft-kernel feature "(exochain|cluster|tilezero|ecc)"' \
+        || true)"
+    if [ -n "$hits" ]; then
+        fail "clawft-mesh-service must not own state, but its dependency tree contains:"
+        printf '%s\n' "$hits" | sort -u | sed 's/^/        /'
+        return 1
+    fi
+    pass "clawft-mesh-service dependency tree is free of exochain, resource tree, RVF runtime, tilezero and clawft-weave"
+    timer_end
+}
+
 cmd_check() {
     # `check <pkg>…` scopes to the named packages (fast loop for new crates);
     # the kernel wasm gates below only run for the whole-workspace check.
@@ -1907,6 +1954,11 @@ ${BOLD}Commands:${NC}
                   gate against the panel size budget. (WEFT-484 / M6-B)
                   Override budget: scripts/build.sh wasm-panel <max-raw-kb> <max-gz-kb>
   check-mesh-only Run cargo check -p clawft-kernel --no-default-features --features native,mesh
+  check-tests     Compile (not run) the tests of the named packages: check-tests <pkg>…
+  check-mesh-no-owned-state
+                  Fail if `cargo tree -p clawft-mesh-service -e normal,features` contains
+                  exo-resource-tree, rvf-runtime, cognitum-gate-tilezero, clawft-weave or
+                  the kernel exochain/cluster/tilezero/ecc features (P3-S "must not own")
   check           Run cargo check --workspace (fast compile check), then
                   cargo check -p clawft-kernel --target wasm32-unknown-unknown
                   --no-default-features when the target is installed (WEFT-114:
@@ -2066,7 +2118,7 @@ parse_args() {
     #   scripts/build.sh test [<package>…]
     #   scripts/build.sh clippy [<package>…]
     #   scripts/build.sh check [<package>…]
-    if [ "$COMMAND" = "test" ] || [ "$COMMAND" = "clippy" ] || [ "$COMMAND" = "check" ]; then
+    if [ "$COMMAND" = "test" ] || [ "$COMMAND" = "clippy" ] || [ "$COMMAND" = "check" ] || [ "$COMMAND" = "check-tests" ]; then
         while [ $# -gt 0 ] && [[ "$1" != --* ]]; do
             TEST_PACKAGES+=("$1")
             shift
@@ -2180,6 +2232,8 @@ main() {
         wasm-panel)   cmd_wasm_panel "${WASM_PANEL_MAX_RAW_KB:-}" "${WASM_PANEL_MAX_GZ_KB:-}" ;;
         check)        cmd_check ;;
         check-mesh-only) cmd_check_mesh_only ;;
+        check-tests)  cmd_check_tests ;;
+        check-mesh-no-owned-state) cmd_check_mesh_no_owned_state ;;
         clippy)       cmd_clippy ;;
         audit)        cmd_audit ;;
         npm-audit)    cmd_npm_audit ;;
