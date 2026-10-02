@@ -18,7 +18,9 @@ const ANCHOR_CANON: &str = r#"{"at":"2026-10-01T10:00:00Z","cert_serial":1,"chai
 const ANCHOR_SIG: &str = "6e390a39c81f8b60753abbd1e494dcae41acf4b056a9eab0eb387656795fd39b81d9a36409b63b977ac14cc43efe7df94e79a62e1f2500171710a238e788900d";
 const ANCHOR_HASH: &str = "4b97b9304b53143e0772be7ea09bcb03733f9e136edc8b95ea6b83c4b0e35dc4";
 const POP_NONCE: &str = "00112233445566778899aabbccddeeff";
-const POP_SIG: &str = "71077e668d8fff3f84e60927fe75ef129c31b3faae3b40216001047f6eb8122e0df9885b654756429be0a310b16073d03d23cf8d0e51dbdcc13ddf25c67ac405";
+const POP_SIG_REKEY: &str = "c09c3915e40139316c6a753d1857272c9466f816ef3e80d7a639a55d6072240860d0d97946edd571ee567e71af164ae93d51934841f2f95ae9d27375763f5c0f";
+const USER_KID: &str = "34750f98bd59fcfc946da45aaabe933b";
+const POP_SIG: &str = "a091f8884ef78b01ea1caac70b8c01b8e5e8b9cef8ac162321c1450596279d72426a8d4b86f94e9c13d38f944f9d291826e931fb9286999bc0c19a33466be10f";
 
 fn user_key() -> SigningKey {
     SigningKey::from_bytes(&[1u8; 32])
@@ -261,31 +263,43 @@ fn anchor_hash_covers_the_signature_and_chains() {
 
 #[test]
 fn pop_bytes_and_golden_signature() {
-    let bytes = pop_signed_bytes(POP_NONCE, PID).unwrap();
+    let bytes = pop_signed_bytes(PopOp::Register, USER_KID, POP_NONCE, PID).unwrap();
     assert_eq!(
         bytes,
-        format!("weftos-mesh-local-pop-v1\n{POP_NONCE}\n{PID}").into_bytes()
+        format!("weftos-mesh-local-pop-v2\nregister\n{USER_KID}\n{POP_NONCE}\n{PID}").into_bytes()
     );
     assert_eq!(hex_encode(&proj_key().sign(&bytes).to_bytes()), POP_SIG);
-    // Binding: another project id or nonce changes the bytes.
-    let other_nonce = "00112233445566778899aabbccddeeff".replace('f', "e");
-    assert_ne!(bytes, pop_signed_bytes(&other_nonce, PID).unwrap());
+    let rk = pop_signed_bytes(PopOp::Rekey, USER_KID, POP_NONCE, PID).unwrap();
+    assert_eq!(hex_encode(&proj_key().sign(&rk).to_bytes()), POP_SIG_REKEY);
+    // Binding: op, user chain, nonce and project id each change the bytes.
+    assert_ne!(bytes, rk);
+    let other_nonce = POP_NONCE.replace('f', "e");
+    assert_ne!(bytes, pop_signed_bytes(PopOp::Register, USER_KID, &other_nonce, PID).unwrap());
     assert_ne!(
         bytes,
-        pop_signed_bytes(POP_NONCE, "01JB8Z3Q0V6X9KQ4M2N7T5R1WE").unwrap()
+        pop_signed_bytes(PopOp::Register, USER_KID, POP_NONCE, "01JB8Z3Q0V6X9KQ4M2N7T5R1WE").unwrap()
+    );
+    assert_ne!(
+        bytes,
+        pop_signed_bytes(PopOp::Register, &"0".repeat(32), POP_NONCE, PID).unwrap()
     );
 }
 
 #[test]
 fn pop_refuses_separator_smuggling() {
+    use PopOp::Register as R;
+    let u = USER_KID;
     // ("aa\nBB", "C") and ("aa", "BB\nC") would join to the same bytes.
-    assert_eq!(pop_signed_bytes("aa\nBB", "C"), Err(CertError::BadNonce));
-    assert_eq!(pop_signed_bytes("aa", "BB\nC"), Err(CertError::BadNonce));
+    assert_eq!(pop_signed_bytes(R, u, "aa\nBB", "C"), Err(CertError::BadNonce));
+    assert_eq!(pop_signed_bytes(R, u, "aa", "BB\nC"), Err(CertError::BadNonce));
     let n = POP_NONCE;
-    assert_eq!(pop_signed_bytes(n, "BB\nC"), Err(CertError::BadProjectId));
-    assert_eq!(pop_signed_bytes(n, &format!("{PID}\n")), Err(CertError::BadProjectId));
+    assert_eq!(pop_signed_bytes(R, u, n, "BB\nC"), Err(CertError::BadProjectId));
+    assert_eq!(pop_signed_bytes(R, u, n, &format!("{PID}\n")), Err(CertError::BadProjectId));
     for bad in ["", "00ff", &n.to_uppercase(), &format!("{n}0"), "zz112233445566778899aabbccddeeff"] {
-        assert_eq!(pop_signed_bytes(bad, PID), Err(CertError::BadNonce), "{bad}");
+        assert_eq!(pop_signed_bytes(R, u, bad, PID), Err(CertError::BadNonce), "{bad}");
+    }
+    for bad in ["", "ab\ncd", &u.to_uppercase(), &format!("{u}0")] {
+        assert_eq!(pop_signed_bytes(R, bad, n, PID), Err(CertError::BadHex("user_key_id")), "{bad}");
     }
 }
 

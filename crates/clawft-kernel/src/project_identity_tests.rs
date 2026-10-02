@@ -2,15 +2,18 @@
 //! `clawft-types/src/project/cert_tests.rs`.
 
 use super::*;
-use crate::chain::ChainManager;
+use crate::chain::{ChainEvent, ChainManager};
+use clawft_types::project::cert::key_id;
 use chrono::Duration;
+use clawft_types::project::cert::PopOp;
 use serde_json::json;
 
 const PID: &str = "01JB8Z3Q0V6X9KQ4M2N7T5R1WD";
 const OTHER_PID: &str = "01JB8Z3Q0V6X9KQ4M2N7T5R1WE";
 const CERT_SIG: &str = "081ef31a626b34369d2da9df686d53f2ed1f96e9fc78ab5c554e5921b96bdf7e77d612e6196a0c60ac69c952e0a4d91e2ed1b8d70224274fb53479d8160cb701";
 const POP_NONCE: &str = "00112233445566778899aabbccddeeff";
-const POP_SIG: &str = "71077e668d8fff3f84e60927fe75ef129c31b3faae3b40216001047f6eb8122e0df9885b654756429be0a310b16073d03d23cf8d0e51dbdcc13ddf25c67ac405";
+const POP_SIG: &str = "a091f8884ef78b01ea1caac70b8c01b8e5e8b9cef8ac162321c1450596279d72426a8d4b86f94e9c13d38f944f9d291826e931fb9286999bc0c19a33466be10f";
+const USER_KID: &str = "34750f98bd59fcfc946da45aaabe933b";
 
 fn user_key() -> SigningKey {
     SigningKey::from_bytes(&[1u8; 32])
@@ -105,28 +108,30 @@ fn expiry_is_honoured_and_a_backwards_lifetime_refused() {
 }
 
 #[test]
-fn pop_matches_golden_and_binds_nonce_id_and_key() {
+fn pop_matches_golden_and_binds_op_user_nonce_id_and_key() {
     let pk = proj_key().verifying_key().to_bytes();
-    let sig = pop_sign(&proj_key(), POP_NONCE, PID).unwrap();
+    let reg = PopOp::Register;
+    let sig = pop_sign(&proj_key(), reg, USER_KID, POP_NONCE, PID).unwrap();
     assert_eq!(hex(&sig), POP_SIG);
-    pop_verify(&pk, POP_NONCE, PID, &sig).unwrap();
-    assert!(pop_verify(&pk, "ff".repeat(16).as_str(), PID, &sig).is_err());
-    assert!(pop_verify(&pk, POP_NONCE, OTHER_PID, &sig).is_err());
+    pop_verify(&pk, reg, USER_KID, POP_NONCE, PID, &sig).unwrap();
+    assert!(pop_verify(&pk, PopOp::Rekey, USER_KID, POP_NONCE, PID, &sig).is_err());
+    assert!(pop_verify(&pk, reg, &"0".repeat(32), POP_NONCE, PID, &sig).is_err());
+    assert!(pop_verify(&pk, reg, USER_KID, "ff".repeat(16).as_str(), PID, &sig).is_err());
+    assert!(pop_verify(&pk, reg, USER_KID, POP_NONCE, OTHER_PID, &sig).is_err());
     let stranger = SigningKey::from_bytes(&[3u8; 32]).verifying_key().to_bytes();
-    assert!(pop_verify(&stranger, POP_NONCE, PID, &sig).is_err());
-    assert_eq!(pop_sign(&proj_key(), "short", PID), Err(CertError::BadNonce));
+    assert!(pop_verify(&stranger, reg, USER_KID, POP_NONCE, PID, &sig).is_err());
+    assert_eq!(pop_sign(&proj_key(), reg, USER_KID, "short", PID), Err(CertError::BadNonce));
 }
 
 #[test]
 fn signatures_are_domain_separated() {
-    // The project key signing the bare PoP payload without its tag, or a
-    // cert's signed bytes, does not pass as a PoP, and vice versa.
     let pk = proj_key().verifying_key().to_bytes();
-    let untagged = proj_key().sign(format!("{POP_NONCE}\n{PID}").as_bytes()).to_bytes();
-    assert!(pop_verify(&pk, POP_NONCE, PID, &untagged).is_err());
+    let reg = PopOp::Register;
+    let untagged = proj_key().sign(format!("register\n{USER_KID}\n{POP_NONCE}\n{PID}").as_bytes()).to_bytes();
+    assert!(pop_verify(&pk, reg, USER_KID, POP_NONCE, PID, &untagged).is_err());
     let as_cert_bytes = proj_key().sign(&cert().canonical_bytes()).to_bytes();
-    assert!(pop_verify(&pk, POP_NONCE, PID, &as_cert_bytes).is_err());
-    let pop = pop_sign(&proj_key(), POP_NONCE, PID).unwrap();
+    assert!(pop_verify(&pk, reg, USER_KID, POP_NONCE, PID, &as_cert_bytes).is_err());
+    let pop = pop_sign(&proj_key(), reg, USER_KID, POP_NONCE, PID).unwrap();
     let mut forged = cert();
     forged.sig = hex(&pop);
     assert!(verify_cert_at(&forged, &proj_key().verifying_key().to_bytes(), now()).is_err());
@@ -176,12 +181,44 @@ fn loose_permissions_and_symlinks_are_refused_not_fixed() {
     assert!(load_or_create_project_key(&link).is_err());
 }
 
+#[cfg(unix)]
+#[test]
+fn a_group_writable_parent_directory_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let sub = dir.path().join("w");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o770)).unwrap();
+    let p = sub.join("project.key");
+    assert!(matches!(load_or_create_project_key(&p), Err(IdentityError::KeyFile { .. })));
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let k = load_or_create_project_key(&p).unwrap();
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o707)).unwrap();
+    assert!(load_or_create_project_key(&p).is_err());
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(load_or_create_project_key(&p).unwrap().to_bytes(), k.to_bytes());
+}
+
+#[test]
+fn concurrent_creators_all_get_the_same_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("project.key");
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            let p = p.clone();
+            std::thread::spawn(move || load_or_create_project_key(&p).unwrap().to_bytes())
+        })
+        .collect();
+    let keys: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert!(keys.windows(2).all(|w| w[0] == w[1]));
+}
+
 #[test]
 fn exclusive_write_refuses_to_overwrite() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("f");
     write_private_atomic(&p, b"one", true).unwrap();
-    assert!(write_private_atomic(&p, b"two", true).is_err());
+    assert!(matches!(write_private_atomic(&p, b"two", true), Err(IdentityError::Exists(_))));
     assert_eq!(std::fs::read(&p).unwrap(), b"one");
     write_private_atomic(&p, b"three", false).unwrap();
     assert_eq!(std::fs::read(&p).unwrap(), b"three");
@@ -197,52 +234,106 @@ fn chain_with(events: &[(&str, serde_json::Value)]) -> Vec<ChainEvent> {
     cm.tail_from(0)
 }
 
+fn view(events: &[ChainEvent], journal: &[JournalRecord], files: &[ProjectCert]) -> RevocationView {
+    RevocationView::build(&user_pk(), events, journal, files)
+}
+
+fn cert_for(pid: &str, key: &SigningKey, serial: u64) -> ProjectCert {
+    sign_cert(&user_key(), &req_for(pid, key, serial)).unwrap()
+}
+
 #[test]
 fn tofu_rekey_then_old_cert_fails_the_revocation_view() {
     let old = cert();
     let new_key = SigningKey::from_bytes(&[3u8; 32]);
-    let new_cert = sign_cert(&user_key(), &req_for(PID, &new_key, 2)).unwrap();
+    let new_cert = cert_for(PID, &new_key, 2);
     let register = ("project.register", json!({"cert": old}));
 
-    let view = RevocationView::from_events(&chain_with(&[register.clone()]));
-    assert_eq!(view.bound_key_id(PID), Some(old.project_key_id.as_str()));
-    view.check_cert(&old).unwrap();
-    // Same key again: idempotent, existing cert.
+    let v = view(&chain_with(&[register.clone()]), &[], &[]);
+    assert_eq!(v.bound_key_id(PID), Some(old.project_key_id.as_str()));
+    v.check_cert(&old).unwrap();
     let pk = proj_key().verifying_key().to_bytes();
-    assert_eq!(view.plan_registration(PID, &pk).unwrap(), Registration::Existing(Box::new(old.clone())));
-    // A second key for the id: refused.
+    assert_eq!(v.plan_registration(PID, &pk).unwrap(), Registration::Existing(Box::new(old.clone())));
     let npk = new_key.verifying_key().to_bytes();
-    assert!(matches!(view.plan_registration(PID, &npk), Err(IdentityError::KeyConflict { .. })));
-    // A different project is unaffected.
-    assert_eq!(view.plan_registration(OTHER_PID, &npk).unwrap(), Registration::New { serial: 1 });
+    assert!(matches!(v.plan_registration(PID, &npk), Err(IdentityError::KeyConflict { .. })));
+    assert!(matches!(v.plan_registration(OTHER_PID, &pk), Err(IdentityError::KeyReuse { .. })));
+    assert_eq!(v.plan_registration(OTHER_PID, &npk).unwrap(), Registration::New { serial: 1 });
 
-    let (old_kid, serial) = view.plan_rekey(PID, &npk).unwrap();
+    let (old_kid, serial) = v.plan_rekey(PID, &npk).unwrap();
     assert_eq!((old_kid.as_str(), serial), (old.project_key_id.as_str(), 2));
     let rekey = (
         "project.rekey",
         json!({"project_id": PID, "old_key_id": old_kid, "new_cert": new_cert, "reason": "rotate"}),
     );
-    let view = RevocationView::from_events(&chain_with(&[register, rekey]));
-    assert!(view.is_revoked(PID, &old.project_key_id));
-    assert!(matches!(view.check_cert(&old), Err(IdentityError::KeyRevoked { .. })));
-    view.check_cert(&new_cert).unwrap();
-    assert_eq!(view.last_serial(PID), 2);
-    // The revoked key can never be re-certified, nor re-used to rekey.
-    assert!(matches!(view.plan_registration(PID, &pk), Err(IdentityError::KeyRevoked { .. })));
-    assert!(matches!(view.plan_rekey(PID, &pk), Err(IdentityError::KeyRevoked { .. })));
+    let v = view(&chain_with(&[register, rekey]), &[], &[]);
+    assert!(v.is_revoked(PID, &old.project_key_id));
+    assert!(matches!(v.check_cert(&old), Err(IdentityError::KeyRevoked { .. })));
+    v.check_cert(&new_cert).unwrap();
+    assert_eq!(v.last_serial(PID), 2);
+    assert!(matches!(v.plan_registration(PID, &pk), Err(IdentityError::KeyRevoked { .. })));
+    assert!(matches!(v.plan_rekey(PID, &pk), Err(IdentityError::KeyRevoked { .. })));
 }
 
 #[test]
 fn revoke_unbinds_and_next_registration_gets_the_next_serial() {
     let old = cert();
-    let view = RevocationView::from_events(&chain_with(&[
-        ("project.register", json!({"cert": old})),
-        ("project.revoke", json!({"project_id": PID, "old_key_id": old.project_key_id, "reason": "lost"})),
-    ]));
-    assert_eq!(view.bound_key_id(PID), None);
-    assert!(view.plan_rekey(PID, &[5u8; 32]).is_err());
+    let v = view(
+        &chain_with(&[
+            ("project.register", json!({"cert": old})),
+            ("project.revoke", json!({"project_id": PID, "old_key_id": old.project_key_id})),
+        ]),
+        &[],
+        &[],
+    );
+    assert_eq!(v.bound_key_id(PID), None);
+    assert!(v.plan_rekey(PID, &[5u8; 32]).is_err());
     let npk = SigningKey::from_bytes(&[3u8; 32]).verifying_key().to_bytes();
-    assert_eq!(view.plan_registration(PID, &npk).unwrap(), Registration::New { serial: 2 });
+    assert_eq!(v.plan_registration(PID, &npk).unwrap(), Registration::New { serial: 2 });
+}
+
+#[test]
+fn union_merge_cannot_resurrect_a_revoked_key() {
+    // A stale cert file and a register record for the old key, plus a
+    // journal-only revocation: the key stays revoked whatever the order.
+    let old = cert();
+    let revoke = JournalRecord::Revoke { project_id: PID.into(), key_id: old.project_key_id.clone() };
+    let v = view(
+        &chain_with(&[("project.register", json!({"cert": old}))]),
+        &[JournalRecord::Register { cert: old.clone() }, revoke],
+        &[old.clone()],
+    );
+    assert_eq!(v.bound_key_id(PID), None);
+    assert!(matches!(v.check_cert(&old), Err(IdentityError::KeyRevoked { .. })));
+}
+
+#[test]
+fn bindings_survive_when_only_the_journal_or_cert_file_remembers_them() {
+    let old = cert();
+    let pk = proj_key().verifying_key().to_bytes();
+    let other = SigningKey::from_bytes(&[3u8; 32]).verifying_key().to_bytes();
+    // Crash: the chain lost the event.
+    for v in [
+        view(&[], &[JournalRecord::Register { cert: old.clone() }], &[]),
+        view(&[], &[], &[old.clone()]),
+    ] {
+        assert_eq!(v.plan_registration(PID, &pk).unwrap(), Registration::Existing(Box::new(old.clone())));
+        assert!(matches!(v.plan_registration(PID, &other), Err(IdentityError::KeyConflict { .. })));
+    }
+}
+
+#[test]
+fn forged_certs_in_any_source_are_dropped() {
+    let attacker = SigningKey::from_bytes(&[9u8; 32]);
+    let forged = sign_cert(&attacker, &req_for(PID, &SigningKey::from_bytes(&[4u8; 32]), 1)).unwrap();
+    let mut tampered = cert();
+    tampered.serial = 7;
+    let v = view(
+        &chain_with(&[("project.register", json!({"cert": forged}))]),
+        &[JournalRecord::Register { cert: tampered.clone() }],
+        &[forged.clone()],
+    );
+    assert_eq!(v.bound_key_id(PID), None);
+    assert_eq!(v.rejected(), 3);
 }
 
 #[test]
@@ -251,8 +342,26 @@ fn foreign_sources_and_malformed_events_are_ignored() {
     cm.append("someone.else", KIND_REGISTER, Some(json!({"cert": cert()})));
     cm.append(SOURCE, KIND_REGISTER, Some(json!({"cert": "garbage"})));
     cm.append(SOURCE, KIND_REVOKE, None);
-    let view = RevocationView::from_events(&cm.tail_from(0));
-    assert_eq!(view.bound_key_id(PID), None);
+    assert_eq!(view(&cm.tail_from(0), &[], &[]).bound_key_id(PID), None);
+}
+
+#[test]
+fn a_key_cannot_certify_two_projects_even_after_revocation() {
+    let c = cert();
+    let pk = proj_key().verifying_key().to_bytes();
+    let v = view(
+        &[],
+        &[
+            JournalRecord::Register { cert: c.clone() },
+            JournalRecord::Revoke { project_id: PID.into(), key_id: c.project_key_id.clone() },
+        ],
+        &[],
+    );
+    assert!(matches!(v.plan_registration(OTHER_PID, &pk), Err(IdentityError::KeyReuse { .. })));
+    // Rekey onto another project's key is refused too.
+    let v = view(&[], &[JournalRecord::Register { cert: c }, JournalRecord::Register { cert: cert_for(OTHER_PID, &SigningKey::from_bytes(&[3u8; 32]), 1) }], &[]);
+    let other_pk = SigningKey::from_bytes(&[3u8; 32]).verifying_key().to_bytes();
+    assert!(matches!(v.plan_rekey(PID, &other_pk), Err(IdentityError::KeyReuse { .. })));
 }
 
 #[test]
@@ -265,4 +374,84 @@ fn chain_events_carry_public_material_only() {
     assert!(!dump.contains(&hex(&user_key().to_bytes())));
     assert!(!dump.contains(&format!("{:?}", seed.to_vec())));
     assert!(dump.contains(&c.project_pubkey));
+}
+
+#[test]
+fn user_projects_is_a_reserved_source() {
+    assert!(is_reserved_source("user.projects"));
+    assert!(is_reserved_source(" user.projects "));
+    assert!(!is_reserved_source("user.projects.x"));
+    assert!(!is_reserved_source("kernel"));
+}
+
+#[test]
+fn journal_roundtrip_missing_is_empty_and_order_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let j = IdentityJournal::new(dir.path());
+    assert!(j.read().unwrap().is_empty());
+    let recs = vec![
+        JournalRecord::Register { cert: cert() },
+        JournalRecord::Revoke { project_id: PID.into(), key_id: "k".into() },
+    ];
+    let _l = j.lock().unwrap();
+    for r in &recs {
+        j.append(r).unwrap();
+    }
+    assert_eq!(j.read().unwrap(), recs);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(j.path()).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+}
+
+#[test]
+fn a_corrupt_empty_or_unknown_journal_is_an_error_and_is_never_overwritten() {
+    let rec = JournalRecord::Revoke { project_id: PID.into(), key_id: "k".into() };
+    let good = serde_json::to_string(&rec).unwrap();
+    for (name, content) in [
+        ("empty", String::new()),
+        ("garbage", "not json\n".to_owned()),
+        ("torn", format!("{good}\n{{\"op\":\"reg")),
+        ("blank line", format!("{good}\n\n{good}\n")),
+        ("unknown op", "{\"op\":\"nuke\"}\n".to_owned()),
+        ("unknown field", "{\"op\":\"revoke\",\"project_id\":\"a\",\"key_id\":\"b\",\"x\":1}\n".to_owned()),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let j = IdentityJournal::new(dir.path());
+        std::fs::write(j.path(), &content).unwrap();
+        assert!(matches!(j.read(), Err(IdentityError::JournalCorrupt { .. })), "{name}");
+        assert!(j.append(&rec).is_err(), "{name}");
+        assert_eq!(std::fs::read_to_string(j.path()).unwrap(), content, "{name}: modified");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_journal_is_an_error_not_empty() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let j = IdentityJournal::new(dir.path());
+    let rec = JournalRecord::Revoke { project_id: PID.into(), key_id: "k".into() };
+    j.append(&rec).unwrap();
+    std::fs::set_permissions(j.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+    let readable_anyway = std::fs::read(j.path()).is_ok(); // running as root
+    let r = j.read();
+    std::fs::set_permissions(j.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+    if !readable_anyway {
+        assert!(matches!(r, Err(IdentityError::JournalCorrupt { .. })));
+    }
+}
+
+#[test]
+fn the_journal_lock_excludes_other_holders() {
+    let dir = tempfile::tempdir().unwrap();
+    let j = IdentityJournal::new(dir.path());
+    let held = j.lock().unwrap();
+    assert!(j.try_lock().unwrap().is_none(), "second holder got the lock");
+    let j2 = j.clone();
+    let t = std::thread::spawn(move || j2.try_lock().unwrap().is_none());
+    assert!(t.join().unwrap());
+    drop(held);
+    assert!(j.try_lock().unwrap().is_some());
 }

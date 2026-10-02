@@ -9,7 +9,7 @@
 //! |---|---|---|
 //! | [`ProjectCert`] | user key | `"weftos-project-cert-v1\n"` + canonical JSON of the cert without `sig` |
 //! | [`ProjectAnchorStmt`] | project key | `"weftos-project-anchor-v1\n"` + canonical JSON of the statement without `sig` |
-//! | mesh-local PoP | project key | `"weftos-mesh-local-pop-v1\n"` + nonce + `"\n"` + project id (see [`pop_signed_bytes`]) |
+//! | mesh-local PoP | project key | `"weftos-mesh-local-pop-v2\n"` + op + `"\n"` + user key id + `"\n"` + nonce + `"\n"` + project id (see [`pop_signed_bytes`]) |
 //!
 //! Canonical JSON is defined in [`canonical_json`]: sorted keys, no
 //! whitespace. Hex fields are lowercase. A `key_id` is the first 16 bytes of
@@ -33,7 +33,10 @@ pub const CERT_DOMAIN: &str = "weftos-project-cert-v1\n";
 /// Domain tag prepended to the signed bytes of a [`ProjectAnchorStmt`].
 pub const ANCHOR_DOMAIN: &str = "weftos-project-anchor-v1\n";
 /// Domain tag prepended to the mesh-local proof-of-possession bytes.
-pub const POP_DOMAIN: &str = "weftos-mesh-local-pop-v1\n";
+///
+/// `v2` (package C review): the signed bytes also carry the operation and the
+/// user key id, so a proof made for one purpose or one user cannot be reused.
+pub const POP_DOMAIN: &str = "weftos-mesh-local-pop-v2\n";
 /// `type` field of a project certificate.
 pub const CERT_TYPE: &str = "project-cert";
 /// Certificate format version.
@@ -357,16 +360,45 @@ impl ProjectAnchorStmt {
     }
 }
 
-/// Bytes the project key signs to prove possession during `mesh.register`:
-/// `"weftos-mesh-local-pop-v1\n<nonce>\n<project_id>"`.
+/// What a proof of possession authorises.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PopOp {
+    /// First certification of a key (`mesh.register`).
+    Register,
+    /// Replacing the certified key (`project.rekey`).
+    Rekey,
+}
+
+impl PopOp {
+    /// The tag signed into the bytes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Register => "register",
+            Self::Rekey => "rekey",
+        }
+    }
+}
+
+/// Bytes the project key signs to prove possession:
+/// `"weftos-mesh-local-pop-v2\n<op>\n<user_key_id>\n<nonce>\n<project_id>"`.
 ///
-/// Both parts are validated first (the nonce as [`POP_NONCE_HEX_LEN`]
-/// lowercase hex, the id as a canonical ULID) so neither can contain the
-/// `\n` separator and two different pairs never give the same bytes.
-pub fn pop_signed_bytes(nonce: &str, project_id: &str) -> Result<Vec<u8>, CertError> {
+/// `user_key_id` names the user chain the certificate will be issued on
+/// (32 lowercase hex). All parts are validated first (nonce as
+/// [`POP_NONCE_HEX_LEN`] lowercase hex, id as a canonical ULID) so none can
+/// contain the `\n` separator and two different tuples never give the same
+/// bytes.
+pub fn pop_signed_bytes(
+    op: PopOp,
+    user_key_id: &str,
+    nonce: &str,
+    project_id: &str,
+) -> Result<Vec<u8>, CertError> {
+    if !is_lower_hex(user_key_id, 32) {
+        return Err(CertError::BadHex("user_key_id"));
+    }
     if !is_lower_hex(nonce, POP_NONCE_HEX_LEN) {
         return Err(CertError::BadNonce);
     }
     validate_id(project_id).map_err(|_| CertError::BadProjectId)?;
-    Ok(format!("{POP_DOMAIN}{nonce}\n{project_id}").into_bytes())
+    Ok(format!("{POP_DOMAIN}{}\n{user_key_id}\n{nonce}\n{project_id}", op.as_str()).into_bytes())
 }

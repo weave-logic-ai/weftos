@@ -3,8 +3,6 @@
 use super::*;
 use clawft_types::project::adopt_or_init;
 
-const NONCE_A: &str = "00112233445566778899aabbccddeeff";
-
 struct Fixture {
     _t: tempfile::TempDir,
     env: CertEnv,
@@ -20,11 +18,12 @@ fn project_key(n: u8) -> SigningKey {
     SigningKey::from_bytes(&[n; 32])
 }
 
-/// A unique 32-hex nonce per call (the replay set is process-wide).
-fn nonce() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static N: AtomicU64 = AtomicU64::new(1);
-    format!("{:032x}", N.fetch_add(1, Ordering::Relaxed))
+fn user_kid() -> String {
+    key_id(&user_key().verifying_key().to_bytes())
+}
+
+fn env_over(chain: Arc<ChainManager>, mdir: &Path) -> CertEnv {
+    CertEnv { chain, user_key: user_key(), manifests_dir: mdir.to_path_buf() }
 }
 
 fn fixture() -> Fixture {
@@ -34,15 +33,16 @@ fn fixture() -> Fixture {
     std::fs::create_dir_all(&root).unwrap();
     let m = adopt_or_init(&root.canonicalize().unwrap(), &mdir, Some("demo")).unwrap();
     Fixture {
-        env: CertEnv {
-            chain: Arc::new(ChainManager::new(0, 1000)),
-            user_key: user_key(),
-            manifests_dir: mdir,
-        },
+        env: env_over(Arc::new(ChainManager::new(0, 1000)), &mdir),
         root: m.root.clone(),
         id: m.id,
         _t: t,
     }
+}
+
+/// The same manifests, a chain that lost everything (crash before save).
+fn restarted(f: &Fixture) -> CertEnv {
+    env_over(Arc::new(ChainManager::new(0, 1000)), &f.env.manifests_dir)
 }
 
 fn request(f: &Fixture, key: &SigningKey) -> RegisterRequest {
@@ -50,14 +50,14 @@ fn request(f: &Fixture, key: &SigningKey) -> RegisterRequest {
 }
 
 fn request_for(id: &str, root: &Path, key: &SigningKey) -> RegisterRequest {
-    let n = nonce();
+    let n = issue_challenge(id).unwrap();
     RegisterRequest {
         project_id: id.to_owned(),
         project_pubkey: key.verifying_key().to_bytes(),
         root_sha256: root_sha256(root),
         spawn: SpawnInfo { pid: 4242, exe_sha: "ab".repeat(32) },
-        pop_sig: ident::pop_sign(key, &n, id).unwrap(),
-        nonce: n,
+        pop_sig: ident::pop_sign(key, PopOp::Register, &user_kid(), &n, id).unwrap(),
+        nonce: claim_nonce(&n, id).unwrap(),
     }
 }
 
@@ -66,32 +66,38 @@ fn now() -> DateTime<Utc> {
 }
 
 fn rekey_params(id: &str, key: &SigningKey) -> Value {
-    let n = nonce();
+    let n = issue_challenge(id).unwrap();
     json!({
         "id": id,
         "new_pubkey": ident::hex(&key.verifying_key().to_bytes()),
         "nonce": n,
-        "pop_sig": ident::hex(&ident::pop_sign(key, &n, id).unwrap()),
+        "pop_sig": ident::hex(&ident::pop_sign(key, PopOp::Rekey, &user_kid(), &n, id).unwrap()),
         "reason": "rotate\nnow",
     })
 }
 
+fn count(f: &Fixture, kind: &str) -> usize {
+    f.env.chain.tail_from(0).iter().filter(|e| e.kind == kind).count()
+}
+
 #[test]
-fn register_certifies_records_on_chain_and_writes_the_cert_file() {
+fn register_certifies_journals_records_on_chain_and_writes_the_cert_file() {
     let f = fixture();
     let issued = register(&f.env, &request(&f, &project_key(2)), now()).unwrap();
     assert!(issued.new);
     ident::verify_cert_at(&issued.cert, &user_key().verifying_key().to_bytes(), now()).unwrap();
     assert_eq!(issued.cert.serial, 1);
 
-    let events = f.env.chain.tail_from(0);
-    let ev = events.iter().find(|e| e.kind == KIND_REGISTER).unwrap();
+    let ev = f.env.chain.tail_from(0).into_iter().find(|e| e.kind == KIND_REGISTER).unwrap();
     assert_eq!(ev.source, SOURCE);
-    let p = ev.payload.as_ref().unwrap();
+    let p = ev.payload.unwrap();
     assert_eq!(p["name"], "demo");
     assert_eq!(p["root_sha256"], root_sha256(&f.root));
     assert_eq!(p["spawn"]["pid"], 4242);
     assert_eq!(p["manifest_schema"], 1);
+
+    let recs = IdentityJournal::new(&f.env.manifests_dir).read().unwrap();
+    assert_eq!(recs, vec![JournalRecord::Register { cert: issued.cert.clone() }]);
 
     let path = cert_path(&f.env.manifests_dir, &f.id);
     let on_disk: ProjectCert = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -104,21 +110,23 @@ fn register_certifies_records_on_chain_and_writes_the_cert_file() {
 }
 
 #[test]
-fn chain_holds_no_private_bytes() {
+fn nothing_private_reaches_the_chain_journal_or_cert_files() {
     let f = fixture();
-    let (pk, uk) = (project_key(2), user_key());
+    let (pk, uk, pk3) = (project_key(2), user_key(), project_key(3));
     register(&f.env, &request(&f, &pk), now()).unwrap();
-    rekey(&f.env, &rekey_params(&f.id, &project_key(3)), now()).unwrap();
+    rekey(&f.env, &rekey_params(&f.id, &pk3), now()).unwrap();
     revoke(&f.env, &json!({"id": f.id})).unwrap();
     let dump = serde_json::to_string(&f.env.chain.tail_from(0)).unwrap();
-    for secret in [pk.to_bytes(), uk.to_bytes(), project_key(3).to_bytes()] {
+    for secret in [pk.to_bytes(), uk.to_bytes(), pk3.to_bytes()] {
         assert!(!dump.contains(&ident::hex(&secret)));
         assert!(!dump.contains(&format!("{:?}", secret.to_vec())));
     }
-    let files = std::fs::read_dir(&f.env.manifests_dir).unwrap();
-    for e in files.flatten() {
+    for e in std::fs::read_dir(&f.env.manifests_dir).unwrap().flatten() {
         let b = std::fs::read(e.path()).unwrap();
-        assert!(!b.windows(32).any(|w| w == pk.to_bytes() || w == uk.to_bytes()));
+        for secret in [pk.to_bytes(), uk.to_bytes(), pk3.to_bytes()] {
+            assert!(!b.windows(32).any(|w| w == secret), "{:?}", e.path());
+            assert!(!String::from_utf8_lossy(&b).contains(&ident::hex(&secret)), "{:?}", e.path());
+        }
     }
 }
 
@@ -126,140 +134,189 @@ fn chain_holds_no_private_bytes() {
 fn registering_twice_is_idempotent_and_byte_identical() {
     let f = fixture();
     let a = register(&f.env, &request(&f, &project_key(2)), now()).unwrap();
-    let later = now() + chrono::Duration::hours(5);
-    let b = register(&f.env, &request(&f, &project_key(2)), later).unwrap();
+    let b = register(&f.env, &request(&f, &project_key(2)), now() + chrono::Duration::hours(5)).unwrap();
     assert!(a.new && !b.new);
     assert_eq!(a.cert.canonical_bytes(), b.cert.canonical_bytes());
     assert_eq!(a.cert.sig, b.cert.sig);
-    let n = f.env.chain.tail_from(0).iter().filter(|e| e.kind == KIND_REGISTER).count();
-    assert_eq!(n, 1, "no second event");
+    assert_eq!(count(&f, KIND_REGISTER), 1, "no second event");
+    assert_eq!(IdentityJournal::new(&f.env.manifests_dir).read().unwrap().len(), 1);
 }
 
 #[test]
 fn second_key_for_an_id_is_refused_until_rekey() {
     let f = fixture();
     register(&f.env, &request(&f, &project_key(2)), now()).unwrap();
-    let err = register(&f.env, &request(&f, &project_key(3)), now()).unwrap_err();
-    assert_eq!(err.kind(), "key_conflict");
+    assert_eq!(register(&f.env, &request(&f, &project_key(3)), now()).unwrap_err().kind(), "key_conflict");
 
     let old = register(&f.env, &request(&f, &project_key(2)), now()).unwrap().cert;
     let new = rekey(&f.env, &rekey_params(&f.id, &project_key(3)), now()).unwrap().cert;
     assert_eq!(new.serial, 2);
     assert_ne!(new.project_key_id, old.project_key_id);
 
-    let view = view_for(&f.env, &f.id);
+    let view = current_view(&f.env).unwrap();
     assert!(matches!(view.check_cert(&old), Err(IdentityError::KeyRevoked { .. })));
     view.check_cert(&new).unwrap();
-    // The old key cannot come back by registering.
-    assert_eq!(
-        register(&f.env, &request(&f, &project_key(2)), now()).unwrap_err().kind(),
-        "key_revoked"
-    );
-    // The new key registers idempotently.
+    assert_eq!(register(&f.env, &request(&f, &project_key(2)), now()).unwrap_err().kind(), "key_revoked");
     assert!(!register(&f.env, &request(&f, &project_key(3)), now()).unwrap().new);
-    // The rekey reason lost its control characters.
     let ev = f.env.chain.tail_from(0).into_iter().find(|e| e.kind == KIND_REKEY).unwrap();
     assert_eq!(ev.payload.unwrap()["reason"], "rotatenow");
 }
 
 #[test]
-fn revocation_survives_a_chain_that_was_not_saved() {
+fn a_crash_does_not_reset_tofu() {
+    let f = fixture();
+    register(&f.env, &request(&f, &project_key(2)), now()).unwrap();
+    // Restart with an empty chain: K2 must still be refused, K1 idempotent.
+    let r = restarted(&f);
+    assert_eq!(register(&r, &request(&f, &project_key(3)), now()).unwrap_err().kind(), "key_conflict");
+    assert!(!register(&r, &request(&f, &project_key(2)), now()).unwrap().new);
+    // Even with the journal gone, the verified cert file still binds.
+    std::fs::remove_file(IdentityJournal::new(&f.env.manifests_dir).path()).unwrap();
+    assert_eq!(register(&r, &request(&f, &project_key(3)), now()).unwrap_err().kind(), "key_conflict");
+}
+
+#[test]
+fn revocation_and_rekey_survive_a_chain_that_was_not_saved() {
     let f = fixture();
     let old = register(&f.env, &request(&f, &project_key(2)), now()).unwrap().cert;
     revoke(&f.env, &json!({"id": f.id, "reason": "lost"})).unwrap();
     assert!(!cert_path(&f.env.manifests_dir, &f.id).exists());
-    // A fresh chain (crash before save) still sees the revocation.
-    let fresh = CertEnv {
-        chain: Arc::new(ChainManager::new(0, 1000)),
-        user_key: user_key(),
-        manifests_dir: f.env.manifests_dir.clone(),
-    };
-    let view = view_for(&fresh, &f.id);
+    let r = restarted(&f);
+    // A verifier sees a revocation only the journal remembers.
+    let view = current_view(&r).unwrap();
     assert!(matches!(view.check_cert(&old), Err(IdentityError::KeyRevoked { .. })));
-    assert_eq!(
-        register(&fresh, &request(&f, &project_key(2)), now()).unwrap_err().kind(),
-        "key_revoked"
-    );
-    // A different key is certified afresh (serial continues from the chain
-    // the daemon actually has; here the fresh chain restarts at 1).
-    assert!(register(&f.env, &request(&f, &project_key(3)), now()).unwrap().new);
-    assert_eq!(revoke(&fresh, &json!({"id": f.id})).unwrap_err().kind(), "not_certified");
+    assert_eq!(register(&r, &request(&f, &project_key(2)), now()).unwrap_err().kind(), "key_revoked");
+    // A new key is certified with the next serial, not serial 1 again.
+    let c = register(&r, &request(&f, &project_key(3)), now()).unwrap();
+    assert_eq!(c.cert.serial, 2);
+    assert_eq!(revoke(&restarted(&f), &json!({"id": "nope"})).unwrap_err().kind(), "invalid_params");
+}
+
+#[test]
+fn a_corrupt_journal_stops_everything_and_is_left_alone() {
+    let f = fixture();
+    register(&f.env, &request(&f, &project_key(2)), now()).unwrap();
+    let jpath = IdentityJournal::new(&f.env.manifests_dir).path();
+    for bad in ["", "garbage\n", "{\"op\":\"revoke\""] {
+        std::fs::write(&jpath, bad).unwrap();
+        assert_eq!(register(&f.env, &request(&f, &project_key(2)), now()).unwrap_err().kind(), "journal_corrupt");
+        assert_eq!(register(&f.env, &request(&f, &project_key(3)), now()).unwrap_err().kind(), "journal_corrupt");
+        assert_eq!(rekey(&f.env, &rekey_params(&f.id, &project_key(3)), now()).unwrap_err().kind(), "journal_corrupt");
+        assert_eq!(revoke(&f.env, &json!({"id": f.id})).unwrap_err().kind(), "journal_corrupt");
+        assert_eq!(show(&f.env, &json!({"id": f.id})).unwrap_err().kind(), "journal_corrupt");
+        assert_eq!(current_view(&f.env).unwrap_err().kind(), "journal_corrupt");
+        assert_eq!(std::fs::read_to_string(&jpath).unwrap(), bad, "journal was modified");
+    }
+    assert_eq!(count(&f, KIND_REVOKE) + count(&f, KIND_REKEY), 0);
+}
+
+#[test]
+fn a_key_cannot_certify_two_projects() {
+    let f = fixture();
+    let other_root = f._t.path().join("other");
+    std::fs::create_dir_all(&other_root).unwrap();
+    let other = adopt_or_init(&other_root.canonicalize().unwrap(), &f.env.manifests_dir, None).unwrap();
+    register(&f.env, &request(&f, &project_key(2)), now()).unwrap();
+    let e = register(&f.env, &request_for(&other.id, &other.root, &project_key(2)), now()).unwrap_err();
+    assert_eq!(e.kind(), "key_reuse");
+    // Not even after the first project revoked it.
+    revoke(&f.env, &json!({"id": f.id})).unwrap();
+    let e = register(&f.env, &request_for(&other.id, &other.root, &project_key(2)), now()).unwrap_err();
+    assert_eq!(e.kind(), "key_reuse");
+    // Rekeying onto another project's key is refused too.
+    register(&f.env, &request_for(&other.id, &other.root, &project_key(5)), now()).unwrap();
+    register(&f.env, &request(&f, &project_key(6)), now()).unwrap();
+    let e = rekey(&f.env, &rekey_params(&f.id, &project_key(5)), now()).unwrap_err();
+    assert_eq!(e.kind(), "key_reuse");
+}
+
+#[test]
+fn concurrent_registrations_of_different_keys_have_one_winner() {
+    let f = fixture();
+    let (chain, dir) = (Arc::clone(&f.env.chain), f.env.manifests_dir.clone());
+    let reqs: Vec<_> = (2u8..10).map(|n| request(&f, &project_key(n))).collect();
+    let handles: Vec<_> = reqs
+        .into_iter()
+        .map(|r| {
+            let env = env_over(Arc::clone(&chain), &dir);
+            std::thread::spawn(move || register(&env, &r, now()))
+        })
+        .collect();
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    let wins = results.iter().filter(|r| r.is_ok()).count();
+    assert_eq!(wins, 1, "{:?}", results.iter().map(|r| r.as_ref().map(|_| ()).map_err(|e| e.kind())).collect::<Vec<_>>());
+    assert!(results.iter().filter_map(|r| r.as_ref().err()).all(|e| e.kind() == "key_conflict"));
+    assert_eq!(count(&f, KIND_REGISTER), 1);
+    assert_eq!(IdentityJournal::new(&dir).read().unwrap().len(), 1);
 }
 
 #[test]
 fn no_cert_for_another_projects_id_or_root() {
     let f = fixture();
     let k = project_key(2);
-    // An id nobody registered.
     let unknown = "01JB8Z3Q0V6X9KQ4M2N7T5R1WD";
-    let e = register(&f.env, &request_for(unknown, &f.root, &k), now()).unwrap_err();
-    assert_eq!(e.kind(), "project_not_found");
-    // Another registered project's root with this project's id.
+    assert_eq!(register(&f.env, &request_for(unknown, &f.root, &k), now()).unwrap_err().kind(), "project_not_found");
     let other_root = f._t.path().join("other");
     std::fs::create_dir_all(&other_root).unwrap();
     let other = adopt_or_init(&other_root.canonicalize().unwrap(), &f.env.manifests_dir, None).unwrap();
-    let e = register(&f.env, &request_for(&f.id, &other.root, &k), now()).unwrap_err();
-    assert_eq!(e.kind(), "root_mismatch");
-    // Another project's id with this project's root.
-    let e = register(&f.env, &request_for(&other.id, &f.root, &k), now()).unwrap_err();
-    assert_eq!(e.kind(), "root_mismatch");
-    // A malformed id never reaches the filesystem.
-    let e = register(&f.env, &request_for("../x", &f.root, &k), now());
-    assert!(e.is_err());
-    assert_eq!(f.env.chain.tail_from(0).iter().filter(|e| e.kind == KIND_REGISTER).count(), 0);
+    assert_eq!(register(&f.env, &request_for(&f.id, &other.root, &k), now()).unwrap_err().kind(), "root_mismatch");
+    assert_eq!(register(&f.env, &request_for(&other.id, &f.root, &k), now()).unwrap_err().kind(), "root_mismatch");
+    assert!(issue_challenge("../x").is_err());
+    assert_eq!(count(&f, KIND_REGISTER), 0);
 }
 
 #[test]
 fn no_cert_for_a_pubkey_the_caller_cannot_prove() {
     let f = fixture();
     let (mine, victim) = (project_key(2), project_key(7));
-    // Present the victim's pubkey but sign with my key.
     let mut r = request(&f, &mine);
     r.project_pubkey = victim.verifying_key().to_bytes();
     assert_eq!(register(&f.env, &r, now()).unwrap_err().kind(), "pop_failed");
-    // A PoP bound to a different project id.
+    // A PoP made for another operation, or for another user chain.
     let mut r = request(&f, &mine);
-    r.pop_sig = ident::pop_sign(&mine, &r.nonce, "01JB8Z3Q0V6X9KQ4M2N7T5R1WE").unwrap();
+    r.pop_sig = ident::pop_sign(&mine, PopOp::Rekey, &user_kid(), r.nonce.as_str(), &f.id).unwrap();
     assert_eq!(register(&f.env, &r, now()).unwrap_err().kind(), "pop_failed");
-    // A garbage nonce.
     let mut r = request(&f, &mine);
-    r.nonce = NONCE_A.to_uppercase();
+    r.pop_sig = ident::pop_sign(&mine, PopOp::Register, &"0".repeat(32), r.nonce.as_str(), &f.id).unwrap();
     assert_eq!(register(&f.env, &r, now()).unwrap_err().kind(), "pop_failed");
-    assert_eq!(f.env.chain.tail_from(0).len(), 0);
+    assert_eq!(count(&f, KIND_REGISTER), 0);
+    assert!(IdentityJournal::new(&f.env.manifests_dir).read().unwrap().is_empty());
 }
 
 #[test]
-fn a_replayed_pop_is_refused() {
+fn only_daemon_issued_single_use_nonces_work() {
     let f = fixture();
-    let r = request(&f, &project_key(2));
-    register(&f.env, &r, now()).unwrap();
-    assert_eq!(register(&f.env, &r, now()).unwrap_err().kind(), "pop_failed");
+    // An invented nonce cannot become a DaemonNonce.
+    assert_eq!(claim_nonce(&"ab".repeat(16), &f.id).unwrap_err().kind(), "pop_failed");
+    // Single use.
+    let n = issue_challenge(&f.id).unwrap();
+    claim_nonce(&n, &f.id).unwrap();
+    assert_eq!(claim_nonce(&n, &f.id).unwrap_err().kind(), "pop_failed");
+    // Bound to its project: another id cannot claim it (and it is burnt).
+    let n = issue_challenge(&f.id).unwrap();
+    assert_eq!(claim_nonce(&n, "01JB8Z3Q0V6X9KQ4M2N7T5R1WE").unwrap_err().kind(), "pop_failed");
+    assert_eq!(claim_nonce(&n, &f.id).unwrap_err().kind(), "pop_failed");
+    // A rekey nonce is single use too.
+    let p = rekey_params(&f.id, &project_key(3));
+    register(&f.env, &request(&f, &project_key(2)), now()).unwrap();
+    rekey(&f.env, &p, now()).unwrap();
+    assert_eq!(rekey(&f.env, &p, now()).unwrap_err().kind(), "pop_failed");
 }
 
 #[test]
 fn rekey_needs_a_certified_key_a_proof_and_a_different_key() {
     let f = fixture();
-    // Nothing certified yet.
-    assert_eq!(
-        rekey(&f.env, &rekey_params(&f.id, &project_key(3)), now()).unwrap_err().kind(),
-        "not_certified"
-    );
+    assert_eq!(rekey(&f.env, &rekey_params(&f.id, &project_key(3)), now()).unwrap_err().kind(), "not_certified");
     register(&f.env, &request(&f, &project_key(2)), now()).unwrap();
-    // Same key.
-    assert_eq!(
-        rekey(&f.env, &rekey_params(&f.id, &project_key(2)), now()).unwrap_err().kind(),
-        "key_conflict"
-    );
-    // Proof by the wrong key.
+    assert_eq!(rekey(&f.env, &rekey_params(&f.id, &project_key(2)), now()).unwrap_err().kind(), "key_conflict");
     let mut p = rekey_params(&f.id, &project_key(3));
     p["new_pubkey"] = json!(ident::hex(&project_key(4).verifying_key().to_bytes()));
     assert_eq!(rekey(&f.env, &p, now()).unwrap_err().kind(), "pop_failed");
-    // Missing params.
     assert_eq!(rekey(&f.env, &json!({"id": f.id}), now()).unwrap_err().kind(), "invalid_params");
 }
 
 #[test]
-fn show_reports_the_certificate_in_force() {
+fn show_and_challenge() {
     let f = fixture();
     let v = show(&f.env, &json!({"id": f.id})).unwrap();
     assert_eq!(v["certified"], false);
@@ -269,4 +326,36 @@ fn show_reports_the_certificate_in_force() {
     assert_eq!(v["certified"], true);
     assert_eq!(v["cert"]["project_key_id"], c.project_key_id.as_str());
     assert_eq!(show(&f.env, &json!({"id": "nope"})).unwrap_err().kind(), "invalid_params");
+
+    let ch = challenge(&f.env, &json!({"id": f.id})).unwrap();
+    assert_eq!(ch["user_key_id"], user_kid().as_str());
+    assert_eq!(ch["op"], "rekey");
+    claim_nonce(ch["nonce"].as_str().unwrap(), &f.id).unwrap();
+    let unreg = "01JB8Z3Q0V6X9KQ4M2N7T5R1WD";
+    assert_eq!(challenge(&f.env, &json!({"id": unreg})).unwrap_err().kind(), "project_not_found");
+}
+
+#[test]
+fn revoke_reports_a_cert_file_it_could_not_remove() {
+    let f = fixture();
+    register(&f.env, &request(&f, &project_key(2)), now()).unwrap();
+    let path = cert_path(&f.env.manifests_dir, &f.id);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    let e = revoke(&f.env, &json!({"id": f.id})).unwrap_err();
+    assert_eq!(e.kind(), "project_store_error");
+    assert!(e.to_string().contains("is revoked"), "{e}");
+    // The revocation itself took effect.
+    assert!(current_view(&f.env).unwrap().bound_key_id(&f.id).is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn distinct_non_utf8_roots_hash_differently() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let a = root_sha256(Path::new(OsStr::from_bytes(b"/tmp/\xff")));
+    let b = root_sha256(Path::new(OsStr::from_bytes(b"/tmp/\xfe")));
+    assert_ne!(a, b);
+    assert_eq!(a, ident::hex(&Sha256::digest(b"/tmp/\xff")));
 }

@@ -6359,6 +6359,12 @@ async fn dispatch(
                 if append_params.record.kind.trim().is_empty() {
                     return Response::error("chain.append: record.kind must be non-empty");
                 }
+                if clawft_kernel::project_identity::is_reserved_source(&append_params.source) {
+                    return Response::error_with_kind(
+                        "reserved_source",
+                        "chain.append: this source is reserved for the daemon's identity events",
+                    );
+                }
                 let k = kernel.read().await;
                 if let Some(cm) = k.chain_manager() {
                     let payload = match serde_json::to_value(&append_params.record) {

@@ -101,7 +101,12 @@ fn denied(v: &Value) -> bool {
             .contains("permission denied")
 }
 
-const CERT_METHODS: [&str; 3] = ["project.cert.show", "project.rekey", "project.revoke"];
+const CERT_METHODS: [&str; 4] = [
+    "project.cert.show",
+    "project.cert.challenge",
+    "project.rekey",
+    "project.revoke",
+];
 
 #[tokio::test]
 async fn anonymous_relay_and_untrusted_peer_are_denied() {
@@ -154,15 +159,22 @@ async fn owner_flow_on_the_user_daemon() {
     assert_eq!(shown["result"]["certified"], false, "{shown}");
 
     // Certify through the function package H's mesh.register calls.
+    use clawft_kernel::project_identity as ident;
+    use clawft_types::project::cert::PopOp;
+    let user_kid = {
+        let k = d.kernel.read().await;
+        let uk = k.chain_manager().unwrap().signing_key_clone().unwrap();
+        clawft_types::project::cert::key_id(&uk.verifying_key().to_bytes())
+    };
     let key = ed25519_dalek::SigningKey::from_bytes(&[2u8; 32]);
-    let nonce = "00112233445566778899aabbccddee01".to_owned();
+    let nonce = clawft_weave::project_cert_rpc::issue_challenge(&id).unwrap();
     let req = clawft_weave::project_cert_rpc::RegisterRequest {
         project_id: id.clone(),
         project_pubkey: key.verifying_key().to_bytes(),
         root_sha256: clawft_weave::project_cert_rpc::root_sha256(&canon_root),
         spawn: clawft_weave::project_cert_rpc::SpawnInfo { pid: 1, exe_sha: "ab".repeat(32) },
-        pop_sig: clawft_kernel::project_identity::pop_sign(&key, &nonce, &id).unwrap(),
-        nonce,
+        pop_sig: ident::pop_sign(&key, PopOp::Register, &user_kid, &nonce, &id).unwrap(),
+        nonce: clawft_weave::project_cert_rpc::claim_nonce(&nonce, &id).unwrap(),
     };
     let ctx = clawft_weave::rpc_ext::ExtCtx {
         kernel: Arc::clone(&d.kernel),
@@ -179,13 +191,16 @@ async fn owner_flow_on_the_user_daemon() {
 
     // Rekey, then revoke.
     let key2 = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
-    let n2 = "00112233445566778899aabbccddee02";
-    let sig2 = clawft_kernel::project_identity::pop_sign(&key2, n2, &id).unwrap();
+    let ch = call(&d, "project.cert.challenge", json!({"id": id}), Some("admin")).await;
+    assert_eq!(ch["ok"], true, "{ch}");
+    assert_eq!(ch["result"]["user_key_id"], user_kid.as_str());
+    let n2 = ch["result"]["nonce"].as_str().unwrap().to_owned();
+    let sig2 = ident::pop_sign(&key2, PopOp::Rekey, &user_kid, &n2, &id).unwrap();
     let rk = call(
         &d,
         "project.rekey",
-        json!({"id": id, "new_pubkey": clawft_kernel::project_identity::hex(&key2.verifying_key().to_bytes()),
-               "nonce": n2, "pop_sig": clawft_kernel::project_identity::hex(&sig2), "reason": "test"}),
+        json!({"id": id, "new_pubkey": ident::hex(&key2.verifying_key().to_bytes()),
+               "nonce": n2, "pop_sig": ident::hex(&sig2), "reason": "test"}),
         Some("admin"),
     )
     .await;
@@ -199,6 +214,17 @@ async fn owner_flow_on_the_user_daemon() {
     let events = d.kernel.read().await.chain_manager().unwrap().tail_from(0);
     let kinds: Vec<&str> = events.iter().filter(|e| e.source == "user.projects").map(|e| e.kind.as_str()).collect();
     assert_eq!(kinds, ["project.register", "project.rekey", "project.revoke"]);
+
+    // The source is reserved: a Write caller cannot forge identity events.
+    let forged = call(
+        &d,
+        "chain.append",
+        json!({"source": "user.projects", "record": {"kind": "project.revoke", "entries": [],
+            "hash_before": "", "hash_after": "", "ts": "2026-10-01T00:00:00Z"}}),
+        Some("admin"),
+    )
+    .await;
+    assert_eq!(forged["error_kind"], "reserved_source", "{forged}");
     let dump = serde_json::to_string(&events).unwrap();
     assert!(!dump.contains(&"02".repeat(32)) && !dump.contains(&"03".repeat(32)));
     clawft_weave::user_daemon::leave();

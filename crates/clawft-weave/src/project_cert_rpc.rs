@@ -1,5 +1,5 @@
-//! Project key certificates: `project.cert.show`, `project.rekey`,
-//! `project.revoke`, and [`issue_for_register`] for `mesh.register`
+//! Project key certificates: `project.cert.show`, `project.cert.challenge`,
+//! `project.rekey`, `project.revoke`, and [`issue_for_register`] for `mesh.register`
 //! (ADR-103 A7, Phase 2 package C).
 //!
 //! Every route is `Admin` and user-daemon only. A `wft_` token is refused
@@ -8,33 +8,36 @@
 //! A daemon that is not the `--profile user` daemon refuses too, so a
 //! project kernel can never mint certificates with its own key.
 //!
-//! The user chain (source `user.projects`) holds `project.register`,
-//! `project.rekey` and `project.revoke` events: certificates (public keys
-//! and signatures) and metadata, never private bytes. The chain is the
-//! source of truth; `~/.weftos/projects/<id>.cert.json` is a 0600 copy
-//! rewritten atomically from it, and `<id>.revoked.json` is a
-//! revocations-only journal that survives a crash before the chain is
-//! saved (it can only add revocations).
+//! The user chain (source `user.projects`, reserved: the `chain.append`
+//! RPC refuses it) holds `project.register`, `project.rekey` and
+//! `project.revoke` events: certificates (public keys and signatures) and
+//! metadata, never private bytes. The chain is saved only on clean
+//! shutdown, so every operation first appends to the fsynced identity
+//! journal (`<manifests>/identity.journal.jsonl`) under an exclusive
+//! `flock`, and [`current_view`] merges journal + `<id>.cert.json` files +
+//! chain into the one [`RevocationView`] used for every decision. A journal
+//! that exists but does not parse stops issuing and verifying (fail closed).
 //!
-//! Package H owns the registration challenge: it must hand
-//! [`issue_for_register`] a nonce it issued and verified the spawn nonce
-//! for. This module also refuses a replayed proof-of-possession nonce
-//! (bounded in-memory set), but freshness is H's job. TOFU limits are
-//! stated in `clawft_kernel::project_identity`.
+//! Nonces are issued by the daemon ([`issue_challenge`]), single use and
+//! short lived; [`claim_nonce`] turns one into a [`DaemonNonce`], the only
+//! thing [`issue_for_register`] and `project.rekey` accept, so a replayed or
+//! invented nonce cannot reach the PoP check. Package H's `mesh.challenge`
+//! must call [`issue_challenge`] and its `mesh.register` [`claim_nonce`]; H
+//! also verifies the spawn nonce. TOFU limits are stated in
+//! `clawft_kernel::project_identity`.
 
-use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use clawft_kernel::chain::ChainManager;
 use clawft_kernel::project_identity::{
-    self as ident, IdentityError, KIND_REGISTER, KIND_REKEY, KIND_REVOKE, Registration,
-    RevocationView, SOURCE,
+    self as ident, IdentityError, IdentityJournal, JournalRecord, KIND_REGISTER, KIND_REKEY,
+    KIND_REVOKE, Registration, RevocationView, SOURCE,
 };
 use clawft_kernel::token_authority::SECRET_PREFIX;
 use clawft_rpc::Response;
-use clawft_types::project::cert::ProjectCert;
+use clawft_types::project::cert::{PopOp, ProjectCert, key_id};
 use clawft_types::project::{CertRequest, ProjectError, find_by_id, validate_id};
 use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
@@ -42,8 +45,11 @@ use sha2::{Digest, Sha256};
 
 use crate::rpc_ext::{ExtCall, ExtCtx, ExtFuture};
 
+#[path = "project_cert_nonce.rs"]
+mod nonce;
+pub use nonce::{CHALLENGE_TTL, DaemonNonce, claim_nonce, issue_challenge};
+
 const MAX_REASON: usize = 256;
-const NONCE_MEMORY: usize = 4096;
 
 /// What the user daemon verified about the child it spawned.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,9 +71,10 @@ pub struct RegisterRequest {
     pub root_sha256: String,
     /// Spawn facts recorded on the chain.
     pub spawn: SpawnInfo,
-    /// Challenge nonce (32 lowercase hex), issued by the caller's flow.
-    pub nonce: String,
-    /// Proof of possession: [`ident::pop_sign`] over nonce and id.
+    /// The daemon-issued challenge nonce, claimed with [`claim_nonce`].
+    pub nonce: DaemonNonce,
+    /// Proof of possession: [`ident::pop_sign`] with [`PopOp::Register`]
+    /// and the user key id over this nonce and project id.
     pub pop_sig: [u8; 64],
 }
 
@@ -92,7 +99,8 @@ pub enum IssueError {
     /// The id is not in the manifest store.
     #[error("project {0} is not registered")]
     NotRegistered(String),
-    /// The claimed root is not the registered root.
+    /// The claimed root is not the registered root. The child must send the
+    /// canonical root path (what `project.register` stored).
     #[error("root does not match the registered project root")]
     RootMismatch,
     /// Proof of possession failed or its nonce was used before.
@@ -117,6 +125,8 @@ impl IssueError {
             Self::Pop(_) => "pop_failed",
             Self::Identity(IdentityError::KeyConflict { .. }) => "key_conflict",
             Self::Identity(IdentityError::KeyRevoked { .. }) => "key_revoked",
+            Self::Identity(IdentityError::KeyReuse { .. }) => "key_reuse",
+            Self::Identity(IdentityError::JournalCorrupt { .. }) => "journal_corrupt",
             Self::Identity(IdentityError::NotBound(_)) => "not_certified",
             Self::Identity(_) => "cert_error",
             Self::Store(_) => "project_store_error",
@@ -138,65 +148,45 @@ pub struct CertEnv {
     pub manifests_dir: PathBuf,
 }
 
-/// Hex SHA-256 of the root path's UTF-8 bytes: how a project root is named
-/// in `project.register` and in [`RegisterRequest::root_sha256`].
+/// Hex SHA-256 of the root path's raw bytes (`OsStr` bytes on unix, so two
+/// distinct non-UTF-8 paths never collide): how a project root is named in
+/// `project.register` and in [`RegisterRequest::root_sha256`]. The child
+/// must hash the canonical root, exactly as stored in the manifest.
 pub fn root_sha256(root: &Path) -> String {
-    ident::hex(&Sha256::digest(root.to_string_lossy().as_bytes()))
-}
-
-/// One writer at a time: the plan (read the chain) and the append must not
-/// interleave or two first keys for one id could both win.
-static ISSUE_LOCK: Mutex<()> = Mutex::new(());
-static SEEN_NONCES: OnceLock<Mutex<(HashSet<String>, VecDeque<String>)>> = OnceLock::new();
-
-fn consume_nonce(nonce: &str) -> bool {
-    let mut g = SEEN_NONCES
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if !g.0.insert(nonce.to_owned()) {
-        return false;
-    }
-    g.1.push_back(nonce.to_owned());
-    if g.1.len() > NONCE_MEMORY
-        && let Some(old) = g.1.pop_front()
-    {
-        g.0.remove(&old);
-    }
-    true
+    #[cfg(unix)]
+    let bytes = {
+        use std::os::unix::ffi::OsStrExt;
+        root.as_os_str().as_bytes().to_vec()
+    };
+    #[cfg(not(unix))]
+    let bytes = root.to_string_lossy().into_owned().into_bytes();
+    ident::hex(&Sha256::digest(bytes))
 }
 
 fn cert_path(dir: &Path, id: &str) -> PathBuf {
     dir.join(format!("{id}.cert.json"))
 }
 
-fn journal_path(dir: &Path, id: &str) -> PathBuf {
-    dir.join(format!("{id}.revoked.json"))
+fn read_cert_files(dir: &Path) -> Vec<ProjectCert> {
+    let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
+    rd.flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".cert.json"))
+        .filter_map(|e| serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok())
+        .collect()
 }
 
-fn read_journal(dir: &Path, id: &str) -> Vec<String> {
-    std::fs::read(journal_path(dir, id))
-        .ok()
-        .and_then(|b| serde_json::from_slice::<Vec<String>>(&b).ok())
-        .unwrap_or_default()
-}
-
-fn add_journal(dir: &Path, id: &str, key_id: &str) -> Result<(), IssueError> {
-    let mut ids = read_journal(dir, id);
-    if !ids.iter().any(|k| k == key_id) {
-        ids.push(key_id.to_owned());
-    }
-    let bytes = serde_json::to_vec(&ids).map_err(|e| IssueError::Store(e.to_string()))?;
-    ident::write_private_atomic(&journal_path(dir, id), &bytes, false)?;
-    Ok(())
-}
-
-fn view_for(env: &CertEnv, id: &str) -> RevocationView {
-    let mut view = RevocationView::from_events(&env.chain.tail_from(0));
-    for k in read_journal(&env.manifests_dir, id) {
-        view.add_revoked(id, &k);
-    }
-    view
+/// The one view every issue, rekey, revoke and verification decision uses:
+/// journal, certificate files and chain merged, every certificate
+/// re-verified against the user key. Errors (instead of returning a weaker
+/// view) when the journal cannot be trusted.
+pub fn current_view(env: &CertEnv) -> Result<RevocationView, IssueError> {
+    let journal = IdentityJournal::new(&env.manifests_dir).read()?;
+    Ok(RevocationView::build(
+        &user_pubkey(env),
+        &env.chain.tail_from(0),
+        &journal,
+        &read_cert_files(&env.manifests_dir),
+    ))
 }
 
 fn write_cert_file(dir: &Path, cert: &ProjectCert) -> Result<(), IssueError> {
@@ -228,12 +218,20 @@ fn registered_manifest(
         .ok_or_else(|| IssueError::NotRegistered(id.to_owned()))
 }
 
-fn verify_pop(id: &str, pubkey: &[u8; 32], nonce: &str, sig: &[u8; 64]) -> Result<(), IssueError> {
-    ident::pop_verify(pubkey, nonce, id, sig).map_err(|e| IssueError::Pop(e.to_string()))?;
-    if !consume_nonce(nonce) {
-        return Err(IssueError::Pop("proof-of-possession nonce was already used".into()));
+fn verify_pop(
+    env: &CertEnv,
+    op: PopOp,
+    pubkey: &[u8; 32],
+    nonce: &DaemonNonce,
+    project_id: &str,
+    sig: &[u8; 64],
+) -> Result<(), IssueError> {
+    if nonce.project_id() != project_id {
+        return Err(IssueError::Pop("nonce was issued for another project".into()));
     }
-    Ok(())
+    let uk = key_id(&user_pubkey(env));
+    ident::pop_verify(pubkey, op, &uk, nonce.as_str(), project_id, sig)
+        .map_err(|e| IssueError::Pop(e.to_string()))
 }
 
 fn user_pubkey(env: &CertEnv) -> [u8; 32] {
@@ -242,17 +240,18 @@ fn user_pubkey(env: &CertEnv) -> [u8; 32] {
 
 /// Certify the key in `req` for `project.register`. Refuses an id that is
 /// not in the manifest store, a root that is not that project's registered
-/// root, a key the caller cannot prove (PoP), a second key for a certified
-/// id, and a revoked key. Idempotent for the certified key.
+/// root, a key the caller cannot prove (PoP over a daemon-issued nonce), a
+/// second key for a certified id, a key used by another project, and a
+/// revoked key. Idempotent for the certified key.
 pub fn register(env: &CertEnv, req: &RegisterRequest, now: DateTime<Utc>) -> Result<Issued, IssueError> {
     let manifest = registered_manifest(env, &req.project_id)?;
     if req.root_sha256 != root_sha256(&manifest.root) {
         return Err(IssueError::RootMismatch);
     }
-    verify_pop(&req.project_id, &req.project_pubkey, &req.nonce, &req.pop_sig)?;
-    let _g = ISSUE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let view = view_for(env, &req.project_id);
-    match view.plan_registration(&req.project_id, &req.project_pubkey)? {
+    verify_pop(env, PopOp::Register, &req.project_pubkey, &req.nonce, &req.project_id, &req.pop_sig)?;
+    let journal = IdentityJournal::new(&env.manifests_dir);
+    let _lock = journal.lock()?;
+    match current_view(env)?.plan_registration(&req.project_id, &req.project_pubkey)? {
         Registration::Existing(cert) => {
             ident::verify_cert_at(&cert, &user_pubkey(env), now).map_err(IdentityError::from)?;
             write_cert_file(&env.manifests_dir, &cert)?;
@@ -269,6 +268,7 @@ pub fn register(env: &CertEnv, req: &RegisterRequest, now: DateTime<Utc>) -> Res
                     expires_at: None,
                 },
             )?;
+            journal.append(&JournalRecord::Register { cert: cert.clone() })?;
             env.chain.append(
                 SOURCE,
                 KIND_REGISTER,
@@ -287,16 +287,18 @@ pub fn register(env: &CertEnv, req: &RegisterRequest, now: DateTime<Utc>) -> Res
 }
 
 /// `project.rekey`: replace the certified key with `new_pubkey` (proved by
-/// PoP). The old key is revoked for good.
+/// PoP over a nonce from `project.cert.challenge`). The old key is revoked
+/// for good.
 pub fn rekey(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Issued, IssueError> {
     let id = str_param(params, "id")?;
     registered_manifest(env, id)?;
     let new_pk = pubkey_param(params, "new_pubkey")?;
-    let nonce = str_param(params, "nonce")?;
+    let nonce = claim_nonce(str_param(params, "nonce")?, id)?;
     let sig = sig_param(params, "pop_sig")?;
-    verify_pop(id, &new_pk, nonce, &sig)?;
-    let _g = ISSUE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let (old_key_id, serial) = view_for(env, id).plan_rekey(id, &new_pk)?;
+    verify_pop(env, PopOp::Rekey, &new_pk, &nonce, id, &sig)?;
+    let journal = IdentityJournal::new(&env.manifests_dir);
+    let _lock = journal.lock()?;
+    let (old_key_id, serial) = current_view(env)?.plan_rekey(id, &new_pk)?;
     let cert = ident::sign_cert(
         &env.user_key,
         &CertRequest {
@@ -307,7 +309,7 @@ pub fn rekey(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Issued
             expires_at: None,
         },
     )?;
-    add_journal(&env.manifests_dir, id, &old_key_id)?;
+    journal.append(&JournalRecord::Rekey { old_key_id: old_key_id.clone(), cert: cert.clone() })?;
     env.chain.append(
         SOURCE,
         KIND_REKEY,
@@ -327,12 +329,13 @@ pub fn rekey(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Issued
 pub fn revoke(env: &CertEnv, params: &Value) -> Result<Value, IssueError> {
     let id = str_param(params, "id")?;
     validate_id(id).map_err(|_| IssueError::Invalid("project id is not a canonical ULID".into()))?;
-    let _g = ISSUE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let old = view_for(env, id)
+    let journal = IdentityJournal::new(&env.manifests_dir);
+    let _lock = journal.lock()?;
+    let old = current_view(env)?
         .bound_key_id(id)
         .ok_or_else(|| IdentityError::NotBound(id.to_owned()))?
         .to_owned();
-    add_journal(&env.manifests_dir, id, &old)?;
+    journal.append(&JournalRecord::Revoke { project_id: id.to_owned(), key_id: old.clone() })?;
     env.chain.append(
         SOURCE,
         KIND_REVOKE,
@@ -342,7 +345,15 @@ pub fn revoke(env: &CertEnv, params: &Value) -> Result<Value, IssueError> {
             "reason": clean_reason(params.get("reason")),
         })),
     );
-    let _ = std::fs::remove_file(cert_path(&env.manifests_dir, id));
+    match std::fs::remove_file(cert_path(&env.manifests_dir, id)) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(IssueError::Store(format!(
+                "key {old} is revoked, but removing {id}.cert.json failed: {e}"
+            )));
+        }
+    }
     Ok(json!({ "project_id": id, "revoked_key_id": old }))
 }
 
@@ -350,12 +361,24 @@ pub fn revoke(env: &CertEnv, params: &Value) -> Result<Value, IssueError> {
 pub fn show(env: &CertEnv, params: &Value) -> Result<Value, IssueError> {
     let id = str_param(params, "id")?;
     validate_id(id).map_err(|_| IssueError::Invalid("project id is not a canonical ULID".into()))?;
-    let view = view_for(env, id);
+    let view = current_view(env)?;
     Ok(json!({
         "project_id": id,
         "certified": view.bound_key_id(id).is_some(),
         "cert": view.current_cert(id),
         "last_serial": view.last_serial(id),
+    }))
+}
+
+/// `project.cert.challenge`: a nonce for a `project.rekey` proof.
+pub fn challenge(env: &CertEnv, params: &Value) -> Result<Value, IssueError> {
+    let id = str_param(params, "id")?;
+    registered_manifest(env, id)?;
+    Ok(json!({
+        "nonce": issue_challenge(id)?,
+        "ttl_secs": CHALLENGE_TTL.as_secs(),
+        "user_key_id": key_id(&user_pubkey(env)),
+        "op": PopOp::Rekey.as_str(),
     }))
 }
 
@@ -404,7 +427,8 @@ pub async fn issue_for_register(ctx: &ExtCtx, req: &RegisterRequest) -> Result<I
         .map_err(|e| IssueError::Store(format!("task failed: {e}")))?
 }
 
-/// Handler for `project.cert.show`, `project.rekey`, `project.revoke`.
+/// Handler for `project.cert.show`, `project.cert.challenge`,
+/// `project.rekey` and `project.revoke`.
 pub fn handle(call: ExtCall) -> ExtFuture {
     Box::pin(async move {
         if call
@@ -425,6 +449,7 @@ pub fn handle(call: ExtCall) -> ExtFuture {
         let (method, params) = (call.method, call.params);
         let out = tokio::task::spawn_blocking(move || match method.as_str() {
             "project.cert.show" => show(&env, &params),
+            "project.cert.challenge" => challenge(&env, &params),
             "project.rekey" => rekey(&env, &params, Utc::now())
                 .map(|i| json!({ "cert": i.cert })),
             "project.revoke" => revoke(&env, &params),
