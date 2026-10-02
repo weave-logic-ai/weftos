@@ -349,6 +349,7 @@ async fn place_cmd(args: &[String]) -> R<bool> {
         allow_emulated: false,
         start: true,
         dry_run: false,
+        project_id: None,
     };
     let report = plane.place(&order).await.map_err(|e| e.to_string())?;
     println!("── place --explain\n{}", report.explain);

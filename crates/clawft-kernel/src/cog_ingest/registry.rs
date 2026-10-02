@@ -108,6 +108,14 @@ impl TokenRegistry {
         self.inner.lock().ok()?.by_hash.get(&hash(token)).cloned()
     }
 
+    /// True if `instance_id` currently has a token.
+    pub fn contains(&self, instance_id: &str) -> bool {
+        self.inner
+            .lock()
+            .map(|g| g.by_instance.contains_key(instance_id))
+            .unwrap_or(false)
+    }
+
     /// Live instances.
     pub fn len(&self) -> usize {
         self.inner.lock().map(|g| g.by_instance.len()).unwrap_or(0)

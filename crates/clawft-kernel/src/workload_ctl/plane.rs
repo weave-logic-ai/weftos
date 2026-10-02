@@ -140,6 +140,11 @@ pub struct PlacementRecord {
     pub decision_id: String,
     /// Package manifest hash.
     pub manifest_hash: String,
+    /// Project that placed it, when placement went through a project; the
+    /// cog ingest bridge delivers the instance's vectors to that project's
+    /// store (ADR-100, Decision 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 /// One signed round trip.

@@ -130,3 +130,8 @@ fn parse_vector(e: &Value) -> Result<IngestVector, String> {
     }
     Ok(IngestVector { id, values })
 }
+
+/// True for a project id: 26 upper-case alphanumeric characters (a ULID).
+pub fn valid_project_id(s: &str) -> bool {
+    s.len() == 26 && s.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+}

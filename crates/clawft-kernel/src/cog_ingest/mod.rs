@@ -19,6 +19,7 @@
 
 pub mod bridge;
 pub mod forward;
+pub mod hooks;
 pub mod owner;
 pub mod registry;
 pub mod store;
@@ -35,13 +36,16 @@ pub use forward::{
     ForwardRefusal, ForwardRequest, Forwarder, LocalForwarder, MeshForwarder, STORE_INGEST_METHOD,
     STORE_SERVICE,
 };
+pub use hooks::{IngestHooks, IngestLease};
 pub use owner::{ForwardPolicy, KeyPolicy, OwnerConnector, StoreOwnerService};
 pub use registry::{InstanceBinding, RateBudget, StaticRouter, StoreRouter, TokenRegistry};
 #[cfg(feature = "ecc")]
-pub use store::VectorBackendStore;
+pub use store::{VectorBackendStore, VectorDirectory};
 pub use store::{
     IngestOutcome, IngestStore, MemoryIngestStore, Provenance, StaticDirectory, StoreDirectory,
     StoreError,
 };
-pub use types::{DIMS, INGEST_PATH, IngestBatch, IngestError, IngestVector, parse_batch};
+pub use types::{
+    DIMS, INGEST_PATH, IngestBatch, IngestError, IngestVector, parse_batch, valid_project_id,
+};
 pub use udp::{UdpForwardConfig, UdpForwarder};

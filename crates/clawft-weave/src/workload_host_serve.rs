@@ -131,6 +131,9 @@ pub struct HostParts<'a> {
     pub serving: Option<&'a HostConfig>,
     /// Container adapter (`workload-container.json`); none serves native only.
     pub container: Option<ContainerRuntimeConfig>,
+    /// Cog ingest bridge wiring (`cog-ingest.json`); none places cogs
+    /// without ingest.
+    pub ingest: Option<clawft_kernel::cog_ingest::IngestHooks>,
 }
 
 /// This node's `workload-host`: the native adapter (and the container
@@ -165,6 +168,9 @@ pub fn local_host(p: HostParts<'_>) -> Result<WorkloadHostService, String> {
         .with_controllers(controllers)
         .with_chain(p.chain.clone())
         .with_facts_source(p.facts);
+    if let Some(h) = p.ingest {
+        svc = svc.with_ingest(h);
+    }
     if let Some((h, routes)) = container {
         for r in routes {
             svc = svc.with_route(r, h.clone());

@@ -260,3 +260,45 @@ async fn a_forwarder_rejects_a_response_signed_by_the_wrong_owner() {
     assert!(matches!(err, IngestError::Unavailable(_)), "{err}");
 }
 
+
+// ── Hooks: container listeners are scoped to one token ──────────────────
+
+#[tokio::test]
+async fn container_routes_get_a_token_scoped_listener_as_their_upstream() {
+    let store = mem();
+    let (bridge, reg) = bridge_over(
+        StaticRouter::new().with_controller(
+            "ctl",
+            Arc::new(LocalForwarder::new(
+                "n",
+                Arc::new(StaticDirectory::new().with_fallback(store.clone())),
+            )),
+        ),
+        RateBudget::default(),
+    );
+    let hooks = IngestHooks::new(reg.clone(), bridge, "127.0.0.1:80".parse().unwrap(), Some("127.0.0.1".parse().unwrap()));
+    let mk = || crate::workload_runtime::HostContract::default_feed();
+
+    // Native: the shared URL, no listener of its own.
+    let (c, l) = hooks.prepare("native", mk()).await.unwrap();
+    assert!(l.is_none() && c.ingest_upstream.is_none());
+    assert_eq!(c.ingest_url.as_deref(), Some("http://127.0.0.1:80/api/v1/store/ingest"));
+
+    // Container: its own listener, accepting only its own token.
+    let (c1, l1) = hooks.prepare("container", mk()).await.unwrap();
+    let (c2, l2) = hooks.prepare("container", mk()).await.unwrap();
+    let up1 = c1.ingest_upstream.unwrap();
+    assert_eq!(Some(up1), l1.as_ref().map(|h| h.addr()));
+    let (t1, t2) = (c1.token.expose().to_string(), c2.token.expose().to_string());
+    let lease1 = hooks.lease(InstanceBinding::new("one", None, "ctl"), c1, l1).unwrap();
+    let _lease2 = hooks.lease(InstanceBinding::new("two", None, "ctl"), c2, l2).unwrap();
+    let b = batch_json(&[(1, vec8(1.0))], false);
+    assert_eq!(post(up1, Some(&t1), &b).await.0, 200);
+    assert_eq!(post(up1, Some(&t2), &b).await.0, 403, "another instance's valid token");
+
+    // Deactivate (stop) closes the door; activate (start) reopens it.
+    hooks.deactivate(&lease1);
+    assert_eq!(post(up1, Some(&t1), &b).await.0, 401);
+    hooks.activate(&lease1).unwrap();
+    assert_eq!(post(up1, Some(&t1), &b).await.0, 200);
+}

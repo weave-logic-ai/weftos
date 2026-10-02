@@ -279,3 +279,46 @@ impl StoreDirectory for StaticDirectory {
         }
     }
 }
+
+/// A node's stores for the projects it owns, each an in-memory HNSW index
+/// created on first use (persistence follows the project kernel's store
+/// work; a restart empties them). Only listed projects have a store here;
+/// the controller fallback exists only when enabled.
+#[cfg(feature = "ecc")]
+pub struct VectorDirectory {
+    projects: HashSet<String>,
+    fallback: bool,
+    stores: Mutex<HashMap<Option<String>, Arc<VectorBackendStore>>>,
+}
+
+#[cfg(feature = "ecc")]
+impl VectorDirectory {
+    /// Directory owning `projects`, and the controller fallback if `fallback`.
+    pub fn new(projects: impl IntoIterator<Item = String>, fallback: bool) -> Self {
+        Self {
+            projects: projects.into_iter().collect(),
+            fallback,
+            stores: Mutex::default(),
+        }
+    }
+}
+
+#[cfg(feature = "ecc")]
+impl StoreDirectory for VectorDirectory {
+    fn store_for(&self, project_id: Option<&str>) -> Option<Arc<dyn IngestStore>> {
+        match project_id {
+            Some(p) if !self.projects.contains(p) => return None,
+            None if !self.fallback => return None,
+            _ => {}
+        }
+        let mut g = self.stores.lock().ok()?;
+        let s = g.entry(project_id.map(String::from)).or_insert_with(|| {
+            Arc::new(VectorBackendStore::new(Arc::new(
+                crate::vector_hnsw::HnswBackend::new(
+                    crate::hnsw_service::HnswServiceConfig::default(),
+                ),
+            )))
+        });
+        Some(s.clone() as Arc<dyn IngestStore>)
+    }
+}

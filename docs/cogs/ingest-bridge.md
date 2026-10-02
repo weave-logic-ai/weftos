@@ -32,8 +32,69 @@ controller_node }` together with the instance's token
 | `project_id = None` | the placing controller's store (`controller_node`) |
 
 The owner may be this node (`LocalForwarder`) or another (`MeshForwarder`).
-`PlacementRecord` does not carry a project id yet, so the caller that holds
-the project id passes it to `InstanceBinding::from_record`.
+
+## Wiring into placement
+
+The project id travels with the placement:
+
+1. The caller names the project: `PlaceOrder.project_id` (the
+   `workload.place` RPC takes `project`, a 26-character project id).
+   `PlaceBody.project_id` carries it to the target, and `PlacementRecord`
+   keeps it (`project_id`, absent when the placement had no project).
+2. At `place` / `load` on the target, `WorkloadHostService` (given
+   `with_ingest(IngestHooks)`) issues the cog's token with its host
+   contract, injects `COGNITUM_COG_TOKEN` and `COGNITUM_INGEST_URL`, and
+   after the adapter names the instance registers
+   `InstanceBinding { instance_id, project_id, controller_node = requester }`.
+   Only `cog` workloads get a token.
+3. `stop` and `unload` revoke the token before the adapter acts, and a
+   failed start rolls back and revokes. `start` registers it again. A
+   malformed project id is refused (`invalid_request`).
+4. Native cogs get the shared loopback listener's URL. Container routes get
+   their own token-scoped listener (when `bridge.container_bind` is set),
+   passed to the adapter as the relay's `ingest_upstream`; that listener
+   accepts only that instance's token (another instance's valid token is
+   403) and is closed with the instance.
+
+There is no package-revocation path to the host yet (card 13); when one
+force-unloads an instance it goes through `unload`, which revokes the token.
+
+## Daemon configuration
+
+The daemon (`crates/clawft-weave/src/cog_ingest_serve.rs`) starts the bridge
+when it builds its placement host, and the `cog-store` service when asked.
+Everything is optional; `<runtime>/cog-ingest.json` overrides the defaults:
+
+```json
+{
+  "bridge": { "bind": "127.0.0.1:80", "requests_per_sec": 20,
+              "vectors_per_sec": 2048, "container_bind": "192.168.64.1" },
+  "routes": [
+    { "project": "<26-char project id>", "owner": "local" },
+    { "project": "<26-char project id>",
+      "owner": { "node": "<node id>", "key": "<64 hex>", "addr": "host:9472", "noise": true } },
+    { "controller": "<node id>", "owner": "local" }
+  ],
+  "store_owner": { "listen": "0.0.0.0:9472", "noise": true,
+                   "forwarders": [ { "key": "<64 hex>", "projects": ["<id>"] } ],
+                   "projects": ["<id>"], "fallback": false }
+}
+```
+
+| Knob | Default | Meaning |
+|---|---|---|
+| `bridge.bind` | `127.0.0.1:80` | Shared listener; must be loopback. Released cogs post to this address. If it cannot bind (taken, or unprivileged on Linux) the daemon logs it and places cogs without ingest. |
+| `bridge.requests_per_sec`, `vectors_per_sec` | 20, 2048 | Per-instance budgets. |
+| `bridge.container_bind` | none | Address for token-scoped container listeners (the engine or VM gateway). Unset: containers get no scoped listener. |
+| `routes` | one route: project-less placements by this node's key go to this node's store | A `project` route sends that project's batches to its owner; a `controller` route takes project-less batches placed by that node. `owner` is `"local"` or a remote node pinned by `key`. A project with no route is refused. |
+| `store_owner` | off | Serve `cog-store` on `listen` (Noise XX by default) for the listed bridge keys, optionally restricted per project. `projects` are the stores this node owns; `fallback` also owns the project-less store. |
+
+Stores on an owner node are in-memory HNSW indexes created on first use
+(`VectorDirectory`). They are not persisted yet: a daemon restart empties
+them. Wiring them to a project kernel's durable store is a follow-up.
+
+The bridge and owner both log, and the host chains the placement as before;
+ingest requests themselves are counted (`BridgeStats`), not chained.
 
 ## Request contract
 
@@ -83,20 +144,35 @@ Whatever a cog prints is captured by the runtime adapter as `RunEvidence`
 for logs and the chain. It is never parsed into a store write and never
 used as control input. The only path from a cog to a store is this bridge.
 
-## Network policy per runtime
+## Network policy per runtime (egress enforcement is deferred)
 
 The contract (ADR-100 section 4) is: sensor feed in, bridge out, nothing
-else. What is enforced today and what is not:
+else. **Card 10's clause "a cog cannot reach anything else" is not met in
+code; it is deferred, per runtime, as below.** Until then the adapters tell
+the gate `egress` and placing a cog needs a permit.
 
-| Runtime | Enforced by this card | Operator configuration | Deferred |
-|---|---|---|---|
-| native | The bridge binds loopback only (`bind` refuses anything else for the shared scope). The token is per instance and is checked on every request. The adapter declares `NetworkPolicy::Egress` to the gate, so a permit rule is needed to place a native cog. | Run the cog as an unprivileged user. | Blocking the cog's other egress (nftables, landlock net rules). A native cog can still open other sockets. |
-| container (docker, podman, apple) | The in-container relay (`container_relay`) carries the cog's `127.0.0.1:80` to the bridge. Use one instance-scoped listener per container (`BridgeScope::Instance`), bound to the address the container sees (the VM or bridge gateway) with `BridgeConfig::allow_non_loopback`; the token still applies, and another instance's token on it is 403. `network=none` is refused when an upstream is set. | Put the container on a dedicated network that routes only to the bridge address (for docker, an `--internal` network with the gateway forwarded to the bridge). The adapter cannot verify this and declares `egress` to the gate for any network but `none`. | Verifying the network from the adapter. |
-| Seed (`remote.api`) | Not this bridge: the Seed ingests into its own store. | | |
+| Runtime | Enforced now | Deferred |
+|---|---|---|
+| native (Linux) | The bridge binds loopback only. The token is per instance and checked on every request. The cog runs unprivileged under rlimits. | Blocking the cog's other egress with landlock, seccomp and nftables rules. A native cog can open other sockets today. |
+| native (macOS) | As above. | A macOS sandbox profile (`sandbox-exec` / App Sandbox) denying other network access. Follow-up. |
+| container (docker, podman, apple) | The in-container relay carries the cog's `127.0.0.1:80` to a token-scoped listener (`BridgeScope::Token`); another instance's token on it is 403; `network=none` is refused when an upstream is set. | The adapter verifying the container's network. |
+| Seed (`remote.api`) | Not this bridge: the Seed ingests into its own store. | |
 
-A cog that opens a non-bridge socket is therefore stopped by the container
-network the operator configured, not by this code. That gap is the reason
-the gate sees `egress`.
+**Container egress is operator network configuration.** The recipe:
+
+1. Create a network with no route out: `docker network create --internal
+   cogs` (podman: `podman network create --internal cogs`; Apple
+   `container`: a host-only network via `container network create`).
+2. Set the runtime config `network` to that network.
+3. Set `bridge.container_bind` to the gateway address of that network (the
+   address the container reaches the host at). The daemon then binds one
+   listener per container there, scoped to the container's token.
+4. Do not publish other host ports into that network.
+
+Steps 1 to 3 give a container exactly two peers: the relay's scoped listener
+and whatever else the operator attached to that network. The adapter cannot
+check this, which is why the gate sees `egress` for every network except
+`none`.
 
 ## Optional UDP forwarder
 
@@ -137,7 +213,19 @@ made.
 
 ## Tests
 
-`cargo test -p clawft-kernel --lib cog_ingest`:
+`cargo test -p clawft-kernel --lib cog_ingest workload_ctl::tests_ingest`
+and `cargo test -p clawft-weave --lib cog_ingest_serve`:
+
+- a stub cog placed through the real placement path (controller, signed
+  `workload.ctl`, fetch-before-load, native adapter) posts with its injected
+  token and URL, its vectors land in the placing project's store, and stop,
+  start and unload revoke and reissue the token (further posts 401);
+- a project-less placement lands in the controller's store; a malformed
+  project id is refused by the host; stdout claiming vectors writes nothing;
+- daemon config defaults and validation; an unbindable bridge disables
+  ingest without failing the daemon; a bridge on one daemon delivers to the
+  store-owner daemon over real TCP with Noise;
+- token-scoped container listeners;
 
 - request validation (shape, dimensions, non-finite, batch and body caps);
 - fake feed, cog stub, bridge, store: vectors land and dedup holds;

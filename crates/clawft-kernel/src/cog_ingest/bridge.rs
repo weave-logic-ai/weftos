@@ -33,6 +33,10 @@ pub enum BridgeScope {
     /// Only this instance's token (one listener per instance; the address
     /// goes into [`HostContract::with_ingest_upstream`](crate::workload_runtime::HostContract)).
     Instance(String),
+    /// Only the holder of one token, identified by its BLAKE3 hash. For a
+    /// listener bound before the instance id exists (the token is issued
+    /// with the host contract, before the adapter names the instance).
+    Token([u8; 32]),
     /// Any registered instance (the node's shared `127.0.0.1:80`).
     Any,
 }
@@ -115,6 +119,11 @@ impl IngestBridge {
         })
     }
 
+    /// Drop an instance's rate counters (at unload).
+    pub fn forget(&self, instance_id: &str) {
+        self.budget.forget(instance_id);
+    }
+
     /// Counters.
     pub fn stats(&self) -> &BridgeStats {
         &self.stats
@@ -127,7 +136,7 @@ impl IngestBridge {
         addr: SocketAddr,
         scope: BridgeScope,
     ) -> Result<BridgeHandle, IngestError> {
-        let one_instance = matches!(scope, BridgeScope::Instance(_));
+        let one_instance = matches!(scope, BridgeScope::Instance(_) | BridgeScope::Token(_));
         if !(addr.ip().is_loopback() || self.cfg.allow_non_loopback && one_instance) {
             return Err(IngestError::Malformed(format!(
                 "refusing to bind {addr}: the bridge listens on loopback, or on one \
@@ -266,6 +275,11 @@ impl IngestBridge {
             .ok_or(IngestError::Unauthorized)?;
         match scope {
             BridgeScope::Instance(id) if *id != b.instance_id => Err(IngestError::Forbidden),
+            BridgeScope::Token(h)
+                if token.map(|t| blake3::hash(t.as_bytes())) != Some(blake3::Hash::from(*h)) =>
+            {
+                Err(IngestError::Forbidden)
+            }
             _ => Ok(b),
         }
     }

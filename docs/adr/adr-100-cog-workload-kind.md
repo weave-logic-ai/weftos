@@ -104,3 +104,12 @@ that would put one project's data in another's store.
 Acceptance runs for the real-hardware card use a **replayed ESP32 feed**
 (recorded or synthetic packets). A live feed is optional and documented
 where it is used. Mechanics and limits: `docs/cogs/ingest-bridge.md`.
+
+Network egress for ingesting cogs is **deferred**, not solved: native
+egress enforcement waits for landlock, seccomp and nftables on Linux and a
+sandbox profile on macOS (follow-up); container egress is operator network
+configuration following the recipe in `docs/cogs/ingest-bridge.md`. Until
+then the adapters report `egress` to the gate. The ingest bridge itself is
+wired into placement: the placing project id rides `PlaceOrder`,
+`PlaceBody` and `PlacementRecord`, tokens are issued at place and revoked at
+stop and unload.

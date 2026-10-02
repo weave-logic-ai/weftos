@@ -244,11 +244,12 @@ pub async fn serve_connection(
 /// Most concurrent sessions an owner listener serves.
 pub const MAX_SESSIONS: usize = 32;
 
-/// Accept connections on `listener` and serve each as a `cog-store` session.
-/// Runs until the listener fails.
+/// Accept connections on `listener` and serve each as a `cog-store` session
+/// (Noise XX responder when `noise` is set). Runs until the listener fails.
 pub async fn serve_listener(
     mut listener: Box<dyn TransportListener>,
     svc: Arc<StoreOwnerService>,
+    noise: bool,
 ) -> Result<(), MeshError> {
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_SESSIONS));
     loop {
@@ -260,6 +261,22 @@ pub async fn serve_listener(
         let svc = svc.clone();
         tokio::spawn(async move {
             let _slot = slot;
+            let stream: Box<dyn MeshStream> = if noise {
+                let cfg = crate::mesh_noise::NoiseConfig {
+                    pattern: crate::mesh_noise::NoisePattern::XX,
+                    local_private_key: rand::random(),
+                    remote_static_key: None,
+                };
+                match crate::mesh_noise::NoiseChannel::respond(stream, &cfg).await {
+                    Ok(ch) => Box::new(NoiseStream::new(Box::new(ch))),
+                    Err(e) => {
+                        tracing::warn!(%peer, error = %e, "cog-store noise handshake failed");
+                        return;
+                    }
+                }
+            } else {
+                stream
+            };
             if let Err(e) = serve_connection(stream, svc).await {
                 tracing::debug!(%peer, error = %e, "cog-store session ended");
             }
