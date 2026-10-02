@@ -58,10 +58,13 @@ pub use nonce::{CHALLENGE_TTL, DaemonNonce, claim_nonce, issue_challenge};
 
 const MAX_REASON: usize = 256;
 
-/// What the user daemon verified about the child it spawned.
+/// What the user daemon recorded about the child it spawned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpawnInfo {
-    /// Child pid.
+    /// Child pid AS CLAIMED by the child in `mesh.register` (the spawn
+    /// ledger checks it against the supervisor's pid when one is recorded,
+    /// but the daemon does not otherwise verify it). Recorded on the chain
+    /// as `claimed_pid`.
     pub pid: u32,
     /// SHA-256 of the child executable, hex.
     pub exe_sha: String,
@@ -170,6 +173,50 @@ pub fn root_sha256(root: &Path) -> String {
     ident::hex(&Sha256::digest(bytes))
 }
 
+/// The marker a revoked project's child refuses to run under:
+/// `<manifests>/../run/<id>/revoked`, i.e. `~/.weftos/run/<id>/revoked`, the
+/// file `RuntimePaths::child_at(<run>/<id>, ..).root().join("revoked")`
+/// names (`clawft_kernel::overlay_trust::REVOKED_FILE`).
+pub fn revoked_marker(manifests_dir: &Path, id: &str) -> Option<PathBuf> {
+    Some(manifests_dir.parent()?.join("run").join(id).join(clawft_kernel::overlay_trust::REVOKED_FILE))
+}
+
+/// `project.revoke` is terminal for the id: drop the session (a running
+/// child's next heartbeat fails and its re-register is refused `key_revoked`)
+/// and write the marker (atomic, 0600; the run dir is created 0700 when the
+/// child is stopped, so a stopped child is marked too). Nothing here clears
+/// it: delete `~/.weftos/run/<id>/revoked` by hand after re-enrolling the
+/// project. A marker that cannot be written is logged, not fatal: the
+/// journal is the authority, the marker is what lets a child that cannot
+/// reach the parent still see the revocation.
+fn mark_revoked(env: &CertEnv, id: &str, why: &str) {
+    crate::mesh_local_registry::registry().evict(id);
+    let Some(path) = revoked_marker(&env.manifests_dir, id) else { return };
+    if let Some(dir) = path.parent() {
+        let mut b = std::fs::DirBuilder::new();
+        b.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            b.mode(0o700);
+        }
+        if let Err(e) = b.create(dir) {
+            tracing::warn!(dir = %dir.display(), error = %e, "could not create the run dir for the revoked marker");
+            return;
+        }
+    }
+    if let Err(e) = ident::write_private_atomic(&path, format!("{why}\n").as_bytes(), false) {
+        tracing::warn!(path = %path.display(), error = %e, "could not write the revoked marker");
+    }
+}
+
+/// `project.rekey` replaces the key: the old key's session is dropped (its
+/// re-register is refused `key_revoked`) but NO marker is written, because
+/// the rekeyed child must be able to boot under its new certificate.
+fn drop_session(id: &str) {
+    crate::mesh_local_registry::registry().evict(id);
+}
+
 fn cert_path(dir: &Path, id: &str) -> PathBuf {
     dir.join(format!("{id}.cert.json"))
 }
@@ -262,7 +309,7 @@ pub fn register(env: &CertEnv, req: RegisterRequest, now: DateTime<Utc>) -> Resu
                     "name": manifest.name,
                     "root_sha256": req.root_sha256,
                     "manifest_schema": manifest.schema_version,
-                    "spawn": { "pid": req.spawn.pid, "exe_sha": req.spawn.exe_sha },
+                    "spawn": { "claimed_pid": req.spawn.pid, "exe_sha": req.spawn.exe_sha },
                 })),
             );
             write_cert_file(&env.manifests_dir, &cert)?;
@@ -308,6 +355,7 @@ pub fn rekey(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Issued
         })),
     );
     write_cert_file(&env.manifests_dir, &cert)?;
+    drop_session(id);
     Ok(Issued { cert, new: true })
 }
 
@@ -334,6 +382,7 @@ pub fn revoke(env: &CertEnv, params: &Value) -> Result<Value, IssueError> {
             "reason": clean_reason(params.get("reason")),
         })),
     );
+    mark_revoked(env, id, "revoked");
     match std::fs::remove_file(cert_path(&env.manifests_dir, id)) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

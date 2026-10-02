@@ -131,14 +131,19 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
     #[cfg(any(unix, windows))]
     crate::boot_refusal::capture_replay();
     #[cfg(any(unix, windows))]
-    let user_profile = crate::user_daemon::parse_profile(
+    let profile = crate::user_daemon::parse_profile(
         args.profile
             .clone()
             .or_else(|| std::env::var("WEAVER_PROFILE").ok())
             .as_deref(),
     )
-        .map_err(|e| anyhow::anyhow!(e))?
-        .is_some();
+    .map_err(|e| anyhow::anyhow!(e))?;
+    #[cfg(any(unix, windows))]
+    let user_profile = profile == Some(crate::user_daemon::PROFILE_USER);
+    // `--profile project`: `daemon::run` forces `KernelProfile::Project`, so
+    // the child handshake in `pre_boot` cannot be skipped by a plain config.
+    #[cfg(any(unix, windows))]
+    crate::user_daemon::set_project_profile(profile == Some(crate::user_daemon::PROFILE_PROJECT));
     #[cfg(any(unix, windows))]
     if user_profile {
         // Before anything resolves a socket, pid or chain path, and before

@@ -74,7 +74,7 @@ pub enum RootSource {
 mod child;
 pub use child::{
     OVERLAY_FILE, PARENT_POLICY_FILE, PROJECT_CERT_FILE, PROJECT_KEY_FILE, SPAWN_JSON_FILE,
-    STATE_JSON_FILE,
+    STATE_JSON_FILE, child_profile, set_child_profile,
 };
 
 /// Process-wide user-profile state: `None` when off, else the absolute
@@ -252,6 +252,9 @@ impl RuntimePaths {
     /// Resolve from the process environment, working directory and home.
     /// Honours [`set_user_profile`].
     pub fn resolve() -> Self {
+        if let Some(child) = child_profile() {
+            return child;
+        }
         let env = std::env::var(RUNTIME_DIR_ENV).ok();
         let user = USER_PROFILE.read().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(captured) = user {

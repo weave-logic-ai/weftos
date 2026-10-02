@@ -93,7 +93,7 @@ fn register_certifies_journals_records_on_chain_and_writes_the_cert_file() {
     let p = ev.payload.unwrap();
     assert_eq!(p["name"], "demo");
     assert_eq!(p["root_sha256"], root_sha256(&f.root));
-    assert_eq!(p["spawn"]["pid"], 4242);
+    assert_eq!(p["spawn"]["claimed_pid"], 4242);
     assert_eq!(p["manifest_schema"], 1);
 
     let recs = IdentityJournal::new(&f.env.manifests_dir).read(true).unwrap();
