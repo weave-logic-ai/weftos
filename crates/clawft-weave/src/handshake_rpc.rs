@@ -145,6 +145,7 @@ pub fn build_handshake(
         version: VERSION.to_owned(),
         sha: BUILD_SHA.to_owned(),
         binary: binary.map(|p| p.display().to_string()),
+        mesh: None,
     }
 }
 
@@ -156,6 +157,7 @@ pub fn with_user_profile(mut h: Handshake, user_key_id: Option<String>) -> Hands
         h.roles = roles;
         h.user_id = crate::user_daemon::local_uid();
         h.user_key_id = user_key_id;
+        h.mesh = crate::mesh_state::global().get();
     }
     h
 }

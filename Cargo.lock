@@ -2125,6 +2125,7 @@ dependencies = [
  "clawft-core",
  "clawft-graphify",
  "clawft-kernel",
+ "clawft-mesh-local",
  "clawft-platform",
  "clawft-rpc",
  "clawft-service-agent",

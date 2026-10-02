@@ -27,6 +27,9 @@ pub const PROFILE_USER: &str = "user";
 /// Roles the user daemon runs (collapsed machine + user, ADR-103 roles table).
 pub const USER_ROLES: [&str; 2] = ["machine", "user"];
 
+/// Roles of the user daemon when the machine role lives in the mesh service.
+pub const SERVICE_MODE_ROLES: [&str; 1] = ["user"];
+
 /// Parse a `--profile` value. `None` and `default` mean the existing
 /// project/legacy behaviour.
 pub fn parse_profile(value: Option<&str>) -> Result<Option<&'static str>, String> {
@@ -68,9 +71,16 @@ pub fn handshake_profile() -> Option<(String, Vec<String>)> {
     is_active().then(|| {
         (
             PROFILE_USER.to_owned(),
-            USER_ROLES.iter().map(|r| (*r).to_owned()).collect(),
+            roles_for(crate::mesh_state::global()),
         )
     })
+}
+
+/// Roles for the handshake: the machine role belongs to the mesh service when
+/// this daemon is its client.
+pub fn roles_for(mesh: &crate::mesh_state::MeshStateCell) -> Vec<String> {
+    let roles: &[&str] = if mesh.is_service() { &SERVICE_MODE_ROLES } else { &USER_ROLES };
+    roles.iter().map(|r| (*r).to_owned()).collect()
 }
 
 /// `<home>/.weftos/weave.toml`.
@@ -198,6 +208,20 @@ mod tests {
         let loaded = layer_user_config(layers, &json!({})).unwrap();
         assert_eq!(loaded.config.kernel.max_processes, 9);
         assert!(loaded.workspace_routing.is_none());
+    }
+
+    #[test]
+    fn roles_are_user_only_in_service_mode_and_machine_user_otherwise() {
+        let cell = crate::mesh_state::MeshStateCell::new();
+        assert_eq!(roles_for(&cell), ["machine", "user"], "undecided");
+        cell.set(crate::mesh_state::plain("collapsed"));
+        assert_eq!(roles_for(&cell), ["machine", "user"], "collapsed");
+        cell.set(clawft_rpc::handshake::MeshHandshake {
+            mode: "service".into(),
+            state: Some("connected".into()),
+            ..Default::default()
+        });
+        assert_eq!(roles_for(&cell), ["user"], "service");
     }
 
     #[test]

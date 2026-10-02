@@ -27,16 +27,66 @@ use ed25519_dalek::SigningKey;
 #[cfg(test)]
 use clawft_kernel::NODE_KEY_FILE as KEYFILE_NAME;
 
-/// Loaded daemon identity: signing key + derived node-id.
+/// Loaded daemon identity: the node-id and whatever key material backs it.
 ///
-/// Cheap to clone — the signing key is 32 bytes.
+/// Cheap to clone. Collapsed daemons hold the node key; a daemon in service
+/// mode (ADR-103 P3-U) holds only the machine's *public* key, because the
+/// box key belongs to the mesh service and never reaches the user daemon.
 #[derive(Clone)]
 pub struct DaemonIdentity {
-    /// Ed25519 keypair the daemon signs with.
-    pub signing_key: SigningKey,
     /// Stable node-id derived from the pubkey
     /// (see [`clawft_kernel::node_id_from_pubkey`]).
     pub node_id: String,
+    binding: IdentityBinding,
+}
+
+#[derive(Clone)]
+enum IdentityBinding {
+    /// This daemon's own `node.key`.
+    Local(SigningKey),
+    /// The machine mesh service's public key.
+    Service { machine_pubkey: [u8; 32] },
+}
+
+impl DaemonIdentity {
+    /// Identity backed by a local node key.
+    pub fn local(signing_key: SigningKey) -> Self {
+        let node_id = clawft_kernel::node_id_from_pubkey(&signing_key.verifying_key().to_bytes());
+        Self { node_id, binding: IdentityBinding::Local(signing_key) }
+    }
+
+    /// Identity of the machine mesh service. `node_id` must be the id of
+    /// `machine_pubkey`; anything else is refused (never papered over).
+    pub fn for_service(node_id: String, machine_pubkey: [u8; 32]) -> Result<Self, IdentityError> {
+        let derived = clawft_kernel::node_id_from_pubkey(&machine_pubkey);
+        if derived != node_id {
+            return Err(IdentityError::ServiceMismatch { claimed: node_id, derived });
+        }
+        Ok(Self { node_id, binding: IdentityBinding::Service { machine_pubkey } })
+    }
+
+    /// True when the box key lives in the mesh service.
+    pub fn is_service(&self) -> bool {
+        matches!(self.binding, IdentityBinding::Service { .. })
+    }
+
+    /// Public key of this node (the machine key in service mode).
+    pub fn public_key(&self) -> [u8; 32] {
+        match &self.binding {
+            IdentityBinding::Local(k) => k.verifying_key().to_bytes(),
+            IdentityBinding::Service { machine_pubkey } => *machine_pubkey,
+        }
+    }
+
+    /// The local node key, or an error in service mode. There is no fallback
+    /// to a generated key: a caller that needs to sign as the node must say
+    /// what it does instead when the service holds the key.
+    pub fn signing_key(&self) -> Result<&SigningKey, IdentityError> {
+        match &self.binding {
+            IdentityBinding::Local(k) => Ok(k),
+            IdentityBinding::Service { .. } => Err(IdentityError::KeyHeldByService),
+        }
+    }
 }
 
 impl std::fmt::Debug for DaemonIdentity {
@@ -44,6 +94,7 @@ impl std::fmt::Debug for DaemonIdentity {
         // Never print the signing key — only the public node-id.
         f.debug_struct("DaemonIdentity")
             .field("node_id", &self.node_id)
+            .field("service", &self.is_service())
             .finish_non_exhaustive()
     }
 }
@@ -61,6 +112,17 @@ pub enum IdentityError {
         path: PathBuf,
         /// Bytes actually present.
         got: usize,
+    },
+    /// In service mode the node key is held by the mesh service.
+    #[error("the node key is held by the machine mesh service; this daemon cannot sign as the node")]
+    KeyHeldByService,
+    /// The service's node id does not belong to its public key.
+    #[error("service node id {claimed} does not match its public key (derives {derived})")]
+    ServiceMismatch {
+        /// Id the service claimed.
+        claimed: String,
+        /// Id derived from the key it presented.
+        derived: String,
     },
 }
 
@@ -85,12 +147,7 @@ pub fn load_or_generate(runtime_dir: &Path) -> Result<DaemonIdentity, IdentityEr
                 ))
             }
         })?;
-    let pubkey_bytes: [u8; 32] = signing_key.verifying_key().to_bytes();
-    let node_id = clawft_kernel::node_id_from_pubkey(&pubkey_bytes);
-    Ok(DaemonIdentity {
-        signing_key,
-        node_id,
-    })
+    Ok(DaemonIdentity::local(signing_key))
 }
 
 #[cfg(test)]
@@ -120,8 +177,8 @@ mod tests {
         assert_eq!(first.node_id, second.node_id);
         // Pubkey round-trips too.
         assert_eq!(
-            first.signing_key.verifying_key().to_bytes(),
-            second.signing_key.verifying_key().to_bytes(),
+            first.public_key(),
+            second.public_key(),
         );
     }
 
@@ -173,11 +230,32 @@ mod tests {
         // The signing-key bytes must not appear in the Debug output.
         // Hex-encode them and check.
         let hex_seed: String = id
-            .signing_key
+            .signing_key()
+            .unwrap()
             .to_bytes()
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
         assert!(!s.contains(&hex_seed));
+    }
+
+    #[test]
+    fn service_identity_holds_no_signing_key() {
+        let k = SigningKey::from_bytes(&[5u8; 32]);
+        let pk = k.verifying_key().to_bytes();
+        let id = DaemonIdentity::for_service(clawft_kernel::node_id_from_pubkey(&pk), pk).unwrap();
+        assert!(id.is_service());
+        assert_eq!(id.public_key(), pk);
+        assert!(matches!(id.signing_key(), Err(IdentityError::KeyHeldByService)));
+    }
+
+    #[test]
+    fn service_identity_with_a_foreign_node_id_is_refused() {
+        let pk = SigningKey::from_bytes(&[5u8; 32]).verifying_key().to_bytes();
+        let other = clawft_kernel::node_id_from_pubkey(&[9u8; 32]);
+        assert!(matches!(
+            DaemonIdentity::for_service(other, pk),
+            Err(IdentityError::ServiceMismatch { .. })
+        ));
     }
 }

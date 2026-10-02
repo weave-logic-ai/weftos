@@ -589,9 +589,12 @@ fn print_handshake_summary(h: &clawft_rpc::handshake::Handshake) {
         println!("User:       uid {uid} (unverified)");
     }
     if let Some(key) = &h.user_key_id {
-        println!("User key:   {key} (chain key until Phase 3)");
+        println!("User key:   {key} (user.key, else the chain key)");
     }
     println!("Protocol:   {}..={}", h.proto.min, h.proto.current);
+    if let Some(m) = &h.mesh {
+        println!("Mesh:       {}", m.summary());
+    }
 }
 
 /// Fetch and print cluster info from daemon (appended to status output).
