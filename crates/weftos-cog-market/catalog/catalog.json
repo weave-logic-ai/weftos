@@ -13,7 +13,11 @@
       "export_port": 8049,
       "simulate": true,
       "guide": "/guide",
-      "modules": ["ky-038", "ads1115-board", "pi-zero-2w"]
+      "modules": [
+        "ky-038",
+        "ads1115-board",
+        "pi-zero-2w"
+      ]
     },
     {
       "id": "rd-03e",
@@ -25,7 +29,10 @@
       "export_port": 8050,
       "simulate": true,
       "guide": "/guide",
-      "modules": ["rd-03e-module", "pi-zero-2w"]
+      "modules": [
+        "rd-03e-module",
+        "pi-zero-2w"
+      ]
     },
     {
       "id": "hlk-as201",
@@ -37,7 +44,10 @@
       "export_port": 8051,
       "simulate": true,
       "guide": "/guide",
-      "modules": ["hlk-as201-module", "pi-zero-2w"]
+      "modules": [
+        "hlk-as201-module",
+        "pi-zero-2w"
+      ]
     }
   ],
   "modules": [
@@ -47,14 +57,35 @@
       "vendor": "generic",
       "kind": "sensor",
       "summary": "Electret microphone + LM393 comparator with a sensitivity trimpot. Analog (AO) and digital-threshold (DO) outputs.",
-      "good_for": ["sound-event detection", "activity / noise-rate monitoring", "loud-event triggers"],
-      "not_for": ["calibrated SPL / decibels", "audio recording", "frequency analysis"],
-      "spec": { "outputs": "AO (analog) + DO (digital)", "logic": "3.3 V", "mic": "electret", "source": "module datasheet" },
-      "pins": ["AO", "DO", "VCC", "GND"],
-      "chips": ["lm393"],
+      "good_for": [
+        "sound-event detection",
+        "activity / noise-rate monitoring",
+        "loud-event triggers"
+      ],
+      "not_for": [
+        "calibrated SPL / decibels",
+        "audio recording",
+        "frequency analysis"
+      ],
+      "spec": {
+        "outputs": "AO (analog) + DO (digital)",
+        "logic": "3.3 V",
+        "mic": "electret",
+        "source": "module datasheet"
+      },
+      "pins": [
+        "AO",
+        "DO",
+        "VCC",
+        "GND"
+      ],
+      "chips": [
+        "lm393"
+      ],
       "photo": "module.jpg",
       "mouser_query": "KY-038 microphone module",
-      "buy": []
+      "buy": [],
+      "datasheet": "https://www.ti.com/lit/ds/symlink/lm393.pdf"
     },
     {
       "id": "rd-03e-module",
@@ -62,14 +93,37 @@
       "vendor": "Ai-Thinker",
       "kind": "sensor",
       "summary": "24 GHz FMCW presence + ranging radar module. Streams a 5-byte report frame over UART on power-up.",
-      "good_for": ["presence / occupancy", "rough ranging (cm)", "sensing through thin plastic", "dark / privacy-friendly"],
-      "not_for": ["identifying who/what", "multi-target X/Y tracking (that's RD-03D)", "seeing through metal"],
-      "spec": { "band": "24.0-24.25 GHz FMCW", "range": "moving ~6 m, micro-motion ~3.5 m", "accuracy": "±5 cm (30-350 cm)", "uart": "256000 8N1, 3.3 V", "source": "Ai-Thinker / openelab" },
-      "pins": ["TX", "RX", "VCC", "GND"],
-      "chips": ["s3km111l"],
+      "good_for": [
+        "presence / occupancy",
+        "rough ranging (cm)",
+        "sensing through thin plastic",
+        "dark / privacy-friendly"
+      ],
+      "not_for": [
+        "identifying who/what",
+        "multi-target X/Y tracking (that's RD-03D)",
+        "seeing through metal"
+      ],
+      "spec": {
+        "band": "24.0-24.25 GHz FMCW",
+        "range": "moving ~6 m, micro-motion ~3.5 m",
+        "accuracy": "\u00b15 cm (30-350 cm)",
+        "uart": "256000 8N1, 3.3 V",
+        "source": "Ai-Thinker / openelab"
+      },
+      "pins": [
+        "TX",
+        "RX",
+        "VCC",
+        "GND"
+      ],
+      "chips": [
+        "s3km111l"
+      ],
       "photo": "module.jpg",
       "mouser_query": "Ai-Thinker RD-03E",
-      "buy": []
+      "buy": [],
+      "datasheet": "https://docs.ai-thinker.com/_media/rd-03e_v1.0.0_specification.pdf"
     },
     {
       "id": "hlk-as201-module",
@@ -77,14 +131,35 @@
       "vendor": "Hi-Link",
       "kind": "sensor",
       "summary": "9/10-axis IMU (accel + gyro + magnetometer, some variants + barometer) over UART. The X/Y/Z silkscreen marks it an IMU, not a radar.",
-      "good_for": ["orientation / tilt", "motion & vibration", "heading (after mag calibration)"],
-      "not_for": ["absolute position (drifts)", "heading without calibration", "exact numbers until the frame is confirmed"],
-      "spec": { "axes": "3x accel, 3x gyro, 3x mag", "uart": "115200 8N1 (4800-921600), 3.3 V", "frame": "WIT standard (FALLBACK, UNCONFIRMED for AS201)", "source": "Hi-Link + WitMotion" },
-      "pins": ["TX", "RX", "VCC", "GND"],
-      "chips": ["as201-imu"],
+      "good_for": [
+        "orientation / tilt",
+        "motion & vibration",
+        "heading (after mag calibration)"
+      ],
+      "not_for": [
+        "absolute position (drifts)",
+        "heading without calibration",
+        "exact numbers until the frame is confirmed"
+      ],
+      "spec": {
+        "axes": "3x accel, 3x gyro, 3x mag",
+        "uart": "115200 8N1 (4800-921600), 3.3 V",
+        "frame": "WIT standard (FALLBACK, UNCONFIRMED for AS201)",
+        "source": "Hi-Link + WitMotion"
+      },
+      "pins": [
+        "TX",
+        "RX",
+        "VCC",
+        "GND"
+      ],
+      "chips": [
+        "as201-imu"
+      ],
       "photo": "module.jpg",
       "mouser_query": "HLK-AS201",
-      "buy": []
+      "buy": [],
+      "datasheet": "https://hlktech.net/index.php?id=1380"
     },
     {
       "id": "ads1115-board",
@@ -92,14 +167,39 @@
       "vendor": "generic / Adafruit",
       "kind": "board",
       "summary": "4-channel 16-bit I2C ADC breakout. Lets analog sensors (sound AO, ECG) reach the Seed's I2C bus; up to 4 on a bus at 0x48-0x4B.",
-      "good_for": ["reading analog sensors over I2C", "sharing one ADC across channels"],
-      "not_for": ["high-speed sampling (<= 860 SPS)"],
-      "spec": { "resolution": "16-bit", "channels": "4 single-ended", "rate": "up to 860 SPS", "addr": "0x48-0x4B", "logic": "3.3 V", "source": "TI datasheet" },
-      "pins": ["VDD", "GND", "SCL", "SDA", "ADDR", "A0", "A1", "A2", "A3"],
-      "chips": ["ads1115"],
+      "good_for": [
+        "reading analog sensors over I2C",
+        "sharing one ADC across channels"
+      ],
+      "not_for": [
+        "high-speed sampling (<= 860 SPS)"
+      ],
+      "spec": {
+        "resolution": "16-bit",
+        "channels": "4 single-ended",
+        "rate": "up to 860 SPS",
+        "addr": "0x48-0x4B",
+        "logic": "3.3 V",
+        "source": "TI datasheet"
+      },
+      "pins": [
+        "VDD",
+        "GND",
+        "SCL",
+        "SDA",
+        "ADDR",
+        "A0",
+        "A1",
+        "A2",
+        "A3"
+      ],
+      "chips": [
+        "ads1115"
+      ],
       "photo": "module.jpg",
       "mouser_query": "ADS1115 ADC breakout",
-      "buy": []
+      "buy": [],
+      "datasheet": "https://www.ti.com/lit/ds/symlink/ads1115.pdf"
     },
     {
       "id": "pi-zero-2w",
@@ -107,14 +207,35 @@
       "vendor": "Raspberry Pi",
       "kind": "board",
       "summary": "Quad-core SBC used as a Cognitum Seed host. 40-pin GPIO header carries the I2C + UART the sensor cogs use.",
-      "good_for": ["Seed host", "running cogs", "I2C + UART sensor hookup"],
-      "not_for": ["5 V sensor logic (GPIO is 3.3 V only)"],
-      "spec": { "soc": "Broadcom BCM2710A1 (RP3A0), quad-core A53", "header": "40-pin GPIO", "logic": "3.3 V", "source": "Raspberry Pi datasheet" },
-      "pins": ["1 3V3", "6 GND", "3 SDA", "5 SCL", "8 TXD", "10 RXD"],
-      "chips": ["bcm2710a1"],
+      "good_for": [
+        "Seed host",
+        "running cogs",
+        "I2C + UART sensor hookup"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V only)"
+      ],
+      "spec": {
+        "soc": "Broadcom BCM2710A1 (RP3A0), quad-core A53",
+        "header": "40-pin GPIO",
+        "logic": "3.3 V",
+        "source": "Raspberry Pi datasheet"
+      },
+      "pins": [
+        "1 3V3",
+        "6 GND",
+        "3 SDA",
+        "5 SCL",
+        "8 TXD",
+        "10 RXD"
+      ],
+      "chips": [
+        "bcm2710a1"
+      ],
       "photo": "pizero2w-pinout.jpg",
       "mouser_query": "Raspberry Pi Zero 2 W",
-      "buy": []
+      "buy": [],
+      "datasheet": "https://datasheets.raspberrypi.com/rpizero2/raspberry-pi-zero-2-w-product-brief.pdf"
     }
   ],
   "chips": [
@@ -123,9 +244,16 @@
       "name": "LM393",
       "manufacturer": "TI / onsemi (multi-source)",
       "role": "Dual voltage comparator",
-      "tags": ["comparator", "analog"],
+      "tags": [
+        "comparator",
+        "analog"
+      ],
       "summary": "The comparator on the KY-038 sound module: compares the mic level against the trimpot to drive the digital DO output.",
-      "spec": { "type": "dual differential comparator", "supply": "2-36 V", "source": "TI datasheet" },
+      "spec": {
+        "type": "dual differential comparator",
+        "supply": "2-36 V",
+        "source": "TI datasheet"
+      },
       "mouser_query": "LM393",
       "datasheet": "https://www.ti.com/product/LM393"
     },
@@ -134,20 +262,41 @@
       "name": "S3KM111L",
       "manufacturer": "Ai-Thinker",
       "role": "24 GHz FMCW radar SoC",
-      "tags": ["radar", "24GHz", "FMCW"],
+      "tags": [
+        "radar",
+        "24GHz",
+        "FMCW"
+      ],
       "summary": "Single-chip 24 GHz presence + ranging radar that drives the RD-03E module (and its RD-03D tracking sibling).",
-      "spec": { "band": "24.0-24.25 GHz", "bandwidth": "<=1 GHz", "uart": "256000 8N1", "source": "Ai-Thinker" },
+      "spec": {
+        "band": "24.0-24.25 GHz",
+        "bandwidth": "<=1 GHz",
+        "uart": "256000 8N1",
+        "source": "Ai-Thinker"
+      },
       "mouser_query": "S3KM111L",
       "datasheet": "https://docs.ai-thinker.com/_media/rd-03e_v1.0.0_specification.pdf"
     },
     {
       "id": "as201-imu",
-      "name": "AS201 IMU (internal)",
-      "manufacturer": "unconfirmed (WIT-compatible)",
-      "role": "9/10-axis inertial measurement unit",
-      "tags": ["imu", "accel", "gyro", "mag", "unconfirmed"],
-      "summary": "The IMU silicon inside the HLK-AS201 is not published. The cog decodes the WitMotion WIT protocol as a fallback; confirm against the AS201 datasheet.",
-      "spec": { "axes": "3x accel + 3x gyro + 3x mag", "frame": "WIT standard (unconfirmed)", "source": "inferred, UNCONFIRMED" },
+      "name": "HLK-AS201 integrated IMU",
+      "manufacturer": "Shenzhen Hi-Link Electronics",
+      "role": "10-axis attitude module (32-bit DSP + MEMS)",
+      "tags": [
+        "imu",
+        "accel",
+        "gyro",
+        "mag",
+        "baro",
+        "dsp"
+      ],
+      "summary": "The HLK-AS201's integrated attitude engine: 32-bit floating-point DSP (to 240 MHz) fusing 3-axis accel + 3-axis gyro + 3-axis mag + barometer, output over UART/BLE. Protocol confirmed by the Hi-Link datasheet V1.1.",
+      "spec": {
+        "axes": "3x accel + 3x gyro + 3x mag + baro",
+        "dsp": "32-bit float, up to 240 MHz",
+        "frame": "Hi-Link FA FB..FC FD, 42-byte report",
+        "source": "Hi-Link datasheet V1.1 2025-08-01"
+      },
       "mouser_query": "",
       "datasheet": "https://hlktech.net/index.php?id=1380"
     },
@@ -156,9 +305,19 @@
       "name": "ADS1115",
       "manufacturer": "Texas Instruments",
       "role": "16-bit I2C ADC (4 channels)",
-      "tags": ["adc", "i2c", "16-bit"],
+      "tags": [
+        "adc",
+        "i2c",
+        "16-bit"
+      ],
       "summary": "Precision 16-bit delta-sigma ADC with 4 single-ended channels and a PGA. The brains of the ADS1115 breakout the analog cogs read through.",
-      "spec": { "resolution": "16-bit", "channels": "4 single-ended / 2 differential", "rate": "8-860 SPS", "addr": "0x48-0x4B", "source": "TI datasheet" },
+      "spec": {
+        "resolution": "16-bit",
+        "channels": "4 single-ended / 2 differential",
+        "rate": "8-860 SPS",
+        "addr": "0x48-0x4B",
+        "source": "TI datasheet"
+      },
       "mouser_query": "ADS1115IDGSR",
       "datasheet": "https://www.ti.com/product/ADS1115"
     },
@@ -167,9 +326,17 @@
       "name": "BCM2710A1 (RP3A0)",
       "manufacturer": "Broadcom / Raspberry Pi",
       "role": "Quad-core SBC application processor",
-      "tags": ["soc", "arm", "sbc"],
+      "tags": [
+        "soc",
+        "arm",
+        "sbc"
+      ],
       "summary": "The system-on-chip inside the Pi Zero 2 W Seed host: quad-core Cortex-A53.",
-      "spec": { "cores": "4x Cortex-A53", "clock": "~1 GHz", "source": "Raspberry Pi" },
+      "spec": {
+        "cores": "4x Cortex-A53",
+        "clock": "~1 GHz",
+        "source": "Raspberry Pi"
+      },
       "mouser_query": "",
       "datasheet": "https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/"
     }

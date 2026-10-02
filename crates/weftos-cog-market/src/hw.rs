@@ -93,6 +93,8 @@ pub struct Module {
     #[serde(default)]
     pub photo: String,
     #[serde(default)]
+    pub datasheet: String,
+    #[serde(default)]
     pub mouser_query: String,
     #[serde(default)]
     pub buy: Vec<BuyLink>,
