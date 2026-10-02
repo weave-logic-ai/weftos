@@ -619,8 +619,8 @@ impl Supervisor {
         }
     }
 
-    /// `project.revoke` happened (`on_identity_change` wrote the terminal
-    /// `<run>/<id>/revoked` marker first): kill the child's credentials first, then
+    /// `project.revoke` happened (the user daemon's RPC wrote the terminal
+    /// `<run>/<id>/revoked` marker): kill the child's credentials first, then
     /// stop it (signals if the gated stop fails) and mark the project failed.
     /// The project is never respawned: `prepare` refuses while the marker
     /// exists.
