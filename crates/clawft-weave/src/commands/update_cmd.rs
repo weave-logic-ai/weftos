@@ -142,6 +142,7 @@ async fn install(force: bool, restart: bool) -> anyhow::Result<()> {
         println!("If the kernel is running, restart it:");
         println!("  weaver kernel stop && weaver kernel start");
     }
+    print_service_update_lines();
 
     Ok(())
 }
@@ -304,4 +305,26 @@ async fn fetch_latest_version() -> anyhow::Result<String> {
 
     // Strip leading 'v'
     Ok(tag.strip_prefix('v').unwrap_or(tag).to_string())
+}
+
+/// Machine mesh service: print (never run) the sudo lines when its build
+/// differs from this binary's. The service is root-owned and restarted by an
+/// administrator; `weaver update` has no path to signal it.
+fn print_service_update_lines() {
+    #[cfg(all(unix, feature = "mesh"))]
+    {
+        use crate::install_tiers::{service_update_lines, Manager, ServiceObserved};
+        let record = std::path::Path::new(crate::service_units_system::RUN_DIR).join("service.json");
+        let observed = clawft_mesh_local::proto::ServiceRecord::load(&record)
+            .ok()
+            .map(|r| ServiceObserved { build_sha: r.build_sha });
+        let exe = std::env::current_exe().unwrap_or_default();
+        let lines = service_update_lines(Manager::host(), &exe, env!("BUILD_VERSION"), observed.as_ref());
+        if !lines.is_empty() {
+            println!();
+            for l in lines {
+                println!("{l}");
+            }
+        }
+    }
 }

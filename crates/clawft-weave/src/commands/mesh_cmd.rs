@@ -95,6 +95,10 @@ pub enum MeshCmd {
     },
     /// Pin the service's machine key after verifying its fingerprint out of band.
     Trust(TrustArgs),
+    /// PRINT a reviewed shell script that installs the service (runs nothing).
+    InstallService(super::mesh_install::InstallArgs),
+    /// PRINT the inverse script (keeps node.key unless --purge-key; runs nothing).
+    UninstallService(super::mesh_install::InstallArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -217,6 +221,8 @@ pub async fn execute(cmd: MeshCmd, w: &mut dyn Write) -> Result<()> {
             journal_verify(w, &conn, accept_truncate, seq, floor).await
         }
         MeshCmd::Trust(t) => trust(w, t).await,
+        MeshCmd::InstallService(a) => super::mesh_install::run_install(&a, w),
+        MeshCmd::UninstallService(a) => super::mesh_install::run_uninstall(&a, w),
     }
 }
 
@@ -231,7 +237,7 @@ async fn serve(a: ServeArgs) -> Result<()> {
     clawft_mesh_service::run(cfg).await.map_err(|e| anyhow!(e))
 }
 
-fn socket_of(c: &ConnArgs) -> PathBuf {
+pub(crate) fn socket_of(c: &ConnArgs) -> PathBuf {
     c.socket
         .clone()
         .or_else(|| std::env::var_os(ENV_SOCKET).map(PathBuf::from))
@@ -279,6 +285,14 @@ async fn call_best(c: &ConnArgs, m: Message) -> Result<Value> {
         }
         other => other,
     }
+}
+
+/// Status (best role) and, when this caller is an admin, the journal check;
+/// read-only, for `weaver doctor`.
+pub(crate) async fn status_for_doctor(c: &ConnArgs) -> Result<(Value, Option<Value>)> {
+    let status = call_best(c, Message::Status {}).await?;
+    let journal = call(c, Role::Admin, Message::JournalVerify {}).await.ok();
+    Ok((status, journal))
 }
 
 /// The user id of the key pending approval for `uid`.

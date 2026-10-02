@@ -296,3 +296,20 @@ fn parses_kernel_status_line() {
     assert_eq!(parse_status(old).unwrap().pid, None);
     assert_eq!(parse_status("garbage"), None);
 }
+
+#[test]
+fn never_signals_the_machine_mesh_service_pid() {
+    // Even if a pid file names the service (a stale or hostile file), the
+    // service exe is refused and no action of any kind is performed.
+    let d = tempfile::tempdir().unwrap();
+    let f = Fake {
+        alive: vec![900],
+        exes: vec![(900, "/usr/local/libexec/weftos/weaver")],
+        launchd: Some(900),
+        systemd: Some(900),
+        ..healthy()
+    };
+    let r = restart_with(&inputs(d.path(), Some("900")), &f);
+    assert!(matches!(&r.outcome, Outcome::Refused(m) if m.contains("machine mesh service")), "{r:?}");
+    assert!(f.performed.borrow().is_empty());
+}

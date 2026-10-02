@@ -61,16 +61,45 @@ pub async fn run(args: DoctorArgs) -> anyhow::Result<()> {
     let env = DoctorEnv::detect();
     let runtime_wanted = opts.components.contains(&Component::Runtime);
     let home = env.home.clone();
+    let install_wanted = opts.components.contains(&Component::Install);
+    let config_dir = env.config_dir.clone();
     let mut report = tokio::task::spawn_blocking(move || doctor::run_system(&env, &opts)).await?;
     if runtime_wanted {
         // user.key / chain.key during the D-5 transition (compares pubkeys).
         report.findings.extend(crate::user_key::doctor_findings(&home));
     }
+    #[cfg(all(unix, feature = "mesh"))]
+    {
+        if runtime_wanted {
+            let probe = crate::mesh_doctor::gather(&home).await;
+            report.findings.extend(crate::mesh_doctor::findings(&probe, &home));
+        }
+        if install_wanted {
+            report.findings.extend(service_tier_findings(&config_dir));
+        }
+    }
+    #[cfg(not(all(unix, feature = "mesh")))]
+    let _ = (install_wanted, &config_dir);
     let code = doctor::print_report(&report, "weaver doctor", args.json, args.strict);
     if code != 0 {
         std::process::exit(code);
     }
     Ok(())
+}
+
+/// Service tier skew: the service's own `service.json` wins over the receipt.
+#[cfg(all(unix, feature = "mesh"))]
+fn service_tier_findings(config_dir: &std::path::Path) -> Vec<clawft_rpc::doctor::Finding> {
+    use crate::install_tiers::{parse_tiers, skew_findings, ServiceObserved};
+    let receipt = std::fs::read_to_string(config_dir.join("weftos/weftos-receipt.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let record = std::path::Path::new(crate::service_units_system::RUN_DIR).join("service.json");
+    let observed = clawft_mesh_local::proto::ServiceRecord::load(&record)
+        .ok()
+        .map(|r| ServiceObserved { build_sha: r.build_sha });
+    skew_findings(&parse_tiers(&receipt), observed.as_ref(), env!("BUILD_VERSION"))
 }
 
 #[cfg(test)]
