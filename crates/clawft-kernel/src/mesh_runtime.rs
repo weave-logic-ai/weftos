@@ -347,6 +347,11 @@ impl MeshRuntime {
     /// outbound channel). Routes since replaced by a newer connection are
     /// left alone; `Left` is emitted only for routes actually removed.
     /// Returns the number removed.
+    /// True when some route currently sends through `tx`'s channel.
+    pub fn routes_via(&self, tx: &tokio::sync::mpsc::Sender<Vec<u8>>) -> bool {
+        self.peers.iter().any(|e| e.sender.same_channel(tx))
+    }
+
     pub fn disconnect_channel(&self, tx: &tokio::sync::mpsc::Sender<Vec<u8>>) -> usize {
         let ids: Vec<String> = self
             .peers

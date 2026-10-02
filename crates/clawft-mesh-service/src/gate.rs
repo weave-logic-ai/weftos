@@ -197,6 +197,10 @@ impl AdmissionGate for ServiceGate {
         self.current().strict()
     }
 
+    fn is_revoked(&self, node_id: &str) -> bool {
+        self.current().is_revoked(node_id)
+    }
+
     async fn admit(&self, hello: &VerifiedHello, ctx: &AdmitContext) -> Admission {
         let adm = self.current().admit(hello, ctx).await;
         self.record(Some(hello), ctx, &adm);

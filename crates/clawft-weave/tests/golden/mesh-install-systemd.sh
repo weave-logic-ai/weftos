@@ -33,6 +33,8 @@ install -d -m 0750 -o weftos -g weftos /var/run/weftos
 # --- binary (root-owned copy) ---
 install -m 0755 -o root -g root '/opt/we ftos/it'\''s/weaver' /usr/local/libexec/weftos/weaver
 
+# --- box key: none adopted; the service generates a new one on first start (new node id) ---
+
 # --- configuration (kept if already present) ---
 if [ ! -e /etc/weftos/mesh.toml ]; then
 cat > /etc/weftos/mesh.toml.new <<'WEFTOS_EOF'

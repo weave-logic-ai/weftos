@@ -64,6 +64,10 @@ pub async fn prepare(kernel_config: &KernelConfig, runtime_dir: &Path) -> anyhow
             Ok(MeshBoot { identity, link: Some(link) })
         }
         other => {
+            if matches!(other, Resolved::Collapsed) {
+                let pinned = clawft_types::runtime_paths::user_weftos_dir(&home).join("mesh/machine.pub");
+                refuse_fresh_identity(cfg.service, pinned.exists(), runtime_dir.join(clawft_kernel::NODE_KEY_FILE).exists())?;
+            }
             mesh_local_glue::record_plain_mode(mesh_state::global(), &other);
             if matches!(other, Resolved::Collapsed) && cfg.service == MeshServicePolicy::Auto {
                 // Booted without a service: keep watching, never switch live.
@@ -74,6 +78,37 @@ pub async fn prepare(kernel_config: &KernelConfig, runtime_dir: &Path) -> anyhow
             }
             Ok(MeshBoot { identity: local()?, link: None })
         }
+    }
+}
+
+/// Review S2: under `auto`, a machine that has used the service (the machine
+/// key is pinned) and no longer has a local `node.key` would get a freshly
+/// generated node id when the service is down: an identity fork. Refuse; the
+/// operator chooses `required` (wait for the service) or `off` (collapsed,
+/// knowingly with a new key).
+fn refuse_fresh_identity(policy: MeshServicePolicy, pinned: bool, has_node_key: bool) -> anyhow::Result<()> {
+    if policy == MeshServicePolicy::Auto && pinned && !has_node_key {
+        anyhow::bail!(
+            "mesh: this machine has used the machine mesh service (its key is pinned in \
+             ~/.weftos/mesh/machine.pub) but the service does not answer, and there is no local node.key. \
+             Collapsing now would generate a NEW node id that peers do not know. Start the service \
+             (weaver mesh status), or set kernel.mesh.service = \"required\" to wait for it; set \
+             kernel.mesh.service = \"off\" only if you want a collapsed daemon with a new node id"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_never_mints_a_node_key_on_a_machine_that_used_the_service() {
+        assert!(refuse_fresh_identity(MeshServicePolicy::Auto, true, false).is_err());
+        assert!(refuse_fresh_identity(MeshServicePolicy::Auto, true, true).is_ok(), "rollback keeps its key");
+        assert!(refuse_fresh_identity(MeshServicePolicy::Auto, false, false).is_ok(), "a new machine");
+        assert!(refuse_fresh_identity(MeshServicePolicy::Off, true, false).is_ok(), "off is a deliberate choice");
     }
 }
 

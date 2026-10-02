@@ -43,8 +43,7 @@ pub enum ClientError {
     ServerUid { got: Principal, expected: u32 },
     #[error(
         "machine_key_changed: pinned {pinned} but the service presented {presented}; verify \
-         out of band, then remove the pin file to re-pin (a `weaver mesh trust` command \
-         arrives with Phase 3 package S)"
+         out of band, then re-pin with `weaver mesh trust --replace`"
     )]
     MachineKeyChanged { pinned: String, presented: String },
     #[error("{} is corrupt; remove it to re-pin", .0.display())]

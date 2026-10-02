@@ -16,7 +16,7 @@ use crate::mesh_admit::{
 use crate::mesh_assess::{AssessmentEnvelope, AssessmentTransport};
 use crate::mesh_delivery::PeerCtx;
 use crate::mesh_ipc::MeshIpcEnvelope;
-use crate::mesh_limits::{IpSlot, Limits, HANDSHAKE_TIMEOUT, MAX_CONNECTIONS};
+use crate::mesh_limits::{IpSlot, Limits, HANDSHAKE_TIMEOUT, MAX_CONNECTIONS, ROUTE_CHECK};
 use crate::mesh_noise::{
     noise_static_public, EncryptedChannel, NoiseChannel, NoiseConfig, PassthroughChannel,
 };
@@ -335,6 +335,16 @@ async fn serve_connection(
     // Admission runs in the handler of a completed `recv`, never inside a
     // raced future.
     let strict = gate.strict();
+    // Set once this connection carries a route; when the route is removed
+    // from under it (`disconnect_peer`, e.g. `weaver mesh peer revoke`, or a
+    // replacement connection), the connection is closed instead of lingering
+    // and re-registering on its next frame.
+    let mut routed = false;
+    let mut route_check = tokio::time::interval(ROUTE_CHECK);
+    route_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // The silence timers run from the last frame in either direction; the
+    // route check's own ticks must not reset them.
+    let mut last_activity = tokio::time::Instant::now();
     loop {
         // Strict gates bound how long a peer may stay silent: briefly before
         // the first frame, longer once admitted. Lenient gates keep the
@@ -343,7 +353,7 @@ async fn serve_connection(
             .then(|| if active.is_none() { limits.first_frame } else { limits.idle });
         let timer = async {
             match limit {
-                Some(d) => tokio::time::sleep(d).await,
+                Some(d) => tokio::time::sleep_until(last_activity + d).await,
                 None => std::future::pending::<()>().await,
             }
         };
@@ -352,8 +362,21 @@ async fn serve_connection(
                 tracing::warn!(peer = %peer_addr, "mesh connection timed out, dropping");
                 break;
             }
+            _ = route_check.tick() => {
+                if routed && !rt.routes_via(&out_tx) {
+                    tracing::info!(peer = %peer_addr, "mesh route removed (disconnect or revocation), closing");
+                    break;
+                }
+                if let Some(id) = active.as_ref().and_then(|a| a.bound.as_deref())
+                    && gate.is_revoked(id)
+                {
+                    tracing::warn!(peer = %peer_addr, node = id, "mesh peer revoked, closing");
+                    break;
+                }
+            }
             inbound = channel.recv_encrypted() => match inbound {
                 Ok(data) => {
+                    last_activity = tokio::time::Instant::now();
                     let frame = match active {
                         Some(_) => Some(data),
                         None => match admit_first_frame(&*channel, kind, &*gate, data).await {
@@ -372,17 +395,27 @@ async fn serve_connection(
                     };
                     let Some(frame) = frame else { continue };
                     let Some(act) = active.as_ref() else { break };
+                    // A revocation after admission: the next frame must not
+                    // re-register the route.
+                    if let Some(id) = act.bound.as_deref()
+                        && gate.is_revoked(id)
+                    {
+                        tracing::warn!(peer = %peer_addr, node = id, "mesh peer revoked, closing");
+                        break;
+                    }
                     if let Some(frame) = screen_frame(frame, act) {
                         let ctx = act.peer_ctx();
                         if let Err(e) = rt.handle_incoming_peer(&frame, out_tx.clone(), Some(&ctx)).await {
                             tracing::debug!(error = %e, "mesh message handling error");
                         }
+                        routed = routed || rt.routes_via(&out_tx);
                     }
                 }
                 Err(_) => break,
             },
             outbound = out_rx.recv() => match outbound {
                 Some(data) => {
+                    last_activity = tokio::time::Instant::now();
                     if channel.send_encrypted(&data).await.is_err() {
                         break;
                     }

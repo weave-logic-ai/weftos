@@ -50,6 +50,10 @@ pub struct InstallArgs {
     /// into the service state so the machine keeps its node id (install only).
     #[arg(long, value_name = "PATH")]
     pub adopt_node_key: Option<PathBuf>,
+    /// Let the service generate a NEW box key even though this machine has one
+    /// (`~/.weftos/run/node.key`): the node id changes and peers must re-pin.
+    #[arg(long)]
+    pub fresh_node_key: bool,
     /// Mesh listener written to mesh.toml (non-loopback exposes it to the network).
     #[arg(long, default_value = DEFAULT_LISTEN)]
     pub listen: String,
@@ -73,6 +77,8 @@ pub struct Plan {
     pub purge_key: bool,
     /// `exe` already is the installed copy: nothing to copy.
     pub skip_copy: bool,
+    /// Box-key warnings (fresh key on a machine that has one).
+    pub key_notes: Vec<String>,
 }
 
 /// Parse `--listen`: a socket address, or `localhost:PORT` (loopback).
@@ -108,8 +114,9 @@ fn no_control(what: &str, p: &Path) -> Result<()> {
 }
 
 impl Plan {
-    /// Validate and build from arguments.
-    pub fn from_args(a: &InstallArgs, exe: &Path) -> Result<Self> {
+    /// Validate and build from arguments. `collapsed` is the collapsed daemon's
+    /// node key when one exists (install only; see [`super::mesh_install_key`]).
+    pub fn from_args(a: &InstallArgs, exe: &Path, collapsed: Option<&Path>) -> Result<Self> {
         if a.apply {
             bail!("--apply is refused: `weaver mesh install-service` only prints a script for an administrator to review and run");
         }
@@ -118,6 +125,7 @@ impl Plan {
             no_control("--adopt-node-key", k)?;
         }
         let listen = parse_listen(&a.listen)?;
+        let key_notes = super::mesh_install_key::key_notes(a.adopt_node_key.as_deref(), a.fresh_node_key, collapsed)?;
         let exe = canonical_exe(exe);
         Ok(Plan {
             manager: a.kind.unwrap_or_else(Manager::host_default),
@@ -127,6 +135,7 @@ impl Plan {
             listen,
             admin_uids: a.admin_uids.clone(),
             purge_key: a.purge_key,
+            key_notes,
         })
     }
 
@@ -211,7 +220,7 @@ TARGET_USER=\"${{SUDO_USER:-}}\"\n\
             Manager::Launchd => "launchd",
             Manager::Systemd => "systemd",
         },
-        notes = p.listen_notes().iter().map(|n| format!("# WARNING: {n}\n")).collect::<String>(),
+        notes = p.listen_notes().iter().chain(&p.key_notes).map(|n| format!("# WARNING: {n}\n")).collect::<String>(),
     ));
 
     s.push_str("# --- account and group ---\n");
@@ -248,6 +257,13 @@ install -d -m 0750 -o {acct} -g {group} {RUN_DIR}\n"
         ));
     }
 
+    let stop = match p.manager {
+        Manager::Launchd => format!("sudo launchctl bootout system/{MESH_LAUNCHD_LABEL}"),
+        Manager::Systemd => format!("sudo systemctl stop {MESH_SYSTEMD_UNIT}"),
+    };
+    if p.adopt_node_key.is_none() {
+        s.push_str("\n# --- box key: none adopted; the service generates a new one on first start (new node id) ---\n");
+    }
     if let Some(key) = &p.adopt_node_key {
         s.push_str("\n# --- adopt the existing node key (the key will exist in two places; node id unchanged) ---\n");
         let k = sh_quote(&key.to_string_lossy());
@@ -257,11 +273,15 @@ install -d -m 0750 -o {acct} -g {group} {RUN_DIR}\n"
     echo 'node key already adopted (identical); leaving it'\n\
   else\n\
     echo '{STATE_DIR}/node.key exists and differs from the key to adopt; not overwriting' >&2\n\
+    cat >&2 <<'WEFTOS_EOF'\n\
+{remedy}\n\
+WEFTOS_EOF\n\
     exit 1\n\
   fi\n\
 else\n\
   install -m 0600 -o {acct} -g {group} {k} {STATE_DIR}/node.key\n\
-fi\n"
+fi\n",
+            remedy = super::mesh_install_key::differs_remedy(&stop)
         ));
     }
 
@@ -356,8 +376,10 @@ rm -f {STATE_DIR}/node.key\n"
 
 /// Entry points from `mesh_cmd`.
 pub fn run_install(a: &InstallArgs, w: &mut dyn Write) -> Result<()> {
-    let p = Plan::from_args(a, &std::env::current_exe()?)?;
-    for m in ignored_flag_warnings(a, false).into_iter().chain(p.listen_notes()) {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let collapsed = home.as_deref().and_then(super::mesh_install_key::collapsed_key);
+    let p = Plan::from_args(a, &std::env::current_exe()?, collapsed.as_deref())?;
+    for m in ignored_flag_warnings(a, false).into_iter().chain(p.listen_notes()).chain(p.key_notes.clone()) {
         eprintln!("note: {m}");
     }
     w.write_all(install_script(&p).as_bytes())?;
@@ -368,7 +390,7 @@ pub fn run_uninstall(a: &InstallArgs, w: &mut dyn Write) -> Result<()> {
     if a.adopt_node_key.is_some() {
         bail!("--adopt-node-key applies to install-service only");
     }
-    let p = Plan::from_args(a, &std::env::current_exe()?)?;
+    let p = Plan::from_args(a, &std::env::current_exe()?, None)?;
     for m in ignored_flag_warnings(a, true) {
         eprintln!("note: {m}");
     }
@@ -389,11 +411,12 @@ mod tests {
             admin_uids: vec![],
             purge_key: false,
             skip_copy: false,
+            key_notes: vec![],
         }
     }
 
     fn args() -> InstallArgs {
-        InstallArgs { kind: None, apply: false, adopt_node_key: None, listen: DEFAULT_LISTEN.into(), admin_uids: vec![], purge_key: false }
+        InstallArgs { kind: None, apply: false, adopt_node_key: None, fresh_node_key: false, listen: DEFAULT_LISTEN.into(), admin_uids: vec![], purge_key: false }
     }
 
     fn check_golden(name: &str, got: &str) {
@@ -465,7 +488,7 @@ mod tests {
     #[test]
     fn apply_is_refused_and_uninstall_keeps_the_key() {
         let a = InstallArgs { apply: true, ..args() };
-        assert!(Plan::from_args(&a, Path::new("/x/weaver")).unwrap_err().to_string().contains("--apply is refused"));
+        assert!(Plan::from_args(&a, Path::new("/x/weaver"), None).unwrap_err().to_string().contains("--apply is refused"));
         for m in [Manager::Launchd, Manager::Systemd] {
             let keep = uninstall_script(&plan(m));
             assert!(!keep.contains("rm -f /var/lib/weftos/mesh/node.key"));
@@ -478,7 +501,7 @@ mod tests {
     #[test]
     fn control_characters_are_refused() {
         let a = InstallArgs { adopt_node_key: Some("/k\nrm -rf /".into()), ..args() };
-        assert!(Plan::from_args(&a, Path::new("/x/weaver")).is_err());
+        assert!(Plan::from_args(&a, Path::new("/x/weaver"), None).is_err());
     }
 
     #[test]
@@ -489,6 +512,20 @@ mod tests {
         assert!(t.contains("if cmp -s '/home/a/.weftos/run/node.key' /var/lib/weftos/mesh/node.key; then"));
         assert!(t.contains("exists and differs from the key to adopt; not overwriting"));
         assert!(t.contains("install -m 0600 -o weftos -g weftos '/home/a/.weftos/run/node.key'"));
+    }
+
+    #[test]
+    fn a_collapsed_key_is_never_replaced_by_omission() {
+        let k = Path::new("/h/.weftos/run/node.key");
+        assert!(Plan::from_args(&args(), Path::new("/x/weaver"), Some(k)).is_err());
+        let fresh = Plan::from_args(&InstallArgs { fresh_node_key: true, ..args() }, Path::new("/x/weaver"), Some(k)).unwrap();
+        let t = install_script(&fresh);
+        assert!(t.contains("# WARNING: --fresh-node-key: the service generates a NEW box key"), "{t}");
+        assert!(t.contains("none adopted; the service generates a new one"));
+        let adopt = InstallArgs { adopt_node_key: Some(k.into()), ..args() };
+        let t = install_script(&Plan::from_args(&adopt, Path::new("/x/weaver"), Some(k)).unwrap());
+        assert!(!t.contains("WARNING") && !t.contains("none adopted"));
+        assert!(t.contains("sudo mv /var/lib/weftos/mesh /var/lib/weftos/mesh.generated"), "differs branch has a remedy");
     }
 
     #[test]
@@ -534,7 +571,7 @@ mod tests {
         let t = install_script(&p);
         assert!(!t.contains("install -m 0755 -o root -g root '"));
         assert!(t.contains("already is /usr/local/libexec/weftos/weaver"));
-        let pl = Plan::from_args(&args(), Path::new(SERVICE_EXE)).unwrap();
+        let pl = Plan::from_args(&args(), Path::new(SERVICE_EXE), None).unwrap();
         assert!(pl.skip_copy);
     }
 

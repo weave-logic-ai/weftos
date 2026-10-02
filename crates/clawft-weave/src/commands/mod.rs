@@ -25,6 +25,8 @@ pub mod migrate_cmd;
 pub mod mesh_cmd;
 #[cfg(all(unix, feature = "mesh"))]
 pub mod mesh_install;
+#[cfg(all(unix, feature = "mesh"))]
+pub mod mesh_install_key;
 pub mod resource_cmd;
 pub mod service_cmd;
 pub mod soul_cmd;

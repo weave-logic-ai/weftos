@@ -404,6 +404,13 @@ pub trait AdmissionGate: Send + Sync + 'static {
         false
     }
 
+    /// Whether an admitted peer has since been revoked and must be cut off
+    /// (re-checked on every frame). Only gates that refuse revoked peers at
+    /// admission say yes; the default never does.
+    fn is_revoked(&self, _node_id: &str) -> bool {
+        false
+    }
+
     /// A hello verified; decide.
     async fn admit(&self, hello: &VerifiedHello, ctx: &AdmitContext) -> Admission;
 
