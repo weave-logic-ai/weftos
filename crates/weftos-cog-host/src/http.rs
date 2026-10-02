@@ -145,7 +145,10 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>, policy: &Policy) -> std
     let cors = cors_headers(method, path, &headers, policy);
 
     // DNS-rebinding guard: a page on an attacker's name resolving to this host sends its own Host.
-    if !policy.host_allowed(headers.get("host").map(String::as_str)) {
+    // Edge heartbeats are exempt: minimal firmware (HTTP/1.0) may send no Host or a router-domain
+    // name, and that route is already CSRF-exempt, size-capped and display-only.
+    let heartbeat = method == "POST" && path == "/fleet/heartbeat";
+    if !heartbeat && !policy.host_allowed(headers.get("host").map(String::as_str)) {
         return respond(&mut s, "421 Misdirected Request", serde_json::json!({"ok":false,"error":"host header not allowed","hint":"use an IP, localhost or this machine's name, or set WEFT_COG_HOST_NAMES"}).to_string(), "");
     }
     if method == "OPTIONS" {
@@ -429,6 +432,13 @@ mod tests {
         let hb = r#"{"id":"esp-01","rssi":-50}"#;
         let raw = format!("POST /fleet/heartbeat HTTP/1.1\r\nHost: 192.168.1.9\r\nContent-Length: {}\r\n\r\n{hb}", hb.len());
         assert!(send(a, &raw).0.contains("200"));
+        // minimal firmware: HTTP/1.0 with no Host header, or an unlisted router-domain name
+        let nohost = format!("POST /fleet/heartbeat HTTP/1.0\r\nContent-Length: {}\r\n\r\n{hb}", hb.len());
+        assert!(send(a, &nohost).0.contains("200"), "no Host header");
+        let lan = format!("POST /fleet/heartbeat HTTP/1.1\r\nHost: pi5.lan\r\nContent-Length: {}\r\n\r\n{hb}", hb.len());
+        assert!(send(a, &lan).0.contains("200"), "unlisted Host");
+        // ...but only that route: everything else still refuses an unlisted/missing Host
+        assert!(send(a, "GET /status HTTP/1.1\r\nHost: pi5.lan\r\n\r\n").0.contains("421"));
         let big = format!("POST /fleet/heartbeat HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\n\r\n", fleet_cap() + 1);
         assert!(send(a, &big).0.contains("413"));
     }

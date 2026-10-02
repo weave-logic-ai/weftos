@@ -26,8 +26,12 @@ Linux Foundation VID) is marked `claimed`; a device can spoof it.
 
 - **Host header allowlist (DNS rebinding):** requests whose `Host` is not a loopback name, an IP
   literal, this machine's hostname (plus `<short>.local` and its tailnet MagicDNS name when
-  `tailscale` is installed) or one of `WEFT_COG_HOST_NAMES` (comma separated) get `421`. This applies
-  to every route, including the read views. A missing `Host` header is refused too.
+  `tailscale` is installed, looked up with a 2 s timeout) or one of `WEFT_COG_HOST_NAMES` (comma
+  separated) get `421`. `WEFT_COG_HOST_NAMES` is needed for router-domain names such as `pi5.lan`, and
+  when the tailscale CLI is not available (macOS also tries
+  `/Applications/Tailscale.app/Contents/MacOS/Tailscale`). This applies
+  to every route, including the read views. A missing `Host` header is refused too, except on
+  `/fleet/heartbeat`, which minimal firmware may send without one.
 - **Token on every POST** (except edge `/fleet/heartbeat`, which firmware cannot sign) and on every
   `GET /hw/*`: `Authorization: Bearer <token>`. `GET /status`, `/network` and `/healthz` stay open
   for the console's read views.
