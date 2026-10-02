@@ -22,6 +22,9 @@ pub struct Settings {
     pub our_registry: String,
     /// Cognitum app-registry.json URL (optional; empty = skip).
     pub cognitum_registry: String,
+    /// cog-host bearer token for the `/hw/*` mutating routes (`WEFTOS_HOST_TOKEN`, or `?token=` in
+    /// the browser). Found in `<host root>/host.token`.
+    pub token: String,
 }
 
 impl Default for Settings {
@@ -29,6 +32,7 @@ impl Default for Settings {
         Self {
             // native: env; browser: ?host= / ?wl= / ?cog= query params; else the default.
             host: setting("WEFTOS_HOST", "host", "http://127.0.0.1:9480"),
+            token: setting("WEFTOS_HOST_TOKEN", "token", ""),
             our_registry: setting("WEFTOS_WL_REGISTRY", "wl", ""),
             cognitum_registry: setting(
                 "WEFTOS_COGNITUM_REGISTRY",
@@ -161,6 +165,9 @@ pub struct HwUsbId {
     pub module: Option<String>,
     #[serde(default)]
     pub notes: String,
+    /// Matched on a product string only, which any device on a shared VID can spoof.
+    #[serde(default)]
+    pub claimed: bool,
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -217,12 +224,12 @@ pub struct HwUsbReport {
     pub removed: Vec<HwUsbRemoved>,
     #[serde(default)]
     pub unmatched_ports: Vec<String>,
-    /// Catalog items this scan caught for the first time (Hardware Dex).
+    /// Catches not yet acknowledged ("NEW CATCH!"); persisted on the host until acked.
     #[serde(default)]
-    pub new_catches: Vec<DexCatch>,
+    pub unseen_catches: Vec<DexCatch>,
 }
 
-/// A caught catalog item (`GET /hw/dex` `caught[]`, and `new_catches[]` of a scan).
+/// A caught catalog item (`GET /hw/dex` `caught[]`, and `unseen_catches[]`).
 #[derive(Deserialize, Clone, Default)]
 pub struct DexCatch {
     /// `module:<id>` | `chip:<id>`
@@ -352,8 +359,6 @@ pub struct Shared {
     pub hw_identify: std::collections::BTreeMap<String, Identify>,
     /// Hardware Dex (Catalog > Dex): fetched on demand when the tab opens, and after a catch.
     pub hw_dex: Option<Result<HwDexReport, String>>,
-    /// "NEW CATCH!" from a Register-species confirmation; cleared on the next Rescan.
-    pub hw_banner: Vec<DexCatch>,
     pub host: Option<Result<HostStatus, String>>,
     pub net: Option<Result<Net, String>>,
     pub our_reg: Option<Result<WlRegistry, String>>,
@@ -504,11 +509,11 @@ impl Client {
         let id = id.to_string();
         let action = action.to_string();
         let mut req = ehttp::Request::post(url, Vec::new());
-        req.headers.insert("content-type", "application/json");
+        post_headers(&mut req, &self.s.token);
         ehttp::fetch(req, move |res| {
             let msg = match &res {
                 Ok(r) if r.ok => format!("{action} {id}: ok"),
-                Ok(r) => format!("{action} {id}: HTTP {}", r.status),
+                Ok(r) => format!("{action} {id}: {}", http_err(r)),
                 Err(e) => format!("{action} {id}: {e}"),
             };
             shared.lock().unwrap().last_action = Some(msg);
@@ -523,15 +528,14 @@ impl Client {
 impl Client {
     /// Scan the host's USB bus (`GET /hw/usb`). On demand: the modal calls this on open and Rescan.
     pub fn hw_scan(&self, ctx: &eframe::egui::Context) {
-        {
-            let mut sh = self.shared.lock().unwrap();
-            sh.hw_usb = None;
-            sh.hw_banner.clear();
-        }
-        let url = format!("{}/hw/usb", base(&self.s.host));
+        self.shared.lock().unwrap().hw_usb = None;
+        // POST: a scan the user asked for records sightings in the dex (GET /hw/usb is read-only).
+        let url = format!("{}/hw/usb/scan", base(&self.s.host));
+        let mut req = ehttp::Request::post(url, Vec::new());
+        post_headers(&mut req, &self.s.token);
         let shared = Arc::clone(&self.shared);
         let ctx = ctx.clone();
-        ehttp::fetch(ehttp::Request::get(url), move |res| {
+        ehttp::fetch(req, move |res| {
             let mut sh = shared.lock().unwrap();
             sh.hw_usb = Some(parse_json::<HwUsbReport>(&res));
             sh.hw_usb_at = Some(Instant::now());
@@ -547,12 +551,12 @@ impl Client {
             None => Vec::new(),
         };
         let mut req = ehttp::Request::post(url, body);
-        req.headers.insert("content-type", "application/json");
+        post_headers(&mut req, &self.s.token);
         let (shared, host, ctx2) = (Arc::clone(&self.shared), self.s.host.clone(), ctx.clone());
         ehttp::fetch(req, move |res| {
             let msg = match &res {
                 Ok(r) if r.ok => "baseline saved".to_string(),
-                Ok(r) => format!("baseline: HTTP {}", r.status),
+                Ok(r) => format!("baseline: {}", http_err(r)),
                 Err(e) => format!("baseline: {e}"),
             };
             shared.lock().unwrap().last_action = Some(msg);
@@ -573,7 +577,7 @@ impl Client {
         self.shared.lock().unwrap().hw_identify.insert(key.to_string(), Identify::Pending);
         let url = format!("{}/hw/usb/identify", base(&self.s.host));
         let mut req = ehttp::Request::post(url, serde_json::json!({ "key": key }).to_string().into_bytes());
-        req.headers.insert("content-type", "application/json");
+        post_headers(&mut req, &self.s.token);
         let (shared, ctx, key) = (Arc::clone(&self.shared), ctx.clone(), key.to_string());
         ehttp::fetch(req, move |res| {
             // Error bodies (503 no agent / 404 rescan) are JSON too: surface their message + hint.
@@ -587,12 +591,41 @@ impl Client {
                             None => e.to_string(),
                         })
                     }
-                    Err(_) => Err(format!("HTTP {} {}", r.status, r.status_text)),
+                    Err(_) => Err(http_err(r)),
                 },
                 Err(e) => Err(e.clone()),
             };
             shared.lock().unwrap().hw_identify.insert(key, Identify::Done(out));
             ctx.request_repaint();
+        });
+    }
+
+    /// Acknowledge the "NEW CATCH!" banners (`POST /hw/dex/ack`), then refresh the scan and dex.
+    pub fn hw_ack(&self, ctx: &eframe::egui::Context) {
+        let url = format!("{}/hw/dex/ack", base(&self.s.host));
+        let mut req = ehttp::Request::post(url, Vec::new());
+        post_headers(&mut req, &self.s.token);
+        let (shared, ctx, host) = (Arc::clone(&self.shared), ctx.clone(), self.s.host.clone());
+        ehttp::fetch(req, move |res| {
+            let msg = match &res {
+                Ok(r) if r.ok => "acknowledged".to_string(),
+                Ok(r) => format!("ack: {}", http_err(r)),
+                Err(e) => format!("ack: {e}"),
+            };
+            shared.lock().unwrap().last_action = Some(msg);
+            for path in ["hw/usb", "hw/dex"] {
+                let (shared, ctx) = (Arc::clone(&shared), ctx.clone());
+                let url = format!("{}/{path}", base(&host));
+                ehttp::fetch(ehttp::Request::get(url), move |res| {
+                    let mut sh = shared.lock().unwrap();
+                    if path == "hw/usb" {
+                        sh.hw_usb = Some(parse_json::<HwUsbReport>(&res));
+                    } else {
+                        sh.hw_dex = Some(parse_json::<HwDexReport>(&res));
+                    }
+                    ctx.request_repaint();
+                });
+            }
         });
     }
 
@@ -612,7 +645,7 @@ impl Client {
         let url = format!("{}/hw/dex/catch", base(&self.s.host));
         let body = serde_json::json!({ "key": key, "catalog_id": catalog_id, "name": name, "answer": answer });
         let mut req = ehttp::Request::post(url, body.to_string().into_bytes());
-        req.headers.insert("content-type", "application/json");
+        post_headers(&mut req, &self.s.token);
         let (shared, ctx) = (Arc::clone(&self.shared), ctx.clone());
         let this = (self.s.clone(), catalog_id.to_string());
         ehttp::fetch(req, move |res| {
@@ -620,20 +653,13 @@ impl Client {
                 Ok(r) => match serde_json::from_slice::<serde_json::Value>(&r.bytes) {
                     Ok(v) if v["ok"] == true => format!("registered {}", this.1),
                     Ok(v) => format!("register failed: {}", v["error"].as_str().unwrap_or("error")),
-                    Err(_) => format!("register: HTTP {}", r.status),
+                    Err(_) => format!("register: {}", http_err(r)),
                 },
                 Err(e) => format!("register: {e}"),
             };
             {
                 let mut sh = shared.lock().unwrap();
                 sh.last_action = Some(msg);
-                if let Ok(r) = &res
-                    && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&r.bytes)
-                    && v["catch"]["new"] == true
-                    && let Ok(c) = serde_json::from_value::<DexCatch>(v["catch"].clone())
-                {
-                    sh.hw_banner = vec![c];
-                }
             }
             for path in ["hw/usb", "hw/dex"] {
                 let (shared, ctx) = (Arc::clone(&shared), ctx.clone());
@@ -684,6 +710,7 @@ impl Client {
         self.set_action(format!("fetching {id}…"), ctx);
         let shared = Arc::clone(&self.shared);
         let host = base(&self.s.host);
+        let token = self.s.token.clone();
         let busy = Arc::clone(&self.status_busy);
         let id = id.to_string();
         let ctx = ctx.clone();
@@ -702,7 +729,7 @@ impl Client {
             })
             .to_string();
             let mut req = ehttp::Request::post(format!("{host}/install"), body.into_bytes());
-            req.headers.insert("content-type", "application/json");
+            post_headers(&mut req, &token);
             let shared2 = Arc::clone(&shared);
             let busy2 = Arc::clone(&busy);
             let ctx2 = ctx.clone();
@@ -788,10 +815,28 @@ fn base(host: &str) -> String {
     }
 }
 
+/// Headers every host POST needs: JSON content type, the `X-Weft-Host` CSRF marker and, when set,
+/// the bearer token.
+fn post_headers(req: &mut ehttp::Request, token: &str) {
+    req.headers.insert("content-type", "application/json");
+    req.headers.insert("x-weft-host", "1");
+    if !token.trim().is_empty() {
+        req.headers.insert("authorization", format!("Bearer {}", token.trim()));
+    }
+}
+
+/// A readable failure for a non-2xx response; 401 says where the token lives.
+fn http_err(r: &ehttp::Response) -> String {
+    if r.status == 401 {
+        return "host token required: paste the contents of <host root>/host.token into the token field and Connect".into();
+    }
+    format!("HTTP {} {}", r.status, r.status_text)
+}
+
 fn parse_json<T: for<'de> Deserialize<'de>>(res: &ehttp::Result<ehttp::Response>) -> Result<T, String> {
     match res {
         Ok(r) if r.ok => serde_json::from_slice::<T>(&r.bytes).map_err(|e| e.to_string()),
-        Ok(r) => Err(format!("HTTP {} {}", r.status, r.status_text)),
+        Ok(r) => Err(http_err(r)),
         Err(e) => Err(e.clone()),
     }
 }

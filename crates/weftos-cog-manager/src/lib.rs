@@ -40,6 +40,7 @@ pub struct Manager {
     client: Client,
     section: Section,
     host_draft: String,
+    token_draft: String,
     /// Sensors tab: the cog whose guide is open (None = the list), its parsed bundle, and the
     /// renderer. `guide_port_draft` lets the user correct the export port if the default is wrong.
     guide_cog: Option<String>,
@@ -60,10 +61,12 @@ impl Manager {
     pub fn new() -> Self {
         let s = Settings::default();
         let host_draft = s.host.clone();
+        let token_draft = s.token.clone();
         Self {
             client: Client::new(s),
             section: Section::Cogs,
             host_draft,
+            token_draft,
             guide_cog: None,
             guide_view: GuideView::at(None),
             guide_bundle: None,
@@ -225,9 +228,12 @@ impl Manager {
                 ui.separator();
                 ui.label("host");
                 ui.add(egui::TextEdit::singleline(&mut self.host_draft).desired_width(230.0).hint_text("http://<ip>:9480"));
+                ui.label("token");
+                ui.add(egui::TextEdit::singleline(&mut self.token_draft).password(true).desired_width(110.0).hint_text("<root>/host.token"));
                 if ui.button("Connect").clicked() {
                     let mut s = self.client.s.clone();
                     s.host = self.host_draft.clone();
+                    s.token = self.token_draft.clone();
                     self.client.reconnect(s);
                 }
                 ui.separator();

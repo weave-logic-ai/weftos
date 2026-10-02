@@ -1,35 +1,59 @@
-//! Minimal std-only HTTP control API for the manager UI. CORS `*` so the egui/WASM manager can call
-//! it from the browser. Routes:
+//! Minimal std-only HTTP control API for the manager UI. Routes:
 //!   GET  /status | /cogs      -> {running, root, cogs:[CogStatus]}
 //!   POST /cogs/<id>/start|stop -> enable/disable + spawn/kill
 //!   POST /install              -> verify (Ed25519/sha256) + write + reload  (body: InstallReq JSON)
 //!   POST /reload               -> re-read records from disk
 //!   GET  /healthz              -> ok
-//!   GET  /hw/usb               -> USB inventory vs baseline + id-table labels (serials redacted)
-//!   POST /hw/usb/baseline      -> accept the current scan (or body {keys:[..]}) as known
-//!   POST /hw/usb/identify      -> body {key}; ask the configured agent what the device is
-//!   GET  /hw/dex               -> Hardware Dex: caught, wild, totals, badges, numbers
-//!   POST /hw/dex/catch         -> body {key, catalog_id|"wild", name?, answer?}: register a species
+//!   /hw/*                      -> USB inventory, identify, Hardware Dex (see `hw_http`)
+//!
+//! Browser safety (the host binds all interfaces): every POST except edge heartbeats needs
+//! `Content-Type: application/json` + `X-Weft-Host: 1` (forcing a CORS preflight), CORS is answered
+//! only for allowlisted origins on `/hw/*` and on every POST, and the `/hw/*` mutating routes need
+//! the host bearer token. See `auth`. Plain GETs of the legacy routes keep `*` for the web console.
+//! Limits: 32 concurrent connections (503 beyond), 20 s per request, 64 KB bodies on `/hw/*`.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use weftos_cog_host::auth::{Headers, Policy};
 use weftos_cog_host::fleet::Heartbeat;
+use weftos_cog_host::hw_http::{self, HW_BODY_CAP};
 use weftos_cog_host::supervise::Supervisor;
-use weftos_cog_host::{dex, install, network, usb, usb_identify, InstallReq};
+use weftos_cog_host::{install, InstallReq};
 
 const MAX_BODY: usize = 32 * 1024 * 1024; // 32 MB cap on an upload
+const MAX_CONNS: usize = 32;
+const REQUEST_DEADLINE: Duration = Duration::from_secs(20);
 
-pub fn serve(listener: TcpListener, sup: Arc<Mutex<Supervisor>>) {
+static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+
+/// Counts a live connection; dropping it frees the slot.
+struct Slot;
+impl Drop for Slot {
+    fn drop(&mut self) {
+        ACTIVE.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+pub fn serve(listener: TcpListener, sup: Arc<Mutex<Supervisor>>, policy: Arc<Policy>) {
     for stream in listener.incoming() {
         match stream {
-            Ok(s) => {
-                let sup = Arc::clone(&sup);
+            Ok(mut s) => {
+                if ACTIVE.fetch_add(1, Ordering::AcqRel) >= MAX_CONNS {
+                    ACTIVE.fetch_sub(1, Ordering::AcqRel);
+                    s.set_write_timeout(Some(Duration::from_secs(1))).ok();
+                    let _ = respond(&mut s, "503 Service Unavailable", r#"{"ok":false,"error":"too many connections"}"#.into(), "");
+                    continue;
+                }
+                let (sup, policy) = (Arc::clone(&sup), Arc::clone(&policy));
                 // One thread per connection: /hw/usb/identify blocks on an agent for up to 90 s and
                 // must not stall lifecycle/status requests.
                 std::thread::spawn(move || {
-                    if let Err(e) = handle(s, sup) {
+                    let _slot = Slot;
+                    if let Err(e) = handle(s, sup, &policy) {
                         eprintln!("[cog-host] request error: {e}");
                     }
                 });
@@ -39,9 +63,36 @@ pub fn serve(listener: TcpListener, sup: Arc<Mutex<Supervisor>>) {
     }
 }
 
-fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>) -> std::io::Result<()> {
+fn parse_headers(head: &str) -> Headers {
+    head.lines().skip(1).filter_map(|l| l.split_once(':')).map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string())).collect()
+}
+
+fn respond(s: &mut TcpStream, code: &str, payload: String, cors: &str) -> std::io::Result<()> {
+    let bytes = payload.into_bytes();
+    let resp = format!("HTTP/1.1 {code}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{cors}Connection: close\r\n\r\n", bytes.len());
+    s.write_all(resp.as_bytes())?;
+    s.write_all(&bytes)?;
+    s.flush()
+}
+
+/// CORS headers for this request. Browsers get them only from an allowlisted origin on `/hw/*`
+/// and for POSTs; the legacy GET routes (and edge heartbeats) keep `*`.
+fn cors_headers(method: &str, path: &str, h: &Headers, policy: &Policy) -> String {
+    let open = !path.starts_with("/hw/") && (method == "GET" || path == "/fleet/heartbeat");
+    if open {
+        return "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\n".into();
+    }
+    match h.get("origin") {
+        Some(o) if policy.origin_allowed(o, h.get("host").map(String::as_str)) => format!(
+            "Access-Control-Allow-Origin: {o}\r\nVary: Origin\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type, x-weft-host, authorization\r\nAccess-Control-Max-Age: 600\r\n"
+        ),
+        _ => String::new(),
+    }
+}
+
+fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>, policy: &Policy) -> std::io::Result<()> {
     let peer_ip = s.peer_addr().ok().map(|a| a.ip().to_string());
-    s.set_read_timeout(Some(Duration::from_secs(15))).ok();
+    let deadline = Instant::now() + REQUEST_DEADLINE;
     let mut buf: Vec<u8> = Vec::new();
     let mut tmp = [0u8; 16384];
     let mut head_end = None;
@@ -51,13 +102,24 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>) -> std::io::Result<()> 
         if head_end.is_none() && let Some(p) = find(&buf, b"\r\n\r\n") {
             head_end = Some(p);
             content_len = content_length(&buf[..p]);
+            let head = String::from_utf8_lossy(&buf[..p]);
+            let path = head.lines().next().unwrap_or("").split_whitespace().nth(1).unwrap_or("/");
+            let cap = if path.starts_with("/hw/") { HW_BODY_CAP } else { MAX_BODY };
+            if content_len > cap {
+                return respond(&mut s, "413 Payload Too Large", r#"{"ok":false,"error":"body too large"}"#.into(), "");
+            }
         }
         if let Some(p) = head_end && buf.len() >= p + 4 + content_len {
             break;
         }
-        if buf.len() > MAX_BODY {
+        if buf.len() > MAX_BODY + 65536 {
             break;
         }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return respond(&mut s, "408 Request Timeout", r#"{"ok":false,"error":"request timed out"}"#.into(), "");
+        }
+        s.set_read_timeout(Some(left.min(Duration::from_secs(15)))).ok();
         let n = s.read(&mut tmp)?;
         if n == 0 {
             break;
@@ -66,27 +128,42 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>) -> std::io::Result<()> 
     }
 
     let he = head_end.unwrap_or(buf.len());
-    let head = String::from_utf8_lossy(&buf[..he]);
+    let head = String::from_utf8_lossy(&buf[..he]).into_owned();
     let mut first = head.lines().next().unwrap_or("").split_whitespace();
     let method = first.next().unwrap_or("");
     let path = first.next().unwrap_or("/");
+    let headers = parse_headers(&head);
     let body: &[u8] = if he + 4 <= buf.len() { &buf[he + 4..] } else { &[] };
+    let cors = cors_headers(method, path, &headers, policy);
 
-    let (code, payload) = route(method, path, body, peer_ip, &sup);
-    let bytes = payload.into_bytes();
-    let resp = format!(
-        "HTTP/1.1 {code}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\nConnection: close\r\n\r\n",
-        bytes.len()
-    );
-    s.write_all(resp.as_bytes())?;
-    s.write_all(&bytes)?;
-    s.flush()
+    if method == "OPTIONS" {
+        // Preflight: 204 with CORS headers for an allowed origin, 403 (no CORS headers) otherwise.
+        let allowed = headers.get("origin").is_none_or(|o| policy.origin_allowed(o, headers.get("host").map(String::as_str)));
+        return respond(&mut s, if allowed { "204 No Content" } else { "403 Forbidden" }, String::new(), &if allowed { preflight(&headers, path, policy) } else { String::new() });
+    }
+    if method == "POST" && path != "/fleet/heartbeat" && let Err((code, payload)) = policy.check_post(&headers) {
+        return respond(&mut s, code, payload, &cors);
+    }
+    let root: PathBuf = sup.lock().unwrap().root.clone();
+    let hw = hw_http::Req { method, path, headers: &headers, body };
+    let (code, payload) = match hw_http::handle(&hw, &root, policy) {
+        Some(r) => r,
+        None => route(method, path, body, peer_ip, &sup),
+    };
+    respond(&mut s, code, payload, &cors)
+}
+
+/// CORS headers for an allowed preflight (legacy open routes still get `*`).
+fn preflight(h: &Headers, path: &str, policy: &Policy) -> String {
+    let c = cors_headers("OPTIONS", path, h, policy);
+    if c.is_empty() {
+        // no Origin header (not a browser): nothing to add
+        return String::new();
+    }
+    c
 }
 
 fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &Arc<Mutex<Supervisor>>) -> (&'static str, String) {
-    if method == "OPTIONS" {
-        return ("204 No Content", String::new());
-    }
     let parts: Vec<&str> = path.trim_matches('/').split('/').filter(|p| !p.is_empty()).collect();
     match (method, parts.as_slice()) {
         ("GET", ["healthz"]) => ("200 OK", r#"{"ok":true}"#.to_string()),
@@ -117,11 +194,6 @@ fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &A
             ("200 OK", r#"{"ok":true}"#.to_string())
         }
         ("POST", ["install"]) => install_route(body, sup),
-        ("GET", ["hw", "usb"]) => hw_usb_get(sup),
-        ("POST", ["hw", "usb", "baseline"]) => hw_usb_baseline(body, sup),
-        ("POST", ["hw", "usb", "identify"]) => hw_usb_identify(body),
-        ("GET", ["hw", "dex"]) => hw_dex_get(sup),
-        ("POST", ["hw", "dex", "catch"]) => hw_dex_catch(body, sup),
         ("POST", ["cogs", id, action @ ("start" | "stop")]) => {
             let mut sup = sup.lock().unwrap();
             let res = if *action == "start" { sup.start(id) } else { sup.stop(id) };
@@ -131,98 +203,6 @@ fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &A
             }
         }
         _ => ("404 Not Found", r#"{"ok":false,"error":"not found"}"#.to_string()),
-    }
-}
-
-fn json_resp(code: &'static str, v: serde_json::Value) -> (&'static str, String) {
-    (code, v.to_string())
-}
-
-fn hw_usb_get(sup: &Arc<Mutex<Supervisor>>) -> (&'static str, String) {
-    let root = sup.lock().unwrap().root.clone();
-    let (node, now) = dex::node_now();
-    let scan = usb::scan();
-    // A scan is what "catches" catalog items; user-registered rows identify devices on the way.
-    let res = dex::with_dex(&root, |d| {
-        let table = dex::id_table().with_user_rows(d.user_rows(dex::catalog()));
-        let fresh = d.record_scan(&scan.devices, &table, dex::catalog(), &node, now);
-        (table, fresh)
-    });
-    let (table, fresh) = res.unwrap_or_else(|e| {
-        eprintln!("[cog-host] dex: {e}");
-        (dex::id_table().clone(), Vec::new())
-    });
-    let mut rep = usb::report(&root, &scan, &table, &node, now);
-    rep["new_catches"] = serde_json::Value::Array(fresh);
-    json_resp("200 OK", rep)
-}
-
-fn hw_usb_baseline(body: &[u8], sup: &Arc<Mutex<Supervisor>>) -> (&'static str, String) {
-    #[derive(serde::Deserialize, Default)]
-    struct Req {
-        keys: Option<Vec<String>>,
-    }
-    let req: Req = if body.iter().all(u8::is_ascii_whitespace) {
-        Req::default()
-    } else {
-        match serde_json::from_slice(body) {
-            Ok(r) => r,
-            Err(e) => return json_resp("400 Bad Request", serde_json::json!({"ok":false,"error":format!("bad baseline request: {e}")})),
-        }
-    };
-    let root = sup.lock().unwrap().root.clone();
-    match usb::save_baseline(&root, &usb::scan(), req.keys.as_deref(), usb::now_secs()) {
-        Ok(n) => json_resp("200 OK", serde_json::json!({"ok":true,"devices":n})),
-        Err(e) => json_resp("500 Internal Server Error", serde_json::json!({"ok":false,"error":format!("write baseline: {e}")})),
-    }
-}
-
-fn hw_usb_identify(body: &[u8]) -> (&'static str, String) {
-    #[derive(serde::Deserialize)]
-    struct Req {
-        key: String,
-    }
-    let Ok(req) = serde_json::from_slice::<Req>(body) else {
-        return json_resp("400 Bad Request", serde_json::json!({"ok":false,"error":"body must be {\"key\": ...}"}));
-    };
-    let Some(dev) = usb::scan().devices.into_iter().find(|d| d.key == req.key) else {
-        return json_resp("404 Not Found", serde_json::json!({"ok":false,"error":"device not attached (rescan)"}));
-    };
-    let (ok, v) = usb_identify::identify(&dev, dex::id_table());
-    json_resp(if ok { "200 OK" } else { "503 Service Unavailable" }, v)
-}
-
-fn hw_dex_get(sup: &Arc<Mutex<Supervisor>>) -> (&'static str, String) {
-    let root = sup.lock().unwrap().root.clone();
-    let node = network::node_name();
-    match dex::with_dex(&root, |d| d.report(dex::catalog(), dex::id_table(), &node)) {
-        Ok(v) => json_resp("200 OK", v),
-        Err(e) => json_resp("500 Internal Server Error", serde_json::json!({"ok":false,"error":format!("dex: {e}")})),
-    }
-}
-
-fn hw_dex_catch(body: &[u8], sup: &Arc<Mutex<Supervisor>>) -> (&'static str, String) {
-    #[derive(serde::Deserialize)]
-    struct Req {
-        key: String,
-        catalog_id: String,
-        #[serde(default)]
-        name: String,
-        #[serde(default)]
-        answer: String,
-    }
-    let Ok(req) = serde_json::from_slice::<Req>(body) else {
-        return json_resp("400 Bad Request", serde_json::json!({"ok":false,"error":"body must be {key, catalog_id, name?, answer?}"}));
-    };
-    let Some(dev) = usb::scan().devices.into_iter().find(|d| d.key == req.key) else {
-        return json_resp("404 Not Found", serde_json::json!({"ok":false,"error":"device not attached (rescan)"}));
-    };
-    let root = sup.lock().unwrap().root.clone();
-    let (node, now) = dex::node_now();
-    match dex::with_dex(&root, |d| d.register(&dev, &req.catalog_id, &req.name, &req.answer, dex::catalog(), &node, now)) {
-        Ok(Ok(v)) => json_resp("200 OK", serde_json::json!({"ok":true,"catch":v})),
-        Ok(Err(e)) => json_resp("400 Bad Request", serde_json::json!({"ok":false,"error":e})),
-        Err(e) => json_resp("500 Internal Server Error", serde_json::json!({"ok":false,"error":format!("dex: {e}")})),
     }
 }
 
@@ -256,4 +236,128 @@ fn content_length(head: &[u8]) -> usize {
         }
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // the connection counter is process-global: keep these tests from starving each other
+    static SERIAL: Mutex<()> = Mutex::new(());
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A host on an ephemeral loopback port with a temp root and token "tok".
+    fn start() -> (std::net::SocketAddr, tempfile::TempDir) {
+        let root = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let sup = Arc::new(Mutex::new(Supervisor::new(root.path().to_path_buf())));
+        let policy = Arc::new(Policy::new("tok".into(), vec!["http://127.0.0.1:*".into(), "http://localhost:*".into()]));
+        std::thread::spawn(move || serve(listener, sup, policy));
+        (addr, root)
+    }
+
+    /// Raw request -> (status line, headers lowercased, body).
+    fn send(addr: std::net::SocketAddr, raw: &str) -> (String, String, String) {
+        let mut c = TcpStream::connect(addr).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        c.write_all(raw.as_bytes()).unwrap();
+        let mut out = String::new();
+        let _ = c.read_to_string(&mut out);
+        let (head, body) = out.split_once("\r\n\r\n").unwrap_or((&out, ""));
+        let status = head.lines().next().unwrap_or("").to_string();
+        (status, head.to_ascii_lowercase(), body.to_string())
+    }
+
+    fn post(path: &str, extra: &str, body: &str) -> String {
+        format!("POST {path} HTTP/1.1\r\nHost: x\r\n{extra}Content-Length: {}\r\n\r\n{body}", body.len())
+    }
+
+    const JSON: &str = "Content-Type: application/json\r\nX-Weft-Host: 1\r\n";
+
+    #[test]
+    fn csrf_guard_refuses_posts_without_json_and_custom_header() {
+        let _g = serial();
+        let (a, _r) = start();
+        for (extra, why) in [
+            ("", "no headers"),
+            ("Content-Type: text/plain\r\nX-Weft-Host: 1\r\n", "wrong content type"),
+            ("Content-Type: application/json\r\n", "no custom header"),
+            ("Content-Type: application/x-www-form-urlencoded\r\nX-Weft-Host: 1\r\n", "form post"),
+        ] {
+            // legacy routes are covered too, not just /hw/*
+            for path in ["/reload", "/cogs/x/start", "/install", "/hw/dex/ack"] {
+                let (st, _, _) = send(a, &post(path, extra, "{}"));
+                assert!(st.contains("400"), "{path} {why}: {st}");
+            }
+        }
+        // with both headers the legacy routes work again
+        assert!(send(a, &post("/reload", JSON, "{}")).0.contains("200"));
+    }
+
+    #[test]
+    fn disallowed_origin_is_refused_and_gets_no_cors_headers() {
+        let _g = serial();
+        let (a, _r) = start();
+        let evil = format!("Origin: http://evil.example\r\n{JSON}");
+        let (st, h, _) = send(a, &post("/reload", &evil, "{}"));
+        assert!(st.contains("403"), "{st}");
+        assert!(!h.contains("access-control-allow-origin"));
+        let (st, h, _) = send(a, "OPTIONS /hw/dex/catch HTTP/1.1\r\nHost: x\r\nOrigin: http://evil.example\r\nAccess-Control-Request-Method: POST\r\n\r\n");
+        assert!(st.contains("403") && !h.contains("access-control-allow-origin"), "{st} {h}");
+    }
+
+    #[test]
+    fn allowed_origin_gets_an_exact_preflight_answer_never_star_for_posts() {
+        let _g = serial();
+        let (a, _r) = start();
+        let (st, h, _) = send(a, "OPTIONS /hw/dex/catch HTTP/1.1\r\nHost: x\r\nOrigin: http://localhost:8080\r\nAccess-Control-Request-Method: POST\r\n\r\n");
+        assert!(st.contains("204"), "{st}");
+        assert!(h.contains("access-control-allow-origin: http://localhost:8080"), "{h}");
+        assert!(h.contains("x-weft-host") && h.contains("authorization") && h.contains("vary: origin"));
+        // a real POST from that origin echoes it (not `*`)
+        let (_, h, _) = send(a, &post("/reload", &format!("Origin: http://localhost:8080\r\n{JSON}"), "{}"));
+        assert!(h.contains("access-control-allow-origin: http://localhost:8080") && !h.contains("allow-origin: *"));
+        // plain legacy GETs keep `*` for the web console; /hw GETs do not
+        let (_, h, _) = send(a, "GET /status HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert!(h.contains("access-control-allow-origin: *"));
+        let (_, h, _) = send(a, "GET /hw/dex HTTP/1.1\r\nHost: x\r\nOrigin: http://evil.example\r\n\r\n");
+        assert!(!h.contains("access-control-allow-origin"), "{h}");
+    }
+
+    #[test]
+    fn hw_mutations_need_the_bearer_token_over_http() {
+        let _g = serial();
+        let (a, _r) = start();
+        for path in ["/hw/usb/scan", "/hw/usb/baseline", "/hw/usb/identify", "/hw/dex/catch", "/hw/dex/ack"] {
+            let (st, _, body) = send(a, &post(path, JSON, "{}"));
+            assert!(st.contains("401"), "{path}: {st}");
+            assert!(body.contains("host token required"));
+            let (st, _, _) = send(a, &post(path, &format!("{JSON}Authorization: Bearer wrong\r\n"), "{}"));
+            assert!(st.contains("401"));
+        }
+        assert!(send(a, &post("/hw/dex/ack", &format!("{JSON}Authorization: Bearer tok\r\n"), "{}")).0.contains("200"));
+    }
+
+    #[test]
+    fn oversized_hw_body_is_refused_before_reading_it() {
+        let _g = serial();
+        let (a, _r) = start();
+        let raw = format!("POST /hw/dex/catch HTTP/1.1\r\nHost: x\r\n{JSON}Authorization: Bearer tok\r\nContent-Length: {}\r\n\r\n", HW_BODY_CAP + 1);
+        assert!(send(a, &raw).0.contains("413"));
+    }
+
+    #[test]
+    fn connection_cap_answers_503() {
+        let _g = serial();
+        let (a, _r) = start();
+        // hold MAX_CONNS idle connections (their threads wait for a request)
+        let held: Vec<TcpStream> = (0..MAX_CONNS).map(|_| TcpStream::connect(a).unwrap()).collect();
+        std::thread::sleep(Duration::from_millis(300));
+        let (st, _, _) = send(a, "GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert!(st.contains("503"), "{st}");
+        drop(held);
+    }
 }

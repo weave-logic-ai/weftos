@@ -860,9 +860,9 @@
   {
    "ref": "module:vayyar-home-care",
    "type": "radar",
-   "grade": "A",
-   "why": "automotive/industrial-grade FMCW MIMO radar; catalog spec band=mmWave (imaging radar)",
-   "confidence": "medium"
+   "grade": "B",
+   "why": "commercial mmWave fall-detection product; imaging-radar class from outside knowledge, the catalog holds no figures; grade is from product class and outside knowledge, not from catalog figures (none present)",
+   "confidence": "low"
   },
   {
    "ref": "module:ti-iwr6843isk-dca1000",
@@ -980,21 +980,21 @@
    "ref": "module:hackrf-one",
    "type": "sdr",
    "grade": "B",
-   "why": "half-duplex or low-cost 12-bit/8-bit wideband SDR; catalog spec adc=8-bit, bw=up to 20 MHz, tuning=1 MHz - 6 GHz",
+   "why": "half-duplex 8-bit wideband SDR, 1 MHz-6 GHz tuning; catalog spec adc=8-bit, bw=up to 20 MHz, tuning=1 MHz - 6 GHz",
    "confidence": "medium"
   },
   {
    "ref": "module:plutosdr-zynq7010",
    "type": "sdr",
    "grade": "B",
-   "why": "half-duplex or low-cost 12-bit/8-bit wideband SDR; catalog spec sample_rate=up to 61.44 MHz, adc=12-bit, tuning=70 MHz - 6 GHz (AD9363)",
+   "why": "low-cost 12-bit 2x2 SDR front end, 70 MHz-6 GHz; catalog spec sample_rate=up to 61.44 MHz, adc=12-bit, tuning=70 MHz - 6 GHz (AD9363)",
    "confidence": "medium"
   },
   {
    "ref": "chip:ad9363",
    "type": "sdr",
    "grade": "B",
-   "why": "half-duplex or low-cost 12-bit/8-bit wideband SDR; catalog spec adc=12-bit, tuning=70 MHz-6 GHz (board-unlockable), channels=2x2",
+   "why": "low-cost 12-bit 2x2 SDR front end, 70 MHz-6 GHz; catalog spec adc=12-bit, tuning=70 MHz-6 GHz (board-unlockable), channels=2x2",
    "confidence": "medium"
   },
   {
@@ -1113,21 +1113,21 @@
    "ref": "module:oceansonics-iclisten",
    "type": "hydrophone",
    "grade": "A",
-   "why": "calibrated digital smart hydrophone; no figures in the catalog spec",
+   "why": "calibrated digital smart hydrophone; grade is from product class and outside knowledge, not from catalog figures (none present)",
    "confidence": "low"
   },
   {
    "ref": "module:reson-tc4032",
    "type": "hydrophone",
    "grade": "S",
-   "why": "lab-grade broadband reference hydrophone; no figures in the catalog spec",
+   "why": "lab-grade broadband reference hydrophone; grade is from product class and outside knowledge, not from catalog figures (none present)",
    "confidence": "low"
   },
   {
    "ref": "module:bruel-kjaer-8104",
    "type": "hydrophone",
    "grade": "S",
-   "why": "lab-grade broadband reference hydrophone; no figures in the catalog spec",
+   "why": "lab-grade broadband reference hydrophone; grade is from product class and outside knowledge, not from catalog figures (none present)",
    "confidence": "low"
   },
   {
@@ -1239,7 +1239,7 @@
    "ref": "chip:adi-ad5940",
    "type": "biopotential",
    "grade": "A",
-   "why": "high-precision bioimpedance / electrochemical AFE; no figures in the catalog spec",
+   "why": "high-precision bioimpedance / electrochemical AFE; grade is from product class and outside knowledge, not from catalog figures (none present)",
    "confidence": "low"
   },
   {

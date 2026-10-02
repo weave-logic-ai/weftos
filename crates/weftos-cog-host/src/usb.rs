@@ -9,6 +9,8 @@ use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use weftos_cog_market::usb::UsbIdTable;
 use weftos_cog_repo::sha256_hex;
 
@@ -33,13 +35,43 @@ pub struct Scan {
     pub unmatched_ports: Vec<String>,
 }
 
-/// Stable device key: `vid:pid:s-<hash of serial>` or `vid:pid:p-<bus path>` without a serial.
-/// The serial is hashed so the key (returned over HTTP) does not disclose it.
-pub fn device_key(vid: u16, pid: u16, serial: Option<&str>, bus_path: &str) -> String {
+/// Stable device key: `vid:pid:s-<16 hex of sha256(host salt | serial)>`, or `vid:pid:p-<bus path>`
+/// without a serial. The salt is per host (`<root>/hw/salt`, random, 0600), so neither the key nor a
+/// hash of it lets anyone recompute or correlate a serial number across hosts.
+pub fn device_key(vid: u16, pid: u16, serial: Option<&str>, bus_path: &str, salt: &str) -> String {
     match serial.filter(|s| !s.is_empty()) {
-        Some(s) => format!("{vid:04x}:{pid:04x}:s-{}", &sha256_hex(s.as_bytes())[..8]),
+        Some(s) => format!("{vid:04x}:{pid:04x}:s-{}", &sha256_hex(format!("{salt}|{s}").as_bytes())[..16]),
         None => format!("{vid:04x}:{pid:04x}:p-{bus_path}"),
     }
+}
+
+/// The per-host salt, created on first use (random, 0600, atomic).
+pub fn load_salt(root: &Path) -> String {
+    let p = root.join("hw").join("salt");
+    if let Some(s) = std::fs::read_to_string(&p).ok().map(|s| s.trim().to_string()).filter(|s| s.len() >= 32) {
+        return s;
+    }
+    let s = crate::auth::random_hex(32).unwrap_or_else(|_| sha256_hex(format!("{}{:?}", std::process::id(), Instant::now()).as_bytes()));
+    let _ = crate::auth::write_private(&p, s.as_bytes());
+    // another thread may have won the race; read back what is on disk
+    std::fs::read_to_string(&p).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or(s)
+}
+
+/// macOS serial-port names embed the USB serial (`cu.usbmodem5B5E0063501`); anything leaving the
+/// host shows only `…` plus the last 4 characters of that suffix. Short suffixes (location ids such
+/// as `wchusbserial1410`) and Linux `ttyUSB0`/`ttyACM0` names carry no serial and pass through.
+pub fn redact_port(p: &str) -> String {
+    let (dir, name) = p.rsplit_once('/').map(|(d, n)| (format!("{d}/"), n)).unwrap_or((String::new(), p));
+    for prefix in ["cu.usbmodem", "cu.usbserial-", "cu.usbserial", "cu.wchusbserial", "cu.SLAB_USBtoUART", "tty.usbmodem", "tty.usbserial-", "tty.usbserial", "tty.wchusbserial", "tty.SLAB_USBtoUART"] {
+        if let Some(tail) = name.strip_prefix(prefix) {
+            let n = tail.chars().count();
+            if n > 4 {
+                return format!("{dir}{prefix}…{}", tail.chars().skip(n - 4).collect::<String>());
+            }
+            return p.to_string();
+        }
+    }
+    p.to_string()
 }
 
 /// Show only the last 4 characters (`…1234`); short serials are fully masked.
@@ -69,17 +101,36 @@ fn class_name(code: u8) -> &'static str {
 
 // ---- scanning ---------------------------------------------------------------------------------
 
-pub fn scan() -> Scan {
+/// Scan the bus. Results are reused for 2 s (the macOS `system_profiler` call is slow), so
+/// hammering the endpoints cannot hammer the system.
+pub fn scan(salt: &str) -> Scan {
+    static CACHE: Mutex<Option<(Instant, String, Scan)>> = Mutex::new(None);
+    let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, s, scan)) = c.as_ref()
+        && s == salt
+        && at.elapsed() < Duration::from_secs(2)
+    {
+        return scan.clone();
+    }
+    let fresh = scan_uncached(salt);
+    *c = Some((Instant::now(), salt.to_string(), fresh.clone()));
+    fresh
+}
+
+fn scan_uncached(salt: &str) -> Scan {
     #[cfg(target_os = "linux")]
     {
-        return scan_sysfs(Path::new("/sys/bus/usb/devices"), Path::new("/dev"));
+        return scan_sysfs(Path::new("/sys/bus/usb/devices"), Path::new("/dev"), salt);
     }
     #[cfg(target_os = "macos")]
     {
-        return scan_macos();
+        return scan_macos(salt);
     }
     #[allow(unreachable_code)]
-    Scan::default()
+    {
+        let _ = salt;
+        Scan::default()
+    }
 }
 
 fn read_trim(p: &Path) -> String {
@@ -92,7 +143,7 @@ fn hex_attr(p: &Path) -> Option<u16> {
 
 /// Linux: walk `<sysfs>/<bus-port>` device dirs; tty names come from their interface dirs
 /// (`<dev>:1.0/ttyUSB0` or `<dev>:1.0/tty/ttyACM0`) and map to `<dev_root>/<name>`.
-pub fn scan_sysfs(sysfs: &Path, dev_root: &Path) -> Scan {
+pub fn scan_sysfs(sysfs: &Path, dev_root: &Path, salt: &str) -> Scan {
     let mut devices = Vec::new();
     let Ok(rd) = std::fs::read_dir(sysfs) else { return Scan::default() };
     let mut names: Vec<String> = rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
@@ -123,7 +174,7 @@ pub fn scan_sysfs(sysfs: &Path, dev_root: &Path) -> Scan {
         ports.sort();
         ports.dedup();
         devices.push(UsbDevice {
-            key: device_key(vid, pid, serial.as_deref(), name),
+            key: device_key(vid, pid, serial.as_deref(), name, salt),
             vid,
             pid,
             manufacturer: read_trim(&d.join("manufacturer")),
@@ -139,12 +190,12 @@ pub fn scan_sysfs(sysfs: &Path, dev_root: &Path) -> Scan {
 }
 
 #[cfg(target_os = "macos")]
-fn scan_macos() -> Scan {
+fn scan_macos(salt: &str) -> Scan {
     let ports = mac_serial_ports(Path::new("/dev"));
     for dt in ["SPUSBHostDataType", "SPUSBDataType"] {
         let Ok(out) = Command::new("system_profiler").args([dt, "-json"]).output() else { continue };
         let Ok(v) = serde_json::from_slice::<Value>(&out.stdout) else { continue };
-        let scan = parse_system_profiler(&v, &ports);
+        let scan = parse_system_profiler(&v, &ports, salt);
         if !scan.devices.is_empty() {
             return scan;
         }
@@ -189,7 +240,7 @@ fn port_matches(port: &str, serial: Option<&str>, location: &str) -> bool {
     loc.len() >= 3 && base.ends_with(loc)
 }
 
-fn collect_mac(v: &Value, out: &mut Vec<(UsbDevice, String)>) {
+fn collect_mac(v: &Value, out: &mut Vec<(UsbDevice, String)>, salt: &str) {
     let Some(items) = v.as_array() else { return };
     for it in items {
         let vid_s = str_of(it, &["USBDeviceKeyVendorID", "vendor_id"]);
@@ -200,7 +251,7 @@ fn collect_mac(v: &Value, out: &mut Vec<(UsbDevice, String)>) {
             let bus_path = location.split_whitespace().next().unwrap_or("").to_string();
             out.push((
                 UsbDevice {
-                    key: device_key(vid, pid, serial.as_deref(), &bus_path),
+                    key: device_key(vid, pid, serial.as_deref(), &bus_path, salt),
                     vid,
                     pid,
                     manufacturer: str_of(it, &["USBDeviceKeyVendorName", "manufacturer"]).to_string(),
@@ -215,17 +266,17 @@ fn collect_mac(v: &Value, out: &mut Vec<(UsbDevice, String)>) {
             ));
         }
         if let Some(children) = it.get("_items") {
-            collect_mac(children, out);
+            collect_mac(children, out, salt);
         }
     }
 }
 
 /// Parse `system_profiler SPUSBHostDataType|SPUSBDataType -json` and attach serial ports.
-pub fn parse_system_profiler(v: &Value, serial_ports: &[String]) -> Scan {
+pub fn parse_system_profiler(v: &Value, serial_ports: &[String], salt: &str) -> Scan {
     let mut found = Vec::new();
     if let Some(obj) = v.as_object() {
         for tree in obj.values() {
-            collect_mac(tree, &mut found);
+            collect_mac(tree, &mut found, salt);
         }
     }
     let mut left: Vec<String> = serial_ports.to_vec();
@@ -263,17 +314,15 @@ pub fn load_baseline(root: &Path) -> Option<Vec<Value>> {
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path)
+    crate::auth::write_private(path, bytes)
 }
+
+static BASELINE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Write the baseline. `keys = None` accepts the whole current scan; `Some(keys)` adds only those
 /// currently-present devices to the existing baseline. Returns how many devices it now holds.
 pub fn save_baseline(root: &Path, scan: &Scan, keys: Option<&[String]>, now: u64) -> std::io::Result<usize> {
+    let _g = BASELINE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut entries: Vec<Value> = match keys {
         None => Vec::new(),
         Some(_) => load_baseline(root).unwrap_or_default(),
@@ -304,7 +353,8 @@ pub fn now_secs() -> u64 {
 
 pub fn id_json(table: &UsbIdTable, d: &UsbDevice) -> Value {
     match table.lookup_device(d.vid, d.pid, &d.product) {
-        Some(i) => json!({ "name": i.name, "kind": i.kind, "chip": i.chip, "module": i.module, "notes": i.notes }),
+        // `claimed`: matched on a product string only (spoofable by any device on a shared VID)
+        Some(i) => json!({ "name": i.name, "kind": i.kind, "chip": i.chip, "module": i.module, "notes": i.notes, "claimed": i.product.is_some() }),
         None => Value::Null,
     }
 }
@@ -328,7 +378,7 @@ pub fn report(root: &Path, scan: &Scan, table: &UsbIdTable, node: &str, now: u64
                 "class": d.class,
                 "speed": d.speed,
                 "bus_path": d.bus_path,
-                "ports": d.ports,
+                "ports": d.ports.iter().map(|p| redact_port(p)).collect::<Vec<_>>(),
                 "state": if known.contains(&d.key) { "known" } else { "new" },
                 "id": id_json(table, d),
             })
@@ -341,7 +391,7 @@ pub fn report(root: &Path, scan: &Scan, table: &UsbIdTable, node: &str, now: u64
         "baseline_missing": baseline.is_none(),
         "devices": devices,
         "removed": baseline.as_deref().map(|b| removed(b, scan)).unwrap_or_default(),
-        "unmatched_ports": scan.unmatched_ports,
+        "unmatched_ports": scan.unmatched_ports.iter().map(|p| redact_port(p)).collect::<Vec<_>>(),
     })
 }
 
@@ -375,13 +425,14 @@ mod tests {
     fn sysfs_scan_finds_devices_ports_and_skips_root_hubs() {
         let t = tempfile::tempdir().unwrap();
         fake_sysfs(t.path());
-        let s = scan_sysfs(t.path(), Path::new("/dev"));
+        let s = scan_sysfs(t.path(), Path::new("/dev"), "salt");
         assert_eq!(s.devices.len(), 2);
         let cp = s.devices.iter().find(|d| d.vid == 0x10c4).unwrap();
         assert_eq!(cp.ports, vec!["/dev/ttyUSB0"]);
         assert_eq!(cp.speed, "12 Mb/s");
         assert_eq!(cp.product, "CP2102 USB to UART Bridge");
         assert!(cp.key.starts_with("10c4:ea60:s-") && !cp.key.contains("ABCD1234"));
+        assert_eq!(cp.key.rsplit("s-").next().unwrap().len(), 16);
         let esp = s.devices.iter().find(|d| d.vid == 0x303a).unwrap();
         assert_eq!(esp.ports, vec!["/dev/ttyACM0"]);
         assert_eq!(esp.key, "303a:1001:p-1-3.1");
@@ -401,7 +452,7 @@ mod tests {
     fn macos_host_format_parses_nested_devices_and_matches_ports() {
         let v: Value = serde_json::from_str(MAC_HOST).unwrap();
         let ports = vec!["/dev/cu.usbmodem5B5E0063501".to_string(), "/dev/cu.usbserial-zzz".to_string()];
-        let s = parse_system_profiler(&v, &ports);
+        let s = parse_system_profiler(&v, &ports, "salt");
         assert_eq!(s.devices.len(), 3);
         let ch = s.devices.iter().find(|d| d.vid == 0x1a86).unwrap();
         assert_eq!(ch.ports, vec!["/dev/cu.usbmodem5B5E0063501"]);
@@ -418,11 +469,45 @@ mod tests {
             "serial_num":"A50285BI","manufacturer":"FTDI","location_id":"0x14100000 / 3","device_speed":"full_speed"}]}]}"#,
         )
         .unwrap();
-        let s = parse_system_profiler(&v, &["/dev/cu.usbserial-A50285BI".into()]);
+        let s = parse_system_profiler(&v, &["/dev/cu.usbserial-A50285BI".into()], "salt");
         assert_eq!(s.devices.len(), 1);
         assert_eq!(s.devices[0].manufacturer, "FTDI");
         assert_eq!(s.devices[0].ports.len(), 1);
         assert_eq!(s.devices[0].bus_path, "0x14100000");
+    }
+
+    #[test]
+    fn keys_are_salted_per_host() {
+        let a = device_key(0x10c4, 0xea60, Some("SER123456"), "1-2", "salt-a");
+        let b = device_key(0x10c4, 0xea60, Some("SER123456"), "1-2", "salt-b");
+        assert_ne!(a, b);
+        assert_eq!(a, device_key(0x10c4, 0xea60, Some("SER123456"), "9-9", "salt-a")); // bus path irrelevant with a serial
+        assert!(!a.contains("SER123456") && a.rsplit("s-").next().unwrap().len() >= 16);
+        let d = tempfile::tempdir().unwrap();
+        let s1 = load_salt(d.path());
+        assert!(s1.len() >= 32);
+        assert_eq!(s1, load_salt(d.path()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(d.path().join("hw/salt")).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+    }
+
+    #[test]
+    fn macos_port_names_never_leak_the_serial() {
+        assert_eq!(redact_port("/dev/cu.usbmodem5B5E0063501"), "/dev/cu.usbmodem…3501");
+        assert_eq!(redact_port("/dev/cu.usbserial-A50285BI"), "/dev/cu.usbserial-…85BI");
+        assert_eq!(redact_port("/dev/cu.wchusbserial1410"), "/dev/cu.wchusbserial1410"); // location id
+        assert_eq!(redact_port("/dev/ttyUSB0"), "/dev/ttyUSB0");
+        let v: Value = serde_json::from_str(MAC_HOST).unwrap();
+        let sc = parse_system_profiler(&v, &["/dev/cu.usbmodem5B5E0063501".to_string(), "/dev/cu.usbserial-SECRET12345".to_string()], "salt");
+        let rep = report(tempfile::tempdir().unwrap().path(), &sc, &UsbIdTable::bundled(), "n", 1);
+        let text = rep.to_string();
+        assert!(!text.contains("5B5E0063501") && !text.contains("SECRET12345"), "{text}");
+        assert!(text.contains("cu.usbmodem…3501") && text.contains("cu.usbserial-…2345"));
+        // matching still used the real names
+        assert_eq!(sc.devices.iter().find(|d| d.vid == 0x1a86).unwrap().ports, vec!["/dev/cu.usbmodem5B5E0063501"]);
     }
 
     #[test]
@@ -438,7 +523,7 @@ mod tests {
         fake_sysfs(sysfs.path());
         let root = tempfile::tempdir().unwrap();
         let table = UsbIdTable::bundled();
-        let scan = scan_sysfs(sysfs.path(), Path::new("/dev"));
+        let scan = scan_sysfs(sysfs.path(), Path::new("/dev"), "salt");
 
         let r = report(root.path(), &scan, &table, "n", 1);
         assert_eq!(r["baseline_missing"], true);
@@ -458,7 +543,7 @@ mod tests {
         let nd = sysfs.path().join("1-4");
         w(&nd.join("idVendor"), "dead\n");
         w(&nd.join("idProduct"), "beef\n");
-        let scan2 = scan_sysfs(sysfs.path(), Path::new("/dev"));
+        let scan2 = scan_sysfs(sysfs.path(), Path::new("/dev"), "salt");
         let r = report(root.path(), &scan2, &table, "n", 3);
         let states: Vec<_> = r["devices"].as_array().unwrap().iter().map(|d| (d["vid"].as_str().unwrap().to_string(), d["state"].as_str().unwrap().to_string())).collect();
         assert!(states.contains(&("10c4".into(), "known".into())) && states.contains(&("dead".into(), "new".into())));

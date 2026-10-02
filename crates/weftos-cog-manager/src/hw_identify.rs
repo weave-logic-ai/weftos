@@ -2,7 +2,7 @@
 //! what is new / known / removed / unidentified, links matches into the catalog and can ask the
 //! host's agent about unknown devices. All requests are on demand (open, Rescan, buttons) - no polling.
 
-use crate::client::{Client, DexCatch, HwUsbDevice, HwUsbReport, Identify};
+use crate::client::{Client, HwUsbDevice, HwUsbReport, Identify};
 use crate::{AMBER, GREEN, GREY, RED};
 use eframe::egui::{self, Color32, RichText};
 use weftos_cog_market::hw::HwCatalog;
@@ -62,9 +62,9 @@ impl HwIdentify {
             return None;
         }
         // Copy out of the shared state so the UI below can call client methods without re-locking.
-        let (report, age_s, answers, banner) = {
+        let (report, age_s, answers) = {
             let sh = client.snapshot();
-            (sh.hw_usb.clone(), sh.hw_usb_at.map(|t| t.elapsed().as_secs()), sh.hw_identify.clone(), sh.hw_banner.clone())
+            (sh.hw_usb.clone(), sh.hw_usb_at.map(|t| t.elapsed().as_secs()), sh.hw_identify.clone())
         };
         let mut jump = None;
         let width = (ctx.content_rect().width() - 80.0).clamp(320.0, 860.0);
@@ -89,9 +89,9 @@ impl HwIdentify {
                 }
                 Some(Err(e)) => {
                     ui.label(RichText::new(format!("scan failed: {e}")).color(RED));
-                    ui.label(RichText::new("needs a weft-cog-host that has /hw/usb (rebuild + restart it).").color(GREY).small());
+                    ui.label(RichText::new("needs a weft-cog-host with /hw/usb/scan and the host token (token field, top bar).").color(GREY).small());
                 }
-                Some(Ok(r)) => jump = self.rows(ui, ctx, client, cat, r, &answers, &banner),
+                Some(Ok(r)) => jump = self.rows(ui, ctx, client, cat, r, &answers),
             }
         });
         if modal.should_close() {
@@ -123,11 +123,17 @@ impl HwIdentify {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn rows(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, client: &Client, cat: &HwCatalog, r: &HwUsbReport, answers: &std::collections::BTreeMap<String, Identify>, banner: &[DexCatch]) -> Option<Jump> {
+    fn rows(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, client: &Client, cat: &HwCatalog, r: &HwUsbReport, answers: &std::collections::BTreeMap<String, Identify>) -> Option<Jump> {
         let mut jump = None;
-        for c in r.new_catches.iter().chain(banner) {
-            ui.label(RichText::new(format!("✨ NEW CATCH! #{:03} {} ({})", c.number, c.name, c.rarity)).strong().size(15.0).color(crate::hw_dex::rarity_color(&c.rarity)));
+        // Pending catches live on the host until acknowledged, so a closed window or a stale
+        // response cannot lose one.
+        if !r.unseen_catches.is_empty() {
+            for c in &r.unseen_catches {
+                ui.label(RichText::new(format!("✨ NEW CATCH! #{:03} {} ({})", c.number, c.name, c.rarity)).strong().size(15.0).color(crate::hw_dex::rarity_color(&c.rarity)));
+            }
+            if ui.small_button("Got it").clicked() {
+                client.hw_ack(ctx);
+            }
         }
         egui::ScrollArea::vertical().max_height(ctx.content_rect().height() - 220.0).auto_shrink([false, true]).show(ui, |ui| {
             if r.devices.is_empty() && r.removed.is_empty() {
@@ -174,6 +180,9 @@ impl HwIdentify {
             if d.id.is_none() {
                 badge(ui, "UNKNOWN", AMBER);
             }
+            if d.id.as_ref().is_some_and(|i| i.claimed) {
+                badge(ui, "CLAIMED", AMBER);
+            }
             let name = d.id.as_ref().map(|i| i.name.as_str()).filter(|n| !n.is_empty()).unwrap_or(if d.product.is_empty() { "unnamed device" } else { &d.product });
             ui.label(if hub { RichText::new(name).color(GREY) } else { RichText::new(name).strong() });
             ui.label(RichText::new(format!("{}:{}", d.vid, d.pid)).monospace().color(GREY));
@@ -206,6 +215,9 @@ impl HwIdentify {
                 if let Some(i) = &d.id {
                     row("kind", &i.kind);
                     row("notes", &i.notes);
+                    if i.claimed {
+                        row("match", "claimed by product string only (a device can spoof this)");
+                    }
                 }
             });
             ui.hyperlink_to(RichText::new("look up vid:pid ↗").small(), lookup_url(d));

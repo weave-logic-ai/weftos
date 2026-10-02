@@ -92,23 +92,26 @@ impl UsbIdTable {
         self.lookup_device(vid, pid, "")
     }
 
-    /// Like [`lookup`](Self::lookup), but rows with a `product` filter match only when the device's
-    /// product string contains it. Earlier rows win, so user rows prepended by
-    /// [`with_user_rows`](Self::with_user_rows) override the bundled ones.
+    /// Most specific matching row: exact pid + product filter, then exact pid, then vendor + product
+    /// filter, then vendor-wide. Rows with a `product` filter match only when the device's product
+    /// string contains it. Ties go to the earlier row, so bundled rows are never shadowed by user
+    /// rows added with [`with_user_rows`](Self::with_user_rows).
     pub fn lookup_device(&self, vid: u16, pid: u16, product: &str) -> Option<&UsbId> {
         let p = product.to_lowercase();
-        let fits = |e: &&UsbId| e.vid == vid && e.product.as_ref().is_none_or(|f| p.contains(&f.to_lowercase()));
         self.entries
             .iter()
-            .filter(fits)
-            .find(|e| e.pid == Some(pid))
-            .or_else(|| self.entries.iter().filter(fits).find(|e| e.pid.is_none()))
+            .enumerate()
+            .filter(|(_, e)| e.vid == vid && e.pid.is_none_or(|x| x == pid) && e.product.as_ref().is_none_or(|f| p.contains(&f.to_lowercase())))
+            .max_by_key(|(i, e)| (u8::from(e.pid.is_some()) * 2 + u8::from(e.product.is_some()), std::cmp::Reverse(*i)))
+            .map(|(_, e)| e)
     }
 
-    /// A copy with `rows` placed first (so they beat bundled rows for the same vid:pid).
-    pub fn with_user_rows(&self, mut rows: Vec<UsbId>) -> Self {
-        rows.extend(self.entries.iter().cloned());
-        Self { entries: rows }
+    /// A copy with `rows` appended. They fill gaps and may be *more specific* than a bundled row
+    /// (a product filter), but never shadow one.
+    pub fn with_user_rows(&self, rows: Vec<UsbId>) -> Self {
+        let mut entries = self.entries.clone();
+        entries.extend(rows);
+        Self { entries }
     }
 }
 
@@ -167,10 +170,14 @@ mod tests {
     }
 
     #[test]
-    fn user_rows_override_bundled() {
+    fn user_rows_never_shadow_bundled_but_fill_gaps_and_may_be_more_specific() {
         let t = UsbIdTable::bundled();
-        let row = UsbId { vid: 0x10c4, pid: Some(0xea60), name: "mine".into(), kind: "wild".into(), chip: None, module: None, notes: String::new(), product: None };
-        assert_eq!(t.with_user_rows(vec![row]).lookup(0x10c4, 0xea60).unwrap().name, "mine");
+        let row = |vid, pid, name: &str, product: Option<&str>| UsbId { vid, pid: Some(pid), name: name.into(), kind: "wild".into(), chip: None, module: None, notes: String::new(), product: product.map(String::from) };
+        let ext = t.with_user_rows(vec![row(0x10c4, 0xea60, "mine", None), row(0xdead, 0xbeef, "gap", None), row(0x2341, 0x0043, "board-x", Some("board x"))]);
+        assert_eq!(ext.lookup(0x10c4, 0xea60).unwrap().name, "Silicon Labs CP210x USB-UART bridge"); // bundled wins a tie
+        assert_eq!(ext.lookup(0xdead, 0xbeef).unwrap().name, "gap"); // gap filled
+        assert_eq!(ext.lookup_device(0x2341, 0x0043, "My Board X rev2").unwrap().name, "board-x"); // more specific
+        assert_eq!(ext.lookup_device(0x2341, 0x0043, "Arduino Uno").unwrap().name, "Arduino Uno R3");
     }
 
     #[test]

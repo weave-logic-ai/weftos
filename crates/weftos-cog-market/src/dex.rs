@@ -209,7 +209,13 @@ pub fn badges(cat: &HwCatalog, table: &UsbIdTable, types: &SensorTypes, caught: 
             1,
         ),
         badge("naturalist".into(), "Naturalist".into(), "register a wild species".into(), wild, 1),
-        badge("first-s-grade".into(), "First S-Grade".into(), "catch an S-grade (lab/reference) sensor".into(), caught.keys().filter(|r| types.grade_of(r) == Some(Grade::S)).count(), 1),
+        badge(
+            "first-s-grade".into(),
+            "First S-Grade".into(),
+            "catch an S-grade (lab/reference) sensor whose grade rests on catalog figures (not low-confidence)".into(),
+            caught.keys().filter(|r| types.assignment(r).is_some_and(|a| a.grade == Grade::S && a.confidence != "low")).count(),
+            1,
+        ),
         badge("five-types".into(), "Five Types".into(), "catch sensors of 5 different types".into(), types_caught, 5),
         badge("full-house".into(), "Full House".into(), "catch every sensor type at any grade".into(), types_caught, rows.len().max(1)),
         badge("grade-up".into(), "Grade Up".into(), "catch a higher-grade sensor of a type you already had".into(), upgraded_types(types, caught), 1),
@@ -304,6 +310,19 @@ mod tests {
         caught.extend([("module:a".to_string(), 2), ("module:b".to_string(), 3)]);
         let b = badges(&c, &t, &st, &caught, 0);
         assert!(b.iter().find(|x| x.id == "hat-trick:sensor").unwrap().earned);
+    }
+
+    #[test]
+    fn low_confidence_s_grade_does_not_earn_first_s_grade() {
+        let c = HwCatalog::bundled();
+        let st = SensorTypes::bundled();
+        let earned = |r: &str| {
+            let caught = BTreeMap::from([(r.to_string(), 1u64)]);
+            badges(&c, &UsbIdTable::bundled(), &st, &caught, 0).iter().find(|b| b.id == "first-s-grade").unwrap().earned
+        };
+        assert!(!earned("module:reson-tc4032"));
+        assert!(!earned("module:bruel-kjaer-8104"));
+        assert!(earned("module:ti-iwr6843isk-dca1000"));
     }
 
     #[test]
