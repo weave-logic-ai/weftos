@@ -3764,6 +3764,14 @@ where
                     }
                     Err(msg) => (Response::error(msg).with_id(id), None),
                 }
+            } else if req.method == "chain.subscribe" {
+                // ADR-103 P2 D: streaming chain tail (body in chain_subscribe_rpc).
+                match crate::chain_subscribe_rpc::handle_chain_subscribe(req.params, &caller, &caps, Arc::clone(kernel)).await {
+                    Ok((ack, topic, rx, on_disconnect)) => {
+                        (ack.with_id(id), Some((topic, rx, on_disconnect)))
+                    }
+                    Err(refusal) => (refusal.with_id(id), None),
+                }
             } else if req.method == "kernel.logs_stream" {
                 // WEFT-434: live kernel log tail; write-half owned by
                 // the stream forwarder after the ack.

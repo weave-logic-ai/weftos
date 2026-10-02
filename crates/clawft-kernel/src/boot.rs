@@ -1039,26 +1039,18 @@ impl<P: Platform> Kernel<P> {
                                             Arc::new(restored)
                                         }
                                         Err(e2) => {
-                                            error!(error = %e2, "JSON fallback also failed, starting fresh");
-                                            boot_log.push(BootEvent::info(
-                                                BootPhase::Services,
-                                                format!("Chain restore failed (RVF: {e}, JSON: {e2}), starting fresh"),
-                                            ));
-                                            Arc::new(crate::chain::ChainManager::new(
-                                                chain_config.chain_id,
-                                                chain_config.checkpoint_interval,
-                                            ))
+                                            error!(error = %e2, "JSON fallback also failed; refusing to boot");
+                                            return Err(KernelError::Boot(unrestorable_chain_msg(
+                                                &rvf_path,
+                                                &format!("RVF: {e}; JSON: {e2}"),
+                                            )));
                                         }
                                     }
                                 } else {
-                                    boot_log.push(BootEvent::info(
-                                        BootPhase::Services,
-                                        format!("RVF restore failed: {e}, starting fresh"),
-                                    ));
-                                    Arc::new(crate::chain::ChainManager::new(
-                                        chain_config.chain_id,
-                                        chain_config.checkpoint_interval,
-                                    ))
+                                    return Err(KernelError::Boot(unrestorable_chain_msg(
+                                        &rvf_path,
+                                        &e.to_string(),
+                                    )));
                                 }
                             }
                         }
@@ -1080,15 +1072,11 @@ impl<P: Platform> Kernel<P> {
                                 Arc::new(restored)
                             }
                             Err(e) => {
-                                error!(error = %e, "failed to restore chain, starting fresh");
-                                boot_log.push(BootEvent::info(
-                                    BootPhase::Services,
-                                    format!("Chain restore failed: {e}, starting fresh"),
-                                ));
-                                Arc::new(crate::chain::ChainManager::new(
-                                    chain_config.chain_id,
-                                    chain_config.checkpoint_interval,
-                                ))
+                                error!(error = %e, "failed to restore chain; refusing to boot");
+                                return Err(KernelError::Boot(unrestorable_chain_msg(
+                                    &json_path,
+                                    &e.to_string(),
+                                )));
                             }
                         }
                     } else {
@@ -2697,6 +2685,24 @@ impl<P: Platform> Kernel<P> {
     }
 }
 
+/// Boot refusal text for an existing chain file that failed to restore.
+///
+/// A chain that fails verification (corruption, or events written by a
+/// newer binary, e.g. carrying a `rule_hash` this build cannot verify) must
+/// never be replaced by a fresh genesis: the next checkpoint save would
+/// overwrite the only copy. The operator moves it aside explicitly
+/// (`--new-chain` picks a different location and does not touch this file).
+#[cfg(feature = "exochain")]
+fn unrestorable_chain_msg(path: &std::path::Path, cause: &str) -> String {
+    format!(
+        "chain at {} failed to restore ({cause}); refusing to start a fresh chain over it. \
+         Move or rename {} (and its .rvf/.json sibling) aside, then restart; \
+         if a newer binary wrote it, upgrade",
+        path.display(),
+        path.display()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3537,6 +3543,47 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("in use by another kernel"), "{msg}");
         assert!(msg.contains("--new-chain"), "{msg}");
+    }
+
+    /// A chain file that fails verification (corruption, or events a newer
+    /// binary wrote that this build cannot verify) is never replaced by a
+    /// fresh genesis: boot refuses and the file is left byte-identical.
+    #[cfg(all(feature = "exochain", unix))]
+    #[tokio::test]
+    async fn boot_refuses_an_unrestorable_chain_and_keeps_the_file() {
+        for rvf in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let ckpt = dir.path().join("chain.json");
+            let chain_file = if rvf { ckpt.with_extension("rvf") } else { ckpt.clone() };
+            let cm = crate::chain::ChainManager::new(0, 0);
+            cm.append("s", "k", Some(serde_json::json!({"a": 1})));
+            if rvf {
+                cm.save_to_rvf(&chain_file).unwrap();
+            } else {
+                cm.save_to_file(&chain_file).unwrap();
+            }
+            let mut bytes = std::fs::read(&chain_file).unwrap();
+            let mid = bytes.len() / 2;
+            bytes[mid] ^= 0xFF; // corrupt
+            std::fs::write(&chain_file, &bytes).unwrap();
+
+            let mut kc = test_kernel_config_exochain();
+            kc.chain.as_mut().unwrap().checkpoint_path =
+                Some(ckpt.to_string_lossy().into_owned());
+            let platform = Arc::new(NativePlatform::new());
+            let err = Kernel::boot(test_config(), kc, platform)
+                .await
+                .err()
+                .expect("boot must refuse an unrestorable chain");
+            let msg = err.to_string();
+            assert!(msg.contains("refusing to start a fresh chain"), "rvf={rvf}: {msg}");
+            assert!(
+                msg.contains("Move or rename") && msg.contains(".rvf/.json sibling") && msg.contains("upgrade"),
+                "rvf={rvf}: {msg}"
+            );
+            assert!(!msg.contains("--new-chain"), "rvf={rvf}: {msg}");
+            assert_eq!(std::fs::read(&chain_file).unwrap(), bytes, "rvf={rvf}: file changed");
+        }
     }
 
     #[cfg(feature = "exochain")]

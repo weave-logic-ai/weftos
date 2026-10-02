@@ -26,7 +26,7 @@
 //! Global root chain, BridgeEvent anchoring, ruvector-raft consensus.
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{SigningKey, VerifyingKey};
@@ -174,6 +174,15 @@ pub struct ChainEvent {
     /// same logical operation without invalidating the ledger.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<[u8; 32]>,
+    /// Hash of the kind-registry rules in force when this event was
+    /// appended (ADR-103 A7). `None` for every pre-P2 event.
+    ///
+    /// **Covered by the event hash only when `Some`**, so events
+    /// without it hash byte-identically to before the field existed.
+    /// A binary that predates the field ignores it on read, recomputes
+    /// a different hash and fails integrity verification loudly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_hash: Option<[u8; 32]>,
 }
 
 /// Number of recent events scanned for idempotency-key collisions
@@ -275,6 +284,7 @@ pub(crate) fn compute_payload_hash(payload: &Option<serde_json::Value>) -> [u8; 
 ///     sequence(8)  ‖  chain_id(4)  ‖  prev_hash(32)  ‖
 ///     source  ‖  0x00  ‖  kind  ‖  0x00  ‖
 ///     timestamp(8)  ‖  payload_hash(32)
+///     [ ‖  0x01  ‖  rule_hash(32) ]      -- only when `rule_hash` is Some
 /// )
 /// ```
 ///
@@ -288,8 +298,9 @@ pub(crate) fn compute_event_hash(
     kind: &str,
     timestamp: &DateTime<Utc>,
     payload_hash: &[u8; 32],
+    rule_hash: Option<&[u8; 32]>,
 ) -> [u8; 32] {
-    let mut buf = Vec::with_capacity(128);
+    let mut buf = Vec::with_capacity(160);
     buf.extend_from_slice(&sequence.to_le_bytes());
     buf.extend_from_slice(&chain_id.to_le_bytes());
     buf.extend_from_slice(prev_hash);
@@ -299,6 +310,14 @@ pub(crate) fn compute_event_hash(
     buf.push(0x00); // separator
     buf.extend_from_slice(&timestamp.timestamp().to_le_bytes());
     buf.extend_from_slice(payload_hash);
+    // None vs Some non-collision (P2 D review) relies on the fixed-width
+    // tail before this point: the i64-LE timestamp, whose top byte is 0x00
+    // for any realistic date, then payload_hash; the 0x01 tag cannot
+    // align with a None event's tail.
+    if let Some(rh) = rule_hash {
+        buf.push(0x01); // domain tag: rule_hash present
+        buf.extend_from_slice(rh);
+    }
     shake256_256(&buf)
 }
 
@@ -881,6 +900,29 @@ pub const EVENT_KIND_HNSW_EML_TRAINED: &str = "hnsw.eml.trained";
 /// with tuned parameters. Auditable training provenance.
 pub const EVENT_KIND_HNSW_EML_TRIAGE: &str = "hnsw.eml.triage";
 
+/// Supplies the rule hash stamped on each append (ADR-103 A7).
+pub type RuleHashProvider = std::sync::Arc<dyn Fn() -> Option<[u8; 32]> + Send + Sync>;
+
+/// ExoChainHeader flag: this event segment carries a `rule_hash`.
+const EXO_FLAG_HAS_RULE_HASH: u16 = 0x0001;
+/// Flag bits this build understands; any other bit means the segment was
+/// written by a newer binary.
+const EXO_FLAGS_KNOWN: u16 = EXO_FLAG_HAS_RULE_HASH;
+
+/// Check a segment's flags against what was decoded from its payload.
+fn check_exo_flags(flags: u16, has_rule_hash: bool) -> Result<(), String> {
+    if flags & !EXO_FLAGS_KNOWN != 0 {
+        return Err(format!(
+            "segment flags {flags:#06x} carry bits this build does not know: \
+             written by a newer binary"
+        ));
+    }
+    if (flags & EXO_FLAG_HAS_RULE_HASH != 0) != has_rule_hash {
+        return Err("segment rule_hash flag disagrees with its payload".into());
+    }
+    Ok(())
+}
+
 /// Local chain state.
 struct LocalChain {
     chain_id: u32,
@@ -892,6 +934,13 @@ struct LocalChain {
     checkpoints: Vec<ChainCheckpoint>,
     /// Witness entries — one per event for cryptographic audit trail.
     witness_entries: Vec<WitnessEntry>,
+    /// Stamps `rule_hash` on every append (ADR-103 A7). Called under the
+    /// chain lock: it must not call back into the chain.
+    rule_hash_provider: Option<RuleHashProvider>,
+    /// Oldest replay a subscriber may ask for, in events behind the head.
+    max_replay_window: u64,
+    /// Live fan-out for [`ChainManager::subscribe`].
+    hub: crate::chain_subscribe::EventHub,
 }
 
 impl LocalChain {
@@ -905,6 +954,9 @@ impl LocalChain {
             events_since_checkpoint: 0,
             checkpoints: Vec::new(),
             witness_entries: Vec::new(),
+            rule_hash_provider: None,
+            max_replay_window: crate::chain_subscribe::DEFAULT_MAX_REPLAY_WINDOW,
+            hub: Default::default(),
         }
     }
 
@@ -929,6 +981,26 @@ impl LocalChain {
             events_since_checkpoint: 0,
             checkpoints: Vec::new(),
             witness_entries,
+            rule_hash_provider: None,
+            max_replay_window: crate::chain_subscribe::DEFAULT_MAX_REPLAY_WINDOW,
+            hub: Default::default(),
+        }
+    }
+
+    /// Ask the provider for the current rule hash. Runs under the chain
+    /// lock (lock order: chain first, then whatever the provider touches),
+    /// so a panicking provider is contained: it must not unwind through the
+    /// held mutex and poison the chain. Only effective where panics unwind:
+    /// `[profile.release]` sets `panic = "abort"`, so in release a provider
+    /// panic aborts the process and the provider must simply not panic.
+    fn stamp_rule_hash(&self) -> Option<[u8; 32]> {
+        let p = self.rule_hash_provider.as_ref()?;
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| p())) {
+            Ok(h) => h,
+            Err(_) => {
+                warn!("rule_hash provider panicked; appending without rule_hash");
+                None
+            }
         }
     }
 
@@ -956,6 +1028,7 @@ impl LocalChain {
     ) -> &ChainEvent {
         let timestamp = Utc::now();
         let payload_hash = compute_payload_hash(&payload);
+        let rule_hash = self.stamp_rule_hash();
         let hash = compute_event_hash(
             self.sequence,
             self.chain_id,
@@ -964,6 +1037,7 @@ impl LocalChain {
             &kind,
             &timestamp,
             &payload_hash,
+            rule_hash.as_ref(),
         );
 
         let event = ChainEvent {
@@ -977,6 +1051,7 @@ impl LocalChain {
             kind,
             payload,
             idempotency_key,
+            rule_hash,
         };
 
         // Create a witness entry for this event.
@@ -990,6 +1065,7 @@ impl LocalChain {
         self.last_hash = hash;
         self.sequence += 1;
         self.events_since_checkpoint += 1;
+        self.hub.publish(&event);
         self.events.push(event);
 
         // Auto-checkpoint
@@ -1029,6 +1105,9 @@ struct RvfChainPayload {
     payload_hash: String,
     /// Hex-encoded 32-byte event hash.
     hash: String,
+    /// Hex-encoded 32-byte rule hash (ADR-103 A7); absent on pre-P2 events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rule_hash: Option<String>,
 }
 
 /// Encode a 32-byte hash as a lowercase hex string.
@@ -1329,6 +1408,96 @@ impl ChainManager {
         }
     }
 
+    /// Install the provider that stamps `rule_hash` on every append
+    /// (ADR-103 A7).
+    ///
+    /// **Lock order: the chain lock is taken first, then the provider
+    /// runs.** The provider must therefore never block and never call back
+    /// into this manager: read lock-free state (an atomic, see
+    /// [`crate::chain_rule_hash::RuleHashCell`]) or use `try_read`.
+    /// A provider that takes a lock another thread holds while appending
+    /// would deadlock. In dev/test builds (panic = unwind) a panicking
+    /// provider is caught: the event is appended without `rule_hash` and a
+    /// warning is logged. Release builds use `panic = "abort"`, so there a
+    /// provider panic aborts the process; it must not panic.
+    pub fn set_rule_hash_provider(&self, provider: RuleHashProvider) {
+        self.inner.lock().unwrap().rule_hash_provider = Some(provider);
+    }
+
+    /// Bound how far back [`Self::subscribe`] may replay, in events.
+    pub fn set_max_replay_window(&self, events: u64) {
+        self.inner.lock().unwrap().max_replay_window = events;
+    }
+
+    /// Subscribe to chain events: optional replay from `filter.from_seq`,
+    /// then live events, with no gap and no duplicate between the two.
+    /// See [`crate::chain_subscribe`].
+    ///
+    /// Under the chain lock this only subscribes to the live feed and
+    /// records the snapshot end; the replay is paged later in short lock
+    /// holds by the subscription, so a deep `from_seq` cannot stall
+    /// appends or pin memory.
+    ///
+    /// # Errors
+    /// [`SubscribeError::ReplayWindowExceeded`] when `from_seq` is older
+    /// than the configured replay window.
+    #[cfg(feature = "native")]
+    pub fn subscribe(
+        self: &Arc<Self>,
+        filter: crate::chain_subscribe::ChainFilter,
+    ) -> Result<crate::chain_subscribe::ChainSubscription, crate::chain_subscribe::SubscribeError>
+    {
+        let chain = self.inner.lock().unwrap();
+        if let Some(from) = filter.from_seq {
+            let oldest_allowed = chain.sequence.saturating_sub(chain.max_replay_window);
+            if from < oldest_allowed {
+                return Err(crate::chain_subscribe::SubscribeError::ReplayWindowExceeded {
+                    requested: from,
+                    oldest_allowed,
+                });
+            }
+        }
+        let rx = chain.hub.subscribe();
+        Ok(crate::chain_subscribe::ChainSubscription::new(
+            filter,
+            Arc::downgrade(self),
+            rx,
+            chain.sequence,
+        ))
+    }
+
+    /// One replay page: up to `limit` events matching `prefix` with
+    /// `sequence` in `[from, end)`, scanning at most `scan` retained
+    /// events. Returns the page and the sequence to resume from.
+    pub(crate) fn replay_page(
+        &self,
+        from: u64,
+        end: u64,
+        prefix: Option<&str>,
+        limit: usize,
+        scan: usize,
+    ) -> (Vec<ChainEvent>, u64) {
+        let chain = self.inner.lock().unwrap();
+        let start = chain.events.partition_point(|e| e.sequence < from);
+        let mut out = Vec::new();
+        let mut next = from;
+        let mut scanned = 0;
+        for e in &chain.events[start..] {
+            if e.sequence >= end {
+                return (out, end);
+            }
+            if scanned >= scan || out.len() >= limit {
+                return (out, next);
+            }
+            scanned += 1;
+            next = e.sequence + 1;
+            if prefix.is_none_or(|p| e.kind.starts_with(p)) {
+                out.push(e.clone());
+            }
+        }
+        (out, end)
+    }
+
     /// Return events with sequence strictly greater than `after`.
     /// Used for incremental replication in K6.4 chain sync.
     pub fn tail_from(&self, after: u64) -> Vec<ChainEvent> {
@@ -1428,6 +1597,7 @@ impl ChainManager {
             &event.kind,
             &event.timestamp,
             &event.payload_hash,
+            event.rule_hash.as_ref(),
         );
         if event.hash != recomputed {
             return Err(AppendSignedError::HashMismatch {
@@ -1447,6 +1617,7 @@ impl ChainManager {
         chain.last_hash = event.hash;
         chain.sequence = event.sequence.saturating_add(1);
         chain.events_since_checkpoint = chain.events_since_checkpoint.saturating_add(1);
+        chain.hub.publish(&event);
         chain.events.push(event);
         if chain.checkpoint_interval > 0
             && chain.events_since_checkpoint >= chain.checkpoint_interval
@@ -1602,6 +1773,7 @@ impl ChainManager {
                 &event.kind,
                 &event.timestamp,
                 &event.payload_hash,
+                event.rule_hash.as_ref(),
             );
             if event.hash != recomputed {
                 errors.push(format!(
@@ -1727,7 +1899,7 @@ impl ChainManager {
                 magic: EXOCHAIN_MAGIC,
                 version: 1,
                 subtype: 0x40, // ExochainEvent
-                flags: 0,
+                flags: if event.rule_hash.is_some() { EXO_FLAG_HAS_RULE_HASH } else { 0 },
                 chain_id: event.chain_id,
                 _reserved: 0,
                 sequence: event.sequence,
@@ -1742,6 +1914,7 @@ impl ChainManager {
                 payload: event.payload.clone(),
                 payload_hash: hex_hash(&event.payload_hash),
                 hash: hex_hash(&event.hash),
+                rule_hash: event.rule_hash.as_ref().map(hex_hash),
             };
 
             let mut cbor_bytes = Vec::new();
@@ -1866,6 +2039,14 @@ impl ChainManager {
 
                 let payload_hash = parse_hex_hash(&rvf_payload.payload_hash)?;
                 let hash = parse_hex_hash(&rvf_payload.hash)?;
+                let rule_hash = rvf_payload
+                    .rule_hash
+                    .as_deref()
+                    .map(parse_hex_hash)
+                    .transpose()?;
+
+                check_exo_flags(exo_header.flags, rule_hash.is_some())
+                    .map_err(|e| format!("segment at offset {offset}: {e}"))?;
 
                 let timestamp = DateTime::from_timestamp(exo_header.timestamp_secs as i64, 0)
                     .ok_or_else(|| {
@@ -1889,6 +2070,7 @@ impl ChainManager {
                     // they are not persisted to RVF segments
                     // (preserves chain-hash stability across restores).
                     idempotency_key: None,
+                    rule_hash,
                 });
             } else if exo_header.subtype == 0x41 {
                 // Checkpoint — extract witness chain if present.

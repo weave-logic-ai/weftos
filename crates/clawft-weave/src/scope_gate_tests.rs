@@ -167,11 +167,11 @@ fn literals(s: &str) -> Vec<String> {
 }
 
 /// Streaming intercepts matched in `dispatch_json_line` before `dispatch`.
-const INTERCEPTS: &[&str] = &["ipc.subscribe_stream", "substrate.subscribe", "kernel.logs_stream"];
+const INTERCEPTS: &[&str] = &["ipc.subscribe_stream", "substrate.subscribe", "kernel.logs_stream", "chain.subscribe"];
 
 /// Allow-listed methods whose handler is not a legacy arm (ext routes or
 /// owned by other Phase 1 packages).
-const NOT_LEGACY_ARMS: &[&str] = &["kernel.handshake", "project.list", "project.show", "auth.token.validate"];
+const NOT_LEGACY_ARMS: &[&str] = &["kernel.handshake", "project.list", "project.show", "auth.token.validate", "chain.subscribe"];
 
 fn all_methods() -> Vec<String> {
     let (mut arms, _) = dispatch_arms();
