@@ -565,6 +565,70 @@
       ]
     },
     {
+      "id": "bananapi-m1",
+      "name": "LeMaker BananaPi (M1)",
+      "vendor": "LeMaker",
+      "kind": "board",
+      "summary": "Allwinner A20 SBC, SATA + GbE. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "allwinner-a20",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "allwinner-a20"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "bananapro",
+      "name": "LeMaker BananaPro",
+      "vendor": "LeMaker",
+      "kind": "board",
+      "summary": "BananaPi Pro (A20, WiFi). Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "allwinner-a20",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "allwinner-a20"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
       "id": "bluerobotics-ping1d",
       "name": "Blue Robotics Ping1D single-beam echosounder",
       "vendor": "Blue Robotics",
@@ -1735,6 +1799,47 @@
       ]
     },
     {
+      "id": "gt-u7-gps",
+      "name": "GT-U7 GPS module (NEO-6M, PPS on header)",
+      "vendor": "Goouuu / generic",
+      "kind": "sensor",
+      "summary": "NEO-6M GPS module that breaks out the PPS pin on its 6-pin header \u2014 the no-solder pick for sub-us timing plus position.",
+      "good_for": [
+        "sub-us timing (PPS on header, no soldering)",
+        "position",
+        "coarse UTC"
+      ],
+      "not_for": [
+        "indoor without sky view",
+        "multi-GNSS (GPS only)"
+      ],
+      "notes": [
+        "PPS is on the header (VCC/RX/TX/GND/PPS) \u2014 the easy clock-discipline module. Needs SKY VIEW: the passive ceramic patch antenna won't get a fix indoors \u2014 place at a window or use an active antenna. PPS is only valid after a satellite fix."
+      ],
+      "spec": {
+        "chip": "u-blox NEO-6M",
+        "pins": "VCC/RX/TX/GND/PPS",
+        "uart": "9600 default",
+        "timepulse": "1PPS",
+        "antenna": "patch",
+        "source": "GT-U7 / u-blox NEO-6"
+      },
+      "pins": [
+        "VCC",
+        "RX",
+        "TX",
+        "GND",
+        "PPS"
+      ],
+      "chips": [
+        "neo-6m"
+      ],
+      "photo": "",
+      "datasheet": "https://www.u-blox.com/en/product/neo-6-series",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
       "id": "gt911-touch",
       "name": "GT911 capacitive touch controller (CrowPanel/Inkpad)",
       "vendor": "Goodix",
@@ -1890,6 +1995,56 @@
       "buy": [],
       "seen_in": [
         "docs/MODULES.md"
+      ]
+    },
+    {
+      "id": "hglrc-m100-pro-gps",
+      "name": "HGLRC M100 Pro GNSS + compass",
+      "vendor": "HGLRC",
+      "kind": "sensor",
+      "summary": "u-blox M10 multi-GNSS (GPS/GLONASS/Galileo/BeiDou) module with a QMC5883L compass. Fast multi-constellation position + magnetic heading.",
+      "good_for": [
+        "multi-GNSS position (fast fix)",
+        "magnetic heading (compass)",
+        "nav for the appliance/mesh"
+      ],
+      "not_for": [
+        "sub-us timing (FPV module, PPS usually not broken out)",
+        "indoor without sky view"
+      ],
+      "notes": [
+        "FPV/UAV module: exposes UART (nav) + I2C (compass); PPS/TIMEPULSE is usually NOT broken out, so great for position+heading but not a clean timing source. Needs SKY VIEW: the passive ceramic patch antenna won't get a fix indoors \u2014 place at a window or use an active antenna. PPS is only valid after a satellite fix."
+      ],
+      "spec": {
+        "chip": "u-blox M10 (UBX-M10050)",
+        "gnss": "GPS+GLONASS+Galileo+BeiDou concurrent",
+        "compass": "QMC5883L (I2C 0x0D)",
+        "uart": "nav (UBX/NMEA)",
+        "antenna": "ceramic",
+        "source": "HGLRC M100 Pro / u-blox M10"
+      },
+      "pins": [
+        "VCC",
+        "GND",
+        "TX",
+        "RX",
+        "SDA",
+        "SCL"
+      ],
+      "chips": [
+        "ublox-m10",
+        "qmc5883l"
+      ],
+      "photo": "",
+      "datasheet": "https://www.u-blox.com/en/product/m10-standard-precision-gnss",
+      "mouser_query": "",
+      "buy": [
+        {
+          "vendor": "Amazon",
+          "price": "",
+          "url": "https://www.amazon.com/HGLRC-M100-Pro-GPS-Generation/dp/B0DPH8FV7K/",
+          "ships_from": "Amazon"
+        }
       ]
     },
     {
@@ -3577,6 +3732,38 @@
       ]
     },
     {
+      "id": "nanopi",
+      "name": "NanoPi (family)",
+      "vendor": "FriendlyELEC",
+      "kind": "board",
+      "summary": "NanoPi SBC family (Allwinner H3/H5); Pi4J 1.2 experimental. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "allwinner-h3",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "allwinner-h3"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
       "id": "node-a1-esp32-s3-wroom-1-n16r8",
       "name": "ESP32-S3-WROOM-1 N16R8 DevKitC-1",
       "vendor": "Espressif (module)",
@@ -3797,6 +3984,102 @@
       "seen_in": [
         ".planning/sonobuoy/build/commercial-comparison.md"
       ]
+    },
+    {
+      "id": "odroid-c1",
+      "name": "Odroid-C1/C1+",
+      "vendor": "Hardkernel",
+      "kind": "board",
+      "summary": "Amlogic S805 quad-core SBC. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "amlogic-s805",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "amlogic-s805"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "odroid-xu4",
+      "name": "Odroid-XU4",
+      "vendor": "Hardkernel",
+      "kind": "board",
+      "summary": "Exynos 5422 octa-core (big.LITTLE), USB3/GbE. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "exynos-5422",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "exynos-5422"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "orangepi",
+      "name": "Orange Pi (family)",
+      "vendor": "Xunlong",
+      "kind": "board",
+      "summary": "Orange Pi SBC family (commonly Allwinner H3); Pi4J 1.2 experimental. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "allwinner-h3",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "allwinner-h3"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
     },
     {
       "id": "orbbec-gemini-2",
@@ -4533,6 +4816,422 @@
       ]
     },
     {
+      "id": "rpi-1-a",
+      "name": "Raspberry Pi 1 Model A",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "Original Pi Model A (no Ethernet). Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2835",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2835"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-1-a-plus",
+      "name": "Raspberry Pi 1 Model A+",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "Compact Pi 1 A+. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2835",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2835"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-1-b",
+      "name": "Raspberry Pi 1 Model B",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "Original Pi Model B (rev 1 & 2). Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2835",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2835"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-1-b-plus",
+      "name": "Raspberry Pi 1 Model B+",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "Pi 1 B+ (40-pin header). Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2835",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2835"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-2-b",
+      "name": "Raspberry Pi 2 Model B",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "First quad-core Pi. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2836",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2836"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-3-a-plus",
+      "name": "Raspberry Pi 3 Model A+",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "Compact Pi 3 A+. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2837b0",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2837b0"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-3-b",
+      "name": "Raspberry Pi 3 Model B",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "64-bit quad-core + WiFi/BT. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2837",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2837"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-3-b-plus",
+      "name": "Raspberry Pi 3 Model B+",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "Pi 3 B+ (1.4GHz, gigabit-over-USB). Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2837b0",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2837b0"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-cm1",
+      "name": "Raspberry Pi Compute Module 1",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "SODIMM compute module (BCM2835). Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2835",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2835"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-cm3",
+      "name": "Raspberry Pi Compute Module 3",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "SODIMM compute module (BCM2837). Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2837",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2837"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-cm3-plus",
+      "name": "Raspberry Pi Compute Module 3+",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "CM3+ (BCM2837, more flash options). Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2837",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2837"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-zero",
+      "name": "Raspberry Pi Zero",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "Tiny single-core Pi. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2835",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2835"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
+      "id": "rpi-zero-w",
+      "name": "Raspberry Pi Zero W",
+      "vendor": "Raspberry Pi",
+      "kind": "board",
+      "summary": "Pi Zero + WiFi/BT. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "bcm2835",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "bcm2835"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
       "id": "rtl-sdr",
       "name": "RTL-SDR (passive RF / spectrum receiver)",
       "vendor": "Realtek RTL2832U-based dongle",
@@ -5086,6 +5785,38 @@
       ]
     },
     {
+      "id": "synovoip-bpi",
+      "name": "Synovoip BPI (BananaPi)",
+      "vendor": "Synovoip",
+      "kind": "board",
+      "summary": "BananaPi variant; Pi4J 1.2 experimental. Supported by Pi4J 1.2.",
+      "good_for": [
+        "cog host / Linux SBC",
+        "GPIO + I2C/SPI/UART sensor hookup",
+        "Pi4J (Java GPIO)"
+      ],
+      "not_for": [
+        "5 V sensor logic (GPIO is 3.3 V)"
+      ],
+      "notes": [],
+      "spec": {
+        "soc": "allwinner-a20",
+        "header": "GPIO (model-dependent)",
+        "logic": "3.3 V",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "pins": [
+        "GPIO header"
+      ],
+      "chips": [
+        "allwinner-a20"
+      ],
+      "photo": "",
+      "datasheet": "https://www.pi4j.com/1.2/",
+      "mouser_query": "",
+      "buy": []
+    },
+    {
       "id": "ti-awr1642-evm",
       "name": "TI AWR1642 76-81 GHz automotive FMCW radar",
       "vendor": "Texas Instruments",
@@ -5344,6 +6075,109 @@
       ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-ti-iwrl6432wmod-certified-module.json"
+      ]
+    },
+    {
+      "id": "ublox-neo-6m-gps",
+      "name": "u-blox NEO-6M GPS module (GY-NEO6MV2)",
+      "vendor": "u-blox / generic board",
+      "kind": "sensor",
+      "summary": "GPS receiver module (NEO-6M) with a ceramic patch antenna. Position + coarse UTC over UART; a 1PPS edge for sub-us timing via the PPS pad.",
+      "good_for": [
+        "position/location (GPS)",
+        "coarse UTC time (NMEA)",
+        "1PPS sub-us timing (after a fix)",
+        "per-node fleet positioning"
+      ],
+      "not_for": [
+        "indoor use without sky view",
+        "sub-us timing without wiring the PPS pad",
+        "multi-GNSS (GPS only)"
+      ],
+      "notes": [
+        "Needs SKY VIEW: the passive ceramic patch antenna won't get a fix indoors \u2014 place at a window or use an active antenna. PPS is only valid after a satellite fix.",
+        "This blue-board variant breaks out VCC/RX/TX/GND only; PPS is an on-board LED, NOT a header pin \u2014 tack a wire to the PPS LED pad (NEO TIMEPULSE net) for sub-us timing, or use a GT-U7 which exposes PPS on the header."
+      ],
+      "spec": {
+        "chip": "u-blox NEO-6M",
+        "gnss": "GPS (50 ch)",
+        "uart": "9600 baud default, 3-5V",
+        "update_rate": "up to 5 Hz",
+        "timepulse": "1PPS",
+        "antenna": "passive ceramic patch",
+        "source": "u-blox NEO-6 datasheet"
+      },
+      "pins": [
+        "VCC",
+        "RX",
+        "TX",
+        "GND",
+        "(PPS via LED pad)"
+      ],
+      "chips": [
+        "neo-6m"
+      ],
+      "photo": "",
+      "datasheet": "https://www.u-blox.com/en/product/neo-6-series",
+      "mouser_query": "",
+      "buy": [
+        {
+          "vendor": "Amazon",
+          "price": "",
+          "url": "https://www.amazon.com/dp/B0DTK7T6VW/",
+          "ships_from": "Amazon"
+        }
+      ]
+    },
+    {
+      "id": "ublox-neo-7m-gps",
+      "name": "u-blox NEO-7M GPS module (GY-NEO7MV2)",
+      "vendor": "u-blox / generic board",
+      "kind": "sensor",
+      "summary": "GPS receiver module (NEO-7M): faster fix and up to 10 Hz vs the 6M. Position + coarse UTC over UART; 1PPS for timing via the PPS pad.",
+      "good_for": [
+        "position/location (GPS)",
+        "coarse UTC time",
+        "faster/10 Hz updates",
+        "1PPS timing (after a fix)"
+      ],
+      "not_for": [
+        "indoor without sky view",
+        "sub-us timing without wiring the PPS pad"
+      ],
+      "notes": [
+        "Needs SKY VIEW: the passive ceramic patch antenna won't get a fix indoors \u2014 place at a window or use an active antenna. PPS is only valid after a satellite fix.",
+        "This blue-board variant breaks out VCC/RX/TX/GND only; PPS is an on-board LED, NOT a header pin \u2014 tack a wire to the PPS LED pad (NEO TIMEPULSE net) for sub-us timing, or use a GT-U7 which exposes PPS on the header."
+      ],
+      "spec": {
+        "chip": "u-blox NEO-7M",
+        "gnss": "GPS",
+        "uart": "9600 baud default",
+        "update_rate": "up to 10 Hz",
+        "timepulse": "1PPS",
+        "antenna": "passive ceramic patch",
+        "source": "u-blox NEO-7 datasheet"
+      },
+      "pins": [
+        "VCC",
+        "RX",
+        "TX",
+        "GND",
+        "(PPS via LED pad)"
+      ],
+      "chips": [
+        "neo-7m"
+      ],
+      "photo": "",
+      "datasheet": "https://www.u-blox.com/en/product/neo-7-series",
+      "mouser_query": "",
+      "buy": [
+        {
+          "vendor": "Amazon",
+          "price": "",
+          "url": "https://www.amazon.com/dp/B09WV19K9P/",
+          "ships_from": "Amazon"
+        }
       ]
     },
     {
@@ -6147,6 +6981,62 @@
       "seen_in": []
     },
     {
+      "id": "allwinner-a20",
+      "name": "Allwinner A20",
+      "manufacturer": "Allwinner",
+      "role": "SoC: Cortex-A7 dual-core",
+      "tags": [
+        "soc",
+        "sbc",
+        "arm"
+      ],
+      "summary": "SoC: Cortex-A7 dual-core used in Pi4J-supported SBCs.",
+      "spec": {
+        "cpu": "2x Cortex-A7",
+        "gpu": "Mali-400 MP2",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "mouser_query": "",
+      "datasheet": ""
+    },
+    {
+      "id": "allwinner-h3",
+      "name": "Allwinner H3",
+      "manufacturer": "Allwinner",
+      "role": "SoC: Cortex-A7 quad-core",
+      "tags": [
+        "soc",
+        "sbc",
+        "arm"
+      ],
+      "summary": "SoC: Cortex-A7 quad-core used in Pi4J-supported SBCs.",
+      "spec": {
+        "cpu": "4x Cortex-A7 @ 1.2GHz",
+        "gpu": "Mali-400 MP2",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "mouser_query": "",
+      "datasheet": ""
+    },
+    {
+      "id": "amlogic-s805",
+      "name": "Amlogic S805",
+      "manufacturer": "Amlogic",
+      "role": "SoC: Cortex-A5 quad-core",
+      "tags": [
+        "soc",
+        "sbc",
+        "arm"
+      ],
+      "summary": "SoC: Cortex-A5 quad-core used in Pi4J-supported SBCs.",
+      "spec": {
+        "cpu": "4x Cortex-A5 @ 1.5GHz",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "mouser_query": "",
+      "datasheet": ""
+    },
+    {
       "id": "ap2112",
       "name": "AP2112 3.3 V LDO regulator",
       "manufacturer": "Diodes Inc.",
@@ -6277,6 +7167,79 @@
       "mouser_query": "",
       "datasheet": "https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/",
       "seen_in": []
+    },
+    {
+      "id": "bcm2835",
+      "name": "Broadcom BCM2835",
+      "manufacturer": "Broadcom",
+      "role": "SoC: ARM1176JZF-S single-core",
+      "tags": [
+        "soc",
+        "sbc",
+        "arm"
+      ],
+      "summary": "SoC: ARM1176JZF-S single-core used in Pi4J-supported SBCs.",
+      "spec": {
+        "cpu": "ARM1176JZF-S @ 700MHz-1GHz",
+        "gpu": "VideoCore IV",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "mouser_query": "",
+      "datasheet": ""
+    },
+    {
+      "id": "bcm2836",
+      "name": "Broadcom BCM2836",
+      "manufacturer": "Broadcom",
+      "role": "SoC: Cortex-A7 quad-core",
+      "tags": [
+        "soc",
+        "sbc",
+        "arm"
+      ],
+      "summary": "SoC: Cortex-A7 quad-core used in Pi4J-supported SBCs.",
+      "spec": {
+        "cpu": "4x Cortex-A7 @ 900MHz",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "mouser_query": "",
+      "datasheet": ""
+    },
+    {
+      "id": "bcm2837",
+      "name": "Broadcom BCM2837",
+      "manufacturer": "Broadcom",
+      "role": "SoC: Cortex-A53 quad-core",
+      "tags": [
+        "soc",
+        "sbc",
+        "arm"
+      ],
+      "summary": "SoC: Cortex-A53 quad-core used in Pi4J-supported SBCs.",
+      "spec": {
+        "cpu": "4x Cortex-A53 @ 1.2GHz",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "mouser_query": "",
+      "datasheet": ""
+    },
+    {
+      "id": "bcm2837b0",
+      "name": "Broadcom BCM2837B0",
+      "manufacturer": "Broadcom",
+      "role": "SoC: Cortex-A53 quad-core (1.4GHz)",
+      "tags": [
+        "soc",
+        "sbc",
+        "arm"
+      ],
+      "summary": "SoC: Cortex-A53 quad-core (1.4GHz) used in Pi4J-supported SBCs.",
+      "spec": {
+        "cpu": "4x Cortex-A53 @ 1.4GHz",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "mouser_query": "",
+      "datasheet": ""
     },
     {
       "id": "bes2700",
@@ -6752,6 +7715,24 @@
           "ships_from": "Mouser"
         }
       ]
+    },
+    {
+      "id": "exynos-5422",
+      "name": "Samsung Exynos 5422",
+      "manufacturer": "Samsung",
+      "role": "SoC: big.LITTLE octa-core",
+      "tags": [
+        "soc",
+        "sbc",
+        "arm"
+      ],
+      "summary": "SoC: big.LITTLE octa-core used in Pi4J-supported SBCs.",
+      "spec": {
+        "cpu": "4x Cortex-A15 + 4x Cortex-A7 (octa)",
+        "source": "Pi4J 1.2 supported platforms + vendor specs"
+      },
+      "mouser_query": "",
+      "datasheet": ""
     },
     {
       "id": "fdc2214",
@@ -7379,6 +8360,52 @@
       "seen_in": []
     },
     {
+      "id": "neo-6m",
+      "name": "u-blox NEO-6M",
+      "manufacturer": "u-blox",
+      "role": "GPS receiver IC (50-channel)",
+      "tags": [
+        "gps",
+        "gnss",
+        "positioning",
+        "uart",
+        "timepulse"
+      ],
+      "summary": "u-blox gen-6 GPS receiver. The silicon in the GY-NEO6MV2 and GT-U7 modules. Has a 1PPS TIMEPULSE output (~30 ns RMS) usable as a timing reference after a fix.",
+      "spec": {
+        "gnss": "GPS, 50 channels",
+        "sensitivity": "-161 dBm tracking",
+        "update": "up to 5 Hz",
+        "timepulse": "1PPS",
+        "source": "u-blox NEO-6 datasheet"
+      },
+      "mouser_query": "NEO-6M-0-001",
+      "datasheet": "https://www.u-blox.com/en/product/neo-6-series"
+    },
+    {
+      "id": "neo-7m",
+      "name": "u-blox NEO-7M",
+      "manufacturer": "u-blox",
+      "role": "GPS receiver IC (gen 7)",
+      "tags": [
+        "gps",
+        "gnss",
+        "positioning",
+        "uart",
+        "timepulse"
+      ],
+      "summary": "u-blox gen-7 GPS receiver: faster fix and up to 10 Hz vs the NEO-6M. 1PPS TIMEPULSE output.",
+      "spec": {
+        "gnss": "GPS (GLONASS alt.)",
+        "update": "up to 10 Hz",
+        "sensitivity": "-162 dBm",
+        "timepulse": "1PPS",
+        "source": "u-blox NEO-7 datasheet"
+      },
+      "mouser_query": "NEO-7M-0-000",
+      "datasheet": "https://www.u-blox.com/en/product/neo-7-series"
+    },
+    {
       "id": "nrf52833",
       "name": "Nordic nRF52833",
       "manufacturer": "Nordic Semiconductor",
@@ -7467,6 +8494,28 @@
           "ships_from": "Mouser"
         }
       ]
+    },
+    {
+      "id": "qmc5883l",
+      "name": "QMC5883L",
+      "manufacturer": "QST Corporation",
+      "role": "3-axis magnetometer (compass)",
+      "tags": [
+        "magnetometer",
+        "compass",
+        "i2c"
+      ],
+      "summary": "3-axis magnetic sensor, I2C 0x0D, HMC5883L-pin-compatible. The compass on the HGLRC M100 Pro; gives magnetic heading.",
+      "spec": {
+        "axes": "3",
+        "range": "+-8 gauss",
+        "resolution": "16-bit",
+        "i2c_addr": "0x0D",
+        "odr": "up to 200 Hz",
+        "source": "QST QMC5883L datasheet"
+      },
+      "mouser_query": "QMC5883L",
+      "datasheet": ""
     },
     {
       "id": "qorvo-dw3000",
@@ -8100,6 +9149,30 @@
           "ships_from": "Mouser"
         }
       ]
+    },
+    {
+      "id": "ublox-m10",
+      "name": "u-blox M10 (UBX-M10050)",
+      "manufacturer": "u-blox",
+      "role": "Multi-GNSS receiver IC (gen 10)",
+      "tags": [
+        "gnss",
+        "gps",
+        "glonass",
+        "galileo",
+        "beidou",
+        "positioning",
+        "timepulse"
+      ],
+      "summary": "u-blox 10th-gen concurrent multi-GNSS receiver (GPS+GLONASS+Galileo+BeiDou). Fast, sensitive, low power. The chip in the HGLRC M100 Pro. Has TIMEPULSE internally (not always broken out on FPV boards).",
+      "spec": {
+        "gnss": "GPS+GLONASS+Galileo+BeiDou concurrent",
+        "sensitivity": "-167 dBm",
+        "timepulse": "1PPS (internal)",
+        "source": "u-blox M10 datasheet"
+      },
+      "mouser_query": "MAX-M10S",
+      "datasheet": "https://www.u-blox.com/en/product/m10-standard-precision-gnss"
     },
     {
       "id": "vl53l1x",
