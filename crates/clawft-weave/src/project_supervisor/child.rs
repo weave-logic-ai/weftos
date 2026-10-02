@@ -378,7 +378,7 @@ impl ChildLauncher for Launcher {
             .mode_0600()
             .open(run_dir.join(LOG_FILE_NAME))
             .map_err(|e| backend(format!("kernel.log: {e}")))?;
-        let log2 = log.try_clone().map_err(|e| backend(e))?;
+        let log2 = log.try_clone().map_err(backend)?;
         let env = child_env(&self.cfg.home, &run_dir, id, |k| std::env::var(k).ok());
         let mut cmd = std::process::Command::new(&self.cfg.exe);
         cmd.args(child_args(id))

@@ -30,6 +30,8 @@ mod project;
 
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, feature = "workload-runtime", feature = "mesh", unix, feature = "native"))]
+mod project_tests;
 
 pub use cog::CogKind;
 #[cfg(all(feature = "workload-runtime", feature = "mesh", unix, feature = "native"))]

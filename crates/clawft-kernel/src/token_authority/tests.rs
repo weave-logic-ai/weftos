@@ -450,3 +450,30 @@ fn rebuild_prunes_old_revocations_but_keeps_live_and_unknown_ones() {
     a.rebuild_at(now);
     assert_eq!(std::fs::read_to_string(&journal).unwrap(), kept);
 }
+
+#[test]
+fn project_tokens_are_write_scoped_never_admin_and_survive_a_rebuild() {
+    let c = chain();
+    let a = auth(&c);
+    let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let (secret, info) = a.issue_project(id, Duration::minutes(30), &owner()).unwrap();
+    assert_eq!((info.scope, info.project.as_deref()), (TokenScope::Project, Some(id)));
+    assert_eq!(TokenScope::Project.capability_scopes(), ["write"]);
+    assert_eq!(TokenScope::Owner.capability_scopes(), ["admin"]);
+    assert_eq!(info.expires_at - info.issued_at, Duration::minutes(30));
+    // Owner tokens keep their scope and an old `issued` event with no scope
+    // field still reads as Owner.
+    let (_, owner_info) = a.issue("o", None, None, &owner()).unwrap();
+    assert_eq!(owner_info.scope, TokenScope::Owner);
+    let ev = c.tail_from(0).into_iter().find(|e| e.kind == KIND_ISSUED && e.payload.as_ref().unwrap()["label"] == "o").unwrap();
+    assert!(ev.payload.unwrap().get("scope").is_none());
+    // A fresh authority over the same chain rebuilds the scope.
+    let b = auth(&c);
+    let again = b.validate(&secret).expect("rebuilt from the chain");
+    assert_eq!(again.scope, TokenScope::Project);
+    // Over-long project tokens are refused like any other.
+    assert_eq!(
+        a.issue_project(id, Duration::hours(25), &owner()).unwrap_err(),
+        TokenError::TtlTooLong
+    );
+}

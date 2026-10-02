@@ -312,6 +312,12 @@ pub struct Supervisor {
 
 static GLOBAL: OnceLock<Arc<Supervisor>> = OnceLock::new();
 
+/// Install `sup` as the process supervisor. `false` when one is installed
+/// already (the first wins).
+pub fn install_global(sup: Arc<Supervisor>) -> bool {
+    GLOBAL.set(sup).is_ok()
+}
+
 /// The user daemon's supervisor, once installed ([`post_boot`]).
 pub fn global() -> Option<Arc<Supervisor>> {
     GLOBAL.get().cloned()
@@ -945,7 +951,7 @@ pub fn post_boot(kernel: &clawft_kernel::Kernel<clawft_platform::NativePlatform>
         gate: None,
     };
     let sup = Supervisor::new(cfg, deps);
-    if GLOBAL.set(Arc::clone(&sup)).is_err() {
+    if !install_global(Arc::clone(&sup)) {
         return;
     }
     rt.spawn(async move {
