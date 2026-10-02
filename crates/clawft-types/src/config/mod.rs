@@ -17,6 +17,9 @@ pub mod channels;
 pub mod governance;
 pub mod kernel;
 pub mod local_llm;
+pub mod overlay;
+#[cfg(test)]
+mod overlay_tests;
 pub mod personality;
 pub mod plugins;
 pub mod policies;

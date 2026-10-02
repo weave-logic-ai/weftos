@@ -279,6 +279,56 @@ pub struct KernelConfig {
     /// may do. Defaults to `read_only`.
     #[serde(default)]
     pub governance: super::governance::GovernanceConfig,
+
+    /// Kernel profile (ADR-103 A6). `"project"` marks a per-project child
+    /// kernel supervised by the user daemon; absent keeps the existing
+    /// behaviour. The user-daemon profile is process state, not config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<KernelProfile>,
+
+    /// Which heavy services a `project`-profile kernel takes from its parent
+    /// (the user daemon) instead of running itself. Only read when
+    /// `profile = "project"`.
+    #[serde(default, skip_serializing_if = "SharedServicesConfig::is_default")]
+    pub shared_services: SharedServicesConfig,
+}
+
+/// Kernel profile selector (`kernel.profile`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KernelProfile {
+    /// A per-project child kernel of the user daemon.
+    Project,
+}
+
+/// Where a shared service runs for a `project`-profile kernel.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SharedServiceMode {
+    /// Call the user daemon; fail closed when it is down (never fall back
+    /// to a local copy).
+    #[default]
+    Parent,
+}
+
+/// `[kernel.shared_services]`: every service defaults to `parent`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SharedServicesConfig {
+    /// Embedding model.
+    #[serde(default)]
+    pub embeddings: SharedServiceMode,
+    /// LLM provider access (and its API keys).
+    #[serde(default)]
+    pub llm: SharedServiceMode,
+    /// Voice pipeline.
+    #[serde(default)]
+    pub voice: SharedServiceMode,
+}
+
+impl SharedServicesConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 impl Default for KernelConfig {
@@ -301,6 +351,8 @@ impl Default for KernelConfig {
             llm: None,
             agent: None,
             governance: Default::default(),
+            profile: None,
+            shared_services: Default::default(),
         }
     }
 }
@@ -1695,12 +1747,42 @@ mod tests {
             llm: None,
             agent: None,
             governance: Default::default(),
+            profile: None,
+            shared_services: Default::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let restored: KernelConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.enabled, cfg.enabled);
         assert_eq!(restored.max_processes, cfg.max_processes);
         assert_eq!(restored.brand(), cfg.brand());
+    }
+
+    #[test]
+    fn old_configs_load_without_profile_or_shared_services() {
+        let cfg: KernelConfig = serde_json::from_str(r#"{"enabled": true}"#).unwrap();
+        assert_eq!(cfg.profile, None);
+        assert_eq!(cfg.shared_services, SharedServicesConfig::default());
+        // The new fields add nothing to a serialised default config.
+        let json = serde_json::to_value(KernelConfig::default()).unwrap();
+        assert!(json.get("profile").is_none());
+        assert!(json.get("shared_services").is_none());
+    }
+
+    #[test]
+    fn project_profile_and_shared_services_parse() {
+        let cfg: KernelConfig = serde_json::from_str(
+            r#"{"profile": "project", "shared_services": {"embeddings": "parent", "llm": "parent", "voice": "parent"}}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.profile, Some(KernelProfile::Project));
+        assert_eq!(cfg.shared_services.voice, SharedServiceMode::Parent);
+        let back = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(back["profile"], "project");
+        // A local mode is not accepted (fail closed, no local fallback).
+        assert!(
+            serde_json::from_str::<KernelConfig>(r#"{"shared_services": {"llm": "local"}}"#)
+                .is_err()
+        );
     }
 
     #[test]

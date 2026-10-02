@@ -87,6 +87,8 @@ impl From<&str> for ClaimedProject {
     }
 }
 
+pub use crate::verified_project::VerifiedProject;
+
 /// The kind of principal behind a request, set by the entry path (never by
 /// the client). Gates use it for per-principal deny-lists.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

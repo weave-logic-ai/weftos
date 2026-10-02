@@ -36,6 +36,12 @@ pub mod user_daemon;
 /// Daemon RPC extension seam: method-prefix routes + pre-dispatch gates (ADR-103 D0).
 #[cfg(any(unix, windows))]
 pub mod rpc_ext;
+/// Seams `daemon::run` calls for the per-project kernel profile (ADR-103 A6).
+#[cfg(any(unix, windows))]
+pub mod project_hooks;
+/// `VerifiedProject`: a project id with cryptographic provenance (ADR-103 A6).
+#[cfg(any(unix, windows))]
+pub mod verified_project;
 /// D12 scope gate: outside-project policy and the voice deny-list (ADR-103).
 #[cfg(any(unix, windows))]
 pub mod scope_gate;

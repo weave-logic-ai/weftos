@@ -631,6 +631,31 @@ pub struct GatePrincipal {
     /// Conversation scope for attribution (parent or child conv id).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conv_id: Option<String>,
+
+    /// Project the action is attributed to (ADR-103 A6). Set only from a
+    /// verified source, via [`GatePrincipal::with_project`]; `None` for
+    /// everything that predates Phase 2, which keeps old chain payloads
+    /// byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+
+    /// Node id of the kernel that evaluated the request (the project key id
+    /// for a child kernel).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+}
+
+/// A project id whose provenance is cryptographic (token scope, the
+/// kernel's own bound project, or a user-signed forward header).
+///
+/// Implemented by the daemon's `VerifiedProject`. [`GatePrincipal::with_project`]
+/// accepts only this, so a bare `Request.project` string cannot be stamped
+/// onto a principal by accident. A same-uid process can still claim a
+/// project over the socket; this is an isolation guard between one user's
+/// projects, not a boundary against a hostile local process.
+pub trait AttestedProject {
+    /// The verified project id.
+    fn project_id(&self) -> &str;
 }
 
 impl GatePrincipal {
@@ -641,7 +666,21 @@ impl GatePrincipal {
             user_id: None,
             parent_agent_id: None,
             conv_id: None,
+            project_id: None,
+            instance_id: None,
         }
+    }
+
+    /// Attribute the action to a verified project (ADR-103 A6).
+    pub fn with_project(mut self, project: &impl AttestedProject) -> Self {
+        self.project_id = Some(project.project_id().to_owned());
+        self
+    }
+
+    /// Record the evaluating kernel's node id.
+    pub fn with_instance(mut self, instance_id: impl Into<String>) -> Self {
+        self.instance_id = Some(instance_id.into());
+        self
     }
 
     /// Attach a user authority (WEFT-635 / WEFT-636).
@@ -3872,6 +3911,38 @@ mod tests {
         let json = serde_json::to_string(&p).unwrap();
         let restored: GatePrincipal = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, p);
+    }
+
+    #[test]
+    fn gate_principal_old_json_parses_and_new_fields_stay_off_the_wire() {
+        // A pre-Phase-2 chain payload.
+        let old = r#"{"agent_id":"a","user_id":"u","parent_agent_id":"p","conv_id":"c"}"#;
+        let p: GatePrincipal = serde_json::from_str(old).unwrap();
+        assert_eq!(p.project_id, None);
+        assert_eq!(p.instance_id, None);
+        // And it serialises back to the same bytes: nothing new appears.
+        assert_eq!(serde_json::to_string(&p).unwrap(), old);
+        // Missing everything still parses (all fields default).
+        let bare: GatePrincipal = serde_json::from_str("{}").unwrap();
+        assert_eq!(bare, GatePrincipal::default());
+    }
+
+    #[test]
+    fn gate_principal_project_and_instance_round_trip() {
+        struct Verified;
+        impl AttestedProject for Verified {
+            fn project_id(&self) -> &str {
+                "01JB8Z3Q0V6X9KQ4M2N7T5R1WD"
+            }
+        }
+        let p = GatePrincipal::agent("a")
+            .with_project(&Verified)
+            .with_instance("6a3803d5f059902a1c6dafbc9ba47292");
+        let v = serde_json::to_value(&p).unwrap();
+        assert_eq!(v["project_id"], "01JB8Z3Q0V6X9KQ4M2N7T5R1WD");
+        assert_eq!(v["instance_id"], "6a3803d5f059902a1c6dafbc9ba47292");
+        let back: GatePrincipal = serde_json::from_value(v).unwrap();
+        assert_eq!(back, p);
     }
 
     // ── WEFT-506: explicit EffectVector schema per gate family ──

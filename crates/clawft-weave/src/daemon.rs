@@ -982,13 +982,16 @@ fn seed_user_projects() {
 /// from the config loader. Global is the PermissionResolver ceiling;
 /// workspace is the optional overlay that will be clamped.
 pub async fn run(
-    config: Config,
+    mut config: Config,
     kernel_config: KernelConfig,
     // WEFT-10: unmerged global routing (ceiling for PermissionResolver).
     global_routing: clawft_types::routing::RoutingConfig,
     // WEFT-10: workspace overlay routing, when present.
     workspace_routing: Option<clawft_types::routing::RoutingConfig>,
 ) -> anyhow::Result<()> {
+    // ADR-103 A6 seams: bodies live in `project_hooks` (no-ops until Phase 2 H/F).
+    let _pre_boot = crate::project_hooks::pre_boot(&mut config);
+    crate::project_hooks::adjust_services(&mut config);
     let paths = protocol::runtime_paths();
     let socket_path = paths.socket();
 
@@ -1087,6 +1090,7 @@ pub async fn run(
     // consumed by boot.
     clawft_kernel::chain_storage::request_new_chain(false);
     clawft_kernel::chain_storage::request_adopt_legacy_chain(false);
+    crate::project_hooks::post_boot(&kernel);
     let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
     // Record this process as the live daemon only now that boot (which takes
     // the chain lock) has succeeded, so a refused boot leaves no stale pid.

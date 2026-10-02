@@ -16,6 +16,8 @@
 //! and `~/.clawft/workspaces.json` in.
 
 mod adopt;
+pub mod canon;
+pub mod cert;
 mod error;
 mod ids;
 mod schema;
@@ -23,10 +25,12 @@ mod seed;
 mod store;
 
 pub use adopt::{adopt_or_init, reinit_fork};
+pub use cert::{CertError, CertRequest, ProjectAnchorStmt, ProjectCert};
 pub use error::ProjectError;
 pub use ids::{new_id, validate_id};
 pub use schema::{
-    BinaryInfo, ChainSection, LegacySection, ProjectManifest, ProjectState, ProjectToml,
+    BinaryInfo, ChainSection, ChildState, DEFAULT_IDLE_STOP_SECS, DEFAULT_RESTART_MAX, DEFAULT_RESTART_WINDOW_SECS,
+    LegacySection, ProjectManifest, ProjectState, ProjectToml,
     ProjectTomlPresence, SCHEMA_VERSION, SeedSection, ServeSection, ServeVia, WeaveSection,
 };
 pub use seed::{SeedReport, seed_from_registry, seed_from_workspaces};
@@ -36,6 +40,8 @@ pub use store::{
     write_manifest, write_project_toml,
 };
 
+#[cfg(test)]
+mod cert_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

@@ -126,8 +126,27 @@ pub struct LegacySection {
 pub enum ServeVia {
     #[default]
     UserDaemon,
-    /// Phase 2.
+    /// A per-project kernel supervised by the user daemon (Phase 2).
     ChildKernel,
+}
+
+/// Default idle stop for `child-kernel` projects, seconds.
+pub const DEFAULT_IDLE_STOP_SECS: u64 = 1800;
+/// Default for [`ServeSection::restart_max`].
+pub const DEFAULT_RESTART_MAX: u32 = 5;
+/// Default for [`ServeSection::restart_window_secs`].
+pub const DEFAULT_RESTART_WINDOW_SECS: u64 = 60;
+
+/// State machine of a supervised child kernel (`<run>/<id>/state.json`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChildState {
+    #[default]
+    Stopped,
+    Starting,
+    Running,
+    IdleStopping,
+    Failed,
 }
 
 /// `[serve]`: read by the resolver (D14).
@@ -141,6 +160,46 @@ pub struct ServeSection {
     /// Stop a project kernel after this many idle seconds (Phase 2 consumer).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_stop_secs: Option<u64>,
+    /// Restarts allowed inside `restart_window_secs` before the child is
+    /// marked failed. `None` means [`DEFAULT_RESTART_MAX`]; read it through
+    /// [`ServeSection::restart_max`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_max: Option<u32>,
+    /// Restart budget window. `None` means [`DEFAULT_RESTART_WINDOW_SECS`];
+    /// read it through [`ServeSection::restart_window_secs`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_window_secs: Option<u64>,
+    /// Kernel version last started for this project (written by the
+    /// supervisor, never by the owner).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kernel_version: Option<String>,
+    /// Kernel binary sha last started for this project (supervisor-written).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kernel_sha: Option<String>,
+}
+
+impl ServeSection {
+    /// Restart budget count, with the default applied.
+    pub fn restart_max(&self) -> u32 {
+        self.restart_max.unwrap_or(DEFAULT_RESTART_MAX)
+    }
+
+    /// Restart budget window in seconds, with the default applied.
+    pub fn restart_window_secs(&self) -> u64 {
+        self.restart_window_secs
+            .unwrap_or(DEFAULT_RESTART_WINDOW_SECS)
+    }
+
+    /// Idle stop in seconds; 0 means never. Absent means
+    /// [`DEFAULT_IDLE_STOP_SECS`] for a `child-kernel` project (owner
+    /// decision 3) and never otherwise.
+    pub fn idle_stop_secs(&self) -> u64 {
+        match (self.idle_stop_secs, self.via) {
+            (Some(n), _) => n,
+            (None, ServeVia::ChildKernel) => DEFAULT_IDLE_STOP_SECS,
+            (None, _) => 0,
+        }
+    }
 }
 
 /// `[chain]`: chain location (D6). Absent means the in-tree default
