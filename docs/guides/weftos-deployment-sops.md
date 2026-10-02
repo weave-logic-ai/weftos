@@ -183,8 +183,8 @@ Expected output lists at minimum: ExoChain, HNSW (if ECC enabled), Health.
 #### Optional: machine mesh service
 
 When the machine mesh service runs (`weaver mesh serve`, or the installed unit),
-check it and pin its key once, after comparing the fingerprint with the one the
-install script printed:
+check it and pin its key once, after comparing the fingerprint `weaver mesh status`
+shows with the one an administrator reads on the service host:
 
 ```bash
 weaver mesh status            # identity, policy, registrations, journal
@@ -198,6 +198,76 @@ After pinning, a different key is a hard `machine_key_changed` error; replace
 the pin only with `weaver mesh trust --replace` after verifying the new key out
 of band. The service listens on `127.0.0.1:9489` by default; exposing it on the
 LAN (`listen = "0.0.0.0:9489"` in `mesh.toml`) is an explicit choice.
+
+#### Installing and removing the machine mesh service (administrator)
+
+`weaver mesh install-service` and `weaver mesh uninstall-service` only print a
+shell script. They run nothing, write nothing and refuse an `--apply` form. Read
+the script, then run it as an administrator from your own account
+(`sudo sh install.sh`); the service itself never runs as root.
+
+```bash
+weaver mesh install-service > install.sh          # --kind launchd|systemd (default: this host)
+weaver mesh install-service --adopt-node-key ~/.weftos/run/node.key > install.sh
+less install.sh && sudo sh install.sh             # does NOT start the service
+```
+
+What the script does:
+
+- creates the service account and group (`_weftos` on macOS via `dscl`, `weftos`
+  on Linux via `systemd-sysusers`), with no login shell;
+- **adds the invoking user to that group.** `/var/run/weftos` (the mesh socket and
+  `service.json`) is owned by the service account's group with mode 0750, so only
+  group members can reach the socket. The membership applies at the next login: log
+  out and in, or start a new session, before `weaver mesh status` works. Other users
+  on the machine need `dseditgroup -o edit -a USER -t user _weftos` (macOS) or
+  `usermod -aG weftos USER` (Linux) to use the service;
+- creates `/etc/weftos`, `/var/lib/weftos/mesh` (0700, service account),
+  `/var/run/weftos` (0750, service account and group), `/var/log/weftos` (macOS);
+- copies the binary to `/usr/local/libexec/weftos/weaver`, root-owned 0755. The
+  service never runs from a user-writable path;
+- writes `/etc/weftos/mesh.toml` when absent: `listen = "127.0.0.1:9489"` unless you
+  pass `--listen`, plus `--admin-uid` ids if given;
+- installs the unit (`/Library/LaunchDaemons/ai.weftos.mesh.plist` and a small
+  `ai.weftos.mesh-rundir` helper that recreates `/var/run/weftos` at boot, because
+  macOS clears `/var/run`; or `/etc/systemd/system/weftos-mesh.service`);
+- with `--adopt-node-key PATH`, copies that key to `/var/lib/weftos/mesh/node.key`
+  (0600, service account) so the node id does not change. It refuses to overwrite an
+  existing different key; an identical key is a no-op, so the script can be re-run.
+  The key then exists in two places until you remove the old copy;
+- the script is re-runnable. An existing `mesh.toml` is kept and the script says that
+  `--listen` / `--admin-uid` were not applied. `--listen` accepts `IP:PORT` or `localhost:PORT` only (no other hostnames); a
+  non-loopback address or a port below 1024 is flagged in the script header and on
+  stderr (the service has no capabilities and cannot bind a privileged port). Paths
+  and ports come from `mesh.toml` only; the units set no environment overrides;
+- macOS: the log is `/var/log/weftos/mesh.log` and is NOT rotated yet. `newsyslog`
+  cannot rotate a file launchd holds open (no copytruncate; output would go to a
+  deleted file), so none is installed. Follow-up: log through os_log/syslog or
+  self-rotate in the daemon. The service can start before the rundir helper
+  has created `/var/run/weftos`; launchd retries every 10 s until it exists.
+
+The last line is the enable command, printed and commented, not run:
+`sudo launchctl bootstrap system /Library/LaunchDaemons/ai.weftos.mesh.plist` or
+`sudo systemctl enable --now weftos-mesh`. Stop a collapsed user daemon first
+(`weaver kernel stop`); it holds port 9489. Migration from the collapsed daemon is
+the owner procedure in `docs/plans/weave-topology-p3-plan.md` section 5.
+
+Removing it: `weaver mesh uninstall-service > uninstall.sh`, read it, run it as root.
+It stops the unit and removes the unit files, the root-owned binary and the runtime
+directory. It keeps `/var/lib/weftos/mesh` including `node.key`, the journal, logs,
+`mesh.toml` and the account. `--purge-key` additionally deletes `node.key` (peers
+that pinned this machine will no longer recognise it). Account removal is listed
+commented out; before deleting the account run `weaver mesh bind revoke <uid>` for
+every bound uid, because a later account that reuses the uid would inherit its bind.
+
+Updating: `weaver update` replaces the user binary and restarts the user daemon. For
+the service it only prints the `sudo install ... /usr/local/libexec/weftos/weaver`
+and the restart line (`sudo launchctl kickstart -k system/ai.weftos.mesh` or
+`sudo systemctl restart weftos-mesh`) when the packaged build differs from the one
+`service.json` reports; it never calls `sudo`. `weaver doctor` reports the `mesh.*`
+checks (reachability, proto window, pin, journal, box key mode, a leftover
+`~/.weftos/run/node.key`, two listeners on 9489, force-revoked users) and the service
+tier skew.
 
 ### Expected Outputs
 

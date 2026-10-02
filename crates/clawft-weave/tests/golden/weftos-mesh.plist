@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.weftos.mesh</string>
+    <key>UserName</key>
+    <string>_weftos</string>
+    <key>GroupName</key>
+    <string>_weftos</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/libexec/weftos/weaver</string>
+        <string>mesh</string>
+        <string>serve</string>
+        <string>--config</string>
+        <string>/etc/weftos/mesh.toml</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/var/lib/weftos/mesh</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>/var/log/weftos/mesh.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/weftos/mesh.log</string>
+</dict>
+</plist>

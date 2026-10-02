@@ -23,6 +23,8 @@ pub mod leaf_cmd;
 pub mod migrate_cmd;
 #[cfg(all(unix, feature = "mesh"))]
 pub mod mesh_cmd;
+#[cfg(all(unix, feature = "mesh"))]
+pub mod mesh_install;
 pub mod resource_cmd;
 pub mod service_cmd;
 pub mod soul_cmd;

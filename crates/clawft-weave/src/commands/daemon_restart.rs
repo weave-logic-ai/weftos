@@ -157,6 +157,14 @@ fn decide_and_restart(i: &Inputs, host: &dyn Host) -> Outcome {
             exe.display()
         ));
     }
+    // The machine mesh service is never ours to signal or restart: it runs the
+    // root-owned copy and is restarted by an administrator (printed lines only).
+    if canonical_exe(&exe) == canonical_exe(Path::new(crate::service_units_system::SERVICE_EXE)) {
+        return Outcome::Refused(format!(
+            "pid {pid} is the machine mesh service ({}); it is restarted by an administrator, never by weaver update",
+            crate::service_units_system::SERVICE_EXE
+        ));
+    }
     if !same_binary(&exe, &i.installed_exe) {
         return Outcome::ExeMismatch {
             running: strip_deleted(&exe),
