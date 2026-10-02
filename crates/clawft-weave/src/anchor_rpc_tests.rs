@@ -250,8 +250,18 @@ fn accepted_anchor_survives_a_user_chain_lost_in_a_crash() {
         user_key: user_key(),
         manifests_dir: f.env.manifests_dir.clone(),
     };
-    assert_eq!(last_accepted(&env2, &f.id).unwrap(), Some(a.clone()));
-    assert_eq!(submit(&env2, &first, later(11)).unwrap(), a);
+    // Recovery re-appends the event: same statement, the rewritten ack.
+    let rec = last_accepted(&env2, &f.id).unwrap().unwrap();
+    assert_eq!(rec.statement, first);
+    let ev = env2.chain.tail(0).into_iter().find(|e| e.source == ANCHOR_SOURCE).unwrap();
+    assert_eq!((rec.user_seq, rec.user_event_hash.clone()), (ev.sequence, ident::hex(&ev.hash)));
+    let p = ev.payload.unwrap();
+    assert_eq!(p["recovered"], true);
+    assert_eq!(p["original_user_seq"], a.user_seq);
+    assert_eq!(p["original_user_event_hash"], a.user_event_hash);
+    // A resend after recovery returns the rewritten ack and adds no event.
+    assert_eq!(submit(&env2, &first, later(11)).unwrap(), rec);
+    assert_eq!(env2.chain.tail(0).iter().filter(|e| e.source == ANCHOR_SOURCE).count(), 1);
     let next = stmt(&f, 2, Some(first.hash()), 20, later(6));
     submit(&env2, &next, later(12)).unwrap();
 }
