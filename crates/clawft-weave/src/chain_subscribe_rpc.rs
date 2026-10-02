@@ -11,7 +11,8 @@
 //! * `chain: "project/<id>"`: a project's chain. The caller must be `Admin`
 //!   or hold a [`VerifiedProject`] for that id (a validated project-scoped
 //!   token, or this daemon's own bound project); a bare `Request.project`
-//!   claim is not enough. A project-bound daemon serves `project/<own id>`
+//!   claim is not enough. A caller with a project-scoped token is matched
+//!   against that scope only (`project_scope_mismatch` otherwise). A project-bound daemon serves `project/<own id>`
 //!   from its local chain. Any other id means proxying to that project's
 //!   daemon, which packages G/H wire; until then an authorized caller gets
 //!   the typed `not_yet_supported`.
@@ -59,10 +60,35 @@ pub fn parse_target(chain: &str) -> Result<ChainTarget<'_>, String> {
     }
 }
 
-/// May a caller read project `id`'s chain? `Admin`, or a verified
-/// project equal to `id`. Never a bare claim.
-pub fn project_read_allowed(is_admin: bool, verified: &[VerifiedProject], id: &str) -> bool {
-    is_admin || verified.iter().any(|v| v.as_str() == id)
+/// Outcome of the `project/<id>` access check.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ProjectAccess {
+    Allow,
+    /// Not Admin and no verified proof for `id`.
+    Denied,
+    /// The caller's token is scoped to a different project.
+    ScopeMismatch,
+}
+
+/// May a caller read project `id`'s chain?
+///
+/// A caller presenting a project-scoped token is matched against that
+/// scope ONLY: it never inherits the daemon's bound project, and the
+/// token's implicit Admin capability does not widen it. Otherwise: `Admin`,
+/// or the daemon's own bound project equal to `id`. Never a bare
+/// `Request.project` claim.
+pub fn project_access(
+    token_scope: Option<&VerifiedProject>,
+    is_admin: bool,
+    bound: Option<&VerifiedProject>,
+    id: &str,
+) -> ProjectAccess {
+    match token_scope {
+        Some(v) if v.as_str() == id => ProjectAccess::Allow,
+        Some(_) => ProjectAccess::ScopeMismatch,
+        None if is_admin || bound.is_some_and(|b| b.as_str() == id) => ProjectAccess::Allow,
+        None => ProjectAccess::Denied,
+    }
 }
 
 #[cfg(feature = "exochain")]
@@ -101,7 +127,7 @@ mod stream {
     use clawft_rpc::Response;
     use tokio::sync::RwLock;
 
-    use super::{ChainTarget, SubscribeParams, parse_target, project_read_allowed};
+    use super::{ChainTarget, ProjectAccess, SubscribeParams, parse_target, project_access};
     use crate::capability::{CallerCapabilities, Capability};
     use crate::rpc_ext::{CallerCtx, VerifiedProject};
 
@@ -178,15 +204,28 @@ mod stream {
                 }
             }
             ChainTarget::Project(id) => {
-                let mut verified: Vec<VerifiedProject> = scoped.into_iter().collect();
-                verified.extend(VerifiedProject::from_bound(&crate::handshake_rpc::bound()));
-                if !project_read_allowed(caps.allows(Capability::Admin), &verified, id) {
-                    return Err(Response::error_with_kind(
-                        "project_denied",
-                        format!(
-                            "permission denied: reading project/{id} needs a verified project or admin"
-                        ),
-                    ));
+                let bound = VerifiedProject::from_bound(&crate::handshake_rpc::bound());
+                match project_access(
+                    scoped.as_ref(),
+                    caps.allows(Capability::Admin),
+                    bound.as_ref(),
+                    id,
+                ) {
+                    ProjectAccess::Allow => {}
+                    ProjectAccess::ScopeMismatch => {
+                        return Err(Response::error_with_kind(
+                            "project_scope_mismatch",
+                            format!("this token is scoped to another project; it cannot read project/{id}"),
+                        ));
+                    }
+                    ProjectAccess::Denied => {
+                        return Err(Response::error_with_kind(
+                            "project_denied",
+                            format!(
+                                "permission denied: reading project/{id} needs a verified project or admin"
+                            ),
+                        ));
+                    }
                 }
                 // A project-bound daemon's own chain IS the project's chain.
                 if crate::handshake_rpc::bound_project_id().as_deref() != Some(id) {
@@ -266,11 +305,18 @@ mod tests {
     }
 
     #[test]
-    fn project_acl_needs_admin_or_a_matching_verified_project() {
-        let va = VerifiedProject::from_verified_forward(A.into());
-        assert!(project_read_allowed(true, &[], A));
-        assert!(project_read_allowed(false, std::slice::from_ref(&va), A));
-        assert!(!project_read_allowed(false, std::slice::from_ref(&va), B));
-        assert!(!project_read_allowed(false, &[], A));
+    fn project_access_matrix() {
+        let a = VerifiedProject::from_verified_forward(A.into());
+        let b = VerifiedProject::from_verified_forward(B.into());
+        // No token scope: admin, or the daemon's own bound project.
+        assert_eq!(project_access(None, true, None, A), ProjectAccess::Allow);
+        assert_eq!(project_access(None, false, Some(&a), A), ProjectAccess::Allow);
+        assert_eq!(project_access(None, false, Some(&a), B), ProjectAccess::Denied);
+        assert_eq!(project_access(None, false, None, A), ProjectAccess::Denied);
+        // A scoped token matches only its own scope, admin capability or not.
+        assert_eq!(project_access(Some(&b), true, Some(&a), B), ProjectAccess::Allow);
+        // B-token on an A-bound daemon reading project/A: never inherits A.
+        assert_eq!(project_access(Some(&b), true, Some(&a), A), ProjectAccess::ScopeMismatch);
+        assert_eq!(project_access(Some(&b), false, Some(&a), A), ProjectAccess::ScopeMismatch);
     }
 }

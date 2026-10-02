@@ -62,6 +62,28 @@ of kind `kernel.boot.complete`. Anything earlier than that without
 a corresponding entry means the boot stalled — `weaver kernel logs`
 will show where.
 
+### The chain won't restore: boot refuses
+
+If the chain file exists but fails verification, boot stops with
+`chain at <path> failed to restore (...); refusing to start a fresh chain
+over it`. The kernel does not replace it with a new genesis, because the next
+save would overwrite the only copy. (Earlier builds logged "starting fresh"
+and did exactly that.)
+
+Causes: file corruption, or events written by a newer binary that this build
+cannot verify (events carrying a `rule_hash`, or RVF segments with flag bits
+this build does not know).
+
+What to do:
+
+1. If a newer binary wrote it, upgrade the binary and restart.
+2. Otherwise move or rename the chain file (and its `.rvf` / `.json` sibling)
+   aside, for example `mv chain.rvf chain.rvf.bad`, and restart. A fresh chain
+   starts; keep the old file for inspection.
+
+`--new-chain` selects a different chain location; it does not touch the
+existing file, so it does not clear this refusal.
+
 ---
 
 ## K-Phase Status (0.7.0)

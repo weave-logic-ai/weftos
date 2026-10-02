@@ -2690,13 +2690,15 @@ impl<P: Platform> Kernel<P> {
 /// A chain that fails verification (corruption, or events written by a
 /// newer binary, e.g. carrying a `rule_hash` this build cannot verify) must
 /// never be replaced by a fresh genesis: the next checkpoint save would
-/// overwrite the only copy. The operator chooses explicitly.
+/// overwrite the only copy. The operator moves it aside explicitly
+/// (`--new-chain` picks a different location and does not touch this file).
 #[cfg(feature = "exochain")]
 fn unrestorable_chain_msg(path: &std::path::Path, cause: &str) -> String {
     format!(
         "chain at {} failed to restore ({cause}); refusing to start a fresh chain over it. \
-         If it was written by a newer binary, upgrade. Otherwise inspect or move the file, \
-         or boot with --new-chain",
+         Move or rename {} (and its .rvf/.json sibling) aside, then restart; \
+         if a newer binary wrote it, upgrade",
+        path.display(),
         path.display()
     )
 }
@@ -3575,6 +3577,11 @@ mod tests {
                 .expect("boot must refuse an unrestorable chain");
             let msg = err.to_string();
             assert!(msg.contains("refusing to start a fresh chain"), "rvf={rvf}: {msg}");
+            assert!(
+                msg.contains("Move or rename") && msg.contains(".rvf/.json sibling") && msg.contains("upgrade"),
+                "rvf={rvf}: {msg}"
+            );
+            assert!(!msg.contains("--new-chain"), "rvf={rvf}: {msg}");
             assert_eq!(std::fs::read(&chain_file).unwrap(), bytes, "rvf={rvf}: file changed");
         }
     }

@@ -990,7 +990,9 @@ impl LocalChain {
     /// Ask the provider for the current rule hash. Runs under the chain
     /// lock (lock order: chain first, then whatever the provider touches),
     /// so a panicking provider is contained: it must not unwind through the
-    /// held mutex and poison the chain.
+    /// held mutex and poison the chain. Only effective where panics unwind:
+    /// `[profile.release]` sets `panic = "abort"`, so in release a provider
+    /// panic aborts the process and the provider must simply not panic.
     fn stamp_rule_hash(&self) -> Option<[u8; 32]> {
         let p = self.rule_hash_provider.as_ref()?;
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| p())) {
@@ -1414,8 +1416,10 @@ impl ChainManager {
     /// into this manager: read lock-free state (an atomic, see
     /// [`crate::chain_rule_hash::RuleHashCell`]) or use `try_read`.
     /// A provider that takes a lock another thread holds while appending
-    /// would deadlock. A panicking provider is caught: the event is
-    /// appended without `rule_hash` and a warning is logged.
+    /// would deadlock. In dev/test builds (panic = unwind) a panicking
+    /// provider is caught: the event is appended without `rule_hash` and a
+    /// warning is logged. Release builds use `panic = "abort"`, so there a
+    /// provider panic aborts the process; it must not panic.
     pub fn set_rule_hash_provider(&self, provider: RuleHashProvider) {
         self.inner.lock().unwrap().rule_hash_provider = Some(provider);
     }

@@ -1,11 +1,13 @@
 //! Lock-free holder for the current rule hash (ADR-103 A7).
 //!
 //! The chain calls its `rule_hash` provider while holding the chain lock,
-//! so the provider must never block. [`RuleHashCell`] is the intended
+//! so the provider must not take locks. [`RuleHashCell`] is the intended
 //! source: writers publish with [`RuleHashCell::set`], the provider reads
 //! with [`RuleHashCell::get`], and a read never takes a lock (a seqlock
-//! over four atomic words; a reader only retries while a write is in
-//! flight, which is a few instructions).
+//! over four atomic words). A reader only retries while a write is in
+//! flight, which is a few instructions; it spins briefly and then yields,
+//! so it is lock-free in the sense that matters here (no mutex, no
+//! priority inversion on the chain lock) but not wait-free.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering, fence};
@@ -30,7 +32,8 @@ impl RuleHashCell {
     /// Publish a new value (or clear it).
     pub fn set(&self, hash: Option<[u8; 32]>) {
         let _w = self.writers.lock().unwrap_or_else(|e| e.into_inner());
-        self.seq.fetch_add(1, Ordering::AcqRel); // odd: write in flight
+        self.seq.fetch_add(1, Ordering::Relaxed); // odd: write in flight
+        fence(Ordering::Release); // order the odd marker before the data stores
         let h = hash.unwrap_or([0; 32]);
         for (i, w) in self.words.iter().enumerate() {
             let mut b = [0u8; 8];
@@ -41,12 +44,19 @@ impl RuleHashCell {
         self.seq.fetch_add(1, Ordering::Release); // even: stable
     }
 
-    /// The current value. Never blocks on a lock.
+    /// The current value. Takes no lock; retries (spin, then yield) only
+    /// while a write is in flight.
     pub fn get(&self) -> Option<[u8; 32]> {
+        let mut spins = 0u32;
         loop {
             let s1 = self.seq.load(Ordering::Acquire);
             if s1 & 1 == 1 {
-                std::hint::spin_loop();
+                spins += 1;
+                if spins < 16 {
+                    std::hint::spin_loop();
+                } else {
+                    std::thread::yield_now();
+                }
                 continue;
             }
             let mut out = [0u8; 32];
