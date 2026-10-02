@@ -7,7 +7,7 @@
 //! 2. child calls [`METHOD_REGISTER`] with a [`RegisterRequest`] whose
 //!    [`NonceReply::sig`] is its project key over
 //!    [`pop_signed_bytes`](clawft_types::project::cert::pop_signed_bytes)
-//!    (`weftos-mesh-local-pop-v1\n<nonce>\n<project_id>`), plus the spawn
+//!    (`weftos-mesh-local-pop-v2\n<op>\n<user_key_id>\n<nonce>\n<project_id>`), plus the spawn
 //!    nonce from `spawn.json`;
 //! 3. the user daemon answers a [`RegisterAck`];
 //! 4. [`METHOD_HEARTBEAT`] every [`RegisterAck::heartbeat_secs`] carries the

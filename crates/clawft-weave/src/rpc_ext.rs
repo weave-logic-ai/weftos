@@ -269,6 +269,31 @@ const ROUTES: &[ExtRoute] = &[
         handler: crate::project_rpc::handle_register,
     },
     ExtRoute {
+        prefix: "project.cert.show",
+        capability: Capability::Admin,
+        handler: crate::project_cert_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.cert.challenge",
+        capability: Capability::Admin,
+        handler: crate::project_cert_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.identity.repair",
+        capability: Capability::Admin,
+        handler: crate::project_cert_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.rekey",
+        capability: Capability::Admin,
+        handler: crate::project_cert_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.revoke",
+        capability: Capability::Admin,
+        handler: crate::project_cert_rpc::handle,
+    },
+    ExtRoute {
         prefix: "auth.token.issue",
         capability: Capability::Admin,
         handler: crate::token_rpc::handle,
@@ -312,6 +337,31 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "project.register",
         capability: Capability::Admin,
         handler: crate::project_rpc::handle_register,
+    },
+    ExtRoute {
+        prefix: "project.cert.show",
+        capability: Capability::Admin,
+        handler: crate::project_cert_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.cert.challenge",
+        capability: Capability::Admin,
+        handler: crate::project_cert_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.identity.repair",
+        capability: Capability::Admin,
+        handler: crate::project_cert_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.rekey",
+        capability: Capability::Admin,
+        handler: crate::project_cert_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.revoke",
+        capability: Capability::Admin,
+        handler: crate::project_cert_rpc::handle,
     },
     ExtRoute {
         prefix: "auth.token.issue",

@@ -213,13 +213,21 @@ fn strip_debug_string_quotes(s: &str) -> &str {
 /// Forward a drained pending batch onto a [`ChainManager`]-like appender.
 ///
 /// Used by the daemon drain loop and by tests. Returns the number of
-/// events appended.
+/// events appended. Events naming a reserved source (see
+/// `clawft_kernel::project_identity::is_reserved_source`) are dropped:
+/// tracing and `push_chain_event` let any code choose its source, and
+/// reserved sources belong to the daemon's own identity events.
 #[cfg(feature = "exochain")]
 pub fn forward_pending_to_chain(cm: &clawft_kernel::chain::ChainManager) -> usize {
     let pending = clawft_core::chain_event::drain_pending_chain_events();
-    let n = pending.len();
+    let mut n = 0;
     for evt in pending {
+        if clawft_kernel::project_identity::is_reserved_source(&evt.source) {
+            tracing::warn!(source = %evt.source, kind = %evt.kind, "dropping pending chain event with a reserved source");
+            continue;
+        }
         cm.append(&evt.source, &evt.kind, evt.payload);
+        n += 1;
     }
     n
 }
@@ -381,5 +389,20 @@ mod tests {
                 "missing on-chain kind {expected}; have {kinds:?}"
             );
         }
+    }
+
+    #[cfg(feature = "exochain")]
+    #[test]
+    fn reserved_sources_are_not_forwarded_to_the_chain() {
+        let _guard = buffer_lock();
+        let _ = drain_pending_chain_events();
+        let cm = clawft_kernel::chain::ChainManager::new(0, 1000);
+        let before = cm.tail_from(0).len();
+        clawft_core::chain_event::push_chain_event("user.projects", "project.revoke", None);
+        clawft_core::chain_event::push_chain_event("graphify", "graphify.build", None);
+        assert_eq!(forward_pending_to_chain(&cm), 1);
+        let events = cm.tail_from(0);
+        assert_eq!(events.len(), before + 1);
+        assert!(events.iter().all(|e| e.source != "user.projects"));
     }
 }
