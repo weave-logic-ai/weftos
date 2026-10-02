@@ -1,0 +1,27 @@
+{
+  "_note": "Near-duplicate consolidation map for crates/weftos-cog-market/catalog/catalog.json. Each key is an old (duplicate) id, each value the canonical id it merges into. Merges are WITHIN a collection only (module->module, chip->chip, project->project): a module that CARRIES a chip is never merged with that chip. Each pair below is the SAME physical part recorded redundantly after the three-repo merge, not two real boards of one chip. Consumed by scripts/consolidate-catalog.py.",
+  "modules": {
+    "bme280-env": "bme280",
+    "icm20948-imu": "icm-20948-imu",
+    "st-vl53l1x-breakout": "vl53l1x-tof",
+    "inmp441-mems-mic": "inmp441-mic",
+    "max30102-module": "max30102-ppg",
+    "rpi-zero-2w": "pi-zero-2w",
+    "rpi-5": "raspberry-pi-5",
+    "rtl-sdr-rtl2832u": "rtl-sdr",
+    "polar-h10-hr-strap": "polar-h10"
+  },
+  "chips": {
+    "bosch-bme280": "bme280",
+    "bosch-bno055": "bno055",
+    "adi-ad8232": "ad8232",
+    "ti-ads1115": "ads1115",
+    "infineon-bgt60tr13c": "bgt60tr13c",
+    "goodix-gt911": "gt911",
+    "tdk-icm20948": "icm-20948",
+    "maxim-max30102": "max30102",
+    "ti-iwr6843": "iwr6843",
+    "st-vl53l1x": "vl53l1x"
+  },
+  "projects": {}
+}
