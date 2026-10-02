@@ -22,7 +22,7 @@ Staging area for changes after the 0.8.1 cut.
   backoff, drop after 5 minutes of inbound silence, and stop when the mesh
   service stops. There is no dial-side keepalive yet, so a seed that stays
   silent for 300 s flaps `Left`/`Joined` every 5 minutes.
-=======
+
 ### Changed — Chain authority follow-ups (ADR-103 A7)
 
 - **Behaviour change:** the user daemon now exports its real `max_processes` and
@@ -32,7 +32,6 @@ Staging area for changes after the 0.8.1 cut.
   value in the message; lower it to the parent cap or below.
 - `auth.token` events and `governance.overlay.applied` are never replicated;
   chain sync stops cleanly at the first authority event (`StoppedAtAuthorityEvent`).
->>>>>>> wt/fu-chain-authority
 
 ### Added — Weave topology Phase 2, per-project kernels (ADR-103 A7, package G)
 
