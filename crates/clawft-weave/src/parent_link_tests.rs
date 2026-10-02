@@ -202,26 +202,11 @@ mod refresh {
     }
 
     #[test]
-    fn from_spawn_computes_the_expiry_from_the_spawn_file() {
-        let run = Path::new("/h/.weftos/run").join(ID);
-        let spawn = SpawnFile {
-            nonce: "n".into(),
-            parent_socket: None,
-            user_pubkey: "u".into(),
-            user_key_id: "k".into(),
-            project_id: ID.into(),
-            root: "/p".into(),
-            expires: 1_000_060,
-            project_token: "wft_t".into(),
-        };
-        let l = ParentLink::from_spawn(&spawn, &run);
-        // Default parent socket: `<run>/../kernel.sock`, the user daemon's.
-        assert_eq!(l.socket, Path::new("/h/.weftos/run/kernel.sock"));
+    fn a_link_from_spawn_tracks_the_token_expiry() {
+        let l = ParentLink::new_from_spawn("/h/.weftos/run/kernel.sock".into(), ID.into(), "wft_t".into());
         let st = l.token.lock().unwrap();
-        assert_eq!(st.expires_unix, Some(1_000_000 + PROJECT_TOKEN_TTL_SECS));
+        let left = st.expires_unix.unwrap() - now_unix();
+        assert!(left <= PROJECT_TOKEN_TTL_SECS && left > PROJECT_TOKEN_TTL_SECS - 2 * SPAWN_TTL_SECS);
         assert_eq!(st.secret.as_deref(), Some("wft_t"));
-        drop(st);
-        let empty = SpawnFile { project_token: String::new(), ..spawn };
-        assert!(ParentLink::from_spawn(&empty, &run).config_error.is_some());
     }
 }

@@ -18,8 +18,32 @@
 //! [`resolve_root`]: super::resolve_root
 
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 use super::{RootSource, RuntimePaths, absolutize, user_runtime_root};
+
+/// Process-wide child profile: the paths of the spawned child this process
+/// is. Set once by the child's boot (`weave::project_boot::pre_boot`) after
+/// it has read and validated `spawn.json`; [`RuntimePaths::resolve`] then
+/// returns it for every caller, so the socket, lock, chain, key and
+/// governance overlay all agree. The walk-up never sets it.
+static CHILD_PROFILE: RwLock<Option<RuntimePaths>> = RwLock::new(None);
+
+/// Make [`RuntimePaths::resolve`] return `paths` for this process. `paths`
+/// must be a child root ([`RuntimePaths::child_at`]); anything else is
+/// refused (`false`) and leaves the state unchanged. `None` clears it.
+pub fn set_child_profile(paths: Option<RuntimePaths>) -> bool {
+    if paths.as_ref().is_some_and(|p| p.child_id().is_none()) {
+        return false;
+    }
+    *CHILD_PROFILE.write().unwrap_or_else(|e| e.into_inner()) = paths;
+    true
+}
+
+/// The child paths set by [`set_child_profile`], if any.
+pub fn child_profile() -> Option<RuntimePaths> {
+    CHILD_PROFILE.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
 
 /// Spawn handshake written by the user daemon (0600, 60 s expiry).
 pub const SPAWN_JSON_FILE: &str = "spawn.json";

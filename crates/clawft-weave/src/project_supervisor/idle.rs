@@ -33,6 +33,28 @@ pub trait ActivitySource: Send + Sync {
     fn activity(&self, project_id: &str) -> Option<Activity>;
 }
 
+/// Activity from the mesh-local registry: what each child last said in its
+/// signed `mesh.heartbeat`. A project with no live session reports nothing,
+/// so it is never idle-stopped.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RegistryActivity;
+
+impl ActivitySource for RegistryActivity {
+    fn activity(&self, project_id: &str) -> Option<Activity> {
+        use crate::mesh_local_registry::{SessionState, registry};
+        registry()
+            .sessions()
+            .into_iter()
+            .find(|(s, state)| s.facts.project_id == project_id && *state == SessionState::Live)
+            .map(|(s, _)| Activity {
+                last_activity_unix: s.activity.last_activity_unix,
+                busy_agents: s.activity.busy.agents,
+                busy_workloads: s.activity.busy.workloads,
+                busy_streams: s.activity.busy.streams,
+            })
+    }
+}
+
 /// The default source until a registry is installed: reports nothing, so no
 /// project is ever idle-stopped.
 #[derive(Debug, Default, Clone, Copy)]

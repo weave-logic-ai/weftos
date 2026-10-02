@@ -8,13 +8,12 @@ use std::time::Duration;
 use clawft_kernel::boot::Kernel;
 use clawft_platform::NativePlatform;
 use clawft_types::config::{ChainConfig, Config, KernelConfig};
-use clawft_types::project::spawn::SpawnFile;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{RwLock, watch};
 
-use super::fixture::Fixture;
+use super::fixture::{self, Fixture};
 
 async fn call(sock: &std::path::Path, method: &str, params: Value, auth: Option<&str>) -> Value {
     let (r, mut w) = UnixStream::connect(sock).await.unwrap().into_split();
@@ -58,7 +57,12 @@ pub fn lifecycle_rpc_end_to_end() {
         // `post_boot` wires it.
         let authority = clawft_weave::token_rpc::authority_for(&kernel).await.unwrap();
         let mut deps = fx.deps();
-        deps.cert_env.chain = Arc::clone(kernel.read().await.chain_manager().unwrap());
+        let chain = Arc::clone(kernel.read().await.chain_manager().unwrap());
+        // The daemon signs certificates with its chain key: the supervisor
+        // must trust exactly that one.
+        let user_key = chain.signing_key_clone().expect("the isolated chain has a signing key");
+        deps.cert_env.chain = Arc::clone(&chain);
+        deps.cert_env.user_key = user_key.clone();
         deps.tokens = Some(Arc::clone(&authority));
         let sup = clawft_weave::project_supervisor::Supervisor::new(fx.cfg(), deps);
         assert!(clawft_weave::project_supervisor::install_global(sup));
@@ -94,7 +98,7 @@ pub fn lifecycle_rpc_end_to_end() {
 
         // The child's project token: Write only. It cannot run Admin
         // methods, but it can renew itself, and only itself.
-        let token = SpawnFile::read(&fx.run_dir().join("spawn.seen.json")).unwrap().project_token;
+        let token = fixture::seen_spawn(&fx.run_dir()).project_token.unwrap();
         for m in ["project.start", "project.stop_all", "project.restart", "kernel.shutdown"] {
             assert!(denied(&call(&sock, m, json!({"id": fx.id}), Some(&token)).await), "{m} with a project token");
         }
@@ -121,5 +125,92 @@ pub fn lifecycle_rpc_end_to_end() {
         assert_eq!(r["result"]["started"], true, "{r}");
         let r = call(&sock, "project.stop_all", json!({}), Some("admin")).await;
         assert_eq!(r["result"]["stopped"], json!([fx.id]), "{r}");
+
+        identity_changes(&fx, &sock, &chain, &user_key).await;
     });
+}
+
+/// The REAL `project.rekey` / `project.revoke` RPCs against a certified
+/// project with a running child: rekey stops the child and writes no marker;
+/// revoke writes the terminal marker at exactly the path the child checks and
+/// the project is never respawned.
+async fn identity_changes(
+    fx: &Fixture,
+    sock: &std::path::Path,
+    chain: &Arc<clawft_kernel::chain::ChainManager>,
+    user_key: &ed25519_dalek::SigningKey,
+) {
+    use clawft_kernel::project_identity as ident;
+    use clawft_types::project::cert::{PopOp, key_id};
+    use clawft_weave::project_cert_rpc::{CertEnv, RegisterRequest, SpawnInfo, claim_nonce, issue_challenge, register, root_sha256};
+    use clawft_weave::project_supervisor::child::pid_alive;
+
+    // The cert RPCs only run on the user daemon.
+    clawft_types::runtime_paths::set_user_profile(true);
+    clawft_weave::project_rpc::init_manifests_dir(fx.mdir.clone());
+    let env = CertEnv { chain: Arc::clone(chain), user_key: user_key.clone(), manifests_dir: fx.mdir.clone() };
+    let ukid = key_id(&user_key.verifying_key().to_bytes());
+    let k1 = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
+    let n = issue_challenge(&fx.id).unwrap();
+    register(
+        &env,
+        RegisterRequest {
+            project_id: fx.id.clone(),
+            project_pubkey: k1.verifying_key().to_bytes(),
+            root_sha256: root_sha256(&fx.root),
+            spawn: SpawnInfo { pid: 1, exe_sha: "ab".repeat(32) },
+            pop_sig: ident::pop_sign(&k1, PopOp::Register, &ukid, &n, &fx.id).unwrap(),
+            nonce: claim_nonce(&n, &fx.id).unwrap(),
+        },
+        chrono::Utc::now(),
+    )
+    .unwrap();
+
+    let r = call(sock, "project.ensure_running", json!({"id": fx.id}), Some("admin")).await;
+    assert_eq!(r["ok"], true, "{r}");
+    let pid1 = r["result"]["pid"].as_u64().unwrap() as u32;
+
+    // Rekey: the old child is stopped, NO marker, and it starts again.
+    let k2 = ed25519_dalek::SigningKey::from_bytes(&[12u8; 32]);
+    let n = issue_challenge(&fx.id).unwrap();
+    let r = call(
+        sock,
+        "project.rekey",
+        json!({"id": fx.id, "new_pubkey": ident::hex(&k2.verifying_key().to_bytes()), "nonce": n,
+               "pop_sig": ident::hex(&ident::pop_sign(&k2, PopOp::Rekey, &ukid, &n, &fx.id).unwrap()),
+               "reason": "rotate"}),
+        Some("admin"),
+    )
+    .await;
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(!pid_alive(pid1), "the old child was stopped");
+    assert!(!fx.run_dir().join("revoked").exists(), "rekey must not write the marker");
+    let r = call(sock, "project.ensure_running", json!({"id": fx.id}), Some("admin")).await;
+    assert_eq!(r["ok"], true, "a rekeyed project starts normally: {r}");
+    let pid2 = r["result"]["pid"].as_u64().unwrap() as u32;
+
+    // Revoke: terminal marker at the exact path the child checks.
+    let r = call(sock, "project.revoke", json!({"id": fx.id, "reason": "test"}), Some("admin")).await;
+    assert_eq!(r["ok"], true, "{r}");
+    let child_paths = clawft_types::runtime_paths::RuntimePaths::child_with(&fx.home, &fx.id, &fx.root).unwrap();
+    let marker = child_paths.root().join("revoked");
+    assert_eq!(marker, fx.run_dir().join("revoked"), "the supervisor's run dir is the child's");
+    assert!(marker.exists(), "revoke writes the marker");
+    use std::os::unix::fs::PermissionsExt as _;
+    assert_eq!(std::fs::metadata(&marker).unwrap().permissions().mode() & 0o077, 0);
+    wait_gone(pid2).await;
+    let r = call(sock, "project.ensure_running", json!({"id": fx.id}), Some("admin")).await;
+    assert_eq!(r["error_kind"], "project_revoked", "revoke is terminal: {r}");
+    clawft_types::runtime_paths::set_user_profile(false);
+}
+
+async fn wait_gone(pid: u32) {
+    use clawft_weave::project_supervisor::child::pid_alive;
+    for _ in 0..500 {
+        if !pid_alive(pid) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("pid {pid} still alive");
 }

@@ -55,9 +55,14 @@ pub fn read(run_dir: &Path) -> Option<StateFile> {
     serde_json::from_str(&text).ok()
 }
 
-/// Drop the `revoked` marker the child checks (a revoked or rekeyed
-/// project's running kernel stops taking policy). Creates the run dir.
+/// Drop the `revoked` marker the child checks: a revoked project's kernel
+/// never boots again and stops taking policy. Terminal; written only on
+/// `project.revoke` (never on rekey). Creates the run dir 0700.
 pub fn mark_revoked(run_dir: &Path, reason: &str) -> std::io::Result<()> {
+    if !run_dir.exists() {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(run_dir)?;
+    }
     write_atomic_0600(&run_dir.join(REVOKED_FILE), format!("{reason}\n").as_bytes())
 }
 
@@ -66,10 +71,6 @@ pub fn is_marked_revoked(run_dir: &Path) -> bool {
     run_dir.join(REVOKED_FILE).exists()
 }
 
-/// Remove the marker (a valid certificate is in force again after a rekey).
-pub fn clear_revoked(run_dir: &Path) {
-    let _ = std::fs::remove_file(run_dir.join(REVOKED_FILE));
-}
 
 /// Unix seconds now.
 pub fn now_unix() -> u64 {

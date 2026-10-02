@@ -191,3 +191,9 @@ pub async fn wait_state(sup: &Supervisor, id: &str, want: ChildState, secs: u64)
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
+
+/// The `spawn.json` a fake kernel saw (the real child consumes and deletes
+/// it, so the fake copies it first).
+pub fn seen_spawn(run_dir: &std::path::Path) -> clawft_types::project::SpawnFile {
+    serde_json::from_slice(&std::fs::read(run_dir.join("spawn.seen.json")).unwrap()).unwrap()
+}

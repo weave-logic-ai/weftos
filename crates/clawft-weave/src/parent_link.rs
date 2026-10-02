@@ -39,8 +39,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use clawft_rpc::{DaemonClient, Request};
-use clawft_types::project::spawn::{
-    PROJECT_TOKEN_REFRESH_SECS, PROJECT_TOKEN_TTL_SECS, SPAWN_TTL_SECS, SpawnFile, TOKEN_REFRESH_METHOD,
+use clawft_types::project::SPAWN_TTL_SECS;
+use clawft_types::project::token_consts::{
+    PROJECT_TOKEN_REFRESH_SECS, PROJECT_TOKEN_TTL_SECS, TOKEN_REFRESH_METHOD,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -222,27 +223,15 @@ impl ParentLink {
         self
     }
 
-    /// A link from the `spawn.json` the child already read (and deleted, see
-    /// [`SpawnFile::take`]). The token is short-lived
-    /// ([`PROJECT_TOKEN_TTL_SECS`]); the link renews it with
+    /// A link for a child that has just consumed its `spawn.json` (the
+    /// token was issued at most [`SPAWN_TTL_SECS`] ago). The token is
+    /// short-lived ([`PROJECT_TOKEN_TTL_SECS`]); the link renews it with
     /// `project.token.refresh` when [`PROJECT_TOKEN_REFRESH_SECS`] are left,
-    /// before every call and from the monitor. An empty token fails closed.
-    pub fn from_spawn(spawn: &SpawnFile, run_dir: &Path) -> Self {
-        let socket = spawn
-            .parent_socket
-            .clone()
-            .or_else(|| run_dir.parent().map(|r| r.join("kernel.sock")));
-        let link = match (socket, spawn.project_token.trim()) {
-            (Some(socket), t) if !t.is_empty() => {
-                Self::new(socket, spawn.project_id.clone(), t.to_owned())
-            }
-            _ => return Self::unconfigured("spawn.json carries no project token or no parent socket"),
-        };
-        // spawn.json expires SPAWN_TTL_SECS after the token was issued.
-        let issued = spawn.expires.saturating_sub(SPAWN_TTL_SECS);
-        link.token.lock().unwrap_or_else(|e| e.into_inner()).expires_unix =
-            Some(issued + PROJECT_TOKEN_TTL_SECS);
-        link
+    /// before every call and from the monitor.
+    pub fn new_from_spawn(socket: PathBuf, project_id: String, token: String) -> Self {
+        let link = Self::new(socket, project_id, token);
+        let expires = now_unix() + PROJECT_TOKEN_TTL_SECS - SPAWN_TTL_SECS;
+        link.with_token_expiry(expires)
     }
 
     /// Track the current token's expiry (tests).

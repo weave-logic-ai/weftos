@@ -137,6 +137,12 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "project.restart",
     "project.status",
     "project.token.refresh",
+    // mesh-local/1 (package H): spawn-nonce and PoP authenticated; a child
+    // sends its project claim on every call, so it is inside a project.
+    "mesh.challenge",
+    "mesh.register",
+    "mesh.heartbeat",
+    "mesh.unregister",
 ];
 
 /// What `deny_all` still permits: liveness, discovery and project lookup.

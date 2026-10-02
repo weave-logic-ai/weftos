@@ -58,10 +58,13 @@ pub use nonce::{CHALLENGE_TTL, DaemonNonce, claim_nonce, issue_challenge};
 
 const MAX_REASON: usize = 256;
 
-/// What the user daemon verified about the child it spawned.
+/// What the user daemon recorded about the child it spawned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpawnInfo {
-    /// Child pid.
+    /// Child pid AS CLAIMED by the child in `mesh.register` (the spawn
+    /// ledger checks it against the supervisor's pid when one is recorded,
+    /// but the daemon does not otherwise verify it). Recorded on the chain
+    /// as `claimed_pid`.
     pub pid: u32,
     /// SHA-256 of the child executable, hex.
     pub exe_sha: String,
@@ -170,6 +173,17 @@ pub fn root_sha256(root: &Path) -> String {
     ident::hex(&Sha256::digest(bytes))
 }
 
+/// Drop the project's registry session when its key is revoked or replaced,
+/// so a running child's next heartbeat fails and its re-register is refused.
+///
+/// The `<run>/<id>/revoked` marker (what `project_boot` and the overlay
+/// check) is written and the child stopped by the supervisor's identity
+/// change hook, not here: there is one writer. A child booted while the
+/// parent is unreachable only sees a revocation if that marker was written.
+fn mark_revoked(_env: &CertEnv, id: &str, _why: &str) {
+    crate::mesh_local_registry::registry().evict(id);
+}
+
 fn cert_path(dir: &Path, id: &str) -> PathBuf {
     dir.join(format!("{id}.cert.json"))
 }
@@ -262,7 +276,7 @@ pub fn register(env: &CertEnv, req: RegisterRequest, now: DateTime<Utc>) -> Resu
                     "name": manifest.name,
                     "root_sha256": req.root_sha256,
                     "manifest_schema": manifest.schema_version,
-                    "spawn": { "pid": req.spawn.pid, "exe_sha": req.spawn.exe_sha },
+                    "spawn": { "claimed_pid": req.spawn.pid, "exe_sha": req.spawn.exe_sha },
                 })),
             );
             write_cert_file(&env.manifests_dir, &cert)?;
@@ -308,6 +322,7 @@ pub fn rekey(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Issued
         })),
     );
     write_cert_file(&env.manifests_dir, &cert)?;
+    mark_revoked(env, id, "rekeyed");
     Ok(Issued { cert, new: true })
 }
 
@@ -334,6 +349,7 @@ pub fn revoke(env: &CertEnv, params: &Value) -> Result<Value, IssueError> {
             "reason": clean_reason(params.get("reason")),
         })),
     );
+    mark_revoked(env, id, "revoked");
     match std::fs::remove_file(cert_path(&env.manifests_dir, id)) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -420,13 +436,17 @@ pub async fn issue_for_register(ctx: &ExtCtx, req: RegisterRequest) -> Result<Is
         .map_err(|e| IssueError::Store(format!("task failed: {e}")))?
 }
 
-/// A project's key was revoked or replaced: write the `revoked` marker its
-/// child checks and stop the child. Without a supervisor (not the user
+/// A project's key was revoked (terminal `revoked` marker, child stopped) or
+/// replaced (child stopped, no marker). Without a supervisor (not the user
 /// daemon) there is nothing to do.
 #[cfg(all(unix, feature = "exochain", feature = "placement"))]
 pub async fn on_identity_change(id: &str, method: &str) {
     if let Some(sup) = crate::project_supervisor::global() {
-        sup.revoked(id, method).await;
+        if method == "project.revoke" {
+            sup.revoked(id, method).await;
+        } else {
+            sup.rekeyed(id).await;
+        }
     }
 }
 

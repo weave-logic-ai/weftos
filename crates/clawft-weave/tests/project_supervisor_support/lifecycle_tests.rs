@@ -148,7 +148,7 @@ pub fn spawn_refusal_cases() {
         // A revoked key with no certificate in force.
         state::mark_revoked(&fx.run_dir(), "test").unwrap();
         assert_eq!(refused(sup.ensure_running(&fx.id).await.unwrap_err()), "project_revoked");
-        state::clear_revoked(&fx.run_dir());
+        std::fs::remove_file(fx.run_dir().join("revoked")).unwrap();
         // No governance engine: no parent policy, no child.
         let mut deps = fx.deps();
         deps.snapshot = std::sync::Arc::new(|| None);

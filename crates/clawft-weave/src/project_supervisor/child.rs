@@ -35,7 +35,8 @@ use clawft_kernel::token_authority::{Issuer, TokenAuthority};
 use clawft_kernel::workload_runtime::{ChildLauncher, ChildProbe, ChildRef, ChildSpec, RuntimeError};
 use clawft_types::config::overlay::Limits;
 use clawft_types::project::cert::key_id;
-use clawft_types::project::spawn::{PROJECT_TOKEN_TTL_SECS, SPAWN_TTL_SECS, SpawnFile};
+use clawft_types::project::SpawnFile;
+use clawft_types::project::token_consts::PROJECT_TOKEN_TTL_SECS;
 use clawft_types::runtime_paths::{LOG_FILE_NAME, PARENT_POLICY_FILE, SOCKET_NAME, SPAWN_JSON_FILE};
 use ed25519_dalek::SigningKey;
 use nix::sys::signal::{Signal, kill, killpg};
@@ -44,8 +45,11 @@ use rand::RngCore;
 use tokio::sync::watch;
 
 use super::SupervisorConfig;
+use crate::mesh_local_registry::{SpawnExpectation, cancel_spawn, expect_spawn, registry};
 use super::io::ChildIo;
 use super::state;
+
+static EXE_SHA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Locale variables passed through when set.
 const LOCALE_VARS: &[&str] = &[
@@ -268,6 +272,20 @@ impl Launcher {
         }
     }
 
+    /// SHA-256 of the kernel executable (hex), computed once.
+    fn exe_sha(&self) -> String {
+        EXE_SHA
+            .get_or_init(|| {
+                use sha2::{Digest, Sha256};
+                std::fs::read(&self.cfg.exe)
+                    .map(|b| hex::encode(Sha256::digest(b)))
+                    .unwrap_or_default()
+            })
+            .clone()
+    }
+
+    /// Write the run dir files and file the spawn expectation in the
+    /// registry. Returns the spawn nonce.
     fn write_run_files(&self, spec: &ChildSpec, token: &str) -> Result<(), RuntimeError> {
         let run_dir = self.run_dir(&spec.project_id);
         std::fs::create_dir_all(&run_dir).map_err(|e| backend(format!("{}: {e}", run_dir.display())))?;
@@ -294,18 +312,37 @@ impl Launcher {
         let mut nonce = [0u8; 32];
         rand::rngs::OsRng.fill_bytes(&mut nonce);
         let now = state::now_unix();
-        SpawnFile {
-            nonce: hex::encode(nonce),
-            parent_socket: Some(self.cfg.parent_socket.clone()),
-            user_pubkey: hex::encode(pubkey),
-            user_key_id: key_id(&pubkey),
+        let nonce = hex::encode(nonce);
+        let spawn = SpawnFile::new(
+            nonce.clone(),
+            self.cfg.parent_socket.clone(),
+            hex::encode(pubkey),
+            key_id(&pubkey),
+            spec.project_id.clone(),
+            spec.root.clone(),
+            (!token.is_empty()).then(|| token.to_owned()),
+            now,
+        );
+        // A live registry session blocks any new registration (even with a
+        // fresh nonce), so a respawn evicts the dead child's first.
+        registry().evict(&spec.project_id);
+        // The expectation first: if it cannot be filed (ledger full) nothing
+        // is written and nothing starts.
+        expect_spawn(SpawnExpectation {
             project_id: spec.project_id.clone(),
+            nonce,
+            pid: 0,
+            exe_sha: self.exe_sha(),
             root: spec.root.clone(),
-            expires: now + SPAWN_TTL_SECS,
-            project_token: token.to_owned(),
-        }
-        .write(&run_dir.join(SPAWN_JSON_FILE))
-        .map_err(|e| backend(format!("spawn.json: {e}")))
+            expires_unix: spawn.expires_unix,
+        })
+        .map_err(|e| RuntimeError::Backend(format!("spawn ledger: {e}")))?;
+        spawn
+            .write(&run_dir.join(SPAWN_JSON_FILE))
+            .map_err(|e| {
+                cancel_spawn(&spec.project_id);
+                backend(format!("spawn.json: {e}"))
+            })
     }
 
     /// Issue the child's project token (Write only, project-scoped).
@@ -388,6 +425,25 @@ impl ChildLauncher for Launcher {
         let token = self.issue_token(id)?;
         self.write_run_files(spec, &token)?;
         let run_dir = self.run_dir(id);
+        let started = self.launch(spec, &run_dir).await;
+        if started.is_err() {
+            cancel_spawn(id);
+        }
+        started
+    }
+
+    async fn terminate(&self, child: &ChildRef, grace: Duration) -> Result<Option<i32>, RuntimeError> {
+        self.terminate_inner(child, grace).await
+    }
+
+    async fn probe(&self, project_id: &str) -> ChildProbe {
+        self.probe_inner(project_id).await
+    }
+}
+
+impl Launcher {
+    async fn launch(&self, spec: &ChildSpec, run_dir: &Path) -> Result<ChildRef, RuntimeError> {
+        let id = spec.project_id.as_str();
         let log = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -395,7 +451,7 @@ impl ChildLauncher for Launcher {
             .open(run_dir.join(LOG_FILE_NAME))
             .map_err(|e| backend(format!("kernel.log: {e}")))?;
         let log2 = log.try_clone().map_err(backend)?;
-        let env = child_env(&self.cfg.home, &run_dir, id, |k| std::env::var(k).ok());
+        let env = child_env(&self.cfg.home, run_dir, id, |k| std::env::var(k).ok());
         let mut cmd = std::process::Command::new(&self.cfg.exe);
         cmd.args(child_args(id))
             .env_clear()
@@ -409,6 +465,7 @@ impl ChildLauncher for Launcher {
             .spawn()
             .map_err(|e| backend(format!("cannot start {}: {e}", self.cfg.exe.display())))?;
         let pid = child.id();
+        registry().note_pid(id, pid);
         self.spawns.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = watch::channel(None);
         std::thread::spawn(move || {
@@ -419,7 +476,7 @@ impl ChildLauncher for Launcher {
             id.to_owned(),
             Entry { proc: Proc::Owned { pid, exit: rx }, stop: Arc::new(AtomicBool::new(false)) },
         );
-        state::update(&run_dir, |st| {
+        state::update(run_dir, |st| {
             st.state = clawft_types::project::ChildState::Starting;
             st.pid = Some(pid);
             st.exe = Some(self.cfg.exe.display().to_string());
@@ -428,7 +485,7 @@ impl ChildLauncher for Launcher {
         Ok(ChildRef { project_id: id.to_owned(), pid })
     }
 
-    async fn terminate(&self, child: &ChildRef, grace: Duration) -> Result<Option<i32>, RuntimeError> {
+    async fn terminate_inner(&self, child: &ChildRef, grace: Duration) -> Result<Option<i32>, RuntimeError> {
         let id = child.project_id.as_str();
         let (owned, stop) = match self.procs().get(id) {
             Some(e) => (matches!(e.proc, Proc::Owned { .. }), Arc::clone(&e.stop)),
@@ -452,7 +509,7 @@ impl ChildLauncher for Launcher {
         Ok(info.code)
     }
 
-    async fn probe(&self, project_id: &str) -> ChildProbe {
+    async fn probe_inner(&self, project_id: &str) -> ChildProbe {
         enum P {
             Owned(Option<ExitInfo>, u32),
             Adopted(u32),

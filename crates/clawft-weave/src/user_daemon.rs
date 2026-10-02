@@ -24,8 +24,26 @@ use crate::commands::LoadedConfig;
 /// Profile name accepted by `--profile` / `WEAVER_PROFILE`.
 pub const PROFILE_USER: &str = "user";
 
+/// Profile of a per-project child kernel (`--profile project`, ADR-103 A6).
+/// Started by the user daemon only; see `project_boot`.
+pub const PROFILE_PROJECT: &str = "project";
+
 /// Roles the user daemon runs (collapsed machine + user, ADR-103 roles table).
 pub const USER_ROLES: [&str; 2] = ["machine", "user"];
+
+static PROJECT_PROFILE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Record that this process was started with `--profile project` (or
+/// `WEAVER_PROFILE=project`); `daemon::run` then forces
+/// `KernelProfile::Project` so `pre_boot` runs the child handshake.
+pub fn set_project_profile(on: bool) {
+    PROJECT_PROFILE.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// True when `--profile project` was requested for this process.
+pub fn project_profile_requested() -> bool {
+    PROJECT_PROFILE.load(std::sync::atomic::Ordering::SeqCst)
+}
 
 /// Parse a `--profile` value. `None` and `default` mean the existing
 /// project/legacy behaviour.
@@ -33,8 +51,9 @@ pub fn parse_profile(value: Option<&str>) -> Result<Option<&'static str>, String
     match value.map(str::trim).filter(|v| !v.is_empty()) {
         None | Some("default") => Ok(None),
         Some(PROFILE_USER) => Ok(Some(PROFILE_USER)),
+        Some(PROFILE_PROJECT) => Ok(Some(PROFILE_PROJECT)),
         Some(other) => Err(format!(
-            "unknown profile {other:?}: expected `user` (or omit for the default)"
+            "unknown profile {other:?}: expected `user` or `project` (or omit for the default)"
         )),
     }
 }
@@ -172,6 +191,7 @@ mod tests {
         assert_eq!(parse_profile(Some("")), Ok(None));
         assert_eq!(parse_profile(Some("default")), Ok(None));
         assert_eq!(parse_profile(Some("user")), Ok(Some("user")));
+        assert_eq!(parse_profile(Some("project")), Ok(Some("project")));
         assert!(parse_profile(Some("root")).unwrap_err().contains("unknown profile"));
     }
 

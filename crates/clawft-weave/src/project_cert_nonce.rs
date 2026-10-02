@@ -13,6 +13,9 @@ use clawft_kernel::project_identity as ident;
 /// How long an issued challenge nonce stays valid.
 pub const CHALLENGE_TTL: Duration = Duration::from_secs(60);
 const MAX_CHALLENGES: usize = 1024;
+/// Outstanding challenges one project may hold; the oldest is dropped for a
+/// new one, so a flood of `mesh.challenge` for one id cannot fill the table.
+pub const MAX_PER_PROJECT: usize = 4;
 
 /// A challenge nonce this daemon issued, not yet used. Only
 /// [`claim_nonce`] makes one.
@@ -46,6 +49,16 @@ pub fn issue_challenge(project_id: &str) -> Result<String, IssueError> {
     let mut map = CHALLENGES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
     let now = Instant::now();
     map.retain(|_, (_, t)| *t > now);
+    let mine: Vec<(String, Instant)> = map
+        .iter()
+        .filter(|(_, (p, _))| p == project_id)
+        .map(|(n, (_, t))| (n.clone(), *t))
+        .collect();
+    if mine.len() >= MAX_PER_PROJECT
+        && let Some((oldest, _)) = mine.into_iter().min_by_key(|(_, t)| *t)
+    {
+        map.remove(&oldest);
+    }
     if map.len() >= MAX_CHALLENGES {
         return Err(IssueError::Unavailable("too many outstanding challenges".into()));
     }
@@ -70,4 +83,25 @@ pub fn claim_nonce(nonce: &str, project_id: &str) -> Result<DaemonNonce, IssueEr
     }
     let (pid, _) = map.remove(nonce).ok_or_else(fail)?;
     Ok(DaemonNonce { nonce: nonce.to_owned(), project_id: pid })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_project_cannot_hold_more_than_the_cap_and_others_are_unaffected() {
+        let a = clawft_types::project::new_id();
+        let b = clawft_types::project::new_id();
+        let (a, b) = (a.as_str(), b.as_str());
+        let other = issue_challenge(b).unwrap();
+        let first = issue_challenge(a).unwrap();
+        let mut last = first.clone();
+        for _ in 0..MAX_PER_PROJECT + 2 {
+            last = issue_challenge(a).unwrap();
+        }
+        assert!(claim_nonce(&first, a).is_err(), "the oldest was dropped");
+        assert!(claim_nonce(&last, a).is_ok());
+        assert!(claim_nonce(&other, b).is_ok(), "another project's challenge survives");
+    }
 }

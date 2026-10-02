@@ -170,12 +170,14 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
             .as_deref(),
     )
     .map_err(|e| anyhow::anyhow!(e))?;
-    // `project` is the child kernel's profile (package H); only `user`
-    // addresses the user daemon here.
     #[cfg(any(unix, windows))]
-    let user_profile = profile == Some("user");
+    let user_profile = profile == Some(crate::user_daemon::PROFILE_USER);
+    // `--profile project`: `daemon::run` forces `KernelProfile::Project`, so
+    // the child handshake in `pre_boot` cannot be skipped by a plain config.
     #[cfg(any(unix, windows))]
-    let project_profile = profile == Some("project");
+    crate::user_daemon::set_project_profile(profile == Some(crate::user_daemon::PROFILE_PROJECT));
+    #[cfg(any(unix, windows))]
+    let project_profile = profile == Some(crate::user_daemon::PROFILE_PROJECT);
     #[cfg(any(unix, windows))]
     if user_profile {
         // Before anything resolves a socket, pid or chain path, and before

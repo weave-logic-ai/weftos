@@ -22,7 +22,6 @@ mod rpc_test;
 use std::time::{Duration, Instant};
 
 use clawft_types::project::ChildState;
-use clawft_types::project::spawn::SpawnFile;
 use clawft_weave::capability::{CallerCapabilities, Capability};
 use clawft_weave::env_probe::{leaked, process_environment};
 use clawft_weave::project_supervisor::child::pid_alive;
@@ -147,19 +146,19 @@ fn env_allowlist_spawn_contract() {
             fx.root.display().to_string()
         );
         // spawn.json as the child saw it.
-        let spawn: SpawnFile = SpawnFile::read(&fx.run_dir().join("spawn.seen.json")).unwrap();
+        let spawn = fixture::seen_spawn(&fx.run_dir());
         assert_eq!(spawn.project_id, fx.id);
         assert_eq!(spawn.root, fx.root);
         assert_eq!(spawn.nonce.len(), 64);
         let now = state::now_unix();
-        assert!(spawn.expires > now && spawn.expires <= now + 60, "60 s expiry");
+        assert!(spawn.expires_unix > now && spawn.expires_unix <= now + 60, "60 s expiry");
         assert_eq!(
-            spawn.parent_socket.as_deref(),
-            Some(fx.run_root.join("kernel.sock").as_path()),
+            spawn.parent_socket.as_path(),
+            fx.run_root.join("kernel.sock").as_path(),
             "the default parent socket is the user daemon's socket"
         );
         // The token: project-scoped, Write only, never Admin.
-        let info = fx.tokens.validate(&spawn.project_token).expect("live token");
+        let info = fx.tokens.validate(spawn.project_token.as_ref().unwrap()).expect("live token");
         assert_eq!(info.project.as_deref(), Some(fx.id.as_str()));
         let caps = CallerCapabilities::from_scopes(info.scope.capability_scopes().iter().copied());
         assert!(!caps.allows(Capability::Admin), "a project token must not be admin");
@@ -352,7 +351,7 @@ fn token_refresh() {
     rt().block_on(async {
         let sup = fx.supervisor();
         sup.ensure_running(&fx.id).await.unwrap();
-        let t1 = SpawnFile::read(&fx.run_dir().join("spawn.seen.json")).unwrap().project_token;
+        let t1 = fixture::seen_spawn(&fx.run_dir()).project_token.unwrap();
         let (t2, _) = sup.launcher().refresh_token(&fx.id, &t1).unwrap();
         let (t3, _) = sup.launcher().refresh_token(&fx.id, &t2).unwrap();
         assert!(fx.tokens.validate(&t1).is_none(), "the token before the previous one is revoked");

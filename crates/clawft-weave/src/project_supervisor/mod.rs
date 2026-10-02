@@ -419,7 +419,8 @@ impl Supervisor {
             .map_err(|e| SupError::Identity(e.kind().to_owned() + ": " + &e.to_string()))?;
         let cert = view.current_cert(id).cloned();
         let run_dir = self.run_dir(id);
-        if cert.is_none() && state::is_marked_revoked(&run_dir) {
+        // Revoke is terminal: the marker is never lifted by the supervisor.
+        if state::is_marked_revoked(&run_dir) {
             return Err(SupError::Revoked(id.to_owned()));
         }
         let upub = self.deps.cert_env.user_key.verifying_key().to_bytes();
@@ -435,10 +436,6 @@ impl Supervisor {
             ProjectPrepareError::Identity(m) => SupError::Identity(m),
             other => SupError::Identity(other.to_string()),
         })?;
-        // A valid certificate in force again after a rekey lifts the marker.
-        if cert.is_some() {
-            state::clear_revoked(&run_dir);
-        }
         Ok((w, manifest))
     }
 
@@ -789,8 +786,16 @@ impl Supervisor {
         stopped
     }
 
-    /// Mark a project revoked or rekeyed: drop the marker its child checks
-    /// and stop the child (its key is no longer certified).
+    /// A project's key was replaced (`project.rekey`): stop the old child;
+    /// the next start runs the rekeyed project normally. No marker.
+    pub async fn rekeyed(self: &Arc<Self>, id: &str) {
+        if let Err(e) = self.stop(id).await {
+            tracing::warn!(project = id, error = %e, "could not stop a rekeyed project's kernel");
+        }
+    }
+
+    /// `project.revoke`: write the terminal `<run>/<id>/revoked` marker its
+    /// child checks and stop the child. The project is never respawned.
     pub async fn revoked(self: &Arc<Self>, id: &str, reason: &str) {
         if let Err(e) = state::mark_revoked(&self.run_dir(id), reason) {
             tracing::warn!(project = id, error = %e, "could not write the revoked marker");
@@ -840,6 +845,29 @@ impl Supervisor {
             .collect()
     }
 
+    /// File an expired registry session for an adopted child so it can
+    /// re-register without a spawn nonce. Uses the REAL certified project
+    /// key: a zero or default key would silently break the child's signed
+    /// heartbeats. Without a certificate in force nothing is filed.
+    fn file_adopted_session(&self, id: &str, pid: u32) {
+        use crate::mesh_local_registry::{NewSession, registry};
+        let Ok(view) = crate::project_cert_rpc::current_view(&self.deps.cert_env) else { return };
+        let Some(cert) = view.current_cert(id) else { return };
+        let Some(project_pubkey) = clawft_types::project::canon::hex_decode::<32>(&cert.project_pubkey) else {
+            return;
+        };
+        registry().adopt_expired(NewSession {
+            project_id: id.to_owned(),
+            socket: self.socket(id),
+            pid,
+            addresses: vec![id.to_owned()],
+            topic_prefixes: vec![format!("chain/{id}/")],
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            project_key_id: cert.project_key_id.clone(),
+            project_pubkey,
+        });
+    }
+
     /// Verify and adopt children left by an earlier daemon (see [`adopt`]).
     pub async fn adopt_on_boot(self: &Arc<Self>) -> Vec<Found> {
         let found = adopt::scan(&self.cfg.run_root, &self.cfg.exe, self.deps.io.as_ref()).await;
@@ -871,6 +899,7 @@ impl Supervisor {
                         st.generation += 1;
                         st.generation
                     };
+                    self.file_adopted_session(id, *pid);
                     self.set_state(id, &slot, ChildState::Running);
                     self.chain("project.kernel.adopted", json!({"project_id": id, "pid": pid}));
                     self.spawn_monitor(id.clone(), Arc::clone(&slot), g);
@@ -965,7 +994,7 @@ pub fn post_boot(kernel: &clawft_kernel::Kernel<clawft_platform::NativePlatform>
         cert_env: CertEnv { chain, user_key: user_key.clone(), manifests_dir: manifests_dir.clone() },
         snapshot: Arc::new(move || gate.as_ref().and_then(|g| g.governance_snapshot())),
         tokens: crate::token_rpc::authority_for_kernel(kernel),
-        activity: Arc::new(idle::NoActivity),
+        activity: Arc::new(idle::RegistryActivity),
         io: Arc::new(io::RpcChildIo::new(user_key, manifests_dir)),
         gate: None,
     };
