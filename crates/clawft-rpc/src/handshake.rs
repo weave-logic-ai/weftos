@@ -4,9 +4,9 @@
 //! One definition shared by the daemon (which builds [`Handshake`]) and the
 //! client (which checks it), so the wire shape cannot drift.
 //!
-//! Deviation from the Phase 1 plan: a request with no `proto` (a legacy
-//! client) is accepted for ALL methods in Phase 1, not only read-only ones,
-//! so existing clients keep working. Phase 2 may restrict or refuse it.
+//! A request with no `proto` (a legacy client) was accepted for ALL methods
+//! in Phase 1. From 0.8.2 (ADR-103 A8, review S10) the daemon refuses it for
+//! every method that is not read-only; read-only methods still work.
 //! `kernel.handshake` is exempt from the proto refusal: it is the discovery
 //! call that tells a client which range the daemon accepts.
 
@@ -162,11 +162,48 @@ impl MeshHandshake {
 pub enum ProtoCheck {
     /// Inside the supported range.
     Supported,
-    /// Field absent: a pre-A client, treated as protocol 0. Accepted in
-    /// Phase 1; refused from Phase 2.
+    /// Field absent: a pre-A client, treated as protocol 0. Accepted for
+    /// read-only methods only (0.8.2 onward).
     Legacy,
     /// Outside `[PROTO_MIN, PROTO_VERSION]`.
     Unsupported(u32),
+}
+
+/// Methods a client may call against a daemon whose identity it could not
+/// verify (no `kernel.handshake`). Fail-closed: anything not listed is
+/// treated as mutating. The daemon crate asserts every entry is
+/// `Capability::Read` there.
+pub const READ_ONLY_METHODS: &[&str] = &[
+    "kernel.handshake",
+    "kernel.status",
+    "kernel.ps",
+    "kernel.services",
+    "kernel.logs",
+    "agent.list",
+    "agent.inspect",
+    "chain.status",
+    "chain.tail",
+    "chain.verify",
+    "cluster.facts",
+    "cluster.health",
+    "cluster.nodes",
+    "cluster.shards",
+    "cluster.status",
+    "cron.list",
+    "ipc.topics",
+    "resource.inspect",
+    "resource.rank",
+    "resource.score",
+    "resource.stats",
+    "resource.tree",
+    "node.identity",
+    "substrate.list",
+    "substrate.read",
+];
+
+/// Whether `method` is on the [`READ_ONLY_METHODS`] allowlist.
+pub fn is_read_only_method(method: &str) -> bool {
+    READ_ONLY_METHODS.contains(&method)
 }
 
 /// Classify the `proto` field of a request.

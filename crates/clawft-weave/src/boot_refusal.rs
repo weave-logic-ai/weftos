@@ -3,8 +3,13 @@
 //! A daemon that is refused at boot (instance lock held, chain lock held,
 //! legacy chain adoption refused, bad config) cannot succeed by being
 //! retried, so it exits with [`EX_CONFIG`] rather than 1. The generated
-//! systemd unit lists that code in `RestartPreventExitStatus`; launchd
-//! cannot filter on exit codes and relies on `ThrottleInterval` instead.
+//! systemd unit lists that code in `RestartPreventExitStatus`. launchd
+//! cannot filter on exit codes, so the user daemon leaves a `REFUSED`
+//! sentinel in its runtime root on a permanent refusal (and on a clean exit)
+//! and the generated plist's `KeepAlive` is `PathState { REFUSED: false }`;
+//! see [`write_refused`] and [`clear_refused`]. A transient refusal (an older
+//! kernel wrote the legacy chain moments ago) is a plain boot error and
+//! leaves no sentinel, so launchd retries it.
 //!
 //! The re-exec plan keeps the original arguments (notably `--profile user`,
 //! which is process state, not environment) minus the one-shot chain flags,
@@ -41,6 +46,22 @@ pub fn exit_code(e: &anyhow::Error) -> i32 {
     if refused { EX_CONFIG } else { 1 }
 }
 
+/// Leave the "do not restart" sentinel for launchd. Best effort: failing to
+/// write it only costs the old behaviour (a restart every throttle interval).
+pub fn write_refused(sentinel: &Path, reason: &str) {
+    if let Some(dir) = sentinel.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Err(e) = std::fs::write(sentinel, format!("{reason}\n")) {
+        tracing::warn!(path = %sentinel.display(), error = %e, "could not write the REFUSED sentinel");
+    }
+}
+
+/// Remove the sentinel (a start attempt is beginning). Missing is fine.
+pub fn clear_refused(sentinel: &Path) {
+    let _ = std::fs::remove_file(sentinel);
+}
+
 /// Everything a SIGHUP re-exec must reproduce, captured once at startup
 /// before the daemon changes directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +74,7 @@ pub struct Replay {
 
 static REPLAY: std::sync::OnceLock<Replay> = std::sync::OnceLock::new();
 
-/// Make the value of `--config X`, `-c X` and `--config=X` absolute against `cwd`.
+/// Make the value of `--config X`, `-c X`, `-cX` and `--config=X` absolute against `cwd`.
 pub fn absolutize_config_args(args: Vec<String>, cwd: &Path) -> Vec<String> {
     let abs = |v: &str| {
         let p = Path::new(v);
@@ -69,6 +90,9 @@ pub fn absolutize_config_args(args: Vec<String>, cwd: &Path) -> Vec<String> {
             }
         } else if let Some(v) = a.strip_prefix("--config=") {
             out.push(format!("--config={}", abs(v)));
+        } else if let Some(v) = a.strip_prefix("-c").filter(|v| !v.is_empty() && !a.starts_with("--")) {
+            // clap's attached short form: `-cREL`.
+            out.push(format!("-c{}", abs(v)));
         } else {
             out.push(a);
         }
@@ -196,6 +220,8 @@ mod tests {
             (v(&["kernel", "-c", "sub/w.toml", "start"]), v(&["kernel", "-c", "/work/sub/w.toml", "start"])),
             (v(&["kernel", "start", "--config=w.toml"]), v(&["kernel", "start", "--config=/work/w.toml"])),
             (v(&["--config", "/abs/w.toml"]), v(&["--config", "/abs/w.toml"])),
+            (v(&["kernel", "start", "-cw.toml"]), v(&["kernel", "start", "-c/work/w.toml"])),
+            (v(&["kernel", "start", "-c/abs/w.toml"]), v(&["kernel", "start", "-c/abs/w.toml"])),
         ] {
             let r = Replay::capture(given, cwd, None);
             assert_eq!(r.args, want);
@@ -225,11 +251,26 @@ mod tests {
         // Retryable: everything else.
         for e in [
             anyhow::Error::new(KernelError::Boot("service start failed: x".into())),
+            // The transient legacy age-window refusal (chain_storage).
+            anyhow::Error::new(KernelError::Boot(
+                "the legacy chain at /h/.clawft/chain.json looks in use by an older kernel".into(),
+            )),
             anyhow::Error::new(KernelError::Boot("mesh enabled but the listener could not bind".into())),
             anyhow::anyhow!("socket write failed"),
             anyhow::Error::new(LockError::Io { path: "/x".into(), source: std::io::Error::other("e") }),
         ] {
             assert_eq!(exit_code(&e), 1, "{e}");
         }
+    }
+
+    #[test]
+    fn refused_sentinel_round_trips_and_clear_is_idempotent() {
+        let d = tempfile::tempdir().unwrap();
+        let s = d.path().join("run").join("REFUSED");
+        write_refused(&s, "instance lock held");
+        assert_eq!(std::fs::read_to_string(&s).unwrap(), "instance lock held\n");
+        clear_refused(&s);
+        assert!(!s.exists());
+        clear_refused(&s);
     }
 }

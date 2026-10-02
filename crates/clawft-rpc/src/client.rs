@@ -80,6 +80,9 @@ mod imp {
         /// keeps that scope; only an absent token gets the implicit
         /// upgrade.
         pub async fn call(&mut self, mut request: Request) -> anyhow::Result<Response> {
+            if let Some(refused) = crate::connect::unverified_refusal(&request, self.ctx.as_ref()) {
+                return Ok(refused);
+            }
             crate::connect::stamp_request(&mut request, self.ctx.as_ref());
             let mut json = serde_json::to_string(&request)?;
             json.push('\n');
@@ -116,6 +119,9 @@ mod imp {
             mut self,
             mut request: Request,
         ) -> anyhow::Result<(Response, StreamSession)> {
+            if let Some(refused) = crate::connect::unverified_refusal(&request, self.ctx.as_ref()) {
+                anyhow::bail!("{}", refused.error.unwrap_or_default());
+            }
             crate::connect::stamp_request(&mut request, self.ctx.as_ref());
             let mut json = serde_json::to_string(&request)?;
             json.push('\n');
@@ -210,6 +216,9 @@ mod imp {
         /// ACL-gated by the creating process (same trust model as UDS
         /// filesystem permissions on Unix).
         pub async fn call(&mut self, mut request: Request) -> anyhow::Result<Response> {
+            if let Some(refused) = crate::connect::unverified_refusal(&request, self.ctx.as_ref()) {
+                return Ok(refused);
+            }
             crate::connect::stamp_request(&mut request, self.ctx.as_ref());
             let mut json = serde_json::to_string(&request)?;
             json.push('\n');
@@ -243,6 +252,9 @@ mod imp {
             mut self,
             mut request: Request,
         ) -> anyhow::Result<(Response, StreamSession)> {
+            if let Some(refused) = crate::connect::unverified_refusal(&request, self.ctx.as_ref()) {
+                anyhow::bail!("{}", refused.error.unwrap_or_default());
+            }
             crate::connect::stamp_request(&mut request, self.ctx.as_ref());
             let mut json = serde_json::to_string(&request)?;
             json.push('\n');
@@ -364,10 +376,16 @@ mod imp {
 
 pub use imp::{DaemonClient, StreamSession};
 
-/// Check if a daemon is running at the default socket path
-/// (socket/pipe exists and accepts connections).
+/// Check if a daemon is running at the endpoint the resolver picks
+/// (socket/pipe exists and accepts connections). Honours `WEFTOS_RUNTIME_DIR`
+/// and a project manifest's `runtime_dir`, like `connect_resolved`.
 pub async fn is_daemon_running() -> bool {
-    DaemonClient::connect().await.is_some()
+    is_daemon_running_at(crate::resolve::current_socket_path()).await
+}
+
+/// [`is_daemon_running`] for explicit resolver inputs.
+pub async fn is_daemon_running_for(inputs: &crate::resolve::ResolveInputs) -> bool {
+    is_daemon_running_at(crate::resolve::socket_for(inputs)).await
 }
 
 /// Check if a daemon is accepting connections at `path`.

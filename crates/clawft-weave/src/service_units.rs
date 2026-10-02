@@ -25,7 +25,8 @@ pub const LAUNCHD_LABEL: &str = "ai.weftos.user";
 pub const SYSTEMD_UNIT: &str = "weftos";
 
 /// Exit code the daemon uses for a refused boot (EX_CONFIG). The systemd unit
-/// lists it in `RestartPreventExitStatus`; launchd cannot filter on codes.
+/// lists it in `RestartPreventExitStatus`; launchd cannot filter on codes, so
+/// its plist watches the `REFUSED` sentinel instead (see `boot_refusal`).
 pub const REFUSED_EXIT: i32 = 78;
 
 /// launchd `ThrottleInterval`, seconds between restarts.
@@ -37,6 +38,11 @@ const ARGS: [&str; 5] = ["kernel", "start", "--foreground", "--profile", "user"]
 /// `<home>/.weftos/run/kernel.log`, the launchd stdout/stderr target.
 pub fn log_path(home: &Path) -> PathBuf {
     home.join(".weftos").join("run").join("kernel.log")
+}
+
+/// `<home>/.weftos/run/REFUSED`, the sentinel launchd's `KeepAlive` watches.
+pub fn refused_path(home: &Path) -> PathBuf {
+    clawft_types::runtime_paths::user_runtime_root(home).join(clawft_types::runtime_paths::REFUSED_FILE_NAME)
 }
 
 /// Canonical path of the running binary, as a unit would reference it.
@@ -114,8 +120,11 @@ const PLIST_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <integer>@THROTTLE@</integer>
     <key>KeepAlive</key>
     <dict>
-        <key>SuccessfulExit</key>
-        <false/>
+        <key>PathState</key>
+        <dict>
+            <key>@REFUSED@</key>
+            <false/>
+        </dict>
     </dict>
     <key>AbandonProcessGroup</key>
     <true/>
@@ -131,6 +140,7 @@ const PLIST_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 pub fn launchd_plist(exe: &Path, home: &Path) -> String {
     let exe = xml_escape(&exe.to_string_lossy());
     let log = xml_escape(&log_path(home).to_string_lossy());
+    let refused = xml_escape(&refused_path(home).to_string_lossy());
     let home = xml_escape(&home.to_string_lossy());
     let args: String = ARGS
         .iter()
@@ -142,6 +152,7 @@ pub fn launchd_plist(exe: &Path, home: &Path) -> String {
         .replace("@ARGS@", &args)
         .replace("@HOME@", &home)
         .replace("@LOG@", &log)
+        .replace("@REFUSED@", &refused)
         .replace("@THROTTLE@", &LAUNCHD_THROTTLE_SECS.to_string())
 }
 
@@ -354,6 +365,11 @@ mod tests {
         }
         let pl = launchd_plist(Path::new("/x/weaver"), Path::new("/h"));
         assert!(pl.contains("<key>ThrottleInterval</key>\n    <integer>30</integer>"));
+        // A permanent refusal stops the cycle: KeepAlive is the sentinel's
+        // absence, not "any non-zero exit".
+        assert!(pl.contains("<key>PathState</key>"));
+        assert!(pl.contains("<key>/h/.weftos/run/REFUSED</key>\n            <false/>"));
+        assert!(!pl.contains("SuccessfulExit"));
     }
 
     #[cfg(unix)]

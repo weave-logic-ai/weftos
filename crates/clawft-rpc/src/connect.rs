@@ -29,6 +29,9 @@ pub struct ClientContext {
     pub project: Option<String>,
     /// Protocol version to announce.
     pub proto: u32,
+    /// The daemon could not be verified (it has no `kernel.handshake`):
+    /// only read-only methods are sent (ADR-103 A8, 0.8.2).
+    pub unverified: bool,
 }
 
 impl Default for ClientContext {
@@ -36,6 +39,7 @@ impl Default for ClientContext {
         Self {
             project: None,
             proto: PROTO_VERSION,
+            unverified: false,
         }
     }
 }
@@ -67,6 +71,30 @@ pub(crate) fn stamp_request(request: &mut Request, client: Option<&ClientContext
         request.project.clone_from(&ctx.project);
     }
 }
+
+/// Refusal for a mutating request on a client whose daemon is unverified.
+/// `None` when the request may be sent.
+pub(crate) fn unverified_refusal(
+    request: &Request,
+    client: Option<&ClientContext>,
+) -> Option<Response> {
+    let ctx = client.or_else(|| CONTEXT.get())?;
+    if !ctx.unverified || crate::handshake::is_read_only_method(&request.method) {
+        return None;
+    }
+    Some(Response::error_with_kind(
+        UNVERIFIED_DAEMON_KIND,
+        format!(
+            "refusing `{}`: the daemon has no kernel.handshake, so its project and node \
+             are unverified and only read-only calls are allowed; restart it with the \
+             current build (`weaver kernel restart`)",
+            request.method
+        ),
+    ))
+}
+
+/// `error_kind` of a mutating call refused client-side on an unverified daemon.
+pub const UNVERIFIED_DAEMON_KIND: &str = "unverified_daemon";
 
 /// Why [`DaemonClient::connect_resolved`] failed.
 #[derive(Debug)]
@@ -379,6 +407,7 @@ impl DaemonClient {
         let mut client = client.with_context(ClientContext {
             project: res.project_id.clone(),
             proto: PROTO_VERSION,
+            unverified: false,
         });
         let resp = client
             .call(Request::new("kernel.handshake"))
@@ -403,9 +432,14 @@ impl DaemonClient {
                 let handshake = degraded_handshake(res, &status);
                 let warnings = vec![format!(
                     "daemon has no kernel.handshake ({detail}); it is an older build and \
-                     project/node are unverified: {}",
+                     project/node are unverified, so only read-only calls are sent: {}",
                     remedy(&handshake.sha, false)
                 )];
+                let client = client.with_context(ClientContext {
+                    project: res.project_id.clone(),
+                    proto: PROTO_VERSION,
+                    unverified: true,
+                });
                 return Ok(Connected {
                     client,
                     handshake,

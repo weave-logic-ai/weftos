@@ -294,7 +294,13 @@ impl<P: Platform> Kernel<P> {
         // An older, lock-unaware kernel may still be writing the legacy
         // chain: refuse before taking any lock or touching the chain.
         if let Some(msg) = pin.refusal {
-            return Err(KernelError::BootRefused(msg));
+            // A refusal that clears by itself is a plain boot error (exit 1,
+            // a service manager retries); the rest are permanent (exit 78).
+            return Err(if pin.refusal_transient {
+                KernelError::Boot(msg)
+            } else {
+                KernelError::BootRefused(msg)
+            });
         }
         let (pinned_chain, chain_note) = (pin.path, pin.warning);
         // One kernel per chain: hold chain.lock beside the chain in use for

@@ -119,6 +119,13 @@ pub fn check(env: &DoctorEnv, procs: &ProcTable, fix: bool, all_runtimes: bool) 
                 out.push(f);
             }
         }
+        let (files, data) = state_files(env, procs, &dir);
+        out.extend(files);
+        if let Some(obj) = data.as_object() {
+            for (k, v) in obj {
+                entry[k] = v.clone();
+            }
+        }
         let key = dir.join("node.key");
         if key.is_file() {
             let canon = std::fs::canonicalize(&key).unwrap_or(key.clone());
@@ -134,6 +141,92 @@ pub fn check(env: &DoctorEnv, procs: &ProcTable, fix: bool, all_runtimes: bool) 
         .map(|k| json!({ "path": k, "mode": key_mode(k).map(|m| format!("{m:o}")) }))
         .collect();
     (out, json!({ "dir": env.runtime_dir, "source": env.runtime_source.label(), "dirs": dirs_data, "node_keys": key_data }))
+}
+
+/// What a runtime dir's lock, sentinel and chain files say (ADR-103 D4,
+/// Phase 1 review S6): who holds `kernel.lock`, whether launchd was told not
+/// to restart the daemon (`REFUSED`), and, for the legacy `~/.clawft` root,
+/// whether its chain was migrated and whether a lock-aware kernel has adopted
+/// it. Read-only.
+fn state_files(env: &DoctorEnv, procs: &ProcTable, dir: &Path) -> (Vec<Finding>, Value) {
+    use clawft_types::runtime_paths::{
+        LEGACY_MIGRATED_MARKER, LOCK_FILE_NAME, REFUSED_FILE_NAME, legacy_migration_marker,
+        user_chain_checkpoint, user_runtime_root,
+    };
+    let c = Component::Runtime;
+    let mut out = Vec::new();
+    let mut data = serde_json::Map::new();
+
+    let lock = dir.join(LOCK_FILE_NAME);
+    if lock.is_file() {
+        let holder: Option<u32> = std::fs::read_to_string(&lock)
+            .ok()
+            .and_then(|t| t.split_whitespace().next().and_then(|p| p.parse().ok()));
+        let id = format!("lock:{}", dir.display());
+        let (state, f) = match holder {
+            Some(p) if !procs.ok => ("unknown", Finding::new(c, id, Severity::Ok, format!("{} names pid {p} (liveness unknown)", lock.display()))),
+            Some(p) if procs.alive(p) => ("held", Finding::new(c, id, Severity::Ok, format!("{} held by pid {p}", lock.display()))),
+            Some(p) => ("free", Finding::new(c, id, Severity::Ok, format!("{} names pid {p}, which is not running (the lock is released on exit; harmless)", lock.display()))),
+            None => ("unknown", Finding::new(c, id, Severity::Ok, format!("{} present (holder pid not recorded)", lock.display()))),
+        };
+        data.insert("lock".into(), json!({ "pid": holder, "state": state }));
+        out.push(f);
+    }
+
+    let refused = dir.join(REFUSED_FILE_NAME);
+    if refused.is_file() {
+        let why = std::fs::read_to_string(&refused).unwrap_or_default();
+        let why = why.trim();
+        data.insert("refused".into(), json!(why));
+        out.push(
+            Finding::new(c, format!("refused:{}", dir.display()), Severity::Warn, format!(
+                "{} is present: the user daemon was refused or stopped ({}), so launchd will not restart it",
+                refused.display(),
+                if why.is_empty() { "no reason recorded" } else { why }
+            ))
+            .remedy("fix the cause, then `weaver kernel start --profile user` (it lifts the sentinel)"),
+        );
+    }
+
+    if dir == user_runtime_root(&env.home) {
+        let chain = user_chain_checkpoint(&env.home);
+        let has = chain.exists() || chain.with_extension("rvf").exists();
+        data.insert("user_chain".into(), json!({ "path": chain, "present": has }));
+        out.push(Finding::new(c, format!("user_chain:{}", dir.display()), Severity::Ok, if has {
+            format!("user chain present at {}", chain.display())
+        } else {
+            format!("no user chain at {} yet (created on first boot, or `weaver migrate user-chain`)", chain.display())
+        }));
+    }
+
+    if dir == env.home.join(".clawft") {
+        let chain = dir.join(clawft_types::runtime_paths::CHAIN_CHECKPOINT_FILE);
+        let has = chain.exists() || chain.with_extension("rvf").exists();
+        let marker = legacy_migration_marker(dir);
+        let adopted = chain.with_extension("lock").exists();
+        data.insert("legacy_chain".into(), json!({
+            "present": has,
+            "migrated_marker": marker.is_some(),
+            "adopted_by_lock_aware_kernel": adopted,
+        }));
+        if let Some((m, dest)) = &marker {
+            out.push(
+                Finding::new(c, format!("migrated:{}", dir.display()), Severity::Ok, format!(
+                    "{LEGACY_MIGRATED_MARKER} present ({}): the legacy chain was migrated to {}; a kernel rooted here is refused unless --adopt-legacy-chain",
+                    m.display(),
+                    dest.as_deref().unwrap_or("~/.weftos/chain")
+                )),
+            );
+        } else if has {
+            out.push(Finding::new(c, format!("adoption:{}", dir.display()), Severity::Ok, if adopted {
+                format!("legacy chain {} is adopted (chain.lock present: a lock-aware kernel has used it)", chain.display())
+            } else {
+                format!("legacy chain {} has not been used by a lock-aware kernel; its first adoption needs `weaver kernel start --adopt-legacy-chain` (or `weaver migrate user-chain`)", chain.display())
+            }));
+        }
+    }
+
+    (out, Value::Object(data))
 }
 
 fn skipped(mode: FixMode) -> Option<String> {
@@ -255,6 +348,55 @@ mod tests {
     fn stale_socket(rt: &Path) {
         let l = UnixListener::bind(rt.join("kernel.sock")).unwrap();
         drop(l); // file stays, nobody listens
+    }
+
+    #[test]
+    fn user_root_is_listed_with_lock_holder_sentinel_and_chain() {
+        let _serial = crate::doctor::env::serial();
+        let d = tempfile::tempdir().unwrap();
+        let (mut env, _rt) = setup(d.path());
+        let run = env.home.join(".weftos/run");
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(run.join("kernel.lock"), "4242\n").unwrap();
+        std::fs::write(run.join("REFUSED"), "instance lock held\n").unwrap();
+        let chain = env.home.join(".weftos/chain");
+        std::fs::create_dir_all(&chain).unwrap();
+        std::fs::write(chain.join("chain.json"), "{}").unwrap();
+        env.ps_override = Some("4242 weaver kernel start --foreground --profile user\n".into());
+        let procs = ProcTable::load(&env);
+        let (f, data) = check(&env, &procs, false, false);
+        assert!(env.runtime_dir_candidates().contains(&run));
+        let lock = f.iter().find(|x| x.id.starts_with("lock:")).expect("lock finding");
+        assert!(lock.message.contains("held by pid 4242"), "{}", lock.message);
+        let refused = f.iter().find(|x| x.id.starts_with("refused:")).expect("refused finding");
+        assert_eq!(refused.severity, Severity::Warn);
+        assert!(refused.message.contains("instance lock held"));
+        assert!(f.iter().any(|x| x.id.starts_with("user_chain:") && x.message.contains("present")));
+        let dirs = data["dirs"].as_array().unwrap();
+        let e = dirs.iter().find(|e| e["dir"] == json!(run)).expect("user root in data");
+        assert_eq!(e["lock"]["state"], "held");
+    }
+
+    #[test]
+    fn legacy_root_reports_migration_marker_and_adoption_state() {
+        let _serial = crate::doctor::env::serial();
+        let d = tempfile::tempdir().unwrap();
+        let (env, _rt) = setup(d.path());
+        let legacy = env.home.join(".clawft");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("chain.json"), "{}").unwrap();
+        let (f, data) = check(&env, &ProcTable::parse(""), false, false);
+        let a = f.iter().find(|x| x.id.starts_with("adoption:")).expect("adoption finding");
+        assert!(a.message.contains("--adopt-legacy-chain"), "{}", a.message);
+        std::fs::write(legacy.join("MIGRATED-TO-WEFTOS.txt"), "migrated-to: /h/.weftos/chain\n").unwrap();
+        std::fs::write(legacy.join("chain.lock"), "").unwrap();
+        let (f, data2) = check(&env, &ProcTable::parse(""), false, false);
+        let m = f.iter().find(|x| x.id.starts_with("migrated:")).expect("marker finding");
+        assert!(m.message.contains("/h/.weftos/chain"), "{}", m.message);
+        let e = |d: &Value| d["dirs"].as_array().unwrap().iter().find(|e| e["dir"] == json!(legacy)).unwrap().clone();
+        assert_eq!(e(&data)["legacy_chain"]["migrated_marker"], false);
+        assert_eq!(e(&data2)["legacy_chain"]["migrated_marker"], true);
+        assert_eq!(e(&data2)["legacy_chain"]["adopted_by_lock_aware_kernel"], true);
     }
 
     #[test]

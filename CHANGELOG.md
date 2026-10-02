@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.1 cut.
 
+### Changed — Weave topology Phase 1 follow-ups (ADR-103 A8, next release 0.8.2)
+
+- **Legacy clients are refused for mutating calls (breaking).** A request with
+  no `proto` now gets `proto_mismatch` unless the method is read-only, and
+  `weft`/`weaver` clients that meet a daemon with no `kernel.handshake` on the
+  default endpoint send read-only calls only (`unverified_daemon` otherwise).
+  Restart an old daemon with the current build to lift it.
+- **launchd no longer cycles on a permanent refusal.** The user daemon writes
+  `~/.weftos/run/REFUSED` on a permanent refusal or a clean exit and the
+  generated plist's `KeepAlive` is `PathState {REFUSED: false}`; `kernel start
+  --profile user` lifts it. Regenerate the unit with `weaver service unit --kind launchd` to pick up the new
+  plist. The legacy-chain age-window refusal is now a plain boot error (exit
+  1, retried); `-cREL` is made absolute on SIGHUP re-exec.
+- `weaver kernel status` without `--profile user` reports a live user daemon
+  instead of booting an inspection kernel; `weft doctor` lists `~/.weftos/run`
+  with the `kernel.lock` holder, `REFUSED`, the migration marker and adoption
+  state; MCP attach messages and `is_daemon_running()` honour a manifest
+  `runtime_dir`.
+
 ### Added — Weave topology Phase 2, per-project kernels (ADR-103 A7, package G)
 
 - **Per-project child kernels under the user daemon.** `weaver kernel start

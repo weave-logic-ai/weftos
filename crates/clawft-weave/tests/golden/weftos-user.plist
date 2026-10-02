@@ -21,8 +21,11 @@
     <integer>30</integer>
     <key>KeepAlive</key>
     <dict>
-        <key>SuccessfulExit</key>
-        <false/>
+        <key>PathState</key>
+        <dict>
+            <key>/Users/alice/.weftos/run/REFUSED</key>
+            <false/>
+        </dict>
     </dict>
     <key>AbandonProcessGroup</key>
     <true/>

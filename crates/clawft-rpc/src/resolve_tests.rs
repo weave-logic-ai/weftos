@@ -429,3 +429,17 @@ fn known_project_without_user_daemon_manifest_ignores_the_user_root() {
     let want = RuntimePaths::resolve_with(None, Some(&w.proj), Some(&w.home));
     assert_eq!(r.runtime_root, want.root());
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn socket_readers_follow_a_manifest_runtime_dir_without_env() {
+    let w = world(None);
+    let rt = w._dir.path().join("rt-manifest");
+    fs::create_dir_all(&rt).unwrap();
+    write_manifest_for(&w, &w.proj, rt.to_str().unwrap());
+    let i = inputs(&w); // no env, no flags: only the manifest names the endpoint
+    assert_eq!(socket_for(&i), rt.join("kernel.sock"));
+    assert!(!crate::is_daemon_running_for(&i).await);
+    let _live = tokio::net::UnixListener::bind(rt.join("kernel.sock")).unwrap();
+    assert!(crate::is_daemon_running_for(&i).await, "must dial the manifest endpoint");
+}

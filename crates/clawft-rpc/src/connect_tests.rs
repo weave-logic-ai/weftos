@@ -230,6 +230,23 @@ async fn old_daemon_on_default_endpoint_degrades_with_warning() {
 }
 
 #[tokio::test]
+async fn degraded_client_sends_read_only_calls_and_refuses_mutating_ones() {
+    let d = tempfile::tempdir().unwrap();
+    old_daemon(d.path());
+    let mut res = resolution(d.path(), Some(ID_A));
+    res.source = ResolveSource::Default;
+    let mut c = connect(&res).await.unwrap();
+    // Read-only goes through to the daemon (which answers with its own error).
+    let r = c.client.simple_call("agent.list").await.unwrap();
+    assert_ne!(r.error_kind.as_deref(), Some(UNVERIFIED_DAEMON_KIND));
+    // Mutating is refused before it is sent.
+    let r = c.client.simple_call("agent.spawn").await.unwrap();
+    assert!(!r.ok);
+    assert_eq!(r.error_kind.as_deref(), Some(UNVERIFIED_DAEMON_KIND));
+    assert!(r.error.unwrap().contains("weaver kernel restart"));
+}
+
+#[tokio::test]
 async fn old_daemon_on_explicit_endpoint_is_an_error() {
     let d = tempfile::tempdir().unwrap();
     old_daemon(d.path());
@@ -308,6 +325,7 @@ async fn contexts_are_per_client() {
     let ctx = |p: &str| ClientContext {
         project: Some(p.into()),
         proto: PROTO_VERSION,
+        unverified: false,
     };
     let mut ca = DaemonClient::connect_path(a.path().join("kernel.sock"))
         .await
