@@ -16,6 +16,7 @@ use crate::mesh_assess::AssessmentTransport;
 use crate::mesh_chain::{ChainSyncRequest, ChainSyncResponse};
 use crate::mesh_discovery::{MeshPeerEvent, MeshPeerEventBus};
 use crate::mesh_heartbeat::{ClockSource, HeartbeatConfig, HeartbeatTracker, MeshClockSync};
+use crate::mesh_delivery::{LocalDelivery, PeerCtx};
 use crate::mesh_ipc::MeshIpcEnvelope;
 use crate::mesh_kad::KademliaTable;
 
@@ -28,6 +29,10 @@ pub struct PeerConnection {
     pub connected_at: chrono::DateTime<chrono::Utc>,
     /// Sender for outbound serialized messages.
     pub sender: tokio::sync::mpsc::Sender<Vec<u8>>,
+    /// True when this route was registered by a connection whose node id
+    /// admission verified. A verified route cannot be taken over by an
+    /// unverified connection claiming the same id.
+    pub verified: bool,
 }
 
 /// Discovery state for mesh peer lookup and health tracking.
@@ -53,7 +58,7 @@ pub struct MeshRuntime {
     /// Active peer connections: node_id -> PeerConnection.
     peers: DashMap<String, PeerConnection>,
     /// Reference to the local A2A router for injecting remote messages.
-    local_router: Option<Arc<A2ARouter>>,
+    local_router: Option<Arc<dyn LocalDelivery>>,
     /// Optional discovery state (Kademlia + heartbeat).
     discovery: Option<DiscoveryState>,
     /// Mesh time synchronization state.
@@ -204,6 +209,12 @@ impl MeshRuntime {
         self.local_router = Some(router);
     }
 
+    /// Attach any [`LocalDelivery`] sink for inbound messages (a mesh
+    /// service delivers to tenants instead of an in-kernel router).
+    pub fn set_local_delivery(&mut self, delivery: Arc<dyn LocalDelivery>) {
+        self.local_router = Some(delivery);
+    }
+
     // ── Peer topic subscription registry ─────────────────────────
 
     /// Register a remote peer as a subscriber for the given topic.
@@ -270,20 +281,52 @@ impl MeshRuntime {
     /// has completed. Higher-level helpers like `connect_peer` build
     /// on top of this.
     pub fn add_peer(&self, node_id: String, sender: tokio::sync::mpsc::Sender<Vec<u8>>) {
+        self.register_peer(node_id, sender, false);
+    }
+
+    /// Register or refresh a route. Returns false when refused: an
+    /// unverified connection may not replace a verified peer's route.
+    ///
+    /// Re-registering the *same* channel (every inbound envelope does) is
+    /// a no-op; only a genuinely new channel replaces the route and emits
+    /// `Recovered`.
+    fn register_peer(
+        &self,
+        node_id: String,
+        sender: tokio::sync::mpsc::Sender<Vec<u8>>,
+        verified: bool,
+    ) -> bool {
+        use dashmap::mapref::entry::Entry;
         debug!(peer = %node_id, "adding peer connection");
-        let was_known = self.peers.contains_key(&node_id);
         let address = self
             .discovery
             .as_ref()
             .and_then(|d| d.peer_addresses.get(&node_id).map(|a| a.value().clone()));
-        self.peers.insert(
-            node_id.clone(),
-            PeerConnection {
-                node_id: node_id.clone(),
-                connected_at: chrono::Utc::now(),
-                sender,
-            },
-        );
+        let conn = PeerConnection {
+            node_id: node_id.clone(),
+            connected_at: chrono::Utc::now(),
+            sender,
+            verified,
+        };
+        // Decide and write under the entry (shard) lock so an unverified
+        // registration can never overwrite a verified one in a race.
+        let was_known = match self.peers.entry(node_id.clone()) {
+            Entry::Occupied(mut o) => {
+                if o.get().sender.same_channel(&conn.sender) {
+                    return true;
+                }
+                if o.get().verified && !verified {
+                    warn!(peer = %node_id, "refusing route takeover of an admitted peer by an unverified connection");
+                    return false;
+                }
+                o.insert(conn);
+                true
+            }
+            Entry::Vacant(v) => {
+                v.insert(conn);
+                false
+            }
+        };
         // WEFT-120: reconnected peers emit Recovered; first connect → Joined.
         if was_known {
             self.peer_events.emit(MeshPeerEvent::Recovered {
@@ -297,6 +340,35 @@ impl MeshRuntime {
                 platform: None,
             });
         }
+        true
+    }
+
+    /// Remove every route that still points at `tx` (a closed connection's
+    /// outbound channel). Routes since replaced by a newer connection are
+    /// left alone; `Left` is emitted only for routes actually removed.
+    /// Returns the number removed.
+    pub fn disconnect_channel(&self, tx: &tokio::sync::mpsc::Sender<Vec<u8>>) -> usize {
+        let ids: Vec<String> = self
+            .peers
+            .iter()
+            .filter(|e| e.sender.same_channel(tx))
+            .map(|e| e.key().clone())
+            .collect();
+        let mut n = 0;
+        for id in ids {
+            if let Some((_, conn)) = self.peers.remove_if(&id, |_, p| p.sender.same_channel(tx)) {
+                // Admitted routes lose their subscriptions with the
+                // connection. Unadmitted (legacy) peers keep theirs, as
+                // before: a leaf that reconnects must not have to
+                // re-subscribe.
+                if conn.verified {
+                    self.unregister_all_peer_topics(&id);
+                }
+                self.peer_events.emit(MeshPeerEvent::Left { node_id: id });
+                n += 1;
+            }
+        }
+        n
     }
 
     /// Send a [`MeshIpcEnvelope`] to a connected peer.
@@ -346,7 +418,8 @@ impl MeshRuntime {
         }
         let envelope = MeshIpcEnvelope::from_bytes(data)
             .map_err(|e| KernelError::Mesh(format!("deserialization error: {e}")))?;
-        self.handle_envelope(envelope).await
+        let ctx = PeerCtx::unauthenticated(envelope.source_node.clone());
+        self.handle_envelope(envelope, &ctx).await
     }
 
     /// Handle incoming bytes while auto-registering the sending peer.
@@ -366,6 +439,25 @@ impl MeshRuntime {
         data: &[u8],
         outbound: tokio::sync::mpsc::Sender<Vec<u8>>,
     ) -> KernelResult<()> {
+        self.handle_incoming_peer(data, outbound, None).await
+    }
+
+    /// [`handle_incoming_from`](Self::handle_incoming_from) with the
+    /// connection's authenticated identity.
+    ///
+    /// With `peer = Some(ctx)` and `ctx.node_verified`, the route is
+    /// registered under `ctx.peer_id` (never under the envelope's claim),
+    /// an envelope whose `source_node` differs is rejected, and the
+    /// route cannot later be taken over by an unverified connection. With
+    /// `None` (or an unverified ctx) behaviour is the pre-admission one:
+    /// the peer is registered under its claimed `source_node`, with a
+    /// warning the first time that id is seen.
+    pub async fn handle_incoming_peer(
+        &self,
+        data: &[u8],
+        outbound: tokio::sync::mpsc::Sender<Vec<u8>>,
+        peer: Option<&PeerCtx>,
+    ) -> KernelResult<()> {
         // AssessmentSync frames do not carry MeshIpcEnvelope source_node
         // for auto-registration. Demux first; reply (if any) goes on the
         // same outbound channel. Peer registration for assessment-only
@@ -381,20 +473,40 @@ impl MeshRuntime {
         let envelope = MeshIpcEnvelope::from_bytes(data)
             .map_err(|e| KernelError::Mesh(format!("deserialization error: {e}")))?;
 
+        let mut ctx = match peer {
+            Some(c) => c.clone(),
+            None => PeerCtx::unauthenticated(envelope.source_node.clone()),
+        };
+        if ctx.node_verified && envelope.source_node != ctx.peer_id {
+            return Err(KernelError::Mesh(format!(
+                "source_node {} does not match admitted node {}",
+                envelope.source_node, ctx.peer_id
+            )));
+        }
+        if !ctx.node_verified {
+            // No authenticated identity: the claim is all there is.
+            ctx.peer_id = envelope.source_node.clone();
+            if !self.peers.contains_key(&ctx.peer_id) {
+                warn!(peer = %ctx.peer_id,
+                    "registering peer under an unauthenticated source_node claim");
+            }
+        }
+        ctx.src_scope = envelope.src_scope.clone();
+
         // Always (re)register the peer's outbound channel. A leaf that
         // reconnects (daemon restart, wifi blip, socket idle-timeout)
         // keeps the same node_id but gets a fresh channel — the stale
         // entry must be replaced or `send_to_peer` delivers into the
         // dead channel of the dropped connection and the peer never
         // receives anything again.
-        if self.peers.contains_key(&envelope.source_node) {
-            debug!(peer = %envelope.source_node, "re-registering reconnected peer");
-        } else {
-            debug!(peer = %envelope.source_node, "auto-registering inbound peer");
+        if !self.register_peer(ctx.peer_id.clone(), outbound, ctx.node_verified) {
+            return Err(KernelError::Mesh(format!(
+                "route for {} belongs to an admitted peer",
+                ctx.peer_id
+            )));
         }
-        self.add_peer(envelope.source_node.clone(), outbound);
 
-        self.handle_envelope(envelope).await
+        self.handle_envelope(envelope, &ctx).await
     }
 
     /// Demux AssessmentSync frames into the registered transport.
@@ -435,7 +547,11 @@ impl MeshRuntime {
         }
     }
 
-    async fn handle_envelope(&self, envelope: MeshIpcEnvelope) -> KernelResult<()> {
+    async fn handle_envelope(
+        &self,
+        envelope: MeshIpcEnvelope,
+        ctx: &PeerCtx,
+    ) -> KernelResult<()> {
         debug!(
             from_node = %envelope.source_node,
             dest_node = %envelope.dest_node,
@@ -473,6 +589,7 @@ impl MeshRuntime {
 
         // Unwrap the RemoteNode wrapper so the local router sees the
         // inner target (Process, Service, Topic, etc.).
+        let dest_scope = envelope.dest_scope;
         let mut message = envelope.message;
         if let MessageTarget::RemoteNode { target, .. } = message.target {
             message.target = *target;
@@ -494,7 +611,17 @@ impl MeshRuntime {
             if let MessagePayload::Json(ref payload) = message.payload
                 && let Some(topic) = payload.get("topic").and_then(|v| v.as_str())
             {
-                self.register_peer_topic(topic, &envelope.source_node);
+                // Same admitted-identity path as delivery: the subscriber
+                // is `ctx.peer_id`, and a tenant-aware sink may veto.
+                if let Some(router) = self.local_router.as_ref()
+                    && !router
+                        .authorize_subscribe(ctx, topic, dest_scope.as_ref())
+                        .await
+                {
+                    warn!(from = %ctx.peer_id, topic, "mesh.subscribe refused by local delivery");
+                    return Ok(());
+                }
+                self.register_peer_topic(topic, &ctx.peer_id);
                 return Ok(());
             }
             // Malformed subscribe — drop silently rather than routing to
@@ -511,7 +638,7 @@ impl MeshRuntime {
             .local_router
             .as_ref()
             .ok_or_else(|| KernelError::Mesh("no local router attached to mesh runtime".into()))?;
-        router.send(message).await
+        router.deliver(ctx, dest_scope.as_ref(), message).await
     }
 
     /// Number of currently connected peers.
@@ -1725,3 +1852,7 @@ mod tests {
         let _ = b_to_a_rx.try_recv();
     }
 }
+
+#[cfg(test)]
+#[path = "mesh_runtime_bind_tests.rs"]
+mod bind_tests;
