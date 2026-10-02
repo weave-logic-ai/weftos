@@ -202,7 +202,7 @@ fn canon(p: &Path) -> std::path::PathBuf {
 /// - expected Some, daemon Some(other): hard error.
 /// - expected Some, daemon None: hard error when the endpoint was chosen
 ///   explicitly (flag, env or manifest), a warning on the default level
-///   (the Phase 1 user-daemon case).
+///   unless the daemon is the user daemon (`profile == "user"`).
 pub fn verify_handshake(res: &Resolution, h: &Handshake) -> Result<Vec<String>, ConnectError> {
     let mut warnings = Vec::new();
     match (&res.project_id, &h.project_id) {
@@ -212,6 +212,8 @@ pub fn verify_handshake(res: &Resolution, h: &Handshake) -> Result<Vec<String>, 
                 actual: got.clone(),
             });
         }
+        // The user daemon is deliberately unbound (D14); say nothing.
+        (Some(_), None) if h.profile.as_deref() == Some("user") => {}
         (Some(want), None) if res.source != ResolveSource::Default => {
             return Err(ConnectError::ProjectUnbound {
                 expected: want.clone(),
@@ -291,6 +293,7 @@ fn degraded_handshake(res: &Resolution, status: &serde_json::Value) -> Handshake
         version: build("version"),
         sha: build("sha"),
         binary: None,
+        mesh: None,
     }
 }
 

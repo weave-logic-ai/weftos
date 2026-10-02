@@ -1,0 +1,27 @@
+[Unit]
+Description=WeftOS machine mesh service
+Documentation=https://github.com/weave-logic-ai/weftos
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=weftos
+Group=weftos
+ExecStart="/usr/local/libexec/weftos/weaver" mesh serve --config /etc/weftos/mesh.toml
+Restart=always
+RestartSec=3
+StateDirectory=weftos/mesh
+StateDirectoryMode=0700
+RuntimeDirectory=weftos
+RuntimeDirectoryMode=0750
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

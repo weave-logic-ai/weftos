@@ -23,6 +23,13 @@ pub mod kernel_cmd;
 pub mod leaf_cmd;
 #[cfg(all(unix, feature = "exochain", feature = "placement"))]
 pub mod project_cmd;
+pub mod migrate_cmd;
+#[cfg(all(unix, feature = "mesh"))]
+pub mod mesh_cmd;
+#[cfg(all(unix, feature = "mesh"))]
+pub mod mesh_install;
+#[cfg(all(unix, feature = "mesh"))]
+pub mod mesh_install_key;
 pub mod resource_cmd;
 pub mod service_cmd;
 pub mod soul_cmd;

@@ -6,7 +6,11 @@
 //! 2. env: `WEFTOS_RUNTIME_DIR`, `WEFTOS_PROJECT`
 //! 3. manifest: `project.toml` found walking up from the cwd (never `$HOME`),
 //!    then `~/.weftos/projects/<id>.toml` and its `[serve] runtime_dir`
-//! 4. default: [`RuntimePaths::resolve_with`]
+//!    Without a `runtime_dir`, a manifest with `[serve] via = "user-daemon"`
+//!    selects the user daemon's root (`~/.weftos/run`).
+//! 4. user default: with no project known, `~/.weftos/run` when its
+//!    `kernel.sock` or `kernel.lock` exists
+//! 5. default: [`RuntimePaths::resolve_with`] (the Phase 0 answer)
 //!
 //! The expected project id is chosen independently with the same order
 //! (flag, env, `project.toml`), so a flag or env project still gets its
@@ -20,7 +24,7 @@ use clawft_types::project::{
     ServeVia, find_project_toml, read_manifest, read_project_toml, validate_id,
 };
 use clawft_types::runtime_paths::{
-    RUNTIME_DIR_ENV, RuntimePaths, SOCKET_NAME, home_dir, user_runtime_root,
+    LOCK_FILE_NAME, RUNTIME_DIR_ENV, RuntimePaths, SOCKET_NAME, home_dir, user_runtime_root,
 };
 
 use crate::probe::{SocketState, describe_state};
@@ -266,6 +270,12 @@ pub fn resolve_with(i: &ResolveInputs) -> Result<Resolution, ResolveError> {
                         child_root = Some(run);
                         None
                     }
+                    (None, _) if m.serve.as_ref().is_some_and(|s| s.via == ServeVia::UserDaemon) => {
+                        // D14: the project is served by the user daemon.
+                        manifest_note =
+                            format!("{manifest_note}; manifest serves via user-daemon");
+                        Some(user_runtime_root(h))
+                    }
                     (None, _) => {
                         manifest_note =
                             format!("{manifest_note}; manifest has no [serve] runtime_dir");
@@ -306,6 +316,19 @@ pub fn resolve_with(i: &ResolveInputs) -> Result<Resolution, ResolveError> {
     let flag_rt = i.flags.runtime.clone().filter(|p| !p.as_os_str().is_empty());
     let env_rt = nonempty(&i.env_runtime).map(PathBuf::from);
     let default = RuntimePaths::resolve_with(None, i.cwd.as_deref(), home);
+    // User default (D14): no project, but a user daemon has been there.
+    let user_default = home
+        .map(user_runtime_root)
+        .filter(|r| r.join(SOCKET_NAME).exists() || r.join(LOCK_FILE_NAME).exists());
+    let user_default = if project.is_none() { user_default } else { None };
+    let user_note = match (&user_default, home) {
+        (Some(r), _) => format!("user daemon root {}", r.display()),
+        (None, Some(h)) => format!(
+            "no user daemon at {} (no kernel.sock or kernel.lock)",
+            user_runtime_root(h).display()
+        ),
+        (None, None) => "no home directory".into(),
+    };
 
     let (root, source) = if let Some(p) = flag_rt.clone() {
         (p, ResolveSource::Flag)
@@ -315,6 +338,8 @@ pub fn resolve_with(i: &ResolveInputs) -> Result<Resolution, ResolveError> {
         (p, ResolveSource::Manifest)
     } else if let Some(p) = child_root.clone() {
         (p, ResolveSource::Manifest)
+    } else if let Some(p) = user_default.clone() {
+        (p, ResolveSource::Default)
     } else {
         (default.root().to_path_buf(), ResolveSource::Default)
     };
@@ -347,7 +372,7 @@ pub fn resolve_with(i: &ResolveInputs) -> Result<Resolution, ResolveError> {
     });
     tried.push(Attempt {
         level: ResolveSource::Default,
-        detail: format!("runtime root {}", default.root().display()),
+        detail: format!("{user_note}; else runtime root {}", default.root().display()),
         used: source == ResolveSource::Default,
     });
 

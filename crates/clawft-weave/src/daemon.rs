@@ -653,10 +653,10 @@ pub fn daemonize(
     if pid_path.exists()
         && let Ok(pid_str) = std::fs::read_to_string(&pid_path)
     {
-        if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            if process_alive(pid) {
-                anyhow::bail!("kernel already running (pid {pid})");
-            }
+        if let Ok(pid) = pid_str.trim().parse::<u32>()
+            && process_alive(pid)
+        {
+            anyhow::bail!("kernel already running (pid {pid})");
         }
         // Stale PID file
         let _ = std::fs::remove_file(&pid_path);
@@ -957,13 +957,17 @@ pub(crate) async fn boot_kernel_with_identity(
     platform: Arc<NativePlatform>,
     identity: &crate::node_identity::DaemonIdentity,
 ) -> clawft_kernel::KernelResult<Kernel<NativePlatform>> {
-    Kernel::boot_with_node_key(
-        config,
-        kernel_config,
-        platform,
-        Some(identity.signing_key.to_bytes()),
-    )
-    .await
+    match identity.signing_key() {
+        Ok(key) => {
+            Kernel::boot_with_node_key(config, kernel_config, platform, Some(key.to_bytes())).await
+        }
+        // Service mode: the node id is the mesh service's; there is no key
+        // here to derive one from and none is generated.
+        Err(_) => {
+            Kernel::boot_in_service_mode(config, kernel_config, platform, identity.node_id.clone())
+                .await
+        }
+    }
 }
 
 /// User daemon only: seed `~/.weftos/projects` from the legacy
@@ -1105,7 +1109,23 @@ pub async fn run(
         clawft_types::runtime_paths::user_profile_active(),
     );
     // A project kernel boots with its project key (node key == chain key),
-    // already loaded and certified by `pre_boot`.
+    // already loaded and certified by `pre_boot`; it never talks to the
+    // machine mesh service (its mesh is off, ADR-103 A7), so the P3-U mesh
+    // decision below is skipped for it and `<runtime>/node.key` is not read.
+    // Otherwise (ADR-103 P3-U) decide the mesh mode first: in service mode
+    // the node id is the machine mesh service's and `node.key` is never read.
+    #[cfg(all(unix, feature = "mesh"))]
+    let (daemon_identity, mesh_link) = match pre_boot.take_identity() {
+        Some(identity) => {
+            crate::mesh_state::global().set(crate::mesh_state::plain("off"));
+            (identity, None)
+        }
+        None => {
+            let b = crate::mesh_boot::prepare(&kernel_config, &runtime_dir).await?;
+            (b.identity, b.link)
+        }
+    };
+    #[cfg(not(all(unix, feature = "mesh")))]
     let daemon_identity = match pre_boot.take_identity() {
         Some(identity) => identity,
         None => crate::node_identity::load_or_generate(&runtime_dir)
@@ -1130,6 +1150,12 @@ pub async fn run(
         seed_user_projects();
         crate::anchor_rpc::reconcile_startup(&kernel).await;
     }
+    // ADR-103 P3-U: start the service link now that the router and gate exist.
+    #[cfg(all(unix, feature = "mesh"))]
+    let mesh_handle = match mesh_link {
+        Some(link) => Some(crate::mesh_boot::start_link(link, &kernel).await),
+        None => None,
+    };
 
     // WEFT-494: seed live MCP registry + remember best-effort config path
     // for path-less mcp.reload (CLI after weft mcp add).
@@ -1147,15 +1173,24 @@ pub async fn run(
     #[cfg(feature = "exochain")]
     crate::workload_rpc::init_registry(&paths.workloads());
     // mesh-placement-12: the placement control plane signs with the node key.
+    // In service mode the box key belongs to the mesh service, so there is
+    // nothing to sign with here and placement stays off (no fallback key).
     #[cfg(all(feature = "placement", unix))]
-    crate::workload_place_rpc::init(daemon_identity.signing_key.clone(), runtime_dir.clone());
-    // mesh-placement-03: probe, sign and cache this node's facts.
+    match daemon_identity.signing_key() {
+        Ok(key) => crate::workload_place_rpc::init(key.clone(), runtime_dir.clone()),
+        Err(e) => warn!(error = %e, "placement control plane disabled"),
+    }
+    // mesh-placement-03: probe, sign and cache this node's facts. In service
+    // mode the service signs and advertises the machine's facts.
     #[cfg(any(feature = "mesh", feature = "exochain"))]
-    crate::node_facts_rpc::init(
-        daemon_identity.signing_key.clone(),
-        runtime_dir.clone(),
-        kernel.read().await.cluster_membership().clone(),
-    );
+    match daemon_identity.signing_key() {
+        Ok(key) => crate::node_facts_rpc::init(
+            key.clone(),
+            runtime_dir.clone(),
+            kernel.read().await.cluster_membership().clone(),
+        ),
+        Err(e) => warn!(error = %e, "local node facts disabled (the mesh service advertises them)"),
+    }
     // mesh-placement-12: serve this node's workload-host to the controllers
     // named in <runtime>/workload-host.json (off when the file is absent).
     #[cfg(all(feature = "placement", unix))]
@@ -1171,9 +1206,11 @@ pub async fn run(
     }
     {
         let k = kernel.read().await;
-        let pubkey: [u8; 32] = daemon_identity.signing_key.verifying_key().to_bytes();
-        k.node_registry()
-            .register(pubkey, Some("daemon".to_string()));
+        let pubkey: [u8; 32] = daemon_identity.public_key();
+        // In service mode `pubkey` is the machine's: this process cannot sign
+        // for it, so the entry says it is attested by the service.
+        let label = if daemon_identity.is_service() { "daemon (service-attested)" } else { "daemon" };
+        k.node_registry().register(pubkey, Some(label.to_string()));
         info!(node_id = %daemon_identity.node_id, "daemon node registered");
         k.event_log().info(
             "node",
@@ -1976,7 +2013,10 @@ pub async fn run(
         // self-registration happening before the listener is up).
         let concierge_agent_id: String = {
             let k = kernel.read().await;
-            let pubkey: [u8; 32] = daemon_identity.signing_key.verifying_key().to_bytes();
+            // In service mode this is the machine's public key: the entry is
+            // service-attested (this process cannot sign for that key). The
+            // agent registry has no label field yet; tracked as a follow-up card.
+            let pubkey: [u8; 32] = daemon_identity.public_key();
             let entry = k.agent_registry().register("concierge-bot".into(), pubkey);
             info!(
                 agent_id = %entry.agent_id,
@@ -2351,8 +2391,9 @@ pub async fn run(
             let k = kernel.read().await;
             k.agent_registry().clone()
         };
+        // Service mode: service-attested machine key, as for the concierge above.
         let caller_pubkey: [u8; 32] =
-            daemon_identity.signing_key.verifying_key().to_bytes();
+            daemon_identity.public_key();
         let mut service = clawft_service_agent::AgentService::new(agent_loop)
             .with_defer_broker(defer_broker)
             .with_caller_registry(
@@ -2776,6 +2817,10 @@ pub async fn run(
 
     // Shutdown signal
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    #[cfg(all(unix, feature = "mesh"))]
+    if let Some(h) = mesh_handle {
+        crate::mesh_boot::stop_on_shutdown(h, shutdown_rx.clone());
+    }
 
     // Cron tick loop — fires overdue jobs every second
     let cron_kernel = Arc::clone(&kernel);
@@ -3070,7 +3115,7 @@ pub async fn run(
                                         Some(digest) => {
                                             let guard = llm.read().await;
                                             crate::conv_postmortem::summarize_durable_facts(
-                                                &*guard, &digest,
+                                                &guard, &digest,
                                             )
                                             .await
                                         }
@@ -6795,7 +6840,7 @@ async fn dispatch(
                 (Some(tier), Some(llm)) => match tier.conversation_digest(&conv_id, 16_384) {
                     Some(digest) => {
                         let guard = llm.read().await;
-                        crate::conv_postmortem::summarize_durable_facts(&*guard, &digest).await
+                        crate::conv_postmortem::summarize_durable_facts(&guard, &digest).await
                     }
                     None => None,
                 },

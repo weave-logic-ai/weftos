@@ -111,6 +111,50 @@ pub struct Handshake {
     /// Path of the daemon binary, when known.
     #[serde(default)]
     pub binary: Option<String>,
+    /// How this daemon relates to the mesh (ADR-103 P3-U). Absent from older
+    /// daemons and from daemons that have not decided yet; older clients
+    /// ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<MeshHandshake>,
+}
+
+/// The `mesh` object of [`Handshake`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeshHandshake {
+    /// `service`, `collapsed` or `off`.
+    pub mode: String,
+    /// Service mode: `connected` or `reconnecting`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    /// Service mode: the machine node id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_node_id: Option<String>,
+    /// Service mode: serial of the current user certificate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert_serial: Option<u64>,
+    /// Service mode: expiry of the current user certificate (unix seconds).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert_not_after: Option<u64>,
+    /// Service mode: negotiated mesh-local protocol version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proto: Option<u32>,
+    /// Service mode: chain events (journal anchors, binding records) waiting
+    /// for the chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events_pending: Option<u64>,
+    /// Service mode: chain events dropped because the queue was full.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events_dropped: Option<u64>,
+}
+
+impl MeshHandshake {
+    /// One-line summary, e.g. `service (connected)`.
+    pub fn summary(&self) -> String {
+        match (self.mode.as_str(), self.state.as_deref()) {
+            (m, Some(st)) => format!("{m} ({st})"),
+            (m, None) => m.to_owned(),
+        }
+    }
 }
 
 /// Outcome of checking the `proto` a request carried.
@@ -353,6 +397,7 @@ mod tests {
             version: "0.8.1".into(),
             sha: "abcd".into(),
             binary: Some("/bin/weaver".into()),
+            mesh: None,
         };
         let back: Handshake = serde_json::from_value(handshake_value(&h)).unwrap();
         assert_eq!(back, h);
@@ -363,5 +408,28 @@ mod tests {
         .unwrap();
         assert_eq!(minimal.project_id, None);
         assert_eq!(minimal.depth, 0);
+    }
+
+    #[test]
+    fn mesh_object_is_optional_and_additive() {
+        let minimal: Handshake = serde_json::from_value(json!({
+            "proto": {"current": 1, "min": 1},
+            "node_id": "n", "runtime_dir": "/r", "pid": 1
+        }))
+        .unwrap();
+        assert_eq!(minimal.mesh, None, "older daemons send no mesh object");
+        let with: Handshake = serde_json::from_value(json!({
+            "proto": {"current": 1, "min": 1},
+            "node_id": "n", "runtime_dir": "/r", "pid": 1,
+            "mesh": {"mode": "service", "state": "connected", "cert_serial": 3, "unknown_future_field": 1}
+        }))
+        .unwrap();
+        let m = with.mesh.as_ref().unwrap();
+        assert_eq!((m.mode.as_str(), m.cert_serial), ("service", Some(3)));
+        assert_eq!(m.summary(), "service (connected)");
+        // And a handshake without it serialises without the key.
+        let v = handshake_value(&minimal);
+        assert!(v.get("mesh").is_none(), "{v}");
+        assert_eq!(MeshHandshake { mode: "off".into(), ..Default::default() }.summary(), "off");
     }
 }

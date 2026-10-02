@@ -60,7 +60,8 @@ pub enum KernelAction {
         #[arg(long)]
         new_chain: bool,
 
-        /// Adopt the legacy `~/.clawft` chain for the first time. Required
+        /// Adopt the legacy `~/.clawft` chain for the first time (also overrides a
+        /// `weaver migrate user-chain` marker, with a WARN: it forks history). Required
         /// once, after stopping every older weaver daemon, while no
         /// `chain.lock` exists beside that chain.
         #[arg(long, conflicts_with = "new_chain")]
@@ -667,9 +668,19 @@ fn print_handshake_summary(h: &clawft_rpc::handshake::Handshake) {
         println!("User:       uid {uid} (unverified)");
     }
     if let Some(key) = &h.user_key_id {
-        println!("User key:   {key} (chain key until Phase 3)");
+        println!("User key:   {key} (user.key, else the chain key)");
     }
     println!("Protocol:   {}..={}", h.proto.min, h.proto.current);
+    if let Some(m) = &h.mesh {
+        println!("Mesh:       {}", m.summary());
+        if m.events_dropped.unwrap_or(0) > 0 {
+            println!(
+                "            WARNING: {} mesh chain event(s) dropped ({} pending); the chain is not accepting events",
+                m.events_dropped.unwrap_or(0),
+                m.events_pending.unwrap_or(0)
+            );
+        }
+    }
 }
 
 /// Fetch and print cluster info from daemon (appended to status output).

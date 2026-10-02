@@ -103,6 +103,133 @@ Staging area for changes after the 0.8.1 cut.
   `undici` 7.30.0 and `brace-expansion` 5.0.12; new wasmtime advisories are
   ignored with enforced expiries (see `docs/security/cargo-audit-residual.md`).
 
+### Changed — Weave topology Phase 1 (ADR-103) — read before upgrading
+
+Phase 1 adds the user daemon, projects, tokens and the scope gate. The owner
+steps are in `docs/guides/kernel.md` (User daemon, "Owner migration").
+
+- **The gateway binds to loopback by default.** `gateway.host` changed from
+  `0.0.0.0` to `127.0.0.1`, and loopback binds now check the `Host` header. An
+  install that relied on the implicit LAN bind loses it silently: set
+  `gateway.host = "0.0.0.0"` if you want LAN exposure.
+- **User daemon.** `weaver kernel start --profile user` runs one machine-wide
+  daemon in `~/.weftos/run` (socket, `kernel.lock`, log) with the roles
+  `machine` and `user`, its working directory in `~/.weftos`. It reads
+  `~/.weftos/weave.toml`, which takes precedence over `~/.clawft/config.json`;
+  copy your `[kernel.mesh]` and Noise sections into it or the user daemon runs
+  with the mesh off. It seeds `~/.weftos/projects/` from `workspaces.json`.
+- **`weft` now reaches the user daemon without flags.** The endpoint resolves
+  from `--runtime`, then `WEFTOS_RUNTIME_DIR`, then the project manifest
+  (`[serve] runtime_dir`, or `via = "user-daemon"`, which selects
+  `~/.weftos/run`), then `~/.weftos/run` when no project is known and a user
+  daemon has run there, then the Phase 0 default. The unreachable-daemon
+  error lists every level tried.
+- **User chain migration.** `weaver migrate user-chain [--dry-run]` copies the
+  legacy chain from `~/.clawft` to `~/.weftos/chain`, verifies it (hashes,
+  head, signature) and writes `MIGRATED-TO-WEFTOS.txt` beside the original,
+  which is never modified. After it, any kernel that would still land on the
+  `~/.clawft` chain, including one whose config sets
+  `kernel.chain.checkpoint_path` into that directory, is refused with
+  **exit 78** unless `--adopt-legacy-chain` is passed. `migrate` warns when
+  `~/.clawft/config.json` sets the key.
+- **Projects.** New `weft project init|fork|list|show|seed`; new global flags
+  `--project <ULID>` and `--runtime <DIR>`; new environment variables
+  `WEFTOS_PROJECT` and `WEFTOS_MANIFESTS_DIR`. Manifests live in
+  `~/.weftos/projects/<ULID>.toml` (mode 0600); `project.toml` marks a
+  project directory.
+- **Tokens.** `weft token issue|revoke|list` mint `wft_` secrets (shown once,
+  with a playground link; 24 h maximum). Only hashes go on the chain;
+  revocations are also journaled in `auth-tokens.jsonl`, now in the runtime
+  root (older journals beside the chain or in `~/.clawft` are merged in once,
+  not modified). A token's `project` is recorded but not yet enforced.
+- **Literal `auth` scopes are same-uid only.** `admin`, `write`, `chat` and
+  `read` as an `auth` value work only from a unix-socket peer with the daemon's
+  uid. From another uid on the unix socket the request fails with
+  `peer_uid_mismatch`; over the TCP relay the literal is stripped, so the call
+  is anonymous and a mutating method fails with "permission denied: requires
+  capability". Use a `wft_` token instead.
+- **Scope gate (D12).** On the user daemon, `kernel.governance.outside_project`
+  defaults to `read_only`: outside a project only a reviewed allow-list of read
+  methods works and everything else returns `project_required`. Other modes:
+  `deny_all`, `allow_all` (the pre-Phase 1 behaviour, and the default for
+  project daemons). The allow-list includes the streams and reads first-party
+  clients use without a project (`kernel.logs_stream`, `substrate.read`,
+  `substrate.subscribe`, `cluster.facts`, `voice.trace`), so the egui
+  explorer and `weft voice watch` keep working. `ipc.subscribe_stream` is not
+  on it: it needs a project claim.
+- **Service units.** `weaver service unit --kind launchd|systemd` prints a unit
+  for the user daemon, and `weaver update --restart` restarts it (acting only
+  on the pid-file pid after checking the exe and the handshake). A refused boot
+  exits **78**; the systemd unit lists it in `RestartPreventExitStatus`.
+  launchd cannot filter on exit codes, so it retries a refused boot every 30 s
+  and fills the log until you fix the cause.
+- **Compatibility.** `kernel.status` now carries a `handshake` object. Clients
+  that send no `proto` are accepted for every method this release; they will be
+  refused in Phase 2, so update `weft` and the gateway together.
+
+### Added — Weave topology Phase 3 (ADR-103) — machine mesh service
+
+Phase 3 adds an optional machine mesh service that owns the box node key and
+the one mesh listener, with user daemons as its registered clients. Nothing
+changes until an administrator installs it; without it the user daemon keeps
+running the mesh itself (collapsed mode). Owner steps:
+`docs/guides/weftos-deployment-sops.md` ("Moving to the machine mesh service").
+
+- **`weaver mesh serve`** runs the service as an unprivileged account (it
+  refuses root). It keeps a signed, hash-chained machine journal of bindings,
+  certificates, admissions and policy, issues 24 h user certificates, routes
+  `weft://<node>/<user>/<project>/<topic>` addresses to registered users, and
+  owns no chain, token, secret or governance state (`scripts/build.sh
+  check-mesh-no-owned-state` enforces that).
+- **Admin verbs:** `weaver mesh status | bindings | bind approve|revoke|rebind
+  | peer revoke|unrevoke | journal verify [--accept-truncate] | trust`.
+- **Installing:** `weaver mesh install-service` and `uninstall-service` print a
+  reviewed script (launchd or systemd, service account `_weftos` / `weftos`,
+  binary in `/usr/local/libexec/weftos/`). They run nothing. On a machine that
+  has `~/.weftos/run/node.key`, `install-service` requires `--adopt-node-key`
+  (keep the node id) or `--fresh-node-key` (a new one, with a `# WARNING` in the
+  script). The service listens on `127.0.0.1:9489` by default; LAN peers such
+  as the Pi need `--listen 0.0.0.0:9489`. Admin verbs need root or a uid given
+  with `--admin-uid`. `weaver update` prints the service restart line when the
+  service binary is out of date; it never calls `sudo` for the service (the
+  user-binary copy keeps its old `sudo cp` fallback).
+- **Mode selection.** New `kernel.mesh.service = "auto" | "required" | "off"`
+  (default `auto`) in `~/.weftos/weave.toml`. `auto` uses a service that
+  answers and verifies, else collapsed; a service that answers but fails
+  verification (machine key changed, wrong server uid) fails the boot instead
+  of falling back. `kernel.status` shows `mesh.mode` (`service`, `collapsed`,
+  `off`); in service mode the daemon's node id is the service's and it never
+  reads `~/.weftos/run/node.key`.
+- **User key.** `weaver migrate user-key [--dry-run]` copies the migrated
+  `chain.key` seed to `~/.weftos/user.key` (same public key, same user id;
+  `chain.key` is kept). The user daemon pins the machine key on first contact
+  in `~/.weftos/mesh/machine.pub`; the `weaver mesh` verbs only compare
+  against a pin and write one with `weaver mesh trust`.
+- **Keep `service = "required"` after removing `~/.weftos/run/node.key`.**
+  Under `auto` a daemon whose service is down would need a new node id; it
+  refuses to boot instead when the machine key is pinned, and only `off`
+  collapses deliberately with a new id.
+- **`weaver mesh peer revoke`** closes the peer's live connection. Under
+  `admission = enforce` it is refused on reconnect; under `observe` (the
+  default) the revocation is only recorded and it can reconnect.
+- **Doctor.** `weaver doctor runtime` adds `mesh.*` checks (service reachable,
+  protocol window, pin, journal, box key mode, leftover `node.key`, two
+  listeners on 9489, the daemon's mode against the service) and
+  `user_key_split` when `user.key` and `chain.key` disagree.
+- **Mesh admission** (`admission = off | observe | enforce`, default
+  `observe`) verifies a signed hello bound to the Noise session; `observe`
+  journals would-be refusals and admits.
+- **Tests:** `scripts/build.sh test-mesh-service` runs the mesh crates, the
+  end-to-end test (`scripts/dev/mesh-p3-e2e.sh`: the service and two user
+  daemons as the current user on tempdirs), the no-owned-state gate and the
+  mesh-only kernel build.
+- **Known limits:** macOS service log not rotated; Windows not implemented
+  (the service refuses to start); on macOS the service may start before
+  `/var/run/weftos` exists and converges by launchd restarts; the installer
+  receipt's service tier is not written yet; leaf peers without signed
+  admission are not yet reported by the service; scoped `weft://` sends are
+  reachable from the API and tests only (no RPC or router caller yet).
+
 ### Fixed (0.8.2)
 
 - **Ruflo team bus synced to the fixed ADR-402 store** (upstream `ruvnet/ruflo` PR

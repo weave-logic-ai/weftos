@@ -227,7 +227,7 @@ fn population_allow_list_is_read_only_and_real() {
     for m in READ_ONLY_ALLOW {
         assert_eq!(required_capability(m), Capability::Read, "{m} must be a Read method");
         assert!(
-            arms.iter().any(|a| a == m) || NOT_LEGACY_ARMS.contains(m),
+            arms.iter().any(|a| a == m) || NOT_LEGACY_ARMS.contains(m) || INTERCEPTS.contains(m),
             "{m} is on the allow-list but is not a dispatched method"
         );
         assert!(
@@ -241,12 +241,16 @@ fn population_allow_list_is_read_only_and_real() {
 
 /// Methods the `capability.rs` default would call anonymous `Read` but that
 /// can disclose or change state must stay off the list; the list never
-/// derives from capability. `chain.tail` is the one deliberate exception:
-/// the gateway facade serves `/api/chain/events` from it (owner decision).
+/// derives from capability. `chain.tail` (gateway facade) and the S2 reads
+/// and streams used by first-party clients are the deliberate exceptions.
 #[test]
 fn allow_list_excludes_known_sensitive_reads() {
-    assert!(READ_ONLY_ALLOW.contains(&"chain.tail"));
-    for m in ["chain.local", "chain.export", "substrate.read", "kernel.logs_stream", "agent.chat", "cluster.facts"] {
+    // Deliberate exceptions: the gateway facade and first-party read-only
+    // clients (S2 decision) need these outside a project.
+    for m in ["chain.tail", "kernel.logs_stream", "substrate.subscribe", "substrate.read", "cluster.facts", "voice.trace"] {
+        assert!(READ_ONLY_ALLOW.contains(&m), "{m}");
+    }
+    for m in ["chain.local", "chain.export", "agent.chat", "ipc.subscribe_stream"] {
         assert!(!READ_ONLY_ALLOW.contains(&m), "{m}");
     }
 }

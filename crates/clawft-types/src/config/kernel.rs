@@ -929,6 +929,80 @@ pub struct MeshConfig {
     /// If absent, a ephemeral key is generated at boot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub noise_key_path: Option<String>,
+
+    /// Peer admission policy on the mesh listener (ADR-103, P3-K1).
+    ///
+    /// - `off`: no policy, but a peer that sends an `AdmitHello` still has
+    ///   it consumed and verified, and its `source_node` is bound to the
+    ///   verified key.
+    /// - `observe` (default): checks and records would-be refusals, never
+    ///   refuses, never marks a peer admitted. Takes effect only once
+    ///   `genesis_hash` is pinned.
+    /// - `enforce`: refuses unsigned, plaintext, wrong-genesis, revoked and
+    ///   verdict-denied peers. Needs `genesis_hash`, and a governance gate
+    ///   unless `admission_open_membership` is set.
+    ///
+    /// For every peer that is not *admitted* (anything but `enforce`
+    /// accepting a verified hello) the listener strips the envelope's
+    /// `src_scope`.
+    #[serde(default)]
+    pub admission: MeshAdmissionMode,
+
+    /// Cluster genesis hash (64 hex chars) peers must present in their
+    /// `AdmitHello`. Required for `admission = "enforce"`. This is a
+    /// cluster label, not a credential: anyone who knows it can present it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub genesis_hash: Option<String>,
+
+    /// Allow `admission = "enforce"` without a governance gate, i.e. admit
+    /// every peer that presents a valid hello for the right genesis. Off by
+    /// default: without it enforce refuses everyone when no gate exists.
+    #[serde(default)]
+    pub admission_open_membership: bool,
+
+    /// Whether this daemon uses the machine mesh service (ADR-103 D2,
+    /// P3-U). See [`MeshServicePolicy`].
+    #[serde(default)]
+    pub service: MeshServicePolicy,
+
+    /// Override for the machine mesh service socket. Absent: the
+    /// `WEFTOS_MESH_SOCKET` environment variable, else
+    /// `/var/run/weftos/mesh.sock`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_socket: Option<String>,
+}
+
+/// How the daemon relates to the machine mesh service (`kernel.mesh.service`).
+///
+/// - `auto` (default): use the service when its socket answers and verifies,
+///   otherwise run the mesh collapsed in this process. A service that answers
+///   but fails verification (machine key changed, bind conflict, wrong
+///   server uid) is a boot failure, never a silent fallback.
+/// - `required`: boot fails when no service answers.
+/// - `off`: never probe; collapsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MeshServicePolicy {
+    /// Use the service when present, else collapsed.
+    #[default]
+    Auto,
+    /// The service must be present.
+    Required,
+    /// Never use the service.
+    Off,
+}
+
+/// Mesh admission policy (see [`MeshConfig::admission`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MeshAdmissionMode {
+    /// No admission checks.
+    Off,
+    /// Check and record, never refuse.
+    #[default]
+    Observe,
+    /// Refuse peers that fail admission.
+    Enforce,
 }
 
 fn default_mesh_transport() -> String {
@@ -952,6 +1026,11 @@ impl Default for MeshConfig {
             seed_peers: vec![],
             noise: false,
             noise_key_path: None,
+            admission: MeshAdmissionMode::default(),
+            genesis_hash: None,
+            admission_open_membership: false,
+            service: MeshServicePolicy::default(),
+            service_socket: None,
         }
     }
 }

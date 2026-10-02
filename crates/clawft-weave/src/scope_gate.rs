@@ -95,6 +95,19 @@ pub const READ_ONLY_ALLOW: &[&str] = &[
     "ecc.status",
     "ecc.search",
     "ecc.calibrate",
+    // First-party clients (egui explorer, `weft voice watch`, the substrate
+    // mesh/kernel/chain panels) read these without a project claim, so under
+    // the user daemon's `read_only` default they would go dark. Each is
+    // `Capability::Read`; `substrate.*` apply their own sensitivity/ACL
+    // egress filter, `kernel.logs_stream` is the live form of `kernel.logs`
+    // above, and `cluster.facts` / `voice.trace` return public node facts and
+    // decision timings. `ipc.subscribe_stream` stays off: it taps any IPC
+    // topic with no ACL and registers a router sink.
+    "kernel.logs_stream",
+    "substrate.subscribe",
+    "substrate.read",
+    "cluster.facts",
+    "voice.trace",
     "agent.list",
     "agent.inspect",
     "control.list",

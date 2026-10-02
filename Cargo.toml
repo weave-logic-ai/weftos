@@ -24,6 +24,11 @@ members = [
     "crates/clawft-security",
     "crates/clawft-kernel",
     "crates/clawft-rpc",
+    # ADR-103 Phase 3 (package L): mesh-local/1 protocol, user cert, weft:// addresses,
+    # peer identity, client. No clawft-kernel dependency by design.
+    "crates/clawft-mesh-local",
+    # ADR-103 Phase 3 (package J/S): machine mesh service journal and bindings.
+    "crates/clawft-mesh-service",
     "crates/clawft-weave",
     "crates/exo-resource-tree",
     # WEFT-619 / ADR-043: K6 substrate primitives (BLAKE3+HLC) + in-memory
@@ -58,6 +63,21 @@ members = [
     "crates/eml-core",
     "crates/clawft-app",
     "crates/clawft-gui-egui",
+    "crates/weftos-ecg-scope",
+    "crates/weftos-sensor-guide",
+    "crates/weftos-cog-companion",
+    "crates/weftos-tof-scope",
+    "crates/weftos-sound-scope",
+    "crates/weftos-bridge-send",
+    # COG-008: off-device WeaveLogic cog repository tooling (sign/verify/install,
+    # signed-only Ed25519 trust model).
+    "crates/weftos-cog-repo",
+    # COG-009: unified cog marketplace catalog (WeaveLogic signed + Cognitum mirror).
+    "crates/weftos-cog-market",
+    # COG-009: on-appliance cog supervisor + lifecycle API (no agent cap).
+    "crates/weftos-cog-host",
+    # COG-009: the WeftOS appliance console (egui native + wasm) over the cog-host.
+    "crates/weftos-cog-manager",
     "crates/clawft-substrate",
     "crates/clawft-surface",
     "crates/clawft-canon",
@@ -333,6 +353,8 @@ futures = "0.3"
 # Versions MUST track `workspace.package.version` so that bumping the workspace
 # version atomically updates all path-dep version constraints (WEFT-8).
 clawft-rpc = { version = "0.8.1", path = "crates/clawft-rpc" }
+clawft-mesh-local = { version = "0.8.1", path = "crates/clawft-mesh-local" }
+clawft-mesh-service = { version = "0.8.1", path = "crates/clawft-mesh-service" }
 clawft-types = { version = "0.8.1", path = "crates/clawft-types", default-features = false }
 clawft-platform = { version = "0.8.1", path = "crates/clawft-platform", default-features = false }
 clawft-core = { version = "0.8.1", path = "crates/clawft-core", default-features = false }

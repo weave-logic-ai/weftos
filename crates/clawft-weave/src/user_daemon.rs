@@ -45,6 +45,9 @@ pub fn project_profile_requested() -> bool {
     PROJECT_PROFILE.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+/// Roles of the user daemon when the machine role lives in the mesh service.
+pub const SERVICE_MODE_ROLES: [&str; 1] = ["user"];
+
 /// Parse a `--profile` value. `None` and `default` mean the existing
 /// project/legacy behaviour.
 pub fn parse_profile(value: Option<&str>) -> Result<Option<&'static str>, String> {
@@ -93,9 +96,16 @@ pub fn handshake_profile() -> Option<(String, Vec<String>)> {
     is_active().then(|| {
         (
             PROFILE_USER.to_owned(),
-            USER_ROLES.iter().map(|r| (*r).to_owned()).collect(),
+            roles_for(crate::mesh_state::global()),
         )
     })
+}
+
+/// Roles for the handshake: the machine role belongs to the mesh service when
+/// this daemon is its client.
+pub fn roles_for(mesh: &crate::mesh_state::MeshStateCell) -> Vec<String> {
+    let roles: &[&str] = if mesh.is_service() { &SERVICE_MODE_ROLES } else { &USER_ROLES };
+    roles.iter().map(|r| (*r).to_owned()).collect()
 }
 
 /// `<home>/.weftos/weave.toml`.
@@ -215,6 +225,20 @@ mod tests {
         assert_eq!(mesh.listen_addr, "0.0.0.0:9470");
     }
 
+    #[tokio::test]
+    async fn weave_toml_kernel_mesh_service_is_the_documented_key() {
+        // The owner steps say: `service = "required"` under `[kernel.mesh]`.
+        use clawft_platform::Platform;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("weave.toml");
+        std::fs::write(&path, "[kernel.mesh]\nenabled = true\nservice = \"required\"\n").unwrap();
+        let platform = clawft_platform::NativePlatform::new();
+        let weave = config_loader::load_weave_toml_file(platform.fs(), &path).await.unwrap();
+        let layers = config_loader::ConfigLayers { global: json!({}), workspace: None };
+        let mesh = layer_user_config(layers, &weave).unwrap().config.kernel.mesh.expect("mesh");
+        assert_eq!(mesh.service, clawft_types::config::MeshServicePolicy::Required);
+    }
+
     #[test]
     fn empty_weave_toml_is_the_legacy_config() {
         let layers = config_loader::ConfigLayers {
@@ -224,6 +248,20 @@ mod tests {
         let loaded = layer_user_config(layers, &json!({})).unwrap();
         assert_eq!(loaded.config.kernel.max_processes, 9);
         assert!(loaded.workspace_routing.is_none());
+    }
+
+    #[test]
+    fn roles_are_user_only_in_service_mode_and_machine_user_otherwise() {
+        let cell = crate::mesh_state::MeshStateCell::new();
+        assert_eq!(roles_for(&cell), ["machine", "user"], "undecided");
+        cell.set(crate::mesh_state::plain("collapsed"));
+        assert_eq!(roles_for(&cell), ["machine", "user"], "collapsed");
+        cell.set(clawft_rpc::handshake::MeshHandshake {
+            mode: "service".into(),
+            state: Some("connected".into()),
+            ..Default::default()
+        });
+        assert_eq!(roles_for(&cell), ["user"], "service");
     }
 
     #[test]

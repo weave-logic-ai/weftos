@@ -129,6 +129,14 @@ pub struct ObservabilitySubsystem {
     pub(crate) dead_letter_queue: Option<Arc<crate::dead_letter::DeadLetterQueue>>,
 }
 
+/// Where a booting kernel gets its node identity from.
+enum NodeBinding {
+    /// A persisted key seed (`None`: ephemeral, tests and one-shot boots).
+    Key(Option<[u8; 32]>),
+    /// The machine mesh service's node id (P3-U); no key is held here.
+    Service(String),
+}
+
 /// The WeftOS kernel.
 ///
 /// Wraps `AppContext<P>` in a managed boot sequence with process
@@ -214,10 +222,69 @@ impl<P: Platform> Kernel<P> {
     /// and its listener cannot bind (ADR-103 D2).
     pub async fn boot_with_node_key(
         config: Config,
-        mut kernel_config: KernelConfig,
+        kernel_config: KernelConfig,
         platform: Arc<P>,
         node_key_seed: Option<[u8; 32]>,
     ) -> KernelResult<Self> {
+        Self::boot_bound(config, kernel_config, platform, NodeBinding::Key(node_key_seed)).await
+    }
+
+    /// Boot as a client of the machine mesh service (ADR-103 P3-U).
+    ///
+    /// The node id is the service's (`hello_ack.node_id`); this kernel holds
+    /// no node key, binds no mesh listener and starts no mesh runtime. There
+    /// is no ephemeral-identity fallback: a malformed id fails the boot.
+    ///
+    /// # Errors
+    ///
+    /// [`KernelError::Boot`] when `service_node_id` is not a node id, plus
+    /// everything [`Kernel::boot`] can return.
+    pub async fn boot_in_service_mode(
+        config: Config,
+        kernel_config: KernelConfig,
+        platform: Arc<P>,
+        service_node_id: String,
+    ) -> KernelResult<Self> {
+        if !crate::node_id::is_node_id(&service_node_id) {
+            return Err(KernelError::Boot(format!(
+                "service mode needs the mesh service's node id, got {service_node_id:?}"
+            )));
+        }
+        Self::boot_bound(
+            config,
+            kernel_config,
+            platform,
+            NodeBinding::Service(service_node_id),
+        )
+        .await
+    }
+
+    async fn boot_bound(
+        config: Config,
+        mut kernel_config: KernelConfig,
+        platform: Arc<P>,
+        binding: NodeBinding,
+    ) -> KernelResult<Self> {
+        let (node_key_seed, service_node_id) = match binding {
+            NodeBinding::Key(seed) => (seed, None),
+            NodeBinding::Service(id) => (None, Some(id)),
+        };
+        // `required` means a machine mesh service must carry the mesh. A boot
+        // path that did not link one (one-shot CLI boot, foreground boot,
+        // tests) cannot honour it and must not quietly run its own listener.
+        #[cfg(feature = "mesh")]
+        if service_node_id.is_none()
+            && let Some(m) = kernel_config.mesh.as_ref()
+            && m.enabled
+            && m.service == clawft_types::config::MeshServicePolicy::Required
+        {
+            return Err(KernelError::Boot(
+                "kernel.mesh.service = \"required\" but this boot did not link a machine mesh \
+                 service (start the user daemon with the service running, or set \
+                 kernel.mesh.service = \"auto\")"
+                    .into(),
+            ));
+        }
         let boot_time = Instant::now();
         let mut boot_log = BootLog::new();
         // Resolve the chain location once (explicit config, else
@@ -371,7 +438,11 @@ impl<P: Platform> Kernel<P> {
         // Node identity (ADR-025 / ADR-103 D11): the node id is derived from
         // the Ed25519 node key, never allocated per boot. Mesh handshake,
         // cluster membership, heartbeats and status all use this one id.
-        let node_id: String = {
+        let node_id: String = if let Some(id) = service_node_id.clone() {
+            // Service mode: the id belongs to the machine mesh service; this
+            // kernel never derives or generates one (no silent fallback).
+            id
+        } else {
             #[cfg(any(feature = "mesh", feature = "exochain"))]
             {
                 let identity = match node_key_seed {
@@ -487,13 +558,30 @@ impl<P: Platform> Kernel<P> {
             ));
         }
 
+        // Host revocation list: loaded here (not at step 6b) so the mesh
+        // listener's admission gate and the kernel share one instance.
+        let revocation_list = Arc::new(crate::revocation::RevocationList::load(
+            runtime_paths.revoked_hosts(),
+        ));
+
+        // Collapsed-mode verdict source for mesh admission; bound to the
+        // governance gate once that exists (step 9, below the mesh block).
+        #[cfg(all(feature = "native", feature = "mesh", feature = "exochain"))]
+        let mesh_verdicts = Arc::new(crate::mesh_admit::GateVerdictSource::late());
+        #[cfg(all(feature = "native", feature = "mesh", feature = "exochain"))]
+        let mesh_closed_without_gate = mesh_config_early.admission
+            == clawft_types::config::MeshAdmissionMode::Enforce
+            && !mesh_config_early.admission_open_membership;
+
         // 5d. Initialize mesh transport (K6) if configured.
         //     Must happen before cluster (step 7) because cluster needs mesh
         //     to reach peer nodes.
         #[cfg(all(feature = "native", feature = "mesh"))]
         let mesh_runtime = {
             let mesh_config = mesh_config_early;
-            if mesh_config.enabled {
+            if service_node_id.is_none()
+                && crate::mesh_mode::select(&mesh_config) == crate::mesh_mode::MeshMode::Collapsed
+            {
                 let node_id = mesh_node_id
                     .clone()
                     .expect("mesh enabled implies mesh_node_id");
@@ -601,28 +689,15 @@ impl<P: Platform> Kernel<P> {
                 };
                 let noise_for_seeds = noise_config.clone();
 
-                // Spawn the mesh listener on the configured transport.
+                // Bind the configured transport; the accept loop and seed
+                // dialing live in `mesh_serve` (P3-K0).
                 let listen_addr = mesh_config.listen_addr.clone();
-                let rt = Arc::clone(&runtime);
-                use crate::mesh::MeshTransport;
-                let transport: Box<dyn MeshTransport> = match mesh_config.transport.as_str() {
-                    "ws" | "websocket" => Box::new(crate::mesh_ws::WsTransport),
-                    #[cfg(feature = "quic")]
-                    "quic" => Box::new(crate::mesh_quic::QuicTransport),
-                    #[cfg(not(feature = "quic"))]
-                    "quic" => {
-                        tracing::error!(
-                            "mesh transport=quic requested but clawft-kernel built without `quic` feature; falling back to tcp"
-                        );
-                        Box::new(crate::mesh_tcp::TcpTransport)
-                    }
-                    _ => Box::new(crate::mesh_tcp::TcpTransport),
-                };
+                let transport = crate::mesh_serve::transport_for(&mesh_config.transport, None);
 
                 // Bind synchronously so a taken port fails boot loudly instead of
                 // leaving a kernel that silently has no mesh (ADR-103 D1/D2).
                 // Disabled mesh never reaches this block, so mesh-off cannot fail here.
-                let mut listener = transport.listen(&listen_addr).await.map_err(|e| {
+                let listener = transport.listen(&listen_addr).await.map_err(|e| {
                     KernelError::Boot(format!(
                         "mesh enabled but the listener could not bind {listen_addr} ({e}); \
                          another kernel on this machine is probably already using that port. \
@@ -631,181 +706,94 @@ impl<P: Platform> Kernel<P> {
                     ))
                 })?;
 
-                tokio::spawn(async move {
-                    let bind = listener
-                        .local_addr()
-                        .map(|a| a.to_string())
-                        .unwrap_or_else(|_| listen_addr.clone());
-                    tracing::info!(
-                        transport = transport.name(),
-                        addr = %bind,
-                        noise = noise_config.is_some(),
-                        "mesh listener started"
-                    );
-
-                    loop {
-                        match listener.accept().await {
-                            Ok((stream, peer_addr)) => {
-                                let rt2 = Arc::clone(&rt);
-                                let nc = noise_config.clone();
-                                tokio::spawn(async move {
-                                    tracing::info!(
-                                        peer = %peer_addr,
-                                        noise = nc.is_some(),
-                                        "mesh peer connected"
-                                    );
-
-                                    // Optionally wrap in Noise encryption.
-                                    let mut channel: Box<
-                                        dyn crate::mesh_noise::EncryptedChannel,
-                                    > = match &nc {
-                                        Some(cfg) => {
-                                            match crate::mesh_noise::NoiseChannel::respond(
-                                                stream, cfg,
-                                            )
-                                            .await
-                                            {
-                                                Ok(ch) => {
-                                                    tracing::info!(peer = %peer_addr, "noise handshake complete");
-                                                    Box::new(ch)
-                                                }
-                                                Err(e) => {
-                                                    tracing::warn!(peer = %peer_addr, error = %e, "noise handshake failed, dropping");
-                                                    return;
-                                                }
-                                            }
-                                        }
-                                        None => Box::new(
-                                            crate::mesh_noise::PassthroughChannel::new(
-                                                stream,
-                                            ),
-                                        ),
-                                    };
-
-                                    // Outbound channel: the kernel pushes frames into
-                                    // `out_tx` (via `MeshRuntime::send_to_peer`) and this
-                                    // task drains `out_rx` back through the encrypted
-                                    // stream. This is what lets the topic forwarder in
-                                    // `A2ARouter` deliver pushes to inbound leaf peers that
-                                    // subscribed via `mesh.subscribe`.
-                                    let (out_tx, mut out_rx) =
-                                        tokio::sync::mpsc::channel::<Vec<u8>>(256);
-
-                                    // Bidirectional loop. `handle_incoming_from` auto-
-                                    // registers the peer by `envelope.source_node` on first
-                                    // arrival so the kernel can route back.
-                                    //
-                                    // Cancel-safety (ADR-010 / WEFT-18): both racing
-                                    // futures must be cancel-safe.
-                                    // - `out_rx.recv()` — tokio mpsc, cancel-safe.
-                                    // - `channel.recv_encrypted()` → `MeshStream::recv` —
-                                    //   contract on `MeshStream` requires cancel-safe
-                                    //   framing (`TcpMeshStream` keeps partial progress).
-                                    // Losing either race must not drop a complete message
-                                    // already removed from its source, and must not desync
-                                    // the TCP length-prefix stream.
-                                    loop {
-                                        tokio::select! {
-                                            inbound = channel.recv_encrypted() => match inbound {
-                                                Ok(data) => {
-                                                    if let Err(e) = rt2
-                                                        .handle_incoming_from(&data, out_tx.clone())
-                                                        .await
-                                                    {
-                                                        tracing::debug!(error = %e, "mesh message handling error");
-                                                    }
-                                                }
-                                                Err(_) => break,
-                                            },
-                                            outbound = out_rx.recv() => match outbound {
-                                                Some(data) => {
-                                                    if channel.send_encrypted(&data).await.is_err() {
-                                                        break;
-                                                    }
-                                                }
-                                                None => break,
-                                            },
-                                        }
-                                    }
-                                });
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = %e, "mesh accept error");
-                            }
+                // Admission (P3-K1): AllowAll unless a genesis hash is pinned
+                // (observe) or enforcement is requested (needs the pin).
+                let pinned = mesh_config
+                    .genesis_hash
+                    .as_deref()
+                    .map(|h| {
+                        crate::mesh_admit::hex_decode(h)
+                            .and_then(|b| <[u8; 32]>::try_from(b).ok())
+                            .ok_or_else(|| {
+                                KernelError::Boot(
+                                    "kernel.mesh.genesis_hash must be 64 hex characters".into(),
+                                )
+                            })
+                    })
+                    .transpose()?;
+                let dial_identity: Option<Arc<crate::mesh_admit::DialIdentity>> =
+                    match (mesh_config.admission, pinned, node_key_seed) {
+                        (clawft_types::config::MeshAdmissionMode::Off, _, _) => None,
+                        (_, Some(genesis), Some(seed)) => {
+                            Some(Arc::new(crate::mesh_admit::DialIdentity {
+                                key: ed25519_dalek::SigningKey::from_bytes(&seed),
+                                genesis,
+                                platform: std::env::consts::OS.to_owned(),
+                                capabilities: vec![],
+                            }))
+                        }
+                        _ => None,
+                    };
+                let admission_gate: Arc<dyn crate::mesh_admit::AdmissionGate> = {
+                    use clawft_types::config::MeshAdmissionMode as Adm;
+                    match (mesh_config.admission, pinned) {
+                        (Adm::Off, _) | (Adm::Observe, None) => {
+                            Arc::new(crate::mesh_admit::AllowAll)
+                        }
+                        (Adm::Enforce, None) => {
+                            return Err(KernelError::Boot(
+                                "kernel.mesh.admission = \"enforce\" requires kernel.mesh.genesis_hash"
+                                    .into(),
+                            ));
+                        }
+                        (mode, Some(genesis)) => {
+                            #[cfg(feature = "exochain")]
+                            let verdicts: Arc<dyn crate::mesh_admit::VerdictSource> =
+                                mesh_verdicts.clone();
+                            #[cfg(not(feature = "exochain"))]
+                            let verdicts: Arc<dyn crate::mesh_admit::VerdictSource> = {
+                                if mode == Adm::Enforce && !mesh_config.admission_open_membership {
+                                    return Err(KernelError::Boot(
+                                        "kernel.mesh.admission = \"enforce\" needs a governance \
+                                         gate; this build has none. Set \
+                                         kernel.mesh.admission_open_membership = true to admit \
+                                         any valid hello"
+                                            .into(),
+                                    ));
+                                }
+                                Arc::new(crate::mesh_admit::OpenVerdicts)
+                            };
+                            Arc::new(crate::mesh_admit::CryptoGate::new(
+                                genesis,
+                                Arc::clone(&revocation_list),
+                                verdicts,
+                                mode,
+                            ))
                         }
                     }
+                };
+
+                let rt = Arc::clone(&runtime);
+                tokio::spawn(async move {
+                    crate::mesh_serve::serve_listener(
+                        rt,
+                        listener,
+                        noise_config,
+                        transport.name(),
+                        &listen_addr,
+                        admission_gate,
+                    )
+                    .await;
                 });
 
                 // Connect to seed peers.
-                for peer_addr in &seed_peers {
-                    let addr = peer_addr.clone();
-                    let rt = Arc::clone(&runtime);
-                    let transport_name = transport_name_for_seeds.clone();
-                    let nc = noise_for_seeds.clone();
-                    tokio::spawn(async move {
-                        use crate::mesh::MeshTransport;
-
-                        let transport: Box<dyn MeshTransport> = match transport_name.as_str() {
-                            "ws" | "websocket" => Box::new(crate::mesh_ws::WsTransport),
-                            #[cfg(feature = "quic")]
-                            "quic" => Box::new(crate::mesh_quic::QuicTransport),
-                            #[cfg(not(feature = "quic"))]
-                            "quic" => {
-                                tracing::error!(
-                                    peer = %addr,
-                                    "seed peer uses quic but binary built without `quic` feature; falling back to tcp"
-                                );
-                                Box::new(crate::mesh_tcp::TcpTransport)
-                            }
-                            _ => Box::new(crate::mesh_tcp::TcpTransport),
-                        };
-
-                        match transport.connect(&addr).await {
-                            Ok(stream) => {
-                                // Optionally wrap in Noise encryption (as initiator).
-                                let mut channel: Box<dyn crate::mesh_noise::EncryptedChannel> =
-                                    match &nc {
-                                        Some(cfg) => {
-                                            match crate::mesh_noise::NoiseChannel::initiate(
-                                                stream, cfg,
-                                            )
-                                            .await
-                                            {
-                                                Ok(ch) => {
-                                                    tracing::info!(peer = %addr, "noise handshake complete (initiator)");
-                                                    Box::new(ch)
-                                                }
-                                                Err(e) => {
-                                                    tracing::warn!(peer = %addr, error = %e, "noise handshake failed");
-                                                    return;
-                                                }
-                                            }
-                                        }
-                                        None => Box::new(
-                                            crate::mesh_noise::PassthroughChannel::new(stream),
-                                        ),
-                                    };
-
-                                let (tx, mut rx) = tokio::sync::mpsc::channel(256);
-                                let peer_id = addr.clone();
-                                rt.add_peer(peer_id.clone(), tx);
-                                tracing::info!(peer = %addr, noise = nc.is_some(), "connected to seed peer");
-
-                                // Drain outbound queue through encrypted channel.
-                                tokio::spawn(async move {
-                                    while let Some(data) = rx.recv().await {
-                                        if channel.send_encrypted(&data).await.is_err() {
-                                            break;
-                                        }
-                                    }
-                                });
-                            }
-                            Err(e) => {
-                                tracing::warn!(peer = %addr, error = %e, "failed to connect to seed peer");
-                            }
-                        }
-                    });
-                }
+                crate::mesh_serve::connect_seeds(
+                    &runtime,
+                    &seed_peers,
+                    &transport_name_for_seeds,
+                    noise_for_seeds,
+                    dial_identity,
+                );
 
                 // WEFT-119: register Mesh as a SystemService so start/stop/
                 // health_check are available via the kernel service surface.
@@ -839,7 +827,11 @@ impl<P: Platform> Kernel<P> {
             } else {
                 boot_log.push(BootEvent::info(
                     BootPhase::Network,
-                    "Mesh transport disabled",
+                    if service_node_id.is_some() {
+                        "Mesh transport owned by the machine mesh service"
+                    } else {
+                        "Mesh transport disabled"
+                    },
                 ));
                 None
             }
@@ -888,9 +880,8 @@ impl<P: Platform> Kernel<P> {
             ),
         ));
 
-        // 6b. Load host revocation list (persistent ban list)
-        let revocation_path = runtime_paths.revoked_hosts();
-        let revocation_list = Arc::new(crate::revocation::RevocationList::load(revocation_path));
+        // 6b. Host revocation list (persistent ban list), loaded before the
+        //     mesh block (5d) so the listener's admission gate shares it.
         {
             let count = revocation_list.len();
             if count > 0 {
@@ -1015,7 +1006,26 @@ impl<P: Platform> Kernel<P> {
                 } else if let Some(ref ckpt_path) =
                     chain_config.effective_checkpoint_path()
                 {
-                    let key_path = std::path::PathBuf::from(ckpt_path).with_extension("key");
+                    // `~/.weftos/user.key` wins over `chain.key` for the user
+                    // chain (ADR-103 D-5); every other chain keeps its own key.
+                    let key_path = clawft_types::config::chain_paths::chain_key_for_checkpoint(
+                        std::path::Path::new(ckpt_path),
+                    );
+                    // The user key is held to the same standard as the mesh
+                    // client's reader: a symlink, a non-regular file or a key
+                    // readable beyond its owner is refused, not followed.
+                    #[cfg(unix)]
+                    if key_path.file_name().is_some_and(|n| n == "user.key") {
+                        use std::os::unix::fs::PermissionsExt;
+                        if let Ok(m) = std::fs::symlink_metadata(&key_path) {
+                            if !m.file_type().is_file() || m.permissions().mode() & 0o077 != 0 {
+                                return Err(KernelError::Boot(format!(
+                                    "{} must be a regular file readable only by its owner (chmod 600); refusing to sign the chain with it",
+                                    key_path.display()
+                                )));
+                            }
+                        }
+                    }
                     match crate::chain::ChainManager::load_or_create_key(&key_path) {
                         Ok(key) => {
                             boot_log.push(BootEvent::info(
@@ -1897,6 +1907,23 @@ impl<P: Platform> Kernel<P> {
                 None
             }
         };
+
+        #[cfg(all(feature = "native", feature = "mesh", feature = "exochain"))]
+        match &governance_gate {
+            Some(g) => mesh_verdicts.bind(Arc::clone(g)),
+            None if mesh_closed_without_gate => {
+                error!(
+                    "mesh admission = enforce but no governance gate exists: every peer will be \
+                     refused. Enable the chain/governance, or set \
+                     kernel.mesh.admission_open_membership = true to admit any valid hello"
+                );
+                mesh_verdicts.bind_closed();
+            }
+            None => {
+                warn!("mesh admission_open_membership: admitting any peer with a valid hello");
+                mesh_verdicts.bind_open();
+            }
+        }
 
         // Wire governance gate into A2A router for dual-layer enforcement.
         // The A2ARouter is already behind Arc, so we use set_gate() which
@@ -2842,6 +2869,7 @@ mod tests {
             seed_peers: vec![],
             noise: false,
             noise_key_path: None,
+            ..MeshConfig::default()
         });
 
         let mut kernel = Kernel::boot(test_config(), kconfig, platform)
@@ -2892,6 +2920,120 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains(&addr), "error should name the address: {msg}");
         assert!(msg.contains("another kernel"), "error should name the cause: {msg}");
+    }
+
+    /// P3-U: a symlinked or loose `~/.weftos/user.key` is refused as the chain
+    /// signing key instead of being followed.
+    #[cfg(all(feature = "native", feature = "exochain", unix))]
+    #[tokio::test]
+    async fn user_key_symlink_or_loose_mode_is_refused_at_boot() {
+        use clawft_types::config::ChainConfig;
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let weftos = home.path().join(".weftos");
+        let chain_dir = weftos.join("chain");
+        std::fs::create_dir_all(&chain_dir).unwrap();
+        let mk = |ckpt: &std::path::Path| {
+            let mut kc = test_kernel_config();
+            kc.chain = Some(ChainConfig {
+                enabled: true,
+                checkpoint_path: Some(ckpt.display().to_string()),
+                ..ChainConfig::default()
+            });
+            kc
+        };
+        let ckpt = chain_dir.join("chain.json");
+
+        // Loose permissions.
+        let user_key = weftos.join("user.key");
+        std::fs::write(&user_key, [3u8; 32]).unwrap();
+        std::fs::set_permissions(&user_key, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let err = Kernel::boot(test_config(), mk(&ckpt), Arc::new(NativePlatform::new()))
+            .await
+            .err()
+            .expect("loose user.key must refuse boot");
+        assert!(err.to_string().contains("user.key"), "{err}");
+
+        // A symlink, even to a private file.
+        std::fs::remove_file(&user_key).unwrap();
+        let target = home.path().join("elsewhere.key");
+        std::fs::write(&target, [3u8; 32]).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink(&target, &user_key).unwrap();
+        let err = Kernel::boot(test_config(), mk(&ckpt), Arc::new(NativePlatform::new()))
+            .await
+            .err()
+            .expect("symlinked user.key must refuse boot");
+        assert!(err.to_string().contains("user.key"), "{err}");
+    }
+
+    /// P3-U: service mode takes the service's node id, binds no listener (the
+    /// taken port is not touched) and starts no mesh runtime.
+    #[cfg(all(feature = "native", feature = "mesh"))]
+    #[tokio::test]
+    async fn service_mode_uses_the_service_node_id_and_binds_nothing() {
+        use clawft_types::config::MeshConfig;
+
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = taken.local_addr().unwrap().to_string();
+        let service_id = crate::node_id::node_id_from_pubkey(&[42u8; 32]);
+
+        let mut kconfig = test_kernel_config();
+        kconfig.mesh = Some(MeshConfig {
+            enabled: true,
+            listen_addr: addr,
+            ..MeshConfig::default()
+        });
+        let mut kernel = Kernel::boot_in_service_mode(
+            test_config(),
+            kconfig,
+            Arc::new(NativePlatform::new()),
+            service_id.clone(),
+        )
+        .await
+        .expect("service mode must not try to bind the taken port");
+        assert_eq!(kernel.cluster_membership().local_node_id(), service_id);
+        assert!(kernel.services().get("mesh").is_none(), "no in-kernel mesh service");
+        kernel.shutdown().await.unwrap();
+    }
+
+    /// P3-U: a malformed service node id fails the boot; there is no
+    /// ephemeral-identity fallback.
+    #[cfg(all(feature = "native", feature = "mesh"))]
+    #[tokio::test]
+    async fn service_mode_refuses_a_malformed_node_id() {
+        let err = Kernel::boot_in_service_mode(
+            test_config(),
+            test_kernel_config(),
+            Arc::new(NativePlatform::new()),
+            "nope".into(),
+        )
+        .await
+        .err()
+        .expect("must fail");
+        assert!(err.to_string().contains("node id"), "{err}");
+    }
+
+    /// P3-U (R2): `kernel.mesh.service = required` fails any boot path that
+    /// did not link a service, instead of running its own listener.
+    #[cfg(all(feature = "native", feature = "mesh"))]
+    #[tokio::test]
+    async fn required_service_fails_a_boot_without_a_link() {
+        use clawft_types::config::{MeshConfig, MeshServicePolicy};
+
+        let mut kconfig = test_kernel_config();
+        kconfig.mesh = Some(MeshConfig {
+            enabled: true,
+            listen_addr: "127.0.0.1:0".into(),
+            service: MeshServicePolicy::Required,
+            ..MeshConfig::default()
+        });
+        let err = Kernel::boot(test_config(), kconfig, Arc::new(NativePlatform::new()))
+            .await
+            .err()
+            .expect("required without a service link must fail");
+        assert!(err.to_string().contains("required"), "{err}");
     }
 
     /// Mesh off means no bind and no error, even if the address is taken.

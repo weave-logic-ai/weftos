@@ -73,6 +73,14 @@ scripts/build.sh ui-e2e                           # Installs Playwright +
                                                   # clawft-ui E2E suite.
 ```
 
+### Release gates and `--all-features`
+
+Keep `--all-features` off release gates and release builds. Some crates carry
+test-only features (for example `clawft-mesh-service`'s `testing`, which adds
+injectable peer credentials and fails to compile in release profiles on
+purpose); `--all-features` would enable them. Use the named commands
+(`scripts/build.sh gate`, `check`, `test`) instead.
+
 ## Quick Reference (raw cargo)
 
 ```bash

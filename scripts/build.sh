@@ -445,6 +445,75 @@ cmd_browser() {
     fi
 }
 
+# Companion apps for sensor cogs (ADR-104): crates/weftos-<name>-scope, binary weft-<name>-scope.
+cmd_scope() {
+    local name="${1:-}"
+    [ -n "$name" ] && [ -d "$ROOT/crates/weftos-${name}-scope" ] || { fail "usage: scripts/build.sh scope <name>  (crates/weftos-<name>-scope; e.g. ecg, tof)"; return 1; }
+    local profile="${PROFILE:-release}"
+    header "Building weft-${name}-scope (native egui companion, profile: $profile)"
+    timer_start
+    run_cmd cargo build -p "weftos-${name}-scope" --bin "weft-${name}-scope" --profile "$profile"
+    timer_end
+    local dir="$profile"; [ "$profile" = "dev" ] && dir="debug"
+    report_binary_size "target/${dir}/weft-${name}-scope" "weft-${name}-scope"
+    pass "run: SEED_HOST=169.254.42.1 target/${dir}/weft-${name}-scope"
+}
+
+cmd_scope_web() {
+    local name="${1:-}"
+    [ -n "$name" ] && [ -d "$ROOT/crates/weftos-${name}-scope" ] || { fail "usage: scripts/build.sh scope-web <name>"; return 1; }
+    local profile="${PROFILE:-release-wasm}"
+    header "Building weft-${name}-scope for the browser (wasm32-unknown-unknown, profile: $profile)"
+    if ! check_target_installed wasm32-unknown-unknown; then return 1; fi
+    timer_start
+    run_cmd cargo build --target wasm32-unknown-unknown -p "weftos-${name}-scope" --lib --profile "$profile"
+    timer_end
+    local wasm_file="target/wasm32-unknown-unknown/${profile}/weftos_${name}_scope.wasm"
+    report_binary_size "$wasm_file" "${name}-scope WASM (raw)"
+    local pkg_dir="$ROOT/crates/weftos-${name}-scope/www/pkg"
+    if command -v wasm-bindgen >/dev/null 2>&1; then
+        info "Running wasm-bindgen → $pkg_dir"
+        run_cmd wasm-bindgen "$wasm_file" --out-dir "$pkg_dir" --target web --no-typescript
+        report_binary_size "$pkg_dir/weftos_${name}_scope_bg.wasm" "${name}-scope WASM (bindgen)"
+        pass "pkg/ ready — serve crates/weftos-${name}-scope/www over http and open /?seed=<seed-ip>"
+    else
+        skip "wasm-bindgen CLI not found — pkg/ not generated"
+        info "Install with: cargo install wasm-bindgen-cli"
+    fi
+}
+
+cmd_manager() {
+    local profile="${PROFILE:-release}"
+    header "Building weft-cog-manager (WeftOS appliance console, native, profile: $profile)"
+    timer_start
+    run_cmd cargo build -p weftos-cog-manager --bin weft-cog-manager --profile "$profile"
+    timer_end
+    local dir="$profile"; [ "$profile" = "dev" ] && dir="debug"
+    report_binary_size "target/${dir}/weft-cog-manager" "weft-cog-manager"
+    pass "run: WEFTOS_HOST=http://<ip>:9480 target/${dir}/weft-cog-manager"
+}
+
+cmd_manager_web() {
+    local profile="${PROFILE:-release-wasm}"
+    header "Building weft-cog-manager for the browser (wasm32-unknown-unknown, profile: $profile)"
+    if ! check_target_installed wasm32-unknown-unknown; then return 1; fi
+    timer_start
+    run_cmd cargo build --target wasm32-unknown-unknown -p weftos-cog-manager --lib --profile "$profile"
+    timer_end
+    local wasm_file="target/wasm32-unknown-unknown/${profile}/weftos_cog_manager.wasm"
+    report_binary_size "$wasm_file" "cog-manager WASM (raw)"
+    local pkg_dir="$ROOT/crates/weftos-cog-manager/www/pkg"
+    if command -v wasm-bindgen >/dev/null 2>&1; then
+        info "Running wasm-bindgen → $pkg_dir"
+        run_cmd wasm-bindgen "$wasm_file" --out-dir "$pkg_dir" --target web --no-typescript
+        report_binary_size "$pkg_dir/weftos_cog_manager_bg.wasm" "cog-manager WASM (bindgen)"
+        pass "pkg/ ready — serve crates/weftos-cog-manager/www and open /?host=http://<ip>:9480"
+    else
+        skip "wasm-bindgen CLI not found — pkg/ not generated"
+        info "Install with: cargo install wasm-bindgen-cli"
+    fi
+}
+
 cmd_ui() {
     header "Building React frontend (tsc + vite)"
     if [ ! -d "$ROOT/clawft-ui" ] || [ ! -f "$ROOT/clawft-ui/package.json" ]; then
@@ -830,7 +899,104 @@ check_kernel_ecc_rejected_on_wasm() {
     return 1
 }
 
+# P3-K0: the mesh role must build without exochain/cluster/tilezero/ecc so a
+# machine mesh service can depend on the kernel's mesh modules alone.
+cmd_check_mesh_only() {
+    header "Running cargo check -p clawft-kernel --no-default-features --features native,mesh"
+    timer_start
+    run_cmd cargo check -p clawft-kernel --no-default-features --features native,mesh
+    timer_end
+}
+
+# P3-X: the machine mesh service lane: the mesh crates' tests, the Phase 3
+# end-to-end test (the real service plus two user daemons as the current user,
+# tempdirs only; scripts/dev/mesh-p3-e2e.sh), the no-owned-state gate and the
+# mesh-only kernel build. Nothing here needs root or touches /var or /etc.
+cmd_test_mesh_service() {
+    header "Running the machine mesh service lane (mesh crates, Phase 3 e2e, no-owned-state, mesh-only build)"
+    timer_start
+    isolate_test_runtime
+    run_cmd cargo test -p clawft-mesh-local -p clawft-mesh-service
+    run_cmd scripts/dev/mesh-p3-e2e.sh
+    cmd_check_mesh_no_owned_state
+    cmd_check_mesh_only
+    timer_end
+}
+
+# P3-S: compile (not run) the tests of the named packages. The lead session
+# runs the tests; this is the fast loop for writing them.
+cmd_check_tests() {
+    if [ ${#TEST_PACKAGES[@]} -eq 0 ]; then
+        fail "check-tests needs at least one package: scripts/build.sh check-tests <package>…"
+        return 1
+    fi
+    local scope=() pkg
+    for pkg in "${TEST_PACKAGES[@]}"; do scope+=(-p "$pkg"); done
+    header "Running cargo check ${scope[*]} --tests"
+    timer_start
+    run_cmd cargo check "${scope[@]}" --tests
+    timer_end
+}
+
+# P3-S "must not own": the machine mesh service links the kernel only for its
+# mesh modules. It must never pull in the chain, resource tree, RVF runtime,
+# the governance tile, the operator CLI, or the kernel features that bring
+# them (exochain, cluster, tilezero, ecc).
+cmd_check_mesh_no_owned_state() {
+    header "Asserting clawft-mesh-service owns no chain, governance or operator-CLI state"
+    timer_start
+    if [ "$DRY_RUN" = true ]; then
+        printf "  ${YELLOW}DRY${NC}   cargo tree -p clawft-mesh-service -e normal,features\n"
+        timer_end
+        return 0
+    fi
+    local tree rc=0
+    tree="$(cargo tree -p clawft-mesh-service -e normal,features 2>&1)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        fail "cargo tree failed for clawft-mesh-service"
+        printf '%s\n' "$tree" | tail -20
+        return 1
+    fi
+    local hits
+    hits="$(printf '%s\n' "$tree" \
+        | grep -E '(exo-resource-tree|rvf-runtime|cognitum-gate-tilezero|clawft-weave) v[0-9]|clawft-kernel feature "(exochain|cluster|tilezero|ecc)"' \
+        || true)"
+    if [ -n "$hits" ]; then
+        fail "clawft-mesh-service must not own state, but its dependency tree contains:"
+        printf '%s\n' "$hits" | sort -u | sed 's/^/        /'
+        return 1
+    fi
+    # Direct dependencies are an allowlist: a new one needs a deliberate edit here.
+    local allowed=" clawft-mesh-local clawft-kernel clawft-types serde serde_json ed25519-dalek sha2 thiserror rand toml async-trait tracing tokio libc "
+    local direct name extra=""
+    direct="$(cargo tree -p clawft-mesh-service -e normal --depth 1 --prefix none 2>&1 | awk 'NR>1 {print $1}' | sort -u)"
+    for name in $direct; do
+        case "$allowed" in *" $name "*) ;; *) extra="$extra $name" ;; esac
+    done
+    if [ -n "$extra" ]; then
+        fail "clawft-mesh-service has direct dependencies outside the allowlist:$extra (edit cmd_check_mesh_no_owned_state deliberately)"
+        return 1
+    fi
+    pass "clawft-mesh-service dependency tree is free of exochain, resource tree, RVF runtime, tilezero and clawft-weave; direct deps match the allowlist"
+    timer_end
+}
+
 cmd_check() {
+    # `check <pkg>…` scopes to the named packages (fast loop for new crates);
+    # the kernel wasm gates below only run for the whole-workspace check.
+    if [ ${#TEST_PACKAGES[@]} -gt 0 ]; then
+        local scope=() pkg
+        for pkg in "${TEST_PACKAGES[@]}"; do scope+=(-p "$pkg"); done
+        header "Running cargo check ${scope[*]}${FEATURES:+ --features $FEATURES}"
+        timer_start
+        if [ -n "$FEATURES" ]; then
+            run_cmd cargo check "${scope[@]}" --features "$FEATURES"
+        else
+            run_cmd cargo check "${scope[@]}"
+        fi
+        timer_end
+        return 0
+    fi
     header "Running cargo check --workspace${FEATURES:+ --features $FEATURES}"
     timer_start
     if [ -n "$FEATURES" ]; then
@@ -1610,9 +1776,9 @@ cmd_gate() {
     if [ "${GATE_RELEASE_DRY_RUN:-}" = "1" ] || [ "${GATE_RELEASE_DRY_RUN:-}" = "true" ]; then
         WITH_RELEASE_DRY_RUN=true
     fi
-    local total=19
+    local total=20
     if [ "$WITH_RELEASE_DRY_RUN" = true ]; then
-        total=20
+        total=21
     fi
     header "Phase Gate — ${total} checks"
     local passed=0 failed=0 skipped=0
@@ -1793,12 +1959,17 @@ cmd_gate() {
     run_gate_check 19 "agents/ confidentiality leak check (AD-2)" \
         bash "$ROOT/scripts/agents-leak-check.sh"
 
-    # 20. WEFT-460 — optional cargo-dist host-triple release rehearsal.
+    # 20. P3-S "must not own": the machine mesh service owns no chain,
+    # governance or operator-CLI state (dependency tree + direct-dep allowlist).
+    run_gate_check 20 "mesh service owns no state (check-mesh-no-owned-state)" \
+        cmd_check_mesh_no_owned_state
+
+    # 21. WEFT-460 — optional cargo-dist host-triple release rehearsal.
     # Off by default (multi-minute LTO build). Enable with:
     #   scripts/build.sh gate --with-release-dry-run
     #   GATE_RELEASE_DRY_RUN=1 scripts/build.sh gate
     if [ "$WITH_RELEASE_DRY_RUN" = true ]; then
-        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 20 "$total" "release-dry-run (cargo-dist host triple)"
+        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 21 "$total" "release-dry-run (cargo-dist host triple)"
         timer_start
         if [ "$DRY_RUN" = true ]; then
             printf "  ${YELLOW}DRY${NC}   scripts/build.sh release-dry-run\n"
@@ -1854,6 +2025,9 @@ ${BOLD}Commands:${NC}
   gui-egui        Build native egui GUI binary (weft-gui-egui, requires --features native)
   wasi            Build WASM for WASI (wasm32-wasip2)
   browser         Build WASM for browser (wasm32-unknown-unknown)
+  scope <name>    Build a sensor-cog companion app crates/weftos-<name>-scope (ecg, tof); ADR-104
+  scope-web <name> Same for the browser (wasm + wasm-bindgen into crates/weftos-<name>-scope/www/pkg)
+  ecg-scope[-web] Aliases for scope ecg / scope-web ecg
   ui              Build React frontend (tsc + vite)
   ui-docker       Build the clawft-ui multi-stage Docker image (WEFT-317).
                   Override tag with CLAWFT_UI_DOCKER_TAG=...
@@ -1882,6 +2056,16 @@ ${BOLD}Commands:${NC}
                   via wasm-pack / cargo + wasm-bindgen + wasm-opt -Oz, then
                   gate against the panel size budget. (WEFT-484 / M6-B)
                   Override budget: scripts/build.sh wasm-panel <max-raw-kb> <max-gz-kb>
+  check-mesh-only Run cargo check -p clawft-kernel --no-default-features --features native,mesh
+  test-mesh-service
+                  Machine mesh service lane (P3): cargo test -p clawft-mesh-local
+                  -p clawft-mesh-service, scripts/dev/mesh-p3-e2e.sh, the
+                  no-owned-state gate and check-mesh-only. Current user, tempdirs only
+  check-tests     Compile (not run) the tests of the named packages: check-tests <pkg>…
+  check-mesh-no-owned-state
+                  Fail if `cargo tree -p clawft-mesh-service -e normal,features` contains
+                  exo-resource-tree, rvf-runtime, cognitum-gate-tilezero, clawft-weave or
+                  the kernel exochain/cluster/tilezero/ecc features (P3-S "must not own")
   check           Run cargo check --workspace (fast compile check), then
                   cargo check -p clawft-kernel --target wasm32-unknown-unknown
                   --no-default-features when the target is installed (WEFT-114:
@@ -2040,7 +2224,8 @@ parse_args() {
     # Capture positional args for test command (package scoping):
     #   scripts/build.sh test [<package>…]
     #   scripts/build.sh clippy [<package>…]
-    if [ "$COMMAND" = "test" ] || [ "$COMMAND" = "clippy" ]; then
+    #   scripts/build.sh check [<package>…]
+    if [ "$COMMAND" = "test" ] || [ "$COMMAND" = "clippy" ] || [ "$COMMAND" = "check" ] || [ "$COMMAND" = "check-tests" ]; then
         while [ $# -gt 0 ] && [[ "$1" != --* ]]; do
             TEST_PACKAGES+=("$1")
             shift
@@ -2056,6 +2241,15 @@ parse_args() {
         fi
         if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
             BENCH_NAME="$1"
+            shift
+        fi
+    fi
+
+    # scope / scope-web take the companion app name: scripts/build.sh scope <name>
+    SCOPE_NAME=""
+    if [ "$COMMAND" = "scope" ] || [ "$COMMAND" = "scope-web" ]; then
+        if [ $# -gt 0 ] && [[ "$1" != -* ]]; then
+            SCOPE_NAME="$1"
             shift
         fi
     fi
@@ -2143,6 +2337,14 @@ main() {
         gui-egui)     cmd_gui_egui ;;
         wasi)         cmd_wasi ;;
         browser)      cmd_browser ;;
+        scope)        cmd_scope "$SCOPE_NAME" ;;
+        scope-web)    cmd_scope_web "$SCOPE_NAME" ;;
+        ecg-scope)    cmd_scope ecg ;;
+        ecg-scope-web) cmd_scope_web ecg ;;
+        sound-scope)  cmd_scope sound ;;
+        sound-scope-web) cmd_scope_web sound ;;
+        manager)      cmd_manager ;;
+        manager-web)  cmd_manager_web ;;
         ui)           cmd_ui ;;
         ui-docker)    cmd_ui_docker ;;
         ui-e2e)       cmd_ui_e2e ;;
@@ -2153,6 +2355,10 @@ main() {
         bundle-size)  cmd_bundle_size ;;
         wasm-panel)   cmd_wasm_panel "${WASM_PANEL_MAX_RAW_KB:-}" "${WASM_PANEL_MAX_GZ_KB:-}" ;;
         check)        cmd_check ;;
+        check-mesh-only) cmd_check_mesh_only ;;
+        test-mesh-service) cmd_test_mesh_service ;;
+        check-tests)  cmd_check_tests ;;
+        check-mesh-no-owned-state) cmd_check_mesh_no_owned_state ;;
         clippy)       cmd_clippy ;;
         audit)        cmd_audit ;;
         npm-audit)    cmd_npm_audit ;;

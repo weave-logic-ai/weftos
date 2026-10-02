@@ -231,6 +231,8 @@ mod overlay_swap_tests;
 mod overlay_trust_tests;
 #[cfg(all(test, feature = "exochain"))]
 mod overlay_boot_tests;
+#[cfg(feature = "exochain")]
+pub mod chain_migrate;
 pub mod chain_storage;
 #[cfg(feature = "exochain")]
 pub mod token_authority;
@@ -350,6 +352,10 @@ pub mod mesh_artifact_types;
 #[cfg(all(feature = "mesh", feature = "ecc", feature = "exochain", feature = "native"))]
 pub mod mesh_artifact_wire;
 #[cfg(feature = "mesh")]
+pub mod mesh_admit;
+#[cfg(feature = "mesh")]
+pub mod mesh_admit_gate;
+#[cfg(feature = "mesh")]
 pub mod mesh_assess;
 #[cfg(feature = "mesh")]
 pub mod mesh_bootstrap;
@@ -357,6 +363,8 @@ pub mod mesh_bootstrap;
 pub mod mesh_chain;
 #[cfg(feature = "mesh")]
 pub mod mesh_dedup;
+#[cfg(feature = "mesh")]
+pub mod mesh_delivery;
 #[cfg(feature = "mesh")]
 pub mod mesh_discovery;
 #[cfg(feature = "mesh")]
@@ -368,11 +376,15 @@ pub mod mesh_ipc;
 #[cfg(feature = "mesh")]
 pub mod mesh_kad;
 #[cfg(feature = "mesh")]
+pub mod mesh_limits;
+#[cfg(feature = "mesh")]
 pub mod mesh_listener;
 #[cfg(feature = "mesh")]
 pub mod mesh_log;
 #[cfg(feature = "mesh")]
 pub mod mesh_mdns;
+#[cfg(feature = "mesh")]
+pub mod mesh_mode;
 #[cfg(feature = "mesh")]
 pub mod mesh_noise;
 #[cfg(feature = "mesh")]
@@ -381,6 +393,8 @@ pub mod mesh_process;
 pub mod mesh_runtime;
 #[cfg(feature = "mesh")]
 pub mod mesh_sensor;
+#[cfg(feature = "mesh")]
+pub mod mesh_serve;
 #[cfg(feature = "mesh")]
 pub mod mesh_service;
 #[cfg(feature = "mesh")]
@@ -629,7 +643,11 @@ pub use mesh_heartbeat::{
     HeartbeatConfig, HeartbeatState, HeartbeatTracker, PeerHeartbeat, PingRequest, PingResponse,
 };
 #[cfg(feature = "mesh")]
-pub use mesh_ipc::{MeshIpcEnvelope, MeshIpcError};
+pub use mesh_ipc::{MeshIpcEnvelope, MeshIpcError, Scope as MeshScope};
+#[cfg(feature = "mesh")]
+pub use mesh_delivery::LocalDelivery;
+#[cfg(feature = "mesh")]
+pub use mesh_mode::MeshMode;
 #[cfg(feature = "mesh")]
 pub use mesh_kad::{
     ALPHA, DhtEntry, DhtKey, K_BUCKET_SIZE, KEY_BITS, KademliaDiscovery, KademliaTable,

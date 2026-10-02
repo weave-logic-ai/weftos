@@ -75,6 +75,17 @@ mod tests {
         );
     }
 
+    /// Same vector as `clawft-mesh-local`; guards drift between the two
+    /// derivations.
+    #[test]
+    fn golden_vector_pubkey_00_to_1f() {
+        let mut pk = [0u8; 32];
+        for (i, b) in pk.iter_mut().enumerate() {
+            *b = i as u8;
+        }
+        assert_eq!(node_id_from_pubkey(&pk), "630dcd2966c4336691125448bbb25b4f");
+    }
+
     #[test]
     fn shape_check_rejects_legacy_and_uuid() {
         assert!(!is_node_id("n-3a7f9c"));

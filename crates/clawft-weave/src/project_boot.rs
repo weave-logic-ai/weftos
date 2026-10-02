@@ -218,10 +218,10 @@ pub async fn pre_boot(config: &Config, kernel_config: &KernelConfig) -> Result<P
         child.cert.project_id.clone(),
         child.project_token.clone(),
     ));
-    let identity = DaemonIdentity {
-        signing_key: child.key.clone(),
-        node_id,
-    };
+    // The project key is this kernel's own (local) node key; node_id is
+    // derived from it, and equals the certified key id checked above.
+    let identity = DaemonIdentity::local(child.key.clone());
+    debug_assert_eq!(identity.node_id, node_id);
     info!(
         project = %child.cert.project_id,
         serial = child.cert.serial,

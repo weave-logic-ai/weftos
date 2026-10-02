@@ -34,6 +34,14 @@ pub trait EncryptedChannel: Send + Sync + 'static {
     /// Get the remote peer's static public key (after handshake).
     fn remote_static_key(&self) -> Option<&[u8]>;
 
+    /// The Noise handshake hash of this session, when the channel has
+    /// one. Both sides of a session compute the same value; admission
+    /// signs it to bind a node identity to this exact session (P3-K1).
+    /// `None` for channels without a handshake (plaintext passthrough).
+    fn handshake_hash(&self) -> Option<&[u8]> {
+        None
+    }
+
     /// Close the encrypted channel gracefully.
     async fn close(&mut self) -> Result<(), MeshError>;
 }
@@ -113,9 +121,16 @@ pub struct NoiseChannel {
     stream: Box<dyn MeshStream>,
     transport: snow::TransportState,
     remote_static: Option<Vec<u8>>,
+    handshake_hash: Vec<u8>,
 }
 
 impl NoiseChannel {
+    /// The session's Noise handshake hash (32 bytes for SHA-256). Equal
+    /// on both ends of one session, different on every other session.
+    pub fn handshake_hash(&self) -> &[u8] {
+        &self.handshake_hash
+    }
+
     /// Perform a Noise XX handshake as the initiator and return an encrypted channel.
     pub async fn initiate(
         mut stream: Box<dyn MeshStream>,
@@ -156,6 +171,7 @@ impl NoiseChannel {
         stream.send(&buf[..len]).await?;
 
         let remote_static = handshake.get_remote_static().map(|k| k.to_vec());
+        let handshake_hash = handshake.get_handshake_hash().to_vec();
 
         let transport = handshake
             .into_transport_mode()
@@ -167,6 +183,7 @@ impl NoiseChannel {
             stream,
             transport,
             remote_static,
+            handshake_hash,
         })
     }
 
@@ -210,6 +227,7 @@ impl NoiseChannel {
             .map_err(|e| MeshError::Handshake(format!("read msg 3: {e}")))?;
 
         let remote_static = handshake.get_remote_static().map(|k| k.to_vec());
+        let handshake_hash = handshake.get_handshake_hash().to_vec();
 
         let transport = handshake
             .into_transport_mode()
@@ -221,6 +239,7 @@ impl NoiseChannel {
             stream,
             transport,
             remote_static,
+            handshake_hash,
         })
     }
 }
@@ -249,6 +268,10 @@ impl EncryptedChannel for NoiseChannel {
 
     fn remote_static_key(&self) -> Option<&[u8]> {
         self.remote_static.as_deref()
+    }
+
+    fn handshake_hash(&self) -> Option<&[u8]> {
+        Some(&self.handshake_hash)
     }
 
     async fn close(&mut self) -> Result<(), MeshError> {
@@ -290,6 +313,17 @@ impl EncryptedChannel for PassthroughChannel {
     async fn close(&mut self) -> Result<(), MeshError> {
         self.stream.close().await
     }
+}
+
+/// The Noise static public key for a static private key (Curve25519),
+/// i.e. what the remote side sees as this node's remote static. Needed to
+/// fill `noise_static_pub` in an admission hello on the initiator side,
+/// where the handshake does not expose the local static.
+pub fn noise_static_public(private: &[u8; 32]) -> Option<[u8; 32]> {
+    use snow::resolvers::{CryptoResolver, DefaultResolver};
+    let mut dh = DefaultResolver.resolve_dh(&snow::params::DHChoice::Curve25519)?;
+    dh.set(private);
+    dh.pubkey().try_into().ok()
 }
 
 /// Create an encrypted channel for a mesh connection.

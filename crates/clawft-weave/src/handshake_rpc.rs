@@ -154,11 +154,13 @@ pub fn build_handshake(
         version: VERSION.to_owned(),
         sha: BUILD_SHA.to_owned(),
         binary: binary.map(|p| p.display().to_string()),
+        mesh: None,
     }
 }
 
 /// Apply the user-daemon fields: profile, roles, local uid and user key id.
-/// A default (project/legacy) daemon leaves all four empty.
+/// A default (project/legacy) daemon leaves all four empty. Every daemon
+/// reports its mesh mode (`collapsed`, `off`, or `service` with the link).
 pub fn with_user_profile(mut h: Handshake, user_key_id: Option<String>) -> Handshake {
     if let Some((profile, roles)) = crate::user_daemon::handshake_profile() {
         h.profile = Some(profile);
@@ -166,6 +168,7 @@ pub fn with_user_profile(mut h: Handshake, user_key_id: Option<String>) -> Hands
         h.user_id = crate::user_daemon::local_uid();
         h.user_key_id = user_key_id;
     }
+    h.mesh = crate::mesh_state::global().get();
     h
 }
 

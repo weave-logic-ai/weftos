@@ -1,0 +1,41 @@
+[package]
+name = "clawft-mesh-service"
+version.workspace = true
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "WeftOS machine mesh service: journal, bindings, tenant routing, admission verdicts and the mesh-local server (ADR-103)"
+
+# The kernel is used only for its mesh modules: `default-features = false` with
+# `native` + `mesh` keeps exochain, cluster, tilezero and ecc (and so every
+# owned-state subsystem) out of this crate. `scripts/build.sh
+# check-mesh-no-owned-state` fails if that ever changes.
+[dependencies]
+clawft-mesh-local = { workspace = true }
+clawft-kernel = { workspace = true, features = ["native", "mesh"] }
+clawft-types = { workspace = true, features = ["native"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ed25519-dalek = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+rand = { workspace = true }
+toml = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[features]
+# Test seams (write-failure injection). Never enabled in production builds.
+testing = []
+
+[dev-dependencies]
+clawft-mesh-service = { path = ".", features = ["testing"] }
+clawft-mesh-local = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }

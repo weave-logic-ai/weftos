@@ -159,3 +159,36 @@ fn huge_ttl_is_an_error_not_a_panic() {
     );
     assert!(!r.ok);
 }
+
+#[test]
+fn legacy_journals_merge_into_the_new_location_without_touching_the_old() {
+    let dir = tempfile::tempdir().unwrap();
+    let new = dir.path().join("run").join(JOURNAL_FILE);
+    let old1 = dir.path().join("legacy").join(JOURNAL_FILE);
+    let old2 = dir.path().join("beside").join(JOURNAL_FILE);
+    std::fs::create_dir_all(old1.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(old2.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(new.parent().unwrap()).unwrap();
+    std::fs::write(&new, "{\"r\":1}\n").unwrap();
+    std::fs::write(&old1, "{\"r\":1}\n{\"r\":2}\n").unwrap();
+    std::fs::write(&old2, "{\"r\":3}\n\n").unwrap();
+    let missing = dir.path().join("none").join(JOURNAL_FILE);
+    let before = std::fs::read_to_string(&old1).unwrap();
+
+    merge_legacy_journals(&new, &[old1.clone(), missing, old2, new.clone()]);
+    let merged = std::fs::read_to_string(&new).unwrap();
+    assert_eq!(merged, "{\"r\":1}\n{\"r\":2}\n{\"r\":3}\n");
+    assert_eq!(std::fs::read_to_string(&old1).unwrap(), before);
+
+    // Idempotent: a second boot adds nothing.
+    merge_legacy_journals(&new, &[old1]);
+    assert_eq!(std::fs::read_to_string(&new).unwrap(), merged);
+}
+
+#[test]
+fn merge_with_no_legacy_journal_creates_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let new = dir.path().join("run").join(JOURNAL_FILE);
+    merge_legacy_journals(&new, &[dir.path().join("absent")]);
+    assert!(!new.exists());
+}

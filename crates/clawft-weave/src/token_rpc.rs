@@ -29,6 +29,7 @@ use clawft_kernel::boot::Kernel;
 use clawft_kernel::token_authority::{Issuer, MAX_TTL, SECRET_PREFIX, TokenAuthority, TokenInfo};
 use clawft_platform::NativePlatform;
 use clawft_rpc::Response;
+use clawft_types::runtime_paths::RuntimePaths;
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
 
@@ -67,8 +68,12 @@ pub fn authority_for_kernel(k: &Kernel<NativePlatform>) -> Option<Arc<TokenAutho
         return Some(Arc::clone(a));
     }
     let node_id = k.cluster_membership().local_node_id().to_owned();
-    // The journal sits beside the chain checkpoint (see `with_journal`).
-    let journal = k
+    // The journal lives in the runtime root, never beside a chain that may be
+    // a legacy one (`~/.clawft`). Journals from the old locations are merged
+    // in once so no revocation is lost.
+    let root = RuntimePaths::resolve().root().to_path_buf();
+    let journal = root.join(JOURNAL_FILE);
+    let beside_checkpoint = k
         .kernel_config()
         .chain
         .clone()
@@ -77,11 +82,59 @@ pub fn authority_for_kernel(k: &Kernel<NativePlatform>) -> Option<Arc<TokenAutho
         .and_then(|p| {
             std::path::Path::new(&p)
                 .parent()
-                .map(|d| d.join("auth-tokens.jsonl"))
+                .map(|d| d.join(JOURNAL_FILE))
         });
+    let legacy_root = clawft_types::runtime_paths::home_dir()
+        .map(|h| h.join(".clawft").join(JOURNAL_FILE));
+    let old: Vec<_> = beside_checkpoint.into_iter().chain(legacy_root).collect();
+    merge_legacy_journals(&journal, &old);
+    let journal = Some(journal);
     let a = Arc::new(TokenAuthority::with_journal(chain, node_id, journal));
     map.insert(key, Arc::clone(&a));
     Some(a)
+}
+
+/// Revocation journal file name (see `TokenAuthority::with_journal`).
+const JOURNAL_FILE: &str = "auth-tokens.jsonl";
+
+/// Append to `new` every line of the `old` journals it does not already
+/// hold. Old files are only read, never modified or removed, so rollback and
+/// a legacy daemon keep working; lines are merged verbatim because the
+/// authority itself ignores anything but well-formed revocations.
+fn merge_legacy_journals(new: &std::path::Path, old: &[std::path::PathBuf]) {
+    use std::io::Write;
+    let mut have: std::collections::HashSet<String> = std::fs::read_to_string(new)
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_owned())
+        .collect();
+    let mut add = String::new();
+    for path in old.iter().filter(|p| p.as_path() != new) {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            if have.insert(line.to_owned()) {
+                add.push_str(line);
+                add.push('\n');
+            }
+        }
+    }
+    if add.is_empty() {
+        return;
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let written = new
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| opts.open(new))
+        .and_then(|mut f| f.write_all(add.as_bytes()).and_then(|()| f.sync_all()));
+    if let Err(e) = written {
+        tracing::error!(path = %new.display(), error = %e, "could not merge legacy token journal: revocations may be lost");
+    }
 }
 
 fn info_json(i: &TokenInfo) -> Value {
