@@ -198,10 +198,34 @@ pub mod chain;
 pub mod chain_anchor;
 #[cfg(feature = "exochain")]
 pub mod chain_rule_hash;
+/// Project governance overlay, kernel side: load, merge, hash (ADR-103 D8).
+#[cfg(feature = "exochain")]
+pub mod governance_overlay;
+/// A project kernel's live governance: boot, reload, parent updates.
+#[cfg(feature = "exochain")]
+pub mod overlay_runtime;
+/// Trust root, rollback pin and revocation checks of a project kernel.
+#[cfg(feature = "exochain")]
+pub mod overlay_trust;
+/// The signed parent policy the user daemon exports (ADR-103 D8).
+#[cfg(feature = "exochain")]
+pub mod parent_policy;
 #[cfg(feature = "exochain")]
 pub mod chain_subscribe;
 #[cfg(all(test, feature = "exochain"))]
 mod chain_hash_tests;
+#[cfg(all(test, feature = "exochain"))]
+mod governance_overlay_tests;
+#[cfg(all(test, feature = "exochain"))]
+mod governance_overlay_prop_tests;
+#[cfg(all(test, feature = "exochain"))]
+mod overlay_runtime_tests;
+#[cfg(all(test, feature = "exochain"))]
+mod overlay_swap_tests;
+#[cfg(all(test, feature = "exochain"))]
+mod overlay_trust_tests;
+#[cfg(all(test, feature = "exochain"))]
+mod overlay_boot_tests;
 pub mod chain_storage;
 #[cfg(feature = "exochain")]
 pub mod token_authority;

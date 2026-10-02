@@ -90,6 +90,25 @@ pub trait GateBackend: Send + Sync {
     /// * `context` - Additional context for the decision (tool args,
     ///   target PID, etc.).
     fn check(&self, agent_id: &str, action: &str, context: &serde_json::Value) -> GateDecision;
+
+    /// The rules and settings this gate evaluates with, when it is backed by
+    /// a governance engine. The user daemon exports it as the signed parent
+    /// policy for its project kernels (ADR-103 D8). `None` for gates with no
+    /// rule set.
+    fn governance_snapshot(&self) -> Option<GovernanceSnapshot> {
+        None
+    }
+}
+
+/// A governance engine's rules and settings at one instant.
+#[derive(Debug, Clone)]
+pub struct GovernanceSnapshot {
+    /// Every rule, active or not.
+    pub rules: Vec<crate::governance::GovernanceRule>,
+    /// The engine's risk threshold.
+    pub risk_threshold: f64,
+    /// Whether blocking verdicts escalate to a human.
+    pub human_approval_required: bool,
 }
 
 /// Gate backend wrapping the existing `CapabilityChecker`.
@@ -343,6 +362,14 @@ impl GovernanceGate {
         self
     }
 
+    /// Take over the runtime configuration of the gate this one replaces:
+    /// per-action exemptions, rate limit and scorer. Rules, threshold and
+    /// chain are the new gate's own.
+    pub(crate) fn inherit_config(&mut self, old: &GovernanceGate) {
+        self.exempt_actions = old.exempt_actions.clone();
+        self.engine.inherit_config(&old.engine);
+    }
+
     /// Attach a chain manager for audit logging.
     pub fn with_chain(mut self, cm: std::sync::Arc<crate::chain::ChainManager>) -> Self {
         self.chain = Some(cm);
@@ -423,6 +450,14 @@ impl GovernanceGate {
 }
 
 impl GateBackend for GovernanceGate {
+    fn governance_snapshot(&self) -> Option<GovernanceSnapshot> {
+        Some(GovernanceSnapshot {
+            rules: self.engine.rules().to_vec(),
+            risk_threshold: self.engine.risk_threshold(),
+            human_approval_required: self.engine.human_approval_required(),
+        })
+    }
+
     fn check(&self, agent_id: &str, action: &str, context: &serde_json::Value) -> GateDecision {
         let effect = Self::extract_effect(context);
         let mut ctx_map = Self::extract_context(context);

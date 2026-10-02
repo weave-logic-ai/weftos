@@ -2013,7 +2013,17 @@ pub async fn run(
                     g = g.with_chain(cm.clone());
                 }
             }
-            let backend: Arc<dyn GateBackend> = Arc::new(g);
+            // ADR-103 D8: a project kernel's tool gate is its effective
+            // governance (signed parent policy + overlay), not the chat-only
+            // rule set above, so an overlay deny also stops tool dispatch.
+            #[cfg(feature = "exochain")]
+            let overlay_gate = {
+                let k = kernel.read().await;
+                k.governance_overlay().and(k.governance_gate().cloned())
+            };
+            #[cfg(not(feature = "exochain"))]
+            let overlay_gate: Option<Arc<dyn GateBackend>> = None;
+            let backend: Arc<dyn GateBackend> = overlay_gate.unwrap_or_else(|| Arc::new(g));
             Arc::new(clawft_service_agent::KernelEffectGate::new(backend))
         };
 
@@ -7010,7 +7020,13 @@ async fn dispatch(
                             tool_selector: None,
                             force_on_match: false,
                         });
-                    Some(std::sync::Arc::new(g))
+                    // ADR-103 D8: a project kernel's spawned agents are gated by
+                    // its effective governance, not this fixed rule set.
+                    k.governance_overlay()
+                        .and(k.governance_gate().cloned())
+                        .or_else(|| {
+                            Some(std::sync::Arc::new(g) as std::sync::Arc<dyn clawft_kernel::GateBackend>)
+                        })
                 };
                 move |pid, cancel| {
                     let inbox = a2a_clone.create_inbox(pid);

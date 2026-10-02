@@ -114,6 +114,9 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "project.identity.repair",
     "project.rekey",
     "project.revoke",
+    "governance.parent.push",
+    "governance.parent.update",
+    "governance.reload",
 ];
 
 /// What `deny_all` still permits: liveness, discovery and project lookup.

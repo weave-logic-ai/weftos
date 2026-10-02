@@ -94,6 +94,9 @@ pub struct ChainSubsystem {
     pub(crate) governance_gate: Option<Arc<dyn crate::gate::GateBackend>>,
     /// External chain-head anchoring controller (file ledger / external stub).
     pub(crate) chain_anchor: Option<Arc<crate::chain_anchor::AnchoringController>>,
+    /// Project governance (profile `project` only): overlay reload and
+    /// parent-policy updates (ADR-103 D8).
+    pub(crate) overlay: Option<Arc<crate::overlay_runtime::OverlayRuntime>>,
     /// Exclusive lock on the chain in use; released when the kernel drops.
     pub(crate) _chain_lock: Option<crate::chain_storage::ChainLock>,
 }
@@ -258,6 +261,26 @@ impl<P: Platform> Kernel<P> {
             BootPhase::Init,
             format!("Runtime dir: {}", runtime_paths.root().display()),
         ));
+        // ADR-103 D8: a `project` kernel's rules are the user's signed parent
+        // policy plus the project overlay; any failure refuses the boot.
+        let project_profile = kernel_config.profile.is_some();
+        #[cfg(feature = "exochain")]
+        let mut overlay_prepared = if project_profile {
+            let p = crate::overlay_runtime::prepare(&runtime_paths)
+                .map_err(|e| KernelError::BootRefused(e.boot_message()))?;
+            p.apply_limits(&mut kernel_config);
+            Some(p)
+        } else {
+            None
+        };
+        #[cfg(not(feature = "exochain"))]
+        if project_profile {
+            return Err(KernelError::BootRefused(
+                "profile `project` needs the exochain feature (governance overlay)".into(),
+            ));
+        }
+        #[cfg(feature = "exochain")]
+        let mut overlay_runtime: Option<Arc<crate::overlay_runtime::OverlayRuntime>> = None;
         if let Some(w) = chain_note {
             warn!("{w}");
             boot_log.push(BootEvent::warn(BootPhase::Init, w));
@@ -1118,6 +1141,14 @@ impl<P: Platform> Kernel<P> {
                     ),
                 ));
 
+                // ADR-103 A7: a project kernel stamps its effective rule hash on
+                // every chain event, boot events included.
+                if let Some(p) = overlay_prepared.as_ref() {
+                    p.commit(&cm)
+                        .map_err(|e| KernelError::BootRefused(e.boot_message()))?;
+                    p.install_provider(&cm);
+                }
+
                 // Log boot phases to chain
                 cm.append(
                     "kernel",
@@ -1444,8 +1475,9 @@ impl<P: Platform> Kernel<P> {
                 use crate::governance::{GovernanceBranch, GovernanceRule, RuleSeverity};
 
                 // Default risk threshold (0.7 for production safety)
-                let risk_threshold = 0.7;
-                let human_approval = false;
+                let (risk_threshold, human_approval) = overlay_prepared
+                    .as_ref()
+                    .map_or((0.7, false), |p| p.engine_params());
 
                 let mut gate =
                     GovernanceGate::new(risk_threshold, human_approval).with_chain(Arc::clone(cm));
@@ -1759,6 +1791,12 @@ impl<P: Platform> Kernel<P> {
                 // ADR-099 s4: default-deny for workload.* actions.
                 .chain(crate::workload_governance::default_rules())
                 .collect::<Vec<_>>();
+                // ADR-103 D8 (project profile): the effective rules replace the
+                // default set.
+                let genesis_rules = match overlay_prepared.as_ref() {
+                    Some(p) => p.rules().to_vec(),
+                    None => genesis_rules,
+                };
 
                 // Anchor genesis rules to chain
                 let genesis_seq = cm.sequence();
@@ -1821,8 +1859,20 @@ impl<P: Platform> Kernel<P> {
                     ),
                 ));
 
-                Some(Arc::new(gate) as Arc<dyn crate::gate::GateBackend>)
+                match overlay_prepared.take() {
+                    Some(p) => {
+                        let (gate, rt) = p.into_runtime(gate, Arc::clone(cm));
+                        overlay_runtime = Some(rt);
+                        Some(gate)
+                    }
+                    None => Some(Arc::new(gate) as Arc<dyn crate::gate::GateBackend>),
+                }
             } else {
+                if overlay_prepared.is_some() {
+                    return Err(KernelError::BootRefused(
+                        "profile `project` needs a chain: governance cannot run open".into(),
+                    ));
+                }
                 boot_log.push(BootEvent::info(
                     BootPhase::Services,
                     "Governance: no chain available, using open governance",
@@ -2311,6 +2361,7 @@ impl<P: Platform> Kernel<P> {
                 tree_manager,
                 governance_gate,
                 chain_anchor,
+                overlay: overlay_runtime,
                 _chain_lock: chain_lock,
             },
             #[cfg(feature = "ecc")]
@@ -2572,6 +2623,12 @@ impl<P: Platform> Kernel<P> {
     #[cfg(feature = "exochain")]
     pub fn chain_manager(&self) -> Option<&Arc<crate::chain::ChainManager>> {
         self.chain.chain_manager.as_ref()
+    }
+
+    /// The project governance runtime (profile `project` only).
+    #[cfg(feature = "exochain")]
+    pub fn governance_overlay(&self) -> Option<&Arc<crate::overlay_runtime::OverlayRuntime>> {
+        self.chain.overlay.as_ref()
     }
 
     /// Get the tree manager (when exochain feature is enabled).
