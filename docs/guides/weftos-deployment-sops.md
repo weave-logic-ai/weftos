@@ -179,6 +179,26 @@ weft kernel services
 
 Expected output lists at minimum: ExoChain, HNSW (if ECC enabled), Health.
 
+
+#### Optional: machine mesh service
+
+When the machine mesh service runs (`weaver mesh serve`, or the installed unit),
+check it and pin its key once, after comparing the fingerprint with the one the
+install script printed:
+
+```bash
+weaver mesh status            # identity, policy, registrations, journal
+weaver mesh trust             # shows the machine key fingerprint, then pins it
+```
+
+`weaver mesh trust` writes `~/.weftos/mesh/machine.pub`. There is no pin by
+default: until it exists, verbs check the key only against the service record
+beside the socket (`service.json`), so the first contact is trust-on-first-use.
+After pinning, a different key is a hard `machine_key_changed` error; replace
+the pin only with `weaver mesh trust --replace` after verifying the new key out
+of band. The service listens on `127.0.0.1:9489` by default; exposing it on the
+LAN (`listen = "0.0.0.0:9489"` in `mesh.toml`) is an explicit choice.
+
 ### Expected Outputs
 
 | Output | Location | Description |

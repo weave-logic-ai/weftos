@@ -248,3 +248,41 @@ async fn one_peer_cannot_ask_the_owner_more_than_its_budget() {
     assert_eq!(asked.load(Ordering::SeqCst) as u32, ASKS_PER_NODE_PER_MINUTE);
     assert!(matches!(r.broker.ask(req("other", 2)).await, Decision::Deny(_)), "other peers are unaffected");
 }
+
+#[tokio::test]
+async fn stale_grace_counts_from_expiry_not_from_the_grant() {
+    let r = rig(80, 500);
+    let (reg, rx) = owner(&r, 7);
+    let _asked = answer(&r, 7, rx, true, 1); // allow, ttl 1 s
+    assert!(matches!(r.broker.ask(req("n1", 1)).await, Decision::Allow { stale: false, .. }));
+    r.registry.unregister("owner", 7);
+    drop(reg);
+    tokio::time::sleep(Duration::from_millis(1200)).await; // expired, inside the grace
+    assert!(matches!(r.broker.ask(req("n1", 1)).await, Decision::Allow { stale: true, .. }));
+    tokio::time::sleep(Duration::from_millis(600)).await; // past expiry + grace
+    assert!(matches!(r.broker.ask(req("n1", 1)).await, Decision::Unavailable(_)));
+}
+
+#[tokio::test]
+async fn refreshes_keep_budget_when_new_peers_exhaust_theirs() {
+    let r = rig(500, 600_000);
+    r.broker.store(key_for("member"), entry(true));
+    for i in 0..(ASKS_PER_MINUTE - REFRESH_RESERVED) {
+        assert!(r.broker.allow_ask(&format!("new{i}"), false), "new peer {i}");
+    }
+    assert!(!r.broker.allow_ask("one-more-new", false), "new peers are capped below the global limit");
+    assert!(r.broker.allow_ask("member", true), "a peer already holding an allow can still refresh");
+}
+
+#[tokio::test]
+async fn an_answer_obtained_before_clear_is_discarded() {
+    let r = rig(500, 600_000);
+    let (_reg, mut rx) = owner(&r, 7);
+    let broker = Arc::clone(&r.broker);
+    let asker = tokio::spawn(async move { broker.ask(req("n1", 1)).await });
+    let frame = rx.recv().await.unwrap();
+    r.broker.clear(); // the authority changed while the owner was thinking
+    r.broker.on_reply(7, frame.id.unwrap(), Reply { allow: true, ttl_s: 60, reason: String::new(), rule_hash: "old".into() });
+    assert!(matches!(asker.await.unwrap(), Decision::Unavailable(_)));
+    assert_eq!(r.broker.cache_len(), 0, "nothing from the old authority is cached");
+}

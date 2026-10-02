@@ -327,14 +327,72 @@ async fn admin_verbs_journal_first_and_change_nothing_when_the_journal_refuses()
 }
 
 #[tokio::test]
-async fn a_failed_journal_append_fails_the_verb_and_nothing_is_applied() {
+async fn a_broken_journal_does_not_stop_a_peer_revocation_but_does_stop_loosening() {
     let h = Harness::start().await;
     h.svc().state.core.lock().unwrap().journal.inject_write_failure();
+    // Tightening applies first and journals best-effort, with a warning.
+    let data = h.admin_ok(Message::PeerRevoke { node_id: "e".repeat(32), reason: "x".into() }).await;
+    assert!(data["warning"].as_str().unwrap().contains("journal record failed"), "{data}");
+    assert!(h.svc().state.revocations.is_revoked(&"e".repeat(32)));
+    assert!(std::fs::read_to_string(h.state_dir().join("revoked.json")).unwrap().contains(&"e".repeat(32)));
+    // Loosening stays journal-first: the journal is poisoned, so nothing changes.
     assert_eq!(
-        h.admin_err(Message::PeerRevoke { node_id: "e".repeat(32), reason: "x".into() }).await,
+        h.admin_err(Message::PeerUnrevoke { node_id: "e".repeat(32) }).await,
         ErrorKind::Forbidden
     );
-    let path = h.state_dir().join("revoked.json");
-    assert!(!path.exists() || !std::fs::read_to_string(path).unwrap().contains(&"e".repeat(32)));
-    assert!(!h.svc().state.revocations.is_revoked(&"e".repeat(32)), "not applied in memory either");
+    assert!(h.svc().state.revocations.is_revoked(&"e".repeat(32)));
+}
+
+#[tokio::test]
+async fn a_binding_revocation_is_enforced_even_when_the_journal_cannot_record_it() {
+    let h = Harness::start().await;
+    let c = h.connect(None, 1, RegisterParams::default()).await.unwrap();
+    h.svc().state.core.lock().unwrap().journal.inject_write_failure();
+    let data = h.admin_ok(Message::BindRevoke { uid: h.euid, reason: "compromised".into() }).await;
+    assert!(data["warning"].as_str().unwrap().contains("enforced in memory"), "{data}");
+    // The live registration is cut off and the uid cannot come back.
+    let mut gone = false;
+    for _ in 0..40 {
+        if c.request(Message::Ping {}).await.is_err() {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(gone);
+    assert_eq!(server_kind(h.connect(None, 1, RegisterParams::default()).await), ErrorKind::Forbidden);
+}
+
+#[tokio::test]
+async fn policy_set_with_a_failing_journal_applies_nothing() {
+    let h = Harness::start().await;
+    h.svc().state.core.lock().unwrap().journal.inject_write_failure();
+    let set = Message::PolicySet { admission: Some("off".into()), cluster_owner_uid: Some(77) };
+    assert_eq!(h.admin_err(set).await, ErrorKind::Forbidden);
+    let s = h.admin_ok(Message::Status {}).await;
+    assert_eq!((s["admission"].as_str(), s["cluster_owner_uid"].is_null()), (Some("observe"), true));
+}
+
+#[tokio::test]
+async fn a_journalled_enforce_with_an_incomplete_mesh_toml_stops_the_service() {
+    let mut h = Harness::with(|c, _| {
+        c.genesis_hash = Some([1; 32]);
+        c.noise = true;
+        c.cluster_owner_uid = Some(c.admin_uids[0]);
+    })
+    .await;
+    h.admin_ok(Message::PolicySet { admission: Some("enforce".into()), cluster_owner_uid: None }).await;
+    h.stop().await;
+    // mesh.toml loses its genesis hash: the effective mode (enforce) cannot be built.
+    let genesis = h.cfg.genesis_hash.take();
+    assert!(matches!(h.begin().await, Err(StartError::Config(_))), "must refuse, not run as allow-all");
+    // Same with noise removed, and with the owner removed.
+    h.cfg.genesis_hash = genesis;
+    h.cfg.noise = false;
+    assert!(matches!(h.begin().await, Err(StartError::Config(_))));
+    h.cfg.noise = true;
+    h.cfg.cluster_owner_uid = None;
+    assert!(matches!(h.begin().await, Err(StartError::Config(_))));
+    h.cfg.cluster_owner_uid = Some(h.euid);
+    h.begin().await.expect("a complete configuration starts");
 }

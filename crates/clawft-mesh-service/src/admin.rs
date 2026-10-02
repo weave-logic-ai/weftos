@@ -5,8 +5,11 @@
 //! cannot change while the service runs. Every state change is a journal
 //! record naming `by`, and it is journalled *first*: state changes only after
 //! the append succeeded, so an append failure (read-only journal, I/O) is the
-//! verb's error and nothing was applied. Verbs run on a blocking thread
-//! (fsync, `verify_dir`).
+//! verb's error and nothing was applied. The exception is tightening
+//! (`peer.revoke`, `bind.revoke`): a broken journal must not stop an operator
+//! from cutting someone off, so those apply first and journal best-effort,
+//! returning `{"warning": ...}` when the record could not be written. Verbs
+//! run on a blocking thread (fsync, `verify_dir`).
 
 use clawft_mesh_local::framing::FrameError;
 use clawft_mesh_local::proto::{ErrorKind, Message};
@@ -123,21 +126,40 @@ fn admin_dispatch(ctx: &ConnCtx, m: Message) -> Result<Value, Reject> {
                 )));
             }
             bindings.bind(journal, &p, &key, BindHow::Approved, meta(ctx)).map_err(|e| admin_err(&e))?;
+            st.force_revoked.lock().expect("force lock").remove(&p);
             Ok(Value::Null)
         }
         Message::BindRevoke { uid, reason } => {
             let p = Principal::Uid(uid);
+            let mut warning = None;
             {
                 let mut g = st.core.lock().expect("core lock");
                 let Core { journal, bindings } = &mut *g;
-                bindings.revoke(journal, &p, &reason, &ctx.principal).map_err(|e| admin_err(&e))?;
+                match bindings.revoke(journal, &p, &reason, &ctx.principal) {
+                    Ok(()) => {}
+                    // The record could not be written, but cutting someone
+                    // off must not wait for the journal: enforce in memory.
+                    Err(BindError::Journal(e)) if bindings.key_of(&p).is_some() => {
+                        st.force_revoked.lock().expect("force lock").insert(p.clone());
+                        warning = Some(format!(
+                            "journal record failed ({e}); the revocation is enforced in memory until the service restarts"
+                        ));
+                    }
+                    Err(BindError::Degraded(w)) => {
+                        st.force_revoked.lock().expect("force lock").insert(p.clone());
+                        warning = Some(format!(
+                            "bindings are degraded ({w}); the revocation is enforced in memory until the service restarts"
+                        ));
+                    }
+                    Err(e) => return Err(admin_err(&e)),
+                }
             }
             if let Some(r) = st.registry.by_principal(&p) {
                 r.kill(format!("binding revoked: {reason}"));
             }
             owner_changed(ctx, uid);
             st.refresh_facts();
-            Ok(Value::Null)
+            Ok(warning.map_or(Value::Null, |w| json!({"warning": w})))
         }
         Message::BindRebind { uid, user_pubkey } => {
             let p = Principal::Uid(uid);
@@ -155,6 +177,7 @@ fn admin_dispatch(ctx: &ConnCtx, m: Message) -> Result<Value, Reject> {
                 bindings.rebind(journal, &p, &key, meta(ctx)).map_err(|e| admin_err(&e))?;
             }
             st.conflicts.lock().expect("conflicts lock").remove(&p);
+            st.force_revoked.lock().expect("force lock").remove(&p);
             if let Some(r) = st.registry.by_principal(&p) {
                 r.kill("binding replaced; register with the new key");
             }
@@ -166,15 +189,17 @@ fn admin_dispatch(ctx: &ConnCtx, m: Message) -> Result<Value, Reject> {
             if !valid_node_id(&node_id) {
                 return Err(bad("node_id is empty or has unexpected characters"));
             }
-            // Journal first; revoking only reduces trust, so it is allowed
-            // while the journal is read-only (the append still has to succeed).
-            st.try_note("peer.revoke", json!({"node_id": node_id, "reason": reason, "by": by_json(ctx)}))
-                .map_err(|e| journal_err(&e))?;
+            // Tightening: apply first (revoked.json, disconnect), then journal
+            // best-effort. A broken journal must not delay cutting a peer off.
             st.revocations.revoke_host(&node_id, &reason);
             if let Some(rt) = st.router.runtime() {
                 rt.disconnect_peer(&node_id);
             }
-            Ok(Value::Null)
+            let noted = st.try_note("peer.revoke", json!({"node_id": node_id, "reason": reason, "by": by_json(ctx)}));
+            Ok(match noted {
+                Ok(()) => Value::Null,
+                Err(e) => json!({"warning": format!("journal record failed ({e}); the peer is revoked but the revocation is not in the journal")}),
+            })
         }
         Message::PeerUnrevoke { node_id } => {
             if !valid_node_id(&node_id) {
@@ -207,27 +232,44 @@ fn admin_dispatch(ctx: &ConnCtx, m: Message) -> Result<Value, Reject> {
                     ));
                 }
             }
-            // Owner first (enforce depends on it), each journalled before applied.
+            // Both records are appended before any part is applied; if the
+            // second append fails, the part that is in the journal is applied
+            // (so state matches what a restart would replay) and the verb errors.
+            let mut apply_owner = None;
+            let mut apply_mode = None;
+            let mut failure = None;
             if let Some(u) = cluster_owner_uid {
                 let old = st.policy.owner_uid();
-                st.try_note(
+                match st.try_note(
                     "policy.set",
                     json!({"key": "cluster_owner_uid", "old": old, "new": u, "by": by_json(ctx)}),
-                )
-                .map_err(|e| journal_err(&e))?;
-                st.policy.set_owner(u);
-                st.verdicts.clear();
+                ) {
+                    Ok(()) => apply_owner = Some(u),
+                    Err(e) => failure = Some(e),
+                }
             }
-            if let Some(m) = mode {
+            if let (Some(m), None) = (mode, &failure) {
                 let old = admission_str(st.policy.admission());
-                st.try_note(
+                match st.try_note(
                     "policy.set",
                     json!({"key": "admission", "old": old, "new": admission_str(m), "by": by_json(ctx)}),
-                )
-                .map_err(|e| journal_err(&e))?;
+                ) {
+                    Ok(()) => apply_mode = Some(m),
+                    Err(e) => failure = Some(e),
+                }
+            }
+            if let Some(u) = apply_owner {
+                st.policy.set_owner(u);
+            }
+            if let Some(m) = apply_mode {
                 st.gate.set_mode(m).map_err(bad)?;
                 st.policy.set_admission(m);
+            }
+            if apply_owner.is_some() || apply_mode.is_some() {
                 st.verdicts.clear();
+            }
+            if let Some(e) = failure {
+                return Err(journal_err(&e));
             }
             Ok(json!({
                 "admission": admission_str(st.policy.admission()),

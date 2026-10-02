@@ -294,8 +294,11 @@ async fn pending_user_id(c: &ConnArgs, uid: u32) -> Result<String> {
 }
 
 async fn ack(w: &mut dyn Write, c: &ConnArgs, m: Message, done: &str) -> Result<()> {
-    call(c, Role::Admin, m).await?;
+    let data = call(c, Role::Admin, m).await?;
     writeln!(w, "{done}")?;
+    if let Some(warning) = data["warning"].as_str() {
+        writeln!(w, "WARNING: {warning}")?;
+    }
     Ok(())
 }
 

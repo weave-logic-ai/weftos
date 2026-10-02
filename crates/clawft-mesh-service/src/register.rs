@@ -148,6 +148,10 @@ impl Conn {
             Ok(o) => o,
             Err(RegisterError::InUse { holder_pid }) => return self.reject(id, in_use(holder_pid)).await,
         };
+        // accept_from governs local cross-tenant sends only; deliveries from
+        // admitted remote peers are gated by admission, not by this list.
+        let (accept, accept_rejected) = sanitize_accept_from(&req.accept_from);
+        reg.set_accept_from(accept);
         reg.set_cert(cert.clone());
         self.reg = Some(reg);
         self.cert = Some(cert.clone());
@@ -155,7 +159,7 @@ impl Conn {
             user_id,
             cert,
             accepted: Accepted { addresses: outcome.addresses, topic_prefixes: outcome.topic_prefixes },
-            rejected: outcome.rejected,
+            rejected: outcome.rejected.into_iter().chain(accept_rejected).collect(),
             bind,
         };
         self.send(id, Message::RegisterAck(ack)).await?;
@@ -171,6 +175,13 @@ fn bind_and_issue(ctx: &ConnCtx, req: &RegisterReq) -> Result<(BindState, UserCe
     let uid = ctx.uid;
     let user_id = node_id_from_pubkey(&key);
     let meta = BindMeta { by: None, peer_pid: Some(ctx.pid).filter(|p| *p > 0), exe: Some(ctx.exe.clone()) };
+    if st.force_revoked.lock().expect("force lock").contains(&ctx.principal) {
+        return Err(Reject::new(
+            ErrorKind::Forbidden,
+            "this binding was revoked (the revocation is enforced in memory until the journal is repaired)",
+            "an admin runs `weaver mesh journal verify`",
+        ));
+    }
     let mut guard = st.core.lock().expect("core lock");
     let Core { journal, bindings } = &mut *guard;
     let state = match bindings.check(&ctx.principal, &key) {
@@ -217,6 +228,34 @@ fn bind_and_issue(ctx: &ConnCtx, req: &RegisterReq) -> Result<(BindState, UserCe
     Ok((state, cert))
 }
 
+/// Most `accept_from` entries a registration may carry.
+pub const MAX_ACCEPT_FROM: usize = 32;
+
+/// Keep valid entries (`*` or a 32-hex user id), at most [`MAX_ACCEPT_FROM`];
+/// report the rest.
+pub(crate) fn sanitize_accept_from(list: &[String]) -> (Vec<String>, Vec<clawft_mesh_local::proto::Rejected>) {
+    let mut ok = Vec::new();
+    let mut rejected = Vec::new();
+    for e in list {
+        let valid = e == "*" || clawft_mesh_local::hexser::decode::<16>(e).is_some();
+        if !valid {
+            rejected.push(clawft_mesh_local::proto::Rejected {
+                what: format!("accept_from {}", e.chars().take(40).collect::<String>()),
+                reason: "not `*` or a 32 hex character user id".into(),
+            });
+        } else if ok.len() >= MAX_ACCEPT_FROM {
+            rejected.push(clawft_mesh_local::proto::Rejected {
+                what: "accept_from".into(),
+                reason: format!("more than {MAX_ACCEPT_FROM} entries; the rest are ignored"),
+            });
+            break;
+        } else if !ok.contains(e) {
+            ok.push(e.clone());
+        }
+    }
+    (ok, rejected)
+}
+
 fn in_use(holder_pid: u32) -> Reject {
     let mut r = Reject::new(
         ErrorKind::AddressInUse,
@@ -225,4 +264,20 @@ fn in_use(holder_pid: u32) -> Reject {
     );
     r.data = Some(json!({"holder_pid": holder_pid}));
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accept_from_keeps_valid_entries_dedupes_and_caps_at_32() {
+        let ids: Vec<String> = (0..40u8).map(|n| node_id_from_pubkey(&[n; 32])).collect();
+        let (ok, rej) = sanitize_accept_from(&ids);
+        assert_eq!(ok.len(), MAX_ACCEPT_FROM);
+        assert_eq!(rej.len(), 1, "one note that the rest were ignored");
+        let (ok, rej) = sanitize_accept_from(&["*".into(), "*".into(), "ZZ".into(), ids[0].to_uppercase()]);
+        assert_eq!(ok, vec!["*".to_string()]);
+        assert_eq!(rej.len(), 2, "garbage and uppercase hex are refused");
+    }
 }

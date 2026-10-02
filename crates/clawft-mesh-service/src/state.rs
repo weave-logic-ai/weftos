@@ -133,6 +133,9 @@ pub struct ServiceState {
     /// Newest certificate per user id, reused by a reconnect while it has more
     /// than half its life left (no new journal record per reconnect). In memory.
     pub last_certs: Mutex<HashMap<String, clawft_mesh_local::UserCert>>,
+    /// Principals revoked while the journal could not record it: enforced in
+    /// memory (registration and renewal refuse them) until a restart.
+    pub force_revoked: Mutex<std::collections::HashSet<Principal>>,
     pub conn_seq: AtomicU64,
     pub started_at: u64,
     /// Where the mesh listener actually bound.
@@ -147,7 +150,7 @@ impl ServiceState {
         journal: Journal,
         revocations: Arc<RevocationList>,
         limits: LimitConfig,
-    ) -> Arc<Self> {
+    ) -> Result<Arc<Self>, String> {
         let machine_pubkey = machine_key.verifying_key().to_bytes();
         let node_id = clawft_mesh_local::node_id_from_pubkey(&machine_pubkey);
         let bindings = Bindings::fold_lenient(&journal);
@@ -155,6 +158,11 @@ impl ServiceState {
             tracing::error!(reason = why, "bindings are degraded: serving read-only, refusing binds and certs");
         }
         let policy = PolicyCell::from_journal(&cfg, &journal);
+        if policy.admission() == MeshAdmissionMode::Enforce && policy.owner_uid().is_none() {
+            return Err("the effective admission mode is enforce but no cluster owner is set \
+                        (set cluster_owner_uid in mesh.toml)"
+                .into());
+        }
         let core = Arc::new(Mutex::new(Core { journal, bindings }));
         let registry = Arc::new(Registry::new());
         let verdicts = VerdictBroker::new(
@@ -172,8 +180,9 @@ impl ServiceState {
             Arc::clone(&verdicts),
             Arc::clone(&core),
             policy.admission(),
-        );
-        Arc::new(Self {
+        )
+        .map_err(|e| format!("the effective admission mode ({}) cannot be applied: {e}", admission_str(policy.admission())))?;
+        Ok(Arc::new(Self {
             cfg,
             machine_key,
             machine_pubkey,
@@ -192,7 +201,8 @@ impl ServiceState {
             conn_seq: AtomicU64::new(1),
             started_at: unix_now(),
             listen_addr: Mutex::new(None),
-        })
+            force_revoked: Mutex::new(std::collections::HashSet::new()),
+        }))
     }
 
     /// Append a non-binding record. A failure is logged and swallowed: the

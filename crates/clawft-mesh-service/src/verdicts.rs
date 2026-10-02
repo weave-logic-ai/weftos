@@ -83,28 +83,39 @@ fn subject_key(s: &VerdictSubject) -> VerdictSubjectKey {
 /// fail-closed answer.
 pub const ASKS_PER_MINUTE: u32 = 120;
 pub const ASKS_PER_NODE_PER_MINUTE: u32 = 10;
+/// Of [`ASKS_PER_MINUTE`], this many are reserved for peers that already hold
+/// an allow entry (refreshes), so a flood of new node ids cannot crowd out
+/// the renewals of the peers that are already members.
+pub const REFRESH_RESERVED: u32 = 60;
 const MAX_DENY_CACHE: usize = 256;
 
 struct AskBudget {
     window_start: Instant,
     total: u32,
+    /// Asks by peers holding no allow entry.
+    new_peers: u32,
     per_node: HashMap<String, u32>,
 }
 
-type Waiters = Vec<oneshot::Sender<Decision>>;
+type Waiters = (u64, Vec<oneshot::Sender<Decision>>);
 
 /// Removes this ask's single-flight slot if the leader is dropped before it
-/// finished, so waiters fail closed instead of hanging.
+/// finished, so waiters fail closed instead of hanging. Only a slot that still
+/// belongs to this flight is removed (a newer leader's is left alone).
 struct Flight<'a> {
     broker: &'a VerdictBroker,
     key: CacheKey,
+    id: u64,
     done: bool,
 }
 
 impl Drop for Flight<'_> {
     fn drop(&mut self) {
         if !self.done {
-            self.broker.inflight.lock().expect("inflight lock").remove(&self.key);
+            let mut f = self.broker.inflight.lock().expect("inflight lock");
+            if f.get(&self.key).is_some_and(|(id, _)| *id == self.id) {
+                f.remove(&self.key);
+            }
         }
     }
 }
@@ -124,6 +135,9 @@ pub struct VerdictBroker {
     allows: Mutex<HashMap<CacheKey, Entry>>,
     denies: Mutex<HashMap<CacheKey, Entry>>,
     inflight: Mutex<HashMap<CacheKey, Waiters>>,
+    next_flight: AtomicU64,
+    /// Bumped by `clear()`: an answer obtained under an older authority is discarded.
+    generation: AtomicU64,
     budget: Mutex<AskBudget>,
     /// Last `rule_hash` an allow carried per node id (journalled with `peer.admit`).
     last_rule: Mutex<HashMap<String, String>>,
@@ -146,7 +160,9 @@ impl VerdictBroker {
             allows: Mutex::new(HashMap::new()),
             denies: Mutex::new(HashMap::new()),
             inflight: Mutex::new(HashMap::new()),
-            budget: Mutex::new(AskBudget { window_start: Instant::now(), total: 0, per_node: HashMap::new() }),
+            next_flight: AtomicU64::new(1),
+            generation: AtomicU64::new(0),
+            budget: Mutex::new(AskBudget { window_start: Instant::now(), total: 0, new_peers: 0, per_node: HashMap::new() }),
             last_rule: Mutex::new(HashMap::new()),
         })
     }
@@ -163,8 +179,11 @@ impl VerdictBroker {
 
     /// Forget every cached verdict (owner change, admission-mode change,
     /// revocation or rebind of the owner): an answer given under the old
-    /// authority must not outlive it. Stale grace goes with it.
+    /// authority must not outlive it. Stale grace goes with it, asks in flight
+    /// are discarded and replies still owed by the old owner are dropped.
     pub fn clear(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        self.pending.lock().expect("pending lock").clear();
         self.allows.lock().expect("cache lock").clear();
         self.denies.lock().expect("cache lock").clear();
         self.last_rule.lock().expect("rule lock").clear();
@@ -181,14 +200,15 @@ impl VerdictBroker {
         None
     }
 
-    fn allow_ask(&self, node: &str) -> bool {
+    fn allow_ask(&self, node: &str, holds_allow: bool) -> bool {
         let mut b = self.budget.lock().expect("budget lock");
         if b.window_start.elapsed() >= Duration::from_secs(60) {
             b.window_start = Instant::now();
             b.total = 0;
+            b.new_peers = 0;
             b.per_node.clear();
         }
-        if b.total >= ASKS_PER_MINUTE {
+        if b.total >= ASKS_PER_MINUTE || (!holds_allow && b.new_peers >= ASKS_PER_MINUTE - REFRESH_RESERVED) {
             return false;
         }
         if b.per_node.len() >= MAX_CACHE && !b.per_node.contains_key(node) {
@@ -200,6 +220,9 @@ impl VerdictBroker {
         }
         *n += 1;
         b.total += 1;
+        if !holds_allow {
+            b.new_peers += 1;
+        }
         true
     }
 
@@ -217,16 +240,17 @@ impl VerdictBroker {
             return d;
         }
         // Single flight: later askers of the same key wait for the leader.
+        let flight_id = self.next_flight.fetch_add(1, Ordering::Relaxed);
         let waiter = {
             let mut f = self.inflight.lock().expect("inflight lock");
             match f.get_mut(&key) {
-                Some(v) => {
+                Some((_, v)) => {
                     let (tx, rx) = oneshot::channel();
                     v.push(tx);
                     Some(rx)
                 }
                 None => {
-                    f.insert(key.clone(), Vec::new());
+                    f.insert(key.clone(), (flight_id, Vec::new()));
                     None
                 }
             }
@@ -237,9 +261,16 @@ impl VerdictBroker {
                 Err(_) => self.fallback(&key, "the concurrent ask was abandoned".into()),
             };
         }
-        let mut flight = Flight { broker: self, key: key.clone(), done: false };
-        let d = self.decide(&key, &req).await;
-        let waiters = self.inflight.lock().expect("inflight lock").remove(&key).unwrap_or_default();
+        let mut flight = Flight { broker: self, key: key.clone(), id: flight_id, done: false };
+        let epoch = self.generation.load(Ordering::SeqCst);
+        let d = self.decide(&key, &req, epoch).await;
+        let waiters = {
+            let mut f = self.inflight.lock().expect("inflight lock");
+            match f.get(&key) {
+                Some((id, _)) if *id == flight_id => f.remove(&key).map(|(_, w)| w).unwrap_or_default(),
+                _ => Vec::new(),
+            }
+        };
         flight.done = true;
         for w in waiters {
             let _ = w.send(d.clone());
@@ -247,11 +278,15 @@ impl VerdictBroker {
         d
     }
 
-    async fn decide(&self, key: &CacheKey, req: &VerdictRequest) -> Decision {
-        if !self.allow_ask(&req.peer.node_id) {
+    async fn decide(&self, key: &CacheKey, req: &VerdictRequest, epoch: u64) -> Decision {
+        let holds = self.allows.lock().expect("cache lock").contains_key(key);
+        if !self.allow_ask(&req.peer.node_id, holds) {
             return self.fallback(key, "ask rate limit reached".into());
         }
         match self.ask_owner(req).await {
+            Ok(_) if self.generation.load(Ordering::SeqCst) != epoch => {
+                Decision::Unavailable("the cluster authority changed while this was being decided".into())
+            }
             Ok(reply) => {
                 let ttl = Duration::from_secs(reply.ttl_s)
                     .min(if reply.allow { MAX_ALLOW_TTL } else { MAX_DENY_TTL });
@@ -281,7 +316,7 @@ impl VerdictBroker {
         let mut c = map.lock().expect("cache lock");
         if c.len() >= cap {
             let grace = self.stale_grace;
-            c.retain(|_, v| v.at.elapsed() < v.ttl.max(if v.allow { grace } else { Duration::ZERO }));
+            c.retain(|_, v| v.at.elapsed() < v.ttl + if v.allow { grace } else { Duration::ZERO });
             while c.len() >= cap {
                 let Some(old) = c.iter().min_by_key(|(_, v)| v.at).map(|(k, _)| k.clone()) else { break };
                 c.remove(&old);
@@ -290,11 +325,12 @@ impl VerdictBroker {
         c.insert(key, e);
     }
 
-    /// D-3: a peer already granted keeps its permit for `stale_grace` from
-    /// the grant; new peers (and previously denied ones) are refused.
+    /// D-3: a peer already granted keeps its permit for `stale_grace` after
+    /// the grant *expires* (`at + ttl`), so a long-lived grant is not shorter
+    /// than a short one; new peers (and previously denied ones) are refused.
     fn fallback(&self, key: &CacheKey, why: String) -> Decision {
         if let Some(e) = self.allows.lock().expect("cache lock").get(key)
-            && e.at.elapsed() < self.stale_grace
+            && e.at.elapsed() < e.ttl + self.stale_grace
         {
             return decision(e, true);
         }

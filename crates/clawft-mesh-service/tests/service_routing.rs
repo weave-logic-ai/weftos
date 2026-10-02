@@ -249,3 +249,19 @@ async fn verdicts_fail_closed_when_the_owner_is_gone() {
     assert!(matches!(d, clawft_mesh_service::verdicts::Decision::Unavailable(_)));
 }
 
+
+#[tokio::test]
+async fn accept_from_is_validated_and_bounded() {
+    let h = Harness::start().await;
+    let a = h.connect(None, 1, RegisterParams::default()).await.unwrap();
+    let params = RegisterParams {
+        accept_from: vec!["not-a-user-id".into(), "*".into()],
+        ..Default::default()
+    };
+    let mut b = h.connect(Some(9001), 2, params).await.unwrap();
+    assert!(b.register_ack().rejected.iter().any(|r| r.what.contains("accept_from not-a-user-id")));
+    // The valid "*" was applied, so A can send to B.
+    let dest = WeftAddr::from_str(&format!("weft://local/{}/_/chat", user_id(2))).unwrap();
+    assert!(matches!(a.send(&dest, serde_json::to_value(km("t")).unwrap()).await.unwrap(), Message::Ack {}));
+    assert!(next_deliver(&mut b).await.is_some());
+}

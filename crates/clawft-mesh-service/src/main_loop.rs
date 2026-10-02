@@ -249,7 +249,8 @@ async fn start_inner(
         )?;
     }
     let revocations = Arc::new(RevocationList::load(cfg.state_dir.join("revoked.json")));
-    let state = ServiceState::build(cfg.clone(), key.clone(), journal, revocations, limits);
+    let state = ServiceState::build(cfg.clone(), key.clone(), journal, revocations, limits)
+        .map_err(|e| StartError::Config(ConfigError::Invalid(e)))?;
     state.note(
         "service.start",
         json!({

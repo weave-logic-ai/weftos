@@ -86,7 +86,7 @@ impl ServiceGate {
         verdicts: Arc<VerdictBroker>,
         core: Arc<Mutex<Core>>,
         mode: MeshAdmissionMode,
-    ) -> Arc<Self> {
+    ) -> Result<Arc<Self>, String> {
         let gate = Arc::new(Self {
             inner: RwLock::new(Arc::new(AllowAll)),
             genesis,
@@ -98,10 +98,11 @@ impl ServiceGate {
             refuse_notes: Mutex::new(NoteLimiter::new()),
             admit_notes: Mutex::new(NoteLimiter::new()),
         });
-        // The initial mode was validated with the configuration; a failure here
-        // leaves AllowAll, which is also what `observe` without a genesis means.
-        let _ = gate.set_mode(mode);
-        gate
+        // Fail closed: an effective mode that cannot be built (journalled
+        // `enforce` with an edited mesh.toml missing the genesis hash or noise)
+        // must stop the service, not silently run as AllowAll.
+        gate.set_mode(mode)?;
+        Ok(gate)
     }
 
     fn build(&self, mode: MeshAdmissionMode) -> Result<Arc<dyn AdmissionGate>, String> {
