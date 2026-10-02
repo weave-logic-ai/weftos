@@ -314,10 +314,13 @@ async fn start_inner(
     };
     connect_seeds(&rt, &cfg.seed_peers, &cfg.transport, noise, dial);
 
-    // The mesh-local socket, then the record clients pin.
+    // The record clients pin, then the mesh-local socket: a client that finds
+    // the socket must also find the record that verifies it. The socket path
+    // is checked first so a live service's record is never overwritten.
+    prepare_socket(&cfg.socket)?;
+    write_service_json(&cfg, &state, &socket_dir)?;
     let sock = bind_socket(&cfg.socket)?;
     tasks.push(tokio::spawn(serve_local(Arc::clone(&state), sock, peers)));
-    write_service_json(&cfg, &state, &socket_dir)?;
 
     let health_addr = match &cfg.health_listen {
         Some(addr) => {

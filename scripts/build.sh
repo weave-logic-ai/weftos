@@ -908,6 +908,21 @@ cmd_check_mesh_only() {
     timer_end
 }
 
+# P3-X: the machine mesh service lane: the mesh crates' tests, the Phase 3
+# end-to-end test (the real service plus two user daemons as the current user,
+# tempdirs only; scripts/dev/mesh-p3-e2e.sh), the no-owned-state gate and the
+# mesh-only kernel build. Nothing here needs root or touches /var or /etc.
+cmd_test_mesh_service() {
+    header "Running the machine mesh service lane (mesh crates, Phase 3 e2e, no-owned-state, mesh-only build)"
+    timer_start
+    isolate_test_runtime
+    run_cmd cargo test -p clawft-mesh-local -p clawft-mesh-service
+    run_cmd scripts/dev/mesh-p3-e2e.sh
+    cmd_check_mesh_no_owned_state
+    cmd_check_mesh_only
+    timer_end
+}
+
 # P3-S: compile (not run) the tests of the named packages. The lead session
 # runs the tests; this is the fast loop for writing them.
 cmd_check_tests() {
@@ -2042,6 +2057,10 @@ ${BOLD}Commands:${NC}
                   gate against the panel size budget. (WEFT-484 / M6-B)
                   Override budget: scripts/build.sh wasm-panel <max-raw-kb> <max-gz-kb>
   check-mesh-only Run cargo check -p clawft-kernel --no-default-features --features native,mesh
+  test-mesh-service
+                  Machine mesh service lane (P3): cargo test -p clawft-mesh-local
+                  -p clawft-mesh-service, scripts/dev/mesh-p3-e2e.sh, the
+                  no-owned-state gate and check-mesh-only. Current user, tempdirs only
   check-tests     Compile (not run) the tests of the named packages: check-tests <pkg>…
   check-mesh-no-owned-state
                   Fail if `cargo tree -p clawft-mesh-service -e normal,features` contains
@@ -2335,6 +2354,7 @@ main() {
         wasm-panel)   cmd_wasm_panel "${WASM_PANEL_MAX_RAW_KB:-}" "${WASM_PANEL_MAX_GZ_KB:-}" ;;
         check)        cmd_check ;;
         check-mesh-only) cmd_check_mesh_only ;;
+        test-mesh-service) cmd_test_mesh_service ;;
         check-tests)  cmd_check_tests ;;
         check-mesh-no-owned-state) cmd_check_mesh_no_owned_state ;;
         clippy)       cmd_clippy ;;

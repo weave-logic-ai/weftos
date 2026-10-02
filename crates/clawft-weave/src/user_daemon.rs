@@ -199,6 +199,20 @@ mod tests {
         assert_eq!(mesh.listen_addr, "0.0.0.0:9470");
     }
 
+    #[tokio::test]
+    async fn weave_toml_kernel_mesh_service_is_the_documented_key() {
+        // The owner steps say: `service = "required"` under `[kernel.mesh]`.
+        use clawft_platform::Platform;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("weave.toml");
+        std::fs::write(&path, "[kernel.mesh]\nenabled = true\nservice = \"required\"\n").unwrap();
+        let platform = clawft_platform::NativePlatform::new();
+        let weave = config_loader::load_weave_toml_file(platform.fs(), &path).await.unwrap();
+        let layers = config_loader::ConfigLayers { global: json!({}), workspace: None };
+        let mesh = layer_user_config(layers, &weave).unwrap().config.kernel.mesh.expect("mesh");
+        assert_eq!(mesh.service, clawft_types::config::MeshServicePolicy::Required);
+    }
+
     #[test]
     fn empty_weave_toml_is_the_legacy_config() {
         let layers = config_loader::ConfigLayers {

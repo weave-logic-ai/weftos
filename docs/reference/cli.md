@@ -201,6 +201,7 @@ Exit code is 1 on any FAIL, or on any WARN with `--strict`; otherwise 0.
 | `daemon` | Kernel processes from `ps` (`weaver kernel start`, `weftos boot`): pid, executable (`/proc/<pid>/exe` or `lsof`), version (from `kernel.status` when the socket is tied to the pid, else `<exe> --version`). WARN when the executable is outside any known install location, differs from the `PATH` winner, or the CLI and daemon versions differ. Never starts or signals a process. |
 | `runtime` | The resolved runtime dir and how it was resolved; `kernel.sock` connect test (refused means stale), `kernel.pid` liveness, every `node.key` under `~/.clawft`, `~/.weftos/runtime` and project `.weftos/runtime` dirs (paths and permissions only; contents are never read, keys are never deleted). |
 | `mcp` | Each stdio server in the nearest `.mcp.json` resolves on `PATH`. |
+| `runtime` (weaver, mesh) | `mesh.*`: the machine mesh service answers on its socket, its `mesh-local` protocol window overlaps this weaver, the machine key matches `~/.weftos/mesh/machine.pub`, the journal verifies, the box key is 0600 and owned by the service account, `~/.weftos/run/node.key` left behind while the service runs (WARN), two listeners on 9489 (FAIL), the user daemon's `mesh.mode` against the service (`mesh.mode`; a project daemon reached from a project directory is only reported), force-revoked users. `user_key` / `user_key_split`: `user.key` and `chain.key` during the migration, WARN when their public keys differ. |
 | `config`, `agents` | (weft) config loads; `claude` on `PATH`, auto-delegation rules, agent routes. |
 
 `--fix` is deliberately narrow: a socket is removed only when a connect is
@@ -242,6 +243,70 @@ weaver doctor install             # just the binary inventory
 weaver doctor --component runtime --fix
 weft doctor --json --strict       # for CI
 ```
+
+---
+
+## weaver mesh
+
+The machine mesh service (ADR-103 Phase 3) and its admin verbs. `serve` runs
+the service; every other verb is a client of its socket that first verifies
+the server (its uid, and the machine key against `service.json` and the pin).
+Admin verbs are authorised by the caller's uid (root or `admin_uids` in
+`mesh.toml`) and hold no keys.
+
+### Usage
+
+```
+weaver mesh serve [--config PATH] [--state-dir DIR] [--socket PATH] [--listen ADDR] [--health-listen ADDR|off]
+weaver mesh status [--json]
+weaver mesh bindings
+weaver mesh bind approve <UID> [--user-id ID]
+weaver mesh bind revoke <UID> [--reason TEXT]
+weaver mesh bind rebind <UID> [--pubkey HEX]
+weaver mesh peer revoke <NODE_ID> [--reason TEXT]
+weaver mesh peer unrevoke <NODE_ID>
+weaver mesh journal verify [--accept-truncate [--seq N] [--floor N]]
+weaver mesh trust [--replace]
+weaver mesh install-service [--kind launchd|systemd] [--adopt-node-key PATH] [--listen ADDR] [--admin-uid UID]
+weaver mesh uninstall-service [--kind launchd|systemd] [--purge-key]
+```
+
+Client verbs also take `--socket PATH` (default `$WEFTOS_MESH_SOCKET`, else
+`/var/run/weftos/mesh.sock`), `--pin PATH` (default
+`~/.weftos/mesh/machine.pub`) and `--json`.
+
+| Verb | What it does |
+|------|--------------|
+| `serve` | Runs the service in the foreground. Refuses root. Defaults: state `/var/lib/weftos/mesh`, socket `/var/run/weftos/mesh.sock`, listener `127.0.0.1:9489`, health `127.0.0.1:9490`. Tests point `--state-dir`, `--socket` and `--listen 127.0.0.1:0` at tempdirs. |
+| `status` | Node id, machine key, protocol window, admission and bind policy, registrations, peers, journal head. |
+| `bindings` | Bound, pending and revoked users (admin). |
+| `bind approve` | Approves a pending bind; `--user-id` names the key you looked at, and the service refuses if the pending key is another. |
+| `bind revoke` | Revokes the uid's binding and every certificate issued to its key. |
+| `bind rebind` | Replaces the uid's key (default: the key it last offered in conflict) and revokes the old one. The old daemon must be restarted with the new key. |
+| `peer revoke` / `unrevoke` | Refuses and disconnects a mesh peer by node id, or lifts that. |
+| `journal verify` | Re-verifies the machine journal's hash chain and signatures; `--accept-truncate` acknowledges a quarantined tail and lifts read-only mode. |
+| `trust` | Shows the machine key fingerprint and pins it; `--replace` overwrites a different pin after you verified the new key out of band. |
+| `install-service` / `uninstall-service` | Print a reviewed install or uninstall script. They run nothing and refuse `--apply`. See `docs/guides/weftos-deployment-sops.md`. |
+
+The daemon side is `kernel.mesh.service = "auto" | "required" | "off"` in
+`~/.weftos/weave.toml`; `weaver kernel status` shows the resulting
+`mesh.mode`.
+
+---
+
+## weaver migrate
+
+One-way copies into `~/.weftos` that never modify the source.
+
+```
+weaver migrate user-chain [--dry-run] [--from DIR] [--to DIR] [--allow-unsigned]
+weaver migrate user-key [--dry-run]
+```
+
+| Verb | What it does |
+|------|--------------|
+| `user-chain` | Copies the legacy chain from `~/.clawft` to `~/.weftos/chain`, verifies hashes, head and signature, and writes `MIGRATED-TO-WEFTOS.txt` beside the original (Phase 1). |
+| `user-key` | Copies the seed of `~/.weftos/chain/chain.key` to `~/.weftos/user.key` (0600), proves the two public keys are equal and writes `user.key.MIGRATED_FROM.json`. The user id does not change and `chain.key` is kept. Idempotent (Phase 3). |
 
 ---
 

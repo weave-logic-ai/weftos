@@ -250,7 +250,53 @@ The last line is the enable command, printed and commented, not run:
 `sudo launchctl bootstrap system /Library/LaunchDaemons/ai.weftos.mesh.plist` or
 `sudo systemctl enable --now weftos-mesh`. Stop a collapsed user daemon first
 (`weaver kernel stop`); it holds port 9489. Migration from the collapsed daemon is
-the owner procedure in `docs/plans/weave-topology-p3-plan.md` section 5.
+the owner procedure below.
+
+#### Moving to the machine mesh service (owner migration)
+
+Nothing here is automatic, and no step touches `~/.weftos/run/node.key`,
+`~/.weftos/chain/*`, `~/.clawft/*`, any project runtime directory or the Pi's
+`cluster_peers.json`; they are only read (the adopt copy). The service writes only
+under `/var/lib/weftos/mesh`, the user daemon only `~/.weftos/user.key` and
+`~/.weftos/mesh/`.
+
+1. **Install the service, adopting the node key.** Build and install the packaged
+   binary, then `weaver mesh install-service --adopt-node-key ~/.weftos/run/node.key
+   > install.sh`, read it, and run it as an administrator. It creates the account and
+   directories, copies the binary and the key, and writes `mesh.toml`. The key is now
+   in two places; the node id, and the id the Pi pinned, are unchanged. Log out and in
+   so your account's new group membership applies.
+2. **Give the user daemon its user key.** `weaver migrate user-key --dry-run`, then
+   without `--dry-run`. `~/.weftos/user.key` gets the `chain.key` seed: same public
+   key, same user id. `weaver doctor runtime` WARNs (`user_key_split`) if the two
+   ever differ.
+3. **Swap the listener.** Stop the collapsed user daemon (`weaver kernel stop
+   --profile user`; it holds 9489), start the service (`sudo launchctl bootstrap
+   system /Library/LaunchDaemons/ai.weftos.mesh.plist` or `sudo systemctl enable --now
+   weftos-mesh`), then `weaver mesh status` and `weaver mesh trust` after comparing
+   the fingerprint with the one the install script printed.
+4. **Require the service.** Set `service = "required"` under `[kernel.mesh]` in
+   `~/.weftos/weave.toml` and start the user daemon again. It registers; the first bind
+   is journalled (`how: "tofu"`, or pending until `weaver mesh bind approve <uid>`
+   under the `approve` policy). `weaver kernel status --profile user` prints
+   `Profile:    user (roles: user)` and `Mesh:       service (connected)`, and the
+   `Node:` line keeps the node id from before.
+5. **Check from the Pi** that the machine still appears under the same id. Only then
+   delete `~/.weftos/run/node.key` (the doctor's `mesh.node_key_dup` WARNs until you
+   do; keep a backup until peers reconnect).
+
+Rollback, before step 5's removal: stop the service, set `service = "off"`, restart
+the user daemon. It binds 9489 with its own `node.key`; no chain or id has changed.
+After the removal, an administrator first copies `/var/lib/weftos/mesh/node.key`
+back. Choosing a fresh box key instead of adopting means the Pi must re-pin this
+machine.
+
+What the suite cannot check and you verify on the real install: the service
+running as `_weftos`/`weftos` on 9489, the adopted node id in `weaver mesh status`,
+a second real account unable to take your address (`scripts/dev/mesh-two-uid.sh`,
+needs passwordless `sudo -u`), launchd/systemd restarts, the Pi seeing the same id,
+and `weaver update` printing (not running) the service restart. The rest of the
+Phase 3 exit list runs as your own user in `scripts/build.sh test-mesh-service`.
 
 Removing it: `weaver mesh uninstall-service > uninstall.sh`, read it, run it as root.
 It stops the unit and removes the unit files, the root-owned binary and the runtime

@@ -116,6 +116,56 @@ steps are in `docs/guides/kernel.md` (User daemon, "Owner migration").
   that send no `proto` are accepted for every method this release; they will be
   refused in Phase 2, so update `weft` and the gateway together.
 
+### Added — Weave topology Phase 3 (ADR-103) — machine mesh service
+
+Phase 3 adds an optional machine mesh service that owns the box node key and
+the one mesh listener, with user daemons as its registered clients. Nothing
+changes until an administrator installs it; without it the user daemon keeps
+running the mesh itself (collapsed mode). Owner steps:
+`docs/guides/weftos-deployment-sops.md` ("Moving to the machine mesh service").
+
+- **`weaver mesh serve`** runs the service as an unprivileged account (it
+  refuses root). It keeps a signed, hash-chained machine journal of bindings,
+  certificates, admissions and policy, issues 24 h user certificates, routes
+  `weft://<node>/<user>/<project>/<topic>` addresses to registered users, and
+  owns no chain, token, secret or governance state (`scripts/build.sh
+  check-mesh-no-owned-state` enforces that).
+- **Admin verbs:** `weaver mesh status | bindings | bind approve|revoke|rebind
+  | peer revoke|unrevoke | journal verify [--accept-truncate] | trust`.
+- **Installing:** `weaver mesh install-service` and `uninstall-service` print a
+  reviewed script (launchd or systemd, service account `_weftos` / `weftos`,
+  binary in `/usr/local/libexec/weftos/`, `--adopt-node-key` to keep the
+  machine's node id). They run nothing. `weaver update` prints the service
+  restart line when the service binary is out of date; it never calls `sudo`.
+- **Mode selection.** New `kernel.mesh.service = "auto" | "required" | "off"`
+  (default `auto`) in `~/.weftos/weave.toml`. `auto` uses a service that
+  answers and verifies, else collapsed; a service that answers but fails
+  verification (machine key changed, wrong server uid) fails the boot instead
+  of falling back. `kernel.status` shows `mesh.mode` (`service`, `collapsed`,
+  `off`); in service mode the daemon's node id is the service's and it never
+  reads `~/.weftos/run/node.key`.
+- **User key.** `weaver migrate user-key [--dry-run]` copies the migrated
+  `chain.key` seed to `~/.weftos/user.key` (same public key, same user id;
+  `chain.key` is kept). The machine key is pinned on first contact in
+  `~/.weftos/mesh/machine.pub`.
+- **Doctor.** `weaver doctor runtime` adds `mesh.*` checks (service reachable,
+  protocol window, pin, journal, box key mode, leftover `node.key`, two
+  listeners on 9489, the daemon's mode against the service) and
+  `user_key_split` when `user.key` and `chain.key` disagree.
+- **Mesh admission** (`admission = off | observe | enforce`, default
+  `observe`) verifies a signed hello bound to the Noise session; `observe`
+  journals would-be refusals and admits.
+- **Tests:** `scripts/build.sh test-mesh-service` runs the mesh crates, the
+  end-to-end test (`scripts/dev/mesh-p3-e2e.sh`: the service and two user
+  daemons as the current user on tempdirs), the no-owned-state gate and the
+  mesh-only kernel build.
+- **Known limits:** macOS service log not rotated; Windows not implemented
+  (the service refuses to start); on macOS the service may start before
+  `/var/run/weftos` exists and converges by launchd restarts; the installer
+  receipt's service tier is not written yet; leaf peers without signed
+  admission are not yet reported by the service; scoped `weft://` sends are
+  reachable from the API and tests only (no RPC or router caller yet).
+
 ### Fixed (0.8.2)
 
 - **Ruflo team bus synced to the fixed ADR-402 store** (upstream `ruvnet/ruflo` PR

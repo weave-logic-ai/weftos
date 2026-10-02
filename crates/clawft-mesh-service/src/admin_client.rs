@@ -204,11 +204,11 @@ pub fn write_pin(path: &Path, key: &[u8; 32], replace: bool) -> Result<(), Admin
             )));
         }
     }
-    if let Some(dir) = path.parent() {
-        if std::fs::symlink_metadata(dir).is_err() {
-            std::fs::create_dir_all(dir)?;
-            std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
-        }
+    if let Some(dir) = path.parent()
+        && std::fs::symlink_metadata(dir).is_err()
+    {
+        std::fs::create_dir_all(dir)?;
+        std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
     }
     crate::facts::write_with_mode(path, format!("{}\n", hexser::encode(key)).as_bytes(), 0o600)?;
     Ok(())
@@ -218,5 +218,5 @@ pub fn write_pin(path: &Path, key: &[u8; 32], replace: bool) -> Result<(), Admin
 pub fn fingerprint(key: &[u8; 32]) -> String {
     use sha2::{Digest, Sha256};
     let d = Sha256::digest(key);
-    d[..8].chunks(2).map(|c| hexser::encode(c)).collect::<Vec<_>>().join(":")
+    d[..8].chunks(2).map(hexser::encode).collect::<Vec<_>>().join(":")
 }
