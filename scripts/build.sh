@@ -2228,6 +2228,8 @@ main() {
         scope-web)    cmd_scope_web "$SCOPE_NAME" ;;
         ecg-scope)    cmd_scope ecg ;;
         ecg-scope-web) cmd_scope_web ecg ;;
+        sound-scope)  cmd_scope sound ;;
+        sound-scope-web) cmd_scope_web sound ;;
         manager)      cmd_manager ;;
         manager-web)  cmd_manager_web ;;
         ui)           cmd_ui ;;
