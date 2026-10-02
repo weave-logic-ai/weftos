@@ -361,6 +361,7 @@ async fn wire_rvf_enforces_capabilities_and_gates() {
         auth: auth.map(String::from),
         proto: None,
         project: None,
+        forward: None,
     };
     let r = rvf_roundtrip(&kernel, req("kernel.shutdown", None)).await;
     assert!(!r.ok);

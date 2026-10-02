@@ -156,6 +156,12 @@ pub struct WorkloadPermitRule {
     /// Highest resource cost allowed.
     #[serde(default = "default_max_cost")]
     pub max_resource_cost: f64,
+    /// Verified project ids this permit applies to (ADR-103 A6). Empty: any.
+    /// Matched against the gate's verified attestation, never against
+    /// anything the request carries; with a non-empty list and no verified
+    /// project the rule does not match.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<String>,
 }
 
 impl WorkloadPermitRule {
@@ -177,6 +183,7 @@ impl WorkloadPermitRule {
             allow_emulated: false,
             accelerators: Vec::new(),
             max_resource_cost: default_max_cost(),
+            projects: Vec::new(),
         }
     }
 
@@ -202,6 +209,9 @@ impl WorkloadPermitRule {
         if self.kinds.iter().any(|k| k.is_empty()) || self.accelerators.iter().any(|a| a.is_empty()) {
             return Err(format!("permit rule '{}': empty kind or accelerator selector", self.id));
         }
+        if self.projects.iter().any(|p| p.is_empty()) {
+            return Err(format!("permit rule '{}': empty project selector", self.id));
+        }
         if !self.max_resource_cost.is_finite() || !(0.0..=1.0).contains(&self.max_resource_cost) {
             return Err(format!("permit rule '{}': max_resource_cost must be in [0, 1]", self.id));
         }
@@ -210,13 +220,21 @@ impl WorkloadPermitRule {
 
     /// Whether this rule permits `action` with `effect`.
     pub fn matches(&self, action: &str, effect: &WorkloadEffect) -> bool {
+        self.matches_in(action, effect, None)
+    }
+
+    /// [`matches`](Self::matches) for a request attributed to `project`
+    /// (the verified project id, or `None` outside any project).
+    pub fn matches_in(&self, action: &str, effect: &WorkloadEffect, project: Option<&str>) -> bool {
+        let project_ok = self.projects.is_empty() || project.is_some_and(|p| self.projects.iter().any(|x| x == p));
         let action_ok = self.actions.iter().any(|s| selector_matches(s, action));
         let kind_ok = self.kinds.iter().any(|k| k == "*" || k == &effect.kind);
         let accel_ok = match &effect.accelerator {
             None => true,
             Some(acc) => self.accelerators.iter().any(|s| selector_matches(s, acc)),
         };
-        action_ok
+        project_ok
+            && action_ok
             && kind_ok
             && accel_ok
             && effect.package_trust >= self.min_package_trust

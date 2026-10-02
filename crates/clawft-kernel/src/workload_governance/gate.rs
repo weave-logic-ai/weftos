@@ -26,6 +26,7 @@ use crate::chain::{self, ChainManager};
 use crate::gate::{GateBackend, GateDecision};
 use crate::governance::{
     GatePrincipal, GovernanceDecision, GovernanceEngine, GovernanceRequest, GovernanceRule,
+    ProjectAttestation,
 };
 use crate::revocation::{RevocationKind, RevocationList};
 
@@ -60,6 +61,9 @@ pub struct WorkloadGate {
     permits: Vec<WorkloadPermitRule>,
     chain: Option<Arc<ChainManager>>,
     revocations: Option<Arc<RevocationList>>,
+    /// Project this gate decides for, overriding the kernel's instance
+    /// attestation (tests; a kernel serves one project, set at boot).
+    attestation: Option<ProjectAttestation>,
 }
 
 impl WorkloadGate {
@@ -97,6 +101,7 @@ impl WorkloadGate {
             permits: Vec::new(),
             chain: None,
             revocations: None,
+            attestation: None,
         }
     }
 
@@ -120,6 +125,23 @@ impl WorkloadGate {
     pub fn with_revocations(mut self, list: Arc<RevocationList>) -> Self {
         self.revocations = Some(list);
         self
+    }
+
+    /// Decide for the verified project `att` instead of the kernel's
+    /// instance attestation. Permit rules with `projects` match on it.
+    pub fn with_attestation(mut self, att: ProjectAttestation) -> Self {
+        self.attestation = Some(att);
+        self
+    }
+
+    /// The verified project this gate decides for: its own attestation, else
+    /// the kernel's (never anything from the request context).
+    fn project(&self) -> Option<(ProjectAttestation, Option<&'static str>)> {
+        match (&self.attestation, crate::governance_project::instance_project()) {
+            (Some(a), inst) => Some((a.clone(), inst.map(|(_, i)| i))),
+            (None, Some((a, i))) => Some((a.clone(), Some(i))),
+            (None, None) => None,
+        }
     }
 
     /// Permit rules in evaluation order.
@@ -175,7 +197,13 @@ impl WorkloadGate {
             return out;
         }
 
-        let Some(permit) = self.permits.iter().find(|p| p.matches(action, &req.effect)) else {
+        let project = self.project();
+        let project_id = project.as_ref().map(|(a, _)| a.project_id());
+        let Some(permit) = self
+            .permits
+            .iter()
+            .find(|p| p.matches_in(action, &req.effect, project_id))
+        else {
             out.evaluated_rules = self.default_rule_ids.clone();
             out.decision = Self::deny(format!(
                 "default deny: no workload permit rule matches '{action}' for kind '{}' (rule {})",
@@ -193,7 +221,13 @@ impl WorkloadGate {
             context: req.effect.context_map(),
             node_id: None,
             principal: Some(GatePrincipal::agent(agent_id)),
-        };
+        }
+        // ADR-103 A6: the project comes from the verified attestation, so
+        // permit rules and the audit principal can match on it.
+        .attributed_with(
+            project.as_ref().map(|(a, _)| a),
+            project.as_ref().and_then(|(_, i)| *i),
+        );
         let result = self.permitted_engine.evaluate(&request);
         out.evaluated_rules = result.evaluated_rules;
         out.threshold_exceeded = result.threshold_exceeded;

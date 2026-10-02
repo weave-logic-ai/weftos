@@ -68,6 +68,12 @@ pub mod shared_rpc;
 /// `VerifiedProject`: a project id with cryptographic provenance (ADR-103 A6).
 #[cfg(any(unix, windows))]
 pub mod verified_project;
+/// User-signed forward header sign and verify (ADR-103 A6, package I).
+#[cfg(any(unix, windows))]
+pub mod project_forward;
+/// Establishes the caller's `VerifiedProject` per request (package I).
+#[cfg(any(unix, windows))]
+pub mod caller_principal;
 /// D12 scope gate: outside-project policy and the voice deny-list (ADR-103).
 #[cfg(any(unix, windows))]
 pub mod scope_gate;

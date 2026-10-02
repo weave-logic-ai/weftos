@@ -128,6 +128,27 @@ pub struct Request {
     /// registry (package G). Absent means unscoped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+
+    /// User-signed forward header on a call the user daemon proxies to a
+    /// project's own kernel (ADR-103 A6, Phase 2 package I). Verified by the
+    /// child against its certificate's user key; never trusted from any
+    /// other sender, and ignored by a daemon that holds no such key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward: Option<ForwardHeader>,
+}
+
+/// `{project_id, issued_at_ms, sig}`: the user key's statement that the user
+/// daemon forwards this one request on behalf of `project_id`. Signed over
+/// `"weftos-project-forward-v1\n<project_id>\n<issued_at_ms>"`; the child
+/// accepts it within 5 s of `issued_at_ms` and once. See
+/// `clawft_weave::project_forward`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForwardHeader {
+    pub project_id: String,
+    /// Unix milliseconds at signing.
+    pub issued_at_ms: u64,
+    /// Ed25519 signature by the user key, 128 hex chars.
+    pub sig: String,
 }
 
 impl Request {
@@ -140,6 +161,7 @@ impl Request {
             auth: None,
             proto: None,
             project: None,
+            forward: None,
         }
     }
 
@@ -152,6 +174,7 @@ impl Request {
             auth: None,
             proto: None,
             project: None,
+            forward: None,
         }
     }
 

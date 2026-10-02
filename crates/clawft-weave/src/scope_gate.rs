@@ -41,6 +41,12 @@
 //! manifest, an unreadable manifest, or an archived/missing one. The
 //! claim (`Request.project`) is never trusted by itself.
 //!
+//! A request's project is a [`VerifiedProject`](crate::verified_project::VerifiedProject)
+//! when it came from a token scope, a verified forward header or the
+//! kernel's own binding (ADR-103 Phase 2 package I); [`inside_project_verified`]
+//! prefers it, and the claim-only path keeps the behaviour above, labelled
+//! `claimed` in the gate's log line.
+//!
 //! # Honest limit
 //!
 //! Verification proves the claimed project is *registered*, not that the
@@ -167,6 +173,47 @@ pub fn inside_project(bound: Option<&str>, claim: Option<&str>, manifests_dir: O
     }
 }
 
+/// How the project a request is judged against was established.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectBasis {
+    /// A [`VerifiedProject`](crate::verified_project::VerifiedProject): token
+    /// scope, verified forward header or this kernel's own binding.
+    Verified,
+    /// Only the client's `Request.project`; Phase 1 behaviour (registry
+    /// check), logged as `claimed`.
+    Claimed,
+    /// No project named at all.
+    None,
+}
+
+impl ProjectBasis {
+    /// Audit label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::Claimed => "claimed",
+            Self::None => "none",
+        }
+    }
+}
+
+/// [`inside_project`] preferring a verified project over the claim
+/// (Phase 2 package I). A verified project is still checked against the
+/// registry on an unbound daemon (an archived project is not "inside").
+pub fn inside_project_verified(
+    bound: Option<&str>,
+    verified: Option<&str>,
+    claim: Option<&str>,
+    manifests_dir: Option<&Path>,
+) -> (bool, ProjectBasis) {
+    let (named, basis) = match (verified, claim) {
+        (Some(v), _) => (Some(v), ProjectBasis::Verified),
+        (None, Some(c)) => (Some(c), ProjectBasis::Claimed),
+        (None, None) => (None, ProjectBasis::None),
+    };
+    (inside_project(bound, named, manifests_dir), basis)
+}
+
 /// Apply `policy` to `method`. `inside` is only evaluated when the method
 /// is not already allowed, so allow-listed calls never touch the registry.
 pub fn decide(
@@ -203,7 +250,14 @@ pub fn scope_gate<'a>(req: &'a GateRequest<'a>) -> GateFuture<'a> {
             .effective_outside_project(USER_PROFILE.load(Ordering::Relaxed));
         decide(policy, req.method, req.caps.allows(Capability::Admin), || {
             let bound = crate::handshake_rpc::bound_project_id();
-            inside_project(bound.as_deref(), req.project, manifests_dir().as_deref())
+            let (inside, basis) = inside_project_verified(
+                bound.as_deref(),
+                req.verified_project.map(|v| v.as_str()),
+                req.project,
+                manifests_dir().as_deref(),
+            );
+            tracing::debug!(method = req.method, project_basis = basis.label(), inside, "scope gate");
+            inside
         })
     })
 }

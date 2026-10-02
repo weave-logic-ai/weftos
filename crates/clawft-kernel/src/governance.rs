@@ -797,6 +797,7 @@ impl GovernanceRequest {
             node_id: None,
             principal: Some(GatePrincipal::agent(agent_id)),
         }
+        .attributed()
     }
 
     /// Set the node ID for distributed governance evaluation.
@@ -850,13 +851,29 @@ impl GovernanceRequest {
     }
 
     /// Add a single key-value pair to the context map.
+    ///
+    /// The reserved keys ([`crate::governance_project::RESERVED_CONTEXT_KEYS`])
+    /// are the kernel's alone and are ignored here.
     pub fn with_context_entry(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.context.insert(key.into(), value.into());
+        let key = key.into();
+        if !crate::governance_project::RESERVED_CONTEXT_KEYS.contains(&key.as_str()) {
+            self.context.insert(key, value.into());
+        }
         self
     }
 
-    /// Resolve the principal for this request (explicit or synthesised).
+    /// Resolve the principal for this request (explicit or synthesised),
+    /// attributed to the kernel's attested project when it has one.
     pub fn resolved_principal(&self) -> GatePrincipal {
+        let p = self.base_principal();
+        match crate::governance_project::instance_project() {
+            Some((att, inst)) => p.with_project(att).with_instance(inst),
+            None => p,
+        }
+    }
+
+    /// The principal as the request carries it, before project attribution.
+    pub(crate) fn base_principal(&self) -> GatePrincipal {
         if let Some(p) = &self.principal {
             let mut p = p.clone();
             if p.agent_id.is_empty() {
