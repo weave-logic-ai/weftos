@@ -87,5 +87,5 @@ echo 'installed. weftos membership for '"$TARGET_USER"' takes effect at next log
 echo 'stop any collapsed user daemon first (it holds 9489): weaver kernel stop'
 echo 'then enable the service with:'
 echo '  sudo systemctl enable --now weftos-mesh'
-echo 'afterwards: weaver mesh status, compare the machine key fingerprint out of band, weaver mesh trust'
+echo 'afterwards, on this host as root or an admin: run weaver mesh status. It prints the node id and the machine key fingerprint. Adopted key: the node id must equal the one you recorded before migrating. Fresh key: compare the fingerprint out of band (do not take it from a user-run status on another machine), then run weaver mesh trust as each user'
 # ENABLE (exact command): systemctl enable --now weftos-mesh

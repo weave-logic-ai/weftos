@@ -13,7 +13,7 @@ use tokio::sync::watch;
 
 use crate::mesh_local_chain::{ChainQueue, ChainSink};
 use crate::mesh_local_glue::{
-    self, LinkDeps, LinkHandle, Resolved, ServiceLink, Timings, build_endpoint,
+    self, LinkDeps, LinkHandle, Resolved, ServiceLink, Timings, build_endpoint_async,
 };
 use crate::mesh_state;
 use crate::node_identity::{self, DaemonIdentity};
@@ -52,7 +52,7 @@ pub async fn prepare(kernel_config: &KernelConfig, runtime_dir: &Path) -> anyhow
         return Ok(MeshBoot { identity: local()?, link: None });
     }
     let home = crate::user_daemon::require_home()?;
-    let endpoint = build_endpoint(&cfg, &home, BUILD_SHA);
+    let endpoint = build_endpoint_async(&cfg, &home, BUILD_SHA).await;
     let resolved = mesh_local_glue::resolve(&cfg, endpoint)
         .await
         .map_err(|why| anyhow::anyhow!("mesh: {why}"))?;

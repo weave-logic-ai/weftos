@@ -36,7 +36,6 @@ use tokio::net::UnixListener;
 use tokio::task::JoinHandle;
 
 use crate::config::{ConfigError, MeshServiceConfig};
-use crate::facts::write_with_mode;
 use crate::fsutil;
 use crate::limits::LimitConfig;
 use crate::local_server::{real_peer_source, serve_local, PeerSource};
@@ -314,12 +313,20 @@ async fn start_inner(
     };
     connect_seeds(&rt, &cfg.seed_peers, &cfg.transport, noise, dial);
 
-    // The record clients pin, then the mesh-local socket: a client that finds
-    // the socket must also find the record that verifies it. The socket path
-    // is checked first so a live service's record is never overwritten.
+    // Stage the record clients pin, bind the socket, and only then publish
+    // the record: a service that loses a bind race must never replace the
+    // winner's record. A client that sees the socket a moment before the
+    // rename waits for the record (RECORD_WAIT in the client).
     prepare_socket(&cfg.socket)?;
-    write_service_json(&cfg, &state, &socket_dir)?;
-    let sock = bind_socket(&cfg.socket)?;
+    let staged = stage_service_json(&cfg, &state, &socket_dir)?;
+    let sock = match bind_socket(&cfg.socket) {
+        Ok(s) => s,
+        Err(e) => {
+            staged.discard();
+            return Err(e);
+        }
+    };
+    staged.publish()?;
     tasks.push(tokio::spawn(serve_local(Arc::clone(&state), sock, peers)));
 
     let health_addr = match &cfg.health_listen {
@@ -335,7 +342,39 @@ async fn start_inner(
     Ok(RunningService { node_id, socket: cfg.socket.clone(), mesh_addr, health_addr, runtime: rt, tasks: tasks.into_vec(), state })
 }
 
-fn write_service_json(cfg: &MeshServiceConfig, st: &ServiceState, socket_dir: &Path) -> Result<(), StartError> {
+/// The `service.json` copies written beside temp names, not yet visible.
+struct StagedRecord(Vec<(PathBuf, PathBuf)>);
+
+impl StagedRecord {
+    fn publish(mut self) -> Result<(), StartError> {
+        let items = std::mem::take(&mut self.0);
+        for (i, (tmp, dst)) in items.iter().enumerate() {
+            if let Err(e) = std::fs::rename(tmp, dst) {
+                for (rest, _) in &items[i..] {
+                    let _ = std::fs::remove_file(rest);
+                }
+                return Err(StartError::from(e));
+            }
+        }
+        Ok(())
+    }
+
+    fn discard(mut self) {
+        for (tmp, _) in std::mem::take(&mut self.0) {
+            let _ = std::fs::remove_file(tmp);
+        }
+    }
+}
+
+impl Drop for StagedRecord {
+    fn drop(&mut self) {
+        for (tmp, _) in self.0.drain(..) {
+            let _ = std::fs::remove_file(tmp);
+        }
+    }
+}
+
+fn stage_service_json(cfg: &MeshServiceConfig, st: &ServiceState, socket_dir: &Path) -> Result<StagedRecord, StartError> {
     let rec = ServiceRecord {
         node_id: st.node_id.clone(),
         machine_pubkey: st.machine_pubkey,
@@ -348,9 +387,46 @@ fn write_service_json(cfg: &MeshServiceConfig, st: &ServiceState, socket_dir: &P
     // Plan 1.1 puts the record in the state dir; that dir is 0700, so clients
     // of other uids cannot read it there. A copy beside the socket is the one
     // they pin from.
-    write_with_mode(&cfg.state_dir.join(SERVICE_JSON), &bytes, 0o644)?;
-    write_with_mode(&socket_dir.join(SERVICE_JSON), &bytes, 0o644)?;
-    Ok(())
+    let mut staged = StagedRecord(Vec::new());
+    for dir in [cfg.state_dir.as_path(), socket_dir] {
+        remove_stale_staging(dir);
+        let tmp = dir.join(format!("{SERVICE_JSON}.{}.tmp", std::process::id()));
+        write_staged(&tmp, &bytes, 0o644)?;
+        staged.0.push((tmp, dir.join(SERVICE_JSON)));
+    }
+    Ok(staged)
+}
+
+/// Remove `service.json.<pid>.tmp` files this uid left behind (a crash between
+/// staging and publishing), keeping those of a still-running process.
+fn remove_stale_staging(dir: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(pid) = name
+            .strip_prefix(&format!("{SERVICE_JSON}."))
+            .and_then(|r| r.strip_suffix(".tmp"))
+            .and_then(|p| p.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        let ours = e.metadata().is_ok_and(|m| m.uid() == fsutil::euid());
+        // SAFETY: signal 0 only probes for the process.
+        let alive = pid as u32 == std::process::id() || unsafe { libc::kill(pid, 0) } == 0;
+        if ours && !alive {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+fn write_staged(tmp: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let _ = std::fs::remove_file(tmp);
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(mode).open(tmp)?;
+    f.write_all(bytes)?;
+    f.sync_all()
 }
 
 /// Re-probe and re-sign facts at half their lifetime so they never expire.

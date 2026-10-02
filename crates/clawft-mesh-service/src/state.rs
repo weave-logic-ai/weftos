@@ -148,13 +148,22 @@ impl ServiceState {
     pub fn build(
         cfg: MeshServiceConfig,
         machine_key: SigningKey,
-        journal: Journal,
+        mut journal: Journal,
         revocations: Arc<RevocationList>,
         limits: LimitConfig,
     ) -> Result<Arc<Self>, String> {
         let machine_pubkey = machine_key.verifying_key().to_bytes();
         let node_id = clawft_mesh_local::node_id_from_pubkey(&machine_pubkey);
-        let bindings = Bindings::fold_lenient(&journal);
+        let mut bindings = Bindings::fold_lenient(&journal);
+        // A crash mid-append leaves one unacknowledged torn line; losing it
+        // loses nothing, and leaving the journal read-only would refuse every
+        // certificate renewal within 12 h (ADR-103 A10).
+        let by = clawft_mesh_local::Principal::Uid(crate::fsutil::euid());
+        match bindings.auto_accept_torn_tail(&mut journal, by) {
+            Ok(true) => tracing::warn!("journal: accepted a torn final line from an interrupted append (journalled, auto=torn_tail)"),
+            Ok(false) => {}
+            Err(e) => tracing::error!(error = %e, "journal: could not accept a torn tail; staying read-only"),
+        }
         if let Some(why) = bindings.degraded() {
             tracing::error!(reason = why, "bindings are degraded: serving read-only, refusing binds and certs");
         }
@@ -238,7 +247,7 @@ impl ServiceState {
     /// The `status` reply. Registrations are listed for admins only; the peer
     /// table needs a registered daemon or an admin.
     pub fn status_json(&self, caller_uid: u32, admin: bool, registered: bool) -> Value {
-        let (head, records, read_only, degraded, pending) = {
+        let (head, records, read_only, degraded, pending, auto) = {
             let c = self.core.lock().expect("core lock");
             (
                 c.journal.head(),
@@ -246,6 +255,7 @@ impl ServiceState {
                 c.journal.read_only(),
                 c.bindings.degraded().map(str::to_string),
                 c.journal.pending_quarantines(),
+                c.journal.last_auto_accept(),
             )
         };
         let regs: Vec<Value> = if admin {
@@ -288,6 +298,7 @@ impl ServiceState {
                 "seq": head.as_ref().map(|h| h.seq), "hash": head.map(|h| h.hash),
                 "records": records, "read_only": read_only, "degraded": degraded,
                 "pending_quarantines": pending,
+                "last_auto_accept": auto.map(|(seq, at)| json!({"seq": seq, "at": at})),
             },
             "router": {
                 "delivered": get(&c.delivered), "scope_required": get(&c.scope_required),

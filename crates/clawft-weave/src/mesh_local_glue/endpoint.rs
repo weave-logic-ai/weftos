@@ -45,6 +45,20 @@ pub fn build_endpoint(
     build_endpoint_in(cfg, home, build_sha, &record_dir)
 }
 
+/// [`build_endpoint`] for async callers: the blocking record wait (up to
+/// [`RECORD_WAIT`]) and the key file I/O run on the blocking pool, never on
+/// a runtime worker.
+pub async fn build_endpoint_async(
+    cfg: &MeshConfig,
+    home: &Path,
+    build_sha: &str,
+) -> Result<Option<ServiceEndpoint>, String> {
+    let (cfg, home, sha) = (cfg.clone(), home.to_path_buf(), build_sha.to_owned());
+    tokio::task::spawn_blocking(move || build_endpoint(&cfg, &home, &sha))
+        .await
+        .map_err(|e| format!("endpoint probe task failed: {e}"))?
+}
+
 /// [`build_endpoint`] with an explicit directory holding `service.json`.
 pub fn build_endpoint_in(
     cfg: &MeshConfig,
@@ -101,20 +115,27 @@ fn read_record(path: &Path, sock_owner: u32) -> Result<ServiceRecord, String> {
         format!("{} is unreadable ({e}); without it the service's machine key cannot be checked", path.display())
     };
     let started = Instant::now();
-    let mut file = loop {
-        match std::fs::File::open(path) {
-            Ok(f) => break f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound && started.elapsed() < RECORD_WAIT => {
+    // A record that is missing, empty or not yet complete JSON inside the
+    // wait window is a writer mid-publish: retry until the window expires.
+    let (owner, record) = loop {
+        let retry = started.elapsed() < RECORD_WAIT;
+        let mut file = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && retry => {
                 std::thread::sleep(RECORD_POLL);
+                continue;
             }
             Err(e) => return Err(unreadable(e)),
+        };
+        let owner = file.metadata().map_err(unreadable)?.uid();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(unreadable)?;
+        match serde_json::from_slice::<ServiceRecord>(&bytes) {
+            Ok(r) => break (owner, r),
+            Err(_) if retry => std::thread::sleep(RECORD_POLL),
+            Err(e) => return Err(unreadable(std::io::Error::new(std::io::ErrorKind::InvalidData, e))),
         }
     };
-    let owner = file.metadata().map_err(unreadable)?.uid();
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(unreadable)?;
-    let record: ServiceRecord = serde_json::from_slice(&bytes)
-        .map_err(|e| unreadable(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
     if owner != 0 && owner != sock_owner {
         return Err(format!(
             "{} is owned by uid {owner}, not root or the socket's owner (uid {sock_owner}); refusing to trust it",
@@ -129,4 +150,115 @@ fn read_record(path: &Path, sock_owner: u32) -> Result<ServiceRecord, String> {
         ));
     }
     Ok(record)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clawft_mesh_local::proto::VersionRange;
+
+    fn record(service_uid: u32) -> ServiceRecord {
+        ServiceRecord {
+            node_id: "n".repeat(32),
+            machine_pubkey: [3u8; 32],
+            service_uid,
+            proto: VersionRange { min: 1, max: 1, sha: None },
+            build_sha: "t".into(),
+            started_at: 1,
+        }
+    }
+
+    fn me() -> u32 {
+        nix::unistd::geteuid().as_raw()
+    }
+
+    fn write(dir: &Path, rec: &ServiceRecord) -> PathBuf {
+        let p = dir.join("service.json");
+        std::fs::write(&p, serde_json::to_vec(rec).unwrap()).unwrap();
+        p
+    }
+
+    #[test]
+    fn a_record_naming_the_socket_owner_is_trusted() {
+        let d = tempfile::tempdir().unwrap();
+        let p = write(d.path(), &record(me()));
+        assert_eq!(read_record(&p, me()).unwrap().service_uid, me());
+    }
+
+    #[test]
+    fn a_record_whose_service_uid_is_not_the_socket_owner_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let p = write(d.path(), &record(me() + 1));
+        let e = read_record(&p, me()).unwrap_err();
+        assert!(e.contains("names service uid") && e.contains("refusing"), "{e}");
+    }
+
+    #[test]
+    fn a_record_file_owned_by_neither_root_nor_the_socket_owner_is_refused() {
+        if me() == 0 {
+            return; // root-owned files are always acceptable
+        }
+        let d = tempfile::tempdir().unwrap();
+        let p = write(d.path(), &record(me() + 1));
+        // The file is ours; the socket belongs to someone else.
+        let e = read_record(&p, me() + 1).unwrap_err();
+        assert!(e.contains("owned by uid"), "{e}");
+    }
+
+    #[test]
+    fn an_empty_or_truncated_record_is_retried_until_complete() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("service.json");
+        std::fs::write(&p, b"").unwrap();
+        let full = serde_json::to_vec(&record(me())).unwrap();
+        let (pp, half) = (p.clone(), full[..full.len() / 2].to_vec());
+        let w = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(250));
+            std::fs::write(&pp, half).unwrap();
+            std::thread::sleep(Duration::from_millis(250));
+            std::fs::write(&pp, full).unwrap();
+        });
+        assert_eq!(read_record(&p, me()).unwrap().service_uid, me());
+        w.join().unwrap();
+    }
+
+    #[test]
+    fn a_record_that_stays_unparseable_fails_after_the_window() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("service.json");
+        std::fs::write(&p, b"{").unwrap();
+        let t = Instant::now();
+        let e = read_record(&p, me()).unwrap_err();
+        assert!(e.contains("unreadable") && t.elapsed() >= RECORD_WAIT, "{e}");
+    }
+
+    #[test]
+    fn a_missing_record_is_waited_for_without_blocking_the_runtime() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("service.json");
+        let rec = record(me());
+        let late = p.clone();
+        let w = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(250));
+            write(late.parent().unwrap(), &rec);
+        });
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        // On a current-thread runtime a blocking wait on the runtime thread
+        // would starve the ticker; the blocking pool must not.
+        let ticks = rt.block_on(async {
+            let ticker = tokio::spawn(async {
+                let mut n = 0u32;
+                for _ in 0..5 {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    n += 1;
+                }
+                n
+            });
+            let r = tokio::task::spawn_blocking(move || read_record(&p, me())).await.unwrap();
+            assert!(r.is_ok(), "{r:?}");
+            ticker.await.unwrap()
+        });
+        w.join().unwrap();
+        assert_eq!(ticks, 5);
+    }
 }

@@ -87,6 +87,12 @@ impl AdminAck {
         Self { by }
     }
 
+    /// The service's own acknowledgement of a lone torn tail (see
+    /// [`Journal::lone_torn_tail`]). Not an admin act; the record says so.
+    pub(crate) fn service_torn_tail(by: Principal) -> Self {
+        Self { by }
+    }
+
     #[cfg(feature = "testing")]
     pub fn for_tests(by: Principal) -> Self { Self { by } }
 }
@@ -143,6 +149,9 @@ pub struct Journal {
     active_len: u64,
     lost: Option<LostInfo>,
     quarantined: Option<PathBuf>,
+    /// This open quarantined exactly one torn (newline-less) final line that
+    /// held no readable facts: a crash during an append, never acknowledged.
+    lone_torn: bool,
     poisoned: bool,
     fail_next_write: bool,
 }
@@ -159,6 +168,21 @@ fn serial_floor(records: &[Record]) -> u64 {
         })
         .max()
         .unwrap_or(0)
+}
+
+/// True when the bytes from `off` to the end of `path` are not valid JSON (and
+/// so cannot be a whole record): a write that stopped part-way.
+fn torn_bytes_are_partial(path: &Path, off: u64) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = fsutil::open_file(path, false, false, false) else { return false };
+    if f.seek(SeekFrom::Start(off)).is_err() {
+        return false;
+    }
+    let mut buf = Vec::new();
+    if f.take(MAX_RECORD_BYTES as u64 + 1).read_to_end(&mut buf).is_err() {
+        return false;
+    }
+    !buf.contains(&b'\n') && serde_json::from_slice::<serde_json::Value>(&buf).is_err()
 }
 
 fn now() -> u64 {
@@ -217,6 +241,7 @@ impl Journal {
             active_len: 0,
             lost: crate::lost::load_marker(&active.with_file_name(MARKER))?,
             quarantined: None,
+            lone_torn: false,
             poisoned: false,
             fail_next_write: false,
         };
@@ -228,7 +253,18 @@ impl Journal {
             if j.records.is_empty() {
                 return Err(JournalError::Unverifiable { file: files[fi].display().to_string(), reason });
             }
+            let prior = j.lost.is_some();
+            // Only a proper prefix of a record can be an unacknowledged
+            // partial write; a torn line that is complete JSON (a whole record
+            // missing just its newline) may have been acted on, so an admin
+            // reviews it.
+            let partial = reason.starts_with("torn final line") && torn_bytes_are_partial(&files[fi], off);
             j.quarantine(&files, fi, off)?;
+            j.lone_torn = !prior
+                && partial
+                && j.lost.as_ref().is_some_and(|i| {
+                    i.lost_count == 1 && i.raw_serial_high_water == 0 && i.revoked_user_ids.is_empty()
+                });
         }
         j.active_len = fs::symlink_metadata(&active).map_or(0, |m| m.len());
         j.finalize_marker()?;
@@ -381,6 +417,23 @@ impl Journal {
     /// The quarantine an acceptance must name: the newest pending one.
     pub fn latest_pending_quarantine(&self) -> Option<u64> {
         self.pending_quarantines().last().copied()
+    }
+
+    /// True when the only pending quarantine is a single torn final line with
+    /// no readable facts (the signature of a crash mid-append). Such a line was
+    /// never acknowledged to any caller, so accepting it loses nothing.
+    pub(crate) fn lone_torn_tail(&self) -> bool {
+        self.lone_torn && self.pending_quarantines().len() == 1
+    }
+
+    /// Seq and time of the newest quarantine the service accepted on its own
+    /// (a crash-torn tail), if any.
+    pub fn last_auto_accept(&self) -> Option<(u64, u64)> {
+        self.records
+            .iter()
+            .rev()
+            .find(|r| r.kind == KIND_ACCEPT_TRUNCATE && r.body["auto"].is_string())
+            .map(|r| (r.seq, r.ts))
     }
 
     /// What the unacknowledged quarantine lost, if anything.

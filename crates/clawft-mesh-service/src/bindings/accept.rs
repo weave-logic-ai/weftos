@@ -45,10 +45,38 @@ impl Bindings {
             serial_floor: floor,
             quarantine,
             by: ack.by.clone(),
+            auto: None,
         });
         self.write(journal, false, ev)?;
         journal.clear_lost(&ack)?;
         Ok(())
+    }
+
+    /// Accept a lone torn final line at startup (crash mid-append; see
+    /// `Journal::lone_torn_tail`). The acceptance is journalled with
+    /// `auto: "torn_tail"` so the history shows the service, not an admin,
+    /// did it. Returns whether it accepted.
+    pub(crate) fn auto_accept_torn_tail(&mut self, journal: &mut Journal, by: Principal) -> Result<bool, BindError> {
+        self.refuse_degraded()?;
+        let (Some(seq), Some((latest, files))) = (journal.latest_pending_quarantine(), self.latest_quarantine.clone())
+        else {
+            return Ok(false);
+        };
+        if !journal.lone_torn_tail() || seq != latest || !self.quarantine_pending() {
+            return Ok(false);
+        }
+        let ack = AdminAck::service_torn_tail(by.clone());
+        let ev = Event::Accept(AcceptBody {
+            quarantine_seq: Some(seq),
+            marker_only: false,
+            serial_floor: self.last_serial,
+            quarantine: files,
+            by,
+            auto: Some("torn_tail".into()),
+        });
+        self.write(journal, false, ev)?;
+        journal.clear_lost(&ack)?;
+        Ok(true)
     }
 
     /// A quarantine record newer than the newest accepted one exists.

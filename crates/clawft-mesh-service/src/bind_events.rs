@@ -140,6 +140,9 @@ pub(crate) struct AcceptBody {
     pub serial_floor: u64,
     pub quarantine: Vec<String>,
     pub by: Principal,
+    /// Set when the service accepted the quarantine itself (`torn_tail`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto: Option<String>,
 }
 
 /// Signed facts about a quarantined tail; this is what constrains the state.
