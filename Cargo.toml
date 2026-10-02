@@ -67,6 +67,7 @@ members = [
     "crates/weftos-sensor-guide",
     "crates/weftos-cog-companion",
     "crates/weftos-tof-scope",
+    "crates/weftos-sound-scope",
     "crates/weftos-bridge-send",
     # COG-008: off-device WeaveLogic cog repository tooling (sign/verify/install,
     # signed-only Ed25519 trust model).

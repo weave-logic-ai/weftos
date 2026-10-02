@@ -142,12 +142,17 @@ pub fn install(root: &Path, req: &InstallReq) -> Result<CogRecord, String> {
     let binary = format!("cog-{}-arm", req.id);
     let dir = root.join(&req.id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {dir:?}: {e}"))?;
-    std::fs::write(dir.join(&binary), &bytes).map_err(|e| format!("write binary: {e}"))?;
+    // Write to a temp file then rename over the target: a rename replaces the path even while the
+    // old binary is running (the process keeps the old inode), avoiding ETXTBSY / "Text file busy".
+    let final_path = dir.join(&binary);
+    let tmp_path = dir.join(format!("{binary}.new"));
+    std::fs::write(&tmp_path, &bytes).map_err(|e| format!("write binary: {e}"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir.join(&binary), std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+        std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
     }
+    std::fs::rename(&tmp_path, &final_path).map_err(|e| format!("install binary: {e}"))?;
     let rec = CogRecord {
         id: req.id.clone(),
         version: req.version.clone(),
