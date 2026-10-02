@@ -17,7 +17,7 @@ pub const PER_PROJECT_CONCURRENT: usize = 2;
 pub const GLOBAL_CONCURRENT: usize = 4;
 /// How long a project that was refused for want of a global slot counts as
 /// waiting (it must retry; `shared.*` does not queue).
-pub const WAITING_TTL: Duration = Duration::from_secs(3);
+pub const WAITING_TTL: Duration = Duration::from_secs(10);
 /// Wall-clock cap on one `shared.llm.chat`: it bounds how long the user's own
 /// next turn can wait behind it on the single model slot.
 pub const LLM_CALL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -32,6 +32,9 @@ const MODELS_TIMEOUT: Duration = Duration::from_secs(3);
 
 static METER: OnceLock<UsageMeter> = OnceLock::new();
 static LIMITS: Mutex<Option<HashMap<String, SharedLimits>>> = Mutex::new(None);
+/// (mtime, length) of each project's manifest when its limits were cached.
+type Stamp = (std::time::SystemTime, u64);
+static STAMPS: Mutex<Option<HashMap<String, Stamp>>> = Mutex::new(None);
 static SLOTS: Mutex<Option<FairSlots>> = Mutex::new(None);
 static MODELS: Mutex<Option<(Instant, Duration, Vec<String>)>> = Mutex::new(None);
 static EMBEDDER: tokio::sync::OnceCell<Arc<dyn EmbeddingProvider>> =
@@ -62,6 +65,30 @@ pub fn cached_limits<E>(
 /// Drop every cached limit (operator `shared.reload`).
 pub fn reload() {
     *LIMITS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *STAMPS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+/// The cached limits of `project`, if any.
+pub fn cached(project: &str) -> Option<SharedLimits> {
+    LIMITS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()?.get(project).copied()
+}
+
+/// Cache `limits` for `project` together with the manifest `stamp` they were
+/// read under.
+pub fn store(project: &str, limits: SharedLimits, stamp: Stamp) {
+    LIMITS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(project.to_owned(), limits);
+    STAMPS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(project.to_owned(), stamp);
+}
+
+/// Has the manifest changed since `project`'s limits were cached? True when
+/// nothing is cached.
+pub fn stamp_changed(project: &str, now: Stamp) -> bool {
+    STAMPS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(project))
+        .is_none_or(|s| *s != now)
 }
 
 /// Drop one project's cached limits (it was archived, unregistered or
@@ -69,6 +96,9 @@ pub fn reload() {
 /// project is registered and active.
 pub fn invalidate(project: &str) {
     if let Some(map) = LIMITS.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        map.remove(project);
+    }
+    if let Some(map) = STAMPS.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
         map.remove(project);
     }
 }
@@ -79,7 +109,7 @@ pub fn invalidate(project: &str) {
 /// they keep calling, and a third never gets in. This pool keeps the global
 /// cap and the per-project cap, and adds one rule: a project that already
 /// holds a slot may not take another while the free slots are needed by
-/// projects that hold none and were refused within [`WAITING_TTL`]. The
+/// projects that hold none and were refused within [`WAITING_TTL`] (the per-project cap is checked first). The
 /// starved project gets the next slot that frees up; the holders get theirs
 /// back when nobody is waiting.
 #[derive(Debug)]

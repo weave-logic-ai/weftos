@@ -312,3 +312,23 @@ pub fn an_adopted_but_refused_leftover_is_reported_as_unmanaged() {
     });
     std::fs::write(&ptoml, text).unwrap();
 }
+
+/// A leftover that holds its lock but never answers must not hold up boot or
+/// a stop cascade for the whole `ready_timeout` (10 s here, 30 s in production).
+pub fn a_wedged_leftover_delays_boot_and_the_stop_cascade_only_briefly() {
+    let fx = Fixture::new();
+    let mut kid = booting_kernel(&fx, 120_000);
+    rt().block_on(async {
+        let sup = fx.supervisor(); // ready_timeout is 10 s
+        let t = Instant::now();
+        let found = sup.adopt_on_boot().await;
+        assert!(t.elapsed() < Duration::from_secs(6), "boot waited {:?}", t.elapsed());
+        assert!(matches!(&found[..], [Found::Unverifiable { reason: Skip::HandshakeFailed(_), .. }]), "{found:?}");
+        let t = Instant::now();
+        assert!(sup.stop_all().await.is_empty());
+        assert!(t.elapsed() < Duration::from_secs(5), "the cascade waited {:?}", t.elapsed());
+        assert!(pid_alive(kid.id()), "an unverifiable leftover is never signalled");
+    });
+    let _ = kid.kill();
+    let _ = kid.wait();
+}

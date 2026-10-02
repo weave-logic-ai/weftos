@@ -8856,6 +8856,14 @@ mod tests {
         .expect("kernel boots");
         let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
         test_hooks::track(true);
+        // Restore the process-wide switch even when an assertion fails.
+        struct Untrack;
+        impl Drop for Untrack {
+            fn drop(&mut self) {
+                crate::project_boot_run::test_hooks::track(false);
+            }
+        }
+        let _untrack = Untrack;
         let params = serde_json::json!({});
         let mut denied = crate::rpc_ext::CallerCtx::from_auth(Some("read".into()));
         let r = authorize_caller(&mut denied, "project.stop_all", &params, &kernel).await;
@@ -8865,7 +8873,6 @@ mod tests {
         let r = authorize_caller(&mut allowed, "project.stop_all", &params, &kernel).await;
         assert!(r.is_ok(), "the owner may");
         assert!(test_hooks::last_activity() > 0, "an authorized call is activity");
-        test_hooks::track(false);
     }
 
     /// The voice consumer must dispatch as a capped internal principal:

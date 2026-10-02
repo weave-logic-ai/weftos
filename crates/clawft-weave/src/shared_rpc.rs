@@ -141,32 +141,51 @@ fn identify(call: &ExtCall, authority: Option<&clawft_kernel::token_authority::T
 ///
 /// The limits are cached on first use (editing a manifest does not raise them
 /// until `shared.reload`), but whether the project is still registered and
-/// active is checked on every call, so archiving or unregistering a project
+/// active is re-checked on every call, so archiving or unregistering a project
 /// (the `weft project` commands edit the manifest store directly) stops the
-/// service at once instead of at the next reload or restart.
-fn limits_for(project: &str) -> Result<SharedLimits, Response> {
-    let limits = state::cached_limits(project, || load_limits(project))?;
-    if active_manifest(project).is_none() {
-        state::invalidate(project);
-        return Err(unknown_project());
+/// service at once. The check is a `stat` on a blocking thread; the manifest
+/// is read only when its (mtime, length) changed since the limits were cached.
+async fn limits_for(project: &str) -> Result<SharedLimits, Response> {
+    let project = project.to_owned();
+    tokio::task::spawn_blocking(move || limits_for_blocking(&project))
+        .await
+        .unwrap_or_else(|e| Err(refuse("project_store_unavailable", format!("manifest check failed: {e}"))))
+}
+
+fn limits_for_blocking(project: &str) -> Result<SharedLimits, Response> {
+    let unavailable = |why: String| refuse("project_store_unavailable", why);
+    let dir = crate::scope_gate::manifests_dir().ok_or_else(|| unavailable("no manifest store".into()))?;
+    let path = clawft_types::project::manifest_path(&dir, project).map_err(|e| unavailable(e.to_string()))?;
+    let stamp = match std::fs::metadata(&path) {
+        Ok(m) => (m.modified().unwrap_or(std::time::UNIX_EPOCH), m.len()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            state::invalidate(project);
+            return Err(unknown_project());
+        }
+        Err(e) => return Err(unavailable(format!("manifest store unreadable: {e}"))),
+    };
+    if !state::stamp_changed(project, stamp)
+        && let Some(l) = state::cached(project)
+    {
+        return Ok(l);
     }
-    Ok(limits)
+    match read_manifest(&dir, project) {
+        Ok(Some(m)) if m.state == ProjectState::Active => {
+            // Cached limits survive a manifest edit; only a reload refreshes them.
+            let limits = state::cached(project).unwrap_or_else(|| SharedLimits::from_manifest(&m));
+            state::store(project, limits, stamp);
+            Ok(limits)
+        }
+        Ok(_) => {
+            state::invalidate(project);
+            Err(unknown_project())
+        }
+        Err(e) => Err(unavailable(format!("manifest store unreadable: {e}"))),
+    }
 }
 
 fn unknown_project() -> Response {
     refuse("project_unknown", "project is not registered and active")
-}
-
-fn active_manifest(project: &str) -> Option<clawft_types::project::ProjectManifest> {
-    let dir = crate::scope_gate::manifests_dir()?;
-    read_manifest(&dir, project).ok().flatten().filter(|m| m.state == ProjectState::Active)
-}
-
-fn load_limits(project: &str) -> Result<SharedLimits, Response> {
-    if crate::scope_gate::manifests_dir().is_none() {
-        return Err(refuse("project_store_unavailable", "no manifest store"));
-    }
-    active_manifest(project).map(|m| SharedLimits::from_manifest(&m)).ok_or_else(unknown_project)
 }
 
 async fn record_use(kernel: &KernelRef, project: &str, service: &str, tokens: u64) {
@@ -204,7 +223,7 @@ async fn run(call: ExtCall) -> Response {
         Ok(p) => p,
         Err(r) => return r,
     };
-    let limits = match limits_for(&project) {
+    let limits = match limits_for(&project).await {
         Ok(l) => l,
         Err(r) => return r,
     };

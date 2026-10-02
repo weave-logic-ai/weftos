@@ -197,7 +197,10 @@ pub async fn legacy_guard_with(
     // back is `migrate-kernel --revert`.
     if let Some(m) = manifests_dir
         .and_then(|d| clawft_types::project::find_by_root(d, root).ok().flatten())
-        .filter(|m| m.serve.as_ref().is_some_and(|s| s.via == clawft_types::project::ServeVia::ChildKernel))
+        .filter(|m| {
+            m.state == clawft_types::project::ProjectState::Active
+                && m.serve.as_ref().is_some_and(|s| s.via == clawft_types::project::ServeVia::ChildKernel)
+        })
     {
         anyhow::bail!(
             "this project ({id}) was migrated to a child kernel under the user daemon; a second \
@@ -325,6 +328,11 @@ mod tests {
                 .to_string();
             assert!(e.contains(&format!("kernel start --project {id}")) && e.contains("--revert"), "{e}");
         }
+        // An archived entry (left by `init --fork --force`) is not a migrated project.
+        let mut m = clawft_types::project::find_by_id(&dir, &id).unwrap().unwrap();
+        m.state = clawft_types::project::ProjectState::Archived;
+        clawft_types::project::write_manifest(&dir, &m).unwrap();
+        assert!(legacy_guard_with(true, &project_paths(&w), &w.sock, Some(&dir)).await.is_ok());
         // A project served the ordinary way is not blocked by the marker check.
         let (dir, _) = register(&w, ServeVia::UserDaemon);
         assert!(legacy_guard_with(true, &project_paths(&w), &w.sock, Some(&dir)).await.is_ok());

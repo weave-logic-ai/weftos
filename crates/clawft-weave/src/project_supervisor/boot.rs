@@ -3,6 +3,12 @@
 
 use super::*;
 
+/// Longest the boot scan waits for children that hold their lock but have
+/// not bound their socket yet.
+const BOOT_RETRY: Duration = Duration::from_secs(3);
+/// Longest `stop_all` waits for them once more.
+const CASCADE_RETRY: Duration = Duration::from_secs(2);
+
 impl Supervisor {
     /// File an expired registry session for an adopted child so it can
     /// re-register without a spawn nonce. Uses the REAL certified project
@@ -109,20 +115,21 @@ impl Supervisor {
                 Found::Unverifiable { .. } => {}
             }
         }
-        self.retry_handshake_leftovers(&mut found).await;
+        self.retry_handshake_leftovers(&mut found, self.cfg.ready_timeout.min(BOOT_RETRY)).await;
         *self.leftovers.lock().unwrap_or_else(|e| e.into_inner()) = found.clone();
         found
     }
 
     /// Leftovers whose pid, executable and lock verified but whose socket did
     /// not answer yet (a child still booting when its daemon restarted):
-    /// look again every `ready_poll` for up to `ready_timeout`, adopting the
+    /// look again every `ready_poll` for up to `budget` (short: a wedged one
+    /// must not hold up boot or a stop cascade), adopting the
     /// ones that now answer. Anything else stays as filed.
-    async fn retry_handshake_leftovers(self: &Arc<Self>, found: &mut [Found]) {
+    async fn retry_handshake_leftovers(self: &Arc<Self>, found: &mut [Found], budget: Duration) {
         let waiting = |f: &Found| {
             matches!(f, Found::Unverifiable { pid: Some(_), reason: adopt::Skip::HandshakeFailed(_), .. })
         };
-        let deadline = tokio::time::Instant::now() + self.cfg.ready_timeout;
+        let deadline = tokio::time::Instant::now() + budget;
         loop {
             let mut pending = false;
             for f in found.iter_mut().filter(|f| waiting(f)) {
@@ -159,7 +166,7 @@ impl Supervisor {
         if left.iter().any(|f| {
             matches!(f, Found::Unverifiable { pid: Some(_), reason: adopt::Skip::HandshakeFailed(_), .. })
         }) {
-            self.retry_handshake_leftovers(&mut left).await;
+            self.retry_handshake_leftovers(&mut left, self.cfg.ready_timeout.min(CASCADE_RETRY)).await;
             *self.leftovers.lock().unwrap_or_else(|e| e.into_inner()) = left;
         }
     }
@@ -192,8 +199,11 @@ impl Supervisor {
                     now.saturating_duration_since(since) >= self.cfg.lost_heartbeat_grace
                 }
             };
+            // One restart per pass: if the registry itself stalled, every
+            // child looks lost at once and must not be restarted together.
             if due && self.restart_lost(&id, &slot).await {
                 acted.push(id);
+                break;
             }
         }
         acted

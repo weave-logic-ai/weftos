@@ -76,6 +76,7 @@ fn tests() -> Vec<(&'static str, TestFn)> {
         ("a_revoked_project_without_a_marker_is_refused_before_spawning", followup_tests::a_revoked_project_without_a_marker_is_refused_before_spawning),
         ("an_adopted_pid_recycled_between_sigterm_and_sigkill_is_never_killed", followup_tests::an_adopted_pid_recycled_between_sigterm_and_sigkill_is_never_killed),
         ("an_adopted_but_refused_leftover_is_reported_as_unmanaged", followup_tests::an_adopted_but_refused_leftover_is_reported_as_unmanaged),
+        ("a_wedged_leftover_delays_boot_and_the_stop_cascade_only_briefly", followup_tests::a_wedged_leftover_delays_boot_and_the_stop_cascade_only_briefly),
         // Last: installs the process-wide supervisor.
         ("lifecycle_rpc_end_to_end", rpc_test::lifecycle_rpc_end_to_end),
     ]
