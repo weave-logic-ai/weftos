@@ -89,11 +89,11 @@ each item as you go. Every checklist item links to its corresponding section.
 
 ### CLI Testing (Section 5)
 
-- [ ] **CLI.1** `weft kernel status` — Returns state, uptime, counts — [Section 5.1](#51-test-weft-kernel-status)
-- [ ] **CLI.2** `weft kernel services` — Lists services or "No services" — [Section 5.2](#52-test-weft-kernel-services)
-- [ ] **CLI.3** `weft kernel ps` — Shows process table with PID 0 — [Section 5.3](#53-test-weft-kernel-ps)
-- [ ] **CLI.4** `weft kernel boot` — Boots with verbose output — [Section 5.4](#54-test-weft-kernel-boot-interactive)
-- [ ] **CLI.5** `weft kernel shutdown` — Graceful shutdown — [Section 5.5](#55-test-weft-kernel-shutdown)
+- [ ] **CLI.1** `weaver kernel status` — Returns state, uptime, counts — [Section 5.1](#51-test-weaver-kernel-status)
+- [ ] **CLI.2** `weaver kernel services` — Lists services or "No services" — [Section 5.2](#52-test-weaver-kernel-services)
+- [ ] **CLI.3** `weaver kernel ps` — Shows process table with PID 0 — [Section 5.3](#53-test-weaver-kernel-ps)
+- [ ] **CLI.4** `weaver kernel start --foreground --verbose` — Boots with verbose output — [Section 5.4](#54-test-weaver-kernel-start-foreground-interactive)
+- [ ] **CLI.5** `weaver kernel stop` — Graceful shutdown — [Section 5.5](#55-test-weaver-kernel-stop)
 
 ### Feature-Gated Modules (Section 6)
 
@@ -1929,16 +1929,16 @@ async fn integration_cluster_health() {
 
 ## 5. CLI Testing
 
-The kernel CLI commands are exposed via `weft kernel` (assuming CLI integration is complete).
+The kernel CLI commands are exposed via `weaver kernel` (the `weft` binary has no `kernel` subcommand). `weaver kernel start` backgrounds by default; the examples below use `--foreground` where they need the boot log. The expected-output blocks in this section are illustrative and have not been re-checked against the current output; compare with `weaver kernel status` / `services` in `weftos-deployment-sops.md` SOP 1.
 
-### 5.1 Test `weft kernel status`
+### 5.1 Test `weaver kernel status`
 
 ```bash
-# Boot kernel (via background service or test harness)
-weft kernel boot
+# Start the kernel daemon (backgrounds by default)
+weaver kernel start
 
 # Check status
-weft kernel status
+weaver kernel status
 
 # Expected output:
 # Kernel State: running
@@ -1948,11 +1948,11 @@ weft kernel status
 # Health: Healthy
 ```
 
-### 5.2 Test `weft kernel services`
+### 5.2 Test `weaver kernel services`
 
 ```bash
 # List registered services
-weft kernel services
+weaver kernel services
 
 # Expected output (table format):
 # NAME          TYPE         STATE     HEALTH
@@ -1960,11 +1960,11 @@ weft kernel services
 # cron          scheduler    running   healthy
 ```
 
-### 5.3 Test `weft kernel ps`
+### 5.3 Test `weaver kernel ps`
 
 ```bash
 # List process table
-weft kernel ps
+weaver kernel ps
 
 # Expected output:
 # PID   NAME            STATE     CPU(ms)  MEM(MB)  FILES
@@ -1973,11 +1973,11 @@ weft kernel ps
 # 3     agent-worker-2  running   95       48       6
 ```
 
-### 5.4 Test `weft kernel boot` (Interactive)
+### 5.4 Test `weaver kernel start --foreground` (Interactive)
 
 ```bash
 # Boot kernel with verbose output
-weft kernel boot --verbose
+weaver kernel start --foreground --verbose
 
 # Expected output:
 # [INFO] Phase: Init - Initializing kernel subsystems
@@ -1990,11 +1990,11 @@ weft kernel boot --verbose
 # Kernel booted in 2.3 seconds
 ```
 
-### 5.5 Test `weft kernel shutdown`
+### 5.5 Test `weaver kernel stop`
 
 ```bash
 # Graceful shutdown
-weft kernel shutdown
+weaver kernel stop
 
 # Expected output:
 # Stopping all services...
@@ -2146,19 +2146,19 @@ scripts/build.sh gate
 
 ```bash
 # Boot kernel
-cargo run --bin weft -- kernel boot
+cargo run --bin weaver -- kernel start
 
 # Check status
-cargo run --bin weft -- kernel status
+cargo run --bin weaver -- kernel status
 
 # List services
-cargo run --bin weft -- kernel services
+cargo run --bin weaver -- kernel services
 
 # List processes
-cargo run --bin weft -- kernel ps
+cargo run --bin weaver -- kernel ps
 
 # Shutdown
-cargo run --bin weft -- kernel shutdown
+cargo run --bin weaver -- kernel stop
 ```
 
 ### 8.6 Documentation Build

@@ -731,17 +731,17 @@ async fn main() -> anyhow::Result<()> {
 scripts/build.sh native
 
 # 2. Verify weave commands work
-./target/release/weave kernel boot
-./target/release/weave resource list
-./target/release/weave console
+./target/release/weaver kernel start
+./target/release/weaver resource tree
+./target/release/weaver console
 
 # 3. Verify weft commands work
 ./target/release/weft agent spawn --type coder
 ./target/release/weft tools list
 
 # 4. Check deprecation warning
-./target/release/weft kernel boot
-# Should print: "Note: 'weft kernel' is deprecated. Use 'weave' instead."
+./target/release/weft kernel status
+# `weft` has no `kernel` subcommand; expect "unrecognized subcommand 'kernel'" (checked against weft --help)
 
 # 5. Install both to PATH
 cargo install --path crates/clawft-cli --bin weave
@@ -1284,7 +1284,7 @@ USER weft
 WORKDIR /home/weft
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
-  CMD weave kernel status || exit 1
+  CMD weaver kernel status || exit 1
 
 ENTRYPOINT ["/usr/local/bin/weave"]
 CMD ["kernel", "boot"]

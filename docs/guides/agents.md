@@ -76,14 +76,36 @@ CamelCase alias: `workspaceRoot`.
 
 ### Example: systemd with a fixed project root
 
-```toml
+```ini
 # /etc/systemd/system/weaver.service
+[Unit]
+Description=WeftOS kernel (weaver)
+After=network-online.target
+
 [Service]
+Type=simple
+User=weaver
 WorkingDirectory=/var/lib/weaver
-# config (e.g. ~/.clawft/config.json or weave.toml merge):
-# { "agents": { "workspace_root": "/srv/projects/acme" } }
-ExecStart=/usr/local/bin/weaver daemon
+ExecStart=/usr/local/bin/weaver kernel start --foreground
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
 ```
+
+```toml
+# /var/lib/weaver/weave.toml  (read from the unit's WorkingDirectory)
+[agents]
+workspace_root = "/srv/projects/acme"
+```
+
+`kernel start` backgrounds by default, so a unit must pass `--foreground`
+(there is no `daemon` subcommand). The same settings can live in
+`~/.clawft/config.json` as the JSON shown above. To run the per-user daemon
+under a service manager instead, `weaver service unit --kind launchd|systemd` prints a
+user unit for `weaver kernel start --foreground --profile user` and
+the commands to install it; it installs nothing itself.
 
 The daemon may start from `/var/lib/weaver` while identity and tools use
 `/srv/projects/acme`.
