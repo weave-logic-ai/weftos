@@ -5,6 +5,9 @@
 //!   POST /install              -> verify (Ed25519/sha256) + write + reload  (body: InstallReq JSON)
 //!   POST /reload               -> re-read records from disk
 //!   GET  /healthz              -> ok
+//!   GET  /hw/usb               -> USB inventory vs baseline + id-table labels (serials redacted)
+//!   POST /hw/usb/baseline      -> accept the current scan (or body {keys:[..]}) as known
+//!   POST /hw/usb/identify      -> body {key}; ask the configured agent what the device is
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -12,7 +15,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use weftos_cog_host::fleet::Heartbeat;
 use weftos_cog_host::supervise::Supervisor;
-use weftos_cog_host::{install, InstallReq};
+use weftos_cog_host::{install, network, usb, usb_identify, InstallReq};
+use weftos_cog_market::usb::UsbIdTable;
 
 const MAX_BODY: usize = 32 * 1024 * 1024; // 32 MB cap on an upload
 
@@ -21,9 +25,13 @@ pub fn serve(listener: TcpListener, sup: Arc<Mutex<Supervisor>>) {
         match stream {
             Ok(s) => {
                 let sup = Arc::clone(&sup);
-                if let Err(e) = handle(s, sup) {
-                    eprintln!("[cog-host] request error: {e}");
-                }
+                // One thread per connection: /hw/usb/identify blocks on an agent for up to 90 s and
+                // must not stall lifecycle/status requests.
+                std::thread::spawn(move || {
+                    if let Err(e) = handle(s, sup) {
+                        eprintln!("[cog-host] request error: {e}");
+                    }
+                });
             }
             Err(e) => eprintln!("[cog-host] accept: {e}"),
         }
@@ -108,6 +116,9 @@ fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &A
             ("200 OK", r#"{"ok":true}"#.to_string())
         }
         ("POST", ["install"]) => install_route(body, sup),
+        ("GET", ["hw", "usb"]) => hw_usb_get(sup),
+        ("POST", ["hw", "usb", "baseline"]) => hw_usb_baseline(body, sup),
+        ("POST", ["hw", "usb", "identify"]) => hw_usb_identify(body),
         ("POST", ["cogs", id, action @ ("start" | "stop")]) => {
             let mut sup = sup.lock().unwrap();
             let res = if *action == "start" { sup.start(id) } else { sup.stop(id) };
@@ -118,6 +129,51 @@ fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &A
         }
         _ => ("404 Not Found", r#"{"ok":false,"error":"not found"}"#.to_string()),
     }
+}
+
+fn json_resp(code: &'static str, v: serde_json::Value) -> (&'static str, String) {
+    (code, v.to_string())
+}
+
+fn hw_usb_get(sup: &Arc<Mutex<Supervisor>>) -> (&'static str, String) {
+    let root = sup.lock().unwrap().root.clone();
+    let rep = usb::report(&root, &usb::scan(), &UsbIdTable::bundled(), &network::node_name(), usb::now_secs());
+    json_resp("200 OK", rep)
+}
+
+fn hw_usb_baseline(body: &[u8], sup: &Arc<Mutex<Supervisor>>) -> (&'static str, String) {
+    #[derive(serde::Deserialize, Default)]
+    struct Req {
+        keys: Option<Vec<String>>,
+    }
+    let req: Req = if body.iter().all(u8::is_ascii_whitespace) {
+        Req::default()
+    } else {
+        match serde_json::from_slice(body) {
+            Ok(r) => r,
+            Err(e) => return json_resp("400 Bad Request", serde_json::json!({"ok":false,"error":format!("bad baseline request: {e}")})),
+        }
+    };
+    let root = sup.lock().unwrap().root.clone();
+    match usb::save_baseline(&root, &usb::scan(), req.keys.as_deref(), usb::now_secs()) {
+        Ok(n) => json_resp("200 OK", serde_json::json!({"ok":true,"devices":n})),
+        Err(e) => json_resp("500 Internal Server Error", serde_json::json!({"ok":false,"error":format!("write baseline: {e}")})),
+    }
+}
+
+fn hw_usb_identify(body: &[u8]) -> (&'static str, String) {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        key: String,
+    }
+    let Ok(req) = serde_json::from_slice::<Req>(body) else {
+        return json_resp("400 Bad Request", serde_json::json!({"ok":false,"error":"body must be {\"key\": ...}"}));
+    };
+    let Some(dev) = usb::scan().devices.into_iter().find(|d| d.key == req.key) else {
+        return json_resp("404 Not Found", serde_json::json!({"ok":false,"error":"device not attached (rescan)"}));
+    };
+    let (ok, v) = usb_identify::identify(&dev, &UsbIdTable::bundled());
+    json_resp(if ok { "200 OK" } else { "503 Service Unavailable" }, v)
 }
 
 fn install_route(body: &[u8], sup: &Arc<Mutex<Supervisor>>) -> (&'static str, String) {

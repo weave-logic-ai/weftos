@@ -147,8 +147,93 @@ pub struct GuideFetch {
     pub result: Option<Result<serde_json::Value, String>>,
 }
 
+// ---- /hw/usb shapes (mirror of weftos_cog_host::usb::report) ----
+
+#[derive(Deserialize, Clone, Default)]
+pub struct HwUsbId {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub chip: Option<String>,
+    #[serde(default)]
+    pub module: Option<String>,
+    #[serde(default)]
+    pub notes: String,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct HwUsbDevice {
+    pub key: String,
+    #[serde(default)]
+    pub vid: String,
+    #[serde(default)]
+    pub pid: String,
+    #[serde(default)]
+    pub manufacturer: String,
+    #[serde(default)]
+    pub product: String,
+    #[serde(default)]
+    pub serial_redacted: Option<String>,
+    #[serde(default)]
+    pub class: String,
+    #[serde(default)]
+    pub speed: String,
+    #[serde(default)]
+    pub bus_path: String,
+    #[serde(default)]
+    pub ports: Vec<String>,
+    /// "new" | "known"
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub id: Option<HwUsbId>,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct HwUsbRemoved {
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub vid: String,
+    #[serde(default)]
+    pub pid: String,
+    #[serde(default)]
+    pub manufacturer: String,
+    #[serde(default)]
+    pub product: String,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct HwUsbReport {
+    #[serde(default)]
+    pub node: String,
+    #[serde(default)]
+    pub baseline_missing: bool,
+    #[serde(default)]
+    pub devices: Vec<HwUsbDevice>,
+    #[serde(default)]
+    pub removed: Vec<HwUsbRemoved>,
+    #[serde(default)]
+    pub unmatched_ports: Vec<String>,
+}
+
+/// Progress of an "Ask agent" call for one device key.
+#[derive(Clone)]
+pub enum Identify {
+    Pending,
+    /// Ok(answer) | Err(error + hint)
+    Done(Result<String, String>),
+}
+
 #[derive(Default)]
 pub struct Shared {
+    /// Identify-hardware modal: last scan (None = not scanned yet / in flight), when it landed,
+    /// and per-device agent answers. On demand only; never polled.
+    pub hw_usb: Option<Result<HwUsbReport, String>>,
+    pub hw_usb_at: Option<Instant>,
+    pub hw_identify: std::collections::BTreeMap<String, Identify>,
     pub host: Option<Result<HostStatus, String>>,
     pub net: Option<Result<Net, String>>,
     pub our_reg: Option<Result<WlRegistry, String>>,
@@ -316,6 +401,77 @@ impl Client {
 }
 
 impl Client {
+    /// Scan the host's USB bus (`GET /hw/usb`). On demand: the modal calls this on open and Rescan.
+    pub fn hw_scan(&self, ctx: &eframe::egui::Context) {
+        self.shared.lock().unwrap().hw_usb = None;
+        let url = format!("{}/hw/usb", base(&self.s.host));
+        let shared = Arc::clone(&self.shared);
+        let ctx = ctx.clone();
+        ehttp::fetch(ehttp::Request::get(url), move |res| {
+            let mut sh = shared.lock().unwrap();
+            sh.hw_usb = Some(parse_json::<HwUsbReport>(&res));
+            sh.hw_usb_at = Some(Instant::now());
+            ctx.request_repaint();
+        });
+    }
+
+    /// Accept the current scan (`keys = None`) or just `keys` as the known baseline, then rescan.
+    pub fn hw_baseline(&self, keys: Option<Vec<String>>, ctx: &eframe::egui::Context) {
+        let url = format!("{}/hw/usb/baseline", base(&self.s.host));
+        let body = match keys {
+            Some(k) => serde_json::json!({ "keys": k }).to_string().into_bytes(),
+            None => Vec::new(),
+        };
+        let mut req = ehttp::Request::post(url, body);
+        req.headers.insert("content-type", "application/json");
+        let (shared, host, ctx2) = (Arc::clone(&self.shared), self.s.host.clone(), ctx.clone());
+        ehttp::fetch(req, move |res| {
+            let msg = match &res {
+                Ok(r) if r.ok => "baseline saved".to_string(),
+                Ok(r) => format!("baseline: HTTP {}", r.status),
+                Err(e) => format!("baseline: {e}"),
+            };
+            shared.lock().unwrap().last_action = Some(msg);
+            let url = format!("{}/hw/usb", base(&host));
+            let (shared, ctx3) = (Arc::clone(&shared), ctx2.clone());
+            ehttp::fetch(ehttp::Request::get(url), move |res| {
+                let mut sh = shared.lock().unwrap();
+                sh.hw_usb = Some(parse_json::<HwUsbReport>(&res));
+                sh.hw_usb_at = Some(Instant::now());
+                ctx3.request_repaint();
+            });
+        });
+    }
+
+    /// Ask the host's agent what a device is (`POST /hw/usb/identify {key}`); the answer lands in
+    /// `hw_identify[key]`. The host blocks up to ~90 s, so the UI shows a spinner meanwhile.
+    pub fn hw_identify(&self, key: &str, ctx: &eframe::egui::Context) {
+        self.shared.lock().unwrap().hw_identify.insert(key.to_string(), Identify::Pending);
+        let url = format!("{}/hw/usb/identify", base(&self.s.host));
+        let mut req = ehttp::Request::post(url, serde_json::json!({ "key": key }).to_string().into_bytes());
+        req.headers.insert("content-type", "application/json");
+        let (shared, ctx, key) = (Arc::clone(&self.shared), ctx.clone(), key.to_string());
+        ehttp::fetch(req, move |res| {
+            // Error bodies (503 no agent / 404 rescan) are JSON too: surface their message + hint.
+            let out = match &res {
+                Ok(r) => match serde_json::from_slice::<serde_json::Value>(&r.bytes) {
+                    Ok(v) if v["ok"] == true => Ok(v["answer"].as_str().unwrap_or("").to_string()),
+                    Ok(v) => {
+                        let e = v["error"].as_str().unwrap_or("identify failed");
+                        Err(match v["hint"].as_str() {
+                            Some(h) => format!("{e} ({h})"),
+                            None => e.to_string(),
+                        })
+                    }
+                    Err(_) => Err(format!("HTTP {} {}", r.status, r.status_text)),
+                },
+                Err(e) => Err(e.clone()),
+            };
+            shared.lock().unwrap().hw_identify.insert(key, Identify::Done(out));
+            ctx.request_repaint();
+        });
+    }
+
     /// Install a catalog item onto the host: fetch the binary (TLS here, in the browser/native),
     /// then upload it to the host's `/install`, which verifies (Ed25519 for signed, sha256 for
     /// Cognitum) before writing. Progress/result lands in `last_action`.

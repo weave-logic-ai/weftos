@@ -19,3 +19,8 @@ serde_json = { workspace = true }
 # (no `cli` feature → no reqwest/TLS pulled into the appliance host).
 weftos-cog-repo = { path = "../weftos-cog-repo", default-features = false }
 base64 = "0.22"
+# USB id table for /hw/usb (pure data, wasm-safe; no new third-party deps).
+weftos-cog-market = { path = "../weftos-cog-market" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

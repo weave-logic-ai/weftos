@@ -9,6 +9,8 @@
 pub mod fleet;
 pub mod network;
 pub mod supervise;
+pub mod usb;
+pub mod usb_identify;
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};

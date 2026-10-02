@@ -10,6 +10,7 @@
 #![allow(deprecated)]
 
 pub mod client;
+mod hw_identify;
 
 use client::{Client, HostCog, HostStatus, Net, Settings};
 use eframe::egui::{self, Color32, RichText};
@@ -49,6 +50,8 @@ pub struct Manager {
     cat_tab: u8, // 0 projects, 1 modules, 2 chips
     cat_search: String,
     cat_kind: String, // module kind filter: all|board|sensor|display|actuator
+    /// Catalog tab: the "Identify hardware" USB scan modal.
+    hw: hw_identify::HwIdentify,
 }
 
 impl Manager {
@@ -67,15 +70,16 @@ impl Manager {
             cat_tab: 1,
             cat_search: String::new(),
             cat_kind: "all".into(),
+            hw: hw_identify::HwIdentify::default(),
         }
     }
 }
 
 fn mod_hay(m: &Module) -> String {
-    format!("{} {} {} {} {} {} {}", m.name, m.vendor, m.kind, m.summary, m.chips.join(" "), m.good_for.join(" "), m.spec.values().cloned().collect::<Vec<_>>().join(" ")).to_lowercase()
+    format!("{} {} {} {} {} {} {} {}", m.id, m.name, m.vendor, m.kind, m.summary, m.chips.join(" "), m.good_for.join(" "), m.spec.values().cloned().collect::<Vec<_>>().join(" ")).to_lowercase()
 }
 fn chip_hay(c: &Chip) -> String {
-    format!("{} {} {} {} {} {}", c.name, c.manufacturer, c.role, c.summary, c.tags.join(" "), c.spec.values().cloned().collect::<Vec<_>>().join(" ")).to_lowercase()
+    format!("{} {} {} {} {} {} {}", c.id, c.name, c.manufacturer, c.role, c.summary, c.tags.join(" "), c.spec.values().cloned().collect::<Vec<_>>().join(" ")).to_lowercase()
 }
 fn proj_hay(p: &Project) -> String {
     format!("{} {} {} {} {}", p.name, p.category, p.difficulty, p.summary, p.modules.join(" ")).to_lowercase()
@@ -399,8 +403,15 @@ impl Manager {
         ui.add_space(2.0);
     }
 
-    fn catalog_view(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Hardware catalog");
+    fn catalog_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.horizontal(|ui| {
+            ui.heading("Hardware catalog");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("🔍 Identify hardware").on_hover_text("scan the host's USB bus and match devices to the catalog").clicked() {
+                    self.hw.open(&self.client, ctx);
+                }
+            });
+        });
         ui.label(
             RichText::new(format!(
                 "{} projects · {} modules · {} chips — Projects → Modules → Chips (explored across weftos, mentra, whitsentry)",
@@ -749,12 +760,18 @@ impl eframe::App for Manager {
             egui::ScrollArea::vertical().show(ui, |ui| match self.section {
                 Section::Cogs => self.cogs_view(ui, ctx),
                 Section::Sensors => self.sensors_view(ui, ctx),
-                Section::Catalog => self.catalog_view(ui),
+                Section::Catalog => self.catalog_view(ui, ctx),
                 Section::Network => self.network_view(ui),
                 Section::Apps => self.apps_view(ui),
                 Section::System => self.system_view(ui),
             });
         });
+        if let Some(j) = self.hw.show(ctx, &self.client, &self.catalog) {
+            self.section = Section::Catalog;
+            self.cat_tab = j.tab;
+            self.cat_search = j.search;
+            self.cat_kind = "all".into();
+        }
     }
 }
 

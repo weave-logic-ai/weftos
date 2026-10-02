@@ -12,6 +12,7 @@
 //! through [`weftos_cog_repo::verify_artifact`] against the pinned key.
 
 pub mod hw;
+pub mod usb;
 
 use serde::{Deserialize, Serialize};
 use weftos_cog_repo::Registry as WlRegistry;

@@ -10710,6 +10710,8 @@ dependencies = [
  "base64 0.22.1",
  "serde",
  "serde_json",
+ "tempfile",
+ "weftos-cog-market",
  "weftos-cog-repo",
 ]
 
