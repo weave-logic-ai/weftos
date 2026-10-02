@@ -137,12 +137,6 @@ cat > /Library/LaunchDaemons/ai.weftos.mesh.plist.new <<'WEFTOS_EOF'
 </plist>
 WEFTOS_EOF
 chown root:wheel /Library/LaunchDaemons/ai.weftos.mesh.plist.new && chmod 0644 /Library/LaunchDaemons/ai.weftos.mesh.plist.new && mv /Library/LaunchDaemons/ai.weftos.mesh.plist.new /Library/LaunchDaemons/ai.weftos.mesh.plist
-install -d -m 0755 -o root -g wheel /etc/newsyslog.d
-cat > /etc/newsyslog.d/weftos-mesh.conf.new <<'WEFTOS_EOF'
-# logfilename                owner:group       mode count size  when flags
-/var/log/weftos/mesh.log   _weftos:_weftos   640  5     1024  *    JN
-WEFTOS_EOF
-chown root:wheel /etc/newsyslog.d/weftos-mesh.conf.new && chmod 0644 /etc/newsyslog.d/weftos-mesh.conf.new && mv /etc/newsyslog.d/weftos-mesh.conf.new /etc/newsyslog.d/weftos-mesh.conf
 # macOS clears /var/run at boot; ai.weftos.mesh-rundir recreates /var/run/weftos (group _weftos, 0750).
 # The service may start before it does; launchd retries every 10 s (ThrottleInterval) until it exists.
 launchctl bootstrap system /Library/LaunchDaemons/ai.weftos.mesh-rundir.plist || true

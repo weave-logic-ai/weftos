@@ -48,7 +48,7 @@ pub const RUNDIR_PLIST_PATH: &str = "/Library/LaunchDaemons/ai.weftos.mesh-rundi
 pub const MESH_UNIT_PATH: &str = "/etc/systemd/system/weftos-mesh.service";
 /// Where the sysusers fragment is installed.
 pub const SYSUSERS_PATH: &str = "/etc/sysusers.d/weftos-mesh.conf";
-/// Where the macOS log-rotation snippet is installed.
+/// Old rotation snippet; never installed (it breaks launchd logging), removed on uninstall if present.
 pub const NEWSYSLOG_PATH: &str = "/etc/newsyslog.d/weftos-mesh.conf";
 
 /// Group that owns `/var/run/weftos` on macOS; users must be members.
@@ -244,14 +244,6 @@ fi
     )
 }
 
-/// `/etc/newsyslog.d/weftos-mesh.conf`: rotate the launchd log (macOS).
-pub fn newsyslog_conf() -> String {
-    format!(
-        "# logfilename                owner:group       mode count size  when flags\n\
-{LOG_DIR}/mesh.log   {MACOS_ACCOUNT}:{MACOS_ACCOUNT}   640  5     1024  *    JN\n"
-    )
-}
-
 /// Executable named by an installed unit (the systemd `ExecStart=` or the
 /// first launchd `ProgramArguments` string); `None` when it cannot be parsed.
 pub fn unit_exe(text: &str) -> Option<String> {
@@ -345,11 +337,6 @@ mod tests {
             assert!(t.contains(k), "{k}");
         }
         assert!(!t.contains("User=root"));
-    }
-
-    #[test]
-    fn newsyslog_matches_golden() {
-        check_golden("weftos-mesh-newsyslog.conf", &newsyslog_conf());
     }
 
     #[test]

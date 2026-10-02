@@ -147,7 +147,7 @@ impl Plan {
     /// Exposure warnings, for the script header and stderr.
     pub fn listen_notes(&self) -> Vec<String> {
         let mut n = Vec::new();
-        if !self.listen.ip().is_loopback() {
+        if !self.listen.ip().to_canonical().is_loopback() {
             n.push(format!("listen {} exposes the mesh port beyond this machine (the default is 127.0.0.1:9489)", self.listen));
         }
         if self.listen.port() < 1024 {
@@ -278,8 +278,6 @@ fi\n"
         Manager::Launchd => {
             heredoc(&mut s, RUNDIR_PLIST_PATH, "0644", "root:wheel", &launchd_rundir_plist());
             heredoc(&mut s, MESH_PLIST_PATH, "0644", "root:wheel", &launchd_system_plist(exe, state));
-            s.push_str("install -d -m 0755 -o root -g wheel /etc/newsyslog.d\n");
-            heredoc(&mut s, NEWSYSLOG_PATH, "0644", "root:wheel", &newsyslog_conf());
             s.push_str(&format!("# macOS clears /var/run at boot; {MESH_RUNDIR_LABEL} recreates {RUN_DIR} (group {group}, 0750).\n\
 # The service may start before it does; launchd retries every 10 s (ThrottleInterval) until it exists.\n"));
             s.push_str(&format!("launchctl bootstrap system {RUNDIR_PLIST_PATH} || true\n"));
@@ -515,6 +513,10 @@ mod tests {
         // [::1] is loopback too.
         p.listen = parse_listen("[::1]:9489").unwrap();
         assert!(p.listen_notes().is_empty());
+        p.listen = parse_listen("[::ffff:127.0.0.1]:9489").unwrap();
+        assert!(p.listen_notes().is_empty());
+        p.listen = parse_listen("[::ffff:10.0.0.1]:9489").unwrap();
+        assert_eq!(p.listen_notes().len(), 1);
     }
 
     #[test]
@@ -537,9 +539,10 @@ mod tests {
     }
 
     #[test]
-    fn macos_gets_rotation_and_atomic_rundir() {
+    fn macos_rundir_helper_and_no_log_rotation() {
         let t = install_script(&plan(Manager::Launchd));
-        assert!(t.contains("/etc/newsyslog.d/weftos-mesh.conf"));
+        // newsyslog would break logging (launchd keeps the fd); not installed, only cleaned up.
+        assert!(!t.contains("newsyslog"));
         assert!(t.contains("-o _weftos -g _weftos /var/run/weftos</string>"));
         assert!(uninstall_script(&plan(Manager::Launchd)).contains("/etc/newsyslog.d/weftos-mesh.conf"));
         assert!(install_script(&plan(Manager::Systemd)).contains("/etc/sysusers.d/weftos-mesh.conf"));
