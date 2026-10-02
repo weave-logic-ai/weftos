@@ -173,31 +173,15 @@ pub fn root_sha256(root: &Path) -> String {
     ident::hex(&Sha256::digest(bytes))
 }
 
-/// File dropped in a child's run dir when its key is revoked or replaced; a
-/// child refuses to boot, keep running, reload or update while it exists
-/// (`clawft_kernel::overlay_trust::REVOKED_FILE`).
+/// Drop the project's registry session when its key is revoked or replaced,
+/// so a running child's next heartbeat fails and its re-register is refused.
 ///
-/// Written next to the manifest store (`<manifests>/../run/<id>/revoked`,
-/// i.e. `~/.weftos/run/<id>/revoked`), atomic and 0600, and only when the run
-/// dir exists (no child was ever spawned otherwise). The session is dropped
-/// so the next heartbeat of a running child fails and its re-register is
-/// refused (`key_revoked`). Failure to write is logged, not fatal: the
-/// journal is the authority, the marker is what lets a child that cannot
-/// reach the parent still see the revocation. A child booted while the
-/// parent is unreachable CANNOT see a revocation issued before the marker
-/// existed or while the user daemon could not write it.
-fn mark_revoked(env: &CertEnv, id: &str, why: &str) {
+/// The `<run>/<id>/revoked` marker (what `project_boot` and the overlay
+/// check) is written and the child stopped by the supervisor's identity
+/// change hook, not here: there is one writer. A child booted while the
+/// parent is unreachable only sees a revocation if that marker was written.
+fn mark_revoked(_env: &CertEnv, id: &str, _why: &str) {
     crate::mesh_local_registry::registry().evict(id);
-    let Some(run) = env.manifests_dir.parent().map(|d| d.join("run").join(id)) else {
-        return;
-    };
-    if !run.is_dir() {
-        return;
-    }
-    let path = run.join(clawft_kernel::overlay_trust::REVOKED_FILE);
-    if let Err(e) = ident::write_private_atomic(&path, format!("{why}\n").as_bytes(), false) {
-        tracing::warn!(path = %path.display(), error = %e, "could not write the revoked marker");
-    }
 }
 
 fn cert_path(dir: &Path, id: &str) -> PathBuf {

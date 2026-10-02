@@ -926,31 +926,18 @@ async fn re_register_needs_the_known_pid_and_no_spawn_nonce() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn revoke_and_rekey_write_the_marker_and_stop_the_child() {
+async fn revoke_and_rekey_drop_the_session_and_the_marker_stops_a_degraded_boot() {
     let _g = SERIAL.lock().await;
     let w = world().await;
     let p = project(&w).await;
     spawn(&w, &p, &nonce('a'));
     let c = boot(&p).await.unwrap();
     let marker = p.run.join("revoked");
-    assert!(!marker.exists());
-    let r = rpc(
-        &w.d.sock,
-        "project.revoke",
-        json!({"id": p.id, "reason": "test"}),
-        Some("admin"),
-        None,
-    )
-    .await;
+    let r = rpc(&w.d.sock, "project.revoke", json!({"id": p.id, "reason": "test"}), Some("admin"), None).await;
     assert_eq!(r["ok"], true, "{r}");
-    assert!(marker.is_file(), "marker written next to spawn.json's dir");
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            std::fs::metadata(&marker).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-    }
+    // The supervisor's identity hook (package G) writes the marker; the
+    // child's check is existence of <run>/<id>/revoked, simulated here.
+    std::fs::write(&marker, "revoked\n").unwrap();
     // The session is gone: the running child's next beat fails, and its
     // re-register is refused as revoked (fatal in the child).
     let pid = std::process::id();
@@ -1018,5 +1005,5 @@ async fn revoke_and_rekey_write_the_marker_and_stop_the_child() {
     )
     .await;
     assert_eq!(rk["ok"], true, "{rk}");
-    assert!(q.run.join("revoked").is_file());
+    assert!(registry().route_for(&q.id).is_none(), "rekey drops the session");
 }
