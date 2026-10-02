@@ -1,12 +1,12 @@
 //! The `/hw/*` routes (USB inventory, baseline, agent identify, Hardware Dex), split out of the
 //! binary's `http.rs` so they are unit-testable. CSRF checks for every POST run in `http.rs`; the
-//! mutating and agent routes here additionally require the host bearer token.
+//! routes here (reads included: they describe attached hardware) require the host bearer token.
 //!
-//!   GET  /hw/usb            read-only inventory vs baseline + id-table labels (serials redacted)
+//!   GET  /hw/usb            (token) read-only inventory vs baseline + id-table labels (serials redacted)
 //!   POST /hw/usb/scan       same report, but records sightings in the dex (catches, times_seen)
 //!   POST /hw/usb/baseline   accept the current scan (or body {keys:[..]}) as known
 //!   POST /hw/usb/identify   body {key}; ask the configured agent what the device is
-//!   GET  /hw/dex            Hardware Dex: caught, unseen_catches, wild, totals, badges, types
+//!   GET  /hw/dex            (token) Hardware Dex: caught, unseen_catches, wild, totals, badges, types
 //!   POST /hw/dex/catch      body {key, catalog_id|"wild", name?, answer?, force?}
 //!   POST /hw/dex/ack        body {refs?}; acknowledge NEW CATCH banners
 
@@ -55,8 +55,8 @@ fn parse_opt<T: serde::de::DeserializeOwned + Default>(body: &[u8]) -> Result<T,
 pub fn handle(req: &Req, root: &Path, policy: &Policy) -> Option<Resp> {
     let parts: Vec<&str> = req.path.split('?').next().unwrap_or("").trim_matches('/').split('/').filter(|p| !p.is_empty()).collect();
     Some(match (req.method, parts.as_slice()) {
-        ("GET", ["hw", "usb"]) => usb_get(root),
-        ("GET", ["hw", "dex"]) => dex_get(root),
+        ("GET", ["hw", "usb"]) => guarded(req, policy, || usb_get(root)),
+        ("GET", ["hw", "dex"]) => guarded(req, policy, || dex_get(root)),
         ("POST", ["hw", "usb", "scan"]) => guarded(req, policy, || usb_scan(root)),
         ("POST", ["hw", "usb", "baseline"]) => guarded(req, policy, || baseline(req.body, root)),
         ("POST", ["hw", "usb", "identify"]) => guarded(req, policy, || identify(req.body, root)),
@@ -216,10 +216,11 @@ mod tests {
     }
 
     #[test]
-    fn reads_are_read_only() {
+    fn reads_need_the_token_and_are_read_only() {
         let d = tempfile::tempdir().unwrap();
         for p in ["/hw/usb", "/hw/dex"] {
-            let (code, body) = call("GET", p, "", false, d.path());
+            assert_eq!(call("GET", p, "", false, d.path()).0, "401 Unauthorized", "{p}");
+            let (code, body) = call("GET", p, "", true, d.path());
             assert_eq!(code, "200 OK");
             assert!(body.contains("\"ok\":true"));
         }
@@ -236,7 +237,7 @@ mod tests {
         assert!(v["unseen_catches"].is_array());
         assert!(dex::path(d.path()).exists());
         dex::with_dex(d.path(), |x| x.unseen.push("module:ky-038".into())).unwrap();
-        let g: Value = serde_json::from_str(&call("GET", "/hw/dex", "", false, d.path()).1).unwrap();
+        let g: Value = serde_json::from_str(&call("GET", "/hw/dex", "", true, d.path()).1).unwrap();
         assert!(g["unseen_catches"].as_array().unwrap().iter().any(|c| c["ref"] == "module:ky-038"));
         assert_eq!(call("POST", "/hw/dex/ack", r#"{"refs":["module:ky-038"]}"#, true, d.path()).0, "200 OK");
         assert!(!dex::read_dex(d.path()).unseen.contains(&"module:ky-038".to_string()));

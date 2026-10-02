@@ -4,8 +4,12 @@
 //!
 //! - every `POST` (except edge heartbeats) needs `Content-Type: application/json` and
 //!   `X-Weft-Host: 1`; a custom header forces a CORS preflight, which only allowlisted origins pass;
-//! - the `/hw/*` mutating and agent routes also need `Authorization: Bearer <token>`, where the token
-//!   is `$WEFT_COG_HOST_TOKEN` or the 0600 file `<root>/host.token` created on first start.
+//! - every POST except `/fleet/heartbeat`, and every `GET /hw/*`, also needs
+//!   `Authorization: Bearer <token>`, where the token is `$WEFT_COG_HOST_TOKEN` or the 0600 file
+//!   `<root>/host.token` created on first start;
+//! - the `Host` header must be a loopback name, an IP literal, this machine's hostname (plus `.local`
+//!   and its tailnet MagicDNS name when known) or one of `$WEFT_COG_HOST_NAMES`; anything else is a
+//!   DNS-rebinding style request and is refused (421).
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -16,6 +20,7 @@ pub type Refusal = (&'static str, String);
 
 pub const TOKEN_ENV: &str = "WEFT_COG_HOST_TOKEN";
 pub const ORIGINS_ENV: &str = "WEFT_COG_HOST_ORIGINS";
+pub const NAMES_ENV: &str = "WEFT_COG_HOST_NAMES";
 const DEFAULT_ORIGINS: [&str; 3] = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"];
 
 pub fn token_path(root: &Path) -> PathBuf {
@@ -60,6 +65,41 @@ pub fn ct_eq(a: &str, b: &str) -> bool {
 pub struct Policy {
     token: String,
     origins: Vec<String>,
+    /// Lowercase DNS names accepted in the `Host` header (IP literals and loopback always are).
+    names: Vec<String>,
+}
+
+/// Host header -> lowercase name without port, brackets or trailing dot.
+pub fn host_name(h: &str) -> String {
+    let h = h.trim().to_ascii_lowercase();
+    let name = if let Some(rest) = h.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("").to_string()
+    } else if h.matches(':').count() == 1 {
+        h.split(':').next().unwrap_or("").to_string()
+    } else {
+        h
+    };
+    name.trim_end_matches('.').to_string()
+}
+
+/// This machine's names: hostname, `<short>.local`, and the tailnet MagicDNS name when
+/// `tailscale` is installed (best effort).
+fn machine_names() -> Vec<String> {
+    let mut v = Vec::new();
+    let host = crate::network::node_name().to_ascii_lowercase();
+    if !host.is_empty() {
+        let short = host.split('.').next().unwrap_or("").to_string();
+        v.push(format!("{short}.local"));
+        v.push(short);
+        v.push(host);
+    }
+    if let Ok(out) = std::process::Command::new("tailscale").args(["status", "--json"]).output()
+        && let Ok(j) = serde_json::from_slice::<serde_json::Value>(&out.stdout)
+        && let Some(dns) = j["Self"]["DNSName"].as_str()
+    {
+        v.push(dns.trim_end_matches('.').to_ascii_lowercase());
+    }
+    v
 }
 
 fn refuse(code: &'static str, msg: &str, hint: &str) -> Refusal {
@@ -68,7 +108,21 @@ fn refuse(code: &'static str, msg: &str, hint: &str) -> Refusal {
 
 impl Policy {
     pub fn new(token: String, origins: Vec<String>) -> Self {
-        Self { token, origins }
+        Self { token, origins, names: Vec::new() }
+    }
+
+    /// Add DNS names accepted in the `Host` header.
+    pub fn with_names(mut self, names: Vec<String>) -> Self {
+        self.names.extend(names.into_iter().map(|n| host_name(&n)).filter(|n| !n.is_empty()));
+        self
+    }
+
+    /// DNS-rebinding guard: is this `Host` header one of ours? Loopback names and any IP literal
+    /// (an attacker's page cannot be served from an IP literal under its own name) always pass.
+    pub fn host_allowed(&self, host: Option<&str>) -> bool {
+        let Some(h) = host else { return false };
+        let n = host_name(h);
+        n == "localhost" || n.ends_with(".localhost") || n.parse::<std::net::IpAddr>().is_ok() || self.names.contains(&n)
     }
 
     /// Token from `$WEFT_COG_HOST_TOKEN`, else `<root>/host.token` (created on first start);
@@ -89,7 +143,8 @@ impl Policy {
         if let Ok(extra) = std::env::var(ORIGINS_ENV) {
             origins.extend(extra.split(',').map(|s| s.trim().trim_end_matches('/').to_string()).filter(|s| !s.is_empty()));
         }
-        Ok(Self { token, origins })
+        let extra_names = std::env::var(NAMES_ENV).unwrap_or_default().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>();
+        Ok(Self { token, origins, names: Vec::new() }.with_names(machine_names()).with_names(extra_names))
     }
 
     /// Is `origin` allowed to call the API cross-origin? Allowlist entries may end in `:*` (any
@@ -139,6 +194,20 @@ mod tests {
     }
     fn hs(v: &[(&str, &str)]) -> Headers {
         v.iter().map(|(k, x)| (k.to_string(), x.to_string())).collect()
+    }
+
+    #[test]
+    fn host_header_allowlist_refuses_rebinding_names() {
+        let p = pol().with_names(vec!["MyBox.local".into(), "mybox.tail1234.ts.net.".into()]);
+        for ok in ["localhost", "localhost:9480", "127.0.0.1:9480", "[::1]:9480", "10.0.0.5:9480", "100.109.125.18", "mybox.local:9480", "mybox.tail1234.ts.net", "FOO.localhost"] {
+            assert!(p.host_allowed(Some(ok)), "{ok}");
+        }
+        for bad in ["evil.example", "evil.example:9480", "127.0.0.1.evil.example", "localhost.evil.example", "mybox.local.evil.example", ""] {
+            assert!(!p.host_allowed(Some(bad)), "{bad}");
+        }
+        assert!(!p.host_allowed(None), "a missing Host header is refused");
+        assert_eq!(host_name("[::1]:80"), "::1");
+        assert_eq!(host_name("Example.COM.:80"), "example.com");
     }
 
     #[test]

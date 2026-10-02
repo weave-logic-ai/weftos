@@ -9,7 +9,8 @@
 //!   that use it; for a chip, the number of modules that carry it. `>=3` common, `2` uncommon,
 //!   `1` rare, `0` legendary (catalogued but nothing uses it yet).
 //! - For sensor *chips* and `sensor`-kind modules that have a grade (`sensor_types.json`), rarity follows
-//!   the grade instead: S legendary, A rare, B uncommon, C common. Boards and other modules keep the
+//!   the grade instead (S legendary, A rare, B uncommon, C common), unless the grade is
+//!   low-confidence, in which case the usage rule applies. Boards and other modules keep the
 //!   usage rule.
 //! - **Badges** come from catalog fields (module `kind`, USB id-table kinds) - no hardcoded ids.
 
@@ -96,7 +97,9 @@ pub fn rarity_with(cat: &HwCatalog, types: &SensorTypes, r: &str) -> Option<Rari
         Some(("module", id)) => cat.module(id).is_some_and(|m| m.kind == "sensor"),
         _ => true,
     };
-    Some(match types.grade_of(r).filter(|_| graded) {
+    // a low-confidence grade (no catalog figures behind it) must not drive rarity
+    let grade = types.assignment(r).filter(|a| graded && a.confidence != "low").map(|a| a.grade);
+    Some(match grade {
         Some(Grade::S) => Rarity::Legendary,
         Some(Grade::A) => Rarity::Rare,
         Some(Grade::B) => Rarity::Uncommon,
@@ -178,7 +181,8 @@ pub fn upgraded_types(types: &SensorTypes, caught: &BTreeMap<String, u64>) -> us
         .types
         .iter()
         .filter(|t| {
-            let mut got: Vec<(u64, Grade)> = types.members(&t.id).into_iter().filter_map(|a| caught.get(&a.r).map(|at| (*at, a.grade))).collect();
+            // low-confidence grades are not evidence of an upgrade
+            let mut got: Vec<(u64, Grade)> = types.members(&t.id).into_iter().filter(|a| a.confidence != "low").filter_map(|a| caught.get(&a.r).map(|at| (*at, a.grade))).collect();
             got.sort();
             let mut best: Option<Grade> = None;
             got.iter().any(|(_, g)| {
@@ -377,6 +381,29 @@ mod tests {
         caught.insert("chip:c1".to_string(), 13);
         let b = badges(&mini(false), &UsbIdTable::default(), &st, &caught, 0);
         assert!(b.iter().find(|x| x.id == "full-house").unwrap().earned);
+    }
+
+    #[test]
+    fn low_confidence_grades_do_not_drive_rarity_or_grade_up() {
+        let c = mini(false);
+        let st = SensorTypes::parse(
+            r#"{"types":[{"id":"t","name":"T"}],"assign":[
+              {"ref":"module:a","type":"t","grade":"S","why":"x","confidence":"low"},
+              {"ref":"module:b","type":"t","grade":"C","why":"x","confidence":"medium"},
+              {"ref":"chip:c1","type":"t","grade":"A","why":"x","confidence":"low"}]}"#,
+        )
+        .unwrap();
+        // low-confidence S/A fall back to the usage rule (a: 2 projects uncommon; c1: 2 modules uncommon)
+        assert_eq!(rarity_with(&c, &st, "module:a"), rarity(&c, "module:a"));
+        assert_eq!(rarity_with(&c, &st, "chip:c1"), rarity(&c, "chip:c1"));
+        assert_ne!(rarity_with(&c, &st, "module:a"), Some(Rarity::Legendary));
+        assert_eq!(rarity_with(&c, &st, "module:b"), Some(Rarity::Common)); // medium confidence still grade-led
+        // catching C then a low-confidence S is not a "grade up"
+        let caught = BTreeMap::from([("module:b".to_string(), 1u64), ("module:a".to_string(), 2)]);
+        assert_eq!(upgraded_types(&st, &caught), 0);
+        let b = badges(&c, &UsbIdTable::default(), &st, &caught, 0);
+        assert!(!b.iter().find(|x| x.id == "legendary").unwrap().earned);
+        assert!(!b.iter().find(|x| x.id == "first-s-grade").unwrap().earned);
     }
 
     #[test]

@@ -521,7 +521,12 @@ mod tests {
         assert_eq!(sdr["upgrade_available"], true);
         assert!(sdr["members"].as_array().unwrap().iter().any(|m| m["id"] == "module:rtl-sdr" && m["caught"] == true));
         let rtl = rep["caught"].as_array().unwrap().iter().find(|c| c["ref"] == "module:rtl-sdr").unwrap();
-        assert_eq!((rtl["grade"].as_str(), rtl["rarity"].as_str()), (Some("C"), Some("common")));
+        // rtl-sdr's grade is low-confidence (no catalog figures), so rarity follows the usage rule
+        let usage = rules::rarity(catalog(), "module:rtl-sdr").map(|r| r.label());
+        assert_eq!((rtl["grade"].as_str(), rtl["rarity"].as_str()), (Some("C"), usage));
+        // a medium-confidence grade (chip bme280 has stated figures) drives rarity
+        let bme = rules::rarity_with(catalog(), sensor_types(), "chip:bme280");
+        assert_eq!(bme, Some(weftos_cog_market::dex::Rarity::Common));
         assert_eq!(rep["types"].as_array().unwrap().iter().find(|r| r["type"] == "imu").unwrap()["caught"], false);
     }
 

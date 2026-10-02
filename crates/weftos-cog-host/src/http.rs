@@ -6,11 +6,13 @@
 //!   GET  /healthz              -> ok
 //!   /hw/*                      -> USB inventory, identify, Hardware Dex (see `hw_http`)
 //!
-//! Browser safety (the host binds all interfaces): every POST except edge heartbeats needs
-//! `Content-Type: application/json` + `X-Weft-Host: 1` (forcing a CORS preflight), CORS is answered
-//! only for allowlisted origins on `/hw/*` and on every POST, and the `/hw/*` mutating routes need
-//! the host bearer token. See `auth`. Plain GETs of the legacy routes keep `*` for the web console.
-//! Limits: 32 concurrent connections (503 beyond), 20 s per request, 64 KB bodies on `/hw/*`.
+//! Browser safety (the host binds all interfaces): the `Host` header must be an allowed name
+//! (DNS-rebinding guard, 421 otherwise); every POST except edge heartbeats needs
+//! `Content-Type: application/json` + `X-Weft-Host: 1` (forcing a CORS preflight) **and** the host
+//! bearer token, as does every `GET /hw/*`; CORS is answered only for allowlisted origins on
+//! `/hw/*` and on every POST. See `auth`. `GET /status|/network|/healthz` stay open (read views)
+//! and keep `*`. Limits: 32 concurrent connections (503 beyond), 20 s per request, 64 KB bodies on
+//! `/hw/*`, 4 KB on `/fleet/heartbeat`.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -19,7 +21,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use weftos_cog_host::auth::{Headers, Policy};
-use weftos_cog_host::fleet::Heartbeat;
+use weftos_cog_host::fleet::{Heartbeat, HEARTBEAT_BODY_CAP};
 use weftos_cog_host::hw_http::{self, HW_BODY_CAP};
 use weftos_cog_host::supervise::Supervisor;
 use weftos_cog_host::{install, InstallReq};
@@ -104,7 +106,13 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>, policy: &Policy) -> std
             content_len = content_length(&buf[..p]);
             let head = String::from_utf8_lossy(&buf[..p]);
             let path = head.lines().next().unwrap_or("").split_whitespace().nth(1).unwrap_or("/");
-            let cap = if path.starts_with("/hw/") { HW_BODY_CAP } else { MAX_BODY };
+            let cap = if path.starts_with("/hw/") {
+                HW_BODY_CAP
+            } else if path == "/fleet/heartbeat" {
+                HEARTBEAT_BODY_CAP
+            } else {
+                MAX_BODY
+            };
             if content_len > cap {
                 return respond(&mut s, "413 Payload Too Large", r#"{"ok":false,"error":"body too large"}"#.into(), "");
             }
@@ -136,12 +144,19 @@ fn handle(mut s: TcpStream, sup: Arc<Mutex<Supervisor>>, policy: &Policy) -> std
     let body: &[u8] = if he + 4 <= buf.len() { &buf[he + 4..] } else { &[] };
     let cors = cors_headers(method, path, &headers, policy);
 
+    // DNS-rebinding guard: a page on an attacker's name resolving to this host sends its own Host.
+    if !policy.host_allowed(headers.get("host").map(String::as_str)) {
+        return respond(&mut s, "421 Misdirected Request", serde_json::json!({"ok":false,"error":"host header not allowed","hint":"use an IP, localhost or this machine's name, or set WEFT_COG_HOST_NAMES"}).to_string(), "");
+    }
     if method == "OPTIONS" {
         // Preflight: 204 with CORS headers for an allowed origin, 403 (no CORS headers) otherwise.
         let allowed = headers.get("origin").is_none_or(|o| policy.origin_allowed(o, headers.get("host").map(String::as_str)));
         return respond(&mut s, if allowed { "204 No Content" } else { "403 Forbidden" }, String::new(), &if allowed { preflight(&headers, path, policy) } else { String::new() });
     }
-    if method == "POST" && path != "/fleet/heartbeat" && let Err((code, payload)) = policy.check_post(&headers) {
+    if method == "POST"
+        && path != "/fleet/heartbeat"
+        && let Err((code, payload)) = policy.check_post(&headers).and_then(|_| policy.check_token(&headers))
+    {
         return respond(&mut s, code, payload, &cors);
     }
     let root: PathBuf = sup.lock().unwrap().root.clone();
@@ -272,7 +287,7 @@ mod tests {
     }
 
     fn post(path: &str, extra: &str, body: &str) -> String {
-        format!("POST {path} HTTP/1.1\r\nHost: x\r\n{extra}Content-Length: {}\r\n\r\n{body}", body.len())
+        format!("POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}Content-Length: {}\r\n\r\n{body}", body.len())
     }
 
     const JSON: &str = "Content-Type: application/json\r\nX-Weft-Host: 1\r\n";
@@ -293,8 +308,8 @@ mod tests {
                 assert!(st.contains("400"), "{path} {why}: {st}");
             }
         }
-        // with both headers the legacy routes work again
-        assert!(send(a, &post("/reload", JSON, "{}")).0.contains("200"));
+        // with both headers AND the token the legacy routes work
+        assert!(send(a, &post("/reload", &format!("{JSON}Authorization: Bearer tok\r\n"), "{}")).0.contains("200"));
     }
 
     #[test]
@@ -302,10 +317,11 @@ mod tests {
         let _g = serial();
         let (a, _r) = start();
         let evil = format!("Origin: http://evil.example\r\n{JSON}");
+        let evil = format!("{evil}Authorization: Bearer tok\r\n");
         let (st, h, _) = send(a, &post("/reload", &evil, "{}"));
         assert!(st.contains("403"), "{st}");
         assert!(!h.contains("access-control-allow-origin"));
-        let (st, h, _) = send(a, "OPTIONS /hw/dex/catch HTTP/1.1\r\nHost: x\r\nOrigin: http://evil.example\r\nAccess-Control-Request-Method: POST\r\n\r\n");
+        let (st, h, _) = send(a, "OPTIONS /hw/dex/catch HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\nAccess-Control-Request-Method: POST\r\n\r\n");
         assert!(st.contains("403") && !h.contains("access-control-allow-origin"), "{st} {h}");
     }
 
@@ -313,17 +329,17 @@ mod tests {
     fn allowed_origin_gets_an_exact_preflight_answer_never_star_for_posts() {
         let _g = serial();
         let (a, _r) = start();
-        let (st, h, _) = send(a, "OPTIONS /hw/dex/catch HTTP/1.1\r\nHost: x\r\nOrigin: http://localhost:8080\r\nAccess-Control-Request-Method: POST\r\n\r\n");
+        let (st, h, _) = send(a, "OPTIONS /hw/dex/catch HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://localhost:8080\r\nAccess-Control-Request-Method: POST\r\n\r\n");
         assert!(st.contains("204"), "{st}");
         assert!(h.contains("access-control-allow-origin: http://localhost:8080"), "{h}");
         assert!(h.contains("x-weft-host") && h.contains("authorization") && h.contains("vary: origin"));
         // a real POST from that origin echoes it (not `*`)
-        let (_, h, _) = send(a, &post("/reload", &format!("Origin: http://localhost:8080\r\n{JSON}"), "{}"));
+        let (_, h, _) = send(a, &post("/reload", &format!("Origin: http://localhost:8080\r\n{JSON}Authorization: Bearer tok\r\n"), "{}"));
         assert!(h.contains("access-control-allow-origin: http://localhost:8080") && !h.contains("allow-origin: *"));
         // plain legacy GETs keep `*` for the web console; /hw GETs do not
-        let (_, h, _) = send(a, "GET /status HTTP/1.1\r\nHost: x\r\n\r\n");
+        let (_, h, _) = send(a, "GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
         assert!(h.contains("access-control-allow-origin: *"));
-        let (_, h, _) = send(a, "GET /hw/dex HTTP/1.1\r\nHost: x\r\nOrigin: http://evil.example\r\n\r\n");
+        let (_, h, _) = send(a, "GET /hw/dex HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\n\r\n");
         assert!(!h.contains("access-control-allow-origin"), "{h}");
     }
 
@@ -345,7 +361,7 @@ mod tests {
     fn oversized_hw_body_is_refused_before_reading_it() {
         let _g = serial();
         let (a, _r) = start();
-        let raw = format!("POST /hw/dex/catch HTTP/1.1\r\nHost: x\r\n{JSON}Authorization: Bearer tok\r\nContent-Length: {}\r\n\r\n", HW_BODY_CAP + 1);
+        let raw = format!("POST /hw/dex/catch HTTP/1.1\r\nHost: 127.0.0.1\r\n{JSON}Authorization: Bearer tok\r\nContent-Length: {}\r\n\r\n", HW_BODY_CAP + 1);
         assert!(send(a, &raw).0.contains("413"));
     }
 
@@ -356,8 +372,68 @@ mod tests {
         // hold MAX_CONNS idle connections (their threads wait for a request)
         let held: Vec<TcpStream> = (0..MAX_CONNS).map(|_| TcpStream::connect(a).unwrap()).collect();
         std::thread::sleep(Duration::from_millis(300));
-        let (st, _, _) = send(a, "GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
+        let (st, _, _) = send(a, "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
         assert!(st.contains("503"), "{st}");
         drop(held);
+    }
+
+    const TOK: &str = "Authorization: Bearer tok\r\n";
+
+    #[test]
+    fn rebinding_style_requests_are_refused_on_every_route() {
+        let _g = serial();
+        let (a, _r) = start();
+        let evil_post = format!("POST /reload HTTP/1.1\r\nHost: evil.example:9480\r\n{JSON}{TOK}Content-Length: 2\r\n\r\n{{}}");
+        for raw in [
+            "GET /status HTTP/1.1\r\nHost: evil.example\r\n\r\n".to_string(),
+            "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1.evil.example\r\n\r\n".to_string(),
+            "GET /hw/dex HTTP/1.1\r\nHost: evil.example\r\nAuthorization: Bearer tok\r\n\r\n".to_string(),
+            "GET /status HTTP/1.0\r\n\r\n".to_string(), // no Host at all
+            evil_post,
+        ] {
+            let (st, h, _) = send(a, &raw);
+            assert!(st.contains("421"), "{raw:?}: {st}");
+            assert!(!h.contains("access-control-allow-origin"));
+        }
+        // the same requests with a good Host work (token included where required)
+        assert!(send(a, "GET /status HTTP/1.1\r\nHost: localhost:9480\r\n\r\n").0.contains("200"));
+    }
+
+    #[test]
+    fn every_post_but_heartbeat_needs_the_token_and_hw_gets_too() {
+        let _g = serial();
+        let (a, _r) = start();
+        for path in ["/reload", "/cogs/x/start", "/cogs/x/stop", "/install", "/hw/usb/scan"] {
+            let (st, _, body) = send(a, &post(path, JSON, "{}"));
+            assert!(st.contains("401"), "{path}: {st}");
+            assert!(body.contains("host token required"));
+        }
+        for path in ["/hw/usb", "/hw/dex"] {
+            let (st, _, _) = send(a, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"));
+            assert!(st.contains("401"), "GET {path}: {st}");
+            let (st, _, _) = send(a, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{TOK}\r\n"));
+            assert!(st.contains("200"), "GET {path} with token: {st}");
+        }
+        // read views stay open
+        for path in ["/status", "/network", "/healthz"] {
+            let (st, h, _) = send(a, &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"));
+            assert!(st.contains("200") && h.contains("access-control-allow-origin: *"), "{path}: {st}");
+        }
+    }
+
+    #[test]
+    fn heartbeat_stays_open_but_is_size_capped() {
+        let _g = serial();
+        let (a, _r) = start();
+        // edge firmware: no JSON content type, no custom header, no token
+        let hb = r#"{"id":"esp-01","rssi":-50}"#;
+        let raw = format!("POST /fleet/heartbeat HTTP/1.1\r\nHost: 192.168.1.9\r\nContent-Length: {}\r\n\r\n{hb}", hb.len());
+        assert!(send(a, &raw).0.contains("200"));
+        let big = format!("POST /fleet/heartbeat HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\n\r\n", fleet_cap() + 1);
+        assert!(send(a, &big).0.contains("413"));
+    }
+
+    fn fleet_cap() -> usize {
+        HEARTBEAT_BODY_CAP
     }
 }

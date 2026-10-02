@@ -552,7 +552,7 @@ impl Client {
         };
         let mut req = ehttp::Request::post(url, body);
         post_headers(&mut req, &self.s.token);
-        let (shared, host, ctx2) = (Arc::clone(&self.shared), self.s.host.clone(), ctx.clone());
+        let (shared, host, ctx2, token) = (Arc::clone(&self.shared), self.s.host.clone(), ctx.clone(), self.s.token.clone());
         ehttp::fetch(req, move |res| {
             let msg = match &res {
                 Ok(r) if r.ok => "baseline saved".to_string(),
@@ -562,7 +562,7 @@ impl Client {
             shared.lock().unwrap().last_action = Some(msg);
             let url = format!("{}/hw/usb", base(&host));
             let (shared, ctx3) = (Arc::clone(&shared), ctx2.clone());
-            ehttp::fetch(ehttp::Request::get(url), move |res| {
+            ehttp::fetch(get_req(url, &token), move |res| {
                 let mut sh = shared.lock().unwrap();
                 sh.hw_usb = Some(parse_json::<HwUsbReport>(&res));
                 sh.hw_usb_at = Some(Instant::now());
@@ -605,7 +605,7 @@ impl Client {
         let url = format!("{}/hw/dex/ack", base(&self.s.host));
         let mut req = ehttp::Request::post(url, Vec::new());
         post_headers(&mut req, &self.s.token);
-        let (shared, ctx, host) = (Arc::clone(&self.shared), ctx.clone(), self.s.host.clone());
+        let (shared, ctx, host, token) = (Arc::clone(&self.shared), ctx.clone(), self.s.host.clone(), self.s.token.clone());
         ehttp::fetch(req, move |res| {
             let msg = match &res {
                 Ok(r) if r.ok => "acknowledged".to_string(),
@@ -616,7 +616,7 @@ impl Client {
             for path in ["hw/usb", "hw/dex"] {
                 let (shared, ctx) = (Arc::clone(&shared), ctx.clone());
                 let url = format!("{}/{path}", base(&host));
-                ehttp::fetch(ehttp::Request::get(url), move |res| {
+                ehttp::fetch(get_req(url, &token), move |res| {
                     let mut sh = shared.lock().unwrap();
                     if path == "hw/usb" {
                         sh.hw_usb = Some(parse_json::<HwUsbReport>(&res));
@@ -633,7 +633,7 @@ impl Client {
     pub fn hw_dex_fetch(&self, ctx: &eframe::egui::Context) {
         let url = format!("{}/hw/dex", base(&self.s.host));
         let (shared, ctx) = (Arc::clone(&self.shared), ctx.clone());
-        ehttp::fetch(ehttp::Request::get(url), move |res| {
+        ehttp::fetch(get_req(url, &self.s.token), move |res| {
             shared.lock().unwrap().hw_dex = Some(parse_json::<HwDexReport>(&res));
             ctx.request_repaint();
         });
@@ -664,7 +664,7 @@ impl Client {
             for path in ["hw/usb", "hw/dex"] {
                 let (shared, ctx) = (Arc::clone(&shared), ctx.clone());
                 let url = format!("{}/{path}", base(&this.0.host));
-                ehttp::fetch(ehttp::Request::get(url), move |res| {
+                ehttp::fetch(get_req(url, &this.0.token), move |res| {
                     let mut sh = shared.lock().unwrap();
                     if path == "hw/usb" {
                         sh.hw_usb = Some(parse_json::<HwUsbReport>(&res));
@@ -813,6 +813,15 @@ fn base(host: &str) -> String {
     } else {
         format!("http://{h}")
     }
+}
+
+/// GET with the bearer token (the `/hw/*` reads require it).
+fn get_req(url: String, token: &str) -> ehttp::Request {
+    let mut req = ehttp::Request::get(url);
+    if !token.trim().is_empty() {
+        req.headers.insert("authorization", format!("Bearer {}", token.trim()));
+    }
+    req
 }
 
 /// Headers every host POST needs: JSON content type, the `X-Weft-Host` CSRF marker and, when set,
