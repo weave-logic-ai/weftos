@@ -397,9 +397,10 @@ pub enum Admission {
 /// Admission policy for the mesh listener.
 #[async_trait]
 pub trait AdmissionGate: Send + Sync + 'static {
-    /// True when the listener should apply first-frame, idle and per-IP
-    /// limits (a gate that actually checks peers). `AllowAll` is false so
-    /// slow legacy leaves behave exactly as before.
+    /// True when the listener should apply the idle limit and the live
+    /// revocation check (a gate that actually checks peers). The per-IP cap
+    /// and first-frame timeout apply under every gate. `AllowAll` is false so
+    /// quiet legacy leaves are not cut off once connected.
     fn strict(&self) -> bool {
         false
     }
