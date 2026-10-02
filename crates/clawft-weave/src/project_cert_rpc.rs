@@ -385,7 +385,7 @@ fn sig_param(p: &Value, k: &str) -> Result<[u8; 64], IssueError> {
 
 /// Build the environment from the daemon: only the user daemon, which
 /// signs with the user key and keeps the manifests.
-async fn env_from(ctx: &ExtCtx) -> Result<CertEnv, IssueError> {
+pub(crate) async fn env_from(ctx: &ExtCtx) -> Result<CertEnv, IssueError> {
     if !crate::user_daemon::is_active() {
         return Err(IssueError::Unavailable(
             "project certificates are issued by the user daemon only".into(),

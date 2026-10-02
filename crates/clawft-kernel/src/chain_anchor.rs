@@ -25,6 +25,22 @@ use weftos_rvf_crypto::hash::shake256_256;
 use crate::chain::{AnchorReceipt, ChainAnchor, ChainManager, MockAnchor};
 use clawft_types::config::{ChainAnchorBackend, ChainExternalAnchorConfig};
 
+/// Chain event source of project anchors: `project.anchor` on the user chain
+/// (the daemon's record of an accepted statement) and `project.anchored` on
+/// the project chain (the acknowledgement). Reserved in
+/// `project_identity::RESERVED_SOURCES` so a `chain.append` caller cannot
+/// forge either.
+pub const ANCHOR_SOURCE: &str = "project.anchor";
+
+#[cfg(feature = "native")]
+#[path = "chain_anchor_parent.rs"]
+mod parent;
+#[cfg(feature = "native")]
+pub use parent::{
+    AnchorAck, AnchorSubmitError, ParentAnchor, ParentAnchorConfig, ParentTransport,
+    KIND_ANCHORED, KIND_ANCHOR,
+};
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 fn hex_hash(h: &[u8; 32]) -> String {
@@ -472,6 +488,13 @@ impl AnchoringController {
                         .to_string()
                 })?;
                 Arc::new(ExternalLedgerAnchor::open(path, cfg.endpoint.clone())?)
+            }
+            ChainAnchorBackend::Parent => {
+                return Err(
+                    "parent anchor: needs the project key and a parent link; \
+                     project boot builds ParentAnchor and wraps it with AnchoringController::new"
+                        .to_string(),
+                );
             }
         };
         Ok(Some(Self::new(

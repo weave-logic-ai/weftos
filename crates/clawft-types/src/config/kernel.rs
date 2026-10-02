@@ -1128,6 +1128,11 @@ pub enum ChainAnchorBackend {
     File,
     /// External ledger stub with real config wiring (endpoint + intent log).
     External,
+    /// A project kernel anchors its chain head to the user daemon
+    /// (`project.anchor.submit`, ADR-103 A7). Needs the project key and a
+    /// parent transport, so project boot builds it, not [`ChainAnchorBackend`]
+    /// config alone.
+    Parent,
 }
 
 /// Configuration for chain-head external anchoring beyond MockAnchor.

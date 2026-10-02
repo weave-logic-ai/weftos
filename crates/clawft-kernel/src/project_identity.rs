@@ -56,6 +56,7 @@ pub use view::{Registration, RevocationView};
 
 /// Chain event source of the project identity events (user chain).
 pub const SOURCE: &str = "user.projects";
+pub use crate::chain_anchor::ANCHOR_SOURCE;
 /// A project key was certified.
 pub const KIND_REGISTER: &str = "project.register";
 /// A project key was replaced.
@@ -66,7 +67,7 @@ pub const KIND_REVOKE: &str = "project.revoke";
 /// Chain sources only the daemon's own code may append under. A caller
 /// that chooses its own source (the `chain.append` RPC) must be refused
 /// these: a forged `user.projects` event would otherwise feed the view.
-pub const RESERVED_SOURCES: &[&str] = &[SOURCE];
+pub const RESERVED_SOURCES: &[&str] = &[SOURCE, ANCHOR_SOURCE];
 
 /// Is `source` reserved for the daemon's own identity events?
 pub fn is_reserved_source(source: &str) -> bool {

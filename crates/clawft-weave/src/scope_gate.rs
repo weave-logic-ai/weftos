@@ -114,6 +114,9 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "project.identity.repair",
     "project.rekey",
     "project.revoke",
+    // Signature-authenticated; a project kernel calls it with its project
+    // claim, so it is inside a project and needs no Admin.
+    "project.anchor.submit",
 ];
 
 /// What `deny_all` still permits: liveness, discovery and project lookup.
