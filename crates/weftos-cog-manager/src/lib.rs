@@ -13,6 +13,7 @@ pub mod client;
 
 use client::{Client, HostCog, HostStatus, Net, Settings};
 use eframe::egui::{self, Color32, RichText};
+use weftos_cog_market::hw::{Chip, HwCatalog, Module, Project};
 use weftos_cog_market::{Catalog, CatalogItem, Source};
 use weftos_sensor_guide::{GuideBundle, GuideView};
 
@@ -27,6 +28,7 @@ const COG: Color32 = Color32::from_rgb(0xb0, 0x82, 0xd8); // Cognitum purple
 enum Section {
     Cogs,
     Sensors,
+    Catalog,
     Network,
     Apps,
     System,
@@ -42,6 +44,11 @@ pub struct Manager {
     guide_view: GuideView,
     guide_bundle: Option<Result<GuideBundle, String>>,
     guide_port_draft: String,
+    /// Catalog tab: the embedded Projects/Modules/Chips inventory + its view state.
+    catalog: HwCatalog,
+    cat_tab: u8, // 0 projects, 1 modules, 2 chips
+    cat_search: String,
+    cat_kind: String, // module kind filter: all|board|sensor|display|actuator
 }
 
 impl Manager {
@@ -56,8 +63,105 @@ impl Manager {
             guide_view: GuideView::at(None),
             guide_bundle: None,
             guide_port_draft: String::new(),
+            catalog: HwCatalog::bundled(),
+            cat_tab: 1,
+            cat_search: String::new(),
+            cat_kind: "all".into(),
         }
     }
+}
+
+fn mod_hay(m: &Module) -> String {
+    format!("{} {} {} {} {} {} {}", m.name, m.vendor, m.kind, m.summary, m.chips.join(" "), m.good_for.join(" "), m.spec.values().cloned().collect::<Vec<_>>().join(" ")).to_lowercase()
+}
+fn chip_hay(c: &Chip) -> String {
+    format!("{} {} {} {} {} {}", c.name, c.manufacturer, c.role, c.summary, c.tags.join(" "), c.spec.values().cloned().collect::<Vec<_>>().join(" ")).to_lowercase()
+}
+fn proj_hay(p: &Project) -> String {
+    format!("{} {} {} {} {}", p.name, p.category, p.difficulty, p.summary, p.modules.join(" ")).to_lowercase()
+}
+
+fn buy_and_datasheet(ui: &mut egui::Ui, buy: Option<(&str, &str)>, datasheet: &str) {
+    ui.horizontal_wrapped(|ui| {
+        if let Some((price, url)) = buy.filter(|(_, u)| !u.is_empty()) {
+            ui.hyperlink_to(RichText::new(format!("🛒 {} ↗", if price.is_empty() { "Mouser" } else { price })).color(GREEN), url);
+        }
+        if !datasheet.is_empty() {
+            ui.hyperlink_to(RichText::new("datasheet ↗").color(WL), datasheet);
+        }
+    });
+}
+
+fn module_card(ui: &mut egui::Ui, m: &Module) {
+    egui::CollapsingHeader::new(RichText::new(m.name.as_str()).strong())
+        .id_salt(format!("m-{}", m.id))
+        .show(ui, |ui| {
+            if !m.vendor.is_empty() {
+                ui.label(RichText::new(&m.vendor).color(GREY).small());
+            }
+            if !m.summary.is_empty() {
+                ui.label(&m.summary);
+            }
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(&m.kind).color(WL).small());
+                for c in &m.chips {
+                    ui.label(RichText::new(format!("◉ {c}")).color(GREY).small());
+                }
+            });
+            buy_and_datasheet(ui, m.buy.first().map(|b| (b.price.as_str(), b.url.as_str())), &m.datasheet);
+            if !m.good_for.is_empty() {
+                ui.label(RichText::new(format!("Good for: {}", m.good_for.join(" · "))).small());
+            }
+            if !m.not_for.is_empty() {
+                ui.label(RichText::new(format!("Not for: {}", m.not_for.join(" · "))).small().color(GREY));
+            }
+            for n in &m.notes {
+                ui.label(RichText::new(format!("⚠ {n}")).color(AMBER).small());
+            }
+            egui::Grid::new(format!("ms-{}", m.id)).num_columns(2).spacing([12.0, 2.0]).show(ui, |ui| {
+                for (k, v) in &m.spec {
+                    ui.label(RichText::new(k).color(GREY).small());
+                    ui.label(RichText::new(v).small());
+                    ui.end_row();
+                }
+            });
+        });
+}
+
+fn chip_card(ui: &mut egui::Ui, c: &Chip) {
+    egui::CollapsingHeader::new(RichText::new(&c.name).strong()).id_salt(format!("c-{}", c.id)).show(ui, |ui| {
+        ui.label(RichText::new(format!("{} · {}", c.manufacturer, c.role)).color(GREY).small());
+        if !c.summary.is_empty() {
+            ui.label(&c.summary);
+        }
+        ui.horizontal_wrapped(|ui| {
+            for t in &c.tags {
+                ui.label(RichText::new(t).color(WL).small());
+            }
+        });
+        buy_and_datasheet(ui, None, &c.datasheet);
+        egui::Grid::new(format!("cs-{}", c.id)).num_columns(2).spacing([12.0, 2.0]).show(ui, |ui| {
+            for (k, v) in &c.spec {
+                ui.label(RichText::new(k).color(GREY).small());
+                ui.label(RichText::new(v).small());
+                ui.end_row();
+            }
+        });
+    });
+}
+
+fn project_card(ui: &mut egui::Ui, p: &Project) {
+    egui::CollapsingHeader::new(RichText::new(&p.name).strong()).id_salt(format!("p-{}", p.id)).show(ui, |ui| {
+        ui.label(RichText::new(format!("{} · {}", p.category, p.difficulty)).color(GREY).small());
+        if !p.summary.is_empty() {
+            ui.label(&p.summary);
+        }
+        ui.horizontal_wrapped(|ui| {
+            for m in &p.modules {
+                ui.label(RichText::new(format!("▸ {m}")).color(GREY).small());
+            }
+        });
+    });
 }
 
 /// The export port each known sensor cog serves `/guide` on (from each cog.toml `[api].bind_port`).
@@ -142,6 +246,7 @@ impl Manager {
             ui.selectable_value(&mut self.section, Section::Cogs, RichText::new("⚙  Cogs").size(16.0));
             ui.add_space(2.0);
             ui.selectable_value(&mut self.section, Section::Sensors, RichText::new("📈  Sensors").size(16.0));
+            ui.selectable_value(&mut self.section, Section::Catalog, RichText::new("📚  Catalog").size(16.0));
             ui.add_space(2.0);
             ui.selectable_value(&mut self.section, Section::Network, RichText::new("🌐  Network").size(16.0));
             ui.add_space(2.0);
@@ -292,6 +397,74 @@ impl Manager {
             ui.label(RichText::new(&item.description).color(GREY).small());
         }
         ui.add_space(2.0);
+    }
+
+    fn catalog_view(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Hardware catalog");
+        ui.label(
+            RichText::new(format!(
+                "{} projects · {} modules · {} chips — Projects → Modules → Chips (explored across weftos, mentra, whitsentry)",
+                self.catalog.projects.len(),
+                self.catalog.modules.len(),
+                self.catalog.chips.len()
+            ))
+            .color(GREY)
+            .small(),
+        );
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.cat_tab, 0u8, "Projects");
+            ui.selectable_value(&mut self.cat_tab, 1u8, "Modules");
+            ui.selectable_value(&mut self.cat_tab, 2u8, "Chips");
+            ui.add_space(10.0);
+            ui.add(egui::TextEdit::singleline(&mut self.cat_search).hint_text("search name, vendor, spec, what it senses…").desired_width(300.0));
+        });
+        if self.cat_tab == 1 {
+            ui.horizontal_wrapped(|ui| {
+                for k in ["all", "board", "sensor", "display", "actuator"] {
+                    ui.selectable_value(&mut self.cat_kind, k.to_string(), k);
+                }
+            });
+        }
+        ui.separator();
+        let q = self.cat_search.to_lowercase();
+        let (tab, kind) = (self.cat_tab, self.cat_kind.clone());
+        let cat = &self.catalog;
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            let mut n = 0;
+            match tab {
+                0 => {
+                    for p in &cat.projects {
+                        if q.is_empty() || proj_hay(p).contains(&q) {
+                            project_card(ui, p);
+                            n += 1;
+                        }
+                    }
+                    ui.label(RichText::new(format!("{n} projects")).color(GREY).small());
+                }
+                2 => {
+                    for c in &cat.chips {
+                        if q.is_empty() || chip_hay(c).contains(&q) {
+                            chip_card(ui, c);
+                            n += 1;
+                        }
+                    }
+                    ui.label(RichText::new(format!("{n} chips")).color(GREY).small());
+                }
+                _ => {
+                    for m in &cat.modules {
+                        if kind != "all" && m.kind != kind {
+                            continue;
+                        }
+                        if q.is_empty() || mod_hay(m).contains(&q) {
+                            module_card(ui, m);
+                            n += 1;
+                        }
+                    }
+                    ui.label(RichText::new(format!("{n} modules")).color(GREY).small());
+                }
+            }
+        });
     }
 
     fn network_view(&self, ui: &mut egui::Ui) {
@@ -576,6 +749,7 @@ impl eframe::App for Manager {
             egui::ScrollArea::vertical().show(ui, |ui| match self.section {
                 Section::Cogs => self.cogs_view(ui, ctx),
                 Section::Sensors => self.sensors_view(ui, ctx),
+                Section::Catalog => self.catalog_view(ui),
                 Section::Network => self.network_view(ui),
                 Section::Apps => self.apps_view(ui),
                 Section::System => self.system_view(ui),
