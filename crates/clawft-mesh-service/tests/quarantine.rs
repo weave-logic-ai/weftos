@@ -116,7 +116,7 @@ fn admin_floor_can_raise_but_is_capped() {
 }
 
 #[test]
-fn accepting_one_quarantine_does_not_lift_another() {
+fn accept_names_the_latest_quarantine_and_clears_earlier_ones() {
     let dir = tmpdir();
     build(dir.path(), false);
     corrupt_line_containing(dir.path(), "\"serial\":2");
@@ -130,17 +130,42 @@ fn accepting_one_quarantine_does_not_lift_another() {
     let pending = j.pending_quarantines();
     assert_eq!(pending.len(), 2);
     let mut b = Bindings::fold(&j).unwrap();
-    b.accept_truncate(&mut j, ack(), pending[0], None).unwrap();
-    assert!(j.read_only(), "A accepted, B still pending");
-    assert_eq!(j.pending_quarantines(), vec![pending[1]]);
-    // Accepting A again, or a seq that is not a quarantine, is refused.
+    // A stale seq (not the latest) is refused and lifts nothing.
     assert!(matches!(b.accept_truncate(&mut j, ack(), pending[0], None), Err(BindError::NoSuchQuarantine(_))));
     assert!(matches!(b.accept_truncate(&mut j, ack(), 0, None), Err(BindError::NoSuchQuarantine(0))));
+    assert!(j.read_only());
+    b.accept_truncate(&mut j, ack(), pending[1], None).unwrap();
+    assert!(!j.read_only(), "one accept of the latest clears A and B");
+    assert!(j.pending_quarantines().is_empty());
+    // Accepting the same quarantine twice is refused.
+    assert!(matches!(b.accept_truncate(&mut j, ack(), pending[1], None), Err(BindError::NoSuchQuarantine(_))));
+}
+
+#[test]
+fn a_quarantine_after_an_accept_is_read_only_again() {
+    let dir = tmpdir();
+    build(dir.path(), false);
+    corrupt_line_containing(dir.path(), "\"serial\":2");
+    {
+        let mut j = Journal::open(dir.path(), key()).unwrap();
+        let mut b = Bindings::fold(&j).unwrap();
+        let q = pq(&j);
+        b.accept_truncate(&mut j, ack(), q, None).unwrap();
+        assert!(!j.read_only());
+        j.append("policy.set", json!({"n": 1})).unwrap();
+        j.append("policy.set", json!({"n": 2})).unwrap();
+    }
+    drop(Journal::open(dir.path(), key()).unwrap());
+    corrupt_line_containing(dir.path(), "\"n\":2");
+    let j = Journal::open(dir.path(), key()).unwrap();
+    assert!(j.read_only(), "a new quarantine after an accept re-gates the journal");
+    fs::remove_file(dir.path().join("journal.truncated")).unwrap();
     drop(j);
     let mut j = Journal::open(dir.path(), key()).unwrap();
-    assert!(j.read_only(), "still read-only after restart");
+    assert!(j.read_only(), "and the chain keeps it so without the marker");
     let mut b = Bindings::fold(&j).unwrap();
-    b.accept_truncate(&mut j, ack(), pending[1], None).unwrap();
+    let q = pq(&j);
+    b.accept_truncate(&mut j, ack(), q, None).unwrap();
     assert!(!j.read_only());
 }
 
@@ -252,5 +277,5 @@ fn overlong_first_line_still_harvests_later_lines() {
 }
 
 fn pq(j: &Journal) -> u64 {
-    j.pending_quarantines()[0]
+    j.latest_pending_quarantine().unwrap()
 }

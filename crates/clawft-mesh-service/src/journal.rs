@@ -341,20 +341,25 @@ impl Journal {
         self.lost.is_some() || !self.pending_quarantines().is_empty()
     }
 
-    /// Seqs of `journal.quarantine` records no `journal.accept_truncate` has
-    /// accepted yet (oldest first). Each acceptance covers exactly one.
+    /// Seqs of `journal.quarantine` records newer than the newest accepted
+    /// quarantine (oldest first). One acceptance of the latest clears them all.
     pub fn pending_quarantines(&self) -> Vec<u64> {
-        let accepted: std::collections::HashSet<u64> = self
+        let accepted = self
             .records
             .iter()
             .filter(|r| r.kind == KIND_ACCEPT_TRUNCATE)
             .filter_map(|r| r.body["quarantine_seq"].as_u64())
-            .collect();
+            .max();
         self.records
             .iter()
-            .filter(|r| r.kind == KIND_QUARANTINE && !accepted.contains(&r.seq))
+            .filter(|r| r.kind == KIND_QUARANTINE && accepted.is_none_or(|a| r.seq > a))
             .map(|r| r.seq)
             .collect()
+    }
+
+    /// The quarantine an acceptance must name: the newest pending one.
+    pub fn latest_pending_quarantine(&self) -> Option<u64> {
+        self.pending_quarantines().last().copied()
     }
 
     /// What the unacknowledged quarantine lost, if anything.

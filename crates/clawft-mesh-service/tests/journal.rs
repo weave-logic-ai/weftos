@@ -238,5 +238,5 @@ fn real(j: &Journal) -> usize {
 }
 
 fn pq(j: &Journal) -> u64 {
-    j.pending_quarantines()[0]
+    j.latest_pending_quarantine().unwrap()
 }

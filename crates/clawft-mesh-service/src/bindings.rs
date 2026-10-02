@@ -52,8 +52,10 @@ pub struct Bindings {
     revoked_principals: HashSet<Principal>,
     /// Users a quarantine proved revoked (their keys are never bindable).
     lost_revoked_ids: HashSet<String>,
-    /// Seqs of `journal.quarantine` records not yet accepted.
-    pending_quarantines: std::collections::BTreeSet<u64>,
+    /// Seq and signed file list of the newest `journal.quarantine` record.
+    latest_quarantine: Option<(u64, Vec<String>)>,
+    /// Newest quarantine seq an acceptance has covered.
+    accepted_through: Option<u64>,
     degraded: Option<String>,
 }
 
@@ -77,7 +79,7 @@ impl Bindings {
                 match Event::parse(rec) {
                     Ok(ev @ Event::Quarantine(_)) => {
                         b.commit(&ev);
-                        b.pending_quarantines.insert(rec.seq);
+                        b.note_quarantine(rec.seq, &ev);
                     }
                     Ok(ev @ Event::Accept(_)) => b.commit(&ev),
                     _ => {}
@@ -114,9 +116,16 @@ impl Bindings {
         }
     }
 
-    /// Admin acknowledgement of one quarantined tail, named by the seq of its
-    /// `journal.quarantine` record (see `Journal::pending_quarantines`): the
-    /// gate is lifted only for that quarantine. `floor` is an explicit
+    fn note_quarantine(&mut self, seq: u64, ev: &Event) {
+        if let Event::Quarantine(q) = ev {
+            self.latest_quarantine = Some((seq, q.quarantine.clone()));
+        }
+    }
+
+    /// Admin acknowledgement of quarantined tails, naming the seq of the latest
+    /// `journal.quarantine` record seen (`Journal::latest_pending_quarantine`);
+    /// one acceptance clears every earlier quarantine too, but a quarantine
+    /// appended after that seq keeps the journal read-only. `floor` is an explicit
     /// admin-chosen serial floor; it can only raise the floor (default: the
     /// clamped quarantine value already in the state) and may exceed the
     /// current last serial by at most 2^32. The constraining facts come from
@@ -134,7 +143,11 @@ impl Bindings {
         if floor > max {
             return Err(BindError::FloorTooHigh { floor, max });
         }
-        let quarantine = journal.lost().map(|l| l.quarantine.clone()).unwrap_or_default();
+        // File list comes from the signed quarantine record (the marker may be gone).
+        let quarantine = match &self.latest_quarantine {
+            Some((seq, files)) if *seq == quarantine_seq => files.clone(),
+            _ => return Err(BindError::NoSuchQuarantine(quarantine_seq)),
+        };
         let ev = Event::Accept(AcceptBody { quarantine_seq, serial_floor: floor, quarantine, by: ack.by.clone() });
         self.write(journal, false, ev)?;
         journal.clear_lost(&ack)?;
@@ -154,9 +167,7 @@ impl Bindings {
         self.validate(&ev)
             .map_err(|e| BindError::Replay { seq: rec.seq, source: Box::new(e) })?;
         self.commit(&ev);
-        if matches!(ev, Event::Quarantine(_)) {
-            self.pending_quarantines.insert(rec.seq);
-        }
+        self.note_quarantine(rec.seq, &ev);
         Ok(())
     }
 
@@ -189,12 +200,10 @@ impl Bindings {
         self.by_principal.get(principal).copied()
     }
 
-    /// Internal lookup that ignores degradation (mutators refuse separately).
     fn bound_key(&self, principal: &Principal) -> Option<[u8; 32]> {
         self.by_principal.get(principal).copied()
     }
 
-    /// `None` when degraded.
     pub fn principal_of(&self, key: &[u8; 32]) -> Option<&Principal> {
         if self.degraded.is_some() {
             return None;
@@ -356,7 +365,8 @@ impl Bindings {
         match ev {
             Event::Other | Event::Quarantine(_) => Ok(()),
             Event::Accept(a) => {
-                if self.pending_quarantines.contains(&a.quarantine_seq) {
+                let latest = self.latest_quarantine.as_ref().map(|(s, _)| *s);
+                if latest == Some(a.quarantine_seq) && self.accepted_through != latest {
                     Ok(())
                 } else {
                     Err(BindError::NoSuchQuarantine(a.quarantine_seq))
@@ -430,7 +440,7 @@ impl Bindings {
             Event::Other => {}
             Event::Accept(a) => {
                 self.last_serial = self.last_serial.max(a.serial_floor);
-                self.pending_quarantines.remove(&a.quarantine_seq);
+                self.accepted_through = Some(a.quarantine_seq);
             }
             Event::Quarantine(q) => self.apply_lost(q.serial_high_water, &q.revoked_user_ids),
             Event::Pending(p) => {
