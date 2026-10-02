@@ -2,6 +2,7 @@
 
 - **Status**: Accepted (2026-10-01, owner: "make this a thing we provide with all of our sensor cogs, and maybe other places too")
 - **Date**: 2026-10-01
+- **Updated**: 2026-10-01. A1: companion apps share one shell, `weftos-cog-companion` (decision 5); second sensor, `sen0628-tof` and `weft-tof-scope`; `grid` diagram added (decision 1).
 - **Deciders**: Owner / platform
 - **Depends-On**: ADR-099 (governed workload placement), ADR-100 (cog workload kind)
 - **First implementation**: `crates/weftos-sensor-guide` (format, validation, egui renderer, `guide-check`); `crates/weftos-ecg-scope` (first companion app); the `sen0213-ecg` cog in the cogs repo (first guide, served at `/guide`)
@@ -17,8 +18,9 @@ A sensor cog is only useful once someone has wired the sensor correctly, placed 
      - `[header]`: header pins used, with colours and destinations, plus pins to avoid and why;
      - `[[parts]]` and `[[wires]]`: endpoints as `part.pin`;
      - `[[placements]]`: normalised pad positions on a front-view body;
-     - `[[flow]]`: the signal chain.
-   - One CommonMark file per page. The first `# ` line is the title and the first `> ` line the summary. A fenced block with info string `diagram` whose body is `header`, `wiring`, `placements` or `flow` embeds that diagram.
+     - `[[flow]]`: the signal chain;
+     - `[grid]` (A1): the zone map for matrix sensors, with orientation labels.
+   - One CommonMark file per page. The first `# ` line is the title and the first `> ` line the summary. A fenced block with info string `diagram` whose body is `header`, `wiring`, `placements` or `flow` embeds that diagram (`grid` added in A1).
 2. **The cog serves its guide** at `GET /guide` on its export port as `{"toml": "...", "pages": {id: markdown}}`, compiled in with `include_str!`. A client therefore always sees the guide that matches the installed cog version. The cog's unit tests check that the embedded page list matches `guide.toml`.
 3. **`weftos-sensor-guide` is the one renderer.** It parses and validates a bundle and renders it in egui, natively and in WASM. It provides searchable page navigation, Markdown through `egui_commonmark`, and the four diagrams painted from data. `validate()` rejects:
    - links to missing pages;
@@ -29,7 +31,16 @@ A sensor cog is only useful once someone has wired the sensor correctly, placed 
 
    `guide-check <dir>...` runs the same validation in a cog's gate.
 4. **Companion apps link checklist steps to pages** through `[links]`, with a "?" next to each step. The app owns the live checks; the guide owns the explanation.
-5. **Authoring rules:**
+5. **Companion apps share one shell (A1, `crates/weftos-cog-companion`).** A sensor app implements `SensorApp`: its live view, its checklist steps, its calibration panel and any extra export polling. The shell provides:
+   - the connection bar;
+   - start, stop and test-run;
+   - the four connection steps;
+   - the cog settings, generated from the cog's manifest;
+   - the Guide tab;
+   - native and WASM entry points.
+
+   Apps are `crates/weftos-<name>-scope`, built with `scripts/build.sh scope <name>` and `scope-web <name>`.
+6. **Authoring rules:**
    - Facts must match the cog source and its ADR; mark anything unverified.
    - Trust pin labels over wire colours.
    - Keep tables to about three short columns, and use sections for long fixes.

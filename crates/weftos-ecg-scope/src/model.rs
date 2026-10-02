@@ -2,7 +2,6 @@
 //! cog report, and the Seed agent's view of the cog.
 
 use std::collections::{BTreeSet, VecDeque};
-use web_time::Instant;
 
 /// Seconds of signal kept locally (matches the cog's own 60 s ring).
 pub const KEEP_SECONDS: f64 = 60.0;
@@ -95,49 +94,6 @@ impl SignalBuffer {
             ));
         }
         out
-    }
-}
-
-/// What a probe of one endpoint last returned.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub enum Probe {
-    #[default]
-    Unknown,
-    Ok,
-    Failed(String),
-}
-
-impl Probe {
-    pub fn is_ok(&self) -> bool {
-        matches!(self, Probe::Ok)
-    }
-}
-
-/// Everything the worker learns, read by the UI each frame.
-#[derive(Default)]
-pub struct State {
-    pub signal: SignalBuffer,
-    /// Latest cog report (`/status`), as JSON.
-    pub report: Option<serde_json::Value>,
-    pub export: Probe,
-    pub seed_api: Probe,
-    pub cog_installed: Option<bool>,
-    pub cog_running: Option<bool>,
-    pub last_action: Option<String>,
-    /// The cog's current config from the agent (`GET /api/v1/apps/<id>/config`).
-    pub cog_config: Option<serde_json::Value>,
-    /// The cog's own guide (`GET :8046/guide`, ADR-104), or why it could not be loaded.
-    pub guide: Option<Result<weftos_sensor_guide::GuideBundle, String>>,
-    pub last_poll: Option<Instant>,
-}
-
-impl State {
-    pub fn report_str(&self, key: &str) -> Option<&str> {
-        self.report.as_ref()?.get(key)?.as_str()
-    }
-
-    pub fn report_f64(&self, key: &str) -> Option<f64> {
-        self.report.as_ref()?.get(key)?.as_f64()
     }
 }
 

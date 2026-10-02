@@ -412,3 +412,85 @@ pub fn flow(ui: &mut Ui, doc: &GuideDoc) {
         }
     }
 }
+
+/// A rows x cols zone map with orientation labels and the row-major index in each cell.
+pub fn grid(ui: &mut Ui, doc: &GuideDoc) {
+    let Some(g) = &doc.grid else { return };
+    let (rows, cols) = (g.rows.max(1) as f32, g.cols.max(1) as f32);
+    let cell = ((ui.available_width().min(980.0) - 160.0) / cols).clamp(18.0, 44.0);
+    let (p, r) = canvas(ui, 70.0 + cell * rows + 60.0);
+    p.text(
+        pos2(r.left() + 14.0, r.top() + 10.0),
+        Align2::LEFT_TOP,
+        &g.title,
+        FontId::proportional(13.0),
+        TEXT,
+    );
+    let origin = pos2(r.center().x - cell * cols / 2.0, r.top() + 50.0);
+    for y in 0..g.rows {
+        for x in 0..g.cols {
+            let cr = Rect::from_min_size(
+                origin + vec2(x as f32 * cell, y as f32 * cell),
+                vec2(cell - 2.0, cell - 2.0),
+            );
+            let shade = 40 + ((x + y) % 2) as u8 * 10;
+            p.rect_filled(cr, 2.0, Color32::from_gray(shade));
+            if cell >= 24.0 {
+                p.text(
+                    cr.center(),
+                    Align2::CENTER_CENTER,
+                    (y * g.cols + x).to_string(),
+                    FontId::monospace(9.0),
+                    DIM,
+                );
+            }
+        }
+    }
+    let gw = cell * cols;
+    let gh = cell * rows;
+    let corner = Rect::from_min_size(origin, vec2(cell - 2.0, cell - 2.0));
+    p.rect_stroke(
+        corner,
+        2.0,
+        Stroke::new(2.0, Color32::from_rgb(240, 190, 40)),
+        egui::StrokeKind::Middle,
+    );
+    p.text(
+        pos2(origin.x + gw / 2.0, origin.y - 6.0),
+        Align2::CENTER_BOTTOM,
+        &g.top,
+        FontId::proportional(11.0),
+        TEXT,
+    );
+    p.text(
+        pos2(origin.x + gw / 2.0, origin.y + gh + 4.0),
+        Align2::CENTER_TOP,
+        &g.bottom,
+        FontId::proportional(11.0),
+        TEXT,
+    );
+    p.text(
+        pos2(origin.x - 8.0, origin.y + gh / 2.0),
+        Align2::RIGHT_CENTER,
+        &g.left,
+        FontId::proportional(11.0),
+        TEXT,
+    );
+    p.text(
+        pos2(origin.x + gw + 8.0, origin.y + gh / 2.0),
+        Align2::LEFT_CENTER,
+        &g.right,
+        FontId::proportional(11.0),
+        TEXT,
+    );
+    if !g.note.is_empty() {
+        wrapped(
+            &p,
+            pos2(r.left() + 14.0, origin.y + gh + 22.0),
+            &g.note,
+            FontId::proportional(11.0),
+            DIM,
+            r.width() - 28.0,
+        );
+    }
+}

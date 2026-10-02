@@ -445,32 +445,37 @@ cmd_browser() {
     fi
 }
 
-cmd_ecg_scope() {
+# Companion apps for sensor cogs (ADR-104): crates/weftos-<name>-scope, binary weft-<name>-scope.
+cmd_scope() {
+    local name="${1:-}"
+    [ -n "$name" ] && [ -d "$ROOT/crates/weftos-${name}-scope" ] || { fail "usage: scripts/build.sh scope <name>  (crates/weftos-<name>-scope; e.g. ecg, tof)"; return 1; }
     local profile="${PROFILE:-release}"
-    header "Building weft-ecg-scope (native egui, profile: $profile)"
+    header "Building weft-${name}-scope (native egui companion, profile: $profile)"
     timer_start
-    run_cmd cargo build -p weftos-ecg-scope --bin weft-ecg-scope --profile "$profile"
+    run_cmd cargo build -p "weftos-${name}-scope" --bin "weft-${name}-scope" --profile "$profile"
     timer_end
     local dir="$profile"; [ "$profile" = "dev" ] && dir="debug"
-    report_binary_size "target/${dir}/weft-ecg-scope" "weft-ecg-scope"
-    pass "run: SEED_HOST=169.254.42.1 target/${dir}/weft-ecg-scope"
+    report_binary_size "target/${dir}/weft-${name}-scope" "weft-${name}-scope"
+    pass "run: SEED_HOST=169.254.42.1 target/${dir}/weft-${name}-scope"
 }
 
-cmd_ecg_scope_web() {
+cmd_scope_web() {
+    local name="${1:-}"
+    [ -n "$name" ] && [ -d "$ROOT/crates/weftos-${name}-scope" ] || { fail "usage: scripts/build.sh scope-web <name>"; return 1; }
     local profile="${PROFILE:-release-wasm}"
-    header "Building weft-ecg-scope for the browser (wasm32-unknown-unknown, profile: $profile)"
+    header "Building weft-${name}-scope for the browser (wasm32-unknown-unknown, profile: $profile)"
     if ! check_target_installed wasm32-unknown-unknown; then return 1; fi
     timer_start
-    run_cmd cargo build --target wasm32-unknown-unknown -p weftos-ecg-scope --lib --profile "$profile"
+    run_cmd cargo build --target wasm32-unknown-unknown -p "weftos-${name}-scope" --lib --profile "$profile"
     timer_end
-    local wasm_file="target/wasm32-unknown-unknown/${profile}/weftos_ecg_scope.wasm"
-    report_binary_size "$wasm_file" "ecg-scope WASM (raw)"
-    local pkg_dir="$ROOT/crates/weftos-ecg-scope/www/pkg"
+    local wasm_file="target/wasm32-unknown-unknown/${profile}/weftos_${name}_scope.wasm"
+    report_binary_size "$wasm_file" "${name}-scope WASM (raw)"
+    local pkg_dir="$ROOT/crates/weftos-${name}-scope/www/pkg"
     if command -v wasm-bindgen >/dev/null 2>&1; then
         info "Running wasm-bindgen → $pkg_dir"
         run_cmd wasm-bindgen "$wasm_file" --out-dir "$pkg_dir" --target web --no-typescript
-        report_binary_size "$pkg_dir/weftos_ecg_scope_bg.wasm" "ecg-scope WASM (bindgen)"
-        pass "pkg/ ready — serve crates/weftos-ecg-scope/www over http and open /?seed=<seed-ip>"
+        report_binary_size "$pkg_dir/weftos_${name}_scope_bg.wasm" "${name}-scope WASM (bindgen)"
+        pass "pkg/ ready — serve crates/weftos-${name}-scope/www over http and open /?seed=<seed-ip>"
     else
         skip "wasm-bindgen CLI not found — pkg/ not generated"
         info "Install with: cargo install wasm-bindgen-cli"
@@ -1886,8 +1891,9 @@ ${BOLD}Commands:${NC}
   gui-egui        Build native egui GUI binary (weft-gui-egui, requires --features native)
   wasi            Build WASM for WASI (wasm32-wasip2)
   browser         Build WASM for browser (wasm32-unknown-unknown)
-  ecg-scope       Build weft-ecg-scope (native egui sensor hook-up tool for the sen0213-ecg cog)
-  ecg-scope-web   Build weft-ecg-scope for the browser (wasm + wasm-bindgen into www/pkg)
+  scope <name>    Build a sensor-cog companion app crates/weftos-<name>-scope (ecg, tof); ADR-104
+  scope-web <name> Same for the browser (wasm + wasm-bindgen into crates/weftos-<name>-scope/www/pkg)
+  ecg-scope[-web] Aliases for scope ecg / scope-web ecg
   ui              Build React frontend (tsc + vite)
   ui-docker       Build the clawft-ui multi-stage Docker image (WEFT-317).
                   Override tag with CLAWFT_UI_DOCKER_TAG=...
@@ -2094,6 +2100,15 @@ parse_args() {
         fi
     fi
 
+    # scope / scope-web take the companion app name: scripts/build.sh scope <name>
+    SCOPE_NAME=""
+    if [ "$COMMAND" = "scope" ] || [ "$COMMAND" = "scope-web" ]; then
+        if [ $# -gt 0 ] && [[ "$1" != -* ]]; then
+            SCOPE_NAME="$1"
+            shift
+        fi
+    fi
+
     # Capture optional positional budget overrides for wasm-panel:
     #   scripts/build.sh wasm-panel [<max-raw-kb> [<max-gz-kb>]]
     if [ "$COMMAND" = "wasm-panel" ]; then
@@ -2177,8 +2192,10 @@ main() {
         gui-egui)     cmd_gui_egui ;;
         wasi)         cmd_wasi ;;
         browser)      cmd_browser ;;
-        ecg-scope)    cmd_ecg_scope ;;
-        ecg-scope-web) cmd_ecg_scope_web ;;
+        scope)        cmd_scope "$SCOPE_NAME" ;;
+        scope-web)    cmd_scope_web "$SCOPE_NAME" ;;
+        ecg-scope)    cmd_scope ecg ;;
+        ecg-scope-web) cmd_scope_web ecg ;;
         ui)           cmd_ui ;;
         ui-docker)    cmd_ui_docker ;;
         ui-e2e)       cmd_ui_e2e ;;

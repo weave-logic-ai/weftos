@@ -10670,12 +10670,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "weftos-ecg-scope"
+name = "weftos-cog-companion"
 version = "0.8.1"
 dependencies = [
  "console_error_panic_hook",
  "eframe",
- "egui_plot",
  "ehttp",
  "serde",
  "serde_json",
@@ -10684,6 +10683,19 @@ dependencies = [
  "web-sys",
  "web-time",
  "weftos-sensor-guide",
+]
+
+[[package]]
+name = "weftos-ecg-scope"
+version = "0.8.1"
+dependencies = [
+ "eframe",
+ "egui_plot",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-time",
+ "weftos-cog-companion",
 ]
 
 [[package]]
@@ -10769,6 +10781,19 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "weftos-worldmodel-core",
+]
+
+[[package]]
+name = "weftos-tof-scope"
+version = "0.8.1"
+dependencies = [
+ "eframe",
+ "egui_plot",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-time",
+ "weftos-cog-companion",
 ]
 
 [[package]]

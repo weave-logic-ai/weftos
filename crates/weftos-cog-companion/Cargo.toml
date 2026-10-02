@@ -1,28 +1,19 @@
 [package]
-name = "weftos-ecg-scope"
+name = "weftos-cog-companion"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
-description = "egui scope for the sen0213-ecg cog: live ECG graph, hook-up checklist and calibration tools (native + wasm)"
-
-[lib]
-name = "weftos_ecg_scope"
-path = "src/lib.rs"
-# cdylib for the wasm web build, rlib for the native binary.
-crate-type = ["cdylib", "rlib"]
-
-[[bin]]
-name = "weft-ecg-scope"
-path = "src/main.rs"
+description = "Shared shell for sensor-cog companion apps (ADR-104): Seed connection, agent API, manifest-driven cog settings, hook-up checklist with guide links, Live/Guide tabs, native + wasm"
 
 [dependencies]
-egui_plot = "0.35"
+ehttp = "0.5"
+serde = { workspace = true }
 serde_json = { workspace = true }
 web-time = "1.1"
-weftos-cog-companion = { path = "../weftos-cog-companion" }
+weftos-sensor-guide = { path = "../weftos-sensor-guide" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 eframe = { version = "0.34", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
@@ -31,3 +22,5 @@ eframe = { version = "0.34", default-features = false, features = ["default_font
 eframe = { version = "0.34", default-features = false, features = ["default_fonts", "glow"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement", "Location"] }
+console_error_panic_hook = "0.1"

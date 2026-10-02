@@ -130,6 +130,7 @@ impl GuideView {
                                     diagrams::placements(ui, &bundle.doc, &mut self.placement)
                                 }
                                 "flow" => diagrams::flow(ui, &bundle.doc),
+                                "grid" => diagrams::grid(ui, &bundle.doc),
                                 other => {
                                     ui.label(
                                         RichText::new(format!("(unknown diagram '{other}')"))

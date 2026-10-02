@@ -33,6 +33,27 @@ pub struct GuideDoc {
     pub placements: Vec<Placement>,
     #[serde(default)]
     pub flow: Vec<FlowStep>,
+    /// Zone map for matrix sensors (ToF arrays, thermal arrays).
+    #[serde(default)]
+    pub grid: Option<Grid>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct Grid {
+    pub rows: u32,
+    pub cols: u32,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub top: String,
+    #[serde(default)]
+    pub bottom: String,
+    #[serde(default)]
+    pub left: String,
+    #[serde(default)]
+    pub right: String,
+    #[serde(default)]
+    pub note: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -261,6 +282,9 @@ impl GuideBundle {
                         "wiring" => !d.parts.is_empty(),
                         "placements" => !d.placements.is_empty(),
                         "flow" => !d.flow.is_empty(),
+                        "grid" => d.grid.as_ref().is_some_and(|g| {
+                            (1..=64).contains(&g.rows) && (1..=64).contains(&g.cols)
+                        }),
                         _ => false,
                     };
                     if !ok {

@@ -1,6 +1,6 @@
 //! Self-screenshot for headless visual checks (native only): with
-//! `ECG_SCOPE_SCREENSHOT=<path.bmp>` the app captures its own window after
-//! `ECG_SCOPE_SCREENSHOT_AFTER` seconds (default 6), writes a 24-bit BMP and exits.
+//! `COMPANION_SCREENSHOT=<path.bmp>` the app captures its own window after
+//! `COMPANION_SCREENSHOT_AFTER` seconds (default 6), writes a 24-bit BMP and exits.
 
 use eframe::egui;
 use std::sync::OnceLock;
@@ -17,10 +17,10 @@ static REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool:
 
 fn plan() -> &'static Option<Plan> {
     PLAN.get_or_init(|| {
-        let path = std::env::var("ECG_SCOPE_SCREENSHOT")
+        let path = std::env::var("COMPANION_SCREENSHOT")
             .ok()
             .filter(|p| !p.is_empty())?;
-        let after_s = std::env::var("ECG_SCOPE_SCREENSHOT_AFTER")
+        let after_s = std::env::var("COMPANION_SCREENSHOT_AFTER")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(6.0);

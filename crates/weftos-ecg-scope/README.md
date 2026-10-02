@@ -48,21 +48,20 @@ There's no SSH and no TLS. The agent serves plain HTTP on port 80 over USB, LAN 
   - a RuView ADR-293 reference series (`timestamp_ms,value`: beat-to-beat bpm). That series is ground truth for grading `wifi-densepose-vitals`.
 
   Natively both are written to files; in the browser they're copied to the clipboard.
-- **Guide tab (ADR-104):** the cog's own sensor guide, fetched from `http://<seed>:8046/guide`. It's a searchable mini-wiki covering start, parts, wiring, electrodes, setup, calibration, troubleshooting, API reference, safety and glossary, with painted header, wiring, placement and flow diagrams, rendered by `weftos-sensor-guide`. Each checklist step has a "?" that opens its page. Set `ECG_GUIDE_DIR=<cog>/guide` (native) to author against a local folder.
+- **Guide tab (ADR-104):** the cog's own sensor guide, fetched from `http://<seed>:8046/guide`. It's a searchable mini-wiki covering start, parts, wiring, electrodes, setup, calibration, troubleshooting, API reference, safety and glossary, with painted header, wiring, placement and flow diagrams, rendered by `weftos-sensor-guide`. Each checklist step has a "?" that opens its page. Set `COMPANION_GUIDE_DIR=<cog>/guide` (native) to author against a local folder.
 - **Start, stop and test-run** the cog (`--once --simulate`, which needs no hardware).
 
 Not a medical device. Power the Seed from a battery while pads are on a person.
 
 ## Layout
 
+It's built on `weftos-cog-companion`, which provides the connection bar, the agent API, the four connection checklist steps, the cog settings generated from the manifest, the Guide tab, and the native and web entry points. The environment variables (`SEED_HOST`, `COGNITUM_SEED_TOKEN`, `COMPANION_*`) are listed in that crate's README.
+
 | File | Role |
 |---|---|
-| `src/net.rs` | ehttp polling on both targets (`/raw` every 250 ms, `/status` every 1 s, agent every 3 s, config every 5 s), one request in flight per lane, stale-request recovery, a generation counter on reconnect |
-| `src/model.rs` | merged 60 s signal buffer (deduplicated by timestamp), CSV and RuView reference export |
+| `src/app.rs` | `EcgApp`: polls `/raw`, draws the ECG plot (R markers snapped to the waveform), the readouts, calibration, recommended notch, tap-along check and recording |
+| `src/checklist.rs` | ECG sensor steps (ADS1115 found, power, electrodes, beats, polarity, mains notch) |
+| `src/model.rs` | merged 60 s signal buffer, CSV and RuView reference export |
 | `src/analysis.rs` | calibration maths and tap tempo |
-| `src/checklist.rs` | hook-up steps from live state |
-| `src/app.rs` | egui panels |
-| (guide) | rendering comes from the shared `weftos-sensor-guide` crate; content ships with the cog |
-| `src/shot.rs` | native-only self-screenshot (`ECG_SCOPE_SCREENSHOT=<file.bmp>`, with `ECG_SCOPE_TAB=guide` and `ECG_SCOPE_PAGE=<id>` to capture a guide page) for headless visual checks |
 
 The cog lives in the private cogs repo (`src/cogs/sen0213-ecg`, ADR-158).

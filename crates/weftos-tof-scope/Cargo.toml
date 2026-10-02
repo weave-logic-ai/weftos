@@ -1,21 +1,20 @@
 [package]
-name = "weftos-ecg-scope"
+name = "weftos-tof-scope"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
-description = "egui scope for the sen0213-ecg cog: live ECG graph, hook-up checklist and calibration tools (native + wasm)"
+description = "Companion app for the sen0628-tof cog (DFRobot SEN0628 8x8 matrix ToF): live zone heatmap, hook-up checklist, levelling and noise calibration, guide (native + wasm)"
 
 [lib]
-name = "weftos_ecg_scope"
+name = "weftos_tof_scope"
 path = "src/lib.rs"
-# cdylib for the wasm web build, rlib for the native binary.
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "weft-ecg-scope"
+name = "weft-tof-scope"
 path = "src/main.rs"
 
 [dependencies]
