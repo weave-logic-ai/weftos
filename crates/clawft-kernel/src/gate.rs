@@ -100,6 +100,16 @@ pub trait GateBackend: Send + Sync {
     }
 }
 
+/// The process and spawn caps a kernel runs under, as the limits a parent
+/// policy exports (ADR-103 A6). Boot-time values, like the caps themselves.
+pub fn parent_limits_of(kc: &clawft_types::config::KernelConfig) -> clawft_types::config::overlay::Limits {
+    clawft_types::config::overlay::Limits {
+        max_processes: Some(u64::from(kc.max_processes)),
+        spawn_budget: kc.agent.as_ref().map(|a| u64::from(a.subagents.max_per_conv)),
+        ..Default::default()
+    }
+}
+
 /// A governance engine's rules and settings at one instant.
 #[derive(Debug, Clone)]
 pub struct GovernanceSnapshot {

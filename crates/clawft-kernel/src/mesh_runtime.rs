@@ -895,12 +895,22 @@ impl MeshRuntime {
     /// Returns the number of events **newly applied** (idempotent skips
     /// are not counted). When no chain manager is attached, returns the
     /// number of events in the payload without applying them (legacy /
-    /// transport-only callers).
+    /// transport-only callers). See [`Self::handle_chain_sync_outcome`] for
+    /// the typed form, which also reports a stop at an authority event.
     ///
     /// Merge policy (ADR-089): linear catch-up only. A hash mismatch at
     /// the same sequence surfaces as a mesh error (fork) rather than
     /// silent overwrite — multi-parent merge commits are a later layer.
     pub fn handle_chain_sync_response(&self, data: &[u8]) -> KernelResult<usize> {
+        self.handle_chain_sync_outcome(data).map(|o| o.applied)
+    }
+
+    /// [`Self::handle_chain_sync_response`] with a typed, non-fatal stop:
+    /// replication halts cleanly at the first authority-bearing event
+    /// (a reserved source or kind, see `chain::RESERVED_SOURCES`) and says
+    /// where, instead of failing the batch. Verified replication of authority
+    /// events is future work; skipping one would leave a sequence gap.
+    pub fn handle_chain_sync_outcome(&self, data: &[u8]) -> KernelResult<ChainSyncOutcome> {
         let resp: ChainSyncResponse = serde_json::from_slice(data)
             .map_err(|e| KernelError::Mesh(format!("chain sync deserialize error: {e}")))?;
 
@@ -908,14 +918,21 @@ impl MeshRuntime {
         {
             if let Some(cm) = self.chain_manager.get() {
                 let mut applied = 0usize;
+                let mut stopped = None;
                 for value in &resp.events {
                     let event: crate::chain::ChainEvent = serde_json::from_value(value.clone())
                         .map_err(|e| {
                             KernelError::Mesh(format!("chain sync event decode: {e}"))
                         })?;
+                    let seq = event.sequence;
                     match cm.append_signed(event) {
                         Ok(_) => applied += 1,
                         Err(crate::chain::AppendSignedError::AlreadyPresent { .. }) => {}
+                        Err(crate::chain::AppendSignedError::ReservedSource { event_source }) => {
+                            warn!(seq, source = %event_source, "chain sync stopped at an authority event");
+                            stopped = Some(StoppedAtAuthorityEvent { sequence: seq, source: event_source });
+                            break;
+                        }
                         Err(e) => {
                             return Err(KernelError::Mesh(format!(
                                 "chain sync append_signed: {e}"
@@ -929,11 +946,11 @@ impl MeshRuntime {
                     tip = resp.tip_sequence,
                     "chain sync response applied"
                 );
-                return Ok(applied);
+                return Ok(ChainSyncOutcome { applied, stopped });
             }
         }
 
-        Ok(resp.events.len())
+        Ok(ChainSyncOutcome { applied: resp.events.len(), stopped: None })
     }
 
     #[cfg(feature = "exochain")]
@@ -965,6 +982,24 @@ impl MeshRuntime {
     fn chain_tip_meta(&self, _from_seq: u64) -> (String, u32) {
         (String::new(), 0)
     }
+}
+
+/// Where chain replication stopped at an authority-bearing event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoppedAtAuthorityEvent {
+    /// Sequence of the refused event.
+    pub sequence: u64,
+    /// Its source.
+    pub source: String,
+}
+
+/// Result of applying a chain sync batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainSyncOutcome {
+    /// Events newly applied.
+    pub applied: usize,
+    /// Set when replication halted at an authority event (not an error).
+    pub stopped: Option<StoppedAtAuthorityEvent>,
 }
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -1619,6 +1654,36 @@ mod tests {
             .build_chain_sync_response(sink_cm.head_sequence(), 256)
             .unwrap();
         assert!(resp2.events.is_empty());
+    }
+
+    /// Replication stops cleanly (typed, non-fatal) at the first authority
+    /// event; what came before is applied, nothing after is.
+    #[cfg(feature = "exochain")]
+    #[test]
+    fn chain_sync_stops_at_the_first_authority_event() {
+        use crate::chain::ChainManager;
+        use std::sync::Arc;
+
+        let src = Arc::new(ChainManager::new(0, 1000));
+        src.append("mesh", "peer.join", None);
+        let forged = src.append("auth.token", "auth.token.issued", Some(serde_json::json!({})));
+        src.append("mesh", "peer.join", None);
+        let genesis = src.tail(0)[0].clone();
+        let sink = Arc::new(ChainManager::from_events(vec![genesis], 1000).unwrap());
+        let src_rt = MeshRuntime::new("s".into());
+        src_rt.set_chain_manager(src.clone());
+        let sink_rt = MeshRuntime::new("k".into());
+        sink_rt.set_chain_manager(sink.clone());
+        let resp = src_rt.build_chain_sync_response(sink.head_sequence(), 256).unwrap();
+        let data = serde_json::to_vec(&resp).unwrap();
+        let out = sink_rt.handle_chain_sync_outcome(&data).unwrap();
+        assert_eq!(out.applied, 1);
+        assert_eq!(
+            out.stopped,
+            Some(StoppedAtAuthorityEvent { sequence: forged.sequence, source: "auth.token".into() })
+        );
+        assert!(sink.tail(0).iter().all(|e| e.source != "auth.token"));
+        assert_eq!(sink_rt.handle_chain_sync_response(&data).unwrap(), 0);
     }
 
     // ── Test 23: inbound peer auto-registered, topic forwarded ───

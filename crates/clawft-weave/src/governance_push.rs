@@ -28,6 +28,28 @@ pub fn parse_limits(params: &Value) -> Result<Limits, String> {
     }
 }
 
+/// `base` with `extra` laid on tighten-only: numbers take the smaller, the
+/// approval flag is OR. An explicit push `limits` can never raise a cap the
+/// parent snapshot carries.
+pub fn tighten_limits(base: &Limits, extra: &Limits) -> Limits {
+    fn lo<T: PartialOrd + Copy>(a: Option<T>, b: Option<T>) -> Option<T> {
+        match (a, b) {
+            (Some(x), Some(y)) => Some(if y < x { y } else { x }),
+            (x, None) => x,
+            (None, y) => y,
+        }
+    }
+    Limits {
+        risk_threshold: lo(base.risk_threshold, extra.risk_threshold),
+        max_processes: lo(base.max_processes, extra.max_processes),
+        spawn_budget: lo(base.spawn_budget, extra.spawn_budget),
+        human_approval_required: match (base.human_approval_required, extra.human_approval_required) {
+            (Some(true), _) | (_, Some(true)) => Some(true),
+            (a, b) => a.or(b),
+        },
+    }
+}
+
 /// The project must be registered with this user daemon before it is sent
 /// policy. (Revocation is checked by the child itself: it refuses policy once
 /// the user daemon has dropped the `revoked` marker in its run dir.)
@@ -139,7 +161,7 @@ mod imp {
             snapshot.rules,
             snapshot.risk_threshold,
             snapshot.human_approval_required,
-            limits,
+            &super::tighten_limits(&snapshot.limits, limits),
             key,
         )
         .map_err(|e: ParentPolicyError| {
@@ -196,7 +218,10 @@ mod imp {
             };
             let (snapshot, key) = {
                 let k = call.ctx.kernel.read().await;
-                let snap = k.governance_gate().and_then(|g| g.governance_snapshot());
+                let snap = k.governance_gate().and_then(|g| g.governance_snapshot()).map(|mut s| {
+                    s.limits = clawft_kernel::gate::parent_limits_of(k.kernel_config());
+                    s
+                });
                 let key = k.chain_manager().and_then(|c| c.signing_key_clone());
                 (snap, key)
             };
@@ -367,6 +392,24 @@ mod tests {
                 let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
                 assert_eq!(mode, 0o600);
             }
+        }
+
+        #[tokio::test]
+        async fn a_push_without_limits_keeps_the_parent_caps_and_explicit_limits_only_tighten() {
+            let t = tempfile::tempdir().unwrap();
+            let key = SigningKey::from_bytes(&[7u8; 32]);
+            let mut snap = snapshot();
+            snap.limits = Limits { max_processes: Some(12), spawn_budget: Some(3), ..Default::default() };
+            push_policy(t.path(), ID, snap.clone(), &Limits::default(), &key).await.map_err(|r| r.error).unwrap();
+            let read = || -> ParentPolicy {
+                serde_json::from_slice(&std::fs::read(t.path().join(ID).join("parent-policy.json")).unwrap()).unwrap()
+            };
+            assert_eq!(read().limits.max_processes, Some(12));
+            assert_eq!(read().limits.spawn_budget, Some(3));
+            let ask = Limits { max_processes: Some(99), spawn_budget: Some(1), ..Default::default() };
+            push_policy(t.path(), ID, snap, &ask, &key).await.map_err(|r| r.error).unwrap();
+            assert_eq!(read().limits.max_processes, Some(12), "an explicit push cannot raise a parent cap");
+            assert_eq!(read().limits.spawn_budget, Some(1));
         }
 
         #[tokio::test]

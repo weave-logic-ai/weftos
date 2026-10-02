@@ -193,7 +193,7 @@ pub enum OverlayError {
     #[error("`{key}`: invalid value")]
     InvalidLimit { key: String },
     /// A limit that loosens the parent's.
-    #[error("`{key}`: {overlay} relaxes the parent value {parent}")]
+    #[error("`{key}`: {overlay} relaxes the parent value {parent}; set it to {parent} or lower in overlay.toml")]
     Relaxes {
         key: String,
         parent: String,

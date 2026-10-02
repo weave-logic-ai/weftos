@@ -509,6 +509,22 @@ impl OverlayRuntime {
         )
     }
 
+    /// [`Self::effective_rules`] and the effective hash (hex) from ONE lock
+    /// acquisition, so the pair always describes the same generation.
+    pub fn effective_rules_and_hash(
+        &self,
+    ) -> ((Vec<crate::governance::GovernanceRule>, f64, bool), String) {
+        let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        (
+            (
+                s.effective.rules.clone(),
+                s.effective.risk_threshold(DEFAULT_RISK_THRESHOLD),
+                s.effective.human_approval(false),
+            ),
+            Applied::of(&s.effective, &self.boot).effective_hash,
+        )
+    }
+
     fn apply_locked(
         &self,
         s: &mut State,

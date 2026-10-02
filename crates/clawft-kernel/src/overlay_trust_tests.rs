@@ -294,3 +294,25 @@ fn kernel_sources_are_reserved_against_callers_but_replicate() {
     // Replication still accepts governance events (every chain has them).
     assert!(!is_reserved_source("governance"));
 }
+
+#[test]
+fn a_replicated_applied_event_is_refused_whatever_its_source() {
+    use crate::chain::AppendSignedError;
+    let f = fixture(&parent_with(base_parent().rules, base_parent().limits, 5), None);
+    let r = start(&f);
+    let peer = ChainManager::new(0, 100);
+    for source in ["governance", "x"] {
+        let ev = peer.append(
+            source,
+            "governance.overlay.applied",
+            Some(serde_json::json!({"parent_version": u64::MAX, "user_pin": true, "overlay_hash": "ff"})),
+        );
+        assert!(matches!(r.cm.append_signed(ev), Err(AppendSignedError::ReservedSource { .. })));
+    }
+    let h = crate::overlay_trust::chain_history(&r.cm);
+    assert_eq!(h.max_parent_version, Some(5));
+    assert!(!h.user_pin_used);
+    // Other governance events still replicate.
+    let ok = peer.append("governance", "governance.permit", None);
+    assert!(!matches!(r.cm.append_signed(ok), Err(AppendSignedError::ReservedSource { .. })));
+}

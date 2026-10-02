@@ -185,11 +185,7 @@ pub fn post_boot(kernel: &clawft_kernel::Kernel<clawft_platform::NativePlatform>
     // The parent's real caps, so a child's merged limits start from them
     // (the overlay can only tighten). Boot-time values, like the caps.
     let kc = kernel.kernel_config();
-    let parent_limits = clawft_types::config::overlay::Limits {
-        max_processes: Some(u64::from(kc.max_processes)),
-        spawn_budget: kc.agent.as_ref().map(|a| u64::from(a.subagents.max_per_conv)),
-        ..Default::default()
-    };
+    let parent_limits = clawft_kernel::gate::parent_limits_of(kc);
     let deps = Deps {
         cert_env: CertEnv { chain, user_key: user_key.clone(), manifests_dir: manifests_dir.clone() },
         snapshot: Arc::new(move || {

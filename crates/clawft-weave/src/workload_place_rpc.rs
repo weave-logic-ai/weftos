@@ -138,8 +138,12 @@ async fn build(
         .cloned()
         .ok_or("placement needs the kernel chain (decisions are chained)")?;
     let membership = k.cluster_membership().clone();
-    let effective = k.governance_overlay().map(|o| o.effective_rules());
-    let _ = BUILT_RULES.set(k.governance_overlay().map(|o| o.applied().effective_hash));
+    let effective = k.governance_overlay().map(|o| o.effective_rules_and_hash());
+    let (effective, built) = match effective {
+        Some((rules, hash)) => (Some(rules), Some(hash)),
+        None => (None, None),
+    };
+    let _ = BUILT_RULES.set(built);
     drop(k);
     let pk = boot.key.verifying_key().to_bytes();
     let id = clawft_kernel::node_id_from_pubkey(&pk);
