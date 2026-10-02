@@ -1959,6 +1959,9 @@ pub async fn run(
         // self-registration happening before the listener is up).
         let concierge_agent_id: String = {
             let k = kernel.read().await;
+            // In service mode this is the machine's public key: the entry is
+            // service-attested (this process cannot sign for that key). The
+            // agent registry has no label field yet; tracked as a follow-up card.
             let pubkey: [u8; 32] = daemon_identity.public_key();
             let entry = k.agent_registry().register("concierge-bot".into(), pubkey);
             info!(
@@ -2324,6 +2327,7 @@ pub async fn run(
             let k = kernel.read().await;
             k.agent_registry().clone()
         };
+        // Service mode: service-attested machine key, as for the concierge above.
         let caller_pubkey: [u8; 32] =
             daemon_identity.public_key();
         let mut service = clawft_service_agent::AgentService::new(agent_loop)
