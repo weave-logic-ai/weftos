@@ -8,9 +8,15 @@
 //!   project, Phase 3);
 //! * turns the voice consumer, `talk_loop` and `voice_loop` off (voice runs
 //!   in the user daemon);
-//! * clears every provider API key from the config and scrubs provider
-//!   secrets from the process environment, so nothing reachable from the
-//!   child can authenticate to a model provider;
+//! * clears every provider API key from the config and, best effort,
+//!   scrubs credential-looking variables from this process's environment
+//!   ([`scrub_provider_secrets_from_env`]). This is NOT a guarantee:
+//!   `remove_var` does not change the initial environment block that
+//!   `/proc/<pid>/environ` and `ps -E` read, and the project kernel has a
+//!   shell tool. The real guard is the supervisor (package G) spawning the
+//!   child with a cleared environment, so the keys are never in it; use
+//!   [`crate::env_probe`] to test that. The scrub also narrows what in-process
+//!   code can `getenv`;
 //! * installs the process-wide [`ParentLink`], read from `spawn.json`, which
 //!   the embedder and LLM construction sites in `daemon.rs` and
 //!   `llm_service.rs` consult to build the remote variants instead of loading
@@ -54,9 +60,10 @@ pub fn shared_services_health() -> Option<SharedServicesHealth> {
     LINK.get().map(|l| l.health())
 }
 
-/// Environment variables that carry provider credentials: the known names
-/// plus anything ending `_API_KEY`. The supervisor (package G) must keep
-/// these out of a child's environment; the child scrubs them again at boot.
+/// Environment variables that carry provider credentials: these known names
+/// plus the shapes [`is_provider_secret_env`] matches. The supervisor
+/// (package G) must keep all of these out of a child's environment (clear the
+/// env and pass an allow-list); the child's own scrub is a second layer only.
 pub const PROVIDER_SECRET_ENV: &[&str] = &[
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -77,25 +84,55 @@ pub const PROVIDER_SECRET_ENV: &[&str] = &[
     "HUGGING_FACE_HUB_TOKEN",
 ];
 
-/// Whether `name` is a provider credential variable.
+/// Whether `name` looks like a credential variable: a known name, or (case
+/// insensitively) ending `_KEY`, `_TOKEN`, `_SECRET`, `_PASSWORD`, or starting
+/// `AWS_`.
 pub fn is_provider_secret_env(name: &str) -> bool {
-    PROVIDER_SECRET_ENV.contains(&name) || name.ends_with("_API_KEY")
+    let up = name.to_ascii_uppercase();
+    PROVIDER_SECRET_ENV.contains(&up.as_str())
+        || ["_KEY", "_TOKEN", "_SECRET", "_PASSWORD"].iter().any(|s| up.ends_with(s))
+        || up.starts_with("AWS_")
 }
 
-/// Remove every provider credential from this process's environment.
-/// Returns the names removed (never the values).
-pub fn scrub_provider_secrets_from_env() -> Vec<String> {
+/// Remove credential variables from this process's environment: everything
+/// [`is_provider_secret_env`] matches plus each name in `extra` (the
+/// `api_key_env` names the config points at). Returns the names removed,
+/// never the values.
+///
+/// Best effort only; see the module docs. It runs after the tokio runtime and
+/// its worker threads exist (`main` is `#[tokio::main]`, and the profile is
+/// known only once the config is loaded), so another thread could be reading
+/// the environment while it runs, which is why `remove_var` is `unsafe`.
+/// That race is accepted because this is not the guard that matters.
+pub fn scrub_provider_secrets_from_env(extra: &[String]) -> Vec<String> {
     let names: Vec<String> = std::env::vars_os()
         .filter_map(|(k, _)| k.into_string().ok())
-        .filter(|k| is_provider_secret_env(k))
+        .filter(|k| is_provider_secret_env(k) || extra.iter().any(|e| e.eq_ignore_ascii_case(k)))
         .collect();
     for name in &names {
-        // SAFETY: runs once at boot, before this kernel starts any service
-        // that reads the environment; the same pattern `llm_service` tests
-        // use. The values are discarded, not read.
+        // SAFETY: see the function docs: worker threads exist, and the race
+        // with a concurrent `getenv` is accepted for a best-effort scrub. The
+        // values are discarded, not read.
         unsafe { std::env::remove_var(name) };
     }
     names
+}
+
+/// The project registry's tool set minus the voice tools: `audio_transcribe`
+/// / `audio_synthesize` / `voice_listen` / `voice_speak` default to local STT
+/// and TTS endpoints (and cloud fallbacks); voice runs in the user daemon.
+/// Outside the project profile the registry is returned unchanged.
+pub fn strip_voice_tools(
+    registry: clawft_core::tools::registry::ToolRegistry,
+) -> clawft_core::tools::registry::ToolRegistry {
+    if !is_project_profile() {
+        return registry;
+    }
+    let deny: Vec<String> = ["audio_transcribe", "audio_synthesize", "voice_listen", "voice_speak"]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    registry.filtered_tools(&[], &deny)
 }
 
 fn clear_keys(p: &mut ProvidersConfig) {
@@ -167,9 +204,10 @@ pub fn adjust_services(config: &mut Config, kernel_config: &mut KernelConfig) {
     if !apply_to_config(config, kernel_config) {
         return;
     }
-    let scrubbed = scrub_provider_secrets_from_env();
+    let extra = vec![config.voice.xai.api_key_env_name().to_owned()];
+    let scrubbed = scrub_provider_secrets_from_env(&extra);
     if !scrubbed.is_empty() {
-        info!(count = scrubbed.len(), "project profile: provider credentials removed from the environment");
+        info!(count = scrubbed.len(), "project profile: credential variables removed from this process's environment (best effort; the supervisor must spawn the child with a cleared env)");
     }
     let spawn_json = RuntimePaths::resolve().spawn_json();
     let link = Arc::new(ParentLink::from_spawn_json(&spawn_json));
@@ -301,10 +339,14 @@ mod tests {
 
     #[test]
     fn provider_secret_names() {
-        for n in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "SOMETHING_NEW_API_KEY", "HF_TOKEN"] {
+        for n in [
+            "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "SOMETHING_NEW_API_KEY", "HF_TOKEN",
+            "openai_api_key", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "MY_SERVICE_SECRET",
+            "AWS_ACCESS_KEY_ID", "AWS_PROFILE", "DB_PASSWORD", "STRIPE_KEY",
+        ] {
             assert!(is_provider_secret_env(n), "{n}");
         }
-        for n in ["PATH", "HOME", "WEFTOS_RUNTIME_DIR", "LLM_MODEL"] {
+        for n in ["PATH", "HOME", "WEFTOS_RUNTIME_DIR", "LLM_MODEL", "KEYBOARD", "TOKENIZERS_PARALLELISM"] {
             assert!(!is_provider_secret_env(n), "{n}");
         }
     }

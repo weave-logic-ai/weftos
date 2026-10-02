@@ -10,31 +10,42 @@ use clawft_service_llm::{ChatRequest, ChatResponse, LlmBackend, LlmError};
 use serde_json::{Value, json};
 use tracing::warn;
 
-use crate::parent_link::{
-    DEFAULT_EMBED_DIMENSION, PARENT_UNAVAILABLE_KIND, ParentError, ParentLink, Service,
-};
+use crate::parent_link::{PARENT_UNAVAILABLE_KIND, ParentError, ParentLink, Service};
 
 /// An embedder that calls the parent's `shared.embed`.
+///
+/// The width is whatever the parent reports, learned on the first successful
+/// answer and then fixed: [`dimension`](clawft_core::embeddings::Embedder::dimension)
+/// is `0` until then (no guessed width), [`is_ready`](Self::is_ready) says
+/// whether the parent has answered, and a later reply of another width is
+/// refused rather than adopted.
 pub struct RemoteEmbedder {
     link: Arc<ParentLink>,
     dimension: AtomicUsize,
 }
 
 impl RemoteEmbedder {
-    /// An embedder with the default width until the parent reports its own.
+    /// An embedder whose width is unknown until the parent answers.
     pub fn new(link: Arc<ParentLink>) -> Self {
         Self {
             link,
-            dimension: AtomicUsize::new(DEFAULT_EMBED_DIMENSION),
+            dimension: AtomicUsize::new(0),
         }
     }
 
+    /// True once the parent has reported the embedding width.
+    pub fn is_ready(&self) -> bool {
+        self.width() > 0
+    }
+
     /// [`new`](Self::new) plus one best-effort `shared.embed` with no texts to
-    /// learn the parent's width. A down parent leaves the default and logs.
+    /// learn the parent's width. A down parent leaves it unknown (see
+    /// [`is_ready`](Self::is_ready)) and logs; the width binds on the first
+    /// later call that gets through.
     pub async fn connect(link: Arc<ParentLink>) -> Arc<Self> {
         let this = Arc::new(Self::new(link));
         if let Err(e) = this.embed_texts(&[]).await {
-            warn!(error = %e, "shared embeddings: parent did not answer; assuming {DEFAULT_EMBED_DIMENSION}-d until it does");
+            warn!(error = %e, "shared embeddings: parent did not answer; embedding width unknown until it does");
         }
         this
     }
@@ -47,13 +58,29 @@ impl RemoteEmbedder {
             .await?;
         let dim = v.get("dimension").and_then(Value::as_u64).unwrap_or(0) as usize;
         if dim > 0 {
-            self.dimension.store(dim, Ordering::Relaxed);
+            // First answer binds the width; a different one later is refused.
+            if let Err(bound) =
+                self.dimension.compare_exchange(0, dim, Ordering::Relaxed, Ordering::Relaxed)
+                && bound != dim
+            {
+                return Err(ParentError::Refused {
+                    kind: "parent_malformed".into(),
+                    message: format!("embedding width changed from {bound} to {dim}"),
+                });
+            }
         }
         let rows: Vec<Vec<f32>> = serde_json::from_value(v.get("embeddings").cloned().unwrap_or(json!([])))
             .map_err(|e| ParentError::Refused {
                 kind: "parent_malformed".into(),
                 message: format!("shared.embed reply: {e}"),
             })?;
+        let bound = self.width();
+        if bound > 0 && rows.iter().any(|r| r.len() != bound) {
+            return Err(ParentError::Refused {
+                kind: "parent_malformed".into(),
+                message: format!("shared.embed returned a vector that is not {bound}-d"),
+            });
+        }
         if rows.len() != texts.len() {
             return Err(ParentError::Refused {
                 kind: "parent_malformed".into(),

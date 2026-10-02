@@ -79,7 +79,8 @@ async fn remote_embedder_never_returns_a_local_vector() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("parent_unavailable"), "{err}");
-    assert_eq!(Embedder::dimension(&e), DEFAULT_EMBED_DIMENSION);
+    assert_eq!(Embedder::dimension(&e), 0, "no guessed width");
+    assert!(!e.is_ready());
 }
 
 #[tokio::test]

@@ -15,8 +15,13 @@
 //! ([`UsageMeter::settle`]); a failed call settles at the minimum.
 //!
 //! Limits come from the project manifest's `[shared]` table
-//! (`~/.weftos/projects/<id>.toml`, user-owned: a project cannot raise its
-//! own). Absent keys use the defaults below.
+//! (`~/.weftos/projects/<id>.toml`), read once per project into the user
+//! daemon's memory (see `shared_rpc`) and refreshed only by a restart or an
+//! operator `shared.reload`. Honest limit: the manifest is a file of the
+//! user's uid, and a child kernel runs as that uid, so a hostile child can
+//! edit it; the edit then needs a reload or restart to bite, which is a speed
+//! bump, not a boundary. The real boundary is the Phase 4 sandbox. Absent keys
+//! use the defaults below.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -142,8 +147,32 @@ pub struct UsageMeter {
 }
 
 impl UsageMeter {
-    /// Admit one call estimated at `estimated` tokens, or refuse it.
-    pub fn admit(
+    /// Count one call against the rate limit, before the request is parsed
+    /// or anything else is checked, so refused and malformed calls count too.
+    pub fn note_call(
+        &self,
+        project: &str,
+        limits: &SharedLimits,
+        now: Instant,
+    ) -> Result<(), Refusal> {
+        let minute = Duration::from_secs(60);
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let u = map.entry(project.to_owned()).or_default();
+        while u.calls.front().is_some_and(|t| now.duration_since(*t) >= minute) {
+            u.calls.pop_front();
+        }
+        if u.calls.len() >= limits.max_calls_per_min as usize {
+            let oldest = *u.calls.front().expect("non-empty when at the limit");
+            return Err(Refusal::RateLimited {
+                retry_after_secs: minute.saturating_sub(now.duration_since(oldest)).as_secs() + 1,
+            });
+        }
+        u.calls.push_back(now);
+        Ok(())
+    }
+
+    /// Reserve `estimated` tokens (at least the minimum) against the budget.
+    pub fn reserve(
         &self,
         project: &str,
         limits: &SharedLimits,
@@ -154,21 +183,11 @@ impl UsageMeter {
         if charge > limits.max_tokens_per_call {
             return Err(Refusal::TooLarge { requested: charge, max: limits.max_tokens_per_call });
         }
-        let minute = Duration::from_secs(60);
         let window = Duration::from_secs(limits.budget_window_secs.max(1));
         let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let u = map.entry(project.to_owned()).or_default();
-        while u.calls.front().is_some_and(|t| now.duration_since(*t) >= minute) {
-            u.calls.pop_front();
-        }
         while u.spend.front().is_some_and(|s| now.duration_since(s.at) >= window) {
             u.spend.pop_front();
-        }
-        if u.calls.len() >= limits.max_calls_per_min as usize {
-            let oldest = *u.calls.front().expect("non-empty when at the limit");
-            return Err(Refusal::RateLimited {
-                retry_after_secs: minute.saturating_sub(now.duration_since(oldest)).as_secs() + 1,
-            });
         }
         let used: u64 = u.spend.iter().map(|s| s.tokens).sum();
         if used.saturating_add(charge) > limits.token_budget {
@@ -184,11 +203,22 @@ impl UsageMeter {
                 retry_after_secs: retry,
             });
         }
-        u.calls.push_back(now);
         let id = u.next_id;
         u.next_id += 1;
         u.spend.push_back(Spend { id, at: now, tokens: charge });
         Ok(Reservation { project: project.to_owned(), id })
+    }
+
+    /// [`note_call`](Self::note_call) then [`reserve`](Self::reserve).
+    pub fn admit(
+        &self,
+        project: &str,
+        limits: &SharedLimits,
+        estimated: u64,
+        now: Instant,
+    ) -> Result<Reservation, Refusal> {
+        self.note_call(project, limits, now)?;
+        self.reserve(project, limits, estimated, now)
     }
 
     /// Replace the reservation with the actual cost (at least the minimum).
@@ -290,6 +320,19 @@ mod tests {
         assert!(m.admit("a", &l, 10, t0).is_err());
         assert!(m.admit("b", &l, 100, t0).is_ok(), "b has its own budget");
         assert!(m.admit("a", &l, 10, t0 + Duration::from_secs(3601)).is_ok());
+    }
+
+    #[test]
+    fn refused_calls_still_count_against_the_rate_limit() {
+        let m = UsageMeter::default();
+        let l = limits(3, 1_000_000);
+        let t0 = Instant::now();
+        // Oversized: refused by `reserve`, but `note_call` already counted it.
+        for _ in 0..3 {
+            m.note_call("p", &l, t0).unwrap();
+            assert!(m.reserve("p", &l, 10_001, t0).is_err());
+        }
+        assert_eq!(m.note_call("p", &l, t0).unwrap_err().kind(), "rate_limited");
     }
 
     #[test]

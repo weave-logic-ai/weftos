@@ -894,6 +894,12 @@ async fn build_embedding_router_or_warn(
         crate::project_profile::project_embedder().await
     {
         // Project profile: the parent embeds; no local model, no API key.
+        // Never build the index on a guessed width: until the parent has
+        // reported its own, the router is unavailable.
+        if !remote.is_ready() {
+            warn!("agent-core: EmbeddingRouter unavailable; the user daemon has not reported an embedding width");
+            return None;
+        }
         remote
     } else if std::env::var("OPENAI_API_KEY")
         .map(|s| !s.is_empty())
@@ -1242,13 +1248,17 @@ pub async fn run(
     // publisher is auto-selected; several candidates are refused with a
     // warning. There is no hard-coded node id.
     let (mic_node_tx, mic_node_rx) = watch::channel(None::<String>);
-    tokio::spawn(crate::mic_source::supervise(
-        crate::mic_source::pin_from(voice_mic_pin.as_deref()),
-        kernel.clone(),
-        control_flags.clone(),
-        daemon_identity.node_id.clone(),
-        mic_node_tx,
-    ));
+    // A project kernel runs no voice pipeline (the user daemon does); with the
+    // sender dropped the receiver just keeps its `None`.
+    if !crate::project_profile::is_project_profile() {
+        tokio::spawn(crate::mic_source::supervise(
+            crate::mic_source::pin_from(voice_mic_pin.as_deref()),
+            kernel.clone(),
+            control_flags.clone(),
+            daemon_identity.node_id.clone(),
+            mic_node_tx,
+        ));
+    }
 
     // Spawn the LLM service handle. Unlike whisper this is a
     // request/response client — there's no background tokio task to
@@ -1577,7 +1587,9 @@ pub async fn run(
                 },
             );
         }
-        let tool_registry = Arc::new(tool_registry);
+        // Project profile: no voice tools (their default STT/TTS endpoints and
+        // cloud fallbacks belong to the user daemon).
+        let tool_registry = Arc::new(crate::project_profile::strip_voice_tools(tool_registry));
         // Stash the registry + spawner so the lifecycle paths (idle reaper,
         // agent.chat.end, agent.chat.cancel) can cascade-cancel a parent's
         // still-running children when the parent conversation ends (design D5).

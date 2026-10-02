@@ -31,25 +31,48 @@
 //! project's context; unknown params (`conv_id`, `session`, ...) are refused
 //! rather than ignored.
 //!
-//! **Limits and audit.** Every call passes [`UsageMeter`] (rate, token budget,
-//! per-call cap) with limits from the manifest's `[shared]` table, and each
+//! **Limits and audit.** Every call is counted against the project's rate
+//! limit first, before its params are parsed (so refused and malformed calls
+//! count). A served call then passes the token budget and per-call cap of
+//! [`UsageMeter`], with limits from the manifest's `[shared]` table, read once
+//! per project (first use after daemon start, or an operator `shared.reload`)
+//! and kept in memory: a live edit of the manifest does not take effect until
+//! then. Same-uid limit, as for `VerifiedProject`: a child kernel is the
+//! user's uid and can write that file, so this is a speed bump; the real
+//! boundary is the Phase 4 sandbox.
+//!
+//! **Concurrency and the user's own turns.** At most [`PER_PROJECT_CONCURRENT`]
+//! in-flight calls per project and [`GLOBAL_CONCURRENT`] overall; beyond that
+//! a call is refused `busy` (never queued). `shared.llm.chat` runs on the
+//! daemon's single model slot only if it is free *right now*
+//! (`LlmClient::try_slot`), so it never queues in front of an `agent.chat` or
+//! voice turn, and it is cut off after [`LLM_CALL_TIMEOUT`], bounding how long
+//! the user's next turn can wait behind it. It cannot preempt a call already
+//! running. The `LlmClient` is cloned out of its lock first, so the lock is
+//! never held across the model call. A child may name a `model` only if the
+//! parent lists it; otherwise the parent default is used. Upstream error
+//! bodies are never relayed; the reply says `upstream_error` and the status.
+//!
+//! Each
 //! served call is appended to the user chain as
 //! `shared.use {project_id, service, tokens}`: no prompt, no completion, no
 //! text of any kind.
+//!
+//! `shared.reload` (operator only; a token holder is refused) drops the
+//! cached limits.
 
-use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Instant;
 
-use clawft_kernel::embedding::EmbeddingProvider;
 use clawft_kernel::token_authority::SECRET_PREFIX;
 use clawft_rpc::Response;
-use clawft_service_llm::{ChatMessage, SharedLlmClient, Tool, ToolChoice};
+use clawft_service_llm::{ChatMessage, LlmError, Tool, ToolChoice};
 use clawft_types::project::{ProjectState, read_manifest};
 use serde_json::{Value, json};
 
 use crate::capability::Capability;
 use crate::rpc_ext::{ExtCall, ExtFuture, KernelRef, VerifiedProject};
-use crate::shared_meter::{Refusal, SharedLimits, UsageMeter, estimate_tokens};
+use crate::shared_meter::{Refusal, SharedLimits, estimate_tokens};
+use crate::shared_state::{self as state, EMBED_CALL_TIMEOUT, LLM_CALL_TIMEOUT, PER_PROJECT_CONCURRENT, GLOBAL_CONCURRENT};
 
 /// Chain source and kind of the per-call audit record.
 pub const USE_SOURCE: &str = "shared.services";
@@ -61,41 +84,6 @@ const MAX_CHAT_BYTES: usize = 2 * 1024 * 1024;
 const DEFAULT_MAX_TOKENS: u64 = 512;
 const CHAT_KEYS: &[&str] =
     &["model", "messages", "tools", "tool_choice", "temperature", "max_tokens", "stream", "project_id"];
-
-static METER: OnceLock<UsageMeter> = OnceLock::new();
-static EMBEDDER: OnceLock<Arc<dyn EmbeddingProvider>> = OnceLock::new();
-static LLM: RwLock<Option<SharedLlmClient>> = RwLock::new(None);
-
-/// Serve `shared.llm.*` from `client` instead of the daemon's own (tests).
-pub fn install_llm(client: SharedLlmClient) {
-    *LLM.write().unwrap_or_else(|e| e.into_inner()) = Some(client);
-}
-
-/// Serve `shared.embed` from `embedder` instead of the daemon's own (tests).
-/// Only the first install wins.
-pub fn install_embedder(embedder: Arc<dyn EmbeddingProvider>) {
-    let _ = EMBEDDER.set(embedder);
-}
-
-fn llm_client() -> Option<SharedLlmClient> {
-    LLM.read()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()
-        .or_else(crate::daemon::daemon_llm)
-}
-
-async fn embedder() -> Arc<dyn EmbeddingProvider> {
-    if let Some(e) = EMBEDDER.get() {
-        return Arc::clone(e);
-    }
-    // The model load can take seconds; keep it off the async threads.
-    let built = tokio::task::spawn_blocking(|| {
-        Arc::from(clawft_kernel::embedding::select_embedding_provider(None))
-    })
-    .await
-    .expect("embedder selection panicked");
-    Arc::clone(EMBEDDER.get_or_init(|| built))
-}
 
 fn refuse(kind: &str, message: impl Into<String>) -> Response {
     Response::error_with_kind(kind, message)
@@ -141,6 +129,10 @@ fn identify(call: &ExtCall, authority: Option<&clawft_kernel::token_authority::T
 
 /// The project's manifest limits; the project must be registered and active.
 fn limits_for(project: &str) -> Result<SharedLimits, Response> {
+    state::cached_limits(project, || load_limits(project))
+}
+
+fn load_limits(project: &str) -> Result<SharedLimits, Response> {
     let dir = crate::scope_gate::manifests_dir()
         .ok_or_else(|| refuse("project_store_unavailable", "no manifest store"))?;
     match read_manifest(&dir, project) {
@@ -170,6 +162,15 @@ async fn run(call: ExtCall) -> Response {
     if crate::project_profile::is_project_profile() {
         return refuse("not_a_parent", "a project kernel does not serve shared services");
     }
+    if call.method == "shared.reload" {
+        // Operator only: a token holder (a child) cannot refresh its own limits.
+        let by_token = call.ctx.auth.as_deref().is_some_and(|a| a.trim().starts_with(SECRET_PREFIX));
+        if by_token || !call.ctx.caps.allows(Capability::Admin) {
+            return refuse("verified_project_required", "shared.reload is operator-only");
+        }
+        state::reload();
+        return Response::success(json!({ "reloaded": true }));
+    }
     let authority = crate::token_rpc::authority_for(&call.ctx.kernel).await;
     let project = match identify(&call, authority.as_deref()) {
         Ok(p) => p,
@@ -179,6 +180,19 @@ async fn run(call: ExtCall) -> Response {
         Ok(l) => l,
         Err(r) => return r,
     };
+    // Count the call before looking at its params: refused and malformed
+    // calls spend rate-limit too.
+    if let Err(r) = state::meter().note_call(&project, &limits, Instant::now()) {
+        return refused(&r);
+    }
+    let Some(_permits) = state::try_acquire(&project) else {
+        return refuse(
+            "busy",
+            format!(
+                "too many shared calls in flight (at most {PER_PROJECT_CONCURRENT} per project, {GLOBAL_CONCURRENT} overall)"
+            ),
+        );
+    };
     match call.method.as_str() {
         "shared.embed" => embed(&call, &project, &limits).await,
         "shared.llm.chat" => chat(&call, &project, &limits).await,
@@ -187,15 +201,32 @@ async fn run(call: ExtCall) -> Response {
     }
 }
 
-fn admit(project: &str, limits: &SharedLimits, estimated: u64) -> Result<crate::shared_meter::Reservation, Response> {
-    METER
-        .get_or_init(UsageMeter::default)
-        .admit(project, limits, estimated, Instant::now())
+fn reserve(
+    project: &str,
+    limits: &SharedLimits,
+    estimated: u64,
+) -> Result<crate::shared_meter::Reservation, Response> {
+    state::meter()
+        .reserve(project, limits, estimated, Instant::now())
         .map_err(|r| refused(&r))
 }
 
 fn settle(r: &crate::shared_meter::Reservation, actual: u64) -> u64 {
-    METER.get_or_init(UsageMeter::default).settle(r, actual)
+    state::meter().settle(r, actual)
+}
+
+/// Upstream failures name the status and nothing else: error bodies can echo
+/// prompts, URLs or credentials.
+fn upstream_error(e: &LlmError) -> Response {
+    let what = match e {
+        LlmError::Server { status, .. } | LlmError::ClientError { status, .. } => {
+            format!("status {status}")
+        }
+        LlmError::Loading => "model loading".to_owned(),
+        LlmError::Transport(_) => "transport failure".to_owned(),
+        LlmError::Malformed(_) | LlmError::NoChoices => "malformed reply".to_owned(),
+    };
+    refuse("upstream_error", format!("upstream: {what}"))
 }
 
 fn only_keys(params: &Value, allowed: &[&str]) -> Result<(), Response> {
@@ -224,16 +255,20 @@ async fn embed(call: &ExtCall, project: &str, limits: &SharedLimits) -> Response
         );
     }
     let estimated: u64 = texts.iter().map(|t| estimate_tokens(t)).sum();
-    let reservation = match admit(project, limits, estimated) {
+    let reservation = match reserve(project, limits, estimated) {
         Ok(r) => r,
         Err(r) => return r,
     };
-    let provider = embedder().await;
+    let provider = state::embedder().await;
     let rows = if texts.is_empty() {
-        Ok(Vec::new())
+        Ok(Ok(Vec::new()))
     } else {
         let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-        provider.embed_batch(&refs).await
+        tokio::time::timeout(EMBED_CALL_TIMEOUT, provider.embed_batch(&refs)).await
+    };
+    let rows = match rows {
+        Ok(r) => r,
+        Err(_) => Err(clawft_kernel::embedding::EmbeddingError::BackendError("timed out".into())),
     };
     match rows {
         Ok(rows) => {
@@ -246,9 +281,9 @@ async fn embed(call: &ExtCall, project: &str, limits: &SharedLimits) -> Response
                 "tokens": tokens,
             }))
         }
-        Err(e) => {
+        Err(_) => {
             settle(&reservation, 0);
-            refuse("upstream_error", format!("embedding failed: {e}"))
+            refuse("upstream_error", "upstream: embedding failed")
         }
     }
 }
@@ -316,20 +351,32 @@ async fn chat(call: &ExtCall, project: &str, limits: &SharedLimits) -> Response 
     let max_tokens = p.get("max_tokens").and_then(Value::as_u64).map(|n| n.min(u32::MAX as u64) as u32);
     let model = p.get("model").and_then(Value::as_str).map(str::to_owned);
 
-    let Some(client) = llm_client() else {
+    let Some(shared) = state::llm_client() else {
         return refuse("service_unavailable", "the user daemon has no llm service");
     };
+    // Clone the client out of its lock: the lock is never held across the call.
+    let client = shared.read().await.clone();
+    // The model slot is shared with the user's own turns: take it only if it
+    // is free right now, never queue.
+    let Some(_slot) = client.try_slot() else {
+        return refuse("busy", "the model is in use");
+    };
+    let model = state::allowed_model(&client, model.as_deref()).await;
     let prompt = prompt_tokens(&messages, &tools);
     let estimated = prompt + max_tokens.map(u64::from).unwrap_or(DEFAULT_MAX_TOKENS);
-    let reservation = match admit(project, limits, estimated) {
+    let reservation = match reserve(project, limits, estimated) {
         Ok(r) => r,
         Err(r) => return r,
     };
-    let result = client
-        .read()
-        .await
-        .complete_with_tools(messages, tools, tool_choice, temperature, max_tokens, model.as_deref())
-        .await;
+    let result = tokio::time::timeout(
+        LLM_CALL_TIMEOUT,
+        client.complete_unchecked(messages, tools, tool_choice, temperature, max_tokens, model.as_deref()),
+    )
+    .await;
+    let result = match result {
+        Ok(r) => r,
+        Err(_) => Err(LlmError::Transport("timed out".into())),
+    };
     match result {
         Ok(resp) => {
             let actual = if resp.usage.total_tokens > 0 {
@@ -342,12 +389,12 @@ async fn chat(call: &ExtCall, project: &str, limits: &SharedLimits) -> Response 
             record_use(&call.ctx.kernel, project, "llm", tokens).await;
             match serde_json::to_value(&resp) {
                 Ok(v) => Response::success(v),
-                Err(e) => refuse("upstream_error", format!("reply not serialisable: {e}")),
+                Err(_) => refuse("upstream_error", "upstream: malformed reply"),
             }
         }
         Err(e) => {
             settle(&reservation, 0);
-            refuse("upstream_error", format!("llm: {e}"))
+            upstream_error(&e)
         }
     }
 }
@@ -356,18 +403,19 @@ async fn models(call: &ExtCall, project: &str, limits: &SharedLimits) -> Respons
     if let Err(r) = only_keys(&call.params, &["project_id"]) {
         return r;
     }
-    let Some(client) = llm_client() else {
+    let Some(shared) = state::llm_client() else {
         return refuse("service_unavailable", "the user daemon has no llm service");
     };
-    let reservation = match admit(project, limits, 0) {
+    let client = shared.read().await.clone();
+    let reservation = match reserve(project, limits, 0) {
         Ok(r) => r,
         Err(r) => return r,
     };
-    let listed = client.read().await.list_models().await;
+    let listed = client.list_models().await;
     let tokens = settle(&reservation, 0);
     record_use(&call.ctx.kernel, project, "llm.models", tokens).await;
     match listed {
         Ok(models) => Response::success(json!({ "models": models })),
-        Err(e) => refuse("upstream_error", format!("llm models: {e}")),
+        Err(e) => upstream_error(&e),
     }
 }

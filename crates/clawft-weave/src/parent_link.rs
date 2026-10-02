@@ -48,9 +48,6 @@ use crate::protocol::SharedServicesHealth;
 /// credentials. Callers branch on it; nothing may substitute a local result.
 pub const PARENT_UNAVAILABLE_KIND: &str = "parent_unavailable";
 
-/// Embedding width assumed until the parent has told us its own.
-pub const DEFAULT_EMBED_DIMENSION: usize = 384;
-
 /// Which shared service a call is for (selects the health flag and timeout).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Service {
@@ -197,6 +194,10 @@ impl ParentLink {
         self
     }
 
+    // TODO(package G): the project token in spawn.json should be short-lived
+    // with a refresh path (today it lives for its issued TTL, max 24 h), and
+    // the supervisor should delete spawn.json (or this module should) once it
+    // has been read, so the token is not left on disk or readable by a shell.
     /// Read `spawn.json` at `path`. A missing, unreadable or token-less file
     /// gives an [`unconfigured`](Self::unconfigured) link, never a panic or a
     /// partially trusted one.

@@ -34,6 +34,8 @@ mesh = ["clawft-kernel/mesh", "clawft-kernel/quic"]
 # mesh-placement-12: placement control plane (runtime adapters + mesh).
 placement = ["clawft-kernel/workload-runtime", "mesh", "ecc", "exochain"]
 rvf-rpc = ["dep:weftos-rvf-wire", "dep:rvf-types"]
+# Stub installers for the `shared.*` services (integration tests only).
+test-support = []
 
 [dependencies]
 clawft-core = { workspace = true, features = ["native", "rvf", "embedding-router"] }
@@ -109,3 +111,7 @@ weftos-rvf-wire = { workspace = true, optional = true }
 rvf-types = { workspace = true, optional = true }
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", default-features = false, features = ["signal", "process", "fs", "user"] }
+
+[dev-dependencies]
+# Self dev-dependency: turns `test-support` on for this crate's integration tests.
+clawft-weave = { path = ".", features = ["test-support"] }

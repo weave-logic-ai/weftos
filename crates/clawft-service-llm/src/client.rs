@@ -706,6 +706,14 @@ impl LlmClient {
         Ok(client)
     }
 
+    /// Take the single in-flight slot without waiting: `None` while another
+    /// call holds it. A caller that must never queue behind (or in front of)
+    /// the daemon's own turns holds this across [`Self::complete_unchecked`]
+    /// instead of calling [`Self::complete_with_tools`].
+    pub fn try_slot(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        Arc::clone(&self.in_flight).try_acquire_owned().ok()
+    }
+
     /// Read-only accessor; used by the daemon's wiring + structured logs.
     pub fn config(&self) -> &LlmConfig {
         &self.config

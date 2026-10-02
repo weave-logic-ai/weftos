@@ -30,6 +30,9 @@ const FAKE_KEYS: &[(&str, &str)] = &[
     ("ANTHROPIC_API_KEY", "sk-ant-fake-0002"),
     ("OPENROUTER_API_KEY", "sk-or-fake-0003"),
     ("GROQ_API_KEY", "gsk-fake-0004"),
+    ("GITHUB_TOKEN", "ghp-fake-0005"),
+    ("my_custom_secret", "fake-0006"),
+    ("AWS_SESSION_THING", "fake-0007"),
 ];
 
 #[tokio::test(flavor = "multi_thread")]
@@ -45,6 +48,19 @@ async fn project_profile_boots_with_no_heavy_services_and_no_provider_keys() {
         // No spawn.json: the link is unconfigured and every shared call fails closed.
         std::env::set_var("WEFTOS_RUNTIME_DIR", run.path());
     }
+
+    // Decoy endpoints for everything a local fallback could dial: the LLM
+    // service, local STT and TTS. Any connection to them fails the test.
+    let decoys: Vec<tokio::net::TcpListener> = {
+        let mut v = Vec::new();
+        for var in ["LLM_SERVICE_URL", "WEFT_WHISPER_URL", "WEFT_TTS_URL"] {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            // SAFETY: as above, before anything else runs.
+            unsafe { std::env::set_var(var, format!("http://{}", l.local_addr().unwrap())) };
+            v.push(l);
+        }
+        v
+    };
 
     let mut config = Config::default();
     config.providers.openai.api_key = serde_json::from_str("\"sk-fake-openai-0001\"").unwrap();
@@ -123,6 +139,24 @@ async fn project_profile_boots_with_no_heavy_services_and_no_provider_keys() {
         assert!(!status_dump.contains(v), "{v} in kernel.status");
     }
 
+    // No voice tools: their default STT/TTS endpoints belong to the parent.
+    let reg = clawft_weave::project_profile::strip_voice_tools(tools(&[
+        "audio_transcribe", "audio_synthesize", "voice_listen", "voice_speak", "read_file",
+    ]));
+    assert_eq!(reg.list(), ["read_file"]);
+
+    // Parent down, and the shared embedder has no width: not ready, no guess.
+    let emb = clawft_weave::project_profile::project_embedder().await.expect("project embedder");
+    assert!(!emb.is_ready());
+    assert_eq!(clawft_core::embeddings::Embedder::dimension(&*emb), 0);
+    assert!(clawft_core::embeddings::Embedder::embed(&*emb, "x").await.is_err());
+
+    // Through all of the above, nothing dialled a local endpoint.
+    for l in &decoys {
+        let hit = tokio::time::timeout(Duration::from_millis(150), l.accept()).await;
+        assert!(hit.is_err(), "a project kernel with its parent down made an outbound connection");
+    }
+
     // A project kernel does not serve shared.* to a sibling.
     let r = rpc(&sock, "shared.embed", json!({"texts": [], "project_id": "01J0000000000000000000000A"}), "admin").await;
     assert_eq!(r["error_kind"], "not_a_parent", "{r}");
@@ -135,4 +169,30 @@ async fn rpc(sock: &std::path::Path, method: &str, params: Value, auth: &str) ->
     let mut line = String::new();
     BufReader::new(r).read_line(&mut line).await.unwrap();
     serde_json::from_str(line.trim()).unwrap()
+}
+
+struct Named(&'static str);
+
+#[async_trait::async_trait]
+impl clawft_core::tools::registry::Tool for Named {
+    fn name(&self) -> &str {
+        self.0
+    }
+    fn description(&self) -> &str {
+        "test"
+    }
+    fn parameters(&self) -> Value {
+        json!({"type": "object"})
+    }
+    async fn execute(&self, _args: Value) -> Result<Value, clawft_core::tools::registry::ToolError> {
+        Ok(Value::Null)
+    }
+}
+
+fn tools(names: &[&'static str]) -> clawft_core::tools::registry::ToolRegistry {
+    let mut r = clawft_core::tools::registry::ToolRegistry::new();
+    for n in names {
+        r.register(Arc::new(Named(n)));
+    }
+    r
 }

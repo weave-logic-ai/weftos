@@ -1,192 +1,18 @@
 //! Package F, user-daemon side: `shared.*` served to a stub child over the
-//! real socket path (ADR-103 Phase 2 F).
+//! real socket path (ADR-103 Phase 2 F). Harness in `common/mod.rs`.
 //!
-//! The "user daemon" is an in-process kernel behind `handle_connection`; the
-//! "child" is a `ParentLink` with a project token, the same client the
-//! project profile installs. Embedding and LLM are stubs that record what
-//! they were sent: no model is loaded and nothing touches the network.
 //! This process never enters the project profile (that is
 //! `shared_services_child.rs`), so `shared.*` is served here.
 
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+mod common;
+
+use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
-use clawft_kernel::boot::Kernel;
-use clawft_kernel::embedding::{EmbeddingError, EmbeddingProvider};
-use clawft_platform::NativePlatform;
-use clawft_service_llm::{
-    ChatRequest, ChatResponse, LlmBackend, LlmClient, LlmConfig, LlmError, share_llm_client,
-};
-use clawft_types::config::{ChainConfig, Config, KernelConfig};
-use clawft_weave::parent_link::{Backoff, ParentError, ParentLink, ParentLlmBackend, RemoteEmbedder};
+use clawft_service_llm::{LlmClient, LlmConfig};
+use clawft_weave::parent_link::{ParentError, ParentLlmBackend, RemoteEmbedder};
+use common::*;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{RwLock, watch};
-
-type KernelRef = Arc<RwLock<Kernel<NativePlatform>>>;
-
-/// `scope_gate`, the manifest dir and the stub installs are process-global:
-/// one test at a time.
-static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-const PROMPT: &str = "the-secret-prompt-text-xyzzy";
-
-// ── stubs ────────────────────────────────────────────────────────────────
-
-struct StubEmbedder;
-
-#[async_trait]
-impl EmbeddingProvider for StubEmbedder {
-    async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
-        Ok(vec![text.len() as f32, 1.0, 2.0, 3.0])
-    }
-    fn dimensions(&self) -> usize {
-        4
-    }
-    fn model_name(&self) -> &str {
-        "stub-embed"
-    }
-}
-
-#[derive(Debug, Default)]
-struct StubLlm {
-    seen: Mutex<Vec<String>>,
-}
-
-#[async_trait]
-impl LlmBackend for StubLlm {
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
-        let texts: Vec<String> = request.messages.iter().map(|m| m.content.as_text().into_owned()).collect();
-        self.seen.lock().unwrap().extend(texts);
-        Ok(serde_json::from_value(json!({
-            "choices": [{"message": {"role": "assistant", "content": "stub reply"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
-            "model": "stub-model"
-        }))
-        .unwrap())
-    }
-    async fn list_models(&self) -> Result<Vec<String>, LlmError> {
-        Ok(vec!["stub-model".into()])
-    }
-    async fn health(&self) -> Result<bool, LlmError> {
-        Ok(true)
-    }
-}
-
-fn stub_llm() -> &'static Arc<StubLlm> {
-    static S: OnceLock<Arc<StubLlm>> = OnceLock::new();
-    S.get_or_init(|| {
-        let stub = Arc::new(StubLlm::default());
-        let client = LlmClient::with_backend(LlmConfig::default(), stub.clone()).unwrap();
-        clawft_weave::shared_rpc::install_llm(share_llm_client(client));
-        stub
-    })
-}
-
-// ── user daemon stand-in ─────────────────────────────────────────────────
-
-struct Daemon {
-    _tmp: tempfile::TempDir,
-    sock: PathBuf,
-    manifests: PathBuf,
-    kernel: KernelRef,
-    shutdown: watch::Sender<bool>,
-}
-
-async fn spawn() -> Daemon {
-    stub_llm();
-    clawft_weave::shared_rpc::install_embedder(Arc::new(StubEmbedder));
-    let tmp = tempfile::tempdir().unwrap();
-    let manifests = tmp.path().join("projects");
-    clawft_weave::project_rpc::init_manifests_dir(manifests.clone());
-    clawft_weave::scope_gate::init(Some(manifests.clone()), false);
-    let kcfg = KernelConfig {
-        chain: Some(ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())),
-        ..KernelConfig::default()
-    };
-    let kernel = Kernel::boot(Config::default(), kcfg, Arc::new(NativePlatform::new()))
-        .await
-        .expect("boot");
-    let kernel: KernelRef = Arc::new(RwLock::new(kernel));
-    let sock = tmp.path().join("kernel.sock");
-    let listener = UnixListener::bind(&sock).unwrap();
-    let (tx, mut rx) = watch::channel(false);
-    let (k, t) = (Arc::clone(&kernel), tx.clone());
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                accepted = listener.accept() => match accepted {
-                    Ok((s, _)) => {
-                        tokio::spawn(clawft_weave::daemon::handle_connection(s, Arc::clone(&k), t.clone()));
-                    }
-                    Err(_) => break,
-                },
-                _ = rx.changed() => if *rx.borrow() { break; },
-            }
-        }
-    });
-    tokio::time::sleep(Duration::from_millis(30)).await;
-    Daemon { _tmp: tmp, sock, manifests, kernel, shutdown: tx }
-}
-
-async fn rpc(sock: &Path, method: &str, params: Value, auth: Option<&str>, project: Option<&str>) -> Value {
-    let (r, mut w) = UnixStream::connect(sock).await.unwrap().into_split();
-    let mut req = json!({"id": "t", "method": method, "params": params});
-    if let Some(a) = auth {
-        req["auth"] = json!(a);
-    }
-    if let Some(p) = project {
-        req["project"] = json!(p);
-    }
-    w.write_all(format!("{req}\n").as_bytes()).await.unwrap();
-    let mut line = String::new();
-    BufReader::new(r).read_line(&mut line).await.unwrap();
-    serde_json::from_str(line.trim()).unwrap()
-}
-
-/// Register a project root and return its id; `shared` is appended to its
-/// manifest as the `[shared]` limits table.
-async fn register(d: &Daemon, shared: &str) -> String {
-    let root = tempfile::tempdir().unwrap().keep();
-    let r = rpc(&d.sock, "project.register", json!({"root": root, "name": "p"}), Some("admin"), None).await;
-    assert_eq!(r["ok"], true, "{r}");
-    let id = r["result"]["project"]["id"].as_str().unwrap().to_owned();
-    if !shared.is_empty() {
-        let path = d.manifests.join(format!("{id}.toml"));
-        let mut text = std::fs::read_to_string(&path).unwrap();
-        text.push_str(&format!("\n[shared]\n{shared}\n"));
-        std::fs::write(path, text).unwrap();
-    }
-    id
-}
-
-/// A project-scoped token, as the supervisor will hand a child in spawn.json.
-async fn token_for(d: &Daemon, project: &str) -> String {
-    let r = rpc(&d.sock, "auth.token.issue", json!({"label": "child", "project": project}), Some("admin"), None).await;
-    assert_eq!(r["ok"], true, "{r}");
-    r["result"]["secret"].as_str().unwrap().to_owned()
-}
-
-fn child(d: &Daemon, project: &str, token: &str) -> Arc<ParentLink> {
-    Arc::new(
-        ParentLink::new(d.sock.clone(), project.into(), token.into())
-            .with_backoff(Backoff { attempts: 1, initial: Duration::from_millis(1), max: Duration::from_millis(1) }),
-    )
-}
-
-fn shared_use_events(d: &Daemon, rt: &tokio::runtime::Handle) -> Vec<Value> {
-    let k = rt.block_on(d.kernel.read());
-    k.chain_manager()
-        .unwrap()
-        .tail(200)
-        .into_iter()
-        .filter(|e| e.kind == "shared.use")
-        .map(|e| e.payload.unwrap())
-        .collect()
-}
 
 // ── tests ────────────────────────────────────────────────────────────────
 
@@ -344,9 +170,9 @@ async fn a_project_only_gets_context_it_sent() {
     ca.complete(vec![clawft_service_llm::ChatMessage::user("alpha-only-context")], None, None).await.unwrap();
 
     // B's request reaches the model with exactly B's messages.
-    let before = stub_llm().seen.lock().unwrap().len();
+    let before = stub_llm().0.seen.lock().unwrap().len();
     cb.complete(vec![clawft_service_llm::ChatMessage::user("beta question")], None, None).await.unwrap();
-    let seen = stub_llm().seen.lock().unwrap().clone();
+    let seen = stub_llm().0.seen.lock().unwrap().clone();
     assert_eq!(&seen[before..], ["beta question"], "B must see only its own messages");
 
     // There is no way to ask for stored context: conversation, session and
