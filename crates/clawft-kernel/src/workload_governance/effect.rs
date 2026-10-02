@@ -26,6 +26,11 @@ pub const MAX_REFS: usize = 64;
 pub enum PackageTrust {
     /// No valid signature.
     Unsigned,
+    /// Authorised by a project certificate chained to the user key (the
+    /// `project` kind, ADR-103 A6). Ordered just above `Unsigned` so it never
+    /// satisfies the signed-package minimums cog permits ask for; only a
+    /// permit that names it (`min_package_trust = project_cert`) matches.
+    ProjectCert,
     /// Signed, but not by a pinned signer.
     SignedUnpinned,
     /// Operator attestation over a hash manifest (model weights, ADR-101).
@@ -169,6 +174,9 @@ impl WorkloadEffect {
             PackageTrust::SignedUnpinned => 0.6,
             PackageTrust::OperatorAttested => 0.3,
             PackageTrust::PinnedSigner => 0.1,
+            // Chained to the user's own key: between a pinned signer and an
+            // operator attestation.
+            PackageTrust::ProjectCert => 0.2,
         };
         let tier_sec = match self.node_tier {
             NodeTrustTier::Discovered => 0.8,

@@ -202,7 +202,7 @@ impl WorkloadGate {
         let Some(permit) = self
             .permits
             .iter()
-            .find(|p| p.matches_in(action, &req.effect, project_id))
+            .find(|p| p.matches_for(action, &req.effect, project_id, Some(agent_id)))
         else {
             out.evaluated_rules = self.default_rule_ids.clone();
             out.decision = Self::deny(format!(

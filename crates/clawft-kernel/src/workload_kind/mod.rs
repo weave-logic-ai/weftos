@@ -26,11 +26,15 @@ use crate::workload_pkg::{ManifestEnvelope, ManifestError};
 use crate::workload_runtime::VerifiedWorkload;
 
 mod cog;
+mod project;
 
 #[cfg(test)]
 mod tests;
 
 pub use cog::CogKind;
+#[cfg(all(feature = "workload-runtime", feature = "mesh", unix, feature = "native"))]
+pub use project::{ProjectFacts, ProjectPrepareError, prepare_project};
+pub use project::{KIND_PROJECT, ProjectKind, project_healthy};
 #[cfg(all(feature = "workload-runtime", feature = "mesh", unix))]
 pub use cog::load_cog_shaped;
 
@@ -92,10 +96,12 @@ impl KindRegistry {
         Self::default()
     }
 
-    /// The in-tree kinds: `cog`.
+    /// The in-tree kinds: `cog` and `project`.
     pub fn builtin() -> Self {
         let mut r = Self::new();
         r.register(Arc::new(CogKind))
+            .expect("builtin kind ids are distinct");
+        r.register(Arc::new(ProjectKind))
             .expect("builtin kind ids are distinct");
         r
     }

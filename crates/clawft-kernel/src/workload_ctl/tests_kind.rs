@@ -202,6 +202,7 @@ fn project_sources_are_refused_by_signed() {
             cert_serial: 1,
             user_key_id: "u".into(),
             policy_hash: "00".into(),
+            root: "/p".into(),
         }),
     };
     assert!(w.signed("native").is_err());

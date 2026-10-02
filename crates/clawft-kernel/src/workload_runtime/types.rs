@@ -91,6 +91,9 @@ pub struct ProjectPayload {
     pub user_key_id: String,
     /// Hash (hex) of the project policy in force.
     pub policy_hash: String,
+    /// The project root the child kernel runs in (canonical, from the
+    /// manifest). The `logical` adapter refuses admission when it is gone.
+    pub root: std::path::PathBuf,
 }
 
 /// The verified payload of a signed package.

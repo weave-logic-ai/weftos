@@ -22,6 +22,7 @@ mod error;
 mod ids;
 mod schema;
 mod seed;
+pub mod spawn;
 mod store;
 
 pub use adopt::{adopt_or_init, reinit_fork};

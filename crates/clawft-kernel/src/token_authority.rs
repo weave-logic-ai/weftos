@@ -58,6 +58,36 @@ pub const SECRET_PREFIX: &str = "wft_";
 pub enum TokenScope {
     /// Full surface (ADR-102 D4).
     Owner,
+    /// A per-project child kernel's credential (ADR-103 A6, Phase 2 G):
+    /// read and write only, never Admin, bound to one project by
+    /// [`TokenInfo::project`]. It cannot mint, revoke or list tokens and
+    /// reaches no Admin-gated method.
+    Project,
+}
+
+impl TokenScope {
+    /// The literal capability scopes this token grants (see
+    /// `capability::CallerCapabilities::from_scopes` in the weave crate).
+    pub fn capability_scopes(self) -> &'static [&'static str] {
+        match self {
+            TokenScope::Owner => &["admin"],
+            TokenScope::Project => &["write"],
+        }
+    }
+
+    fn parse(s: Option<&str>) -> Self {
+        match s {
+            Some("project") => TokenScope::Project,
+            _ => TokenScope::Owner,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            TokenScope::Owner => "owner",
+            TokenScope::Project => "project",
+        }
+    }
 }
 
 /// Public metadata of a live token. Never contains the secret or hash.
@@ -183,7 +213,7 @@ fn parse_issued(p: &Value) -> Option<Entry> {
                 .to_owned(),
             issued_at,
             expires_at,
-            scope: TokenScope::Owner,
+            scope: TokenScope::parse(p.get("scope").and_then(Value::as_str)),
             project: p.get("project").and_then(Value::as_str).map(str::to_owned),
         },
     })
@@ -448,6 +478,37 @@ impl TokenAuthority {
         project: Option<String>,
         issuer: &Issuer,
     ) -> Result<(String, TokenInfo), TokenError> {
+        self.issue_scoped_at(now, label, ttl, project, TokenScope::Owner, issuer)
+    }
+
+    /// Issue a [`TokenScope::Project`] token for `project_id`: Write only,
+    /// never Admin, valid for `ttl`.
+    pub fn issue_project(
+        &self,
+        project_id: &str,
+        ttl: Duration,
+        issuer: &Issuer,
+    ) -> Result<(String, TokenInfo), TokenError> {
+        self.issue_scoped_at(
+            Utc::now(),
+            &format!("project:{project_id}"),
+            Some(ttl),
+            Some(project_id.to_owned()),
+            TokenScope::Project,
+            issuer,
+        )
+    }
+
+    /// Issue with an explicit scope at an explicit clock.
+    pub fn issue_scoped_at(
+        &self,
+        now: DateTime<Utc>,
+        label: &str,
+        ttl: Option<Duration>,
+        project: Option<String>,
+        scope: TokenScope,
+        issuer: &Issuer,
+    ) -> Result<(String, TokenInfo), TokenError> {
         let ttl = ttl.unwrap_or(DEFAULT_TTL);
         if ttl <= Duration::zero() {
             return Err(TokenError::TtlNotPositive);
@@ -470,7 +531,7 @@ impl TokenAuthority {
             label: label.to_owned(),
             issued_at: now,
             expires_at: now + ttl,
-            scope: TokenScope::Owner,
+            scope,
             project,
         };
         let mut payload = json!({
@@ -483,6 +544,9 @@ impl TokenAuthority {
         });
         if let Some(p) = &info.project {
             payload["project"] = json!(p);
+        }
+        if scope != TokenScope::Owner {
+            payload["scope"] = json!(scope.as_str());
         }
         self.chain.append(SOURCE, KIND_ISSUED, Some(payload));
         self.lock().insert(
