@@ -51,7 +51,9 @@ impl std::fmt::Display for LinkError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unavailable(m) => write!(f, "user daemon unavailable: {m}"),
-            Self::Refused { kind, message, .. } => write!(f, "user daemon refused ({kind}): {message}"),
+            Self::Refused { kind, message, .. } => {
+                write!(f, "user daemon refused ({kind}): {message}")
+            }
         }
     }
 }
@@ -111,7 +113,9 @@ pub async fn call_async(
         let (r, mut w) = stream.into_split();
         w.write_all(line.as_bytes()).await?;
         let mut out = String::new();
-        TBufReader::new(r.take(MAX_RESPONSE_BYTES)).read_line(&mut out).await?;
+        TBufReader::new(r.take(MAX_RESPONSE_BYTES))
+            .read_line(&mut out)
+            .await?;
         Ok::<_, std::io::Error>(out)
     };
     let out = tokio::time::timeout(timeout, exchange)
@@ -123,7 +127,9 @@ pub async fn call_async(
 
 fn parse_response(method: &str, line: &str) -> Result<Response, LinkError> {
     if line.trim().is_empty() {
-        return Err(LinkError::Unavailable(format!("{method}: the daemon closed the connection")));
+        return Err(LinkError::Unavailable(format!(
+            "{method}: the daemon closed the connection"
+        )));
     }
     serde_json::from_str(line.trim())
         .map_err(|e| LinkError::Unavailable(format!("{method}: malformed response: {e}")))
@@ -145,9 +151,13 @@ pub fn call_blocking(
     let io = |e: std::io::Error| LinkError::Unavailable(format!("{method}: {e}"));
     stream.set_write_timeout(Some(timeout)).map_err(io)?;
     stream.set_read_timeout(Some(timeout)).map_err(io)?;
-    stream.write_all(request_line(method, params, project).as_bytes()).map_err(io)?;
+    stream
+        .write_all(request_line(method, params, project).as_bytes())
+        .map_err(io)?;
     let mut out = String::new();
-    BufReader::new((&stream).take(MAX_RESPONSE_BYTES)).read_line(&mut out).map_err(io)?;
+    BufReader::new((&stream).take(MAX_RESPONSE_BYTES))
+        .read_line(&mut out)
+        .map_err(io)?;
     parse_response(method, &out)
 }
 
@@ -165,7 +175,11 @@ pub struct RpcParentTransport {
 impl RpcParentTransport {
     /// A transport to `socket` for `project_id` with a per-call deadline.
     pub fn new(socket: PathBuf, project_id: String, timeout: Duration) -> Self {
-        Self { socket, project_id, timeout }
+        Self {
+            socket,
+            project_id,
+            timeout,
+        }
     }
 }
 
@@ -173,8 +187,14 @@ impl ParentTransport for RpcParentTransport {
     fn submit(&self, stmt: &ProjectAnchorStmt) -> Result<AnchorAck, AnchorSubmitError> {
         let params = serde_json::to_value(stmt)
             .map_err(|e| AnchorSubmitError::Unreachable(format!("encode statement: {e}")))?;
-        let resp = call_blocking(&self.socket, "project.anchor.submit", params, Some(&self.project_id), self.timeout)
-            .map_err(|e| AnchorSubmitError::Unreachable(e.to_string()))?;
+        let resp = call_blocking(
+            &self.socket,
+            "project.anchor.submit",
+            params,
+            Some(&self.project_id),
+            self.timeout,
+        )
+        .map_err(|e| AnchorSubmitError::Unreachable(e.to_string()))?;
         if resp.ok {
             return resp
                 .result
@@ -187,13 +207,20 @@ impl ParentTransport for RpcParentTransport {
             .and_then(|d| d.get("last"))
             .and_then(|l| serde_json::from_value::<Accepted>(l.clone()).ok())
             .map(|a| {
-                let ack = AnchorAck { user_seq: a.user_seq, user_event_hash: a.user_event_hash.clone() };
+                let ack = AnchorAck {
+                    user_seq: a.user_seq,
+                    user_event_hash: a.user_event_hash.clone(),
+                };
                 Box::new((a.statement, ack))
             });
         let key_history = data
             .and_then(|d| d.get("key_history"))
             .and_then(Value::as_array)
-            .map(|v| v.iter().filter_map(|k| k.as_str().and_then(hex_decode::<32>)).collect())
+            .map(|v| {
+                v.iter()
+                    .filter_map(|k| k.as_str().and_then(hex_decode::<32>))
+                    .collect()
+            })
             .unwrap_or_default();
         Err(AnchorSubmitError::Rejected {
             kind: resp.error_kind.unwrap_or_else(|| "parent_error".into()),
@@ -224,8 +251,18 @@ mod tests {
     fn blocking_call_round_trips_and_carries_the_project() {
         let t = tempfile::tempdir().unwrap();
         let p = t.path().join("s");
-        let h = serve_once(&p, "{\"ok\":true,\"result\":{\"user_seq\":3,\"user_event_hash\":\"ab\"}}\n");
-        let r = call_blocking(&p, "project.anchor.submit", json!({}), Some("PID"), Duration::from_secs(2)).unwrap();
+        let h = serve_once(
+            &p,
+            "{\"ok\":true,\"result\":{\"user_seq\":3,\"user_event_hash\":\"ab\"}}\n",
+        );
+        let r = call_blocking(
+            &p,
+            "project.anchor.submit",
+            json!({}),
+            Some("PID"),
+            Duration::from_secs(2),
+        )
+        .unwrap();
         assert!(r.ok);
         let sent: Value = serde_json::from_str(&h.join().unwrap()).unwrap();
         assert_eq!(sent["project"], "PID");
@@ -253,7 +290,9 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let p = t.path().join("s");
         let _l = tokio::net::UnixListener::bind(&p).unwrap();
-        let e = call_async(&p, "m", json!({}), None, Duration::from_millis(150)).await.unwrap_err();
+        let e = call_async(&p, "m", json!({}), None, Duration::from_millis(150))
+            .await
+            .unwrap_err();
         assert!(matches!(e, LinkError::Unavailable(m) if m.contains("timed out")));
     }
 
@@ -262,7 +301,11 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let f = t.path().join("plain");
         std::fs::write(&f, "x").unwrap();
-        assert!(verify_parent_socket(&f).unwrap_err().contains("not a unix socket"));
+        assert!(
+            verify_parent_socket(&f)
+                .unwrap_err()
+                .contains("not a unix socket")
+        );
         let link = t.path().join("link");
         let real = t.path().join("real");
         let _l = UnixListener::bind(&real).unwrap();
@@ -275,7 +318,10 @@ mod tests {
     fn rejection_carries_kind_and_resync_detail() {
         let t = tempfile::tempdir().unwrap();
         let p = t.path().join("s");
-        let _h = serve_once(&p, "{\"ok\":false,\"error\":\"nope\",\"error_kind\":\"anchor_seq\"}\n");
+        let _h = serve_once(
+            &p,
+            "{\"ok\":false,\"error\":\"nope\",\"error_kind\":\"anchor_seq\"}\n",
+        );
         let tr = RpcParentTransport::new(p, "PID".into(), Duration::from_secs(2));
         let stmt = ProjectAnchorStmt {
             project_id: "PID".into(),

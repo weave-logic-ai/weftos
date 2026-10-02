@@ -30,7 +30,8 @@ use clawft_rpc::mesh_local::Activity;
 pub const HEARTBEAT_SECS: u64 = 15;
 /// A session expires after this many missed beats.
 pub const MISSED_BEATS: u32 = 3;
-const MAX_EXPECTATIONS: usize = 256;
+/// Most unexpired spawn expectations the ledger holds.
+pub const MAX_EXPECTATIONS: usize = 256;
 
 /// What the supervisor knows about a child it just spawned. Filed by
 /// [`expect_spawn`] right when it writes `spawn.json`.
@@ -91,6 +92,12 @@ pub enum RegistryError {
     /// No such session (never registered, unregistered, or replaced).
     #[error("unknown session")]
     UnknownSession,
+    /// The spawn ledger is full of unexpired expectations.
+    #[error("too many outstanding spawns")]
+    LedgerFull,
+    /// A session-bound request failed its proof (pid, freshness, signature).
+    #[error("session proof refused: {0}")]
+    BadProof(&'static str),
     /// The session missed three heartbeats; register again.
     #[error("session expired after {0} missed heartbeats; register again")]
     SessionExpired(u32),
@@ -107,6 +114,8 @@ impl RegistryError {
             Self::WrongRoot => "root_mismatch",
             Self::SecondSession(_) => "second_session",
             Self::UnknownSession => "unknown_session",
+            Self::LedgerFull => "spawn_ledger_full",
+            Self::BadProof(_) => "bad_session_proof",
             Self::SessionExpired(_) => "session_expired",
         }
     }
@@ -129,6 +138,8 @@ pub struct NewSession {
     pub version: String,
     /// `key_id` of the certified project key.
     pub project_key_id: String,
+    /// The certified project public key (verifies session-bound requests).
+    pub project_pubkey: [u8; 32],
 }
 
 /// Session liveness.
@@ -175,7 +186,10 @@ pub struct ProjectRegistry {
 impl ProjectRegistry {
     /// A registry whose sessions expire after [`MISSED_BEATS`] x `beat`.
     pub fn new(beat: Duration) -> Self {
-        Self { beat, inner: Mutex::new(HashMap::new()) }
+        Self {
+            beat,
+            inner: Mutex::new(HashMap::new()),
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, SessionInfo>> {
@@ -192,12 +206,18 @@ impl ProjectRegistry {
 
     /// The tombstone for `id`, if any, with its state.
     pub fn state_at(&self, id: &str, now: Instant) -> Option<(SessionState, u32)> {
-        self.lock().get(id).map(|s| (self.state_of(s, now), s.facts.pid))
+        self.lock()
+            .get(id)
+            .map(|s| (self.state_of(s, now), s.facts.pid))
     }
 
     /// Open a session. Refused while a live one exists. A tombstone (expired
     /// session) is replaced.
-    pub fn register_at(&self, facts: NewSession, now: Instant) -> Result<SessionInfo, RegistryError> {
+    pub fn register_at(
+        &self,
+        facts: NewSession,
+        now: Instant,
+    ) -> Result<SessionInfo, RegistryError> {
         let mut map = self.lock();
         if let Some(old) = map.get(&facts.project_id)
             && self.state_of(old, now) == SessionState::Live
@@ -215,7 +235,12 @@ impl ProjectRegistry {
     }
 
     /// Record a beat. An expired or replaced session is refused.
-    pub fn heartbeat_at(&self, session: &str, activity: Activity, now: Instant) -> Result<(), RegistryError> {
+    pub fn heartbeat_at(
+        &self,
+        session: &str,
+        activity: Activity,
+        now: Instant,
+    ) -> Result<(), RegistryError> {
         let mut map = self.lock();
         let Some(s) = map.values_mut().find(|s| s.session == session) else {
             return Err(RegistryError::UnknownSession);
@@ -225,6 +250,52 @@ impl ProjectRegistry {
         }
         s.last_heartbeat = now;
         s.activity = activity;
+        Ok(())
+    }
+
+    /// Check a heartbeat/unregister proof: the session exists and beats,
+    /// `pid` is the registered one, `at_unix` is within the window of
+    /// `now_unix`, and `sig` is the certified key's signature over
+    /// [`clawft_rpc::mesh_local::session_signed_bytes`].
+    pub fn verify_proof_at(
+        &self,
+        op: &str,
+        session: &str,
+        pid: u32,
+        at_unix: u64,
+        sig_hex: &str,
+        now_unix: u64,
+        now: Instant,
+    ) -> Result<(), RegistryError> {
+        use clawft_rpc::mesh_local::{SESSION_PROOF_WINDOW_SECS, session_signed_bytes};
+        let (pubkey, want_pid, state) = {
+            let map = self.lock();
+            let s = map
+                .values()
+                .find(|s| s.session == session)
+                .ok_or(RegistryError::UnknownSession)?;
+            (s.facts.project_pubkey, s.facts.pid, self.state_of(s, now))
+        };
+        if pid != want_pid {
+            return Err(RegistryError::BadProof("pid is not the registered one"));
+        }
+        if at_unix.abs_diff(now_unix) > SESSION_PROOF_WINDOW_SECS {
+            return Err(RegistryError::BadProof("stale or future timestamp"));
+        }
+        let sig = clawft_types::project::canon::hex_decode::<64>(sig_hex)
+            .ok_or(RegistryError::BadProof("signature is missing or not hex"))?;
+        let vk = ed25519_dalek::VerifyingKey::from_bytes(&pubkey)
+            .map_err(|_| RegistryError::BadProof("registered key is invalid"))?;
+        vk.verify_strict(
+            &session_signed_bytes(op, session, pid, at_unix),
+            &ed25519_dalek::Signature::from_bytes(&sig),
+        )
+        .map_err(|_| {
+            RegistryError::BadProof("signature does not verify under the certified key")
+        })?;
+        if state == SessionState::Expired && op == "heartbeat" {
+            return Err(RegistryError::SessionExpired(MISSED_BEATS));
+        }
         Ok(())
     }
 
@@ -262,8 +333,11 @@ impl ProjectRegistry {
     /// Every session with its state (for `weaver kernel status`, G's idle
     /// poll and tests).
     pub fn sessions_at(&self, now: Instant) -> Vec<(SessionInfo, SessionState)> {
-        let mut v: Vec<_> =
-            self.lock().values().map(|s| (s.clone(), self.state_of(s, now))).collect();
+        let mut v: Vec<_> = self
+            .lock()
+            .values()
+            .map(|s| (s.clone(), self.state_of(s, now)))
+            .collect();
         v.sort_by(|a, b| a.0.facts.project_id.cmp(&b.0.facts.project_id));
         v
     }
@@ -348,18 +422,41 @@ fn ct_eq(a: &str, b: &str) -> bool {
 /// File the expectation for a child about to start (the supervisor calls
 /// this when it writes `spawn.json`). One per project id: a newer spawn
 /// replaces an older one.
-pub fn expect_spawn(e: SpawnExpectation) {
+///
+/// Refuses ([`RegistryError::LedgerFull`]) when [`MAX_EXPECTATIONS`]
+/// unexpired expectations for other projects are outstanding (expired ones
+/// are purged first).
+pub fn expect_spawn(e: SpawnExpectation) -> Result<(), RegistryError> {
+    expect_spawn_capped(e, MAX_EXPECTATIONS)
+}
+
+fn expect_spawn_capped(e: SpawnExpectation, cap: usize) -> Result<(), RegistryError> {
     let mut map = ledger().lock().unwrap_or_else(|x| x.into_inner());
-    if map.len() >= MAX_EXPECTATIONS && !map.contains_key(&e.project_id) {
-        let now = now_unix();
+    insert_capped(&mut map, e, cap, now_unix())
+}
+
+fn insert_capped(
+    map: &mut HashMap<String, SpawnExpectation>,
+    e: SpawnExpectation,
+    cap: usize,
+    now: u64,
+) -> Result<(), RegistryError> {
+    if map.len() >= cap && !map.contains_key(&e.project_id) {
         map.retain(|_, v| v.expires_unix > now);
+        if map.len() >= cap {
+            return Err(RegistryError::LedgerFull);
+        }
     }
     map.insert(e.project_id.clone(), e);
+    Ok(())
 }
 
 /// Forget the outstanding expectation for `project_id` (spawn failed).
 pub fn cancel_spawn(project_id: &str) {
-    ledger().lock().unwrap_or_else(|x| x.into_inner()).remove(project_id);
+    ledger()
+        .lock()
+        .unwrap_or_else(|x| x.into_inner())
+        .remove(project_id);
 }
 
 /// True when an unexpired expectation is outstanding for `project_id`.
@@ -380,7 +477,9 @@ pub fn peek_spawn(
     now_unix: u64,
 ) -> Result<SpawnExpectation, RegistryError> {
     let map = ledger().lock().unwrap_or_else(|x| x.into_inner());
-    let e = map.get(project_id).ok_or_else(|| RegistryError::NotExpected(project_id.to_owned()))?;
+    let e = map
+        .get(project_id)
+        .ok_or_else(|| RegistryError::NotExpected(project_id.to_owned()))?;
     if e.expires_unix <= now_unix {
         return Err(RegistryError::SpawnExpired);
     }
@@ -391,7 +490,10 @@ pub fn peek_spawn(
         return Err(RegistryError::BadSpawnNonce);
     }
     if e.pid != 0 && e.pid != pid {
-        return Err(RegistryError::PidMismatch { got: pid, want: e.pid });
+        return Err(RegistryError::PidMismatch {
+            got: pid,
+            want: e.pid,
+        });
     }
     Ok(e.clone())
 }
@@ -429,6 +531,7 @@ mod tests {
             topic_prefixes: vec![format!("chain/{id}/")],
             version: "0.8.2".into(),
             project_key_id: "k".into(),
+            project_pubkey: [0u8; 32],
         }
     }
 
@@ -438,7 +541,9 @@ mod tests {
         let t0 = Instant::now();
         let s1 = r.register_at(facts("P", 1), t0).unwrap();
         assert_eq!(
-            r.register_at(facts("P", 2), t0 + Duration::from_secs(44)).unwrap_err().kind(),
+            r.register_at(facts("P", 2), t0 + Duration::from_secs(44))
+                .unwrap_err()
+                .kind(),
             "second_session"
         );
         let t = t0 + Duration::from_secs(45);
@@ -446,7 +551,12 @@ mod tests {
         assert!(r.route_for_at("P", t).is_none());
         let s2 = r.register_at(facts("P", 2), t).unwrap();
         assert_ne!(s1.session, s2.session);
-        assert_eq!(r.heartbeat_at(&s1.session, Activity::default(), t).unwrap_err().kind(), "unknown_session");
+        assert_eq!(
+            r.heartbeat_at(&s1.session, Activity::default(), t)
+                .unwrap_err()
+                .kind(),
+            "unknown_session"
+        );
     }
 
     #[test]
@@ -454,12 +564,22 @@ mod tests {
         let r = ProjectRegistry::new(Duration::from_secs(15));
         let t0 = Instant::now();
         let s = r.register_at(facts("P", 1), t0).unwrap();
-        r.heartbeat_at(&s.session, Activity::default(), t0 + Duration::from_secs(40)).unwrap();
+        r.heartbeat_at(
+            &s.session,
+            Activity::default(),
+            t0 + Duration::from_secs(40),
+        )
+        .unwrap();
         let live = t0 + Duration::from_secs(40 + 44);
         assert!(r.route_for_at("P", live).is_some());
         let dead = t0 + Duration::from_secs(40 + 45);
         assert!(r.route_for_at("P", dead).is_none());
-        assert_eq!(r.heartbeat_at(&s.session, Activity::default(), dead).unwrap_err().kind(), "session_expired");
+        assert_eq!(
+            r.heartbeat_at(&s.session, Activity::default(), dead)
+                .unwrap_err()
+                .kind(),
+            "session_expired"
+        );
     }
 
     #[test]
@@ -482,28 +602,87 @@ mod tests {
             exe_sha: String::new(),
             root: "/r".into(),
             expires_unix: 1_000,
-        });
-        assert_eq!(peek_spawn(id, None, 7, 10).unwrap_err().kind(), "bad_spawn_nonce");
-        assert_eq!(peek_spawn(id, Some(&"cd".repeat(16)), 7, 10).unwrap_err().kind(), "bad_spawn_nonce");
-        assert_eq!(peek_spawn(id, Some(&n), 7, 1_000).unwrap_err().kind(), "spawn_expired");
+        })
+        .unwrap();
+        assert_eq!(
+            peek_spawn(id, None, 7, 10).unwrap_err().kind(),
+            "bad_spawn_nonce"
+        );
+        assert_eq!(
+            peek_spawn(id, Some(&"cd".repeat(16)), 7, 10)
+                .unwrap_err()
+                .kind(),
+            "bad_spawn_nonce"
+        );
+        assert_eq!(
+            peek_spawn(id, Some(&n), 7, 1_000).unwrap_err().kind(),
+            "spawn_expired"
+        );
         let e = peek_spawn(id, Some(&n), 7, 10).unwrap();
         assert!(consume_spawn(&e));
         assert!(!consume_spawn(&e), "single use");
-        assert_eq!(peek_spawn(id, Some(&n), 7, 10).unwrap_err().kind(), "spawn_not_expected");
+        assert_eq!(
+            peek_spawn(id, Some(&n), 7, 10).unwrap_err().kind(),
+            "spawn_not_expected"
+        );
         // Recorded pid must match.
         let id2 = "01TESTLEDGER0000000000000B";
-        expect_spawn(SpawnExpectation { project_id: id2.into(), nonce: n.clone(), pid: 9, exe_sha: String::new(), root: "/r".into(), expires_unix: 1_000 });
-        assert_eq!(peek_spawn(id2, Some(&n), 8, 10).unwrap_err().kind(), "pid_mismatch");
+        expect_spawn(SpawnExpectation {
+            project_id: id2.into(),
+            nonce: n.clone(),
+            pid: 9,
+            exe_sha: String::new(),
+            root: "/r".into(),
+            expires_unix: 1_000,
+        })
+        .unwrap();
+        assert_eq!(
+            peek_spawn(id2, Some(&n), 8, 10).unwrap_err().kind(),
+            "pid_mismatch"
+        );
         assert!(peek_spawn(id2, Some(&n), 9, 10).is_ok());
         cancel_spawn(id2);
     }
 
     #[test]
+    fn a_full_ledger_purges_expired_then_refuses_a_new_project() {
+        let mk = |id: &str, exp: u64| SpawnExpectation {
+            project_id: id.into(),
+            nonce: "ab".repeat(16),
+            pid: 0,
+            exe_sha: String::new(),
+            root: "/r".into(),
+            expires_unix: exp,
+        };
+        let mut m = HashMap::new();
+        insert_capped(&mut m, mk("A", 100), 2, 50).unwrap();
+        insert_capped(&mut m, mk("B", 100), 2, 50).unwrap();
+        // Full of live entries: a third project is refused, a replacement is not.
+        assert_eq!(
+            insert_capped(&mut m, mk("C", 100), 2, 50)
+                .unwrap_err()
+                .kind(),
+            "spawn_ledger_full"
+        );
+        insert_capped(&mut m, mk("A", 200), 2, 50).unwrap();
+        // Once the old ones have expired they are purged to make room.
+        insert_capped(&mut m, mk("C", 300), 2, 150).unwrap();
+        assert!(m.contains_key("C") && m.contains_key("A") && !m.contains_key("B"));
+    }
+
+    #[test]
     fn a_newer_spawn_replaces_the_older_one() {
         let id = "01TESTLEDGER0000000000000C";
-        let mk = |n: &str| SpawnExpectation { project_id: id.into(), nonce: n.repeat(16), pid: 0, exe_sha: String::new(), root: "/r".into(), expires_unix: 1_000 };
-        expect_spawn(mk("aa"));
-        expect_spawn(mk("bb"));
+        let mk = |n: &str| SpawnExpectation {
+            project_id: id.into(),
+            nonce: n.repeat(16),
+            pid: 0,
+            exe_sha: String::new(),
+            root: "/r".into(),
+            expires_unix: 1_000,
+        };
+        expect_spawn(mk("aa")).unwrap();
+        expect_spawn(mk("bb")).unwrap();
         assert!(peek_spawn(id, Some(&"aa".repeat(16)), 1, 1).is_err());
         assert!(peek_spawn(id, Some(&"bb".repeat(16)), 1, 1).is_ok());
         cancel_spawn(id);

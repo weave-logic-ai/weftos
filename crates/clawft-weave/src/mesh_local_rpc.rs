@@ -34,7 +34,7 @@ use clawft_rpc::Response;
 use clawft_rpc::mesh_local::{
     ChallengeReply, ChallengeRequest, HeartbeatRequest, METHOD_CHALLENGE, METHOD_HEARTBEAT,
     METHOD_REGISTER, METHOD_UNREGISTER, PROTO_MESH_LOCAL, PROTOCOL_TAG, ParentHead, RegisterAck,
-    RegisterRequest, UnregisterRequest, ack_signed_bytes,
+    RegisterRequest, UnregisterRequest, ack_signed_bytes, bind_signed_bytes,
 };
 use clawft_types::project::canon::hex_decode;
 use clawft_types::project::cert::key_id;
@@ -63,15 +63,23 @@ fn reg_err(e: &RegistryError) -> Response {
 }
 
 fn params<T: DeserializeOwned>(v: Value) -> Result<T, Response> {
-    serde_json::from_value(v).map_err(|e| err("invalid_params", format!("bad mesh-local params: {e}")))
+    serde_json::from_value(v)
+        .map_err(|e| err("invalid_params", format!("bad mesh-local params: {e}")))
 }
 
 /// Handler for the four `mesh.*` methods.
 pub fn handle(call: ExtCall) -> ExtFuture {
     Box::pin(async move {
-        let ExtCall { method, params: p, ctx } = call;
+        let ExtCall {
+            method,
+            params: p,
+            ctx,
+        } = call;
         if !crate::user_daemon::is_active() {
-            return err("mesh_unavailable", "mesh-local registration is served by the user daemon only");
+            return err(
+                "mesh_unavailable",
+                "mesh-local registration is served by the user daemon only",
+            );
         }
         match method.as_str() {
             METHOD_CHALLENGE => challenge(&ctx, p).await,
@@ -93,7 +101,9 @@ async fn challenge(ctx: &ExtCtx, p: Value) -> Response {
     }
     // A challenge is only handed to a project the supervisor is starting (or
     // whose session this daemon knows), so strangers cannot fill the table.
-    let known = registry().state_at(&req.project_id, Instant::now()).is_some();
+    let known = registry()
+        .state_at(&req.project_id, Instant::now())
+        .is_some();
     if !known && !spawn_expected(&req.project_id, now_unix()) {
         return reg_err(&RegistryError::NotExpected(req.project_id));
     }
@@ -103,7 +113,12 @@ async fn challenge(ctx: &ExtCtx, p: Value) -> Response {
     };
     match clawft_types::project::find_by_id(&env.manifests_dir, &req.project_id) {
         Ok(Some(_)) => {}
-        Ok(None) => return err("project_not_found", format!("project {} is not registered", req.project_id)),
+        Ok(None) => {
+            return err(
+                "project_not_found",
+                format!("project {} is not registered", req.project_id),
+            );
+        }
         Err(e) => return err("project_store_error", e.to_string()),
     }
     match issue_challenge(&req.project_id) {
@@ -126,12 +141,20 @@ enum Auth {
 
 fn authorise(req: &RegisterRequest, now: u64) -> Result<Auth, RegistryError> {
     if let Some(n) = req.spawn_nonce.as_deref() {
+        // A live session blocks a new one before anything else runs, so the
+        // refused child neither gets a certificate nor burns its nonce.
+        if let Some((SessionState::Live, _)) = registry().state_at(&req.project_id, Instant::now())
+        {
+            return Err(RegistryError::SecondSession(req.project_id.clone()));
+        }
         return peek_spawn(&req.project_id, Some(n), req.pid, now).map(Auth::Spawn);
     }
     match registry().state_at(&req.project_id, Instant::now()) {
         Some((SessionState::Expired, pid)) if pid == req.pid => Ok(Auth::Reregister),
         Some((SessionState::Live, _)) => Err(RegistryError::SecondSession(req.project_id.clone())),
-        Some((SessionState::Expired, want)) => Err(RegistryError::PidMismatch { got: req.pid, want }),
+        Some((SessionState::Expired, want)) => {
+            Err(RegistryError::PidMismatch { got: req.pid, want })
+        }
         None => Err(RegistryError::NotExpected(req.project_id.clone())),
     }
 }
@@ -143,7 +166,10 @@ async fn register(ctx: &ExtCtx, p: Value) -> Response {
     };
     // 1. shape
     if req.protocol != PROTOCOL_TAG {
-        return err("proto_mismatch", format!("expected {PROTOCOL_TAG}, got {:?}", req.protocol));
+        return err(
+            "proto_mismatch",
+            format!("expected {PROTOCOL_TAG}, got {:?}", req.protocol),
+        );
     }
     if validate_id(&req.project_id).is_err() {
         return err("invalid_params", "project id is not a canonical ULID");
@@ -152,14 +178,61 @@ async fn register(ctx: &ExtCtx, p: Value) -> Response {
         ident::parse_pubkey(&req.project_pubkey),
         hex_decode::<64>(&req.nonce_reply.sig),
     ) else {
-        return err("invalid_params", "project_pubkey and nonce_reply.sig must be lowercase hex");
+        return err(
+            "invalid_params",
+            "project_pubkey and nonce_reply.sig must be lowercase hex",
+        );
     };
-    let hex32 = |s: &str| s.len() == 32 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    let hex32 =
+        |s: &str| s.len() == 32 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     if !hex32(&req.client_nonce) {
-        return err("invalid_params", "client_nonce must be 32 lowercase hex characters");
+        return err(
+            "invalid_params",
+            "client_nonce must be 32 lowercase hex characters",
+        );
     }
-    if req.socket.len() > MAX_FIELD || req.version.len() > 64 || req.addresses.len() > 16 || req.topic_prefixes.len() > 16 {
+    if req.socket.len() > MAX_FIELD
+        || req.version.len() > 64
+        || req.addresses.len() > 16
+        || req.topic_prefixes.len() > 16
+    {
         return err("invalid_params", "registration fields are too large");
+    }
+    // Addresses and topics are the project's own, nothing else.
+    let topic_prefix = format!("chain/{}/", req.project_id);
+    if req.addresses.iter().any(|a| a != &req.project_id)
+        || req
+            .topic_prefixes
+            .iter()
+            .any(|t| !t.starts_with(&topic_prefix))
+    {
+        return err(
+            "invalid_params",
+            "addresses and topic_prefixes must belong to the registering project",
+        );
+    }
+    // The binding signature ties this challenge to the child's own socket,
+    // pid and client randomness (the fixed PoP does not cover them).
+    let bind_ok = hex_decode::<64>(&req.bind_sig).is_some_and(|sig| {
+        ed25519_dalek::VerifyingKey::from_bytes(&pubkey).is_ok_and(|vk| {
+            vk.verify_strict(
+                &bind_signed_bytes(
+                    &req.project_id,
+                    &req.nonce_reply.nonce,
+                    &req.client_nonce,
+                    &req.socket,
+                    req.pid,
+                ),
+                &ed25519_dalek::Signature::from_bytes(&sig),
+            )
+            .is_ok()
+        })
+    });
+    if !bind_ok {
+        return err(
+            "pop_failed",
+            "bind_sig does not verify (socket, pid and client_nonce must be signed by the project key)",
+        );
     }
     // 2. authorisation (no side effects yet)
     let now = now_unix();
@@ -173,9 +246,15 @@ async fn register(ctx: &ExtCtx, p: Value) -> Response {
             if req.root_sha256 != root_sha256(&e.root) {
                 return reg_err(&RegistryError::WrongRoot);
             }
-            SpawnInfo { pid: req.pid, exe_sha: e.exe_sha.clone() }
+            SpawnInfo {
+                pid: req.pid,
+                exe_sha: e.exe_sha.clone(),
+            }
         }
-        Auth::Reregister => SpawnInfo { pid: req.pid, exe_sha: String::new() },
+        Auth::Reregister => SpawnInfo {
+            pid: req.pid,
+            exe_sha: String::new(),
+        },
     };
     // 4. the challenge nonce
     let nonce = match claim_nonce(&req.nonce_reply.nonce, &req.project_id) {
@@ -214,6 +293,7 @@ async fn register(ctx: &ExtCtx, p: Value) -> Response {
             topic_prefixes: req.topic_prefixes.clone(),
             version: req.version.clone(),
             project_key_id: issued.cert.project_key_id.clone(),
+            project_pubkey: pubkey,
         },
         Instant::now(),
     ) {
@@ -243,7 +323,10 @@ async fn register(ctx: &ExtCtx, p: Value) -> Response {
         session: session.session,
         cert: Some(issued.cert),
         accepted: vec![req.project_id],
-        proto: clawft_rpc::mesh_local::ProtoRange { current: PROTO_MESH_LOCAL, min: PROTO_MESH_LOCAL },
+        proto: clawft_rpc::mesh_local::ProtoRange {
+            current: PROTO_MESH_LOCAL,
+            min: PROTO_MESH_LOCAL,
+        },
         heartbeat_secs: HEARTBEAT_SECS,
         machine_cert: None,
         parent_head: head,
@@ -257,6 +340,17 @@ fn heartbeat(p: Value) -> Response {
         Ok(r) => r,
         Err(r) => return r,
     };
+    if let Err(e) = registry().verify_proof_at(
+        "heartbeat",
+        &req.session,
+        req.pid,
+        req.at_unix,
+        &req.sig,
+        now_unix(),
+        Instant::now(),
+    ) {
+        return reg_err(&e);
+    }
     match registry().heartbeat_at(&req.session, req.activity, Instant::now()) {
         Ok(()) => Response::success(json!({ "ok": true, "heartbeat_secs": HEARTBEAT_SECS })),
         Err(e) => reg_err(&e),
@@ -268,6 +362,17 @@ fn unregister(p: Value) -> Response {
         Ok(r) => r,
         Err(r) => return r,
     };
+    if let Err(e) = registry().verify_proof_at(
+        "unregister",
+        &req.session,
+        req.pid,
+        req.at_unix,
+        &req.sig,
+        now_unix(),
+        Instant::now(),
+    ) {
+        return reg_err(&e);
+    }
     match registry().unregister(&req.session) {
         Ok(id) => {
             tracing::info!(project = %id, reason = %req.reason.chars().take(64).collect::<String>(), "child unregistered");

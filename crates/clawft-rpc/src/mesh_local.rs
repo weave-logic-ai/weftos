@@ -81,9 +81,46 @@ pub const ACK_DOMAIN: &str = "weftos-mesh-local-ack-v1\n";
 /// ([`RegisterRequest::client_nonce`]), so a socket squatting at the parent's
 /// path cannot replay a captured acknowledgement: it would have to get the
 /// user key to sign over a value it chose after the child did.
-pub fn ack_signed_bytes(project_id: &str, session: &str, nonce: &str, client_nonce: &str) -> Vec<u8> {
+pub fn ack_signed_bytes(
+    project_id: &str,
+    session: &str,
+    nonce: &str,
+    client_nonce: &str,
+) -> Vec<u8> {
     format!("{ACK_DOMAIN}{project_id}\n{session}\n{nonce}\n{client_nonce}").into_bytes()
 }
+
+/// Domain tag of the registration binding signature.
+pub const BIND_DOMAIN: &str = "weftos-mesh-local-bind-v1\n";
+
+/// Bytes the project key signs into [`RegisterRequest::bind_sig`]:
+/// `weftos-mesh-local-bind-v1\n<project_id>\n<nonce>\n<client_nonce>\n<socket>\n<pid>`.
+/// The proof of possession itself is fixed by `clawft_types` (golden
+/// vectors); this second signature ties the same challenge to the child's
+/// self-reported socket, pid and client randomness.
+pub fn bind_signed_bytes(
+    project_id: &str,
+    nonce: &str,
+    client_nonce: &str,
+    socket: &str,
+    pid: u32,
+) -> Vec<u8> {
+    format!("{BIND_DOMAIN}{project_id}\n{nonce}\n{client_nonce}\n{socket}\n{pid}").into_bytes()
+}
+
+/// Domain tag of a session-bound request signature.
+pub const SESSION_DOMAIN: &str = "weftos-mesh-local-session-v1\n";
+
+/// Bytes the certified project key signs into a heartbeat or unregister:
+/// `weftos-mesh-local-session-v1\n<op>\n<session>\n<pid>\n<at_unix>`.
+/// The user daemon accepts `at_unix` within [`SESSION_PROOF_WINDOW_SECS`] of
+/// its own clock, so a captured request is useful for seconds, not forever.
+pub fn session_signed_bytes(op: &str, session: &str, pid: u32, at_unix: u64) -> Vec<u8> {
+    format!("{SESSION_DOMAIN}{op}\n{session}\n{pid}\n{at_unix}").into_bytes()
+}
+
+/// Allowed clock difference for [`session_signed_bytes`] proofs.
+pub const SESSION_PROOF_WINDOW_SECS: u64 = 30;
 
 /// The user-chain head the user daemon had when it accepted a registration;
 /// a child's first boot records it in `project.genesis`.
@@ -141,6 +178,9 @@ pub struct RegisterRequest {
     /// covers; a child refuses an acknowledgement that does not.
     #[serde(default)]
     pub client_nonce: String,
+    /// Project-key signature (hex) over [`bind_signed_bytes`].
+    #[serde(default)]
+    pub bind_sig: String,
     /// Hex SHA-256 of the canonical project root (`root_sha256` of the path
     /// in `spawn.json`); the user daemon compares it with the manifest.
     #[serde(default)]
@@ -220,6 +260,16 @@ pub struct Activity {
 pub struct HeartbeatRequest {
     /// Session from [`RegisterAck`].
     pub session: String,
+    /// The child's pid; must equal the registered one.
+    #[serde(default)]
+    pub pid: u32,
+    /// Unix seconds when signed.
+    #[serde(default)]
+    pub at_unix: u64,
+    /// Project-key signature (hex) over [`session_signed_bytes`] with op
+    /// `heartbeat`. Required: a session id alone is not a credential.
+    #[serde(default)]
+    pub sig: String,
     /// Activity since the last beat.
     #[serde(default)]
     pub activity: Activity,
@@ -230,6 +280,16 @@ pub struct HeartbeatRequest {
 pub struct UnregisterRequest {
     /// Session to end.
     pub session: String,
+    /// The child's pid; must equal the registered one.
+    #[serde(default)]
+    pub pid: u32,
+    /// Unix seconds when signed.
+    #[serde(default)]
+    pub at_unix: u64,
+    /// Project-key signature (hex) over [`session_signed_bytes`] with op
+    /// `unregister`.
+    #[serde(default)]
+    pub sig: String,
     /// Why (`shutdown`, `idle`, ...).
     #[serde(default)]
     pub reason: String,
@@ -254,6 +314,7 @@ mod tests {
             socket: "/Users/x/.weftos/run/01JB8Z3Q0V6X9KQ4M2N7T5R1WD/kernel.sock".into(),
             features: vec!["anchor".into(), "subscribe".into()],
             client_nonce: "dd".repeat(16),
+            bind_sig: "ab".repeat(64),
             root_sha256: "ee".repeat(32),
             spawn_nonce: Some("n0".into()),
             nonce_reply: NonceReply {
@@ -296,16 +357,27 @@ mod tests {
             proto: ProtoRange { current: 1, min: 1 },
             heartbeat_secs: 15,
             machine_cert: None,
-            parent_head: Some(ParentHead { user_seq: 3, user_event_hash: "aa".into() }),
+            parent_head: Some(ParentHead {
+                user_seq: 3,
+                user_event_hash: "aa".into(),
+            }),
             parent_sig: Some("bb".repeat(64)),
         };
-        let back: RegisterAck = serde_json::from_str(&serde_json::to_string(&ack).unwrap()).unwrap();
+        let back: RegisterAck =
+            serde_json::from_str(&serde_json::to_string(&ack).unwrap()).unwrap();
         assert_eq!(back, ack);
         let hb: HeartbeatRequest = serde_json::from_str(
             r#"{"session":"s","activity":{"last_activity_unix":9,"busy":{"agents":1}}}"#,
         )
         .unwrap();
-        assert_eq!(hb.activity.busy, Busy { agents: 1, workloads: 0, streams: 0 });
+        assert_eq!(
+            hb.activity.busy,
+            Busy {
+                agents: 1,
+                workloads: 0,
+                streams: 0
+            }
+        );
         assert!(!hb.activity.busy.is_idle());
         assert!(Busy::default().is_idle());
         let bare: HeartbeatRequest = serde_json::from_str(r#"{"session":"s"}"#).unwrap();

@@ -473,3 +473,12 @@ fn unlisted_verbs_under_classified_prefixes_are_denied() {
         assert!(decide(OutsideProjectPolicy::ReadOnly, m, true, || false).is_err(), "{m}");
     }
 }
+
+/// mesh-local children are not Admin; they carry their project claim.
+#[test]
+fn mesh_local_routes_pass_for_a_child_inside_a_project_and_not_outside() {
+    for m in ["mesh.challenge", "mesh.register", "mesh.heartbeat", "mesh.unregister"] {
+        assert!(decide(OutsideProjectPolicy::ReadOnly, m, false, || true).is_ok(), "{m} inside a project");
+        assert!(decide(OutsideProjectPolicy::ReadOnly, m, false, || false).is_err(), "{m} without a claim");
+    }
+}

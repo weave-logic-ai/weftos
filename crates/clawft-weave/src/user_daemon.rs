@@ -31,6 +31,20 @@ pub const PROFILE_PROJECT: &str = "project";
 /// Roles the user daemon runs (collapsed machine + user, ADR-103 roles table).
 pub const USER_ROLES: [&str; 2] = ["machine", "user"];
 
+static PROJECT_PROFILE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Record that this process was started with `--profile project` (or
+/// `WEAVER_PROFILE=project`); `daemon::run` then forces
+/// `KernelProfile::Project` so `pre_boot` runs the child handshake.
+pub fn set_project_profile(on: bool) {
+    PROJECT_PROFILE.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// True when `--profile project` was requested for this process.
+pub fn project_profile_requested() -> bool {
+    PROJECT_PROFILE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Parse a `--profile` value. `None` and `default` mean the existing
 /// project/legacy behaviour.
 pub fn parse_profile(value: Option<&str>) -> Result<Option<&'static str>, String> {

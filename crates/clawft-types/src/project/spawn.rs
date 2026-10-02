@@ -8,6 +8,12 @@
 //! each nonce for exactly one `mesh.register`, so a copied file is worth
 //! nothing once the real child has registered or 60 s have passed.
 //!
+//! Expiry is wall clock (`expires_unix`): a clock step can shorten or extend
+//! the 60 s window, which the single-use nonce on the user daemon bounds.
+//! The file is removed by path after the descriptor checks, not by
+//! `unlinkat` on the directory descriptor; swapping the path in between
+//! needs write access to the user's own run dir.
+//!
 //! Honest limit: the file proves "the user daemon wrote this for this
 //! project", to a reader that can read a 0600 file in the user's run dir.
 //! That is the same uid as everything else Phase 2 trusts; the Phase 3 peer
@@ -61,7 +67,10 @@ impl fmt::Debug for SpawnFile {
             .field("project_id", &self.project_id)
             .field("root", &self.root)
             .field("expires_unix", &self.expires_unix)
-            .field("project_token", &self.project_token.as_ref().map(|_| "<redacted>"))
+            .field(
+                "project_token",
+                &self.project_token.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -110,7 +119,9 @@ impl SpawnFile {
     /// Structural checks: hex shapes, a ULID, absolute paths.
     pub fn validate(&self) -> Result<(), SpawnError> {
         let bad = |m: &str| Err(SpawnError::Invalid(m.to_owned()));
-        let hex = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+        let hex = |s: &str, n: usize| {
+            s.len() == n && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        };
         if !(hex(&self.nonce, 32) || hex(&self.nonce, 64)) {
             return bad("`nonce` must be 32 or 64 lowercase hex characters");
         }
@@ -132,7 +143,10 @@ impl SpawnFile {
     /// Write `path` atomically with mode 0600 (temp file in the same
     /// directory, `O_EXCL`, fsync, rename). Replaces an older spawn file.
     pub fn write(&self, path: &Path) -> std::io::Result<()> {
-        let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let dir = path
+            .parent()
+            .filter(|d| !d.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
         let tmp = dir.join(format!(".spawn.{}.tmp", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
         let mut opts = std::fs::OpenOptions::new();
@@ -166,7 +180,10 @@ impl SpawnFile {
             path: path.to_path_buf(),
             reason: e.to_string(),
         };
-        let insecure = |r: &str| SpawnError::Insecure { path: path.to_path_buf(), reason: r.to_owned() };
+        let insecure = |r: &str| SpawnError::Insecure {
+            path: path.to_path_buf(),
+            reason: r.to_owned(),
+        };
         let mut opts = std::fs::OpenOptions::new();
         opts.read(true);
         #[cfg(unix)]
@@ -207,7 +224,9 @@ impl SpawnFile {
         let spawn: Self = serde_json::from_str(&text).map_err(|e| unreadable(&e))?;
         spawn.validate()?;
         if now_unix >= spawn.expires_unix {
-            return Err(SpawnError::Expired { age_secs: now_unix - spawn.expires_unix });
+            return Err(SpawnError::Expired {
+                age_secs: now_unix - spawn.expires_unix,
+            });
         }
         Ok(spawn)
     }
@@ -241,11 +260,17 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                std::fs::metadata(&p).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
         assert_eq!(SpawnFile::read_and_consume(&p, 1059).unwrap(), s);
         assert!(!p.exists(), "single use");
-        assert!(matches!(SpawnFile::read_and_consume(&p, 1059), Err(SpawnError::Unreadable { .. })));
+        assert!(matches!(
+            SpawnFile::read_and_consume(&p, 1059),
+            Err(SpawnError::Unreadable { .. })
+        ));
     }
 
     #[test]

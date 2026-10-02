@@ -18,15 +18,17 @@ use std::time::Duration;
 
 use clawft_kernel::chain::ChainManager;
 use clawft_kernel::project_identity as ident;
-use clawft_rpc::mesh_local::{MeshRole, NonceReply, PROTOCOL_TAG, RegisterRequest};
+use clawft_rpc::mesh_local::{
+    MeshRole, NonceReply, PROTOCOL_TAG, RegisterRequest, bind_signed_bytes, session_signed_bytes,
+};
 use clawft_types::config::overlay::Limits;
-use clawft_types::project::SpawnFile;
 use clawft_types::project::cert::{PopOp, key_id};
+use clawft_types::project::{SpawnError, SpawnFile};
 use clawft_weave::mesh_local_registry::{SpawnExpectation, expect_spawn, now_unix, registry};
 use clawft_weave::project_boot::{BootError, bootstrap};
 use clawft_weave::project_boot_run::ensure_genesis;
 use common::{Daemon, SERIAL, rpc};
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{Value, json};
 
 const T: Duration = Duration::from_secs(5);
@@ -52,18 +54,30 @@ async fn world() -> World {
         k.chain_manager().unwrap().signing_key_clone().unwrap()
     };
     let tmp = tempfile::tempdir().unwrap();
-    World { d, home: tmp.path().join("home"), user_key, _tmp: tmp }
+    World {
+        d,
+        home: tmp.path().join("home"),
+        user_key,
+        _tmp: tmp,
+    }
 }
 
 /// Register a project with the user daemon and lay out its run dir with a
 /// signed parent policy, as the supervisor would.
 async fn project(w: &World) -> Proj {
     let root = tempfile::tempdir().unwrap().keep();
-    let r = rpc(&w.d.sock, "project.register", json!({"root": root, "name": "p"}), Some("admin"), None).await;
+    let r = rpc(
+        &w.d.sock,
+        "project.register",
+        json!({"root": root, "name": "p"}),
+        Some("admin"),
+        None,
+    )
+    .await;
     assert_eq!(r["ok"], true, "{r}");
     let id = r["result"]["project"]["id"].as_str().unwrap().to_owned();
     let stored = PathBuf::from(r["result"]["project"]["root"].as_str().unwrap());
-    let run = w.home.join(".weftos/run").join(&id);
+    let run = w.d.manifests.parent().unwrap().join("run").join(&id);
     std::fs::create_dir_all(&run).unwrap();
     clawft_kernel::parent_policy::export_rules_to(
         &run.join("parent-policy.json"),
@@ -74,7 +88,11 @@ async fn project(w: &World) -> Proj {
         &w.user_key,
     )
     .unwrap();
-    Proj { id, root: stored, run }
+    Proj {
+        id,
+        root: stored,
+        run,
+    }
 }
 
 fn spawn_file(w: &World, p: &Proj, sock: &Path, nonce: &str, now: u64) -> SpawnFile {
@@ -102,7 +120,8 @@ fn spawn(w: &World, p: &Proj, nonce: &str) -> SpawnFile {
         exe_sha: "ee".repeat(32),
         root: p.root.clone(),
         expires_unix: s.expires_unix,
-    });
+    })
+    .unwrap();
     s
 }
 
@@ -134,18 +153,45 @@ async fn raw_register(
     pop_key: &SigningKey,
     reuse_nonce: Option<&str>,
 ) -> (Value, String) {
+    raw_register_with(w, p, spawn_nonce, root, pop_key, reuse_nonce, |_| {}).await
+}
+
+async fn raw_register_with(
+    w: &World,
+    p: &Proj,
+    spawn_nonce: Option<&str>,
+    root: &Path,
+    pop_key: &SigningKey,
+    reuse_nonce: Option<&str>,
+    tamper: impl FnOnce(&mut RegisterRequest),
+) -> (Value, String) {
     let key = SigningKey::from_bytes(&[7u8; 32]);
     let upk = w.user_key.verifying_key().to_bytes();
     let nonce = match reuse_nonce {
         Some(n) => n.to_owned(),
         None => {
-            let c = rpc(&w.d.sock, "mesh.challenge", json!({"project_id": p.id}), None, None).await;
+            let c = rpc(
+                &w.d.sock,
+                "mesh.challenge",
+                json!({"project_id": p.id}),
+                None,
+                None,
+            )
+            .await;
             assert_eq!(c["ok"], true, "{c}");
             c["result"]["nonce"].as_str().unwrap().to_owned()
         }
     };
     let sig = ident::pop_sign(pop_key, PopOp::Register, &key_id(&upk), &nonce, &p.id).unwrap();
-    let req = RegisterRequest {
+    let socket = p.run.join("kernel.sock").to_string_lossy().into_owned();
+    let bind = key.sign(&bind_signed_bytes(
+        &p.id,
+        &nonce,
+        &nonce_hex(),
+        &socket,
+        4242,
+    ));
+    let mut req = RegisterRequest {
         protocol: PROTOCOL_TAG.into(),
         role: MeshRole::Project,
         project_id: p.id.clone(),
@@ -156,19 +202,38 @@ async fn raw_register(
         version: "t".into(),
         build_sha: String::new(),
         pid: 4242,
-        socket: p.run.join("kernel.sock").to_string_lossy().into_owned(),
+        socket,
         features: vec![],
+        bind_sig: ident::hex(&bind.to_bytes()),
         client_nonce: nonce_hex(),
         root_sha256: clawft_weave::project_cert_rpc::root_sha256(root),
         spawn_nonce: spawn_nonce.map(str::to_owned),
-        nonce_reply: NonceReply { nonce: nonce.clone(), sig: ident::hex(&sig) },
+        nonce_reply: NonceReply {
+            nonce: nonce.clone(),
+            sig: ident::hex(&sig),
+        },
     };
-    let r = rpc(&w.d.sock, "mesh.register", serde_json::to_value(req).unwrap(), None, None).await;
+    tamper(&mut req);
+    let r = rpc(
+        &w.d.sock,
+        "mesh.register",
+        serde_json::to_value(req).unwrap(),
+        None,
+        None,
+    )
+    .await;
     (r, nonce)
 }
 
 fn nonce_hex() -> String {
     "dd".repeat(16)
+}
+
+fn proof(key: &SigningKey, op: &str, session: &str, pid: u32, at: u64) -> String {
+    ident::hex(
+        &key.sign(&session_signed_bytes(op, session, pid, at))
+            .to_bytes(),
+    )
 }
 
 fn kind(v: &Value) -> &str {
@@ -197,13 +262,93 @@ async fn register_happy_path() {
     let route = registry().route_for(&p.id).expect("registered");
     assert_eq!(route.session, session);
     assert_eq!(route.addresses, vec![p.id.clone()]);
-    assert_eq!(user_events(&w, "project.register").await.iter().filter(|e| e["cert"]["project_id"] == p.id.as_str()).count(), 1);
-    // The real heartbeat path.
-    let hb = rpc(&w.d.sock, "mesh.heartbeat", json!({"session": session, "activity": {"busy": {"agents": 2}}}), None, None).await;
+    assert_eq!(
+        user_events(&w, "project.register")
+            .await
+            .iter()
+            .filter(|e| e["cert"]["project_id"] == p.id.as_str())
+            .count(),
+        1
+    );
+    // The real heartbeat path, signed by the certified key.
+    let pid = std::process::id();
+    let beat = |session: &str, pid: u32, at: u64, key: &SigningKey, op: &str| {
+        json!({"session": session, "pid": pid, "at_unix": at,
+               "sig": proof(key, op, session, pid, at), "activity": {"busy": {"agents": 2}}})
+    };
+    let hb = rpc(
+        &w.d.sock,
+        "mesh.heartbeat",
+        beat(&session, pid, now_unix(), &c.key, "heartbeat"),
+        None,
+        None,
+    )
+    .await;
     assert_eq!(hb["ok"], true, "{hb}");
-    let bad = rpc(&w.d.sock, "mesh.heartbeat", json!({"session": "nope"}), None, None).await;
+    // A session id alone is not a credential.
+    let bare = rpc(
+        &w.d.sock,
+        "mesh.heartbeat",
+        json!({"session": session}),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(kind(&bare), "bad_session_proof", "{bare}");
+    let other = SigningKey::from_bytes(&[3u8; 32]);
+    for (what, params) in [
+        (
+            "wrong key",
+            beat(&session, pid, now_unix(), &other, "heartbeat"),
+        ),
+        (
+            "wrong pid",
+            beat(&session, pid + 1, now_unix(), &c.key, "heartbeat"),
+        ),
+        (
+            "stale",
+            beat(&session, pid, now_unix() - 120, &c.key, "heartbeat"),
+        ),
+        (
+            "wrong op",
+            beat(&session, pid, now_unix(), &c.key, "unregister"),
+        ),
+    ] {
+        let r = rpc(&w.d.sock, "mesh.heartbeat", params, None, None).await;
+        assert_eq!(kind(&r), "bad_session_proof", "{what}: {r}");
+    }
+    let bad = rpc(
+        &w.d.sock,
+        "mesh.heartbeat",
+        beat("nope", pid, now_unix(), &c.key, "heartbeat"),
+        None,
+        None,
+    )
+    .await;
     assert_eq!(kind(&bad), "unknown_session");
-    let un = rpc(&w.d.sock, "mesh.unregister", json!({"session": session, "reason": "test"}), None, None).await;
+    // A caller who learned the session id cannot end it.
+    let guessed = rpc(
+        &w.d.sock,
+        "mesh.unregister",
+        json!({"session": session, "reason": "evil"}),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(kind(&guessed), "bad_session_proof", "{guessed}");
+    assert!(registry().route_for(&p.id).is_some(), "still registered");
+    let un = rpc(
+        &w.d.sock,
+        "mesh.unregister",
+        {
+            let mut v = beat(&session, pid, now_unix(), &c.key, "unregister");
+            v["reason"] = json!("test");
+            v
+        },
+        None,
+        None,
+    )
+    .await;
     assert_eq!(un["ok"], true, "{un}");
     assert!(registry().route_for(&p.id).is_none());
 }
@@ -220,7 +365,8 @@ async fn wrong_pop_is_refused_and_does_not_burn_the_spawn_nonce() {
         exe_sha: String::new(),
         root: p.root.clone(),
         expires_unix: now_unix() + 60,
-    });
+    })
+    .unwrap();
     let other = SigningKey::from_bytes(&[9u8; 32]);
     let (r, _) = raw_register(&w, &p, Some(&nonce('b')), &p.root, &other, None).await;
     assert_eq!(kind(&r), "pop_failed", "{r}");
@@ -245,6 +391,7 @@ async fn replayed_challenge_nonce_is_refused() {
             root: p.root.clone(),
             expires_unix: now_unix() + 60,
         })
+        .unwrap()
     };
     mk();
     let (first, n) = raw_register(&w, &p, Some(&nonce('c')), &p.root, &key, None).await;
@@ -261,17 +408,30 @@ async fn expired_loose_and_copied_spawn_files_are_refused() {
     let w = world().await;
     let p = project(&w).await;
     // Expired.
-    spawn_file(&w, &p, &w.d.sock, &nonce('d'), now_unix() - 120).write(&p.run.join("spawn.json")).unwrap();
+    spawn_file(&w, &p, &w.d.sock, &nonce('d'), now_unix() - 120)
+        .write(&p.run.join("spawn.json"))
+        .unwrap();
     let e = boot(&p).await.unwrap_err();
-    assert!(matches!(e, BootError::Spawn(_)), "{e}");
+    assert!(
+        matches!(e, BootError::Spawn(SpawnError::Expired { .. })),
+        "{e}"
+    );
     assert!(e.to_string().contains("started by the user daemon"), "{e}");
     // Group/world readable.
     spawn(&w, &p, &nonce('e'));
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(p.run.join("spawn.json"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(
+            p.run.join("spawn.json"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
     }
     let e = boot(&p).await.unwrap_err();
+    assert!(
+        matches!(e, BootError::Spawn(SpawnError::Insecure { .. })),
+        "{e}"
+    );
     assert!(e.to_string().contains("0644"), "{e}");
     // A copy taken before the real child registered, used afterwards.
     let s = spawn(&w, &p, &nonce('f'));
@@ -279,9 +439,18 @@ async fn expired_loose_and_copied_spawn_files_are_refused() {
     std::fs::copy(p.run.join("spawn.json"), &copy).unwrap();
     boot(&p).await.expect("the real child registers");
     s.write(&p.run.join("spawn.json")).unwrap(); // the attacker's copy, back in place
+    // While the real child lives: refused as a second session, up front.
     let e = boot(&p).await.unwrap_err();
     assert!(
-        matches!(&e, BootError::Refused { kind, .. } if kind == "spawn_not_expected" || kind == "second_session"),
+        matches!(&e, BootError::Refused { kind, .. } if kind == "second_session"),
+        "{e}"
+    );
+    // After it is gone the nonce is simply used up.
+    registry().evict(&p.id);
+    s.write(&p.run.join("spawn.json")).unwrap();
+    let e = boot(&p).await.unwrap_err();
+    assert!(
+        matches!(&e, BootError::Refused { kind, .. } if kind == "spawn_not_expected"),
         "{e}"
     );
 }
@@ -292,10 +461,21 @@ async fn unknown_project_wrong_root_and_second_session_are_refused() {
     let w = world().await;
     let p = project(&w).await;
     // No spawn expected: no challenge, no registration.
-    let c = rpc(&w.d.sock, "mesh.challenge", json!({"project_id": p.id}), None, None).await;
+    let c = rpc(
+        &w.d.sock,
+        "mesh.challenge",
+        json!({"project_id": p.id}),
+        None,
+        None,
+    )
+    .await;
     assert_eq!(kind(&c), "spawn_not_expected", "{c}");
     // A project the manifest store does not know, even with an expectation.
-    let ghost = Proj { id: clawft_types::project::new_id(), root: p.root.clone(), run: p.run.clone() };
+    let ghost = Proj {
+        id: clawft_types::project::new_id(),
+        root: p.root.clone(),
+        run: p.run.clone(),
+    };
     expect_spawn(SpawnExpectation {
         project_id: ghost.id.clone(),
         nonce: nonce('1'),
@@ -303,8 +483,16 @@ async fn unknown_project_wrong_root_and_second_session_are_refused() {
         exe_sha: String::new(),
         root: p.root.clone(),
         expires_unix: now_unix() + 60,
-    });
-    let c = rpc(&w.d.sock, "mesh.challenge", json!({"project_id": ghost.id}), None, None).await;
+    })
+    .unwrap();
+    let c = rpc(
+        &w.d.sock,
+        "mesh.challenge",
+        json!({"project_id": ghost.id}),
+        None,
+        None,
+    )
+    .await;
     assert_eq!(kind(&c), "project_not_found", "{c}");
     // Wrong root: spawned in p.root, child claims another directory.
     let key = SigningKey::from_bytes(&[7u8; 32]);
@@ -317,6 +505,7 @@ async fn unknown_project_wrong_root_and_second_session_are_refused() {
             root: p.root.clone(),
             expires_unix: now_unix() + 60,
         })
+        .unwrap()
     };
     mk('2');
     let elsewhere = tempfile::tempdir().unwrap();
@@ -350,16 +539,34 @@ async fn genesis_names_the_user_chain_head_and_the_chain_verifies() {
         let k = w.d.kernel.read().await;
         let user_chain = k.chain_manager().unwrap();
         assert!(head.user_seq <= user_chain.head_sequence());
-        let at_seq = user_chain.tail(0).into_iter().find(|e| e.sequence == head.user_seq).expect("head event exists");
-        assert_eq!(ident::hex(&at_seq.hash), head.user_event_hash, "the genesis names a real user-chain event");
+        let at_seq = user_chain
+            .tail(0)
+            .into_iter()
+            .find(|e| e.sequence == head.user_seq)
+            .expect("head event exists");
+        assert_eq!(
+            ident::hex(&at_seq.hash),
+            head.user_event_hash,
+            "the genesis names a real user-chain event"
+        );
     }
     let chain = ChainManager::new(0, 1000);
     chain.append("kernel", "boot.init", None);
     assert!(ensure_genesis(&chain, &c.cert, &head));
     assert!(!ensure_genesis(&chain, &c.cert, &head), "written once");
-    let g = chain.tail(0).into_iter().find(|e| e.kind == "project.genesis").unwrap();
-    assert_eq!(g.payload.as_ref().unwrap()["parent_head"]["user_event_hash"], head.user_event_hash);
-    assert_eq!(g.payload.as_ref().unwrap()["cert"]["project_id"], p.id.as_str());
+    let g = chain
+        .tail(0)
+        .into_iter()
+        .find(|e| e.kind == "project.genesis")
+        .unwrap();
+    assert_eq!(
+        g.payload.as_ref().unwrap()["parent_head"]["user_event_hash"],
+        head.user_event_hash
+    );
+    assert_eq!(
+        g.payload.as_ref().unwrap()["cert"]["project_id"],
+        p.id.as_str()
+    );
     assert!(chain.verify_integrity().valid);
 }
 
@@ -379,7 +586,14 @@ async fn restart_keeps_node_id_and_mints_no_second_certificate() {
     assert_eq!(first.cert, second.cert);
     assert_ne!(first.session, second.session);
     let registers = user_events(&w, "project.register").await;
-    assert_eq!(registers.iter().filter(|e| e["cert"]["project_id"] == p.id.as_str()).count(), 1, "no second certificate");
+    assert_eq!(
+        registers
+            .iter()
+            .filter(|e| e["cert"]["project_id"] == p.id.as_str())
+            .count(),
+        1,
+        "no second certificate"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -391,14 +605,23 @@ async fn parent_down_registered_child_degrades_and_never_registered_child_refuse
     let first = boot(&p).await.unwrap();
     // The parent goes away (a socket path with nothing behind it).
     let dead = w.home.join("gone.sock");
-    spawn_file(&w, &p, &dead, &nonce('8'), now_unix()).write(&p.run.join("spawn.json")).unwrap();
-    let again = boot(&p).await.expect("a registered child continues degraded");
+    spawn_file(&w, &p, &dead, &nonce('8'), now_unix())
+        .write(&p.run.join("spawn.json"))
+        .unwrap();
+    let again = boot(&p)
+        .await
+        .expect("a registered child continues degraded");
     assert!(again.degraded.is_some() && again.session.is_none());
-    assert_eq!(again.cert, first.cert, "the cached certificate is the one in force");
+    assert_eq!(
+        again.cert, first.cert,
+        "the cached certificate is the one in force"
+    );
     assert_eq!(again.cert.project_key_id, first.cert.project_key_id);
     // A project that never registered has no certificate to fall back on.
     let q = project(&w).await;
-    spawn_file(&w, &q, &dead, &nonce('9'), now_unix()).write(&q.run.join("spawn.json")).unwrap();
+    spawn_file(&w, &q, &dead, &nonce('9'), now_unix())
+        .write(&q.run.join("spawn.json"))
+        .unwrap();
     let e = boot(&q).await.unwrap_err();
     assert!(matches!(e, BootError::NeverRegistered(_)), "{e}");
     assert!(!q.root.join(".weftos/project.cert.json").exists());
@@ -406,23 +629,27 @@ async fn parent_down_registered_child_degrades_and_never_registered_child_refuse
 
 /// Answer every request with a canned success: a squatter on the parent
 /// socket that cannot sign with the user key.
-fn squatter(path: PathBuf, cert: Value) -> std::thread::JoinHandle<()> {
+fn squatter(path: PathBuf, cert: Value) -> std::thread::JoinHandle<Vec<Value>> {
     use std::io::{BufRead, BufReader, Write};
     let l = std::os::unix::net::UnixListener::bind(&path).unwrap();
     std::thread::spawn(move || {
+        let mut seen = Vec::new();
         for s in l.incoming().take(2) {
             let s = s.unwrap();
             let mut line = String::new();
             BufReader::new(&s).read_line(&mut line).unwrap();
             let req: Value = serde_json::from_str(&line).unwrap();
+            seen.push(req.clone());
             let result = if req["method"] == "mesh.challenge" {
                 json!({"nonce": "aa".repeat(16), "user_key_id": ""})
             } else {
                 json!({"ok": true, "session": "S", "cert": cert, "accepted": [], "heartbeat_secs": 15,
                        "proto": {"current": 1, "min": 1}, "parent_sig": "00".repeat(64)})
             };
-            (&s).write_all(format!("{}\n", json!({"ok": true, "result": result})).as_bytes()).unwrap();
+            (&s).write_all(format!("{}\n", json!({"ok": true, "result": result})).as_bytes())
+                .unwrap();
         }
+        seen
     })
 }
 
@@ -440,10 +667,45 @@ async fn a_squatter_on_the_parent_socket_cannot_get_a_child_to_run() {
     std::fs::create_dir_all(&w.home).unwrap();
     let h = squatter(fake.clone(), cert);
     registry().evict(&p.id);
-    spawn_file(&w, &p, &fake, &nonce('b'), now_unix()).write(&p.run.join("spawn.json")).unwrap();
+    spawn_file(&w, &p, &fake, &nonce('b'), now_unix())
+        .write(&p.run.join("spawn.json"))
+        .unwrap();
     let e = boot(&p).await.unwrap_err();
-    assert!(matches!(&e, BootError::Untrusted(m) if m.contains("user key")), "{e}");
-    drop(h);
+    assert!(
+        matches!(&e, BootError::Untrusted(m) if m.contains("user key")),
+        "{e}"
+    );
+    // What the squatter captured is useless against the real daemon: its
+    // proof is bound to a challenge only the squatter issued.
+    let seen = h.join().unwrap();
+    let captured = seen
+        .iter()
+        .find(|r| r["method"] == "mesh.register")
+        .expect("it saw the register")
+        .clone();
+    let nb = nonce('b');
+    expect_spawn(SpawnExpectation {
+        project_id: p.id.clone(),
+        nonce: nb.clone(),
+        pid: 0,
+        exe_sha: String::new(),
+        root: p.root.clone(),
+        expires_unix: now_unix() + 60,
+    })
+    .unwrap();
+    let replay = rpc(
+        &w.d.sock,
+        "mesh.register",
+        captured["params"].clone(),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(kind(&replay), "pop_failed", "{replay}");
+    assert!(
+        clawft_weave::mesh_local_registry::spawn_expected(&p.id, now_unix()),
+        "the nonce was not burnt"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -454,10 +716,307 @@ async fn a_revoked_marker_stops_the_boot_and_a_mismatched_pin_is_refused() {
     spawn(&w, &p, &nonce('c'));
     std::fs::write(p.run.join("user.pub"), format!("{}\n", "11".repeat(32))).unwrap();
     let e = boot(&p).await.unwrap_err();
-    assert!(matches!(e, BootError::Untrusted(_)), "pin differs from spawn.json: {e}");
+    assert!(
+        matches!(e, BootError::Untrusted(_)),
+        "pin differs from spawn.json: {e}"
+    );
     spawn(&w, &p, &nonce('d'));
     std::fs::remove_file(p.run.join("user.pub")).unwrap();
     std::fs::write(p.run.join("revoked"), "").unwrap();
     let e = boot(&p).await.unwrap_err();
     assert!(matches!(e, BootError::Revoked(_)), "{e}");
+}
+
+fn expect(p: &Proj, n: char) {
+    expect_spawn(SpawnExpectation {
+        project_id: p.id.clone(),
+        nonce: nonce(n),
+        pid: 0,
+        exe_sha: String::new(),
+        root: p.root.clone(),
+        expires_unix: now_unix() + 60,
+    })
+    .unwrap();
+}
+
+fn link(w: &World, p: &Proj) -> clawft_weave::project_boot::LinkParams {
+    let upk = w.user_key.verifying_key().to_bytes();
+    clawft_weave::project_boot::LinkParams {
+        socket: w.d.sock.clone(),
+        project_id: p.id.clone(),
+        user_pubkey: upk,
+        user_key_id: key_id(&upk),
+        own_socket: p.run.join("kernel.sock"),
+        root: p.root.clone(),
+        timeout: T,
+    }
+}
+
+fn dead_session(
+    p: &Proj,
+    key: &SigningKey,
+    pid: u32,
+) -> clawft_weave::mesh_local_registry::NewSession {
+    clawft_weave::mesh_local_registry::NewSession {
+        project_id: p.id.clone(),
+        socket: p.run.join("kernel.sock"),
+        pid,
+        addresses: vec![p.id.clone()],
+        topic_prefixes: vec![],
+        version: "t".into(),
+        project_key_id: key_id(&key.verifying_key().to_bytes()),
+        project_pubkey: key.verifying_key().to_bytes(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_second_child_neither_gets_a_certificate_nor_burns_its_nonce() {
+    let _g = SERIAL.lock().await;
+    let w = world().await;
+    let p = project(&w).await;
+    spawn(&w, &p, &nonce('a'));
+    boot(&p).await.unwrap();
+    expect(&p, 'b');
+    let intruder = SigningKey::from_bytes(&[11u8; 32]);
+    let (r, _) = raw_register(&w, &p, Some(&nonce('b')), &p.root, &intruder, None).await;
+    assert_eq!(kind(&r), "second_session", "{r}");
+    assert!(
+        clawft_weave::mesh_local_registry::spawn_expected(&p.id, now_unix()),
+        "nonce not burnt"
+    );
+    let n = user_events(&w, "project.register").await;
+    assert_eq!(
+        n.iter()
+            .filter(|e| e["cert"]["project_id"] == p.id.as_str())
+            .count(),
+        1,
+        "no certificate for it"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bind_signature_and_project_scoped_addresses_are_enforced() {
+    let _g = SERIAL.lock().await;
+    let w = world().await;
+    let p = project(&w).await;
+    expect(&p, 'a');
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let tampers: Vec<(&str, Box<dyn FnOnce(&mut RegisterRequest)>, &str)> = vec![
+        (
+            "no bind_sig",
+            Box::new(|r| r.bind_sig.clear()),
+            "pop_failed",
+        ),
+        (
+            "socket changed after signing",
+            Box::new(|r| r.socket = "/evil.sock".into()),
+            "pop_failed",
+        ),
+        (
+            "pid changed after signing",
+            Box::new(|r| r.pid = 1),
+            "pop_failed",
+        ),
+        (
+            "client_nonce changed",
+            Box::new(|r| r.client_nonce = "ee".repeat(16)),
+            "pop_failed",
+        ),
+        (
+            "foreign topic",
+            Box::new(|r| r.topic_prefixes = vec!["chain/other/".into()]),
+            "invalid_params",
+        ),
+        (
+            "foreign address",
+            Box::new(|r| r.addresses = vec!["other".into()]),
+            "invalid_params",
+        ),
+    ];
+    for (what, f, want) in tampers {
+        let (r, _) = raw_register_with(&w, &p, Some(&nonce('a')), &p.root, &key, None, f).await;
+        assert_eq!(kind(&r), want, "{what}: {r}");
+    }
+    assert!(
+        clawft_weave::mesh_local_registry::spawn_expected(&p.id, now_unix()),
+        "no refusal burnt the nonce"
+    );
+}
+
+/// A parent that answers every connection with a transient refusal.
+fn flaky_parent(path: PathBuf, n: usize) -> std::thread::JoinHandle<usize> {
+    use std::io::{BufRead, BufReader, Write};
+    let l = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    std::thread::spawn(move || {
+        let mut seen = 0;
+        for s in l.incoming().take(n) {
+            let s = s.unwrap();
+            let mut line = String::new();
+            BufReader::new(&s).read_line(&mut line).unwrap();
+            seen += 1;
+            (&s).write_all(
+                b"{\"ok\":false,\"error\":\"busy\",\"error_kind\":\"cert_unavailable\"}\n",
+            )
+            .unwrap();
+        }
+        seen
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn transient_refusals_are_retried_with_backoff_then_reported() {
+    let _g = SERIAL.lock().await;
+    let w = world().await;
+    let p = project(&w).await;
+    std::fs::create_dir_all(&w.home).unwrap();
+    let sock = w.home.join("flaky.sock");
+    let h = flaky_parent(sock.clone(), 3);
+    spawn_file(&w, &p, &sock, &nonce('a'), now_unix())
+        .write(&p.run.join("spawn.json"))
+        .unwrap();
+    let retry = clawft_weave::project_boot::Retry {
+        attempts: 3,
+        initial: Duration::from_millis(5),
+        max: Duration::from_millis(20),
+    };
+    let e = clawft_weave::project_boot::bootstrap_with(&p.run, &p.id, now_unix(), T, retry)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&e, BootError::Refused { kind, .. } if kind == "cert_unavailable"),
+        "{e}"
+    );
+    assert_eq!(h.join().unwrap(), 3, "three attempts, not one");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn re_register_needs_the_known_pid_and_no_spawn_nonce() {
+    let _g = SERIAL.lock().await;
+    let w = world().await;
+    let p = project(&w).await;
+    spawn(&w, &p, &nonce('a'));
+    let c = boot(&p).await.unwrap();
+    let params = link(&w, &p);
+    let now = now_unix();
+    // Live session: refused.
+    let live =
+        clawft_weave::project_boot::register_once(&params, &c.key, Some(&c.cert), None, now).await;
+    assert!(
+        matches!(&live, Err(clawft_weave::project_boot::RegError::Refused { kind, .. }) if kind == "second_session"),
+        "{live:?}"
+    );
+    // The parent forgot the child (restart): an expired record of our pid.
+    registry().evict(&p.id);
+    registry().adopt_expired(dead_session(&p, &c.key, std::process::id()));
+    let again =
+        clawft_weave::project_boot::register_once(&params, &c.key, Some(&c.cert), None, now)
+            .await
+            .expect("re-registers");
+    assert_eq!(again.cert, c.cert, "same certificate, no second one");
+    assert_ne!(Some(again.session), c.session);
+    // An expired record of another pid does not let this process in.
+    registry().evict(&p.id);
+    registry().adopt_expired(dead_session(&p, &c.key, 1));
+    let other =
+        clawft_weave::project_boot::register_once(&params, &c.key, Some(&c.cert), None, now).await;
+    assert!(
+        matches!(&other, Err(clawft_weave::project_boot::RegError::Refused { kind, .. }) if kind == "pid_mismatch"),
+        "{other:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn revoke_and_rekey_write_the_marker_and_stop_the_child() {
+    let _g = SERIAL.lock().await;
+    let w = world().await;
+    let p = project(&w).await;
+    spawn(&w, &p, &nonce('a'));
+    let c = boot(&p).await.unwrap();
+    let marker = p.run.join("revoked");
+    assert!(!marker.exists());
+    let r = rpc(
+        &w.d.sock,
+        "project.revoke",
+        json!({"id": p.id, "reason": "test"}),
+        Some("admin"),
+        None,
+    )
+    .await;
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(marker.is_file(), "marker written next to spawn.json's dir");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&marker).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    // The session is gone: the running child's next beat fails, and its
+    // re-register is refused as revoked (fatal in the child).
+    let pid = std::process::id();
+    let at = now_unix();
+    let hb = rpc(
+        &w.d.sock,
+        "mesh.heartbeat",
+        json!({"session": c.session, "pid": pid, "at_unix": at,
+        "sig": proof(&c.key, "heartbeat", c.session.as_ref().unwrap(), pid, at)}),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(kind(&hb), "unknown_session", "{hb}");
+    registry().adopt_expired(dead_session(&p, &c.key, pid));
+    let again = clawft_weave::project_boot::register_once(
+        &link(&w, &p),
+        &c.key,
+        Some(&c.cert),
+        None,
+        now_unix(),
+    )
+    .await;
+    assert!(
+        matches!(&again, Err(clawft_weave::project_boot::RegError::Refused { kind, .. }) if kind == "key_revoked"),
+        "{again:?}"
+    );
+    // A degraded boot (parent unreachable, cached cert) still refuses.
+    let dead = w.home.join("gone.sock");
+    spawn_file(&w, &p, &dead, &nonce('b'), now_unix())
+        .write(&p.run.join("spawn.json"))
+        .unwrap();
+    let e = boot(&p).await.unwrap_err();
+    assert!(matches!(e, BootError::Revoked(_)), "{e}");
+
+    // Rekey drops the same marker.
+    let q = project(&w).await;
+    spawn(&w, &q, &nonce('c'));
+    boot(&q).await.unwrap();
+    let ch = rpc(
+        &w.d.sock,
+        "project.cert.challenge",
+        json!({"id": q.id}),
+        Some("admin"),
+        None,
+    )
+    .await;
+    assert_eq!(ch["ok"], true, "{ch}");
+    let new_key = SigningKey::from_bytes(&[5u8; 32]);
+    let sig = ident::pop_sign(
+        &new_key,
+        PopOp::Rekey,
+        ch["result"]["user_key_id"].as_str().unwrap(),
+        ch["result"]["nonce"].as_str().unwrap(),
+        &q.id,
+    )
+    .unwrap();
+    let rk = rpc(
+        &w.d.sock,
+        "project.rekey",
+        json!({"id": q.id, "new_pubkey": ident::hex(&new_key.verifying_key().to_bytes()),
+        "nonce": ch["result"]["nonce"], "pop_sig": ident::hex(&sig)}),
+        Some("admin"),
+        None,
+    )
+    .await;
+    assert_eq!(rk["ok"], true, "{rk}");
+    assert!(q.run.join("revoked").is_file());
 }

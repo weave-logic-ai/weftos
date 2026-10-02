@@ -1004,6 +1004,10 @@ pub async fn run(
     // For the `project` profile `pre_boot` does the spawn handshake, key and
     // registration (and fixes `RuntimePaths::resolve()`), so it must stay the
     // first thing here.
+    if crate::user_daemon::project_profile_requested() {
+        config.kernel.profile = Some(clawft_types::config::KernelProfile::Project);
+        kernel_config.profile = Some(clawft_types::config::KernelProfile::Project);
+    }
     let mut pre_boot = crate::project_hooks::pre_boot(&mut config, &kernel_config).await?;
     crate::project_hooks::adjust_services(&mut config, &mut kernel_config);
     let paths = protocol::runtime_paths();
