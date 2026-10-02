@@ -50,6 +50,8 @@ clawft-mesh-local = { workspace = true, optional = true }
 clawft-platform = { workspace = true }
 clawft-rpc = { workspace = true }
 clawft-types = { workspace = true }
+# ADR-105: `weaver cog ...` project cog sources, licences, install, catalog.
+weftos-cog-sources = { path = "../weftos-cog-sources", features = ["net"] }
 clap = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

@@ -2119,6 +2119,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "weftos-cog-sources",
  "weftos-leaf-scene",
  "weftos-leaf-types",
  "weftos-rvf-wire",
@@ -10753,6 +10754,27 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "weftos-cog-sources"
+version = "0.8.1"
+dependencies = [
+ "chrono",
+ "ed25519-dalek",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 0.8.23",
+ "weftos-cog-host",
+ "weftos-cog-market",
+ "weftos-cog-repo",
 ]
 
 [[package]]

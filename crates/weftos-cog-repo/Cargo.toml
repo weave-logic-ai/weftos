@@ -18,7 +18,7 @@ required-features = ["cli"]
 default = ["cli"]
 # `cli` drags in the native-only deps. Leaving it off (e.g. a wasm consumer of the lib)
 # keeps just the pure registry types + Ed25519/sha256 verification, which build for wasm32.
-cli = ["dep:reqwest", "ed25519-dalek/pkcs8", "ed25519-dalek/pem"]
+cli = ["dep:reqwest", "dep:toml", "ed25519-dalek/pkcs8", "ed25519-dalek/pem"]
 
 [dependencies]
 serde = { workspace = true }
@@ -27,4 +27,8 @@ sha2 = "0.10"
 hex = "0.4"
 # Base features (std) cover verify_artifact; pkcs8/pem (for the signer) come in via `cli`.
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+toml = { workspace = true, optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

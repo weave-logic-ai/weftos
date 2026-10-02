@@ -80,7 +80,7 @@ impl std::fmt::Display for VerifyError {
             VerifyError::SizeMismatch { want, got } => write!(f, "size {got} != registry {want}"),
             VerifyError::Sha256Mismatch { want, got } => write!(f, "sha256 {got} != registry {want}"),
             VerifyError::BadSignatureHex(e) => write!(f, "signature not valid hex/length: {e}"),
-            VerifyError::SignatureRejected => write!(f, "Ed25519 signature rejected (not signed by the WeaveLogic release key)"),
+            VerifyError::SignatureRejected => write!(f, "Ed25519 signature rejected (not signed by a key pinned for this repository)"),
         }
     }
 }

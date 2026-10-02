@@ -144,14 +144,45 @@ pub fn install(root: &Path, req: &InstallReq) -> Result<CogRecord, String> {
         }
     }
 
-    let binary = format!("cog-{}-arm", req.id);
-    let dir = root.join(&req.id);
+    install_verified(
+        root,
+        &VerifiedInstall {
+            id: &req.id,
+            version: &req.version,
+            source: req.source,
+            signed: req.signed,
+            args: &req.args,
+            enable: req.enable,
+            bytes: &bytes,
+        },
+    )
+}
+
+/// A binary whose trust was already decided by the caller (a source resolver that checked
+/// the signature against the key pinned for that source, or a sha256 against a registry).
+/// [`install`] performs the WeaveLogic / sha256 checks and then lands here; other callers
+/// (`weftos-cog-sources`, private registries) verify with their own pinned keys first.
+pub struct VerifiedInstall<'a> {
+    pub id: &'a str,
+    pub version: &'a str,
+    pub source: Source,
+    /// Recorded in `cog.json`: whether a signature was verified.
+    pub signed: bool,
+    pub args: &'a [String],
+    pub enable: bool,
+    pub bytes: &'a [u8],
+}
+
+/// Write an already-verified cog binary and its record under `root`. Does no verification.
+pub fn install_verified(root: &Path, v: &VerifiedInstall<'_>) -> Result<CogRecord, String> {
+    let binary = format!("cog-{}-arm", v.id);
+    let dir = root.join(v.id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {dir:?}: {e}"))?;
     // Write to a temp file then rename over the target: a rename replaces the path even while the
     // old binary is running (the process keeps the old inode), avoiding ETXTBSY / "Text file busy".
     let final_path = dir.join(&binary);
     let tmp_path = dir.join(format!("{binary}.new"));
-    std::fs::write(&tmp_path, &bytes).map_err(|e| format!("write binary: {e}"))?;
+    std::fs::write(&tmp_path, v.bytes).map_err(|e| format!("write binary: {e}"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -159,13 +190,13 @@ pub fn install(root: &Path, req: &InstallReq) -> Result<CogRecord, String> {
     }
     std::fs::rename(&tmp_path, &final_path).map_err(|e| format!("install binary: {e}"))?;
     let rec = CogRecord {
-        id: req.id.clone(),
-        version: req.version.clone(),
-        source: req.source,
-        enabled: req.enable,
+        id: v.id.to_string(),
+        version: v.version.to_string(),
+        source: v.source,
+        enabled: v.enable,
         binary,
-        args: req.args.clone(),
-        signed: req.signed,
+        args: v.args.to_vec(),
+        signed: v.signed,
     };
     save_record(root, &rec).map_err(|e| e.to_string())?;
     Ok(rec)
