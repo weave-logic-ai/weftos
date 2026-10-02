@@ -81,7 +81,7 @@ fn lost_revoke_and_serials_stay_effective_through_accept() {
 
     let q = pq(&j);
 
-    b.accept_truncate(&mut j, ack(), q, None).unwrap();
+    b.accept_truncate(&mut j, ack(), Some(q), None).unwrap();
     assert!(!j.read_only());
     assert!(!dir.path().join("journal.truncated").exists());
     // Needs an approved bind with an approver after a revoke.

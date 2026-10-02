@@ -36,6 +36,9 @@ pub struct LostInfo {
     /// in the chain. A marker without the field is a pure read-only gate.
     #[serde(default = "yes")]
     pub recorded: bool,
+    /// The marker file could not be parsed (in memory only).
+    #[serde(skip)]
+    pub unreadable: bool,
 }
 
 /// Lenient pass over (file, start offset) sources: (line count, raw serial
@@ -65,6 +68,13 @@ pub(crate) fn harvest(sources: &[(PathBuf, u64)]) -> (u64, u64, Vec<String>) {
             let Ok(v) = serde_json::from_slice::<serde_json::Value>(&buf) else { continue };
             match v["kind"].as_str() {
                 Some("user.cert.issue") => hw = hw.max(v["body"]["serial"].as_u64().unwrap_or(0)),
+                Some("journal.quarantine") => {
+                    // An earlier quarantine record lost to a later bad tail: carry its facts.
+                    hw = hw.max(v["body"]["serial_high_water"].as_u64().unwrap_or(0));
+                    if let Some(a) = v["body"]["revoked_user_ids"].as_array() {
+                        ids.extend(a.iter().filter_map(|x| x.as_str().map(String::from)));
+                    }
+                }
                 Some("user.revoke") => {
                     if let Some(id) = v["body"]["user_id"].as_str() {
                         ids.push(id.to_string());
@@ -119,7 +129,7 @@ pub(crate) fn load_marker(path: &Path) -> Result<Option<LostInfo>, JournalError>
     f.take(1 << 20).read_to_end(&mut data)?;
     // An unreadable marker still means "read-only": keep the journal safe.
     let mut info: LostInfo = serde_json::from_slice(&data)
-        .unwrap_or_else(|_| LostInfo { recorded: true, ..LostInfo::default() });
+        .unwrap_or_else(|_| LostInfo { recorded: true, unreadable: true, ..LostInfo::default() });
     info.quarantine = sanitize_names(std::mem::take(&mut info.quarantine));
     Ok(Some(info))
 }

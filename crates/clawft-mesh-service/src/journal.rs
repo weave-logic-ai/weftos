@@ -229,6 +229,7 @@ impl Journal {
         }
         j.active_len = fs::symlink_metadata(&active).map_or(0, |m| m.len());
         j.finalize_marker()?;
+        j.drop_stale_marker()?;
         Ok(j)
     }
 
@@ -296,6 +297,23 @@ impl Journal {
         }
         fsutil::sync_dir(&self.dir);
         self.quarantined = Some(corrupt);
+        Ok(())
+    }
+
+    /// A recorded, parseable marker with nothing pending is stale (the accept
+    /// record landed but the removal did not): remove it. Never touches an
+    /// unrecorded marker (the only gate before the record exists) or an
+    /// unreadable one (an admin must clear it explicitly).
+    fn drop_stale_marker(&mut self) -> Result<(), JournalError> {
+        let stale = self.lost.as_ref().is_some_and(|i| i.recorded && !i.unreadable);
+        if stale && self.pending_quarantines().is_empty() {
+            let m = self.dir.join(MARKER);
+            if fs::symlink_metadata(&m).is_ok() {
+                fs::remove_file(&m)?;
+                fsutil::sync_dir(&self.dir);
+            }
+            self.lost = None;
+        }
         Ok(())
     }
 

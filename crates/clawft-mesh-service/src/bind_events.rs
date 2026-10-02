@@ -64,6 +64,8 @@ pub enum BindError {
     ApprovalWithoutApprover,
     #[error("serial floor {floor} exceeds the allowed maximum {max}")]
     FloorTooHigh { floor: u64, max: u64 },
+    #[error("nothing is pending and there is no marker to clear")]
+    NothingToAccept,
     #[error("seq {0} is not a pending journal.quarantine record")]
     NoSuchQuarantine(u64),
     #[error("bindings are degraded ({0}); read-only")]
@@ -130,8 +132,11 @@ pub(crate) struct RevokeBody {
 /// raise the serial floor (never lower the clamped quarantine value).
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct AcceptBody {
-    /// Seq of the `journal.quarantine` record this accepts.
-    pub quarantine_seq: u64,
+    /// Seq of the `journal.quarantine` record this accepts; `None` only for a
+    /// marker-only acceptance (nothing pending, a stale or unreadable marker).
+    pub quarantine_seq: Option<u64>,
+    #[serde(default)]
+    pub marker_only: bool,
     pub serial_floor: u64,
     pub quarantine: Vec<String>,
     pub by: Principal,

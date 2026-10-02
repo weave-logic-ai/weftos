@@ -22,6 +22,8 @@
 use std::collections::{HashMap, HashSet};
 
 use clawft_mesh_local::{node_id_from_pubkey, Principal};
+mod accept;
+
 use crate::bind_events::{
     id_matches, now, AcceptBody, BindBody, CertBody, Event, PendingBody, RevokeBody,
 };
@@ -114,44 +116,6 @@ impl Bindings {
             let t = self.revoked_through.entry(id.clone()).or_insert(0);
             *t = (*t).max(high_water);
         }
-    }
-
-    fn note_quarantine(&mut self, seq: u64, ev: &Event) {
-        if let Event::Quarantine(q) = ev {
-            self.latest_quarantine = Some((seq, q.quarantine.clone()));
-        }
-    }
-
-    /// Admin acknowledgement of quarantined tails, naming the seq of the latest
-    /// `journal.quarantine` record seen (`Journal::latest_pending_quarantine`);
-    /// one acceptance clears every earlier quarantine too, but a quarantine
-    /// appended after that seq keeps the journal read-only. `floor` is an explicit
-    /// admin-chosen serial floor; it can only raise the floor (default: the
-    /// clamped quarantine value already in the state) and may exceed the
-    /// current last serial by at most 2^32. The constraining facts come from
-    /// the signed quarantine record, never from the marker file.
-    pub fn accept_truncate(
-        &mut self,
-        journal: &mut Journal,
-        ack: AdminAck,
-        quarantine_seq: u64,
-        floor: Option<u64>,
-    ) -> Result<(), BindError> {
-        self.refuse_degraded()?;
-        let max = self.last_serial.saturating_add(MAX_FLOOR_JUMP);
-        let floor = floor.unwrap_or(self.last_serial);
-        if floor > max {
-            return Err(BindError::FloorTooHigh { floor, max });
-        }
-        // File list comes from the signed quarantine record (the marker may be gone).
-        let quarantine = match &self.latest_quarantine {
-            Some((seq, files)) if *seq == quarantine_seq => files.clone(),
-            _ => return Err(BindError::NoSuchQuarantine(quarantine_seq)),
-        };
-        let ev = Event::Accept(AcceptBody { quarantine_seq, serial_floor: floor, quarantine, by: ack.by.clone() });
-        self.write(journal, false, ev)?;
-        journal.clear_lost(&ack)?;
-        Ok(())
     }
 
     fn refuse_degraded(&self) -> Result<(), BindError> {
@@ -366,10 +330,15 @@ impl Bindings {
             Event::Other | Event::Quarantine(_) => Ok(()),
             Event::Accept(a) => {
                 let latest = self.latest_quarantine.as_ref().map(|(s, _)| *s);
-                if latest == Some(a.quarantine_seq) && self.accepted_through != latest {
-                    Ok(())
+                let ok = if a.marker_only {
+                    a.quarantine_seq.is_none() && !self.quarantine_pending()
                 } else {
-                    Err(BindError::NoSuchQuarantine(a.quarantine_seq))
+                    a.quarantine_seq.is_some() && a.quarantine_seq == latest && self.quarantine_pending()
+                };
+                match (ok, a.quarantine_seq) {
+                    (true, _) => Ok(()),
+                    (false, Some(s)) => Err(BindError::NoSuchQuarantine(s)),
+                    (false, None) => Err(BindError::NothingToAccept),
                 }
             }
             Event::Pending(p) => {
@@ -440,7 +409,9 @@ impl Bindings {
             Event::Other => {}
             Event::Accept(a) => {
                 self.last_serial = self.last_serial.max(a.serial_floor);
-                self.accepted_through = Some(a.quarantine_seq);
+                if a.quarantine_seq.is_some() {
+                    self.accepted_through = a.quarantine_seq;
+                }
             }
             Event::Quarantine(q) => self.apply_lost(q.serial_high_water, &q.revoked_user_ids),
             Event::Pending(p) => {

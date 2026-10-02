@@ -94,7 +94,7 @@ fn forged_high_water_is_clamped() {
     let mut b = Bindings::fold(&j).unwrap();
     assert_eq!(b.last_serial(), 2);
     let q = pq(&j);
-    b.accept_truncate(&mut j, ack(), q, None).unwrap();
+    b.accept_truncate(&mut j, ack(), Some(q), None).unwrap();
     assert_eq!(b.issue_cert(&mut j, &u(501), 10, 20).unwrap(), 3, "issuance is not bricked");
 }
 
@@ -105,12 +105,12 @@ fn admin_floor_can_raise_but_is_capped() {
     let mut j = Journal::open(dir.path(), key()).unwrap();
     let mut b = Bindings::fold(&j).unwrap();
     let q = pq(&j);
-    let r = b.accept_truncate(&mut j, ack(), q, Some(u64::MAX));
+    let r = b.accept_truncate(&mut j, ack(), Some(q), Some(u64::MAX));
     assert!(matches!(r, Err(BindError::FloorTooHigh { .. })));
-    let r = b.accept_truncate(&mut j, ack(), q, Some(2 + (1 << 32) + 1));
+    let r = b.accept_truncate(&mut j, ack(), Some(q), Some(2 + (1 << 32) + 1));
     assert!(matches!(r, Err(BindError::FloorTooHigh { .. })));
     assert!(j.read_only(), "a refused acceptance lifts nothing");
-    b.accept_truncate(&mut j, ack(), q, Some(100)).unwrap();
+    b.accept_truncate(&mut j, ack(), Some(q), Some(100)).unwrap();
     assert_eq!(b.issue_cert(&mut j, &u(501), 10, 20).unwrap(), 101);
     assert_eq!(Bindings::fold(&j).unwrap(), b);
 }
@@ -131,14 +131,14 @@ fn accept_names_the_latest_quarantine_and_clears_earlier_ones() {
     assert_eq!(pending.len(), 2);
     let mut b = Bindings::fold(&j).unwrap();
     // A stale seq (not the latest) is refused and lifts nothing.
-    assert!(matches!(b.accept_truncate(&mut j, ack(), pending[0], None), Err(BindError::NoSuchQuarantine(_))));
-    assert!(matches!(b.accept_truncate(&mut j, ack(), 0, None), Err(BindError::NoSuchQuarantine(0))));
+    assert!(matches!(b.accept_truncate(&mut j, ack(), Some(pending[0]), None), Err(BindError::NoSuchQuarantine(_))));
+    assert!(matches!(b.accept_truncate(&mut j, ack(), Some(0), None), Err(BindError::NoSuchQuarantine(0))));
     assert!(j.read_only());
-    b.accept_truncate(&mut j, ack(), pending[1], None).unwrap();
+    b.accept_truncate(&mut j, ack(), Some(pending[1]), None).unwrap();
     assert!(!j.read_only(), "one accept of the latest clears A and B");
     assert!(j.pending_quarantines().is_empty());
     // Accepting the same quarantine twice is refused.
-    assert!(matches!(b.accept_truncate(&mut j, ack(), pending[1], None), Err(BindError::NoSuchQuarantine(_))));
+    assert!(matches!(b.accept_truncate(&mut j, ack(), Some(pending[1]), None), Err(BindError::NoSuchQuarantine(_))));
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn a_quarantine_after_an_accept_is_read_only_again() {
         let mut j = Journal::open(dir.path(), key()).unwrap();
         let mut b = Bindings::fold(&j).unwrap();
         let q = pq(&j);
-        b.accept_truncate(&mut j, ack(), q, None).unwrap();
+        b.accept_truncate(&mut j, ack(), Some(q), None).unwrap();
         assert!(!j.read_only());
         j.append("policy.set", json!({"n": 1})).unwrap();
         j.append("policy.set", json!({"n": 2})).unwrap();
@@ -165,8 +165,79 @@ fn a_quarantine_after_an_accept_is_read_only_again() {
     assert!(j.read_only(), "and the chain keeps it so without the marker");
     let mut b = Bindings::fold(&j).unwrap();
     let q = pq(&j);
-    b.accept_truncate(&mut j, ack(), q, None).unwrap();
+    b.accept_truncate(&mut j, ack(), Some(q), None).unwrap();
     assert!(!j.read_only());
+}
+
+#[test]
+fn crash_between_accept_record_and_marker_removal_does_not_wedge() {
+    let dir = tmpdir();
+    build(dir.path(), false);
+    corrupt_line_containing(dir.path(), "\"serial\":2");
+    let marker = dir.path().join("journal.truncated");
+    {
+        let mut j = Journal::open(dir.path(), key()).unwrap();
+        let saved = fs::read(&marker).unwrap();
+        let mut b = Bindings::fold(&j).unwrap();
+        let q = pq(&j);
+        b.accept_truncate(&mut j, ack(), Some(q), None).unwrap();
+        assert!(!marker.exists());
+        fs::write(&marker, saved).unwrap(); // the crash: record landed, removal did not
+    }
+    let mut j = Journal::open(dir.path(), key()).unwrap();
+    assert!(!j.read_only(), "a stale recorded marker is dropped at open");
+    assert!(!marker.exists());
+    let mut b = Bindings::fold(&j).unwrap();
+    b.bind(&mut j, &u(502), &k(9), BindHow::Tofu, BindMeta::default()).unwrap();
+}
+
+#[test]
+fn unreadable_marker_with_nothing_pending_is_cleared_by_an_admin_accept() {
+    let dir = tmpdir();
+    {
+        let mut j = Journal::open(dir.path(), key()).unwrap();
+        j.append("policy.set", json!({"a": 1})).unwrap();
+    }
+    fs::write(dir.path().join("journal.truncated"), b"not json at all").unwrap();
+    let mut j = Journal::open(dir.path(), key()).unwrap();
+    assert!(j.read_only(), "an unreadable marker is never auto-removed");
+    let mut b = Bindings::fold(&j).unwrap();
+    assert!(b.bind(&mut j, &u(501), &k(1), BindHow::Tofu, BindMeta::default()).is_err());
+    assert!(matches!(b.accept_truncate(&mut j, ack(), Some(5), None), Err(BindError::NoSuchQuarantine(5))));
+    b.accept_truncate(&mut j, ack(), None, None).unwrap();
+    assert!(!j.read_only());
+    assert!(!dir.path().join("journal.truncated").exists());
+    let last = j.iter().last().unwrap();
+    assert_eq!(last.body["marker_only"], json!(true));
+    assert!(last.body["quarantine_seq"].is_null());
+    // With nothing pending and no marker there is nothing to accept.
+    assert!(matches!(b.accept_truncate(&mut j, ack(), None, None), Err(BindError::NothingToAccept)));
+    drop(j);
+    let mut j = Journal::open(dir.path(), key()).unwrap();
+    assert!(!j.read_only());
+    let mut b = Bindings::fold(&j).unwrap();
+    b.bind(&mut j, &u(501), &k(1), BindHow::Tofu, BindMeta::default()).unwrap();
+}
+
+#[test]
+fn a_lost_earlier_quarantine_record_is_reharvested() {
+    let dir = tmpdir();
+    build(dir.path(), false);
+    corrupt_line_containing(dir.path(), "\"serial\":2");
+    {
+        let mut j = Journal::open(dir.path(), key()).unwrap(); // Q1 carries hw 3 and the revoke
+        j.append("policy.set", json!({"n": 1})).unwrap();
+    }
+    // Now Q1's own record falls into a later bad tail.
+    corrupt_line_containing(dir.path(), "journal.quarantine");
+    let j = Journal::open(dir.path(), key()).unwrap();
+    let body = quarantine_body(&j);
+    assert_eq!(body["raw_serial_high_water"].as_u64(), Some(3), "Q1's facts carried forward");
+    assert_eq!(body["revoked_user_ids"], json!([node_id_from_pubkey(&k(1))]));
+    let b = Bindings::fold(&j).unwrap();
+    assert_eq!(b.last_serial(), 3);
+    assert_eq!(b.key_of(&u(501)), None);
+    assert_eq!(b.check(&u(502), &k(1)), Check::Conflict(ConflictReason::KeyRevoked));
 }
 
 #[test]
@@ -225,7 +296,7 @@ fn deleting_the_marker_keeps_floor_and_revocations() {
 
     // Acceptance lifts it for good, with or without a marker.
     let q = pq(&j);
-    b.accept_truncate(&mut j, ack(), q, None).unwrap();
+    b.accept_truncate(&mut j, ack(), Some(q), None).unwrap();
     assert!(!j.read_only());
     drop(j);
     let j = Journal::open(dir.path(), key()).unwrap();
@@ -248,7 +319,7 @@ fn key_whose_bind_and_revoke_were_both_lost_stays_unbindable() {
     assert_eq!(b.key_of(&u(501)), None);
     assert_eq!(b.check(&u(502), &k(1)), Check::Conflict(ConflictReason::KeyRevoked));
     let q = pq(&j);
-    b.accept_truncate(&mut j, ack(), q, None).unwrap();
+    b.accept_truncate(&mut j, ack(), Some(q), None).unwrap();
     let r = b.bind(&mut j, &u(502), &k(1), BindHow::Approved, BindMeta { by: Some(u(0)), ..Default::default() });
     assert!(r.is_err(), "even an approved bind cannot resurrect it");
     r.unwrap_err();

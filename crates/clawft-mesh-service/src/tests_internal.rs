@@ -102,3 +102,20 @@ fn replay_rejects_an_accept_without_a_pending_quarantine() {
         .unwrap();
     assert!(matches!(Bindings::fold(&j), Err(BindError::Replay { seq: 0, .. })));
 }
+
+#[test]
+fn replay_accepts_marker_only_form_only_when_nothing_is_pending() {
+    let dir = tmpdir();
+    let mut j = Journal::open(dir.path(), key()).unwrap();
+    let q = json!({"lost_from_seq": 0, "lost_count": 1, "serial_high_water": 0, "raw_serial_high_water": 0,
+                   "revoked_user_ids": [], "quarantine": []});
+    let marker_only = json!({"quarantine_seq": null, "marker_only": true, "serial_floor": 0, "quarantine": [],
+                             "by": {"kind":"uid","id":0}});
+    // Fine with nothing pending ...
+    j.append_raw(1, "journal.accept_truncate", marker_only.clone()).unwrap();
+    assert!(Bindings::fold(&j).is_ok());
+    // ... but rejected while a quarantine is pending.
+    j.append_raw(2, "journal.quarantine", q).unwrap();
+    j.append_raw(3, "journal.accept_truncate", marker_only).unwrap();
+    assert!(matches!(Bindings::fold(&j), Err(BindError::Replay { seq: 2, .. })));
+}
