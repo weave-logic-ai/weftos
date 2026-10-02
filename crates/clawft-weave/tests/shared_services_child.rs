@@ -53,7 +53,7 @@ async fn project_profile_boots_with_no_heavy_services_and_no_provider_keys() {
     // service, local STT and TTS. Any connection to them fails the test.
     let decoys: Vec<tokio::net::TcpListener> = {
         let mut v = Vec::new();
-        for var in ["LLM_SERVICE_URL", "WEFT_WHISPER_URL", "WEFT_TTS_URL"] {
+        for var in ["LLM_SERVICE_URL", "WEFT_WHISPER_URL", "WEFT_TTS_URL", "WHISPER_SERVICE_URL"] {
             let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             // SAFETY: as above, before anything else runs.
             unsafe { std::env::set_var(var, format!("http://{}", l.local_addr().unwrap())) };

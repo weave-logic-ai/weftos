@@ -182,7 +182,12 @@ fn llm_error(e: ParentError) -> LlmError {
             LlmError::Transport(format!("{PARENT_UNAVAILABLE_KIND}: {m}"))
         }
         ParentError::Refused { kind, message } => {
-            let status = if kind == "rate_limited" || kind == "budget_exceeded" { 429 } else { 400 };
+            // Retryable refusals get a retryable status.
+            let status = match kind.as_str() {
+                "rate_limited" | "budget_exceeded" | "busy" => 429,
+                "upstream_error" | "service_unavailable" => 503,
+                _ => 400,
+            };
             LlmError::ClientError {
                 status,
                 body: format!("{kind}: {message}"),

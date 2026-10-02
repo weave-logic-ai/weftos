@@ -1250,7 +1250,7 @@ pub async fn run(
     let (mic_node_tx, mic_node_rx) = watch::channel(None::<String>);
     // A project kernel runs no voice pipeline (the user daemon does); with the
     // sender dropped the receiver just keeps its `None`.
-    if !crate::project_profile::is_project_profile() {
+    if crate::project_profile::mic_supervisor_enabled(crate::project_profile::is_project_profile()) {
         tokio::spawn(crate::mic_source::supervise(
             crate::mic_source::pin_from(voice_mic_pin.as_deref()),
             kernel.clone(),

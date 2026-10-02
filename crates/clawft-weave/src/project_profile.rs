@@ -228,6 +228,12 @@ fn link_problem(link: &ParentLink) -> Option<String> {
     link.project_id().is_none().then(|| "spawn.json missing or incomplete".to_owned())
 }
 
+/// Whether `daemon::run` starts the mic-source supervisor (the voice
+/// pipeline's input): never in a project kernel.
+pub fn mic_supervisor_enabled(project_profile: bool) -> bool {
+    !project_profile
+}
+
 /// The embedder for the context router (`daemon.rs`): the remote embedder in
 /// a project kernel, `None` elsewhere (the caller keeps its own choice).
 pub async fn project_embedder() -> Option<Arc<RemoteEmbedder>> {
@@ -335,6 +341,12 @@ mod tests {
         assert!(!apply_to_config(&mut config, &mut kc));
         assert_eq!(serde_json::to_value(&config).unwrap(), before);
         assert!(kc.mesh.as_ref().unwrap().enabled);
+    }
+
+    #[test]
+    fn the_mic_supervisor_is_off_in_a_project_kernel() {
+        assert!(!mic_supervisor_enabled(true));
+        assert!(mic_supervisor_enabled(false));
     }
 
     #[test]

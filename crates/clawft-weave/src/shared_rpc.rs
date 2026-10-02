@@ -282,7 +282,7 @@ async fn embed(call: &ExtCall, project: &str, limits: &SharedLimits) -> Response
             }))
         }
         Err(_) => {
-            settle(&reservation, 0);
+            settle(&reservation, estimated);
             refuse("upstream_error", "upstream: embedding failed")
         }
     }
@@ -358,10 +358,12 @@ async fn chat(call: &ExtCall, project: &str, limits: &SharedLimits) -> Response 
     let client = shared.read().await.clone();
     // The model slot is shared with the user's own turns: take it only if it
     // is free right now, never queue.
+    // Resolve the model first (bounded, negatively cached) so a slow listing
+    // never happens while the slot is held.
+    let model = state::allowed_model(&client, model.as_deref()).await;
     let Some(_slot) = client.try_slot() else {
         return refuse("busy", "the model is in use");
     };
-    let model = state::allowed_model(&client, model.as_deref()).await;
     let prompt = prompt_tokens(&messages, &tools);
     let estimated = prompt + max_tokens.map(u64::from).unwrap_or(DEFAULT_MAX_TOKENS);
     let reservation = match reserve(project, limits, estimated) {
@@ -393,7 +395,9 @@ async fn chat(call: &ExtCall, project: &str, limits: &SharedLimits) -> Response 
             }
         }
         Err(e) => {
-            settle(&reservation, 0);
+            // The call ran (possibly holding the slot for the full timeout):
+            // charge what was reserved, not the minimum.
+            settle(&reservation, estimated);
             upstream_error(&e)
         }
     }

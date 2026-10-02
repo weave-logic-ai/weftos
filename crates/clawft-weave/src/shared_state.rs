@@ -23,12 +23,16 @@ pub const LLM_CALL_TIMEOUT: Duration = Duration::from_secs(60);
 pub const EMBED_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the parent's model list is trusted.
 const MODELS_TTL: Duration = Duration::from_secs(60);
+/// A failed or slow listing is remembered (as "no models") this long, and a
+/// listing may take at most [`MODELS_TIMEOUT`].
+const MODELS_NEGATIVE_TTL: Duration = Duration::from_secs(5);
+const MODELS_TIMEOUT: Duration = Duration::from_secs(3);
 
 static METER: OnceLock<UsageMeter> = OnceLock::new();
 static LIMITS: Mutex<Option<HashMap<String, SharedLimits>>> = Mutex::new(None);
 static GLOBAL: OnceLock<Arc<Semaphore>> = OnceLock::new();
 static PER_PROJECT: Mutex<Option<HashMap<String, Arc<Semaphore>>>> = Mutex::new(None);
-static MODELS: Mutex<Option<(Instant, Vec<String>)>> = Mutex::new(None);
+static MODELS: Mutex<Option<(Instant, Duration, Vec<String>)>> = Mutex::new(None);
 static EMBEDDER: tokio::sync::OnceCell<Arc<dyn EmbeddingProvider>> =
     tokio::sync::OnceCell::const_new();
 static LLM: RwLock<Option<SharedLlmClient>> = RwLock::new(None);
@@ -89,14 +93,18 @@ pub async fn allowed_model(client: &LlmClient, requested: Option<&str>) -> Optio
     let cached = {
         let g = MODELS.lock().unwrap_or_else(|e| e.into_inner());
         g.as_ref()
-            .filter(|(at, _)| at.elapsed() < MODELS_TTL)
-            .map(|(_, l)| l.clone())
+            .filter(|(at, ttl, _)| at.elapsed() < *ttl)
+            .map(|(_, _, l)| l.clone())
     };
     let list = match cached {
         Some(l) => l,
         None => {
-            let l = client.list_models().await.ok()?;
-            *MODELS.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), l.clone()));
+            let listed = tokio::time::timeout(MODELS_TIMEOUT, client.list_models()).await;
+            let (l, ttl) = match listed {
+                Ok(Ok(l)) => (l, MODELS_TTL),
+                _ => (Vec::new(), MODELS_NEGATIVE_TTL),
+            };
+            *MODELS.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), ttl, l.clone()));
             l
         }
     };
