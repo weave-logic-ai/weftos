@@ -276,6 +276,8 @@ fn no_project_id_assignment_outside_governance() {
     let other_type = [
         "clawft-kernel/src/project_identity_tests.rs",
         "clawft-weave/src/project_forward_tests.rs",
+        // Builds a tampered `ProjectAnchorStmt` (P2 D) to test refusal.
+        "clawft-weave/src/anchor_rpc_tests.rs",
     ];
     for s in sources() {
         if !kernel_or_weave(&s.path)

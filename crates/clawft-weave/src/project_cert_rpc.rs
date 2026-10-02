@@ -173,14 +173,47 @@ pub fn root_sha256(root: &Path) -> String {
     ident::hex(&Sha256::digest(bytes))
 }
 
-/// Drop the project's registry session when its key is revoked or replaced,
-/// so a running child's next heartbeat fails and its re-register is refused.
-///
-/// The `<run>/<id>/revoked` marker (what `project_boot` and the overlay
-/// check) is written and the child stopped by the supervisor's identity
-/// change hook, not here: there is one writer. A child booted while the
-/// parent is unreachable only sees a revocation if that marker was written.
-fn mark_revoked(_env: &CertEnv, id: &str, _why: &str) {
+/// The marker a revoked project's child refuses to run under:
+/// `<manifests>/../run/<id>/revoked`, i.e. `~/.weftos/run/<id>/revoked`, the
+/// file `RuntimePaths::child_at(<run>/<id>, ..).root().join("revoked")`
+/// names (`clawft_kernel::overlay_trust::REVOKED_FILE`).
+pub fn revoked_marker(manifests_dir: &Path, id: &str) -> Option<PathBuf> {
+    Some(manifests_dir.parent()?.join("run").join(id).join(clawft_kernel::overlay_trust::REVOKED_FILE))
+}
+
+/// `project.revoke` is terminal for the id: drop the session (a running
+/// child's next heartbeat fails and its re-register is refused `key_revoked`)
+/// and write the marker (atomic, 0600; the run dir is created 0700 when the
+/// child is stopped, so a stopped child is marked too). Nothing here clears
+/// it: delete `~/.weftos/run/<id>/revoked` by hand after re-enrolling the
+/// project. A marker that cannot be written is logged, not fatal: the
+/// journal is the authority, the marker is what lets a child that cannot
+/// reach the parent still see the revocation.
+fn mark_revoked(env: &CertEnv, id: &str, why: &str) {
+    crate::mesh_local_registry::registry().evict(id);
+    let Some(path) = revoked_marker(&env.manifests_dir, id) else { return };
+    if let Some(dir) = path.parent() {
+        let mut b = std::fs::DirBuilder::new();
+        b.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            b.mode(0o700);
+        }
+        if let Err(e) = b.create(dir) {
+            tracing::warn!(dir = %dir.display(), error = %e, "could not create the run dir for the revoked marker");
+            return;
+        }
+    }
+    if let Err(e) = ident::write_private_atomic(&path, format!("{why}\n").as_bytes(), false) {
+        tracing::warn!(path = %path.display(), error = %e, "could not write the revoked marker");
+    }
+}
+
+/// `project.rekey` replaces the key: the old key's session is dropped (its
+/// re-register is refused `key_revoked`) but NO marker is written, because
+/// the rekeyed child must be able to boot under its new certificate.
+fn drop_session(id: &str) {
     crate::mesh_local_registry::registry().evict(id);
 }
 
@@ -322,7 +355,7 @@ pub fn rekey(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Issued
         })),
     );
     write_cert_file(&env.manifests_dir, &cert)?;
-    mark_revoked(env, id, "rekeyed");
+    drop_session(id);
     Ok(Issued { cert, new: true })
 }
 

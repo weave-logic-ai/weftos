@@ -112,11 +112,27 @@ pub fn bind_signed_bytes(
 pub const SESSION_DOMAIN: &str = "weftos-mesh-local-session-v1\n";
 
 /// Bytes the certified project key signs into a heartbeat or unregister:
-/// `weftos-mesh-local-session-v1\n<op>\n<session>\n<pid>\n<at_unix>`.
+/// `weftos-mesh-local-session-v1\n<op>\n<session>\n<pid>\n<at_unix>\n<extra>`,
+/// where `extra` is [`activity_digest`] for a heartbeat (so the reported
+/// activity cannot be altered in flight) and empty for an unregister.
 /// The user daemon accepts `at_unix` within [`SESSION_PROOF_WINDOW_SECS`] of
 /// its own clock, so a captured request is useful for seconds, not forever.
-pub fn session_signed_bytes(op: &str, session: &str, pid: u32, at_unix: u64) -> Vec<u8> {
-    format!("{SESSION_DOMAIN}{op}\n{session}\n{pid}\n{at_unix}").into_bytes()
+pub fn session_signed_bytes(
+    op: &str,
+    session: &str,
+    pid: u32,
+    at_unix: u64,
+    extra: &str,
+) -> Vec<u8> {
+    format!("{SESSION_DOMAIN}{op}\n{session}\n{pid}\n{at_unix}\n{extra}").into_bytes()
+}
+
+/// Canonical text of an [`Activity`] for [`session_signed_bytes`].
+pub fn activity_digest(a: &Activity) -> String {
+    format!(
+        "{}:{}:{}:{}",
+        a.last_activity_unix, a.busy.agents, a.busy.workloads, a.busy.streams
+    )
 }
 
 /// Allowed clock difference for [`session_signed_bytes`] proofs.

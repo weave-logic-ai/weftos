@@ -229,11 +229,30 @@ fn nonce_hex() -> String {
     "dd".repeat(16)
 }
 
-fn proof(key: &SigningKey, op: &str, session: &str, pid: u32, at: u64) -> String {
+fn proof(key: &SigningKey, op: &str, session: &str, pid: u32, at: u64, extra: &str) -> String {
     ident::hex(
-        &key.sign(&session_signed_bytes(op, session, pid, at))
+        &key.sign(&session_signed_bytes(op, session, pid, at, extra))
             .to_bytes(),
     )
+}
+
+/// A heartbeat/unregister request body signed like the real child does it.
+fn beat_body(key: &SigningKey, op: &str, session: &str, pid: u32, at: u64, agents: u32) -> Value {
+    let act = clawft_rpc::mesh_local::Activity {
+        last_activity_unix: 0,
+        busy: clawft_rpc::mesh_local::Busy {
+            agents,
+            workloads: 0,
+            streams: 0,
+        },
+    };
+    let extra = if op == "heartbeat" {
+        clawft_rpc::mesh_local::activity_digest(&act)
+    } else {
+        String::new()
+    };
+    json!({"session": session, "pid": pid, "at_unix": at,
+           "sig": proof(key, op, session, pid, at, &extra), "activity": {"busy": {"agents": agents}}})
 }
 
 fn kind(v: &Value) -> &str {
@@ -273,8 +292,7 @@ async fn register_happy_path() {
     // The real heartbeat path, signed by the certified key.
     let pid = std::process::id();
     let beat = |session: &str, pid: u32, at: u64, key: &SigningKey, op: &str| {
-        json!({"session": session, "pid": pid, "at_unix": at,
-               "sig": proof(key, op, session, pid, at), "activity": {"busy": {"agents": 2}}})
+        beat_body(key, op, session, pid, at, 2)
     };
     let hb = rpc(
         &w.d.sock,
@@ -399,7 +417,7 @@ async fn replayed_challenge_nonce_is_refused() {
     registry().evict(&p.id);
     mk();
     let (replay, _) = raw_register(&w, &p, Some(&nonce('c')), &p.root, &key, Some(&n)).await;
-    assert_eq!(kind(&replay), "pop_failed", "{replay}");
+    assert_eq!(kind(&replay), "challenge_unknown", "{replay}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -701,7 +719,7 @@ async fn a_squatter_on_the_parent_socket_cannot_get_a_child_to_run() {
         None,
     )
     .await;
-    assert_eq!(kind(&replay), "pop_failed", "{replay}");
+    assert_eq!(kind(&replay), "challenge_unknown", "{replay}");
     assert!(
         clawft_weave::mesh_local_registry::spawn_expected(&p.id, now_unix()),
         "the nonce was not burnt"
@@ -844,7 +862,7 @@ async fn bind_signature_and_project_scoped_addresses_are_enforced() {
 }
 
 /// A parent that answers every connection with a transient refusal.
-fn flaky_parent(path: PathBuf, n: usize) -> std::thread::JoinHandle<usize> {
+fn flaky_parent(path: PathBuf, n: usize, kind: &'static str) -> std::thread::JoinHandle<usize> {
     use std::io::{BufRead, BufReader, Write};
     let l = std::os::unix::net::UnixListener::bind(&path).unwrap();
     std::thread::spawn(move || {
@@ -855,7 +873,8 @@ fn flaky_parent(path: PathBuf, n: usize) -> std::thread::JoinHandle<usize> {
             BufReader::new(&s).read_line(&mut line).unwrap();
             seen += 1;
             (&s).write_all(
-                b"{\"ok\":false,\"error\":\"busy\",\"error_kind\":\"cert_unavailable\"}\n",
+                format!("{{\"ok\":false,\"error\":\"busy\",\"error_kind\":\"{kind}\"}}\n")
+                    .as_bytes(),
             )
             .unwrap();
         }
@@ -870,7 +889,7 @@ async fn transient_refusals_are_retried_with_backoff_then_reported() {
     let p = project(&w).await;
     std::fs::create_dir_all(&w.home).unwrap();
     let sock = w.home.join("flaky.sock");
-    let h = flaky_parent(sock.clone(), 3);
+    let h = flaky_parent(sock.clone(), 3, "cert_unavailable");
     spawn_file(&w, &p, &sock, &nonce('a'), now_unix())
         .write(&p.run.join("spawn.json"))
         .unwrap();
@@ -878,6 +897,7 @@ async fn transient_refusals_are_retried_with_backoff_then_reported() {
         attempts: 3,
         initial: Duration::from_millis(5),
         max: Duration::from_millis(20),
+        budget: Duration::from_secs(5),
     };
     let e = clawft_weave::project_boot::bootstrap_with(&p.run, &p.id, now_unix(), T, retry)
         .await
@@ -932,12 +952,30 @@ async fn revoke_and_rekey_drop_the_session_and_the_marker_stops_a_degraded_boot(
     let p = project(&w).await;
     spawn(&w, &p, &nonce('a'));
     let c = boot(&p).await.unwrap();
-    let marker = p.run.join("revoked");
-    let r = rpc(&w.d.sock, "project.revoke", json!({"id": p.id, "reason": "test"}), Some("admin"), None).await;
+    let marker = clawft_types::runtime_paths::RuntimePaths::child_at(&p.run, &p.id, &p.root)
+        .unwrap()
+        .root()
+        .join("revoked");
+    assert_eq!(marker, p.run.join("revoked"));
+    assert!(!marker.exists());
+    let r = rpc(
+        &w.d.sock,
+        "project.revoke",
+        json!({"id": p.id, "reason": "test"}),
+        Some("admin"),
+        None,
+    )
+    .await;
     assert_eq!(r["ok"], true, "{r}");
-    // The supervisor's identity hook (package G) writes the marker; the
-    // child's check is existence of <run>/<id>/revoked, simulated here.
-    std::fs::write(&marker, "revoked\n").unwrap();
+    // The real RPC wrote it at exactly the path the child's RuntimePaths resolves.
+    assert!(marker.is_file(), "marker at {}", marker.display());
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&marker).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
     // The session is gone: the running child's next beat fails, and its
     // re-register is refused as revoked (fatal in the child).
     let pid = std::process::id();
@@ -946,7 +984,7 @@ async fn revoke_and_rekey_drop_the_session_and_the_marker_stops_a_degraded_boot(
         &w.d.sock,
         "mesh.heartbeat",
         json!({"session": c.session, "pid": pid, "at_unix": at,
-        "sig": proof(&c.key, "heartbeat", c.session.as_ref().unwrap(), pid, at)}),
+        "sig": proof(&c.key, "heartbeat", c.session.as_ref().unwrap(), pid, at, "0:0:0:0")}),
         None,
         None,
     )
@@ -972,11 +1010,45 @@ async fn revoke_and_rekey_drop_the_session_and_the_marker_stops_a_degraded_boot(
         .unwrap();
     let e = boot(&p).await.unwrap_err();
     assert!(matches!(e, BootError::Revoked(_)), "{e}");
+}
 
-    // Rekey drops the same marker.
+#[tokio::test(flavor = "multi_thread")]
+async fn revoke_marks_a_stopped_child_whose_run_dir_is_gone() {
+    let _g = SERIAL.lock().await;
+    let w = world().await;
+    let p = project(&w).await;
+    spawn(&w, &p, &nonce('a'));
+    boot(&p).await.unwrap();
+    std::fs::remove_dir_all(&p.run).unwrap();
+    let r = rpc(
+        &w.d.sock,
+        "project.revoke",
+        json!({"id": p.id}),
+        Some("admin"),
+        None,
+    )
+    .await;
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(
+        p.run.join("revoked").is_file(),
+        "marker created with its dir"
+    );
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&p.run).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rekey_drops_the_session_writes_no_marker_and_the_rekeyed_child_boots() {
+    let _g = SERIAL.lock().await;
+    let w = world().await;
     let q = project(&w).await;
     spawn(&w, &q, &nonce('c'));
-    boot(&q).await.unwrap();
+    let old = boot(&q).await.unwrap();
     let ch = rpc(
         &w.d.sock,
         "project.cert.challenge",
@@ -1005,5 +1077,155 @@ async fn revoke_and_rekey_drop_the_session_and_the_marker_stops_a_degraded_boot(
     )
     .await;
     assert_eq!(rk["ok"], true, "{rk}");
-    assert!(registry().route_for(&q.id).is_none(), "rekey drops the session");
+    assert!(
+        registry().route_for(&q.id).is_none(),
+        "rekey drops the session"
+    );
+    assert!(!q.run.join("revoked").exists(), "rekey writes no marker");
+    // The old key can never register again.
+    let again = clawft_weave::project_boot::register_once(
+        &link(&w, &q),
+        &old.key,
+        Some(&old.cert),
+        None,
+        now_unix(),
+    )
+    .await;
+    assert!(again.is_err());
+    // The owner installs the new key; the rekeyed child boots under serial 2.
+    let key_file = q.root.join(".weftos/project.key");
+    std::fs::write(&key_file, new_key.to_bytes()).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    spawn(&w, &q, &nonce('d'));
+    let new = boot(&q).await.expect("the rekeyed child boots");
+    assert_eq!(new.cert.serial, 2);
+    assert_eq!(
+        new.cert.project_pubkey,
+        ident::hex(&new_key.verifying_key().to_bytes())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_evicted_challenge_is_challenge_unknown_and_the_child_retries_it() {
+    let _g = SERIAL.lock().await;
+    let w = world().await;
+    let p = project(&w).await;
+    expect(&p, 'a');
+    // A flooder pushes this challenge out between challenge and register.
+    let c = rpc(
+        &w.d.sock,
+        "mesh.challenge",
+        json!({"project_id": p.id}),
+        None,
+        None,
+    )
+    .await;
+    let n = c["result"]["nonce"].as_str().unwrap().to_owned();
+    for _ in 0..5 {
+        let f = rpc(
+            &w.d.sock,
+            "mesh.challenge",
+            json!({"project_id": p.id}),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(f["ok"], true, "{f}");
+    }
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let (r, _) = raw_register(&w, &p, Some(&nonce('a')), &p.root, &key, Some(&n)).await;
+    assert_eq!(kind(&r), "challenge_unknown", "{r}");
+    assert!(
+        clawft_weave::mesh_local_registry::spawn_expected(&p.id, now_unix()),
+        "nonce not burnt"
+    );
+    // The child treats it as "ask again" inside its attempt budget.
+    let sock = w.home.join("evicting.sock");
+    std::fs::create_dir_all(&w.home).unwrap();
+    let h = flaky_parent(sock.clone(), 3, "challenge_unknown");
+    spawn_file(&w, &p, &sock, &nonce('b'), now_unix())
+        .write(&p.run.join("spawn.json"))
+        .unwrap();
+    let retry = clawft_weave::project_boot::Retry {
+        attempts: 3,
+        initial: Duration::from_millis(5),
+        max: Duration::from_millis(20),
+        budget: Duration::from_secs(5),
+    };
+    let e = clawft_weave::project_boot::bootstrap_with(&p.run, &p.id, now_unix(), T, retry)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&e, BootError::Refused { kind, .. } if kind == "challenge_unknown"),
+        "{e}"
+    );
+    assert_eq!(h.join().unwrap(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_retry_budget_bounds_total_time() {
+    let _g = SERIAL.lock().await;
+    let w = world().await;
+    let p = project(&w).await;
+    std::fs::create_dir_all(&w.home).unwrap();
+    let sock = w.home.join("busy.sock");
+    let h = flaky_parent(sock.clone(), 1000, "cert_unavailable");
+    spawn_file(&w, &p, &sock, &nonce('a'), now_unix())
+        .write(&p.run.join("spawn.json"))
+        .unwrap();
+    let retry = clawft_weave::project_boot::Retry {
+        attempts: 1000,
+        initial: Duration::from_millis(40),
+        max: Duration::from_millis(40),
+        budget: Duration::from_millis(300),
+    };
+    let start = std::time::Instant::now();
+    let e = clawft_weave::project_boot::bootstrap_with(&p.run, &p.id, now_unix(), T, retry)
+        .await
+        .unwrap_err();
+    assert!(matches!(&e, BootError::Refused { .. }), "{e}");
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "stopped by the budget, not the attempt count"
+    );
+    drop(h);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_captured_heartbeat_is_replayable_only_inside_the_proof_window() {
+    let _g = SERIAL.lock().await;
+    let w = world().await;
+    let p = project(&w).await;
+    spawn(&w, &p, &nonce('a'));
+    let c = boot(&p).await.unwrap();
+    let s = c.session.clone().unwrap();
+    let pid = std::process::id();
+    let at = now_unix();
+    let body = beat_body(&c.key, "heartbeat", &s, pid, at, 1);
+    // Replays inside the window succeed: a captured beat proves liveness for
+    // at most SESSION_PROOF_WINDOW_SECS (30 s), nothing more.
+    for _ in 0..2 {
+        let r = rpc(&w.d.sock, "mesh.heartbeat", body.clone(), None, None).await;
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    let near = beat_body(&c.key, "heartbeat", &s, pid, at - 25, 1);
+    assert_eq!(
+        rpc(&w.d.sock, "mesh.heartbeat", near, None, None).await["ok"],
+        true
+    );
+    let old = beat_body(&c.key, "heartbeat", &s, pid, at - 35, 1);
+    assert_eq!(
+        kind(&rpc(&w.d.sock, "mesh.heartbeat", old, None, None).await),
+        "bad_session_proof"
+    );
+    // The reported activity is covered by the signature.
+    let mut forged = body.clone();
+    forged["activity"] = json!({"busy": {"agents": 0}});
+    assert_eq!(
+        kind(&rpc(&w.d.sock, "mesh.heartbeat", forged, None, None).await),
+        "bad_session_proof"
+    );
 }
