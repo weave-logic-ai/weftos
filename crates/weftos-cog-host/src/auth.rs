@@ -82,6 +82,34 @@ pub fn host_name(h: &str) -> String {
     name.trim_end_matches('.').to_string()
 }
 
+/// Run a command and return its stdout, or `None` on failure or when it takes longer than
+/// `timeout` (the child is killed), so a hung daemon cannot stall startup.
+pub fn run_with_timeout(prog: &str, args: &[&str], timeout: std::time::Duration) -> Option<Vec<u8>> {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(prog).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut out = child.stdout.take()?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    // read in a thread so a large output cannot block the child on a full pipe
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = out.read_to_end(&mut buf);
+        let _ = tx.send(buf);
+    });
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(st)) => return st.success().then(|| rx.recv_timeout(std::time::Duration::from_millis(500)).ok()).flatten(),
+            Ok(None) if start.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(_) => return None,
+        }
+    }
+}
+
 /// This machine's names: hostname, `<short>.local`, and the tailnet MagicDNS name when
 /// `tailscale` is installed (best effort).
 fn machine_names() -> Vec<String> {
@@ -93,11 +121,14 @@ fn machine_names() -> Vec<String> {
         v.push(short);
         v.push(host);
     }
-    if let Ok(out) = std::process::Command::new("tailscale").args(["status", "--json"]).output()
-        && let Ok(j) = serde_json::from_slice::<serde_json::Value>(&out.stdout)
-        && let Some(dns) = j["Self"]["DNSName"].as_str()
-    {
-        v.push(dns.trim_end_matches('.').to_ascii_lowercase());
+    for prog in ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"] {
+        if let Some(out) = run_with_timeout(prog, &["status", "--json"], std::time::Duration::from_secs(2))
+            && let Ok(j) = serde_json::from_slice::<serde_json::Value>(&out)
+            && let Some(dns) = j["Self"]["DNSName"].as_str()
+        {
+            v.push(dns.trim_end_matches('.').to_ascii_lowercase());
+            break;
+        }
     }
     v
 }
@@ -194,6 +225,15 @@ mod tests {
     }
     fn hs(v: &[(&str, &str)]) -> Headers {
         v.iter().map(|(k, x)| (k.to_string(), x.to_string())).collect()
+    }
+
+    #[test]
+    fn run_with_timeout_kills_a_hung_command_and_returns_output() {
+        let t = std::time::Instant::now();
+        assert!(run_with_timeout("sh", &["-c", "sleep 30"], std::time::Duration::from_millis(300)).is_none());
+        assert!(t.elapsed() < std::time::Duration::from_secs(5));
+        assert_eq!(run_with_timeout("echo", &["hi"], std::time::Duration::from_secs(5)).unwrap(), b"hi\n");
+        assert!(run_with_timeout("/nonexistent/prog", &[], std::time::Duration::from_secs(1)).is_none());
     }
 
     #[test]
