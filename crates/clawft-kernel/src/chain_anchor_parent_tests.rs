@@ -225,8 +225,9 @@ fn only_the_latest_pending_statement_is_replayed_after_a_long_outage() {
 
     f.parent.down.store(false, Ordering::SeqCst);
     f.parent.calls.lock().unwrap().clear();
-    // Not before the backoff has elapsed.
-    assert!(a.retry_pending_at(at(1600)).unwrap().is_none());
+    // Four failures, last at 1200 s: the backoff is 40 s, so 1210 s is too early.
+    assert!(a.retry_pending_at(at(1210)).unwrap().is_none());
+    assert!(f.parent.calls().is_empty());
     let r = a.retry_pending_at(at(1600 + 3600)).unwrap().expect("replayed");
     assert_eq!(r.tx_id, "parent-101");
     let calls = f.parent.calls();
