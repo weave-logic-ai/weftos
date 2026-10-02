@@ -19,6 +19,10 @@ pub struct UsbId {
     pub chip: Option<String>,
     pub module: Option<String>,
     pub notes: String,
+    /// When set, the row only matches devices whose product string contains this (case-insensitive);
+    /// for shared VIDs such as the Linux Foundation gadget 1d6b.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -33,6 +37,8 @@ struct RawEntry {
     module: Option<String>,
     #[serde(default)]
     notes: String,
+    #[serde(default)]
+    product: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -70,6 +76,7 @@ impl UsbIdTable {
                 chip: e.chip,
                 module: e.module,
                 notes: e.notes,
+                product: e.product,
             });
         }
         Ok(Self { entries })
@@ -82,10 +89,26 @@ impl UsbIdTable {
 
     /// Exact `vid:pid` wins over a vendor-wide (`pid: *`) row.
     pub fn lookup(&self, vid: u16, pid: u16) -> Option<&UsbId> {
+        self.lookup_device(vid, pid, "")
+    }
+
+    /// Like [`lookup`](Self::lookup), but rows with a `product` filter match only when the device's
+    /// product string contains it. Earlier rows win, so user rows prepended by
+    /// [`with_user_rows`](Self::with_user_rows) override the bundled ones.
+    pub fn lookup_device(&self, vid: u16, pid: u16, product: &str) -> Option<&UsbId> {
+        let p = product.to_lowercase();
+        let fits = |e: &&UsbId| e.vid == vid && e.product.as_ref().is_none_or(|f| p.contains(&f.to_lowercase()));
         self.entries
             .iter()
-            .find(|e| e.vid == vid && e.pid == Some(pid))
-            .or_else(|| self.entries.iter().find(|e| e.vid == vid && e.pid.is_none()))
+            .filter(fits)
+            .find(|e| e.pid == Some(pid))
+            .or_else(|| self.entries.iter().filter(fits).find(|e| e.pid.is_none()))
+    }
+
+    /// A copy with `rows` placed first (so they beat bundled rows for the same vid:pid).
+    pub fn with_user_rows(&self, mut rows: Vec<UsbId>) -> Self {
+        rows.extend(self.entries.iter().cloned());
+        Self { entries: rows }
     }
 }
 
@@ -107,7 +130,7 @@ mod tests {
         assert!(t.entries.len() > 40);
         let mut seen = std::collections::BTreeSet::new();
         for e in &t.entries {
-            assert!(seen.insert((e.vid, e.pid)), "duplicate row {:04x}:{:?}", e.vid, e.pid);
+            assert!(seen.insert((e.vid, e.pid, e.product.clone())), "duplicate row {:04x}:{:?}", e.vid, e.pid);
         }
     }
 
@@ -132,6 +155,22 @@ mod tests {
         assert_eq!(t.lookup(0x2341, 0x0043).unwrap().name, "Arduino Uno R3");
         assert_eq!(t.lookup(0x2341, 0x9999).unwrap().name, "Arduino board");
         assert!(t.lookup(0xdead, 0xbeef).is_none());
+    }
+
+    #[test]
+    fn product_filtered_row_matches_only_its_product() {
+        let t = UsbIdTable::bundled();
+        assert!(t.lookup(0x1d6b, 0x0104).is_none());
+        assert!(t.lookup_device(0x1d6b, 0x0104, "Some Gadget").is_none());
+        let seed = t.lookup_device(0x1d6b, 0x0104, "Cognitum Seed").unwrap();
+        assert_eq!(seed.module.as_deref(), Some("pi-zero-2w"));
+    }
+
+    #[test]
+    fn user_rows_override_bundled() {
+        let t = UsbIdTable::bundled();
+        let row = UsbId { vid: 0x10c4, pid: Some(0xea60), name: "mine".into(), kind: "wild".into(), chip: None, module: None, notes: String::new(), product: None };
+        assert_eq!(t.with_user_rows(vec![row]).lookup(0x10c4, 0xea60).unwrap().name, "mine");
     }
 
     #[test]

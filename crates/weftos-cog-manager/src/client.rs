@@ -217,6 +217,88 @@ pub struct HwUsbReport {
     pub removed: Vec<HwUsbRemoved>,
     #[serde(default)]
     pub unmatched_ports: Vec<String>,
+    /// Catalog items this scan caught for the first time (Hardware Dex).
+    #[serde(default)]
+    pub new_catches: Vec<DexCatch>,
+}
+
+/// A caught catalog item (`GET /hw/dex` `caught[]`, and `new_catches[]` of a scan).
+#[derive(Deserialize, Clone, Default)]
+pub struct DexCatch {
+    /// `module:<id>` | `chip:<id>`
+    #[serde(default, rename = "ref")]
+    pub r: String,
+    #[serde(default)]
+    pub number: u32,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub rarity: String,
+    #[serde(default)]
+    pub first_caught_at: u64,
+    #[serde(default)]
+    pub caught_on: String,
+    #[serde(default)]
+    pub times_seen: u32,
+    #[serde(default)]
+    pub via: String,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct DexWild {
+    #[serde(default)]
+    pub vid: String,
+    #[serde(default)]
+    pub pid: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub times_seen: u32,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct DexBadge {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub desc: String,
+    #[serde(default)]
+    pub earned: bool,
+    #[serde(default)]
+    pub have: usize,
+    #[serde(default)]
+    pub need: usize,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct DexCount {
+    #[serde(default)]
+    pub caught: usize,
+    #[serde(default)]
+    pub total: usize,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct DexTotals {
+    #[serde(default)]
+    pub modules: DexCount,
+    #[serde(default)]
+    pub chips: DexCount,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct HwDexReport {
+    #[serde(default)]
+    pub caught: Vec<DexCatch>,
+    #[serde(default)]
+    pub wild: Vec<DexWild>,
+    #[serde(default)]
+    pub totals: DexTotals,
+    #[serde(default)]
+    pub badges: Vec<DexBadge>,
+    /// ref -> dex number, for every catalog item (so uncaught ones show "#042 ???").
+    #[serde(default)]
+    pub numbers: std::collections::BTreeMap<String, u32>,
 }
 
 /// Progress of an "Ask agent" call for one device key.
@@ -234,6 +316,10 @@ pub struct Shared {
     pub hw_usb: Option<Result<HwUsbReport, String>>,
     pub hw_usb_at: Option<Instant>,
     pub hw_identify: std::collections::BTreeMap<String, Identify>,
+    /// Hardware Dex (Catalog > Dex): fetched on demand when the tab opens, and after a catch.
+    pub hw_dex: Option<Result<HwDexReport, String>>,
+    /// "NEW CATCH!" from a Register-species confirmation; cleared on the next Rescan.
+    pub hw_banner: Vec<DexCatch>,
     pub host: Option<Result<HostStatus, String>>,
     pub net: Option<Result<Net, String>>,
     pub our_reg: Option<Result<WlRegistry, String>>,
@@ -403,7 +489,11 @@ impl Client {
 impl Client {
     /// Scan the host's USB bus (`GET /hw/usb`). On demand: the modal calls this on open and Rescan.
     pub fn hw_scan(&self, ctx: &eframe::egui::Context) {
-        self.shared.lock().unwrap().hw_usb = None;
+        {
+            let mut sh = self.shared.lock().unwrap();
+            sh.hw_usb = None;
+            sh.hw_banner.clear();
+        }
         let url = format!("{}/hw/usb", base(&self.s.host));
         let shared = Arc::clone(&self.shared);
         let ctx = ctx.clone();
@@ -469,6 +559,62 @@ impl Client {
             };
             shared.lock().unwrap().hw_identify.insert(key, Identify::Done(out));
             ctx.request_repaint();
+        });
+    }
+
+    /// Fetch the Hardware Dex (`GET /hw/dex`).
+    pub fn hw_dex_fetch(&self, ctx: &eframe::egui::Context) {
+        let url = format!("{}/hw/dex", base(&self.s.host));
+        let (shared, ctx) = (Arc::clone(&self.shared), ctx.clone());
+        ehttp::fetch(ehttp::Request::get(url), move |res| {
+            shared.lock().unwrap().hw_dex = Some(parse_json::<HwDexReport>(&res));
+            ctx.request_repaint();
+        });
+    }
+
+    /// "Register species": link an attached device to a catalog ref (`module:<id>`/`chip:<id>`) or
+    /// register it as `wild` (with `name`). Rescans and refreshes the dex afterwards.
+    pub fn hw_dex_catch(&self, key: &str, catalog_id: &str, name: &str, answer: &str, ctx: &eframe::egui::Context) {
+        let url = format!("{}/hw/dex/catch", base(&self.s.host));
+        let body = serde_json::json!({ "key": key, "catalog_id": catalog_id, "name": name, "answer": answer });
+        let mut req = ehttp::Request::post(url, body.to_string().into_bytes());
+        req.headers.insert("content-type", "application/json");
+        let (shared, ctx) = (Arc::clone(&self.shared), ctx.clone());
+        let this = (self.s.clone(), catalog_id.to_string());
+        ehttp::fetch(req, move |res| {
+            let msg = match &res {
+                Ok(r) => match serde_json::from_slice::<serde_json::Value>(&r.bytes) {
+                    Ok(v) if v["ok"] == true => format!("registered {}", this.1),
+                    Ok(v) => format!("register failed: {}", v["error"].as_str().unwrap_or("error")),
+                    Err(_) => format!("register: HTTP {}", r.status),
+                },
+                Err(e) => format!("register: {e}"),
+            };
+            {
+                let mut sh = shared.lock().unwrap();
+                sh.last_action = Some(msg);
+                if let Ok(r) = &res
+                    && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&r.bytes)
+                    && v["catch"]["new"] == true
+                    && let Ok(c) = serde_json::from_value::<DexCatch>(v["catch"].clone())
+                {
+                    sh.hw_banner = vec![c];
+                }
+            }
+            for path in ["hw/usb", "hw/dex"] {
+                let (shared, ctx) = (Arc::clone(&shared), ctx.clone());
+                let url = format!("{}/{path}", base(&this.0.host));
+                ehttp::fetch(ehttp::Request::get(url), move |res| {
+                    let mut sh = shared.lock().unwrap();
+                    if path == "hw/usb" {
+                        sh.hw_usb = Some(parse_json::<HwUsbReport>(&res));
+                        sh.hw_usb_at = Some(Instant::now());
+                    } else {
+                        sh.hw_dex = Some(parse_json::<HwDexReport>(&res));
+                    }
+                    ctx.request_repaint();
+                });
+            }
         });
     }
 

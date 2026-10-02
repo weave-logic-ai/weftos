@@ -8,6 +8,8 @@
 //!   GET  /hw/usb               -> USB inventory vs baseline + id-table labels (serials redacted)
 //!   POST /hw/usb/baseline      -> accept the current scan (or body {keys:[..]}) as known
 //!   POST /hw/usb/identify      -> body {key}; ask the configured agent what the device is
+//!   GET  /hw/dex               -> Hardware Dex: caught, wild, totals, badges, numbers
+//!   POST /hw/dex/catch         -> body {key, catalog_id|"wild", name?, answer?}: register a species
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -15,8 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use weftos_cog_host::fleet::Heartbeat;
 use weftos_cog_host::supervise::Supervisor;
-use weftos_cog_host::{install, network, usb, usb_identify, InstallReq};
-use weftos_cog_market::usb::UsbIdTable;
+use weftos_cog_host::{dex, install, network, usb, usb_identify, InstallReq};
 
 const MAX_BODY: usize = 32 * 1024 * 1024; // 32 MB cap on an upload
 
@@ -119,6 +120,8 @@ fn route(method: &str, path: &str, body: &[u8], peer_ip: Option<String>, sup: &A
         ("GET", ["hw", "usb"]) => hw_usb_get(sup),
         ("POST", ["hw", "usb", "baseline"]) => hw_usb_baseline(body, sup),
         ("POST", ["hw", "usb", "identify"]) => hw_usb_identify(body),
+        ("GET", ["hw", "dex"]) => hw_dex_get(sup),
+        ("POST", ["hw", "dex", "catch"]) => hw_dex_catch(body, sup),
         ("POST", ["cogs", id, action @ ("start" | "stop")]) => {
             let mut sup = sup.lock().unwrap();
             let res = if *action == "start" { sup.start(id) } else { sup.stop(id) };
@@ -137,7 +140,20 @@ fn json_resp(code: &'static str, v: serde_json::Value) -> (&'static str, String)
 
 fn hw_usb_get(sup: &Arc<Mutex<Supervisor>>) -> (&'static str, String) {
     let root = sup.lock().unwrap().root.clone();
-    let rep = usb::report(&root, &usb::scan(), &UsbIdTable::bundled(), &network::node_name(), usb::now_secs());
+    let (node, now) = dex::node_now();
+    let scan = usb::scan();
+    // A scan is what "catches" catalog items; user-registered rows identify devices on the way.
+    let res = dex::with_dex(&root, |d| {
+        let table = dex::id_table().with_user_rows(d.user_rows(dex::catalog()));
+        let fresh = d.record_scan(&scan.devices, &table, dex::catalog(), &node, now);
+        (table, fresh)
+    });
+    let (table, fresh) = res.unwrap_or_else(|e| {
+        eprintln!("[cog-host] dex: {e}");
+        (dex::id_table().clone(), Vec::new())
+    });
+    let mut rep = usb::report(&root, &scan, &table, &node, now);
+    rep["new_catches"] = serde_json::Value::Array(fresh);
     json_resp("200 OK", rep)
 }
 
@@ -172,8 +188,42 @@ fn hw_usb_identify(body: &[u8]) -> (&'static str, String) {
     let Some(dev) = usb::scan().devices.into_iter().find(|d| d.key == req.key) else {
         return json_resp("404 Not Found", serde_json::json!({"ok":false,"error":"device not attached (rescan)"}));
     };
-    let (ok, v) = usb_identify::identify(&dev, &UsbIdTable::bundled());
+    let (ok, v) = usb_identify::identify(&dev, dex::id_table());
     json_resp(if ok { "200 OK" } else { "503 Service Unavailable" }, v)
+}
+
+fn hw_dex_get(sup: &Arc<Mutex<Supervisor>>) -> (&'static str, String) {
+    let root = sup.lock().unwrap().root.clone();
+    let node = network::node_name();
+    match dex::with_dex(&root, |d| d.report(dex::catalog(), dex::id_table(), &node)) {
+        Ok(v) => json_resp("200 OK", v),
+        Err(e) => json_resp("500 Internal Server Error", serde_json::json!({"ok":false,"error":format!("dex: {e}")})),
+    }
+}
+
+fn hw_dex_catch(body: &[u8], sup: &Arc<Mutex<Supervisor>>) -> (&'static str, String) {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        key: String,
+        catalog_id: String,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        answer: String,
+    }
+    let Ok(req) = serde_json::from_slice::<Req>(body) else {
+        return json_resp("400 Bad Request", serde_json::json!({"ok":false,"error":"body must be {key, catalog_id, name?, answer?}"}));
+    };
+    let Some(dev) = usb::scan().devices.into_iter().find(|d| d.key == req.key) else {
+        return json_resp("404 Not Found", serde_json::json!({"ok":false,"error":"device not attached (rescan)"}));
+    };
+    let root = sup.lock().unwrap().root.clone();
+    let (node, now) = dex::node_now();
+    match dex::with_dex(&root, |d| d.register(&dev, &req.catalog_id, &req.name, &req.answer, dex::catalog(), &node, now)) {
+        Ok(Ok(v)) => json_resp("200 OK", serde_json::json!({"ok":true,"catch":v})),
+        Ok(Err(e)) => json_resp("400 Bad Request", serde_json::json!({"ok":false,"error":e})),
+        Err(e) => json_resp("500 Internal Server Error", serde_json::json!({"ok":false,"error":format!("dex: {e}")})),
+    }
 }
 
 fn install_route(body: &[u8], sup: &Arc<Mutex<Supervisor>>) -> (&'static str, String) {

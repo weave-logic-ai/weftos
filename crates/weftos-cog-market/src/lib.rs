@@ -11,6 +11,7 @@
 //! in the browser) and hand them in. Signature verification of a WeaveLogic artifact still goes
 //! through [`weftos_cog_repo::verify_artifact`] against the pinned key.
 
+pub mod dex;
 pub mod hw;
 pub mod usb;
 

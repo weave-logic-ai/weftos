@@ -10,6 +10,7 @@
 #![allow(deprecated)]
 
 pub mod client;
+mod hw_dex;
 mod hw_identify;
 
 use client::{Client, HostCog, HostStatus, Net, Settings};
@@ -52,6 +53,7 @@ pub struct Manager {
     cat_kind: String, // module kind filter: all|board|sensor|display|actuator
     /// Catalog tab: the "Identify hardware" USB scan modal.
     hw: hw_identify::HwIdentify,
+    dex: hw_dex::DexUi,
 }
 
 impl Manager {
@@ -71,6 +73,7 @@ impl Manager {
             cat_search: String::new(),
             cat_kind: "all".into(),
             hw: hw_identify::HwIdentify::default(),
+            dex: hw_dex::DexUi::default(),
         }
     }
 }
@@ -427,6 +430,7 @@ impl Manager {
             ui.selectable_value(&mut self.cat_tab, 0u8, "Projects");
             ui.selectable_value(&mut self.cat_tab, 1u8, "Modules");
             ui.selectable_value(&mut self.cat_tab, 2u8, "Chips");
+            ui.selectable_value(&mut self.cat_tab, 3u8, "Dex");
             ui.add_space(10.0);
             ui.add(egui::TextEdit::singleline(&mut self.cat_search).hint_text("search name, vendor, spec, what it senses…").desired_width(300.0));
         });
@@ -438,6 +442,10 @@ impl Manager {
             });
         }
         ui.separator();
+        if self.cat_tab == 3 {
+            self.dex.show(ui, ctx, &self.client, &self.catalog);
+            return;
+        }
         let q = self.cat_search.to_lowercase();
         let (tab, kind) = (self.cat_tab, self.cat_kind.clone());
         let cat = &self.catalog;

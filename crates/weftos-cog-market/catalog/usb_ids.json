@@ -59,8 +59,9 @@
   {
    "vid": "1a86",
    "pid": "55d3",
-   "name": "WCH CH343 USB-UART bridge",
-   "kind": "usb-uart"
+   "name": "WCH CH343P USB-UART bridge",
+   "kind": "usb-uart",
+   "notes": "Common on ESP32-S3 dev boards. Port appears as cu.usbmodem<serial>N on macOS."
   },
   {
    "vid": "0403",
@@ -277,6 +278,12 @@
    "kind": "hub"
   },
   {
+   "vid": "0bda",
+   "pid": "5423",
+   "name": "Realtek USB 2.0 4-port hub",
+   "kind": "hub"
+  },
+  {
    "vid": "1d50",
    "pid": "6089",
    "name": "HackRF One",
@@ -356,6 +363,15 @@
    "name": "Teensy HalfKay bootloader",
    "kind": "mcu",
    "notes": "Press the program button; flash with teensy_loader_cli."
+  },
+  {
+   "vid": "1d6b",
+   "pid": "0104",
+   "product": "Cognitum Seed",
+   "name": "Cognitum Seed (USB gadget)",
+   "kind": "mcu",
+   "module": "pi-zero-2w",
+   "notes": "Linux Foundation multifunction-gadget VID; recognised by its product string. The Seed board is a Pi Zero 2 W class module."
   }
  ]
 }

@@ -6,6 +6,7 @@
 //! `/var/lib/cognitum/apps` is untouched; this is a separate, uncapped lifecycle that runs cogs which
 //! still POST to the agent store on `:80`.
 
+pub mod dex;
 pub mod fleet;
 pub mod network;
 pub mod supervise;

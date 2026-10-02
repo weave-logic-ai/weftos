@@ -34,7 +34,7 @@ pub fn build_prompt(d: &UsbDevice, table: &UsbIdTable) -> String {
     if !d.ports.is_empty() {
         p += &format!("serial ports: {}\n", d.ports.join(", "));
     }
-    if let Some(i) = table.lookup(d.vid, d.pid) {
+    if let Some(i) = table.lookup_device(d.vid, d.pid, &d.product) {
         p += &format!("id-table hint: {} ({})", i.name, i.kind);
         if !i.notes.is_empty() {
             p += &format!(" - {}", i.notes);

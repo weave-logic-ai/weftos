@@ -303,7 +303,7 @@ pub fn now_secs() -> u64 {
 }
 
 pub fn id_json(table: &UsbIdTable, d: &UsbDevice) -> Value {
-    match table.lookup(d.vid, d.pid) {
+    match table.lookup_device(d.vid, d.pid, &d.product) {
         Some(i) => json!({ "name": i.name, "kind": i.kind, "chip": i.chip, "module": i.module, "notes": i.notes }),
         None => Value::Null,
     }

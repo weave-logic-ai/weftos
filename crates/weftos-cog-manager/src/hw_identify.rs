@@ -2,7 +2,7 @@
 //! what is new / known / removed / unidentified, links matches into the catalog and can ask the
 //! host's agent about unknown devices. All requests are on demand (open, Rescan, buttons) - no polling.
 
-use crate::client::{Client, HwUsbDevice, HwUsbReport, Identify};
+use crate::client::{Client, DexCatch, HwUsbDevice, HwUsbReport, Identify};
 use crate::{AMBER, GREEN, GREY, RED};
 use eframe::egui::{self, Color32, RichText};
 use weftos_cog_market::hw::HwCatalog;
@@ -13,13 +13,26 @@ pub struct Jump {
     pub search: String,
 }
 
+/// The inline "Register species" panel for one device.
+#[derive(Default)]
+struct Register {
+    key: String,
+    search: String,
+    wild_name: String,
+}
+
 #[derive(Default)]
 pub struct HwIdentify {
     open: bool,
+    register: Option<Register>,
 }
 
 fn badge(ui: &mut egui::Ui, text: &str, bg: Color32) {
     ui.label(RichText::new(format!(" {text} ")).small().strong().color(Color32::BLACK).background_color(bg));
+}
+
+fn is_hub(d: &HwUsbDevice) -> bool {
+    d.id.as_ref().is_some_and(|i| i.kind == "hub")
 }
 
 fn lookup_url(d: &HwUsbDevice) -> String {
@@ -49,9 +62,9 @@ impl HwIdentify {
             return None;
         }
         // Copy out of the shared state so the UI below can call client methods without re-locking.
-        let (report, age_s, answers) = {
+        let (report, age_s, answers, banner) = {
             let sh = client.snapshot();
-            (sh.hw_usb.clone(), sh.hw_usb_at.map(|t| t.elapsed().as_secs()), sh.hw_identify.clone())
+            (sh.hw_usb.clone(), sh.hw_usb_at.map(|t| t.elapsed().as_secs()), sh.hw_identify.clone(), sh.hw_banner.clone())
         };
         let mut jump = None;
         let width = (ctx.content_rect().width() - 80.0).clamp(320.0, 860.0);
@@ -78,7 +91,7 @@ impl HwIdentify {
                     ui.label(RichText::new(format!("scan failed: {e}")).color(RED));
                     ui.label(RichText::new("needs a weft-cog-host that has /hw/usb (rebuild + restart it).").color(GREY).small());
                 }
-                Some(Ok(r)) => jump = self.rows(ui, ctx, client, cat, r, &answers),
+                Some(Ok(r)) => jump = self.rows(ui, ctx, client, cat, r, &answers, &banner),
             }
         });
         if modal.should_close() {
@@ -110,13 +123,20 @@ impl HwIdentify {
         }
     }
 
-    fn rows(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, client: &Client, cat: &HwCatalog, r: &HwUsbReport, answers: &std::collections::BTreeMap<String, Identify>) -> Option<Jump> {
+    #[allow(clippy::too_many_arguments)]
+    fn rows(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, client: &Client, cat: &HwCatalog, r: &HwUsbReport, answers: &std::collections::BTreeMap<String, Identify>, banner: &[DexCatch]) -> Option<Jump> {
         let mut jump = None;
+        for c in r.new_catches.iter().chain(banner) {
+            ui.label(RichText::new(format!("✨ NEW CATCH! #{:03} {} ({})", c.number, c.name, c.rarity)).strong().size(15.0).color(crate::hw_dex::rarity_color(&c.rarity)));
+        }
         egui::ScrollArea::vertical().max_height(ctx.content_rect().height() - 220.0).auto_shrink([false, true]).show(ui, |ui| {
             if r.devices.is_empty() && r.removed.is_empty() {
                 ui.label(RichText::new("no USB devices found").color(GREY));
             }
-            for d in &r.devices {
+            // hubs are plumbing: list them last
+            let mut devs: Vec<&HwUsbDevice> = r.devices.iter().collect();
+            devs.sort_by_key(|d| is_hub(d));
+            for d in devs {
                 if let Some(j) = self.device_row(ui, ctx, client, cat, d, answers.get(&d.key)) {
                     jump = Some(j);
                 }
@@ -142,7 +162,7 @@ impl HwIdentify {
         jump
     }
 
-    fn device_row(&self, ui: &mut egui::Ui, ctx: &egui::Context, client: &Client, cat: &HwCatalog, d: &HwUsbDevice, answer: Option<&Identify>) -> Option<Jump> {
+    fn device_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, client: &Client, cat: &HwCatalog, d: &HwUsbDevice, answer: Option<&Identify>) -> Option<Jump> {
         let mut jump = None;
         ui.horizontal_wrapped(|ui| {
             if d.state == "new" {
@@ -150,11 +170,12 @@ impl HwIdentify {
             } else {
                 badge(ui, "KNOWN", GREY);
             }
+            let hub = is_hub(d);
             if d.id.is_none() {
                 badge(ui, "UNKNOWN", AMBER);
             }
             let name = d.id.as_ref().map(|i| i.name.as_str()).filter(|n| !n.is_empty()).unwrap_or(if d.product.is_empty() { "unnamed device" } else { &d.product });
-            ui.label(RichText::new(name).strong());
+            ui.label(if hub { RichText::new(name).color(GREY) } else { RichText::new(name).strong() });
             ui.label(RichText::new(format!("{}:{}", d.vid, d.pid)).monospace().color(GREY));
             if !d.manufacturer.is_empty() {
                 ui.label(RichText::new(&d.manufacturer).color(GREY));
@@ -215,7 +236,49 @@ impl HwIdentify {
                     }
                 }
             }
+            if ui.small_button("Register species…").on_hover_text("link this device to a catalog item, or add a wild species").clicked() {
+                self.register = Some(Register { key: d.key.clone(), search: String::new(), wild_name: d.product.clone() });
+            }
+            self.register_panel(ui, ctx, client, cat, d, answer);
         }
         jump
+    }
+
+    fn register_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, client: &Client, cat: &HwCatalog, d: &HwUsbDevice, answer: Option<&Identify>) {
+        let Some(reg) = self.register.as_mut().filter(|r| r.key == d.key) else { return };
+        let text = match answer {
+            Some(Identify::Done(Ok(t))) => t.clone(),
+            _ => String::new(),
+        };
+        let mut done = false;
+        ui.group(|ui| {
+            ui.label(RichText::new("Register species").strong());
+            ui.add(egui::TextEdit::singleline(&mut reg.search).hint_text("search the catalog…").desired_width(260.0));
+            let q = reg.search.to_lowercase();
+            if !q.is_empty() {
+                let mods = cat.modules.iter().filter(|m| format!("{} {}", m.id, m.name).to_lowercase().contains(&q)).map(|m| (format!("module:{}", m.id), format!("{} (module)", m.name)));
+                let chips = cat.chips.iter().filter(|c| format!("{} {}", c.id, c.name).to_lowercase().contains(&q)).map(|c| (format!("chip:{}", c.id), format!("{} (chip)", c.name)));
+                for (r, label) in mods.chain(chips).take(8) {
+                    if ui.small_button(label).clicked() {
+                        client.hw_dex_catch(&d.key, &r, "", &text, ctx);
+                        done = true;
+                    }
+                }
+            }
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("or wild:").small().color(GREY));
+                ui.add(egui::TextEdit::singleline(&mut reg.wild_name).hint_text("species name").desired_width(180.0));
+                if ui.small_button("Register as wild").clicked() {
+                    client.hw_dex_catch(&d.key, "wild", &reg.wild_name, &text, ctx);
+                    done = true;
+                }
+                if ui.small_button("Cancel").clicked() {
+                    done = true;
+                }
+            });
+        });
+        if done {
+            self.register = None;
+        }
     }
 }
