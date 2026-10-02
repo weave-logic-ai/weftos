@@ -162,6 +162,34 @@ pub struct WorkloadPermitRule {
     /// project the rule does not match.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<String>,
+    /// Principals (the gate's `agent_id`) this permit applies to. Empty:
+    /// any. With a non-empty list a request whose principal is unknown, or
+    /// not listed, does not match. The `project` kind uses it to limit its
+    /// permit to [`SUPERVISOR_PRINCIPAL`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub principals: Vec<String>,
+}
+
+/// The internal principal the user-daemon project supervisor acts as. Never
+/// accepted from a request: the supervisor builds its own gate and host with
+/// this id, so an operator-facing placement path (whose gate has no such
+/// permit) cannot start a `project` workload.
+pub const SUPERVISOR_PRINCIPAL: &str = "weftos.project-supervisor";
+
+/// The permit that lets the supervisor, and only the supervisor, run the
+/// `project` kind on this node. It does not reach any other kind.
+pub fn project_supervisor_permit() -> WorkloadPermitRule {
+    let mut rule = WorkloadPermitRule::new(
+        "PROJECT-SUPERVISOR-PERMIT",
+        [ACTION_LOAD, ACTION_START, ACTION_STOP, ACTION_UNLOAD],
+        ["project"],
+    );
+    rule.description = "the project supervisor may run per-project child kernels (ADR-103 A6)".into();
+    rule.min_package_trust = PackageTrust::ProjectCert;
+    rule.min_node_tier = NodeTrustTier::Paired;
+    rule.max_network = NetworkPolicy::None;
+    rule.principals = vec![SUPERVISOR_PRINCIPAL.into()];
+    rule
 }
 
 impl WorkloadPermitRule {
@@ -184,6 +212,7 @@ impl WorkloadPermitRule {
             accelerators: Vec::new(),
             max_resource_cost: default_max_cost(),
             projects: Vec::new(),
+            principals: Vec::new(),
         }
     }
 
@@ -209,6 +238,9 @@ impl WorkloadPermitRule {
         if self.kinds.iter().any(|k| k.is_empty()) || self.accelerators.iter().any(|a| a.is_empty()) {
             return Err(format!("permit rule '{}': empty kind or accelerator selector", self.id));
         }
+        if self.principals.iter().any(|p| p.is_empty()) {
+            return Err(format!("permit rule '{}': empty principal selector", self.id));
+        }
         if self.projects.iter().any(|p| p.is_empty()) {
             return Err(format!("permit rule '{}': empty project selector", self.id));
         }
@@ -226,6 +258,21 @@ impl WorkloadPermitRule {
     /// [`matches`](Self::matches) for a request attributed to `project`
     /// (the verified project id, or `None` outside any project).
     pub fn matches_in(&self, action: &str, effect: &WorkloadEffect, project: Option<&str>) -> bool {
+        self.matches_for(action, effect, project, None)
+    }
+
+    /// [`matches_in`](Self::matches_in) for a request made by `principal`
+    /// (the gate's agent id; `None` when unknown, which never satisfies a
+    /// rule that lists principals).
+    pub fn matches_for(
+        &self,
+        action: &str,
+        effect: &WorkloadEffect,
+        project: Option<&str>,
+        principal: Option<&str>,
+    ) -> bool {
+        let principal_ok =
+            self.principals.is_empty() || principal.is_some_and(|p| self.principals.iter().any(|x| x == p));
         let project_ok = self.projects.is_empty() || project.is_some_and(|p| self.projects.iter().any(|x| x == p));
         let action_ok = self.actions.iter().any(|s| selector_matches(s, action));
         let kind_ok = self.kinds.iter().any(|k| k == "*" || k == &effect.kind);
@@ -233,7 +280,8 @@ impl WorkloadPermitRule {
             None => true,
             Some(acc) => self.accelerators.iter().any(|s| selector_matches(s, acc)),
         };
-        project_ok
+        principal_ok
+            && project_ok
             && action_ok
             && kind_ok
             && accel_ok

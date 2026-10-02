@@ -300,3 +300,130 @@ async fn contexts_are_per_client() {
     assert!(ca.simple_call("x").await.unwrap().ok);
     assert!(cb.simple_call("x").await.unwrap().ok);
 }
+
+/// A child-kernel resolution over a fake home: the user daemon's socket is
+/// `<home>/.weftos/run/kernel.sock`, the child's `<home>/.weftos/run/<id>/`.
+struct ChildWorld {
+    _d: tempfile::TempDir,
+    home: PathBuf,
+    run: PathBuf,
+    res: Resolution,
+}
+
+fn child_world() -> ChildWorld {
+    let d = tempfile::Builder::new().prefix("rpcc").tempdir_in("/tmp").unwrap();
+    let home = d.path().join("home");
+    let proj = home.join("app");
+    std::fs::create_dir_all(proj.join(".weftos")).unwrap();
+    std::fs::write(
+        proj.join(".weftos/project.toml"),
+        format!("schema = 1\nid = \"{ID_A}\"\nname = \"app\"\ncreated = 2026-01-01T00:00:00Z\n"),
+    )
+    .unwrap();
+    let mdir = crate::resolve::manifests_dir(&home);
+    std::fs::create_dir_all(&mdir).unwrap();
+    std::fs::write(
+        mdir.join(format!("{ID_A}.toml")),
+        format!(
+            "schema = 1\nid = \"{ID_A}\"\nname = \"app\"\nroot = \"{}\"\n\
+             created = 2026-01-01T00:00:00Z\nlast_seen = 2026-01-01T00:00:00Z\n\
+             [serve]\nvia = \"child-kernel\"\n",
+            proj.display()
+        ),
+    )
+    .unwrap();
+    let res = resolve_with(&ResolveInputs {
+        cwd: Some(proj),
+        home: Some(home.clone()),
+        ..ResolveInputs::default()
+    })
+    .unwrap();
+    let run = home.join(".weftos/run");
+    std::fs::create_dir_all(run.join(ID_A)).unwrap();
+    ChildWorld { _d: d, home, run, res }
+}
+
+/// A fake user daemon: `project.ensure_running` starts the fake child
+/// (reporting `child_project`) and counts the calls.
+fn fake_user_daemon(w: &ChildWorld, child_project: &'static str) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let l = UnixListener::bind(w.run.join("kernel.sock")).unwrap();
+    let (c, child_dir) = (calls.clone(), w.run.join(ID_A));
+    tokio::spawn(async move {
+        loop {
+            let (s, _) = l.accept().await.unwrap();
+            let (c, child_dir) = (c.clone(), child_dir.clone());
+            tokio::spawn(async move {
+                let (r, mut w) = s.into_split();
+                let mut lines = BufReader::new(r).lines();
+                while let Some(line) = lines.next_line().await.unwrap() {
+                    let req: Request = serde_json::from_str(&line).unwrap();
+                    assert_eq!(req.method, "project.ensure_running");
+                    assert_eq!(req.params["id"], ID_A);
+                    if c.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        let dir = child_dir.clone();
+                        serve(&child_dir, move |_| {
+                            Response::success(handshake_value(&hs(&dir, Some(child_project), "childnode")))
+                        });
+                    }
+                    let mut out = serde_json::to_string(&Response::success(
+                        serde_json::json!({"started": true, "pid": 4242}),
+                    ))
+                    .unwrap();
+                    out.push('\n');
+                    w.write_all(out.as_bytes()).await.unwrap();
+                }
+            });
+        }
+    });
+    calls
+}
+
+#[tokio::test]
+async fn child_kernel_is_ensured_once_then_handshaken() {
+    let w = child_world();
+    let calls = fake_user_daemon(&w, ID_A);
+    let c = connect(&w.res).await.unwrap();
+    assert_eq!(c.handshake.project_id.as_deref(), Some(ID_A));
+    assert_eq!(c.handshake.node_id, "childnode");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(c.warnings.iter().any(|m| m.contains("started") && m.contains("4242")), "{:?}", c.warnings);
+    let _ = &w.home;
+}
+
+#[tokio::test]
+async fn a_child_answering_for_another_project_stays_a_hard_error() {
+    let w = child_world();
+    let _calls = fake_user_daemon(&w, ID_B);
+    match connect(&w.res).await {
+        Err(ConnectError::ProjectMismatch { expected, actual }) => {
+            assert_eq!((expected.as_str(), actual.as_str()), (ID_A, ID_B));
+        }
+        other => panic!("expected a project mismatch, got {:?}", other.map(|c| c.handshake.node_id)),
+    }
+}
+
+#[tokio::test]
+async fn no_user_daemon_means_a_clear_ensure_failure() {
+    let w = child_world();
+    match connect(&w.res).await {
+        Err(ConnectError::EnsureFailed { project_id, detail }) => {
+            assert_eq!(project_id, ID_A);
+            assert!(detail.contains("weaver kernel start --profile user"), "{detail}");
+        }
+        other => panic!("expected EnsureFailed, got {:?}", other.map(|c| c.handshake.node_id)),
+    }
+}
+
+#[tokio::test]
+async fn a_running_child_is_not_ensured_again() {
+    let w = child_world();
+    let dir = w.run.join(ID_A);
+    serve(&dir, {
+        let dir = dir.clone();
+        move |_| Response::success(handshake_value(&hs(&dir, Some(ID_A), "childnode")))
+    });
+    // No user daemon at all: nothing may be asked of it.
+    let c = connect(&w.res).await.unwrap();
+    assert!(c.warnings.iter().all(|m| !m.contains("started")), "{:?}", c.warnings);
+}

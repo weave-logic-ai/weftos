@@ -65,6 +65,18 @@ pub enum KernelAction {
         /// `chain.lock` exists beside that chain.
         #[arg(long, conflicts_with = "new_chain")]
         adopt_legacy_chain: bool,
+
+        /// Start (or find) this project's kernel under the user daemon
+        /// instead of starting a daemon here. Takes a project id or its
+        /// registered name. With `--profile project` this is the child's own
+        /// boot: the user daemon passes its project id this way.
+        #[arg(long, value_name = "ID|NAME")]
+        project: Option<String>,
+
+        /// Start a project-rooted daemon even though a user daemon is
+        /// running (deprecated, removed next release).
+        #[arg(long)]
+        legacy_project_daemon: bool,
     },
 
     /// Stop a running kernel daemon (sends SIGTERM).
@@ -72,10 +84,30 @@ pub enum KernelAction {
         /// Force-kill with SIGKILL if graceful shutdown times out.
         #[arg(long)]
         force: bool,
+
+        /// Stop only this project's kernel (under the user daemon).
+        #[arg(long, value_name = "ID|NAME", conflicts_with_all = ["all_children", "keep_children"])]
+        project: Option<String>,
+
+        /// Stop every project kernel under the user daemon and leave the
+        /// daemon running.
+        #[arg(long, conflicts_with = "keep_children")]
+        all_children: bool,
+
+        /// With `--profile user`: stop only the user daemon and leave the
+        /// project kernels running for the next daemon to adopt. The
+        /// default stops them cleanly first.
+        #[arg(long)]
+        keep_children: bool,
     },
 
     /// Restart a running kernel daemon (sends SIGHUP for re-exec).
-    Restart,
+    Restart {
+        /// Restart only this project's kernel under the user daemon: stop
+        /// it, clear a `failed` state and start it again.
+        #[arg(long, value_name = "ID|NAME")]
+        project: Option<String>,
+    },
 
     /// Show kernel state, uptime, process count, service count.
     Status,
@@ -145,6 +177,8 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
     #[cfg(any(unix, windows))]
     crate::user_daemon::set_project_profile(profile == Some(crate::user_daemon::PROFILE_PROJECT));
     #[cfg(any(unix, windows))]
+    let project_profile = profile == Some(crate::user_daemon::PROFILE_PROJECT);
+    #[cfg(any(unix, windows))]
     if user_profile {
         // Before anything resolves a socket, pid or chain path, and before
         // `prepare_home` changes directory: fix relative paths first.
@@ -156,7 +190,7 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
     #[cfg(not(any(unix, windows)))]
     {
         match args.action {
-            KernelAction::Start { .. } | KernelAction::Stop { .. } | KernelAction::Restart => {
+            KernelAction::Start { .. } | KernelAction::Stop { .. } | KernelAction::Restart { .. } => {
                 anyhow::bail!(
                     "kernel daemon server is not available on this platform.\n\
                      Local transport requires Unix domain sockets or Windows named pipes (WEFT-559)."
@@ -172,7 +206,20 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
             foreground,
             new_chain,
             adopt_legacy_chain,
+            project,
+            legacy_project_daemon,
         } => {
+            // `--project <id>` without the child profile asks the user daemon
+            // to run that project's kernel (package G); with
+            // `--profile project` it is the child's own boot.
+            if let Some(p) = project.as_deref()
+                && !project_profile
+            {
+                return super::kernel_children::start_project(p).await;
+            }
+            if !user_profile && !project_profile {
+                super::kernel_children::legacy_guard(legacy_project_daemon).await?;
+            }
             if foreground {
                 // Run in foreground (blocking)
                 let platform = NativePlatform::new();
@@ -215,7 +262,26 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
             }
         }
         #[cfg(unix)]
-        KernelAction::Stop { force } => {
+        KernelAction::Stop {
+            force,
+            project,
+            all_children,
+            keep_children,
+        } => {
+            if let Some(p) = project.as_deref() {
+                return super::kernel_children::stop_project(p).await;
+            }
+            if all_children {
+                let ids = super::kernel_children::stop_all_children().await?;
+                println!("stopped {} project kernel(s){}", ids.len(), if ids.is_empty() { "" } else { ": " });
+                for id in ids {
+                    println!("  {id}");
+                }
+                return Ok(());
+            }
+            if user_profile {
+                super::kernel_children::cascade_before_user_stop(keep_children).await;
+            }
             let pid = read_daemon_pid()?;
             let nix_pid = nix::unistd::Pid::from_raw(pid);
 
@@ -241,11 +307,14 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
         // Windows: prefer RPC `kernel.shutdown` over named pipe; fall back
         // to taskkill using the PID file (WEFT-559).
         #[cfg(windows)]
-        KernelAction::Stop { force } => {
+        KernelAction::Stop { force, .. } => {
             stop_windows(force).await?;
         }
         #[cfg(unix)]
-        KernelAction::Restart => {
+        KernelAction::Restart { project } => {
+            if let Some(p) = project.as_deref() {
+                return super::kernel_children::restart_project(p).await;
+            }
             let pid = read_daemon_pid()?;
             let nix_pid = nix::unistd::Pid::from_raw(pid);
 
@@ -255,13 +324,13 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
         }
         // Windows has no SIGHUP re-exec path — stop then start.
         #[cfg(windows)]
-        KernelAction::Restart => {
+        KernelAction::Restart { .. } => {
             println!("Restarting daemon (stop + start)...");
             let _ = stop_windows(true).await;
             crate::daemon::daemonize(args.config.as_deref(), false, false)?;
         }
         #[cfg(not(any(unix, windows)))]
-        KernelAction::Start { .. } | KernelAction::Stop { .. } | KernelAction::Restart => {
+        KernelAction::Start { .. } | KernelAction::Stop { .. } | KernelAction::Restart { .. } => {
             unreachable!("handled above");
         }
         KernelAction::Status => {
@@ -278,6 +347,10 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
                         .and_then(|s| s.trim().parse::<u32>().ok());
                     print_daemon_status(&result, pid);
                     print_cluster_summary(&mut client).await;
+                    #[cfg(any(unix, windows))]
+                    if user_profile {
+                        super::kernel_children::print_children().await;
+                    }
                 } else {
                     let msg = resp.error.unwrap_or_else(|| "unknown error".into());
                     eprintln!("daemon error: {msg}");

@@ -681,6 +681,11 @@ pub fn daemonize(
     }
     if crate::user_daemon::is_active() {
         cmd.args(["--profile", crate::user_daemon::PROFILE_USER]);
+    } else {
+        // The parent already passed the legacy-daemon check (a project-rooted
+        // daemon beside a user daemon); the foreground child must not refuse
+        // it a second time.
+        cmd.arg("--legacy-project-daemon");
     }
 
     // Windows: detach so the daemon outlives the spawning console.
@@ -3666,9 +3671,11 @@ async fn resolve_caller_capabilities(
 
     if token.starts_with(clawft_kernel::token_authority::SECRET_PREFIX) {
         if let Some(authority) = crate::token_rpc::authority_for(kernel).await
-            && authority.validate(token).is_some()
+            && let Some(info) = authority.validate(token)
         {
-            return CallerCapabilities::from_scopes(["admin"]);
+            // Owner tokens carry `admin`; a project token (Phase 2 G) carries
+            // write only, never admin.
+            return CallerCapabilities::from_scopes(info.scope.capability_scopes().iter().copied());
         }
         tracing::warn!("rpc auth: token rejected (unknown, expired or revoked)");
         return CallerCapabilities::denied();
@@ -3684,6 +3691,21 @@ async fn resolve_caller_capabilities(
 
     tracing::warn!("rpc auth: presented token did not match any recognised shape; denying");
     CallerCapabilities::denied()
+}
+
+/// True when the caller's credential is a live project-scoped token.
+async fn project_token_scope(
+    caller: &crate::rpc_ext::CallerCtx,
+    kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
+) -> bool {
+    let Some(t) = caller.auth.as_deref().map(str::trim) else { return false };
+    if !t.starts_with(clawft_kernel::token_authority::SECRET_PREFIX) {
+        return false;
+    }
+    let Some(authority) = crate::token_rpc::authority_for(kernel).await else { return false };
+    authority
+        .validate(t)
+        .is_some_and(|i| i.scope == clawft_kernel::token_authority::TokenScope::Project)
 }
 
 /// Resolve the caller's capabilities, then run the capability check and
@@ -3717,6 +3739,13 @@ async fn authorize_caller(
     // binding, never from `Request.project`; a disagreeing claim is refused.
     crate::project_boot_run::note_activity(method);
     caller.verified_project = crate::caller_principal::establish(caller, method, params, kernel).await?;
+    // A project token may call only what its parent link calls.
+    if project_token_scope(caller, kernel).await && !crate::project_token_scope::allows(method) {
+        return Err(Response::error_with_kind(
+            crate::project_token_scope::DENIED_KIND,
+            format!("a project token may not call {method}"),
+        ));
+    }
     let caps = resolve_caller_capabilities(caller, kernel).await;
     crate::rpc_ext::authorize(caller, &caps, method, params, kernel).await?;
     Ok(caps)
@@ -3953,6 +3982,7 @@ async fn run_stream_subscribe<W>(
     W: AsyncWriteExt + Unpin,
 {
     debug!(topic, "ipc.subscribe_stream: forwarder started");
+    let _open = crate::open_streams::guard();
     while let Some(bytes) = rx.recv().await {
         if let Err(e) = writer.write_all(&bytes).await {
             debug!(topic, error = %e, "ipc.subscribe_stream: write error, closing");

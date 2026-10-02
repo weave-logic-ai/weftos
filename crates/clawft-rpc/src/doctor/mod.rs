@@ -12,7 +12,7 @@
 //! |---|---|---|
 //! | `install` | [`install`] | every copy of weft/weaver/weftos, channel, PATH winner |
 //! | `daemon` | [`daemon`] | running kernel processes, exe path, version skew |
-//! | `runtime` | [`runtime`] | runtime dir, stale socket/pid, multiple `node.key` |
+//! | `runtime` | [`runtime`], [`children`] | runtime dir, stale socket/pid, multiple `node.key`, failed/orphaned project kernels |
 //! | `mcp` | [`mcp`] | `.mcp.json` servers resolve |
 //! | `config`, `agents` | `clawft-cli` | config load and multi-agent readiness |
 //!
@@ -20,6 +20,7 @@
 //! place to switch over to a new runtime-paths API.
 
 pub mod channel;
+pub mod children;
 pub mod daemon;
 pub mod env;
 pub mod install;
@@ -295,6 +296,7 @@ pub fn run_system(env: &DoctorEnv, opts: &Options) -> Report {
     if opts.wants(Component::Runtime) {
         let (f, data) = runtime::check(env, &procs, opts.fix, opts.all_runtimes);
         report.findings.extend(f);
+        report.findings.extend(children::check(env, &procs));
         report.data.insert("runtime".into(), data);
     }
     if opts.wants(Component::Mcp) {

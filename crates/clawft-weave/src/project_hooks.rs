@@ -33,6 +33,19 @@ pub fn adjust_services(config: &mut Config, kernel_config: &mut KernelConfig) {
 /// After the kernel has booted: for a project kernel, genesis, the
 /// heartbeat and the anchor task.
 pub fn post_boot(kernel: &Kernel<NativePlatform>, pre: &PreBoot) -> anyhow::Result<()> {
+    // What a project kernel reports as busy beyond its agents (idle-stop
+    // inputs): catalogued workloads (conservative: any means busy) and open
+    // streams. First call wins; unused outside the project profile.
+    #[cfg(feature = "exochain")]
+    crate::project_boot_run::set_busy_probe(|| clawft_rpc::mesh_local::Busy {
+        agents: 0,
+        workloads: u32::try_from(crate::workload_rpc::registry().list().len()).unwrap_or(u32::MAX),
+        streams: crate::open_streams::count(),
+    });
+    // The user daemon supervises project kernels and adopts leftovers
+    // (package G); a no-op for every other profile.
+    #[cfg(all(unix, feature = "exochain", feature = "placement"))]
+    crate::project_supervisor::post_boot(kernel);
     crate::project_boot_run::post_boot(kernel, pre)
 }
 

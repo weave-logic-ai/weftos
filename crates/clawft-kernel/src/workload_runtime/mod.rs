@@ -30,6 +30,7 @@ pub mod evidence;
 pub mod host;
 pub mod host_contract;
 pub mod host_seed;
+pub mod logical;
 pub mod native;
 pub mod seed;
 pub mod seed_client;
@@ -70,6 +71,9 @@ pub use container_cmd::{CommandRunner, Engine, SystemRunner};
 pub use evidence::RunEvidence;
 pub use host::{RUNTIME_CHAIN_SOURCE, WorkloadHost};
 pub use host_contract::HostContract;
+pub use logical::{
+    CAP_PROJECT_LOGICAL, ChildLauncher, ChildProbe, ChildRef, ChildSpec, LOGICAL_ID, LogicalRuntime,
+};
 pub use native::{NativeConfig, NativeRuntime};
 pub use seed::{SeedApiRuntime, SeedConfig, SeedPin};
 pub use seed_creds::FileCredentials;

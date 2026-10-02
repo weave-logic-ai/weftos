@@ -127,6 +127,16 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     // Signature-authenticated; a project kernel calls it with its project
     // claim, so it is inside a project and needs no Admin.
     "project.anchor.submit",
+    // Per-project child kernels (package G): the lifecycle is user-level
+    // Admin; a child renews its own token with a project claim and the token
+    // itself (inside a project, no Admin).
+    "project.start",
+    "project.ensure_running",
+    "project.stop",
+    "project.stop_all",
+    "project.restart",
+    "project.status",
+    "project.token.refresh",
     // mesh-local/1 (package H): spawn-nonce and PoP authenticated; a child
     // sends its project claim on every call, so it is inside a project.
     "mesh.challenge",

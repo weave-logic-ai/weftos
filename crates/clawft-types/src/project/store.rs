@@ -248,6 +248,26 @@ pub fn write_manifest(manifests_dir: &Path, m: &ProjectManifest) -> Result<(), P
     atomic_write(&path, &text, 0o600)
 }
 
+/// Read-modify-write one manifest under the manifest-store lock, so a
+/// concurrent registration or `adopt_or_init` cannot interleave. `None` when
+/// the manifest does not exist (nothing is written). Returns the manifest as
+/// written.
+pub fn update_manifest(
+    manifests_dir: &Path,
+    id: &str,
+    f: impl FnOnce(&mut ProjectManifest),
+) -> Result<Option<ProjectManifest>, ProjectError> {
+    validate_id(id)?;
+    let _g = super::adopt::WRITE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _flock = lock_manifests(manifests_dir)?;
+    let Some(mut m) = read_manifest(manifests_dir, id)? else {
+        return Ok(None);
+    };
+    f(&mut m);
+    write_manifest(manifests_dir, &m)?;
+    Ok(Some(m))
+}
+
 /// Canonicalise even when the leaf is gone: resolve the deepest existing
 /// ancestor and re-append the rest, so `/tmp/x` and `/private/tmp/x` agree.
 pub(super) fn canonical_lenient(path: &Path) -> PathBuf {

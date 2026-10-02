@@ -95,6 +95,10 @@ pub enum ConnectError {
     ProjectUnbound { expected: String },
     /// The daemon's node id is not the expected one.
     NodeMismatch { expected: String, actual: String },
+    /// The project's kernel is a child of the user daemon and could not be
+    /// started on demand (`project.ensure_running` failed or the user daemon
+    /// is not running).
+    EnsureFailed { project_id: String, detail: String },
     /// Transport failure after connecting.
     Transport(anyhow::Error),
 }
@@ -127,7 +131,10 @@ impl ConnectError {
                 expected: expected.clone(),
                 actual: actual.clone(),
             },
-            Self::NoHandshake { .. } | Self::HandshakeRefused { .. } | Self::Transport(_) => {
+            Self::NoHandshake { .. }
+            | Self::HandshakeRefused { .. }
+            | Self::EnsureFailed { .. }
+            | Self::Transport(_) => {
                 return None;
             }
         })
@@ -164,6 +171,10 @@ impl fmt::Display for ConnectError {
             Self::NodeMismatch { expected, actual } => next(
                 f,
                 format!("wrong daemon: expected node {expected} but the daemon is node {actual}"),
+            ),
+            Self::EnsureFailed { project_id, detail } => write!(
+                f,
+                "could not start the kernel for project {project_id}: {detail}"
             ),
             Self::Transport(e) => write!(f, "daemon connection failed: {e}"),
         }
@@ -283,6 +294,42 @@ fn degraded_handshake(res: &Resolution, status: &serde_json::Value) -> Handshake
     }
 }
 
+/// Bound on `project.ensure_running`: a child kernel's first boot waits for
+/// its handshake (the supervisor allows 30 s).
+const ENSURE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// Ask the user daemon to start the project's kernel. Returns the note to
+/// show the operator (pid and socket). Never starts the user daemon itself.
+async fn ensure_child_running(e: &crate::resolve::EnsureRunning) -> Result<String, ConnectError> {
+    let fail = |detail: String| ConnectError::EnsureFailed {
+        project_id: e.project_id.clone(),
+        detail,
+    };
+    let Some(mut user) = DaemonClient::connect_path(&e.user_socket).await else {
+        return Err(fail(
+            "user daemon not running; run `weaver kernel start --profile user`".into(),
+        ));
+    };
+    let req = Request::with_params(
+        "project.ensure_running",
+        serde_json::json!({ "id": e.project_id }),
+    );
+    let resp = tokio::time::timeout(ENSURE_TIMEOUT, user.call(req))
+        .await
+        .map_err(|_| fail(format!("no answer from the user daemon within {ENSURE_TIMEOUT:?}")))?
+        .map_err(|err| fail(err.to_string()))?;
+    if !resp.ok {
+        return Err(fail(resp.error.unwrap_or_else(|| "refused".into())));
+    }
+    let r = resp.result.unwrap_or_default();
+    Ok(format!(
+        "project {} kernel {} (pid {})",
+        e.project_id,
+        if r["started"].as_bool().unwrap_or(false) { "started" } else { "already running" },
+        r["pid"]
+    ))
+}
+
 impl DaemonClient {
     /// Use `ctx` for this client's requests instead of the process default.
     pub fn with_context(mut self, ctx: ClientContext) -> Self {
@@ -299,7 +346,19 @@ impl DaemonClient {
     /// error, since nothing could be verified. Other handshake errors
     /// never downgrade.
     pub async fn connect_resolved(res: &Resolution) -> Result<Connected, ConnectError> {
-        let Some(client) = Self::connect_path(&res.socket).await else {
+        let mut ensure_note = None;
+        let first = Self::connect_path(&res.socket).await;
+        let first = match (first, &res.ensure) {
+            (None, Some(e)) => {
+                // A supervised child kernel: ask the user daemon to start it,
+                // once, then dial again. The handshake below still decides
+                // whether it is the right daemon.
+                ensure_note = Some(ensure_child_running(e).await?);
+                Self::connect_path(&res.socket).await
+            }
+            (c, _) => c,
+        };
+        let Some(client) = first else {
             let state = probe_socket(&res.socket).await;
             return Err(ConnectError::Unreachable {
                 resolution: Box::new(res.clone()),
@@ -361,7 +420,10 @@ impl DaemonClient {
                 daemon_sha: handshake.sha,
             });
         }
-        let warnings = verify_handshake(res, &handshake)?;
+        let mut warnings = verify_handshake(res, &handshake)?;
+        if let Some(n) = ensure_note {
+            warnings.insert(0, n);
+        }
         Ok(Connected {
             client,
             handshake,

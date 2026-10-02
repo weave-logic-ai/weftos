@@ -213,7 +213,7 @@ pub fn adjust_services(config: &mut Config, kernel_config: &mut KernelConfig) {
     // contents come from there. Without it (tests, a hand-built kernel) the
     // file is read as before.
     let link = Arc::new(match crate::project_boot::spawn_link() {
-        Some((socket, id, Some(token))) if !token.trim().is_empty() => ParentLink::new(socket, id, token),
+        Some((socket, id, Some(token))) if !token.trim().is_empty() => ParentLink::new_from_spawn(socket, id, token),
         Some(_) => ParentLink::unconfigured("spawn.json carried no project token"),
         None => ParentLink::from_spawn_json(&RuntimePaths::resolve().spawn_json()),
     });

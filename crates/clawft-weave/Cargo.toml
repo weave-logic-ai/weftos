@@ -115,3 +115,9 @@ nix = { version = "0.29", default-features = false, features = ["signal", "proce
 [dev-dependencies]
 # Self dev-dependency: turns `test-support` on for this crate's integration tests.
 clawft-weave = { path = ".", features = ["test-support"] }
+
+# Spawns real child processes (the test binary acts as a fake project
+# kernel, so it needs its own `main`): see tests/project_supervisor.rs.
+[[test]]
+name = "project_supervisor"
+harness = false

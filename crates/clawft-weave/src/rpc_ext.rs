@@ -321,6 +321,43 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Admin,
         handler: crate::anchor_rpc::handle_restore,
     },
+    // Per-project child kernels (ADR-103 A6, package G). Lifecycle is Admin;
+    // `project.token.refresh` is Write so a project token can renew itself.
+    ExtRoute {
+        prefix: "project.start",
+        capability: Capability::Admin,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.ensure_running",
+        capability: Capability::Admin,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.stop",
+        capability: Capability::Admin,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.stop_all",
+        capability: Capability::Admin,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.restart",
+        capability: Capability::Admin,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.status",
+        capability: Capability::Admin,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.token.refresh",
+        capability: Capability::Write,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
     ExtRoute {
         prefix: "auth.token.issue",
         capability: Capability::Admin,
@@ -449,6 +486,43 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "project.anchor.restore",
         capability: Capability::Admin,
         handler: crate::anchor_rpc::handle_restore,
+    },
+    // Per-project child kernels (ADR-103 A6, package G). Lifecycle is Admin;
+    // `project.token.refresh` is Write so a project token can renew itself.
+    ExtRoute {
+        prefix: "project.start",
+        capability: Capability::Admin,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.ensure_running",
+        capability: Capability::Admin,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.stop",
+        capability: Capability::Admin,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.stop_all",
+        capability: Capability::Admin,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.restart",
+        capability: Capability::Admin,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.status",
+        capability: Capability::Admin,
+        handler: crate::project_lifecycle_rpc::handle,
+    },
+    ExtRoute {
+        prefix: "project.token.refresh",
+        capability: Capability::Write,
+        handler: crate::project_lifecycle_rpc::handle,
     },
     ExtRoute {
         prefix: "auth.token.issue",

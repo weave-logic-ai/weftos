@@ -9,6 +9,12 @@
 //! install prefix is hard-coded (the flaw in `scripts/com.clawft.wake.plist`).
 //! After `weaver update` replaces that binary in place the unit keeps
 //! pointing at the same path, so a restart picks up the new build.
+//!
+//! Per-project child kernels (Phase 2) are started by the daemon and must
+//! survive its restart so `weaver update` does not take every project down:
+//! launchd `AbandonProcessGroup` and systemd `KillMode=process` stop the
+//! service manager from killing the rest of the daemon's process group or
+//! cgroup. The restarted daemon adopts the survivors.
 
 use std::path::{Path, PathBuf};
 
@@ -111,6 +117,8 @@ const PLIST_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
         <key>SuccessfulExit</key>
         <false/>
     </dict>
+    <key>AbandonProcessGroup</key>
+    <true/>
     <key>StandardOutPath</key>
     <string>@LOG@</string>
     <key>StandardErrorPath</key>
@@ -156,6 +164,7 @@ StartLimitBurst=3\n\
 Type=simple\n\
 WorkingDirectory={home}\n\
 ExecStart={exec}\n\
+KillMode=process\n\
 Restart=on-failure\n\
 RestartSec=3\n\
 RestartPreventExitStatus={REFUSED_EXIT}\n\

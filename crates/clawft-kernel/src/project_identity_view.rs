@@ -148,6 +148,13 @@ impl RevocationView {
             .insert(key_id.to_owned());
     }
 
+    /// Every project id the view knows (certified, rekeyed or revoked).
+    pub fn all_project_ids(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.projects.keys().cloned().collect();
+        v.sort();
+        v
+    }
+
     /// Every certificate ever issued for `project_id` whose key was not
     /// revoked for compromise: the current key and keys replaced by a
     /// rekey. A key removed by `project.revoke` is excluded. Statements the

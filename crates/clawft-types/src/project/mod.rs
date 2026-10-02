@@ -23,6 +23,7 @@ mod ids;
 mod schema;
 mod seed;
 pub mod spawn;
+pub mod token_consts;
 mod store;
 
 pub use adopt::{adopt_or_init, reinit_fork};
@@ -39,7 +40,7 @@ pub use seed::{SeedReport, seed_from_registry, seed_from_workspaces};
 pub use store::{
     ManifestListing, PROJECT_DIR, PROJECT_TOML, find_by_id, find_by_root, find_project_toml,
     list_manifests, manifest_path, project_toml_path, read_manifest, read_project_toml,
-    write_manifest, write_project_toml,
+    update_manifest, write_manifest, write_project_toml,
 };
 
 #[cfg(test)]
