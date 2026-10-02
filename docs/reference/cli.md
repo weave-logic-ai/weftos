@@ -1147,6 +1147,16 @@ weaver kernel status --profile user
 | `restart --project` | Stop the project's kernel, clear a `failed` state and start it again. |
 | `status --profile user` | On the user daemon, also lists the children and any unverifiable leftovers. Without `--profile user`, `status` addresses the daemon the current directory resolves to, which may be a project kernel. |
 
+Under launchd the user daemon's `REFUSED` sentinel (`~/.weftos/run/REFUSED`)
+parks the job after a permanent refusal or a clean stop. Only an instance
+launchd itself starts (the generated plist sets `WEFTOS_SERVICE_MANAGER=launchd`)
+removes the sentinel on boot. A manual `weaver kernel start --profile user`
+leaves it in place and prints a hint, so launchd does not launch a second,
+refused instance beside the manual daemon every 30 s. To hand control back,
+run `weaver kernel stop --profile user` and then
+`launchctl kickstart gui/$(id -u)/ai.weftos.user`. Plists generated before this
+change lack the marker: regenerate with `weaver service unit --kind launchd`.
+
 A crashed child is restarted after a 1 s backoff that doubles up to 30 s.
 After `restart_max` crashes inside `restart_window_secs` (manifest `[serve]`,
 defaults 5 and 60 s) the child is marked `failed` and is not started again,

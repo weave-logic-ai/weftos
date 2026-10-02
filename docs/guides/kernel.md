@@ -439,8 +439,16 @@ service (owner migration)".
    the foreground daemon first; the lock refuses two user daemons. After
    that `weaver update --restart` restarts through the service manager. A
    refused boot exits 78; systemd does not retry it
-   (`RestartPreventExitStatus=78`), launchd retries every 30 s, so read the
-   log if the service keeps cycling.
+   (`RestartPreventExitStatus=78`). launchd cannot filter on exit codes, so the
+   daemon leaves `~/.weftos/run/REFUSED` after a permanent refusal or a clean
+   stop and the plist keeps the job alive only while that file is absent.
+   Only an instance launchd starts (the plist sets
+   `WEFTOS_SERVICE_MANAGER=launchd`) removes the file on boot. If you start the
+   daemon by hand while the job is parked (`weaver kernel start --profile
+   user`), the file stays and the command prints a hint; to hand control back,
+   `weaver kernel stop --profile user` and then
+   `launchctl kickstart gui/$(id -u)/ai.weftos.user`. Regenerate a plist made
+   before this marker existed.
 8. **Register each project** with `weft project init` (adopts the seeded
    manifest and prints the ULID), then `weft project show .`. `weft` reaches
    the user daemon from a registered project directory, or from anywhere

@@ -1146,9 +1146,15 @@ pub async fn run(
     // Record this process as the live daemon only now that boot (which takes
     // the chain lock) has succeeded, so a refused boot leaves no stale pid.
     let _ = std::fs::write(protocol::pid_path(), std::process::id().to_string());
-    // Boot succeeded: lift any "do not restart" sentinel from an earlier
-    // refusal or clean exit, so a service manager supervises this run.
-    crate::boot_refusal::clear_refused(&paths.refused());
+    // Boot succeeded. A launchd-started instance lifts the "do not restart"
+    // sentinel (from an earlier refusal or clean exit) so launchd supervises
+    // this run; a manual start leaves it, or launchd would launch its own,
+    // refused, instance beside this one every throttle interval.
+    if crate::boot_refusal::lift_refused_on_boot(&paths.refused(), crate::boot_refusal::service_managed())
+        == crate::boot_refusal::RefusedLift::LeftParked
+    {
+        tracing::warn!("{}", crate::boot_refusal::parked_hint(&paths.refused()));
+    }
     if crate::user_daemon::is_active() {
         seed_user_projects();
         crate::anchor_rpc::reconcile_startup(&kernel).await;

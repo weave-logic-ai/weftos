@@ -48,17 +48,23 @@ Staging area for changes after the 0.8.1 cut.
   are read-only from 0.8.2; send `"proto": 1`. The VS Code panel and the
   child-kernel link now send it. Old no-`proto` clients that call
   `kernel.subscribe`, `substrate.subscribe` or `agent.chat` now fail with
-  `proto_mismatch` (those are not on the read-only allowlist); remote relay
-  clients must send `"proto": 1`. Update the client.
+  `proto_mismatch` (those are not on the read-only allowlist). Update the
+  client.
 - **launchd no longer cycles on a permanent refusal.** The user daemon writes
   `~/.weftos/run/REFUSED` on a permanent refusal or a clean exit and the
-  generated plist's `KeepAlive` is `PathState {REFUSED: false}`; the
-  daemon removes it once a boot succeeds (a refused duplicate start never
-  writes it; a clean-exit write happens only if no successor holds the
-  instance lock). launchd watches `~/.weftos/run/REFUSED`, so a
-  `WEFTOS_RUNTIME_DIR` override is not supervised by launchd. Regenerate the unit with `weaver service unit --kind launchd` to pick up the new
-  plist. The legacy-chain age-window refusal is now a plain boot error (exit
-  1, retried); `-cREL` is made absolute on SIGHUP re-exec.
+  generated plist's `KeepAlive` is `PathState {REFUSED: false}`. Only an
+  instance launchd starts removes it on boot: the plist sets
+  `WEFTOS_SERVICE_MANAGER=launchd`, and a manual `weaver kernel start
+  --profile user` leaves the sentinel in place and prints a hint (otherwise
+  launchd would launch its own, refused, instance beside the manual one every
+  30 s). To hand control back, run `weaver kernel stop --profile user` and then
+  `launchctl kickstart gui/$(id -u)/ai.weftos.user`. A refused duplicate start
+  never writes the sentinel, and a clean-exit write happens only if no
+  successor holds the instance lock. launchd watches `~/.weftos/run/REFUSED`,
+  so a `WEFTOS_RUNTIME_DIR` override is not supervised by launchd. Regenerate
+  the unit with `weaver service unit --kind launchd` to pick up the new plist
+  and its marker. The legacy-chain age-window refusal is now a plain boot error
+  (exit 1, retried); `-cREL` is made absolute on SIGHUP re-exec.
 - `weaver kernel status` without `--profile user` reports a live user daemon
   instead of booting an inspection kernel; `weft doctor` lists `~/.weftos/run`
   with the `kernel.lock` holder, `REFUSED`, the migration marker and adoption

@@ -21,6 +21,14 @@ use std::path::{Path, PathBuf};
 /// launchd label for the per-user daemon.
 pub const LAUNCHD_LABEL: &str = "ai.weftos.user";
 
+/// Set by the generated launchd plist. Only a daemon the service manager
+/// started (it sees this) lifts the `REFUSED` sentinel on boot; a manual
+/// `kernel start` must not, or launchd (watching the sentinel) would launch its
+/// own, refused, instance every throttle interval beside it.
+pub const SERVICE_MANAGER_ENV: &str = "WEFTOS_SERVICE_MANAGER";
+/// Value [`SERVICE_MANAGER_ENV`] carries in the plist.
+pub const SERVICE_MANAGER_LAUNCHD: &str = "launchd";
+
 /// systemd user unit name (without the `.service` suffix).
 pub const SYSTEMD_UNIT: &str = "weftos";
 
@@ -114,6 +122,11 @@ const PLIST_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 @ARGS@    </array>
     <key>WorkingDirectory</key>
     <string>@HOME@</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>@MANAGER_ENV@</key>
+        <string>@MANAGER@</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>ThrottleInterval</key>
@@ -153,6 +166,8 @@ pub fn launchd_plist(exe: &Path, home: &Path) -> String {
         .replace("@HOME@", &home)
         .replace("@LOG@", &log)
         .replace("@REFUSED@", &refused)
+        .replace("@MANAGER_ENV@", SERVICE_MANAGER_ENV)
+        .replace("@MANAGER@", SERVICE_MANAGER_LAUNCHD)
         .replace("@THROTTLE@", &LAUNCHD_THROTTLE_SECS.to_string())
 }
 
@@ -365,8 +380,8 @@ mod tests {
         let p = RuntimePaths::user_with(None, Some(home));
         assert_eq!(p.refused(), refused_path(home));
         assert!(launchd_plist(Path::new("/x/weaver"), home).contains(&p.refused().to_string_lossy().into_owned()));
-        // WEFTOS_RUNTIME_DIR moves the daemon's root; the plist (which sets no
-        // env) keeps watching ~/.weftos/run, so an override is not supervised.
+        // WEFTOS_RUNTIME_DIR moves the daemon's root; the plist (which sets only
+        // the service-manager marker) keeps watching ~/.weftos/run, so an override is not supervised.
         let o = RuntimePaths::user_with(Some("/tmp/iso"), Some(home));
         assert_eq!(o.refused(), Path::new("/tmp/iso/REFUSED"));
         assert_ne!(o.refused(), refused_path(home));
@@ -385,6 +400,8 @@ mod tests {
         assert!(pl.contains("<key>PathState</key>"));
         assert!(pl.contains("<key>/h/.weftos/run/REFUSED</key>\n            <false/>"));
         assert!(!pl.contains("SuccessfulExit"));
+        // Only the launchd-started instance may lift the sentinel.
+        assert!(pl.contains("<key>EnvironmentVariables</key>\n    <dict>\n        <key>WEFTOS_SERVICE_MANAGER</key>\n        <string>launchd</string>"));
     }
 
     #[cfg(unix)]

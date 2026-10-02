@@ -15,6 +15,11 @@
     </array>
     <key>WorkingDirectory</key>
     <string>/Users/alice</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>WEFTOS_SERVICE_MANAGER</key>
+        <string>launchd</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>ThrottleInterval</key>

@@ -85,9 +85,54 @@ pub fn write_refused_if_unowned(paths: &clawft_types::runtime_paths::RuntimePath
     }
 }
 
-/// Remove the sentinel (a start attempt is beginning). Missing is fine.
+/// Remove the sentinel. Missing is fine.
 pub fn clear_refused(sentinel: &Path) {
     let _ = std::fs::remove_file(sentinel);
+}
+
+/// Whether this process was started by the service manager that watches the
+/// sentinel (the generated plist sets [`SERVICE_MANAGER_ENV`](crate::service_units::SERVICE_MANAGER_ENV)).
+pub fn service_managed() -> bool {
+    std::env::var_os(crate::service_units::SERVICE_MANAGER_ENV).is_some_and(|v| !v.is_empty())
+}
+
+/// What a successful boot did about the sentinel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefusedLift {
+    /// No sentinel was present.
+    Absent,
+    /// The service-managed instance removed it.
+    Cleared,
+    /// A manual start found it and left it: the launchd job stays parked.
+    LeftParked,
+}
+
+/// A boot succeeded: lift the sentinel only when `managed` (the service
+/// manager started this instance). A manual start leaves it, so launchd,
+/// which watches the path, does not launch its own instance beside the manual
+/// one and have it refused every throttle interval.
+pub fn lift_refused_on_boot(sentinel: &Path, managed: bool) -> RefusedLift {
+    if !sentinel.exists() {
+        return RefusedLift::Absent;
+    }
+    if managed {
+        clear_refused(sentinel);
+        RefusedLift::Cleared
+    } else {
+        RefusedLift::LeftParked
+    }
+}
+
+/// Printed by a manual `kernel start --profile user` when the launchd job is
+/// parked by the sentinel.
+pub fn parked_hint(sentinel: &Path) -> String {
+    format!(
+        "note: the launchd job is parked ({} exists) and stays parked while this daemon runs. \
+To hand control back: `weaver kernel stop --profile user`, then \
+`launchctl kickstart gui/$(id -u)/{}`",
+        sentinel.display(),
+        crate::service_units::LAUNCHD_LABEL
+    )
 }
 
 /// Everything a SIGHUP re-exec must reproduce, captured once at startup
@@ -300,6 +345,22 @@ mod tests {
         clear_refused(&s);
         assert!(!s.exists());
         clear_refused(&s);
+    }
+
+    #[test]
+    fn only_a_service_managed_boot_lifts_the_sentinel() {
+        let d = tempfile::tempdir().unwrap();
+        let s = d.path().join("run").join("REFUSED");
+        assert_eq!(lift_refused_on_boot(&s, false), RefusedLift::Absent);
+        write_refused(&s, "stopped cleanly");
+        // A manual start (no marker) leaves the launchd job parked.
+        assert_eq!(lift_refused_on_boot(&s, false), RefusedLift::LeftParked);
+        assert!(s.exists());
+        assert!(parked_hint(&s).contains("launchctl kickstart gui/$(id -u)/ai.weftos.user"));
+        // The launchd-started instance (marker set) clears it.
+        assert_eq!(lift_refused_on_boot(&s, true), RefusedLift::Cleared);
+        assert!(!s.exists());
+        assert_eq!(lift_refused_on_boot(&s, true), RefusedLift::Absent);
     }
 
     #[test]

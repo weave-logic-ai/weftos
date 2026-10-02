@@ -230,6 +230,12 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
             // WEFTOS_RUNTIME_DIR override is not supervised by launchd.
             #[cfg(any(unix, windows))]
             let refused_sentinel = user_profile.then(|| protocol::runtime_paths().refused());
+            if let Some(s) = &refused_sentinel
+                && s.exists()
+                && !crate::boot_refusal::service_managed()
+            {
+                eprintln!("{}", crate::boot_refusal::parked_hint(s));
+            }
             if foreground {
                 // Run in foreground (blocking)
                 let platform = NativePlatform::new();
