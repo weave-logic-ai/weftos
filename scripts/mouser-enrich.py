@@ -17,18 +17,22 @@ DEFAULT = os.path.expanduser("~/weftos/crates/weftos-cog-market/catalog/catalog.
 
 
 def load_key():
+    # The Product/Search API key (MOUSER_PRODUCT_API_KEY) is distinct from the Order API key
+    # (MOUSER_API_KEY) and is the one the search endpoint accepts — always prefer it.
+    found = {}
     for k in ("MOUSER_PRODUCT_API_KEY", "MOUSER_API_KEY"):
         if os.environ.get(k):
-            return os.environ[k]
+            found[k] = os.environ[k]
     for f in ("~/weftos/.env", "~/.config/cognitum/env"):
         p = os.path.expanduser(f)
-        if os.path.exists(p):
-            for line in open(p):
-                line = line.strip()
-                for k in ("MOUSER_PRODUCT_API_KEY", "MOUSER_API_KEY"):
-                    if line.startswith(k + "="):
-                        return line.split("=", 1)[1].strip().strip('"').strip("'")
-    return None
+        if not os.path.exists(p):
+            continue
+        for line in open(p):
+            line = line.strip()
+            for k in ("MOUSER_PRODUCT_API_KEY", "MOUSER_API_KEY"):
+                if line.startswith(k + "=") and k not in found:
+                    found[k] = line.split("=", 1)[1].strip().strip('"').strip("'")
+    return found.get("MOUSER_PRODUCT_API_KEY") or found.get("MOUSER_API_KEY")
 
 
 def search(key, query):

@@ -98,7 +98,14 @@
       "photo": "",
       "datasheet": "https://developer.acconeer.com/home/a121-docs-software/a121-esp32/",
       "mouser_query": "Acconeer XM125",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$23.53 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Acconeer/XM125?qs=amGC7iS6iy8ql%2Fsw4HBAJQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md",
         ".metaharness/ingest/findings/hardware/hw-acconeer-a121-xm125.json",
@@ -140,7 +147,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "AD8232",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices/AD8232?qs=%252BEew9%252B0nqrD7yQn%252BwQPzuQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
       ]
@@ -189,9 +203,16 @@
         "ads1115"
       ],
       "photo": "module.jpg",
-      "datasheet": "https://www.ti.com/lit/ds/symlink/ads1115.pdf",
+      "datasheet": "https://www.mouser.com/catalog/specsheets/Soldered_333095.pdf",
       "mouser_query": "ADS1115 ADC breakout",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$11.80 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Soldered/333095?qs=QpmGXVUTftGJZzzQRYYpqA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/hardware/sensors.md",
         "crates/weftos-cog-market/catalog/catalog.json"
@@ -232,7 +253,14 @@
       "photo": "",
       "datasheet": "https://www.ti.com/product/ADS1299",
       "mouser_query": "ADS1299",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$44.98 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/ADS1299-4PAGR?qs=9lcNTSmDlCrUT6jt7VGEHw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md",
         "docs/TRAINING_RIG.md"
@@ -261,9 +289,16 @@
       "pins": [],
       "chips": [],
       "photo": "",
-      "datasheet": "https://www.airmar.com/",
+      "datasheet": "https://www.mouser.com/datasheet/3/59/5/ARK75THD.pdf",
       "mouser_query": "Airmar B260 transducer",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$158.96 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Amphenol-AIRMAR/ARK75THD-DR-01?qs=i8QVZAFTkqSilgYGfnsCjA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".planning/sonobuoy/build/commercial-comparison.md"
       ]
@@ -335,9 +370,16 @@
       ],
       "chips": [],
       "photo": "",
-      "datasheet": "https://www.airmar.com/productdescription.html?id=59",
+      "datasheet": "https://www.mouser.com/datasheet/3/59/5/1MHz_M17mm.pdf",
       "mouser_query": "Airmar P79 31-234-2-01",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$102.54 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Amphenol-AIRMAR/P798-DR-01?qs=i8QVZAFTkqT0KbmmtO8TFA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".planning/sonobuoy/build/build-buoy-p79.md",
         ".planning/sonobuoy/SYNTHESIS.md"
@@ -479,7 +521,14 @@
       "photo": "",
       "datasheet": "https://docs.arduino.cc/hardware/uno-rev3",
       "mouser_query": "Arduino Uno R3",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$4.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/DFRobot/FIT0603?qs=qSfuJ%252Bfl%2Fd6cdpT%2FkgXDfw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -568,9 +617,16 @@
       "pins": [],
       "chips": [],
       "photo": "",
-      "datasheet": "https://bluerobotics.com/store/sonars/imaging-sonars/ping360-sonar-r1-rp/",
+      "datasheet": "https://www.mouser.com/datasheet/3/6021/1/SWL-Catalog-06-12-2023.pdf",
       "mouser_query": "Blue Robotics Ping360",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$168.14 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Swivellink/AFSB-3TSL-0610?qs=ST9lo4GX8V3kuFRM4k1kSg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".planning/sonobuoy/"
       ]
@@ -614,7 +670,14 @@
       "photo": "",
       "datasheet": "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme280-ds002.pdf",
       "mouser_query": "BME280 breakout",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$17.59 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Pimoroni/PIM472?qs=P1JMDcb91o7p2TYl00AP7g%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/hardware/sensors.md"
       ]
@@ -660,9 +723,16 @@
         "bme280"
       ],
       "photo": "",
-      "datasheet": "https://www.bosch-sensortec.com/products/environmental-sensors/humidity-sensors-bme280/",
+      "datasheet": "https://www.mouser.com/datasheet/3/1046/1/bst_bme280_ds002.pdf",
       "mouser_query": "Bosch BME280",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$4.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Bosch-Sensortec/BME280?qs=2OnyuXx6vpj2fK9HX7qb3g%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md",
         "firmware/node-a1-bringup/src/bme280.h",
@@ -706,9 +776,16 @@
         "bme680"
       ],
       "photo": "",
-      "datasheet": "https://www.bosch-sensortec.com/products/environmental-sensors/gas-sensors/bme680/",
+      "datasheet": "https://www.mouser.com/datasheet/3/1046/1/bst_bme680_ds001.pdf",
       "mouser_query": "Bosch BME680",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$9.08 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Bosch-Sensortec/BME680?qs=v271MhAjFHjo0yA%2FC4OnDQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md",
         "firmware/node-a1-bringup/src/bme680.h",
@@ -759,7 +836,14 @@
       "photo": "",
       "datasheet": "https://www.bosch-sensortec.com/products/smart-sensor-systems/bno055/",
       "mouser_query": "BNO055 breakout",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$29.95 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Adafruit/4646?qs=W%2FMpXkg%252BdQ4Msqspav40iw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/hardware/sensors.md",
         "docs/weftos/splat-capture-sensor-head.md",
@@ -798,9 +882,16 @@
         "bno085"
       ],
       "photo": "",
-      "datasheet": "https://www.ceva-dsp.com/product/bno080-085/",
+      "datasheet": "https://www.mouser.com/datasheet/3/5991/1/BNO080_085-Datasheet.pdf",
       "mouser_query": "BNO085",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$15.38 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/CEVA/BNO085?qs=ulEaXIWI0c9BFVeZDQCmmQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md",
         "docs/TRAINING_RIG.md"
@@ -864,9 +955,16 @@
         "decawave-dw1000"
       ],
       "photo": "",
-      "datasheet": "",
+      "datasheet": "https://www.mouser.com/datasheet/3/1081/1/DWM1001C_Data_Sheet.pdf",
       "mouser_query": "DWM1001",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Qorvo/DWM1001?qs=TiOZkKH1s2QHu8thb9F8Bg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-liu-2022-pubmed36365854.json",
         ".metaharness/ingest/findings/hardware/hw-volpi-2023-pubmed36772163.json"
@@ -908,7 +1006,14 @@
       "photo": "",
       "datasheet": "https://www.dfrobot.com/product-2861.html",
       "mouser_query": "DFRobot C1001 SEN0623",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$29.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/DFRobot/SEN0623?qs=iLKYxzqNS758Mo4l97YHUQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-c1001-60ghz-dfrobot.json",
         "docs/research/hardware-alternatives-and-life-detection.md",
@@ -943,7 +1048,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "DFRobot C4002",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$8.90 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/DFRobot/SEN0691?qs=KLj0QfLrw0HgL%2FTBZjrm7g%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-c4002-24ghz-dfrobot.json"
       ]
@@ -985,7 +1097,14 @@
       "photo": "",
       "datasheet": "https://wiki.dfrobot.com/sen0628/",
       "mouser_query": "DFRobot SEN0628 VL53L7CX",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$22.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/DFRobot/SEN0628?qs=6avfeC6zeS4Fmz1aodzk%2FA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md",
         "docs/node_a1/BUILD_AND_WIRING.md",
@@ -1028,7 +1147,14 @@
       "photo": "",
       "datasheet": "https://www.analog.com/media/en/technical-documentation/data-sheets/DS18B20.pdf",
       "mouser_query": "DS18B20 waterproof probe",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$11.25 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/SparkFun/SEN-11050?qs=WyAARYrbSnY0sq2HamgEvg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".planning/sonobuoy/build/build-hydrophone-simple.md",
         ".planning/sonobuoy/build/build-buoy-p79.md"
@@ -1076,9 +1202,16 @@
         "nrf52833"
       ],
       "photo": "",
-      "datasheet": "https://www.qorvo.com/products/p/DWM3001C",
+      "datasheet": "https://www.mouser.com/datasheet/3/1081/1/DWM3001C_Product_Brief.pdf",
       "mouser_query": "DWM3001C",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Qorvo/DWM3001C?qs=QNEnbhJQKvard%252BAFByQwWA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "Downloads/DWM3001C Data Sheet.pdf",
         "scripts/n6 (dw3000-id, DWM3000EVB)"
@@ -1109,9 +1242,16 @@
       ],
       "chips": [],
       "photo": "",
-      "datasheet": "https://www.elecrow.com/",
+      "datasheet": "https://www.mouser.com/datasheet/3/6039/1/ESP32_Display_HMI_User_Manual.pdf",
       "mouser_query": "Elecrow 7 inch ESP32 display",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$28.67 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Elecrow/DIS05035Hwithout-acrylic-case?qs=iLKYxzqNS763TZvWkpPGeg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -1146,9 +1286,16 @@
         "goodix-gt911"
       ],
       "photo": "",
-      "datasheet": "",
+      "datasheet": "https://www.mouser.com/datasheet/3/6039/1/ESP32_Display_HMI_User_Manual.pdf",
       "mouser_query": "Elecrow CrowPanel 7 inch ESP32-S3",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$28.67 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Elecrow/DIS05035Hwithout-acrylic-case?qs=iLKYxzqNS763TZvWkpPGeg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/whitsentry-synergy-report.md"
       ]
@@ -1175,9 +1322,16 @@
       "pins": [],
       "chips": [],
       "photo": "",
-      "datasheet": "https://www.espressif.com/en/products/socs/esp32-c5",
+      "datasheet": "https://www.mouser.com/catalog/specsheets/Espressif-System_12-11-2025_sesp-dev-kits-en-master-esp32c5.pdf",
       "mouser_query": "ESP32-C5",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$15.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Espressif-Systems/ESP32-C5-DevKitC-1-N8R8?qs=6avfeC6zeS67aD1hu9NHBw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -1207,9 +1361,16 @@
       "pins": [],
       "chips": [],
       "photo": "",
-      "datasheet": "https://www.espressif.com/sites/default/files/documentation/esp32-s2_datasheet_en.pdf",
+      "datasheet": "https://www.mouser.com/catalog/specsheets/Espressif Systems_7-27-2022_ESP32-S2-MINI-22U_EN Version.pdf",
       "mouser_query": "ESP32-S2 mini",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$4.31 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Espressif-Systems/ESP32-S2-MINI-2U-N4?qs=vvQtp7zwQdMhxmYSOZwMIQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md",
         "docs/TRAINING_RIG.md"
@@ -1248,7 +1409,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "ESP32-S3 N16R8 devkit",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$13.24 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Espressif-Systems/ESP32-S3-DevKitC-1U-N16R8?qs=LnCj936TGbWl7g3zW1NUIA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/research/hardware-cost-matrix.md",
         "reference/whitsentry/docs/hardware/phase0-parts-list.md",
@@ -1322,7 +1490,14 @@
       "photo": "",
       "datasheet": "https://www.ti.com/product/FDC2214",
       "mouser_query": "FDC2214",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$3,150.13 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/FDC2214EVM?qs=cGEy3R83DS8RC6lg1bYP8A%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -1354,9 +1529,16 @@
       ],
       "chips": [],
       "photo": "",
-      "datasheet": "",
+      "datasheet": "https://www.mouser.com/datasheet/3/902/1/LI-ThermalCAM-USB20-057H_Datasheet.pdf",
       "mouser_query": "FLIR Lepton 3.5",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$249.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Leopard-Imaging/LI-ThermalCAM-USB20-057H?qs=HFfMDpzxxd0lsh3dPYzteg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
       ]
@@ -1570,7 +1752,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "24GHz presence radar module OT1 OT2",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$29.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/DFRobot/SEN0395?qs=ljCeji4nMDmvEgq75EdCVA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/hardware/radar-protocols.md"
       ]
@@ -1645,7 +1834,14 @@
       "photo": "",
       "datasheet": "https://greatscottgadgets.com/hackrf/one/",
       "mouser_query": "HackRF One",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$290.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Great-Scott-Gadgets/HackRF-One-Bare-Board?qs=7%2F6SraaimPR1TANve%252B6MrQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/hardware/sdr-radio.md"
       ]
@@ -1681,7 +1877,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "HC-SR04",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$7.35 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/OSEPP-Electronics/HC-SR04?qs=wNBL%252BABd93PqZEhuhHkuOw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
       ]
@@ -2116,7 +2319,14 @@
       "photo": "",
       "datasheet": "https://invensense.tdk.com/products/motion-tracking/9-axis/icm-20948/",
       "mouser_query": "ICM-20948",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/TDK-InvenSense/ICM-20948?qs=u4fy%2FsgLU9OtGc31yF%2Friw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -2153,7 +2363,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "ICM-20948",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/TDK-InvenSense/ICM-20948?qs=u4fy%2FsgLU9OtGc31yF%2Friw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
       ]
@@ -2187,9 +2404,16 @@
         "bgt60tr13c"
       ],
       "photo": "",
-      "datasheet": "https://www.infineon.com/cms/en/product/sensor/radar-sensors/radar-sensors-for-iot/60ghz-radar/bgt60tr13c/",
+      "datasheet": "https://www.mouser.com/datasheet/3/70/1/Infineon_DS_BGT60TR13C_DataSheet_v02_49_EN.pdf",
       "mouser_query": "BGT60TR13C",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$17.99 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Infineon-Technologies/BGT60TR13CE6327XUMA1?qs=sPbYRqrBIVnK9rZEOIh6SA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -2228,9 +2452,16 @@
         "infineon-bgt60tr13c"
       ],
       "photo": "",
-      "datasheet": "https://www.infineon.com/evaluation-board/DEMO-BGT60TR13C",
+      "datasheet": "https://www.mouser.com/datasheet/3/70/1/infineon_ug091519_radar_baseboard_mcu7_usermanual_en.pdf",
       "mouser_query": "DEMO-BGT60TR13C",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Infineon-Technologies/DEMO-BGT60TR13C?qs=AeBljyeJo%252BgPM8AMLmer2g%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-bgt60tr13c-demo.json",
         ".metaharness/ingest/findings/hardware/hw-brandstetter-2025-pubmed41002864.json"
@@ -2273,7 +2504,14 @@
       "photo": "",
       "datasheet": "https://invensense.tdk.com/products/digital/inmp441/",
       "mouser_query": "INMP441",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/TDK/INMP441?qs=A6eO%252BMLsxmQ7QOONrFN3Pg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md",
         "firmware/node-a1-bringup/src/mic_inmp441.h",
@@ -2317,9 +2555,16 @@
         "inmp441"
       ],
       "photo": "",
-      "datasheet": "https://invensense.tdk.com/products/digital/inmp441/",
+      "datasheet": "https://www.mouser.com/datasheet/3/360/1/specs_DMM_4026_B_I2S_R.pdf",
       "mouser_query": "INMP441 I2S MEMS microphone",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$3.36 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/PUI-Audio/DMM-4026-B-I2S-R?qs=zhx2xqPtQQxBuLVw%2Fwt86Q%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".planning/sensors/JOURNALED-SENSOR-MIC.md",
         ".planning/sensors/JOURNALED-NODE-ESP32.md",
@@ -2353,7 +2598,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "InnoMaker USB UVC camera IR-cut",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$245.05 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/TechNexion/UVCS-AR0522-M-S140-IR?qs=y9%2FpVxnqej9dKwmmXaiXEw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -2413,7 +2665,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "Intel RealSense D435",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$1,302.86 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/FRAMOS/Depth-Camera-D435e-f?qs=efUn273yAhcTJMmXpo1Wdw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
       ]
@@ -2451,9 +2710,16 @@
         "mcp6022"
       ],
       "photo": "",
-      "datasheet": "",
+      "datasheet": "https://www.mouser.com/datasheet/3/1206/1/jfet-j201-j202-interfet.pdf",
       "mouser_query": "J201 JFET",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$5.81 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/InterFET/J201?qs=OxRSArmBDfyvD8SbvWteMw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".planning/sonobuoy/build/build-hydrophone.md",
         ".planning/sonobuoy/build/build-hydrophone-simple.md",
@@ -2533,7 +2799,14 @@
       "photo": "module.jpg",
       "datasheet": "https://www.ti.com/lit/ds/symlink/lm393.pdf",
       "mouser_query": "KY-038 microphone module",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$31.90 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Fortebit/EV3?qs=GBLSl2AkiruXzX5ZQ%252BrPCQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "crates/weftos-cog-market/catalog/catalog.json"
       ]
@@ -2566,7 +2839,14 @@
       "photo": "",
       "datasheet": "https://limemicro.com/products/boards/limesdr/",
       "mouser_query": "LimeSDR USB",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$600.07 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Lime-Microsystems/CS-LIME-26?qs=vvQtp7zwQdOcdpWKMDcSLA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/hardware/sdr-radio.md"
       ]
@@ -2603,9 +2883,16 @@
         "avia-hx711"
       ],
       "photo": "",
-      "datasheet": "",
+      "datasheet": "https://www.mouser.com/datasheet/3/1348/1/adafruit-hx711-24-bit-adc.pdf",
       "mouser_query": "HX711 load cell",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$9.95 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Adafruit/5974?qs=IKkN%2F947nfAOkaWgHqoH5Q%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
       ]
@@ -2639,7 +2926,14 @@
       "photo": "",
       "datasheet": "https://www.st.com/en/mems-and-sensors/lsm6dsv.html",
       "mouser_query": "LSM6DSV",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$8.31 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/LSM6DSV80XTR?qs=bN4HulGPsrFs7nx%2F3S8HMg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -2668,7 +2962,14 @@
       "photo": "",
       "datasheet": "https://marvelmind.com/",
       "mouser_query": "Marvelmind starter set",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$1,035.50 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Eaton-Electrical/XC-204-STARTER-SET?qs=2FehpBK1j95b3vZZP52%2FEw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -2705,7 +3006,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "MAX30102",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$21.90 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/DFRobot/SEN0518?qs=MyNHzdoqoQJAnv7sQmwMqQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
       ]
@@ -2741,7 +3049,14 @@
       "photo": "",
       "datasheet": "https://www.analog.com/en/products/max30102.html",
       "mouser_query": "MAX30102",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$21.90 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/DFRobot/SEN0518?qs=MyNHzdoqoQJAnv7sQmwMqQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -2775,7 +3090,14 @@
       "photo": "",
       "datasheet": "https://www.analog.com/en/products/max98357a.html",
       "mouser_query": "MAX98357A",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$4.08 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices-Maxim-Integrated/MAX98357AETE%2bT?qs=AAveGqk956HhNpoJjF5x2g%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -2812,7 +3134,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "MLX90640",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$38.18 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Melexis/MLX90640ESF-BAB-000-SP?qs=y6ZabgHbY%252BwqHrvRZCHRaw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
       ]
@@ -2845,7 +3174,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "MEMS accelerometer smart glasses",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$32.45 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/STEVAL-MKI234KA?qs=amGC7iS6iy8wXBvzAcWUxg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "MENTRA_LIVE_DEVICE_PROFILE.md",
         "docs/BES2700_UART_PROTOCOL.md",
@@ -2881,7 +3217,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "battery fuel gauge IC",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$5.84 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/BQ34110PW?qs=OEYMhS7p3YbAd6vB%252BTGmNQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/BES2700_UART_PROTOCOL.md",
         "MENTRA_LIVE_DEVICE_PROFILE.md",
@@ -2922,7 +3265,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "MIPI CSI camera module smart glasses",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$71.29 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Terasic-Technologies/FXX-3138-ADC?qs=Vi0JKjFBtYmUUTLxf8mcCQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MENTRA_SENSING_RESEARCH_REPORT.md",
         "MENTRA_LIVE_DEVICE_PROFILE.md",
@@ -3039,7 +3389,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "MEMS gyroscope smart glasses",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$32.45 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/STEVAL-MKI234KA?qs=amGC7iS6iy8wXBvzAcWUxg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "MENTRA_LIVE_DEVICE_PROFILE.md",
         "mentra-glass-hub/src/app/sensors/page.tsx"
@@ -3075,7 +3432,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "MEMS microphone smart glasses",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$1.40 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/TDK-InvenSense/MMICT4076-00-908?qs=BJlw7L4Cy7%252B1fpvtQfyOlA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/COGNITIVE_EDGE_ARCHITECTURE.md",
         "docs/BES2700_UART_PROTOCOL.md",
@@ -3109,9 +3473,16 @@
         "bes2700"
       ],
       "photo": "",
-      "datasheet": "",
+      "datasheet": "https://www.mouser.com/datasheet/3/350/1/Dialight_datasheet_658_Watertight.pdf",
       "mouser_query": "RGB indicator LED",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$32.45 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Dialight/658-2485-303F?qs=Znm5pLBrcAKna8tz5WCYnQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/BES2700_UART_PROTOCOL.md",
         "mentra-glass-hub/src/app/leds/page.tsx",
@@ -3143,9 +3514,16 @@
         "bes2700"
       ],
       "photo": "",
-      "datasheet": "",
+      "datasheet": "https://www.mouser.com/datasheet/3/360/1/specs_DMM_4026_B_I2S_R.pdf",
       "mouser_query": "micro speaker I2S",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$3.36 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/PUI-Audio/DMM-4026-B-I2S-R?qs=zhx2xqPtQQxBuLVw%2Fwt86Q%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/BES2700_UART_PROTOCOL.md",
         "docs/TTS_BENCHMARK_RESULTS.md",
@@ -3180,7 +3558,14 @@
       "photo": "",
       "datasheet": "https://www.nordicsemi.com/Products/nRF5340",
       "mouser_query": "nRF5340",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Nordic-Semiconductor/nRF5340-QKAA-AB0-R?qs=wnTfsH77Xs6JoJgUBaaeFw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/mentraos/cloud-and-phone-architecture.md"
       ]
@@ -3217,7 +3602,14 @@
       "photo": "",
       "datasheet": "https://www.melexis.com/en/product/MLX90614/",
       "mouser_query": "MLX90614",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$10.79 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Melexis/MLX90614KSF-AAA-000-TU?qs=KuGPmAKtFKW%2FY2%2Fu%252BHWs0g%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md",
         "firmware/node-a1-bringup/src/mlx90614.h",
@@ -3260,7 +3652,14 @@
       "photo": "",
       "datasheet": "https://invensense.tdk.com/products/motion-tracking/6-axis/mpu-6050/",
       "mouser_query": "MPU-6050 module",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$9.38 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Olimex-Ltd/MOD-MPU6050?qs=SUpef6bDnvVsH%252Bq1tWOBKA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/hardware/sensors.md",
         "docs/weftos/splat-capture-sensor-head.md"
@@ -3295,7 +3694,14 @@
       "photo": "",
       "datasheet": "https://www.sparkfun.com/products/21265",
       "mouser_query": "MyoWare 2.0 muscle sensor",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$14.79 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/SparkFun/DEV-18425?qs=t7xnP681wgWy3U1F8u8yVw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -3333,9 +3739,16 @@
         "esp32-s3"
       ],
       "photo": "",
-      "datasheet": "https://www.espressif.com/sites/default/files/documentation/esp32-s3-wroom-1_wroom-1u_datasheet_en.pdf",
+      "datasheet": "https://www.mouser.com/datasheet/3/1574/1/esp32-s3-wroom-1_wroom-1u_datasheet_en.pdf",
       "mouser_query": "ESP32-S3-WROOM-1-N16R8",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$6.72 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Espressif-Systems/ESP32-S3-WROOM-1-N16R8?qs=Li%252BoUPsLEnvQc9gW6AMhZg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md",
         "docs/node_a1/BUILD_PLAN.md",
@@ -3398,7 +3811,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "Novelic 24 GHz Doppler radar",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$18.46 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Nisshinbo/NJR4265RF2C1?qs=d9U39LAeJF2V0eFW48mR8w%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-malesevic-2020-pubmed32326190.json"
       ]
@@ -3465,7 +3885,14 @@
       "photo": "",
       "datasheet": "https://www.st.com/en/evaluation-tools/nucleo-n657x0-q.html",
       "mouser_query": "NUCLEO-N657X0-Q",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$75.37 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/NUCLEO-N657X0-Q?qs=%252BXxaIXUDbq1Ro77qvzSZDA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -3566,9 +3993,16 @@
         "ov5640"
       ],
       "photo": "",
-      "datasheet": "https://github.com/espressif/esp32-camera",
+      "datasheet": "https://www.mouser.com/datasheet/3/3721/1/datasheet_arducam_ov5640_camera_module_for_toradex_apalis_and_verdin_product_families.pdf",
       "mouser_query": "OV5640 camera module",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$63.62 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Toradex/CSI-Camera-Set-5MP-OV5640?qs=2FehpBK1j940jWwC7XVd%2Fg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md",
         "docs/node_a1/BUILD_AND_WIRING.md",
@@ -3607,7 +4041,14 @@
       "photo": "",
       "datasheet": "https://www.raspberrypi.com/documentation/accessories/camera.html",
       "mouser_query": "Raspberry Pi Camera Module 3",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$4.94 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Adafruit/5721?qs=mELouGlnn3fyEiC3EztV0Q%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/weftos/splat-capture-sensor-head.md",
         "docs/weftos/splat-multimodal-sensing.md"
@@ -3648,7 +4089,14 @@
       "photo": "pizero2w-pinout.jpg",
       "datasheet": "https://datasheets.raspberrypi.com/rpizero2/raspberry-pi-zero-2-w-product-brief.pdf",
       "mouser_query": "Raspberry Pi Zero 2 W",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$15.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Raspberry-Pi/SC1146?qs=ST9lo4GX8V3CWSVbdflDaA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": []
     },
     {
@@ -3680,7 +4128,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "18mm piezo disc transducer",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$53.25 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/KEMET/ND18X3N21?qs=Jm2GQyTW%2Fbi7jM6%2FtLB9ww%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md",
         "docs/TRAINING_RIG.md"
@@ -3714,9 +4169,16 @@
       ],
       "chips": [],
       "photo": "",
-      "datasheet": "",
+      "datasheet": "https://www.mouser.com/datasheet/3/6118/1/ceb_35fd29.pdf",
       "mouser_query": "35mm piezo disc element",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$2.74 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Same-Sky/CEB-35FD29?qs=WyjlAZoYn53TrNwLOjGdiw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".planning/sonobuoy/build/build-hydrophone-simple.md",
         ".planning/sonobuoy/build/build-hydrophone-oil.md",
@@ -3752,7 +4214,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "PIR motion sensor HC-SR501",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$30.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Smart-Bee-Designs/BEE-MOTION-S3-01?qs=Jm2GQyTW%2FbiRgn4ASiYhUw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "ruview/docs/adr/ADR-069-cognitum-seed-csi-pipeline.md",
         "ruview/CHANGELOG.md"
@@ -3787,9 +4256,16 @@
         "ad9363"
       ],
       "photo": "",
-      "datasheet": "https://wiki.analog.com/university/tools/pluto",
+      "datasheet": "https://www.mouser.com/datasheet/3/1014/1/ADALM-PLUTO-Product-Highlight.pdf",
       "mouser_query": "ADALM-PLUTO SDR",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$255.44 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices/ADALM-PLUTO?qs=xbccQsLEe0ffoUoi%2FjfIWA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/hardware/sdr-radio.md"
       ]
@@ -3818,7 +4294,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "Polar H10",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$14.71 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Samtec/SFSDT-06-28-H-10.00-S?qs=Jm2GQyTW%2FbjozObQ6v5LtQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-brandstetter-2025-pubmed41002864.json"
       ]
@@ -3849,7 +4332,14 @@
       "photo": "",
       "datasheet": "https://www.polar.com/en/sensors/h10-heart-rate-sensor",
       "mouser_query": "Polar H10",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$14.71 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Samtec/SFSDT-06-28-H-10.00-S?qs=Jm2GQyTW%2FbjozObQ6v5LtQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -3884,9 +4374,16 @@
         "dw3110"
       ],
       "photo": "",
-      "datasheet": "https://www.qorvo.com/products/p/DW3110",
+      "datasheet": "https://www.mouser.com/catalog/specsheets/Qorvo_DW3000.pdf",
       "mouser_query": "Qorvo DW3110",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$10.31 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Qorvo/DW3110TR13?qs=hWgE7mdIu5Tls8vsL0LU5w%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -3925,9 +4422,16 @@
         "qorvo-dw3000"
       ],
       "photo": "",
-      "datasheet": "https://www.qorvo.com/products/p/DWM3000",
+      "datasheet": "https://www.mouser.com/datasheet/3/1081/1/DWM3000_Data_Sheet.pdf",
       "mouser_query": "DWM3000",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Qorvo/DWM3000?qs=iLbezkQI%252BsgcUwU6rIS9AQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-dwm3000-tdoa-2026.json",
         "docs/research/hardware-alternatives-and-life-detection.md",
@@ -3959,7 +4463,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "MDEK1001",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Qorvo/MDEK1001?qs=TiOZkKH1s2TlRZBi6MtMNg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-volpi-2023-pubmed36772163.json"
       ]
@@ -3988,7 +4499,14 @@
       "photo": "",
       "datasheet": "https://www.raspberrypi.com/products/raspberry-pi-5/",
       "mouser_query": "Raspberry Pi 5",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$410.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Raspberry-Pi/Raspberry-Pi-500%2b-PT-unit-only?qs=yc9RBI4tIAIXyMjzfnmVcw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -4106,7 +4624,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "reed switch door sensor",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$4.95 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/OSEPP-Electronics/REED-01G?qs=Rp5uXu7WBW%2FzWcoPHZ2rTA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "ruview/docs/adr/ADR-069-cognitum-seed-csi-pipeline.md"
       ]
@@ -4169,9 +4694,16 @@
         "broadcom-bcm43455"
       ],
       "photo": "",
-      "datasheet": "",
+      "datasheet": "https://www.mouser.com/datasheet/3/6063/1/ED_HMI3010_133C_datasheet_en.pdf",
       "mouser_query": "Raspberry Pi 5 8GB",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$536.21 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/EDATEC/ED-HMI3010-133CA-0832?qs=yc9RBI4tIAKqtxR52Sd3ZQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "reference/whitsentry/docs/hardware/phase0-parts-list.md",
         "reference/whitsentry/docs/research/ruview-primer.md"
@@ -4203,7 +4735,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "Raspberry Pi Zero 2 W",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$15.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Raspberry-Pi/SC1146?qs=ST9lo4GX8V3CWSVbdflDaA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "reference/whitsentry/docs/hardware/phase0-parts-list.md"
       ]
@@ -4239,7 +4778,14 @@
       "photo": "",
       "datasheet": "https://www.rtl-sdr.com/",
       "mouser_query": "RTL-SDR dongle RTL2832U",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$104.69 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/SparkFun/WRL-22957?qs=HoCaDK9Nz5dCi4SBDTWygA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md",
         "rtl_433/",
@@ -4313,9 +4859,16 @@
         "scd41"
       ],
       "photo": "",
-      "datasheet": "https://sensirion.com/products/catalog/SCD41",
+      "datasheet": "https://www.mouser.com/datasheet/3/1278/1/CD_DS_SCD4x_Datasheet_D1.pdf",
       "mouser_query": "Sensirion SCD41",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$21.77 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Sensirion/SCD41-D-R2?qs=HBWAp0VN4Ri4o7ei4T3s0g%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/hardware/sensors.md"
       ]
@@ -4475,7 +5028,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "Seeed XIAO ESP32-C6",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$30.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Seeed-Studio/114993387?qs=NeOn4crkEuv2YZSUQT0vjw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "reference/whitsentry/docs/hardware/phase0-parts-list.md",
         "docs/research/hardware/mr60bha2-board-teardown-2026-08-24.md",
@@ -4517,9 +5077,16 @@
         "ad8232"
       ],
       "photo": "",
-      "datasheet": "https://www.analog.com/media/en/technical-documentation/data-sheets/ad8232.pdf",
+      "datasheet": "https://www.mouser.com/datasheet/3/1500/1/AD8232.pdf",
       "mouser_query": "DFRobot SEN0213",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$19.90 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/DFRobot/SEN0213?qs=lqAf%2FiVYw9jb4BZpX2lUpw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/hardware/sensors.md",
         "docs/hardware/README.md"
@@ -4565,7 +5132,14 @@
       "photo": "",
       "datasheet": "https://www.dfrobot.com/product-2999.html",
       "mouser_query": "DFRobot SEN0628 VL53L7CX",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$22.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/DFRobot/SEN0628?qs=6avfeC6zeS4Fmz1aodzk%2FA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/hardware/sensors.md",
         "docs/hardware/README.md",
@@ -4601,9 +5175,16 @@
         "sgp41"
       ],
       "photo": "",
-      "datasheet": "https://sensirion.com/products/catalog/SGP41",
+      "datasheet": "https://www.mouser.com/datasheet/3/1278/1/Sensirion_Gas_Sensors_Datasheet_SGP41.pdf",
       "mouser_query": "Sensirion SGP41",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$9.01 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Sensirion/SGP41-D-R4?qs=A6eO%252BMLsxmRqwfOE5NYPVA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -4641,9 +5222,16 @@
         "sgp40"
       ],
       "photo": "",
-      "datasheet": "https://sensirion.com/products/catalog/SGP40",
+      "datasheet": "https://www.mouser.com/datasheet/3/1278/1/Sensirion_Gas_Sensors_Datasheet_SGP40.pdf",
       "mouser_query": "Sensirion SGP40",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$6.95 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Sensirion/SGP40-D-R4?qs=yqaQSyyJnNgaRqiZfsbS1Q%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/hardware/sensors.md"
       ]
@@ -4678,7 +5266,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "SparkFun Acconeer A111",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$10.22 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Acconeer/A111-001-TR?qs=eP2BKZSCXI7cb1tJ4izqfA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-oreskovic-2023-pubmed38875668.json"
       ]
@@ -4712,9 +5307,16 @@
         "ssd1306"
       ],
       "photo": "",
-      "datasheet": "https://www.solomon-systech.com/product/ssd1306/",
+      "datasheet": "https://www.mouser.com/catalog/specsheets/Soldered_333099.pdf",
       "mouser_query": "SSD1306 OLED 0.96",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$14.03 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Soldered/333100?qs=QpmGXVUTftEn%2F3JlHkGqIQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md",
         "firmware/node-a1-bringup/src/ssd1306.h",
@@ -4755,7 +5357,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "VL53L1X",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$20.84 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/VL53L1X-SATEL?qs=MLItCLRbWsy6f0tjWUkKGA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md"
       ]
@@ -4788,7 +5397,14 @@
       "photo": "",
       "datasheet": "https://www.ti.com/product/AWR1642",
       "mouser_query": "AWR1642",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$385.15 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/AWR1642BOOST?qs=5aG0NVq1C4x%2FRPjTzpqDvA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-fu-2023-pubmed37289651.json"
       ]
@@ -4819,7 +5435,14 @@
       "photo": "",
       "datasheet": "https://www.ti.com/tool/AWR1843BOOST",
       "mouser_query": "AWR1843BOOST",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$414.43 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/AWR1843BOOST?qs=9r4v7xj2LnliVXpjXLB0Vw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -4854,7 +5477,14 @@
       "photo": "",
       "datasheet": "https://www.ti.com/tool/DCA1000EVM",
       "mouser_query": "DCA1000EVM",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$830.24 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/DCA1000EVM?qs=MLItCLRbWszpQLhOmNMP6Q%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/corpus/ring-x1-master-build-plan.md",
         ".metaharness/ingest/findings/hardware/hw-iwr6843isk-60ghz.json"
@@ -4894,7 +5524,14 @@
       "photo": "",
       "datasheet": "https://www.ti.com/tool/IWR6843ISK",
       "mouser_query": "IWR6843ISK",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$242.55 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/IWR6843ISK?qs=PqoDHHvF64%252BpLvVHE%2FA5bw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-iwr6843isk-60ghz.json",
         "docs/corpus/ring-x1-master-build-plan.md",
@@ -4931,7 +5568,14 @@
       "photo": "",
       "datasheet": "https://www.ti.com/tool/IWR6843ISK",
       "mouser_query": "IWR6843ISK",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$242.55 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/IWR6843ISK?qs=PqoDHHvF64%252BpLvVHE%2FA5bw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -4974,7 +5618,14 @@
       "photo": "",
       "datasheet": "https://www.ti.com/product/IWRL6432WMOD",
       "mouser_query": "IWRL6432WMOD",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$196.68 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/BP-IWRL6432WMOD?qs=KLj0QfLrw0EUHZepx7y78Q%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-ti-iwrl6432wmod-certified-module.json"
       ]
@@ -5007,9 +5658,16 @@
         "ad9361"
       ],
       "photo": "",
-      "datasheet": "https://www.ettus.com/all-products/ub210-kit/",
+      "datasheet": "https://www.mouser.com/datasheet/3/1237/1/b200_b210_spec_sheet.pdf",
       "mouser_query": "USRP B210",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$2,683.35 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Digilent/471-043?qs=MyNHzdoqoQKj4QH%2FRFZcAg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/hardware/sdr-radio.md"
       ]
@@ -5038,7 +5696,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "Vayyar Home Care",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$5.80 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Espressif-Systems/ESP32-C61-WROOM-1-N8R2?qs=2FehpBK1j97z7i2M%2Fppq2Q%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         ".metaharness/ingest/findings/hardware/hw-hruby-2023-pubmed37638902.json"
       ]
@@ -5074,7 +5739,14 @@
       "photo": "",
       "datasheet": "https://arxiv.org/pdf/2004.01166",
       "mouser_query": "Velostat sheet; ADS1115",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$4.95 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Adafruit/1361?qs=GURawfaeGuBmp2g%2FJYug6Q%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/MODULES.md"
       ]
@@ -5105,7 +5777,14 @@
       "photo": "",
       "datasheet": "",
       "mouser_query": "vibration sensor SW-420 / piezo",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$24.86 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/TE-Connectivity-Measurement-Specialties/2-1003744-0-M?qs=t7xnP681wgW8UJMC2fHsRQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "ruview/docs/adr/ADR-069-cognitum-seed-csi-pipeline.md",
         "docs/corpus/ring-x1-master-build-plan.md"
@@ -5148,7 +5827,14 @@
       "photo": "",
       "datasheet": "https://www.st.com/en/imaging-and-photonics-solutions/vl53l1x.html",
       "mouser_query": "VL53L1X breakout",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$20.84 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/VL53L1X-SATEL?qs=MLItCLRbWsy6f0tjWUkKGA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "docs/hardware/sensors.md"
       ]
@@ -5187,9 +5873,16 @@
         "esp32-s3"
       ],
       "photo": "",
-      "datasheet": "",
+      "datasheet": "https://www.mouser.com/datasheet/3/1574/1/esp32-s3_datasheet_en.pdf",
       "mouser_query": "Waveshare ESP32-S3 Audio board ES7210",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$45.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Espressif-Systems/ESP32-S3-EYE?qs=Rp5uXu7WBW8jiAfcrui1pQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "spike-sentry/firmware/audio-node/README.md",
         "firmware-backups/waveshare-s3-audio-beehive-full-16mb.bin"
@@ -5229,7 +5922,14 @@
       "photo": "",
       "datasheet": "https://www.waveshare.com/wiki/VL53L7CX",
       "mouser_query": "Waveshare VL53L7CX ToF",
-      "buy": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$60.80 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/P-NUCLEO-53L7A1?qs=By6Nw2ByBD3a6GVZ%252B3LpcA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ],
       "seen_in": [
         "weftos-mic-node/src/tof_sensor.h",
         "weftos-bridge.py"
@@ -5285,7 +5985,15 @@
       },
       "mouser_query": "Acconeer A111",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$10.22 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Acconeer/A111-001-TR?qs=eP2BKZSCXI7cb1tJ4izqfA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "acconeer-a121",
@@ -5313,7 +6021,15 @@
       },
       "mouser_query": "Acconeer A121",
       "datasheet": "https://www.acconeer.com/products/",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$13.59 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Acconeer/A121-001-TR?qs=amGC7iS6iy%2F9krRiPHmNkQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ad8021",
@@ -5333,7 +6049,15 @@
       },
       "mouser_query": "AD8021",
       "datasheet": "https://www.analog.com/en/products/ad8021.html",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices/AD8021?qs=%252BEew9%252B0nqrDbZWW9lvGbNw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ad8232",
@@ -5355,7 +6079,15 @@
       },
       "mouser_query": "AD8232",
       "datasheet": "https://www.analog.com/media/en/technical-documentation/data-sheets/ad8232.pdf",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices/AD8232?qs=%252BEew9%252B0nqrD7yQn%252BwQPzuQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ad9361",
@@ -5376,8 +6108,16 @@
         "source": "docs/hardware/sdr-radio.md"
       },
       "mouser_query": "AD9361",
-      "datasheet": "https://www.analog.com/en/products/ad9361.html",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1014/1/ad9361.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices/AD9361?qs=%252BEew9%252B0nqrBf3l0E4vxEaQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ad9363",
@@ -5399,7 +6139,15 @@
       },
       "mouser_query": "AD9363",
       "datasheet": "https://www.analog.com/en/products/ad9363.html",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices/AD9363?qs=%252BEew9%252B0nqrBwHRXLs%2FKdJg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "adg704",
@@ -5419,8 +6167,16 @@
         "source": ".planning/sonobuoy/build/build-buoy-p79.md"
       },
       "mouser_query": "ADG704",
-      "datasheet": "https://www.analog.com/en/products/adg704.html",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1014/1/ADG704.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices/ADG704?qs=%252BEew9%252B0nqrAnnOcJPSXWrg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "adi-ad5940",
@@ -5440,7 +6196,15 @@
       },
       "mouser_query": "AD5940",
       "datasheet": "https://www.analog.com/en/products/ad5940.html",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$14.67 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices/AD5940BCBZ-RL?qs=MLItCLRbWsy43l4k5gcZVQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "adi-ad8232",
@@ -5459,7 +6223,15 @@
       },
       "mouser_query": "AD8232",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices/AD8232?qs=%252BEew9%252B0nqrD7yQn%252BwQPzuQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "adi-max86141",
@@ -5478,8 +6250,16 @@
         "source": "docs/corpus/ring-x1-master-build-plan.md"
       },
       "mouser_query": "MAX86141",
-      "datasheet": "https://www.analog.com/en/products/max86141.html",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1014/1/MAX8614.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$8.52 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices-Maxim-Integrated/MAX8614AETD%2bT?qs=Jw2w9zrI6w8I33eG24821Q%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ads1115",
@@ -5506,7 +6286,15 @@
       },
       "mouser_query": "ADS1115IDGSR",
       "datasheet": "https://www.ti.com/product/ADS1115",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$5.19 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/ADS1115IDGSR?qs=IK5e5L0zOXjKCJoVMhYO%2FQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ads1299",
@@ -5529,7 +6317,15 @@
       },
       "mouser_query": "ADS1299",
       "datasheet": "https://www.ti.com/product/ADS1299",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$44.98 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/ADS1299-4PAGR?qs=9lcNTSmDlCrUT6jt7VGEHw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ads9224r",
@@ -5551,7 +6347,15 @@
       },
       "mouser_query": "ADS9224R",
       "datasheet": "https://www.ti.com/product/ADS9224R",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$315.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/ADS9224REVM-PDK?qs=lc2O%252BfHJPVZHm79NUPjbDw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "adt6101p",
@@ -5615,8 +6419,16 @@
         "source": ".planning/sonobuoy/build/requirements.md"
       },
       "mouser_query": "AP2112K-3.3",
-      "datasheet": "https://www.diodes.com/part/view/AP2112/",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/175/1/AP2112.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$0.27 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Diodes-Incorporated/AP2112K-3.3TRG1?qs=x6A8l6qLYDDPYHosCdzh%2FA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "as201-imu",
@@ -5662,8 +6474,16 @@
         "source": "docs/corpus/ring-x1-master-build-plan.md"
       },
       "mouser_query": "HX711",
-      "datasheet": "",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1348/1/adafruit-hx711-24-bit-adc.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$9.95 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Adafruit/5974?qs=IKkN%2F947nfAOkaWgHqoH5Q%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "awr1843",
@@ -5684,7 +6504,15 @@
       },
       "mouser_query": "AWR1843",
       "datasheet": "https://www.ti.com/product/AWR1843",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$49.04 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/AWR1843ABGABLRQ1?qs=%252B6g0mu59x7LDewSwpLCJ2g%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "bcm2710a1",
@@ -5749,8 +6577,16 @@
         "source": "docs/MODULES.md \u00a72"
       },
       "mouser_query": "BGT60TR13C",
-      "datasheet": "https://www.infineon.com/cms/en/product/sensor/radar-sensors/radar-sensors-for-iot/60ghz-radar/bgt60tr13c/",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/70/1/Infineon_DS_BGT60TR13C_DataSheet_v02_49_EN.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$17.99 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Infineon-Technologies/BGT60TR13CE6327XUMA1?qs=sPbYRqrBIVnK9rZEOIh6SA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "bme280",
@@ -5776,8 +6612,16 @@
         "measures": "T/RH/P"
       },
       "mouser_query": "BME280",
-      "datasheet": "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme280-ds002.pdf",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1046/1/bst_bme280_ds002.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$4.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Bosch-Sensortec/BME280?qs=2OnyuXx6vpj2fK9HX7qb3g%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "bme680",
@@ -5798,8 +6642,16 @@
         "source": "firmware/node-a1-bringup/src/bme680.c (BST-BME680-DS001)"
       },
       "mouser_query": "Bosch BME680",
-      "datasheet": "https://www.bosch-sensortec.com/products/environmental-sensors/gas-sensors/bme680/",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1046/1/bst_bme680_ds001.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$9.08 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Bosch-Sensortec/BME680?qs=v271MhAjFHjo0yA%2FC4OnDQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "bno055",
@@ -5823,8 +6675,16 @@
         "source": "docs/hardware/sensors.md"
       },
       "mouser_query": "BNO055",
-      "datasheet": "https://www.bosch-sensortec.com/products/smart-sensor-systems/bno055/",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1046/1/bst_bno055_ds000.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$13.60 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Bosch-Sensortec/BNO055?qs=QhAb4EtQfbV8Z2YmISucWw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "bno085",
@@ -5849,8 +6709,16 @@
         "output": "quaternion @ 100 Hz + raw + tap/activity"
       },
       "mouser_query": "BNO085",
-      "datasheet": "https://www.ceva-dsp.com/product/bno080-085/",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/5991/1/BNO080_085-Datasheet.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$15.38 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/CEVA/BNO085?qs=ulEaXIWI0c9BFVeZDQCmmQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "bosch-bme280",
@@ -5870,8 +6738,16 @@
         "source": "ruview/docs/adr/ADR-069-cognitum-seed-csi-pipeline.md"
       },
       "mouser_query": "BME280",
-      "datasheet": "",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1046/1/bst_bme280_ds002.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$4.00 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Bosch-Sensortec/BME280?qs=2OnyuXx6vpj2fK9HX7qb3g%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "bosch-bno055",
@@ -5891,8 +6767,16 @@
         "source": ".metaharness/ingest/findings/hardware/hw-liu-2022-pubmed36365854.json"
       },
       "mouser_query": "BNO055",
-      "datasheet": "",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1046/1/bst_bno055_ds000.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$13.60 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Bosch-Sensortec/BNO055?qs=QhAb4EtQfbV8Z2YmISucWw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "broadcom-bcm43455",
@@ -5931,7 +6815,15 @@
       },
       "mouser_query": "CP2104",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Silicon-Labs/CP2104?qs=sPbYRqrBIVlsUr7kFX0IgQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "decawave-dw1000",
@@ -5950,8 +6842,16 @@
         "source": ".metaharness/ingest/findings/hardware/hw-liu-2022-pubmed36365854.json; hw-volpi-2023-pubmed36772163.json"
       },
       "mouser_query": "Decawave DW1000",
-      "datasheet": "",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1081/1/DW1000_Data_Sheet.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$9.63 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Qorvo/DW1000-I-TR13?qs=TiOZkKH1s2SHqHtNDSAfuQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "drv8837",
@@ -5972,7 +6872,15 @@
       },
       "mouser_query": "DRV8837",
       "datasheet": "https://www.ti.com/product/DRV8837",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$103.60 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/DRV8837EVM?qs=l6ZoeTYLMwO%2FAXsfbn6BiA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ds18b20",
@@ -5992,8 +6900,16 @@
         "source": "Maxim DS18B20 datasheet; used in .planning/sonobuoy/build"
       },
       "mouser_query": "DS18B20",
-      "datasheet": "https://www.analog.com/media/en/technical-documentation/data-sheets/DS18B20.pdf",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/catalog/specsheets/maxim integrated products_ds18b20.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices-Maxim-Integrated/DS18B20?qs=7H2Jq%252ByxpJJTnlhWtKViXg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "dw3110",
@@ -6020,8 +6936,16 @@
         "host_if": "SPI"
       },
       "mouser_query": "Qorvo DW3110",
-      "datasheet": "https://www.qorvo.com/products/p/DW3110",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/catalog/specsheets/Qorvo_DW3000.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$10.31 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Qorvo/DW3110TR13?qs=hWgE7mdIu5Tls8vsL0LU5w%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "es7210",
@@ -6063,8 +6987,16 @@
         "source": ".metaharness/ingest/findings/hardware/hw-espressif-esp-csi-wifi-sensing.json; reference/whitsentry/docs/hardware/phase0-parts-list.md"
       },
       "mouser_query": "ESP32-C6",
-      "datasheet": "https://github.com/espressif/esp-csi",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1574/1/esp32-c6_datasheet_en.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$2.03 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Espressif-Systems/ESP32-C6?qs=Imq1NPwxi75noDtUpuVuWw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "esp32-s2fh4",
@@ -6084,8 +7016,16 @@
         "source": "docs/hardware/sdr-radio.md"
       },
       "mouser_query": "ESP32-S2",
-      "datasheet": "https://www.espressif.com/en/products/socs/esp32-s2",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1574/1/esp32_s2_datasheet_en.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$1.38 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Espressif-Systems/ESP32-S2?qs=GBLSl2Akirtmlui%2FgtDaSQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "esp32-s3",
@@ -6106,8 +7046,16 @@
         "source": "docs/research/hardware-cost-matrix.md; reference/whitsentry/docs/hardware/phase0-parts-list.md"
       },
       "mouser_query": "ESP32-S3",
-      "datasheet": "https://github.com/espressif/esp-csi",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1574/1/esp32-s3_datasheet_en.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$1.85 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Espressif-Systems/ESP32-S3?qs=Rp5uXu7WBW%2FNWuUy%252BBihNw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "fdc2214",
@@ -6127,7 +7075,15 @@
       },
       "mouser_query": "FDC2214",
       "datasheet": "https://www.ti.com/product/FDC2214",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$3,150.13 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/FDC2214EVM?qs=cGEy3R83DS8RC6lg1bYP8A%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "goodix-gt911",
@@ -6189,7 +7145,15 @@
       },
       "mouser_query": "ICM-20948",
       "datasheet": "https://invensense.tdk.com/products/motion-tracking/9-axis/icm-20948/",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/TDK-InvenSense/ICM-20948?qs=u4fy%2FsgLU9OtGc31yF%2Friw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ics-41350",
@@ -6209,7 +7173,15 @@
       },
       "mouser_query": "ICS-41350",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$1.94 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/TDK-InvenSense/ICS-41350?qs=u4fy%2FsgLU9MU%252BiFhvX73lg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ics-43432",
@@ -6229,7 +7201,15 @@
       },
       "mouser_query": "ICS-43432",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$3.64 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/TDK-InvenSense/ICS-43432?qs=u4fy%2FsgLU9PhEy4uYlgedw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "infineon-bgt60ltr11aip",
@@ -6252,8 +7232,16 @@
         "source": ".metaharness/ingest/findings/hardware/hw-bgt60ltr11aip-wake.json"
       },
       "mouser_query": "BGT60LTR11AIP",
-      "datasheet": "https://www.infineon.com/part/BGT60LTR11AIP",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/70/1/infineon_ma005342360_materialcontentsheet_en.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$10.41 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Infineon-Technologies/BGT60LTR11AIPE6327XUMA2?qs=iLbezkQI%252BshzShzFWLPiPQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "infineon-bgt60tr13c",
@@ -6276,8 +7264,16 @@
         "source": ".metaharness/ingest/findings/hardware/hw-bgt60tr13c-demo.json; docs/research/hardware-alternatives-and-life-detection.md"
       },
       "mouser_query": "BGT60TR13C",
-      "datasheet": "https://www.infineon.com/part/BGT60TR13C",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/70/1/Infineon_DS_BGT60TR13C_DataSheet_v02_49_EN.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$17.99 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Infineon-Technologies/BGT60TR13CE6327XUMA1?qs=sPbYRqrBIVnK9rZEOIh6SA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "infineon-bgt60utr11aip",
@@ -6303,7 +7299,15 @@
       },
       "mouser_query": "BGT60UTR11AIP",
       "datasheet": "https://www.infineon.com/part/BGT60UTR11AIP",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Infineon-Technologies/BGT-60UTR11AIP?qs=bpu3f%2FCR1jyMYZ7mMRau4Q%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "inmp441",
@@ -6328,7 +7332,15 @@
       },
       "mouser_query": "INMP441",
       "datasheet": "https://invensense.tdk.com/products/digital/inmp441/",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/TDK/INMP441?qs=A6eO%252BMLsxmQ7QOONrFN3Pg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "irlz44n",
@@ -6347,8 +7359,16 @@
         "source": ".planning/sonobuoy/build/build-buoy-p79.md"
       },
       "mouser_query": "IRLZ44N",
-      "datasheet": "https://www.infineon.com/cms/en/product/power/mosfet/n-channel/irlz44n/",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/70/1/infineon_irlz44n_datasheet_en.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$1.70 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Infineon-Technologies/IRLZ44NPBF?qs=9%252BKlkBgLFf15OZZk%252BD0ibg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "iwr6843",
@@ -6370,7 +7390,15 @@
       },
       "mouser_query": "IWR6843",
       "datasheet": "https://www.ti.com/product/IWR6843",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$52.15 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/IWR6843ABGABL?qs=zW32dvEIR3v7NcgbkVUeyA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "j201-jfet",
@@ -6389,8 +7417,16 @@
         "source": ".planning/sonobuoy/build/build-hydrophone-oil.md"
       },
       "mouser_query": "J201 JFET",
-      "datasheet": "https://www.onsemi.com/products/discrete-power-modules/small-signal-jfets/j201",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1206/1/jfet-j201-j202-interfet.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$5.81 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/InterFET/J201?qs=OxRSArmBDfyvD8SbvWteMw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "lm393",
@@ -6412,7 +7448,15 @@
       },
       "mouser_query": "LM393",
       "datasheet": "https://www.ti.com/product/LM393",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/onsemi/LM393?qs=%252BEew9%252B0nqrBJ%252B4%2FlC%252BRjvw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "lsm6dsv",
@@ -6433,7 +7477,15 @@
       },
       "mouser_query": "LSM6DSV",
       "datasheet": "https://www.st.com/en/mems-and-sensors/lsm6dsv.html",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$8.31 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/LSM6DSV80XTR?qs=bN4HulGPsrFs7nx%2F3S8HMg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "max30102",
@@ -6455,7 +7507,15 @@
       },
       "mouser_query": "MAX30102",
       "datasheet": "https://www.analog.com/en/products/max30102.html",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$21.90 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/DFRobot/SEN0518?qs=MyNHzdoqoQJAnv7sQmwMqQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "max98357a",
@@ -6477,7 +7537,15 @@
       },
       "mouser_query": "MAX98357A",
       "datasheet": "https://www.analog.com/en/products/max98357a.html",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$4.08 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Analog-Devices-Maxim-Integrated/MAX98357AETE%2bT?qs=AAveGqk956HhNpoJjF5x2g%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "maxim-max30102",
@@ -6499,7 +7567,15 @@
       },
       "mouser_query": "MAX30102",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$21.90 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/DFRobot/SEN0518?qs=MyNHzdoqoQJAnv7sQmwMqQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "mcp33131d",
@@ -6522,8 +7598,16 @@
         "source": ".planning/sonobuoy/build/build-buoy-p79.md"
       },
       "mouser_query": "MCP33131D-10",
-      "datasheet": "https://www.microchip.com/en-us/product/mcp33131d-10",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/282/1/MCP33131D-Data-Sheet-DS20005947B.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$5.02 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Microchip-Technology/MCP33131D-10-E-MS?qs=byeeYqUIh0NhU4NZQbhNiA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "mcp6022",
@@ -6543,8 +7627,16 @@
         "source": ".planning/sonobuoy/build/build-hydrophone.md + requirements.md"
       },
       "mouser_query": "MCP6022",
-      "datasheet": "https://www.microchip.com/en-us/product/mcp6022",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/282/1/MCP6021_Data_Sheet_DS20001685.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$1.77 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Microchip-Technology/MCP6022-I-ST?qs=cQYLKLPzRJmFw784uzHvww%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "melexis-mlx90640",
@@ -6565,7 +7657,15 @@
       },
       "mouser_query": "MLX90640",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$38.18 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Melexis/MLX90640ESF-BAB-000-SP?qs=y6ZabgHbY%252BwqHrvRZCHRaw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "mlx90614",
@@ -6586,7 +7686,15 @@
       },
       "mouser_query": "MLX90614",
       "datasheet": "https://www.melexis.com/en/product/MLX90614/",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$10.79 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Melexis/MLX90614KSF-AAA-000-TU?qs=KuGPmAKtFKW%2FY2%2Fu%252BHWs0g%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "mpu-6050",
@@ -6608,7 +7716,15 @@
       },
       "mouser_query": "MPU-6050",
       "datasheet": "https://invensense.tdk.com/products/motion-tracking/6-axis/mpu-6050/",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/TDK-InvenSense/MPU-6050?qs=u4fy%2FsgLU9O14B5JgyQFvg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "mt6761-helio-a22",
@@ -6653,8 +7769,16 @@
         "source": "Nordic nRF52833 datasheet"
       },
       "mouser_query": "nRF52833",
-      "datasheet": "https://www.nordicsemi.com/Products/nRF52833",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/926/1/nRF52833_SoC_Product_Brief.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$6.13 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Nordic-Semiconductor/NRF52833-QIAA-B-R7?qs=QNEnbhJQKvZG956Q2JL0ZA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "nrf5340",
@@ -6676,7 +7800,15 @@
       },
       "mouser_query": "nRF5340",
       "datasheet": "https://www.nordicsemi.com/Products/nRF5340",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Nordic-Semiconductor/nRF5340-QKAA-AB0-R?qs=wnTfsH77Xs6JoJgUBaaeFw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ov5640",
@@ -6698,8 +7830,16 @@
         "source": "docs/MODULES.md \u00a74"
       },
       "mouser_query": "OV5640",
-      "datasheet": "https://www.ovt.com/products/ov5640/",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/catalog/specsheets/Leopard Imaging_10232017_LI-OV5640-MIPI-AF.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$58.85 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Leopard-Imaging/LI-OV5640-MIPI-AF-NIR?qs=EU6FO9ffTwfbx6p%2FOnJjPg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "qorvo-dw3000",
@@ -6743,8 +7883,16 @@
         "role": "ToF carrier bridge @ I2C 0x33"
       },
       "mouser_query": "RP2040",
-      "datasheet": "https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1088/1/RP_008371_DS_1_rp2040_datasheet.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$7.97 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Olimex-Ltd/RP2040-PICO-HDR?qs=By6Nw2ByBD2goXzQ69qDzg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "rtl2832u",
@@ -6852,8 +8000,16 @@
         "source": "docs/hardware/sensors.md"
       },
       "mouser_query": "Sensirion SCD41",
-      "datasheet": "https://sensirion.com/products/catalog/SCD41",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1278/1/CD_DS_SCD4x_Datasheet_D1.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$21.77 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Sensirion/SCD41-D-R2?qs=HBWAp0VN4Ri4o7ei4T3s0g%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "sgp30",
@@ -6895,8 +8051,16 @@
         "source": "docs/hardware/sensors.md"
       },
       "mouser_query": "Sensirion SGP40",
-      "datasheet": "https://sensirion.com/products/catalog/SGP40",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1278/1/Sensirion_Gas_Sensors_Datasheet_SGP40.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$6.95 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Sensirion/SGP40-D-R4?qs=yqaQSyyJnNgaRqiZfsbS1Q%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "sgp41",
@@ -6916,8 +8080,16 @@
         "source": "docs/MODULES.md \u00a76"
       },
       "mouser_query": "Sensirion SGP41",
-      "datasheet": "https://sensirion.com/products/catalog/SGP41",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/1278/1/Sensirion_Gas_Sensors_Datasheet_SGP41.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$9.01 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Sensirion/SGP41-D-R4?qs=A6eO%252BMLsxmRqwfOE5NYPVA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "sony-imx754",
@@ -6979,7 +8151,15 @@
       },
       "mouser_query": "SPH0645LM4H",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/Knowles/SPH0645LM4H?qs=HoCaDK9Nz5fqtWhkh%252Bc4dA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ssd1306",
@@ -6999,8 +8179,16 @@
         "source": "firmware/node-a1-bringup/src/ssd1306.h"
       },
       "mouser_query": "SSD1306",
-      "datasheet": "https://www.solomon-systech.com/product/ssd1306/",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/catalog/specsheets/Soldered_333099.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$14.03 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Soldered/333100?qs=QpmGXVUTftEn%2F3JlHkGqIQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "st-mp34dt06",
@@ -7020,7 +8208,15 @@
       },
       "mouser_query": "MP34DT06",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$26.35 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/X-NUCLEO-CCA02M2?qs=%252B6g0mu59x7LKdoCpRE%2FD%252Bg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "st-vl53l1x",
@@ -7042,7 +8238,15 @@
       },
       "mouser_query": "VL53L1X",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$20.84 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/VL53L1X-SATEL?qs=MLItCLRbWsy6f0tjWUkKGA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "stm32l431",
@@ -7062,7 +8266,15 @@
       },
       "mouser_query": "STM32L431",
       "datasheet": "https://www.st.com/en/microcontrollers-microprocessors/stm32l431.html",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$5.81 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/STM32L431RCI6?qs=U58vgkJzipS9PA5TnW5u0Q%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "stm32n6",
@@ -7083,7 +8295,15 @@
       },
       "mouser_query": "STM32N6",
       "datasheet": "https://www.st.com/en/microcontrollers-microprocessors/stm32n6-series.html",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$22.16 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/STM32N647L0H3Q?qs=a2MtRaTmNORGIIDIKba9rQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "sx1262",
@@ -7104,7 +8324,15 @@
       },
       "mouser_query": "SX1262",
       "datasheet": "https://www.semtech.com/products/wireless-rf/lora-connect/sx1262",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$322.22 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Semtech/SX1262DVK1PAS?qs=byeeYqUIh0PVhfehId%2F8eQ%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "tc4427a",
@@ -7123,8 +8351,16 @@
         "source": ".planning/sonobuoy/build/build-buoy-p79.md"
       },
       "mouser_query": "TC4427A",
-      "datasheet": "https://www.microchip.com/en-us/product/tc4427a",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/datasheet/3/282/1/TC4426A-TC4427A-TC4428A-1.5A-Dual-High-Speed-Power-MOSFET-Drivers-20001423.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$1.62 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Microchip-Technology/TC4427AVOA?qs=C%252BuF95oynlkMQjvJbjR6DA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "tdk-icm20948",
@@ -7146,7 +8382,15 @@
       },
       "mouser_query": "ICM-20948",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "",
+          "url": "https://www.mouser.com/en/ProductDetail/TDK-InvenSense/ICM-20948?qs=u4fy%2FsgLU9OtGc31yF%2Friw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ti-ads1115",
@@ -7166,7 +8410,15 @@
       },
       "mouser_query": "ADS1115",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$7.74 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/ADS1115QNKSRQ1?qs=ulEaXIWI0c%252B%252BH1ufhGRAvg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ti-ads1292r",
@@ -7186,7 +8438,15 @@
       },
       "mouser_query": "ADS1292R",
       "datasheet": "",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$136.21 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/ADS1292RECG-FE?qs=TI%2F9gtmDCEH%2FF3CVCRj00A%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ti-awr1642",
@@ -7205,7 +8465,15 @@
       },
       "mouser_query": "AWR1642",
       "datasheet": "https://www.ti.com/product/AWR1642",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$385.15 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/AWR1642BOOST?qs=5aG0NVq1C4x%2FRPjTzpqDvA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ti-iwr6843",
@@ -7225,7 +8493,15 @@
       },
       "mouser_query": "IWR6843",
       "datasheet": "https://www.ti.com/product/IWR6843",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$52.15 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/IWR6843ABGABL?qs=zW32dvEIR3v7NcgbkVUeyA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "ti-iwrl6432",
@@ -7248,7 +8524,15 @@
       },
       "mouser_query": "IWRL6432",
       "datasheet": "https://www.ti.com/product/IWRL6432",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$191.40 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/IWRL6432FSPEVM?qs=efUn273yAhd%2FNWaW28Y9Iw%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "tp4056",
@@ -7267,8 +8551,16 @@
         "source": ".planning/sonobuoy/build/requirements.md + build-hydrophone-simple.md"
       },
       "mouser_query": "TP4056 charger",
-      "datasheet": "",
-      "seen_in": []
+      "datasheet": "https://www.mouser.com/catalog/specsheets/Soldered_333014.pdf",
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$10.74 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Soldered/333014?qs=QpmGXVUTftHxSOIE2GqfAg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "tps61023",
@@ -7288,7 +8580,15 @@
       },
       "mouser_query": "TPS61023",
       "datasheet": "https://www.ti.com/product/TPS61023",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$1.22 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/Texas-Instruments/TPS61023DRLR?qs=BJlw7L4Cy7%2FfEnwYuWeGOg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "vl53l1x",
@@ -7309,7 +8609,15 @@
       },
       "mouser_query": "VL53L1X",
       "datasheet": "https://www.st.com/en/imaging-and-photonics-solutions/vl53l1x.html",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$20.84 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/VL53L1X-SATEL?qs=MLItCLRbWsy6f0tjWUkKGA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "vl53l5cx",
@@ -7329,7 +8637,15 @@
       },
       "mouser_query": "VL53L5CX",
       "datasheet": "https://www.st.com/en/imaging-and-photonics-solutions/vl53l5cx.html",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$21.04 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/VL53L5CX-SATEL?qs=QNEnbhJQKvYJC8TLRg4rBg%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     },
     {
       "id": "vl53l7cx",
@@ -7354,7 +8670,15 @@
       },
       "mouser_query": "VL53L7CX",
       "datasheet": "https://www.st.com/en/imaging-and-photonics-solutions/vl53l7cx.html",
-      "seen_in": []
+      "seen_in": [],
+      "buy": [
+        {
+          "vendor": "Mouser",
+          "price": "$60.80 USD",
+          "url": "https://www.mouser.com/en/ProductDetail/STMicroelectronics/P-NUCLEO-53L7A1?qs=By6Nw2ByBD3a6GVZ%252B3LpcA%3D%3D",
+          "ships_from": "Mouser"
+        }
+      ]
     }
   ]
 }
