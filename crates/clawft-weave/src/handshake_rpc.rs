@@ -242,7 +242,10 @@ pub fn envelope_refusal_with(
         match check_proto(proto) {
             ProtoCheck::Supported => {}
             ProtoCheck::Legacy => {
-                if required_capability(method) != Capability::Read {
+                // Explicit allowlist, shared with the client: a method the
+                // table does not know defaults to Read there, so it must not
+                // pass here on that basis.
+                if !clawft_rpc::handshake::is_read_only_method(method) {
                     return Some(proto_mismatch_response(
                         0,
                         DaemonBuild {
@@ -316,14 +319,15 @@ mod tests {
 
     #[test]
     fn envelope_accepts_legacy_read_only_and_current() {
-        assert!(envelope_refusal_with(&unbound(), "x", None, None).is_none());
         assert!(envelope_refusal_with(&unbound(), "kernel.status", None, None).is_none());
         assert!(envelope_refusal_with(&unbound(), "x", Some(clawft_rpc::PROTO_VERSION), None).is_none());
     }
 
     #[test]
     fn envelope_refuses_legacy_mutating_request() {
-        for m in ["agent.spawn", "kernel.shutdown", "cron.add"] {
+        // `x.unlisted_mutation` is unknown to the capability table (defaults to
+        // Read there) and must still be refused: the gate is an allowlist.
+        for m in ["agent.spawn", "kernel.shutdown", "cron.add", "x.unlisted_mutation"] {
             let r = envelope_refusal_with(&unbound(), m, None, None).unwrap();
             assert_eq!(r.error_kind.as_deref(), Some("proto_mismatch"), "{m}");
         }

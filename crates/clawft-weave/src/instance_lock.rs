@@ -176,11 +176,13 @@ pub async fn reclaim_stale_socket(paths: &RuntimePaths) -> anyhow::Result<()> {
         return Ok(());
     }
     match probe_socket(&socket).await {
-        SocketState::Reachable => Err(refused(format!(
-            "daemon already running (socket accepts connections: {}); \
-             it does not hold {} - refusing to take over its socket",
-            socket.display(),
-            paths.lock().display()
+        SocketState::Reachable => Err(anyhow::Error::new(crate::boot_refusal::AlreadyRunning(
+            format!(
+                "daemon already running (socket accepts connections: {}); \
+                 it does not hold {} - refusing to take over its socket",
+                socket.display(),
+                paths.lock().display()
+            ),
         ))),
         // ECONNREFUSED / ENOENT: nobody serves it, so it is stale.
         SocketState::Stale | SocketState::NoSocketFile => {

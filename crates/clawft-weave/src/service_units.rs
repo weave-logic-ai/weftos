@@ -358,6 +358,21 @@ mod tests {
     }
 
     #[test]
+    fn sentinel_matches_what_the_plist_watches_unless_the_runtime_dir_is_overridden() {
+        use clawft_types::runtime_paths::RuntimePaths;
+        let home = Path::new("/Users/alice");
+        // No override: the daemon writes exactly the path the plist watches.
+        let p = RuntimePaths::user_with(None, Some(home));
+        assert_eq!(p.refused(), refused_path(home));
+        assert!(launchd_plist(Path::new("/x/weaver"), home).contains(&p.refused().to_string_lossy().into_owned()));
+        // WEFTOS_RUNTIME_DIR moves the daemon's root; the plist (which sets no
+        // env) keeps watching ~/.weftos/run, so an override is not supervised.
+        let o = RuntimePaths::user_with(Some("/tmp/iso"), Some(home));
+        assert_eq!(o.refused(), Path::new("/tmp/iso/REFUSED"));
+        assert_ne!(o.refused(), refused_path(home));
+    }
+
+    #[test]
     fn crash_loop_guards_are_in_the_units() {
         let sd = systemd_user_unit(Path::new("/x/weaver"), Path::new("/h"));
         for k in ["RestartPreventExitStatus=78", "StartLimitIntervalSec=60", "StartLimitBurst=3"] {

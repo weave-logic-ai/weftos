@@ -31,6 +31,22 @@ const ONE_SHOT_FLAGS: [&str; 2] = ["--new-chain", "--adopt-legacy-chain"];
 #[error("{0}")]
 pub struct BootRefused(pub String);
 
+/// A live daemon already serves this runtime dir (its socket answers). A
+/// permanent refusal, but never a reason to leave the restart sentinel: the
+/// daemon that is running is fine.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct AlreadyRunning(pub String);
+
+/// Whether a refused boot should leave the `REFUSED` sentinel. Not when
+/// another daemon holds the instance lock or answers on the socket: a
+/// duplicate `kernel start` must not mark the live daemon as refused.
+pub fn leaves_sentinel(e: &anyhow::Error) -> bool {
+    exit_code(e) == EX_CONFIG
+        && e.downcast_ref::<AlreadyRunning>().is_none()
+        && !matches!(e.downcast_ref::<LockError>(), Some(LockError::Held { .. }))
+}
+
 /// Process exit code for an error that ended `kernel start --foreground`.
 ///
 /// 78 only for refusals that retrying cannot fix: instance lock held, chain
@@ -41,6 +57,7 @@ pub struct BootRefused(pub String);
 pub fn exit_code(e: &anyhow::Error) -> i32 {
     use clawft_kernel::KernelError;
     let refused = e.downcast_ref::<BootRefused>().is_some()
+        || e.downcast_ref::<AlreadyRunning>().is_some()
         || matches!(e.downcast_ref::<KernelError>(), Some(KernelError::BootRefused(_)))
         || matches!(e.downcast_ref::<LockError>(), Some(LockError::Held { .. }));
     if refused { EX_CONFIG } else { 1 }
@@ -54,6 +71,17 @@ pub fn write_refused(sentinel: &Path, reason: &str) {
     }
     if let Err(e) = std::fs::write(sentinel, format!("{reason}\n")) {
         tracing::warn!(path = %sentinel.display(), error = %e, "could not write the REFUSED sentinel");
+    }
+}
+
+/// Leave the sentinel after a clean exit, but only while nobody else owns the
+/// runtime dir: the instance lock was released when the daemon returned, so a
+/// successor may already be booting. Taking the lock here proves it is not,
+/// and holds it while the file is written.
+pub fn write_refused_if_unowned(paths: &clawft_types::runtime_paths::RuntimePaths, reason: &str) {
+    match crate::instance_lock::InstanceLock::acquire(paths) {
+        Ok(_lock) => write_refused(&paths.refused(), reason),
+        Err(_) => {} // a successor (or any other kernel) owns it
     }
 }
 
@@ -272,5 +300,34 @@ mod tests {
         clear_refused(&s);
         assert!(!s.exists());
         clear_refused(&s);
+    }
+
+    #[test]
+    fn duplicate_start_refusals_leave_no_sentinel_but_other_refusals_do() {
+        use clawft_kernel::KernelError;
+        let held = anyhow::Error::new(LockError::Held { root: "/r".into(), pid: "7".into() });
+        let live = anyhow::Error::new(AlreadyRunning("daemon already running".into()));
+        assert_eq!((exit_code(&held), exit_code(&live)), (78, 78));
+        assert!(!leaves_sentinel(&held));
+        assert!(!leaves_sentinel(&live));
+        assert!(leaves_sentinel(&anyhow::Error::new(KernelError::BootRefused("chain".into()))));
+        assert!(leaves_sentinel(&anyhow::Error::new(BootRefused("config".into()))));
+        assert!(!leaves_sentinel(&anyhow::Error::new(KernelError::Boot("transient".into()))));
+    }
+
+    #[test]
+    fn clean_exit_sentinel_is_written_only_when_no_successor_holds_the_lock() {
+        use clawft_types::runtime_paths::RuntimePaths;
+        let d = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths::at(d.path());
+        // A successor already booted: it holds the lock, so no sentinel.
+        let successor = crate::instance_lock::InstanceLock::acquire(&paths).unwrap();
+        write_refused_if_unowned(&paths, "stopped cleanly");
+        assert!(!paths.refused().exists());
+        drop(successor);
+        write_refused_if_unowned(&paths, "stopped cleanly");
+        assert_eq!(std::fs::read_to_string(paths.refused()).unwrap(), "stopped cleanly\n");
+        // The lock was released again afterwards.
+        assert!(crate::instance_lock::InstanceLock::acquire(&paths).is_ok());
     }
 }

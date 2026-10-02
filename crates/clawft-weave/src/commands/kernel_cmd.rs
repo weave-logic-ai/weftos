@@ -222,14 +222,14 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
                 super::kernel_children::legacy_guard(legacy_project_daemon).await?;
             }
             // The user daemon's "do not restart" sentinel (launchd KeepAlive)
-            // is lifted by any start attempt; a refusal or clean exit below
-            // writes it again.
+            // is written below on a permanent refusal or a clean exit, and
+            // lifted by the daemon once a boot succeeds (never by a start
+            // attempt that is refused: a duplicate start must leave a live
+            // daemon's state alone). It lives in the resolved runtime root;
+            // the generated plist watches `~/.weftos/run`, so a
+            // WEFTOS_RUNTIME_DIR override is not supervised by launchd.
             #[cfg(any(unix, windows))]
             let refused_sentinel = user_profile.then(|| protocol::runtime_paths().refused());
-            #[cfg(any(unix, windows))]
-            if let Some(s) = &refused_sentinel {
-                crate::boot_refusal::clear_refused(s);
-            }
             if foreground {
                 // Run in foreground (blocking)
                 let platform = NativePlatform::new();
@@ -267,15 +267,20 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
                         return Err(e);
                     }
                     eprintln!("Error: {e:#}");
-                    if let Some(s) = &refused_sentinel {
+                    if let Some(s) = &refused_sentinel
+                        && crate::boot_refusal::leaves_sentinel(&e)
+                    {
                         crate::boot_refusal::write_refused(s, &format!("{e:#}"));
                     }
                     std::process::exit(code);
                 }
                 // A clean exit (SIGTERM, `kernel stop`) must not be restarted
                 // either: that is what `SuccessfulExit=false` used to say.
-                if let Some(s) = &refused_sentinel {
-                    crate::boot_refusal::write_refused(s, "stopped cleanly");
+                if refused_sentinel.is_some() {
+                    crate::boot_refusal::write_refused_if_unowned(
+                        &protocol::runtime_paths(),
+                        "stopped cleanly",
+                    );
                 }
             } else {
                 // Background (default) — spawn detached child
