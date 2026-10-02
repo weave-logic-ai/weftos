@@ -1,6 +1,8 @@
-//! ADR-103 Phase 3 end to end, as the current user (P3-X): the real machine
-//! mesh service and user daemons linked through the real daemon glue, walking
-//! the plan's section-10 exit list as far as it goes without root. What still
+//! ADR-103 Phase 3 integration, as the current user (P3-X): the real machine
+//! mesh service and user daemons' mesh links through the real daemon glue
+//! (resolve, register, link task), with a stub inbox and chain standing in for
+//! the kernel's router and chain; `mesh_boot_user` covers the daemon boot path.
+//! It walks the plan's section-10 exit list as far as it goes without root. What still
 //! needs the owner's installed service is listed in
 //! `docs/guides/weftos-deployment-sops.md` (machine mesh service migration).
 //!
@@ -23,7 +25,7 @@ use clawft_mesh_local::{WeftAddr, hexser};
 use clawft_types::config::MeshServicePolicy;
 use clawft_weave::mesh_doctor::{MeshProbe, mode_findings};
 use clawft_weave::mesh_local_chain::{KIND_ANCHOR, KIND_BOUND};
-use clawft_weave::mesh_local_glue::{Resolved, build_endpoint, resolve};
+use clawft_weave::mesh_local_glue::{Resolved, Timings, build_endpoint, resolve};
 use clawft_rpc::doctor::Severity;
 use mesh_e2e::*;
 
@@ -80,7 +82,7 @@ async fn a_daemon_registers_in_service_mode_under_the_service_node_id() {
     // The doctor reads the same status and agrees with the daemon's mode.
     let status = svc.admin(Message::Status {}).await;
     let probe = MeshProbe { record_present: true, status: Some(status), ..MeshProbe::default() };
-    let f = mode_findings(a.state.get().as_ref(), &probe);
+    let f = mode_findings(Some("user"), a.state.get().as_ref(), &probe);
     assert_eq!(f[0].severity, Severity::Ok, "{f:?}");
 }
 
@@ -158,11 +160,13 @@ async fn a_second_uid_cannot_take_the_first_uids_address() {
 
 #[tokio::test]
 async fn rebind_revokes_the_old_key_and_its_daemon_stays_out() {
-    // The stale daemon keeps offering its old key; the register budget is
-    // raised so the assertions below see the binding, not the rate limit.
+    // The register budget is raised so the assertions below see the binding,
+    // not the rate limit; the attempt count is asserted separately.
     let limits = clawft_mesh_service::limits::LimitConfig { registers: 1000, ..Default::default() };
     let svc = Svc::with_limits(limits).await;
-    let b = daemon_as_other(&svc, key(2), Vec::new()).await;
+    // Production-shaped backoff ceiling (scaled): 20 ms base, 1 s max.
+    let slow = Timings { backoff: (Duration::from_millis(20), Duration::from_secs(1)), ..fast() };
+    let mut b = daemon_as_other_with(&svc, key(2), Vec::new(), slow).await;
     let old_serial = b.state.get().unwrap().cert_serial.unwrap();
     let new_key = key(4);
     let pubkey = hexser::encode(&new_key.verifying_key().to_bytes());
@@ -170,9 +174,16 @@ async fn rebind_revokes_the_old_key_and_its_daemon_stays_out() {
 
     // The old registration is dropped and every reconnect with the old key fails.
     svc.next_uid.store(OTHER_UID, Ordering::SeqCst);
+    let before = svc.injected_conns.load(Ordering::SeqCst);
     wait_until("B's link drops", || b.link_state().as_deref() == Some("reconnecting")).await;
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
     assert_eq!(b.link_state().as_deref(), Some("reconnecting"), "the old key cannot come back");
+    // Refused registrations retry at the ceiling, not the exponential ramp
+    // (which would be ~6 attempts in this window and exhaust the default
+    // budget of 5 per minute for the uid).
+    let attempts = svc.injected_conns.load(Ordering::SeqCst) - before;
+    assert!((1..=3).contains(&attempts), "{attempts} register attempts after the refusal");
+    b.shutdown().await;
     assert_eq!(server_kind(raw_register(&svc, OTHER_UID, key(2), RegisterParams::default()).await), ErrorKind::BindConflict);
     let c = raw_register(&svc, OTHER_UID, new_key, RegisterParams::default()).await.expect("new key registers");
     assert_eq!(c.register_ack().bind, BindState::Existing);
@@ -264,7 +275,9 @@ async fn service_off_is_collapsed_and_required_without_a_service_fails() {
     assert!(matches!(resolve(&auto, Ok(ep)).await.unwrap(), Resolved::Service(_)));
     let probe = MeshProbe { record_present: true, status: Some(s), ..MeshProbe::default() };
     let collapsed = clawft_weave::mesh_state::plain("collapsed");
-    assert_eq!(mode_findings(Some(&collapsed), &probe)[0].severity, Severity::Warn);
+    assert_eq!(mode_findings(Some("user"), Some(&collapsed), &probe)[0].severity, Severity::Warn);
+    // The same collapsed mode from a project daemon is not a mismatch.
+    assert_eq!(mode_findings(None, Some(&collapsed), &probe)[0].severity, Severity::Ok);
 
     // No service: auto collapses, required fails boot with the reason.
     svc.stop().await;
@@ -275,4 +288,21 @@ async fn service_off_is_collapsed_and_required_without_a_service_fails() {
     let ep = build_endpoint(&req, home.path(), "sha").unwrap();
     let e = resolve(&req, Ok(ep)).await.err().expect("required without a service");
     assert!(e.contains("required"), "{e}");
+}
+
+#[tokio::test]
+async fn a_record_that_appears_shortly_after_the_socket_is_waited_for() {
+    let svc = Svc::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let path = svc.socket().parent().unwrap().join("service.json");
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        std::fs::write(&path, bytes).unwrap();
+    });
+    let cfg = svc.mesh_cfg(MeshServicePolicy::Auto);
+    let ep = build_endpoint(&cfg, home.path(), "sha").expect("the record is waited for").expect("socket present");
+    writer.join().unwrap();
+    assert_eq!(ep.client.service.node_id, svc.node_id());
 }

@@ -186,8 +186,24 @@ pub fn findings(p: &MeshProbe, home: &std::path::Path) -> Vec<Finding> {
 /// Whether the running daemon's mesh mode (from its handshake) agrees with
 /// what is on the host. `None`: no daemon answered (the `daemon` component
 /// reports that), so nothing is said here.
-pub fn mode_findings(daemon: Option<&MeshHandshake>, p: &MeshProbe) -> Vec<Finding> {
+///
+/// Only the user daemon (`profile = "user"`) is a client of the service. The
+/// daemon reached from a project directory is a project or legacy daemon that
+/// always runs its own mesh, so it is reported as information, never as a
+/// mismatch.
+pub fn mode_findings(profile: Option<&str>, daemon: Option<&MeshHandshake>, p: &MeshProbe) -> Vec<Finding> {
     let Some(d) = daemon else { return Vec::new() };
+    if profile != Some("user") {
+        return vec![f(
+            "mode",
+            Severity::Ok,
+            format!(
+                "the daemon reached from here is a {} daemon (mesh {}); only the user daemon uses the machine mesh service, so this is not compared",
+                profile.unwrap_or("project or legacy"),
+                d.summary()
+            ),
+        )];
+    }
     let service_node = p.status.as_ref().and_then(|s| s["node_id"].as_str());
     let finding = match d.mode.as_str() {
         "service" => match (service_node, d.state.as_deref()) {
@@ -200,7 +216,7 @@ pub fn mode_findings(daemon: Option<&MeshHandshake>, p: &MeshProbe) -> Vec<Findi
             )
             .remedy("weaver kernel restart   (the daemon adopts the service's node id at boot)"),
             (Some(_), Some("reconnecting")) => f("mode", Severity::Warn, "the daemon is in service mode and its link to the service is reconnecting")
-                .remedy("weaver mesh status; the daemon keeps running and reconnects on its own"),
+                .remedy("weaver mesh status. A dropped link reconnects on its own; a refused registration (key rebound or revoked) does not: restart the daemon with the current user key (weaver kernel restart --profile user)"),
             (Some(n), _) => f("mode", Severity::Ok, format!("daemon mesh mode: service, node {n}{}", d.cert_serial.map(|s| format!(", cert serial {s}")).unwrap_or_default())),
         },
         "collapsed" if service_node.is_some() => f(
@@ -412,13 +428,19 @@ mod tests {
             ..MeshHandshake::default()
         };
         let collapsed = MeshHandshake { mode: "collapsed".into(), ..MeshHandshake::default() };
-        assert!(mode_findings(None, &running()).is_empty(), "no daemon: the daemon component says so");
-        assert_eq!(sev(&mode_findings(Some(&svc("connected", "n1")), &running()), "mode"), Severity::Ok);
-        assert_eq!(sev(&mode_findings(Some(&svc("connected", "n2")), &running()), "mode"), Severity::Fail);
-        assert_eq!(sev(&mode_findings(Some(&svc("reconnecting", "n1")), &running()), "mode"), Severity::Warn);
-        assert_eq!(sev(&mode_findings(Some(&svc("connected", "n1")), &MeshProbe::default()), "mode"), Severity::Warn);
-        assert_eq!(sev(&mode_findings(Some(&collapsed), &running()), "mode"), Severity::Warn);
-        assert_eq!(sev(&mode_findings(Some(&collapsed), &MeshProbe::default()), "mode"), Severity::Ok);
+        assert!(mode_findings(Some("user"), None, &running()).is_empty(), "no daemon: the daemon component says so");
+        assert_eq!(sev(&mode_findings(Some("user"), Some(&svc("connected", "n1")), &running()), "mode"), Severity::Ok);
+        assert_eq!(sev(&mode_findings(Some("user"), Some(&svc("connected", "n2")), &running()), "mode"), Severity::Fail);
+        assert_eq!(sev(&mode_findings(Some("user"), Some(&svc("reconnecting", "n1")), &running()), "mode"), Severity::Warn);
+        assert_eq!(sev(&mode_findings(Some("user"), Some(&svc("connected", "n1")), &MeshProbe::default()), "mode"), Severity::Warn);
+        assert_eq!(sev(&mode_findings(Some("user"), Some(&collapsed), &running()), "mode"), Severity::Warn);
+        assert_eq!(sev(&mode_findings(Some("user"), Some(&collapsed), &MeshProbe::default()), "mode"), Severity::Ok);
+        // A project daemon next to a running service is not a mismatch.
+        for profile in [None, Some("default")] {
+            let v = mode_findings(profile, Some(&collapsed), &running());
+            assert_eq!(sev(&v, "mode"), Severity::Ok, "{v:?}");
+            assert!(v[0].message.contains("only the user daemon"), "{v:?}");
+        }
     }
 
     #[test]

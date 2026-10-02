@@ -73,8 +73,8 @@ pub async fn run(args: DoctorArgs) -> anyhow::Result<()> {
         if runtime_wanted {
             let probe = crate::mesh_doctor::gather(&home).await;
             report.findings.extend(crate::mesh_doctor::findings(&probe, &home));
-            let daemon = daemon_mesh().await;
-            report.findings.extend(crate::mesh_doctor::mode_findings(daemon.as_ref(), &probe));
+            let (profile, mesh) = daemon_mesh().await.unwrap_or_default();
+            report.findings.extend(crate::mesh_doctor::mode_findings(profile.as_deref(), mesh.as_ref(), &probe));
         }
         if install_wanted {
             report.findings.extend(service_tier_findings(&config_dir));
@@ -89,15 +89,17 @@ pub async fn run(args: DoctorArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The running daemon's mesh mode, from `kernel.status` (None: no daemon
-/// answered within 3 s).
+/// The answering daemon's profile and mesh mode, from `kernel.status` (None:
+/// no daemon answered within 3 s). The daemon is whichever this directory
+/// resolves to, which may be a project daemon.
 #[cfg(all(unix, feature = "mesh"))]
-async fn daemon_mesh() -> Option<clawft_rpc::handshake::MeshHandshake> {
+async fn daemon_mesh() -> Option<(Option<String>, Option<clawft_rpc::handshake::MeshHandshake>)> {
     let ask = async {
         let mut client = crate::client::DaemonClient::connect().await?;
         let resp = client.simple_call("kernel.status").await.ok()?;
         let status: crate::protocol::KernelStatusResult = serde_json::from_value(resp.result?).ok()?;
-        status.handshake?.mesh
+        let h = status.handshake?;
+        Some((h.profile, h.mesh))
     };
     tokio::time::timeout(std::time::Duration::from_secs(3), ask).await.ok().flatten()
 }

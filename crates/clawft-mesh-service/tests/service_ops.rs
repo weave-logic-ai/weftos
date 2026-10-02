@@ -87,11 +87,14 @@ async fn a_live_socket_is_refused_and_a_stale_one_is_replaced() {
     let other = tempfile::Builder::new().prefix("m").tempdir().unwrap();
     let mut cfg = config_in(other.path(), h.euid);
     cfg.socket = h.cfg.socket.clone();
+    let record = std::fs::read(h.cfg.socket.parent().unwrap().join("service.json")).unwrap();
     match start_with(cfg, peer_source(h.next_uid.clone()), Default::default()).await {
         Err(StartError::Socket { reason, .. }) => assert!(reason.contains("already listening"), "{reason}"),
         Err(other) => panic!("expected a socket error, got {other}"),
         Ok(_) => panic!("must not take over a live service's socket"),
     }
+    let after = std::fs::read(h.cfg.socket.parent().unwrap().join("service.json")).unwrap();
+    assert_eq!(after, record, "the live service's record is not overwritten");
 
     // A stale socket file (nobody listening) is ours to replace.
     let dir = tempfile::Builder::new().prefix("m").tempdir().unwrap();
@@ -100,6 +103,22 @@ async fn a_live_socket_is_refused_and_a_stale_one_is_replaced() {
     drop(std::os::unix::net::UnixListener::bind(&cfg.socket).unwrap());
     let svc = start_with(cfg, peer_source(h.next_uid.clone()), Default::default()).await.expect("stale socket replaced");
     svc.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_record_is_written_before_the_socket_is_bound() {
+    // A socket path past the unix limit: binding is the step that fails, so
+    // whatever must precede it has already happened.
+    let euid = clawft_mesh_local::peer::own_uid().await.unwrap();
+    let dir = tempfile::Builder::new().prefix("m").tempdir().unwrap();
+    let mut cfg = config_in(dir.path(), euid);
+    cfg.socket = dir.path().join("r").join("s".repeat(120));
+    match start_with(cfg, peer_source(std::sync::Arc::new(std::sync::atomic::AtomicU32::new(REAL))), Default::default()).await {
+        Err(StartError::Socket { .. }) => {}
+        Err(other) => panic!("expected the bind to fail, got {other}"),
+        Ok(_) => panic!("a 120-byte socket name must not bind"),
+    }
+    assert!(dir.path().join("r/service.json").exists(), "service.json is written before the socket exists");
 }
 
 #[tokio::test]

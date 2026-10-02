@@ -44,11 +44,15 @@ impl MeshSink {
     }
 
     /// The sender's scope, when its certificate verifies against the machine
-    /// key. Anything else (no cert, another machine's cert, expired) is no
-    /// claim at all.
+    /// key and names the node the delivery came from. Anything else (no cert,
+    /// another machine's cert, expired, a cert for another node) is no claim
+    /// at all.
     fn sender_scope(&self, d: &Deliver) -> Option<Scope> {
         let (cert, key) = (d.source_cert.as_ref()?, self.machine_key.as_ref()?);
         cert.verify(key, clawft_mesh_local::client::now_unix()).ok()?;
+        if cert.node_id != d.source_node {
+            return None;
+        }
         Some(Scope { user_id: cert.user_id.clone(), project_id: None })
     }
 
@@ -161,9 +165,13 @@ mod tests {
     }
 
     fn deliver_with(cert: Option<UserCert>) -> Deliver {
+        deliver_from(&clawft_mesh_local::node_id_from_pubkey(&SigningKey::from_bytes(&[1; 32]).verifying_key().to_bytes()), cert)
+    }
+
+    fn deliver_from(source_node: &str, cert: Option<UserCert>) -> Deliver {
         let msg = KernelMessage::text(0, MessageTarget::Topic("t".into()), "x");
         Deliver {
-            source_node: "n".into(),
+            source_node: source_node.into(),
             source_cert: cert,
             scope: WireScope { user_id: "me".into(), project_id: None },
             envelope_id: "e".into(),
@@ -187,8 +195,10 @@ mod tests {
         }
         // Without a trusted machine key nothing is a claim either.
         MeshSink::new(seen.clone(), "me").deliver(deliver_with(Some(good.clone()))).await.unwrap();
+        // A valid cert riding a delivery from another node is not the sender's.
+        sink.deliver(deliver_from(&"c".repeat(32), Some(good.clone()))).await.unwrap();
         let got: Vec<Option<String>> =
             seen.0.lock().unwrap().iter().map(|s| s.as_ref().map(|s| s.user_id.clone())).collect();
-        assert_eq!(got, vec![Some(good.user_id), None, None, None, None]);
+        assert_eq!(got, vec![Some(good.user_id), None, None, None, None, None]);
     }
 }

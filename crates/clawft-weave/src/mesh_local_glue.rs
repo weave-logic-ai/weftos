@@ -9,7 +9,7 @@
 //! user chain, outbound remote-node messages as `send`. If the service drops
 //! the daemon keeps running and the link reconnects with jittered backoff.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -18,7 +18,6 @@ use clawft_kernel::gate::GateBackend;
 use clawft_kernel::mesh_delivery::LocalDelivery;
 use clawft_kernel::mesh_mode::{self, MeshMode, ServiceProbe};
 use clawft_mesh_local::client::RegisterParams;
-use clawft_mesh_local::proto::ServiceRecord;
 use clawft_mesh_local::UserCert;
 use clawft_mesh_local::{Backoff, ClientConfig, ClientError, MeshLocalClient};
 use clawft_rpc::handshake::MeshHandshake;
@@ -32,7 +31,9 @@ use crate::mesh_local_sink::{MeshSink, OutCmd, ServiceForwarder};
 use crate::mesh_state::{MeshStateCell, plain};
 use crate::node_identity::{DaemonIdentity, IdentityError};
 
+mod endpoint;
 mod session;
+pub use endpoint::{build_endpoint, build_endpoint_in, state_dir};
 use session::session;
 
 /// Environment override for the service state dir (holds `service.json`).
@@ -104,100 +105,6 @@ impl ServiceLink {
     pub fn identity(&self) -> Result<DaemonIdentity, IdentityError> {
         let ack = self.client.hello_ack();
         DaemonIdentity::for_service(ack.node_id.clone(), ack.machine_pubkey)
-    }
-}
-
-/// `$WEFTOS_MESH_STATE_DIR` or the default state dir.
-pub fn state_dir() -> PathBuf {
-    std::env::var_os(STATE_DIR_ENV)
-        .filter(|v| !v.is_empty())
-        .map_or_else(|| PathBuf::from(DEFAULT_STATE_DIR), PathBuf::from)
-}
-
-/// Build the endpoint for the real service. `Ok(None)`: there is no socket,
-/// so no service. `Err`: something is there that cannot be verified
-/// (unreadable `service.json`, unusable user key); the caller treats that as
-/// a refusal.
-///
-/// `service.json` is read from beside the socket: the state dir is 0700 and
-/// owned by the service account, so the service writes a copy there for its
-/// clients (the same copy `weaver mesh` verbs and the doctor read).
-pub fn build_endpoint(
-    cfg: &MeshConfig,
-    home: &Path,
-    build_sha: &str,
-) -> Result<Option<ServiceEndpoint>, String> {
-    let sock = mesh_mode::service_socket(cfg);
-    let record_dir = sock.parent().map_or_else(state_dir, Path::to_path_buf);
-    build_endpoint_in(cfg, home, build_sha, &record_dir)
-}
-
-/// [`build_endpoint`] with an explicit directory holding `service.json`.
-pub fn build_endpoint_in(
-    cfg: &MeshConfig,
-    home: &Path,
-    build_sha: &str,
-    state_dir: &Path,
-) -> Result<Option<ServiceEndpoint>, String> {
-    let sock = mesh_mode::service_socket(cfg);
-    match std::fs::symlink_metadata(&sock) {
-        Ok(_) => {}
-        // Only a missing path means "no service". Anything else (permission,
-        // loop, I/O) means something may be there that this user cannot reach
-        // or verify, which must not turn into a quiet fallback.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => {
-            return Err(format!(
-                "cannot inspect {} ({e}); if the mesh service is installed, this user needs \
-                 access to its socket directory (it is group-owned by the service group, \
-                 mode 0750: add your account to that group and log in again)",
-                sock.display()
-            ));
-        }
-    }
-    let record_path = state_dir.join("service.json");
-    let record = ServiceRecord::load(&record_path).map_err(|e| {
-        format!(
-            "{} is unreadable ({e}); without it the service's machine key cannot be checked",
-            record_path.display()
-        )
-    })?;
-    check_record_owner(&record_path, record.service_uid)?;
-    // A fresh user.key would split the identity while a legacy chain waits.
-    let (user_key, _) =
-        crate::user_key::resolve_user_key(home, true).map_err(|e| format!("user key: {e}"))?;
-    let mut client = ClientConfig::new(&sock, record);
-    client.machine_pin = Some(clawft_types::runtime_paths::user_weftos_dir(home).join("mesh/machine.pub"));
-    client.build_sha = build_sha.to_owned();
-    client.exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
-    let user_id = clawft_mesh_local::node_id_from_pubkey(&user_key.verifying_key().to_bytes());
-    let register = RegisterParams {
-        projects: Vec::new(),
-        topic_prefixes: vec![format!("user/{user_id}/")],
-        capabilities: vec!["a2a".to_owned()],
-        version: env!("CARGO_PKG_VERSION").to_owned(),
-        // No other local tenant may send to this user unless configured;
-        // the service refuses cross-tenant sends by default (P3 S).
-        accept_from: Vec::new(),
-    };
-    Ok(Some(ServiceEndpoint { client, user_key, register }))
-}
-
-/// `service.json` is what clients pin: it must belong to root or the service
-/// account, or anyone who can write the state dir could repoint the pin.
-fn check_record_owner(path: &Path, service_uid: u32) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
-    let owner = std::fs::metadata(path)
-        .map_err(|e| format!("{}: {e}", path.display()))?
-        .uid();
-    if owner == 0 || owner == service_uid {
-        Ok(())
-    } else {
-        Err(format!(
-            "{} is owned by uid {owner}, not root or the service account (uid {service_uid}); \
-             refusing to trust it",
-            path.display()
-        ))
     }
 }
 
@@ -480,7 +387,12 @@ async fn run(
                     );
                 }
             }
-            Err(e) => debug!(error = %e, "mesh service reconnect failed"),
+            Err(e) => {
+                // Transport trouble (the service restarting) is not a refusal:
+                // back to the normal backoff.
+                refused = None;
+                debug!(error = %e, "mesh service reconnect failed");
+            }
         }
     }
 }

@@ -278,8 +278,9 @@ under `/var/lib/weftos/mesh`, the user daemon only `~/.weftos/user.key` and
 4. **Require the service.** Set `service = "required"` under `[kernel.mesh]` in
    `~/.weftos/weave.toml` and start the user daemon again. It registers; the first bind
    is journalled (`how: "tofu"`, or pending until `weaver mesh bind approve <uid>`
-   under the `approve` policy). `weaver kernel status --profile user` shows
-   `Mesh: service (connected)` and roles `user`, with the same node id as before.
+   under the `approve` policy). `weaver kernel status --profile user` prints
+   `Profile:    user (roles: user)` and `Mesh:       service (connected)`, and the
+   `Node:` line keeps the node id from before.
 5. **Check from the Pi** that the machine still appears under the same id. Only then
    delete `~/.weftos/run/node.key` (the doctor's `mesh.node_key_dup` WARNs until you
    do; keep a backup until peers reconnect).

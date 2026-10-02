@@ -163,7 +163,8 @@ running the mesh itself (collapsed mode). Owner steps:
   (the service refuses to start); on macOS the service may start before
   `/var/run/weftos` exists and converges by launchd restarts; the installer
   receipt's service tier is not written yet; leaf peers without signed
-  admission are not yet reported by the service.
+  admission are not yet reported by the service; scoped `weft://` sends are
+  reachable from the API and tests only (no RPC or router caller yet).
 
 ### Fixed (0.8.2)
 

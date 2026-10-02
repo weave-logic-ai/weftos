@@ -1,13 +1,13 @@
-//! Harness for the Phase 3 end-to-end test: the real machine mesh service
-//! (package S) on tempdirs, and user daemons linked to it through the real
-//! daemon glue (package U). Everything runs as the current user; a second uid
+//! Harness for the Phase 3 integration test: the real machine mesh service
+//! (package S) on tempdirs, and user daemons' mesh links through the real
+//! daemon glue (package U) with a stub inbox and chain in place of the kernel. Everything runs as the current user; a second uid
 //! is injected into the service's peer source and into the client's view of
 //! itself, exactly as S's own tests do. No root, no /var, /etc, launchd or
 //! systemd; nothing reads the real `$HOME`.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -47,15 +47,18 @@ pub struct Svc {
     pub limits: LimitConfig,
     pub svc: Option<RunningService>,
     pub next_uid: Arc<AtomicU32>,
+    /// Connections accepted under an injected uid (each is one register attempt).
+    pub injected_conns: Arc<AtomicUsize>,
     pub euid: u32,
 }
 
-fn peer_source(next: Arc<AtomicU32>) -> PeerSource {
+fn peer_source(next: Arc<AtomicU32>, injected: Arc<AtomicUsize>) -> PeerSource {
     Arc::new(move |s: &tokio::net::UnixStream| {
         let n = next.load(Ordering::SeqCst);
         if n == REAL {
             UnixPeer::from_stream(s).map(|p| Arc::new(p) as Arc<dyn PeerIdentity>)
         } else {
+            injected.fetch_add(1, Ordering::SeqCst);
             Ok(Arc::new(InjectedPeer::uid(n)) as Arc<dyn PeerIdentity>)
         }
     })
@@ -81,13 +84,21 @@ impl Svc {
             build_sha: "e2e-service".into(),
             ..MeshServiceConfig::default()
         };
-        let mut s = Self { dir, cfg, limits, svc: None, next_uid: Arc::new(AtomicU32::new(REAL)), euid };
+        let mut s = Self {
+            dir,
+            cfg,
+            limits,
+            svc: None,
+            next_uid: Arc::new(AtomicU32::new(REAL)),
+            injected_conns: Arc::new(AtomicUsize::new(0)),
+            euid,
+        };
         s.begin().await;
         s
     }
 
     pub async fn begin(&mut self) {
-        let svc = start_with(self.cfg.clone(), peer_source(self.next_uid.clone()), self.limits)
+        let svc = start_with(self.cfg.clone(), peer_source(self.next_uid.clone(), self.injected_conns.clone()), self.limits)
             .await
             .expect("service starts");
         self.svc = Some(svc);
@@ -227,6 +238,11 @@ pub fn fast() -> Timings {
 
 /// Resolve and link a daemon. The caller has set the service's next uid.
 pub async fn link(cfg: &MeshConfig, ep: ServiceEndpoint) -> Daemon {
+    link_with(cfg, ep, fast()).await
+}
+
+/// [`link`] with explicit link timings.
+pub async fn link_with(cfg: &MeshConfig, ep: ServiceEndpoint, timings: Timings) -> Daemon {
     let user_id = node_id_from_pubkey(&ep.user_key.verifying_key().to_bytes());
     let link = match resolve(cfg, Ok(Some(ep))).await.expect("resolves") {
         Resolved::Service(l) => l,
@@ -243,7 +259,7 @@ pub async fn link(cfg: &MeshConfig, ep: ServiceEndpoint) -> Daemon {
             gate: None,
             chain: Arc::new(ChainQueue::new(chain.clone())),
             state: state.clone(),
-            timings: fast(),
+            timings,
         },
     );
     Daemon { handle: Some(handle), state, inbox, chain, user_id, node_id }
@@ -281,9 +297,14 @@ pub fn other_endpoint(svc: &Svc, key: SigningKey, accept_from: Vec<String>) -> S
 
 /// Daemon B: the injected second account.
 pub async fn daemon_as_other(svc: &Svc, key: SigningKey, accept_from: Vec<String>) -> Daemon {
+    daemon_as_other_with(svc, key, accept_from, fast()).await
+}
+
+/// [`daemon_as_other`] with explicit link timings.
+pub async fn daemon_as_other_with(svc: &Svc, key: SigningKey, accept_from: Vec<String>, timings: Timings) -> Daemon {
     svc.next_uid.store(OTHER_UID, Ordering::SeqCst);
     let cfg = svc.mesh_cfg(MeshServicePolicy::Required);
-    let d = link(&cfg, other_endpoint(svc, key, accept_from)).await;
+    let d = link_with(&cfg, other_endpoint(svc, key, accept_from), timings).await;
     svc.next_uid.store(REAL, Ordering::SeqCst);
     d
 }
