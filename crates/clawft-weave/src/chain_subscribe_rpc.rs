@@ -9,9 +9,9 @@
 //!   project-scoped token is refused (`project_scope_mismatch`); a plain
 //!   local Read caller is not.
 //! * `chain: "project/<id>"`: a project's chain. The caller must be `Admin`
-//!   or hold a [`VerifiedProject`] for that id (a validated project-scoped
-//!   token, or this daemon's own bound project); a bare `Request.project`
-//!   claim is not enough. A caller with a project-scoped token is matched
+//!   or hold a [`VerifiedProject`] for that id (`CallerCtx.verified_project`:
+//!   a validated project-scoped token, this daemon's own bound project or a
+//!   verified forward header); a bare `Request.project` claim is not enough. A caller with a project-scoped token is matched
 //!   against that scope only (`project_scope_mismatch` otherwise). A project-bound daemon serves `project/<own id>`
 //!   from its local chain. Any other id means proxying to that project's
 //!   daemon, which packages G/H wire; until then an authorized caller gets
@@ -162,18 +162,15 @@ mod stream {
         })
     }
 
-    /// The project a validated project-scoped token carries, if the
-    /// caller presented one.
-    async fn token_project(
-        caller: &CallerCtx,
-        kernel: &Arc<RwLock<Kernel<NativePlatform>>>,
-    ) -> Option<VerifiedProject> {
-        let token = caller.auth.as_deref().map(str::trim)?;
-        if !token.starts_with(clawft_kernel::token_authority::SECRET_PREFIX) {
-            return None;
+    /// Split the caller's verified project (set by the entry path) into the
+    /// token-scoped part and the part that behaves like the daemon's own
+    /// binding (the bound project or a verified forward header).
+    fn split_verified(caller: &CallerCtx) -> (Option<&VerifiedProject>, Option<&VerifiedProject>) {
+        use clawft_kernel::governance::AttestSource;
+        match caller.verified_project.as_ref() {
+            Some(v) if v.attest().source() == AttestSource::TokenScope => (Some(v), None),
+            other => (None, other),
         }
-        let authority = crate::token_rpc::authority_for(kernel).await?;
-        VerifiedProject::from_token(&authority.validate(token)?)
     }
 
     /// Handle `chain.subscribe`. `Err` is the refusal response.
@@ -188,12 +185,12 @@ mod stream {
         })?;
         let target = parse_target(&p.chain)
             .map_err(|m| Response::error_with_kind("invalid_params", m))?;
-        let scoped = token_project(caller, &kernel).await;
+        let (scoped, bound) = split_verified(caller);
 
         match target {
             ChainTarget::User => {
                 // A project-scoped token never reads the user-level chain.
-                if let Some(v) = &scoped {
+                if let Some(v) = scoped {
                     return Err(Response::error_with_kind(
                         "project_scope_mismatch",
                         format!(
@@ -204,13 +201,7 @@ mod stream {
                 }
             }
             ChainTarget::Project(id) => {
-                let bound = VerifiedProject::from_bound(&crate::handshake_rpc::bound());
-                match project_access(
-                    scoped.as_ref(),
-                    caps.allows(Capability::Admin),
-                    bound.as_ref(),
-                    id,
-                ) {
+                match project_access(scoped, caps.allows(Capability::Admin), bound, id) {
                     ProjectAccess::Allow => {}
                     ProjectAccess::ScopeMismatch => {
                         return Err(Response::error_with_kind(

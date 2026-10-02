@@ -19,9 +19,9 @@
 //!    token) names the project in `project_id` / `Request.project`;
 //! 3. anything else is `verified_project_required`.
 //!
-//! Package I will add the other two `VerifiedProject` sources (the child's
-//! own socket, a user-signed forward header); the hook is marked in
-//! [`identify`]. Honest limit, as for `VerifiedProject`: a same-uid local
+//! Package I adds the other two `VerifiedProject` sources (the child's
+//! own socket, a user-signed forward header), read from
+//! `CallerCtx.verified_project` in [`identify`]. Honest limit, as for `VerifiedProject`: a same-uid local
 //! process holding Admin can name any project here; this isolates one user's
 //! projects from each other, not from a hostile local process.
 //!
@@ -113,8 +113,18 @@ fn identify(call: &ExtCall, authority: Option<&clawft_kernel::token_authority::T
             return Ok(vp.as_str().to_owned());
         }
     }
-    // HOOK(package I): prefer `CallerCtx.verified_project` here once it exists
-    // (the child's own socket, or a user-signed forward header).
+    // The entry path's verified project (token scope, a verified forward
+    // header, or this kernel's own binding; `caller_principal`). Never
+    // `Request.project`: that stays a claim, checked against it.
+    if let Some(vp) = call.ctx.verified_project.as_ref() {
+        if claim.is_some_and(|c| c != vp.as_str()) || param.is_some_and(|p| p != vp.as_str()) {
+            return Err(refuse(
+                "project_scope_mismatch",
+                "the request names a project other than the verified one",
+            ));
+        }
+        return Ok(vp.as_str().to_owned());
+    }
     if call.ctx.caps.allows(Capability::Admin) {
         return param
             .or(claim)

@@ -106,6 +106,20 @@ pub fn handle(call: ExtCall) -> ExtFuture {
         let Some(authority) = authority_for(&call.ctx.kernel).await else {
             return Response::error("token authority unavailable: kernel has no chain");
         };
+        // On a project-bound kernel a token may only be scoped to that
+        // project: a `project` param naming another is refused.
+        if call.method == "auth.token.issue"
+            && let (Some(v), Some(p)) = (
+                call.ctx.verified_project.as_ref(),
+                call.params.get("project").and_then(Value::as_str),
+            )
+            && p != v.as_str()
+        {
+            return Response::error_with_kind(
+                crate::caller_principal::SCOPE_MISMATCH_KIND,
+                "auth.token.issue: 'project' differs from the verified project of this kernel",
+            );
+        }
         run(
             &authority,
             &call.method,

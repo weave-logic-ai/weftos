@@ -128,6 +128,31 @@ pub struct Request {
     /// registry (package G). Absent means unscoped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+
+    /// User-signed forward header on a call the user daemon proxies to a
+    /// project's own kernel (ADR-103 A6, Phase 2 package I). Verified by the
+    /// child against its certificate's user key; a daemon that holds no such
+    /// key refuses the request with `forward_unavailable` (never ignores
+    /// it), and the TCP relay strips the field from remote lines. Refusal
+    /// kinds: `forward_unavailable`, `forward_bad_signature`,
+    /// `forward_expired`, `forward_replayed`, `project_scope_mismatch` and
+    /// the reserved `forward_wrong_target` (a header signed for another
+    /// child currently reports as `forward_bad_signature`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward: Option<ForwardHeader>,
+}
+
+/// `{project_id, issued_at_ms, sig}`: the user key's statement that the user
+/// daemon forwards this one request (its method and params) to one child on
+/// behalf of `project_id`. The child accepts it within 5 s and once. See
+/// `clawft_weave::project_forward` for the signed bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForwardHeader {
+    pub project_id: String,
+    /// Unix milliseconds at signing.
+    pub issued_at_ms: u64,
+    /// Ed25519 signature by the user key, 128 hex chars.
+    pub sig: String,
 }
 
 impl Request {
@@ -140,6 +165,7 @@ impl Request {
             auth: None,
             proto: None,
             project: None,
+            forward: None,
         }
     }
 
@@ -152,6 +178,7 @@ impl Request {
             auth: None,
             proto: None,
             project: None,
+            forward: None,
         }
     }
 

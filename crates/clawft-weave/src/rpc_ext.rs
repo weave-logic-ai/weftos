@@ -110,6 +110,14 @@ pub struct CallerCtx {
     /// Project the client claims the request is scoped to
     /// (`Request.project`). Unverified; see [`ClaimedProject`].
     pub project: Option<ClaimedProject>,
+    /// The raw forward header of the request, unverified. Only
+    /// [`crate::caller_principal::establish`] reads it.
+    pub forward: Option<clawft_rpc::ForwardHeader>,
+    /// Project proven by a token scope, a verified forward header or this
+    /// kernel's own binding, set by the entry path (never from
+    /// `Request.project`). `None` means "claim only". See
+    /// [`crate::caller_principal`] for the honest limit.
+    pub verified_project: Option<VerifiedProject>,
     /// The connection's peer is NOT the daemon's own uid (unix socket
     /// peer credentials). Such a caller cannot use literal scope strings
     /// (`"admin"`, ...) as auth; only a token secret counts. `false` for
@@ -124,6 +132,8 @@ impl CallerCtx {
             principal: Principal::External,
             auth,
             project: None,
+            forward: None,
+            verified_project: None,
             peer_untrusted: false,
         }
     }
@@ -140,6 +150,8 @@ impl CallerCtx {
             principal: Principal::External,
             auth: req.auth.clone(),
             project: req.project.clone().map(ClaimedProject::from),
+            forward: req.forward.clone(),
+            verified_project: None,
             peer_untrusted: false,
         }
     }
@@ -170,6 +182,8 @@ pub struct ExtCtx {
     pub auth: Option<String>,
     /// Unverified client claim; see [`ClaimedProject`].
     pub project: Option<ClaimedProject>,
+    /// Verified project of the caller, if any; see [`CallerCtx::verified_project`].
+    pub verified_project: Option<VerifiedProject>,
     /// Capabilities already resolved for this caller.
     pub caps: CallerCapabilities,
 }
@@ -215,6 +229,8 @@ pub struct GateRequest<'a> {
     pub auth: Option<&'a str>,
     /// Unverified client claim (see [`ClaimedProject`]).
     pub project: Option<&'a str>,
+    /// Verified project of the caller, if any (see [`CallerCtx::verified_project`]).
+    pub verified_project: Option<&'a VerifiedProject>,
     /// Capabilities resolved for the caller (the capability check has
     /// already passed for `method`).
     pub caps: &'a CallerCapabilities,
@@ -604,6 +620,7 @@ pub async fn authorize_with(
         params,
         auth: caller.auth.as_deref(),
         project: caller.project.as_ref().map(ClaimedProject::as_str),
+        verified_project: caller.verified_project.as_ref(),
         caps,
         kernel,
     };
@@ -645,6 +662,7 @@ pub async fn dispatch_ext_with(
                 kernel: Arc::clone(kernel),
                 auth: caller.auth.clone(),
                 project: caller.project.clone(),
+                verified_project: caller.verified_project.clone(),
                 caps: caps.clone(),
             },
         })

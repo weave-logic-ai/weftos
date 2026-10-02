@@ -499,7 +499,10 @@ impl GateBackend for GovernanceGate {
             context: ctx_map,
             node_id: None,
             principal: Some(principal),
-        };
+        }
+        // ADR-103 A6: project and instance come from the kernel's own
+        // attestation; any `project_id` in the caller's context is dropped.
+        .attributed();
 
         let result = self.engine.evaluate(&request);
 

@@ -44,6 +44,7 @@ pub use handshake::{
 };
 pub use client::{DaemonClient, StreamSession, is_daemon_running, is_daemon_running_at};
 pub use protocol::{
+    ForwardHeader,
     LOG_FILE_NAME, PID_FILE_NAME, PIPE_NAME_PREFIX, Request, Response, SOCKET_NAME,
     default_pipe_name, log_path, pid_path, pipe_name_for_path, runtime_dir, runtime_paths, socket_path,
 };

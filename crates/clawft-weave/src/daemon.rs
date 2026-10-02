@@ -1094,6 +1094,9 @@ pub async fn run(
     );
     let daemon_identity = crate::node_identity::load_or_generate(&runtime_dir)
         .map_err(|e| anyhow::anyhow!("daemon identity bootstrap: {e}"))?;
+    // ADR-103 A6 (package I): a project-bound kernel attributes every
+    // governance request to its own bound project.
+    crate::caller_principal::attest_instance(&daemon_identity.node_id);
     let kernel =
         boot_kernel_with_identity(config, kernel_config, Arc::new(platform), &daemon_identity)
             .await?;
@@ -3671,7 +3674,7 @@ async fn resolve_caller_capabilities(
 /// Resolve the caller's capabilities, then run the capability check and
 /// extension gates (ADR-103 D0). `Err` is the refusal response.
 async fn authorize_caller(
-    caller: &crate::rpc_ext::CallerCtx,
+    caller: &mut crate::rpc_ext::CallerCtx,
     method: &str,
     params: &serde_json::Value,
     kernel: &Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
@@ -3694,6 +3697,10 @@ async fn authorize_caller(
             ),
         ));
     }
+    // ADR-103 A6 (Phase 2 package I): the caller's verified project comes
+    // from a token scope, a verified forward header or this kernel's own
+    // binding, never from `Request.project`; a disagreeing claim is refused.
+    caller.verified_project = crate::caller_principal::establish(caller, method, params, kernel).await?;
     let caps = resolve_caller_capabilities(caller, kernel).await;
     crate::rpc_ext::authorize(caller, &caps, method, params, kernel).await?;
     Ok(caps)
@@ -3724,11 +3731,12 @@ async fn dispatch_authorized(
     kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,
     shutdown_tx: watch::Sender<bool>,
 ) -> Response {
-    let caps = match authorize_caller(caller, &method, &params, &kernel).await {
+    let mut caller = caller.clone();
+    let caps = match authorize_caller(&mut caller, &method, &params, &kernel).await {
         Ok(caps) => caps,
         Err(denied) => return denied,
     };
-    dispatch_after_auth(caller, &caps, method, params, kernel, shutdown_tx).await
+    dispatch_after_auth(&caller, &caps, method, params, kernel, shutdown_tx).await
 }
 
 async fn dispatch_json_line<W>(
@@ -3762,7 +3770,7 @@ where
             // ADR-103 D0: one authorization point (capability check, then
             // extension gates) for every entry path, before any streaming
             // intercept or dispatch.
-            let caller =
+            let mut caller =
                 crate::rpc_ext::CallerCtx::from_request(&req).with_peer_untrusted(peer_untrusted);
             // ADR-103 D14: refuse an unsupported `proto` / malformed
             // `project` before anything else looks at the request.
@@ -3771,7 +3779,7 @@ where
             {
                 (crate::capability::CallerCapabilities::denied(), Some(refusal))
             } else {
-                match authorize_caller(&caller, &req.method, &req.params, kernel).await {
+                match authorize_caller(&mut caller, &req.method, &req.params, kernel).await {
                     Ok(caps) => (caps, None),
                     Err(denied) => (crate::capability::CallerCapabilities::denied(), Some(denied)),
                 }

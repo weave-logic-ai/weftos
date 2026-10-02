@@ -181,6 +181,7 @@ async fn owner_flow_on_the_user_daemon() {
         kernel: Arc::clone(&d.kernel),
         auth: None,
         project: None,
+        verified_project: None,
         caps: clawft_weave::capability::CallerCapabilities::anonymous(),
     };
     let issued = clawft_weave::project_cert_rpc::issue_for_register(&ctx, req).await.unwrap();

@@ -244,6 +244,7 @@ pub mod error;
 #[cfg(feature = "exochain")]
 pub mod gate;
 pub mod governance;
+pub mod governance_project;
 pub mod rule_distribution;
 #[cfg(feature = "exochain")]
 pub mod placement_vocabulary;

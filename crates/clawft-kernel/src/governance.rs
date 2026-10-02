@@ -646,12 +646,15 @@ pub struct GatePrincipal {
     /// verified source, via [`GatePrincipal::with_project`]; `None` for
     /// everything that predates Phase 2, which keeps old chain payloads
     /// byte-identical.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// Serialised, never deserialised: no payload can assert a project.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
     project_id: Option<String>,
 
     /// Node id of the kernel that evaluated the request (the project key id
     /// for a child kernel).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Serialised, never deserialised, like `project_id`.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
     instance_id: Option<String>,
 }
 
@@ -720,6 +723,14 @@ impl GatePrincipal {
     /// Attribute the action to a verified project (ADR-103 A6).
     pub fn with_project(mut self, project: &ProjectAttestation) -> Self {
         self.project_id = Some(project.project_id().to_owned());
+        self
+    }
+
+    /// Drop project and instance attribution (a kernel with no attestation
+    /// carries none, whatever the request claimed).
+    pub(crate) fn without_attribution(mut self) -> Self {
+        self.project_id = None;
+        self.instance_id = None;
         self
     }
 
@@ -807,6 +818,7 @@ impl GovernanceRequest {
             node_id: None,
             principal: Some(GatePrincipal::agent(agent_id)),
         }
+        .attributed()
     }
 
     /// Set the node ID for distributed governance evaluation.
@@ -860,13 +872,29 @@ impl GovernanceRequest {
     }
 
     /// Add a single key-value pair to the context map.
+    ///
+    /// The reserved keys ([`crate::governance_project::RESERVED_CONTEXT_KEYS`])
+    /// are the kernel's alone and are ignored here.
     pub fn with_context_entry(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.context.insert(key.into(), value.into());
+        let key = key.into();
+        if !crate::governance_project::RESERVED_CONTEXT_KEYS.contains(&key.as_str()) {
+            self.context.insert(key, value.into());
+        }
         self
     }
 
-    /// Resolve the principal for this request (explicit or synthesised).
+    /// Resolve the principal for this request (explicit or synthesised),
+    /// attributed to the kernel's attested project when it has one.
     pub fn resolved_principal(&self) -> GatePrincipal {
+        let p = self.base_principal();
+        match crate::governance_project::instance_project() {
+            Some((att, inst)) => p.with_project(att).with_instance(inst),
+            None => p,
+        }
+    }
+
+    /// The principal as the request carries it, before project attribution.
+    pub(crate) fn base_principal(&self) -> GatePrincipal {
         if let Some(p) = &self.principal {
             let mut p = p.clone();
             if p.agent_id.is_empty() {
@@ -4030,8 +4058,10 @@ mod tests {
         assert_eq!(v["project_id"], "01JB8Z3Q0V6X9KQ4M2N7T5R1WD");
         assert_eq!(v["instance_id"], "6a3803d5f059902a1c6dafbc9ba47292");
         let back: GatePrincipal = serde_json::from_value(v).unwrap();
-        assert_eq!(back, p);
-        assert_eq!(back.project_id(), Some("01JB8Z3Q0V6X9KQ4M2N7T5R1WD"));
+        // Serialised for audit, never deserialised (nothing can assert it).
+        assert_eq!(back.project_id(), None);
+        assert_eq!(back.instance_id(), None);
+        assert_eq!(back.agent_id, p.agent_id);
     }
 
     // ── WEFT-506: explicit EffectVector schema per gate family ──

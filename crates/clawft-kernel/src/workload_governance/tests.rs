@@ -356,3 +356,48 @@ fn scripted_permit_and_deny_events_survive_chain_save_and_load() {
         ]
     );
 }
+
+// ── ADR-103 A6 (Phase 2 package I): permits match the verified project ──
+
+mod project_permits {
+    use super::*;
+    use crate::governance::{AttestSource, ProjectAttestation};
+
+    const P1: &str = "01JB8Z3Q0V6X9KQ4M2N7T5R1WD";
+    const P2: &str = "01JB8Z3Q0V6X9KQ4M2N7T5R1WE";
+
+    fn gate_for(project: Option<&str>) -> WorkloadGate {
+        let mut permit = cog_place_permit();
+        permit.projects = vec![P1.into()];
+        let g = WorkloadGate::new(0.8, false).with_permit(permit).unwrap();
+        match project {
+            Some(p) => g.with_attestation(ProjectAttestation::from_verified(p, AttestSource::BoundKernel)),
+            None => g,
+        }
+    }
+
+    #[test]
+    fn a_project_scoped_permit_matches_only_the_verified_project() {
+        assert!(!gate_for(Some(P1)).check("a", "workload.place", &cog_ctx()).is_deny());
+        assert!(gate_for(Some(P2)).check("a", "workload.place", &cog_ctx()).is_deny());
+        assert!(gate_for(None).check("a", "workload.place", &cog_ctx()).is_deny());
+    }
+
+    #[test]
+    fn a_project_named_in_the_request_context_is_not_a_source() {
+        let mut ctx = cog_ctx();
+        ctx["project_id"] = json!(P1);
+        ctx["workload"]["project_id"] = json!(P1);
+        assert!(gate_for(Some(P2)).check("a", "workload.place", &ctx).is_deny());
+        assert!(gate_for(None).check("a", "workload.place", &ctx).is_deny());
+    }
+
+    #[test]
+    fn permit_rules_without_projects_serialise_as_before() {
+        let v = serde_json::to_value(cog_place_permit()).unwrap();
+        assert!(v.get("projects").is_none());
+        let mut bad = cog_place_permit();
+        bad.projects = vec![String::new()];
+        assert!(bad.validate().is_err());
+    }
+}
