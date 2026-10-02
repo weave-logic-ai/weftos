@@ -138,17 +138,35 @@ fn identify(call: &ExtCall, authority: Option<&clawft_kernel::token_authority::T
 }
 
 /// The project's manifest limits; the project must be registered and active.
+///
+/// The limits are cached on first use (editing a manifest does not raise them
+/// until `shared.reload`), but whether the project is still registered and
+/// active is checked on every call, so archiving or unregistering a project
+/// (the `weft project` commands edit the manifest store directly) stops the
+/// service at once instead of at the next reload or restart.
 fn limits_for(project: &str) -> Result<SharedLimits, Response> {
-    state::cached_limits(project, || load_limits(project))
+    let limits = state::cached_limits(project, || load_limits(project))?;
+    if active_manifest(project).is_none() {
+        state::invalidate(project);
+        return Err(unknown_project());
+    }
+    Ok(limits)
+}
+
+fn unknown_project() -> Response {
+    refuse("project_unknown", "project is not registered and active")
+}
+
+fn active_manifest(project: &str) -> Option<clawft_types::project::ProjectManifest> {
+    let dir = crate::scope_gate::manifests_dir()?;
+    read_manifest(&dir, project).ok().flatten().filter(|m| m.state == ProjectState::Active)
 }
 
 fn load_limits(project: &str) -> Result<SharedLimits, Response> {
-    let dir = crate::scope_gate::manifests_dir()
-        .ok_or_else(|| refuse("project_store_unavailable", "no manifest store"))?;
-    match read_manifest(&dir, project) {
-        Ok(Some(m)) if m.state == ProjectState::Active => Ok(SharedLimits::from_manifest(&m)),
-        _ => Err(refuse("project_unknown", "project is not registered and active")),
+    if crate::scope_gate::manifests_dir().is_none() {
+        return Err(refuse("project_store_unavailable", "no manifest store"));
     }
+    active_manifest(project).map(|m| SharedLimits::from_manifest(&m)).ok_or_else(unknown_project)
 }
 
 async fn record_use(kernel: &KernelRef, project: &str, service: &str, tokens: u64) {

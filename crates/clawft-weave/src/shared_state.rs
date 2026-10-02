@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 
 use clawft_kernel::embedding::EmbeddingProvider;
 use clawft_service_llm::{LlmClient, SharedLlmClient};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::shared_meter::{SharedLimits, UsageMeter};
 
@@ -16,6 +15,9 @@ use crate::shared_meter::{SharedLimits, UsageMeter};
 pub const PER_PROJECT_CONCURRENT: usize = 2;
 /// In-flight `shared.*` calls allowed in the whole daemon.
 pub const GLOBAL_CONCURRENT: usize = 4;
+/// How long a project that was refused for want of a global slot counts as
+/// waiting (it must retry; `shared.*` does not queue).
+pub const WAITING_TTL: Duration = Duration::from_secs(3);
 /// Wall-clock cap on one `shared.llm.chat`: it bounds how long the user's own
 /// next turn can wait behind it on the single model slot.
 pub const LLM_CALL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -30,8 +32,7 @@ const MODELS_TIMEOUT: Duration = Duration::from_secs(3);
 
 static METER: OnceLock<UsageMeter> = OnceLock::new();
 static LIMITS: Mutex<Option<HashMap<String, SharedLimits>>> = Mutex::new(None);
-static GLOBAL: OnceLock<Arc<Semaphore>> = OnceLock::new();
-static PER_PROJECT: Mutex<Option<HashMap<String, Arc<Semaphore>>>> = Mutex::new(None);
+static SLOTS: Mutex<Option<FairSlots>> = Mutex::new(None);
 static MODELS: Mutex<Option<(Instant, Duration, Vec<String>)>> = Mutex::new(None);
 static EMBEDDER: tokio::sync::OnceCell<Arc<dyn EmbeddingProvider>> =
     tokio::sync::OnceCell::const_new();
@@ -63,27 +64,106 @@ pub fn reload() {
     *LIMITS.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
-/// Held for the duration of one call.
+/// Drop one project's cached limits (it was archived, unregistered or
+/// registered again): the next call reloads them and re-checks that the
+/// project is registered and active.
+pub fn invalidate(project: &str) {
+    if let Some(map) = LIMITS.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        map.remove(project);
+    }
+}
+
+/// Who holds the daemon's `shared.*` slots, and who is waiting for one.
+///
+/// A plain pool lets two busy projects hold every global slot for as long as
+/// they keep calling, and a third never gets in. This pool keeps the global
+/// cap and the per-project cap, and adds one rule: a project that already
+/// holds a slot may not take another while the free slots are needed by
+/// projects that hold none and were refused within [`WAITING_TTL`]. The
+/// starved project gets the next slot that frees up; the holders get theirs
+/// back when nobody is waiting.
+#[derive(Debug)]
+pub struct FairSlots {
+    global: usize,
+    per_project: usize,
+    ttl: Duration,
+    in_flight: HashMap<String, usize>,
+    total: usize,
+    waiting: HashMap<String, Instant>,
+}
+
+impl FairSlots {
+    /// A pool of `global` slots, at most `per_project` of them per project.
+    pub fn new(global: usize, per_project: usize, ttl: Duration) -> Self {
+        Self { global, per_project, ttl, in_flight: HashMap::new(), total: 0, waiting: HashMap::new() }
+    }
+
+    /// Take a slot for `project` at `now`, or say there is none for it.
+    pub fn try_take(&mut self, project: &str, now: Instant) -> bool {
+        let ttl = self.ttl;
+        self.waiting.retain(|_, at| now.saturating_duration_since(*at) < ttl);
+        let mine = self.in_flight.get(project).copied().unwrap_or(0);
+        if mine >= self.per_project {
+            return false;
+        }
+        if self.total >= self.global {
+            if mine == 0 {
+                self.waiting.insert(project.to_owned(), now);
+            }
+            return false;
+        }
+        if mine > 0 {
+            let starved = self
+                .waiting
+                .keys()
+                .filter(|p| p.as_str() != project && !self.in_flight.contains_key(p.as_str()))
+                .count();
+            if self.global - self.total <= starved {
+                return false;
+            }
+        }
+        *self.in_flight.entry(project.to_owned()).or_insert(0) += 1;
+        self.total += 1;
+        self.waiting.remove(project);
+        true
+    }
+
+    /// Give back a slot `project` holds.
+    pub fn release(&mut self, project: &str) {
+        if let Some(n) = self.in_flight.get_mut(project) {
+            *n -= 1;
+            self.total -= 1;
+            if *n == 0 {
+                self.in_flight.remove(project);
+            }
+        }
+    }
+
+    /// Slots `project` holds (tests).
+    pub fn held(&self, project: &str) -> usize {
+        self.in_flight.get(project).copied().unwrap_or(0)
+    }
+}
+
+/// Held for the duration of one call; the slot goes back on drop.
 pub struct Permits {
-    _global: OwnedSemaphorePermit,
-    _project: OwnedSemaphorePermit,
+    project: String,
+}
+
+impl Drop for Permits {
+    fn drop(&mut self) {
+        if let Some(slots) = SLOTS.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            slots.release(&self.project);
+        }
+    }
 }
 
 /// Take a per-project and a global slot without waiting; `None` when either
-/// is full.
+/// is full, or when the free ones are kept for a project that is waiting.
 pub fn try_acquire(project: &str) -> Option<Permits> {
-    let global = GLOBAL.get_or_init(|| Arc::new(Semaphore::new(GLOBAL_CONCURRENT)));
-    let per = {
-        let mut g = PER_PROJECT.lock().unwrap_or_else(|e| e.into_inner());
-        Arc::clone(
-            g.get_or_insert_with(HashMap::new)
-                .entry(project.to_owned())
-                .or_insert_with(|| Arc::new(Semaphore::new(PER_PROJECT_CONCURRENT))),
-        )
-    };
-    let project_permit = per.try_acquire_owned().ok()?;
-    let global_permit = Arc::clone(global).try_acquire_owned().ok()?;
-    Some(Permits { _global: global_permit, _project: project_permit })
+    let mut g = SLOTS.lock().unwrap_or_else(|e| e.into_inner());
+    let slots = g.get_or_insert_with(|| FairSlots::new(GLOBAL_CONCURRENT, PER_PROJECT_CONCURRENT, WAITING_TTL));
+    slots.try_take(project, Instant::now()).then(|| Permits { project: project.to_owned() })
 }
 
 /// `model` if the parent lists it, else `None` (use the parent default). A
@@ -144,4 +224,87 @@ pub fn install_llm(client: SharedLlmClient) {
 #[cfg(any(test, feature = "test-support"))]
 pub fn install_embedder(embedder: Arc<dyn EmbeddingProvider>) {
     let _ = EMBEDDER.set(embedder);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const A: &str = "01J0000000000000000000000A";
+    const B: &str = "01J0000000000000000000000B";
+    const C: &str = "01J0000000000000000000000C";
+
+    fn pool() -> FairSlots {
+        FairSlots::new(GLOBAL_CONCURRENT, PER_PROJECT_CONCURRENT, WAITING_TTL)
+    }
+
+    #[test]
+    fn two_projects_cannot_keep_a_third_out_of_the_global_slots() {
+        let mut p = pool();
+        let t0 = Instant::now();
+        // A and B fill all four slots (two each).
+        assert!(p.try_take(A, t0) && p.try_take(A, t0) && p.try_take(B, t0) && p.try_take(B, t0));
+        // C is refused, and is now waiting.
+        assert!(!p.try_take(C, t0));
+        // A finishes one call and immediately wants another: the free slot is C's.
+        p.release(A);
+        assert!(!p.try_take(A, t0), "a holder may not take the slot a starved project is waiting for");
+        assert!(p.try_take(C, t0), "the starved project gets it");
+        assert_eq!((p.held(A), p.held(B), p.held(C)), (1, 2, 1));
+        // With nobody waiting any more the holders are not held back.
+        p.release(B);
+        assert!(p.try_take(B, t0));
+    }
+
+    #[test]
+    fn a_waiting_project_that_goes_away_stops_holding_slots_back_after_the_ttl() {
+        let mut p = pool();
+        let t0 = Instant::now();
+        for id in [A, A, B, B] {
+            assert!(p.try_take(id, t0));
+        }
+        assert!(!p.try_take(C, t0));
+        p.release(A);
+        assert!(!p.try_take(A, t0));
+        // C never came back.
+        let later = t0 + WAITING_TTL + Duration::from_millis(1);
+        assert!(p.try_take(A, later));
+    }
+
+    #[test]
+    fn the_per_project_cap_and_the_global_cap_still_hold() {
+        let mut p = pool();
+        let t0 = Instant::now();
+        assert!(p.try_take(A, t0) && p.try_take(A, t0));
+        assert!(!p.try_take(A, t0), "per-project cap");
+        assert!(p.try_take(B, t0) && p.try_take(B, t0));
+        assert!(!p.try_take(C, t0), "global cap");
+        for _ in 0..2 {
+            p.release(A);
+            p.release(B);
+        }
+        assert_eq!(p.total, 0);
+        // Releasing more than was taken is harmless.
+        p.release(A);
+        assert_eq!(p.total, 0);
+    }
+
+    #[test]
+    fn invalidate_drops_one_projects_cached_limits_only() {
+        let limits = SharedLimits::default();
+        let (pa, pb) = ("01J0000000000000000000INVA", "01J0000000000000000000INVB");
+        let loads = std::cell::Cell::new(0);
+        let load = || -> Result<SharedLimits, ()> {
+            loads.set(loads.get() + 1);
+            Ok(limits)
+        };
+        cached_limits(pa, load).unwrap();
+        cached_limits(pb, load).unwrap();
+        cached_limits(pa, load).unwrap();
+        assert_eq!(loads.get(), 2, "served from the cache");
+        invalidate(pa);
+        cached_limits(pa, load).unwrap();
+        cached_limits(pb, load).unwrap();
+        assert_eq!(loads.get(), 3, "only the invalidated project reloaded");
+    }
 }

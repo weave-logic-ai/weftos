@@ -61,6 +61,7 @@ impl Supervisor {
         };
         self.file_adopted_session(id, pid);
         self.set_state(id, slot, ChildState::Running);
+        self.note_build(id).await;
         self.chain("project.kernel.adopted", json!({"project_id": id, "pid": pid}));
         self.spawn_monitor(id.to_owned(), Arc::clone(slot), g);
         Ok(())
@@ -108,8 +109,149 @@ impl Supervisor {
                 Found::Unverifiable { .. } => {}
             }
         }
+        self.retry_handshake_leftovers(&mut found).await;
         *self.leftovers.lock().unwrap_or_else(|e| e.into_inner()) = found.clone();
         found
+    }
+
+    /// Leftovers whose pid, executable and lock verified but whose socket did
+    /// not answer yet (a child still booting when its daemon restarted):
+    /// look again every `ready_poll` for up to `ready_timeout`, adopting the
+    /// ones that now answer. Anything else stays as filed.
+    async fn retry_handshake_leftovers(self: &Arc<Self>, found: &mut [Found]) {
+        let waiting = |f: &Found| {
+            matches!(f, Found::Unverifiable { pid: Some(_), reason: adopt::Skip::HandshakeFailed(_), .. })
+        };
+        let deadline = tokio::time::Instant::now() + self.cfg.ready_timeout;
+        loop {
+            let mut pending = false;
+            for f in found.iter_mut().filter(|f| waiting(f)) {
+                let Found::Unverifiable { id, .. } = f else { continue };
+                let id = id.clone();
+                let rescan = adopt::scan_one(&self.run_dir(&id), &id, &self.cfg.exe, self.deps.io.as_ref()).await;
+                match rescan {
+                    Some(Found::Adopted { id, pid }) => {
+                        let slot = self.slot(&id);
+                        let _g = slot.gate.lock().await;
+                        *f = match self.adopt_one(&id, pid, &slot).await {
+                            Ok(()) => Found::Adopted { id, pid },
+                            Err(reason) => Found::Unverifiable { id, pid: Some(pid), reason },
+                        };
+                    }
+                    Some(other) => {
+                        pending |= waiting(&other);
+                        *f = other;
+                    }
+                    None => {}
+                }
+            }
+            if !pending || tokio::time::Instant::now() >= deadline {
+                return;
+            }
+            tokio::time::sleep(self.cfg.ready_poll).await;
+        }
+    }
+
+    /// [`retry_handshake_leftovers`](Self::retry_handshake_leftovers) over
+    /// the leftovers the last scan kept.
+    pub(super) async fn reconcile_leftovers(self: &Arc<Self>) {
+        let mut left = self.leftovers.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if left.iter().any(|f| {
+            matches!(f, Found::Unverifiable { pid: Some(_), reason: adopt::Skip::HandshakeFailed(_), .. })
+        }) {
+            self.retry_handshake_leftovers(&mut left).await;
+            *self.leftovers.lock().unwrap_or_else(|e| e.into_inner()) = left;
+        }
+    }
+
+    /// One liveness pass at `now`: a `running` child whose registry session
+    /// has stayed expired (three missed heartbeats, no new registration) for
+    /// `lost_heartbeat_grace` is wedged or cut off. It is treated as a crash:
+    /// stopped (pid re-verified before any signal) and restarted inside its
+    /// restart budget, or marked `failed` when the budget is spent. Returns
+    /// the ids acted on.
+    pub async fn liveness_pass(self: &Arc<Self>, now: Instant) -> Vec<String> {
+        let running: Vec<String> = self
+            .status_all()
+            .await
+            .into_iter()
+            .filter(|s| s.state == ChildState::Running)
+            .map(|s| s.project_id)
+            .collect();
+        let mut acted = Vec::new();
+        for id in running {
+            let slot = self.slot(&id);
+            let due = {
+                let lost = self.deps.activity.lost_heartbeat(&id);
+                let mut st = slot.st();
+                if !lost {
+                    st.expired_since = None;
+                    false
+                } else {
+                    let since = *st.expired_since.get_or_insert(now);
+                    now.saturating_duration_since(since) >= self.cfg.lost_heartbeat_grace
+                }
+            };
+            if due && self.restart_lost(&id, &slot).await {
+                acted.push(id);
+            }
+        }
+        acted
+    }
+
+    async fn restart_lost(self: &Arc<Self>, id: &str, slot: &Arc<Slot>) -> bool {
+        let _g = slot.gate.lock().await;
+        // Re-check under the gate: a stop, restart or re-registration may
+        // have happened while this pass waited for it.
+        if slot.st().state != ChildState::Running || !self.deps.activity.lost_heartbeat(id) {
+            return false;
+        }
+        let (decision, old_pid) = {
+            let decision = {
+                let mut st = slot.st();
+                st.expired_since = None;
+                st.tracker.as_mut().map(|t| t.on_crash(Instant::now()))
+            };
+            (decision, self.probe_running(id).await)
+        };
+        if let Err(e) = self.stop_locked(id, slot, "heartbeat").await {
+            tracing::warn!(project = %id, error = %e, "could not stop a child that lost its heartbeat");
+            return false;
+        }
+        self.chain(
+            "project.kernel.exited",
+            json!({"project_id": id, "pid": old_pid, "clean": false, "reason": "heartbeat lost"}),
+        );
+        match decision {
+            Some(Decision::Restart { .. }) => {
+                slot.st().restarts += 1;
+                match self.start_locked(id, slot).await {
+                    Ok(_) => {
+                        self.chain("project.kernel.restarted", json!({"project_id": id, "reason": "heartbeat lost"}));
+                        true
+                    }
+                    Err(e) => {
+                        tracing::warn!(project = %id, error = %e, "restart after a lost heartbeat failed");
+                        false
+                    }
+                }
+            }
+            other => {
+                let why = match other {
+                    Some(Decision::GiveUp { restarts_in_window }) => {
+                        format!("{restarts_in_window} restarts inside the window, last stop: heartbeat lost")
+                    }
+                    _ => "no restart policy".to_owned(),
+                };
+                slot.st().failed = Some(why.clone());
+                self.chain("project.kernel.failed", json!({"project_id": id, "reason": why}));
+                self.launcher.revoke_tokens(id);
+                self.launcher.clean_spawn_file(id);
+                slot.st().state = ChildState::Failed;
+                self.set_state(id, slot, ChildState::Failed);
+                true
+            }
+        }
     }
 
     /// One idle pass at `now_unix`: stop every running project that has been
@@ -152,6 +294,7 @@ impl Supervisor {
                 tokio::time::sleep(every).await;
                 let Some(this) = weak.upgrade() else { return };
                 this.idle_pass(state::now_unix()).await;
+                this.liveness_pass(Instant::now()).await;
             }
         });
     }

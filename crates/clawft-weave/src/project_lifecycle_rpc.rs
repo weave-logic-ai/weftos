@@ -5,7 +5,7 @@
 //! |---|---|---|
 //! | `project.start` `{id}` | `Admin` | start the project's child kernel (idempotent) |
 //! | `project.ensure_running` `{id}` | `Admin` | same, for the resolver: returns the child socket |
-//! | `project.stop` `{id}` | `Admin` | graceful stop; not restarted |
+//! | `project.stop` `{id}` | `Admin` | graceful stop; not restarted; `unmanaged_pid` names a live kernel the supervisor does not manage |
 //! | `project.restart` `{id}` | `Admin` | stop, clear a `failed` state, start |
 //! | `project.status` `{id?}` | `Admin` | one project, or every child plus unverifiable leftovers |
 //! | `project.stop_all` | `Admin` | stop every child (user-daemon stop cascade) |
@@ -103,10 +103,16 @@ pub fn handle(call: ExtCall) -> ExtFuture {
                 sup.ensure_running(&id).await.map(|r| running_json(&id, &r))
             }
             "project.restart" => sup.restart(&id).await.map(|r| running_json(&id, &r)),
-            "project.stop" => sup
-                .stop(&id)
-                .await
-                .map(|was| json!({"project_id": id, "stopped": was})),
+            "project.stop" => sup.stop(&id).await.map(|was| {
+                let mut v = json!({"project_id": id, "stopped": was});
+                // Not running under the supervisor is not the same as not
+                // running: a verified-but-refused leftover is still there.
+                if !was && let Some((pid, why)) = sup.unmanaged(&id) {
+                    v["unmanaged_pid"] = json!(pid);
+                    v["unmanaged_reason"] = json!(why);
+                }
+                v
+            }),
             "project.status" => Ok(sup.status(&id).await.to_json()),
             other => return invalid(format!("unknown method: {other}")),
         };

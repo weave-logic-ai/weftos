@@ -35,11 +35,24 @@ fn failed_reason(run_dir: &Path) -> Option<String> {
     (state == ChildState::Failed).then(|| v["failed_reason"].as_str().unwrap_or("restart budget spent").to_owned())
 }
 
+/// What the supervisor says about one child.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildView {
+    /// State machine position (`running`, `starting`, `idle-stopping`, ...).
+    pub state: String,
+    /// The pid it supervises.
+    pub pid: Option<u32>,
+    /// The kernel runs another build than the user daemon.
+    pub stale_build: bool,
+    /// Build stamp the kernel reported, when it did.
+    pub kernel_sha: Option<String>,
+}
+
 /// What the user daemon's supervisor says about its children
-/// (`project.status`): project id -> (state, pid). `None` when the daemon
+/// (`project.status`): project id -> [`ChildView`]. `None` when the daemon
 /// cannot be reached or does not answer within two seconds, so the process
 /// table alone never vouches for a child.
-pub fn supervisor_view(run_root: &Path) -> Option<std::collections::HashMap<String, (String, Option<u32>)>> {
+pub fn supervisor_view(run_root: &Path) -> Option<std::collections::HashMap<String, ChildView>> {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::time::Duration;
     let mut s = std::os::unix::net::UnixStream::connect(run_root.join(crate::SOCKET_NAME)).ok()?;
@@ -57,7 +70,12 @@ pub fn supervisor_view(run_root: &Path) -> Option<std::collections::HashMap<Stri
             .filter_map(|k| {
                 Some((
                     k.get("project_id")?.as_str()?.to_owned(),
-                    (k.get("state")?.as_str()?.to_owned(), k.get("pid").and_then(|p| p.as_u64()).map(|p| p as u32)),
+                    ChildView {
+                        state: k.get("state")?.as_str()?.to_owned(),
+                        pid: k.get("pid").and_then(|p| p.as_u64()).map(|p| p as u32),
+                        stale_build: k.get("stale_build").and_then(|b| b.as_bool()).unwrap_or(false),
+                        kernel_sha: k.get("kernel_sha").and_then(|b| b.as_str()).map(str::to_owned),
+                    },
                 ))
             })
             .collect(),
@@ -67,7 +85,13 @@ pub fn supervisor_view(run_root: &Path) -> Option<std::collections::HashMap<Stri
 /// All child-kernel findings for `env.home`.
 pub fn check(env: &DoctorEnv, procs: &ProcTable) -> Vec<Finding> {
     let c = Component::Runtime;
-    let run_root = user_runtime_root(&env.home);
+    // A `WEFTOS_RUNTIME_DIR` override is the user daemon's root (sandboxes
+    // and tests); only without one is it `~/.weftos/run`. Never dial the real
+    // home's daemon on behalf of an isolated run.
+    let run_root = match env.runtime_source {
+        crate::doctor::env::RuntimeSource::EnvOverride => env.runtime_dir.clone(),
+        _ => user_runtime_root(&env.home),
+    };
     let user_daemon_alive = read_pid(&run_root.join(PID_FILE_NAME)).is_some_and(|p| procs.alive(p));
     let supervisor = if user_daemon_alive { supervisor_view(&run_root) } else { None };
     let mut out = Vec::new();
@@ -111,11 +135,33 @@ pub fn check(env: &DoctorEnv, procs: &ProcTable) -> Vec<Finding> {
                 .unwrap_or_default();
             if is_child_command(command, &id) {
                 if user_daemon_alive {
-                    match &supervisor {
-                        Some(view) if view.get(&id).is_some_and(|(st, p)| st == "running" && *p == Some(pid)) => {
-                            children += 1;
+                    // `starting` (an automatic restart) and `idle-stopping`
+                    // are states of a supervised child, not signs of a stray.
+                    let supervised = supervisor.as_ref().and_then(|v| v.get(&id)).filter(|c| {
+                        c.pid == Some(pid) && matches!(c.state.as_str(), "running" | "starting" | "idle-stopping")
+                    });
+                    match (&supervisor, supervised) {
+                        (Some(_), Some(cv)) => {
+                            if cv.state == "running" {
+                                children += 1;
+                            }
+                            if cv.stale_build {
+                                out.push(
+                                    Finding::new(
+                                        c,
+                                        format!("child:{id}:stale-build"),
+                                        Severity::Warn,
+                                        format!(
+                                            "project {id}: kernel pid {pid} runs build {} but the user daemon is a \
+                                             different build (`weaver update` keeps project kernels running)",
+                                            cv.kernel_sha.as_deref().map_or("?", |s| &s[..s.len().min(12)])
+                                        ),
+                                    )
+                                    .remedy(format!("`weaver kernel restart --project {id}` starts it on the current build")),
+                                );
+                            }
                         }
-                        Some(_) => out.push(
+                        (Some(_), None) => out.push(
                             Finding::new(
                                 c,
                                 format!("child:{id}:unsupervised"),
@@ -127,7 +173,7 @@ pub fn check(env: &DoctorEnv, procs: &ProcTable) -> Vec<Finding> {
                             )
                             .remedy(format!("`weaver kernel start --project {id}` adopts a verified child; or restart the user daemon")),
                         ),
-                        None => unconfirmed += 1,
+                        (None, _) => unconfirmed += 1,
                     }
                 }
                 if !user_daemon_alive {
@@ -344,5 +390,60 @@ mod tests {
         std::fs::write(user_runtime_root(&env.home).join(ID).join("kernel.pid"), "4242").unwrap();
         let (env, procs) = with_ps(env, "1 init\n");
         assert!(check(&env, &procs).is_empty());
+    }
+
+    fn live_user_daemon(env: &DoctorEnv, root: &std::path::Path) -> (DoctorEnv, ProcTable) {
+        std::fs::write(root.join(ID).join("kernel.pid"), "4242").unwrap();
+        std::fs::write(root.join("kernel.pid"), "100").unwrap();
+        let ps = format!(
+            "100 /u/weaver kernel start --foreground --profile user\n\
+             4242 /u/weaver kernel start --foreground --profile project --project {ID}\n"
+        );
+        with_ps(env.clone(), &ps)
+    }
+
+    #[test]
+    fn a_starting_or_idle_stopping_child_is_not_unsupervised() {
+        let (_t, env) = setup();
+        let root = user_runtime_root(&env.home);
+        let (env, procs) = live_user_daemon(&env, &root);
+        serve_status(&root, serde_json::json!({"ok": true, "result": {"children": [
+            {"project_id": ID, "state": "starting", "pid": 4242}], "unverifiable": []}}));
+        // An automatic restart is in flight: no false WARN, and not counted as running.
+        assert!(check(&env, &procs).is_empty(), "{:?}", ids(&check(&env, &procs)));
+    }
+
+    #[test]
+    fn a_child_on_an_older_build_than_the_daemon_is_reported() {
+        let (_t, env) = setup();
+        let root = user_runtime_root(&env.home);
+        let (env, procs) = live_user_daemon(&env, &root);
+        serve_status(&root, serde_json::json!({"ok": true, "result": {"children": [
+            {"project_id": ID, "state": "running", "pid": 4242,
+             "kernel_sha": "0123456789abcdef0123", "stale_build": true}], "unverifiable": []}}));
+        let f = check(&env, &procs);
+        assert_eq!(ids(&f), [format!("child:{ID}:stale-build"), "children".to_owned()]);
+        assert!(f[0].message.contains("0123456789ab") && !f[0].message.contains("0123456789abc"));
+        assert!(f[0].remedy.as_deref().is_some_and(|r| r.contains(&format!("restart --project {ID}"))));
+    }
+
+    #[test]
+    fn a_runtime_dir_override_is_the_run_root_and_the_real_home_is_not_dialled() {
+        let t = tempfile::Builder::new().prefix("dch").tempdir_in("/tmp").unwrap();
+        let mut env = test_env(t.path());
+        // The home's own run root holds a decoy user daemon that would
+        // report a healthy child; an isolated run must never ask it.
+        let home_root = user_runtime_root(&env.home);
+        std::fs::create_dir_all(home_root.join(ID)).unwrap();
+        serve_status(&home_root, serde_json::json!({"ok": true, "result": {"children": [
+            {"project_id": ID, "state": "running", "pid": 4242}], "unverifiable": []}}));
+        let rt = t.path().join("rt");
+        std::fs::create_dir_all(rt.join(ID)).unwrap();
+        std::fs::write(rt.join(ID).join("kernel.pid"), "4242").unwrap();
+        env.runtime_source = crate::doctor::env::RuntimeSource::EnvOverride;
+        env.runtime_dir = rt;
+        let ps = format!("4242 /u/weaver kernel start --foreground --profile project --project {ID}\n");
+        let (env, procs) = with_ps(env, &ps);
+        assert_eq!(ids(&check(&env, &procs)), [format!("child:{ID}:orphan")]);
     }
 }

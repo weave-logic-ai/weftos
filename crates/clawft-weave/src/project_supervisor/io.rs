@@ -24,6 +24,11 @@ pub struct ChildHandshake {
     pub project_id: Option<String>,
     /// The kernel's own pid.
     pub pid: u32,
+    /// The build stamp the kernel reports (`BUILD_GIT_HASH`); empty from a
+    /// kernel too old to say.
+    pub sha: String,
+    /// The crate version the kernel reports.
+    pub version: String,
 }
 
 /// Calls to a child kernel.
@@ -63,7 +68,7 @@ impl ChildIo for RpcChildIo {
             let mut client = DaemonClient::connect_path(socket).await?;
             let resp = client.call(Request::new("kernel.handshake")).await.ok()?;
             let h: Handshake = serde_json::from_value(resp.result?).ok()?;
-            Some(ChildHandshake { project_id: h.project_id, pid: h.pid })
+            Some(ChildHandshake { project_id: h.project_id, pid: h.pid, sha: h.sha, version: h.version })
         };
         tokio::time::timeout(CALL_TIMEOUT, call).await.ok().flatten()
     }

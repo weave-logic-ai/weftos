@@ -53,6 +53,13 @@ pub struct SupervisorConfig {
     pub idle_poll: Duration,
     /// Poll interval for an adopted child's liveness.
     pub exit_poll: Duration,
+    /// This daemon's build stamp (`BUILD_GIT_HASH`): a child whose handshake
+    /// reports another one runs a stale binary (reported, never restarted).
+    pub build_sha: String,
+    /// How long a `running` child's registry session may stay expired
+    /// (three missed heartbeats and no re-registration) before the
+    /// supervisor treats the child as crashed and restarts it.
+    pub lost_heartbeat_grace: Duration,
 }
 
 impl SupervisorConfig {
@@ -74,6 +81,8 @@ impl SupervisorConfig {
             ready_poll: Duration::from_millis(100),
             idle_poll: Duration::from_secs(30),
             exit_poll: Duration::from_millis(500),
+            build_sha: env!("BUILD_GIT_HASH").to_owned(),
+            lost_heartbeat_grace: Duration::from_secs(2 * crate::mesh_local_registry::HEARTBEAT_SECS),
         }
     }
 }
@@ -240,6 +249,13 @@ pub struct Status {
     pub last_exit_code: Option<i32>,
     /// Why the project is `failed`.
     pub failed_reason: Option<String>,
+    /// Build stamp the running kernel reported when it became ready.
+    pub kernel_sha: Option<String>,
+    /// Crate version the running kernel reported.
+    pub kernel_version: Option<String>,
+    /// The kernel runs another build than this daemon (typically after
+    /// `weaver update`, which keeps children running).
+    pub stale_build: bool,
 }
 
 impl Status {

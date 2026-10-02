@@ -223,7 +223,70 @@ async fn identity_changes(
     wait_gone(pid2).await;
     let r = call(sock, "project.ensure_running", json!({"id": fx.id}), Some("admin")).await;
     assert_eq!(r["error_kind"], "project_revoked", "revoke is terminal: {r}");
+
+    repair_found_a_revoke_blocks_restart(fx, sock, &env, &ukid).await;
     clawft_types::runtime_paths::set_user_profile(false);
+}
+
+/// d302d81c item 3: a revoke that only `project.identity.repair` discovers
+/// (the journal was damaged after it was written, so no revoke RPC ran its
+/// hooks) still stops the child, writes the terminal marker, and refuses
+/// both `project.restart` and `project.ensure_running`.
+async fn repair_found_a_revoke_blocks_restart(
+    fx: &Fixture,
+    sock: &std::path::Path,
+    env: &clawft_weave::project_cert_rpc::CertEnv,
+    ukid: &str,
+) {
+    use clawft_kernel::project_identity as ident;
+    use clawft_types::project::cert::PopOp;
+    use clawft_weave::project_cert_rpc::{RegisterRequest, SpawnInfo, claim_nonce, issue_challenge, register, revoke, root_sha256};
+    use clawft_weave::project_supervisor::child::pid_alive;
+
+    // A second project, certified, with a running child.
+    let root2 = fx.tmp.path().join("proj2");
+    std::fs::create_dir_all(&root2).unwrap();
+    let m2 = clawft_types::project::adopt_or_init(&root2, &fx.mdir, Some("second")).unwrap();
+    let id2 = m2.id.clone();
+    let k = ed25519_dalek::SigningKey::from_bytes(&[31u8; 32]);
+    let n = issue_challenge(&id2).unwrap();
+    register(
+        env,
+        RegisterRequest {
+            project_id: id2.clone(),
+            project_pubkey: k.verifying_key().to_bytes(),
+            root_sha256: root_sha256(&m2.root),
+            spawn: SpawnInfo { pid: 1, exe_sha: "ab".repeat(32) },
+            pop_sig: ident::pop_sign(&k, PopOp::Register, ukid, &n, &id2).unwrap(),
+            nonce: claim_nonce(&n, &id2).unwrap(),
+        },
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    let r = call(sock, "project.ensure_running", json!({"id": id2}), Some("admin")).await;
+    assert_eq!(r["ok"], true, "{r}");
+    let pid = r["result"]["pid"].as_u64().unwrap() as u32;
+
+    // The revoke lands in the journal and on the chain, but no hook runs
+    // (the daemon was down, say), and the journal is then damaged.
+    revoke(env, &json!({"id": id2, "reason": "found by repair"})).unwrap();
+    let marker = fx.run_root.join(&id2).join("revoked");
+    assert!(!marker.exists(), "precondition: nobody wrote the marker");
+    std::fs::write(fx.mdir.join(clawft_kernel::project_identity::JOURNAL_FILE), "garbage\n").unwrap();
+
+    let r = call(sock, "project.identity.repair", json!({}), Some("admin")).await;
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(
+        r["result"]["key_changes"].as_array().is_some_and(|c| c.iter().any(|x| x["id"] == id2.as_str() && x["revoked"] == true)),
+        "repair reports the revoke: {r}"
+    );
+    wait_gone(pid).await;
+    assert!(marker.exists(), "repair wrote the terminal marker");
+    for m in ["project.restart", "project.ensure_running", "project.start"] {
+        let r = call(sock, m, json!({"id": id2}), Some("admin")).await;
+        assert_eq!(r["error_kind"], "project_revoked", "{m} after a revoke found by repair: {r}");
+    }
+    assert!(!pid_alive(pid));
 }
 
 async fn wait_gone(pid: u32) {

@@ -31,6 +31,14 @@ impl Activity {
 pub trait ActivitySource: Send + Sync {
     /// The latest report for `project_id`, `None` when there is none.
     fn activity(&self, project_id: &str) -> Option<Activity>;
+
+    /// True when `project_id`'s child had a session and has missed three
+    /// heartbeats without registering again (a wedged or cut-off child).
+    /// The supervisor restarts such a child after a grace period; sources
+    /// without heartbeat data say `false`.
+    fn lost_heartbeat(&self, _project_id: &str) -> bool {
+        false
+    }
 }
 
 /// Activity from the mesh-local registry: what each child last said in its
@@ -52,6 +60,11 @@ impl ActivitySource for RegistryActivity {
                 busy_workloads: s.activity.busy.workloads,
                 busy_streams: s.activity.busy.streams,
             })
+    }
+
+    fn lost_heartbeat(&self, project_id: &str) -> bool {
+        use crate::mesh_local_registry::{SessionState, registry};
+        matches!(registry().state_at(project_id, std::time::Instant::now()), Some((SessionState::Expired, _)))
     }
 }
 

@@ -19,11 +19,22 @@ use ed25519_dalek::SigningKey;
 
 /// Activity the test controls.
 #[derive(Default)]
-pub struct FakeActivity(pub Mutex<Option<Activity>>);
+pub struct FakeActivity(pub Mutex<Option<Activity>>, pub std::sync::atomic::AtomicBool);
+
+impl FakeActivity {
+    /// Make the registry "lose" (or find again) every child's heartbeat.
+    pub fn set_lost(&self, lost: bool) {
+        self.1.store(lost, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 
 impl ActivitySource for FakeActivity {
     fn activity(&self, _project_id: &str) -> Option<Activity> {
         *self.0.lock().unwrap()
+    }
+
+    fn lost_heartbeat(&self, _project_id: &str) -> bool {
+        self.1.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 

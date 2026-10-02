@@ -187,3 +187,33 @@ async fn a_project_only_gets_context_it_sent() {
     let r = rpc(&d.sock, "shared.llm.chat", json!({"messages": [{"role": "user", "content": "hi"}], "stream": true}), Some(&tb), None).await;
     assert_eq!(r["error_kind"], "bad_params", "{r}");
 }
+
+/// Review S10c / card 3503efb6: limits are cached, but an archived or
+/// unregistered project is no longer served, with no `shared.reload`.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_archived_or_unregistered_project_stops_being_served_without_a_reload() {
+    use clawft_types::project::{ProjectState, read_manifest, write_manifest};
+    let _serial = SERIAL.lock().await;
+    let d = spawn().await;
+    let (p, q) = (register(&d, "").await, register(&d, "").await);
+    let (tp, tq) = (token_for(&d, &p).await, token_for(&d, &q).await);
+    for tok in [&tp, &tq] {
+        let r = rpc(&d.sock, "shared.embed", json!({"texts": ["x"]}), Some(tok), None).await;
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    // Archive p (what `weft project init --fork --force` leaves behind) and
+    // unregister q (the manifest file is gone).
+    let mut m = read_manifest(&d.manifests, &p).unwrap().unwrap();
+    m.state = ProjectState::Archived;
+    write_manifest(&d.manifests, &m).unwrap();
+    std::fs::remove_file(d.manifests.join(format!("{q}.toml"))).unwrap();
+    for tok in [&tp, &tq] {
+        let r = rpc(&d.sock, "shared.embed", json!({"texts": ["x"]}), Some(tok), None).await;
+        assert_eq!(r["error_kind"], "project_unknown", "{r}");
+    }
+    // Registering the project again (it is active) serves it once more.
+    m.state = ProjectState::Active;
+    write_manifest(&d.manifests, &m).unwrap();
+    let r = rpc(&d.sock, "shared.embed", json!({"texts": ["x"]}), Some(&tp), None).await;
+    assert_eq!(r["ok"], true, "{r}");
+}

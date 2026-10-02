@@ -64,6 +64,14 @@ pub const FATAL_KINDS: &[&str] = &[
     "project_revoked",
 ];
 
+/// Refusal kinds that mean "the user daemon expects no spawn from you": its
+/// spawn ledger no longer has this child's nonce (a restarted daemon starts
+/// with an empty one) or the nonce expired. A child that booted degraded
+/// holds its nonce until a registration succeeds, so on these it drops the
+/// nonce and registers the way an adopted child does (same pid, certified
+/// key, proof of possession) instead of being refused for ever.
+pub const SPAWN_NONCE_KINDS: &[&str] = &["spawn_not_expected", "bad_spawn_nonce", "spawn_expired"];
+
 /// Replace what "stop the kernel" does after a fatal refusal (tests). The
 /// default raises SIGTERM on this process, which the daemon already turns
 /// into an orderly shutdown. First call wins.
@@ -105,7 +113,7 @@ fn session_proof(run: &Running, op: &str, session: &str, extra: &str) -> (u32, u
 /// Cheap and safe to call from any request path; does nothing until the
 /// child has booted.
 pub fn note_activity(method: &str) {
-    if RUNNING.get().is_none() {
+    if !tracking() {
         return;
     }
     let quiet = method.starts_with("kernel.status")
@@ -114,6 +122,43 @@ pub fn note_activity(method: &str) {
         || method.starts_with("mesh.");
     if !quiet {
         LAST_ACTIVITY.store(crate::project_boot::now_unix(), Ordering::Relaxed);
+    }
+}
+
+fn tracking() -> bool {
+    RUNNING.get().is_some() || test_hooks::forced()
+}
+
+/// Lets unit tests of the request path observe the idle clock without
+/// booting a whole project kernel.
+#[cfg(test)]
+pub(crate) mod test_hooks {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static FORCE: AtomicBool = AtomicBool::new(false);
+    /// Tests that touch the idle clock hold this for their duration.
+    pub(crate) static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    pub(super) fn forced() -> bool {
+        FORCE.load(Ordering::SeqCst)
+    }
+
+    /// Track activity as if a project kernel were running, from a zero clock.
+    pub(crate) fn track(on: bool) {
+        FORCE.store(on, Ordering::SeqCst);
+        super::LAST_ACTIVITY.store(0, Ordering::SeqCst);
+    }
+
+    /// The idle clock.
+    pub(crate) fn last_activity() -> u64 {
+        super::LAST_ACTIVITY.load(Ordering::SeqCst)
+    }
+}
+
+#[cfg(not(test))]
+mod test_hooks {
+    pub(super) fn forced() -> bool {
+        false
     }
 }
 
@@ -405,6 +450,11 @@ async fn step(run: &Running, backoff: &mut Duration) -> Duration {
             *backoff = (*backoff * 2).min(Duration::from_secs(30));
             w
         }
+        Err(RegError::Refused { kind, .. }) if nonce.is_some() && SPAWN_NONCE_KINDS.contains(&kind.as_str()) => {
+            info!(%kind, "the user daemon expects no spawn from this kernel; registering again without the spawn nonce");
+            set_link(run, |l| l.spawn_nonce = None);
+            Duration::ZERO
+        }
         Err(RegError::Refused { kind, message }) if FATAL_KINDS.contains(&kind.as_str()) => {
             fatal(run, &format!("{kind}: {message}"));
             Duration::from_secs(3600)
@@ -665,6 +715,30 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn a_degraded_child_drops_a_spawn_nonce_the_parent_no_longer_expects() {
+        let t = tempfile::tempdir().unwrap();
+        for kind in SPAWN_NONCE_KINDS {
+            let sock = t.path().join(format!("{kind}.sock"));
+            let h = fake_parent(&sock, kind);
+            let run = running(t.path(), sock);
+            set_link(&run, |l| l.spawn_nonce = Some("ab".repeat(32)));
+            let mut backoff = Duration::from_secs(1);
+            // First try: refused with the nonce -> the nonce goes, retry now.
+            assert_eq!(step(&run, &mut backoff).await, Duration::ZERO, "{kind}");
+            h.join().unwrap();
+            assert!(run.link.lock().unwrap().spawn_nonce.is_none(), "{kind}: nonce dropped");
+            assert!(!*run.stop.borrow(), "{kind} is not fatal");
+            // Second try, no nonce, refused the same way: back to the slow
+            // retry (no hammering the parent).
+            let sock2 = t.path().join(format!("{kind}-2.sock"));
+            let h2 = fake_parent(&sock2, kind);
+            let run2 = running(t.path(), sock2);
+            assert_eq!(step(&run2, &mut backoff).await, Duration::from_secs(30), "{kind} without a nonce");
+            h2.join().unwrap();
+        }
+    }
+
     static FATALS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
     #[tokio::test]
@@ -702,6 +776,8 @@ mod tests {
 
     #[test]
     fn quiet_methods_do_not_move_the_idle_clock() {
+        let _serial = test_hooks::SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        test_hooks::track(false);
         // No child running in this process: nothing is recorded at all.
         LAST_ACTIVITY.store(0, Ordering::Relaxed);
         note_activity("agent.chat");
