@@ -223,8 +223,8 @@ impl std::fmt::Display for SupError {
             Self::Identity(m) => write!(f, "{m}"),
             Self::Failed(m) => write!(
                 f,
-                "project kernel failed ({m}); fix the cause and run `project.restart` \
-                 (`weaver kernel start --project <id>` after a restart)"
+                "project kernel failed ({m}); fix the cause, then `weaver kernel restart --project <id>` \
+                 (`project.restart`) clears it"
             ),
             Self::NotReady(m) => write!(f, "project kernel did not become ready: {m}"),
             Self::Runtime(e) => write!(f, "{e}"),
@@ -554,9 +554,28 @@ impl Supervisor {
         match self.wait_ready(id).await {
             Ok(pid) => {
                 self.set_state(id, slot, ChildState::Running);
+                self.record_kernel_build(id).await;
                 Ok(Running { socket: self.socket(id), pid, started: true })
             }
             Err(why) => Err(SupError::NotReady(why)),
+        }
+    }
+
+    /// Write the version and build of the kernel just started into the
+    /// manifest's `[serve]` (`kernel_version`, `kernel_sha`; supervisor-written,
+    /// never by the owner), only when they changed.
+    async fn record_kernel_build(&self, id: &str) {
+        let (dir, id) = (self.cfg.manifests_dir.clone(), id.to_owned());
+        let r = tokio::task::spawn_blocking(move || {
+            clawft_types::project::update_manifest(&dir, &id, |m| {
+                let s = m.serve.get_or_insert_with(Default::default);
+                s.kernel_version = Some(env!("CARGO_PKG_VERSION").to_owned());
+                s.kernel_sha = Some(env!("BUILD_GIT_HASH").to_owned());
+            })
+        })
+        .await;
+        if !matches!(r, Ok(Ok(Some(_)))) {
+            tracing::warn!("could not record the project kernel build in the manifest");
         }
     }
 

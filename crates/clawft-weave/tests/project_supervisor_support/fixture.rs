@@ -151,9 +151,18 @@ impl Fixture {
 
 impl Drop for Fixture {
     /// Never leave a fake kernel behind, pass or fail: they are ours, named
-    /// by pid files inside this tempdir.
+    /// by pid files inside this tempdir. A pid file can outlive its process,
+    /// and the pid may since belong to someone else, so only a process that
+    /// is this test binary (a fake kernel) is ever signalled.
     fn drop(&mut self) {
+        let me = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
         for pid in self.child_pids() {
+            let ours = clawft_weave::project_supervisor::adopt::process_exe_name(pid) == me;
+            if !ours {
+                continue;
+            }
             let _ = nix::sys::signal::kill(
                 nix::unistd::Pid::from_raw(pid as i32),
                 nix::sys::signal::Signal::SIGKILL,

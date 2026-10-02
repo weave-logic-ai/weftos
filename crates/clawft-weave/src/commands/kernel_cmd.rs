@@ -102,7 +102,12 @@ pub enum KernelAction {
     },
 
     /// Restart a running kernel daemon (sends SIGHUP for re-exec).
-    Restart,
+    Restart {
+        /// Restart only this project's kernel under the user daemon: stop
+        /// it, clear a `failed` state and start it again.
+        #[arg(long, value_name = "ID|NAME")]
+        project: Option<String>,
+    },
 
     /// Show kernel state, uptime, process count, service count.
     Status,
@@ -183,7 +188,7 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
     #[cfg(not(any(unix, windows)))]
     {
         match args.action {
-            KernelAction::Start { .. } | KernelAction::Stop { .. } | KernelAction::Restart => {
+            KernelAction::Start { .. } | KernelAction::Stop { .. } | KernelAction::Restart { .. } => {
                 anyhow::bail!(
                     "kernel daemon server is not available on this platform.\n\
                      Local transport requires Unix domain sockets or Windows named pipes (WEFT-559)."
@@ -304,7 +309,10 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
             stop_windows(force).await?;
         }
         #[cfg(unix)]
-        KernelAction::Restart => {
+        KernelAction::Restart { project } => {
+            if let Some(p) = project.as_deref() {
+                return super::kernel_children::restart_project(p).await;
+            }
             let pid = read_daemon_pid()?;
             let nix_pid = nix::unistd::Pid::from_raw(pid);
 
@@ -314,13 +322,13 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
         }
         // Windows has no SIGHUP re-exec path — stop then start.
         #[cfg(windows)]
-        KernelAction::Restart => {
+        KernelAction::Restart { .. } => {
             println!("Restarting daemon (stop + start)...");
             let _ = stop_windows(true).await;
             crate::daemon::daemonize(args.config.as_deref(), false, false)?;
         }
         #[cfg(not(any(unix, windows)))]
-        KernelAction::Start { .. } | KernelAction::Stop { .. } | KernelAction::Restart => {
+        KernelAction::Start { .. } | KernelAction::Stop { .. } | KernelAction::Restart { .. } => {
             unreachable!("handled above");
         }
         KernelAction::Status => {

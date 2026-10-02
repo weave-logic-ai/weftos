@@ -49,6 +49,18 @@ pub async fn start_project(project: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `weaver kernel restart --project <id|name>`.
+pub async fn restart_project(project: &str) -> anyhow::Result<()> {
+    let v = user_call("project.restart", json!({ "id": project })).await?;
+    println!(
+        "project {} kernel restarted (pid {}, socket {})",
+        v["project_id"].as_str().unwrap_or(project),
+        v["pid"],
+        v["socket"].as_str().unwrap_or("?"),
+    );
+    Ok(())
+}
+
 /// `weaver kernel stop --project <id|name>`.
 pub async fn stop_project(project: &str) -> anyhow::Result<()> {
     let v = user_call("project.stop", json!({ "id": project })).await?;
@@ -119,19 +131,27 @@ pub async fn print_children() {
 /// user daemon is running, unless `--legacy-project-daemon` (one release of
 /// deprecation, ADR-103 A6 decision 7).
 pub async fn legacy_guard(legacy_flag: bool) -> anyhow::Result<()> {
-    if legacy_flag {
-        eprintln!(
-            "warning: --legacy-project-daemon starts a project-rooted daemon beside the user daemon; \
-             this is deprecated and goes away next release"
-        );
-        return Ok(());
-    }
-    let paths = RuntimePaths::resolve();
+    let Ok(sock) = user_socket() else { return Ok(()) };
+    legacy_guard_with(legacy_flag, &RuntimePaths::resolve(), &sock).await
+}
+
+/// [`legacy_guard`] over explicit paths (tests).
+pub async fn legacy_guard_with(
+    legacy_flag: bool,
+    paths: &RuntimePaths,
+    user_socket: &std::path::Path,
+) -> anyhow::Result<()> {
     if !matches!(paths.source(), RootSource::Project(_)) {
         return Ok(());
     }
-    let Ok(sock) = user_socket() else { return Ok(()) };
-    if DaemonClient::connect_path(&sock).await.is_none() {
+    if DaemonClient::connect_path(user_socket).await.is_none() {
+        return Ok(());
+    }
+    if legacy_flag {
+        eprintln!(
+            "warning: a project-rooted daemon beside the user daemon is deprecated and goes away \
+             next release; use `weaver project migrate-kernel`"
+        );
         return Ok(());
     }
     anyhow::bail!(
@@ -140,4 +160,55 @@ pub async fn legacy_guard(legacy_flag: bool) -> anyhow::Result<()> {
          `weaver kernel start --project <id>`,\n  or pass --legacy-project-daemon to start the old kind \
          anyway (deprecated, removed next release)"
     )
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    struct W {
+        _t: tempfile::TempDir,
+        home: PathBuf,
+        proj: PathBuf,
+        sock: PathBuf,
+    }
+
+    fn world() -> W {
+        let t = tempfile::Builder::new().prefix("kc").tempdir_in("/tmp").unwrap();
+        let home = t.path().join("home");
+        let proj = home.join("work/app");
+        std::fs::create_dir_all(proj.join(".weftos/runtime")).unwrap();
+        std::fs::create_dir_all(home.join(".weftos/run")).unwrap();
+        let sock = home.join(".weftos/run/kernel.sock");
+        W { _t: t, home, proj, sock }
+    }
+
+    fn project_paths(w: &W) -> RuntimePaths {
+        let p = RuntimePaths::resolve_with(None, Some(&w.proj), Some(&w.home));
+        assert!(matches!(p.source(), RootSource::Project(_)), "{:?}", p.source());
+        p
+    }
+
+    #[tokio::test]
+    async fn a_plain_start_in_a_project_beside_a_user_daemon_is_refused_with_the_migration_hint() {
+        let w = world();
+        let _daemon = std::os::unix::net::UnixListener::bind(&w.sock).unwrap();
+        let e = legacy_guard_with(false, &project_paths(&w), &w.sock).await.unwrap_err().to_string();
+        assert!(e.contains("migrate-kernel") && e.contains("--legacy-project-daemon"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn the_legacy_flag_a_missing_user_daemon_and_other_roots_do_not_block() {
+        let w = world();
+        // No user daemon: a single-project user is not locked out.
+        assert!(legacy_guard_with(false, &project_paths(&w), &w.sock).await.is_ok());
+        let _daemon = std::os::unix::net::UnixListener::bind(&w.sock).unwrap();
+        // The explicit flag wins.
+        assert!(legacy_guard_with(true, &project_paths(&w), &w.sock).await.is_ok());
+        // An explicit runtime dir (env) or the legacy home is not "inside a project".
+        let env = RuntimePaths::resolve_with(Some("/some/runtime"), Some(&w.proj), Some(&w.home));
+        assert!(legacy_guard_with(false, &env, &w.sock).await.is_ok());
+        let outside = RuntimePaths::resolve_with(None, Some(&w.home), Some(&w.home));
+        assert!(legacy_guard_with(false, &outside, &w.sock).await.is_ok());
+    }
 }

@@ -63,7 +63,7 @@ pub fn check(env: &DoctorEnv, procs: &ProcTable) -> Vec<Finding> {
                         format!("project {id}: kernel failed and is not restarted ({why})"),
                     )
                     .remedy(format!(
-                        "read {} then run `weaver kernel start --project {id}` after `project.restart`",
+                        "read {} then run `weaver kernel restart --project {id}`",
                         dir.join("kernel.log").display()
                     )),
                 );

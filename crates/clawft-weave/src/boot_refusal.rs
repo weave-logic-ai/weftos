@@ -110,10 +110,20 @@ pub fn replay() -> Replay {
 /// Arguments (after the program name) for a re-exec: the originals without
 /// the one-shot flags.
 pub fn reexec_args<I: IntoIterator<Item = String>>(original: I) -> Vec<String> {
-    original
+    let mut args: Vec<String> = original
         .into_iter()
         .filter(|a| !ONE_SHOT_FLAGS.contains(&a.as_str()))
-        .collect()
+        .collect();
+    // A plain `kernel start` that is being re-exec'd is a daemon that was
+    // already running: the one-release refusal of project-rooted daemons
+    // beside a user daemon (ADR-103 A6) must not take it down on SIGHUP.
+    let plain_start = args.iter().any(|a| a == "start")
+        && !args.iter().any(|a| a == "--profile" || a.starts_with("--profile="))
+        && !args.iter().any(|a| a == "--legacy-project-daemon");
+    if plain_start {
+        args.push("--legacy-project-daemon".to_owned());
+    }
+    args
 }
 
 /// What to exec for a restart.
@@ -155,11 +165,24 @@ mod tests {
     }
 
     #[test]
+    fn a_re_exec_of_a_plain_daemon_is_marked_legacy_so_the_refusal_cannot_kill_it() {
+        let got = reexec_args(v(&["kernel", "start", "--foreground"]));
+        assert_eq!(got, v(&["kernel", "start", "--foreground", "--legacy-project-daemon"]));
+        // Already marked: not doubled. Profiles carry their own meaning.
+        let marked = v(&["kernel", "start", "--legacy-project-daemon"]);
+        assert_eq!(reexec_args(marked.clone()), marked);
+        let project = v(&["kernel", "start", "--foreground", "--profile", "project", "--project", "X"]);
+        assert_eq!(reexec_args(project.clone()), project);
+        let user = v(&["kernel", "start", "--foreground", "--profile=user"]);
+        assert_eq!(reexec_args(user.clone()), user);
+    }
+
+    #[test]
     fn plan_strips_deleted_marker_and_defaults_args() {
         let r = Replay { args: v(&["kernel", "start", "--foreground"]), runtime_dir: None };
         let p = reexec_plan(Path::new("/opt/bin/weaver (deleted)"), r);
         assert_eq!(p.exe, PathBuf::from("/opt/bin/weaver"));
-        assert_eq!(p.args, v(&["kernel", "start", "--foreground"]));
+        assert_eq!(p.args, v(&["kernel", "start", "--foreground", "--legacy-project-daemon"]));
         let p = reexec_plan(Path::new("/x/weaver"), Replay { args: Vec::new(), runtime_dir: None });
         assert_eq!(p.args, v(&["kernel", "start", "--foreground"]));
     }
@@ -178,7 +201,8 @@ mod tests {
             assert_eq!(r.args, want);
             let moved = tempfile::tempdir().unwrap();
             let _ = moved; // the plan never consults the current directory
-            assert_eq!(reexec_plan(Path::new("/x/weaver"), r).args, want);
+            // (a plain `start` also gains the legacy marker, tested below)
+            assert_eq!(reexec_plan(Path::new("/x/weaver"), r).args, reexec_args(want));
         }
     }
 

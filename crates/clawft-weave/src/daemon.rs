@@ -681,6 +681,11 @@ pub fn daemonize(
     }
     if crate::user_daemon::is_active() {
         cmd.args(["--profile", crate::user_daemon::PROFILE_USER]);
+    } else {
+        // The parent already passed the legacy-daemon check (a project-rooted
+        // daemon beside a user daemon); the foreground child must not refuse
+        // it a second time.
+        cmd.arg("--legacy-project-daemon");
     }
 
     // Windows: detach so the daemon outlives the spawning console.

@@ -56,6 +56,7 @@ fn tests() -> Vec<(&'static str, TestFn)> {
         ("idle_stop_then_restart", idle_stop_then_restart),
         ("ignored_shutdown_escalates_to_sigterm", ignored_shutdown_escalates_to_sigterm),
         ("adoption_after_user_daemon_restart", lifecycle_tests::adoption_after_user_daemon_restart),
+        ("adopted_zombie_counts_as_dead", lifecycle_tests::adopted_zombie_counts_as_dead),
         ("pid_reuse_and_unverifiable_leftovers_are_never_adopted", lifecycle_tests::unverifiable_leftovers),
         ("spawn_refusal_cases", lifecycle_tests::spawn_refusal_cases),
         ("concurrent_ensure_running_starts_one_child", concurrent_ensure_running),
@@ -179,6 +180,10 @@ fn env_allowlist_spawn_contract() {
         assert!(loads.iter().any(|e| e.payload.as_ref().is_some_and(|p| p["permit_rule"] == "PROJECT-SUPERVISOR-PERMIT")));
         assert!(!fx.events("workload.start").is_empty());
         assert_eq!(fx.events("project.kernel.started").len(), 1);
+        // The supervisor records which kernel it started in the manifest.
+        let serve = fx.manifest().serve.unwrap();
+        assert_eq!(serve.kernel_version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+        assert_eq!(serve.kernel_sha.as_deref(), Some(env!("BUILD_GIT_HASH")));
         assert!(sup.stop(&fx.id).await.unwrap());
     });
 }

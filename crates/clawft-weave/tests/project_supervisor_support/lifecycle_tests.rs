@@ -161,3 +161,30 @@ pub fn spawn_refusal_cases() {
     });
 }
 
+
+/// After a SIGHUP re-exec the daemon is still the parent of its children but
+/// has no waiter for them: an adopted child that dies must read as dead, not
+/// as a live zombie.
+pub fn adopted_zombie_counts_as_dead() {
+    use clawft_kernel::workload_runtime::{ChildLauncher, ChildProbe};
+    let fx = Fixture::new();
+    rt().block_on(async {
+        let sup = fx.supervisor();
+        // A child of THIS process that nobody waits for.
+        let mut zombie = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        let pid = zombie.id();
+        std::fs::create_dir_all(fx.run_dir()).unwrap();
+        std::fs::write(fx.run_dir().join("kernel.pid"), pid.to_string()).unwrap();
+        sup.launcher().adopt(&fx.id, pid);
+        assert_eq!(sup.launcher().probe(&fx.id).await, ChildProbe::Running { pid });
+        zombie.kill().unwrap(); // dies; stays a zombie until reaped
+        wait_until("zombie reads as dead", 5, || sup.launcher().pid_of(&fx.id).is_none()).await;
+        assert!(matches!(sup.launcher().probe(&fx.id).await, ChildProbe::Exited { .. }));
+        let info = sup.launcher().wait_exit(&fx.id).await;
+        assert!(!info.clean(), "kernel.pid was left behind: a crash, not a clean stop");
+        // A clean shutdown removes kernel.pid: that reads as clean.
+        std::fs::remove_file(fx.run_dir().join("kernel.pid")).unwrap();
+        assert!(sup.launcher().wait_exit(&fx.id).await.clean());
+        let _ = zombie.wait();
+    });
+}

@@ -149,6 +149,22 @@ pub fn child_args(project_id: &str) -> Vec<String> {
         .collect()
 }
 
+/// True when an ADOPTED `pid` is alive. After a SIGHUP re-exec of the user
+/// daemon (`weaver update`) the new image is still the parent of the
+/// children but has no waiter for them, so a child that exits stays a zombie
+/// and `kill(pid, 0)` would call it alive forever; reaping it here (only for
+/// adopted pids: an owned child has a waiter thread that must not lose its
+/// status) tells the truth. `ECHILD` means it is not our child: fall back to
+/// the signal-0 probe.
+pub fn adopted_alive(pid: u32) -> bool {
+    use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+    match waitpid(Pid::from_raw(pid as i32), Some(WaitPidFlag::WNOHANG)) {
+        Ok(WaitStatus::StillAlive) => true,
+        Ok(_) => false,
+        Err(_) => pid_alive(pid),
+    }
+}
+
 /// True when `pid` names a live process (EPERM counts: it exists).
 pub fn pid_alive(pid: u32) -> bool {
     match kill(Pid::from_raw(pid as i32), None) {
@@ -214,7 +230,7 @@ impl Launcher {
     pub fn pid_of(&self, id: &str) -> Option<u32> {
         match self.procs().get(id).map(|e| &e.proc) {
             Some(Proc::Owned { pid, exit }) if exit.borrow().is_none() => Some(*pid),
-            Some(Proc::Adopted { pid }) if pid_alive(*pid) => Some(*pid),
+            Some(Proc::Adopted { pid }) if adopted_alive(*pid) => Some(*pid),
             _ => None,
         }
     }
@@ -242,7 +258,7 @@ impl Launcher {
                 }
             },
             W::Adopted(pid) => {
-                while pid_alive(pid) {
+                while adopted_alive(pid) {
                     tokio::time::sleep(self.cfg.exit_poll).await;
                 }
                 // A clean shutdown removes kernel.pid; a crash leaves it.
@@ -451,7 +467,7 @@ impl ChildLauncher for Launcher {
             P::None => ChildProbe::NotStarted,
             P::Owned(None, pid) => ChildProbe::Running { pid },
             P::Owned(Some(i), _) => ChildProbe::Exited { code: i.code, signal: i.signal },
-            P::Adopted(pid) if pid_alive(pid) => ChildProbe::Running { pid },
+            P::Adopted(pid) if adopted_alive(pid) => ChildProbe::Running { pid },
             P::Adopted(_) => ChildProbe::Exited { code: None, signal: None },
         }
     }
