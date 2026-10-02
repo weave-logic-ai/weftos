@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Staging area for changes after the 0.8.1 cut.
 
+### Changed — mesh connection limits and seed dials (ADR-103 A10)
+
+- **Behaviour change:** the per-IP connection cap (default 64) and the
+  first-frame timeout (default 10 s) now apply under every `kernel.mesh.admission`
+  mode, not only `enforce`. A legacy leaf that connects and stays silent for
+  more than 10 s is dropped, and one host can hold at most 64 connections.
+  Tune with `kernel.mesh.max_connections_per_ip` and
+  `kernel.mesh.first_frame_timeout_secs`. The idle timeout and live revocation
+  check remain `enforce`-only.
+- Seed connections are now bidirectional, redial with jittered exponential
+  backoff, drop after 5 minutes of inbound silence, and stop when the mesh
+  service stops.
+
 ### Added — Weave topology Phase 2, per-project kernels (ADR-103 A7, package G)
 
 - **Per-project child kernels under the user daemon.** `weaver kernel start

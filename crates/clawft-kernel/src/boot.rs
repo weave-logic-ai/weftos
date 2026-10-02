@@ -774,26 +774,37 @@ impl<P: Platform> Kernel<P> {
                 };
 
                 let rt = Arc::clone(&runtime);
-                tokio::spawn(async move {
-                    crate::mesh_serve::serve_listener(
+                let conn_limits = crate::mesh_limits::Limits {
+                    first_frame: std::time::Duration::from_secs(
+                        mesh_config.first_frame_timeout_secs.max(1),
+                    ),
+                    per_ip: mesh_config.max_connections_per_ip.max(1),
+                    ..crate::mesh_limits::Limits::default()
+                };
+                // Held by MeshService so `stop` ends the accept loop and the
+                // seed dial loops instead of leaving them running.
+                let listener_task = tokio::spawn(async move {
+                    crate::mesh_serve::serve_listener_with(
                         rt,
                         listener,
                         noise_config,
                         transport.name(),
                         &listen_addr,
                         admission_gate,
+                        conn_limits,
                     )
                     .await;
                 });
 
                 // Connect to seed peers.
-                crate::mesh_serve::connect_seeds(
+                let mut mesh_tasks = crate::mesh_serve::connect_seeds(
                     &runtime,
                     &seed_peers,
                     &transport_name_for_seeds,
                     noise_for_seeds,
                     dial_identity,
                 );
+                mesh_tasks.push(listener_task);
 
                 // WEFT-119: register Mesh as a SystemService so start/stop/
                 // health_check are available via the kernel service surface.
@@ -804,6 +815,7 @@ impl<P: Platform> Kernel<P> {
                     listen_display.clone(),
                     transport_display.clone(),
                 ));
+                mesh_svc.adopt_tasks(mesh_tasks);
                 if let Err(e) = service_registry.register(mesh_svc) {
                     error!(error = %e, "failed to register mesh service");
                 } else {

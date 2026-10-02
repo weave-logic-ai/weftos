@@ -27,14 +27,42 @@ impl LocalDelivery for Rec {
     }
 }
 
-async fn seen(rec: &Rec, topic: &str) -> bool {
-    for _ in 0..150 {
-        if rec.0.lock().unwrap().iter().any(|t| t == topic) {
+/// Poll `f` until it holds (up to 10 s); no fixed sleeps in the tests.
+async fn until(mut f: impl FnMut() -> bool) -> bool {
+    for _ in 0..2000 {
+        if f() {
             return true;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
     false
+}
+
+async fn seen(rec: &Rec, topic: &str) -> bool {
+    until(|| rec.0.lock().unwrap().iter().any(|t| t == topic)).await
+}
+
+/// A listener that counts accepted connections and keeps them open and
+/// silent (`hold`) or closes them at once.
+async fn counting_listener(hold: bool) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+    let mut l = crate::mesh_tcp::TcpTransport.listen("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap().to_string();
+    let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let n2 = Arc::clone(&n);
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = l.accept().await {
+            n2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if hold {
+                held.push(stream);
+            }
+        }
+    });
+    (addr, n)
+}
+
+fn count(n: &std::sync::atomic::AtomicUsize) -> usize {
+    n.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 fn runtime(id: &str) -> (Arc<MeshRuntime>, Arc<Rec>) {
@@ -96,25 +124,25 @@ fn tally_follows_registration_replacement_and_removal() {
 }
 
 #[test]
-fn route_loss_check_does_not_scale_with_peer_count() {
+fn tally_ignores_every_route_it_does_not_own() {
+    // The per-connection check reads only its own counter, so unrelated
+    // peers (added, replaced or removed) never change it.
     let rt = MeshRuntime::new("local".into());
+    let t = RouteTally::default();
     let mut keep = Vec::new();
-    for i in 0..20_000 {
+    for i in 0..5_000 {
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         rt.add_peer(format!("p{i}"), tx);
         keep.push(rx);
     }
-    let t = RouteTally::default();
+    assert_eq!(t.live(), 0);
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     rt.add_peer_tallied("mine".into(), tx, &t);
-    // 100k checks; a full scan of 20k peers each would be ~2e9 visits.
-    let start = std::time::Instant::now();
-    let mut live = 0;
-    for _ in 0..100_000 {
-        live += usize::from(t.live() > 0);
+    assert_eq!(t.live(), 1);
+    for i in 0..5_000 {
+        rt.disconnect_peer(&format!("p{i}"));
     }
-    assert_eq!(live, 100_000);
-    assert!(start.elapsed() < Duration::from_millis(500), "check scales with peers");
+    assert_eq!(t.live(), 1);
 }
 
 #[tokio::test]
@@ -123,12 +151,7 @@ async fn connection_closes_when_its_route_is_revoked() {
     let (addr, _task) = listen(&rt, None).await;
     let mut c = crate::mesh_tcp::TcpTransport.connect(&addr).await.unwrap();
     c.send(&frame("n1", "t.a")).await.unwrap();
-    for _ in 0..100 {
-        if !rt.peer_ids().is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    assert!(until(|| !rt.peer_ids().is_empty()).await);
     assert_eq!(rt.peer_ids(), vec!["n1".to_string()]);
     rt.disconnect_peer("n1");
     assert!(matches!(tokio::time::timeout(Duration::from_secs(2), c.recv()).await, Ok(Err(_))),
@@ -141,19 +164,16 @@ async fn old_connection_closes_when_a_new_one_replaces_its_route() {
     let (addr, _task) = listen(&rt, None).await;
     let mut old = crate::mesh_tcp::TcpTransport.connect(&addr).await.unwrap();
     old.send(&frame("n1", "t.a")).await.unwrap();
-    for _ in 0..100 {
-        if !rt.peer_ids().is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    assert!(until(|| !rt.peer_ids().is_empty()).await);
     let mut new = crate::mesh_tcp::TcpTransport.connect(&addr).await.unwrap();
     new.send(&frame("n1", "t.b")).await.unwrap();
     assert!(matches!(tokio::time::timeout(Duration::from_secs(2), old.recv()).await, Ok(Err(_))),
         "replaced connection must close");
-    // The replacement stays up.
-    assert!(tokio::time::timeout(Duration::from_millis(600), new.recv()).await.is_err());
+    // The replacement stays up and is the live route.
     assert_eq!(rt.peer_ids(), vec!["n1".to_string()]);
+    let msg = KernelMessage::text(0, MessageTarget::Topic("t.back".into()), "x");
+    rt.send_to_peer("n1", MeshIpcEnvelope::new("srv".into(), "n1".into(), msg)).await.unwrap();
+    assert!(matches!(tokio::time::timeout(Duration::from_secs(5), new.recv()).await, Ok(Ok(_))));
 }
 
 // ── Noise listener ───────────────────────────────────────────────
@@ -196,6 +216,7 @@ fn quick() -> SeedTiming {
         base: Duration::from_millis(20),
         max: Duration::from_millis(100),
         stable: Duration::from_secs(60),
+        idle: Duration::from_secs(60),
     }
 }
 
@@ -213,18 +234,16 @@ async fn seed_connection_reads_inbound_frames_from_the_seed() {
     let handles = connect_seeds_with(&dialer, std::slice::from_ref(&addr), "tcp", None, None, quick());
 
     // Dialer introduces itself so the seed can route back.
-    for _ in 0..100 {
+    let mut sent = false;
+    for _ in 0..2000 {
         if push(&dialer, &addr, "dialer", "t.up").await {
+            sent = true;
             break;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    for _ in 0..100 {
-        if srv.peer_ids().contains(&"dialer".to_string()) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    assert!(sent);
+    assert!(until(|| srv.peer_ids().contains(&"dialer".to_string())).await);
     // Seed pushes to the dialer over the same connection.
     let msg = KernelMessage::text(0, MessageTarget::Topic("t.down".into()), "x");
     srv.send_to_peer("dialer", MeshIpcEnvelope::new("srv".into(), "dialer".into(), msg))
@@ -243,23 +262,28 @@ async fn seed_connection_redials_after_the_seed_drops_it() {
     let (dialer, _) = runtime("dialer");
     let handles = connect_seeds_with(&dialer, std::slice::from_ref(&addr), "tcp", None, None, quick());
 
-    for _ in 0..100 {
+    let mut sent = false;
+    for _ in 0..2000 {
         if push(&dialer, &addr, "dialer", "t.one").await {
+            sent = true;
             break;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
+    assert!(sent);
     assert!(seen(&srec, "t.one").await);
     // Seed cuts the connection (route check closes it).
     srv.disconnect_peer("dialer");
     // The dialer redials and traffic flows again.
+    let mut n = 0;
     let mut ok = false;
-    for _ in 0..200 {
-        if push(&dialer, &addr, "dialer", "t.two").await && seen_quick(&srec, "t.two").await {
-            ok = true;
-            break;
+    while n < 2000 && !ok {
+        n += 1;
+        if push(&dialer, &addr, "dialer", "t.two").await {
+            ok = seen_for(&srec, "t.two").await;
+        } else {
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        tokio::time::sleep(Duration::from_millis(30)).await;
     }
     assert!(ok, "dialer never reconnected");
     for h in handles {
@@ -267,22 +291,98 @@ async fn seed_connection_redials_after_the_seed_drops_it() {
     }
 }
 
-async fn seen_quick(rec: &Rec, topic: &str) -> bool {
-    tokio::time::sleep(Duration::from_millis(40)).await;
-    rec.0.lock().unwrap().iter().any(|t| t == topic)
+/// Bounded check that a send which went into a dying connection did not
+/// arrive (the dialer resends on the next loop turn).
+async fn seen_for(rec: &Rec, topic: &str) -> bool {
+    for _ in 0..20 {
+        if rec.0.lock().unwrap().iter().any(|t| t == topic) {
+            return true;
+        }
+        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    false
 }
 
 #[tokio::test]
-async fn seed_dial_to_a_dead_address_keeps_retrying_until_aborted() {
-    // Reserve then free a port so nothing listens on it.
-    let l = crate::mesh_tcp::TcpTransport.listen("127.0.0.1:0").await.unwrap();
-    let addr = l.local_addr().unwrap().to_string();
-    drop(l);
+async fn seed_dial_keeps_redialling_after_failures_until_aborted() {
+    // Every connection is closed at once, so each dial "fails"; the loop
+    // must come back repeatedly.
+    let (addr, n) = counting_listener(false).await;
     let (dialer, _) = runtime("dialer");
     let handles = connect_seeds_with(&dialer, std::slice::from_ref(&addr), "tcp", None, None, quick());
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert!(!handles[0].is_finished(), "dial loop must survive failures");
+    assert!(until(|| count(&n) >= 3).await, "dial loop gave up");
+    for h in &handles {
+        h.abort();
+    }
+}
+
+#[tokio::test]
+async fn silent_seed_is_dropped_and_redialled() {
+    // The seed accepts and never speaks: a half-open connection.
+    let (addr, n) = counting_listener(true).await;
+    let (dialer, _) = runtime("dialer");
+    let timing = SeedTiming { idle: Duration::from_millis(100), ..quick() };
+    let handles = connect_seeds_with(&dialer, std::slice::from_ref(&addr), "tcp", None, None, timing);
+    assert!(until(|| count(&n) >= 2).await, "silent seed was never redialled");
+    for h in &handles {
+        h.abort();
+    }
+}
+
+#[tokio::test]
+async fn duplicate_seed_addresses_are_dialled_once() {
+    let (addr, n) = counting_listener(true).await;
+    let (dialer, _) = runtime("dialer");
+    let seeds = vec![addr.clone(), addr.clone(), addr];
+    let handles = connect_seeds_with(&dialer, &seeds, "tcp", None, None, quick());
+    assert_eq!(handles.len(), 1);
+    assert!(until(|| count(&n) >= 1).await);
     handles[0].abort();
+}
+
+#[tokio::test]
+async fn aborting_a_dial_removes_its_route_and_emits_left() {
+    let (srv, _) = runtime("srv");
+    let (addr, _task) = listen(&srv, None).await;
+    let (dialer, _) = runtime("dialer");
+    let mut events = dialer.subscribe_peer_events();
+    let handles = connect_seeds_with(&dialer, std::slice::from_ref(&addr), "tcp", None, None, quick());
+    assert!(until(|| dialer.peer_ids() == vec![addr.clone()]).await);
+    for h in &handles {
+        h.abort();
+    }
+    assert!(until(|| dialer.peer_ids().is_empty()).await, "dead route left after abort");
+    let mut left = false;
+    while let Ok(ev) = events.try_recv() {
+        left |= matches!(ev, crate::mesh_discovery::MeshPeerEvent::Left { .. });
+    }
+    assert!(left, "no Left event after abort");
+}
+
+#[tokio::test]
+async fn dialled_connection_binds_to_the_first_id_and_cannot_claim_a_routed_one() {
+    use crate::mesh_noise::{EncryptedChannel, PassthroughChannel};
+    let mut l = crate::mesh_tcp::TcpTransport.listen("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap().to_string();
+    let (dialer, drec) = runtime("dialer");
+    // An id already routed through another connection.
+    let (victim_tx, _victim_rx) = tokio::sync::mpsc::channel(4);
+    dialer.add_peer("victim".into(), victim_tx.clone());
+    let handles = connect_seeds_with(&dialer, std::slice::from_ref(&addr), "tcp", None, None, quick());
+    let (stream, _) = l.accept().await.unwrap();
+    let mut seed = PassthroughChannel::new(stream);
+    for (src, topic) in [("victim", "t.1"), ("a", "t.2"), ("b", "t.3"), ("a", "t.4")] {
+        seed.send_encrypted(&frame(src, topic)).await.unwrap();
+    }
+    assert!(seen(&drec, "t.4").await);
+    let got = drec.0.lock().unwrap().clone();
+    assert_eq!(got, vec!["t.2".to_string(), "t.4".to_string()], "binding must drop 'victim' and 'b'");
+    // The victim's route is untouched.
+    assert!(!dialer.route_is_foreign("victim", &victim_tx));
+    for h in &handles {
+        h.abort();
+    }
 }
 
 #[test]

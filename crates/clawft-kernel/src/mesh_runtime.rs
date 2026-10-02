@@ -36,7 +36,7 @@ pub struct PeerConnection {
     /// Live-route accounting for the serving connection (None for routes
     /// added without one). Dropping the route, by removal or replacement,
     /// decrements it.
-    tally: Option<RouteGuard>,
+    _tally: Option<RouteGuard>,
 }
 
 /// Count of live routes registered by one serving connection. Lets the
@@ -317,6 +317,11 @@ impl MeshRuntime {
         self.register_peer(node_id, sender, false, None);
     }
 
+    /// True when `node_id` is routed through some channel other than `tx`.
+    pub fn route_is_foreign(&self, node_id: &str, tx: &tokio::sync::mpsc::Sender<Vec<u8>>) -> bool {
+        self.peers.get(node_id).is_some_and(|p| !p.sender.same_channel(tx))
+    }
+
     /// [`add_peer`](Self::add_peer) that counts the route in `tally`, so the
     /// owning connection can tell in O(1) when it is removed or replaced.
     pub fn add_peer_tallied(
@@ -367,7 +372,7 @@ impl MeshRuntime {
             connected_at: chrono::Utc::now(),
             sender,
             verified,
-            tally: tally.map(RouteGuard::new),
+            _tally: tally.map(RouteGuard::new),
         };
         // Decide and write under the entry (shard) lock so an unverified
         // registration can never overwrite a verified one in a race.

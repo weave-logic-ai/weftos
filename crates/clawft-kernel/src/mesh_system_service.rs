@@ -18,8 +18,9 @@ use crate::service::{ServiceType, SystemService};
 
 /// SystemService adapter for the K6 mesh transport.
 ///
-/// The accept/connect loops are still spawned by kernel boot (phase 5d);
-/// this service owns the **lifecycle surface**: marking the mesh live,
+/// The accept/connect loops are spawned by kernel boot (phase 5d) and handed
+/// to this service ([`MeshService::adopt_tasks`]), which stops them on `stop`;
+/// it owns the **lifecycle surface**: marking the mesh live,
 /// disconnecting peers on stop, and aggregating peer-health into
 /// [`HealthStatus`] for the weaver service registry.
 pub struct MeshService {
@@ -29,9 +30,30 @@ pub struct MeshService {
     listen_addr: Option<String>,
     /// Configured transport name (`tcp`, `ws`, …).
     transport: Option<String>,
+    /// Accept loop and seed dial loops spawned by boot; aborted on `stop`
+    /// and on drop so a stopped mesh neither accepts nor redials.
+    tasks: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+}
+
+impl Drop for MeshService {
+    fn drop(&mut self) {
+        self.abort_tasks();
+    }
 }
 
 impl MeshService {
+    /// Take ownership of the mesh loops so `stop` can end them. `stop` is
+    /// terminal for these loops: `start` after `stop` does not respawn them.
+    pub fn adopt_tasks(&self, handles: Vec<tokio::task::JoinHandle<()>>) {
+        self.tasks.lock().unwrap().extend(handles);
+    }
+
+    fn abort_tasks(&self) {
+        for h in self.tasks.lock().unwrap().drain(..) {
+            h.abort();
+        }
+    }
+
     /// Wrap an existing mesh runtime (listen endpoint unknown).
     pub fn new(runtime: Arc<MeshRuntime>) -> Self {
         Self {
@@ -39,6 +61,7 @@ impl MeshService {
             started: AtomicBool::new(false),
             listen_addr: None,
             transport: None,
+            tasks: Default::default(),
         }
     }
 
@@ -53,6 +76,7 @@ impl MeshService {
             started: AtomicBool::new(false),
             listen_addr: Some(listen_addr.into()),
             transport: Some(transport.into()),
+            tasks: Default::default(),
         }
     }
 
@@ -112,6 +136,9 @@ impl SystemService for MeshService {
 
     async fn stop(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let peer_count = self.runtime.peer_count();
+        // Stop accepting and redialling first, so the disconnect below is
+        // not undone by a seed redial.
+        self.abort_tasks();
         self.runtime.disconnect_all_peers();
         self.started.store(false, Ordering::SeqCst);
         info!(
@@ -269,6 +296,32 @@ mod tests {
             matches!(status, HealthStatus::Unhealthy(_)),
             "expected Unhealthy when sole peer is dead, got {status}"
         );
+    }
+
+    #[tokio::test]
+    async fn stop_ends_the_dial_and_accept_loops() {
+        let rt = Arc::new(MeshRuntime::new("n".into()));
+        let svc = MeshService::new(Arc::clone(&rt));
+        // A dial loop against a dead address would redial forever.
+        let handles = crate::mesh_serve::connect_seeds(
+            &rt,
+            &["127.0.0.1:1".to_string()],
+            "tcp",
+            None,
+            None,
+        );
+        let aborts: Vec<_> = handles.iter().map(|h| h.abort_handle()).collect();
+        svc.adopt_tasks(handles);
+        svc.start().await.unwrap();
+        assert!(aborts.iter().all(|a| !a.is_finished()));
+        svc.stop().await.unwrap();
+        for _ in 0..2000 {
+            if aborts.iter().all(|a| a.is_finished()) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("dial loops still running after stop");
     }
 
     #[test]
