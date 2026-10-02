@@ -8,7 +8,7 @@ set -eu
 
 launchctl bootout system/ai.weftos.mesh || true
 launchctl bootout system/ai.weftos.mesh-rundir || true
-rm -f /Library/LaunchDaemons/ai.weftos.mesh.plist /Library/LaunchDaemons/ai.weftos.mesh-rundir.plist
+rm -f /Library/LaunchDaemons/ai.weftos.mesh.plist /Library/LaunchDaemons/ai.weftos.mesh-rundir.plist /etc/newsyslog.d/weftos-mesh.conf
 rm -f /usr/local/libexec/weftos/weaver
 rmdir /usr/local/libexec/weftos 2>/dev/null || true
 rm -rf /var/run/weftos

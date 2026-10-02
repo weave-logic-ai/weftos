@@ -7,7 +7,7 @@ set -eu
 [ "$(id -u)" -eq 0 ] || { echo 'run this script as root' >&2; exit 1; }
 
 systemctl disable --now weftos-mesh || true
-rm -f /etc/systemd/system/weftos-mesh.service /usr/lib/sysusers.d/weftos-mesh.conf
+rm -f /etc/systemd/system/weftos-mesh.service /etc/sysusers.d/weftos-mesh.conf
 systemctl daemon-reload
 rm -f /usr/local/libexec/weftos/weaver
 rmdir /usr/local/libexec/weftos 2>/dev/null || true

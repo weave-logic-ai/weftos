@@ -10,8 +10,6 @@ Type=simple
 User=weftos
 Group=weftos
 ExecStart="/usr/local/libexec/weftos/weaver" mesh serve --config /etc/weftos/mesh.toml
-Environment="WEFTOS_MESH_STATE_DIR=/var/lib/weftos/mesh"
-Environment="WEFTOS_MESH_SOCKET=/var/run/weftos/mesh.sock"
 Restart=always
 RestartSec=3
 StateDirectory=weftos/mesh

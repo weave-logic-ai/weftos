@@ -11,6 +11,7 @@
 //! 9489).
 
 use std::io::Write;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
@@ -67,9 +68,36 @@ pub struct Plan {
     /// The `weaver` to copy into [`SERVICE_EXE`].
     pub exe: PathBuf,
     pub adopt_node_key: Option<PathBuf>,
-    pub listen: String,
+    pub listen: SocketAddr,
     pub admin_uids: Vec<u32>,
     pub purge_key: bool,
+    /// `exe` already is the installed copy: nothing to copy.
+    pub skip_copy: bool,
+}
+
+/// Parse `--listen`: a socket address, or `localhost:PORT` (loopback).
+pub fn parse_listen(s: &str) -> Result<SocketAddr> {
+    let s = s.trim();
+    let fixed = s.strip_prefix("localhost:").map_or_else(|| s.to_owned(), |p| format!("127.0.0.1:{p}"));
+    fixed
+        .parse::<SocketAddr>()
+        .map_err(|e| anyhow::anyhow!("--listen `{s}` is not a valid address (expected IP:PORT such as 127.0.0.1:9489): {e}"))
+}
+
+/// Warnings for flags that the chosen verb ignores (printed to stderr).
+pub fn ignored_flag_warnings(a: &InstallArgs, uninstall: bool) -> Vec<String> {
+    let mut w = Vec::new();
+    if uninstall {
+        if a.listen != DEFAULT_LISTEN {
+            w.push("--listen is ignored by uninstall-service".to_owned());
+        }
+        if !a.admin_uids.is_empty() {
+            w.push("--admin-uid is ignored by uninstall-service".to_owned());
+        }
+    } else if a.purge_key {
+        w.push("--purge-key is ignored by install-service (it never deletes a key)".to_owned());
+    }
+    w
 }
 
 fn no_control(what: &str, p: &Path) -> Result<()> {
@@ -89,14 +117,14 @@ impl Plan {
         if let Some(k) = &a.adopt_node_key {
             no_control("--adopt-node-key", k)?;
         }
-        if a.listen.chars().any(|c| c.is_control() || c == '"' || c == '\\') || a.listen.trim().is_empty() {
-            bail!("--listen must be host:port without quotes or control characters");
-        }
+        let listen = parse_listen(&a.listen)?;
+        let exe = canonical_exe(exe);
         Ok(Plan {
             manager: a.kind.unwrap_or_else(Manager::host_default),
-            exe: canonical_exe(exe),
+            skip_copy: exe == canonical_exe(Path::new(SERVICE_EXE)),
+            exe,
             adopt_node_key: a.adopt_node_key.clone(),
-            listen: a.listen.clone(),
+            listen,
             admin_uids: a.admin_uids.clone(),
             purge_key: a.purge_key,
         })
@@ -114,6 +142,18 @@ impl Plan {
             Manager::Launchd => macos_group(),
             Manager::Systemd => linux_group(),
         }
+    }
+
+    /// Exposure warnings, for the script header and stderr.
+    pub fn listen_notes(&self) -> Vec<String> {
+        let mut n = Vec::new();
+        if !self.listen.ip().is_loopback() {
+            n.push(format!("listen {} exposes the mesh port beyond this machine (the default is 127.0.0.1:9489)", self.listen));
+        }
+        if self.listen.port() < 1024 {
+            n.push(format!("port {} is privileged; the service runs unprivileged with no capabilities and will fail to bind it", self.listen.port()));
+        }
+        n
     }
 
     fn root_group(&self) -> &'static str {
@@ -163,14 +203,15 @@ pub fn install_script(p: &Plan) -> String {
 #  - installs a root-owned copy of weaver at {SERVICE_EXE} (the service never runs from a\n\
 #    user-writable path)\n\
 #  - writes {MESH_TOML} (only if absent) and installs the unit; it does NOT start the service\n\
-set -eu\n\
+{notes}set -eu\n\
 [ \"$(id -u)\" -eq 0 ] || {{ echo 'run this script as root (sudo sh install.sh)' >&2; exit 1; }}\n\
 TARGET_USER=\"${{SUDO_USER:-}}\"\n\
 [ -n \"$TARGET_USER\" ] && [ \"$TARGET_USER\" != root ] || {{ echo 'run it with sudo from your own account so the group member can be your user' >&2; exit 1; }}\n\n",
         match p.manager {
             Manager::Launchd => "launchd",
             Manager::Systemd => "systemd",
-        }
+        },
+        notes = p.listen_notes().iter().map(|n| format!("# WARNING: {n}\n")).collect::<String>(),
     ));
 
     s.push_str("# --- account and group ---\n");
@@ -198,36 +239,53 @@ install -d -m 0750 -o {acct} -g {group} {RUN_DIR}\n"
     }
 
     s.push_str("\n# --- binary (root-owned copy) ---\n");
-    s.push_str(&format!(
-        "install -m 0755 -o root -g {rg} {} {SERVICE_EXE}\n",
-        sh_quote(&p.exe.to_string_lossy())
-    ));
+    if p.skip_copy {
+        s.push_str(&format!("# this weaver already is {SERVICE_EXE}; nothing to copy\n"));
+    } else {
+        s.push_str(&format!(
+            "install -m 0755 -o root -g {rg} {} {SERVICE_EXE}\n",
+            sh_quote(&p.exe.to_string_lossy())
+        ));
+    }
 
     if let Some(key) = &p.adopt_node_key {
         s.push_str("\n# --- adopt the existing node key (the key will exist in two places; node id unchanged) ---\n");
+        let k = sh_quote(&key.to_string_lossy());
         s.push_str(&format!(
-            "[ ! -e {STATE_DIR}/node.key ] || {{ echo '{STATE_DIR}/node.key already exists; not overwriting' >&2; exit 1; }}\n\
-install -m 0600 -o {acct} -g {group} {} {STATE_DIR}/node.key\n",
-            sh_quote(&key.to_string_lossy())
+            "if [ -e {STATE_DIR}/node.key ]; then\n\
+  if cmp -s {k} {STATE_DIR}/node.key; then\n\
+    echo 'node key already adopted (identical); leaving it'\n\
+  else\n\
+    echo '{STATE_DIR}/node.key exists and differs from the key to adopt; not overwriting' >&2\n\
+    exit 1\n\
+  fi\n\
+else\n\
+  install -m 0600 -o {acct} -g {group} {k} {STATE_DIR}/node.key\n\
+fi\n"
         ));
     }
 
     s.push_str("\n# --- configuration (kept if already present) ---\n");
     s.push_str(&format!("if [ ! -e {MESH_TOML} ]; then\n"));
     heredoc(&mut s, MESH_TOML, "0644", &format!("root:{rg}"), &mesh_toml(p));
-    s.push_str("fi\n");
+    s.push_str(&format!(
+        "else\n  echo '{MESH_TOML} exists; kept as is (--listen and --admin-uid were NOT applied; edit it yourself)'\nfi\n"
+    ));
 
     s.push_str("\n# --- unit ---\n");
-    let (exe, state, sock) = (Path::new(SERVICE_EXE), Path::new(STATE_DIR), Path::new(SOCKET));
+    let (exe, state) = (Path::new(SERVICE_EXE), Path::new(STATE_DIR));
     match p.manager {
         Manager::Launchd => {
             heredoc(&mut s, RUNDIR_PLIST_PATH, "0644", "root:wheel", &launchd_rundir_plist());
-            heredoc(&mut s, MESH_PLIST_PATH, "0644", "root:wheel", &launchd_system_plist(exe, state, sock));
-            s.push_str(&format!("# macOS clears /var/run at boot; {MESH_RUNDIR_LABEL} recreates {RUN_DIR} (group {group}, 0750).\n"));
+            heredoc(&mut s, MESH_PLIST_PATH, "0644", "root:wheel", &launchd_system_plist(exe, state));
+            s.push_str("install -d -m 0755 -o root -g wheel /etc/newsyslog.d\n");
+            heredoc(&mut s, NEWSYSLOG_PATH, "0644", "root:wheel", &newsyslog_conf());
+            s.push_str(&format!("# macOS clears /var/run at boot; {MESH_RUNDIR_LABEL} recreates {RUN_DIR} (group {group}, 0750).\n\
+# The service may start before it does; launchd retries every 10 s (ThrottleInterval) until it exists.\n"));
             s.push_str(&format!("launchctl bootstrap system {RUNDIR_PLIST_PATH} || true\n"));
         }
         Manager::Systemd => {
-            heredoc(&mut s, MESH_UNIT_PATH, "0644", "root:root", &systemd_system_unit(exe, state, sock));
+            heredoc(&mut s, MESH_UNIT_PATH, "0644", "root:root", &systemd_system_unit(exe));
             s.push_str("systemctl daemon-reload\n");
         }
     }
@@ -264,7 +322,7 @@ set -eu\n\
         Manager::Launchd => s.push_str(&format!(
             "launchctl bootout system/{MESH_LAUNCHD_LABEL} || true\n\
 launchctl bootout system/{MESH_RUNDIR_LABEL} || true\n\
-rm -f {MESH_PLIST_PATH} {RUNDIR_PLIST_PATH}\n"
+rm -f {MESH_PLIST_PATH} {RUNDIR_PLIST_PATH} {NEWSYSLOG_PATH}\n"
         )),
         Manager::Systemd => s.push_str(&format!(
             "systemctl disable --now {MESH_SYSTEMD_UNIT} || true\n\
@@ -301,8 +359,8 @@ rm -f {STATE_DIR}/node.key\n"
 /// Entry points from `mesh_cmd`.
 pub fn run_install(a: &InstallArgs, w: &mut dyn Write) -> Result<()> {
     let p = Plan::from_args(a, &std::env::current_exe()?)?;
-    if !p.listen.starts_with("127.") && !p.listen.starts_with("[::1]") && !p.listen.starts_with("localhost") {
-        eprintln!("note: listen {} exposes the mesh port beyond this machine", p.listen);
+    for m in ignored_flag_warnings(a, false).into_iter().chain(p.listen_notes()) {
+        eprintln!("note: {m}");
     }
     w.write_all(install_script(&p).as_bytes())?;
     Ok(())
@@ -313,6 +371,9 @@ pub fn run_uninstall(a: &InstallArgs, w: &mut dyn Write) -> Result<()> {
         bail!("--adopt-node-key applies to install-service only");
     }
     let p = Plan::from_args(a, &std::env::current_exe()?)?;
+    for m in ignored_flag_warnings(a, true) {
+        eprintln!("note: {m}");
+    }
     w.write_all(uninstall_script(&p).as_bytes())?;
     Ok(())
 }
@@ -326,10 +387,15 @@ mod tests {
             manager: m,
             exe: PathBuf::from("/opt/we ftos/it's/weaver"),
             adopt_node_key: None,
-            listen: DEFAULT_LISTEN.into(),
+            listen: parse_listen(DEFAULT_LISTEN).unwrap(),
             admin_uids: vec![],
             purge_key: false,
+            skip_copy: false,
         }
+    }
+
+    fn args() -> InstallArgs {
+        InstallArgs { kind: None, apply: false, adopt_node_key: None, listen: DEFAULT_LISTEN.into(), admin_uids: vec![], purge_key: false }
     }
 
     fn check_golden(name: &str, got: &str) {
@@ -343,6 +409,7 @@ mod tests {
     #[test]
     fn scripts_match_golden() {
         let mut adopt = plan(Manager::Launchd);
+        adopt.listen = parse_listen("0.0.0.0:9489").unwrap();
         adopt.adopt_node_key = Some(PathBuf::from("/Users/a b/.weftos/run/node.key"));
         adopt.admin_uids = vec![501];
         check_golden("mesh-install-launchd.sh", &install_script(&adopt));
@@ -373,11 +440,14 @@ mod tests {
         assert!(mesh_toml(&plan(Manager::Systemd)).contains("listen = \"127.0.0.1:9489\""));
         for m in [Manager::Launchd, Manager::Systemd] {
             for text in [install_script(&plan(m)), uninstall_script(&plan(m))] {
-                if let Ok(mut c) = std::process::Command::new("sh").arg("-n").stdin(std::process::Stdio::piped()).spawn() {
-                    use std::io::Write as _;
-                    c.stdin.take().unwrap().write_all(text.as_bytes()).unwrap();
-                    assert!(c.wait().unwrap().success(), "sh -n failed");
-                }
+                let mut c = std::process::Command::new("sh")
+                    .arg("-n")
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+                    .expect("`sh` must be spawnable to syntax-check the printed scripts");
+                use std::io::Write as _;
+                c.stdin.take().unwrap().write_all(text.as_bytes()).unwrap();
+                assert!(c.wait().unwrap().success(), "sh -n failed");
             }
         }
     }
@@ -396,7 +466,7 @@ mod tests {
 
     #[test]
     fn apply_is_refused_and_uninstall_keeps_the_key() {
-        let a = InstallArgs { kind: None, apply: true, adopt_node_key: None, listen: DEFAULT_LISTEN.into(), admin_uids: vec![], purge_key: false };
+        let a = InstallArgs { apply: true, ..args() };
         assert!(Plan::from_args(&a, Path::new("/x/weaver")).unwrap_err().to_string().contains("--apply is refused"));
         for m in [Manager::Launchd, Manager::Systemd] {
             let keep = uninstall_script(&plan(m));
@@ -409,7 +479,69 @@ mod tests {
 
     #[test]
     fn control_characters_are_refused() {
-        let a = InstallArgs { kind: None, apply: false, adopt_node_key: Some("/k\nrm -rf /".into()), listen: DEFAULT_LISTEN.into(), admin_uids: vec![], purge_key: false };
+        let a = InstallArgs { adopt_node_key: Some("/k\nrm -rf /".into()), ..args() };
         assert!(Plan::from_args(&a, Path::new("/x/weaver")).is_err());
+    }
+
+    #[test]
+    fn adopt_is_rerunnable_and_never_overwrites_a_different_key() {
+        let mut p = plan(Manager::Systemd);
+        p.adopt_node_key = Some(PathBuf::from("/home/a/.weftos/run/node.key"));
+        let t = install_script(&p);
+        assert!(t.contains("if cmp -s '/home/a/.weftos/run/node.key' /var/lib/weftos/mesh/node.key; then"));
+        assert!(t.contains("exists and differs from the key to adopt; not overwriting"));
+        assert!(t.contains("install -m 0600 -o weftos -g weftos '/home/a/.weftos/run/node.key'"));
+    }
+
+    #[test]
+    fn existing_mesh_toml_says_flags_were_not_applied() {
+        assert!(install_script(&plan(Manager::Systemd)).contains("were NOT applied"));
+    }
+
+    #[test]
+    fn listen_is_parsed_and_exposure_is_flagged() {
+        assert!(parse_listen("not-an-address").is_err());
+        assert!(parse_listen("127.0.0.1:99999").is_err());
+        assert_eq!(parse_listen("localhost:9489").unwrap().to_string(), "127.0.0.1:9489");
+        let mut p = plan(Manager::Systemd);
+        assert!(p.listen_notes().is_empty());
+        assert!(!install_script(&p).contains("WARNING"));
+        p.listen = parse_listen("0.0.0.0:443").unwrap();
+        assert_eq!(p.listen_notes().len(), 2);
+        let t = install_script(&p);
+        assert!(t.contains("# WARNING: listen 0.0.0.0:443 exposes the mesh port"));
+        assert!(t.contains("is privileged"));
+        assert!(mesh_toml(&p).contains("listen = \"0.0.0.0:443\""));
+        // [::1] is loopback too.
+        p.listen = parse_listen("[::1]:9489").unwrap();
+        assert!(p.listen_notes().is_empty());
+    }
+
+    #[test]
+    fn ignored_flags_are_reported() {
+        assert!(ignored_flag_warnings(&args(), true).is_empty());
+        let a = InstallArgs { listen: "0.0.0.0:9489".into(), admin_uids: vec![1], purge_key: true, ..args() };
+        assert_eq!(ignored_flag_warnings(&a, true).len(), 2);
+        assert_eq!(ignored_flag_warnings(&a, false).len(), 1);
+    }
+
+    #[test]
+    fn running_from_the_installed_copy_skips_the_copy() {
+        let mut p = plan(Manager::Systemd);
+        p.skip_copy = true;
+        let t = install_script(&p);
+        assert!(!t.contains("install -m 0755 -o root -g root '"));
+        assert!(t.contains("already is /usr/local/libexec/weftos/weaver"));
+        let pl = Plan::from_args(&args(), Path::new(SERVICE_EXE)).unwrap();
+        assert!(pl.skip_copy);
+    }
+
+    #[test]
+    fn macos_gets_rotation_and_atomic_rundir() {
+        let t = install_script(&plan(Manager::Launchd));
+        assert!(t.contains("/etc/newsyslog.d/weftos-mesh.conf"));
+        assert!(t.contains("-o _weftos -g _weftos /var/run/weftos</string>"));
+        assert!(uninstall_script(&plan(Manager::Launchd)).contains("/etc/newsyslog.d/weftos-mesh.conf"));
+        assert!(install_script(&plan(Manager::Systemd)).contains("/etc/sysusers.d/weftos-mesh.conf"));
     }
 }

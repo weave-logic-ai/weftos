@@ -8,7 +8,7 @@
     <array>
         <string>/bin/sh</string>
         <string>-c</string>
-        <string>/bin/mkdir -p /var/run/weftos &amp;&amp; /usr/sbin/chown _weftos:_weftos /var/run/weftos &amp;&amp; /bin/chmod 0750 /var/run/weftos</string>
+        <string>/usr/bin/install -d -m 0750 -o _weftos -g _weftos /var/run/weftos</string>
     </array>
     <key>RunAtLoad</key>
     <true/>

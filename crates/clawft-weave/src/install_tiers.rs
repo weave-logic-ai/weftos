@@ -53,6 +53,28 @@ pub fn upsert_tier(receipt: &mut Value, t: Tier) {
     receipt["tiers"] = Value::Array(list);
 }
 
+/// Build identity inside a stamp: package version and, when present, the git
+/// hash. Stamps look like `0.8.1 (abc123-dirty 2026-10-01T12:00Z) [feats]`
+/// (`BUILD_VERSION`) or just `0.8.1` (a library default); the timestamp and
+/// feature suffix are rebuild noise and never compared.
+pub fn build_identity(stamp: &str) -> (String, Option<String>) {
+    let stamp = stamp.trim();
+    let version = stamp.split_whitespace().next().unwrap_or("").to_owned();
+    let hash = stamp
+        .split_once('(')
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .map(|h| h.trim_end_matches(')').to_owned())
+        .filter(|h| !h.is_empty() && h != "unknown");
+    (version, hash)
+}
+
+/// Whether two stamps name the same build. Versions must match; hashes must
+/// match when both stamps carry one (a bare-version stamp cannot disagree).
+pub fn same_build(a: &str, b: &str) -> bool {
+    let ((va, ha), (vb, hb)) = (build_identity(a), build_identity(b));
+    va == vb && (ha.is_none() || hb.is_none() || ha == hb)
+}
+
 /// What the running service reports about itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceObserved {
@@ -73,7 +95,7 @@ pub fn skew_findings(receipt: &[Tier], observed: Option<&ServiceObserved>, own_s
         }
         return out;
     };
-    if o.build_sha == own_sha {
+    if same_build(&o.build_sha, own_sha) {
         out.push(Finding::new(c, "tier.service", Severity::Ok, format!("service build {} matches this weaver", o.build_sha)));
     } else {
         out.push(
@@ -82,7 +104,7 @@ pub fn skew_findings(receipt: &[Tier], observed: Option<&ServiceObserved>, own_s
         );
     }
     if let Some(t) = receipt.iter().find(|t| t.name == "service")
-        && t.sha != o.build_sha
+        && !same_build(&t.sha, &o.build_sha)
     {
         out.push(Finding::new(
             c,
@@ -112,7 +134,7 @@ impl Manager {
 /// administrator; nothing here runs `sudo` or signals a process.
 pub fn service_update_lines(manager: Manager, packaged_exe: &Path, packaged_sha: &str, service: Option<&ServiceObserved>) -> Vec<String> {
     let Some(s) = service else { return Vec::new() };
-    if s.build_sha == packaged_sha {
+    if same_build(&s.build_sha, packaged_sha) {
         return Vec::new();
     }
     let exe = crate::service_units::sh_quote(&packaged_exe.to_string_lossy());
@@ -160,6 +182,35 @@ mod tests {
         let gone = skew_findings(&[tier("service", "a")], None, "x");
         assert_eq!(gone[0].severity, Severity::Warn);
         assert!(skew_findings(&[], None, "x").is_empty());
+    }
+
+    #[test]
+    fn identical_build_compares_equal_and_a_different_hash_does_not() {
+        // The weaver side stamps BUILD_VERSION; `mesh serve` copies it into the
+        // service record, so the record of an identical build carries it verbatim.
+        let own = env!("BUILD_VERSION");
+        assert!(same_build(own, own));
+        // Same commit rebuilt later (different timestamp / features): still equal.
+        let (v, h) = build_identity(own);
+        let h = h.expect("BUILD_VERSION carries a git hash");
+        assert!(same_build(own, &format!("{v} ({h} 1999-01-01T00:00Z) [other-feature]")));
+        // A different hash is a different build.
+        assert!(!same_build(own, &format!("{v} (deadbee-other 2026-01-01T00:00Z)")));
+        assert!(!same_build(own, &format!("0.0.1-other ({h} 2026-01-01T00:00Z)")));
+        // The service crate's own default stamp (version only) cannot disagree on the hash.
+        #[cfg(all(unix, feature = "mesh"))]
+        {
+            let default = clawft_mesh_service::MeshServiceConfig::default().build_sha;
+            assert_eq!(build_identity(&default).1, None);
+            assert_eq!(same_build(own, &default), build_identity(own).0 == build_identity(&default).0);
+        }
+        // End to end: findings and update lines are quiet for an equal build.
+        let o = ServiceObserved { build_sha: own.into() };
+        assert_eq!(skew_findings(&[], Some(&o), own)[0].severity, Severity::Ok);
+        assert!(service_update_lines(Manager::Systemd, Path::new("/x"), own, Some(&o)).is_empty());
+        let other = ServiceObserved { build_sha: format!("{v} (deadbee 2026)") };
+        assert!(!service_update_lines(Manager::Systemd, Path::new("/x"), own, Some(&other)).is_empty());
+        assert_eq!(skew_findings(&[], Some(&other), own)[0].severity, Severity::Warn);
     }
 
     #[test]

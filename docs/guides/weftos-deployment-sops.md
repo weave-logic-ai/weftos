@@ -233,7 +233,16 @@ What the script does:
   macOS clears `/var/run`; or `/etc/systemd/system/weftos-mesh.service`);
 - with `--adopt-node-key PATH`, copies that key to `/var/lib/weftos/mesh/node.key`
   (0600, service account) so the node id does not change. It refuses to overwrite an
-  existing key. The key then exists in two places until you remove the old copy.
+  existing different key; an identical key is a no-op, so the script can be re-run.
+  The key then exists in two places until you remove the old copy;
+- the script is re-runnable. An existing `mesh.toml` is kept and the script says that
+  `--listen` / `--admin-uid` were not applied. `--listen` must be `IP:PORT`; a
+  non-loopback address or a port below 1024 is flagged in the script header and on
+  stderr (the service has no capabilities and cannot bind a privileged port). Paths
+  and ports come from `mesh.toml` only; the units set no environment overrides;
+- macOS: the log is `/var/log/weftos/mesh.log`, rotated by
+  `/etc/newsyslog.d/weftos-mesh.conf`. The service can start before the rundir helper
+  has created `/var/run/weftos`; launchd retries every 10 s until it exists.
 
 The last line is the enable command, printed and commented, not run:
 `sudo launchctl bootstrap system /Library/LaunchDaemons/ai.weftos.mesh.plist` or

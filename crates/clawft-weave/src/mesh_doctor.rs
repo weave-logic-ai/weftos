@@ -23,6 +23,10 @@ pub struct FileStat {
 /// Everything the checks read, injectable.
 #[derive(Debug, Clone, Default)]
 pub struct MeshProbe {
+    /// `service.json` exists but this user cannot read it (not in the service group).
+    pub record_unreadable: bool,
+    /// Uid this doctor runs as (the service's own pid is visible to lsof when equal to `service_uid`).
+    pub own_uid: u32,
     /// `service.json` loaded (None: no service has run here).
     pub record_pubkey: Option<[u8; 32]>,
     pub record_present: bool,
@@ -38,9 +42,10 @@ pub struct MeshProbe {
     pub box_key: Option<FileStat>,
     /// `~/.weftos/run/node.key` exists.
     pub user_node_key: bool,
-    /// Distinct pids listening on the mesh port (None: could not tell).
+    /// Distinct pids listening on the mesh port that `lsof` can see, i.e. this
+    /// account's own processes (None: could not tell).
     pub listener_pids: Option<Vec<u32>>,
-    /// Executable of the running service, when known.
+    /// Executable named by the installed unit file (not proof of what runs).
     pub service_exe: Option<PathBuf>,
 }
 
@@ -55,14 +60,34 @@ fn user_writable(p: &std::path::Path, home: &std::path::Path) -> bool {
 /// Turn a probe into findings.
 pub fn findings(p: &MeshProbe, home: &std::path::Path) -> Vec<Finding> {
     let mut out = Vec::new();
-    // Two listeners on the mesh port is a FAIL whatever else is true.
-    if let Some(pids) = &p.listener_pids
-        && pids.len() > 1
-    {
+    // `lsof` only shows this account's processes, so a listener held by another
+    // account is invisible. Signal: the service answers (or this user is the
+    // service's own uid) AND a visible process also listens on 9489, or two
+    // visible processes do.
+    if let Some(pids) = &p.listener_pids {
+        let service_is_us = p.service_uid.is_some_and(|u| u == p.own_uid);
+        let allowed = usize::from(p.status.is_some() && service_is_us);
+        let conflict = if p.status.is_some() { pids.len() > allowed } else { pids.len() > 1 };
+        if conflict {
+            out.push(
+                f(
+                    "listeners",
+                    Severity::Fail,
+                    format!(
+                        "port 9489 is held by process(es) {pids:?} in your account while the service{} also needs it; the service and a collapsed daemon must not both bind it (this check cannot see other accounts' processes)",
+                        if p.status.is_some() { " is running and" } else { "" }
+                    ),
+                )
+                .remedy("weaver kernel stop   (a daemon binds 9489 itself only in collapsed mode)"),
+            );
+        }
+    }
+    if p.record_unreadable {
         out.push(
-            f("listeners", Severity::Fail, format!("{} processes listen on 9489 (pids {pids:?}); the service and a collapsed daemon must not both bind it", pids.len()))
-                .remedy("weaver kernel stop   (the daemon binds 9489 itself only in collapsed mode)"),
+            f("service", Severity::Warn, "the service directory is not readable by this user, so the mesh checks cannot run; you are probably not in the service group")
+                .remedy("add yourself to group _weftos (macOS: sudo dseditgroup -o edit -a $USER -t user _weftos) or weftos (Linux: sudo usermod -aG weftos $USER), then log in again"),
         );
+        return out;
     }
     if !p.record_present {
         out.push(f("service", Severity::Ok, "no machine mesh service on this host (collapsed mode); nothing to check"));
@@ -131,7 +156,7 @@ pub fn findings(p: &MeshProbe, home: &std::path::Path) -> Vec<Finding> {
     if p.user_node_key {
         out.push(
             f("node_key_dup", Severity::Warn, "~/.weftos/run/node.key still exists while the service is active (the key is in two places)")
-                .remedy("after the Pi/peers still see this node id: rm ~/.weftos/run/node.key"),
+                .remedy("once `weaver mesh status` shows the node id peers already know, delete the old copy: rm ~/.weftos/run/node.key (keep a backup until peers reconnect)"),
         );
     }
 
@@ -139,7 +164,7 @@ pub fn findings(p: &MeshProbe, home: &std::path::Path) -> Vec<Finding> {
         && user_writable(exe, home)
     {
         out.push(
-            f("exe", Severity::Fail, format!("the running service executable {} is in a user-writable directory; that user could replace it and take the box key", exe.display()))
+            f("exe", Severity::Fail, format!("the installed service unit runs {}, which is in a user-writable directory; that user could replace it and take the box key", exe.display()))
                 .remedy(format!("run the service from {SERVICE_EXE} (weaver mesh install-service)")),
         );
     }
@@ -179,6 +204,15 @@ fn stat_of(p: &std::path::Path) -> Option<FileStat> {
     Some(FileStat { mode: m.mode(), uid: m.uid() })
 }
 
+/// Executable named by the installed launchd/systemd unit, when readable.
+fn installed_unit_exe() -> Option<PathBuf> {
+    [crate::service_units_system::MESH_PLIST_PATH, crate::service_units_system::MESH_UNIT_PATH]
+        .iter()
+        .find_map(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| crate::service_units_system::unit_exe(&t))
+        .map(PathBuf::from)
+}
+
 /// Read the system into a probe. Read-only.
 pub async fn gather(home: &std::path::Path) -> MeshProbe {
     use crate::commands::mesh_cmd::{socket_of, status_for_doctor, ConnArgs};
@@ -186,8 +220,16 @@ pub async fn gather(home: &std::path::Path) -> MeshProbe {
 
     let conn = ConnArgs::default();
     let sock = socket_of(&conn);
-    let rec = sock.parent().map(|d| d.join("service.json")).and_then(|p| ServiceRecord::load(&p).ok());
+    let loaded = sock
+        .parent()
+        .map(|d| ServiceRecord::load(&d.join("service.json")))
+        .unwrap_or_else(|| Err(std::io::ErrorKind::NotFound.into()));
+    let unreadable = matches!(&loaded, Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied);
+    let rec = loaded.ok();
     let mut p = MeshProbe {
+        record_unreadable: unreadable,
+        own_uid: nix::unistd::geteuid().as_raw(),
+        service_exe: installed_unit_exe(),
         record_present: rec.is_some(),
         record_pubkey: rec.as_ref().map(|r| r.machine_pubkey),
         service_uid: rec.as_ref().map(|r| r.service_uid),
@@ -252,6 +294,54 @@ mod tests {
         assert_eq!(sev(&findings(&p, Path::new("/h")), "listeners"), Severity::Fail);
         let one = MeshProbe { listener_pids: Some(vec![10]), ..MeshProbe::default() };
         assert!(!findings(&one, Path::new("/h")).iter().any(|x| x.id == "mesh.listeners"));
+    }
+
+    #[test]
+    fn a_collapsed_daemon_next_to_a_running_service_fails() {
+        // Service owned by another account (invisible to lsof) + one visible listener of ours.
+        let mut p = running();
+        p.own_uid = 501;
+        p.listener_pids = Some(vec![4242]);
+        let v = findings(&p, Path::new("/h"));
+        assert_eq!(sev(&v, "listeners"), Severity::Fail);
+        assert!(v.iter().find(|x| x.id == "mesh.listeners").unwrap().message.contains("cannot see other accounts"));
+        // The service running as us shows up as ONE visible pid: not a conflict.
+        p.own_uid = 300;
+        assert!(!findings(&p, Path::new("/h")).iter().any(|x| x.id == "mesh.listeners"));
+        p.listener_pids = Some(vec![4242, 4243]);
+        assert_eq!(sev(&findings(&p, Path::new("/h")), "listeners"), Severity::Fail);
+        // No visible listener: nothing to report.
+        p.listener_pids = Some(vec![]);
+        assert!(!findings(&p, Path::new("/h")).iter().any(|x| x.id == "mesh.listeners"));
+    }
+
+    #[test]
+    fn unreadable_service_directory_warns_instead_of_reporting_collapsed() {
+        let p = MeshProbe { record_unreadable: true, ..MeshProbe::default() };
+        let v = findings(&p, Path::new("/h"));
+        assert_eq!(sev(&v, "service"), Severity::Warn);
+        let f = v.iter().find(|x| x.id == "mesh.service").unwrap();
+        assert!(f.remedy.as_deref().unwrap().contains("_weftos"));
+        assert!(!f.message.contains("collapsed"));
+    }
+
+    #[test]
+    fn denied_read_of_service_json_is_not_collapsed_mode() {
+        // Real filesystem: a directory with mode 000 makes service.json PermissionDenied.
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let run = d.path().join("run");
+        std::fs::create_dir(&run).unwrap();
+        std::fs::write(run.join("service.json"), "{}").unwrap();
+        std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = clawft_mesh_local::proto::ServiceRecord::load(&run.join("service.json"));
+        let missing = clawft_mesh_local::proto::ServiceRecord::load(&d.path().join("none/service.json"));
+        std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if nix::unistd::geteuid().is_root() {
+            return; // root ignores modes
+        }
+        assert_eq!(denied.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(missing.unwrap_err().kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]

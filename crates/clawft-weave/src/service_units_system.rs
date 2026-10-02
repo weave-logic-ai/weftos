@@ -47,7 +47,9 @@ pub const RUNDIR_PLIST_PATH: &str = "/Library/LaunchDaemons/ai.weftos.mesh-rundi
 /// Where the systemd unit is installed.
 pub const MESH_UNIT_PATH: &str = "/etc/systemd/system/weftos-mesh.service";
 /// Where the sysusers fragment is installed.
-pub const SYSUSERS_PATH: &str = "/usr/lib/sysusers.d/weftos-mesh.conf";
+pub const SYSUSERS_PATH: &str = "/etc/sysusers.d/weftos-mesh.conf";
+/// Where the macOS log-rotation snippet is installed.
+pub const NEWSYSLOG_PATH: &str = "/etc/newsyslog.d/weftos-mesh.conf";
 
 /// Group that owns `/var/run/weftos` on macOS; users must be members.
 pub fn macos_group() -> &'static str {
@@ -92,21 +94,15 @@ fn systemd_quote(s: &str) -> String {
     out
 }
 
-/// `Environment=` assignment, quoted so spaces and specifiers survive.
-fn systemd_env(key: &str, val: &str) -> String {
-    let v = val.replace('\\', "\\\\").replace('"', "\\\"").replace('%', "%%").replace('$', "$$");
-    format!("Environment=\"{key}={v}\"")
-}
-
 /// The launchd system plist for `/Library/LaunchDaemons/ai.weftos.mesh.plist`.
 ///
 /// Runs `<exe> mesh serve --config /etc/weftos/mesh.toml` as `_weftos:_weftos`
-/// with `KeepAlive` and `RunAtLoad`; `state` and `sock` are passed through the
-/// service's own environment overrides.
-pub fn launchd_system_plist(exe: &Path, state: &Path, sock: &Path) -> String {
+/// with `KeepAlive` and `RunAtLoad`. State and socket paths come from
+/// `mesh.toml` only (no environment overrides, so the file stays the single
+/// source); `state` is the working directory.
+pub fn launchd_system_plist(exe: &Path, state: &Path) -> String {
     let exe = xml_escape(&exe.to_string_lossy());
     let state = xml_escape(&state.to_string_lossy());
-    let sock = xml_escape(&sock.to_string_lossy());
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -128,13 +124,6 @@ pub fn launchd_system_plist(exe: &Path, state: &Path, sock: &Path) -> String {
     </array>
     <key>WorkingDirectory</key>
     <string>{state}</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>WEFTOS_MESH_STATE_DIR</key>
-        <string>{state}</string>
-        <key>WEFTOS_MESH_SOCKET</key>
-        <string>{sock}</string>
-    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -165,7 +154,7 @@ pub fn launchd_rundir_plist() -> String {
     <array>
         <string>/bin/sh</string>
         <string>-c</string>
-        <string>/bin/mkdir -p {RUN_DIR} &amp;&amp; /usr/sbin/chown {MACOS_ACCOUNT}:{MACOS_ACCOUNT} {RUN_DIR} &amp;&amp; /bin/chmod 0750 {RUN_DIR}</string>
+        <string>/usr/bin/install -d -m 0750 -o {MACOS_ACCOUNT} -g {MACOS_ACCOUNT} {RUN_DIR}</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -179,10 +168,8 @@ pub fn launchd_rundir_plist() -> String {
 ///
 /// `RuntimeDirectory=weftos` is created owned by `weftos:weftos`; mode 0750
 /// makes group membership the access rule for the socket.
-pub fn systemd_system_unit(exe: &Path, state: &Path, sock: &Path) -> String {
+pub fn systemd_system_unit(exe: &Path) -> String {
     let exec = systemd_quote(&exe.to_string_lossy());
-    let env_state = systemd_env("WEFTOS_MESH_STATE_DIR", &state.to_string_lossy());
-    let env_sock = systemd_env("WEFTOS_MESH_SOCKET", &sock.to_string_lossy());
     format!(
         "[Unit]\n\
 Description=WeftOS machine mesh service\n\
@@ -196,8 +183,6 @@ Type=simple\n\
 User={LINUX_ACCOUNT}\n\
 Group={LINUX_ACCOUNT}\n\
 ExecStart={exec} mesh serve --config {MESH_TOML}\n\
-{env_state}\n\
-{env_sock}\n\
 Restart=always\n\
 RestartSec=3\n\
 StateDirectory=weftos/mesh\n\
@@ -216,7 +201,7 @@ WantedBy=multi-user.target\n"
     )
 }
 
-/// `/usr/lib/sysusers.d/weftos-mesh.conf`: the `weftos` account and its group.
+/// `/etc/sysusers.d/weftos-mesh.conf`: the `weftos` account and its group.
 pub fn sysusers_conf() -> String {
     format!(
         "# WeftOS machine mesh service account (never root, no login shell).\n\
@@ -242,8 +227,12 @@ pub fn macos_account_snippet() -> String {
 fi
 if ! dscl . -read /Users/{a} >/dev/null 2>&1; then
   GID_=$(dscl . -read /Groups/{a} PrimaryGroupID | awk '{{print $2}}')
+  UID_="$GID_"
+  while dscl . -list /Users UniqueID | awk '{{print $2}}' | grep -qx "$UID_"; do
+    UID_=$((UID_ + 1))
+  done
   dscl . -create /Users/{a}
-  dscl . -create /Users/{a} UniqueID "$GID_"
+  dscl . -create /Users/{a} UniqueID "$UID_"
   dscl . -create /Users/{a} PrimaryGroupID "$GID_"
   dscl . -create /Users/{a} RealName "WeftOS mesh service"
   dscl . -create /Users/{a} UserShell /usr/bin/false
@@ -252,6 +241,49 @@ if ! dscl . -read /Users/{a} >/dev/null 2>&1; then
   dscl . -create /Users/{a} IsHidden 1
 fi
 "#
+    )
+}
+
+/// `/etc/newsyslog.d/weftos-mesh.conf`: rotate the launchd log (macOS).
+pub fn newsyslog_conf() -> String {
+    format!(
+        "# logfilename                owner:group       mode count size  when flags\n\
+{LOG_DIR}/mesh.log   {MACOS_ACCOUNT}:{MACOS_ACCOUNT}   640  5     1024  *    JN\n"
+    )
+}
+
+/// Executable named by an installed unit (the systemd `ExecStart=` or the
+/// first launchd `ProgramArguments` string); `None` when it cannot be parsed.
+pub fn unit_exe(text: &str) -> Option<String> {
+    if let Some(l) = text.lines().find_map(|l| l.strip_prefix("ExecStart=")) {
+        let l = l.trim_start_matches(['-', '@', '+', '!', ' ']);
+        if let Some(rest) = l.strip_prefix('"') {
+            let mut out = String::new();
+            let mut it = rest.chars();
+            while let Some(c) = it.next() {
+                match c {
+                    '"' => return Some(out),
+                    '\\' => out.extend(it.next()),
+                    '%' if it.clone().next() == Some('%') => {
+                        it.next();
+                        out.push('%');
+                    }
+                    '$' if it.clone().next() == Some('$') => {
+                        it.next();
+                        out.push('$');
+                    }
+                    c => out.push(c),
+                }
+            }
+            return None;
+        }
+        return l.split_whitespace().next().map(str::to_owned);
+    }
+    let after = text.split("<key>ProgramArguments</key>").nth(1)?;
+    let after = after.split("<string>").nth(1)?;
+    let raw = after.split("</string>").next()?;
+    Some(
+        raw.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&"),
     )
 }
 
@@ -276,7 +308,7 @@ mod tests {
 
     #[test]
     fn plist_matches_golden() {
-        let got = launchd_system_plist(Path::new(SERVICE_EXE), Path::new(STATE_DIR), Path::new(SOCKET));
+        let got = launchd_system_plist(Path::new(SERVICE_EXE), Path::new(STATE_DIR));
         check_golden("weftos-mesh.plist", &got);
     }
 
@@ -287,7 +319,7 @@ mod tests {
 
     #[test]
     fn unit_matches_golden() {
-        let got = systemd_system_unit(Path::new(SERVICE_EXE), Path::new(STATE_DIR), Path::new(SOCKET));
+        let got = systemd_system_unit(Path::new(SERVICE_EXE));
         check_golden("weftos-mesh.service", &got);
     }
 
@@ -303,7 +335,7 @@ mod tests {
 
     #[test]
     fn unit_is_hardened_and_group_gated() {
-        let t = systemd_system_unit(Path::new(SERVICE_EXE), Path::new(STATE_DIR), Path::new(SOCKET));
+        let t = systemd_system_unit(Path::new(SERVICE_EXE));
         for k in [
             "User=weftos\n", "StateDirectory=weftos/mesh\n", "StateDirectoryMode=0700\n",
             "RuntimeDirectory=weftos\n", "RuntimeDirectoryMode=0750\n", "NoNewPrivileges=yes\n",
@@ -316,8 +348,24 @@ mod tests {
     }
 
     #[test]
+    fn newsyslog_matches_golden() {
+        check_golden("weftos-mesh-newsyslog.conf", &newsyslog_conf());
+    }
+
+    #[test]
+    fn unit_exe_round_trips_both_formats() {
+        for exe in ["/usr/local/libexec/weftos/weaver", "/a b/we\"av%er$", "/Users/a/.cargo/bin/weaver"] {
+            let u = systemd_system_unit(Path::new(exe));
+            assert_eq!(unit_exe(&u).as_deref(), Some(exe), "systemd {exe}");
+        }
+        let p = launchd_system_plist(Path::new("/a b/&<w>"), Path::new("/s"));
+        assert_eq!(unit_exe(&p).as_deref(), Some("/a b/&<w>"));
+        assert_eq!(unit_exe("nothing"), None);
+    }
+
+    #[test]
     fn plist_runs_as_the_service_account_never_root() {
-        let t = launchd_system_plist(Path::new(SERVICE_EXE), Path::new(STATE_DIR), Path::new(SOCKET));
+        let t = launchd_system_plist(Path::new(SERVICE_EXE), Path::new(STATE_DIR));
         assert!(t.contains("<key>UserName</key>\n    <string>_weftos</string>"));
         assert!(t.contains("<key>GroupName</key>\n    <string>_weftos</string>"));
         assert!(!t.contains("<string>root</string>"));
@@ -325,10 +373,10 @@ mod tests {
 
     #[test]
     fn paths_are_escaped() {
-        let t = launchd_system_plist(Path::new("/a b/&<w>"), Path::new("/s"), Path::new("/k"));
+        let t = launchd_system_plist(Path::new("/a b/&<w>"), Path::new("/s"));
         assert!(t.contains("<string>/a b/&amp;&lt;w&gt;</string>"));
-        let u = systemd_system_unit(Path::new("/a b/we\"av%er$"), Path::new("/s p"), Path::new("/k"));
+        let u = systemd_system_unit(Path::new("/a b/we\"av%er$"));
         assert!(u.contains("ExecStart=\"/a b/we\\\"av%%er$$\" mesh serve"));
-        assert!(u.contains("Environment=\"WEFTOS_MESH_STATE_DIR=/s p\""));
+        assert!(!u.contains("Environment="), "paths come from mesh.toml only");
     }
 }

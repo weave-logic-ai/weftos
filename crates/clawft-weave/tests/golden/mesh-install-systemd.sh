@@ -16,12 +16,12 @@ TARGET_USER="${SUDO_USER:-}"
 [ -n "$TARGET_USER" ] && [ "$TARGET_USER" != root ] || { echo 'run it with sudo from your own account so the group member can be your user' >&2; exit 1; }
 
 # --- account and group ---
-cat > /usr/lib/sysusers.d/weftos-mesh.conf.new <<'WEFTOS_EOF'
+cat > /etc/sysusers.d/weftos-mesh.conf.new <<'WEFTOS_EOF'
 # WeftOS machine mesh service account (never root, no login shell).
 u weftos - "WeftOS mesh service" /var/lib/weftos/mesh /usr/sbin/nologin
 WEFTOS_EOF
-chown root:root /usr/lib/sysusers.d/weftos-mesh.conf.new && chmod 0644 /usr/lib/sysusers.d/weftos-mesh.conf.new && mv /usr/lib/sysusers.d/weftos-mesh.conf.new /usr/lib/sysusers.d/weftos-mesh.conf
-systemd-sysusers /usr/lib/sysusers.d/weftos-mesh.conf
+chown root:root /etc/sysusers.d/weftos-mesh.conf.new && chmod 0644 /etc/sysusers.d/weftos-mesh.conf.new && mv /etc/sysusers.d/weftos-mesh.conf.new /etc/sysusers.d/weftos-mesh.conf
+systemd-sysusers /etc/sysusers.d/weftos-mesh.conf
 # add weftos membership for the invoking user
 usermod -aG weftos "$TARGET_USER"
 
@@ -43,6 +43,8 @@ listen = "127.0.0.1:9489"
 health_listen = "127.0.0.1:9490"
 WEFTOS_EOF
 chown root:root /etc/weftos/mesh.toml.new && chmod 0644 /etc/weftos/mesh.toml.new && mv /etc/weftos/mesh.toml.new /etc/weftos/mesh.toml
+else
+  echo '/etc/weftos/mesh.toml exists; kept as is (--listen and --admin-uid were NOT applied; edit it yourself)'
 fi
 
 # --- unit ---
@@ -59,8 +61,6 @@ Type=simple
 User=weftos
 Group=weftos
 ExecStart="/usr/local/libexec/weftos/weaver" mesh serve --config /etc/weftos/mesh.toml
-Environment="WEFTOS_MESH_STATE_DIR=/var/lib/weftos/mesh"
-Environment="WEFTOS_MESH_SOCKET=/var/run/weftos/mesh.sock"
 Restart=always
 RestartSec=3
 StateDirectory=weftos/mesh

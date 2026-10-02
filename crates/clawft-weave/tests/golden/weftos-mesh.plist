@@ -18,13 +18,6 @@
     </array>
     <key>WorkingDirectory</key>
     <string>/var/lib/weftos/mesh</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>WEFTOS_MESH_STATE_DIR</key>
-        <string>/var/lib/weftos/mesh</string>
-        <key>WEFTOS_MESH_SOCKET</key>
-        <string>/var/run/weftos/mesh.sock</string>
-    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
