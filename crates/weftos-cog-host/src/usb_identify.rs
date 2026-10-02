@@ -214,7 +214,7 @@ mod tests {
             pid: 0xea60,
             product: "CP2102".into(),
             serial: Some("SECRETSERIAL999".into()),
-            ports: vec!["/dev/ttyUSB0".into(), "/dev/cu.usbmodem5B5E0063501".into()],
+            ports: vec!["/dev/ttyUSB0".into(), "/dev/cu.usbmodemA1B2C3D4501".into()],
             ..Default::default()
         }
     }
@@ -224,8 +224,8 @@ mod tests {
         let p = build_prompt(&dev(), &UsbIdTable::bundled());
         assert!(p.contains("10c4:ea60") && p.contains("CP2102") && p.contains("/dev/ttyUSB0"));
         assert!(p.contains("id-table hint (from our bundled table): Silicon Labs CP210x"));
-        assert!(!p.contains("SECRETSERIAL999") && !p.contains("5B5E0063501"));
-        assert!(p.contains("cu.usbmodem…3501"));
+        assert!(!p.contains("SECRETSERIAL999") && !p.contains("A1B2C3D4501"));
+        assert!(p.contains("cu.usbmodem…4501"));
         assert!(p.contains("untrusted") && p.contains("<<<DEVICE DATA") && p.contains("DEVICE DATA>>>"));
     }
 

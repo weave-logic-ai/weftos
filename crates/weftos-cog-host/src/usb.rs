@@ -57,7 +57,7 @@ pub fn load_salt(root: &Path) -> String {
     std::fs::read_to_string(&p).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or(s)
 }
 
-/// macOS serial-port names embed the USB serial (`cu.usbmodem5B5E0063501`); anything leaving the
+/// macOS serial-port names embed the USB serial (`cu.usbmodemA1B2C3D4501`); anything leaving the
 /// host shows only `…` plus the last 4 characters of that suffix. Short suffixes (location ids such
 /// as `wchusbserial1410`) and Linux `ttyUSB0`/`ttyACM0` names carry no serial and pass through.
 pub fn redact_port(p: &str) -> String {
@@ -443,7 +443,7 @@ mod tests {
       {"_name":"USB 4.0 Bus","USBKeyLocationID":"0x08000000"},
       {"_name":"USB 3.1 Bus","_items":[
         {"_name":"USB Single Serial","USBDeviceKeyLinkSpeed":"12 Mb/s","USBDeviceKeyProductID":"0x55d3",
-         "USBDeviceKeySerialNumber":"5B5E006350","USBDeviceKeyVendorID":"0x1a86","USBKeyLocationID":"0x01100000"}]},
+         "USBDeviceKeySerialNumber":"A1B2C3D450","USBDeviceKeyVendorID":"0x1a86","USBKeyLocationID":"0x01100000"}]},
       {"_name":"USB 2 Bus","_items":[{"_name":"USB2.1 Hub","USBDeviceKeyProductID":"0x5411","USBDeviceKeySerialNumber":"Not Provided",
         "USBDeviceKeyVendorID":"0x0bda","USBDeviceKeyVendorName":"Generic","USBKeyLocationID":"0x00120000","_items":[
         {"_name":"STLINK-V3","USBDeviceKeyProductID":"0x3754","USBDeviceKeyVendorID":"0x0483","USBDeviceKeySerialNumber":"003A00","USBKeyLocationID":"0x00110000"}]}]}]}"#;
@@ -451,11 +451,11 @@ mod tests {
     #[test]
     fn macos_host_format_parses_nested_devices_and_matches_ports() {
         let v: Value = serde_json::from_str(MAC_HOST).unwrap();
-        let ports = vec!["/dev/cu.usbmodem5B5E0063501".to_string(), "/dev/cu.usbserial-zzz".to_string()];
+        let ports = vec!["/dev/cu.usbmodemA1B2C3D4501".to_string(), "/dev/cu.usbserial-zzz".to_string()];
         let s = parse_system_profiler(&v, &ports, "salt");
         assert_eq!(s.devices.len(), 3);
         let ch = s.devices.iter().find(|d| d.vid == 0x1a86).unwrap();
-        assert_eq!(ch.ports, vec!["/dev/cu.usbmodem5B5E0063501"]);
+        assert_eq!(ch.ports, vec!["/dev/cu.usbmodemA1B2C3D4501"]);
         assert_eq!(ch.speed, "12 Mb/s");
         let hub = s.devices.iter().find(|d| d.vid == 0x0bda).unwrap();
         assert!(hub.serial.is_none() && hub.key == "0bda:5411:p-0x00120000");
@@ -496,18 +496,18 @@ mod tests {
 
     #[test]
     fn macos_port_names_never_leak_the_serial() {
-        assert_eq!(redact_port("/dev/cu.usbmodem5B5E0063501"), "/dev/cu.usbmodem…3501");
+        assert_eq!(redact_port("/dev/cu.usbmodemA1B2C3D4501"), "/dev/cu.usbmodem…4501");
         assert_eq!(redact_port("/dev/cu.usbserial-A50285BI"), "/dev/cu.usbserial-…85BI");
         assert_eq!(redact_port("/dev/cu.wchusbserial1410"), "/dev/cu.wchusbserial1410"); // location id
         assert_eq!(redact_port("/dev/ttyUSB0"), "/dev/ttyUSB0");
         let v: Value = serde_json::from_str(MAC_HOST).unwrap();
-        let sc = parse_system_profiler(&v, &["/dev/cu.usbmodem5B5E0063501".to_string(), "/dev/cu.usbserial-SECRET12345".to_string()], "salt");
+        let sc = parse_system_profiler(&v, &["/dev/cu.usbmodemA1B2C3D4501".to_string(), "/dev/cu.usbserial-SECRET12345".to_string()], "salt");
         let rep = report(tempfile::tempdir().unwrap().path(), &sc, &UsbIdTable::bundled(), "n", 1);
         let text = rep.to_string();
-        assert!(!text.contains("5B5E0063501") && !text.contains("SECRET12345"), "{text}");
-        assert!(text.contains("cu.usbmodem…3501") && text.contains("cu.usbserial-…2345"));
+        assert!(!text.contains("A1B2C3D4501") && !text.contains("SECRET12345"), "{text}");
+        assert!(text.contains("cu.usbmodem…4501") && text.contains("cu.usbserial-…2345"));
         // matching still used the real names
-        assert_eq!(sc.devices.iter().find(|d| d.vid == 0x1a86).unwrap().ports, vec!["/dev/cu.usbmodem5B5E0063501"]);
+        assert_eq!(sc.devices.iter().find(|d| d.vid == 0x1a86).unwrap().ports, vec!["/dev/cu.usbmodemA1B2C3D4501"]);
     }
 
     #[test]

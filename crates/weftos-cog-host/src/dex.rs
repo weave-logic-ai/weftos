@@ -521,9 +521,12 @@ mod tests {
         assert_eq!(sdr["upgrade_available"], true);
         assert!(sdr["members"].as_array().unwrap().iter().any(|m| m["id"] == "module:rtl-sdr" && m["caught"] == true));
         let rtl = rep["caught"].as_array().unwrap().iter().find(|c| c["ref"] == "module:rtl-sdr").unwrap();
-        // rtl-sdr's grade is low-confidence (no catalog figures), so rarity follows the usage rule
-        let usage = rules::rarity(catalog(), "module:rtl-sdr").map(|r| r.label());
-        assert_eq!((rtl["grade"].as_str(), rtl["rarity"].as_str()), (Some("C"), usage));
+        // module rtl-sdr has catalog figures (medium confidence), so its grade drives rarity (C -> common)
+        assert_eq!((rtl["grade"].as_str(), rtl["rarity"].as_str()), (Some("C"), Some("common")));
+        // chip rtl2832u's grade is low-confidence (no catalog figures), so rarity follows the usage rule
+        let chip = rep["caught"].as_array().unwrap().iter().find(|c| c["ref"] == "chip:rtl2832u").unwrap();
+        let usage = rules::rarity(catalog(), "chip:rtl2832u").map(|r| r.label());
+        assert_eq!(chip["rarity"].as_str(), usage);
         // a medium-confidence grade (chip bme280 has stated figures) drives rarity
         let bme = rules::rarity_with(catalog(), sensor_types(), "chip:bme280");
         assert_eq!(bme, Some(weftos_cog_market::dex::Rarity::Common));

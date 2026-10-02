@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn host_header_allowlist_refuses_rebinding_names() {
         let p = pol().with_names(vec!["MyBox.local".into(), "mybox.tail1234.ts.net.".into()]);
-        for ok in ["localhost", "localhost:9480", "127.0.0.1:9480", "[::1]:9480", "10.0.0.5:9480", "100.109.125.18", "mybox.local:9480", "mybox.tail1234.ts.net", "FOO.localhost"] {
+        for ok in ["localhost", "localhost:9480", "127.0.0.1:9480", "[::1]:9480", "10.0.0.5:9480", "100.64.0.18", "mybox.local:9480", "mybox.tail1234.ts.net", "FOO.localhost"] {
             assert!(p.host_allowed(Some(ok)), "{ok}");
         }
         for bad in ["evil.example", "evil.example:9480", "127.0.0.1.evil.example", "localhost.evil.example", "mybox.local.evil.example", ""] {
