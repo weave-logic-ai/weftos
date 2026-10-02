@@ -49,6 +49,9 @@ pub mod verified_project;
 /// D12 scope gate: outside-project policy and the voice deny-list (ADR-103).
 #[cfg(any(unix, windows))]
 pub mod scope_gate;
+/// `governance.parent.push|update` and `governance.reload` (ADR-103 D8).
+#[cfg(any(unix, windows))]
+pub mod governance_push;
 /// `auth.token.*` RPC handlers and the per-kernel token authority (ADR-102 D3).
 #[cfg(any(unix, windows))]
 pub mod token_rpc;

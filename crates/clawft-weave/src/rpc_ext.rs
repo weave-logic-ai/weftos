@@ -290,6 +290,23 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Read,
         handler: crate::token_rpc::handle,
     },
+    // Governance overlay (ADR-103 D8): push runs on the user daemon, update
+    // and reload on a project kernel; all Admin.
+    ExtRoute {
+        prefix: "governance.parent.push",
+        capability: Capability::Admin,
+        handler: crate::governance_push::handle_push,
+    },
+    ExtRoute {
+        prefix: "governance.parent.update",
+        capability: Capability::Admin,
+        handler: crate::governance_push::handle_update,
+    },
+    ExtRoute {
+        prefix: "governance.reload",
+        capability: Capability::Admin,
+        handler: crate::governance_push::handle_reload,
+    },
 ];
 #[cfg(test)]
 const ROUTES: &[ExtRoute] = &[
@@ -334,6 +351,23 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "auth.token.validate",
         capability: Capability::Read,
         handler: crate::token_rpc::handle,
+    },
+    // Governance overlay (ADR-103 D8): push runs on the user daemon, update
+    // and reload on a project kernel; all Admin.
+    ExtRoute {
+        prefix: "governance.parent.push",
+        capability: Capability::Admin,
+        handler: crate::governance_push::handle_push,
+    },
+    ExtRoute {
+        prefix: "governance.parent.update",
+        capability: Capability::Admin,
+        handler: crate::governance_push::handle_update,
+    },
+    ExtRoute {
+        prefix: "governance.reload",
+        capability: Capability::Admin,
+        handler: crate::governance_push::handle_reload,
     },
     ExtRoute {
         prefix: "rpc_ext.test.",

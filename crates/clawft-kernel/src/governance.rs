@@ -116,6 +116,16 @@ pub struct GovernanceRule {
     pub force_on_match: bool,
 }
 
+/// `sop_category` tag of a project-overlay deny rule (ADR-103 D8). A matching
+/// blocking rule is an unconditional `Deny`: the engine-wide
+/// `human_approval_required` flag does not soften it into an escalation.
+pub const OVERLAY_DENY_TAG: &str = "project-overlay:deny";
+
+/// `sop_category` tag of a project-overlay `require_approval` rule (ADR-103
+/// D8). A matching blocking rule yields `EscalateToHuman` even when the
+/// engine-wide `human_approval_required` flag is off.
+pub const OVERLAY_APPROVAL_TAG: &str = "project-overlay:approval";
+
 impl GovernanceRule {
     /// Get rules by SOP category from a slice of rules.
     pub fn filter_by_category<'a>(
@@ -1131,6 +1141,16 @@ impl GovernanceEngine {
         self.rules.push(rule);
     }
 
+    /// Every rule, active or not, in insertion order.
+    pub fn rules(&self) -> &[GovernanceRule] {
+        &self.rules
+    }
+
+    /// Whether blocking verdicts escalate to a human instead of denying.
+    pub fn human_approval_required(&self) -> bool {
+        self.human_approval_required
+    }
+
     /// Get all active rules.
     pub fn active_rules(&self) -> Vec<&GovernanceRule> {
         self.rules.iter().filter(|r| r.active).collect()
@@ -1201,6 +1221,8 @@ impl GovernanceEngine {
         let mut evaluated_rules = Vec::new();
         let mut has_warning = false;
         let mut has_blocking = false;
+        let mut hard_deny = false;
+        let mut needs_approval = false;
         let mut blocking_reason = String::new();
 
         for rule in self.active_rules() {
@@ -1258,6 +1280,11 @@ impl GovernanceEngine {
                 RuleSeverity::Blocking | RuleSeverity::Critical => {
                     if applies {
                         has_blocking = true;
+                        match rule.sop_category.as_deref() {
+                            Some(OVERLAY_DENY_TAG) => hard_deny = true,
+                            Some(OVERLAY_APPROVAL_TAG) => needs_approval = true,
+                            _ => {}
+                        }
                         blocking_reason = if rule.force_on_match && !threshold_exceeded {
                             format!(
                                 "rule '{}': selector force-match on action '{}' / tool",
@@ -1281,7 +1308,7 @@ impl GovernanceEngine {
         }
 
         let decision = if has_blocking {
-            if self.human_approval_required {
+            if !hard_deny && (self.human_approval_required || needs_approval) {
                 GovernanceDecision::EscalateToHuman(blocking_reason)
             } else {
                 GovernanceDecision::Deny(blocking_reason)
