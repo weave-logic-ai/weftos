@@ -10893,6 +10893,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "weftos-sound-scope"
+version = "0.8.1"
+dependencies = [
+ "eframe",
+ "egui_plot",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-time",
+ "weftos-cog-companion",
+]
+
+[[package]]
 name = "weftos-tof-scope"
 version = "0.8.1"
 dependencies = [
