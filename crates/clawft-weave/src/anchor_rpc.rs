@@ -251,7 +251,7 @@ fn check_cert(
         return Err(revoked());
     }
     // The certificate may have been sealed by a user key that was rotated
-    // out after it was issued (ADR-103 A11); it verifies under that key up
+    // out after it was issued (ADR-103 A13); it verifies under that key up
     // to the rotation point. Expiry is judged as before.
     let history = crate::project_cert_rpc::user_history(env).map_err(|e| AnchorError::CertInvalid(e.to_string()))?;
     ident::verify_cert_historic(cert, &history).map_err(|e| AnchorError::CertInvalid(e.to_string()))?;

@@ -1,4 +1,4 @@
-//! User-key rotation (ADR-103 A11) across certificates, anchor records and
+//! User-key rotation (ADR-103 A13) across certificates, anchor records and
 //! the journal: dirs are injected, never `HOME`.
 
 use std::sync::Arc;

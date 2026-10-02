@@ -1,4 +1,4 @@
-//! Classifying a unix-socket peer of the user daemon (ADR-103 A12, review S9).
+//! Classifying a unix-socket peer of the user daemon (ADR-103 A14, review S9).
 //!
 //! ADR-070's local-owner shortcut honours a literal scope (`"admin"`) from any
 //! peer with the daemon's uid. A supervised project kernel runs under that

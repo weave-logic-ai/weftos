@@ -56,7 +56,7 @@ pub(super) fn seal(
 
 /// Sealed by the key in use, or by a user key rotated out since, provided the
 /// statement it seals is dated at or before that key's rotation point
-/// (ADR-103 A11). A record the old key sealed after the rotation point is
+/// (ADR-103 A13). A record the old key sealed after the rotation point is
 /// refused: the daemon seals only with the key in use, so the old key's
 /// signature on a later statement is not the daemon's.
 fn seal_ok(env: &CertEnv, a: &Accepted) -> bool {

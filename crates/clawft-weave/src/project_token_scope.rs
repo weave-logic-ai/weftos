@@ -20,7 +20,7 @@
 //! Honest limit: a same-uid caller that sends the literal scope `admin`
 //! (ADR-070, the local-owner shortcut) bypasses this and every other
 //! capability check, except that a peer inside a supervised child's process
-//! group is treated as anonymous (`child_peer`, ADR-103 A12). A hostile
+//! group is treated as anonymous (`child_peer`, ADR-103 A14). A hostile
 //! same-uid process outside those groups, or one that leaves its group, is
 //! not stopped here; that is a separate uid or a Phase 4 sandbox.
 //!

@@ -349,7 +349,7 @@ pub fn verify_signature_only(
 
 /// Check that `cert` is well-formed and was sealed by a user key `trust`
 /// accepts for the certificate's `issued_at`: the current key always, a
-/// retired key only up to its rotation point (ADR-103 A11). Expiry and the
+/// retired key only up to its rotation point (ADR-103 A13). Expiry and the
 /// future-skew rule are ignored, as in [`verify_signature_only`].
 pub fn verify_cert_historic(cert: &ProjectCert, trust: &UserKeyHistory) -> Result<(), IdentityError> {
     let pk = trust.key_for(&cert.user_key_id).ok_or(CertError::UntrustedUser)?;

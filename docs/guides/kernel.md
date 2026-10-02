@@ -592,7 +592,7 @@ kernel (`weaver kernel restart --project <id>`; a running child pins the old
 key), and run `weaver mesh bind rebind` if the machine mesh service is
 installed. The old key is kept as `user.key.retired-<n>`; delete it yourself
 once you are satisfied. After a suspected compromise, also rekey or revoke the
-affected projects. Details: ADR-103 A11.
+affected projects. Details: ADR-103 A13.
 
 #### Never downgrade a child-kernel project
 

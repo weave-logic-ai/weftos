@@ -47,7 +47,7 @@ pub enum MigrateAction {
     /// With --rotate: replace the user key instead. The handover is recorded
     /// in the manifest store, signed by the old and the new key, so
     /// certificates, anchor records and policies sealed by the old key keep
-    /// verifying up to the rotation point (ADR-103 A11). Stop the user daemon
+    /// verifying up to the rotation point (ADR-103 A13). Stop the user daemon
     /// first; afterwards restart it, restart project kernels, and run
     /// `weaver mesh bind rebind` if the machine mesh service is installed.
     #[command(name = "user-key")]

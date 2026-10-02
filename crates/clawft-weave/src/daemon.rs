@@ -3650,7 +3650,7 @@ pub async fn handle_connection_peer<S>(
 
 /// [`handle_connection_peer`] with the full peer classification
 /// ([`crate::child_peer::PeerClass`]): the accept loop uses it so a
-/// supervised child's literal scopes are ignored (ADR-103 A12).
+/// supervised child's literal scopes are ignored (ADR-103 A14).
 pub async fn handle_connection_classed<S>(
     mut stream: S,
     kernel: Arc<tokio::sync::RwLock<Kernel<NativePlatform>>>,

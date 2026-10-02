@@ -120,7 +120,7 @@ pub enum IssueError {
     #[error(transparent)]
     Identity(#[from] IdentityError),
     /// The user-key rotation log is unreadable, broken or does not end at the
-    /// key in use (ADR-103 A11); nothing is verified until it is repaired.
+    /// key in use (ADR-103 A13); nothing is verified until it is repaired.
     #[error(transparent)]
     Rotation(#[from] ident::RotationError),
     /// Manifest store failure.
@@ -374,7 +374,7 @@ fn user_pubkey(env: &CertEnv) -> [u8; 32] {
 
 /// The user keys this daemon trusts for material it sealed earlier: the key in
 /// use plus every key it replaced, from `<manifests>/user-key-rotations.jsonl`
-/// (ADR-103 A11). An empty log is a single key; a log that is unreadable,
+/// (ADR-103 A13). An empty log is a single key; a log that is unreadable,
 /// broken or does not end at the key in use is an error (fail closed).
 pub fn user_history(env: &CertEnv) -> Result<ident::UserKeyHistory, IssueError> {
     Ok(ident::RotationLog::new(&env.manifests_dir).history(&user_pubkey(env))?)
@@ -431,7 +431,7 @@ pub fn register(env: &CertEnv, req: RegisterRequest, now: DateTime<Utc>) -> Resu
             // Sealed by a user key that has since been rotated out: it still
             // verifies (dated before the rotation point), but the child pins
             // the key in use, so certify the same project key again under the
-            // current user key with the next serial (ADR-103 A11).
+            // current user key with the next serial (ADR-103 A13).
             ident::verify_cert_historic(&cert, &history)?;
             let renewed = ident::sign_cert(
                 &env.user_key,

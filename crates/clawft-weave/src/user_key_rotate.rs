@@ -1,5 +1,5 @@
 //! `weaver migrate user-key --rotate`: replace the user key and keep
-//! verifying what the old one sealed (ADR-103 A11).
+//! verifying what the old one sealed (ADR-103 A13).
 //!
 //! Offline: the user daemon must be stopped (the user chain's lock is
 //! probed), because it holds the old key in memory and would go on signing

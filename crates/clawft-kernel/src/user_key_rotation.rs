@@ -1,4 +1,4 @@
-//! User-key rotation records and the trust history they build (ADR-103 A11).
+//! User-key rotation records and the trust history they build (ADR-103 A13).
 //!
 //! The user key signs project certificates, anchor records, parent policies
 //! and the user chain. Rotating it must not orphan what the old key sealed.

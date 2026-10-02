@@ -60,7 +60,7 @@ impl RevocationView {
 
     /// [`Self::build`] under a user-key rotation history: a certificate sealed
     /// by a retired user key counts when it is dated at or before that key's
-    /// rotation point (ADR-103 A11); one dated after it is dropped.
+    /// rotation point (ADR-103 A13); one dated after it is dropped.
     pub fn build_with(
         trust: &UserKeyHistory,
         events: &[ChainEvent],
