@@ -89,6 +89,7 @@ fn route(method: &str, path: &str, body: &[u8], sup: &Arc<Mutex<Supervisor>>) ->
             });
             ("200 OK", obj.to_string())
         }
+        ("GET", ["network"]) => ("200 OK", weftos_cog_host::network::snapshot().to_string()),
         ("POST", ["reload"]) => {
             sup.lock().unwrap().reload();
             ("200 OK", r#"{"ok":true}"#.to_string())

@@ -11,7 +11,7 @@
 
 pub mod client;
 
-use client::{Client, HostCog, HostStatus, Settings};
+use client::{Client, HostCog, HostStatus, Net, Settings};
 use eframe::egui::{self, Color32, RichText};
 use weftos_cog_market::{Catalog, CatalogItem, Source};
 
@@ -25,6 +25,8 @@ const COG: Color32 = Color32::from_rgb(0xb0, 0x82, 0xd8); // Cognitum purple
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
     Cogs,
+    Sensors,
+    Network,
     Apps,
     System,
 }
@@ -108,6 +110,10 @@ impl Manager {
         egui::SidePanel::left("mgr_nav").resizable(false).default_width(150.0).show(ctx, |ui| {
             ui.add_space(8.0);
             ui.selectable_value(&mut self.section, Section::Cogs, RichText::new("⚙  Cogs").size(16.0));
+            ui.add_space(2.0);
+            ui.selectable_value(&mut self.section, Section::Sensors, RichText::new("📈  Sensors").size(16.0));
+            ui.add_space(2.0);
+            ui.selectable_value(&mut self.section, Section::Network, RichText::new("🌐  Network").size(16.0));
             ui.add_space(2.0);
             ui.selectable_value(&mut self.section, Section::Apps, RichText::new("▦  Apps").size(16.0));
             ui.add_space(2.0);
@@ -258,6 +264,102 @@ impl Manager {
         ui.add_space(2.0);
     }
 
+    fn network_view(&self, ui: &mut egui::Ui) {
+        let net = self.client.snapshot().net.clone();
+        ui.heading("Network");
+        ui.label(RichText::new("the fleet this OS is part of — tailnet peers + the Cognitum mesh overlay").color(GREY).small());
+        ui.add_space(6.0);
+        match &net {
+            Some(Ok(n)) => self.fleet_tables(ui, n),
+            Some(Err(e)) => {
+                ui.colored_label(RED, format!("Can't reach the host's /network: {e}"));
+            }
+            None => {
+                ui.label("Querying the mesh…");
+            }
+        }
+    }
+
+    fn fleet_tables(&self, ui: &mut egui::Ui, n: &Net) {
+        if !n.node.is_empty() {
+            ui.label(RichText::new(format!("this node: {}", n.node)).strong());
+        }
+        ui.add_space(4.0);
+
+        ui.label(RichText::new("Tailnet fleet").strong().color(AMBER));
+        if !n.tailscale.available {
+            ui.label(RichText::new("tailscale not available on this node").color(GREY).small());
+        } else {
+            let online = n.tailscale.peers.iter().filter(|p| p.online).count();
+            ui.label(RichText::new(format!("{} nodes, {} online", n.tailscale.peers.len(), online)).color(GREY).small());
+            egui::Grid::new("tailnet").num_columns(4).striped(true).spacing([16.0, 5.0]).show(ui, |ui| {
+                for h in ["node", "tailnet IP", "os", "state"] {
+                    ui.label(RichText::new(h).strong().small());
+                }
+                ui.end_row();
+                // self first, then online, then offline
+                let mut peers: Vec<&client::NetPeer> = n.tailscale.peers.iter().collect();
+                peers.sort_by_key(|p| (!p.is_self, !p.online, p.name.to_lowercase()));
+                for p in peers {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("●").color(if p.online { GREEN } else { GREY }));
+                        let name = if p.name.is_empty() { "(unnamed)" } else { &p.name };
+                        if p.is_self {
+                            ui.label(RichText::new(name).strong().color(WL)).on_hover_text("this node");
+                        } else {
+                            ui.label(name);
+                        }
+                    });
+                    ui.label(RichText::new(&p.ip).color(GREY).small());
+                    ui.label(RichText::new(&p.os).small());
+                    ui.label(if p.online { RichText::new("online").color(GREEN).small() } else { RichText::new("offline").color(GREY).small() });
+                    ui.end_row();
+                }
+            });
+        }
+
+        ui.add_space(10.0);
+        ui.label(RichText::new("Cognitum mesh overlay").strong().color(AMBER));
+        let count = n.cognitum_mesh.get("count").and_then(|v| v.as_u64());
+        match count {
+            Some(0) => {
+                ui.label(RichText::new("0 peers — cog0 is alone on the Cognitum mesh (discovery active)").color(GREY).small());
+            }
+            Some(c) => {
+                ui.label(RichText::new(format!("{c} peer(s)")).color(GREEN).small());
+                if let Some(arr) = n.cognitum_mesh.get("peers").and_then(|v| v.as_array()) {
+                    for p in arr {
+                        ui.label(RichText::new(format!("  {}", p)).small());
+                    }
+                }
+            }
+            None => {
+                ui.label(RichText::new("mesh status unavailable").color(GREY).small());
+            }
+        }
+    }
+
+    fn sensors_view(&self, ui: &mut egui::Ui) {
+        ui.heading("Sensors");
+        ui.label(RichText::new("live dashboards for running sensor cogs").color(GREY).small());
+        ui.add_space(8.0);
+        let host = self.client.snapshot().host.clone();
+        let running: Vec<HostCog> = match &host {
+            Some(Ok(h)) => h.cogs.iter().filter(|c| c.running).cloned().collect(),
+            _ => Vec::new(),
+        };
+        if running.is_empty() {
+            ui.label(RichText::new("No sensor cogs running. Start one in the Cogs tab, then its live dash appears here.").color(GREY));
+        } else {
+            ui.label("Running sensor cogs:");
+            for c in &running {
+                ui.label(format!("  • {} (v{})", c.id, c.version));
+            }
+        }
+        ui.add_space(10.0);
+        ui.label(RichText::new("Dashes coming next: generic vector/metrics/timeline for any cog, plus the ECG waveform (sen0213-ecg) and 8×8 ToF heatmap (sen0628-tof) reusing the scope views.").color(GREY).italics());
+    }
+
     fn apps_view(&self, ui: &mut egui::Ui) {
         ui.add_space(40.0);
         ui.vertical_centered(|ui| {
@@ -326,6 +428,8 @@ impl eframe::App for Manager {
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| match self.section {
                 Section::Cogs => self.cogs_view(ui, ctx),
+                Section::Sensors => self.sensors_view(ui),
+                Section::Network => self.network_view(ui),
                 Section::Apps => self.apps_view(ui),
                 Section::System => self.system_view(ui),
             });

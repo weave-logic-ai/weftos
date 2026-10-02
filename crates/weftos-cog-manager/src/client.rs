@@ -78,9 +78,45 @@ pub struct HostStatus {
     pub cogs: Vec<HostCog>,
 }
 
+// ---- /network shape ----
+
+#[derive(Deserialize, Clone, Default)]
+pub struct NetPeer {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub ip: String,
+    #[serde(default)]
+    pub os: String,
+    #[serde(default)]
+    pub online: bool,
+    #[serde(default, rename = "self")]
+    pub is_self: bool,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct Tailscale {
+    #[serde(default)]
+    pub available: bool,
+    #[serde(default)]
+    pub peers: Vec<NetPeer>,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct Net {
+    #[serde(default)]
+    pub node: String,
+    #[serde(default)]
+    pub tailscale: Tailscale,
+    /// Cognitum mesh overlay peers (count + peers), kept raw.
+    #[serde(default)]
+    pub cognitum_mesh: serde_json::Value,
+}
+
 #[derive(Default)]
 pub struct Shared {
     pub host: Option<Result<HostStatus, String>>,
+    pub net: Option<Result<Net, String>>,
     pub our_reg: Option<Result<WlRegistry, String>>,
     pub cognitum_reg: Option<Result<CognitumRegistry, String>>,
     pub catalog: Option<Catalog>,
@@ -92,6 +128,8 @@ pub struct Client {
     shared: Arc<Mutex<Shared>>,
     status_busy: Arc<AtomicBool>,
     status_fired: Option<Instant>,
+    net_busy: Arc<AtomicBool>,
+    net_fired: Option<Instant>,
     catalog_started: bool,
 }
 
@@ -102,6 +140,8 @@ impl Client {
             shared: Arc::new(Mutex::new(Shared::default())),
             status_busy: Arc::new(AtomicBool::new(false)),
             status_fired: None,
+            net_busy: Arc::new(AtomicBool::new(false)),
+            net_fired: None,
             catalog_started: false,
         }
     }
@@ -116,17 +156,40 @@ impl Client {
         *self.shared.lock().unwrap() = Shared::default();
         self.status_fired = None;
         self.status_busy.store(false, Ordering::Release);
+        self.net_fired = None;
+        self.net_busy.store(false, Ordering::Release);
         self.catalog_started = false;
     }
 
-    /// Call every frame: poll the host and (once) the registries, then build the catalog.
+    /// Call every frame: poll the host + network, and (once) the registries, then build the catalog.
     pub fn tick(&mut self, ctx: &eframe::egui::Context) {
         self.poll_status(ctx);
+        self.poll_network(ctx);
         if !self.catalog_started {
             self.catalog_started = true;
             self.fetch_registries(ctx);
         }
         self.try_build_catalog();
+    }
+
+    fn poll_network(&mut self, ctx: &eframe::egui::Context) {
+        let now = Instant::now();
+        let stale = self.net_fired.is_some_and(|f| now.duration_since(f) > STALE);
+        let waited = self.net_fired.is_none_or(|f| now.duration_since(f) >= Duration::from_millis(4000));
+        if !(waited && (!self.net_busy.load(Ordering::Acquire) || stale)) {
+            return;
+        }
+        self.net_busy.store(true, Ordering::Release);
+        self.net_fired = Some(now);
+        let url = format!("{}/network", base(&self.s.host));
+        let shared = Arc::clone(&self.shared);
+        let busy = Arc::clone(&self.net_busy);
+        let ctx = ctx.clone();
+        ehttp::fetch(ehttp::Request::get(url), move |res| {
+            shared.lock().unwrap().net = Some(parse_json::<Net>(&res));
+            busy.store(false, Ordering::Release);
+            ctx.request_repaint();
+        });
     }
 
     fn poll_status(&mut self, ctx: &eframe::egui::Context) {
