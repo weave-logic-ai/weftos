@@ -339,10 +339,10 @@ rm -f {STATE_DIR}/node.key\n"
             "\n# {STATE_DIR}/node.key is KEPT (pass --purge-key to remove it). The state directory and journal are kept too.\n"
         ));
     }
-    s.push_str(&format!(
+    s.push_str(
         "\n# Account removal (commented out). A later account that reuses the uid would inherit its binds:\n\
-# run `weaver mesh bind revoke <uid>` for every bound uid first, and see docs/guides.\n"
-    ));
+# run `weaver mesh bind revoke <uid>` for every bound uid first, and see docs/guides.\n",
+    );
     match p.manager {
         Manager::Launchd => s.push_str(&format!(
             "# dseditgroup -o edit -d USER -t user {group}   (for each member)\n# dscl . -delete /Users/{acct}\n# dscl . -delete /Groups/{group}\n"

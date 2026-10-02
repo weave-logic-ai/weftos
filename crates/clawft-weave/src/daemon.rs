@@ -653,10 +653,10 @@ pub fn daemonize(
     if pid_path.exists()
         && let Ok(pid_str) = std::fs::read_to_string(&pid_path)
     {
-        if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            if process_alive(pid) {
-                anyhow::bail!("kernel already running (pid {pid})");
-            }
+        if let Ok(pid) = pid_str.trim().parse::<u32>()
+            && process_alive(pid)
+        {
+            anyhow::bail!("kernel already running (pid {pid})");
         }
         // Stale PID file
         let _ = std::fs::remove_file(&pid_path);
@@ -3051,7 +3051,7 @@ pub async fn run(
                                         Some(digest) => {
                                             let guard = llm.read().await;
                                             crate::conv_postmortem::summarize_durable_facts(
-                                                &*guard, &digest,
+                                                &guard, &digest,
                                             )
                                             .await
                                         }
@@ -6727,7 +6727,7 @@ async fn dispatch(
                 (Some(tier), Some(llm)) => match tier.conversation_digest(&conv_id, 16_384) {
                     Some(digest) => {
                         let guard = llm.read().await;
-                        crate::conv_postmortem::summarize_durable_facts(&*guard, &digest).await
+                        crate::conv_postmortem::summarize_durable_facts(&guard, &digest).await
                     }
                     None => None,
                 },

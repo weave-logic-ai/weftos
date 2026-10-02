@@ -122,7 +122,6 @@ pub fn pin_from(config_pin: Option<&str>) -> Option<String> {
 
 /// Running whisper + classify services for one mic source.
 pub struct MicPipeline {
-    source: String,
     whisper: Option<clawft_service_whisper::WhisperService>,
     classify: Option<clawft_service_classify::ClassifierService>,
 }
@@ -281,7 +280,6 @@ async fn start_pipeline(
     }
 
     MicPipeline {
-        source: source.to_string(),
         whisper,
         classify,
     }
