@@ -87,6 +87,12 @@ pub mod governance_push;
 /// (ADR-103 A6, Phase 2 package G).
 #[cfg(all(unix, feature = "exochain", feature = "placement"))]
 pub mod project_supervisor;
+/// The real `ParentTransport`: anchor submission over the user daemon's socket (ADR-103 A7).
+#[cfg(all(unix, feature = "exochain"))]
+pub mod parent_transport;
+/// `weaver project migrate-kernel` logic (ADR-103 A6, package G).
+#[cfg(all(unix, feature = "exochain", feature = "placement"))]
+pub mod project_migrate;
 /// `project.start|stop|restart|status|ensure_running` (ADR-103 A6, package G).
 #[cfg(all(unix, feature = "exochain", feature = "placement"))]
 pub mod project_lifecycle_rpc;

@@ -34,11 +34,14 @@
 //! redacts it).
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use clawft_rpc::{DaemonClient, Request};
+use clawft_types::project::spawn::{
+    PROJECT_TOKEN_REFRESH_SECS, PROJECT_TOKEN_TTL_SECS, SPAWN_TTL_SECS, SpawnFile, TOKEN_REFRESH_METHOD,
+};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -47,6 +50,31 @@ use crate::protocol::SharedServicesHealth;
 /// `error_kind` when the parent cannot be reached or the link has no
 /// credentials. Callers branch on it; nothing may substitute a local result.
 pub const PARENT_UNAVAILABLE_KIND: &str = "parent_unavailable";
+
+/// Bound on dialing the parent socket: a wedged parent must not wedge a call.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Least seconds between refresh attempts.
+const REFRESH_RETRY_SECS: u64 = 30;
+/// Bound on the token refresh call.
+const REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The link's project token and when it stops working.
+#[derive(Default)]
+struct TokenState {
+    secret: Option<String>,
+    /// Unix seconds of the last refresh attempt (success or not), so a
+    /// refusing parent is not asked on every call.
+    last_attempt_unix: u64,
+    /// Unix seconds; `None` means the link does not track expiry (a token
+    /// given to [`ParentLink::new`]) and never refreshes by itself.
+    expires_unix: Option<u64>,
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
 
 /// Which shared service a call is for (selects the health flag and timeout).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,7 +150,7 @@ impl Default for Backoff {
 /// What `spawn.json` carries for this module. Unknown keys are ignored (the
 /// supervisor adds its own).
 #[derive(Debug, Default, Deserialize)]
-struct SpawnFile {
+struct LooseSpawnFile {
     #[serde(default)]
     parent_socket: Option<PathBuf>,
     #[serde(default)]
@@ -136,7 +164,7 @@ struct SpawnFile {
 pub struct ParentLink {
     socket: PathBuf,
     project_id: Option<String>,
-    token: Option<String>,
+    token: Mutex<TokenState>,
     /// Set when the link could not be configured; every call then fails
     /// closed with this text.
     config_error: Option<String>,
@@ -151,7 +179,7 @@ impl std::fmt::Debug for ParentLink {
         f.debug_struct("ParentLink")
             .field("socket", &self.socket)
             .field("project_id", &self.project_id)
-            .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .field("token", &"<redacted>")
             .field("config_error", &self.config_error)
             .finish()
     }
@@ -179,7 +207,7 @@ impl ParentLink {
         Self {
             socket,
             project_id,
-            token,
+            token: Mutex::new(TokenState { secret: token, last_attempt_unix: 0, expires_unix: None }),
             config_error,
             backoff: Backoff::default(),
             embeddings_up: AtomicBool::new(false),
@@ -194,10 +222,97 @@ impl ParentLink {
         self
     }
 
-    // TODO(package G): the project token in spawn.json should be short-lived
-    // with a refresh path (today it lives for its issued TTL, max 24 h), and
-    // the supervisor should delete spawn.json (or this module should) once it
-    // has been read, so the token is not left on disk or readable by a shell.
+    /// A link from the `spawn.json` the child already read (and deleted, see
+    /// [`SpawnFile::take`]). The token is short-lived
+    /// ([`PROJECT_TOKEN_TTL_SECS`]); the link renews it with
+    /// `project.token.refresh` when [`PROJECT_TOKEN_REFRESH_SECS`] are left,
+    /// before every call and from the monitor. An empty token fails closed.
+    pub fn from_spawn(spawn: &SpawnFile, run_dir: &Path) -> Self {
+        let socket = spawn
+            .parent_socket
+            .clone()
+            .or_else(|| run_dir.parent().map(|r| r.join("kernel.sock")));
+        let link = match (socket, spawn.project_token.trim()) {
+            (Some(socket), t) if !t.is_empty() => {
+                Self::new(socket, spawn.project_id.clone(), t.to_owned())
+            }
+            _ => return Self::unconfigured("spawn.json carries no project token or no parent socket"),
+        };
+        // spawn.json expires SPAWN_TTL_SECS after the token was issued.
+        let issued = spawn.expires.saturating_sub(SPAWN_TTL_SECS);
+        link.token.lock().unwrap_or_else(|e| e.into_inner()).expires_unix =
+            Some(issued + PROJECT_TOKEN_TTL_SECS);
+        link
+    }
+
+    /// Track the current token's expiry (tests).
+    pub fn with_token_expiry(self, expires_unix: u64) -> Self {
+        self.token.lock().unwrap_or_else(|e| e.into_inner()).expires_unix = Some(expires_unix);
+        self
+    }
+
+    /// Renew the project token now. The old token stays in place when the
+    /// parent is down or refuses (the call that needed it then fails closed
+    /// on its own).
+    pub async fn refresh_token(&self) -> Result<(), ParentError> {
+        if let Some(why) = &self.config_error {
+            return Err(ParentError::Unavailable(why.clone()));
+        }
+        let (Some(token), Some(project)) = (self.current_token(), &self.project_id) else {
+            return Err(ParentError::Unavailable("link has no project token".into()));
+        };
+        let mut client = self.connect().await?;
+        let mut req = Request::with_params(TOKEN_REFRESH_METHOD, serde_json::json!({ "id": project }))
+            .with_auth(token);
+        req.project = Some(project.clone());
+        let resp = tokio::time::timeout(REFRESH_TIMEOUT, client.call(req))
+            .await
+            .map_err(|_| ParentError::Unavailable("token refresh timed out".into()))?
+            .map_err(|e| ParentError::Unavailable(format!("token refresh: {e}")))?;
+        if !resp.ok {
+            return Err(ParentError::Refused {
+                kind: resp.error_kind.unwrap_or_else(|| "parent_error".into()),
+                message: resp.error.unwrap_or_default(),
+            });
+        }
+        let new = resp
+            .result
+            .as_ref()
+            .and_then(|r| r.get("token"))
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| ParentError::Refused {
+                kind: "parent_error".into(),
+                message: "token refresh reply has no token".into(),
+            })?;
+        let mut st = self.token.lock().unwrap_or_else(|e| e.into_inner());
+        st.secret = Some(new.to_owned());
+        st.expires_unix = Some(now_unix() + PROJECT_TOKEN_TTL_SECS);
+        Ok(())
+    }
+
+    /// Refresh when the token is within [`PROJECT_TOKEN_REFRESH_SECS`] of
+    /// expiry. Errors are swallowed: the next call decides what to do.
+    pub async fn maybe_refresh(&self) {
+        let due = {
+            let mut st = self.token.lock().unwrap_or_else(|e| e.into_inner());
+            let now = now_unix();
+            let due = st.expires_unix.is_some_and(|e| now + PROJECT_TOKEN_REFRESH_SECS >= e)
+                && now >= st.last_attempt_unix + REFRESH_RETRY_SECS;
+            if due {
+                st.last_attempt_unix = now;
+            }
+            due
+        };
+        if due && let Err(e) = self.refresh_token().await {
+            tracing::warn!(error = %e, "project token refresh failed");
+        }
+    }
+
+    fn current_token(&self) -> Option<String> {
+        self.token.lock().unwrap_or_else(|e| e.into_inner()).secret.clone()
+    }
+
     /// Read `spawn.json` at `path`. A missing, unreadable or token-less file
     /// gives an [`unconfigured`](Self::unconfigured) link, never a panic or a
     /// partially trusted one.
@@ -206,7 +321,7 @@ impl ParentLink {
             Ok(t) => t,
             Err(e) => return Self::unconfigured(format!("{}: {e}", path.display())),
         };
-        let spawn: SpawnFile = match serde_json::from_str(&text) {
+        let spawn: LooseSpawnFile = match serde_json::from_str(&text) {
             Ok(s) => s,
             Err(e) => return Self::unconfigured(format!("{}: {e}", path.display())),
         };
@@ -258,7 +373,8 @@ impl ParentLink {
     async fn connect(&self) -> Result<DaemonClient, ParentError> {
         let mut delay = self.backoff.initial;
         for attempt in 0..self.backoff.attempts.max(1) {
-            if let Some(client) = DaemonClient::connect_path(&self.socket).await {
+            let dial = tokio::time::timeout(CONNECT_TIMEOUT, DaemonClient::connect_path(&self.socket));
+            if let Ok(Some(client)) = dial.await {
                 return Ok(client);
             }
             if attempt + 1 < self.backoff.attempts {
@@ -298,11 +414,12 @@ impl ParentLink {
         }
         // `DaemonClient::call` attaches an implicit `admin` scope to a
         // request with no `auth`; never let that happen from a child.
-        let (Some(token), Some(project)) = (&self.token, &self.project_id) else {
+        self.maybe_refresh().await;
+        let (Some(token), Some(project)) = (self.current_token(), &self.project_id) else {
             return Err(ParentError::Unavailable("link has no project token".into()));
         };
         let mut client = self.connect().await?;
-        let mut req = Request::with_params(method, params).with_auth(token.clone());
+        let mut req = Request::with_params(method, params).with_auth(token);
         req.project = Some(project.clone());
         let resp = tokio::time::timeout(service.timeout(), client.call(req))
             .await

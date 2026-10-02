@@ -106,3 +106,122 @@ async fn parent_llm_client_fails_closed_without_http() {
     assert!(client.list_models().await.is_err());
     assert!(!client.health().await.unwrap());
 }
+
+mod refresh {
+    use super::*;
+    use clawft_rpc::{Request, Response};
+    use std::sync::Mutex as StdMutex;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixListener;
+
+    type Seen = Arc<StdMutex<Vec<(String, Option<String>)>>>;
+
+    /// A parent that records `(method, auth)` and answers refresh with
+    /// `wft_new` (or refuses when `refuse`).
+    fn parent(sock: &Path, refuse: bool) -> Seen {
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        let l = UnixListener::bind(sock).unwrap();
+        let seen2 = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let (s, _) = l.accept().await.unwrap();
+                let seen = seen2.clone();
+                tokio::spawn(async move {
+                    let (r, mut w) = s.into_split();
+                    let mut lines = BufReader::new(r).lines();
+                    while let Some(line) = lines.next_line().await.unwrap() {
+                        let req: Request = serde_json::from_str(&line).unwrap();
+                        seen.lock().unwrap().push((req.method.clone(), req.auth.clone()));
+                        let resp = match req.method.as_str() {
+                            "project.token.refresh" if refuse => {
+                                Response::error_with_kind("token_refresh_refused", "no")
+                            }
+                            "project.token.refresh" => Response::success(
+                                json!({"token": "wft_new", "expires_at": "2099-01-01T00:00:00Z"}),
+                            ),
+                            _ => Response::success(json!({})),
+                        };
+                        let mut out = serde_json::to_string(&resp).unwrap();
+                        out.push('\n');
+                        w.write_all(out.as_bytes()).await.unwrap();
+                    }
+                });
+            }
+        });
+        seen
+    }
+
+    fn link(sock: &Path, expires_in: u64) -> ParentLink {
+        ParentLink::new(sock.to_path_buf(), ID.into(), "wft_old".into())
+            .with_token_expiry(now_unix() + expires_in)
+    }
+
+    #[tokio::test]
+    async fn a_token_near_expiry_is_renewed_before_the_call_and_the_new_one_is_used() {
+        let d = tempfile::Builder::new().prefix("plink").tempdir_in("/tmp").unwrap();
+        let sock = d.path().join("kernel.sock");
+        let seen = parent(&sock, false);
+        let l = link(&sock, 10);
+        l.call(Service::Voice, "kernel.handshake", Value::Null).await.unwrap();
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen[0].0, "project.token.refresh");
+        assert_eq!(seen[0].1.as_deref(), Some("wft_old"), "refresh is authenticated by the old token");
+        assert_eq!(seen[1], ("kernel.handshake".into(), Some("wft_new".into())));
+        // Fresh now: the next call does not refresh again.
+        l.call(Service::Voice, "kernel.handshake", Value::Null).await.unwrap();
+        assert_eq!(seen.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_fresh_token_is_not_renewed() {
+        let d = tempfile::Builder::new().prefix("plink").tempdir_in("/tmp").unwrap();
+        let sock = d.path().join("kernel.sock");
+        let seen = parent(&sock, false);
+        let l = link(&sock, 3000);
+        l.call(Service::Voice, "kernel.handshake", Value::Null).await.unwrap();
+        assert!(seen.lock().unwrap().iter().all(|(m, _)| m != "project.token.refresh"));
+    }
+
+    #[tokio::test]
+    async fn a_refused_refresh_keeps_the_old_token_and_does_not_panic() {
+        let d = tempfile::Builder::new().prefix("plink").tempdir_in("/tmp").unwrap();
+        let sock = d.path().join("kernel.sock");
+        let seen = parent(&sock, true);
+        let l = link(&sock, 10);
+        assert!(matches!(
+            l.refresh_token().await,
+            Err(ParentError::Refused { ref kind, .. }) if kind == "token_refresh_refused"
+        ));
+        l.call(Service::Voice, "kernel.handshake", Value::Null).await.unwrap();
+        l.call(Service::Voice, "kernel.handshake", Value::Null).await.unwrap();
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.last().unwrap().1.as_deref(), Some("wft_old"));
+        // A refusing parent is not hammered: one refresh attempt, not three.
+        assert_eq!(seen.iter().filter(|(m, _)| m == "project.token.refresh").count(), 2,
+            "the explicit refresh above plus at most one throttled automatic attempt");
+    }
+
+    #[test]
+    fn from_spawn_computes_the_expiry_from_the_spawn_file() {
+        let run = Path::new("/h/.weftos/run").join(ID);
+        let spawn = SpawnFile {
+            nonce: "n".into(),
+            parent_socket: None,
+            user_pubkey: "u".into(),
+            user_key_id: "k".into(),
+            project_id: ID.into(),
+            root: "/p".into(),
+            expires: 1_000_060,
+            project_token: "wft_t".into(),
+        };
+        let l = ParentLink::from_spawn(&spawn, &run);
+        // Default parent socket: `<run>/../kernel.sock`, the user daemon's.
+        assert_eq!(l.socket, Path::new("/h/.weftos/run/kernel.sock"));
+        let st = l.token.lock().unwrap();
+        assert_eq!(st.expires_unix, Some(1_000_000 + PROJECT_TOKEN_TTL_SECS));
+        assert_eq!(st.secret.as_deref(), Some("wft_t"));
+        drop(st);
+        let empty = SpawnFile { project_token: String::new(), ..spawn };
+        assert!(ParentLink::from_spawn(&empty, &run).config_error.is_some());
+    }
+}
