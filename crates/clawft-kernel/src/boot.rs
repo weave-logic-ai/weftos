@@ -3280,6 +3280,7 @@ mod tests {
             llm: None,
             agent: None,
             brand: ::clawft_types::config::DEFAULT_BRAND.to_string(),
+            ..KernelConfig::default()
         }
     }
 

@@ -35,7 +35,7 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }
-# WEFT-551: keep in lockstep with workspace wasmtime pin (45+ / MSRV 1.93).
+# WEFT-551: keep in lockstep with workspace wasmtime pin (48.0.4+ / MSRV 1.95).
 # Host uses cranelift + runtime only (no browser/wasm-bindgen).
 wasmtime = { workspace = true }
 
