@@ -25,6 +25,7 @@ use crate::mesh_service_adv::{ClusterServiceRegistry, ServiceAdvertisement};
 use crate::node_facts::NodeFactsCache;
 use crate::node_facts_advert::SignedNodeFacts;
 use crate::node_registry::node_id_from_pubkey;
+use crate::workload_kind::KindRegistry;
 use crate::workload_pkg::TrustAnchors;
 use crate::workload_runtime::{InstanceHandle, WorkloadHost};
 
@@ -98,6 +99,9 @@ pub enum PlaneError {
     /// The engine refused the request (bad pin, invalid spec).
     #[error("placement: {0}")]
     Placement(String),
+    /// The package's workload kind is not registered.
+    #[error(transparent)]
+    UnknownKind(#[from] crate::workload_kind::UnknownKind),
 }
 
 /// A known target.
@@ -158,6 +162,8 @@ pub struct PlacementControlPlane {
     pub(super) chain: Arc<ChainManager>,
     pub(super) exchange: Arc<ArtifactExchange>,
     pub(super) anchors: TrustAnchors,
+    /// Registered workload kinds (`cog` by default).
+    pub(super) kinds: KindRegistry,
     pub(super) connector: Arc<dyn CtlConnector>,
     pub(super) facts: NodeFactsCache,
     pub(super) targets: RwLock<BTreeMap<String, TargetInfo>>,
@@ -183,6 +189,12 @@ pub(super) fn now_ms() -> u64 {
 }
 
 impl PlacementControlPlane {
+    /// Replace the workload-kind registry (default: [`KindRegistry::builtin`]).
+    pub fn with_kind_registry(mut self, kinds: KindRegistry) -> Self {
+        self.kinds = kinds;
+        self
+    }
+
     /// Controller for the node owning `key`. Every decision is chained.
     pub fn new(
         key: SigningKey,
@@ -199,6 +211,7 @@ impl PlacementControlPlane {
             chain,
             exchange,
             anchors,
+            kinds: KindRegistry::builtin(),
             connector,
             facts: NodeFactsCache::new(),
             targets: RwLock::new(BTreeMap::new()),

@@ -28,10 +28,8 @@ use serde_json::{Value, json};
 use crate::chain;
 use crate::gate::GateDecision;
 use crate::workload_pkg::codec::hex_encode;
-use crate::workload_pkg::{DirSource, VerifyPolicy, verify_dir};
 use crate::workload_runtime::VerifiedWorkload;
 
-use super::cog_kind::cog_workload_spec;
 use super::facts::governance_tier;
 use super::host_service::{CtlConfig, InstanceBody, PlaceBody};
 use super::msg::method;
@@ -167,27 +165,20 @@ impl PlacementControlPlane {
         )
     }
 
-    /// Verify the package and build its spec; seed it for serving.
-    fn prepare(
-        &self,
-        order: &PlaceOrder,
-    ) -> Result<(VerifiedWorkload, WorkloadSpec, String), PlaneError> {
-        let verified = verify_dir(&order.package_dir, &self.anchors, &VerifyPolicy::default())
-            .map_err(|e| PlaneError::Package(e.to_string()))?;
-        let w = VerifiedWorkload::from_package(&verified, &DirSource::new(&order.package_dir))
-            .map_err(|e| PlaneError::Package(e.to_string()))?;
-        let seeded = self
-            .exchange
-            .seed_package_dir(&order.package_dir, &self.anchors)
-            .map_err(|e| PlaneError::Package(e.to_string()))?;
-        let spec = cog_workload_spec(&w).map_err(PlaneError::Package)?;
-        Ok((w, spec, seeded.manifest_hash))
-    }
-
     /// Decide (and unless `dry_run`, dispatch) one placement.
     pub async fn place(&self, order: &PlaceOrder) -> Result<PlaceReport, PlaneError> {
         order.check()?;
-        let (w, spec, manifest_hash) = self.prepare(order)?;
+        let (w, spec, manifest_hash) = match self.prepare(order) {
+            Ok(p) => p,
+            Err(e @ PlaneError::UnknownKind(_)) => {
+                self.chain_event(
+                    chain::EVENT_KIND_WORKLOAD_REFUSE,
+                    json!({ "phase": "kind", "error": e.to_string() }),
+                );
+                return Err(e);
+            }
+            Err(e) => return Err(e),
+        };
         let view = self.view();
         let verdicts = view
             .iter()

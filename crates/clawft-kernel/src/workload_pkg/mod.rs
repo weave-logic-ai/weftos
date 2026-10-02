@@ -42,7 +42,7 @@ mod tests;
 
 pub use manifest::{
     AttestationRef, CogPackageBody, FileRef, KIND_COG, MANIFEST_FILE, MANIFEST_SCHEMA,
-    ManifestEnvelope, ManifestError, PackageSource, SignatureEntry,
+    MAX_MANIFEST_BYTES, ManifestEnvelope, ManifestError, PackageSource, SignatureEntry,
 };
 pub use pack::{CogPackInput, PackError, pack_cog, write_manifest};
 pub use sign::{key_id_for, sign_envelope, signing_key_from_hex};
@@ -50,5 +50,6 @@ pub use store::{StoredPackage, store_package, verify_stored};
 pub use trust::{KeyOrigin, PinnedKey, TrustAnchors, TrustFile};
 pub use verify::{
     AcceptedSigner, DirSource, FileSource, VerifiedPackage, VerifyError, VerifyPolicy, verify_dir,
-    verify_manifest_signatures, verify_with_source,
+    verify_dir_in, verify_manifest_signatures, verify_manifest_signatures_in, verify_with_source,
+    verify_with_source_in,
 };
