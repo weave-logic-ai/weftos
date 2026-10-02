@@ -44,6 +44,10 @@ enum Commands {
     /// Kernel management (boot, status, services, processes).
     Kernel(commands::kernel_cmd::KernelArgs),
 
+    /// Per-project kernel operations (migrate-kernel).
+    #[cfg(all(unix, feature = "exochain", feature = "placement"))]
+    Project(commands::project_cmd::ProjectArgs),
+
     /// Agent lifecycle management (spawn, stop, restart, inspect).
     Agent(commands::agent_cmd::AgentArgs),
 
@@ -152,6 +156,8 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Kernel(args) => commands::kernel_cmd::run(args).await?,
+        #[cfg(all(unix, feature = "exochain", feature = "placement"))]
+        Commands::Project(args) => commands::project_cmd::run(args).await?,
         Commands::Agent(args) => commands::agent_cmd::run(args).await?,
         Commands::App(args) => commands::app_cmd::run(args).await?,
         Commands::Workload(args) => commands::workload_cmd::run(args).await?,
