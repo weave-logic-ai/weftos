@@ -64,8 +64,91 @@ pub fn child_paths(paths: &RuntimePaths) -> Result<RuntimePaths, OverlayError> {
     if let Some(p) = TEST_CHILD_PATHS.with(|c| c.borrow().clone()) {
         return Ok(p);
     }
+    #[cfg(feature = "test-support")]
+    if let Some(p) = test_support::child_paths() {
+        return Ok(p);
+    }
     paths.child_id().ok_or(OverlayError::NotAChild)?;
     Ok(paths.clone())
+}
+
+/// Process-wide child-root override for other crates' integration tests,
+/// which boot a project-profile kernel before package H's supervisor exists.
+/// Only compiled with the `test-support` feature, which a release build
+/// refuses (see the `compile_error!` in `lib.rs`).
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use super::RuntimePaths;
+    use std::sync::Mutex;
+
+    static CHILD_PATHS: Mutex<Option<RuntimePaths>> = Mutex::new(None);
+
+    /// Make [`super::child_paths`] return `paths` for the rest of the process.
+    pub fn set_child_paths(paths: Option<RuntimePaths>) {
+        *CHILD_PATHS.lock().unwrap_or_else(|e| e.into_inner()) = paths;
+    }
+
+    pub(super) fn child_paths() -> Option<RuntimePaths> {
+        CHILD_PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// A project the child-boot tests run as.
+    pub const FIXTURE_PROJECT_ID: &str = "01JB8Z3Q0V6X9KQ4M2N7T5R1WD";
+
+    /// Build a REAL child root under `base` and make it this process's child
+    /// root. Nothing is bypassed: the overlay's own checks run over it.
+    ///
+    /// Written exactly as the user daemon and supervisor will write them: a
+    /// user key (seed `[7; 32]`) that signs the project certificate
+    /// (`ProjectCert::sign`) and an empty-rules parent policy
+    /// (`parent_policy::export_rules_to`), the `user.pub` pin
+    /// (`write_user_pin`), and a 0600 `project.key` matching the certificate.
+    /// The version pin is written by `Prepared::commit`, as on a real boot.
+    pub fn install_child_fixture(base: &std::path::Path) -> RuntimePaths {
+        use chrono::{Duration, Utc};
+        use clawft_types::config::overlay::Limits;
+        use clawft_types::project::cert::{CertRequest, ProjectCert};
+        use ed25519_dalek::SigningKey;
+
+        let run = base.join("run").join(FIXTURE_PROJECT_ID);
+        let root = base.join("project");
+        std::fs::create_dir_all(&run).expect("run dir");
+        std::fs::create_dir_all(root.join(".weftos")).expect("project .weftos");
+        let paths = RuntimePaths::child_at(&run, FIXTURE_PROJECT_ID, &root).expect("child paths");
+
+        let user_key = SigningKey::from_bytes(&[7u8; 32]);
+        let project_key = SigningKey::from_bytes(&[3u8; 32]);
+        let cert = ProjectCert::sign(
+            &user_key,
+            &CertRequest {
+                project_id: FIXTURE_PROJECT_ID.into(),
+                project_pubkey: project_key.verifying_key().to_bytes(),
+                serial: 1,
+                issued_at: Utc::now() - Duration::minutes(1),
+                expires_at: None,
+            },
+        );
+        let cert_path = paths.project_cert().expect("cert path");
+        std::fs::write(&cert_path, serde_json::to_vec(&cert).expect("cert json")).expect("cert");
+        crate::parent_policy::write_atomic_0600(
+            &paths.project_key().expect("key path"),
+            &project_key.to_bytes(),
+        )
+        .expect("project.key");
+        crate::parent_policy::export_rules_to(
+            &paths.parent_policy(),
+            Vec::new(),
+            0.8,
+            false,
+            &Limits::default(),
+            &user_key,
+        )
+        .expect("signed parent policy");
+        crate::overlay_trust::write_user_pin(&run, &user_key.verifying_key().to_bytes())
+            .expect("user.pub pin");
+        set_child_paths(Some(paths.clone()));
+        paths
+    }
 }
 
 /// A gate whose inner [`GovernanceGate`] is replaced atomically on update.

@@ -16,6 +16,8 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
+# Test-only hooks for other crates' integration tests (debug builds only).
+test-support = []
 default = ["native", "exochain", "cluster", "tilezero", "ecc", "mesh", "quic", "workload-runtime"]
 native = [
     "dep:tokio",
