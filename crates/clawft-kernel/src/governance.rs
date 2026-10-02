@@ -1223,6 +1223,9 @@ impl GovernanceEngine {
         let mut has_blocking = false;
         let mut hard_deny = false;
         let mut needs_approval = false;
+        // A blocking rule that is not an overlay approval matched: its verdict
+        // stands and an approval rule may not soften it into an escalation.
+        let mut other_blocking = false;
         let mut blocking_reason = String::new();
 
         for rule in self.active_rules() {
@@ -1239,6 +1242,7 @@ impl GovernanceEngine {
             if rule.rule_type == GovernanceRuleType::BrowserPolicy {
                 if let Some(reason) = apply_browser_policy_rule(rule, request) {
                     has_blocking = true;
+                    other_blocking = true;
                     blocking_reason = reason;
                     // Keep scanning so evaluated_rules is complete, but the
                     // first denial reason is retained for the decision text.
@@ -1260,6 +1264,7 @@ impl GovernanceEngine {
                     match rule.severity {
                         RuleSeverity::Blocking | RuleSeverity::Critical => {
                             has_blocking = true;
+                            other_blocking = true;
                             // Canonical reason wins for the deny path AC
                             // (`Deny { reason: "binding-thread mismatch" }`),
                             // even if a later magnitude rule would overwrite.
@@ -1283,7 +1288,7 @@ impl GovernanceEngine {
                         match rule.sop_category.as_deref() {
                             Some(OVERLAY_DENY_TAG) => hard_deny = true,
                             Some(OVERLAY_APPROVAL_TAG) => needs_approval = true,
-                            _ => {}
+                            _ => other_blocking = true,
                         }
                         blocking_reason = if rule.force_on_match && !threshold_exceeded {
                             format!(
@@ -1308,7 +1313,7 @@ impl GovernanceEngine {
         }
 
         let decision = if has_blocking {
-            if !hard_deny && (self.human_approval_required || needs_approval) {
+            if !hard_deny && (self.human_approval_required || (needs_approval && !other_blocking)) {
                 GovernanceDecision::EscalateToHuman(blocking_reason)
             } else {
                 GovernanceDecision::Deny(blocking_reason)

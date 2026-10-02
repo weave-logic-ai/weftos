@@ -87,8 +87,20 @@ pub async fn sync_peers(plane: &PlacementControlPlane, dir: &Path) -> Result<(),
     Ok(())
 }
 
-fn gate(dir: &Path, chain: &Arc<ChainManager>) -> Result<Arc<WorkloadGate>, String> {
-    let mut g = WorkloadGate::new(0.95, false).with_chain(chain.clone());
+/// The gate for placement decisions. On a project kernel (ADR-103 D8) it is
+/// built from the effective rules (parent policy plus overlay) as of this
+/// build, so an overlay deny on `workload.*` applies; a later push shows up
+/// when the control plane is rebuilt.
+fn gate(
+    dir: &Path,
+    chain: &Arc<ChainManager>,
+    effective: Option<(Vec<clawft_kernel::governance::GovernanceRule>, f64, bool)>,
+) -> Result<Arc<WorkloadGate>, String> {
+    let base = match effective {
+        Some((rules, threshold, human)) => WorkloadGate::with_rules(threshold.min(0.95), human, rules),
+        None => WorkloadGate::new(0.95, false),
+    };
+    let mut g = base.with_chain(chain.clone());
     for p in load_permits(dir)? {
         g = g.with_permit(p)?;
     }
@@ -108,11 +120,12 @@ async fn build(
         .cloned()
         .ok_or("placement needs the kernel chain (decisions are chained)")?;
     let membership = k.cluster_membership().clone();
+    let effective = k.governance_overlay().map(|o| o.effective_rules());
     drop(k);
     let pk = boot.key.verifying_key().to_bytes();
     let id = clawft_kernel::node_id_from_pubkey(&pk);
     let anchors = load_anchors(dir)?;
-    let gate = gate(dir, &chain)?;
+    let gate = gate(dir, &chain, effective)?;
     let store = ArtifactStore::new_file(dir.join("workload-artifacts"));
     let mut ex = ArtifactExchange::new(&id, Arc::new(store), ExchangeConfig::default())
         .map_err(|e| e.to_string())?;

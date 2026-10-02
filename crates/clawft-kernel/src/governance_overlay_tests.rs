@@ -409,3 +409,59 @@ fn export_refuses_an_out_of_range_threshold() {
     }
 }
 
+
+#[test]
+fn an_approval_overlapping_a_parent_deny_is_refused() {
+    // WL-DENY denies `workload.*`; approvals under it would soften the deny.
+    for glob in ["workload.start*", "workload.*", "workload.start", "work*"] {
+        let e = refused(&format!("[[require_approval]]\nactions = [\"{glob}\"]\n"));
+        assert!(matches!(e, OverlayError::ApprovalOverlapsDeny { .. }), "{glob}: {e}");
+        assert_eq!(e.key(), "require_approval[0].actions[0]");
+    }
+    // A disjoint glob is fine.
+    assert!(merge(&base_parent(), &ov("[[require_approval]]\nactions = [\"cron.add\"]\n")).is_ok());
+}
+
+#[test]
+fn an_approval_never_softens_another_blocking_rule() {
+    // An untagged forced deny and a tagged approval on the same action.
+    let mut deny = rule("P-DENY", RuleSeverity::Blocking, Some("a.b"), true, true);
+    deny.sop_category = None;
+    let mut appr = rule("O-APPR", RuleSeverity::Blocking, Some("a.b"), true, true);
+    appr.sop_category = Some(OVERLAY_APPROVAL_TAG.into());
+    let eng = engine_of(vec![deny, appr.clone()], 0.8, false);
+    assert!(matches!(decide(&eng, "a.b"), GovernanceDecision::Deny(_)));
+
+    // A magnitude rule that fires also keeps its Deny.
+    let mag = rule("P-MAG", RuleSeverity::Blocking, None, false, true);
+    let eng = engine_of(vec![mag, appr.clone()], 0.5, false);
+    let req = GovernanceRequest::new("agent", "a.b").with_effect(crate::governance::EffectVector {
+        risk: 0.9,
+        security: 0.9,
+        ..Default::default()
+    });
+    assert!(matches!(eng.evaluate(&req).decision, GovernanceDecision::Deny(_)));
+
+    // The approval alone still escalates.
+    let eng = engine_of(vec![appr], 0.8, false);
+    assert!(matches!(decide(&eng, "a.b"), GovernanceDecision::EscalateToHuman(_)));
+}
+
+#[test]
+fn a_zero_process_cap_is_refused_everywhere() {
+    let e = refused("[limits]\nmax_processes = 0\n");
+    assert_eq!(e.key(), "limits.max_processes");
+    let p = export_rules(
+        vec![],
+        0.8,
+        false,
+        &Limits {
+            max_processes: Some(0),
+            ..Limits::default()
+        },
+        &user_key(),
+        1,
+        Utc::now(),
+    );
+    assert!(matches!(p, Err(ParentPolicyError::Limit("max_processes"))));
+}

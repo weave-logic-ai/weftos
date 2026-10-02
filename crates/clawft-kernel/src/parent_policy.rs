@@ -35,6 +35,8 @@ use crate::governance_overlay::{
 pub const PARENT_POLICY_DOMAIN: &str = "weftos-parent-policy-v1\n";
 /// Domain tag of [`parent_rules_hash`].
 pub const PARENT_RULES_DOMAIN: &str = "weftos-parent-rules-v1\n";
+/// How far past the clock a previous version may be and still be believed.
+pub const VERSION_SLACK_SECS: u64 = 86_400;
 /// Parent policy format version.
 pub const PARENT_SCHEMA: u32 = 1;
 
@@ -129,6 +131,9 @@ fn check_limits(l: &Limits) -> Result<(), ParentPolicyError> {
         && !(r.is_finite() && (0.0..=1.0).contains(&r))
     {
         return Err(ParentPolicyError::Limit("risk_threshold"));
+    }
+    if l.max_processes == Some(0) {
+        return Err(ParentPolicyError::Limit("max_processes"));
     }
     Ok(())
 }
@@ -331,7 +336,15 @@ pub fn export_rules_to(
     signing_key: &SigningKey,
 ) -> Result<ParentPolicy, ParentPolicyError> {
     let now = Utc::now();
-    let prev = load_parent_policy(path).map(|p| p.version).unwrap_or(0);
+    // Only a policy this key signed may set the version, and a version far
+    // ahead of the clock is not believed: a bad file cannot ratchet it up.
+    let pubkey = signing_key.verifying_key().to_bytes();
+    let slack = u64::try_from(now.timestamp()).unwrap_or(0) + VERSION_SLACK_SECS;
+    let prev = load_parent_policy(path)
+        .ok()
+        .filter(|p| verify_parent_policy(p, &pubkey).is_ok())
+        .map_or(0, |p| p.version)
+        .min(slack);
     let p = export_rules(
         rules,
         engine_threshold,

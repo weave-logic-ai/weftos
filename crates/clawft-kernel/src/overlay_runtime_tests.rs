@@ -17,7 +17,8 @@ use crate::gate::{GateBackend, GateDecision, GovernanceGate};
 use crate::governance::RuleSeverity;
 use crate::governance_overlay::OverlayError;
 use crate::governance_overlay_tests::{base_parent, parent_with, rule, user_key};
-use crate::overlay_runtime::{OverlayRuntime, VERSION_PIN_FILE, child_paths, prepare};
+use crate::overlay_runtime::{OverlayRuntime, child_paths, prepare};
+use crate::overlay_trust::VERSION_PIN_FILE;
 use crate::parent_policy::{ParentPolicy, ParentPolicyError};
 
 const ID: &str = "01JB8Z3Q0V6X9KQ4M2N7T5R1WD";
@@ -70,6 +71,7 @@ pub(crate) struct Running {
 pub(crate) fn start(f: &Fixture) -> Running {
     let prepared = prepare(&f.paths).unwrap();
     let cm = Arc::new(ChainManager::new(0, 1000));
+    prepared.commit(&cm).unwrap();
     prepared.install_provider(&cm);
     let (threshold, human) = prepared.engine_params();
     let mut gate = GovernanceGate::new(threshold, human)
@@ -334,8 +336,12 @@ fn a_bad_edit_is_rejected_on_reload_and_the_running_rules_stay() {
     let p = rej.payload.as_ref().unwrap();
     assert_eq!((p["source"].as_str(), p["key"].as_str()), (Some("reload"), Some("permit")));
 
-    // Deleting the overlay file is a valid edit: it means "no overlay".
+    // Deleting the file is refused while a non-empty overlay is in force;
+    // an explicit empty file is the deliberate way to clear it.
     std::fs::remove_file(f.paths.overlay().unwrap()).unwrap();
+    assert_eq!(r.rt.reload().unwrap_err(), OverlayError::OverlayMissing);
+    assert!(is_deny(&check(&r.gate, "tool.shell_exec")));
+    std::fs::write(f.paths.overlay().unwrap(), "").unwrap();
     r.rt.reload().unwrap();
     assert!(!is_deny(&check(&r.gate, "tool.shell_exec")));
 }

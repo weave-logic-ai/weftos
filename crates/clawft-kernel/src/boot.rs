@@ -1144,6 +1144,8 @@ impl<P: Platform> Kernel<P> {
                 // ADR-103 A7: a project kernel stamps its effective rule hash on
                 // every chain event, boot events included.
                 if let Some(p) = overlay_prepared.as_ref() {
+                    p.commit(&cm)
+                        .map_err(|e| KernelError::BootRefused(e.boot_message()))?;
                     p.install_provider(&cm);
                 }
 

@@ -6992,7 +6992,13 @@ async fn dispatch(
                             tool_selector: None,
                             force_on_match: false,
                         });
-                    Some(std::sync::Arc::new(g))
+                    // ADR-103 D8: a project kernel's spawned agents are gated by
+                    // its effective governance, not this fixed rule set.
+                    k.governance_overlay()
+                        .and(k.governance_gate().cloned())
+                        .or_else(|| {
+                            Some(std::sync::Arc::new(g) as std::sync::Arc<dyn clawft_kernel::GateBackend>)
+                        })
                 };
                 move |pid, cancel| {
                     let inbox = a2a_clone.create_inbox(pid);

@@ -28,10 +28,8 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
-use chrono::Utc;
 use clawft_types::config::KernelConfig;
-use clawft_types::project::ProjectCert;
-use clawft_types::project::canon::{hex_decode, hex_encode};
+use clawft_types::project::canon::hex_encode;
 use clawft_types::runtime_paths::RuntimePaths;
 use serde_json::json;
 
@@ -39,18 +37,18 @@ use crate::chain::ChainManager;
 use crate::chain_rule_hash::RuleHashCell;
 use crate::gate::{GateBackend, GateDecision, GovernanceGate, GovernanceSnapshot};
 use crate::governance_overlay::{
-    Effective, Overlay, OverlayError, load_overlay, merge, read_capped,
+    Effective, Overlay, OverlayError, load_overlay, merge,
+};
+pub use crate::overlay_trust::{REVOKED_FILE, USER_PIN_FILE, VERSION_PIN_FILE, write_user_pin};
+use crate::overlay_trust::{
+    check_version, last_applied_overlay_hash, load_user_pubkey, read_pin, write_pin,
 };
 use crate::parent_policy::{
-    ParentPolicy, ParentPolicyError, load_parent_policy, verify_parent_policy, write_atomic_0600,
+    ParentPolicy, load_parent_policy, verify_parent_policy,
 };
 
 /// Fallback engine threshold when neither parent nor overlay set one.
 pub const DEFAULT_RISK_THRESHOLD: f64 = 0.7;
-/// File (under `<root>/.weftos/state/`) holding the newest accepted parent
-/// policy version.
-pub const VERSION_PIN_FILE: &str = "parent-policy.version";
-
 #[cfg(test)]
 thread_local! {
     /// Tests boot with `RuntimePaths::at`; this lets one name a child root.
@@ -159,66 +157,10 @@ pub struct Prepared {
     user_pubkey: [u8; 32],
     parent: ParentPolicy,
     overlay: Overlay,
+    overlay_present: bool,
+    pinned: Option<u64>,
     effective: Effective,
     cell: Arc<RuleHashCell>,
-}
-
-fn load_user_pubkey(paths: &RuntimePaths) -> Result<[u8; 32], OverlayError> {
-    let cert_err = |m: String| OverlayError::Cert(m);
-    let path = paths
-        .project_cert()
-        .ok_or_else(|| cert_err("no certificate path for this root".into()))?;
-    let text = read_capped(&path)?
-        .ok_or_else(|| cert_err(format!("{} does not exist", path.display())))?;
-    let cert: ProjectCert =
-        serde_json::from_str(&text).map_err(|e| cert_err(format!("does not parse: {e}")))?;
-    let user_pk: [u8; 32] = hex_decode(&cert.user_pubkey)
-        .ok_or_else(|| cert_err("`user_pubkey` is not 64 lowercase hex".into()))?;
-    cert.verify(&user_pk, Utc::now())
-        .map_err(|e| cert_err(e.to_string()))?;
-    if Some(cert.project_id.as_str()) != paths.child_id() {
-        return Err(cert_err("`project_id` is not this kernel's project".into()));
-    }
-    // The key beside the certificate must be the certified one.
-    if let Some(kp) = paths.project_key()
-        && let Ok(bytes) = std::fs::read(&kp)
-        && let Ok(seed) = <[u8; 32]>::try_from(bytes.as_slice())
-    {
-        let pk = ed25519_dalek::SigningKey::from_bytes(&seed)
-            .verifying_key()
-            .to_bytes();
-        if hex_encode(&pk) != cert.project_pubkey {
-            return Err(cert_err("project.key is not the certified project key".into()));
-        }
-    }
-    Ok(user_pk)
-}
-
-fn read_pin(paths: &RuntimePaths) -> Option<u64> {
-    let p = paths.state_dir()?.join(VERSION_PIN_FILE);
-    std::fs::read_to_string(p).ok()?.trim().parse().ok()
-}
-
-fn write_pin(paths: &RuntimePaths, version: u64) -> Result<(), OverlayError> {
-    let p = paths
-        .state_dir()
-        .ok_or(OverlayError::NotAChild)?
-        .join(VERSION_PIN_FILE);
-    write_atomic_0600(&p, version.to_string().as_bytes()).map_err(|e| OverlayError::Io {
-        path: p.display().to_string(),
-        reason: e.to_string(),
-    })
-}
-
-fn check_version(parent: &ParentPolicy, pinned: Option<u64>) -> Result<(), OverlayError> {
-    match pinned {
-        Some(pinned) if parent.version < pinned => Err(ParentPolicyError::Rollback {
-            have: parent.version,
-            pinned,
-        }
-        .into()),
-        _ => Ok(()),
-    }
 }
 
 /// Read, verify and merge the certificate, parent policy and overlay of the
@@ -228,7 +170,9 @@ pub fn prepare(paths: &RuntimePaths) -> Result<Prepared, OverlayError> {
     let user_pubkey = load_user_pubkey(&paths)?;
     let parent = load_parent_policy(&paths.parent_policy())?;
     verify_parent_policy(&parent, &user_pubkey)?;
-    check_version(&parent, read_pin(&paths))?;
+    let pinned = read_pin(&paths)?;
+    check_version(&parent, pinned)?;
+    let overlay_present = paths.overlay().is_some_and(|p| p.exists());
     let overlay = match paths.overlay() {
         Some(p) => load_overlay(&p)?,
         None => Overlay::empty(),
@@ -241,12 +185,40 @@ pub fn prepare(paths: &RuntimePaths) -> Result<Prepared, OverlayError> {
         user_pubkey,
         parent,
         overlay,
+        overlay_present,
+        pinned,
         effective,
         cell,
     })
 }
 
 impl Prepared {
+    /// Boot-time history checks against the project chain, then persist the
+    /// rollback pin. Call once the chain is restored and before anything is
+    /// appended to it.
+    ///
+    /// * the pin is missing but the chain records an applied overlay: someone
+    ///   removed it to roll the parent policy back, so boot is refused;
+    /// * `overlay.toml` is missing but the last applied overlay was not empty:
+    ///   deleting the file must not clear the overlay (an empty file does).
+    pub fn commit(&self, chain: &ChainManager) -> Result<(), OverlayError> {
+        let last = last_applied_overlay_hash(chain);
+        if self.pinned.is_none() && last.is_some() {
+            return Err(OverlayError::PinMissing);
+        }
+        let empty = hex_encode(&Overlay::empty().hash);
+        if let Some(h) = &last
+            && !self.overlay_present
+            && *h != empty
+        {
+            return Err(OverlayError::OverlayMissing);
+        }
+        if self.pinned.is_none_or(|p| self.parent.version > p) {
+            write_pin(&self.paths, self.parent.version)?;
+        }
+        Ok(())
+    }
+
     /// Lower `kc` to the merged limits. A limit can only go down.
     pub fn apply_limits(&self, kc: &mut KernelConfig) {
         let l = &self.effective.limits;
@@ -352,14 +324,30 @@ impl OverlayRuntime {
         self.cell.get()
     }
 
+    /// Re-check that the trust root is unchanged: certificate, expiry,
+    /// revocation and the user-key pin (see [`load_user_pubkey`]).
+    fn recheck_trust(&self) -> Result<(), OverlayError> {
+        let pk = load_user_pubkey(&self.paths)?;
+        if pk != self.user_pubkey {
+            return Err(OverlayError::Cert(
+                "the trusted user key changed since boot; restart the kernel".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Re-read the overlay (and a newer parent policy, if the file holds one)
-    /// and apply. The only path by which a disk edit takes effect.
+    /// and apply. The only path by which a disk edit takes effect. A deleted
+    /// overlay file is refused once a non-empty overlay is in force; an empty
+    /// file is the deliberate way to clear it.
     pub fn reload(&self) -> Result<Applied, OverlayError> {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let result = (|| {
+            self.recheck_trust()?;
             let overlay = match self.paths.overlay() {
-                Some(p) => load_overlay(&p)?,
-                None => Overlay::empty(),
+                Some(p) if p.exists() => load_overlay(&p)?,
+                _ if s.overlay != Overlay::empty() => return Err(OverlayError::OverlayMissing),
+                _ => Overlay::empty(),
             };
             let mut parent = s.parent.clone();
             let disk = load_parent_policy(&self.paths.parent_policy())?;
@@ -376,16 +364,28 @@ impl OverlayRuntime {
 
     /// Accept a pushed policy: valid user signature, version no older than
     /// the newest accepted, merged with the overlay as last loaded (the file
-    /// on disk is not consulted).
+    /// on disk is not consulted). The project must still be unrevoked and its
+    /// certificate unexpired.
     pub fn apply_parent_update(&self, policy: ParentPolicy) -> Result<Applied, OverlayError> {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let result = (|| {
+            self.recheck_trust()?;
             verify_parent_policy(&policy, &self.user_pubkey)?;
             let overlay = s.overlay.clone();
             self.apply_locked(&mut s, policy, overlay)
         })();
         self.record(&result, "parent.update");
         result
+    }
+
+    /// The effective rules and engine parameters now in force.
+    pub fn effective_rules(&self) -> (Vec<crate::governance::GovernanceRule>, f64, bool) {
+        let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        (
+            s.effective.rules.clone(),
+            s.effective.risk_threshold(DEFAULT_RISK_THRESHOLD),
+            s.effective.human_approval(false),
+        )
     }
 
     fn apply_locked(

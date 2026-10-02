@@ -86,6 +86,27 @@ pub enum OverlayError {
     /// The project certificate is missing or does not verify.
     #[error("project certificate: {0}")]
     Cert(String),
+    /// An overlay approval glob overlaps a glob the parent denies; an
+    /// approval must never turn a deny into a question.
+    #[error("`{key}`: approval glob {glob:?} overlaps the parent deny {parent_glob:?}")]
+    ApprovalOverlapsDeny {
+        key: String,
+        glob: String,
+        parent_glob: String,
+    },
+    /// `overlay.toml` is gone although a non-empty overlay is in force.
+    /// Clear an overlay with an empty file, never by deleting it.
+    #[error("overlay.toml is missing but a non-empty overlay was applied; write an empty file to clear it")]
+    OverlayMissing,
+    /// The rollback pin exists but cannot be read.
+    #[error("{path}: {reason}")]
+    PinCorrupt { path: String, reason: String },
+    /// No rollback pin, yet the chain records an applied overlay.
+    #[error("rollback pin is missing although the chain records an applied governance overlay")]
+    PinMissing,
+    /// The project was revoked by its user daemon.
+    #[error("project revoked ({0})")]
+    Revoked(String),
 }
 
 impl OverlayError {
@@ -111,6 +132,11 @@ impl OverlayError {
             Self::IdCollision { key, .. } => key.clone(),
             Self::NotAChild => "kernel.profile".into(),
             Self::Cert(_) => "project.cert.json".into(),
+            Self::ApprovalOverlapsDeny { key, .. } => key.clone(),
+            Self::OverlayMissing => "overlay.toml".into(),
+            Self::PinCorrupt { path, .. } => path.clone(),
+            Self::PinMissing => format!("state/{}", crate::overlay_trust::VERSION_PIN_FILE),
+            Self::Revoked(_) => "revoked".into(),
         }
     }
 
@@ -373,6 +399,16 @@ pub(crate) fn parent_view(p: &ParentPolicy) -> ParentView {
     }
 }
 
+/// True when some action matches both globs (exact, or a prefix ending `*`).
+pub(crate) fn globs_overlap(a: &str, b: &str) -> bool {
+    match (a.strip_suffix('*'), b.strip_suffix('*')) {
+        (Some(pa), Some(pb)) => pa.starts_with(pb) || pb.starts_with(pa),
+        (Some(pa), None) => b.starts_with(pa),
+        (None, Some(pb)) => a.starts_with(pb),
+        (None, None) => a == b,
+    }
+}
+
 /// Merge `overlay` onto `parent` (tighten-only). The parent's signature is
 /// NOT checked here (see [`crate::parent_policy::verify_parent_policy`]);
 /// its rule hash is recomputed rather than trusted.
@@ -385,6 +421,24 @@ pub fn merge(parent: &ParentPolicy, overlay: &Overlay) -> Result<Effective, Over
         limits,
     } = overlay_merge::merge(&parent_view(parent), &overlay.file)?;
 
+    // `max_processes = 0` would leave no slot for the kernel's own process.
+    if limits.max_processes == Some(0) {
+        return Err(OverlayError::Overlay(overlay_merge::OverlayError::InvalidLimit {
+            key: "limits.max_processes".into(),
+        }));
+    }
+    let view = parent_view(parent);
+    for (i, a) in approval_rules.iter().enumerate() {
+        for (j, g) in a.actions.iter().enumerate() {
+            if let Some(pg) = view.deny_actions.iter().find(|pg| globs_overlap(g, pg)) {
+                return Err(OverlayError::ApprovalOverlapsDeny {
+                    key: format!("require_approval[{i}].actions[{j}]"),
+                    glob: g.clone(),
+                    parent_glob: pg.clone(),
+                });
+            }
+        }
+    }
     let mut rules = parent.rules.clone();
     let parent_ids: std::collections::BTreeSet<String> =
         parent.rules.iter().map(|r| norm_id(&r.id)).collect();

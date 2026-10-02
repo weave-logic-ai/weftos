@@ -28,6 +28,20 @@ pub fn parse_limits(params: &Value) -> Result<Limits, String> {
     }
 }
 
+/// The project must be registered with this user daemon before it is sent
+/// policy. (Revocation is checked by the child itself: it refuses policy once
+/// the user daemon has dropped the `revoked` marker in its run dir.)
+pub fn registered(dir: &Path, id: &str) -> Result<(), Response> {
+    match clawft_types::project::find_by_id(dir, id) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(Response::error_with_kind(
+            "project_not_found",
+            format!("project {id} is not registered with this daemon"),
+        )),
+        Err(e) => Err(Response::error_with_kind("project_error", e.to_string())),
+    }
+}
+
 /// `<run_root>/<id>`, refusing an id that is not a single safe path part.
 pub fn run_dir(run_root: &Path, id: &str) -> Result<std::path::PathBuf, String> {
     clawft_types::project::validate_id(id).map_err(|_| "`project_id` is not a project id".to_owned())?;
@@ -151,6 +165,19 @@ mod imp {
             let Some(id) = call.params.get("project_id").and_then(Value::as_str) else {
                 return invalid("governance.parent.push needs `project_id`");
             };
+            match crate::project_rpc::configured_dir() {
+                Some(dir) => {
+                    if let Err(r) = super::registered(&dir, id) {
+                        return r;
+                    }
+                }
+                None => {
+                    return Response::error_with_kind(
+                        "project_store_unavailable",
+                        "cannot locate the project manifest store",
+                    );
+                }
+            }
             let limits = match parse_limits(&call.params) {
                 Ok(l) => l,
                 Err(m) => return invalid(m),
@@ -214,6 +241,21 @@ mod tests {
         let l = parse_limits(&json!({"limits": {"max_processes": 4}})).unwrap();
         assert_eq!(l.max_processes, Some(4));
         assert!(parse_limits(&json!({"limits": {"max_procs": 4}})).is_err());
+    }
+
+    #[test]
+    fn push_requires_a_registered_project() {
+        let t = tempfile::tempdir().unwrap();
+        let mdir = t.path().join("projects");
+        let proj = t.path().join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let reg = crate::project_rpc::register(&mdir, None, &json!({"root": proj.to_str().unwrap()}));
+        assert!(reg.ok, "{:?}", reg.error);
+        let id = reg.result.unwrap()["project"]["id"].as_str().unwrap().to_owned();
+        assert!(registered(&mdir, &id).is_ok());
+        let other = clawft_types::project::new_id();
+        let r = registered(&mdir, &other).unwrap_err();
+        assert_eq!(r.error_kind.as_deref(), Some("project_not_found"));
     }
 
     #[test]
