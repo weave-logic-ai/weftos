@@ -46,7 +46,7 @@ pub mod client;
 
 pub use client::{
     share_llm_client, ChatChoice, ChatMessage, ChatRequest, ChatResponse, ChatTimings, ChatUsage,
-    ChatUsagePromptDetails, ContentBlock, ImageUrl, LlmClient, LlmConfig, LlmError, MessageContent,
+    ChatUsagePromptDetails, ContentBlock, ImageUrl, LlmBackend, LlmClient, LlmConfig, LlmError, MessageContent,
     SharedLlmClient, Tool, ToolCall, ToolCallFunction, ToolChoice, ToolFunction,
 };
 

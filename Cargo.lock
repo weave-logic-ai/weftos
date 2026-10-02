@@ -1774,6 +1774,7 @@ dependencies = [
 name = "clawft-service-llm"
 version = "0.8.1"
 dependencies = [
+ "async-trait",
  "reqwest",
  "serde",
  "serde_json",

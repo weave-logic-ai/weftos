@@ -448,7 +448,7 @@ fn user_level_ops_need_admin_outside_a_project() {
 
 /// Prefix routes whose verbs are individually listed above (everything
 /// unlisted under them is denied outside a project by default).
-const CLASSIFIED_PREFIXES: &[&str] = &["project.", "auth.token.", "rpc_ext.test."];
+const CLASSIFIED_PREFIXES: &[&str] = &["project.", "auth.token.", "shared.", "rpc_ext.test."];
 
 /// Every registered ext route must be classified: allow-listed, user-level,
 /// or a prefix whose verbs are classified. Fails when a package adds a route
