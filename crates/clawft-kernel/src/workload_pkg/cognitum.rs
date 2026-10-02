@@ -10,9 +10,13 @@
 //! Scope: the operator pins the Cognitum release key directly by key id.
 //! The upstream trust-registry v3 quorum, key status windows and builder /
 //! workflow allow-lists are not re-evaluated here. A record binds the cog
-//! id, version and one binary digest; it does not cover `cog.toml`, so a
-//! record-only package runs with an unsigned manifest unless an operator
-//! also signs the envelope.
+//! id, version, source commit and one binary digest; it does not cover
+//! `cog.toml`. A package trusted through a record alone is therefore
+//! accepted only when (a) the record's `sourceCommit` matches the package's
+//! recorded source commit and (b) the package's `cog.toml` hash is one the
+//! operator pinned ([`super::VerifyPolicy::record_cog_toml_pins`]). Packages
+//! an operator signed are not subject to (a) and (b), but an attached record
+//! is still verified.
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -41,6 +45,8 @@ pub struct RecordFacts {
     pub binary_digest: String,
     /// Signing key id.
     pub key_id: String,
+    /// `sourceCommit` (empty when the record does not carry one).
+    pub source_commit: String,
 }
 
 /// Canonical upstream statement bytes for `record`.
@@ -122,6 +128,11 @@ pub fn verify_release_record(record: &Value, keys: &[PinnedKey]) -> Result<Recor
         version: text("/version")?,
         binary_digest,
         key_id: key_id.to_string(),
+        source_commit: record
+            .pointer("/sourceCommit")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
     })
 }
 
@@ -146,14 +157,23 @@ fn require_printable_ascii(v: &Value, depth: usize) -> Result<(), String> {
     }
 }
 
+/// A verified attached record: what it binds and who vouches for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedRecord {
+    /// Facts the record binds.
+    pub facts: RecordFacts,
+    /// The signer to report if the record alone carries trust.
+    pub signer: AcceptedSigner,
+}
+
 /// If the package carries a Cognitum record, verify it and its binding to
 /// the package (cog id, version, and every binary's SHA-256 equal to
 /// `binaryDigest`). `Ok(None)` when no record is attached.
-pub fn accept_from_package(
+pub fn check_attached(
     body: &CogPackageBody,
     source: &dyn FileSource,
     anchors: &TrustAnchors,
-) -> Result<Option<AcceptedSigner>, VerifyError> {
+) -> Result<Option<CheckedRecord>, VerifyError> {
     let Some(att) = body
         .attestations
         .iter()
@@ -192,8 +212,46 @@ pub fn accept_from_package(
             )));
         }
     }
-    Ok(Some(AcceptedSigner {
-        key_id: facts.key_id,
+    let signer = AcceptedSigner {
+        key_id: facts.key_id.clone(),
         origin: super::trust::KeyOrigin::CognitumRelease,
-    }))
+    };
+    Ok(Some(CheckedRecord { facts, signer }))
+}
+
+/// Extra conditions for trusting a package through a Cognitum record
+/// alone: the record's `sourceCommit` must match the package's source
+/// commit, and the package's `cog.toml` hash must be operator-pinned.
+pub fn require_record_only_binding(
+    body: &CogPackageBody,
+    facts: &RecordFacts,
+    policy: &super::VerifyPolicy,
+) -> Result<(), VerifyError> {
+    let reject = |m: String| VerifyError::CognitumRecord(m);
+    let Some(commit) = body.source.commit.as_deref() else {
+        return Err(reject(
+            "record-only trust needs the package source commit to match the record's sourceCommit"
+                .into(),
+        ));
+    };
+    let ok_commit = !facts.source_commit.is_empty()
+        && commit.len() >= 7
+        && (facts.source_commit.starts_with(commit) || commit.starts_with(&facts.source_commit));
+    if !ok_commit {
+        return Err(reject(format!(
+            "record sourceCommit {:?} does not match package source commit {commit}",
+            facts.source_commit
+        )));
+    }
+    if !policy
+        .record_cog_toml_pins
+        .iter()
+        .any(|p| p == &body.cog_toml.blake3)
+    {
+        return Err(reject(format!(
+            "cog.toml {} is not bound: a record does not cover cog.toml, so record-only trust needs an operator-pinned cog.toml hash (or an operator signature)",
+            body.cog_toml.blake3
+        )));
+    }
+    Ok(())
 }
