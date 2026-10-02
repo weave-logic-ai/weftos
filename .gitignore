@@ -148,3 +148,4 @@ docs/research/agent-directory/private/
 # Generated agent-host copies and local install markers
 .agents/skills/
 .weavelogic/
+crates/weftos-cog-market/catalog/mouser-pool.json
