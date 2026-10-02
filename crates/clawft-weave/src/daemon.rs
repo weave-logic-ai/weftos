@@ -3651,9 +3651,11 @@ async fn resolve_caller_capabilities(
 
     if token.starts_with(clawft_kernel::token_authority::SECRET_PREFIX) {
         if let Some(authority) = crate::token_rpc::authority_for(kernel).await
-            && authority.validate(token).is_some()
+            && let Some(info) = authority.validate(token)
         {
-            return CallerCapabilities::from_scopes(["admin"]);
+            // Owner tokens carry `admin`; a project token (Phase 2 G) carries
+            // write only, never admin.
+            return CallerCapabilities::from_scopes(info.scope.capability_scopes().iter().copied());
         }
         tracing::warn!("rpc auth: token rejected (unknown, expired or revoked)");
         return CallerCapabilities::denied();

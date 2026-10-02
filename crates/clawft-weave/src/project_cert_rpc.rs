@@ -420,6 +420,20 @@ pub async fn issue_for_register(ctx: &ExtCtx, req: RegisterRequest) -> Result<Is
         .map_err(|e| IssueError::Store(format!("task failed: {e}")))?
 }
 
+/// A project's key was revoked or replaced: write the `revoked` marker its
+/// child checks and stop the child. Without a supervisor (not the user
+/// daemon) there is nothing to do.
+#[cfg(all(unix, feature = "exochain", feature = "placement"))]
+pub async fn on_identity_change(id: &str, method: &str) {
+    if let Some(sup) = crate::project_supervisor::global() {
+        sup.revoked(id, method).await;
+    }
+}
+
+/// See the supervised variant; without placement there is no supervisor.
+#[cfg(not(all(unix, feature = "exochain", feature = "placement")))]
+pub async fn on_identity_change(_id: &str, _method: &str) {}
+
 /// Handler for `project.cert.show`, `project.cert.challenge`,
 /// `project.rekey`, `project.revoke` and `project.identity.repair`.
 pub fn handle(call: ExtCall) -> ExtFuture {
@@ -440,6 +454,14 @@ pub fn handle(call: ExtCall) -> ExtFuture {
             Err(e) => return e.response(),
         };
         let (method, params) = (call.method, call.params);
+        // Revoke and rekey drop the `revoked` marker the child checks and
+        // stop the child (package G); done after the journal write succeeds.
+        let after = matches!(method.as_str(), "project.revoke" | "project.rekey").then(|| {
+            (
+                method.clone(),
+                params.get("id").and_then(Value::as_str).map(str::to_owned),
+            )
+        });
         let out = tokio::task::spawn_blocking(move || match method.as_str() {
             "project.cert.show" => show(&env, &params),
             "project.cert.challenge" => challenge(&env, &params),
@@ -451,7 +473,12 @@ pub fn handle(call: ExtCall) -> ExtFuture {
         })
         .await;
         match out {
-            Ok(Ok(v)) => Response::success(v),
+            Ok(Ok(v)) => {
+                if let Some((method, Some(id))) = after {
+                    crate::project_cert_rpc::on_identity_change(&id, &method).await;
+                }
+                Response::success(v)
+            }
             Ok(Err(e)) => e.response(),
             Err(e) => Response::error(format!("project cert task failed: {e}")),
         }

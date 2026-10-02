@@ -83,6 +83,13 @@ pub mod scope_gate;
 /// `governance.parent.push|update` and `governance.reload` (ADR-103 D8).
 #[cfg(any(unix, windows))]
 pub mod governance_push;
+/// The project supervisor: per-project child kernels under the user daemon
+/// (ADR-103 A6, Phase 2 package G).
+#[cfg(all(unix, feature = "exochain", feature = "placement"))]
+pub mod project_supervisor;
+/// `project.start|stop|restart|status|ensure_running` (ADR-103 A6, package G).
+#[cfg(all(unix, feature = "exochain", feature = "placement"))]
+pub mod project_lifecycle_rpc;
 /// `auth.token.*` RPC handlers and the per-kernel token authority (ADR-102 D3).
 #[cfg(any(unix, windows))]
 pub mod token_rpc;

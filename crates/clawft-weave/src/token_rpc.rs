@@ -50,6 +50,12 @@ pub async fn authority_for(
     kernel: &Arc<RwLock<Kernel<NativePlatform>>>,
 ) -> Option<Arc<TokenAuthority>> {
     let k = kernel.read().await;
+    authority_for_kernel(&k)
+}
+
+/// [`authority_for`] for a caller that already holds the kernel (the
+/// project supervisor is built from `&Kernel` at boot).
+pub fn authority_for_kernel(k: &Kernel<NativePlatform>) -> Option<Arc<TokenAuthority>> {
     let chain = Arc::clone(k.chain_manager()?);
     let key = Arc::as_ptr(&chain) as usize;
     let mut map = AUTHORITIES

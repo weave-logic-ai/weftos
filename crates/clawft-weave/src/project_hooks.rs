@@ -32,7 +32,14 @@ pub fn adjust_services(config: &mut Config, kernel_config: &mut KernelConfig) {
 }
 
 /// After the kernel has booted.
-pub fn post_boot(_kernel: &Kernel<NativePlatform>) {}
+pub fn post_boot(kernel: &Kernel<NativePlatform>) {
+    // The user daemon supervises project kernels and adopts leftovers
+    // (package G); a no-op for every other profile.
+    #[cfg(all(unix, feature = "exochain", feature = "placement"))]
+    crate::project_supervisor::post_boot(kernel);
+    #[cfg(not(all(unix, feature = "exochain", feature = "placement")))]
+    let _ = kernel;
+}
 
 #[cfg(test)]
 mod tests {
