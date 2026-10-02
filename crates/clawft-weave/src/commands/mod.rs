@@ -18,6 +18,7 @@ pub mod ecc_cmd;
 pub mod graphify_cmd;
 pub mod init_cmd;
 pub mod ipc_cmd;
+pub mod kernel_children;
 pub mod kernel_cmd;
 pub mod leaf_cmd;
 pub mod resource_cmd;

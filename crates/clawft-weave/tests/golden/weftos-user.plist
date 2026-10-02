@@ -24,6 +24,8 @@
         <key>SuccessfulExit</key>
         <false/>
     </dict>
+    <key>AbandonProcessGroup</key>
+    <true/>
     <key>StandardOutPath</key>
     <string>/Users/alice/.weftos/run/kernel.log</string>
     <key>StandardErrorPath</key>
