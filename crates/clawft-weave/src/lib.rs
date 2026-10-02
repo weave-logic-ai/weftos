@@ -43,6 +43,11 @@ pub mod project_rpc;
 pub mod user_daemon;
 /// The user key (`~/.weftos/user.key`) and its migration from `chain.key` (ADR-103 D-5).
 pub mod user_key;
+/// Classifying a unix-socket peer: owner, other uid or a supervised child's process group (ADR-103 A14).
+pub mod child_peer;
+/// `weaver migrate user-key --rotate`: rotation with a dual-signed handover (ADR-103 A13).
+#[cfg(any(unix, windows))]
+pub mod user_key_rotate;
 /// Mesh mode as reported in the handshake (ADR-103 P3-U).
 pub mod mesh_state;
 /// `weaver doctor` mesh-service checks (P3-H).

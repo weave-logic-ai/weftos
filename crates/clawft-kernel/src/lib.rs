@@ -238,6 +238,8 @@ pub mod chain_storage;
 pub mod token_authority;
 #[cfg(all(feature = "exochain", feature = "native"))]
 pub mod project_identity;
+#[cfg(all(feature = "exochain", feature = "native"))]
+pub mod user_key_rotation;
 // S10 key rotation needs Clock (mesh) + ChainManager (exochain). WEFT-107.
 #[cfg(all(feature = "exochain", feature = "mesh"))]
 pub mod key_rotation;

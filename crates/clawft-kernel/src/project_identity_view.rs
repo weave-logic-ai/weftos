@@ -5,9 +5,10 @@ use std::collections::{HashMap, HashSet};
 use clawft_types::project::cert::{ProjectCert, key_id};
 
 use super::{
-    IdentityError, JournalRecord, KIND_REGISTER, KIND_REKEY, KIND_REVOKE, SOURCE,
-    verify_signature_only,
+    IdentityError, JournalRecord, KIND_REGISTER, KIND_REKEY, KIND_REVOKE, KIND_ROTATED, SOURCE,
+    verify_cert_historic,
 };
+use crate::user_key_rotation::UserKeyHistory;
 use crate::chain::ChainEvent;
 
 /// Outcome of [`RevocationView::plan_registration`].
@@ -37,7 +38,12 @@ struct ProjectIdentity {
 /// by [`Self::build`]; there is no way to add an unverified certificate.
 #[derive(Debug, Clone)]
 pub struct RevocationView {
-    user_pubkey: [u8; 32],
+    trust: UserKeyHistory,
+    /// Chain sequence of the `project.register`/`project.rekey` event that
+    /// carries each certificate (by signature).
+    anchored: HashMap<String, u64>,
+    /// Chain sequence of the first `user.key.rotated` event per retired key id.
+    rotated_seq: HashMap<String, u64>,
     projects: HashMap<String, ProjectIdentity>,
     /// key id -> the project that first claimed it (certified or revoked).
     key_owner: HashMap<String, String>,
@@ -54,12 +60,27 @@ impl RevocationView {
         journal: &[JournalRecord],
         cert_files: &[ProjectCert],
     ) -> Self {
+        Self::build_with(&UserKeyHistory::single(user_pubkey), events, journal, cert_files)
+    }
+
+    /// [`Self::build`] under a user-key rotation history: a certificate sealed
+    /// by a retired user key counts when it is dated at or before that key's
+    /// rotation point (ADR-103 A13); one dated after it is dropped.
+    pub fn build_with(
+        trust: &UserKeyHistory,
+        events: &[ChainEvent],
+        journal: &[JournalRecord],
+        cert_files: &[ProjectCert],
+    ) -> Self {
         let mut v = Self {
-            user_pubkey: *user_pubkey,
+            trust: trust.clone(),
+            anchored: HashMap::new(),
+            rotated_seq: HashMap::new(),
             projects: HashMap::new(),
             key_owner: HashMap::new(),
             rejected: 0,
         };
+        v.index_chain(events);
         for rec in journal {
             match rec {
                 JournalRecord::Register { cert } => v.ingest_cert(cert),
@@ -79,6 +100,28 @@ impl RevocationView {
             v.ingest_event(e);
         }
         v
+    }
+
+    /// Record where the chain holds each certificate and each rotation, the
+    /// evidence a retired-key certificate needs (see [`Self::verify_historic`]).
+    fn index_chain(&mut self, events: &[ChainEvent]) {
+        for ev in events.iter().filter(|e| e.source == SOURCE) {
+            let Some(p) = ev.payload.as_ref() else { continue };
+            match ev.kind.as_str() {
+                KIND_REGISTER | KIND_REKEY => {
+                    let field = if ev.kind == KIND_REGISTER { "cert" } else { "new_cert" };
+                    if let Some(c) = p.get(field).and_then(|c| serde_json::from_value::<ProjectCert>(c.clone()).ok()) {
+                        self.anchored.entry(c.sig).or_insert(ev.sequence);
+                    }
+                }
+                k if k == KIND_ROTATED => {
+                    if let Some(old) = p.get("record").and_then(|r| r.get("old_key_id")).and_then(|v| v.as_str()) {
+                        self.rotated_seq.entry(old.to_owned()).or_insert(ev.sequence);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn ingest_event(&mut self, ev: &ChainEvent) {
@@ -116,7 +159,7 @@ impl RevocationView {
     }
 
     fn ingest_cert(&mut self, c: &ProjectCert) {
-        if verify_signature_only(c, &self.user_pubkey).is_err() {
+        if self.verify_historic(c).is_err() {
             self.rejected += 1;
             return;
         }
@@ -127,6 +170,29 @@ impl RevocationView {
         if !st.certs.iter().any(|x| x.sig == c.sig) {
             st.certs.push(c.clone());
         }
+    }
+
+    /// Signature and shape under the user key that sealed `c`. A certificate
+    /// sealed by the key in use needs nothing more. One sealed by a RETIRED
+    /// key counts only when it is dated at or before the rotation point AND
+    /// the user chain proves it: a `project.register`/`project.rekey` event
+    /// carrying it has a sequence below the `user.key.rotated` event of that
+    /// key. A journal line or certificate file alone, however it is dated,
+    /// is not evidence (whoever holds the old private key can backdate; only
+    /// the daemon appends to the reserved chain source).
+    fn verify_historic(&self, c: &ProjectCert) -> Result<(), IdentityError> {
+        verify_cert_historic(c, &self.trust)?;
+        let current = key_id(self.trust.current());
+        if c.user_key_id != current {
+            let before_rotation = matches!(
+                (self.anchored.get(&c.sig), self.rotated_seq.get(&c.user_key_id)),
+                (Some(s), Some(r)) if s < r
+            );
+            if !before_rotation {
+                return Err(clawft_types::project::CertError::UntrustedUser.into());
+            }
+        }
+        Ok(())
     }
 
     fn ingest_revoke(&mut self, project_id: &str, key_id: &str) {

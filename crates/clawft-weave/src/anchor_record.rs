@@ -13,6 +13,7 @@ use clawft_kernel::chain_anchor::{ANCHOR_SOURCE, KIND_ANCHOR};
 use clawft_kernel::project_identity::{self as ident, IdentityError, RevocationView};
 use clawft_types::project::canon::{canonical_json, hex_decode, hex_encode};
 use clawft_types::project::cert::ProjectAnchorStmt;
+use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Signer, VerifyingKey};
 use serde_json::json;
 use tracing::warn;
@@ -27,27 +28,50 @@ pub(super) fn anchor_file(dir: &Path, id: &str) -> PathBuf {
     dir.join(format!("{id}.anchor.json"))
 }
 
-fn record_bytes(statement_hash: &str, user_seq: u64, user_event_hash: &str) -> Vec<u8> {
-    let body = json!({
+fn record_bytes(statement_hash: &str, user_seq: u64, user_event_hash: &str, epoch: u64) -> Vec<u8> {
+    let mut body = json!({
         "statement_hash": statement_hash,
         "user_seq": user_seq,
         "user_event_hash": user_event_hash,
     });
+    // Only a non-zero epoch is signed, so records from before epochs keep verifying.
+    if epoch > 0 {
+        body["epoch"] = json!(epoch);
+    }
     format!("{RECORD_DOMAIN}{}", canonical_json(&body)).into_bytes()
 }
 
 /// An [`Accepted`] sealed with the user key.
-pub(super) fn seal(env: &CertEnv, statement: ProjectAnchorStmt, user_seq: u64, user_event_hash: String) -> Accepted {
-    let bytes = record_bytes(&statement.hash(), user_seq, &user_event_hash);
+pub(super) fn seal(
+    env: &CertEnv,
+    statement: ProjectAnchorStmt,
+    user_seq: u64,
+    user_event_hash: String,
+    epoch: u64,
+) -> Accepted {
+    let bytes = record_bytes(&statement.hash(), user_seq, &user_event_hash, epoch);
     let rec_sig = hex_encode(&env.user_key.sign(&bytes).to_bytes());
-    Accepted { statement, user_seq, user_event_hash, rec_sig }
+    Accepted { statement, user_seq, user_event_hash, rec_sig, epoch }
 }
 
+/// Sealed by the key in use, or by a user key rotated out since, provided the
+/// statement it seals is dated at or before that key's rotation point
+/// (ADR-103 A13). A record the old key sealed after the rotation point is
+/// refused: the daemon seals only with the key in use, so the old key's
+/// signature on a later statement is not the daemon's.
 fn seal_ok(env: &CertEnv, a: &Accepted) -> bool {
     let Some(sig) = hex_decode::<64>(&a.rec_sig) else { return false };
-    let vk: VerifyingKey = env.user_key.verifying_key();
-    let bytes = record_bytes(&a.statement.hash(), a.user_seq, &a.user_event_hash);
-    vk.verify_strict(&bytes, &Signature::from_bytes(&sig)).is_ok()
+    let Ok(history) = crate::project_cert_rpc::user_history(env) else { return false };
+    let Some(at) = DateTime::parse_from_rfc3339(&a.statement.at).ok().map(|t| t.with_timezone(&Utc)) else {
+        return false;
+    };
+    let bytes = record_bytes(&a.statement.hash(), a.user_seq, &a.user_event_hash, a.epoch);
+    let sig = Signature::from_bytes(&sig);
+    std::iter::once(*history.current())
+        .chain(history.retired_keys())
+        .filter(|pk| history.accepts(pk, at))
+        .filter_map(|pk| VerifyingKey::from_bytes(&pk).ok())
+        .any(|vk| vk.verify_strict(&bytes, &sig).is_ok())
 }
 
 /// The statement still verifies under some certificate ever issued for the
@@ -83,17 +107,20 @@ pub(super) fn write_file(env: &CertEnv, a: &Accepted) -> Result<(), AnchorError>
         .map_err(|e: IdentityError| AnchorError::Store(format!("record accepted anchor: {e}")))
 }
 
-pub(super) fn append_event(env: &CertEnv, stmt: &ProjectAnchorStmt, recovered: Option<&Accepted>) -> Accepted {
+pub(super) fn append_event(env: &CertEnv, stmt: &ProjectAnchorStmt, recovered: Option<&Accepted>, epoch: u64) -> Accepted {
     let mut payload = json!({
         "project_id": stmt.project_id,
         "statement": stmt,
         "statement_hash": stmt.hash(),
     });
+    if epoch > 0 {
+        payload["epoch"] = json!(epoch);
+    }
     if let Some(old) = recovered {
         payload["recovered"] = json!(true);
         payload["original_user_seq"] = json!(old.user_seq);
         payload["original_user_event_hash"] = json!(old.user_event_hash);
     }
     let ev = env.chain.append(ANCHOR_SOURCE, KIND_ANCHOR, Some(payload));
-    seal(env, stmt.clone(), ev.sequence, ident::hex(&ev.hash))
+    seal(env, stmt.clone(), ev.sequence, ident::hex(&ev.hash), epoch)
 }

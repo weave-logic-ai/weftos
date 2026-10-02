@@ -137,6 +137,7 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "governance.parent.update",
     "governance.reload",
     "project.anchor.restore",
+    "project.anchor.reset",
     // Signature-authenticated; a project kernel calls it with its project
     // claim, so it is inside a project and needs no Admin.
     "project.anchor.submit",

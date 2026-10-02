@@ -571,6 +571,29 @@ permits ask for approval. Editing the file does nothing until the
   fix the cause (for a missing marker, write `revoked` into that path by
   hand).
 
+#### Project chain reset and anchors
+
+A project chain moved aside restarts its anchors at `seq = 1`, which the user
+daemon refuses while it holds the old head (`anchor_seq`; `kernel.status`
+shows `anchor_pending: true`). After resetting the chain on purpose, the owner
+runs `weaver project anchor reset --project <id> --reason "..."` on the user
+daemon. The reset is chained and signed; the old statements stay as history and
+the project anchors again from genesis. Do not run it for a project whose chain
+was not reset.
+
+#### Rotating the user key
+
+`weaver migrate user-key --rotate` (user daemon stopped) replaces
+`~/.weftos/user.key` and records a handover signed by the old and the new key in
+`<manifests>/user-key-rotations.jsonl`. Certificates and anchor records sealed
+by the old key keep verifying up to the rotation point; the old key's later
+signatures are refused. Afterwards start the user daemon, restart each project
+kernel (`weaver kernel restart --project <id>`; a running child pins the old
+key), and run `weaver mesh bind rebind` if the machine mesh service is
+installed. The old key is kept as `user.key.retired-<n>`; delete it yourself
+once you are satisfied. After a suspected compromise, also rekey or revoke the
+affected projects. Details: ADR-103 A13.
+
 #### Never downgrade a child-kernel project
 
 A pre-Phase 2 `weaver` run against a `child-kernel` project does not refuse

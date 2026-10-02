@@ -119,6 +119,10 @@ pub enum IssueError {
     /// Identity rule (TOFU conflict, revoked, not bound, bad cert).
     #[error(transparent)]
     Identity(#[from] IdentityError),
+    /// The user-key rotation log is unreadable, broken or does not end at the
+    /// key in use (ADR-103 A13); nothing is verified until it is repaired.
+    #[error(transparent)]
+    Rotation(#[from] ident::RotationError),
     /// Manifest store failure.
     #[error("{0}")]
     Store(String),
@@ -145,6 +149,7 @@ impl IssueError {
             Self::Identity(IdentityError::NotBound(_)) => "not_certified",
             Self::Identity(IdentityError::ProjectRevoked(_)) => "project_revoked",
             Self::Identity(_) => "cert_error",
+            Self::Rotation(_) => "user_key_history_invalid",
             Self::Store(_) => "project_store_error",
             Self::Incomplete(_) => "identity_change_incomplete",
         }
@@ -367,6 +372,64 @@ fn user_pubkey(env: &CertEnv) -> [u8; 32] {
     env.user_key.verifying_key().to_bytes()
 }
 
+/// The user keys this daemon trusts for material it sealed earlier: the key in
+/// use plus every key it replaced, from `<manifests>/user-key-rotations.jsonl`
+/// (ADR-103 A13). An empty log is a single key; a log that is unreadable,
+/// broken or does not end at the key in use is an error (fail closed).
+pub fn user_history(env: &CertEnv) -> Result<ident::UserKeyHistory, IssueError> {
+    Ok(ident::RotationLog::new(&env.manifests_dir).history(&user_pubkey(env))?)
+}
+
+/// The rotation records the user chain holds, oldest first, each verified
+/// (both signatures) and one per `seq`.
+fn chain_records(env: &CertEnv) -> Vec<ident::RotationRecord> {
+    let mut by_seq = std::collections::BTreeMap::new();
+    for e in env.chain.tail_from(0).iter().filter(|e| e.source == SOURCE && e.kind == ident::KIND_ROTATED) {
+        let rec = e
+            .payload
+            .as_ref()
+            .and_then(|p| p.get("record"))
+            .and_then(|r| serde_json::from_value::<ident::RotationRecord>(r.clone()).ok())
+            .filter(|r| r.verify().is_ok());
+        if let Some(r) = rec {
+            by_seq.entry(r.seq).or_insert(r);
+        }
+    }
+    by_seq.into_values().collect()
+}
+
+/// Keep the rotation log and the user chain in agreement (ADR-103 A13).
+///
+/// * A record in the log the chain does not hold yet is appended as a
+///   `user.key.rotated` event (the offline `weaver migrate user-key --rotate`
+///   cannot open the chain). Idempotent.
+/// * A log that is missing or shorter than the chain's records (deleted, or
+///   truncated, which would silently downgrade verification to the key in
+///   use) is rebuilt from the chain's verified records, provided they form a
+///   history ending at the key in use; otherwise the error names the cause.
+///
+/// Returns how many events were appended.
+pub fn chain_rotations(env: &CertEnv) -> Result<usize, IssueError> {
+    let log = ident::RotationLog::new(&env.manifests_dir);
+    let mut records = log.read()?;
+    let on_chain = chain_records(env);
+    if on_chain.len() > records.len() {
+        let end = user_pubkey(env);
+        ident::UserKeyHistory::from_records(&end, &on_chain)
+            .map_err(|e| IssueError::Store(format!("the user-key rotation log is missing or short and the chain's records do not rebuild it: {e}")))?;
+        log.replace(&on_chain)?;
+        tracing::warn!(restored = on_chain.len(), "rebuilt the user-key rotation log from the user chain");
+        records = on_chain;
+    }
+    let chained: std::collections::HashSet<String> = chain_records(env).iter().map(|r| r.hash()).collect();
+    let mut n = 0;
+    for r in records.iter().filter(|r| !chained.contains(&r.hash())) {
+        env.chain.append(SOURCE, ident::KIND_ROTATED, Some(json!({ "record": r, "record_hash": r.hash() })));
+        n += 1;
+    }
+    Ok(n)
+}
+
 /// Certify the key in `req` for `project.register`. Refuses an id that is
 /// not in the manifest store, a root that is not that project's registered
 /// root, a key the caller cannot prove (PoP over a daemon-issued nonce), a
@@ -380,11 +443,44 @@ pub fn register(env: &CertEnv, req: RegisterRequest, now: DateTime<Utc>) -> Resu
     verify_pop(env, PopOp::Register, &req.project_pubkey, &req.nonce, &req.project_id, &req.pop_sig)?;
     let journal = IdentityJournal::new(&env.manifests_dir);
     let lock = journal.lock()?;
-    match current_view_locked(env, &lock)?.plan_registration(&req.project_id, &req.project_pubkey)? {
+    let view = current_view_locked(env, &lock)?;
+    match view.plan_registration(&req.project_id, &req.project_pubkey)? {
         Registration::Existing(cert) => {
-            ident::verify_cert_at(&cert, &user_pubkey(env), now).map_err(IdentityError::from)?;
-            write_cert_file(&env.manifests_dir, &cert)?;
-            Ok(Issued { cert: *cert, new: false })
+            let history = user_history(env)?;
+            let current = key_id(&user_pubkey(env));
+            if cert.user_key_id == current {
+                ident::verify_cert_at(&cert, &user_pubkey(env), now).map_err(IdentityError::from)?;
+                write_cert_file(&env.manifests_dir, &cert)?;
+                return Ok(Issued { cert: *cert, new: false });
+            }
+            // Sealed by a user key that has since been rotated out: it still
+            // verifies (dated before the rotation point), but the child pins
+            // the key in use, so certify the same project key again under the
+            // current user key with the next serial (ADR-103 A13).
+            ident::verify_cert_historic(&cert, &history)?;
+            let renewed = ident::sign_cert(
+                &env.user_key,
+                &CertRequest {
+                    project_id: req.project_id.clone(),
+                    project_pubkey: req.project_pubkey,
+                    serial: view.last_serial(&req.project_id) + 1,
+                    issued_at: now,
+                    expires_at: None,
+                },
+            )?;
+            journal.append(&lock, &JournalRecord::Register { cert: renewed.clone() })?;
+            env.chain.append(
+                SOURCE,
+                KIND_REGISTER,
+                Some(json!({
+                    "cert": renewed,
+                    "renewal": true,
+                    "replaces_serial": cert.serial,
+                    "replaces_user_key_id": cert.user_key_id,
+                })),
+            );
+            write_cert_file(&env.manifests_dir, &renewed)?;
+            Ok(Issued { cert: renewed, new: true })
         }
         Registration::New { serial } => {
             let cert = ident::sign_cert(
@@ -561,7 +657,12 @@ pub(crate) async fn env_from_kernel(kernel: &crate::rpc_ext::KernelRef) -> Resul
     };
     let manifests_dir = crate::project_rpc::configured_dir()
         .ok_or_else(|| IssueError::Unavailable("no manifest store (no home directory)".into()))?;
-    Ok(CertEnv { chain, user_key, manifests_dir })
+    let env = CertEnv { chain, user_key, manifests_dir };
+    // Repair the log from the chain first, then require that it ends at the
+    // key in use before anything is signed or verified (fail closed).
+    chain_rotations(&env)?;
+    user_history(&env)?;
+    Ok(env)
 }
 
 /// Certify a registering child's key. Shared by package H's

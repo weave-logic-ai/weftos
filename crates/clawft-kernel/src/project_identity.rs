@@ -53,6 +53,9 @@ pub use journal::{IdentityJournal, JOURNAL_FILE, JournalLock, JournalRecord, Sha
 #[path = "project_identity_view.rs"]
 mod view;
 pub use view::{Registration, RevocationView};
+pub use crate::user_key_rotation::{
+    KIND_ROTATED, ROTATION_FILE, RotationError, RotationLog, RotationRecord, UserKeyHistory,
+};
 
 /// Chain event source of the project identity events (user chain).
 pub const SOURCE: &str = "user.projects";
@@ -342,6 +345,22 @@ pub fn verify_signature_only(
         .map_err(|_| CertError::BadTimestamp("issued_at"))?
         .with_timezone(&Utc);
     cert.verify(trusted_user_pubkey, at)
+}
+
+/// Check that `cert` is well-formed and was sealed by a user key `trust`
+/// accepts for the certificate's `issued_at`: the current key always, a
+/// retired key only up to its rotation point (ADR-103 A13). Expiry and the
+/// future-skew rule are ignored, as in [`verify_signature_only`].
+pub fn verify_cert_historic(cert: &ProjectCert, trust: &UserKeyHistory) -> Result<(), IdentityError> {
+    let pk = trust.key_for(&cert.user_key_id).ok_or(CertError::UntrustedUser)?;
+    let at = DateTime::parse_from_rfc3339(&cert.issued_at)
+        .map_err(|_| CertError::BadTimestamp("issued_at"))?
+        .with_timezone(&Utc);
+    if !trust.accepts(&pk, at) {
+        return Err(CertError::UntrustedUser.into());
+    }
+    verify_signature_only(cert, &pk)?;
+    Ok(())
 }
 
 /// Prove possession of the project key: sign

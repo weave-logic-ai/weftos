@@ -23,6 +23,16 @@ pub struct Accepted {
     /// (see `anchor_record`): a record without a valid one is ignored.
     #[serde(default)]
     pub rec_sig: String,
+    /// Anchor epoch: 0 until the owner runs `project.anchor.reset`, then one
+    /// more per reset. Statements of an earlier epoch are history, never the
+    /// baseline. Part of the signed record only when non-zero, so records
+    /// from before epochs existed keep verifying.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub epoch: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 impl Accepted {
@@ -87,6 +97,17 @@ pub enum AnchorError {
         /// Last accepted.
         last: u64,
     },
+    /// `chain_id` differs from the last accepted statement's.
+    #[error("chain_id {got} is not the last accepted chain_id {want}; if the project chain was reset on purpose, the owner runs `weaver project anchor reset`")]
+    ChainId {
+        /// Submitted.
+        got: u64,
+        /// Last accepted.
+        want: u64,
+    },
+    /// `project.anchor.reset` with no accepted statement to retire.
+    #[error("project {0} has no accepted anchor in its current epoch; there is nothing to reset")]
+    NothingToReset(String),
     /// Too many authenticated refusals in a row.
     #[error("too many refused statements; retry in {0} s")]
     Backoff(i64),
@@ -119,6 +140,8 @@ impl AnchorError {
             Self::Prev { .. } => "anchor_prev",
             Self::Future => "anchor_future",
             Self::HeadRegress { .. } => "anchor_head_regress",
+            Self::ChainId { .. } => "anchor_chain_id",
+            Self::NothingToReset(_) => "anchor_nothing_to_reset",
             Self::Backoff(_) => "anchor_backoff",
             Self::Store(_) => "anchor_store",
         }
@@ -152,11 +175,11 @@ impl AnchorError {
     }
 }
 
-/// Appended to a `seq` refusal when the daemon has no record at all.
+/// Appended to a `seq` refusal: what the owner can do about it.
 fn remedy(last: &Option<Box<Resync>>) -> &'static str {
     if last.is_none() {
         "; if the user daemon lost its record, the owner restores it with `project.anchor.restore`"
     } else {
-        ""
+        "; if the project chain was reset on purpose (the project restarts at seq 1), the owner runs `weaver project anchor reset`"
     }
 }

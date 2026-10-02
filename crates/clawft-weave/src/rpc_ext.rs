@@ -123,6 +123,12 @@ pub struct CallerCtx {
     /// (`"admin"`, ...) as auth; only a token secret counts. `false` for
     /// in-process callers and for the default.
     pub peer_untrusted: bool,
+    /// The peer is the daemon's uid but inside a supervised project kernel's
+    /// process group ([`crate::child_peer`]). Implies `peer_untrusted`; its
+    /// literal scopes are ignored (anonymous), not refused, because a child
+    /// legitimately calls read-level parent methods with the client's
+    /// implicit `"admin"`. Only its project token is honoured.
+    pub peer_child: bool,
 }
 
 impl CallerCtx {
@@ -135,12 +141,21 @@ impl CallerCtx {
             forward: None,
             verified_project: None,
             peer_untrusted: false,
+            peer_child: false,
         }
     }
 
     /// Mark the connection peer as not the daemon's uid.
     pub fn with_peer_untrusted(mut self, untrusted: bool) -> Self {
         self.peer_untrusted = untrusted;
+        self
+    }
+
+    /// Set the peer classification: anything but the owner is untrusted, and a
+    /// supervised child is additionally marked `peer_child`.
+    pub fn with_peer(mut self, peer: crate::child_peer::PeerClass) -> Self {
+        self.peer_untrusted = !peer.is_owner();
+        self.peer_child = peer == crate::child_peer::PeerClass::Child;
         self
     }
 
@@ -153,6 +168,7 @@ impl CallerCtx {
             forward: req.forward.clone(),
             verified_project: None,
             peer_untrusted: false,
+            peer_child: false,
         }
     }
 
@@ -321,6 +337,11 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Admin,
         handler: crate::anchor_rpc::handle_restore,
     },
+    ExtRoute {
+        prefix: "project.anchor.reset",
+        capability: Capability::Admin,
+        handler: crate::anchor_rpc::handle_reset,
+    },
     // Per-project child kernels (ADR-103 A6, package G). Lifecycle is Admin;
     // `project.token.refresh` is Write so a project token can renew itself.
     ExtRoute {
@@ -486,6 +507,11 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "project.anchor.restore",
         capability: Capability::Admin,
         handler: crate::anchor_rpc::handle_restore,
+    },
+    ExtRoute {
+        prefix: "project.anchor.reset",
+        capability: Capability::Admin,
+        handler: crate::anchor_rpc::handle_reset,
     },
     // Per-project child kernels (ADR-103 A6, package G). Lifecycle is Admin;
     // `project.token.refresh` is Write so a project token can renew itself.
