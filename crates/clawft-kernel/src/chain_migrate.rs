@@ -236,6 +236,25 @@ fn signature_state(p: &RuntimePaths) -> Result<String, MigrateError> {
     }
 }
 
+/// The destination chain restores and still contains the marker's head event
+/// (same sequence and hash), so a foreign chain with a higher sequence is not
+/// mistaken for this migration moving forward.
+fn holds_marker_head(to: &Path, m: &Marker) -> bool {
+    let p = RuntimePaths::at(to);
+    let rvf = p.chain_rvf();
+    let loaded = if rvf.exists() {
+        ChainManager::load_from_rvf(&rvf, 1000)
+    } else {
+        ChainManager::load_from_file(&p.chain_checkpoint(), 1000)
+    };
+    let Ok(mgr) = loaded else { return false };
+    mgr.verify_integrity().valid
+        && mgr.tail(mgr.len()).iter().any(|e| {
+            e.sequence == m.sequence
+                && e.hash.iter().map(|b| format!("{b:02x}")).collect::<String>() == m.head_hash
+        })
+}
+
 fn check_destination(
     from: &Path,
     to: &Path,
@@ -269,7 +288,7 @@ fn check_destination(
         // Do not trust the marker alone: the destination must still hold the
         // recorded bytes, or a chain that restores and has only moved forward.
         if inventory(to)? != m.files {
-            let ok = load_head(to).is_ok_and(|h| h.sequence >= m.sequence);
+            let ok = holds_marker_head(to, &m);
             if !ok {
                 return Err(MigrateError::Refused(format!(
                     "{} has a migration marker but its chain no longer matches it (files \
@@ -532,10 +551,28 @@ fn sweep_stale(parent: &Path, prefix: &str) {
         return;
     };
     for e in rd.flatten() {
-        if e.file_name().to_string_lossy().starts_with(prefix) {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(pid) = name.strip_prefix(prefix) else {
+            continue;
+        };
+        // A live owner (not us) may still be using it: leave it alone.
+        let live = pid
+            .parse::<u32>()
+            .is_ok_and(|p| p != std::process::id() && pid_alive(p));
+        if !live {
             let _ = std::fs::remove_dir_all(e.path());
         }
     }
+}
+
+/// Whether `pid` is a running process, without signalling it.
+fn pid_alive(pid: u32) -> bool {
+    std::process::Command::new("ps")
+        .args(["-p", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 fn copy_fsync(src: &Path, dst: &Path) -> Result<(), MigrateError> {

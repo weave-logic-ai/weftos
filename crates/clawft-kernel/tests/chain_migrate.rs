@@ -346,8 +346,9 @@ fn modes_are_private_and_stale_temp_dirs_are_swept() {
     use std::os::unix::fs::PermissionsExt;
     let f = fx();
     let parent = f.to.parent().unwrap();
-    let stale = parent.join(".chain.migrating-99999");
+    let stale = parent.join(".chain.migrating-99999999");
     std::fs::create_dir_all(&stale).unwrap();
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::write(stale.join("chain.key"), "old").unwrap();
     migrate_user_chain(&opts(&f.from, &f.to, false, far())).unwrap();
     assert!(!stale.exists(), "stale temp swept");
@@ -379,6 +380,25 @@ fn marker_is_not_trusted_when_the_destination_chain_was_damaged() {
     let rvf = f.to.join("chain.rvf");
     let b = std::fs::read(&rvf).unwrap();
     std::fs::write(&rvf, &b[..b.len() / 2]).unwrap();
+    let m = refused(migrate_user_chain(&opts(&f.from, &f.to, false, far())));
+    assert!(m.contains("not trusting"), "{m}");
+}
+
+#[test]
+fn a_foreign_chain_with_a_higher_sequence_is_not_reported_as_migrated() {
+    let f = fx();
+    migrate_user_chain(&opts(&f.from, &f.to, false, far())).unwrap();
+    // Replace the destination chain with a different, longer one.
+    let other = f.to.parent().unwrap().join("other");
+    legacy(&other);
+    let p = RuntimePaths::at(&other);
+    let cm = ChainManager::new(9, 1000);
+    for i in 0..20 {
+        cm.append("x", "y", Some(serde_json::json!({ "i": i })));
+    }
+    cm.save_to_rvf(&f.to.join("chain.rvf")).unwrap();
+    cm.save_to_file(&f.to.join("chain.json")).unwrap();
+    let _ = p;
     let m = refused(migrate_user_chain(&opts(&f.from, &f.to, false, far())));
     assert!(m.contains("not trusting"), "{m}");
 }

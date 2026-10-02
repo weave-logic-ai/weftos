@@ -181,8 +181,8 @@ migration a boot that would still land on the migrated legacy chain is
 refused unless `WEFTOS_RUNTIME_DIR` isolates it or `--adopt-legacy-chain`
 is passed (WARN: that forks history). Rollback: delete the destination
 directory and `MIGRATED-TO-WEFTOS.txt` beside the legacy chain; the legacy
-chain is intact. `--allow-unsigned` migrates a chain whose key is missing
-or whose signature cannot be verified. If the marker write fails the command
+chain is intact. A chain with no `chain.key`, or whose signature cannot be verified
+against it, is refused unless `--allow-unsigned` is passed. If the marker write fails the command
 exits non-zero; re-run it to finish.
 
 Chain lock: whichever chain is in use is guarded by an exclusive lock

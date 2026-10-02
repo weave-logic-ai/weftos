@@ -149,7 +149,7 @@ fn migrated_refusal(dir: &Path, adopt_legacy: bool) -> Option<String> {
     }
     Some(format!(
         "the legacy chain in {} was migrated to {} (see {}); booting on it would fork \
-         history. Use the migrated chain, isolate this run with WEFTOS_RUNTIME_DIR, or \
+         history. Use the migrated chain (`weaver kernel start --profile user`), isolate this run with WEFTOS_RUNTIME_DIR, or \
          pass --adopt-legacy-chain to knowingly continue on the legacy copy",
         dir.display(),
         dest.as_deref().unwrap_or("~/.weftos/chain"),
