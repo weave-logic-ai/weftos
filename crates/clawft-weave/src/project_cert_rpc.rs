@@ -183,15 +183,25 @@ pub fn revoked_marker(manifests_dir: &Path, id: &str) -> Option<PathBuf> {
 
 /// `project.revoke` is terminal for the id: drop the session (a running
 /// child's next heartbeat fails and its re-register is refused `key_revoked`)
-/// and write the marker (atomic, 0600; the run dir is created 0700 when the
+/// and, from [`on_identity_change`], write the marker (atomic, 0600; the run dir is created 0700 when the
 /// child is stopped, so a stopped child is marked too). Nothing here clears
 /// it: delete `~/.weftos/run/<id>/revoked` by hand after re-enrolling the
 /// project. A marker that cannot be written is logged, not fatal: the
 /// journal is the authority, the marker is what lets a child that cannot
 /// reach the parent still see the revocation.
-fn mark_revoked(env: &CertEnv, id: &str, why: &str) {
+fn mark_revoked(_env: &CertEnv, id: &str, _why: &str) {
+    // The marker itself is written by [`on_identity_change`] (package G, the
+    // single writer) once the journal write has succeeded.
     crate::mesh_local_registry::registry().evict(id);
-    let Some(path) = revoked_marker(&env.manifests_dir, id) else { return };
+}
+
+/// Write the terminal `revoked` marker (atomic, 0600; the run dir is created
+/// 0700 when the child is stopped, so a stopped child is marked too). A
+/// marker that cannot be written is logged, not fatal: the journal is the
+/// authority, the marker is what lets a child that cannot reach the parent
+/// still see the revocation. Called only from [`on_identity_change`].
+fn write_revoked_marker(manifests_dir: &Path, id: &str, why: &str) {
+    let Some(path) = revoked_marker(manifests_dir, id) else { return };
     if let Some(dir) = path.parent() {
         let mut b = std::fs::DirBuilder::new();
         b.recursive(true);
@@ -469,12 +479,15 @@ pub async fn issue_for_register(ctx: &ExtCtx, req: RegisterRequest) -> Result<Is
         .map_err(|e| IssueError::Store(format!("task failed: {e}")))?
 }
 
-/// A project's key was revoked (the RPC wrote the terminal marker; the child
-/// is stopped and its credentials killed) or replaced (child stopped, no
+/// A project's key was revoked (writes the terminal marker; the child is
+/// stopped and its credentials killed) or replaced (child stopped, no
 /// marker). Without a supervisor (not the user
 /// daemon) there is nothing to do.
 #[cfg(all(unix, feature = "exochain", feature = "placement"))]
-pub async fn on_identity_change(id: &str, method: &str) {
+pub async fn on_identity_change(manifests_dir: &Path, id: &str, method: &str) {
+    if method == "project.revoke" {
+        write_revoked_marker(manifests_dir, id, "revoked");
+    }
     if let Some(sup) = crate::project_supervisor::global() {
         if method == "project.revoke" {
             sup.revoked(id, method).await;
@@ -486,7 +499,11 @@ pub async fn on_identity_change(id: &str, method: &str) {
 
 /// See the supervised variant; without placement there is no supervisor.
 #[cfg(not(all(unix, feature = "exochain", feature = "placement")))]
-pub async fn on_identity_change(_id: &str, _method: &str) {}
+pub async fn on_identity_change(manifests_dir: &Path, id: &str, method: &str) {
+    if method == "project.revoke" {
+        write_revoked_marker(manifests_dir, id, "revoked");
+    }
+}
 
 /// Handler for `project.cert.show`, `project.cert.challenge`,
 /// `project.rekey`, `project.revoke` and `project.identity.repair`.
@@ -512,6 +529,7 @@ pub fn handle(call: ExtCall) -> ExtFuture {
         // (`project.revoke` wrote the marker itself) and a rekey stops the old
         // child (package G); a repair that changed a bound key does the same.
         let is_repair = method == "project.identity.repair";
+        let manifests_dir = env.manifests_dir.clone();
         let after = matches!(method.as_str(), "project.revoke" | "project.rekey").then(|| {
             (
                 method.clone(),
@@ -561,13 +579,13 @@ pub fn handle(call: ExtCall) -> ExtFuture {
         match out {
             Ok(Ok(v)) => {
                 if let Some((method, Some(id))) = after {
-                    crate::project_cert_rpc::on_identity_change(&id, &method).await;
+                    crate::project_cert_rpc::on_identity_change(&manifests_dir, &id, &method).await;
                 }
                 if is_repair {
                     for c in v.get("key_changes").and_then(Value::as_array).into_iter().flatten() {
                         let Some(id) = c.get("id").and_then(Value::as_str) else { continue };
                         let m = if c["revoked"] == true { "project.revoke" } else { "project.rekey" };
-                        crate::project_cert_rpc::on_identity_change(id, m).await;
+                        crate::project_cert_rpc::on_identity_change(&manifests_dir, id, m).await;
                     }
                 }
                 Response::success(v)
