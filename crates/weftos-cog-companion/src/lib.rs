@@ -174,6 +174,18 @@ impl<A: SensorApp> eframe::App for Companion<A> {
                     ui.label(RichText::new(a).italics());
                 }
             });
+            // Simulate mode must never be buried in Advanced settings: say so up top, with a
+            // one-click way back to the real sensor.
+            if st.config.as_ref().is_some_and(|c| c["simulate"] == serde_json::Value::Bool(true)) {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("SIMULATED: the cog is generating synthetic data, not reading the sensor.").color(widgets::AMBER).strong());
+                    if ui.add_enabled(seed_ok, egui::Button::new("Use the real sensor")).on_hover_text("sets simulate = false (the cog restarts)").clicked() {
+                        let mut ch = serde_json::Map::new();
+                        ch.insert("simulate".into(), serde_json::Value::Bool(false));
+                        self.cog.put_config(&ch, ctx);
+                    }
+                });
+            }
         });
 
         egui::SidePanel::left("companion_checklist")
