@@ -166,6 +166,7 @@ async fn local_send_between_tenants_carries_the_senders_certificate() {
     let r = rig();
     let a = tenant(&r, 501, &[], &[]);
     let mut b = tenant(&r, 502, &[], &[]);
+    b.reg.set_accept_from(vec![node_id_from_pubkey(&[501u32 as u8; 32])]);
     let dest = WeftAddr::from_str(&format!("weft://local/{}/_/chat", b.id)).unwrap();
     r.router.route_outbound(&a.reg, &dest, msg("ignored")).await.unwrap();
     let d = got(&mut b).expect("B receives it");
@@ -204,4 +205,24 @@ async fn subscribe_authorisation_follows_the_same_tenant_rule() {
     assert!(!r.router.authorize_subscribe(&ctx(false), "t", Some(&scope(&b.id, None))).await);
     assert!(r.router.authorize_subscribe(&ctx(false), "t", Some(&scope(&a.id, None))).await);
     assert!(r.router.authorize_subscribe(&ctx(false), "t", None).await);
+}
+
+#[tokio::test]
+async fn cross_tenant_local_send_needs_the_recipient_to_opt_in() {
+    let r = rig();
+    let a = tenant(&r, 501, &[], &[]);
+    let mut b = tenant(&r, 502, &[], &[]);
+    let dest = WeftAddr::from_str(&format!("weft://local/{}/_/chat", b.id)).unwrap();
+    assert!(matches!(
+        r.router.route_outbound(&a.reg, &dest, msg("t")).await,
+        Err(SendError::Forbidden(_))
+    ));
+    assert!(got(&mut b).is_none());
+    // A tenant may always send to itself.
+    let me = WeftAddr::from_str(&format!("weft://local/{}/_/chat", a.id)).unwrap();
+    r.router.route_outbound(&a.reg, &me, msg("t")).await.unwrap();
+    // "*" opts everyone in.
+    b.reg.set_accept_from(vec!["*".into()]);
+    r.router.route_outbound(&a.reg, &dest, msg("t")).await.unwrap();
+    assert!(got(&mut b).is_some());
 }

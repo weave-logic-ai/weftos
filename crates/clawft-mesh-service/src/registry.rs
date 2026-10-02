@@ -9,14 +9,21 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use clawft_mesh_local::proto::{Frame, Rejected};
 use clawft_mesh_local::UserCert;
 use clawft_mesh_local::Principal;
 use tokio::sync::{mpsc, watch};
 
-/// Capacity of each registration's outbound queue.
+/// Capacity of each registration's outbound queue for `deliver` traffic.
 pub const QUEUE_CAP: usize = 256;
+/// Extra slots only verdict requests may use, so a flood of `deliver` frames
+/// can never starve an admission decision.
+pub const RESERVED_SLOTS: usize = 16;
+/// `send` budget per registration: at most this many per [`SEND_WINDOW`].
+pub const SEND_LIMIT: u32 = 200;
+pub const SEND_WINDOW: Duration = Duration::from_secs(1);
 const MAX_PREFIX_LEN: usize = 128;
 const MAX_PREFIXES_PER_USER: usize = 64;
 const MAX_PROJECTS_PER_USER: usize = 256;
@@ -41,6 +48,8 @@ pub struct Registration {
     pub registered_at: u64,
     pub counters: Counters,
     cert: Mutex<Option<UserCert>>,
+    accept_from: Mutex<Vec<String>>,
+    send_window: Mutex<(Instant, u32)>,
     tx: mpsc::Sender<Frame>,
     kill: watch::Sender<Option<String>>,
 }
@@ -59,7 +68,7 @@ impl Registration {
         capabilities: Vec<String>,
         registered_at: u64,
     ) -> (Arc<Self>, mpsc::Receiver<Frame>, watch::Receiver<Option<String>>) {
-        let (tx, rx) = mpsc::channel(QUEUE_CAP);
+        let (tx, rx) = mpsc::channel(QUEUE_CAP + RESERVED_SLOTS);
         let (kill, killed) = watch::channel(None);
         let reg = Arc::new(Self {
             conn_id,
@@ -72,6 +81,8 @@ impl Registration {
             registered_at,
             counters: Counters::default(),
             cert: Mutex::new(None),
+            accept_from: Mutex::new(Vec::new()),
+            send_window: Mutex::new((Instant::now(), 0)),
             tx,
             kill,
         });
@@ -87,9 +98,48 @@ impl Registration {
         *self.cert.lock().expect("cert lock") = Some(cert);
     }
 
-    /// Queue a frame without waiting. A full queue drops the frame (the
+    /// Tenants allowed to send to this daemon (user ids, or `"*"`).
+    pub fn set_accept_from(&self, list: Vec<String>) {
+        *self.accept_from.lock().expect("accept lock") = list;
+    }
+
+    /// Whether the tenant `from_user` may send to this registration. A
+    /// tenant always may send to itself; anyone else must be opted in.
+    pub fn accepts(&self, from_user: &str) -> bool {
+        from_user == self.user_id
+            || self.accept_from.lock().expect("accept lock").iter().any(|a| a == "*" || a == from_user)
+    }
+
+    /// Count one `send`; false when over [`SEND_LIMIT`] in the current window.
+    pub fn allow_send(&self) -> bool {
+        self.allow_send_at(Instant::now())
+    }
+
+    pub(crate) fn allow_send_at(&self, now: Instant) -> bool {
+        let mut w = self.send_window.lock().expect("send window lock");
+        if now.duration_since(w.0) >= SEND_WINDOW {
+            *w = (now, 0);
+        }
+        if w.1 >= SEND_LIMIT {
+            return false;
+        }
+        w.1 += 1;
+        true
+    }
+
+    /// Queue a `deliver` frame without waiting. The last [`RESERVED_SLOTS`]
+    /// are kept for verdict requests; a full queue drops the frame (the
     /// newest) and counts it: a slow daemon must not stall the mesh.
     pub fn try_queue(&self, frame: Frame) -> Result<(), QueueError> {
+        if self.tx.capacity() <= RESERVED_SLOTS {
+            self.counters.dropped_full.fetch_add(1, Ordering::Relaxed);
+            return Err(QueueError::Full);
+        }
+        self.try_queue_priority(frame)
+    }
+
+    /// Queue a frame that may use the reserved slots (verdict requests).
+    pub fn try_queue_priority(&self, frame: Frame) -> Result<(), QueueError> {
         match self.tx.try_send(frame) {
             Ok(()) => Ok(()),
             Err(mpsc::error::TrySendError::Full(_)) => {
@@ -350,101 +400,5 @@ impl Registry {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const ULID_A: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-    const ULID_B: &str = "01BX5ZZKBKACTAV9WEVGEMMVRZ";
-
-    fn reg(conn: u64, uid: u32, user: &str, pid: u32) -> (Arc<Registration>, mpsc::Receiver<Frame>) {
-        let (r, rx, _) = Registration::new(
-            conn,
-            Principal::Uid(uid),
-            user.into(),
-            [uid as u8; 32],
-            pid,
-            String::new(),
-            vec![],
-            0,
-        );
-        (r, rx)
-    }
-
-    #[test]
-    fn second_registration_for_a_user_names_the_holder_pid() {
-        let reg_ = Registry::new();
-        let (a, _ra) = reg(1, 501, "u1", 111);
-        let (b, _rb) = reg(2, 501, "u1", 222);
-        reg_.register(&a, &[], &[]).unwrap();
-        assert_eq!(reg_.register(&b, &[], &[]), Err(RegisterError::InUse { holder_pid: 111 }));
-    }
-
-    #[test]
-    fn stale_unregister_cannot_evict_the_successor() {
-        let r = Registry::new();
-        let (a, _ra) = reg(1, 501, "u1", 1);
-        r.register(&a, &[], &["x/".into()]).unwrap();
-        assert!(!r.unregister("u1", 99));
-        assert!(r.get("u1").is_some());
-        assert!(r.unregister("u1", 1));
-        assert!(r.get("u1").is_none());
-        assert!(r.longest_prefix("x/y").is_none(), "claims leave with the registration");
-    }
-
-    #[test]
-    fn prefixes_conflict_across_users_including_overlap() {
-        let r = Registry::new();
-        let (a, _ra) = reg(1, 501, "u1", 1);
-        let (b, _rb) = reg(2, 502, "u2", 2);
-        r.register(&a, &[], &["substrate/".into()]).unwrap();
-        let out = r.register(&b, &[], &["substrate/".into(), "substrate/x/".into(), "other/".into()]).unwrap();
-        assert_eq!(out.topic_prefixes, vec!["other/".to_string()]);
-        assert_eq!(out.rejected.len(), 2);
-    }
-
-    #[test]
-    fn longest_prefix_wins_and_sole_needs_exactly_one() {
-        let r = Registry::new();
-        let (a, _ra) = reg(1, 501, "u1", 1);
-        r.register(&a, &[], &["a/".into()]).unwrap();
-        assert_eq!(r.longest_prefix("a/b").unwrap().user_id, "u1");
-        assert!(r.longest_prefix("z").is_none());
-        assert!(r.sole().is_some());
-        let (b, _rb) = reg(2, 502, "u2", 2);
-        r.register(&b, &[], &[]).unwrap();
-        assert!(r.sole().is_none());
-    }
-
-    #[test]
-    fn projects_are_owned_and_validated() {
-        let r = Registry::new();
-        let (a, _ra) = reg(1, 501, "u1", 1);
-        let (b, _rb) = reg(2, 502, "u2", 2);
-        let out = r.register(&a, &[ULID_A.into(), "not-a-ulid".into()], &[]).unwrap();
-        assert_eq!(out.addresses, vec![ULID_A.to_string()]);
-        let out = r.register(&b, &[ULID_A.into(), ULID_B.into()], &[]).unwrap();
-        assert_eq!(out.addresses, vec![ULID_B.to_string()], "cannot take another user's project");
-        assert_eq!(r.lookup_scope("u1", Some(ULID_A)).unwrap().user_id, "u1");
-        assert_eq!(r.lookup_scope("u1", Some(ULID_B)).err(), Some(ScopeMiss::UnknownProject));
-        assert_eq!(r.lookup_scope("nobody", None).err(), Some(ScopeMiss::Unknown));
-    }
-
-    #[test]
-    fn empty_and_whitespace_prefixes_are_refused() {
-        let r = Registry::new();
-        let (a, _ra) = reg(1, 501, "u1", 1);
-        let out = r.register(&a, &[], &["".into(), "a b".into()]).unwrap();
-        assert!(out.topic_prefixes.is_empty());
-        assert_eq!(out.rejected.len(), 2);
-    }
-
-    #[test]
-    fn full_queue_drops_and_counts() {
-        let (a, _rx) = reg(1, 501, "u1", 1);
-        for _ in 0..QUEUE_CAP {
-            a.try_queue(Frame::new(clawft_mesh_local::Message::Ping {})).unwrap();
-        }
-        assert_eq!(a.try_queue(Frame::new(clawft_mesh_local::Message::Ping {})), Err(QueueError::Full));
-        assert_eq!(a.counters.dropped_full.load(Ordering::Relaxed), 1);
-    }
-}
+#[path = "registry_tests.rs"]
+mod tests;

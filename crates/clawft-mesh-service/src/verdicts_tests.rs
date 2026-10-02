@@ -182,3 +182,69 @@ async fn forget_conn_drops_waiting_requests() {
     r.broker.forget_conn(7);
     assert!(matches!(asker.await.unwrap(), Decision::Unavailable(_)));
 }
+
+#[tokio::test]
+async fn clear_forgets_cached_verdicts_and_the_stale_grace() {
+    let r = rig(500, 600_000);
+    let (reg, rx) = owner(&r, 7);
+    let asked = answer(&r, 7, rx, true, 60);
+    r.broker.ask(req("n1", 1)).await;
+    r.broker.clear();
+    assert_eq!(r.broker.cache_len(), 0);
+    r.broker.ask(req("n1", 1)).await;
+    assert_eq!(asked.load(Ordering::SeqCst), 2, "asked again after the owner/mode changed");
+    // And a granted peer no longer enjoys stale grace once cleared.
+    r.broker.clear();
+    r.registry.unregister("owner", 7);
+    drop(reg);
+    assert!(matches!(r.broker.ask(req("n1", 1)).await, Decision::Unavailable(_)));
+}
+
+fn key_for(node: &str) -> CacheKey {
+    (0, node.into(), [0; 32], String::new(), String::new(), None)
+}
+
+fn entry(allow: bool) -> Entry {
+    Entry { at: Instant::now(), ttl: Duration::from_secs(60), allow, reason: String::new(), rule_hash: "r".into() }
+}
+
+#[tokio::test]
+async fn a_flood_of_denies_cannot_evict_the_allows_stale_grace_depends_on() {
+    let r = rig(500, 600_000);
+    r.broker.store(key_for("granted"), entry(true));
+    for i in 0..(MAX_DENY_CACHE * 3) {
+        r.broker.store(key_for(&format!("hostile{i}")), entry(false));
+    }
+    assert!(r.broker.allows.lock().unwrap().contains_key(&key_for("granted")));
+    assert!(r.broker.denies.lock().unwrap().len() <= MAX_DENY_CACHE, "denies are bounded too");
+}
+
+#[tokio::test]
+async fn concurrent_asks_of_one_key_share_a_single_request() {
+    let r = rig(1000, 600_000);
+    let (_reg, rx) = owner(&r, 7);
+    let asked = answer(&r, 7, rx, true, 60);
+    let (a, b, c, d) = tokio::join!(
+        r.broker.ask(req("n1", 1)),
+        r.broker.ask(req("n1", 1)),
+        r.broker.ask(req("n1", 1)),
+        r.broker.ask(req("n1", 1)),
+    );
+    for x in [&a, &b, &c, &d] {
+        assert!(matches!(x, Decision::Allow { .. }), "{x:?}");
+    }
+    assert_eq!(asked.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn one_peer_cannot_ask_the_owner_more_than_its_budget() {
+    let r = rig(500, 600_000);
+    let (_reg, rx) = owner(&r, 7);
+    let asked = answer(&r, 7, rx, false, 0);
+    for _ in 0..ASKS_PER_NODE_PER_MINUTE {
+        assert!(matches!(r.broker.ask(req("noisy", 1)).await, Decision::Deny(_)));
+    }
+    assert!(matches!(r.broker.ask(req("noisy", 1)).await, Decision::Unavailable(_)), "over budget fails closed");
+    assert_eq!(asked.load(Ordering::SeqCst) as u32, ASKS_PER_NODE_PER_MINUTE);
+    assert!(matches!(r.broker.ask(req("other", 2)).await, Decision::Deny(_)), "other peers are unaffected");
+}

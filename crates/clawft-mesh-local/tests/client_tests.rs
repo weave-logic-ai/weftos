@@ -45,6 +45,7 @@ fn params() -> RegisterParams {
         topic_prefixes: vec!["kernel.".into()],
         capabilities: vec!["verdict".into()],
         version: "0.8.1".into(),
+        accept_from: vec![],
     }
 }
 

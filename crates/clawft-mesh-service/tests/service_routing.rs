@@ -43,7 +43,9 @@ async fn peer_stream(h: &Harness) -> Box<dyn MeshStream> {
 async fn tenants_on_one_machine_deliver_to_each_other_with_the_senders_cert() {
     let h = Harness::start().await;
     let a = h.connect(None, 1, RegisterParams::default()).await.unwrap();
-    let mut b = h.connect(Some(9001), 2, RegisterParams::default()).await.unwrap();
+    // B opts in to receiving from A (cross-tenant delivery is the recipient's choice).
+    let params = RegisterParams { accept_from: vec![user_id(1)], ..Default::default() };
+    let mut b = h.connect(Some(9001), 2, params).await.unwrap();
     let dest = WeftAddr::from_str(&format!("weft://local/{}/_/chat", user_id(2))).unwrap();
     let reply = a.send(&dest, serde_json::to_value(km("ignored")).unwrap()).await.unwrap();
     assert!(matches!(reply, Message::Ack {}));
@@ -77,8 +79,8 @@ async fn a_send_to_an_unregistered_user_or_unknown_peer_is_an_error() {
 
 #[tokio::test]
 async fn an_unadmitted_mesh_peer_reaches_only_the_default_tenant() {
-    let h = Harness::start().await;
-    // A registers first, so A is the cluster owner and the default tenant.
+    let h = Harness::with(|c, _| c.cluster_owner_uid = Some(c.admin_uids[0])).await;
+    // A is the explicit cluster owner, so it is the default tenant.
     let mut a = h.connect(None, 1, RegisterParams::default()).await.unwrap();
     let mut b = h
         .connect(
@@ -170,7 +172,7 @@ async fn prefix_and_project_claims_conflict_across_users() {
 
 #[tokio::test]
 async fn the_verdict_round_trip_reaches_the_cluster_owner_and_only_the_owner_can_answer() {
-    let h = Harness::start().await;
+    let h = Harness::with(|c, _| c.cluster_owner_uid = Some(c.admin_uids[0])).await;
     let mut owner = h.connect(None, 1, RegisterParams::default()).await.unwrap();
     let mut other = h.connect(Some(9001), 2, RegisterParams::default()).await.unwrap();
     let broker = h.svc().state.verdicts.clone();
@@ -207,6 +209,23 @@ async fn the_verdict_round_trip_reaches_the_cluster_owner_and_only_the_owner_can
         .unwrap();
     let d = ask.await.unwrap();
     assert_eq!(d, clawft_mesh_service::verdicts::Decision::Allow { rule_hash: "r1".into(), stale: false });
+    // A change of owner or mode ends the authority the cached answer came from.
+    assert_eq!(h.svc().state.verdicts.cache_len(), 1);
+    h.admin_ok(Message::PolicySet { admission: None, cluster_owner_uid: Some(h.euid) }).await;
+    assert_eq!(h.svc().state.verdicts.cache_len(), 0);
+}
+
+#[tokio::test]
+async fn cross_tenant_send_is_refused_unless_the_recipient_opted_in() {
+    let h = Harness::start().await;
+    let a = h.connect(None, 1, RegisterParams::default()).await.unwrap();
+    let mut b = h.connect(Some(9001), 2, RegisterParams::default()).await.unwrap();
+    let dest = WeftAddr::from_str(&format!("weft://local/{}/_/chat", user_id(2))).unwrap();
+    match a.send(&dest, serde_json::to_value(km("t")).unwrap()).await {
+        Err(clawft_mesh_local::client::ClientError::Server(e)) => assert_eq!(e.kind, ErrorKind::Forbidden),
+        other => panic!("{other:?}"),
+    }
+    assert!(no_deliver(&mut b).await);
 }
 
 #[tokio::test]

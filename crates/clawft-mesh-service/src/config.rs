@@ -91,7 +91,8 @@ pub struct Overrides {
 pub struct MeshServiceConfig {
     pub state_dir: PathBuf,
     pub socket: PathBuf,
-    /// Mesh listener address (default `0.0.0.0:9489`, ADR-103 D1).
+    /// Mesh listener address. Default `127.0.0.1:9489` (ADR-103 D1 port);
+    /// exposing the service on the LAN (`0.0.0.0:9489`) is an explicit choice.
     pub listen: String,
     pub transport: String,
     pub noise: bool,
@@ -121,7 +122,7 @@ impl Default for MeshServiceConfig {
         Self {
             state_dir: PathBuf::from(DEFAULT_STATE_DIR),
             socket: PathBuf::from(DEFAULT_SOCKET),
-            listen: format!("0.0.0.0:{DEFAULT_MESH_PORT}"),
+            listen: format!("127.0.0.1:{DEFAULT_MESH_PORT}"),
             transport: "tcp".into(),
             noise: false,
             discovery: false,
@@ -223,6 +224,12 @@ impl MeshServiceConfig {
             if self.genesis_hash.is_none() {
                 return bad("admission = \"enforce\" requires genesis_hash");
             }
+            if self.cluster_owner_uid.is_none() {
+                return bad(
+                    "admission = \"enforce\" requires an explicit cluster_owner_uid (the uid whose \
+                     daemon decides membership); it is never inferred from the first bound user",
+                );
+            }
             if !self.noise {
                 return bad(
                     "admission = \"enforce\" requires noise = true (a plaintext channel has no \
@@ -255,8 +262,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_listen_on_the_weave_port() {
-        assert_eq!(MeshServiceConfig::default().listen, "0.0.0.0:9489");
+    fn defaults_listen_on_loopback_at_the_weave_port() {
+        assert_eq!(MeshServiceConfig::default().listen, "127.0.0.1:9489");
     }
 
     #[test]
@@ -277,10 +284,12 @@ mod tests {
     }
 
     #[test]
-    fn enforce_needs_genesis_and_noise() {
+    fn enforce_needs_genesis_owner_and_noise() {
         let mut c = MeshServiceConfig { admission: MeshAdmissionMode::Enforce, ..Default::default() };
         assert!(c.validate().is_err());
         c.genesis_hash = Some([1; 32]);
+        assert!(c.validate().is_err(), "no explicit cluster owner");
+        c.cluster_owner_uid = Some(501);
         assert!(c.validate().is_err(), "noise still off");
         c.noise = true;
         assert!(c.validate().is_ok());

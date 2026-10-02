@@ -13,7 +13,7 @@ use clawft_mesh_local::proto::{ErrorKind, Message, SERVICE_ID_FLAG};
 use clawft_mesh_local::{UserCert, WeftAddr};
 use clawft_kernel::ipc::KernelMessage;
 
-use crate::local_server::{Conn, Step};
+use crate::local_server::{Conn, ConnCtx, Step};
 use crate::registry::Registration;
 use crate::router::SendError;
 use crate::state::{unix_now, Core};
@@ -79,43 +79,25 @@ impl Conn {
     }
 
     async fn renew(&mut self, id: Option<u64>, reg: &Arc<Registration>) -> Result<Step, FrameError> {
-        let st = self.st.clone();
-        let now = unix_now();
-        let ttl = st.cfg.cert_ttl_s;
-        let current = self.cert.clone();
-        // No await while the core lock is held.
-        let issued = {
-            let mut guard = st.core.lock().expect("core lock");
-            let Core { journal, bindings } = &mut *guard;
-            let serial_revoked = current
-                .as_ref()
-                .is_some_and(|c| bindings.is_serial_revoked(&reg.user_id, c.serial));
-            if bindings.key_of(&self.principal) != Some(reg.user_pubkey) || serial_revoked {
-                None
-            } else {
-                Some(match &current {
-                    Some(c) if now.saturating_sub(c.issued_at) < min_renew_interval(ttl) => Ok(c.clone()),
-                    _ => bindings
-                        .issue_cert(journal, &self.principal, now, now.saturating_add(ttl))
-                        .map(|serial| UserCert::issue(&st.machine_key, reg.user_pubkey, serial, now, ttl)),
-                })
-            }
-        };
+        let (ctx, reg2, current) = (self.ctx(), Arc::clone(reg), self.cert.clone());
+        // Journal writes fsync: off the async workers.
+        let issued = tokio::task::spawn_blocking(move || renew_blocking(&ctx, &reg2, current.as_ref())).await;
         match issued {
-            None => {
+            Ok(None) => {
                 self.error_step(id, ErrorKind::Forbidden, "this binding was revoked or replaced", "re-register")
                     .await
             }
-            Some(Ok(cert)) => {
+            Ok(Some(Ok(cert))) => {
                 reg.set_cert(cert.clone());
                 self.cert = Some(cert.clone());
                 self.send(id, Message::Cert { cert }).await?;
                 Ok(Step::Continue)
             }
-            Some(Err(e)) => {
+            Ok(Some(Err(e))) => {
                 let r = crate::register::Reject::bind_error(&e);
                 self.error_step(id, r.kind, r.message, r.remedy).await
             }
+            Err(_) => self.error_step(id, ErrorKind::Forbidden, "internal error while renewing", "").await,
         }
     }
 
@@ -126,6 +108,10 @@ impl Conn {
         dest: &str,
         message: serde_json::Value,
     ) -> Result<Step, FrameError> {
+        if !reg.allow_send() {
+            self.error(id, ErrorKind::RateLimited, "too many sends", "slow down").await?;
+            return Ok(Step::Continue);
+        }
         let addr = match WeftAddr::from_str(dest) {
             Ok(a) => a,
             Err(e) => return self.error_step(id, ErrorKind::BadRequest, format!("bad address: {e}"), "").await,
@@ -144,6 +130,7 @@ impl Conn {
             Err(SendError::UnknownScope(w)) => {
                 self.error(id, ErrorKind::UnknownScope, format!("no registration for {w}"), "").await?
             }
+            Err(SendError::Forbidden(w)) => self.error(id, ErrorKind::Forbidden, w, "ask the recipient to set accept_from").await?,
             Err(SendError::Failed(w)) => self.error(id, ErrorKind::BadRequest, w, "").await?,
         }
         Ok(Step::Continue)
@@ -164,4 +151,35 @@ impl Conn {
             None => self.error_step(id, ErrorKind::BadRequest, "the journal is empty", "").await,
         }
     }
+}
+
+/// `None`: the binding was revoked or replaced. Otherwise the current or a
+/// freshly issued certificate (a renew inside the throttle window returns the
+/// current one without a journal record).
+fn renew_blocking(
+    ctx: &ConnCtx,
+    reg: &Registration,
+    current: Option<&UserCert>,
+) -> Option<Result<UserCert, crate::BindError>> {
+    let st = &ctx.st;
+    let now = unix_now();
+    let ttl = st.cfg.cert_ttl_s;
+    let mut guard = st.core.lock().expect("core lock");
+    let Core { journal, bindings } = &mut *guard;
+    let serial_revoked = current.is_some_and(|c| bindings.is_serial_revoked(&reg.user_id, c.serial));
+    if bindings.key_of(&ctx.principal) != Some(reg.user_pubkey) || serial_revoked {
+        return None;
+    }
+    if let Some(c) = current
+        && now.saturating_sub(c.issued_at) < min_renew_interval(ttl)
+    {
+        return Some(Ok(c.clone()));
+    }
+    let cert = bindings
+        .issue_cert(journal, &ctx.principal, now, now.saturating_add(ttl))
+        .map(|serial| UserCert::issue(&st.machine_key, reg.user_pubkey, serial, now, ttl));
+    if let Ok(c) = &cert {
+        st.last_certs.lock().expect("certs lock").insert(reg.user_id.clone(), c.clone());
+    }
+    Some(cert)
 }

@@ -94,6 +94,37 @@ pub async fn handle_connection(st: Arc<ServiceState>, stream: UnixStream, peer: 
     }
 }
 
+/// What a blocking task needs from a connection (journal writes fsync, so
+/// they run off the async workers).
+#[derive(Clone)]
+pub(crate) struct ConnCtx {
+    pub st: Arc<ServiceState>,
+    pub principal: Principal,
+    pub uid: u32,
+    pub pid: u32,
+    pub exe: String,
+    pub admin: bool,
+}
+
+/// The client-supplied executable path is display and audit text only:
+/// control characters are dropped and it is cut to 256 bytes.
+pub(crate) fn sanitize_exe(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars().filter(|c| !c.is_control()) {
+        if out.len() + c.len_utf8() > 256 {
+            break;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// A pid is informational (macOS credentials carry none): anything outside
+/// the plausible range is recorded as 0 (unknown).
+pub(crate) fn sane_pid(p: u32) -> u32 {
+    if (1..=4_194_304).contains(&p) { p } else { 0 }
+}
+
 pub(crate) struct Conn {
     pub st: Arc<ServiceState>,
     wr: OwnedWriteHalf,
@@ -144,6 +175,17 @@ impl Conn {
         let fatal = kind.is_fatal();
         self.error(id, kind, message, remedy).await?;
         Ok(if fatal { Step::Close } else { Step::Continue })
+    }
+
+    pub(crate) fn ctx(&self) -> ConnCtx {
+        ConnCtx {
+            st: Arc::clone(&self.st),
+            principal: self.principal.clone(),
+            uid: self.uid,
+            pid: self.pid,
+            exe: self.exe.clone(),
+            admin: self.admin,
+        }
     }
 
     fn cleanup(&mut self) {
@@ -254,8 +296,8 @@ async fn run(st: &Arc<ServiceState>, stream: UnixStream, peer: &dyn PeerIdentity
         admin,
         challenge,
         challenge_used: false,
-        pid,
-        exe,
+        pid: sane_pid(pid),
+        exe: sanitize_exe(&exe),
         conn_id: st.conn_seq.fetch_add(1, Ordering::Relaxed),
         reg: None,
         cert: None,
@@ -347,10 +389,14 @@ impl Conn {
             Message::Pong {} => {}
             Message::Bye {} => return Ok(Step::Close),
             Message::Status {} => {
-                let data = self.st.status_json(self.uid, self.admin);
+                let data = self.st.status_json(self.uid, self.admin, self.reg.is_some());
                 self.send(id, Message::Reply { data }).await?;
             }
             Message::PeersList {} => {
+                if !(self.admin || self.reg.is_some()) {
+                    self.error(id, ErrorKind::Forbidden, "peers.list needs a registered daemon or an admin", "").await?;
+                    return Ok(Step::Continue);
+                }
                 let data = self.peers_json();
                 self.send(id, Message::Reply { data }).await?;
             }
@@ -398,6 +444,15 @@ pub(crate) fn lapse_in(not_after: u64, now: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exe_and_pid_are_sanitised_before_they_are_journalled_or_shown() {
+        assert_eq!(sanitize_exe("/bin/x\n\u{1b}[31m"), "/bin/x[31m");
+        assert_eq!(sanitize_exe(&"é".repeat(300)).len(), 256);
+        assert_eq!(sane_pid(0), 0);
+        assert_eq!(sane_pid(4242), 4242);
+        assert_eq!(sane_pid(u32::MAX), 0);
+    }
 
     #[test]
     fn registration_lapses_at_expiry_plus_leeway() {

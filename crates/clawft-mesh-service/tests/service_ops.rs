@@ -126,6 +126,17 @@ async fn unsafe_directories_stop_the_service() {
         Err(StartError::SocketDir(_))
     ));
 
+    // Group-writable is refused as well.
+    let dir = tempfile::Builder::new().prefix("m").tempdir().unwrap();
+    let cfg = config_in(dir.path(), euid);
+    let sock_dir = cfg.socket.parent().unwrap().to_path_buf();
+    std::fs::create_dir_all(&sock_dir).unwrap();
+    std::fs::set_permissions(&sock_dir, std::fs::Permissions::from_mode(0o775)).unwrap();
+    assert!(matches!(
+        start_with(cfg, peer_source(next.clone()), Default::default()).await,
+        Err(StartError::SocketDir(_))
+    ));
+
     // A symlinked state dir is refused too.
     let dir = tempfile::Builder::new().prefix("m").tempdir().unwrap();
     let cfg = config_in(dir.path(), euid);
@@ -275,4 +286,55 @@ fn verdicts_module_only_forwards_and_caches() {
     for word in ["GateBackend", "GateDecision", "ChainManager"] {
         assert!(!src.lines().filter(|l| !l.trim_start().starts_with("//")).any(|l| l.contains(word)), "{word}");
     }
+}
+
+#[tokio::test]
+async fn enforce_needs_an_explicit_cluster_owner() {
+    let h = Harness::with(|c, _| {
+        c.genesis_hash = Some([1; 32]);
+        c.noise = true;
+    })
+    .await;
+    // Genesis and noise are in place, but nobody is the cluster owner.
+    let enforce = || Message::PolicySet { admission: Some("enforce".into()), cluster_owner_uid: None };
+    assert_eq!(h.admin_err(enforce()).await, ErrorKind::BadRequest);
+    let s = h.admin_ok(Message::Status {}).await;
+    assert_eq!(s["admission"], "observe", "refused means unchanged");
+    // Setting the owner in the same request is explicit and allowed.
+    h.admin_ok(Message::PolicySet { admission: Some("enforce".into()), cluster_owner_uid: Some(h.euid) }).await;
+    assert_eq!(h.admin_ok(Message::Status {}).await["admission"], "enforce");
+}
+
+#[tokio::test]
+async fn admin_verbs_journal_first_and_change_nothing_when_the_journal_refuses() {
+    let mut h = Harness::start().await;
+    h.connect(None, 1, RegisterParams::default()).await.unwrap().close().await;
+    h.stop().await;
+    let mut f = std::fs::OpenOptions::new().append(true).open(h.state_dir().join("journal.jsonl")).unwrap();
+    f.write_all(br#"{"v":1,"seq":999,"ts":1,"prev":"00"#).unwrap();
+    drop(f);
+    h.begin().await.expect("starts read-only");
+
+    // Trust-increasing verbs are refused on a read-only journal and apply nothing.
+    let set = Message::PolicySet { admission: Some("off".into()), cluster_owner_uid: Some(77) };
+    assert_eq!(h.admin_err(set).await, ErrorKind::Forbidden);
+    let s = h.admin_ok(Message::Status {}).await;
+    assert_eq!((s["admission"].as_str(), s["cluster_owner_uid"].is_null()), (Some("observe"), true));
+    assert_eq!(h.admin_err(Message::PeerUnrevoke { node_id: "d".repeat(32) }).await, ErrorKind::Forbidden);
+    // Revoking only reduces trust: allowed, and journalled before it is applied.
+    h.admin_ok(Message::PeerRevoke { node_id: "d".repeat(32), reason: "x".into() }).await;
+    assert!(std::fs::read_to_string(h.state_dir().join("revoked.json")).unwrap().contains(&"d".repeat(32)));
+}
+
+#[tokio::test]
+async fn a_failed_journal_append_fails_the_verb_and_nothing_is_applied() {
+    let h = Harness::start().await;
+    h.svc().state.core.lock().unwrap().journal.inject_write_failure();
+    assert_eq!(
+        h.admin_err(Message::PeerRevoke { node_id: "e".repeat(32), reason: "x".into() }).await,
+        ErrorKind::Forbidden
+    );
+    let path = h.state_dir().join("revoked.json");
+    assert!(!path.exists() || !std::fs::read_to_string(path).unwrap().contains(&"e".repeat(32)));
+    assert!(!h.svc().state.revocations.is_revoked(&"e".repeat(32)), "not applied in memory either");
 }

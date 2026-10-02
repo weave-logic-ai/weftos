@@ -18,7 +18,8 @@
 //! `source_node` = the machine node id and a `src_scope` stamped from the
 //! sending registration. Whatever a daemon puts in the message about who it
 //! is cannot change that. A destination on this machine is delivered locally
-//! with the sender's certificate attached.
+//! with the sender's certificate attached, but only when the recipient's
+//! registration opted in (`accept_from`: user ids or `*`; default none).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
@@ -59,6 +60,8 @@ pub enum SendError {
     Unreachable(String),
     /// Local destination tenant is not registered.
     UnknownScope(String),
+    /// The recipient's registration has not opted in to receive from this tenant.
+    Forbidden(String),
     /// The message could not be placed on the wire or in a queue.
     Failed(String),
 }
@@ -259,6 +262,13 @@ impl TenantRouter {
                 dest.map_or_else(|| "no matching tenant".into(), |s| s.user_id),
             ));
         };
+        // Cross-tenant delivery on one machine is opt-in by the recipient.
+        if !reg.accepts(&from.user_id) {
+            return Err(SendError::Forbidden(format!(
+                "{} does not accept messages from other tenants (accept_from)",
+                reg.user_id
+            )));
+        }
         self.queue(&reg, &self.node_id, scope, from.cert(), &msg)
             .map_err(|e| SendError::Failed(format!("{e:?}")))?;
         from.counters.sent.fetch_add(1, Ordering::Relaxed);

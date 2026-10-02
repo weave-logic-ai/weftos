@@ -882,7 +882,18 @@ cmd_check_mesh_no_owned_state() {
         printf '%s\n' "$hits" | sort -u | sed 's/^/        /'
         return 1
     fi
-    pass "clawft-mesh-service dependency tree is free of exochain, resource tree, RVF runtime, tilezero and clawft-weave"
+    # Direct dependencies are an allowlist: a new one needs a deliberate edit here.
+    local allowed=" clawft-mesh-local clawft-kernel clawft-types serde serde_json ed25519-dalek sha2 thiserror rand toml async-trait tracing tokio libc "
+    local direct name extra=""
+    direct="$(cargo tree -p clawft-mesh-service -e normal --depth 1 --prefix none 2>&1 | awk 'NR>1 {print $1}' | sort -u)"
+    for name in $direct; do
+        case "$allowed" in *" $name "*) ;; *) extra="$extra $name" ;; esac
+    done
+    if [ -n "$extra" ]; then
+        fail "clawft-mesh-service has direct dependencies outside the allowlist:$extra (edit cmd_check_mesh_no_owned_state deliberately)"
+        return 1
+    fi
+    pass "clawft-mesh-service dependency tree is free of exochain, resource tree, RVF runtime, tilezero and clawft-weave; direct deps match the allowlist"
     timer_end
 }
 
@@ -1681,9 +1692,9 @@ cmd_gate() {
     if [ "${GATE_RELEASE_DRY_RUN:-}" = "1" ] || [ "${GATE_RELEASE_DRY_RUN:-}" = "true" ]; then
         WITH_RELEASE_DRY_RUN=true
     fi
-    local total=19
+    local total=20
     if [ "$WITH_RELEASE_DRY_RUN" = true ]; then
-        total=20
+        total=21
     fi
     header "Phase Gate — ${total} checks"
     local passed=0 failed=0 skipped=0
@@ -1864,12 +1875,17 @@ cmd_gate() {
     run_gate_check 19 "agents/ confidentiality leak check (AD-2)" \
         bash "$ROOT/scripts/agents-leak-check.sh"
 
-    # 20. WEFT-460 — optional cargo-dist host-triple release rehearsal.
+    # 20. P3-S "must not own": the machine mesh service owns no chain,
+    # governance or operator-CLI state (dependency tree + direct-dep allowlist).
+    run_gate_check 20 "mesh service owns no state (check-mesh-no-owned-state)" \
+        cmd_check_mesh_no_owned_state
+
+    # 21. WEFT-460 — optional cargo-dist host-triple release rehearsal.
     # Off by default (multi-minute LTO build). Enable with:
     #   scripts/build.sh gate --with-release-dry-run
     #   GATE_RELEASE_DRY_RUN=1 scripts/build.sh gate
     if [ "$WITH_RELEASE_DRY_RUN" = true ]; then
-        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 20 "$total" "release-dry-run (cargo-dist host triple)"
+        printf "\n${BOLD}[%2d/%d]${NC} %s\n" 21 "$total" "release-dry-run (cargo-dist host triple)"
         timer_start
         if [ "$DRY_RUN" = true ]; then
             printf "  ${YELLOW}DRY${NC}   scripts/build.sh release-dry-run\n"

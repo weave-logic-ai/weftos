@@ -9,7 +9,7 @@ use clawft_mesh_local::{node_id_from_pubkey, UserCert};
 use serde_json::{json, Value};
 
 use crate::config::BindPolicy;
-use crate::local_server::{Conn, Step};
+use crate::local_server::{Conn, ConnCtx, Step};
 use crate::registry::{RegisterError, Registration};
 use crate::state::{unix_now, Core};
 use crate::{BindError, BindHow, BindMeta, Check, ConflictReason, JournalError};
@@ -58,6 +58,17 @@ impl Reject {
                 "the service journal is degraded and refuses new bindings",
                 "an admin runs `weaver mesh journal verify`",
             ),
+        }
+    }
+
+    pub(crate) fn journal_error(e: &JournalError) -> Self {
+        match e {
+            JournalError::ReadOnly => Self::new(
+                ErrorKind::Forbidden,
+                "the service journal is read-only after a quarantined tail",
+                "an admin runs `weaver mesh journal verify --accept-truncate`",
+            ),
+            other => Self::new(ErrorKind::Forbidden, format!("the journal refused the change: {other}"), ""),
         }
     }
 
@@ -111,9 +122,15 @@ impl Conn {
         if let Some(holder) = st.registry.get(&user_id) {
             return self.reject(id, in_use(holder.pid)).await;
         }
-        let (bind, cert) = match self.bind_and_issue(&req) {
-            Ok(x) => x,
-            Err(r) => return self.reject(id, r).await,
+        // Journal writes fsync: keep them off the async workers.
+        let (ctx, rq) = (self.ctx(), req.clone());
+        let issued = tokio::task::spawn_blocking(move || bind_and_issue(&ctx, &rq)).await;
+        let (bind, cert) = match issued {
+            Ok(Ok(x)) => x,
+            Ok(Err(r)) => return self.reject(id, r).await,
+            Err(_) => {
+                return self.reject(id, Reject::new(ErrorKind::Forbidden, "internal error while binding", "")).await;
+            }
         };
         let now = unix_now();
         let (reg, out_rx, killed) = Registration::new(
@@ -144,54 +161,60 @@ impl Conn {
         self.send(id, Message::RegisterAck(ack)).await?;
         Ok(Step::Registered(Box::new((out_rx, killed))))
     }
+}
 
-    /// Bind (per policy) and issue a certificate, under the core lock.
-    fn bind_and_issue(&mut self, req: &RegisterReq) -> Result<(BindState, UserCert), Reject> {
-        let st = self.st.clone();
-        let key = req.user_pubkey;
-        let uid = self.uid;
-        let meta = BindMeta { by: None, peer_pid: Some(self.pid), exe: Some(self.exe.clone()) };
-        let mut guard = st.core.lock().expect("core lock");
-        let Core { journal, bindings } = &mut *guard;
-        let state = match bindings.check(&self.principal, &key) {
-            Check::Existing => BindState::Existing,
-            Check::Conflict(r) => {
-                st.conflicts.lock().expect("conflicts lock").insert(self.principal.clone(), key);
-                return Err(Reject::conflict(r, uid));
-            }
-            c @ (Check::New | Check::Pending) => match st.cfg.bind_policy {
-                BindPolicy::Tofu => {
-                    match bindings.bind(journal, &self.principal, &key, BindHow::Tofu, meta.clone()) {
-                        Ok(()) => BindState::New,
-                        Err(BindError::ApprovalRequired) => {
-                            // A revoked uid needs an approver: park the key.
-                            let _ = bindings.bind_pending(journal, &self.principal, &key, meta);
-                            return Err(Reject::pending(uid));
-                        }
-                        Err(e) => return Err(Reject::bind_error(&e)),
-                    }
-                }
-                BindPolicy::Approve => {
-                    if c == Check::New {
-                        bindings
-                            .bind_pending(journal, &self.principal, &key, meta)
-                            .map_err(|e| Reject::bind_error(&e))?;
-                    }
+/// Bind (per policy) and issue (or reuse) a certificate, under the core lock.
+/// Synchronous: runs on a blocking thread.
+fn bind_and_issue(ctx: &ConnCtx, req: &RegisterReq) -> Result<(BindState, UserCert), Reject> {
+    let st = &ctx.st;
+    let key = req.user_pubkey;
+    let uid = ctx.uid;
+    let user_id = node_id_from_pubkey(&key);
+    let meta = BindMeta { by: None, peer_pid: Some(ctx.pid).filter(|p| *p > 0), exe: Some(ctx.exe.clone()) };
+    let mut guard = st.core.lock().expect("core lock");
+    let Core { journal, bindings } = &mut *guard;
+    let state = match bindings.check(&ctx.principal, &key) {
+        Check::Existing => BindState::Existing,
+        Check::Conflict(r) => {
+            st.conflicts.lock().expect("conflicts lock").insert(ctx.principal.clone(), key);
+            return Err(Reject::conflict(r, uid));
+        }
+        c @ (Check::New | Check::Pending) => match st.cfg.bind_policy {
+            BindPolicy::Tofu => match bindings.bind(journal, &ctx.principal, &key, BindHow::Tofu, meta.clone()) {
+                Ok(()) => BindState::New,
+                Err(BindError::ApprovalRequired) => {
+                    // A revoked uid needs an approver: park the key.
+                    let _ = bindings.bind_pending(journal, &ctx.principal, &key, meta);
                     return Err(Reject::pending(uid));
                 }
+                Err(e) => return Err(Reject::bind_error(&e)),
             },
-        };
-        let now = unix_now();
-        let ttl = st.cfg.cert_ttl_s;
-        let serial = bindings
-            .issue_cert(journal, &self.principal, now, now.saturating_add(ttl))
-            .map_err(|e| Reject::bind_error(&e))?;
-        drop(guard);
-        if state == BindState::New {
-            st.policy.note_bind(uid);
-        }
-        Ok((state, UserCert::issue(&st.machine_key, key, serial, now, ttl)))
+            BindPolicy::Approve => {
+                if c == Check::New {
+                    bindings.bind_pending(journal, &ctx.principal, &key, meta).map_err(|e| Reject::bind_error(&e))?;
+                }
+                return Err(Reject::pending(uid));
+            }
+        },
+    };
+    let now = unix_now();
+    let ttl = st.cfg.cert_ttl_s;
+    // A reconnect reuses a certificate that still has over half its life and
+    // was not revoked: no new journal record per reconnect.
+    if let Some(c) = st.last_certs.lock().expect("certs lock").get(&user_id)
+        && c.user_pubkey == key
+        && c.not_after > now.saturating_add(ttl / 2)
+        && !bindings.is_serial_revoked(&user_id, c.serial)
+    {
+        return Ok((state, c.clone()));
     }
+    let serial = bindings
+        .issue_cert(journal, &ctx.principal, now, now.saturating_add(ttl))
+        .map_err(|e| Reject::bind_error(&e))?;
+    drop(guard);
+    let cert = UserCert::issue(&st.machine_key, key, serial, now, ttl);
+    st.last_certs.lock().expect("certs lock").insert(user_id, cert.clone());
+    Ok((state, cert))
 }
 
 fn in_use(holder_pid: u32) -> Reject {

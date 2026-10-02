@@ -82,10 +82,13 @@ pub struct AdminAck {
 }
 
 impl AdminAck {
-    /// Call only after the requester was verified as an admin.
-    pub fn admin_verified(by: Principal) -> Self {
+    /// Only the service's admin gate may mint one (crate-private).
+    pub(crate) fn admin_verified(by: Principal) -> Self {
         Self { by }
     }
+
+    #[cfg(feature = "testing")]
+    pub fn for_tests(by: Principal) -> Self { Self { by } }
 }
 
 /// One journal record.

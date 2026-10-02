@@ -121,7 +121,7 @@ fn truncated_tail_is_quarantined_and_binds_refused() {
 
     let q = pq(&j);
 
-    b.accept_truncate(&mut j, clawft_mesh_service::AdminAck::admin_verified(Principal::Uid(0)), Some(q), None).unwrap();
+    b.accept_truncate(&mut j, clawft_mesh_service::AdminAck::for_tests(Principal::Uid(0)), Some(q), None).unwrap();
     b.bind(&mut j, &Principal::Uid(501), &pk, BindHow::Tofu, BindMeta::default()).unwrap();
     drop(j);
     let j = Journal::open(dir.path(), key()).unwrap();

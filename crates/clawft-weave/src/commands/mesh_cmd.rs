@@ -53,7 +53,7 @@ pub struct ServeArgs {
     /// mesh-local socket path.
     #[arg(long)]
     pub socket: Option<PathBuf>,
-    /// Mesh listener address (default 0.0.0.0:9489).
+    /// Mesh listener address (default 127.0.0.1:9489; 0.0.0.0 exposes it to the LAN).
     #[arg(long)]
     pub listen: Option<String>,
     /// Loopback health address, or `off` (default 127.0.0.1:9490).
@@ -99,9 +99,14 @@ pub enum MeshCmd {
 
 #[derive(Subcommand, Debug)]
 pub enum BindCmd {
-    /// Approve a bind waiting for approval.
+    /// Approve a bind waiting for approval. The key is named by its user id
+    /// (fingerprint): by default the one pending now, shown before approving;
+    /// the service refuses if the pending key is a different one.
     Approve {
         uid: u32,
+        /// The pending key's user id, as shown by `weaver mesh bindings`.
+        #[arg(long)]
+        user_id: Option<String>,
         #[command(flatten)]
         conn: ConnArgs,
     },
@@ -178,7 +183,14 @@ pub async fn execute(cmd: MeshCmd, w: &mut dyn Write) -> Result<()> {
             show(w, &c, &data, render_bindings)
         }
         MeshCmd::Bind { cmd } => match cmd {
-            BindCmd::Approve { uid, conn } => ack(w, &conn, Message::BindApprove { uid }, &format!("approved uid {uid}")).await,
+            BindCmd::Approve { uid, user_id, conn } => {
+                let user_id = match user_id {
+                    Some(u) => u,
+                    None => pending_user_id(&conn, uid).await?,
+                };
+                writeln!(w, "approving uid {uid} with the key whose user id is {user_id}")?;
+                ack(w, &conn, Message::BindApprove { uid, user_id: Some(user_id) }, &format!("approved uid {uid}")).await
+            }
             BindCmd::Revoke { uid, reason, conn } => {
                 ack(w, &conn, Message::BindRevoke { uid, reason }, &format!("revoked uid {uid}")).await
             }
@@ -267,6 +279,18 @@ async fn call_best(c: &ConnArgs, m: Message) -> Result<Value> {
         }
         other => other,
     }
+}
+
+/// The user id of the key pending approval for `uid`.
+async fn pending_user_id(c: &ConnArgs, uid: u32) -> Result<String> {
+    let data = call(c, Role::Admin, Message::BindingsList {}).await?;
+    data["pending"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|p| p["principal"]["uid"].as_u64() == Some(u64::from(uid)))
+        .and_then(|p| p["user_id"].as_str().map(str::to_string))
+        .with_context(|| format!("nothing is pending approval for uid {uid}"))
 }
 
 async fn ack(w: &mut dyn Write, c: &ConnArgs, m: Message, done: &str) -> Result<()> {

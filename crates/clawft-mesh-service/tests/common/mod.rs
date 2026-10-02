@@ -118,6 +118,8 @@ impl Harness {
     pub async fn connect(&self, uid: Option<u32>, seed: u8, params: RegisterParams) -> Result<MeshLocalClient, ClientError> {
         let mut cc = ClientConfig::new(self.socket(), self.record());
         cc.build_sha = "client-sha".into();
+        // Hostile display text: long, with control characters.
+        cc.exe = format!("{}\n\u{1b}[31m", "x".repeat(1000));
         match uid {
             None => self.next_uid.store(REAL, Ordering::SeqCst),
             Some(u) => {

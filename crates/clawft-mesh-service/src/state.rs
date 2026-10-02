@@ -13,7 +13,6 @@ use clawft_types::config::MeshAdmissionMode;
 use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
 
-use crate::bindings_view::journal_first_bind_uid;
 use crate::config::MeshServiceConfig;
 use crate::facts::Facts;
 use crate::gate::ServiceGate;
@@ -43,7 +42,9 @@ struct PolicyInner {
 /// Mutable policy: which uid is the cluster owner and the admission mode.
 /// Initial values come from `mesh.toml`, overridden by the newest
 /// `policy.set` records in the journal (the journal is the source of truth
-/// for admin changes), and the owner defaults to the first bound uid.
+/// for admin changes). The owner is never inferred: a TOFU bind must not be
+/// able to make a user the authority on cluster membership. With no owner,
+/// verdicts answer `Unavailable` (observe-only) and enforce is refused.
 pub struct PolicyCell {
     inner: RwLock<PolicyInner>,
 }
@@ -73,9 +74,6 @@ impl PolicyCell {
                 _ => {}
             }
         }
-        if let Some(uid) = journal_first_bind_uid(journal) {
-            cell.note_bind(uid);
-        }
         cell
     }
 
@@ -95,14 +93,6 @@ impl PolicyCell {
 
     pub fn set_admission(&self, m: MeshAdmissionMode) {
         self.inner.write().expect("policy lock").admission = m;
-    }
-
-    /// The first uid ever bound becomes the cluster owner unless one was set.
-    pub fn note_bind(&self, uid: u32) {
-        let mut g = self.inner.write().expect("policy lock");
-        if !g.owner_explicit && g.owner_uid.is_none() {
-            g.owner_uid = Some(uid);
-        }
     }
 }
 
@@ -140,6 +130,9 @@ pub struct ServiceState {
     /// The key each principal most recently offered that conflicted with its
     /// binding; lets `bind.rebind <uid>` name it without retyping. In memory.
     pub conflicts: Mutex<HashMap<Principal, [u8; 32]>>,
+    /// Newest certificate per user id, reused by a reconnect while it has more
+    /// than half its life left (no new journal record per reconnect). In memory.
+    pub last_certs: Mutex<HashMap<String, clawft_mesh_local::UserCert>>,
     pub conn_seq: AtomicU64,
     pub started_at: u64,
     /// Where the mesh listener actually bound.
@@ -195,6 +188,7 @@ impl ServiceState {
             facts,
             gate,
             conflicts: Mutex::new(HashMap::new()),
+            last_certs: Mutex::new(HashMap::new()),
             conn_seq: AtomicU64::new(1),
             started_at: unix_now(),
             listen_addr: Mutex::new(None),
@@ -210,6 +204,18 @@ impl ServiceState {
         }
     }
 
+    /// Append a record and report failure: for admin verbs, which must
+    /// journal first and change state only when the append succeeded.
+    pub fn try_note(&self, kind: &str, body: Value) -> Result<(), crate::JournalError> {
+        let mut core = self.core.lock().expect("core lock");
+        core.journal.append(kind, body).map(|_| ())
+    }
+
+    /// Whether the journal refuses trust-increasing changes (quarantined tail).
+    pub fn journal_read_only(&self) -> bool {
+        self.core.lock().expect("core lock").journal.read_only()
+    }
+
     /// Re-sign facts after a revocation change (best effort, logged).
     pub fn refresh_facts(&self) {
         if let Err(e) = self.facts.refresh(&self.core, unix_now()) {
@@ -217,8 +223,9 @@ impl ServiceState {
         }
     }
 
-    /// The `status` reply. `detail` adds the registration list (admins only).
-    pub fn status_json(&self, caller_uid: u32, detail: bool) -> Value {
+    /// The `status` reply. Registrations are listed for admins only; the peer
+    /// table needs a registered daemon or an admin.
+    pub fn status_json(&self, caller_uid: u32, admin: bool, registered: bool) -> Value {
         let (head, records, read_only, degraded, pending) = {
             let c = self.core.lock().expect("core lock");
             (
@@ -229,7 +236,7 @@ impl ServiceState {
                 c.journal.pending_quarantines(),
             )
         };
-        let regs: Vec<Value> = if detail {
+        let regs: Vec<Value> = if admin {
             self.registry
                 .all()
                 .iter()
@@ -263,7 +270,7 @@ impl ServiceState {
             "you": caller_uid,
             "registered": self.registry.len(),
             "registrations": regs,
-            "peers": self.router.runtime().map(|r| r.peer_ids()).unwrap_or_default(),
+            "peers": if admin || registered { self.router.runtime().map(|r| r.peer_ids()).unwrap_or_default() } else { Vec::new() },
             "journal": {
                 "seq": head.as_ref().map(|h| h.seq), "hash": head.map(|h| h.hash),
                 "records": records, "read_only": read_only, "degraded": degraded,

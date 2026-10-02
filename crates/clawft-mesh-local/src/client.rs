@@ -132,6 +132,8 @@ pub struct RegisterParams {
     pub topic_prefixes: Vec<String>,
     pub capabilities: Vec<String>,
     pub version: String,
+    /// Tenants allowed to send to this daemon (user ids or `*`).
+    pub accept_from: Vec<String>,
 }
 
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Message>>>>;
@@ -238,6 +240,7 @@ impl MeshLocalClient {
             capabilities: params.capabilities.clone(),
             version: params.version.clone(),
             build_sha: cfg.build_sha.clone(),
+            accept_from: params.accept_from.clone(),
         };
         write_frame(&mut wr, &Frame::new(Message::Register(req))).await?;
         let reply = within(cfg.deadline, rd.read_frame()).await??.ok_or_else(eof)?;

@@ -26,7 +26,7 @@ async fn register_new_then_existing_with_a_verifying_certificate() {
 
     let c = h.connect_retry(None, 1, RegisterParams::default()).await.unwrap();
     assert_eq!(c.register_ack().bind, BindState::Existing);
-    assert!(c.cert().serial > first, "every registration is a fresh, journalled certificate");
+    assert_eq!(c.cert().serial, first, "a reconnect reuses a cert with over half its life left: no new journal record");
 }
 
 #[tokio::test]
@@ -50,7 +50,7 @@ async fn approve_policy_parks_the_bind_until_an_admin_approves() {
     assert_eq!(list["pending"].as_array().unwrap().len(), 1);
     assert!(list["bound"].as_array().unwrap().is_empty());
 
-    h.admin_ok(Message::BindApprove { uid: h.euid }).await;
+    h.admin_ok(Message::BindApprove { uid: h.euid, user_id: Some(user_id(1)) }).await;
     let c = h.connect_retry(None, 1, RegisterParams::default()).await.unwrap();
     assert_eq!(c.register_ack().bind, BindState::Existing);
     let list = h.admin_ok(Message::BindingsList {}).await;
@@ -140,7 +140,7 @@ async fn revoked_uid_needs_approval_for_a_new_key_and_facts_carry_the_serials() 
     );
     // A fresh key for a revoked uid needs an approver: it is parked, then approved.
     assert_eq!(server_kind(h.connect(None, 3, RegisterParams::default()).await), ErrorKind::BindPending);
-    h.admin_ok(Message::BindApprove { uid: h.euid }).await;
+    h.admin_ok(Message::BindApprove { uid: h.euid, user_id: Some(user_id(3)) }).await;
     assert!(h.connect_retry(None, 3, RegisterParams::default()).await.is_ok());
 
     let facts = h.admin_ok(Message::FactsGet {}).await;
@@ -239,8 +239,69 @@ async fn read_only_verbs_work_for_any_connection_and_unknown_verbs_do_not_close_
         }
         other => panic!("{other:?}"),
     }
+    assert!(data_peers_empty(&mut r).await);
     r.send(Message::Subscribe { prefix: "x".into() }).await;
     assert!(matches!(r.recv().await.unwrap().msg, Message::Error(e) if e.kind == ErrorKind::Unsupported));
     r.send(Message::Ping {}).await;
     assert!(matches!(r.recv().await.unwrap().msg, Message::Pong {}));
+}
+
+async fn data_peers_empty(r: &mut Raw) -> bool {
+    r.send(Message::Status {}).await;
+    let status_peers_empty = match r.recv().await.unwrap().msg {
+        Message::Reply { data } => data["peers"].as_array().unwrap().is_empty(),
+        other => panic!("{other:?}"),
+    };
+    r.send(Message::PeersList {}).await;
+    let refused = matches!(r.recv().await.unwrap().msg, Message::Error(e) if e.kind == ErrorKind::Forbidden);
+    status_peers_empty && refused
+}
+
+#[tokio::test]
+async fn approve_refuses_when_the_pending_key_is_not_the_one_the_admin_looked_at() {
+    let h = Harness::with(|c, _| c.bind_policy = BindPolicy::Approve).await;
+    assert_eq!(server_kind(h.connect(None, 1, RegisterParams::default()).await), ErrorKind::BindPending);
+    let wrong = Message::BindApprove { uid: h.euid, user_id: Some(user_id(9)) };
+    assert_eq!(h.admin_err(wrong).await, ErrorKind::BadRequest);
+    let list = h.admin_ok(Message::BindingsList {}).await;
+    assert!(list["bound"].as_array().unwrap().is_empty(), "nothing was approved");
+    h.admin_ok(Message::BindApprove { uid: h.euid, user_id: Some(user_id(1)) }).await;
+    assert!(h.connect_retry(None, 1, RegisterParams::default()).await.is_ok());
+}
+
+#[tokio::test]
+async fn client_supplied_exe_is_truncated_and_stripped_before_it_is_shown() {
+    let h = Harness::start().await;
+    let _c = h.connect(None, 1, RegisterParams::default()).await.unwrap();
+    let status = h.admin_ok(Message::Status {}).await;
+    let exe = status["registrations"][0]["exe"].as_str().unwrap().to_string();
+    assert!(exe.len() <= 256, "{}", exe.len());
+    assert!(!exe.chars().any(char::is_control), "{exe:?}");
+}
+
+#[tokio::test]
+async fn a_tofu_bind_never_makes_anyone_the_cluster_owner() {
+    let h = Harness::start().await;
+    let _c = h.connect(None, 1, RegisterParams::default()).await.unwrap();
+    let status = h.admin_ok(Message::Status {}).await;
+    assert!(status["cluster_owner_uid"].is_null(), "owner must be explicit, never inferred: {status}");
+    // So there is nobody to ask: admissions fail closed (observe-only).
+    let d = h
+        .svc()
+        .state
+        .verdicts
+        .ask(clawft_mesh_local::proto::VerdictRequest {
+            subject: clawft_mesh_local::proto::VerdictSubject::PeerAdmit,
+            peer: clawft_mesh_local::proto::PeerInfo {
+                node_id: "n".into(),
+                pubkey: clawft_mesh_local::hexser::encode(&[1; 32]),
+                platform: String::new(),
+                capabilities: vec![],
+                genesis_hash: String::new(),
+                chain_seq: 0,
+            },
+            topic: None,
+        })
+        .await;
+    assert!(matches!(d, clawft_mesh_service::verdicts::Decision::Unavailable(_)));
 }

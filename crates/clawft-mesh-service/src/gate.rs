@@ -36,6 +36,10 @@ struct NoteLimiter {
 }
 
 impl NoteLimiter {
+    fn new() -> Self {
+        Self { window_start: Instant::now(), in_window: 0, seen: HashMap::new() }
+    }
+
     fn allow(&mut self, key: String) -> bool {
         let now = Instant::now();
         if now.duration_since(self.window_start) >= Duration::from_secs(60) {
@@ -68,7 +72,10 @@ pub struct ServiceGate {
     verdicts: Arc<VerdictBroker>,
     core: Arc<Mutex<Core>>,
     mode: RwLock<MeshAdmissionMode>,
-    notes: Mutex<NoteLimiter>,
+    /// `peer.refuse` records (attacker-triggerable) and `peer.admit` records
+    /// have separate budgets so refusals cannot starve the admission audit.
+    refuse_notes: Mutex<NoteLimiter>,
+    admit_notes: Mutex<NoteLimiter>,
 }
 
 impl ServiceGate {
@@ -88,7 +95,8 @@ impl ServiceGate {
             verdicts,
             core,
             mode: RwLock::new(mode),
-            notes: Mutex::new(NoteLimiter { window_start: Instant::now(), in_window: 0, seen: HashMap::new() }),
+            refuse_notes: Mutex::new(NoteLimiter::new()),
+            admit_notes: Mutex::new(NoteLimiter::new()),
         });
         // The initial mode was validated with the configuration; a failure here
         // leaves AllowAll, which is also what `observe` without a genesis means.
@@ -112,6 +120,11 @@ impl ServiceGate {
         }
     }
 
+    /// Whether `mode` could be applied (genesis and noise present for enforce).
+    pub fn validate_mode(&self, mode: MeshAdmissionMode) -> Result<(), String> {
+        self.build(mode).map(|_| ())
+    }
+
     /// Switch the admission mode for new admissions. Listener-level limits
     /// (`strict`) are read once when the listener starts and change only on a
     /// restart.
@@ -131,7 +144,8 @@ impl ServiceGate {
     }
 
     fn note(&self, kind: &str, node: &str, code: &str, body: serde_json::Value) {
-        if !self.notes.lock().expect("notes lock").allow(format!("{kind}/{node}/{code}")) {
+        let budget = if kind == "peer.admit" { &self.admit_notes } else { &self.refuse_notes };
+        if !budget.lock().expect("notes lock").allow(format!("{kind}/{node}/{code}")) {
             return;
         }
         let mut c = self.core.lock().expect("core lock");

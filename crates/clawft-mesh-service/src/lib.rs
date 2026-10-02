@@ -59,7 +59,9 @@ pub use lost::LostInfo;
 pub use config::{BindPolicy, ConfigError, MeshServiceConfig, Overrides};
 pub use state::ServiceState;
 #[cfg(unix)]
-pub use main_loop::{run, start, start_with, RunningService, StartError};
+pub use main_loop::{run, start, RunningService, StartError};
+#[cfg(all(unix, feature = "testing"))]
+pub use main_loop::start_with;
 
 #[cfg(test)]
 mod tests_internal;

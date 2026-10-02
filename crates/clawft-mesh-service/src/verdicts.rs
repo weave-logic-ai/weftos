@@ -77,7 +77,43 @@ fn subject_key(s: &VerdictSubject) -> VerdictSubjectKey {
     }
 }
 
+/// Real asks (cache misses) allowed per minute in total, and per peer node id.
+/// A flood of unauthenticated peers can therefore not turn the cluster
+/// owner's daemon into the bottleneck: past the budget they get the
+/// fail-closed answer.
+pub const ASKS_PER_MINUTE: u32 = 120;
+pub const ASKS_PER_NODE_PER_MINUTE: u32 = 10;
+const MAX_DENY_CACHE: usize = 256;
+
+struct AskBudget {
+    window_start: Instant,
+    total: u32,
+    per_node: HashMap<String, u32>,
+}
+
+type Waiters = Vec<oneshot::Sender<Decision>>;
+
+/// Removes this ask's single-flight slot if the leader is dropped before it
+/// finished, so waiters fail closed instead of hanging.
+struct Flight<'a> {
+    broker: &'a VerdictBroker,
+    key: CacheKey,
+    done: bool,
+}
+
+impl Drop for Flight<'_> {
+    fn drop(&mut self) {
+        if !self.done {
+            self.broker.inflight.lock().expect("inflight lock").remove(&self.key);
+        }
+    }
+}
+
 /// Asks the cluster-owner registration and caches what it says.
+///
+/// Allows and denies live in separate bounded caches: denies are cheap for a
+/// hostile peer to generate, and must not be able to evict the allows the
+/// stale-grace rule depends on. Concurrent asks of one key share one request.
 pub struct VerdictBroker {
     registry: Arc<Registry>,
     policy: Arc<PolicyCell>,
@@ -85,7 +121,10 @@ pub struct VerdictBroker {
     stale_grace: Duration,
     next_id: AtomicU64,
     pending: Mutex<HashMap<u64, (u64, oneshot::Sender<Reply>)>>,
-    cache: Mutex<HashMap<CacheKey, Entry>>,
+    allows: Mutex<HashMap<CacheKey, Entry>>,
+    denies: Mutex<HashMap<CacheKey, Entry>>,
+    inflight: Mutex<HashMap<CacheKey, Waiters>>,
+    budget: Mutex<AskBudget>,
     /// Last `rule_hash` an allow carried per node id (journalled with `peer.admit`).
     last_rule: Mutex<HashMap<String, String>>,
 }
@@ -104,7 +143,10 @@ impl VerdictBroker {
             stale_grace,
             next_id: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
-            cache: Mutex::new(HashMap::new()),
+            allows: Mutex::new(HashMap::new()),
+            denies: Mutex::new(HashMap::new()),
+            inflight: Mutex::new(HashMap::new()),
+            budget: Mutex::new(AskBudget { window_start: Instant::now(), total: 0, per_node: HashMap::new() }),
             last_rule: Mutex::new(HashMap::new()),
         })
     }
@@ -119,6 +161,48 @@ impl VerdictBroker {
         self.last_rule.lock().expect("rule lock").get(node_id).cloned()
     }
 
+    /// Forget every cached verdict (owner change, admission-mode change,
+    /// revocation or rebind of the owner): an answer given under the old
+    /// authority must not outlive it. Stale grace goes with it.
+    pub fn clear(&self) {
+        self.allows.lock().expect("cache lock").clear();
+        self.denies.lock().expect("cache lock").clear();
+        self.last_rule.lock().expect("rule lock").clear();
+    }
+
+    fn cached(&self, key: &CacheKey) -> Option<Decision> {
+        for map in [&self.allows, &self.denies] {
+            if let Some(e) = map.lock().expect("cache lock").get(key)
+                && e.at.elapsed() < e.ttl
+            {
+                return Some(decision(e, false));
+            }
+        }
+        None
+    }
+
+    fn allow_ask(&self, node: &str) -> bool {
+        let mut b = self.budget.lock().expect("budget lock");
+        if b.window_start.elapsed() >= Duration::from_secs(60) {
+            b.window_start = Instant::now();
+            b.total = 0;
+            b.per_node.clear();
+        }
+        if b.total >= ASKS_PER_MINUTE {
+            return false;
+        }
+        if b.per_node.len() >= MAX_CACHE && !b.per_node.contains_key(node) {
+            return false;
+        }
+        let n = b.per_node.entry(node.to_string()).or_insert(0);
+        if *n >= ASKS_PER_NODE_PER_MINUTE {
+            return false;
+        }
+        *n += 1;
+        b.total += 1;
+        true
+    }
+
     /// Ask (or answer from cache) whether `req` is allowed.
     pub async fn ask(&self, req: VerdictRequest) -> Decision {
         let key: CacheKey = (
@@ -129,12 +213,45 @@ impl VerdictBroker {
             req.peer.capabilities.join(","),
             req.topic.clone(),
         );
-        if let Some(e) = self.cache.lock().expect("cache lock").get(&key)
-            && e.at.elapsed() < e.ttl
-        {
-            return decision(e, false);
+        if let Some(d) = self.cached(&key) {
+            return d;
         }
-        match self.ask_owner(&req).await {
+        // Single flight: later askers of the same key wait for the leader.
+        let waiter = {
+            let mut f = self.inflight.lock().expect("inflight lock");
+            match f.get_mut(&key) {
+                Some(v) => {
+                    let (tx, rx) = oneshot::channel();
+                    v.push(tx);
+                    Some(rx)
+                }
+                None => {
+                    f.insert(key.clone(), Vec::new());
+                    None
+                }
+            }
+        };
+        if let Some(rx) = waiter {
+            return match rx.await {
+                Ok(d) => d,
+                Err(_) => self.fallback(&key, "the concurrent ask was abandoned".into()),
+            };
+        }
+        let mut flight = Flight { broker: self, key: key.clone(), done: false };
+        let d = self.decide(&key, &req).await;
+        let waiters = self.inflight.lock().expect("inflight lock").remove(&key).unwrap_or_default();
+        flight.done = true;
+        for w in waiters {
+            let _ = w.send(d.clone());
+        }
+        d
+    }
+
+    async fn decide(&self, key: &CacheKey, req: &VerdictRequest) -> Decision {
+        if !self.allow_ask(&req.peer.node_id) {
+            return self.fallback(key, "ask rate limit reached".into());
+        }
+        match self.ask_owner(req).await {
             Ok(reply) => {
                 let ttl = Duration::from_secs(reply.ttl_s)
                     .min(if reply.allow { MAX_ALLOW_TTL } else { MAX_DENY_TTL });
@@ -152,19 +269,20 @@ impl VerdictBroker {
                         .insert(req.peer.node_id.clone(), e.rule_hash.clone());
                 }
                 let d = decision(&e, false);
-                self.store(key, e);
+                self.store(key.clone(), e);
                 d
             }
-            Err(why) => self.fallback(&key, why),
+            Err(why) => self.fallback(key, why),
         }
     }
 
     fn store(&self, key: CacheKey, e: Entry) {
-        let mut c = self.cache.lock().expect("cache lock");
-        if c.len() >= MAX_CACHE {
+        let (map, cap) = if e.allow { (&self.allows, MAX_CACHE) } else { (&self.denies, MAX_DENY_CACHE) };
+        let mut c = map.lock().expect("cache lock");
+        if c.len() >= cap {
             let grace = self.stale_grace;
-            c.retain(|_, v| v.at.elapsed() < v.ttl.max(grace));
-            while c.len() >= MAX_CACHE {
+            c.retain(|_, v| v.at.elapsed() < v.ttl.max(if v.allow { grace } else { Duration::ZERO }));
+            while c.len() >= cap {
                 let Some(old) = c.iter().min_by_key(|(_, v)| v.at).map(|(k, _)| k.clone()) else { break };
                 c.remove(&old);
             }
@@ -175,8 +293,7 @@ impl VerdictBroker {
     /// D-3: a peer already granted keeps its permit for `stale_grace` from
     /// the grant; new peers (and previously denied ones) are refused.
     fn fallback(&self, key: &CacheKey, why: String) -> Decision {
-        if let Some(e) = self.cache.lock().expect("cache lock").get(key)
-            && e.allow
+        if let Some(e) = self.allows.lock().expect("cache lock").get(key)
             && e.at.elapsed() < self.stale_grace
         {
             return decision(e, true);
@@ -190,7 +307,7 @@ impl VerdictBroker {
         let (tx, rx) = oneshot::channel();
         self.pending.lock().expect("pending lock").insert(id, (owner.conn_id, tx));
         let frame = Frame::with_id(id, Message::VerdictRequest(req.clone()));
-        if owner.try_queue(frame).is_err() {
+        if owner.try_queue_priority(frame).is_err() {
             self.pending.lock().expect("pending lock").remove(&id);
             return Err("cluster-owner daemon is not draining its queue".into());
         }
@@ -223,7 +340,7 @@ impl VerdictBroker {
 
     /// Number of verdicts currently cached (tests, status).
     pub fn cache_len(&self) -> usize {
-        self.cache.lock().expect("cache lock").len()
+        self.allows.lock().expect("cache lock").len() + self.denies.lock().expect("cache lock").len()
     }
 }
 

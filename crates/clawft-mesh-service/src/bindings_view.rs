@@ -6,18 +6,6 @@ use clawft_mesh_local::{hexser, node_id_from_pubkey, Principal};
 
 use crate::registry::Registry;
 use crate::state::Core;
-use crate::Journal;
-
-/// The uid of the first `user.bind` record, which defaults the cluster owner.
-pub fn journal_first_bind_uid(journal: &Journal) -> Option<u32> {
-    journal
-        .iter()
-        .find(|r| r.kind == "user.bind")
-        .and_then(|r| match &r.body["principal"] {
-            p if p["kind"] == "uid" => p["id"].as_u64().and_then(|u| u32::try_from(u).ok()),
-            _ => None,
-        })
-}
 
 fn principal_json(p: &Principal) -> Value {
     match p {

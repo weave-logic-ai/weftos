@@ -150,8 +150,10 @@ fn check_socket_dir(dir: &Path) -> Result<(), StartError> {
     if md.uid() != fsutil::euid() && md.uid() != 0 {
         return bad("owned by neither the service account nor root");
     }
-    if md.mode() & 0o002 != 0 {
-        return bad("world-writable; anyone could replace the socket");
+    // Group-writable is as bad as world-writable here: any member could
+    // replace the socket. (A root-owned directory must also be 0755 or tighter.)
+    if md.mode() & 0o022 != 0 {
+        return bad("group- or world-writable; another account could replace the socket");
     }
     Ok(())
 }
@@ -207,11 +209,21 @@ fn noise_config(cfg: &MeshServiceConfig) -> Option<Arc<NoiseConfig>> {
 
 /// Start with the real peer-credential reader and default limits.
 pub async fn start(cfg: MeshServiceConfig) -> Result<RunningService, StartError> {
-    start_with(cfg, real_peer_source(), LimitConfig::default()).await
+    start_inner(cfg, real_peer_source(), LimitConfig::default()).await
 }
 
-/// Start with an injected peer source (tests) and limits.
+/// Start with an injected peer source and limits. Test seam: an injectable
+/// credential source must not exist in release builds.
+#[cfg(feature = "testing")]
 pub async fn start_with(
+    cfg: MeshServiceConfig,
+    peers: PeerSource,
+    limits: LimitConfig,
+) -> Result<RunningService, StartError> {
+    start_inner(cfg, peers, limits).await
+}
+
+async fn start_inner(
     cfg: MeshServiceConfig,
     peers: PeerSource,
     limits: LimitConfig,
@@ -263,6 +275,13 @@ pub async fn start_with(
     let rt = Arc::new(rt);
     state.router.set_runtime(&rt);
 
+    if !cfg.listen.parse::<SocketAddr>().is_ok_and(|a| a.ip().is_loopback()) {
+        tracing::warn!(
+            listen = %cfg.listen,
+            "the mesh listener is exposed beyond loopback (explicit `listen` choice); \
+             every host that can reach this port can attempt to join"
+        );
+    }
     let noise = noise_config(&cfg);
     let transport = transport_for(&cfg.transport, None);
     let listener = transport
