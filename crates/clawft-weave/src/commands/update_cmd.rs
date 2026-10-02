@@ -20,25 +20,28 @@ pub enum UpdateCmd {
         /// Force reinstall even if already on latest.
         #[arg(long)]
         force: bool,
+        /// Restart the per-user daemon after installing (default: print the command).
+        #[arg(long)]
+        restart: bool,
     },
 }
 
 impl Default for UpdateCmd {
     fn default() -> Self {
-        Self::Install { force: false }
+        Self::Install { force: false, restart: false }
     }
 }
 
 pub async fn run(cmd: UpdateCmd) -> anyhow::Result<()> {
     match cmd {
         UpdateCmd::Check => check().await,
-        UpdateCmd::Install { force } => install(force).await,
+        UpdateCmd::Install { force, restart } => install(force, restart).await,
     }
 }
 
 /// Just run install with no subcommand (`weaver update` = `weaver update install`).
 pub async fn run_default() -> anyhow::Result<()> {
-    install(false).await
+    install(false, false).await
 }
 
 async fn check() -> anyhow::Result<()> {
@@ -53,7 +56,7 @@ async fn check() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn install(force: bool) -> anyhow::Result<()> {
+async fn install(force: bool, restart: bool) -> anyhow::Result<()> {
     let latest = fetch_latest_version().await?;
     println!("Current: v{CURRENT_VERSION}");
     println!("Latest:  v{latest}");
@@ -130,8 +133,15 @@ async fn install(force: bool) -> anyhow::Result<()> {
     println!();
     println!("Update complete. Both binaries are now v{latest}.");
     println!();
-    println!("If the kernel is running, restart it:");
-    println!("  weaver kernel stop && weaver kernel start");
+    if restart {
+        let cmd = "weaver kernel stop && weaver kernel start";
+        for line in super::daemon_restart::restart_user_daemon().lines(cmd) {
+            println!("{line}");
+        }
+    } else {
+        println!("If the kernel is running, restart it:");
+        println!("  weaver kernel stop && weaver kernel start");
+    }
 
     Ok(())
 }

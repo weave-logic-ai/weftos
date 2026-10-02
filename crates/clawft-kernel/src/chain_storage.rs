@@ -431,6 +431,15 @@ pub struct ChainLock {
     path: PathBuf,
 }
 
+/// Why [`ChainLock::try_acquire`] failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChainLockError {
+    /// Another kernel holds the lock.
+    InUse(String),
+    /// Filesystem or locking failure.
+    Other(String),
+}
+
 impl ChainLock {
     /// Lock file path for a chain checkpoint (`chain.json` -> `chain.lock`).
     pub fn lock_path(checkpoint: &Path) -> PathBuf {
@@ -444,26 +453,36 @@ impl ChainLock {
     /// The message names the holder PID and the ways out (`--new-chain`,
     /// `kernel.chain.checkpoint_path`).
     pub fn acquire(checkpoint: &Path) -> Result<Self, String> {
+        Self::try_acquire(checkpoint).map_err(|e| match e {
+            ChainLockError::InUse(m) | ChainLockError::Other(m) => m,
+        })
+    }
+
+    /// [`acquire`](Self::acquire), telling "another kernel holds it" (a
+    /// refusal no retry fixes) apart from I/O failures.
+    pub fn try_acquire(checkpoint: &Path) -> Result<Self, ChainLockError> {
         let path = Self::lock_path(checkpoint);
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)
-                .map_err(|e| format!("cannot create chain dir {}: {e}", dir.display()))?;
+            std::fs::create_dir_all(dir).map_err(|e| {
+                ChainLockError::Other(format!("cannot create chain dir {}: {e}", dir.display()))
+            })?;
         }
-        let mut file = open_lock_file(&path)
-            .map_err(|e| format!("cannot open chain lock {}: {e}", path.display()))?;
+        let mut file = open_lock_file(&path).map_err(|e| {
+            ChainLockError::Other(format!("cannot open chain lock {}: {e}", path.display()))
+        })?;
         match try_lock(&file) {
             Ok(true) => {
                 record_pid(&mut file);
                 Ok(Self { _file: file, path })
             }
-            Ok(false) => Err(format!(
+            Ok(false) => Err(ChainLockError::InUse(format!(
                 "chain {} is in use by another kernel (pid {}); refusing to share a chain. \
                  Give this kernel its own: start with --new-chain or set \
                  kernel.chain.checkpoint_path",
                 checkpoint.display(),
                 holder_pid(&path)
-            )),
-            Err(e) => Err(format!("cannot lock {}: {e}", path.display())),
+            ))),
+            Err(e) => Err(ChainLockError::Other(format!("cannot lock {}: {e}", path.display()))),
         }
     }
 
@@ -802,6 +821,14 @@ mod tests {
         );
         assert!(err.contains("--new-chain"), "{err}");
         assert!(err.contains("kernel.chain.checkpoint_path"), "{err}");
+        // A held lock is the refusal class; an unusable path is not.
+        assert!(matches!(ChainLock::try_acquire(&ckpt), Err(ChainLockError::InUse(_))));
+        let blocked = t.path().join("file");
+        std::fs::write(&blocked, "x").unwrap();
+        assert!(matches!(
+            ChainLock::try_acquire(&blocked.join("sub/chain.json")),
+            Err(ChainLockError::Other(_))
+        ));
         drop(first);
         ChainLock::acquire(&ckpt).expect("free after drop");
     }

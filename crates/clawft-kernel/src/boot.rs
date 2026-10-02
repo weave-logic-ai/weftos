@@ -224,7 +224,7 @@ impl<P: Platform> Kernel<P> {
         // An older, lock-unaware kernel may still be writing the legacy
         // chain: refuse before taking any lock or touching the chain.
         if let Some(msg) = pin.refusal {
-            return Err(KernelError::Boot(msg));
+            return Err(KernelError::BootRefused(msg));
         }
         let (pinned_chain, chain_note) = (pin.path, pin.warning);
         // One kernel per chain: hold chain.lock beside the chain in use for
@@ -232,7 +232,10 @@ impl<P: Platform> Kernel<P> {
         #[cfg(feature = "exochain")]
         let chain_lock = match pinned_chain.as_deref() {
             Some(ckpt) => Some(
-                crate::chain_storage::ChainLock::acquire(ckpt).map_err(KernelError::Boot)?,
+                crate::chain_storage::ChainLock::try_acquire(ckpt).map_err(|e| match e {
+                    crate::chain_storage::ChainLockError::InUse(m) => KernelError::BootRefused(m),
+                    crate::chain_storage::ChainLockError::Other(m) => KernelError::Boot(m),
+                })?,
             ),
             None => None,
         };
@@ -1950,7 +1953,7 @@ impl<P: Platform> Kernel<P> {
                             vector_strict,
                         ) {
                             DiskAnnFeatureStatus::StubRejected => {
-                                return Err(KernelError::Boot(
+                                return Err(KernelError::BootRefused(
                                     DISKANN_FEATURE_MISMATCH_ERROR.to_string(),
                                 ));
                             }
@@ -1992,7 +1995,7 @@ impl<P: Platform> Kernel<P> {
                             vector_strict,
                         ) {
                             DiskAnnFeatureStatus::StubRejected => {
-                                return Err(KernelError::Boot(
+                                return Err(KernelError::BootRefused(
                                     DISKANN_FEATURE_MISMATCH_ERROR.to_string(),
                                 ));
                             }

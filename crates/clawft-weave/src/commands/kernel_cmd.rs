@@ -127,6 +127,9 @@ pub enum KernelAction {
 
 /// Run the kernel subcommand.
 pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
+    // Before any chdir: the SIGHUP re-exec replays these (see boot_refusal).
+    #[cfg(any(unix, windows))]
+    crate::boot_refusal::capture_replay();
     #[cfg(any(unix, windows))]
     let user_profile = crate::user_daemon::parse_profile(
         args.profile
@@ -172,20 +175,35 @@ pub async fn run(mut args: KernelArgs) -> anyhow::Result<()> {
                     let home = crate::user_daemon::require_home()?;
                     crate::user_daemon::prepare_home(&home)?;
                     crate::user_daemon::load_user_config(&platform, args.config.as_deref(), &home)
-                        .await?
+                        .await
                 } else {
-                    super::load_config_layered(&platform, args.config.as_deref()).await?
+                    super::load_config_layered(&platform, args.config.as_deref()).await
                 };
+                // A config error is not fixed by retrying: exit 78.
+                let loaded = loaded.unwrap_or_else(|e| {
+                    eprintln!("Error: {e:#}");
+                    std::process::exit(crate::boot_refusal::EX_CONFIG)
+                });
                 let kernel_config = loaded.config.kernel.clone();
                 clawft_kernel::chain_storage::request_new_chain(new_chain);
                 clawft_kernel::chain_storage::request_adopt_legacy_chain(adopt_legacy_chain);
-                crate::daemon::run(
+                if let Err(e) = crate::daemon::run(
                     loaded.config,
                     kernel_config,
                     loaded.global_routing,
                     loaded.workspace_routing,
                 )
-                .await?;
+                .await
+                {
+                    // A refused boot exits 78 so service managers do not
+                    // restart-loop it (see boot_refusal).
+                    let code = crate::boot_refusal::exit_code(&e);
+                    if code == 1 {
+                        return Err(e);
+                    }
+                    eprintln!("Error: {e:#}");
+                    std::process::exit(code);
+                }
             } else {
                 // Background (default) — spawn detached child
                 crate::daemon::daemonize(args.config.as_deref(), new_chain, adopt_legacy_chain)?;
