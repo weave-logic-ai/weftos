@@ -675,7 +675,7 @@ reach (see "What is enforced today" below).
 #### Step 2: Configure Mesh Networking
 
 The schema is `[kernel.mesh]` (`MeshConfig`,
-`crates/clawft-types/src/config/kernel.rs:896-962`): `enabled` (default `false`),
+`crates/clawft-types/src/config/kernel.rs:896-973`): `enabled` (default `false`),
 `transport` (`tcp` default, `ws`, `quic`), `listen_addr` (alias `listen`, default
 `0.0.0.0:9489`), `discovery` (default `false`), `seed_peers`, `noise` (default
 `false`), `noise_key_path`, `admission` (`off | observe | enforce`, default

@@ -5,19 +5,26 @@
 # field of MeshConfig. Fails (exit 1) on any drift.
 #
 # Usage:
-#   scripts/check-doc-commands.sh [--weaver PATH] [--weft PATH] [--list]
+#   scripts/check-doc-commands.sh [--weaver PATH] [--weft PATH] [--list] [--self-test]
 #   scripts/build.sh check-doc-commands
 #
 # Defaults: target/debug/weaver and target/debug/weft (scripts/build.sh native-debug).
 # --list prints the extracted commands without checking them.
+# --self-test runs the checker over fixtures: every drifted form below must be
+# reported and every valid form must pass.
 #
 # Scope (the parts of the docs that were verified against the CLI):
 #   docs/guides/agents.md                     whole file
 #   docs/guides/weftos-deployment-sops.md     SOP 1 and SOP 3
-# Extracted: fenced lines starting with `weaver`/`weft` (after `sudo`/`$`),
-# `ExecStart=.../weaver ...` lines, and inline `weaver ...` code spans.
+# Extracted: `weaver`/`weft` commands in fenced lines and inline code spans, at
+# the start of a line or after `&&`, `;`, `|`, `$(`, leading `VAR=val` words and
+# `sudo`; and `ExecStart=.../weaver ...` lines. A command is cut at ` > `,
+# ` >> ` and ` # `.
+# Flags are checked against the Options section of the final command's own
+# `--help` (clap lists propagated global flags there too); a flag declared only
+# on a parent command is reported.
 # Not checked: positional values, short flags, flag values, config keys other
-# than [kernel.mesh]. A command is cut at ` > `, ` | `, ` && `, ` ; ` or ` # `.
+# than [kernel.mesh].
 # Keep prose that names a NON-existent command out of backticks that start
 # with `weaver ` or `weft `, or it will be reported as drift.
 set -uo pipefail
@@ -29,17 +36,19 @@ cd "$ROOT"
 WEAVER="target/debug/weaver"
 WEFT="target/debug/weft"
 LIST_ONLY=false
+SELF_TEST=false
 while [ $# -gt 0 ]; do
     case "$1" in
         --weaver) WEAVER="${2:?--weaver needs a path}"; shift 2 ;;
         --weft) WEFT="${2:?--weft needs a path}"; shift 2 ;;
         --list) LIST_ONLY=true; shift ;;
-        -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+        --self-test) SELF_TEST=true; shift ;;
+        -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
 
-DOCS="docs/guides/agents.md:all docs/guides/weftos-deployment-sops.md:sop"
+DOCS="${DOC_SPECS:-docs/guides/agents.md:all docs/guides/weftos-deployment-sops.md:sop}"
 MESH_SRC="crates/clawft-types/src/config/kernel.rs"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/doc-commands.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
@@ -49,18 +58,20 @@ trap 'rm -rf "$WORK"' EXIT
 # [kernel.mesh] TOML key.
 extract() { # file mode
     awk -v file="$1" -v mode="$2" '
-    function clean(c) {
-        sub(/^[ \t]+/, "", c)
-        sub(/^\$ +/, "", c)
-        sub(/^sudo +/, "", c)
-        n = split(c, parts, / > | >> | \| | && | ; | # /)
-        c = parts[1]
-        sub(/[ \t\\]+$/, "", c)
-        return c
-    }
-    function emit(c,   t) {
-        t = clean(c)
-        if (t ~ /^(weaver|weft)( |$)/ && t ~ / /) print file ":" start ":" t
+    function emit(c,   n, i, segs, t) {
+        sub(/ # .*/, "", c)
+        gsub(/ && | ; |;[ \t]+| \| |\$\(|\(/, "\001", c)
+        n = split(c, segs, "\001")
+        for (i = 1; i <= n; i++) {
+            t = segs[i]
+            sub(/ >>? .*/, "", t)
+            sub(/^[ \t]+/, "", t)
+            sub(/^\$ +/, "", t)
+            while (t ~ /^[A-Za-z_][A-Za-z0-9_]*=[^ ]* /) sub(/^[A-Za-z_][A-Za-z0-9_]*=[^ ]* +/, "", t)
+            sub(/^sudo +/, "", t)
+            sub(/[ \t\\]+$/, "", t)
+            if (t ~ /^(weaver|weft) / ) print file ":" start ":" t
+        }
     }
     BEGIN { on = (mode == "all") }
     mode == "sop" && /^## SOP 1/ { on = 1 }
@@ -102,13 +113,40 @@ extract() { # file mode
     }' "$1"
 }
 
+if $SELF_TEST; then
+    for b in "$WEAVER" "$WEFT"; do [ -x "$b" ] || { echo "error: $b not found" >&2; exit 2; }; done
+    printf '%s\n' '```bash' \
+        'cd /x && weaver bogus' \
+        'FOO=1 weaver kernel nonsense' \
+        'sudo weaver kernel start --nonflag' \
+        'echo hi | weaver mesh bogusverb' \
+        'x; weaver cluster zzz' \
+        'echo $(weaver kernel stat)' \
+        'weaver kernel status --not-a-flag' \
+        '```' 'Inline: `weaver kernel start --nonflag2` and `cd /y && weft nonexist`.' > "$WORK/bad.md"
+    printf '%s\n' '```bash' \
+        'cd /x && weaver kernel status' \
+        'FOO=1 weaver kernel start --foreground' \
+        'sudo weaver mesh status --json' \
+        'echo hi | weaver cluster nodes' \
+        '```' 'Inline: `weaver kernel stop --force`.' > "$WORK/good.md"
+    st_fail=0
+    out="$(DOC_SPECS="$WORK/bad.md:all" "$0" --weaver "$WEAVER" --weft "$WEFT" 2>&1)"; rc=$?
+    n=$(printf '%s\n' "$out" | grep -c '^DRIFT')
+    if [ "$rc" -ne 1 ] || [ "$n" -lt 9 ]; then echo "self-test FAILED: bad fixture gave exit $rc and $n DRIFT lines (want 1 and 9)"; printf '%s\n' "$out"; st_fail=1; fi
+    out="$(DOC_SPECS="$WORK/good.md:all" "$0" --weaver "$WEAVER" --weft "$WEFT" 2>&1)"; rc=$?
+    if [ "$rc" -ne 0 ]; then echo "self-test FAILED: good fixture exit $rc"; printf '%s\n' "$out"; st_fail=1; fi
+    [ "$st_fail" -eq 0 ] && echo "self-test passed (9 drifted forms reported, 5 valid forms accepted)"
+    exit "$st_fail"
+fi
+
 : > "$WORK/all.txt"
 for spec in $DOCS; do
     extract "${spec%%:*}" "${spec##*:}" >> "$WORK/all.txt"
 done
 
 if $LIST_ONLY; then
-    sort -t: -k1,1 -k2,2n -u "$WORK/all.txt"
+    sort -t: -k1,1 -k2,2n -k3 -u "$WORK/all.txt"
     exit 0
 fi
 
@@ -126,8 +164,9 @@ help_of() {
 subcommands_of() { # bin sub... -> subcommand names
     help_of "$@" | awk '/^Commands:/ {on=1; next} on && /^$/ {exit} on && NF {print $1}'
 }
-flags_of() { # bin sub... -> long flags
-    help_of "$@" | grep -oE -e '--[a-z0-9][a-z0-9-]*' | sort -u
+flags_of() { # bin sub... -> long flags from the Options section only
+    help_of "$@" | awk '/^Options:/ {on=1; next} on && /^[A-Za-z]/ {on=0}
+        on && /^(  -[a-zA-Z], |      )--[a-z0-9]/ { s=$0; sub(/^(  -[a-zA-Z], |      )/, "", s); sub(/[^a-z0-9-].*/, "", s); print s }' | sort -u
 }
 
 fail=0
@@ -164,18 +203,11 @@ check_command() { # loc command
                 ;;
         esac
     done
-    # flags may be declared on the final command or any ancestor (globals)
-    local f i ok
+    local f
     for f in ${flags[@]+"${flags[@]}"}; do
         [ "$f" = "--help" ] && continue
-        ok=false
-        i=${#path[@]}
-        while :; do
-            if flags_of "$bin" ${path[@]+"${path[@]:0:$i}"} | grep -qx -- "$f"; then ok=true; break; fi
-            [ "$i" -eq 0 ] && break
-            i=$((i - 1))
-        done
-        $ok || report "$loc" "\`$first ${path[*]+${path[*]}}\` has no flag \`$f\` (in: $cmd)"
+        flags_of "$bin" ${path[@]+"${path[@]}"} | grep -qx -- "$f" \
+            || report "$loc" "\`$first ${path[*]+${path[*]}}\` has no flag \`$f\` in its own --help Options (in: $cmd)"
     done
     checked=$((checked + 1))
 }
@@ -206,7 +238,7 @@ while IFS= read -r row; do
     else
         check_command "$loc:$line" "$cmd"
     fi
-done < <(sort -t: -k1,1 -k2,2n -u "$WORK/all.txt")
+done < <(sort -t: -k1,1 -k2,2n -k3 -u "$WORK/all.txt")
 
 echo "checked $checked commands and $keys [kernel.mesh] keys against $WEAVER and $WEFT: $fail drift finding(s)"
 [ "$fail" -eq 0 ]

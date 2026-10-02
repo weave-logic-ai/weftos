@@ -914,6 +914,7 @@ cmd_check_mesh_only() {
 cmd_check_doc_commands() {
     header "Checking documented weaver/weft commands against the built CLI"
     timer_start
+    run_cmd scripts/check-doc-commands.sh --self-test
     run_cmd scripts/check-doc-commands.sh
     timer_end
 }
