@@ -907,6 +907,37 @@ pub struct MeshConfig {
     /// default: without it enforce refuses everyone when no gate exists.
     #[serde(default)]
     pub admission_open_membership: bool,
+
+    /// Whether this daemon uses the machine mesh service (ADR-103 D2,
+    /// P3-U). See [`MeshServicePolicy`].
+    #[serde(default)]
+    pub service: MeshServicePolicy,
+
+    /// Override for the machine mesh service socket. Absent: the
+    /// `WEFTOS_MESH_SOCKET` environment variable, else
+    /// `/var/run/weftos/mesh.sock`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_socket: Option<String>,
+}
+
+/// How the daemon relates to the machine mesh service (`kernel.mesh.service`).
+///
+/// - `auto` (default): use the service when its socket answers and verifies,
+///   otherwise run the mesh collapsed in this process. A service that answers
+///   but fails verification (machine key changed, bind conflict, wrong
+///   server uid) is a boot failure, never a silent fallback.
+/// - `required`: boot fails when no service answers.
+/// - `off`: never probe; collapsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MeshServicePolicy {
+    /// Use the service when present, else collapsed.
+    #[default]
+    Auto,
+    /// The service must be present.
+    Required,
+    /// Never use the service.
+    Off,
 }
 
 /// Mesh admission policy (see [`MeshConfig::admission`]).
@@ -946,6 +977,8 @@ impl Default for MeshConfig {
             admission: MeshAdmissionMode::default(),
             genesis_hash: None,
             admission_open_membership: false,
+            service: MeshServicePolicy::default(),
+            service_socket: None,
         }
     }
 }

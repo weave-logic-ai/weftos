@@ -61,6 +61,16 @@ struct PendingRequest {
     sent_at: Instant,
 }
 
+/// Carries messages for remote nodes when the mesh runs outside this kernel
+/// (service mode, ADR-103 P3-U): the router hands every
+/// [`MessageTarget::RemoteNode`] message to it instead of a [`MeshRuntime`].
+#[cfg(feature = "mesh")]
+#[async_trait::async_trait]
+pub trait RemoteForwarder: Send + Sync + 'static {
+    /// Forward `msg` to `node_id`.
+    async fn forward(&self, node_id: &str, msg: KernelMessage) -> KernelResult<()>;
+}
+
 /// Agent-to-agent message router.
 ///
 /// Manages per-agent inboxes (bounded `mpsc` channels), validates
@@ -100,6 +110,10 @@ pub struct A2ARouter {
     /// Optional mesh runtime for cross-node message delivery (K6).
     #[cfg(feature = "mesh")]
     mesh_runtime: std::sync::OnceLock<Arc<MeshRuntime>>,
+
+    /// Remote-node forwarder used instead of `mesh_runtime` in service mode.
+    #[cfg(feature = "mesh")]
+    remote_forwarder: std::sync::OnceLock<Arc<dyn RemoteForwarder>>,
 }
 
 impl A2ARouter {
@@ -122,6 +136,8 @@ impl A2ARouter {
             dead_letter_queue: std::sync::OnceLock::new(),
             #[cfg(feature = "mesh")]
             mesh_runtime: std::sync::OnceLock::new(),
+            #[cfg(feature = "mesh")]
+            remote_forwarder: std::sync::OnceLock::new(),
         }
     }
 
@@ -174,6 +190,13 @@ impl A2ARouter {
     #[cfg(feature = "mesh")]
     pub fn set_mesh_runtime(&self, runtime: Arc<MeshRuntime>) {
         let _ = self.mesh_runtime.set(runtime);
+    }
+
+    /// Attach the forwarder that carries remote-node messages when the mesh
+    /// is owned by the machine mesh service (P3-U). Ignored once set.
+    #[cfg(feature = "mesh")]
+    pub fn set_remote_forwarder(&self, forwarder: Arc<dyn RemoteForwarder>) {
+        let _ = self.remote_forwarder.set(forwarder);
     }
 
     /// Get the mesh runtime (if configured).
@@ -408,6 +431,11 @@ impl A2ARouter {
             MessageTarget::RemoteNode { node_id, .. } => {
                 #[cfg(feature = "mesh")]
                 {
+                    if let Some(forwarder) = self.remote_forwarder.get() {
+                        let node_id = node_id.clone();
+                        debug!(from, %node_id, "routing message to remote node via mesh service");
+                        return forwarder.forward(&node_id, msg).await;
+                    }
                     if let Some(runtime) = self.mesh_runtime.get() {
                         let node_id = node_id.clone();
                         debug!(from, %node_id, "routing message to remote node via mesh");
