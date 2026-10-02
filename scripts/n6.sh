@@ -9,6 +9,7 @@
 #   scripts/n6.sh detach        give it back to macOS
 #   scripts/n6.sh probe         list probes and read the core CPUID
 #   scripts/n6.sh smoke         end-to-end check (probe, CPUID, RAM, code runs)
+#   scripts/n6.sh clock [secs]  measure the CPU clock on HSI and HSE against host time
 #   scripts/n6.sh run <elf>     load a RAM-linked ELF into AXISRAM and start it
 #   scripts/n6.sh shell         interactive shell with probe-rs available
 set -euo pipefail
@@ -53,7 +54,7 @@ in_container() {
     -v /dev/bus/usb:/dev/bus/usb \
     -v "$N6_DIR:/work/n6:ro" \
     ${N6_EXTRA_MOUNT:+-v "$N6_EXTRA_MOUNT"} \
-    -e CHIP="$CHIP" \
+    -e CHIP="$CHIP" -e N6_SECS="${N6_SECS:-}" \
     "$IMAGE" bash -euo pipefail -s
 }
 
@@ -108,6 +109,19 @@ echo "smoke: all checks passed"
 EOF
 }
 
+cmd_clock() {
+  local secs="${1:-60}"
+  [[ "$secs" =~ ^[0-9]+$ ]] || die "usage: n6.sh clock [seconds-per-source]"
+  N6_SECS="$secs" in_container <<'EOF'
+. /work/n6/lib.sh
+cd /tmp
+arm-none-eabi-as -march=armv8.1-m.main -mthumb -o smoke.o /work/n6/smoke/smoke.S
+arm-none-eabi-ld -T /work/n6/smoke/smoke.ld -o smoke.elf smoke.o
+load_and_start smoke.elf >/dev/null   # keep the core running so CYCCNT counts
+python /work/n6/clock.py "$N6_SECS" 2> >(grep -v -i "disk devices by id" >&2)
+EOF
+}
+
 cmd_run() {
   local elf="${1:-}"
   [[ -f "$elf" ]] || die "usage: n6.sh run <ram-linked.elf>"
@@ -130,7 +144,8 @@ case "${1:-}" in
   detach) cmd_detach ;;
   probe)  cmd_probe ;;
   smoke)  cmd_smoke ;;
+  clock)  shift; cmd_clock "$@" ;;
   run)    shift; cmd_run "$@" ;;
   shell)  cmd_shell ;;
-  *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

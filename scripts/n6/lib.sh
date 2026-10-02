@@ -35,6 +35,7 @@ load_and_start() {
     -ex "set \$pc = $entry" \
     -ex 'printf "start pc=0x%08x sp=0x%08x xpsr=0x%08x\n", $pc, $sp, $xpsr' \
     -ex 'detach' 2>&1 | grep -E "^(start|Loading|Start address)" || true
+  sleep 1   # let the server finish resuming the core before it is stopped
   kill "$srv" 2>/dev/null || true
   wait "$srv" 2>/dev/null || true
 }
